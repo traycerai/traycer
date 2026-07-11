@@ -10,13 +10,14 @@ import {
   rateLimitFetchLane,
   type RateLimitProviderId,
 } from "@/lib/rate-limit-providers";
-import { enqueueRateLimitFetch } from "@/lib/rate-limits/ephemeral-fetch-queue";
+import { useRateLimitQueueScope } from "@/hooks/rate-limits/use-rate-limit-queue-scope";
+import { enqueueRateLimitFetchForScope } from "@/lib/rate-limits/ephemeral-fetch-queue";
 
 /**
- * While mounted, refreshes `host.getRateLimitUsage` for `hostId` whenever a
- * chat turn on `providerId`'s harness completes - the provider-pull analog of
- * `useRefreshRateLimitUsageOnTraycerTurn`. Branches on the provider's fetch
- * lane:
+ * While mounted, refreshes `host.getRateLimitUsage` for the current host scope
+ * whenever a chat turn on `providerId`'s harness completes - the provider-pull
+ * analog of `useRefreshRateLimitUsageOnTraycerTurn`. Branches on the provider's
+ * fetch lane:
  *
  * - `ephemeralProcess` (codex, claude-code): enqueues onto the shared serial
  *   queue (`enqueueRateLimitFetch(..., { force: false })`) rather than
@@ -27,13 +28,12 @@ import { enqueueRateLimitFetch } from "@/lib/rate-limits/ephemeral-fetch-queue";
  * - `httpFetch` (openrouter, kilocode): invalidates the query directly (no
  *   subprocess to bound), exactly as before.
  *
- * Unlike the aperture refresh hook (always default-host scoped, mounted only
- * by the Traycer-only `RateLimitView`), `hostId` is a caller-supplied
- * parameter instead of a hardcoded `useReactiveActiveHostId()` read, so a
- * future tab-scoped consumer can reuse this hook without a rewrite.
+ * Unlike the aperture refresh hook, this uses the current `HostRuntimeContext`
+ * scope so Settings-selected and future tab-scoped consumers target the same
+ * host in both fetch lanes.
  *
- * Targets the exact `{ accountContext, providerId }` params key (the same one
- * `useHostProviderRateLimitsQuery` builds), NOT the whole
+ * Targets the exact `{ accountContext, providerId, profileId }` params key
+ * (the same one `useHostProviderRateLimitsQuery` builds), NOT the whole
  * `host.getRateLimitUsage` method scope: a method-scope invalidation would
  * also refetch the aperture query and every OTHER provider's query on this
  * host, so e.g. a Codex turn completing would spawn a `claude` subprocess to
@@ -50,14 +50,15 @@ import { enqueueRateLimitFetch } from "@/lib/rate-limits/ephemeral-fetch-queue";
  */
 export function useRefreshProviderRateLimitsOnTurn(
   providerId: RateLimitProviderId | null,
-  hostId: string | null,
+  profileId: string | null,
 ): void {
   const queryClient = useQueryClient();
+  const queueScope = useRateLimitQueueScope();
   const lastInvalidatedAtRef = useRef(0);
 
   useEffect(() => {
-    // Reset the cooldown whenever this effect re-runs for a new hostId/
-    // providerId pair - otherwise a provider switch on the same mounted
+    // Reset the cooldown whenever this effect re-runs for a new host scope/
+    // providerId/profileId tuple - otherwise a selection switch on the same mounted
     // component (e.g. the chat's selected harness changes) inherits the
     // previous provider's cooldown timestamp and can skip its own first,
     // otherwise-due invalidation.
@@ -82,10 +83,15 @@ export function useRefreshProviderRateLimitsOnTurn(
       // pauses when hidden, so a background turn finishing while the user is away
       // still updates that provider's data.
       if (rateLimitFetchLane(providerId) === "ephemeralProcess") {
-        void enqueueRateLimitFetch(providerId, DEFAULT_ACCOUNT_CONTEXT, {
-          force: false,
-          profileId: null,
-        });
+        void enqueueRateLimitFetchForScope(
+          queueScope,
+          providerId,
+          DEFAULT_ACCOUNT_CONTEXT,
+          {
+            force: false,
+            profileId,
+          },
+        );
         return;
       }
       // httpFetch providers (openrouter, kilocode) never touch the queue - a
@@ -94,12 +100,12 @@ export function useRefreshProviderRateLimitsOnTurn(
         queryKey: queryKeys.hostMethod<
           HostRpcRegistry,
           "host.getRateLimitUsage"
-        >(hostId, "host.getRateLimitUsage", {
+        >(queueScope?.hostId ?? null, "host.getRateLimitUsage", {
           accountContext: DEFAULT_ACCOUNT_CONTEXT,
           providerId,
-          profileId: null,
+          profileId,
         }),
       });
     });
-  }, [queryClient, hostId, providerId]);
+  }, [queryClient, profileId, providerId, queueScope]);
 }

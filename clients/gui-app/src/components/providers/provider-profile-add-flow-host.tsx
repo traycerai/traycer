@@ -17,6 +17,7 @@ export function ProviderProfileAddFlowHost(): ReactNode {
 
   return (
     <ProviderProfileAddFlowSession
+      key={`${harnessId}:${hostId}`}
       harnessId={harnessId}
       hostId={hostId}
       onProfileCreated={onProfileCreated}
@@ -59,6 +60,7 @@ function ProviderProfileAddFlowSession({
 
   return (
     <AddProviderProfileDialog
+      key={state.providerId}
       state={state}
       client={client}
       open

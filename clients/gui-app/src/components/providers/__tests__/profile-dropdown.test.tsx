@@ -133,6 +133,7 @@ function renderDropdown(input: RenderDropdownInput) {
       activeProfileId={input.activeProfileId}
       onSelectProfile={input.onSelectProfile}
       onCreateProfile={input.onCreateProfile}
+      onEditProfile={null}
       createProfileDisabled={input.createProfileDisabled}
       createProfileDisabledReason={input.createProfileDisabledReason}
       shortcutHintForIndex={input.shortcutHintForIndex}
@@ -161,6 +162,34 @@ describe("<ProfileDropdown />", () => {
       name: "Codex profile: Work",
     });
     expect(trigger.textContent).toContain("Work");
+  });
+
+  it("places the settings edit action directly after the profile name", () => {
+    const onEditProfile = vi.fn();
+    render(
+      <ProfileDropdown
+        providerLabel="Codex"
+        profiles={[AMBIENT, WORK]}
+        activeProfileId="work-profile"
+        onSelectProfile={vi.fn()}
+        onCreateProfile={vi.fn()}
+        onEditProfile={onEditProfile}
+        createProfileDisabled={false}
+        createProfileDisabledReason={undefined}
+        shortcutHintForIndex={noShortcutHint}
+        contentContainer={null}
+        onCloseAutoFocus={null}
+      />,
+    );
+
+    const edit = screen.getByRole("button", { name: "Edit Work profile" });
+    expect(edit.previousElementSibling?.textContent).toBe("Work");
+    expect(edit.previousElementSibling?.getAttribute("aria-hidden")).toBe(
+      "true",
+    );
+    expect(edit.closest('[aria-hidden="true"]')).toBeNull();
+    fireEvent.click(edit);
+    expect(onEditProfile).toHaveBeenCalledTimes(1);
   });
 
   it("renders non-modal so nested picker clicks can dismiss only the profile menu", () => {

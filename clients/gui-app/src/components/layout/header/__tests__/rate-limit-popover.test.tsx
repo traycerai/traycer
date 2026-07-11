@@ -108,6 +108,7 @@ const mocks = vi.hoisted<MockState>(() => ({
     refetch: vi.fn(() => Promise.resolve({})),
   },
 }));
+const queueScope = vi.hoisted(() => ({ hostId: "host-1" }));
 
 vi.mock("@/hooks/rate-limits/use-configured-rate-limit-providers", () => ({
   useConfiguredRateLimitProviders: () =>
@@ -165,10 +166,15 @@ vi.mock("@/lib/host", async (importOriginal) => {
 vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
   useReactiveActiveHostId: () => "host-1",
 }));
+vi.mock("@/hooks/rate-limits/use-rate-limit-queue-scope", () => ({
+  useRateLimitQueueScope: () => queueScope,
+}));
 vi.mock("@/lib/rate-limits/ephemeral-fetch-queue", () => ({
   // Wrapper (not `mocks.enqueue` directly) so `beforeEach` can swap the spy -
   // an object-literal binding would freeze the original fn at module load.
   enqueueRateLimitFetch: (...args: unknown[]) => mocks.enqueue(...args),
+  enqueueRateLimitFetchForScope: (...args: unknown[]) =>
+    mocks.enqueue(...args.slice(1)),
 }));
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
   useSystemTabModalActions: () => ({ openSettings: mocks.openSettings }),
@@ -554,7 +560,7 @@ describe("<RateLimitPopover /> rail", () => {
       providerProfile({
         profileId: "ambient",
         kind: "ambient",
-        label: "Terminal",
+        label: "Default Codex",
         tier: "Terminal",
         usageUpdatedAt: NOW - 10_000,
       }),
@@ -570,7 +576,7 @@ describe("<RateLimitPopover /> rail", () => {
       providerProfile({
         profileId: "ambient",
         kind: "ambient",
-        label: "Terminal",
+        label: "Default Claude",
         tier: "Max",
         usageUpdatedAt: NOW - 10_000,
       }),
@@ -621,13 +627,14 @@ describe("<RateLimitPopover /> rail", () => {
 
     expect(screen.getByText("Codex")).toBeTruthy();
     expect(screen.getByText("Claude Code")).toBeTruthy();
-    expect(screen.getAllByText("Terminal account")).toHaveLength(2);
+    expect(screen.getByText("Default Codex")).toBeTruthy();
+    expect(screen.getByText("Default Claude")).toBeTruthy();
     expect(screen.getByText("Work")).toBeTruthy();
     expect(screen.getByText("Personal")).toBeTruthy();
     expect(screen.getAllByText("Active")).toHaveLength(2);
     const activeRows = document.querySelectorAll('[aria-current="true"]');
     expect(activeRows).toHaveLength(2);
-    expect(activeRows[0].textContent).toContain("Terminal account");
+    expect(activeRows[0].textContent).toContain("Default Codex");
     expect(activeRows[0].textContent).not.toContain("Work");
     expect(activeRows[1].textContent).toContain("Personal");
     expect(screen.getByText("Pro 5x")).toBeTruthy();

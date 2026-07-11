@@ -17,6 +17,7 @@ import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
 
 const mocks = vi.hoisted(() => ({
   draining: false,
+  scope: { hostId: "host-b" },
   enqueue: vi.fn((..._args: unknown[]) => Promise.resolve()),
 }));
 
@@ -25,7 +26,10 @@ vi.mock("@/hooks/rate-limits/use-is-rate-limit-queue-draining", () => ({
 }));
 vi.mock("@/lib/rate-limits/ephemeral-fetch-queue", () => ({
   // Wrapper (not `mocks.enqueue` directly) so `beforeEach` can swap the spy.
-  enqueueRateLimitFetch: (...args: unknown[]) => mocks.enqueue(...args),
+  enqueueRateLimitFetchForScope: (...args: unknown[]) => mocks.enqueue(...args),
+}));
+vi.mock("@/hooks/rate-limits/use-rate-limit-queue-scope", () => ({
+  useRateLimitQueueScope: () => mocks.scope,
 }));
 // No-op the fresh-on-open side effect: it has its own enqueue call that would
 // pollute the spy, and its behavior is covered through the consumers' tests.
@@ -60,6 +64,7 @@ describe("useProviderRateLimitRefresh refresh routing", () => {
     await result.current.refresh();
 
     expect(mocks.enqueue).toHaveBeenCalledWith(
+      mocks.scope,
       "codex",
       DEFAULT_ACCOUNT_CONTEXT,
       {

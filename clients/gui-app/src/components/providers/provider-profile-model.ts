@@ -20,7 +20,7 @@ export function profileCommitId(profile: ProviderProfile): string | null {
 }
 
 export function profileDisplayLabel(profile: ProviderProfile): string {
-  return profile.kind === "ambient" ? "Terminal account" : profile.label;
+  return profile.label;
 }
 
 export function profileAuthStatusText(profile: ProviderProfile): string {

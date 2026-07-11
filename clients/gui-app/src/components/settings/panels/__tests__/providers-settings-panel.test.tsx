@@ -35,6 +35,7 @@ type StartLoginData = {
 };
 type StartLoginOptions = {
   readonly onSuccess: (data: StartLoginData) => void;
+  readonly onError: () => void;
 };
 type StartLoginMutate = (
   variables: StartLoginVariables,
@@ -47,7 +48,7 @@ type AwaitLoginVariables = {
 };
 type AwaitLoginOptions = {
   readonly onSuccess: (data: unknown) => void;
-  readonly onSettled: () => void;
+  readonly onError: () => void;
 };
 type AwaitLoginMutate = (
   variables: AwaitLoginVariables,
@@ -108,6 +109,7 @@ const providerMocks = vi.hoisted(() => ({
   recolorProfileMutate: vi.fn<RecolorProfileMutate>(),
   removeProfileMutate: vi.fn<RemoveProfileMutate>(),
   refreshProviders: vi.fn(() => Promise.resolve()),
+  refreshUsageLimits: vi.fn(() => Promise.resolve()),
   openExternalLink: vi.fn(),
 }));
 
@@ -181,8 +183,8 @@ vi.mock("@/hooks/providers/use-providers-delete-env-override-mutation", () => ({
   }),
 }));
 
-// Both the plain and `*ForClient` names are exported: `ProviderProfileCard` /
-// `ProviderProfileReauthDialog` call the plain hooks (host-runtime-context-
+// Both the plain and `*ForClient` names are exported: the inline profile
+// re-auth panel calls the plain hooks (host-runtime-context-
 // scoped, unchanged by S8), while `AddProviderProfileDialog` calls the
 // `*ForClient` variants with an explicit client (also Settings' own host in
 // this tree - see the `@/lib/host` mock below). Both resolve to the same
@@ -332,6 +334,15 @@ vi.mock("@/hooks/host/use-host-provider-rate-limits-query", () => ({
 vi.mock("@/hooks/host/use-refresh-provider-rate-limits-on-turn", () => ({
   useRefreshProviderRateLimitsOnTurn: () => {},
 }));
+vi.mock("@/hooks/host/use-refresh-provider-rate-limits-on-mount", () => ({
+  useRefreshProviderRateLimitsOnMount: () => {},
+}));
+vi.mock("@/hooks/rate-limits/use-provider-rate-limit-refresh", () => ({
+  useProviderRateLimitRefresh: () => ({
+    refresh: providerMocks.refreshUsageLimits,
+    isRefreshing: false,
+  }),
+}));
 
 // Host picker plumbing: a single active host and no transient client means
 // the panel renders inline (no runtime-context re-provide), and `useHostBinding`
@@ -403,6 +414,7 @@ vi.mock("@/components/ui/dropdown-menu", () => {
 });
 
 import { ProvidersSettingsPanel } from "@/components/settings/panels/providers-settings-panel";
+import { ProviderProfileScopedSection } from "@/components/settings/panels/provider-profile-scoped-section";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { redactEmail } from "@/lib/providers/redact-email";
 
@@ -539,6 +551,15 @@ function firstRenameProfileCall(): readonly [
   return call;
 }
 
+function firstRecolorProfileCall(): readonly [
+  RecolorProfileVariables,
+  MutationSuccessOptions,
+] {
+  const call = providerMocks.recolorProfileMutate.mock.calls.at(0);
+  if (call === undefined) throw new Error("Expected recolor profile call.");
+  return call;
+}
+
 function firstRemoveProfileCall(): readonly [
   RemoveProfileVariables,
   MutationSuccessOptions,
@@ -582,6 +603,8 @@ describe("<ProvidersSettingsPanel />", () => {
     providerMocks.renameProfileMutate.mockReset();
     providerMocks.recolorProfileMutate.mockReset();
     providerMocks.removeProfileMutate.mockReset();
+    providerMocks.refreshProviders.mockClear();
+    providerMocks.refreshUsageLimits.mockClear();
   });
 
   afterEach(() => {
@@ -931,7 +954,7 @@ describe("<ProvidersSettingsPanel />", () => {
     ).toBeNull();
   });
 
-  it("uses the shared profile switcher even when only the terminal profile exists", () => {
+  it("uses the shared profile switcher and combined refresh when only the terminal profile exists", async () => {
     providerMocks.listResult.data = {
       providers: [
         {
@@ -944,7 +967,7 @@ describe("<ProvidersSettingsPanel />", () => {
               profile({
                 profileId: "ambient",
                 kind: "ambient",
-                label: "Ambient",
+                label: "Terminal account",
                 email: "ambient@example.test",
                 tier: null,
                 authStatus: "authenticated",
@@ -974,7 +997,339 @@ describe("<ProvidersSettingsPanel />", () => {
       screen.getByRole("menuitem", { name: "Create new profile" }),
     ).toBeDefined();
     expect(screen.getByRole("button", { name: "Add profile" })).toBeDefined();
-    expect(screen.queryByText("Profiles")).toBeNull();
+    expect(screen.getByText("Profiles")).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: "Edit Terminal account profile" }),
+    ).toBeDefined();
+    expect(
+      screen.queryByRole("button", { name: "Refresh usage limits" }),
+    ).toBeNull();
+
+    const addProfileButton = screen.getByRole("button", {
+      name: "Add profile",
+    });
+    const refreshButton = screen.getByRole("button", {
+      name: "Refresh profile statuses and usage limits",
+    });
+    expect(addProfileButton.nextElementSibling).toBe(refreshButton);
+    fireEvent.click(refreshButton);
+    await waitFor(() => {
+      expect(providerMocks.refreshProviders).toHaveBeenCalledTimes(1);
+      expect(providerMocks.refreshUsageLimits).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("edits and switches the default account", async () => {
+    providerMocks.listResult.data = {
+      providers: [
+        {
+          ...providerState({
+            providerId: "codex",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+            profiles: [
+              profile({
+                profileId: "ambient",
+                kind: "ambient",
+                label: "Terminal account",
+                email: "ambient@example.test",
+                tier: "Pro",
+                authStatus: "authenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+            ],
+          }),
+          loginCapability: { oauthArgs: ["auth", "login"], token: null },
+        },
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Edit Terminal account profile" }),
+    );
+    fireEvent.change(screen.getByLabelText("Profile name"), {
+      target: { value: "Default" },
+    });
+
+    const accentColor = PROVIDER_PROFILE_ACCENT_COLORS[4];
+    fireEvent.click(
+      screen.getByRole("button", { name: `Use color ${accentColor}` }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+    const [renameVariables, renameOptions] = firstRenameProfileCall();
+    expect(renameVariables).toEqual({
+      providerId: "codex",
+      profileId: "ambient",
+      label: "Default",
+    });
+    act(() => renameOptions.onSuccess());
+
+    const [recolorVariables, recolorOptions] = firstRecolorProfileCall();
+    expect(recolorVariables).toEqual({
+      providerId: "codex",
+      profileId: "ambient",
+      accentColor,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(providerMocks.renameProfileMutate).toHaveBeenCalledTimes(1);
+    expect(providerMocks.recolorProfileMutate).toHaveBeenCalledTimes(2);
+    act(() => recolorOptions.onSuccess());
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Edit Terminal account profile" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
+    await waitFor(() => {
+      expect(providerMocks.startLoginMutate).toHaveBeenCalled();
+    });
+    expect(firstStartLoginCall()[0]).toEqual({
+      providerId: "codex",
+      profileId: "ambient",
+      createProfile: null,
+    });
+  });
+
+  it("resets the edit draft when reopening the same or a different profile", () => {
+    const ambientColor = PROVIDER_PROFILE_ACCENT_COLORS[0];
+    const workColor = PROVIDER_PROFILE_ACCENT_COLORS[1];
+    const staleColor = PROVIDER_PROFILE_ACCENT_COLORS[2];
+    providerMocks.listResult.data = {
+      providers: [
+        {
+          ...providerState({
+            providerId: "codex",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+            profiles: [
+              profileWithAccent(
+                {
+                  profileId: "ambient",
+                  kind: "ambient",
+                  label: "Terminal account",
+                  email: "ambient@example.test",
+                  tier: null,
+                  authStatus: "authenticated",
+                  duplicateOfProfileId: null,
+                  ambientDriftNotice: null,
+                },
+                ambientColor,
+              ),
+              profileWithAccent(
+                {
+                  profileId: "managed-1",
+                  kind: "managed",
+                  label: "Work",
+                  email: "work@example.test",
+                  tier: "Pro",
+                  authStatus: "authenticated",
+                  duplicateOfProfileId: null,
+                  ambientDriftNotice: null,
+                },
+                workColor,
+              ),
+            ],
+          }),
+          loginCapability: { oauthArgs: ["auth", "login"], token: null },
+        },
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Edit Terminal account profile" }),
+    );
+    fireEvent.change(screen.getByLabelText("Profile name"), {
+      target: { value: "Unsaved name" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: `Use color ${staleColor}` }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Edit Terminal account profile" }),
+    );
+    const reopenedNameInput = screen.getByLabelText("Profile name");
+    if (!(reopenedNameInput instanceof HTMLInputElement)) {
+      throw new Error("Expected profile name input");
+    }
+    expect(reopenedNameInput.value).toBe("Terminal account");
+    expect(
+      screen
+        .getByRole("button", { name: `Use color ${ambientColor}` })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(
+      screen
+        .getByRole("button", { name: `Use color ${staleColor}` })
+        .getAttribute("aria-pressed"),
+    ).toBe("false");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit Work profile" }));
+
+    const nameInput = screen.getByLabelText("Profile name");
+    if (!(nameInput instanceof HTMLInputElement)) {
+      throw new Error("Expected profile name input");
+    }
+    expect(nameInput.value).toBe("Work");
+    expect(
+      screen
+        .getByRole("button", { name: `Use color ${workColor}` })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(
+      screen
+        .getByRole("button", { name: `Use color ${staleColor}` })
+        .getAttribute("aria-pressed"),
+    ).toBe("false");
+  });
+
+  it("starts a fresh editor session when the selected host changes with cached profile data", () => {
+    const ambientColor = PROVIDER_PROFILE_ACCENT_COLORS[0];
+    const state = {
+      ...providerState({
+        providerId: "codex",
+        selected: { kind: "bundled" },
+        candidates: [],
+        envOverrides: [],
+        profiles: [
+          profileWithAccent(
+            {
+              profileId: "ambient",
+              kind: "ambient",
+              label: "Terminal account",
+              email: "ambient@example.test",
+              tier: null,
+              authStatus: "authenticated",
+              duplicateOfProfileId: null,
+              ambientDriftNotice: null,
+            },
+            ambientColor,
+          ),
+        ],
+      }),
+      loginCapability: { oauthArgs: ["auth", "login"], token: null },
+    };
+    const renderSection = (hostId: string): ReactNode => (
+      <TooltipProvider>
+        <ProviderProfileScopedSection
+          state={state}
+          hostId={hostId}
+          isSelectedHostLocal
+          canAddProfile
+          failedAttempt={null}
+          onAddProfile={vi.fn()}
+          onDismissFailedAttempt={vi.fn()}
+          selectedProfileId={null}
+          onSelectedProfileIdChange={vi.fn()}
+        />
+      </TooltipProvider>
+    );
+    const { rerender } = render(renderSection("host-b"));
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Edit Terminal account profile" }),
+    );
+    fireEvent.change(screen.getByLabelText("Profile name"), {
+      target: { value: "Host B draft" },
+    });
+
+    rerender(renderSection("host-c"));
+
+    const nameInput = screen.getByLabelText("Profile name");
+    if (!(nameInput instanceof HTMLInputElement)) {
+      throw new Error("Expected profile name input");
+    }
+    expect(nameInput.value).toBe("Terminal account");
+    expect(screen.getByRole("button", { name: "Save changes" })).toHaveProperty(
+      "disabled",
+      true,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(providerMocks.renameProfileMutate).not.toHaveBeenCalled();
+  });
+
+  it("resets the add-profile draft when it is reopened", () => {
+    const ambientColor = PROVIDER_PROFILE_ACCENT_COLORS[0];
+    const availableColor = PROVIDER_PROFILE_ACCENT_COLORS[1];
+    const staleColor = PROVIDER_PROFILE_ACCENT_COLORS[4];
+    providerMocks.listResult.data = {
+      providers: [
+        {
+          ...providerState({
+            providerId: "codex",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+            profiles: [
+              profileWithAccent(
+                {
+                  profileId: "ambient",
+                  kind: "ambient",
+                  label: "Terminal account",
+                  email: "ambient@example.test",
+                  tier: null,
+                  authStatus: "authenticated",
+                  duplicateOfProfileId: null,
+                  ambientDriftNotice: null,
+                },
+                ambientColor,
+              ),
+            ],
+          }),
+          loginCapability: { oauthArgs: ["auth", "login"], token: null },
+        },
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
+    fireEvent.change(screen.getByLabelText("Profile name"), {
+      target: { value: "Unsaved profile" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: `Use color ${staleColor}` }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
+    const nameInput = screen.getByLabelText("Profile name");
+    if (!(nameInput instanceof HTMLInputElement)) {
+      throw new Error("Expected profile name input");
+    }
+    expect(nameInput.value).toBe("New profile");
+    expect(
+      screen
+        .getByRole("button", { name: `Use color ${availableColor}` })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(
+      screen
+        .getByRole("button", { name: `Use color ${staleColor}` })
+        .getAttribute("aria-pressed"),
+    ).toBe("false");
   });
 
   it("renders profile rows with duplicate, drift, and unauthenticated states", () => {
@@ -989,7 +1344,7 @@ describe("<ProvidersSettingsPanel />", () => {
             profile({
               profileId: "ambient",
               kind: "ambient",
-              label: "Ambient",
+              label: "Terminal account",
               email: "current@example.test",
               tier: "Pro",
               authStatus: "authenticated",
@@ -1030,11 +1385,9 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
-    // Defaults to the ambient profile - the canonical "Terminal account"
-    // label shows (never the wire's arbitrary "Ambient" label), along with
-    // its drift notice, tier, and redacted email.
+    // Defaults to the ambient profile and shows its persisted label, along
+    // with its drift notice, tier, and redacted email.
     expect(screen.getAllByText("Terminal account").length).toBeGreaterThan(0);
-    expect(screen.queryByText("Ambient")).toBeNull();
     expect(
       screen.getByText(
         // Drift notice redacts both emails - "current@example.test" ->
@@ -1049,7 +1402,7 @@ describe("<ProvidersSettingsPanel />", () => {
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Dismiss terminal account change notice",
+        name: "Dismiss ambient account change notice",
       }),
     );
     expect(
@@ -1080,7 +1433,7 @@ describe("<ProvidersSettingsPanel />", () => {
             profile({
               profileId: "ambient",
               kind: "ambient",
-              label: "Ambient",
+              label: "Terminal account",
               email: null,
               tier: null,
               authStatus: "authenticated",
@@ -1141,7 +1494,7 @@ describe("<ProvidersSettingsPanel />", () => {
               profile({
                 profileId: "ambient",
                 kind: "ambient",
-                label: "Ambient",
+                label: "Terminal account",
                 email: "ambient@example.test",
                 tier: null,
                 authStatus: "authenticated",
@@ -1162,15 +1515,13 @@ describe("<ProvidersSettingsPanel />", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
-    fireEvent.click(
-      screen.getByRole("button", { name: "Continue to sign-in" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
 
     const [startVariables, startOptions] = firstStartLoginCall();
     expect(startVariables).toEqual({
       providerId: "codex",
       profileId: null,
-      createProfile: { label: "", shareSkillsAndPlugins: false },
+      createProfile: { label: "New profile", shareSkillsAndPlugins: false },
     });
     expect(typeof startOptions.onSuccess).toBe("function");
 
@@ -1188,6 +1539,66 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(typeof awaitOptions.onSuccess).toBe("function");
   });
 
+  it("keeps a cancelled profile creation mounted until its minted id is cleaned up", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        {
+          ...providerState({
+            providerId: "codex",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+            profiles: [
+              profile({
+                profileId: "ambient",
+                kind: "ambient",
+                label: "Terminal account",
+                email: "ambient@example.test",
+                tier: null,
+                authStatus: "authenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+            ],
+          }),
+          loginCapability: { oauthArgs: ["auth", "login"], token: null },
+        },
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    const [, startOptions] = firstStartLoginCall();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel sign-in" }));
+
+    expect(providerMocks.cancelLoginMutate).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog", { name: "Add profile" })).toBeDefined();
+    expect(screen.getByText("Cancelling sign-in")).toBeDefined();
+
+    act(() => {
+      startOptions.onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "managed-pending",
+      });
+    });
+
+    expect(providerMocks.cancelLoginMutate).toHaveBeenCalledTimes(1);
+    expect(providerMocks.cancelLoginMutate).toHaveBeenCalledWith({
+      providerId: "codex",
+      profileId: "managed-pending",
+    });
+    expect(providerMocks.awaitLoginMutate).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog", { name: "Add profile" })).toBeNull();
+  });
+
   it("cancels a waiting managed-profile login exactly once", () => {
     providerMocks.listResult.data = {
       providers: [
@@ -1201,7 +1612,7 @@ describe("<ProvidersSettingsPanel />", () => {
               profile({
                 profileId: "ambient",
                 kind: "ambient",
-                label: "Ambient",
+                label: "Terminal account",
                 email: "ambient@example.test",
                 tier: null,
                 authStatus: "authenticated",
@@ -1224,9 +1635,7 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Create new profile" }),
     );
-    fireEvent.click(
-      screen.getByRole("button", { name: "Continue to sign-in" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
 
     const [, startOptions] = firstStartLoginCall();
     act(() => {
@@ -1246,7 +1655,7 @@ describe("<ProvidersSettingsPanel />", () => {
     });
   });
 
-  it("signs in again for an existing profile, states when a different account was applied, and can retry", async () => {
+  it("cancels the known re-auth profile while its initial start is pending", async () => {
     providerMocks.listResult.data = {
       providers: [
         {
@@ -1259,7 +1668,154 @@ describe("<ProvidersSettingsPanel />", () => {
               profile({
                 profileId: "ambient",
                 kind: "ambient",
-                label: "Ambient",
+                label: "Terminal account",
+                email: "ambient@example.test",
+                tier: null,
+                authStatus: "authenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+              profile({
+                profileId: "managed-1",
+                kind: "managed",
+                label: "Work",
+                email: "work@example.test",
+                tier: "Pro",
+                authStatus: "authenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+            ],
+          }),
+          loginCapability: { oauthArgs: ["auth", "login"], token: null },
+        },
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit Work profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
+    await waitFor(() => {
+      expect(providerMocks.startLoginMutate).toHaveBeenCalledTimes(1);
+    });
+    const [, startOptions] = firstStartLoginCall();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel sign-in" }));
+
+    expect(providerMocks.cancelLoginMutate).toHaveBeenCalledTimes(1);
+    expect(providerMocks.cancelLoginMutate).toHaveBeenCalledWith({
+      providerId: "codex",
+      profileId: "managed-1",
+    });
+    expect(screen.queryByText("Switching account")).toBeNull();
+
+    act(() => {
+      startOptions.onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "managed-1",
+      });
+    });
+
+    expect(providerMocks.cancelLoginMutate).toHaveBeenCalledTimes(1);
+    expect(providerMocks.awaitLoginMutate).not.toHaveBeenCalled();
+  });
+
+  it("cancels the known re-auth profile while a retry start is pending", async () => {
+    providerMocks.listResult.data = {
+      providers: [
+        {
+          ...providerState({
+            providerId: "codex",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+            profiles: [
+              profile({
+                profileId: "ambient",
+                kind: "ambient",
+                label: "Terminal account",
+                email: "ambient@example.test",
+                tier: null,
+                authStatus: "authenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+              profile({
+                profileId: "managed-1",
+                kind: "managed",
+                label: "Work",
+                email: "work@example.test",
+                tier: "Pro",
+                authStatus: "unauthenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+            ],
+          }),
+          loginCapability: { oauthArgs: ["auth", "login"], token: null },
+        },
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Work, Signed out" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit Work profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
+    await waitFor(() => {
+      expect(providerMocks.startLoginMutate).toHaveBeenCalledTimes(1);
+    });
+    const [, initialStartOptions] = firstStartLoginCall();
+    act(() => initialStartOptions.onError());
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(providerMocks.startLoginMutate).toHaveBeenCalledTimes(2);
+    const retryCall = providerMocks.startLoginMutate.mock.calls.at(1);
+    if (retryCall === undefined) throw new Error("Expected retry login call.");
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel sign-in" }));
+
+    expect(providerMocks.cancelLoginMutate).toHaveBeenCalledTimes(1);
+    expect(providerMocks.cancelLoginMutate).toHaveBeenCalledWith({
+      providerId: "codex",
+      profileId: "managed-1",
+    });
+    act(() => {
+      retryCall[1].onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "managed-1",
+      });
+    });
+    expect(providerMocks.cancelLoginMutate).toHaveBeenCalledTimes(1);
+    expect(providerMocks.awaitLoginMutate).not.toHaveBeenCalled();
+  });
+
+  it("signs in again for an existing profile, states when a different account was applied, and can cancel the restart", async () => {
+    providerMocks.listResult.data = {
+      providers: [
+        {
+          ...providerState({
+            providerId: "codex",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+            profiles: [
+              profile({
+                profileId: "ambient",
+                kind: "ambient",
+                label: "Terminal account",
                 email: "ambient@example.test",
                 tier: null,
                 authStatus: "authenticated",
@@ -1291,11 +1847,21 @@ describe("<ProvidersSettingsPanel />", () => {
 
     // Defaults to the ambient profile - select "Work" (signed out) first.
     fireEvent.click(screen.getByRole("menuitem", { name: "Work, Signed out" }));
-    fireEvent.click(screen.getByRole("button", { name: "Sign in again" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit Work profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
 
     await waitFor(() => {
       expect(providerMocks.startLoginMutate).toHaveBeenCalled();
     });
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    expect(screen.getByRole("dialog", { name: "Edit profile" })).toBeDefined();
+    expect(screen.getByLabelText("Profile name")).toHaveProperty(
+      "disabled",
+      true,
+    );
+    expect(
+      screen.getByRole("button", { name: "Cancel sign-in" }),
+    ).toBeDefined();
     const [startVariables, startOptions] = firstStartLoginCall();
     expect(startVariables).toEqual({
       providerId: "codex",
@@ -1362,6 +1928,23 @@ describe("<ProvidersSettingsPanel />", () => {
       profileId: "managed-1",
       createProfile: null,
     });
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel sign-in" }));
+    expect(providerMocks.cancelLoginMutate).toHaveBeenCalledTimes(1);
+    expect(providerMocks.cancelLoginMutate).toHaveBeenCalledWith({
+      providerId: "codex",
+      profileId: "managed-1",
+    });
+
+    act(() => {
+      retryCall[1].onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "managed-1",
+      });
+    });
+    expect(providerMocks.cancelLoginMutate).toHaveBeenCalledTimes(1);
+    expect(providerMocks.awaitLoginMutate).toHaveBeenCalledTimes(1);
   });
 
   it("does not show a stale identity step after cancelling a re-auth during waiting and reopening", async () => {
@@ -1377,7 +1960,7 @@ describe("<ProvidersSettingsPanel />", () => {
               profile({
                 profileId: "ambient",
                 kind: "ambient",
-                label: "Ambient",
+                label: "Terminal account",
                 email: "ambient@example.test",
                 tier: null,
                 authStatus: "authenticated",
@@ -1408,7 +1991,8 @@ describe("<ProvidersSettingsPanel />", () => {
     );
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
-    fireEvent.click(screen.getByRole("button", { name: "Sign in again" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit Work profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
 
     await waitFor(() => {
       expect(providerMocks.startLoginMutate).toHaveBeenCalled();
@@ -1430,7 +2014,7 @@ describe("<ProvidersSettingsPanel />", () => {
 
     // Cancelling kills the host's login child, which makes the in-flight
     // awaitLogin resolve (not reject) - simulate that late resolution racing
-    // the close.
+    // the inline flow's unmount.
     act(() => {
       awaitOptions.onSuccess({
         state: {
@@ -1450,7 +2034,8 @@ describe("<ProvidersSettingsPanel />", () => {
       });
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Sign in again" }));
+    expect(screen.getByRole("dialog", { name: "Edit profile" })).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
 
     expect(screen.queryByText("Signed in as")).toBeNull();
     expect(screen.getByText("Waiting for browser sign-in")).toBeDefined();
@@ -1469,7 +2054,7 @@ describe("<ProvidersSettingsPanel />", () => {
               profile({
                 profileId: "ambient",
                 kind: "ambient",
-                label: "Ambient",
+                label: "Terminal account",
                 email: "ambient@example.test",
                 tier: null,
                 authStatus: "authenticated",
@@ -1508,7 +2093,7 @@ describe("<ProvidersSettingsPanel />", () => {
               profile({
                 profileId: "ambient",
                 kind: "ambient",
-                label: "Ambient",
+                label: "Terminal account",
                 email: "ambient@example.test",
                 tier: null,
                 authStatus: "authenticated",
@@ -1540,15 +2125,13 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(checkbox);
     expect(checkbox.getAttribute("aria-checked")).toBe("false");
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Continue to sign-in" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
 
     const [startVariables] = firstStartLoginCall();
     expect(startVariables).toEqual({
       providerId: "claude-code",
       profileId: null,
-      createProfile: { label: "", shareSkillsAndPlugins: false },
+      createProfile: { label: "New profile", shareSkillsAndPlugins: false },
     });
   });
 
@@ -1565,7 +2148,7 @@ describe("<ProvidersSettingsPanel />", () => {
               profile({
                 profileId: "ambient",
                 kind: "ambient",
-                label: "Ambient",
+                label: "Terminal account",
                 email: "ambient@example.test",
                 tier: null,
                 authStatus: "authenticated",
@@ -1588,19 +2171,17 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Create new profile" }),
     );
-    fireEvent.click(
-      screen.getByRole("button", { name: "Continue to sign-in" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
 
     const [startVariables] = firstStartLoginCall();
     expect(startVariables).toEqual({
       providerId: "claude-code",
       profileId: null,
-      createProfile: { label: "", shareSkillsAndPlugins: true },
+      createProfile: { label: "New profile", shareSkillsAndPlugins: true },
     });
   });
 
-  it("redacts the newly created profile's email in the sign-in success message", async () => {
+  it("does not create a second profile when the linked account already exists", async () => {
     providerMocks.listResult.data = {
       providers: [
         {
@@ -1613,7 +2194,7 @@ describe("<ProvidersSettingsPanel />", () => {
               profile({
                 profileId: "ambient",
                 kind: "ambient",
-                label: "Ambient",
+                label: "Terminal account",
                 email: "ambient@example.test",
                 tier: null,
                 authStatus: "authenticated",
@@ -1636,9 +2217,7 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Create new profile" }),
     );
-    fireEvent.click(
-      screen.getByRole("button", { name: "Continue to sign-in" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
 
     const [, startOptions] = firstStartLoginCall();
     startOptions.onSuccess({
@@ -1652,10 +2231,10 @@ describe("<ProvidersSettingsPanel />", () => {
       state: {
         profiles: [
           profile({
-            profileId: "managed-1",
-            kind: "managed",
-            label: "Alice",
-            email: "alice@domain.com",
+            profileId: "ambient",
+            kind: "ambient",
+            label: "Terminal account",
+            email: "ambient@example.test",
             tier: null,
             authStatus: "authenticated",
             duplicateOfProfileId: null,
@@ -1663,22 +2242,28 @@ describe("<ProvidersSettingsPanel />", () => {
           }),
         ],
       },
+      existingProfileId: "ambient",
     });
 
     await waitFor(() => {
-      expect(screen.getByText("a•••@d…")).toBeDefined();
+      expect(screen.getByText("Account already linked")).toBeDefined();
     });
-    expect(screen.queryByText("alice@domain.com")).toBeNull();
+    expect(
+      screen.getByText(
+        "This account is already linked to Terminal account. No new profile was created.",
+      ),
+    ).toBeDefined();
+    expect(providerMocks.recolorProfileMutate).not.toHaveBeenCalled();
+    expect(providerMocks.removeProfileMutate).not.toHaveBeenCalled();
   });
 
-  it("warns when the selected accent color is already used by the ambient terminal account", async () => {
+  it("warns when the selected accent color is already used by the ambient terminal account", () => {
     const ambientColor = PROVIDER_PROFILE_ACCENT_COLORS[0];
-    const managedColor = PROVIDER_PROFILE_ACCENT_COLORS[1];
     const ambient = profileWithAccent(
       {
         profileId: "ambient",
         kind: "ambient",
-        label: "Ambient",
+        label: "Terminal account",
         email: "ambient@example.test",
         tier: null,
         authStatus: "authenticated",
@@ -1687,20 +2272,6 @@ describe("<ProvidersSettingsPanel />", () => {
       },
       ambientColor,
     );
-    const managed = profileWithAccent(
-      {
-        profileId: "managed-1",
-        kind: "managed",
-        label: "Alice",
-        email: "alice@domain.com",
-        tier: null,
-        authStatus: "authenticated",
-        duplicateOfProfileId: null,
-        ambientDriftNotice: null,
-      },
-      managedColor,
-    );
-
     providerMocks.listResult.data = {
       providers: [
         {
@@ -1725,32 +2296,6 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Create new profile" }),
     );
-    fireEvent.click(
-      screen.getByRole("button", { name: "Continue to sign-in" }),
-    );
-
-    const [, startOptions] = firstStartLoginCall();
-    act(() => {
-      startOptions.onSuccess({
-        url: "https://login.example.test",
-        started: true,
-        profileId: "managed-1",
-      });
-    });
-
-    const [, awaitOptions] = firstAwaitLoginCall();
-    act(() => {
-      awaitOptions.onSuccess({
-        state: {
-          profiles: [ambient, managed],
-        },
-      });
-    });
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Continue" })).toBeDefined();
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     const ambientColorButton = screen.getByRole("button", {
       name: `Use color ${ambientColor}`,
     });
@@ -1822,7 +2367,7 @@ describe("<ProvidersSettingsPanel />", () => {
             profile({
               profileId: "ambient",
               kind: "ambient",
-              label: "Ambient",
+              label: "Terminal account",
               email: "ambient@example.test",
               tier: null,
               authStatus: "authenticated",
@@ -1851,13 +2396,13 @@ describe("<ProvidersSettingsPanel />", () => {
     );
 
     // Defaults to the ambient profile - select "Work" to bring its editable
-    // details card (name field, actions) into view.
+    // details dialog (name field, actions) into view.
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
-    fireEvent.click(screen.getByRole("button", { name: "Edit name for Work" }));
-    fireEvent.change(screen.getByDisplayValue("Work"), {
+    fireEvent.click(screen.getByRole("button", { name: "Edit Work profile" }));
+    fireEvent.change(screen.getByLabelText("Profile name"), {
       target: { value: "Personal" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Save name for Work" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
 
     const [renameVariables, renameOptions] = firstRenameProfileCall();
     expect(renameVariables).toEqual({
@@ -1866,10 +2411,10 @@ describe("<ProvidersSettingsPanel />", () => {
       label: "Personal",
     });
     expect(typeof renameOptions.onSuccess).toBe("function");
+    act(() => renameOptions.onSuccess());
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Remove this profile" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Edit Work profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove profile" }));
     expect(
       screen.getByText(
         "Chats that ran on Work will show it as removed. Running sessions on this profile must be stopped first.",
@@ -1885,7 +2430,7 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(typeof removeOptions.onSuccess).toBe("function");
   });
 
-  it("removes the just-created profile when the add-profile dialog is cancelled from the identity step", () => {
+  it("automatically finalizes the chosen color after account linking", () => {
     providerMocks.listResult.data = {
       providers: [
         {
@@ -1898,7 +2443,7 @@ describe("<ProvidersSettingsPanel />", () => {
               profile({
                 profileId: "ambient",
                 kind: "ambient",
-                label: "Ambient",
+                label: "Terminal account",
                 email: "ambient@example.test",
                 tier: null,
                 authStatus: "authenticated",
@@ -1919,9 +2464,23 @@ describe("<ProvidersSettingsPanel />", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
+    fireEvent.change(screen.getByLabelText("Profile name"), {
+      target: { value: "Work" },
+    });
+    const selectedColor = PROVIDER_PROFILE_ACCENT_COLORS[2];
     fireEvent.click(
-      screen.getByRole("button", { name: "Continue to sign-in" }),
+      screen.getByRole("button", { name: `Use color ${selectedColor}` }),
     );
+    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+
+    expect(firstStartLoginCall()[0]).toEqual({
+      providerId: "codex",
+      profileId: null,
+      createProfile: {
+        label: "Work",
+        shareSkillsAndPlugins: false,
+      },
+    });
 
     const [, startOptions] = firstStartLoginCall();
     act(() => {
@@ -1940,7 +2499,7 @@ describe("<ProvidersSettingsPanel />", () => {
             profile({
               profileId: "managed-1",
               kind: "managed",
-              label: "New Profile",
+              label: "Work",
               email: "alice@domain.com",
               tier: null,
               authStatus: "authenticated",
@@ -1949,23 +2508,23 @@ describe("<ProvidersSettingsPanel />", () => {
             }),
           ],
         },
+        existingProfileId: null,
       });
     });
 
-    // The dialog has already advanced past sign-in to the identity step -
-    // cancelling here must not leave an orphaned authenticated profile.
-    expect(screen.getByRole("button", { name: "Continue" })).toBeDefined();
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-
-    const [removeVariables] = firstRemoveProfileCall();
-    expect(removeVariables).toEqual({
+    const [recolorVariables, recolorOptions] = firstRecolorProfileCall();
+    expect(recolorVariables).toEqual({
       providerId: "codex",
       profileId: "managed-1",
+      accentColor: selectedColor,
     });
-    expect(providerMocks.removeProfileMutate).toHaveBeenCalledTimes(1);
+    act(() => recolorOptions.onSuccess());
+
+    expect(providerMocks.removeProfileMutate).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog", { name: "Add profile" })).toBeNull();
   });
 
-  it("removes the just-created profile when the add-profile dialog is cancelled from the details step", () => {
+  it("closes immediately when the host already assigned the chosen color", () => {
     providerMocks.listResult.data = {
       providers: [
         {
@@ -1978,7 +2537,7 @@ describe("<ProvidersSettingsPanel />", () => {
               profile({
                 profileId: "ambient",
                 kind: "ambient",
-                label: "Ambient",
+                label: "Terminal account",
                 email: "ambient@example.test",
                 tier: null,
                 authStatus: "authenticated",
@@ -1999,9 +2558,7 @@ describe("<ProvidersSettingsPanel />", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
-    fireEvent.click(
-      screen.getByRole("button", { name: "Continue to sign-in" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
 
     const [, startOptions] = firstStartLoginCall();
     act(() => {
@@ -2011,99 +2568,16 @@ describe("<ProvidersSettingsPanel />", () => {
         profileId: "managed-1",
       });
     });
-
     const [, awaitOptions] = firstAwaitLoginCall();
     act(() => {
       awaitOptions.onSuccess({
         state: {
-          profiles: [
-            profile({
-              profileId: "managed-1",
-              kind: "managed",
-              label: "New Profile",
-              email: "alice@domain.com",
-              tier: null,
-              authStatus: "authenticated",
-              duplicateOfProfileId: null,
-              ambientDriftNotice: null,
-            }),
-          ],
-        },
-      });
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-
-    const [removeVariables] = firstRemoveProfileCall();
-    expect(removeVariables).toEqual({
-      providerId: "codex",
-      profileId: "managed-1",
-    });
-    expect(providerMocks.removeProfileMutate).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not remove the profile once the add-profile dialog is saved", () => {
-    providerMocks.listResult.data = {
-      providers: [
-        {
-          ...providerState({
-            providerId: "codex",
-            selected: { kind: "bundled" },
-            candidates: [],
-            envOverrides: [],
-            profiles: [
-              profile({
-                profileId: "ambient",
-                kind: "ambient",
-                label: "Ambient",
-                email: "ambient@example.test",
-                tier: null,
-                authStatus: "authenticated",
-                duplicateOfProfileId: null,
-                ambientDriftNotice: null,
-              }),
-            ],
-          }),
-          loginCapability: { oauthArgs: ["auth", "login"], token: null },
-        },
-      ],
-    };
-
-    render(
-      <TooltipProvider>
-        <ProvidersSettingsPanel />
-      </TooltipProvider>,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
-    fireEvent.click(
-      screen.getByRole("button", { name: "Continue to sign-in" }),
-    );
-
-    const [, startOptions] = firstStartLoginCall();
-    act(() => {
-      startOptions.onSuccess({
-        url: "https://login.example.test",
-        started: true,
-        profileId: "managed-1",
-      });
-    });
-
-    const [, awaitOptions] = firstAwaitLoginCall();
-    act(() => {
-      awaitOptions.onSuccess({
-        state: {
-          // No identity/email, so the dialog's default label already equals
-          // profile.label and its accentColor is already set - "Save
-          // profile" resolves without needing an intermediate rename/recolor
-          // round trip.
           profiles: [
             profileWithAccent(
               {
                 profileId: "managed-1",
                 kind: "managed",
-                label: "New Profile",
+                label: "New profile",
                 email: null,
                 tier: null,
                 authStatus: "authenticated",
@@ -2114,12 +2588,12 @@ describe("<ProvidersSettingsPanel />", () => {
             ),
           ],
         },
+        existingProfileId: null,
       });
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
-    fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
-
+    expect(providerMocks.recolorProfileMutate).not.toHaveBeenCalled();
     expect(providerMocks.removeProfileMutate).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog", { name: "Add profile" })).toBeNull();
   });
 });

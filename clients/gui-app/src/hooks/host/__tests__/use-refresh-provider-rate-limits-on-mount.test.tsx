@@ -7,14 +7,19 @@ import {
   type RateLimitProviderId,
 } from "@/lib/rate-limit-providers";
 
+const mocks = vi.hoisted(() => ({ scope: { hostId: "host-b" } }));
+
+vi.mock("@/hooks/rate-limits/use-rate-limit-queue-scope", () => ({
+  useRateLimitQueueScope: () => mocks.scope,
+}));
 vi.mock("@/lib/rate-limits/ephemeral-fetch-queue", () => ({
-  enqueueRateLimitFetch: vi.fn(() => Promise.resolve()),
+  enqueueRateLimitFetchForScope: vi.fn(() => Promise.resolve()),
 }));
 
 import { useRefreshProviderRateLimitsOnMount } from "@/hooks/host/use-refresh-provider-rate-limits-on-mount";
-import { enqueueRateLimitFetch } from "@/lib/rate-limits/ephemeral-fetch-queue";
+import { enqueueRateLimitFetchForScope } from "@/lib/rate-limits/ephemeral-fetch-queue";
 
-const enqueueSpy = vi.mocked(enqueueRateLimitFetch);
+const enqueueSpy = vi.mocked(enqueueRateLimitFetchForScope);
 
 function setup(providerId: RateLimitProviderId, usageUpdatedAt: number | null) {
   return renderHook(
@@ -40,10 +45,15 @@ describe("useRefreshProviderRateLimitsOnMount", () => {
   it("enqueues a force:false pull for an ephemeralProcess provider on mount", () => {
     setup("codex", null);
     expect(enqueueSpy).toHaveBeenCalledTimes(1);
-    expect(enqueueSpy).toHaveBeenCalledWith("codex", DEFAULT_ACCOUNT_CONTEXT, {
-      force: false,
-      profileId: null,
-    });
+    expect(enqueueSpy).toHaveBeenCalledWith(
+      mocks.scope,
+      "codex",
+      DEFAULT_ACCOUNT_CONTEXT,
+      {
+        force: false,
+        profileId: null,
+      },
+    );
   });
 
   it("no-ops on mount for an httpFetch provider - its query keeps TanStack's own refetchOnMount", () => {
@@ -62,6 +72,7 @@ describe("useRefreshProviderRateLimitsOnMount", () => {
     rerender({ id: "claude-code", updatedAt: null });
     expect(enqueueSpy).toHaveBeenCalledTimes(2);
     expect(enqueueSpy).toHaveBeenLastCalledWith(
+      mocks.scope,
       "claude-code",
       DEFAULT_ACCOUNT_CONTEXT,
       { force: false, profileId: null },

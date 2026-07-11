@@ -4,6 +4,7 @@ import type {
   ProviderCliState,
   ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -207,6 +208,9 @@ vi.mock("@/hooks/host/use-host-provider-rate-limits-query", () => ({
 vi.mock("@/hooks/host/use-refresh-provider-rate-limits-on-turn", () => ({
   useRefreshProviderRateLimitsOnTurn: () => {},
 }));
+vi.mock("@/hooks/host/use-refresh-provider-rate-limits-on-mount", () => ({
+  useRefreshProviderRateLimitsOnMount: () => {},
+}));
 vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
   useReactiveActiveHostId: () => "local",
 }));
@@ -233,6 +237,22 @@ vi.mock("@/lib/host", async (importOriginal) => {
 
 import { ProvidersSettingsPanel } from "@/components/settings/panels/providers-settings-panel";
 import { TooltipProvider } from "@/components/ui/tooltip";
+
+function renderProvidersSettingsPanel() {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>
+    </QueryClientProvider>,
+  );
+}
 
 const VERY_LONG_LABEL = "C".repeat(2000);
 const HTML_LOOKING_LABEL = '<img src=x onerror="alert(1)">';
@@ -331,11 +351,7 @@ describe("F4: hostile profile labels - settings Profiles section", () => {
       isError: false,
       isFetching: false,
     };
-    const { container } = render(
-      <TooltipProvider>
-        <ProvidersSettingsPanel />
-      </TooltipProvider>,
-    );
+    const { container } = renderProvidersSettingsPanel();
 
     // The section defaults to the ambient profile - select the hostile one to
     // bring its details (and the raw label) into the DOM. It then also
@@ -361,11 +377,7 @@ describe("F4: hostile profile labels - settings Profiles section", () => {
       isError: false,
       isFetching: false,
     };
-    const { container } = render(
-      <TooltipProvider>
-        <ProvidersSettingsPanel />
-      </TooltipProvider>,
-    );
+    const { container } = renderProvidersSettingsPanel();
 
     // The section defaults to the ambient profile - select the hostile one to
     // bring its details (and the raw label) into the DOM. It then also

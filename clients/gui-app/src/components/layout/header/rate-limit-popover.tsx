@@ -19,6 +19,7 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { RefreshIconButton } from "@/components/refresh-icon-button";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { AccentDot } from "@/components/providers/accent-dot";
+import { profileDisplayLabel } from "@/components/providers/provider-profile-model";
 import {
   ProviderRateLimitDetail,
   type ProviderRateLimitQueryState,
@@ -176,10 +177,6 @@ function profileLoggedInForUsage(profile: ProviderProfile): boolean {
 
 function rateLimitProfileId(profile: ProviderProfile): string | null {
   return profile.kind === "ambient" ? null : profile.profileId;
-}
-
-function profileRateLimitLabel(profile: ProviderProfile): string {
-  return profile.kind === "ambient" ? "Terminal account" : profile.label;
 }
 
 /**
@@ -988,7 +985,7 @@ function RateLimitProviderProfileRow({
               className={undefined}
             />
             <span className="min-w-0 truncate text-ui-sm font-medium text-foreground">
-              {profileRateLimitLabel(profile)}
+              {profileDisplayLabel(profile)}
             </span>
             {planLabel !== null ? (
               <Badge variant="secondary" className="font-normal">
@@ -1009,7 +1006,7 @@ function RateLimitProviderProfileRow({
         {variant === "popover-detail" ? (
           <RefreshIconButton
             onRefresh={refresh}
-            label={`Refresh ${profileRateLimitLabel(profile)}`}
+            label={`Refresh ${profileDisplayLabel(profile)}`}
             refreshing={isRefreshing}
           />
         ) : null}

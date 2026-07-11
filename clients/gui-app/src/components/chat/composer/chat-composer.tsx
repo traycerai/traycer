@@ -45,6 +45,7 @@ import { ChatComposerToolbarSlot } from "./chat-composer-toolbar-slot";
 import { createComposerPickerStore } from "./picker/composer-picker-store";
 import { ProviderReauthBanner } from "./provider-reauth-banner";
 import { ProfileRateLimitSwitchBanner } from "./profile-rate-limit-switch-banner";
+import { ChatComposerBannerPortal } from "./chat-composer-banner-portal";
 import { useChatComposerDraft } from "./use-chat-composer-draft";
 import { useChatComposerSubmit } from "./use-chat-composer-submit";
 import {
@@ -320,110 +321,119 @@ function ChatComposerImpl(props: ChatComposerProps) {
   });
 
   return (
-    <div
-      className={cn(
-        "bg-canvas px-4 pb-4",
-        topSpacing === "normal" ? "pt-4" : "pt-0",
-      )}
-    >
-      <div className="mx-auto w-full max-w-3xl">
-        {topBannerKind === "reauth" && reauthBanner !== null ? (
-          <ProviderReauthBanner
-            providerId={reauthBanner.providerId}
-            state={reauthGate.state}
-            reason={reauthBanner.reason}
-            profileLabel={reauthGate.profileLabel}
-            onContinueOnAmbient={
-              reauthBanner.reason === "provider_unauthenticated"
-                ? null
-                : () => onSwitchProfile(null)
-            }
-          />
-        ) : null}
-        {topBannerKind === "rate-limit" ? (
-          <ProfileRateLimitSwitchBanner
-            harnessId={harnessId}
-            hardLimited={rateLimitPrompt.hardLimited}
-            current={rateLimitPrompt.current}
-            alternatives={rateLimitPrompt.alternatives}
-            onSwitchProfile={onSwitchProfile}
-          />
-        ) : null}
-        {topBannerKind === "ambient-drift" &&
-        ambientDrift.pendingNotice !== null ? (
-          <AmbientDriftSendBanner
-            notice={ambientDrift.pendingNotice}
-            onContinue={continueAfterAmbientDrift}
-            onDismiss={ambientDrift.dismiss}
-          />
-        ) : null}
-        {topSlot}
-        <div className="flex flex-col gap-3">
-          <ComposerShell
-            pickerStore={pickerStore}
-            onDragOver={onDragOver}
-            onDrop={onDrop}
-            onDragEnter={onDragEnter}
-            onDragLeave={onDragLeave}
-            isDraggingFiles={isDraggingFiles}
-            attachmentsStrip={
-              <ChatComposerAttachmentsStrip
-                content={draftContent}
-                editingQueueItemId={editingQueueItemId}
-                onCancelQueueEdit={onCancelQueueEdit}
-                onRemoveImage={removeImage}
+    <>
+      {topBannerKind === "rate-limit" ? (
+        <ChatComposerBannerPortal>
+          <div className="bg-canvas px-4 pt-4">
+            <div className="mx-auto w-full max-w-3xl">
+              <ProfileRateLimitSwitchBanner
+                harnessId={harnessId}
+                hardLimited={rateLimitPrompt.hardLimited}
+                current={rateLimitPrompt.current}
+                alternatives={rateLimitPrompt.alternatives}
+                onSwitchProfile={onSwitchProfile}
+                onDismiss={rateLimitPrompt.dismiss}
               />
-            }
-            editor={
-              <ChatComposerEditorSlot
-                ref={editorRef}
-                pickerStore={pickerStore}
-                initialContent={initialContent}
-                initialSelection={initialSelection}
-                slashProviderId={harnessId}
-                isActive={isActive}
-                onSnapshot={handleSnapshot}
-                onSubmit={handleSubmitDraft}
-                onPaste={onPaste}
-                onDragOver={onDragOver}
-                onDrop={onDrop}
-                onEditorReady={handleEditorReady}
-              />
-            }
-            toolbar={
-              <ChatComposerToolbarSlot
-                store={toolbarStore}
-                onAttachImages={attachImageFiles}
-                canSubmit={canSubmit}
-                onSubmit={handleSubmitDraft}
-                activeTurnStatus={activeTurnStatus}
-                hasPendingApprovals={hasPendingApprovals}
-                stopDisabled={stopDisabled}
-                onStopTurn={onStopTurn}
-                composerDisabledHint={workspaceAvailability.disabledHint}
-                dictation={dictationControl}
-                dictationPreparing={dictationPreparing}
-                settingsLocked={false}
-                createProfileHostId={tabHostId}
-              />
-            }
-          />
-          {workspaceControls !== null ? (
-            <ComposerWorkspaceRow workspaceControls={workspaceControls} />
-          ) : null}
-        </div>
-        {unsupportedImagesMessage === null ? null : (
-          <output
-            aria-live="polite"
-            aria-atomic="true"
-            className="mt-2 text-ui-xs text-destructive"
-            data-testid="composer-image-unsupported-message"
-          >
-            {unsupportedImagesMessage}
-          </output>
+            </div>
+          </div>
+        </ChatComposerBannerPortal>
+      ) : null}
+      <div
+        className={cn(
+          "bg-canvas px-4 pb-4",
+          topSpacing === "normal" ? "pt-4" : "pt-0",
         )}
+      >
+        <div className="mx-auto w-full max-w-3xl">
+          {topBannerKind === "reauth" && reauthBanner !== null ? (
+            <ProviderReauthBanner
+              providerId={reauthBanner.providerId}
+              state={reauthGate.state}
+              reason={reauthBanner.reason}
+              profileLabel={reauthGate.profileLabel}
+              onContinueOnAmbient={
+                reauthBanner.reason === "provider_unauthenticated"
+                  ? null
+                  : () => onSwitchProfile(null)
+              }
+            />
+          ) : null}
+          {topBannerKind === "ambient-drift" &&
+          ambientDrift.pendingNotice !== null ? (
+            <AmbientDriftSendBanner
+              notice={ambientDrift.pendingNotice}
+              onContinue={continueAfterAmbientDrift}
+              onDismiss={ambientDrift.dismiss}
+            />
+          ) : null}
+          {topSlot}
+          <div className="flex flex-col gap-3">
+            <ComposerShell
+              pickerStore={pickerStore}
+              onDragOver={onDragOver}
+              onDrop={onDrop}
+              onDragEnter={onDragEnter}
+              onDragLeave={onDragLeave}
+              isDraggingFiles={isDraggingFiles}
+              attachmentsStrip={
+                <ChatComposerAttachmentsStrip
+                  content={draftContent}
+                  editingQueueItemId={editingQueueItemId}
+                  onCancelQueueEdit={onCancelQueueEdit}
+                  onRemoveImage={removeImage}
+                />
+              }
+              editor={
+                <ChatComposerEditorSlot
+                  ref={editorRef}
+                  pickerStore={pickerStore}
+                  initialContent={initialContent}
+                  initialSelection={initialSelection}
+                  slashProviderId={harnessId}
+                  isActive={isActive}
+                  onSnapshot={handleSnapshot}
+                  onSubmit={handleSubmitDraft}
+                  onPaste={onPaste}
+                  onDragOver={onDragOver}
+                  onDrop={onDrop}
+                  onEditorReady={handleEditorReady}
+                />
+              }
+              toolbar={
+                <ChatComposerToolbarSlot
+                  store={toolbarStore}
+                  onAttachImages={attachImageFiles}
+                  canSubmit={canSubmit}
+                  onSubmit={handleSubmitDraft}
+                  activeTurnStatus={activeTurnStatus}
+                  hasPendingApprovals={hasPendingApprovals}
+                  stopDisabled={stopDisabled}
+                  onStopTurn={onStopTurn}
+                  composerDisabledHint={workspaceAvailability.disabledHint}
+                  dictation={dictationControl}
+                  dictationPreparing={dictationPreparing}
+                  settingsLocked={false}
+                  createProfileHostId={tabHostId}
+                />
+              }
+            />
+            {workspaceControls !== null ? (
+              <ComposerWorkspaceRow workspaceControls={workspaceControls} />
+            ) : null}
+          </div>
+          {unsupportedImagesMessage === null ? null : (
+            <output
+              aria-live="polite"
+              aria-atomic="true"
+              className="mt-2 text-ui-xs text-destructive"
+              data-testid="composer-image-unsupported-message"
+            >
+              {unsupportedImagesMessage}
+            </output>
+          )}
+        </div>
       </div>
-    </div>
+    </>
   );
 }
 

@@ -223,6 +223,7 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
                       onProfileChange(resolvedActiveProviderId, profileId),
                   );
                 }}
+                onEditProfile={null}
                 createProfileDisabled={createProfileDisabled}
                 createProfileDisabledReason={createProfileDisabledReason}
                 shortcutHintForIndex={pickerProfileShortcutHintForIndex}

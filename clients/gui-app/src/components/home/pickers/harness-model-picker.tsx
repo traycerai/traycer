@@ -659,7 +659,6 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
             serviceTierLabel={presentation.activeServiceTierLabel}
             serviceTierActive={presentation.serviceTierActive}
             profileLabel={presentation.profileLabel}
-            hasMultipleProfiles={presentation.hasMultipleProfiles}
             profileAccentDot={presentation.profileAccentDot}
             isLoading={presentation.isLoading}
             disabled={disabled}

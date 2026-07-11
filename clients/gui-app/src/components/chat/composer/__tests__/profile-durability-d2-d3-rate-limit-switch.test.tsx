@@ -194,6 +194,7 @@ function ComposerProfileSwitchHarness() {
           current={rateLimitPrompt.current}
           alternatives={rateLimitPrompt.alternatives}
           onSwitchProfile={onSwitchProfile}
+          onDismiss={rateLimitPrompt.dismiss}
         />
       ) : null}
     </div>
@@ -264,6 +265,7 @@ function ComposerBannerPrecedenceHarness({
           current={rateLimitPrompt.current}
           alternatives={rateLimitPrompt.alternatives}
           onSwitchProfile={setProfileId}
+          onDismiss={rateLimitPrompt.dismiss}
         />
       ) : null}
     </div>
@@ -322,6 +324,42 @@ describe("D2: rate-limit switch prompt race (stale click vs. live re-validation)
   afterEach(() => {
     cleanup();
     vi.clearAllMocks();
+  });
+
+  it("dismisses the current suggestion without switching profiles and shows a new severity", () => {
+    mocks.providers = [
+      claudeState([
+        profile("ambient", "ambient", "Terminal account", "near_limit"),
+        profile("work-uuid", "managed", "Work", "ok"),
+      ]),
+    ];
+    const { rerender } = render(<ComposerProfileSwitchHarness />);
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Dismiss rate limit suggestion",
+      }),
+    );
+
+    expect(screen.getByTestId("banner-visible").textContent).toBe("false");
+    expect(screen.getByTestId("profile-id").textContent).toBe("ambient");
+    expect(screen.getByTestId("send-blocked").textContent).toBe("false");
+    expect(
+      screen.queryByRole("button", { name: /Continue this session on/ }),
+    ).toBeNull();
+
+    mocks.providers = [
+      claudeState([
+        profile("ambient", "ambient", "Terminal account", "hard_limit"),
+        profile("work-uuid", "managed", "Work", "ok"),
+      ]),
+    ];
+    rerender(<ComposerProfileSwitchHarness />);
+
+    expect(screen.getByTestId("banner-visible").textContent).toBe("true");
+    expect(
+      screen.getByRole("button", { name: "Continue this session on Work" }),
+    ).toBeDefined();
   });
 
   it("REMOVED between render and click: the click still blindly commits (no click-time re-validation), but the downstream reauth gate catches it on the very next render and blocks send", () => {

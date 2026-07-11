@@ -198,13 +198,17 @@ describe("post-v1.0 GUI harness non-breaking v2→v1 downgrade bridges", () => {
 
     const awaitLogin = providersAwaitLoginDowngradeV2ToV1.downgradeResponse({
       state,
+      existingProfileId: null,
     });
     expect(awaitLogin.ok).toBe(true);
     if (!awaitLogin.ok) return;
     expect(awaitLogin.value.state?.auth.status).toBe("unknown");
 
     expect(
-      providersAwaitLoginDowngradeV2ToV1.downgradeResponse({ state: null }),
+      providersAwaitLoginDowngradeV2ToV1.downgradeResponse({
+        state: null,
+        existingProfileId: null,
+      }),
     ).toEqual({ ok: true, value: { state: null } });
   });
 

@@ -153,6 +153,7 @@ function PreFeatureComposerHarness({
           current={rateLimitPrompt.current}
           alternatives={rateLimitPrompt.alternatives}
           onSwitchProfile={onSwitchProfile}
+          onDismiss={rateLimitPrompt.dismiss}
         />
       ) : null}
     </div>

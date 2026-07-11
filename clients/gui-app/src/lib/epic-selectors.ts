@@ -510,6 +510,50 @@ export function useEpicLiveArtifactTitle(
 }
 
 /**
+ * Live artifact title for an epic session that may be mounted elsewhere in
+ * the app. Global surfaces (for example, the resource monitor) live outside
+ * an `EpicSessionProvider`, but must use the same Y.Doc-backed title that a
+ * canvas tab uses instead of its persisted opening-name snapshot.
+ */
+export function useRegisteredEpicLiveArtifactTitle(
+  epicId: string,
+  artifactId: string | null,
+): string | null {
+  const registry = getOpenEpicRegistry();
+  const handle = useSyncExternalStore(
+    (listener) => registry.subscribe(listener),
+    () => registry.peek(epicId),
+    () => null,
+  );
+  return useSyncExternalStore(
+    (listener) => handle?.store.subscribe(listener) ?? noopSubscribe,
+    () => liveArtifactTitleFromHandle(handle, artifactId),
+    () => null,
+  );
+}
+
+function liveArtifactTitleFromHandle(
+  handle: OpenEpicStoreHandle | null,
+  artifactId: string | null,
+): string | null {
+  if (handle === null || artifactId === null) return null;
+  const state = handle.store.getState();
+  if (Object.hasOwn(state.artifacts.byId, artifactId)) {
+    const title = state.artifacts.byId[artifactId].title;
+    return title.length > 0 ? title : null;
+  }
+  if (Object.hasOwn(state.chats.byId, artifactId)) {
+    const title = state.chats.byId[artifactId].title;
+    return title.length > 0 ? title : null;
+  }
+  if (Object.hasOwn(state.tuiAgents.byId, artifactId)) {
+    const title = state.tuiAgents.byId[artifactId].title;
+    return title.length > 0 ? title : null;
+  }
+  return null;
+}
+
+/**
  * Canonical display title for a canvas tile / node. The Y.Doc live title is
  * the single source of truth; the tile's persisted `name` snapshot is only a
  * fallback for tiles that have no live title (workspace files, git diff,

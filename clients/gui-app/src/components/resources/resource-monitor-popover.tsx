@@ -1,4 +1,10 @@
-import { useMemo, useRef, useState, useSyncExternalStore } from "react";
+import {
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import type { MouseEvent, PointerEvent } from "react";
 import {
   useNavigate,
@@ -17,11 +23,16 @@ import {
 } from "lucide-react";
 import type {
   OwnerResourceSnapshotWire,
+  HostTreeResourceSnapshotWire,
+  OtherResourceSnapshotWire,
   ResourceOwnerKindWire,
   ResourceProcessSnapshotWire,
 } from "@traycer/protocol/host/resources/subscribe";
 import type { TaskLight } from "@traycer/protocol/host/epic/unary-schemas";
 import type { EpicNodeRecord } from "@/lib/artifacts/node-display";
+import { chatDisplayTitle } from "@/lib/display-title";
+import { useRegisteredEpicLiveArtifactTitle } from "@/lib/epic-selectors";
+import { terminalSessionTitle } from "@/lib/terminals/terminal-title";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -42,6 +53,7 @@ import {
 } from "@/stores/resources/resources-registry";
 import { useTitleBarDragSuppression } from "@/stores/layout/title-bar-drag-store";
 import { GlobalResourcesStreamMount } from "@/providers/resources-stream-mount";
+import { useStreamMethodSchemaVersion } from "@/lib/host/stream-runtime-context";
 import type {
   AppResourceUsage,
   TaskResourceSummary,
@@ -104,7 +116,6 @@ const desktopAppResourceListeners = new Set<() => void>();
 let desktopAppResourceSnapshot: DesktopAppResourceUsage | null = null;
 let desktopAppResourceTimer: number | null = null;
 let desktopAppResourceInFlight = false;
-const MAX_VISIBLE_PROCESS_DEPTH = 2;
 const EMPTY_RESOURCE_SUMMARY: TaskResourceSummary = {
   cpuPercent: 0,
   rssBytes: 0,
@@ -151,6 +162,9 @@ interface OwnerDisplayRow {
   readonly canOpen: boolean;
   readonly tabOrder: number;
   readonly location: OpenOwnerLocation | null;
+  readonly record: EpicNodeRecord | null;
+  readonly treeCpuPercent: number;
+  readonly treeRssBytes: number;
 }
 
 interface TaskDisplayRow {
@@ -171,16 +185,24 @@ interface DesktopResourceSummary {
 interface ProcessDisplayRow {
   readonly process: ResourceProcessSnapshotWire;
   readonly depth: number;
-  // A row at the visible-depth cap that still has descendants is an expand
-  // boundary: clicking it reveals its whole sub-tree (to the leaves) inline.
   readonly canExpand: boolean;
   readonly expanded: boolean;
-  // Descendant count, shown as "(N sub-processes)" while the boundary is closed.
   readonly hiddenCount: number;
+  readonly treeCpuPercent: number;
+  readonly treeRssBytes: number;
+  readonly children: readonly ProcessDisplayRow[];
 }
 
-// No process is expanded; used where visibility (not expansion) is all that
-// matters, e.g. deciding whether an owner row has any process rows to show.
+interface OwnerProcessRows {
+  readonly rows: readonly ProcessDisplayRow[];
+  readonly rootRows: readonly ProcessDisplayRow[];
+  readonly canExpand: boolean;
+  readonly selfCpuPercent: number;
+  readonly selfRssBytes: number;
+  readonly treeCpuPercent: number;
+  readonly treeRssBytes: number;
+}
+
 const NO_EXPANDED_PROCESSES: ReadonlySet<string> = new Set();
 
 // For process rows that can never expand (e.g. the host's single root process).
@@ -230,7 +252,7 @@ export function ResourceMonitorPopover(props: ResourceMonitorPopoverProps) {
 function ResourceMonitorContent(props: { readonly onClose: () => void }) {
   const [sortOption, setSortOption] = useState<ResourceSortOption>("memory");
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
-  const [collapsedOwners, setCollapsedOwners] = useState<Set<string>>(
+  const [expandedOwners, setExpandedOwners] = useState<Set<string>>(
     () => new Set(),
   );
   const [expandedProcesses, setExpandedProcesses] = useState<Set<string>>(
@@ -240,6 +262,7 @@ function ResourceMonitorContent(props: { readonly onClose: () => void }) {
   const sortTriggerRef = useRef<HTMLButtonElement | null>(null);
   const dismissingSortMenuRef = useRef(false);
   const projection = useGlobalResourceProjection();
+  const resourcesVersion = useStreamMethodSchemaVersion("resources.subscribe");
   const { tasks } = useCloudEpicTasksQuery(undefined, { enabled: true });
   const canvas = useResourceCanvasSnapshot();
   const navigate = useNavigate();
@@ -260,9 +283,15 @@ function ResourceMonitorContent(props: { readonly onClose: () => void }) {
     (state) => state.resolveTargetTabForEpic,
   );
   const desktopApp = useDesktopAppResourceUsage();
+  const supportsHostTree = resourcesSubscribeV12Supported(resourcesVersion);
   const summary = useMemo(
-    () => combineResourceSummary(projection.summary, desktopApp),
-    [desktopApp, projection.summary],
+    () =>
+      combineHeadlineResourceSummary(
+        supportsHostTree ? projection.hostTree : null,
+        projection.summary,
+        desktopApp,
+      ),
+    [desktopApp, projection.hostTree, projection.summary, supportsHostTree],
   );
 
   const canvasIndex = useMemo(() => buildCanvasResourceIndex(canvas), [canvas]);
@@ -289,7 +318,7 @@ function ResourceMonitorContent(props: { readonly onClose: () => void }) {
   );
 
   const toggleOwner = (key: string): void => {
-    setCollapsedOwners((previous) => {
+    setExpandedOwners((previous) => {
       const next = new Set(previous);
       if (next.has(key)) {
         next.delete(key);
@@ -491,13 +520,20 @@ function ResourceMonitorContent(props: { readonly onClose: () => void }) {
                   <TaskResourceSection
                     key={task.entry.epicId}
                     task={task}
-                    collapsedOwners={collapsedOwners}
+                    expandedOwners={expandedOwners}
                     expandedProcesses={expandedProcesses}
                     onToggleOwner={toggleOwner}
                     onToggleProcess={toggleProcess}
                     onOpenOwner={openOwner}
                   />
                 ))
+              )}
+              {!supportsHostTree || projection.other === null ? null : (
+                <OtherResourceSection
+                  other={projection.other}
+                  expandedProcesses={expandedProcesses}
+                  onToggleProcess={toggleProcess}
+                />
               )}
             </div>
           )}
@@ -705,7 +741,12 @@ function HostAppResourceSection(props: { readonly app: AppResourceUsage }) {
             canExpand: false,
             expanded: false,
             hiddenCount: 0,
+            treeCpuPercent: props.app.process.cpuPercent,
+            treeRssBytes: props.app.process.rssBytes,
+            children: [],
           }}
+          stickyTop={0}
+          labelMode="full"
           onToggleExpand={noProcessToggle}
         />
       )}
@@ -713,12 +754,31 @@ function HostAppResourceSection(props: { readonly app: AppResourceUsage }) {
   );
 }
 
-function combineResourceSummary(
-  summary: TaskResourceSummary | null,
+function resourcesSubscribeV12Supported(
+  version: { readonly major: number; readonly minor: number } | null,
+): boolean {
+  return version === null || (version.major === 1 && version.minor >= 2);
+}
+
+function combineHeadlineResourceSummary(
+  hostTree: HostTreeResourceSnapshotWire | null,
+  legacySummary: TaskResourceSummary | null,
   desktopApp: DesktopAppResourceUsage | null,
 ): TaskResourceSummary | null {
-  if (summary === null && desktopApp === null) return null;
-  const base = summary ?? EMPTY_RESOURCE_SUMMARY;
+  if (hostTree === null && legacySummary === null && desktopApp === null) {
+    return null;
+  }
+  const base =
+    hostTree === null
+      ? (legacySummary ?? EMPTY_RESOURCE_SUMMARY)
+      : {
+          cpuPercent: hostTree.cpuPercent,
+          rssBytes: hostTree.rssBytes,
+          trackedProcessCount: hostTree.processCount,
+          openTerminalCount: legacySummary?.openTerminalCount ?? 0,
+          tuiAgentCount: legacySummary?.tuiAgentCount ?? 0,
+          guiAgentCount: legacySummary?.guiAgentCount ?? 0,
+        };
   const desktop = desktopResourceSummary(desktopApp);
 
   return {
@@ -760,15 +820,30 @@ function buildEpicTitleById(
 
 function TaskResourceSection(props: {
   readonly task: TaskDisplayRow;
-  readonly collapsedOwners: ReadonlySet<string>;
+  readonly expandedOwners: ReadonlySet<string>;
   readonly expandedProcesses: ReadonlySet<string>;
   readonly onToggleOwner: (key: string) => void;
   readonly onToggleProcess: (key: string) => void;
   readonly onOpenOwner: (row: OwnerDisplayRow) => void;
 }) {
+  const headerRef = useRef<HTMLDivElement | null>(null);
+  const [headerHeight, setHeaderHeight] = useState(0);
+
+  useLayoutEffect(() => {
+    const header = headerRef.current;
+    if (header === null) return;
+    const updateHeight = () => setHeaderHeight(header.offsetHeight);
+    updateHeight();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(updateHeight);
+    observer.observe(header);
+    return () => observer.disconnect();
+  }, []);
+
   return (
     <div className="border-b border-border/50 py-1 last:border-b-0">
       <div
+        ref={headerRef}
         className={cn(
           "flex items-center justify-between px-3.5 py-1.5",
           STICKY_SECTION_HEADER,
@@ -793,8 +868,9 @@ function TaskResourceSection(props: {
           <OwnerTreeRow
             key={key}
             row={row}
-            collapsed={props.collapsedOwners.has(key)}
+            expanded={props.expandedOwners.has(key)}
             expandedProcesses={props.expandedProcesses}
+            stickyTop={headerHeight}
             onToggle={() => props.onToggleOwner(key)}
             onToggleProcess={props.onToggleProcess}
             onOpen={() => props.onOpenOwner(row)}
@@ -805,35 +881,136 @@ function TaskResourceSection(props: {
   );
 }
 
+function OtherResourceSection(props: {
+  readonly other: OtherResourceSnapshotWire;
+  readonly expandedProcesses: ReadonlySet<string>;
+  readonly onToggleProcess: (key: string) => void;
+}) {
+  const headerRef = useRef<HTMLDivElement | null>(null);
+  const [headerHeight, setHeaderHeight] = useState(0);
+  // Collapsed by default: the header aggregate says everything most users
+  // need; the per-root breakdown (provider servers, probes, misc children)
+  // is inspect-on-demand, matching collapsed-by-default owner trees.
+  const [expanded, setExpanded] = useState(false);
+  const processRows = buildProcessRows(
+    props.other.processes,
+    props.expandedProcesses,
+    props.other,
+  );
+
+  useLayoutEffect(() => {
+    const header = headerRef.current;
+    if (header === null) return;
+    const updateHeight = () => setHeaderHeight(header.offsetHeight);
+    updateHeight();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(updateHeight);
+    observer.observe(header);
+    return () => observer.disconnect();
+  }, []);
+
+  return (
+    <div className="border-b border-border/50 py-1 last:border-b-0">
+      <div
+        ref={headerRef}
+        className={cn(
+          "flex items-center justify-between px-3.5 py-1.5",
+          STICKY_SECTION_HEADER,
+        )}
+      >
+        <button
+          type="button"
+          aria-expanded={expanded}
+          aria-label={
+            expanded ? "Collapse other processes" : "Expand other processes"
+          }
+          onClick={() => setExpanded((previous) => !previous)}
+          className="flex min-w-0 items-center gap-1 text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+        >
+          {expanded ? (
+            <ChevronDown className="size-3.5 shrink-0" />
+          ) : (
+            <ChevronRight className="size-3.5 shrink-0" />
+          )}
+          <span className="min-w-0 truncate text-ui-xs font-semibold uppercase tracking-wide">
+            Other
+          </span>
+        </button>
+        <MetricPair
+          cpuPercent={processRows.treeCpuPercent}
+          rssBytes={processRows.treeRssBytes}
+          className="text-ui-sm text-foreground/90"
+        />
+      </div>
+      {!expanded
+        ? null
+        : processRows.rootRows.map((processRow) => (
+            <ProcessTreeRow
+              key={processRowKey(processRow.process)}
+              processRow={processRow}
+              stickyTop={headerHeight}
+              labelMode="compact-root"
+              onToggleExpand={props.onToggleProcess}
+            />
+          ))}
+    </div>
+  );
+}
+
 function OwnerTreeRow(props: {
   readonly row: OwnerDisplayRow;
-  readonly collapsed: boolean;
+  readonly expanded: boolean;
   readonly expandedProcesses: ReadonlySet<string>;
+  readonly stickyTop: number;
   readonly onToggle: () => void;
   readonly onToggleProcess: (key: string) => void;
   readonly onOpen: () => void;
 }) {
+  const owner = props.row.snapshot.owner;
+  const liveArtifactTitle = useRegisteredEpicLiveArtifactTitle(
+    owner.epicId,
+    owner.kind === "terminal" ? null : owner.ownerId,
+  );
+  const label = ownerLabel(
+    props.row.snapshot,
+    props.row.location,
+    props.row.record,
+    liveArtifactTitle,
+  );
   const processRows = buildProcessRows(
     props.row.snapshot.processes,
     props.expandedProcesses,
+    props.row.snapshot,
   );
-  const hasProcesses = processRows.length > 0;
+  const visibleCpuPercent = props.expanded
+    ? processRows.selfCpuPercent
+    : processRows.treeCpuPercent;
+  const visibleRssBytes = props.expanded
+    ? processRows.selfRssBytes
+    : processRows.treeRssBytes;
   return (
     <div>
-      <div className="group flex items-center transition-colors hover:bg-muted/50">
-        {hasProcesses ? (
+      <div
+        className={cn(
+          "group flex items-center transition-colors hover:bg-muted/50",
+          props.expanded && "sticky z-10 bg-popover",
+        )}
+        style={props.expanded ? { top: props.stickyTop } : undefined}
+      >
+        {processRows.canExpand ? (
           <button
             type="button"
+            aria-expanded={props.expanded}
             onClick={props.onToggle}
             className="ml-3 flex size-6 shrink-0 items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
             aria-label={
-              props.collapsed ? "Expand process tree" : "Collapse process tree"
+              props.expanded ? "Collapse process tree" : "Expand process tree"
             }
           >
-            {props.collapsed ? (
-              <ChevronRight className="size-3.5" />
-            ) : (
+            {props.expanded ? (
               <ChevronDown className="size-3.5" />
+            ) : (
+              <ChevronRight className="size-3.5" />
             )}
           </button>
         ) : (
@@ -851,7 +1028,7 @@ function OwnerTreeRow(props: {
           )}
         >
           <div className="min-w-0">
-            <div className="truncate text-ui-sm">{props.row.label}</div>
+            <div className="truncate text-ui-sm">{label}</div>
             <div className="truncate text-ui-xs text-muted-foreground">
               {ownerKindLabel(props.row.snapshot.owner.kind)}
               {props.row.snapshot.activeProcessName === null
@@ -859,19 +1036,26 @@ function OwnerTreeRow(props: {
                 : ` · ${props.row.snapshot.activeProcessName}`}
             </div>
           </div>
-          <MetricPair
-            cpuPercent={props.row.snapshot.cpuPercent}
-            rssBytes={props.row.snapshot.rssBytes}
+          <ProcessMetricPair
+            cpuPercent={visibleCpuPercent}
+            rssBytes={visibleRssBytes}
+            selfCpuPercent={processRows.selfCpuPercent}
+            selfRssBytes={processRows.selfRssBytes}
+            treeCpuPercent={processRows.treeCpuPercent}
+            treeRssBytes={processRows.treeRssBytes}
+            hasDescendants={processRows.canExpand}
             className="text-ui-sm text-foreground/90"
           />
         </button>
       </div>
-      {props.collapsed
+      {!props.expanded
         ? null
-        : processRows.map((processRow) => (
+        : processRows.rows.map((processRow) => (
             <ProcessTreeRow
               key={processRowKey(processRow.process)}
               processRow={processRow}
+              stickyTop={props.stickyTop}
+              labelMode="full"
               onToggleExpand={props.onToggleProcess}
             />
           ))}
@@ -897,39 +1081,53 @@ function ProcessRowMarker(props: {
 
 function ProcessTreeRow(props: {
   readonly processRow: ProcessDisplayRow;
+  readonly stickyTop: number;
+  readonly labelMode: "full" | "compact-root";
   readonly onToggleExpand: (key: string) => void;
 }) {
-  const { process, depth, canExpand, expanded, hiddenCount } = props.processRow;
+  const {
+    process,
+    depth,
+    canExpand,
+    expanded,
+    hiddenCount,
+    treeCpuPercent,
+    treeRssBytes,
+  } = props.processRow;
   const rowClassName =
     "flex w-full items-center justify-between gap-3 px-3.5 py-1 text-left text-muted-foreground transition-colors hover:bg-muted/40";
   const rowStyle = { paddingLeft: `calc(1.25rem + ${depth} * 1rem)` };
+  const collapsedLabel =
+    props.labelMode === "compact-root"
+      ? processCompactLeafLabel(process, hiddenCount)
+      : processLeafLabel(process, hiddenCount);
   const inner = (
     <>
       <div className="flex min-w-0 items-center gap-1.5">
         <ProcessRowMarker canExpand={canExpand} expanded={expanded} />
         <span className="min-w-0 truncate text-ui-xs">
-          {expanded
-            ? processLabel(process)
-            : processLeafLabel(process, hiddenCount)}
+          {expanded ? processLabel(process) : collapsedLabel}
         </span>
       </div>
-      <MetricPair
-        cpuPercent={process.cpuPercent}
-        rssBytes={process.rssBytes}
+      <ProcessMetricPair
+        cpuPercent={expanded ? process.cpuPercent : treeCpuPercent}
+        rssBytes={expanded ? process.rssBytes : treeRssBytes}
+        selfCpuPercent={process.cpuPercent}
+        selfRssBytes={process.rssBytes}
+        treeCpuPercent={treeCpuPercent}
+        treeRssBytes={treeRssBytes}
+        hasDescendants={canExpand}
         className="text-ui-xs text-muted-foreground/80"
       />
     </>
   );
   // Leaf and non-boundary rows are static; only an expand boundary is an
   // interactive, keyboard-reachable toggle that reveals its sub-tree inline.
-  if (!canExpand) {
-    return (
-      <div className={rowClassName} style={rowStyle}>
-        {inner}
-      </div>
-    );
-  }
-  return (
+  const row = !canExpand ? (
+    <div className={rowClassName} style={rowStyle}>
+      {inner}
+    </div>
+  ) : (
     <button
       type="button"
       aria-expanded={expanded}
@@ -943,6 +1141,68 @@ function ProcessTreeRow(props: {
     >
       {inner}
     </button>
+  );
+  return (
+    <div>
+      <div
+        className={cn(expanded && "sticky z-10 bg-popover")}
+        style={expanded ? { top: props.stickyTop } : undefined}
+      >
+        {row}
+      </div>
+      {!expanded
+        ? null
+        : props.processRow.children.map((child) => (
+            <ProcessTreeRow
+              key={processRowKey(child.process)}
+              processRow={child}
+              stickyTop={props.stickyTop}
+              labelMode="full"
+              onToggleExpand={props.onToggleExpand}
+            />
+          ))}
+    </div>
+  );
+}
+
+function ProcessMetricPair(props: {
+  readonly cpuPercent: number;
+  readonly rssBytes: number;
+  readonly selfCpuPercent: number;
+  readonly selfRssBytes: number;
+  readonly treeCpuPercent: number;
+  readonly treeRssBytes: number;
+  readonly hasDescendants: boolean;
+  readonly className: string;
+}) {
+  const metrics = (
+    <MetricPair
+      cpuPercent={props.cpuPercent}
+      rssBytes={props.rssBytes}
+      className={props.className}
+    />
+  );
+  if (!props.hasDescendants) return metrics;
+  return (
+    <TooltipWrapper
+      label={
+        <div className="space-y-1 text-ui-xs">
+          <div>
+            Self: {formatCpuPercent(props.selfCpuPercent)} CPU ·{" "}
+            {formatMemoryBytes(props.selfRssBytes)} memory
+          </div>
+          <div>
+            Tree: {formatCpuPercent(props.treeCpuPercent)} CPU ·{" "}
+            {formatMemoryBytes(props.treeRssBytes)} memory
+          </div>
+        </div>
+      }
+      side="left"
+      sideOffset={6}
+      align="center"
+    >
+      <div className="shrink-0">{metrics}</div>
+    </TooltipWrapper>
   );
 }
 
@@ -969,40 +1229,42 @@ function buildTaskRows(input: {
 }): TaskDisplayRow[] {
   const rows = input.entries.flatMap((entry): TaskDisplayRow[] => {
     if (entry.owners.length === 0) return [];
-    const owners = entry.owners
-      .filter(shouldShowOwnerRow)
-      .map((snapshot): OwnerDisplayRow => {
-        const key = ownerKey(
-          snapshot.owner.epicId,
-          snapshot.owner.kind,
-          snapshot.owner.ownerId,
-        );
-        const location = input.canvasIndex.locationByOwner.get(key) ?? null;
-        const record = input.recordByOwner.get(key) ?? null;
-        return {
-          snapshot,
-          label: ownerLabel(snapshot, location, record),
-          canOpen: canOpenOwner(snapshot, location, record),
-          tabOrder:
-            input.canvasIndex.tabOrderByOwner.get(key) ??
-            Number.MAX_SAFE_INTEGER,
-          location,
-        };
-      });
+    const owners = entry.owners.map((snapshot): OwnerDisplayRow => {
+      const key = ownerKey(
+        snapshot.owner.epicId,
+        snapshot.owner.kind,
+        snapshot.owner.ownerId,
+      );
+      const location = input.canvasIndex.locationByOwner.get(key) ?? null;
+      const record = input.recordByOwner.get(key) ?? null;
+      const processRows = buildProcessRows(
+        snapshot.processes,
+        NO_EXPANDED_PROCESSES,
+        snapshot,
+      );
+      return {
+        snapshot,
+        label: ownerLabel(snapshot, location, record, null),
+        canOpen: canOpenOwner(snapshot, location, record),
+        tabOrder:
+          input.canvasIndex.tabOrderByOwner.get(key) ?? Number.MAX_SAFE_INTEGER,
+        location,
+        record,
+        treeCpuPercent: processRows.treeCpuPercent,
+        treeRssBytes: processRows.treeRssBytes,
+      };
+    });
     if (owners.length === 0) return [];
     return [
       {
         entry,
         label: taskLabel(entry.epicId, input.canvas, input.epicTitleById),
         tabOrder: taskTabOrder(entry.epicId, input.canvas),
-        cpuPercent: entry.owners.reduce(
-          (sum, snapshot) => sum + snapshot.cpuPercent,
+        cpuPercent: owners.reduce(
+          (sum, owner) => sum + owner.treeCpuPercent,
           0,
         ),
-        rssBytes: entry.owners.reduce(
-          (sum, snapshot) => sum + snapshot.rssBytes,
-          0,
-        ),
+        rssBytes: owners.reduce((sum, owner) => sum + owner.treeRssBytes, 0),
         owners: sortOwnerRows(owners, input.sortOption),
       },
     ];
@@ -1102,10 +1364,10 @@ function sortOwnerRows(
   const sorted = [...rows];
   switch (sortOption) {
     case "memory":
-      sorted.sort((a, b) => b.snapshot.rssBytes - a.snapshot.rssBytes);
+      sorted.sort((a, b) => b.treeRssBytes - a.treeRssBytes);
       break;
     case "cpu":
-      sorted.sort((a, b) => b.snapshot.cpuPercent - a.snapshot.cpuPercent);
+      sorted.sort((a, b) => b.treeCpuPercent - a.treeCpuPercent);
       break;
     case "name":
       sorted.sort((a, b) => a.label.localeCompare(b.label));
@@ -1287,15 +1549,6 @@ function ownerKey(
   return `${epicId}\x1f${kind}\x1f${ownerId}`;
 }
 
-function shouldShowOwnerRow(snapshot: OwnerResourceSnapshotWire): boolean {
-  if (snapshot.owner.kind !== "terminal") return true;
-  // A terminal always carries its own shell, so "has a process" is always true
-  // and never filters anything. Show a terminal only once it has a sub-process
-  // worth rendering - an idle shell adds no signal over the aggregate metrics.
-  // Visibility depends only on the always-visible rows, not on expansion state.
-  return buildProcessRows(snapshot.processes, NO_EXPANDED_PROCESSES).length > 0;
-}
-
 function resourceOwnerKindForNodeType(
   type: string,
 ): ResourceOwnerKindWire | null {
@@ -1335,12 +1588,29 @@ function ownerLabel(
   snapshot: OwnerResourceSnapshotWire,
   location: OpenOwnerLocation | null,
   record: EpicNodeRecord | null,
+  liveArtifactTitle: string | null,
 ): string {
+  if (snapshot.owner.kind === "terminal") {
+    if (
+      location?.ref.type === "terminal" &&
+      location.ref.titleSource === "manual"
+    ) {
+      return location.ref.name;
+    }
+    return terminalSessionTitle({
+      title: null,
+      activeProcessName: snapshot.activeProcessName,
+    });
+  }
+  if (snapshot.owner.kind === "chat") {
+    return chatDisplayTitle({
+      title: liveArtifactTitle ?? location?.ref.name ?? record?.name ?? "",
+      firstUserMessage: null,
+    });
+  }
+  if (liveArtifactTitle !== null) return liveArtifactTitle;
   if (location !== null) return location.ref.name;
   if (record !== null) return record.name;
-  if (snapshot.owner.kind === "terminal") {
-    return snapshot.activeProcessName ?? "Terminal";
-  }
   return ownerKindLabel(snapshot.owner.kind);
 }
 
@@ -1371,7 +1641,30 @@ function processLeafLabel(
   process: ResourceProcessSnapshotWire,
   hiddenCount: number,
 ): string {
-  const label = processLabel(process);
+  return leafLabelFrom(processLabel(process), hiddenCount);
+}
+
+/**
+ * Compact label for an unattributed (Other) root: the executable basename
+ * rather than the full command path, which for provider binaries is a long
+ * install path that adds no signal at the collapsed level. The full command
+ * remains visible on the expanded row.
+ */
+function processCompactLeafLabel(
+  process: ResourceProcessSnapshotWire,
+  hiddenCount: number,
+): string {
+  return leafLabelFrom(processBasename(process), hiddenCount);
+}
+
+function processBasename(process: ResourceProcessSnapshotWire): string {
+  const source = process.name.length > 0 ? process.name : processLabel(process);
+  const segments = source.split("/");
+  const base = segments[segments.length - 1];
+  return base.length > 0 ? base : source;
+}
+
+function leafLabelFrom(label: string, hiddenCount: number): string {
   if (hiddenCount === 0) return label;
   return `${label} (${countLabel(hiddenCount, "sub-process", "sub-processes")})`;
 }
@@ -1383,65 +1676,100 @@ function processRowKey(process: ResourceProcessSnapshotWire): string {
 function buildProcessRows(
   processes: readonly ResourceProcessSnapshotWire[],
   expandedKeys: ReadonlySet<string>,
-): ProcessDisplayRow[] {
-  // A lone process - a terminal shell with nothing running under it, or an owner
-  // whose whole tree is a single process - is fully described by its owner row,
-  // so it adds no signal as a child row.
-  if (processes.length <= 1) return [];
-
-  const childrenByParent = new Map<number, ResourceProcessSnapshotWire[]>();
-  for (const process of processes) {
-    if (process.parentPid === null || process.pid === process.rootPid) continue;
-    const siblings = childrenByParent.get(process.parentPid) ?? [];
-    siblings.push(process);
-    childrenByParent.set(process.parentPid, siblings);
+  fallback: { readonly cpuPercent: number; readonly rssBytes: number },
+): OwnerProcessRows {
+  if (processes.length === 0) {
+    return {
+      rows: [],
+      rootRows: [],
+      canExpand: false,
+      selfCpuPercent: fallback.cpuPercent,
+      selfRssBytes: fallback.rssBytes,
+      treeCpuPercent: fallback.cpuPercent,
+      treeRssBytes: fallback.rssBytes,
+    };
   }
 
-  const countDescendants = (pid: number, seen: Set<number>): number => {
-    let total = 0;
-    for (const child of childrenByParent.get(pid) ?? []) {
-      if (seen.has(child.pid)) continue;
-      seen.add(child.pid);
-      total += 1 + countDescendants(child.pid, seen);
+  const processByPid = new Map(
+    processes.map((process) => [process.pid, process]),
+  );
+  const childrenByParent = processes.reduce((byParent, process) => {
+    if (process.parentPid === null || !processByPid.has(process.parentPid)) {
+      return byParent;
     }
-    return total;
-  };
+    const siblings = byParent.get(process.parentPid) ?? [];
+    siblings.push(process);
+    byParent.set(process.parentPid, siblings);
+    return byParent;
+  }, new Map<number, ResourceProcessSnapshotWire[]>());
 
-  const rows: ProcessDisplayRow[] = [];
-  const walk = (
+  // Rootness is purely structural: parentless, or parent outside this list.
+  // `pid === rootPid` must NOT qualify — an owner can carry a second tracked
+  // root that is an OS descendant of its first (e.g. a harness child under the
+  // owner's PTY), and counting it as a root while `childrenByParent` also
+  // attaches it under its in-list parent would double-count its subtree.
+  const roots = processes.filter(
+    (process) =>
+      process.parentPid === null || !processByPid.has(process.parentPid),
+  );
+  const completeRoots = roots.length === 0 ? processes : roots;
+
+  const buildRow = (
     process: ResourceProcessSnapshotWire,
     depth: number,
-    revealed: boolean,
-    seen: Set<number>,
-  ): void => {
-    const children = childrenByParent.get(process.pid) ?? [];
-    // Only the deepest always-visible level acts as an expand boundary; once it
-    // is expanded (or an ancestor boundary is), the sub-tree renders to leaves.
-    const atBoundary =
-      depth === MAX_VISIBLE_PROCESS_DEPTH && children.length > 0;
-    const expanded = atBoundary && expandedKeys.has(processRowKey(process));
-    rows.push({
+    ancestors: ReadonlySet<number>,
+  ): ProcessDisplayRow => {
+    const childProcesses = (childrenByParent.get(process.pid) ?? []).filter(
+      (child) => !ancestors.has(child.pid),
+    );
+    const nextAncestors = new Set(ancestors);
+    nextAncestors.add(process.pid);
+    const children = childProcesses.map((child) =>
+      buildRow(child, depth + 1, nextAncestors),
+    );
+    const treeCpuPercent = children.reduce(
+      (sum, child) => sum + child.treeCpuPercent,
+      process.cpuPercent,
+    );
+    const treeRssBytes = children.reduce(
+      (sum, child) => sum + child.treeRssBytes,
+      process.rssBytes,
+    );
+    return {
       process,
       depth,
-      canExpand: atBoundary,
-      expanded,
-      hiddenCount: atBoundary
-        ? countDescendants(process.pid, new Set([process.pid]))
-        : 0,
-    });
-    if (depth >= MAX_VISIBLE_PROCESS_DEPTH && !expanded && !revealed) return;
-    for (const child of children) {
-      if (seen.has(child.pid)) continue;
-      seen.add(child.pid);
-      walk(child, depth + 1, expanded || revealed, seen);
-    }
+      canExpand: children.length > 0,
+      expanded: children.length > 0 && expandedKeys.has(processRowKey(process)),
+      hiddenCount: children.reduce(
+        (sum, child) => sum + 1 + child.hiddenCount,
+        0,
+      ),
+      treeCpuPercent,
+      treeRssBytes,
+      children,
+    };
   };
 
-  for (const root of processes) {
-    if (root.pid !== root.rootPid) continue;
-    walk(root, 1, false, new Set([root.pid]));
-  }
-  return rows;
+  const rootRows = completeRoots.map((root) => buildRow(root, 0, new Set()));
+  const rows = rootRows.flatMap((root) => root.children);
+  return {
+    rows,
+    rootRows,
+    canExpand: rows.length > 0,
+    selfCpuPercent: rootRows.reduce(
+      (sum, root) => sum + root.process.cpuPercent,
+      0,
+    ),
+    selfRssBytes: rootRows.reduce(
+      (sum, root) => sum + root.process.rssBytes,
+      0,
+    ),
+    treeCpuPercent: rootRows.reduce(
+      (sum, root) => sum + root.treeCpuPercent,
+      0,
+    ),
+    treeRssBytes: rootRows.reduce((sum, root) => sum + root.treeRssBytes, 0),
+  };
 }
 
 function countLabel(count: number, singular: string, plural: string): string {

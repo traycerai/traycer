@@ -1,5 +1,5 @@
 /**
- * `resources.subscribe@1.0` / `@1.1` - versioned streaming-RPC contract for
+ * `resources.subscribe@1.0` / `@1.1` / `@1.2` - versioned streaming-RPC contract for
  * live process-resource snapshots.
  *
  * Subscribing opens a per-epic view over the host's `ResourceTracker`: the
@@ -143,7 +143,35 @@ export const appResourceSnapshotSchema = z.object({
 });
 export type AppResourceSnapshotWire = z.infer<typeof appResourceSnapshotSchema>;
 
-const resourcesProjectionFields = {
+/** Aggregate resource use for the host process and all of its descendants. */
+export const hostTreeResourceSnapshotSchema = z.object({
+  sampledAt: z.number(),
+  processCount: z.number().int().nonnegative(),
+  cpuPercent: z.number(),
+  rssBytes: z.number().int().nonnegative(),
+});
+export type HostTreeResourceSnapshotWire = z.infer<
+  typeof hostTreeResourceSnapshotSchema
+>;
+
+/**
+ * Host-tree processes that are not charged to an owner. Process readings are
+ * self values only; consumers derive inclusive subtree totals from the process
+ * parent/root relationships.
+ */
+export const otherResourceSnapshotSchema = z.object({
+  sampledAt: z.number(),
+  rootPids: z.array(z.number().int().nonnegative()),
+  processCount: z.number().int().nonnegative(),
+  cpuPercent: z.number(),
+  rssBytes: z.number().int().nonnegative(),
+  processes: z.array(resourceProcessSnapshotSchema),
+});
+export type OtherResourceSnapshotWire = z.infer<
+  typeof otherResourceSnapshotSchema
+>;
+
+const resourcesProjectionFieldsV11 = {
   epicId: z.string(),
   sampledAt: z.number(),
   app: appResourceSnapshotSchema.nullable(),
@@ -155,16 +183,18 @@ const resourcesProjectionFields = {
   hasBinaryPayload: z.literal(false),
 } as const;
 
+// Frozen `resources.subscribe@1.0` / `@1.1` frame shape. Do not add fields
+// here: a resolver serving either minor must emit precisely this projection.
 export const resourcesSubscribeServerFrameSchema = z.discriminatedUnion(
   "kind",
   [
     z.object({
       kind: z.literal("snapshot"),
-      ...resourcesProjectionFields,
+      ...resourcesProjectionFieldsV11,
     }),
     z.object({
       kind: z.literal("update"),
-      ...resourcesProjectionFields,
+      ...resourcesProjectionFieldsV11,
     }),
     z.object({
       kind: z.literal("pong"),
@@ -174,6 +204,33 @@ export const resourcesSubscribeServerFrameSchema = z.discriminatedUnion(
 );
 export type ResourcesSubscribeServerFrame = z.infer<
   typeof resourcesSubscribeServerFrameSchema
+>;
+
+const resourcesProjectionFieldsV12 = {
+  ...resourcesProjectionFieldsV11,
+  hostTree: hostTreeResourceSnapshotSchema.nullable(),
+  other: otherResourceSnapshotSchema.nullable(),
+} as const;
+
+export const resourcesSubscribeServerFrameSchemaV12 = z.discriminatedUnion(
+  "kind",
+  [
+    z.object({
+      kind: z.literal("snapshot"),
+      ...resourcesProjectionFieldsV12,
+    }),
+    z.object({
+      kind: z.literal("update"),
+      ...resourcesProjectionFieldsV12,
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      hasBinaryPayload: z.literal(false),
+    }),
+  ],
+);
+export type ResourcesSubscribeServerFrameV12 = z.infer<
+  typeof resourcesSubscribeServerFrameSchemaV12
 >;
 
 export const resourcesSubscribeClientFrameSchema = z.discriminatedUnion(
@@ -202,5 +259,13 @@ export const resourcesSubscribeV11 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 1 } as const,
   openRequestSchema: resourcesSubscribeOpenRequestV11Schema,
   serverFrameSchema: resourcesSubscribeServerFrameSchema,
+  clientFrameSchema: resourcesSubscribeClientFrameSchema,
+});
+
+export const resourcesSubscribeV12 = defineStreamRpcContract({
+  method: "resources.subscribe",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  openRequestSchema: resourcesSubscribeOpenRequestV11Schema,
+  serverFrameSchema: resourcesSubscribeServerFrameSchemaV12,
   clientFrameSchema: resourcesSubscribeClientFrameSchema,
 });
