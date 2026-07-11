@@ -8,6 +8,7 @@ import {
   WORKTREE_TIER_ORDER,
   classifyWorktree,
   classifyWorktreeTier,
+  describeReviewReasons,
   provenRemovable,
   worktreeTierRank,
   type WorktreeTier,
@@ -38,6 +39,8 @@ function subFact(
     mergedHeadShaMatches: false,
     mergedIntoDefault: false,
     atPinnedCommit: false,
+    unmergedCommitCount: null,
+    unmergedCommitSubjects: null,
     ...over,
   };
 }
@@ -655,5 +658,89 @@ describe("provenRemovable - single green / bulk-eligible predicate", () => {
         greens.has(classifyWorktreeTier(sample)),
       );
     }
+  });
+});
+
+describe("describeReviewReasons", () => {
+  it("names a closed superproject PR instead of the generic fallback", () => {
+    expect(
+      describeReviewReasons(
+        entry({
+          prState: "closed",
+          branchStatus: status({ ahead: 2, mergedIntoDefault: false }),
+        }),
+      ),
+    ).toEqual(["Superproject PR was closed without merging"]);
+  });
+
+  it("names the never-pushed shape: no PR, no upstream, not contained", () => {
+    // The gui-agent-cli-env fleet shape: clean tree, local-only commits, no PR
+    // ever, branch never pushed (`ahead: null`). Falling back to the generic
+    // tier help here hid the highest-stakes warning - these commits exist
+    // nowhere else.
+    expect(
+      describeReviewReasons(
+        entry({
+          prState: "none",
+          branchStatus: status({ ahead: null, mergedIntoDefault: false }),
+        }),
+      ),
+    ).toEqual([
+      "Commits with no PR that were never pushed - they exist only in this worktree",
+    ]);
+  });
+
+  it("returns every applicable dirty, submodule, and superproject reason", () => {
+    expect(
+      describeReviewReasons(
+        entry({
+          uncommittedCount: 2,
+          prState: "open",
+          branchStatus: status({ ahead: 3 }),
+          submodules: [
+            subFact({
+              branch: "traycer/lib",
+              prState: "none",
+              unmergedCommitCount: 4,
+              unmergedCommitSubjects: ["Newest"],
+            }),
+          ],
+        }),
+      ),
+    ).toEqual([
+      "2 uncommitted changes",
+      "acme/lib (traycer/lib): 4 unmerged commits",
+      "Superproject PR is open",
+    ]);
+  });
+
+  it("describes each submodule state and the remaining superproject blockers", () => {
+    expect(
+      describeReviewReasons(
+        entry({
+          prState: "merged",
+          mergedHeadShaMatches: false,
+          owners: [owner("epic-1")],
+          branchStatus: status({ ahead: 0 }),
+          submodules: [
+            subFact({ branch: "open", prState: "open" }),
+            subFact({ branch: "cold", prState: null }),
+          ],
+        }),
+      ),
+    ).toEqual([
+      "acme/lib (open): PR is open",
+      "acme/lib (cold): still checking merge status",
+      "Merged PR does not cover the current HEAD",
+      "Referenced by a Task at the upstream tip",
+    ]);
+  });
+
+  it("is empty for every non-review tier", () => {
+    expect(
+      describeReviewReasons(
+        entry({ prState: "merged", mergedHeadShaMatches: true }),
+      ),
+    ).toEqual([]);
   });
 });

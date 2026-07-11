@@ -50,6 +50,7 @@ import {
   WORKTREE_TIER_TOOLTIP,
   classifyWorktree,
   classifyWorktreeTier,
+  describeReviewReasons,
   type WorktreeTier,
 } from "@traycer-clients/shared/worktree/classify-worktree";
 import {
@@ -2005,7 +2006,11 @@ const WorktreeRow = memo(function WorktreeRow(props: {
       </div>
       <div className="min-w-0 flex-1 space-y-1 pr-10">
         <div className="flex flex-wrap items-center gap-2">
-          <WorktreeTierPill tier={classification.tier} state={enrichment} />
+          <WorktreeTierPill
+            entry={entry}
+            tier={classification.tier}
+            state={enrichment}
+          />
           <WorktreePrChips entry={entry} />
           <span className="truncate text-ui-sm font-medium text-foreground">
             {branchLabel(entry)}
@@ -2056,6 +2061,7 @@ const WorktreeRow = memo(function WorktreeRow(props: {
  * amber; `orphaned` and `in-use` stay neutral.
  */
 function WorktreeTierPill(props: {
+  readonly entry: WorktreeHostEntryV12;
   readonly tier: WorktreeTier;
   readonly state: WorktreeEnrichmentState;
 }): ReactNode {
@@ -2115,9 +2121,23 @@ function WorktreeTierPill(props: {
     );
   }
   const style = WORKTREE_TIER_PILL_STYLE[props.tier];
+  const reviewReasons =
+    props.tier === "review" && props.entry.branchStatus !== null
+      ? describeReviewReasons(props.entry)
+      : [];
+  const tooltip =
+    reviewReasons.length === 0 ? (
+      WORKTREE_TIER_TOOLTIP[props.tier]
+    ) : (
+      <div className="max-w-[min(90vw,24rem)] space-y-1">
+        {reviewReasons.map((reason) => (
+          <p key={reason}>{reason}</p>
+        ))}
+      </div>
+    );
   return (
     <TooltipWrapper
-      label={WORKTREE_TIER_TOOLTIP[props.tier]}
+      label={tooltip}
       side="top"
       sideOffset={undefined}
       align="center"
@@ -2210,6 +2230,7 @@ interface WorktreePrChipModel {
 interface WorktreeMutedPrChipModel {
   readonly key: string;
   readonly label: string;
+  readonly tooltip: ReactNode;
 }
 
 function WorktreePrChips(props: {
@@ -2289,10 +2310,46 @@ function submoduleUnmergedChip(
   ) {
     return [];
   }
+  const count = submodule.unmergedCommitCount ?? null;
+  const subjects = submodule.unmergedCommitSubjects ?? null;
+  // Subjects are display-only and NOT unique ("wip", "Merge branch …" repeat),
+  // so key each by its occurrence ordinal - unique without leaning on the
+  // array index (react/no-array-index-key).
+  const occurrences = new Map<string, number>();
+  const subjectItems = (subjects ?? []).map((subject) => {
+    const ordinal = (occurrences.get(subject) ?? 0) + 1;
+    occurrences.set(subject, ordinal);
+    return { key: `${subject}#${ordinal}`, subject };
+  });
   return [
     {
       key: `submodule-unmerged:${submodule.repoIdentifier.owner}/${submodule.repoIdentifier.repo}:${submodule.branch}`,
-      label: `${submodule.repoIdentifier.repo} · unmerged`,
+      label:
+        count !== null && count >= 1
+          ? `${submodule.repoIdentifier.repo} · ${count} unmerged commit${count === 1 ? "" : "s"}`
+          : `${submodule.repoIdentifier.repo} · unmerged commits`,
+      tooltip: (
+        <div className="max-w-[min(90vw,24rem)] space-y-1.5">
+          <p>
+            This submodule branch has commits that never landed on{" "}
+            {submodule.repoIdentifier.repo}'s main branch. Deleting the worktree
+            deletes the branch and these commits with it
+            {subjects === null ? "." : ":"}
+          </p>
+          {subjects === null ? null : (
+            <>
+              <ul className="list-inside list-disc">
+                {subjectItems.map((item) => (
+                  <li key={item.key}>{item.subject}</li>
+                ))}
+              </ul>
+              {count !== null && count > subjects.length ? (
+                <p>…and {count - subjects.length} more</p>
+              ) : null}
+            </>
+          )}
+        </div>
+      ),
     },
   ];
 }
@@ -2360,16 +2417,23 @@ function WorktreeMutedPrChip(props: {
   readonly chip: WorktreeMutedPrChipModel;
 }): ReactNode {
   return (
-    <Badge
-      variant="outline"
-      className="gap-1 border-border/40 bg-muted/30 font-medium text-muted-foreground"
-      data-testid="worktree-pr-chip"
-      data-pr-state="unmerged"
+    <TooltipWrapper
+      label={props.chip.tooltip}
+      side="top"
+      sideOffset={undefined}
+      align="center"
     >
-      <span className="max-w-[min(60vw,16rem)] truncate">
-        {props.chip.label}
-      </span>
-    </Badge>
+      <Badge
+        variant="outline"
+        className="gap-1 border-border/40 bg-muted/30 font-medium text-muted-foreground"
+        data-testid="worktree-pr-chip"
+        data-pr-state="unmerged"
+      >
+        <span className="max-w-[min(60vw,16rem)] truncate">
+          {props.chip.label}
+        </span>
+      </Badge>
+    </TooltipWrapper>
   );
 }
 

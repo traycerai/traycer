@@ -382,6 +382,8 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
       mergedHeadShaMatches: false,
       mergedIntoDefault: false,
       atPinnedCommit: false,
+      unmergedCommitCount: null,
+      unmergedCommitSubjects: null,
     };
     const coldEntry: WorktreeHostEntryV12 = {
       ...enrichedEntry("/wt/a", "feat-a"),

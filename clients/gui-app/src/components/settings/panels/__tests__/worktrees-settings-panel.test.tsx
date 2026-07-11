@@ -19,7 +19,10 @@ import { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream
 import type { WorktreeDeleteStreamCallbacks } from "@traycer-clients/shared/host-transport/worktree-delete-stream-client";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/index";
-import type { WorktreeEntryScripts } from "@traycer/protocol/host/worktree-schemas";
+import type {
+  WorktreeEntryScripts,
+  WorktreeSubmoduleMergeFactV12,
+} from "@traycer/protocol/host/worktree-schemas";
 import {
   hostStreamRpcRegistry,
   type HostStreamRpcRegistry,
@@ -207,12 +210,25 @@ function stubOpenStreamTransport() {
   };
 }
 
+type WorktreeSubmoduleMergeFactInput = Omit<
+  WorktreeSubmoduleMergeFactV12,
+  "unmergedCommitCount" | "unmergedCommitSubjects"
+> &
+  Partial<
+    Pick<
+      WorktreeSubmoduleMergeFactV12,
+      "unmergedCommitCount" | "unmergedCommitSubjects"
+    >
+  >;
+
 function entry(
-  over: Partial<WorktreeHostEntryV12> & {
+  over: Partial<Omit<WorktreeHostEntryV12, "submodules">> & {
     worktreePath: string;
     branch: string;
+    submodules?: readonly WorktreeSubmoduleMergeFactInput[];
   },
 ): WorktreeHostEntryV12 {
+  const { submodules, ...rest } = over;
   return {
     repoLabel: "acme/app",
     repoIdentifier: { owner: "acme", repo: "app" },
@@ -230,9 +246,14 @@ function entry(
     prNumber: null,
     prUrl: null,
     mergedHeadShaMatches: false,
-    submodules: [],
+    submodules:
+      submodules?.map((submodule) => ({
+        ...submodule,
+        unmergedCommitCount: submodule.unmergedCommitCount ?? null,
+        unmergedCommitSubjects: submodule.unmergedCommitSubjects ?? null,
+      })) ?? [],
     atBaseCommit: false,
-    ...over,
+    ...rest,
   };
 }
 
@@ -402,9 +423,15 @@ describe("useWorktreeListing", () => {
           "worktree.listAllForHost": (params) => {
             requests.push(params);
             if (params.cursor === null) {
-              return { worktrees: [first], nextCursor: first.worktreePath };
+              return {
+                worktrees: [first],
+                nextCursor: first.worktreePath,
+              };
             }
-            return { worktrees: [second], nextCursor: null };
+            return {
+              worktrees: [second],
+              nextCursor: null,
+            };
           },
         },
       }),
@@ -459,7 +486,10 @@ describe("useWorktreeListing", () => {
           "worktree.listAllForHost": (params) => {
             if (params.cursor === null) {
               firstPageCalls += 1;
-              return { worktrees: [first], nextCursor: first.worktreePath };
+              return {
+                worktrees: [first],
+                nextCursor: first.worktreePath,
+              };
             }
             secondPageCalls += 1;
             throw new Error("host unreachable");
@@ -2161,7 +2191,126 @@ describe("WorktreesList v1.2 signals", () => {
     expect(
       screen.queryByRole("link", { name: "Open cold-sub PR #15" }),
     ).toBeNull();
-    screen.getByText("none-sub · unmerged");
+    screen.getByText("none-sub · unmerged commits");
+  });
+
+  it("explains unmerged submodule commits with a count and newest subjects", async () => {
+    const submodule: WorktreeSubmoduleMergeFactV12 = {
+      repoIdentifier: { owner: "acme", repo: "traycer" },
+      branch: "traycer/feature",
+      prState: "none",
+      prNumber: null,
+      prUrl: null,
+      mergedHeadShaMatches: false,
+      mergedIntoDefault: false,
+      atPinnedCommit: false,
+      unmergedCommitCount: 7,
+      unmergedCommitSubjects: [
+        "Newest change",
+        "Fourth change",
+        "Third change",
+        "Second change",
+        "First change",
+      ],
+    };
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [
+        entry({
+          worktreePath: "/wt/unmerged",
+          branch: "feat-unmerged",
+          submodules: [submodule],
+        }),
+      ],
+      taskTitlesByEpicId: undefined,
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      onVisiblePathsChange: undefined,
+    });
+
+    const chip = screen.getByTestId("worktree-pr-chip");
+    screen.getByText("traycer · 7 unmerged commits");
+    fireEvent.pointerMove(chip);
+    expect(
+      (
+        await screen.findAllByText(
+          "This submodule branch has commits that never landed on traycer's main branch. Deleting the worktree deletes the branch and these commits with it:",
+        )
+      ).length,
+    ).toBeGreaterThan(0);
+    expect(screen.getAllByText("Newest change").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("First change").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("…and 2 more").length).toBeGreaterThan(0);
+  });
+
+  it("lists every Review reason once activity enrichment is available", async () => {
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [
+        entry({
+          worktreePath: "/wt/review-reasons",
+          branch: "feat-review",
+          uncommittedCount: 2,
+          branchStatus: { ahead: 2, behind: 0, mergedIntoDefault: false },
+          submodules: [
+            {
+              repoIdentifier: { owner: "acme", repo: "lib" },
+              branch: "traycer/lib",
+              prState: "none",
+              prNumber: null,
+              prUrl: null,
+              mergedHeadShaMatches: false,
+              mergedIntoDefault: false,
+              atPinnedCommit: false,
+              unmergedCommitCount: 3,
+              unmergedCommitSubjects: ["Newest"],
+            },
+          ],
+        }),
+      ],
+      taskTitlesByEpicId: undefined,
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      onVisiblePathsChange: undefined,
+    });
+
+    fireEvent.pointerMove(screen.getByTestId("worktree-tier-pill"));
+    expect(
+      (await screen.findAllByText("2 uncommitted changes")).length,
+    ).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText("acme/lib (traycer/lib): 3 unmerged commits").length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("keeps the generic Review tooltip before activity enrichment", async () => {
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [
+        entry({
+          worktreePath: "/wt/review-fallback",
+          branch: "feat-review",
+          uncommittedCount: 1,
+          branchStatus: null,
+        }),
+      ],
+      taskTitlesByEpicId: undefined,
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      onVisiblePathsChange: undefined,
+    });
+
+    fireEvent.pointerMove(screen.getByTestId("worktree-tier-pill"));
+    expect(
+      (
+        await screen.findAllByText(
+          "Not proven safe to remove: it has uncommitted changes, unmerged or unpushed commits, an unmerged submodule branch, a detached HEAD, or unknown branch status. Review before deleting.",
+        )
+      ).length,
+    ).toBeGreaterThan(0);
   });
 
   it("hides PR facts from the row facts line now that chips carry the links", () => {

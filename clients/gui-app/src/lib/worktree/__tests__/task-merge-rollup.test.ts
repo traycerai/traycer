@@ -34,6 +34,8 @@ function submodule(
     mergedHeadShaMatches: false,
     mergedIntoDefault: false,
     atPinnedCommit: false,
+    unmergedCommitCount: null,
+    unmergedCommitSubjects: null,
     ...over,
   };
 }
