@@ -113,7 +113,7 @@ import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
 import { useRelativeTimestamp } from "@/lib/relative-time";
 import { useCloudEpicTasksQuery } from "@/hooks/epics/use-cloud-epic-tasks-query";
 import { readEpicTitlesFromCloudTaskCaches } from "@/lib/cloud-epic-tasks-query/cache";
-import { WORKTREE_BINDING_INVALIDATIONS } from "@/hooks/worktree/invalidations";
+import { invalidateWorktreeListingAndBindingCaches } from "@/hooks/worktree/invalidations";
 import {
   backgroundForegroundWorktreeDeleteForHost,
   clearSettledWorktreeDeleteSuccessesForHostIfQuiescent,
@@ -3334,30 +3334,9 @@ function invalidateWorktreeDeleteCaches(
   queryClient: QueryClient,
   hostId: string,
 ): void {
-  // The listing scope must stay `refetchType: "active"`: the enrichment sweep
-  // keeps an observer-less per-path cache entry for EVERY worktree, so "all"
-  // would refetch the whole list in one concurrent fan-out after each delete.
-  // "active" refetches the mounted base list / on-screen rows in place and
-  // only MARKS the rest invalidated - the sweep re-probes those in bounded
-  // chunks while the panel is open, and an invalidated entry refetches on its
-  // next observer mount regardless of staleTime.
-  void queryClient.invalidateQueries({
-    queryKey: hostQueryKeys.methodScope(hostId, "worktree.listAllForHost"),
-    refetchType: "active",
-  });
-  // The binding-backed pickers (git-diff worktree picker, the folder chip, the
-  // create-worktree dialog) keep `refetchType: "all"`: they are often unmounted
-  // when a delete runs from Settings, the app's query defaults skip
-  // refetch-on-focus (and the git picker pins `staleTime: Infinity`), so a
-  // plain invalidate would leave them serving the pre-delete binding until they
-  // next remounted. Each of these scopes is a handful of small queries, not a
-  // per-path fan-out.
-  for (const method of WORKTREE_BINDING_INVALIDATIONS) {
-    void queryClient.invalidateQueries({
-      queryKey: hostQueryKeys.methodScope(hostId, method),
-      refetchType: "all",
-    });
-  }
+  // Listing ("active", sweep-aware) + binding-backed pickers ("all") - the
+  // shared post-delete slice; see the helper for the refetchType rationale.
+  invalidateWorktreeListingAndBindingCaches(queryClient, hostId);
   // A deleted worktree's directory is gone, so its cached `git.getCapabilities`
   // (5-min staleTime) would otherwise keep reporting the stale `available: true`
   // and strand the git panel. Force a re-probe so the gate sees the repo is

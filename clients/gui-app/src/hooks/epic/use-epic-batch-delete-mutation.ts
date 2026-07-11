@@ -12,7 +12,7 @@ import type {
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { hostQueryKeys, epicMutationKeys } from "@/lib/query-keys";
-import { WORKTREE_BINDING_INVALIDATIONS } from "@/hooks/worktree/invalidations";
+import { invalidateWorktreeListingAndBindingCaches } from "@/hooks/worktree/invalidations";
 import { useWorktreeDeleteStreamTransportFactory } from "@/lib/host/use-worktree-delete-stream-transport";
 import {
   runWorktreeCleanup,
@@ -357,24 +357,11 @@ function emitTaskDeleteSummaryToast(
 
 // Refresh the host-wide worktree list plus the shared binding-backed caches
 // after the cleanup lands, so Settings ▸ Worktrees and the folder/worktree
-// pickers stop showing the removed worktrees. Mirrors the Settings delete
-// flow's invalidation: the listing scope stays `refetchType: "active"` (the
-// enrichment sweep keeps an observer-less per-path entry for EVERY worktree,
-// so "all" would fan out the whole list; invalidated entries re-probe via the
-// sweep or on their next observer mount), while the binding-backed picker
-// scopes keep "all" to reach the often-unmounted pickers eagerly.
+// pickers stop showing the removed worktrees. Shares the Settings delete
+// flow's invalidation slice; see the helper for the refetchType rationale.
 function invalidateWorktreeCachesForHost(
   queryClient: QueryClient,
   hostId: string,
 ): void {
-  void queryClient.invalidateQueries({
-    queryKey: hostQueryKeys.methodScope(hostId, "worktree.listAllForHost"),
-    refetchType: "active",
-  });
-  for (const method of WORKTREE_BINDING_INVALIDATIONS) {
-    void queryClient.invalidateQueries({
-      queryKey: hostQueryKeys.methodScope(hostId, method),
-      refetchType: "all",
-    });
-  }
+  invalidateWorktreeListingAndBindingCaches(queryClient, hostId);
 }
