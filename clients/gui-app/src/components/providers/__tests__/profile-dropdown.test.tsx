@@ -184,6 +184,10 @@ describe("<ProfileDropdown />", () => {
 
     const edit = screen.getByRole("button", { name: "Edit Work profile" });
     expect(edit.previousElementSibling?.textContent).toBe("Work");
+    expect(edit.previousElementSibling?.getAttribute("aria-hidden")).toBe(
+      "true",
+    );
+    expect(edit.closest('[aria-hidden="true"]')).toBeNull();
     fireEvent.click(edit);
     expect(onEditProfile).toHaveBeenCalledTimes(1);
   });

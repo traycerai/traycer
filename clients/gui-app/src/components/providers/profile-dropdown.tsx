@@ -128,7 +128,10 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
               size="default"
               className={undefined}
             />
-            <span className="min-w-0 truncate text-left font-medium">
+            <span
+              aria-hidden="true"
+              className="min-w-0 truncate text-left font-medium"
+            >
               {profileDisplayLabel(activeProfile)}
             </span>
             <button
@@ -140,7 +143,10 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
               <Pencil className="size-3.5" />
             </button>
             <span className="min-w-0 flex-1" />
-            <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
+            <ChevronDown
+              aria-hidden="true"
+              className="size-4 shrink-0 text-muted-foreground"
+            />
           </div>
         </div>
       )}

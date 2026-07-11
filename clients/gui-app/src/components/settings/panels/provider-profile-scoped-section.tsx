@@ -236,6 +236,7 @@ export function ProviderProfileScopedSection(
         <EmbeddedProviderRateLimitForProvider
           providerId={state.providerId}
           profileId={profileCommitId(selectedProfile)}
+          usageUpdatedAt={selectedProfile.usageUpdatedAt}
         />
       </div>
 
@@ -332,7 +333,7 @@ function AmbientDriftNotice({
       </span>
       <button
         type="button"
-        aria-label="Dismiss terminal account change notice"
+        aria-label="Dismiss ambient account change notice"
         className="rounded p-0.5 text-current opacity-70 transition-opacity hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
         onClick={onDismiss}
       >
@@ -408,12 +409,13 @@ function ProfileEditDialog({
   const [switchingAccount, setSwitchingAccount] = useState(false);
   const [confirmRemoveOpen, setConfirmRemoveOpen] = useState(false);
   const [label, setLabel] = useState(profile.label);
+  const [committedLabel, setCommittedLabel] = useState(profile.label);
   const [accentColor, setAccentColor] =
     useState<ProviderProfileAccentColor | null>(profile.accentColor);
   const trimmedLabel = label.trim();
   const savePending = renameProfile.isPending || recolorProfile.isPending;
   const changed =
-    trimmedLabel !== profile.label || accentColor !== profile.accentColor;
+    trimmedLabel !== committedLabel || accentColor !== profile.accentColor;
   const invalid = trimmedLabel.length === 0;
 
   const commitProfile = (onSuccess: () => void): void => {
@@ -432,14 +434,19 @@ function ProfileEditDialog({
         { onSuccess },
       );
     };
-    if (trimmedLabel !== profile.label) {
+    if (trimmedLabel !== committedLabel) {
       renameProfile.mutate(
         {
           providerId,
           profileId: profile.profileId,
           label: trimmedLabel,
         },
-        { onSuccess: recolorIfNeeded },
+        {
+          onSuccess: () => {
+            setCommittedLabel(trimmedLabel);
+            recolorIfNeeded();
+          },
+        },
       );
       return;
     }

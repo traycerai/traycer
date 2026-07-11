@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
   queueScope: { hostId: "host-b" },
   enqueue: vi.fn((..._args: unknown[]) => Promise.resolve()),
   refreshProviders: vi.fn(() => Promise.resolve()),
+  refreshOnMount: vi.fn(),
 }));
 
 // A fresh, cold-start envelope wrapping a single response - matches what the
@@ -45,7 +46,9 @@ vi.mock("@/hooks/host/use-refresh-provider-rate-limits-on-turn", () => ({
   useRefreshProviderRateLimitsOnTurn: () => {},
 }));
 vi.mock("@/hooks/host/use-refresh-provider-rate-limits-on-mount", () => ({
-  useRefreshProviderRateLimitsOnMount: () => {},
+  useRefreshProviderRateLimitsOnMount: (...args: unknown[]) => {
+    mocks.refreshOnMount(...args);
+  },
 }));
 vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
   useReactiveActiveHostId: () => "host-1",
@@ -142,6 +145,7 @@ describe("ProviderRateLimitForProvider", () => {
     mocks.draining = false;
     mocks.enqueue = vi.fn((..._args: unknown[]) => Promise.resolve());
     mocks.refreshProviders.mockClear();
+    mocks.refreshOnMount.mockClear();
   });
 
   afterEach(() => {
@@ -153,6 +157,7 @@ describe("ProviderRateLimitForProvider", () => {
       <EmbeddedProviderRateLimitForProvider
         providerId="codex"
         profileId="work-profile"
+        usageUpdatedAt={123}
       />,
     );
 
@@ -161,6 +166,11 @@ describe("ProviderRateLimitForProvider", () => {
     expect(
       screen.queryByRole("button", { name: "Refresh usage limits" }),
     ).toBeNull();
+    expect(mocks.refreshOnMount).toHaveBeenCalledWith(
+      "codex",
+      "work-profile",
+      123,
+    );
   });
 
   it("renders nothing for a provider without native usage limits", () => {

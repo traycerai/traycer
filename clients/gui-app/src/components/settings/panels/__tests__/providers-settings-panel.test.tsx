@@ -334,6 +334,9 @@ vi.mock("@/hooks/host/use-host-provider-rate-limits-query", () => ({
 vi.mock("@/hooks/host/use-refresh-provider-rate-limits-on-turn", () => ({
   useRefreshProviderRateLimitsOnTurn: () => {},
 }));
+vi.mock("@/hooks/host/use-refresh-provider-rate-limits-on-mount", () => ({
+  useRefreshProviderRateLimitsOnMount: () => {},
+}));
 vi.mock("@/hooks/rate-limits/use-provider-rate-limit-refresh", () => ({
   useProviderRateLimitRefresh: () => ({
     refresh: providerMocks.refreshUsageLimits,
@@ -1076,6 +1079,9 @@ describe("<ProvidersSettingsPanel />", () => {
       profileId: "ambient",
       accentColor,
     });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(providerMocks.renameProfileMutate).toHaveBeenCalledTimes(1);
+    expect(providerMocks.recolorProfileMutate).toHaveBeenCalledTimes(2);
     act(() => recolorOptions.onSuccess());
 
     fireEvent.click(
@@ -1396,7 +1402,7 @@ describe("<ProvidersSettingsPanel />", () => {
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Dismiss terminal account change notice",
+        name: "Dismiss ambient account change notice",
       }),
     );
     expect(

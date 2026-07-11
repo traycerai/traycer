@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { useTabProvidersList } from "@/hooks/providers/use-tab-providers-list-query";
@@ -72,7 +72,50 @@ export function useProfileRateLimitSwitchPrompt(
   const profiles =
     query.data?.providers.find((p) => p.providerId === providerId)?.profiles ??
     NO_PROFILES;
-  if (profiles.length < 2) {
+  const current =
+    profiles.length < 2
+      ? undefined
+      : profiles.find((profile) => profileCommitId(profile) === profileId);
+  const currentChip: ProfileRateLimitProfileChip | null =
+    current !== undefined && isLimited(current)
+      ? {
+          profileId: profileCommitId(current),
+          accentDotId: current.profileId,
+          label: profileDisplayLabel(current),
+          accentColor: current.accentColor,
+        }
+      : null;
+  const alternatives =
+    currentChip === null
+      ? NO_ALTERNATIVES
+      : profiles
+          .filter(
+            (profile) =>
+              profileCommitId(profile) !== profileId &&
+              profile.auth.status === "authenticated" &&
+              !isLimited(profile),
+          )
+          .map((profile) => ({
+            profileId: profileCommitId(profile),
+            accentDotId: profile.profileId,
+            label: profileDisplayLabel(profile),
+            accentColor: profile.accentColor,
+          }));
+  const hardLimited = current?.rateLimitStatus === "hard_limit";
+  const promptKey =
+    currentChip === null
+      ? null
+      : JSON.stringify([
+          harnessId,
+          currentChip.accentDotId,
+          hardLimited,
+          alternatives.map((alternative) => alternative.accentDotId).sort(),
+        ]);
+  const dismiss = useCallback((): void => {
+    if (promptKey !== null) setDismissedPromptKey(promptKey);
+  }, [promptKey]);
+
+  if (currentChip === null || promptKey === null) {
     return {
       limited: false,
       hardLimited: false,
@@ -81,53 +124,12 @@ export function useProfileRateLimitSwitchPrompt(
       dismiss: noop,
     };
   }
-
-  const current = profiles.find(
-    (profile) => profileCommitId(profile) === profileId,
-  );
-  if (current === undefined || !isLimited(current)) {
-    return {
-      limited: false,
-      hardLimited: false,
-      current: null,
-      alternatives: NO_ALTERNATIVES,
-      dismiss: noop,
-    };
-  }
-
-  const currentChip: ProfileRateLimitProfileChip = {
-    profileId: profileCommitId(current),
-    accentDotId: current.profileId,
-    label: profileDisplayLabel(current),
-    accentColor: current.accentColor,
-  };
-
-  const alternatives = profiles
-    .filter(
-      (profile) =>
-        profileCommitId(profile) !== profileId &&
-        profile.auth.status === "authenticated" &&
-        !isLimited(profile),
-    )
-    .map((profile) => ({
-      profileId: profileCommitId(profile),
-      accentDotId: profile.profileId,
-      label: profileDisplayLabel(profile),
-      accentColor: profile.accentColor,
-    }));
-  const hardLimited = current.rateLimitStatus === "hard_limit";
-  const promptKey = JSON.stringify([
-    harnessId,
-    currentChip.accentDotId,
-    hardLimited,
-    alternatives.map((alternative) => alternative.accentDotId).sort(),
-  ]);
 
   return {
     limited: alternatives.length > 0 && dismissedPromptKey !== promptKey,
     hardLimited,
     current: currentChip,
     alternatives,
-    dismiss: () => setDismissedPromptKey(promptKey),
+    dismiss,
   };
 }

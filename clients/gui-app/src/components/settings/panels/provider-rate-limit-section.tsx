@@ -3,8 +3,8 @@ import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { RefreshIconButton } from "@/components/refresh-icon-button";
 import { ProviderRateLimitBody } from "@/components/settings/panels/provider-rate-limit-views";
 import { useHostProviderRateLimitsQuery } from "@/hooks/host/use-host-provider-rate-limits-query";
+import { useRefreshProviderRateLimitsOnMount } from "@/hooks/host/use-refresh-provider-rate-limits-on-mount";
 import { useRefreshProviderRateLimitsOnTurn } from "@/hooks/host/use-refresh-provider-rate-limits-on-turn";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useProviderRateLimitRefresh } from "@/hooks/rate-limits/use-provider-rate-limit-refresh";
 import { useRefreshProviders } from "@/hooks/providers/use-refresh-providers";
 import {
@@ -35,15 +35,18 @@ export function ProviderRateLimitForProvider({
 export function EmbeddedProviderRateLimitForProvider({
   providerId,
   profileId,
+  usageUpdatedAt,
 }: {
   readonly providerId: ProviderId;
   readonly profileId: string | null;
+  readonly usageUpdatedAt: number | null;
 }): ReactNode {
   if (!isRateLimitCapableProvider(providerId)) return null;
   return (
     <EmbeddedProviderRateLimitSettingsCard
       providerId={providerId}
       profileId={profileId}
+      usageUpdatedAt={usageUpdatedAt}
     />
   );
 }
@@ -115,13 +118,15 @@ function ProfilesAndUsageRefreshButton({
 function EmbeddedProviderRateLimitSettingsCard({
   providerId,
   profileId,
+  usageUpdatedAt,
 }: {
   readonly providerId: RateLimitProviderId;
   readonly profileId: string | null;
+  readonly usageUpdatedAt: number | null;
 }): ReactNode {
-  const hostId = useReactiveActiveHostId();
   const query = useHostProviderRateLimitsQuery(providerId, profileId);
-  useRefreshProviderRateLimitsOnTurn(providerId, hostId, profileId);
+  useRefreshProviderRateLimitsOnMount(providerId, profileId, usageUpdatedAt);
+  useRefreshProviderRateLimitsOnTurn(providerId, profileId);
 
   return (
     <div className="flex flex-col gap-3 border-t border-border/60 pt-3">
@@ -145,7 +150,6 @@ function ProviderRateLimitSettingsCard({
   readonly profileId: string | null;
   readonly usageUpdatedAt: number | null;
 }): ReactNode {
-  const hostId = useReactiveActiveHostId();
   const query = useHostProviderRateLimitsQuery(providerId, profileId);
   const { refresh, isRefreshing } = useProviderRateLimitRefresh({
     providerId,
@@ -154,7 +158,7 @@ function ProviderRateLimitSettingsCard({
     isFetching: query.isFetching,
     refetch: query.refetch,
   });
-  useRefreshProviderRateLimitsOnTurn(providerId, hostId, profileId);
+  useRefreshProviderRateLimitsOnTurn(providerId, profileId);
 
   return (
     <div className="mb-3 flex flex-col gap-3 rounded-lg border border-border/60 p-3">
