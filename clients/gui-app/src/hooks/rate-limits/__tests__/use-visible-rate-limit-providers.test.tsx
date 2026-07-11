@@ -78,6 +78,7 @@ function providerState(args: {
     availabilityPending: args.availabilityPending,
     providerId: args.providerId,
     auth: auth(args.status),
+    profiles: [],
   };
 }
 
@@ -162,7 +163,7 @@ describe("useVisibleRateLimitProviders", () => {
     const { result } = renderHook(() => useVisibleRateLimitProviders());
 
     expect(result.current).toEqual([
-      { providerId: "codex", lane: "ephemeralProcess" },
+      { providerId: "codex", lane: "ephemeralProcess", profiles: [] },
     ]);
   });
 
@@ -180,7 +181,7 @@ describe("useVisibleRateLimitProviders", () => {
     const { result } = renderHook(() => useVisibleRateLimitProviders());
 
     expect(result.current).toEqual([
-      { providerId: "codex", lane: "ephemeralProcess" },
+      { providerId: "codex", lane: "ephemeralProcess", profiles: [] },
     ]);
   });
 
@@ -199,7 +200,7 @@ describe("useVisibleRateLimitProviders", () => {
     const { result } = renderHook(() => useVisibleRateLimitProviders());
 
     expect(result.current).toEqual([
-      { providerId: "codex", lane: "ephemeralProcess" },
+      { providerId: "codex", lane: "ephemeralProcess", profiles: [] },
     ]);
   });
 

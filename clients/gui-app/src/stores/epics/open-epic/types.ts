@@ -114,6 +114,12 @@ export interface TuiAgentProjection {
   readonly reasoningEffort: string | null;
   readonly agentMode: AgentMode;
   /**
+   * Which of the harness's logged-in profiles (subscriptions) this agent runs
+   * on. `null` = the ambient/host login, so agents persisted before profiles
+   * existed still project cleanly. See the multi-profile decision log.
+   */
+  readonly profileId: string | null;
+  /**
    * Upstream harness's CLI-resumable id. Always non-null for Claude/OpenCode;
    * `null` for Codex until `thread/started` back-fills the saved-session id.
    */

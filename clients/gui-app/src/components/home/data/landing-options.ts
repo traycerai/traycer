@@ -218,11 +218,17 @@ export function nextAgentMode(mode: AgentMode): AgentMode {
 export interface HarnessModelSelection {
   harnessId: ProviderId;
   modelSlug: string;
+  // Which of the harness's logged-in profiles (subscriptions) this selection
+  // runs on. `null` = the ambient/host login - the only value single/no-profile
+  // providers ever carry, so their behavior stays byte-identical. See the
+  // multi-profile decision log.
+  profileId: string | null;
 }
 
 export const DEFAULT_SELECTION: HarnessModelSelection = {
   harnessId: "codex",
   modelSlug: "",
+  profileId: null,
 };
 
 export const DEFAULT_REASONING: ReasoningLevel = "high";

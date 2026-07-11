@@ -59,6 +59,8 @@ export const guiHarnessIdSchema = harnessIdSchema.extract([
   "kilocode",
   "openrouter",
   "amp",
+  "devin",
+  "pi",
 ]);
 export type GuiHarnessId = z.infer<typeof guiHarnessIdSchema>;
 
@@ -83,9 +85,8 @@ export type GuiHarnessIdV10 = z.infer<typeof guiHarnessIdSchemaV10>;
  * Frozen harness id set as shipped in protocol v2.0 (before Amp). Used only by
  * the frozen v2.0 response schema of `agent.gui.listHarnesses` so an already-
  * shipped v2.0 client (which predates Amp) negotiates a wire that can never
- * carry it; the v3.0 line adds it and v3→v2 / v3→v1 downgrade bridges filter
- * it for older callers. Do NOT add new harnesses here - extend the latest
- * `guiHarnessIdSchema` and use the existing v3 bridge instead.
+ * carry it. Do NOT add new harnesses here - extend the latest
+ * `guiHarnessIdSchema` and use the existing version bridges instead.
  */
 export const guiHarnessIdSchemaV20 = harnessIdSchema.extract([
   "claude",
@@ -103,6 +104,32 @@ export const guiHarnessIdSchemaV20 = harnessIdSchema.extract([
   "openrouter",
 ]);
 export type GuiHarnessIdV20 = z.infer<typeof guiHarnessIdSchemaV20>;
+
+/**
+ * Frozen harness id set as shipped in protocol v3.0 (with Amp, before Devin/Pi).
+ * Used only by the frozen v3.0 response schema of `agent.gui.listHarnesses` so
+ * already-shipped v3.0 clients never receive post-v3.0 ids; the v4.0 line adds
+ * them and v4→v3 / v4→v2 / v4→v1 bridges filter them for older callers. Do NOT
+ * add new harnesses here - extend the latest `guiHarnessIdSchema` and use the
+ * existing v4 bridge instead.
+ */
+export const guiHarnessIdSchemaV30 = harnessIdSchema.extract([
+  "claude",
+  "codex",
+  "opencode",
+  "traycer",
+  "cursor",
+  "grok",
+  "qwen",
+  "kiro",
+  "droid",
+  "kimi",
+  "copilot",
+  "kilocode",
+  "openrouter",
+  "amp",
+]);
+export type GuiHarnessIdV30 = z.infer<typeof guiHarnessIdSchemaV30>;
 
 export const tuiHarnessIdSchema = harnessIdSchema.extract([
   "claude",
@@ -164,6 +191,8 @@ export const AGENT_FACING_HARNESS_IDS = [
   "kilocode",
   "openrouter",
   "amp",
+  "devin",
+  "pi",
 ] as const;
 
 export const AGENT_FACING_HARNESS_ID_LIST = AGENT_FACING_HARNESS_IDS.join(", ");
@@ -218,6 +247,12 @@ export type CreateAgentWorkspace = z.infer<typeof createAgentWorkspaceSchema>;
  *
  * The new agent's `parentId` is set to `senderAgentId` so the epic projection
  * can render the spawn lineage without a separate join.
+ *
+ * `profileId` is the explicit per-child profile override: `null` inherits
+ * the sender agent's profile (the default per the multi-profile decision
+ * log), a string pins the child to that specific logged-in profile
+ * (subscription). Defaulted so requests built before profiles existed still
+ * parse.
  */
 export const createAgentRequestSchema = z.object({
   senderAgentId: z.string(),
@@ -230,6 +265,7 @@ export const createAgentRequestSchema = z.object({
   reasoningEffort: z.string().nullable(),
   fastMode: z.boolean().nullable(),
   workspace: createAgentWorkspaceSchema,
+  profileId: z.string().nullable().default(null),
 });
 export type CreateAgentRequest = z.infer<typeof createAgentRequestSchema>;
 
@@ -483,9 +519,8 @@ export type ListAgentsResponseV10 = z.infer<typeof listAgentsResponseSchemaV10>;
 // `agent.list` enumerates every agent in the epic - including Amp GUI harness
 // chats a newer client created - so an already-shipped v2.0 client (which
 // predates Amp) would hit a strict enum on those rows. v2.0 is frozen here as
-// actually shipped (before Amp); the v3.0 line carries Amp rows and v3→v2 /
-// v3→v1 bridges drop them for older callers. Do not add new harnesses here -
-// use the existing v3 bridge.
+// actually shipped (before Amp). Do not add new harnesses here - use the
+// existing version bridges.
 export const agentSummarySchemaV20 = agentSummarySchema.extend({
   harnessId: guiHarnessIdSchemaV20.nullable(),
 });
@@ -493,6 +528,21 @@ export const listAgentsResponseSchemaV20 = listAgentsResponseSchema.extend({
   agents: z.array(agentSummarySchemaV20),
 });
 export type ListAgentsResponseV20 = z.infer<typeof listAgentsResponseSchemaV20>;
+
+// ── Frozen protocol-v3.0 agent.list response (with Amp, before Devin/Pi) ───
+// `agent.list` enumerates every agent in the epic - including Devin/Pi GUI
+// harness chats a newer client created - so an already-shipped v3.0 client
+// would hit a strict enum on those rows. v3.0 is frozen here as actually
+// shipped (with Amp); the v4.0 line carries Devin/Pi rows and v4→v3 / v4→v2 /
+// v4→v1 bridges drop them for older callers. Do not add new harnesses here -
+// use the existing v4 bridge.
+export const agentSummarySchemaV30 = agentSummarySchema.extend({
+  harnessId: guiHarnessIdSchemaV30.nullable(),
+});
+export const listAgentsResponseSchemaV30 = listAgentsResponseSchema.extend({
+  agents: z.array(agentSummarySchemaV30),
+});
+export type ListAgentsResponseV30 = z.infer<typeof listAgentsResponseSchemaV30>;
 
 /**
  * `agent.sendMessage@1.0` - fire-and-forget enqueue from one agent to

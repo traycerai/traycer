@@ -13,6 +13,7 @@ import {
   ChatComposer,
   type ChatComposerSubmitInput,
 } from "@/components/chat/composer/chat-composer";
+import { ChatComposerBannerPortalProvider } from "@/components/chat/composer/chat-composer-banner-portal";
 import { ChatLowerDock } from "@/components/chat/chat-lower-dock";
 import {
   type ChatLowerSurfaceTopSpacing,
@@ -282,7 +283,7 @@ export function ChatLowerInteractionSurfaces(
   );
 
   return (
-    <>
+    <ChatComposerBannerPortalProvider>
       <RuntimeGatedApprovalSurface
         model={composerModel}
         layout={approvalLayout}
@@ -333,7 +334,7 @@ export function ChatLowerInteractionSurfaces(
           setStopChildrenOpen(false);
         }}
       />
-    </>
+    </ChatComposerBannerPortalProvider>
   );
 }
 

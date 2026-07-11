@@ -2,9 +2,13 @@ import {
   resourcesSubscribeServerFrameSchema,
   type AppResourceSnapshotWire,
   type EpicResourceSnapshotWire,
+  type HostTreeResourceSnapshotWire,
+  type OtherResourceSnapshotWire,
   type OwnerResourceSnapshotWire,
   type ResourcesSubscribeOpenRequestV11,
   type ResourcesSubscribeServerFrame,
+  type ResourcesSubscribeServerFrameV12,
+  resourcesSubscribeServerFrameSchemaV12,
 } from "@traycer/protocol/host/resources/subscribe";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type {
@@ -28,6 +32,10 @@ export interface ResourcesProjectionPayload {
   readonly owners: readonly OwnerResourceSnapshotWire[];
   readonly epic: EpicResourceSnapshotWire | null;
   readonly epics: readonly EpicResourceSnapshotWire[];
+  /** Absent when the connected host negotiated resources.subscribe <= 1.1. */
+  readonly hostTree: HostTreeResourceSnapshotWire | null | undefined;
+  /** Absent when the connected host negotiated resources.subscribe <= 1.1. */
+  readonly other: OtherResourceSnapshotWire | null | undefined;
 }
 
 export type ResourcesStreamScope =
@@ -128,11 +136,17 @@ export class ResourcesStreamClient {
     envelope: StreamFrameEnvelope,
     _binaryPayload: Uint8Array | null,
   ): void {
-    const parsed = resourcesSubscribeServerFrameSchema.safeParse(envelope);
+    const v12Parsed =
+      resourcesSubscribeServerFrameSchemaV12.safeParse(envelope);
+    const parsed = v12Parsed.success
+      ? v12Parsed
+      : resourcesSubscribeServerFrameSchema.safeParse(envelope);
     if (!parsed.success) {
       return;
     }
-    const frame: ResourcesSubscribeServerFrame = parsed.data;
+    const frame:
+      ResourcesSubscribeServerFrame | ResourcesSubscribeServerFrameV12 =
+      parsed.data;
     switch (frame.kind) {
       case "snapshot": {
         this.callbacks.onSnapshot(toPayload(frame));
@@ -152,7 +166,7 @@ export class ResourcesStreamClient {
 
 function toPayload(
   frame: Extract<
-    ResourcesSubscribeServerFrame,
+    ResourcesSubscribeServerFrame | ResourcesSubscribeServerFrameV12,
     { kind: "snapshot" | "update" }
   >,
 ): ResourcesProjectionPayload {
@@ -163,5 +177,7 @@ function toPayload(
     owners: frame.owners,
     epic: frame.epic,
     epics: frame.epics ?? [],
+    hostTree: "hostTree" in frame ? frame.hostTree : undefined,
+    other: "other" in frame ? frame.other : undefined,
   };
 }

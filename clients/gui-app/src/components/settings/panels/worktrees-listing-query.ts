@@ -5,8 +5,8 @@ import {
   useInfiniteQuery,
 } from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import type { WorktreeHostEntryV11 } from "@traycer/protocol/host/index";
-import type { WorktreeListAllForHostResponseV11 } from "@traycer/protocol/host/worktree-schemas";
+import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/index";
+import type { WorktreeListAllForHostResponseV12 } from "@traycer/protocol/host/worktree-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { type HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
@@ -24,7 +24,7 @@ const SETTINGS_WORKTREE_LIST_BASE_PARAMS = {
   cursor: null,
   limit: SETTINGS_WORKTREE_LIST_PAGE_LIMIT,
 } as const;
-const EMPTY_WORKTREES: readonly WorktreeHostEntryV11[] = [];
+const EMPTY_WORKTREES: readonly WorktreeHostEntryV12[] = [];
 
 /**
  * Base worktree listing - the instant, viewport-independent leg. It walks the
@@ -37,7 +37,7 @@ export function useWorktreeListing(
   client: HostClient<HostRpcRegistry> | null,
   reachable: boolean,
 ): {
-  readonly worktrees: readonly WorktreeHostEntryV11[];
+  readonly worktrees: readonly WorktreeHostEntryV12[];
   readonly isPending: boolean;
   readonly isError: boolean;
   readonly errorMessage: string | null;
@@ -66,7 +66,7 @@ export function useWorktreeListing(
     pageParam,
   }: {
     readonly pageParam: string | null;
-  }): Promise<WorktreeListAllForHostResponseV11> => {
+  }): Promise<WorktreeListAllForHostResponseV12> => {
     if (client === null) {
       throw hostClientUnavailableError("worktree.listAllForHost");
     }
@@ -92,9 +92,9 @@ export function useWorktreeListing(
     status,
   } = useInfiniteQuery(
     infiniteQueryOptions<
-      WorktreeListAllForHostResponseV11,
+      WorktreeListAllForHostResponseV12,
       HostRpcError,
-      InfiniteData<WorktreeListAllForHostResponseV11, string | null>,
+      InfiniteData<WorktreeListAllForHostResponseV12, string | null>,
       readonly unknown[],
       string | null
     >({

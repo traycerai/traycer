@@ -14,6 +14,7 @@ import {
 } from "@/hooks/notifications/use-notifications-stream";
 import { useNotificationShow } from "@/hooks/notifications/use-notifications";
 import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
+import { useTitleBarDragSuppression } from "@/stores/layout/title-bar-drag-store";
 import { buildPayloadFromEvent } from "@/lib/notifications";
 import { formatNotification } from "@traycer/protocol/notifications/notification-formatter";
 import type { NotificationEntry } from "@traycer/protocol/notifications/notification-entry";
@@ -32,6 +33,7 @@ export function NotificationsBell() {
   const entries = useNotificationsList();
   const notify = useNotificationShow();
   const lastSeenIdsRef = useRef<Set<string> | null>(null);
+  useTitleBarDragSuppression("notifications", open);
   const getLastSeenIds = useCallback(() => {
     if (lastSeenIdsRef.current === null) {
       lastSeenIdsRef.current = new Set();

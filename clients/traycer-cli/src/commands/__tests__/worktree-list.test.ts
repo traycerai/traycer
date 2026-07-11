@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { WorktreeHostEntryV11 } from "@traycer/protocol/host";
+import type { WorktreeHostEntryV12 } from "@traycer/protocol/host";
 import type { WorktreeTier } from "@traycer-clients/shared/worktree/classify-worktree";
 import {
   buildWorktreeListCommand,
@@ -31,7 +31,7 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-function entry(overrides: Partial<WorktreeHostEntryV11>): WorktreeHostEntryV11 {
+function entry(overrides: Partial<WorktreeHostEntryV12>): WorktreeHostEntryV12 {
   return {
     worktreePath: "/Users/dev/.traycer/worktrees/acme__web/feature-x",
     repoLabel: "acme/web",
@@ -56,7 +56,7 @@ function entry(overrides: Partial<WorktreeHostEntryV11>): WorktreeHostEntryV11 {
 }
 
 function row(
-  overrides: Partial<WorktreeHostEntryV11>,
+  overrides: Partial<WorktreeHostEntryV12>,
   tier: WorktreeTier | null,
 ): WorktreeListRow {
   return { ...entry(overrides), tier };

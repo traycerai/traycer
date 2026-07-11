@@ -12,15 +12,15 @@ import {
   type QueryKey,
 } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { WorktreeHostEntryV11 } from "@traycer/protocol/host/index";
-import type { WorktreeListAllForHostResponseV11 } from "@traycer/protocol/host/worktree-schemas";
+import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/index";
+import type { WorktreeListAllForHostResponseV12 } from "@traycer/protocol/host/worktree-schemas";
 import { type HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useHostQueries } from "@/hooks/host/use-host-queries";
 import { useWorktreeEnrichSettlePerf } from "@/components/settings/panels/worktrees-settings-perf";
 
 const EMPTY_PATHS: readonly string[] = [];
-const EMPTY_ENRICHED: ReadonlyMap<string, WorktreeHostEntryV11> = new Map();
+const EMPTY_ENRICHED: ReadonlyMap<string, WorktreeHostEntryV12> = new Map();
 // Coalesce the per-viewport enrichment fetch across a scroll gesture: collect the
 // on-screen row paths for this long before firing one batch of per-path activity
 // queries for the paths not already cached. One batch per settle window, bounded
@@ -59,14 +59,14 @@ function queryKeyHasPrefix(key: unknown, prefix: readonly unknown[]): boolean {
 function foldEnrichedWorktrees(
   queryClient: QueryClient,
   methodScope: readonly unknown[],
-): ReadonlyMap<string, WorktreeHostEntryV11> {
-  const entries = queryClient.getQueriesData<WorktreeListAllForHostResponseV11>(
+): ReadonlyMap<string, WorktreeHostEntryV12> {
+  const entries = queryClient.getQueriesData<WorktreeListAllForHostResponseV12>(
     {
       queryKey: methodScope,
       predicate: (query) => isPerPathEnrichmentQueryKey(query.queryKey),
     },
   );
-  const map = new Map<string, WorktreeHostEntryV11>();
+  const map = new Map<string, WorktreeHostEntryV12>();
   for (const [, data] of entries) {
     if (data === undefined) continue;
     for (const entry of data.worktrees) map.set(entry.worktreePath, entry);
@@ -95,7 +95,7 @@ function foldEnrichedWorktrees(
 export function useCachedWorktreeEnrichment(
   queryClient: QueryClient,
   hostId: string | null,
-): ReadonlyMap<string, WorktreeHostEntryV11> {
+): ReadonlyMap<string, WorktreeHostEntryV12> {
   const methodScope = useMemo(
     () => hostQueryKeys.methodScope(hostId, "worktree.listAllForHost"),
     [hostId],
@@ -103,7 +103,7 @@ export function useCachedWorktreeEnrichment(
   // Cached fold + the scope it was folded for, so the snapshot is recomputed on a
   // relevant cache event OR a host change, and is otherwise referentially stable.
   const snapshotRef =
-    useRef<ReadonlyMap<string, WorktreeHostEntryV11>>(EMPTY_ENRICHED);
+    useRef<ReadonlyMap<string, WorktreeHostEntryV12>>(EMPTY_ENRICHED);
   const snapshotScopeRef = useRef<readonly unknown[] | null>(null);
   const dirtyRef = useRef(true);
 
@@ -133,7 +133,7 @@ export function useCachedWorktreeEnrichment(
   );
   const getSnapshot = useCallback((): ReadonlyMap<
     string,
-    WorktreeHostEntryV11
+    WorktreeHostEntryV12
   > => {
     if (!dirtyRef.current && snapshotScopeRef.current === methodScope) {
       return snapshotRef.current;
@@ -181,7 +181,7 @@ export function useWorktreeActivityEnrichment(
   reachable: boolean,
   hostId: string | null,
 ): {
-  readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV11>;
+  readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV12>;
   // Paths whose per-path enrichment query SETTLED to an error (retries exhausted).
   // A path here is distinct from one still in flight: the row must stop reading as
   // progress and fall back to a non-animated "Unknown" pill instead of spinning
@@ -284,8 +284,20 @@ export function useWorktreeActivityEnrichment(
         attempts: 0,
         timer: null,
       };
+      // `prState === null` = "not yet probed" (distinct from `"none"` =
+      // probed, no PR): the host served a stale/cold row and scheduled a
+      // background `gh` probe whose result never re-emits. Retry drives a
+      // refetch that picks the warmed fact up. A SUBMODULE leg counts too - a
+      // superproject can be proven `merged` while an owned submodule's PR fact
+      // is still warming (the detached-submodule shape), and one unproven
+      // submodule holds the whole row in Review. The per-path refetch re-probes
+      // every leg, so one retry budget per path covers both.
       const hasColdPrState =
-        result.data?.worktrees.some((entry) => entry.prState === null) ?? false;
+        result.data?.worktrees.some(
+          (entry) =>
+            entry.prState === null ||
+            entry.submodules.some((submodule) => submodule.prState === null),
+        ) ?? false;
       if (!hasColdPrState) {
         if (state.timer !== null) window.clearTimeout(state.timer);
         coldPrRefetchStateRef.current.delete(path);

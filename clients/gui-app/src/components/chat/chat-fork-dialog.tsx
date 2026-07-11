@@ -25,12 +25,15 @@ import { ActiveHostWorkspaceControls } from "@/components/home/host-workspace-se
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
+import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useEpicCreateChatForHost } from "@/hooks/epic/use-epic-chat-mutations";
 import { buildChatRunSettings } from "@/lib/composer/chat-run-settings";
+import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
 import { openCreatedChatWhenProjectedWithNavigation } from "@/lib/commands/actions/new-chat";
 import {
   pendingForkChatStagingKey,
+  type WorktreeStagingKey,
   useWorktreeIntentStagingStore,
   worktreeStagingKeyString,
 } from "@/stores/worktree/worktree-intent-staging-store";
@@ -38,8 +41,11 @@ import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-
 import type { ChatForkMode } from "@/components/chat/chat-message";
 import type { ForkWorkspaceSeed } from "@/lib/worktree/fork-workspace-seed";
 import type { SeedIntentOverride } from "@/lib/worktree/worktree-intent-seeding";
-import { readSeededLaunchWorktreeIntent } from "@/lib/worktree/seeded-launch-worktree-intent";
+import { readSeededLaunchWorkspace } from "@/lib/worktree/seeded-launch-worktree-intent";
+import { useSeededWorkspaceSnapshotStore } from "@/stores/worktree/seeded-workspace-snapshot-store";
 import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
+
+const activeChatForkWorkspaceOwnerByKey = new Map<string, symbol>();
 
 export interface ChatForkDialogTarget {
   readonly sourceChatId: string;
@@ -93,12 +99,24 @@ export function ChatForkDialog(props: ChatForkDialogProps) {
   );
 }
 
+// Coordinates dialog lifecycle, toolbar state, staged worktree state, seeded-
+// profile validation, and the fork mutation in one fixed hook order (mirrors
+// terminal-agent-fork-dialog.tsx's identical structure). Splitting this body
+// risks hiding the cross-field submit invariants without reducing user-facing
+// behavior.
+// eslint-disable-next-line complexity
 function ChatForkDialogBody(props: ChatForkDialogProps) {
   const { epicId, onOpenChange, open, tabId, target } = props;
   const stagingKey = useMemo(() => pendingForkChatStagingKey(epicId), [epicId]);
   const [titleState, setTitleState] = useState(() => ({ open, title: "" }));
   const titleInputId = useId();
   const tabHostId = useTabHostId();
+  // The fork's `createChat` call runs on the TAB's host (see
+  // `useEpicCreateChatForHost` -> `useTabHostClient`), so the seeded-profile
+  // validation below must read that SAME host's `providers.list`, not the
+  // app-wide active host - they can genuinely diverge for a tab bound to a
+  // non-default host.
+  const tabHostClient = useTabHostClient();
   const createChat = useEpicCreateChatForHost();
   const navigateNestedFocus = useEpicNestedFocusNavigation();
   const openCancelsRef = useRef<Set<() => void> | null>(null);
@@ -129,9 +147,20 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     setTitleState((current) => ({ ...current, title: nextTitle }));
   }, []);
 
+  // A fork dialog has no send-time reauth gate of its own (unlike the main
+  // composer), so a source chat's profileId that was tombstoned since the
+  // chat last ran must be caught before it reaches `createChat`.
+  // `useComposerToolbarStore` now validates every seed it receives against
+  // the SAME host's live `providers.list` (passing `tabHostClient` here -
+  // this fork's `createChat` call runs on the tab's host, per
+  // `useEpicCreateChatForHost` -> `useTabHostClient`), so no separate
+  // resolution is needed at this call site. Never authoritative (`fallback`/
+  // `none`): this dialog has no reauth gate of its own, so a genuinely-
+  // tombstoned source profile must be corrected to ambient here rather than
+  // silently submitted to `createChat`.
   const toolbarStore = useComposerToolbarStore(
     null,
-    target?.settingsSeed ?? null,
+    fallbackSeedSource(target?.settingsSeed ?? null, tabHostClient),
     null,
     false,
   );
@@ -154,38 +183,58 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     hasStagedPreselection: stagedIntentForKey !== null,
     createPending: createChat.isPending,
   });
+  const activeWorkspaceTarget = open ? target : null;
+
+  useEffect(() => {
+    if (activeWorkspaceTarget === null) return;
+    const stagingKeyId = worktreeStagingKeyString(stagingKey);
+    const owner = Symbol(activeWorkspaceTarget.assistantMessageId);
+    activeChatForkWorkspaceOwnerByKey.set(stagingKeyId, owner);
+    return () => {
+      if (activeChatForkWorkspaceOwnerByKey.get(stagingKeyId) !== owner) {
+        return;
+      }
+      activeChatForkWorkspaceOwnerByKey.delete(stagingKeyId);
+      clearChatForkWorkspace(stagingKey);
+    };
+  }, [activeWorkspaceTarget, stagingKey]);
 
   const close = useCallback(() => {
     if (createChat.isPending) return;
+    clearChatForkWorkspace(stagingKey);
     onOpenChange(false);
-  }, [createChat.isPending, onOpenChange]);
+  }, [createChat.isPending, onOpenChange, stagingKey]);
 
   const handleOpenChange = useCallback(
     (nextOpen: boolean) => {
       if (!nextOpen && createChat.isPending) return;
+      if (!nextOpen) {
+        clearChatForkWorkspace(stagingKey);
+      }
       onOpenChange(nextOpen);
     },
-    [createChat.isPending, onOpenChange],
+    [createChat.isPending, onOpenChange, stagingKey],
   );
 
   const submit = useCallback(() => {
     if (!canSubmit || target === null) return;
     const chatId = uuidv4();
     const hostId = tabHostId;
-    const worktreeIntent = readSeededLaunchWorktreeIntent({
+    const launchWorkspace = readSeededLaunchWorkspace({
       stagingKey,
-      fallbackIntent: target.workspaceSeed.intent,
+      seedIntent: target.workspaceSeed.intent,
+      fallbackWorkspace: target.workspaceSeed.workspace,
     });
     const workspaceMode = deriveWorkspaceMode(
-      target.workspaceSeed.workspace.folders.length,
-      worktreeIntent,
+      launchWorkspace.folderCount,
+      launchWorkspace.worktreeIntent,
     );
+    const worktreeIntent = launchWorkspace.worktreeIntent;
     if (worktreeIntent !== null) {
       useWorktreeIntentMemoryStore
         .getState()
         .setEpicIntent(epicId, worktreeIntent, Date.now());
     }
-    useWorktreeIntentStagingStore.getState().clear(stagingKey);
     const toolbar = toolbarStore.getState();
     const settings = buildChatRunSettings({
       selection: toolbar.selection,
@@ -212,6 +261,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       },
       {
         onSuccess: (result) => {
+          clearChatForkWorkspace(stagingKey);
           const cancel = openCreatedChatWhenProjectedWithNavigation({
             intent: {
               kind: "active-tile",
@@ -281,6 +331,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
                 lockedHarnessId={null}
                 disabled={createChat.isPending}
                 registerActivation={false}
+                createProfileHostId={tabHostId}
               />
               <div className="shrink-0">
                 <AgentModeToggle
@@ -324,6 +375,11 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       </DialogContent>
     </Dialog>
   );
+}
+
+function clearChatForkWorkspace(stagingKey: WorktreeStagingKey): void {
+  useWorktreeIntentStagingStore.getState().clear(stagingKey);
+  useSeededWorkspaceSnapshotStore.getState().clear(stagingKey);
 }
 
 function displayChatTitle(title: string): string {
@@ -375,5 +431,6 @@ function forkDialogModelPickerKey(target: ChatForkDialogTarget): string {
     seed.reasoningEffort ?? "",
     seed.serviceTier ?? "",
     seed.agentMode,
+    seed.profileId ?? "",
   ].join("\u0000");
 }

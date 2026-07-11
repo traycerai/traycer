@@ -15,6 +15,7 @@ import {
   adjacentDedupedProgressItems,
   cleanSubagentNotificationText,
 } from "@/components/chat/segments/subagent-display";
+import { singleSpecialSegment } from "@/components/chat/chat-special-segment";
 import { parseTraycerNextStepsMarkdown } from "@/markdown/traycer-next-steps";
 import { composerClipboardPlainText } from "@/lib/composer/composer-clipboard";
 import { artifactOperationVerb } from "@/lib/chat/artifact-operation-verb";
@@ -158,6 +159,20 @@ function chatFindUnitsForMessage(
     ]);
   }
 
+  // A synthesized row whose single segment is a setup-card / forked-chat-link
+  // renders that segment's own find anchor and no content block (the render side
+  // is renderSingleSpecialSegment in chat-message.tsx; both key off the shared
+  // singleSpecialSegment predicate), so index the segment.
+  const specialSegment = singleSpecialSegment(message.segments);
+  if (specialSegment !== null) {
+    return segmentSearchUnits(specialSegment, tileInstanceId);
+  }
+
+  // Every other user/system message renders its whole body as ONE anchor
+  // (message:{id}:content) via UserMessageBody - never per-segment anchors. Its
+  // `text` segments mirror that content, so also projecting them would
+  // double-count every match with a phantom unit that has no anchor to paint.
+  // Project the content unit alone so the count matches what actually renders.
   const contentText =
     message.structuredContent === null
       ? message.content
@@ -168,9 +183,6 @@ function chatFindUnitsForMessage(
       text: contentText,
       owningChain: [],
     }),
-    ...message.segments.flatMap((segment) =>
-      segmentSearchUnits(segment, tileInstanceId),
-    ),
   ]);
 }
 

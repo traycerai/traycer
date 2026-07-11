@@ -207,6 +207,12 @@ export const runtimeAgentRunInputSchema = z.object({
   // OpenCode server so the inference call bills the right account; other
   // harnesses ignore it.
   accountContext: accountContextSchema.default(DEFAULT_ACCOUNT_CONTEXT),
+  // Which of the harness's logged-in profiles (subscriptions) to spawn this
+  // turn's adapter with (resolved to a config-dir env override by the host's
+  // ProfileResolver). `null` = the ambient/host login. Distinct from
+  // `accountContext`, which selects Traycer's own billing org, not a
+  // provider-CLI login. See the multi-profile decision log.
+  profileId: z.string().nullable().default(null),
 });
 export type RuntimeAgentRunInput = z.infer<typeof runtimeAgentRunInputSchema>;
 
@@ -870,6 +876,22 @@ export const ampUserMessageAnchorResolvedSchema = z.object({
   ampSessionId: z.string().nullable(),
 });
 
+export const devinUserMessageAnchorResolvedSchema = z.object({
+  harnessId: z.literal("devin"),
+  sessionId: z.string(),
+  // The ACP session id the `devin acp` process assigned for this turn.
+  // Null until `session/new` resolves; used to resume the same ACP session.
+  devinSessionId: z.string().nullable(),
+});
+
+export const piUserMessageAnchorResolvedSchema = z.object({
+  harnessId: z.literal("pi"),
+  sessionId: z.string(),
+  // The Pi session id assigned for this turn. Null until the session is
+  // resolved; used to resume the same Pi session on a later turn.
+  piSessionId: z.string().nullable(),
+});
+
 export const userMessageAnchorResolvedEventSchema = z.object({
   ...baseRuntimeEventFields,
   type: z.literal("user_message.anchor_resolved"),
@@ -889,6 +911,8 @@ export const userMessageAnchorResolvedEventSchema = z.object({
     copilotUserMessageAnchorResolvedSchema,
     kilocodeUserMessageAnchorResolvedSchema,
     ampUserMessageAnchorResolvedSchema,
+    devinUserMessageAnchorResolvedSchema,
+    piUserMessageAnchorResolvedSchema,
   ]),
 });
 export type UserMessageAnchorResolvedEvent = z.infer<

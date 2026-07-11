@@ -16,6 +16,7 @@ const REGULAR_RUN_SETTINGS: ChatRunSettings = {
   reasoningEffort: null,
   serviceTier: null,
   agentMode: "regular",
+  profileId: null,
 };
 
 const EPIC_RUN_SETTINGS: ChatRunSettings = {
@@ -25,6 +26,7 @@ const EPIC_RUN_SETTINGS: ChatRunSettings = {
   reasoningEffort: "high",
   serviceTier: "flex",
   agentMode: "epic",
+  profileId: null,
 };
 
 function resetComposerRunSettingsStore(): void {

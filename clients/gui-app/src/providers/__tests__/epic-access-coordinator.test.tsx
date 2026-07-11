@@ -47,6 +47,7 @@ const TEST_SETTINGS: ChatRunSettings = {
   reasoningEffort: null,
   serviceTier: null,
   agentMode: "regular",
+  profileId: null,
 };
 
 const fakeFactory: EpicStreamClientFactory = () => ({

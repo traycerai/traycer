@@ -14,10 +14,7 @@ import { toast } from "sonner";
 import { ArrowLeftRight, Plus, XIcon } from "lucide-react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
-import type {
-  WorktreeFolderIntent,
-  WorktreeIntent,
-} from "@traycer/protocol/host/worktree-schemas";
+import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
 
 import {
   AttachmentStrip,
@@ -77,7 +74,7 @@ import {
   deriveFolderlessAllowedWorkspaceAvailability,
   workspaceComposerCanStart,
 } from "@/lib/composer/workspace-composer-availability";
-import { buildForkWorkspaceSeedFromWorkspaceFolders } from "@/lib/worktree/fork-workspace-seed";
+import { effectiveWorktreeIntent } from "@/lib/worktree/effective-worktree-intent";
 import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
 import { cn } from "@/lib/utils";
 import { ActiveHostWorkspaceControls } from "@/components/home/host-workspace-selector/host-workspace-selector";
@@ -89,6 +86,7 @@ import {
   type ComposerMode,
 } from "@/components/home/data/landing-options";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
+import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
 import type { TerminalAgentLaunch } from "@/components/home/hooks/use-landing-composer-actions";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
@@ -492,9 +490,17 @@ function NewConversationModalBody(props: {
     },
     [epicId, setSettings],
   );
+  // `draftSettings` can fall back to `runSettingsSeed`/`latestSettingsSeed`
+  // (see `useNewConversationModalSeed`), neither of which is host-scoped or
+  // kept in sync with live profile removals - validated against the active
+  // host (this modal always creates there, per its workspace controls below)
+  // via the same machinery `useComposerToolbarStore` runs for every composer
+  // surface. Never authoritative: this modal has no reauth gate of its own,
+  // so a genuinely-removed profile must be corrected to ambient here rather
+  // than silently submitted as the new chat/agent's initial settings.
   const toolbarStore = useComposerToolbarStore(
     null,
-    draftSettings,
+    fallbackSeedSource(draftSettings, hostClient),
     handleToolbarSettingsChange,
     draftComposerMode === "terminal",
   );
@@ -757,6 +763,7 @@ function NewConversationModalBody(props: {
           worktreeIntent,
           workspaceMode,
           terminalAgentArgs: launch.terminalAgentArgs,
+          profileId: launch.profileId,
         })
         .catch(() => undefined);
     },
@@ -944,6 +951,7 @@ function useLatestConversationSettingsSeed(): {
             ? null
             : defaults.defaultServiceTier,
         agentMode: agent.agentMode,
+        profileId: agent.profileId,
         // TUI agents carry no billing context; seed Personal (the store
         // default). The composer lets the user switch before sending.
         accountContext: { type: "PERSONAL" },
@@ -958,6 +966,7 @@ function useGlobalWorkspaceSnapshot(): LandingDraftWorkspaceSnapshot {
     useShallow((state) => ({
       folders: state.folders,
       folderInfoByPath: state.folderInfoByPath,
+      primaryPath: state.primaryPath,
     })),
   );
 }
@@ -975,68 +984,4 @@ function toTuiPlacement(
     return { kind: "target-group", groupId: placement.groupId };
   }
   return { kind: "active-tile" };
-}
-
-function effectiveWorktreeIntent(input: {
-  readonly workspace: LandingDraftWorkspaceSnapshot;
-  readonly seedIntent: WorktreeIntent | null;
-  readonly stagedIntent: WorktreeIntent | null;
-}): WorktreeIntent | null {
-  const fallback =
-    input.seedIntent ??
-    buildForkWorkspaceSeedFromWorkspaceFolders(input.workspace.folders).intent;
-  if (input.stagedIntent === null) {
-    return trimIntentToWorkspace(input.workspace, fallback);
-  }
-  const fallbackByPath = intentEntriesByWorkspacePath(fallback);
-  const stagedByPath = intentEntriesByWorkspacePath(input.stagedIntent);
-  const entries = input.workspace.folders.flatMap((workspacePath, index) => {
-    const entry =
-      stagedByPath.get(workspacePath) ?? fallbackByPath.get(workspacePath);
-    if (entry === undefined) {
-      return localIntentEntry(input.workspace, workspacePath, index);
-    }
-    return [{ ...entry, isPrimary: index === 0 }];
-  });
-  return entries.length === 0 ? null : { entries };
-}
-
-function trimIntentToWorkspace(
-  workspace: LandingDraftWorkspaceSnapshot,
-  intent: WorktreeIntent | null,
-): WorktreeIntent | null {
-  const intentByPath = intentEntriesByWorkspacePath(intent);
-  const entries = workspace.folders.flatMap((workspacePath, index) => {
-    const entry = intentByPath.get(workspacePath);
-    if (entry === undefined) {
-      return localIntentEntry(workspace, workspacePath, index);
-    }
-    return [{ ...entry, isPrimary: index === 0 }];
-  });
-  return entries.length === 0 ? null : { entries };
-}
-
-function localIntentEntry(
-  workspace: LandingDraftWorkspaceSnapshot,
-  workspacePath: string,
-  index: number,
-): WorktreeFolderIntent[] {
-  if (!Object.hasOwn(workspace.folderInfoByPath, workspacePath)) return [];
-  const folder = workspace.folderInfoByPath[workspacePath];
-  return [
-    {
-      kind: "local",
-      workspacePath,
-      repoIdentifier: folder.repoIdentifier,
-      isPrimary: index === 0,
-    },
-  ];
-}
-
-function intentEntriesByWorkspacePath(
-  intent: WorktreeIntent | null,
-): ReadonlyMap<string, WorktreeFolderIntent> {
-  return new Map(
-    intent?.entries.map((entry) => [entry.workspacePath, entry]) ?? [],
-  );
 }

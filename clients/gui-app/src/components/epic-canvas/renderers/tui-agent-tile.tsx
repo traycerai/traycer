@@ -264,6 +264,10 @@ function TuiAgentTileLive(
         // fallback, while `""` and non-empty strings are durable overrides.
         terminalAgentArgs: agent.terminalAgentArgs,
         workspaceMode: agent.workspaceMode,
+        // `null`: this is a reopen/reattach of an already-persisted agent, so
+        // the host resolver falls back to reading the profile off the stored
+        // record itself rather than re-threading it from here.
+        profileId: null,
       });
       if (
         session.terminalShellCommand === null ||

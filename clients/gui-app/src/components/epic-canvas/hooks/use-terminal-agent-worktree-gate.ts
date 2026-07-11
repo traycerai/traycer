@@ -18,6 +18,9 @@ export interface TerminalAgentLaunchSelection {
   readonly reasoningEffort: string | null;
   readonly agentMode: AgentMode;
   readonly terminalAgentArgs: string | null;
+  // Which of the harness's logged-in profiles (subscriptions) to launch this
+  // agent on. `null` = the ambient/host login.
+  readonly profileId: string | null;
 }
 
 export interface TerminalAgentWorktreeCreateInput extends TerminalAgentLaunchSelection {
@@ -69,6 +72,7 @@ export function useTerminalAgentWorktreeGate(
         worktreeIntent,
         workspaceMode: input.workspaceMode,
         terminalAgentArgs: input.terminalAgentArgs,
+        profileId: input.profileId,
       });
     },
     [epicId, tabId, terminalAgentCreate],

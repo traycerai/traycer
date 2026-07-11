@@ -1,38 +1,41 @@
 import { useState, type ReactNode } from "react";
+import { Gauge } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverTrigger } from "@/components/ui/popover";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { RateLimitPopover } from "@/components/layout/header/rate-limit-popover";
 import { useHeaderRateLimitBars } from "@/hooks/rate-limits/use-header-rate-limit-bars";
+import { useRateLimitProfileSelection } from "@/hooks/rate-limits/use-rate-limit-profile-selection";
+import { useTitleBarDragSuppression } from "@/stores/layout/title-bar-drag-store";
 import {
   rateLimitWindowFillPercent,
   rateLimitWindowSeverityBarClassName,
 } from "@/lib/rate-limits/window-severity";
 import { cn } from "@/lib/utils";
 
-/**
- * Fixed placeholder fill percentages for the neutral/no-data glyph (Core
- * Flows wireframe, CodexBar-style generic pre-filled look) - shown both when
- * zero providers are configured and while every provider's first fetch is
- * still pending. Not real usage data.
- */
-const PLACEHOLDER_BAR_PERCENTAGES: ReadonlyArray<number> = [75, 60];
+const EMPTY_BAR_KEYS = ["primary", "secondary"] as const;
 
 /**
- * Header trigger for the provider rate-limit popover. Same `TooltipWrapper` +
- * `Button variant="ghost" size="icon-sm"` structural pattern as
- * `HistoryButton`, always visible per Core Flows' "Entry point & visibility"
- * (position consistency + feature discovery beat hiding an empty state).
- * Clicking opens the popover in any glyph state, including empty (which lands on
- * the zero-provider CTA).
+ * Header trigger for the provider rate-limit popover. Its compact outlined
+ * surface combines a recognizable gauge icon with the two live usage bars, so
+ * the control still reads as an intentional button when both fills are 0%.
+ * Clicking opens the popover in any glyph state, including empty (which lands
+ * on the zero-provider CTA).
  *
  * Never gates on data loading: `useHeaderRateLimitBars` returns `[]` both
  * before any provider has data and when zero providers are configured, and
- * both render the same neutral glyph - there is no separate loading state.
+ * both render the same neutral empty tracks - there is no separate loading
+ * state and no fabricated placeholder usage.
  */
 export function RateLimitIconButton(): ReactNode {
   const [open, setOpen] = useState(false);
-  const bars = useHeaderRateLimitBars();
+  useTitleBarDragSuppression("rate-limits", open);
+  // One subscription bridge owns active-chat + per-harness profile state for
+  // both the always-mounted glyph and the lazily-mounted popover. Passing the
+  // same snapshot down avoids N duplicate chat-store subscriptions when the
+  // Overview renders several multi-profile provider blocks.
+  const profileSelection = useRateLimitProfileSelection();
+  const bars = useHeaderRateLimitBars(profileSelection);
   const isEmpty = bars.length === 0;
   const isDegraded = !isEmpty && bars.some((bar) => bar.degraded);
 
@@ -47,39 +50,37 @@ export function RateLimitIconButton(): ReactNode {
         <PopoverTrigger asChild>
           <Button
             type="button"
-            variant="ghost"
-            size="icon-sm"
+            variant="outline"
+            size="sm"
             aria-label="Usage limits"
             data-testid="rate-limit-header-button"
-            className={cn(
-              "text-muted-foreground hover:text-foreground",
-              isEmpty && "opacity-50",
-              isDegraded && "opacity-[0.55]",
-            )}
+            className="gap-1.5 bg-muted/30 px-2 text-muted-foreground shadow-xs hover:text-foreground"
           >
+            <Gauge
+              data-testid="rate-limit-gauge-icon"
+              className={cn(
+                "size-3.5",
+                isDegraded && "text-amber-600 dark:text-amber-400",
+              )}
+              aria-hidden
+            />
             <span
               aria-hidden
               className="inline-flex flex-col items-start gap-[2.5px]"
             >
               {isEmpty
-                ? PLACEHOLDER_BAR_PERCENTAGES.map((percent) => (
+                ? EMPTY_BAR_KEYS.map((key) => (
                     <span
-                      key={percent}
+                      key={key}
                       data-testid="rate-limit-bar-track"
-                      className="relative h-1 w-4 overflow-hidden rounded-[2px] bg-muted"
-                    >
-                      <span
-                        data-testid="rate-limit-bar-fill"
-                        className="absolute inset-y-0 left-0 rounded-[2px] bg-muted-foreground"
-                        style={{ width: `${percent}%` }}
-                      />
-                    </span>
+                      className="relative h-1 w-4 overflow-hidden rounded-[2px] bg-muted-foreground/35 dark:bg-muted-foreground/40"
+                    />
                   ))
                 : bars.map((bar) => (
                     <span
                       key={`${bar.providerId}-${bar.windowLabel}`}
                       data-testid="rate-limit-bar-track"
-                      className="relative h-1 w-4 overflow-hidden rounded-[2px] bg-muted"
+                      className="relative h-1 w-4 overflow-hidden rounded-[2px] bg-muted-foreground/35 dark:bg-muted-foreground/40"
                     >
                       <span
                         data-testid="rate-limit-bar-fill"
@@ -97,7 +98,10 @@ export function RateLimitIconButton(): ReactNode {
           </Button>
         </PopoverTrigger>
       </TooltipWrapper>
-      <RateLimitPopover onClose={() => setOpen(false)} />
+      <RateLimitPopover
+        onClose={() => setOpen(false)}
+        profileSelection={profileSelection}
+      />
     </Popover>
   );
 }

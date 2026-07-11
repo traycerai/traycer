@@ -1,13 +1,32 @@
 import "../../../../../__tests__/test-browser-apis";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { HeaderRateLimitBar } from "@/hooks/rate-limits/use-header-rate-limit-bars";
+import { useTitleBarDragStore } from "@/stores/layout/title-bar-drag-store";
 
 let bars: ReadonlyArray<HeaderRateLimitBar> = [];
 
 vi.mock("@/hooks/rate-limits/use-header-rate-limit-bars", () => ({
   useHeaderRateLimitBars: () => bars,
+}));
+vi.mock("@/hooks/rate-limits/use-rate-limit-profile-selection", () => ({
+  useRateLimitProfileSelection: () => ({
+    activeChatSettings: null,
+    lastProfileByHarness: {},
+  }),
+}));
+
+vi.mock("@/components/layout/header/rate-limit-popover", () => ({
+  RateLimitPopover: (_props: { readonly onClose: () => void }) => (
+    <div data-testid="rate-limit-popover" />
+  ),
 }));
 
 import { RateLimitIconButton } from "@/components/layout/header/rate-limit-icon";
@@ -24,12 +43,13 @@ function renderIcon() {
 // variant classes always carry `disabled:opacity-50`, which would otherwise
 // false-positive a substring check for the bare `opacity-50` utility.
 function hasClass(element: Element, className: string): boolean {
-  return element.className.split(/\s+/).includes(className);
+  return (element.getAttribute("class") ?? "").split(/\s+/).includes(className);
 }
 
 afterEach(() => {
   cleanup();
   bars = [];
+  useTitleBarDragStore.setState({ suppressors: new Set() });
 });
 
 describe("<RateLimitIconButton />", () => {
@@ -37,22 +57,67 @@ describe("<RateLimitIconButton />", () => {
     renderIcon();
     const button = screen.getByRole("button", { name: "Usage limits" });
     expect(button).toBeTruthy();
+    expect(button.getAttribute("data-variant")).toBe("outline");
+    expect(screen.getByTestId("rate-limit-gauge-icon")).toBeTruthy();
   });
 
-  it("renders zero providers configured as a muted, pre-filled placeholder glyph", () => {
+  it("suppresses title-bar dragging only while the popover is open", () => {
+    renderIcon();
+
+    const isSuppressed = () =>
+      useTitleBarDragStore.getState().suppressors.has("rate-limits");
+    const button = screen.getByRole("button", { name: "Usage limits" });
+
+    expect(isSuppressed()).toBe(false);
+
+    fireEvent.click(button);
+    expect(isSuppressed()).toBe(true);
+
+    fireEvent.click(button);
+    expect(isSuppressed()).toBe(false);
+  });
+
+  it("renders zero providers as visible empty tracks without fabricated usage", () => {
     bars = [];
     renderIcon();
     const button = screen.getByTestId("rate-limit-header-button");
-    expect(hasClass(button, "opacity-50")).toBe(true);
-    expect(hasClass(button, "opacity-[0.55]")).toBe(false);
     const tracks = within(button).getAllByTestId("rate-limit-bar-track");
     expect(tracks).toHaveLength(2);
+    expect(within(button).queryAllByTestId("rate-limit-bar-fill")).toHaveLength(
+      0,
+    );
+    for (const track of tracks) {
+      expect(track.className).toContain("bg-muted-foreground/35");
+    }
+  });
+
+  it("keeps valid 0% readings empty while preserving visible tracks", () => {
+    bars = [
+      {
+        providerId: "codex",
+        windowLabel: "5h",
+        usedPercent: 0,
+        severity: "blue",
+        degraded: false,
+      },
+      {
+        providerId: "codex",
+        windowLabel: "Weekly",
+        usedPercent: 0,
+        severity: "blue",
+        degraded: false,
+      },
+    ];
+    renderIcon();
+    const button = screen.getByTestId("rate-limit-header-button");
+    const tracks = within(button).getAllByTestId("rate-limit-bar-track");
     const fills = within(button).getAllByTestId("rate-limit-bar-fill");
+    expect(tracks).toHaveLength(2);
     expect(fills).toHaveLength(2);
-    expect(fills[0].style.width).toBe("75%");
-    expect(fills[1].style.width).toBe("60%");
-    for (const fill of fills) {
-      expect(hasClass(fill, "bg-muted-foreground")).toBe(true);
+    expect(fills[0].style.width).toBe("0%");
+    expect(fills[1].style.width).toBe("0%");
+    for (const track of tracks) {
+      expect(track.className).toContain("bg-muted-foreground/35");
     }
   });
 
@@ -75,8 +140,6 @@ describe("<RateLimitIconButton />", () => {
     ];
     renderIcon();
     const button = screen.getByTestId("rate-limit-header-button");
-    expect(hasClass(button, "opacity-50")).toBe(false);
-    expect(hasClass(button, "opacity-[0.55]")).toBe(false);
     const fills = within(button).getAllByTestId("rate-limit-bar-fill");
     expect(fills).toHaveLength(2);
     expect(fills[0].className).toContain("blue-500");
@@ -114,7 +177,7 @@ describe("<RateLimitIconButton />", () => {
     expect(fills[1].style.width).toBe("20%");
   });
 
-  it("dims the whole glyph when a contributing bar's last poll failed (degraded)", () => {
+  it("marks the gauge without dimming the whole button when data is degraded", () => {
     bars = [
       {
         providerId: "claude-code",
@@ -133,10 +196,12 @@ describe("<RateLimitIconButton />", () => {
     ];
     renderIcon();
     const button = screen.getByTestId("rate-limit-header-button");
-    expect(hasClass(button, "opacity-[0.55]")).toBe(true);
-    expect(hasClass(button, "opacity-50")).toBe(false);
-    // Degraded dims the whole icon container, not the individual bar - both
-    // bars keep their own severity fill.
+    expect(hasClass(button, "opacity-[0.55]")).toBe(false);
+    expect(
+      hasClass(screen.getByTestId("rate-limit-gauge-icon"), "text-amber-600"),
+    ).toBe(true);
+    // Both bars keep their own severity fill while the gauge carries the
+    // degraded-state treatment.
     const fills = within(button).getAllByTestId("rate-limit-bar-fill");
     expect(fills).toHaveLength(2);
   });

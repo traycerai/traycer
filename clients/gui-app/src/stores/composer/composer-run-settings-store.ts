@@ -97,12 +97,19 @@ function chatRunSettingsModelResolved(settings: ChatRunSettings): boolean {
 }
 
 function sameChatRunSettings(a: ChatRunSettings, b: ChatRunSettings): boolean {
-  return (
-    a.harnessId === b.harnessId &&
-    a.model === b.model &&
-    a.permissionMode === b.permissionMode &&
-    a.reasoningEffort === b.reasoningEffort &&
-    a.serviceTier === b.serviceTier &&
-    a.agentMode === b.agentMode
-  );
+  // Keyed by every `ChatRunSettings` field via `satisfies`: adding a field to
+  // the type forces an entry here (compile error otherwise), so the
+  // comparison can't silently ignore a new field.
+  const fieldsEqual = {
+    harnessId: a.harnessId === b.harnessId,
+    model: a.model === b.model,
+    permissionMode: a.permissionMode === b.permissionMode,
+    reasoningEffort: a.reasoningEffort === b.reasoningEffort,
+    serviceTier: a.serviceTier === b.serviceTier,
+    agentMode: a.agentMode === b.agentMode,
+    // `??` guards a pre-profile persisted blob (the field is missing, not
+    // `null`, on an old serialized `ChatRunSettings`).
+    profileId: (a.profileId ?? null) === (b.profileId ?? null),
+  } satisfies Record<keyof ChatRunSettings, boolean>;
+  return Object.values(fieldsEqual).every((equal) => equal);
 }

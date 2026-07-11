@@ -6,6 +6,8 @@ import type {
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 
+const PROVIDERS_LIST_METHOD_DISCRIMINATOR = "providers.list";
+
 /** The `available: true` arm of `ProviderRateLimits` - the only shape worth retaining. */
 export type AvailableProviderRateLimits = Extract<
   ProviderRateLimits,
@@ -61,6 +63,52 @@ export interface ProviderRateLimitEnvelope {
   readonly lastGood: AvailableProviderRateLimits | null;
   readonly lastGoodAt: number | null;
   readonly lastFailureAt: number | null;
+}
+
+/**
+ * Whether `response` carries a snapshot for one of the two providers that
+ * support managed profiles (v1 is claude-code/codex only) - the only
+ * providers `providers.list`'s per-profile `rateLimitStatus` can ever report
+ * anything for. Openrouter/kilocode/traycer-aperture reads gate out here so a
+ * convergence invalidation isn't spent on a provider that could never affect
+ * the switch-prompt banner. Failed probes (`available: false` - timeout,
+ * cli_not_found, ...) gate out too: they carry no usage the host's gauge cache
+ * could have captured, so `providers.list` has nothing new to converge on.
+ */
+function isManagedProfileCapableRateLimitsResponse(
+  response: RateLimitUsageResponse,
+): boolean {
+  const provider = response.providerRateLimits;
+  return (
+    provider !== null &&
+    provider.available &&
+    (provider.provider === "codex" || provider.provider === "claude-code")
+  );
+}
+
+/**
+ * Converges the composer's rate-limit switch-prompt banner (which reads
+ * `providers.list`) with whatever this `host.getRateLimitUsage` fetch just
+ * learned: a profile the popover/queue just observed crossing into (or out
+ * of) near/hard limit should not wait for `providers.list`'s own unrelated
+ * refetch cadence to reflect that.
+ *
+ * Invalidated by a broad key-prefix predicate rather than one exact `hostId`:
+ * this fetch's own host (the default host, or whichever host the ephemeral
+ * queue is bound to) is not necessarily the tab host the banner's
+ * `providers.list` query is scoped to, and `providers.list` is a cheap
+ * cache-only host read (no subprocess, no account probe), so invalidating it
+ * across every currently-cached host scope is safe.
+ */
+function invalidateProvidersListForConvergence(
+  queryClient: QueryClient,
+  response: RateLimitUsageResponse,
+): void {
+  if (!isManagedProfileCapableRateLimitsResponse(response)) return;
+  void queryClient.invalidateQueries({
+    predicate: (query) =>
+      query.queryKey.includes(PROVIDERS_LIST_METHOD_DISCRIMINATOR),
+  });
 }
 
 /**
@@ -126,6 +174,14 @@ export function buildProviderRateLimitEnvelope(
  * (`queryClient.getQueryData(queryKey)`) - synchronous, and always up to date
  * for this purpose because it runs inside the same queryFn invocation that
  * will overwrite that slot.
+ *
+ * Also the single point where a resolved codex/claude-code fetch converges
+ * `providers.list` (`invalidateProvidersListForConvergence`) - every real
+ * `host.getRateLimitUsage` fetch for those two providers folds through this
+ * function (the ephemeral queue's own `queryFn`; every other observer of
+ * these providers' query key stays `enabled: false`), so this is exactly
+ * "whenever a rate-limit usage fetch resolves" without duplicating the
+ * invalidation at each call site.
  */
 export function mapResponseToProviderRateLimitEnvelope(args: {
   readonly response: RateLimitUsageResponse;
@@ -135,6 +191,7 @@ export function mapResponseToProviderRateLimitEnvelope(args: {
   const previous = args.queryClient.getQueryData<ProviderRateLimitEnvelope>(
     args.queryKey,
   );
+  invalidateProvidersListForConvergence(args.queryClient, args.response);
   return buildProviderRateLimitEnvelope(previous, args.response, Date.now());
 }
 

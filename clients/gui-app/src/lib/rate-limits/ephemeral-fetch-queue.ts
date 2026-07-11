@@ -25,13 +25,13 @@ import { EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS } from "@/lib/rate-limits/rate-li
  * `httpFetch` providers (openrouter, kilocode) NEVER touch this queue - they
  * poll directly via their query's own `refetchInterval`.
  *
- * The queue is a plain module holding process-wide state, wired up once from a
- * long-lived app-shell component (`RateLimitQueueProvider`) via
- * `configureRateLimitQueue`. The `QueryClient`, host client `request`, and the
- * default `hostId` are passed in from that React call site rather than reached
- * for here - `hostId` is bound at configure time (re-bound whenever the default
- * host changes) so an enqueue can't race a host swap mid-flight: a queued fetch
- * always writes into the query key of the host it was enqueued for.
+ * The queue is a plain module holding process-wide state. The long-lived app
+ * shell binds its default host via `configureRateLimitQueue`, while surfaces
+ * that can inspect another host pass an explicit, render-time scope through
+ * `enqueueRateLimitFetchForScope`. Both entry points append to the same promise
+ * chain, so subprocess work remains serialized across every host scope. Each
+ * enqueue snapshots its scope, so it cannot be reassigned by a later host swap
+ * and always writes to the query key for the host that receives the RPC.
  */
 
 type RateLimitUsageParams = RequestOfMethod<
@@ -61,7 +61,7 @@ const drainingListeners = new Set<() => void>();
 /**
  * Post-`usage_fetch_failed` cool-down: how long *automatic* enqueues (the
  * interval tick, turn-completion triggers) are suppressed for the affected
- * provider after a fetch resolves with that reason. The tech plan's root
+ * provider profile after a fetch resolves with that reason. The tech plan's root
  * cause is a server-side 429 on Anthropic's usage endpoint with multi-minute
  * penalty windows; a retry-once (narrowed to the OTHER arm on the host side)
  * plus continued polling on this arm can keep re-tripping the same limit. This
@@ -81,13 +81,11 @@ const drainingListeners = new Set<() => void>();
  */
 const USAGE_FETCH_FAILURE_COOLDOWN_MS = EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS;
 
-// Per-provider cool-down expiry (epoch ms), set after a `usage_fetch_failed`
-// resolution and cleared once a later fetch resolves with anything else.
-// Keyed only by provider id (not host) because the queue itself only ever
-// serves one host at a time - `configureRateLimitQueue` clears this map
-// whenever the bound host actually changes, so a cool-down never survives a
-// swap to a different host's identically-named provider.
-const cooldownUntil = new Map<RateLimitProviderId, number>();
+// Per-host/provider/profile cool-down expiry (epoch ms), set after a
+// `usage_fetch_failed` resolution and cleared once a later fetch resolves with
+// anything else. The host id is part of the key because the shared lane can
+// service the app-shell default host and an explicitly Settings-selected host.
+const cooldownUntil = new Map<string, number>();
 
 /**
  * Dev-only (Vite HMR) self-healing for this module's singleton state. An HMR
@@ -131,24 +129,14 @@ function notifyDraining(): void {
 }
 
 /**
- * Bind (or, with `null`, unbind) the queue to the default host. Called once
- * from an app-shell `useEffect` that re-runs on default-host / client change,
- * and passes `null` on host loss so a stale client can't service an enqueue.
- *
- * Clears `cooldownUntil` whenever the bound host id actually changes (not on
- * every call - a client/queryClient identity change with the same host id
- * must not reset a live cool-down). `cooldownUntil` is keyed only by
- * provider id, not host id, so without this a `usage_fetch_failed` cool-down
- * picked up on one host would otherwise keep suppressing automatic polling
- * for the same-named provider (e.g. `claude-code`) after switching to a
- * different host.
+ * Bind (or, with `null`, unbind) the app-shell default scope. Called from an
+ * effect that re-runs on default-host/client changes. Explicit host scopes do
+ * not replace this binding; they only snapshot their own dependencies for one
+ * enqueue onto the same serialized lane.
  */
 export function configureRateLimitQueue(
   next: RateLimitQueueConfig | null,
 ): void {
-  const previousHostId = deps?.hostId ?? null;
-  const nextHostId = next?.hostId ?? null;
-  if (previousHostId !== nextHostId) cooldownUntil.clear();
   deps = next;
 }
 
@@ -179,24 +167,47 @@ export function isRateLimitQueueDraining(): boolean {
  * exists for is no longer the one in effect, so automatic polling should
  * resume rather than keep suppressing on a stale cause).
  */
-function applyCooldownPolicy(
+function rateLimitQueueProfileKey(
+  hostId: string,
   providerId: RateLimitProviderId,
+  profileId: string | null,
+): string {
+  return profileId === null
+    ? `${hostId}:${providerId}`
+    : `${hostId}:${providerId}:profile:${profileId}`;
+}
+
+function applyCooldownPolicy(
+  hostId: string,
+  providerId: RateLimitProviderId,
+  profileId: string | null,
   envelope: ProviderRateLimitEnvelope,
 ): void {
+  const cooldownKey = rateLimitQueueProfileKey(hostId, providerId, profileId);
   const latest = envelope.latest;
   if (
     latest !== null &&
     !latest.available &&
     latest.reason === "usage_fetch_failed"
   ) {
-    cooldownUntil.set(providerId, Date.now() + USAGE_FETCH_FAILURE_COOLDOWN_MS);
+    cooldownUntil.set(
+      cooldownKey,
+      Date.now() + USAGE_FETCH_FAILURE_COOLDOWN_MS,
+    );
     return;
   }
-  cooldownUntil.delete(providerId);
+  cooldownUntil.delete(cooldownKey);
 }
 
-function isInCooldown(providerId: RateLimitProviderId): boolean {
-  const until = cooldownUntil.get(providerId) ?? 0;
+function isInCooldown(
+  hostId: string,
+  providerId: RateLimitProviderId,
+  profileId: string | null,
+): boolean {
+  const until =
+    cooldownUntil.get(
+      rateLimitQueueProfileKey(hostId, providerId, profileId),
+    ) ?? 0;
   return Date.now() < until;
 }
 
@@ -221,12 +232,29 @@ function isInCooldown(providerId: RateLimitProviderId): boolean {
 export function enqueueRateLimitFetch(
   providerId: RateLimitProviderId,
   accountContext: AccountContext,
-  opts: { readonly force: boolean },
+  opts: { readonly force: boolean; readonly profileId: string | null },
 ): Promise<unknown> {
-  const current = deps;
-  if (current === null) return chain;
-  const { hostId, queryClient, request } = current;
-  const params: RateLimitUsageParams = { accountContext, providerId };
+  return enqueueRateLimitFetchForScope(deps, providerId, accountContext, opts);
+}
+
+/**
+ * Append a provider pull for an explicit host/client/cache scope. The scope is
+ * captured at call time and never mutates the app-shell default binding. A
+ * `null` scope is the same readiness no-op as an unconfigured default queue.
+ */
+export function enqueueRateLimitFetchForScope(
+  scope: RateLimitQueueConfig | null,
+  providerId: RateLimitProviderId,
+  accountContext: AccountContext,
+  opts: { readonly force: boolean; readonly profileId: string | null },
+): Promise<unknown> {
+  if (scope === null) return chain;
+  const { hostId, queryClient, request } = scope;
+  const params: RateLimitUsageParams = {
+    accountContext,
+    providerId,
+    profileId: opts.profileId,
+  };
   const queryKey = queryKeys.hostMethod<
     HostRpcRegistry,
     "host.getRateLimitUsage"
@@ -237,7 +265,8 @@ export function enqueueRateLimitFetch(
     return Date.now() - updatedAt < PROVIDER_RATE_LIMITS_STALE_TIME_MS;
   };
   const shouldSkipAutomatic = (): boolean =>
-    !opts.force && (isFresh() || isInCooldown(providerId));
+    !opts.force &&
+    (isFresh() || isInCooldown(hostId, providerId, opts.profileId));
   if (shouldSkipAutomatic()) return chain;
 
   // Named request fn (not an inline closure in `queryFn`) so the host-scoped
@@ -251,7 +280,7 @@ export function enqueueRateLimitFetch(
       queryClient,
       queryKey,
     });
-    applyCooldownPolicy(providerId, envelope);
+    applyCooldownPolicy(hostId, providerId, opts.profileId, envelope);
     return envelope;
   };
 

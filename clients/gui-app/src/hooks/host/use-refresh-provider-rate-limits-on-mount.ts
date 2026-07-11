@@ -1,10 +1,12 @@
 import { useEffect } from "react";
 import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
 import {
+  PROVIDER_RATE_LIMITS_STALE_TIME_MS,
   rateLimitFetchLane,
   type RateLimitProviderId,
 } from "@/lib/rate-limit-providers";
-import { enqueueRateLimitFetch } from "@/lib/rate-limits/ephemeral-fetch-queue";
+import { useRateLimitQueueScope } from "@/hooks/rate-limits/use-rate-limit-queue-scope";
+import { enqueueRateLimitFetchForScope } from "@/lib/rate-limits/ephemeral-fetch-queue";
 
 /**
  * On mount (and whenever `providerId` changes to a new provider), ensures an
@@ -28,11 +30,24 @@ import { enqueueRateLimitFetch } from "@/lib/rate-limits/ephemeral-fetch-queue";
  */
 export function useRefreshProviderRateLimitsOnMount(
   providerId: RateLimitProviderId,
+  profileId: string | null,
+  usageUpdatedAt: number | null,
 ): void {
+  const queueScope = useRateLimitQueueScope();
   useEffect(() => {
     if (rateLimitFetchLane(providerId) !== "ephemeralProcess") return;
-    void enqueueRateLimitFetch(providerId, DEFAULT_ACCOUNT_CONTEXT, {
-      force: false,
-    });
-  }, [providerId]);
+    const stale =
+      usageUpdatedAt === null ||
+      Date.now() - usageUpdatedAt >= PROVIDER_RATE_LIMITS_STALE_TIME_MS;
+    if (!stale) return;
+    void enqueueRateLimitFetchForScope(
+      queueScope,
+      providerId,
+      DEFAULT_ACCOUNT_CONTEXT,
+      {
+        force: false,
+        profileId,
+      },
+    );
+  }, [profileId, providerId, queueScope, usageUpdatedAt]);
 }

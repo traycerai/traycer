@@ -24,6 +24,8 @@ const PROVIDER_ID_ORDER = [
   "kimi",
   "qwen",
   "amp",
+  "devin",
+  "pi",
 ] as const satisfies ReadonlyArray<ProviderId>;
 
 type MissingProviderIdFromOrder = Exclude<
@@ -53,6 +55,8 @@ const GUI_HARNESS_BY_PROVIDER_ID = {
   kimi: "kimi",
   qwen: "qwen",
   amp: "amp",
+  devin: "devin",
+  pi: "pi",
 } satisfies Readonly<Record<ProviderId, GuiHarnessId>>;
 
 export const ORDERED_PROVIDERS: ExhaustiveOrderedProviders =
@@ -70,6 +74,15 @@ const UNKNOWN_PROVIDER_RANK = Number.MAX_SAFE_INTEGER;
 
 export function providerIdToGuiHarnessId(providerId: ProviderId): GuiHarnessId {
   return GUI_HARNESS_BY_PROVIDER_ID[providerId];
+}
+
+export function guiHarnessIdToProviderId(
+  harnessId: GuiHarnessId,
+): ProviderId | null {
+  return (
+    ORDERED_PROVIDERS.find((provider) => provider.harnessId === harnessId)
+      ?.providerId ?? null
+  );
 }
 
 export function providerDisplayName(providerId: ProviderId): string {

@@ -1,22 +1,25 @@
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
-import { useAccountContextStore } from "@/stores/auth/account-context-store";
+import type { AccountContext } from "@traycer/protocol/common/schemas";
 
 /**
  * Live artifact rate-limit usage for the default host. Default-host scoped, like
  * runtime capabilities. The value moves every Traycer turn, so there is no
  * `staleTime` - `useRefreshRateLimitUsageOnTraycerTurn` invalidates it on turn
- * completion. Mounted only inside `RateLimitView`, which is the implicit
- * tier-gate (rate-limit tiers only).
+ * completion. The caller supplies the account context so the Traycer popover
+ * can render Personal and Team cards concurrently. Mounted only inside
+ * `RateLimitView`, which is the implicit tier-gate (rate-limit tiers only).
  */
-export function useHostRateLimitUsageQuery() {
+export function useHostRateLimitUsageQuery(
+  accountContext: AccountContext,
+  profileId: string | null,
+) {
   const client = useHostClient();
-  const accountContext = useAccountContextStore((s) => s.accountContext);
   return useHostQuery<HostRpcRegistry, "host.getRateLimitUsage">({
     cacheKeyIdentity: undefined,
     client,
     method: "host.getRateLimitUsage",
-    params: { accountContext },
+    params: { accountContext, profileId },
     options: {
       retry: false,
     },

@@ -9,6 +9,13 @@ import type {
   ReasoningFooterConfig,
   ServiceTierFooterConfig,
 } from "@/components/home/pickers/harness-model-picker-footers";
+import {
+  profileAccentDotInput,
+  profileCommitId,
+  profileDisplayLabel,
+  type ProfileAccentDotInput,
+} from "@/components/providers/provider-profile-model";
+import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 
 interface HarnessModelPickerPresentationInput {
   readonly selection: HarnessModelSelection;
@@ -18,6 +25,10 @@ interface HarnessModelPickerPresentationInput {
   readonly harnessesPending: boolean;
   readonly modelsPending: boolean;
   readonly selectedHarnessAvailable: boolean;
+  /** The SELECTED (committed) harness's profiles - drives the composer
+   *  chip's send-identity badge, distinct from the panel's browsed
+   *  provider. */
+  readonly selectedHarnessProfiles: ReadonlyArray<ProviderProfile>;
 }
 
 export interface HarnessModelPickerPresentation {
@@ -26,6 +37,8 @@ export interface HarnessModelPickerPresentation {
   readonly activeServiceTierLabel: string | null;
   readonly serviceTierActive: boolean;
   readonly isLoading: boolean;
+  readonly profileLabel: string | null;
+  readonly profileAccentDot: ProfileAccentDotInput | null;
 }
 
 export function deriveHarnessModelPickerPresentation(
@@ -39,6 +52,7 @@ export function deriveHarnessModelPickerPresentation(
     harnessesPending,
     modelsPending,
     selectedHarnessAvailable,
+    selectedHarnessProfiles,
   } = input;
 
   const label = findModelLabel(models, selection);
@@ -60,6 +74,20 @@ export function deriveHarnessModelPickerPresentation(
       : upgradeServiceTier.label;
   const isLoading =
     harnessesPending || (selectedHarnessAvailable && modelsPending);
+  const hasMultipleProfiles = selectedHarnessProfiles.length >= 2;
+  // The profile a send will actually burn: the committed selection's profile,
+  // resolved only once the provider crosses the 2-profile progressive-
+  // disclosure gate. A stale/removed profileId that no longer matches any
+  // known profile silently omits the badge rather than guessing.
+  const activeProfile = hasMultipleProfiles
+    ? (selectedHarnessProfiles.find(
+        (profile) => profileCommitId(profile) === selection.profileId,
+      ) ?? null)
+    : null;
+  const profileLabel =
+    activeProfile === null ? null : profileDisplayLabel(activeProfile);
+  const profileAccentDot: ProfileAccentDotInput | null =
+    activeProfile === null ? null : profileAccentDotInput(activeProfile);
 
   return {
     label,
@@ -67,5 +95,7 @@ export function deriveHarnessModelPickerPresentation(
     activeServiceTierLabel,
     serviceTierActive,
     isLoading,
+    profileLabel,
+    profileAccentDot,
   };
 }

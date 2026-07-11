@@ -36,6 +36,9 @@ interface ComposerToolbarProps {
    */
   dictationPreparing: DictationPreparingStatus | null;
   settingsLocked: boolean;
+  /** The host "Create new profile" creates on - see `HarnessModelPicker`'s
+   *  prop of the same name. */
+  createProfileHostId: string | null;
 }
 
 function ComposerToolbarImpl(props: ComposerToolbarProps) {
@@ -53,6 +56,7 @@ function ComposerToolbarImpl(props: ComposerToolbarProps) {
     dictation,
     dictationPreparing,
     settingsLocked,
+    createProfileHostId,
   } = props;
 
   // Left-group slices. The store is the single source for harness-level
@@ -113,6 +117,7 @@ function ComposerToolbarImpl(props: ComposerToolbarProps) {
             settingsLocked={settingsLocked}
             dictation={dictation}
             dictationPreparing={dictationPreparing}
+            createProfileHostId={createProfileHostId}
           />
         </>
       )}

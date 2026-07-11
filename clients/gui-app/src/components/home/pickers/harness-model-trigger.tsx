@@ -1,20 +1,29 @@
-import type { Ref } from "react";
+import type { ButtonHTMLAttributes, Ref } from "react";
 import { ChevronDown, Zap } from "lucide-react";
 import { ToolbarPillButton } from "@/components/home/toolbar/toolbar-buttons";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
+import { AccentDot } from "@/components/providers/accent-dot";
 import type { HarnessModelSelection } from "@/components/home/data/landing-options";
+import type { ProfileAccentDotInput } from "@/components/providers/provider-profile-model";
 import { cn } from "@/lib/utils";
 
-interface HarnessModelTriggerProps {
+interface HarnessModelTriggerProps extends Omit<
+  ButtonHTMLAttributes<HTMLButtonElement>,
+  "children"
+> {
   selection: HarnessModelSelection;
   label: string;
   reasoningLabel: string | null;
   serviceTierLabel: string | null;
   serviceTierActive: boolean;
+  profileLabel: string | null;
+  /** Bottom-right corner dot on the harness icon (T3's `AccentDot` primitive).
+   *  `null` unless the provider has multiple profiles and the selection's
+   *  profileId matches a known profile. */
+  profileAccentDot: ProfileAccentDotInput | null;
   isLoading: boolean;
   disabled: boolean;
-  onClick?: () => void;
   ref?: Ref<HTMLButtonElement>;
 }
 
@@ -25,6 +34,8 @@ export function HarnessModelTrigger(props: HarnessModelTriggerProps) {
     reasoningLabel,
     serviceTierLabel,
     serviceTierActive,
+    profileLabel,
+    profileAccentDot,
     isLoading,
     disabled,
     ref,
@@ -38,6 +49,7 @@ export function HarnessModelTrigger(props: HarnessModelTriggerProps) {
     label,
     reasoningLabel === null ? null : `Thinking ${reasoningLabel}`,
     serviceTierSummary,
+    profileLabel,
   ]
     .filter((part): part is string => part !== null)
     .join(", ");
@@ -60,11 +72,23 @@ export function HarnessModelTrigger(props: HarnessModelTriggerProps) {
           strokeWidth={2}
         />
       )}
-      {isLoading ? (
-        <MutedAgentSpinner />
-      ) : (
-        <HarnessIcon harnessId={selection.harnessId} />
-      )}
+      <span className="relative shrink-0">
+        {isLoading ? (
+          <MutedAgentSpinner />
+        ) : (
+          <HarnessIcon harnessId={selection.harnessId} />
+        )}
+        {profileAccentDot === null ? null : (
+          <AccentDot
+            profileId={profileAccentDot.profileId}
+            accentColor={profileAccentDot.accentColor}
+            label={profileAccentDot.label}
+            variant="corner"
+            size="compact"
+            className={undefined}
+          />
+        )}
+      </span>
       <span className="min-w-0 truncate whitespace-nowrap @max-lg:hidden">
         {label}
       </span>

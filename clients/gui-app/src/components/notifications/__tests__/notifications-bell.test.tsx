@@ -19,6 +19,7 @@ import {
   openNotificationsStream,
   useNotificationsStore,
 } from "@/stores/notifications/notifications-store";
+import { useTitleBarDragStore } from "@/stores/layout/title-bar-drag-store";
 import type { NotificationsStreamCallbacks } from "@traycer-clients/shared/host-transport/notifications-stream-client";
 import {
   type NotificationEntry,
@@ -154,11 +155,13 @@ describe("NotificationsBell - OS toast bridge", () => {
   beforeEach(() => {
     __resetNotificationsStoreForTests();
     useNotificationsPopoverStore.getState().setOpen(false);
+    useTitleBarDragStore.setState({ suppressors: new Set() });
   });
 
   afterEach(() => {
     cleanup();
     useNotificationsPopoverStore.getState().setOpen(false);
+    useTitleBarDragStore.setState({ suppressors: new Set() });
   });
 
   it("fires OS toast when a new unread notification arrives while the popover is closed", async () => {
@@ -208,6 +211,28 @@ describe("NotificationsBell - OS toast bridge", () => {
 
     expect(screen.queryByTestId("notifications-popover")).toBeNull();
     expect(useNotificationsPopoverStore.getState().open).toBe(false);
+  });
+
+  it("suppresses title-bar dragging only while the popover is open", async () => {
+    const runnerHost = createRunnerHost();
+    mountBell(runnerHost);
+
+    const isSuppressed = () =>
+      useTitleBarDragStore.getState().suppressors.has("notifications");
+
+    expect(isSuppressed()).toBe(false);
+
+    fireEvent.click(screen.getByTestId("notifications-bell"));
+    expect(await screen.findByTestId("notifications-popover")).not.toBeNull();
+    expect(isSuppressed()).toBe(true);
+
+    fireEvent.click(screen.getByTestId("notifications-bell"));
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(isSuppressed()).toBe(false);
   });
 
   it("does not focus the first header action when the popover opens", async () => {

@@ -3,6 +3,7 @@ import type { WorktreeFolderIntent } from "@traycer/protocol/host/worktree-schem
 import {
   locationSelectionChanges,
   workspaceRunBranchLabel,
+  workspaceRunBranchSourceLabel,
 } from "../workspace-run-item";
 
 const BASE = {
@@ -28,8 +29,8 @@ function newWorktree(
   };
 }
 
-describe("workspaceRunBranchLabel — new worktree shows its source branch", () => {
-  it("labels a carry-WIP fork from the current branch as 'Working tree · …'", () => {
+describe("workspaceRunBranchLabel — new worktree shows its target branch", () => {
+  it("shows the new branch name for a carry-WIP fork", () => {
     expect(
       workspaceRunBranchLabel({
         mode: "worktree",
@@ -37,11 +38,10 @@ describe("workspaceRunBranchLabel — new worktree shows its source branch", () 
         currentIntent: newWorktree("development", true),
         diskWorktrees: [],
       }),
-    ).toBe("Working tree · development");
+    ).toBe("traycer/swift-otter");
   });
 
-  it("labels a clean fork from the current branch as the plain branch", () => {
-    // "Start fresh" off the current branch — no carry → no "Working tree" prefix.
+  it("shows the new branch name for a clean fork", () => {
     expect(
       workspaceRunBranchLabel({
         mode: "worktree",
@@ -49,10 +49,10 @@ describe("workspaceRunBranchLabel — new worktree shows its source branch", () 
         currentIntent: newWorktree("development", false),
         diskWorktrees: [],
       }),
-    ).toBe("development");
+    ).toBe("traycer/swift-otter");
   });
 
-  it("shows the SOURCE branch (not the fork's new name) for a non-working-tree source", () => {
+  it("shows the new branch name rather than a non-working-tree source", () => {
     expect(
       workspaceRunBranchLabel({
         mode: "worktree",
@@ -60,7 +60,7 @@ describe("workspaceRunBranchLabel — new worktree shows its source branch", () 
         currentIntent: newWorktree("release/2", false),
         diskWorktrees: [],
       }),
-    ).toBe("release/2");
+    ).toBe("traycer/swift-otter");
   });
 
   it("shows the adopted branch name for an existing-branch checkout (the name IS the source)", () => {
@@ -90,6 +90,26 @@ describe("workspaceRunBranchLabel — new worktree shows its source branch", () 
         diskWorktrees: [],
       }),
     ).toBe("development");
+  });
+});
+
+describe("workspaceRunBranchSourceLabel", () => {
+  it("keeps clean source context secondary to the target label", () => {
+    expect(workspaceRunBranchSourceLabel(newWorktree("release/2", false))).toBe(
+      "release/2",
+    );
+  });
+
+  it("identifies working-tree WIP in the source context", () => {
+    expect(
+      workspaceRunBranchSourceLabel(newWorktree("development", true)),
+    ).toBe("Working tree · development");
+  });
+
+  it("returns no secondary source for non-new-worktree intents", () => {
+    expect(
+      workspaceRunBranchSourceLabel({ kind: "local", ...BASE }),
+    ).toBeNull();
   });
 });
 

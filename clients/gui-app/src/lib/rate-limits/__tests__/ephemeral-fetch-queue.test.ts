@@ -14,6 +14,7 @@ import {
   __resetRateLimitQueueForTests,
   configureRateLimitQueue,
   enqueueRateLimitFetch,
+  enqueueRateLimitFetchForScope,
   isRateLimitQueueDraining,
   subscribeRateLimitQueueDraining,
   type RateLimitQueueRequestFn,
@@ -39,10 +40,18 @@ function unavailableResponse(reason: RateLimitUnavailableReason) {
 }
 
 function keyFor(providerId: ProviderId) {
+  return keyForHost(HOST_ID, providerId, null);
+}
+
+function keyForHost(
+  hostId: string,
+  providerId: ProviderId,
+  profileId: string | null,
+) {
   return queryKeys.hostMethod<HostRpcRegistry, "host.getRateLimitUsage">(
-    HOST_ID,
+    hostId,
     "host.getRateLimitUsage",
-    { accountContext: DEFAULT_ACCOUNT_CONTEXT, providerId },
+    { accountContext: DEFAULT_ACCOUNT_CONTEXT, providerId, profileId },
   );
 }
 
@@ -92,9 +101,11 @@ describe("ephemeral-fetch-queue", () => {
     // across providers would. Force bypasses the freshness floor.
     void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
       force: true,
+      profileId: null,
     });
     void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
       force: true,
+      profileId: null,
     });
 
     await flush();
@@ -113,6 +124,92 @@ describe("ephemeral-fetch-queue", () => {
     await flush();
   });
 
+  it("targets an explicit selected host instead of the configured default host and writes only its cache key", async () => {
+    const queryClient = newQueryClient();
+    const defaultRequest = vi.fn<RateLimitQueueRequestFn>(() =>
+      Promise.resolve(response()),
+    );
+    const selectedRequest = vi.fn<RateLimitQueueRequestFn>(() =>
+      Promise.resolve(response()),
+    );
+    configureRateLimitQueue({
+      hostId: "host-a",
+      queryClient,
+      request: defaultRequest,
+    });
+
+    await enqueueRateLimitFetchForScope(
+      {
+        hostId: "host-b",
+        queryClient,
+        request: selectedRequest,
+      },
+      "codex",
+      DEFAULT_ACCOUNT_CONTEXT,
+      { force: true, profileId: "work-profile" },
+    );
+
+    expect(defaultRequest).not.toHaveBeenCalled();
+    expect(selectedRequest).toHaveBeenCalledWith(
+      "host-b",
+      "host.getRateLimitUsage",
+      {
+        accountContext: DEFAULT_ACCOUNT_CONTEXT,
+        providerId: "codex",
+        profileId: "work-profile",
+      },
+    );
+    expect(
+      queryClient.getQueryData(keyForHost("host-b", "codex", "work-profile")),
+    ).toEqual({
+      latest: null,
+      lastGood: null,
+      lastGoodAt: null,
+      lastFailureAt: null,
+    });
+    expect(
+      queryClient.getQueryData(keyForHost("host-a", "codex", "work-profile")),
+    ).toBeUndefined();
+  });
+
+  it("serializes default-host and selected-host subprocess work on the same lane", async () => {
+    const queryClient = newQueryClient();
+    const defaultHost = makeControllableRequest();
+    const selectedHost = makeControllableRequest();
+    configureRateLimitQueue({
+      hostId: "host-a",
+      queryClient,
+      request: defaultHost.request,
+    });
+
+    void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
+      force: true,
+      profileId: null,
+    });
+    void enqueueRateLimitFetchForScope(
+      {
+        hostId: "host-b",
+        queryClient,
+        request: selectedHost.request,
+      },
+      "claude-code",
+      DEFAULT_ACCOUNT_CONTEXT,
+      { force: true, profileId: "selected-profile" },
+    );
+
+    await flush();
+    expect(defaultHost.request).toHaveBeenCalledTimes(1);
+    expect(selectedHost.request).not.toHaveBeenCalled();
+
+    defaultHost.settlers[0].ok();
+    await flush();
+    expect(selectedHost.request).toHaveBeenCalledTimes(1);
+
+    selectedHost.settlers[0].ok();
+    await flush();
+    expect(isRateLimitQueueDraining()).toBe(false);
+  });
+
   it("serializes many rapid same-provider force refreshes one at a time", async () => {
     const queryClient = newQueryClient();
     const { request, settlers } = makeControllableRequest();
@@ -121,6 +218,7 @@ describe("ephemeral-fetch-queue", () => {
     for (let i = 0; i < 4; i++) {
       void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
         force: true,
+        profileId: null,
       });
     }
 
@@ -148,6 +246,7 @@ describe("ephemeral-fetch-queue", () => {
 
     void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
       force: true,
+      profileId: null,
     });
     await flush();
     settlers[0].ok();
@@ -174,6 +273,7 @@ describe("ephemeral-fetch-queue", () => {
 
     void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
       force: false,
+      profileId: null,
     });
     await flush();
     // Still fresh -> the automatic trigger must not spawn a subprocess.
@@ -181,6 +281,7 @@ describe("ephemeral-fetch-queue", () => {
 
     void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
       force: true,
+      profileId: null,
     });
     await flush();
     // A user-initiated refresh bypasses the floor.
@@ -194,9 +295,11 @@ describe("ephemeral-fetch-queue", () => {
 
     void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
       force: true,
+      profileId: null,
     });
     void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
       force: true,
+      profileId: null,
     });
 
     await flush();
@@ -218,6 +321,7 @@ describe("ephemeral-fetch-queue", () => {
 
     void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
       force: false,
+      profileId: null,
     });
     await flush();
     settlers[0].fail();
@@ -229,6 +333,7 @@ describe("ephemeral-fetch-queue", () => {
 
     void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
       force: false,
+      profileId: null,
     });
     await flush();
 
@@ -260,6 +365,7 @@ describe("ephemeral-fetch-queue", () => {
 
     void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
       force: true,
+      profileId: null,
     });
     // Draining flips true synchronously at enqueue, before any await.
     expect(isRateLimitQueueDraining()).toBe(true);
@@ -297,6 +403,7 @@ describe("ephemeral-fetch-queue", () => {
 
     void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
       force: true,
+      profileId: null,
     });
     expect(isRateLimitQueueDraining()).toBe(true);
     await flush();
@@ -320,9 +427,11 @@ describe("ephemeral-fetch-queue", () => {
     // No cached data yet: both pass their enqueue-time freshness check.
     void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
       force: true,
+      profileId: null,
     });
     void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
       force: false,
+      profileId: null,
     });
     await flush();
     expect(request).toHaveBeenCalledTimes(1);
@@ -340,6 +449,7 @@ describe("ephemeral-fetch-queue", () => {
     // No configureRateLimitQueue call.
     await enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
       force: true,
+      profileId: null,
     });
     await flush();
     expect(request).not.toHaveBeenCalled();
@@ -387,6 +497,7 @@ describe("post-usage_fetch_failed cool-down", () => {
 
     void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
       force: false,
+      profileId: null,
     });
     await flushFake(0);
     expect(request).toHaveBeenCalledTimes(1);
@@ -398,6 +509,7 @@ describe("post-usage_fetch_failed cool-down", () => {
     await flushFake(PROVIDER_RATE_LIMITS_STALE_TIME_MS + 1_000);
     void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
       force: false,
+      profileId: null,
     });
     await flushFake(0);
     expect(request).toHaveBeenCalledTimes(1);
@@ -405,6 +517,7 @@ describe("post-usage_fetch_failed cool-down", () => {
     // A manual, user-initiated refresh is never subject to the cool-down.
     void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
       force: true,
+      profileId: null,
     });
     await flushFake(0);
     expect(request).toHaveBeenCalledTimes(2);
@@ -419,6 +532,7 @@ describe("post-usage_fetch_failed cool-down", () => {
 
     void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
       force: false,
+      profileId: null,
     });
     await flushFake(0);
     expect(request).toHaveBeenCalledTimes(1);
@@ -427,6 +541,7 @@ describe("post-usage_fetch_failed cool-down", () => {
     await flushFake(5 * 60 * 1000 + 1_000);
     void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
       force: false,
+      profileId: null,
     });
     await flushFake(0);
     expect(request).toHaveBeenCalledTimes(2);
@@ -441,6 +556,7 @@ describe("post-usage_fetch_failed cool-down", () => {
 
     void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
       force: false,
+      profileId: null,
     });
     await flushFake(0);
     expect(request).toHaveBeenCalledTimes(1);
@@ -451,6 +567,7 @@ describe("post-usage_fetch_failed cool-down", () => {
     await flushFake(PROVIDER_RATE_LIMITS_STALE_TIME_MS + 1_000);
     void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
       force: false,
+      profileId: null,
     });
     await flushFake(0);
     expect(request).toHaveBeenCalledTimes(2);
@@ -469,6 +586,7 @@ describe("post-usage_fetch_failed cool-down", () => {
     // First automatic pull trips the cool-down.
     void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
       force: false,
+      profileId: null,
     });
     await flushFake(0);
     expect(request).toHaveBeenCalledTimes(1);
@@ -477,6 +595,7 @@ describe("post-usage_fetch_failed cool-down", () => {
     nextReason = null;
     void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
       force: true,
+      profileId: null,
     });
     await flushFake(0);
     expect(request).toHaveBeenCalledTimes(2);
@@ -487,6 +606,7 @@ describe("post-usage_fetch_failed cool-down", () => {
     await flushFake(PROVIDER_RATE_LIMITS_STALE_TIME_MS + 1_000);
     void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
       force: false,
+      profileId: null,
     });
     await flushFake(0);
     expect(request).toHaveBeenCalledTimes(3);

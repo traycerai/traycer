@@ -52,6 +52,7 @@ export const ACTION_IDS = [
   "composer.model-picker.toggle",
   "model.provider.byDigit",
   "model.reasoning.byDigit",
+  "model.profile.byDigit",
 ] as const;
 
 export type ActionId = (typeof ACTION_IDS)[number];
@@ -396,6 +397,15 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     category: "app",
     kind: "digit",
     defaultChord: "alt",
+  },
+  "model.profile.byDigit": {
+    id: "model.profile.byDigit",
+    label: "Switch profile by number",
+    description:
+      "While the model picker is open and the active provider has 2+ profiles, hold the leader modifier + Shift and press a digit to switch to that profile chip.",
+    category: "app",
+    kind: "digit",
+    defaultChord: "mod+shift",
   },
   // In-app back/forward (`nav.back` / `nav.forward`) intentionally has NO
   // keyboard chord: `mod`/`alt`+Arrow both collide with native text-editing

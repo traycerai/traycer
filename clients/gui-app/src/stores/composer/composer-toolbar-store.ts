@@ -344,7 +344,11 @@ function deriveToolbarState(
   const selection: HarnessModelSelection =
     resolvedSlug === availabilitySelection.modelSlug
       ? availabilitySelection
-      : { harnessId: availabilitySelection.harnessId, modelSlug: resolvedSlug };
+      : {
+          harnessId: availabilitySelection.harnessId,
+          modelSlug: resolvedSlug,
+          profileId: availabilitySelection.profileId,
+        };
   // True ONLY when the resolved slug is a real, loaded model of this harness.
   // The surface emit is NOT gated on this (live-settings propagate immediately);
   // it is the signal the `recordingOnSettingsChange` wrapper reads at write time
@@ -389,11 +393,15 @@ function deriveToolbarState(
     selectionCatalogConfirmed,
   };
   // Preserve the previous `selection` reference when nothing changed so slice
-  // subscribers (picker, send gate) don't wake on every catalog push.
+  // subscribers (picker, send gate) don't wake on every catalog push. Must
+  // compare `profileId` too - a same-harness/same-model profile switch (the
+  // common turn-boundary case) would otherwise be silently discarded back to
+  // the previous profile.
   if (
     previous !== null &&
     previous.selection.harnessId === derived.selection.harnessId &&
-    previous.selection.modelSlug === derived.selection.modelSlug
+    previous.selection.modelSlug === derived.selection.modelSlug &&
+    previous.selection.profileId === derived.selection.profileId
   ) {
     return { ...derived, selection: previous.selection };
   }
@@ -539,5 +547,8 @@ function effectiveSelectionFromHarnesses(
     if (harness.id === selection.harnessId) return selection;
   }
   if (firstEligible === null) return selection;
-  return { harnessId: firstEligible.id, modelSlug: "" };
+  // A forced surface reroute switches provider entirely - the old selection's
+  // profile belongs to the harness being rerouted OFF of, so it never carries
+  // over onto the new one.
+  return { harnessId: firstEligible.id, modelSlug: "", profileId: null };
 }

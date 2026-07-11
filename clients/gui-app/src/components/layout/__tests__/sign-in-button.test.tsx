@@ -318,10 +318,12 @@ describe("<SignInButton />", () => {
     });
 
     expect(screen.queryByRole("button", { name: "Signing in" })).toBeNull();
-    expect(
-      screen.getByRole<HTMLButtonElement>("button", { name: "Sign in" })
-        .disabled,
-    ).toBe(true);
+    await waitFor(() => {
+      expect(
+        screen.getByRole<HTMLButtonElement>("button", { name: "Sign in" })
+          .disabled,
+      ).toBe(true);
+    });
     const retry = await screen.findByTestId("signin-retry-link");
     // `signIn()` restarts the device flow and re-opens the verification page, so
     // a stalled attempt has an immediate escape hatch. Capturing the count

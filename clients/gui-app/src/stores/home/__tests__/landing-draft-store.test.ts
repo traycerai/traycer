@@ -5,7 +5,10 @@ import {
   emptyLandingDraftWorkspaceSnapshot,
   EMPTY_LANDING_DRAFT_CONTENT,
   LANDING_DRAFT_PERSIST_KEY,
+  mergeLandingDraftWorkspaceFolders,
+  removeLandingDraftWorkspaceFolder,
   setLandingDraftDesktopProjectionBridge,
+  setLandingDraftWorkspacePrimary,
   useLandingDraftStore,
   type LandingDraftTab,
 } from "@/stores/home/landing-draft-store";
@@ -56,7 +59,10 @@ import {
   useEpicCanvasStore,
 } from "@/stores/epics/canvas/store";
 import { createEmptyCanvas } from "@/stores/epics/canvas/canvas-state";
-import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
+import {
+  useWorkspaceFoldersStore,
+  type WorkspaceFolderInfo,
+} from "@/stores/workspace/workspace-folders-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import type {
   DesktopJsonValue,
@@ -73,6 +79,7 @@ const HAIKU_SETTINGS: ChatRunSettings = {
   reasoningEffort: null,
   serviceTier: null,
   agentMode: "regular",
+  profileId: null,
 };
 
 const SONNET_SETTINGS: ChatRunSettings = {
@@ -82,6 +89,7 @@ const SONNET_SETTINGS: ChatRunSettings = {
   reasoningEffort: null,
   serviceTier: null,
   agentMode: "epic",
+  profileId: null,
 };
 const WORKSPACE_A = {
   path: "/tmp/workspace-a",
@@ -106,6 +114,7 @@ function resetStore(): void {
   useWorkspaceFoldersStore.setState({
     folders: [],
     folderInfoByPath: {},
+    primaryPath: null,
   });
   useSettingsStore.setState({
     composerMode: "chat",
@@ -159,6 +168,79 @@ function numberedWorkspace(index: number) {
   };
 }
 
+describe("removeLandingDraftWorkspaceFolder / setLandingDraftWorkspacePrimary (pure helpers)", () => {
+  function workspaceOf(folders: ReadonlyArray<WorkspaceFolderInfo>) {
+    return mergeLandingDraftWorkspaceFolders(
+      emptyLandingDraftWorkspaceSnapshot(),
+      folders,
+    );
+  }
+
+  it("setLandingDraftWorkspacePrimary switches primary; a non-member path is a no-op (same reference)", () => {
+    const workspace = workspaceOf([WORKSPACE_A, WORKSPACE_B]);
+    const switched = setLandingDraftWorkspacePrimary(
+      workspace,
+      WORKSPACE_B.path,
+    );
+    expect(switched.primaryPath).toBe(WORKSPACE_B.path);
+
+    const noop = setLandingDraftWorkspacePrimary(switched, "/not-a-member");
+    expect(noop).toBe(switched);
+  });
+
+  it("removing the primary folder deterministically falls back to the first remaining folder", () => {
+    const workspace = setLandingDraftWorkspacePrimary(
+      workspaceOf([WORKSPACE_A, WORKSPACE_B, WORKSPACE_C]),
+      WORKSPACE_B.path,
+    );
+
+    const afterRemove = removeLandingDraftWorkspaceFolder(
+      workspace,
+      WORKSPACE_B.path,
+    );
+
+    expect(afterRemove.primaryPath).toBe(WORKSPACE_A.path);
+  });
+
+  it("removing a secondary folder leaves primary unchanged", () => {
+    const workspace = setLandingDraftWorkspacePrimary(
+      workspaceOf([WORKSPACE_A, WORKSPACE_B, WORKSPACE_C]),
+      WORKSPACE_B.path,
+    );
+
+    const afterRemove = removeLandingDraftWorkspaceFolder(
+      workspace,
+      WORKSPACE_C.path,
+    );
+
+    expect(afterRemove.primaryPath).toBe(WORKSPACE_B.path);
+  });
+
+  it("removing the last folder empties the workspace and its primary (empty state)", () => {
+    const workspace = workspaceOf([WORKSPACE_A]);
+    const afterRemove = removeLandingDraftWorkspaceFolder(
+      workspace,
+      WORKSPACE_A.path,
+    );
+    expect(afterRemove.folders).toEqual([]);
+    expect(afterRemove.primaryPath).toBeNull();
+  });
+
+  it("promotes a non-git (local-only) folder to primary just like any other folder", () => {
+    const nonGitFolder = {
+      path: "/tmp/non-git",
+      name: "non-git",
+      repoIdentifier: null,
+    };
+    const workspace = workspaceOf([WORKSPACE_A, nonGitFolder]);
+    const switched = setLandingDraftWorkspacePrimary(
+      workspace,
+      nonGitFolder.path,
+    );
+    expect(switched.primaryPath).toBe(nonGitFolder.path);
+  });
+});
+
 describe("useLandingDraftStore", () => {
   beforeEach(() => {
     window.localStorage.clear();
@@ -202,6 +284,117 @@ describe("useLandingDraftStore", () => {
       expect(useLandingDraftStore.getState().activeDraftId).toBe(
         "legacy-no-workspace",
       );
+    });
+
+    it("rehydrates a v1 draft with a POPULATED workspace and no primaryPath to first-folder primary", async () => {
+      setLandingDraftDesktopProjectionBridge(null);
+      window.localStorage.setItem(
+        LANDING_DRAFT_PERSIST_KEY,
+        JSON.stringify({
+          state: {
+            drafts: [
+              {
+                id: "v1-populated",
+                content: { type: "doc", content: [{ type: "paragraph" }] },
+                selection: null,
+                lastTouchedAt: 123,
+                settings: null,
+                composerMode: "chat",
+                // v1 workspace shape: folders + metadata, no `primaryPath`.
+                workspace: {
+                  folders: [WORKSPACE_A.path, WORKSPACE_B.path],
+                  folderInfoByPath: {
+                    [WORKSPACE_A.path]: WORKSPACE_A,
+                    [WORKSPACE_B.path]: WORKSPACE_B,
+                  },
+                },
+              },
+            ],
+            activeDraftId: "v1-populated",
+          },
+          version: 1,
+        }),
+      );
+      await useLandingDraftStore.persist.rehydrate();
+
+      const workspace = useLandingDraftStore.getState().drafts[0].workspace;
+      expect(workspace.folders).toEqual([WORKSPACE_A.path, WORKSPACE_B.path]);
+      expect(workspace.primaryPath).toBe(WORKSPACE_A.path);
+    });
+
+    it("rehydrates a switched (non-first) primaryPath verbatim after a reload", async () => {
+      setLandingDraftDesktopProjectionBridge(null);
+      window.localStorage.setItem(
+        LANDING_DRAFT_PERSIST_KEY,
+        JSON.stringify({
+          state: {
+            drafts: [
+              {
+                id: "switched-primary",
+                content: { type: "doc", content: [{ type: "paragraph" }] },
+                selection: null,
+                lastTouchedAt: 123,
+                settings: null,
+                composerMode: "chat",
+                workspace: {
+                  folders: [WORKSPACE_A.path, WORKSPACE_B.path],
+                  folderInfoByPath: {
+                    [WORKSPACE_A.path]: WORKSPACE_A,
+                    [WORKSPACE_B.path]: WORKSPACE_B,
+                  },
+                  // The user switched primary to the SECOND folder before
+                  // the reload; rehydration must not fall back to first.
+                  primaryPath: WORKSPACE_B.path,
+                },
+              },
+            ],
+            activeDraftId: "switched-primary",
+          },
+          version: 1,
+        }),
+      );
+      await useLandingDraftStore.persist.rehydrate();
+
+      expect(
+        useLandingDraftStore.getState().drafts[0].workspace.primaryPath,
+      ).toBe(WORKSPACE_B.path);
+    });
+
+    it("drops a ghost folder (no metadata) from a persisted draft workspace and never resolves it as primary", async () => {
+      setLandingDraftDesktopProjectionBridge(null);
+      window.localStorage.setItem(
+        LANDING_DRAFT_PERSIST_KEY,
+        JSON.stringify({
+          state: {
+            drafts: [
+              {
+                id: "ghost-folder",
+                content: { type: "doc", content: [{ type: "paragraph" }] },
+                selection: null,
+                lastTouchedAt: 123,
+                settings: null,
+                composerMode: "chat",
+                workspace: {
+                  // "/tmp/ghost" is in the folder array but has NO metadata
+                  // entry - corrupt persisted state.
+                  folders: ["/tmp/ghost", WORKSPACE_A.path],
+                  folderInfoByPath: {
+                    [WORKSPACE_A.path]: WORKSPACE_A,
+                  },
+                  primaryPath: "/tmp/ghost",
+                },
+              },
+            ],
+            activeDraftId: "ghost-folder",
+          },
+          version: 1,
+        }),
+      );
+      await useLandingDraftStore.persist.rehydrate();
+
+      const workspace = useLandingDraftStore.getState().drafts[0].workspace;
+      expect(workspace.folders).toEqual([WORKSPACE_A.path]);
+      expect(workspace.primaryPath).toBe(WORKSPACE_A.path);
     });
 
     it("drops a legacy prompt-only draft with no valid content", async () => {
@@ -367,10 +560,11 @@ describe("useLandingDraftStore", () => {
     expect(useLandingDraftStore.getState().drafts[0].workspace).toEqual({
       folders: [WORKSPACE_A.path],
       folderInfoByPath: { [WORKSPACE_A.path]: WORKSPACE_A },
+      primaryPath: WORKSPACE_A.path,
     });
   });
 
-  it("caps draft-added workspace folders to the newest 50 entries", () => {
+  it("caps draft-added workspace folders to the newest 50 entries, never evicting primary", () => {
     const draftId = useLandingDraftStore.getState().createDraft(null);
     const folders = Array.from({ length: 55 }, (_, index) =>
       numberedWorkspace(index),
@@ -380,12 +574,76 @@ describe("useLandingDraftStore", () => {
 
     const workspace = useLandingDraftStore.getState().drafts[0].workspace;
     expect(workspace.folders).toHaveLength(50);
-    expect(workspace.folders[0]).toBe("/tmp/workspace-5");
+    // Primary resolves to the first folder (nothing was explicitly marked
+    // primary yet) and the cap trim must preserve it even though it is the
+    // OLDEST entry - the eviction trims the oldest SECONDARIES instead.
+    expect(workspace.primaryPath).toBe("/tmp/workspace-0");
+    expect(workspace.folders[0]).toBe("/tmp/workspace-0");
     expect(workspace.folders.at(-1)).toBe("/tmp/workspace-54");
-    expect(workspace.folderInfoByPath["/tmp/workspace-0"]).toBeUndefined();
+    expect(workspace.folderInfoByPath["/tmp/workspace-0"]).toEqual(
+      numberedWorkspace(0),
+    );
+    expect(workspace.folderInfoByPath["/tmp/workspace-5"]).toBeUndefined();
     expect(workspace.folderInfoByPath["/tmp/workspace-54"]).toEqual(
       numberedWorkspace(54),
     );
+  });
+
+  it("50->51 cap transition never silently moves an EXPLICIT primary that isn't the oldest folder", () => {
+    const draftId = useLandingDraftStore.getState().createDraft(null);
+    const folders = Array.from({ length: 50 }, (_, index) =>
+      numberedWorkspace(index),
+    );
+    useLandingDraftStore.getState().addDraftResolvedFolders(draftId, folders);
+    // Mark a folder that is NOT the oldest (and would otherwise be the first
+    // trimmed) as primary.
+    useLandingDraftStore
+      .getState()
+      .setDraftWorkspacePrimary(draftId, "/tmp/workspace-2");
+
+    useLandingDraftStore
+      .getState()
+      .addDraftResolvedFolders(draftId, [numberedWorkspace(50)]);
+
+    const workspace = useLandingDraftStore.getState().drafts[0].workspace;
+    expect(workspace.folders).toHaveLength(50);
+    expect(workspace.primaryPath).toBe("/tmp/workspace-2");
+    expect(workspace.folders).toContain("/tmp/workspace-2");
+    expect(workspace.folders).toContain("/tmp/workspace-50");
+    // The oldest secondary (not the explicit primary) is evicted instead.
+    expect(workspace.folders).not.toContain("/tmp/workspace-0");
+  });
+
+  it("setDraftWorkspacePrimary scopes primary to the draft, leaving the global workspace store untouched", () => {
+    const draftId = useLandingDraftStore.getState().createDraft(null);
+    useLandingDraftStore
+      .getState()
+      .addDraftResolvedFolders(draftId, [WORKSPACE_A, WORKSPACE_B]);
+
+    useLandingDraftStore
+      .getState()
+      .setDraftWorkspacePrimary(draftId, WORKSPACE_B.path);
+
+    const draftWorkspace = useLandingDraftStore.getState().drafts[0].workspace;
+    expect(draftWorkspace.primaryPath).toBe(WORKSPACE_B.path);
+    // The global store was never touched by a draft-scoped mutation - it
+    // has no folders at all in this test, so its primary stays null.
+    expect(useWorkspaceFoldersStore.getState().primaryPath).toBeNull();
+  });
+
+  it("a folder outside the draft's workspace is not settable as primary (no-op)", () => {
+    const draftId = useLandingDraftStore.getState().createDraft(null);
+    useLandingDraftStore
+      .getState()
+      .addDraftResolvedFolders(draftId, [WORKSPACE_A]);
+
+    useLandingDraftStore
+      .getState()
+      .setDraftWorkspacePrimary(draftId, "/not-in-this-draft");
+
+    expect(
+      useLandingDraftStore.getState().drafts[0].workspace.primaryPath,
+    ).toBe(WORKSPACE_A.path);
   });
 
   it("closeDraft removes the draft and picks another as active", () => {

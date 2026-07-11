@@ -7,8 +7,8 @@ import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/moc
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type {
-  WorktreeHostEntryV11,
-  WorktreeListAllForHostResponseV11,
+  WorktreeHostEntryV12,
+  WorktreeListAllForHostResponseV12,
 } from "@traycer/protocol/host/worktree-schemas";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
@@ -25,7 +25,7 @@ const WORKTREE_DEBOUNCE_SETTLE_MS = 120;
 function enrichedEntry(
   worktreePath: string,
   branch: string,
-): WorktreeHostEntryV11 {
+): WorktreeHostEntryV12 {
   return {
     worktreePath,
     branch,
@@ -68,8 +68,8 @@ function baseKey(): readonly unknown[] {
   ];
 }
 
-function seedEnriched(qc: QueryClient, entry: WorktreeHostEntryV11): void {
-  qc.setQueryData<WorktreeListAllForHostResponseV11>(
+function seedEnriched(qc: QueryClient, entry: WorktreeHostEntryV12): void {
+  qc.setQueryData<WorktreeListAllForHostResponseV12>(
     perPathKey(entry.worktreePath),
     {
       worktrees: [entry],
@@ -90,7 +90,7 @@ describe("useCachedWorktreeEnrichment (cache-backed overlay)", () => {
     // The base list (includeActivity: false) carries a DIFFERENT path's base-only
     // data. It must NOT enter the overlay - else that row would classify from
     // base-only fields instead of staying pending.
-    qc.setQueryData<WorktreeListAllForHostResponseV11>(baseKey(), {
+    qc.setQueryData<WorktreeListAllForHostResponseV12>(baseKey(), {
       worktrees: [enrichedEntry("/wt/b", "feat-b")],
       nextCursor: null,
     });
@@ -205,7 +205,7 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
   });
 
   function createFixture(
-    entriesByPath: ReadonlyMap<string, WorktreeHostEntryV11>,
+    entriesByPath: ReadonlyMap<string, WorktreeHostEntryV12>,
     onPathRequest: ((path: string) => void) | null,
   ) {
     const queryClient = new QueryClient();
@@ -248,7 +248,7 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
   }
 
   it("enriches a reported window, then keeps it enriched after the window shrinks", async () => {
-    const entriesByPath = new Map<string, WorktreeHostEntryV11>([
+    const entriesByPath = new Map<string, WorktreeHostEntryV12>([
       ["/wt/a", enrichedEntry("/wt/a", "feat-a")],
       ["/wt/b", enrichedEntry("/wt/b", "feat-b")],
     ]);
@@ -297,7 +297,7 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
     // the exact production shape (report from a mount effect under
     // StrictMode), and becomes a real regression net the moment the test
     // runtime gains dev-mode double-invocation.
-    const entriesByPath = new Map<string, WorktreeHostEntryV11>([
+    const entriesByPath = new Map<string, WorktreeHostEntryV12>([
       ["/wt/a", enrichedEntry("/wt/a", "feat-a")],
     ]);
     const fixture = createFixture(entriesByPath, null);
@@ -331,13 +331,13 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
   it("refetches cold null PR state and stops after it resolves", async () => {
     vi.useFakeTimers();
     const coldEntry = enrichedEntry("/wt/a", "feat-a");
-    const resolvedEntry: WorktreeHostEntryV11 = {
+    const resolvedEntry: WorktreeHostEntryV12 = {
       ...coldEntry,
       prState: "open",
       prNumber: 42,
       prUrl: "https://github.com/acme/app/pull/42",
     };
-    const entriesByPath = new Map<string, WorktreeHostEntryV11>([
+    const entriesByPath = new Map<string, WorktreeHostEntryV12>([
       ["/wt/a", coldEntry],
     ]);
     const requests: string[] = [];
@@ -368,9 +368,81 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
     expect(requests).toHaveLength(2);
   });
 
+  it("refetches when a SUBMODULE leg is cold even though the superproject is proven", async () => {
+    vi.useFakeTimers();
+    // The noble-weasel shape: superproject fully proven merged, but an owned
+    // submodule's PR fact is still `null` (warming). One unproven submodule
+    // holds the row in Review, so the retry must fire off the submodule leg.
+    const coldSubmodule = {
+      repoIdentifier: { owner: "acme", repo: "lib" },
+      branch: "traycer/sub",
+      prState: null,
+      prNumber: null,
+      prUrl: null,
+      mergedHeadShaMatches: false,
+      mergedIntoDefault: false,
+      atPinnedCommit: false,
+      unmergedCommitCount: null,
+      unmergedCommitSubjects: null,
+    };
+    const coldEntry: WorktreeHostEntryV12 = {
+      ...enrichedEntry("/wt/a", "feat-a"),
+      prState: "merged",
+      prNumber: 7,
+      prUrl: "https://github.com/acme/app/pull/7",
+      mergedHeadShaMatches: true,
+      submodules: [coldSubmodule],
+    };
+    const resolvedEntry: WorktreeHostEntryV12 = {
+      ...coldEntry,
+      submodules: [
+        {
+          ...coldSubmodule,
+          prState: "merged",
+          prNumber: 9,
+          prUrl: "https://github.com/acme/lib/pull/9",
+          mergedHeadShaMatches: true,
+        },
+      ],
+    };
+    const entriesByPath = new Map<string, WorktreeHostEntryV12>([
+      ["/wt/a", coldEntry],
+    ]);
+    const requests: string[] = [];
+    const fixture = createFixture(entriesByPath, (path) => {
+      requests.push(path);
+      if (requests.length === 1) entriesByPath.set(path, resolvedEntry);
+    });
+    const { result } = renderHook(
+      () => useWorktreeActivityEnrichment(fixture.client, true, HOST_ID),
+      { wrapper: fixture.Wrapper },
+    );
+
+    await act(async () => {
+      result.current.reportVisiblePaths(["/wt/a"]);
+      await vi.advanceTimersByTimeAsync(WORKTREE_DEBOUNCE_SETTLE_MS);
+    });
+    expect(requests).toHaveLength(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    // The retry fired and the warmed submodule fact landed; no further retries
+    // once every leg is probed.
+    expect(requests).toHaveLength(2);
+    expect(
+      result.current.enrichedByPath.get("/wt/a")?.submodules[0].prState,
+    ).toBe("merged");
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(requests).toHaveLength(2);
+  });
+
   it("stops cold PR refetching after the bounded retry budget", async () => {
     vi.useFakeTimers();
-    const entriesByPath = new Map<string, WorktreeHostEntryV11>([
+    const entriesByPath = new Map<string, WorktreeHostEntryV12>([
       ["/wt/a", enrichedEntry("/wt/a", "feat-a")],
     ]);
     const requests: string[] = [];

@@ -18,8 +18,11 @@ import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtur
 import { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import type { WorktreeDeleteStreamCallbacks } from "@traycer-clients/shared/host-transport/worktree-delete-stream-client";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type { WorktreeHostEntryV11 } from "@traycer/protocol/host/index";
-import type { WorktreeEntryScripts } from "@traycer/protocol/host/worktree-schemas";
+import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/index";
+import type {
+  WorktreeEntryScripts,
+  WorktreeSubmoduleMergeFactV12,
+} from "@traycer/protocol/host/worktree-schemas";
 import {
   hostStreamRpcRegistry,
   type HostStreamRpcRegistry,
@@ -207,12 +210,25 @@ function stubOpenStreamTransport() {
   };
 }
 
+type WorktreeSubmoduleMergeFactInput = Omit<
+  WorktreeSubmoduleMergeFactV12,
+  "unmergedCommitCount" | "unmergedCommitSubjects"
+> &
+  Partial<
+    Pick<
+      WorktreeSubmoduleMergeFactV12,
+      "unmergedCommitCount" | "unmergedCommitSubjects"
+    >
+  >;
+
 function entry(
-  over: Partial<WorktreeHostEntryV11> & {
+  over: Partial<Omit<WorktreeHostEntryV12, "submodules">> & {
     worktreePath: string;
     branch: string;
+    submodules?: readonly WorktreeSubmoduleMergeFactInput[];
   },
-): WorktreeHostEntryV11 {
+): WorktreeHostEntryV12 {
+  const { submodules, ...rest } = over;
   return {
     repoLabel: "acme/app",
     repoIdentifier: { owner: "acme", repo: "app" },
@@ -220,7 +236,7 @@ function entry(
     uncommittedCount: 0,
     gitRemovable: true,
     scripts: null,
-    // v1.1 staleness + merge-provenance signals default to the "no signal /
+    // v1.2 staleness + merge-provenance signals default to the "no signal /
     // older host" shape so each test opts into only the fields it exercises.
     owners: [],
     lastActivityAt: null,
@@ -230,13 +246,18 @@ function entry(
     prNumber: null,
     prUrl: null,
     mergedHeadShaMatches: false,
-    submodules: [],
+    submodules:
+      submodules?.map((submodule) => ({
+        ...submodule,
+        unmergedCommitCount: submodule.unmergedCommitCount ?? null,
+        unmergedCommitSubjects: submodule.unmergedCommitSubjects ?? null,
+      })) ?? [],
     atBaseCommit: false,
-    ...over,
+    ...rest,
   };
 }
 
-const WORKTREES: WorktreeHostEntryV11[] = [
+const WORKTREES: WorktreeHostEntryV12[] = [
   entry({
     worktreePath: "/wt/clean",
     branch: "feat-clean",
@@ -285,17 +306,17 @@ afterEach(() => {
 // entry) - the default the behavioural tests want, so tiers classify immediately.
 // Tests that exercise the pending/lazy path pass their own partial overlay.
 function fullyEnriched(
-  worktrees: readonly WorktreeHostEntryV11[],
-): ReadonlyMap<string, WorktreeHostEntryV11> {
+  worktrees: readonly WorktreeHostEntryV12[],
+): ReadonlyMap<string, WorktreeHostEntryV12> {
   return new Map(worktrees.map((entry) => [entry.worktreePath, entry]));
 }
 
 function renderList(args: {
   readonly hostId: string;
   readonly queryClient: QueryClient;
-  readonly worktrees: readonly WorktreeHostEntryV11[];
+  readonly worktrees: readonly WorktreeHostEntryV12[];
   readonly enrichedByPath:
-    ReadonlyMap<string, WorktreeHostEntryV11> | undefined;
+    ReadonlyMap<string, WorktreeHostEntryV12> | undefined;
   readonly erroredPaths: ReadonlySet<string> | undefined;
   readonly onVisiblePathsChange:
     ((paths: readonly string[]) => void) | undefined;
@@ -402,9 +423,15 @@ describe("useWorktreeListing", () => {
           "worktree.listAllForHost": (params) => {
             requests.push(params);
             if (params.cursor === null) {
-              return { worktrees: [first], nextCursor: first.worktreePath };
+              return {
+                worktrees: [first],
+                nextCursor: first.worktreePath,
+              };
             }
-            return { worktrees: [second], nextCursor: null };
+            return {
+              worktrees: [second],
+              nextCursor: null,
+            };
           },
         },
       }),
@@ -459,7 +486,10 @@ describe("useWorktreeListing", () => {
           "worktree.listAllForHost": (params) => {
             if (params.cursor === null) {
               firstPageCalls += 1;
-              return { worktrees: [first], nextCursor: first.worktreePath };
+              return {
+                worktrees: [first],
+                nextCursor: first.worktreePath,
+              };
             }
             secondPageCalls += 1;
             throw new Error("host unreachable");
@@ -1563,7 +1593,7 @@ describe("WorktreesList confirm-time re-check", () => {
     toastMock.messages = [];
   });
 
-  function merged(path: string, branch: string): WorktreeHostEntryV11 {
+  function merged(path: string, branch: string): WorktreeHostEntryV12 {
     return entry({
       worktreePath: path,
       branch,
@@ -1573,7 +1603,7 @@ describe("WorktreesList confirm-time re-check", () => {
 
   function renderWith(
     queryClient: QueryClient,
-    worktrees: readonly WorktreeHostEntryV11[],
+    worktrees: readonly WorktreeHostEntryV12[],
   ) {
     return (
       <QueryClientProvider client={queryClient}>
@@ -1661,7 +1691,7 @@ describe("WorktreesList confirm-time re-check", () => {
     expect(streamMock.paths).toEqual(["/wt/merged"]);
   });
 
-  function atBase(path: string, branch: string): WorktreeHostEntryV11 {
+  function atBase(path: string, branch: string): WorktreeHostEntryV12 {
     return entry({ worktreePath: path, branch, atBaseCommit: true });
   }
 
@@ -1926,7 +1956,7 @@ describe("WorktreesList confirm-time re-check", () => {
   });
 });
 
-describe("WorktreesList v1.1 signals", () => {
+describe("WorktreesList v1.2 signals", () => {
   afterEach(() => {
     cleanup();
     __resetWorktreeDeleteRunForTests();
@@ -2072,6 +2102,7 @@ describe("WorktreesList v1.1 signals", () => {
               prUrl: "https://github.com/acme/open-sub/pull/11",
               mergedHeadShaMatches: false,
               mergedIntoDefault: false,
+              atPinnedCommit: false,
             },
             {
               repoIdentifier: { owner: "acme", repo: "closed-sub" },
@@ -2081,6 +2112,7 @@ describe("WorktreesList v1.1 signals", () => {
               prUrl: "https://github.com/acme/closed-sub/pull/12",
               mergedHeadShaMatches: false,
               mergedIntoDefault: false,
+              atPinnedCommit: false,
             },
             {
               repoIdentifier: { owner: "acme", repo: "merged-sub" },
@@ -2090,6 +2122,7 @@ describe("WorktreesList v1.1 signals", () => {
               prUrl: "https://github.com/acme/merged-sub/pull/13",
               mergedHeadShaMatches: true,
               mergedIntoDefault: true,
+              atPinnedCommit: false,
             },
             {
               repoIdentifier: { owner: "acme", repo: "none-sub" },
@@ -2099,6 +2132,7 @@ describe("WorktreesList v1.1 signals", () => {
               prUrl: "https://github.com/acme/none-sub/pull/14",
               mergedHeadShaMatches: false,
               mergedIntoDefault: false,
+              atPinnedCommit: false,
             },
             {
               repoIdentifier: { owner: "acme", repo: "cold-sub" },
@@ -2108,6 +2142,7 @@ describe("WorktreesList v1.1 signals", () => {
               prUrl: "https://github.com/acme/cold-sub/pull/15",
               mergedHeadShaMatches: false,
               mergedIntoDefault: false,
+              atPinnedCommit: false,
             },
           ],
         }),
@@ -2156,7 +2191,126 @@ describe("WorktreesList v1.1 signals", () => {
     expect(
       screen.queryByRole("link", { name: "Open cold-sub PR #15" }),
     ).toBeNull();
-    screen.getByText("none-sub · unmerged");
+    screen.getByText("none-sub · unmerged commits");
+  });
+
+  it("explains unmerged submodule commits with a count and newest subjects", async () => {
+    const submodule: WorktreeSubmoduleMergeFactV12 = {
+      repoIdentifier: { owner: "acme", repo: "traycer" },
+      branch: "traycer/feature",
+      prState: "none",
+      prNumber: null,
+      prUrl: null,
+      mergedHeadShaMatches: false,
+      mergedIntoDefault: false,
+      atPinnedCommit: false,
+      unmergedCommitCount: 7,
+      unmergedCommitSubjects: [
+        "Newest change",
+        "Fourth change",
+        "Third change",
+        "Second change",
+        "First change",
+      ],
+    };
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [
+        entry({
+          worktreePath: "/wt/unmerged",
+          branch: "feat-unmerged",
+          submodules: [submodule],
+        }),
+      ],
+      taskTitlesByEpicId: undefined,
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      onVisiblePathsChange: undefined,
+    });
+
+    const chip = screen.getByTestId("worktree-pr-chip");
+    screen.getByText("traycer · 7 unmerged commits");
+    fireEvent.pointerMove(chip);
+    expect(
+      (
+        await screen.findAllByText(
+          "This submodule branch has commits that never landed on traycer's main branch. Deleting the worktree deletes the branch and these commits with it:",
+        )
+      ).length,
+    ).toBeGreaterThan(0);
+    expect(screen.getAllByText("Newest change").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("First change").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("…and 2 more").length).toBeGreaterThan(0);
+  });
+
+  it("lists every Review reason once activity enrichment is available", async () => {
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [
+        entry({
+          worktreePath: "/wt/review-reasons",
+          branch: "feat-review",
+          uncommittedCount: 2,
+          branchStatus: { ahead: 2, behind: 0, mergedIntoDefault: false },
+          submodules: [
+            {
+              repoIdentifier: { owner: "acme", repo: "lib" },
+              branch: "traycer/lib",
+              prState: "none",
+              prNumber: null,
+              prUrl: null,
+              mergedHeadShaMatches: false,
+              mergedIntoDefault: false,
+              atPinnedCommit: false,
+              unmergedCommitCount: 3,
+              unmergedCommitSubjects: ["Newest"],
+            },
+          ],
+        }),
+      ],
+      taskTitlesByEpicId: undefined,
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      onVisiblePathsChange: undefined,
+    });
+
+    fireEvent.pointerMove(screen.getByTestId("worktree-tier-pill"));
+    expect(
+      (await screen.findAllByText("2 uncommitted changes")).length,
+    ).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText("acme/lib (traycer/lib): 3 unmerged commits").length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("keeps the generic Review tooltip before activity enrichment", async () => {
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [
+        entry({
+          worktreePath: "/wt/review-fallback",
+          branch: "feat-review",
+          uncommittedCount: 1,
+          branchStatus: null,
+        }),
+      ],
+      taskTitlesByEpicId: undefined,
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      onVisiblePathsChange: undefined,
+    });
+
+    fireEvent.pointerMove(screen.getByTestId("worktree-tier-pill"));
+    expect(
+      (
+        await screen.findAllByText(
+          "Not proven safe to remove: it has uncommitted changes, unmerged or unpushed commits, an unmerged submodule branch, a detached HEAD, or unknown branch status. Review before deleting.",
+        )
+      ).length,
+    ).toBeGreaterThan(0);
   });
 
   it("hides PR facts from the row facts line now that chips carry the links", () => {
@@ -2176,6 +2330,7 @@ describe("WorktreesList v1.1 signals", () => {
               prUrl: "https://github.com/acme/sub/pull/22",
               mergedHeadShaMatches: false,
               mergedIntoDefault: false,
+              atPinnedCommit: false,
             },
           ],
         }),
@@ -2192,6 +2347,38 @@ describe("WorktreesList v1.1 signals", () => {
         .getByRole("link", { name: "Open sub PR #22 Open" })
         .getAttribute("href"),
     ).toBe("https://github.com/acme/sub/pull/22");
+  });
+
+  it("does not render an unmerged chip for a submodule proven at its pinned gitlink", () => {
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [
+        entry({
+          worktreePath: "/wt/submodule-at-pin",
+          branch: "feat-submodule-at-pin",
+          atBaseCommit: true,
+          submodules: [
+            {
+              repoIdentifier: { owner: "acme", repo: "sub" },
+              branch: "feat-submodule-at-pin",
+              prState: "none",
+              prNumber: null,
+              prUrl: null,
+              mergedHeadShaMatches: false,
+              mergedIntoDefault: false,
+              atPinnedCommit: true,
+            },
+          ],
+        }),
+      ],
+      taskTitlesByEpicId: undefined,
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      onVisiblePathsChange: undefined,
+    });
+
+    expect(screen.queryByText("sub · unmerged")).toBeNull();
   });
 
   it("labels a worktree with no owners as not used by any Task", () => {
@@ -2351,6 +2538,7 @@ describe("WorktreesList v1.1 signals", () => {
               prUrl: null,
               mergedHeadShaMatches: true,
               mergedIntoDefault: true,
+              atPinnedCommit: false,
             },
           ],
         }),
@@ -2393,6 +2581,7 @@ describe("WorktreesList v1.1 signals", () => {
               prUrl: null,
               mergedHeadShaMatches: true,
               mergedIntoDefault: true,
+              atPinnedCommit: false,
             },
           ],
         }),
@@ -2688,8 +2877,8 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
   });
 
   function listElement(args: {
-    readonly worktrees: readonly WorktreeHostEntryV11[];
-    readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV11>;
+    readonly worktrees: readonly WorktreeHostEntryV12[];
+    readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV12>;
     readonly erroredPaths: ReadonlySet<string> | undefined;
     readonly onVisiblePathsChange:
       ((paths: readonly string[]) => void) | undefined;
@@ -2712,7 +2901,7 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
     );
   }
 
-  function manyWorktrees(count: number): WorktreeHostEntryV11[] {
+  function manyWorktrees(count: number): WorktreeHostEntryV12[] {
     return Array.from({ length: count }, (_unused, index) =>
       entry({
         worktreePath: `/wt/w${index}`,
@@ -3022,8 +3211,8 @@ describe("WorktreesList status-aware delete safety", () => {
   // `pendingDeleteTargets`) instead of remounting the whole subtree.
   function statusAwareElement(args: {
     readonly queryClient: QueryClient;
-    readonly worktrees: readonly WorktreeHostEntryV11[];
-    readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV11>;
+    readonly worktrees: readonly WorktreeHostEntryV12[];
+    readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV12>;
     readonly erroredPaths: ReadonlySet<string>;
   }): ReactNode {
     return (

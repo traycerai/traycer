@@ -1,4 +1,4 @@
-import { useCallback, useId, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { useStore } from "zustand";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -20,18 +20,30 @@ import { AgentModeToggle } from "@/components/home/pickers/agent-mode-toggle";
 import { ActiveHostWorkspaceControls } from "@/components/home/host-workspace-selector/host-workspace-selector";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
+import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
 import {
   type CreateTuiAgentStatus,
   useCreateTuiAgentForClient,
 } from "@/hooks/agent/use-create-tui-agent";
 import { tuiAgentDisplayTitle } from "@/lib/display-title";
-import { readSeededLaunchWorktreeIntent } from "@/lib/worktree/seeded-launch-worktree-intent";
+import { readSeededLaunchWorkspace } from "@/lib/worktree/seeded-launch-worktree-intent";
+import { useSeededWorkspaceSnapshotStore } from "@/stores/worktree/seeded-workspace-snapshot-store";
 import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
 import {
   pendingForkTerminalAgentStagingKey,
   useWorktreeIntentStagingStore,
+  worktreeStagingKeyString,
+  type WorktreeStagingKey,
 } from "@/stores/worktree/worktree-intent-staging-store";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
+
+// `pendingForkTerminalAgentStagingKey` is per-EPIC, so every terminal-agent
+// tile in an epic shares one staging slot. Two dialog bodies can therefore be
+// mounted over the same key (one unmounting as another opens), and the loser's
+// teardown must not wipe the winner's freshly-seeded workspace. Whoever
+// registered last owns the slot; a stale cleanup sees a different symbol and
+// bails. Mirrors `chat-fork-dialog.tsx`.
+const activeTerminalForkWorkspaceOwnerByKey = new Map<string, symbol>();
 
 export interface TerminalAgentForkDialogTarget {
   readonly sourceAgent: TuiAgentProjection;
@@ -78,12 +90,27 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
     () => pendingForkTerminalAgentStagingKey(epicId),
     [epicId],
   );
-  const settingsSeed = useMemo(
-    () =>
-      target === null ? null : terminalForkSettingsSeed(target.sourceAgent),
-    [target],
+  const settingsSeed = useMemo(() => {
+    if (target === null) return null;
+    return terminalForkSettingsSeed(target.sourceAgent);
+  }, [target]);
+  // A fork dialog has no send-time reauth gate of its own (unlike the main
+  // composer), so a source agent's profileId that was tombstoned since it
+  // last ran must be caught before it reaches `createAgent.create`.
+  // `useComposerToolbarStore` now validates every seed it receives against
+  // the SAME host's live `providers.list` (passing `hostClient` here - this
+  // dialog's explicit prop, not necessarily the app-wide active host -
+  // mirroring how the workspace controls below already query this fixed
+  // host), so no separate resolution is needed at this call site. Never
+  // authoritative: this dialog has no reauth gate of its own, so a
+  // genuinely-tombstoned source profile must be corrected to ambient here
+  // rather than silently submitted to `createAgent.create`.
+  const toolbarStore = useComposerToolbarStore(
+    null,
+    fallbackSeedSource(settingsSeed, hostClient),
+    null,
+    true,
   );
-  const toolbarStore = useComposerToolbarStore(null, settingsSeed, null, true);
   const createAgent = useCreateTuiAgentForClient(hostClient, hostId);
   const [status, setStatus] = useState<TerminalAgentForkStatus>("idle");
   const modelResolved = useStore(
@@ -133,27 +160,53 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
     modelResolved &&
     !busy;
 
+  // The seeded workspace (staged intent + live snapshot) is scratch state for
+  // THIS fork attempt. Abandoning the dialog must drop it, or the next fork in
+  // the epic reads the cancelled fork's folders/primary back out of the shared
+  // per-epic slot - `readSeededLaunchWorkspace` prefers the snapshot over the
+  // new target's `workspaceSeed`.
+  const activeWorkspaceTarget = open ? target : null;
+  useEffect(() => {
+    if (activeWorkspaceTarget === null) return;
+    const stagingKeyId = worktreeStagingKeyString(stagingKey);
+    const owner = Symbol(activeWorkspaceTarget.sourceAgent.id);
+    activeTerminalForkWorkspaceOwnerByKey.set(stagingKeyId, owner);
+    return () => {
+      if (activeTerminalForkWorkspaceOwnerByKey.get(stagingKeyId) !== owner) {
+        return;
+      }
+      activeTerminalForkWorkspaceOwnerByKey.delete(stagingKeyId);
+      clearTerminalForkWorkspace(stagingKey);
+    };
+  }, [activeWorkspaceTarget, stagingKey]);
+
   const close = useCallback(() => {
     if (busy) return;
+    clearTerminalForkWorkspace(stagingKey);
     onOpenChange(false);
-  }, [busy, onOpenChange]);
+  }, [busy, onOpenChange, stagingKey]);
 
   const handleOpenChange = useCallback(
     (nextOpen: boolean) => {
       if (!nextOpen && busy) return;
+      if (!nextOpen) {
+        clearTerminalForkWorkspace(stagingKey);
+      }
       onOpenChange(nextOpen);
     },
-    [busy, onOpenChange],
+    [busy, onOpenChange, stagingKey],
   );
 
   const submit = useCallback(() => {
     // `canSubmit` already implies `target !== null && sourceSessionId !== null`,
     // and TS narrows both from it for the rest of this callback.
     if (!canSubmit) return;
-    const worktreeIntent = readSeededLaunchWorktreeIntent({
+    const launchWorkspace = readSeededLaunchWorkspace({
       stagingKey,
-      fallbackIntent: target.workspaceSeed.intent,
+      seedIntent: target.workspaceSeed.intent,
+      fallbackWorkspace: target.workspaceSeed.workspace,
     });
+    const worktreeIntent = launchWorkspace.worktreeIntent;
     if (worktreeIntent !== null) {
       useWorktreeIntentMemoryStore
         .getState()
@@ -180,11 +233,12 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
         reasoningEffort:
           toolbar.reasoning.length > 0 ? toolbar.reasoning : null,
         agentMode: toolbar.agentMode,
+        profileId: toolbar.selection.profileId,
         forkSourceHarnessSessionId: sourceSessionId,
         onStatusChange: setStatus,
         worktreeIntent,
         workspaceMode: deriveWorkspaceMode(
-          target.workspaceSeed.workspace.folders.length,
+          launchWorkspace.folderCount,
           worktreeIntent,
         ),
         terminalAgentArgs: argsTouched
@@ -193,7 +247,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
       })
       .then((createdAgentId) => {
         if (createdAgentId !== null) {
-          useWorktreeIntentStagingStore.getState().clear(stagingKey);
+          clearTerminalForkWorkspace(stagingKey);
           onOpenChange(false);
         }
       })
@@ -249,6 +303,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
                 lockedHarnessId={target?.sourceAgent.harnessId ?? null}
                 disabled={busy}
                 registerActivation={false}
+                createProfileHostId={hostId}
               />
               <div className="shrink-0">
                 <AgentModeToggle
@@ -325,6 +380,15 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
   );
 }
 
+// Drops both halves of this fork's scratch workspace: the staged per-folder
+// intent (branch/scripts selections) and the live snapshot the picker mirrors
+// out for `readSeededLaunchWorkspace`. Idempotent - a successful submit clears
+// here and the close that follows clears again.
+function clearTerminalForkWorkspace(stagingKey: WorktreeStagingKey): void {
+  useWorktreeIntentStagingStore.getState().clear(stagingKey);
+  useSeededWorkspaceSnapshotStore.getState().clear(stagingKey);
+}
+
 function terminalForkStatusLabel(status: CreateTuiAgentStatus): string {
   switch (status) {
     case "preparing-workspace":
@@ -357,6 +421,12 @@ function terminalForkSettingsSeed(agent: TuiAgentProjection): ChatRunSettings {
     reasoningEffort: agent.reasoningEffort,
     serviceTier: null,
     agentMode: agent.agentMode,
+    // Seed from the source agent's profile - `useComposerToolbarStore`
+    // validates it against the target host's live provider profiles; the
+    // harness stays locked (see `lockedHarnessId` below) but the user can
+    // still switch between that harness's OTHER profiles via the rail
+    // before forking.
+    profileId: agent.profileId,
   };
 }
 
@@ -378,5 +448,6 @@ function terminalForkModelPickerKey(
     agent.model ?? "",
     agent.reasoningEffort ?? "",
     agent.agentMode,
+    agent.profileId ?? "",
   ].join("\u0000");
 }
