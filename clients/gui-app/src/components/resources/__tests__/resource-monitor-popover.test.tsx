@@ -28,6 +28,8 @@ import {
 } from "@testing-library/react";
 import type {
   AppResourceSnapshotWire,
+  HostTreeResourceSnapshotWire,
+  OtherResourceSnapshotWire,
   OwnerResourceSnapshotWire,
   ResourceProcessSnapshotWire,
 } from "@traycer/protocol/host/resources/subscribe";
@@ -41,6 +43,16 @@ import { ResourcesStreamMount } from "@/providers/resources-stream-mount";
 import { __setResourcesStreamClientFactoryForTests } from "@/providers/resources-stream-factory-override";
 import { resourcesRegistry } from "@/stores/resources/resources-registry";
 import { useTitleBarDragStore } from "@/stores/layout/title-bar-drag-store";
+
+const streamVersionMock = vi.hoisted(() => ({
+  version: null as { readonly major: number; readonly minor: number } | null,
+}));
+
+vi.mock("@/lib/host/stream-runtime-context", () => ({
+  useWsStreamClient: () => null,
+  useStreamMethodSupport: () => null,
+  useStreamMethodSchemaVersion: () => streamVersionMock.version,
+}));
 
 type MockEpicIntentInput = Readonly<Record<string, unknown>>;
 type MockEpicIntent = MockEpicIntentInput & { readonly kind: "epic" };
@@ -68,6 +80,17 @@ vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
 }));
 
 const historyNavAvailableMock = vi.hoisted(() => ({ enabled: true }));
+
+const liveArtifactTitleMock = vi.hoisted(() => ({
+  title: null as string | null,
+}));
+
+vi.mock("@/lib/epic-selectors", () => ({
+  useRegisteredEpicLiveArtifactTitle: (
+    _epicId: string,
+    artifactId: string | null,
+  ) => (artifactId === "chat-1" ? liveArtifactTitleMock.title : null),
+}));
 
 vi.mock("@/lib/history-navigation/use-history-nav-available", () => ({
   useHistoryNavAvailable: () => historyNavAvailableMock.enabled,
@@ -275,6 +298,50 @@ function owner(
   };
 }
 
+function hostTree(
+  over: Partial<HostTreeResourceSnapshotWire>,
+): HostTreeResourceSnapshotWire {
+  return {
+    sampledAt: 1_000,
+    processCount: 4,
+    cpuPercent: 10,
+    rssBytes: 400 * 1024 * 1024,
+    ...over,
+  };
+}
+
+function other(
+  over: Partial<OtherResourceSnapshotWire>,
+): OtherResourceSnapshotWire {
+  return {
+    sampledAt: 1_000,
+    rootPids: [500],
+    processCount: 2,
+    cpuPercent: 5,
+    rssBytes: 50 * 1024 * 1024,
+    processes: [
+      resourceProcess({
+        pid: 500,
+        rootPid: 500,
+        name: "worker",
+        command: "worker",
+        cpuPercent: 1,
+        rssBytes: 10 * 1024 * 1024,
+      }),
+      resourceProcess({
+        pid: 501,
+        parentPid: 500,
+        rootPid: 500,
+        name: "child",
+        command: "child",
+        cpuPercent: 4,
+        rssBytes: 40 * 1024 * 1024,
+      }),
+    ],
+    ...over,
+  };
+}
+
 function projection(
   over: Partial<ResourcesProjectionPayload>,
 ): ResourcesProjectionPayload {
@@ -285,6 +352,8 @@ function projection(
     owners: [],
     epic: null,
     epics: [],
+    hostTree: undefined,
+    other: undefined,
     ...over,
   };
 }
@@ -319,6 +388,20 @@ afterEach(() => {
   routerMock.pathname = "/epics/epic-1/tab-1";
   navigateNestedMock.mockClear();
   historyNavAvailableMock.enabled = true;
+  liveArtifactTitleMock.title = null;
+  canvasMock.state.canvasByTabId["tab-1"].tilesByInstanceId["tile-term-1"] = {
+    id: "term-1",
+    instanceId: "tile-term-1",
+    type: "terminal",
+    name: "Terminal Alpha",
+    titleSource: "manual",
+    hostId: "host-1",
+    cwd: "/work",
+  };
+  canvasMock.state.artifactTreeByEpicId["epic-1"][0] = {
+    ...canvasMock.state.artifactTreeByEpicId["epic-1"][0],
+    name: "Agent Chat",
+  };
   tabNavigationMock.existingEpicTabIntentWithNestedFocus.mockClear();
   tabNavigationMock.navigateToTabIntent.mockClear();
   canvasMock.prepareOpenTileInTabFocusTarget.mockReset();
@@ -326,11 +409,277 @@ afterEach(() => {
   canvasMock.resolveTargetTabForEpic.mockReset();
   canvasMock.resolveTargetTabForEpic.mockReturnValue("tab-2");
   __setResourcesStreamClientFactoryForTests(null);
+  streamVersionMock.version = null;
   resourcesRegistry.disposeAll();
   useTitleBarDragStore.setState({ suppressors: new Set() });
 });
 
 describe("ResourceMonitorPopover", () => {
+  it("uses the live chat title when the persisted owner name is untitled", async () => {
+    liveArtifactTitleMock.title = "Generated chat title";
+    canvasMock.state.artifactTreeByEpicId["epic-1"][0] = {
+      ...canvasMock.state.artifactTreeByEpicId["epic-1"][0],
+      name: "Untitled chat",
+    };
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [
+            owner({
+              owner: {
+                kind: "chat",
+                hostId: "host-1",
+                epicId: "epic-1",
+                ownerId: "chat-1",
+              },
+              activeProcessName: null,
+            }),
+          ],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+
+    expect(await screen.findByText("Generated chat title")).not.toBeNull();
+    expect(screen.queryByText("Untitled chat")).toBeNull();
+  });
+
+  it("counts a nested tracked root once in owner tree totals", () => {
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [
+            owner({
+              processes: [
+                // PTY root: parent (the host) is outside this list.
+                resourceProcess({
+                  pid: 100,
+                  parentPid: 1,
+                  rootPid: 100,
+                  name: "zsh",
+                  command: "/bin/zsh",
+                  cpuPercent: 3,
+                  rssBytes: 10 * 1024 * 1024,
+                }),
+                resourceProcess({
+                  pid: 101,
+                  parentPid: 100,
+                  rootPid: 100,
+                  name: "node",
+                  command: "node agent.js",
+                  cpuPercent: 5,
+                  rssBytes: 20 * 1024 * 1024,
+                }),
+                // Second tracked root that is an OS descendant of the first
+                // tree: must be counted exactly once (as a child), never as
+                // an additional root.
+                resourceProcess({
+                  pid: 102,
+                  parentPid: 101,
+                  rootPid: 102,
+                  name: "claude",
+                  command: "claude --chat",
+                  cpuPercent: 9,
+                  rssBytes: 30 * 1024 * 1024,
+                }),
+              ],
+            }),
+          ],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    // 3 + 5 + 9 single-counted, shown by exactly two elements: the task
+    // header and the owner row. A double-count regression in either
+    // projection drops the count below 2 and surfaces 26% instead.
+    expect(screen.getAllByText("17%")).toHaveLength(2);
+    expect(screen.queryByText("26%")).toBeNull();
+  });
+
+  it("updates an auto-titled terminal owner from each resource frame", () => {
+    canvasMock.state.canvasByTabId["tab-1"].tilesByInstanceId["tile-term-1"] = {
+      ...canvasMock.state.canvasByTabId["tab-1"].tilesByInstanceId[
+        "tile-term-1"
+      ],
+      titleSource: "default",
+    };
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [owner({ activeProcessName: "first-command" })],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    expect(screen.getByText("first-command")).not.toBeNull();
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [owner({ activeProcessName: "second-command" })],
+        }),
+      );
+    });
+
+    expect(screen.queryByText("Terminal Alpha")).toBeNull();
+    expect(screen.getByText("second-command")).not.toBeNull();
+  });
+
+  it("uses the host-tree aggregate plus desktop usage for the headline", async () => {
+    const stub = installStubFactory();
+    Reflect.set(globalThis, "runnerHost", {
+      platform: {
+        diagnostics: {
+          getMetrics: vi.fn().mockResolvedValue({
+            appMetrics: [
+              {
+                pid: 10,
+                type: "Browser",
+                cpu: { percentCPUUsage: 1.5 },
+                memory: { workingSetSize: 100 * 1024 },
+              },
+            ],
+          }),
+        },
+      },
+    });
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          app: app(),
+          hostTree: hostTree({}),
+          owners: [owner({ cpuPercent: 99, rssBytes: 900 * 1024 * 1024 })],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    expect(await screen.findByText("12%")).not.toBeNull();
+    expect(screen.getByText("500 MB")).not.toBeNull();
+    expect(screen.getByRole("progressbar").getAttribute("aria-valuenow")).toBe(
+      "24",
+    );
+  });
+
+  it("renders Other as a non-navigable, expandable process-root section", () => {
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub
+        .emit()
+        .onSnapshot(
+          projection({ app: app(), hostTree: hostTree({}), other: other({}) }),
+        );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    // Collapsed by default: only the section header with aggregate totals.
+    expect(screen.getByText("Other")).not.toBeNull();
+    expect(screen.queryByText("worker (1 sub-process)")).toBeNull();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Expand other processes" }),
+    );
+    expect(screen.getByText("worker (1 sub-process)")).not.toBeNull();
+    expect(screen.queryByText("child")).toBeNull();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Expand sub-processes of worker" }),
+    );
+    expect(screen.getByText("child")).not.toBeNull();
+  });
+
+  it("shows compact basename labels for Other roots until expanded", () => {
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          app: app(),
+          hostTree: hostTree({}),
+          other: other({
+            processes: [
+              resourceProcess({
+                pid: 500,
+                rootPid: 500,
+                name: "/Users/dev/.traycer/host/dev/providers/opencode/opencode",
+                command:
+                  "/Users/dev/.traycer/host/dev/providers/opencode/opencode serve",
+                cpuPercent: 1,
+                rssBytes: 10 * 1024 * 1024,
+              }),
+              resourceProcess({
+                pid: 501,
+                parentPid: 500,
+                rootPid: 500,
+                name: "node",
+                command: "node worker.js",
+                cpuPercent: 4,
+                rssBytes: 40 * 1024 * 1024,
+              }),
+            ],
+          }),
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Expand other processes" }),
+    );
+    // Collapsed root shows the executable basename, not the install path.
+    expect(screen.getByText("opencode (1 sub-process)")).not.toBeNull();
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Expand sub-processes of /Users/dev/.traycer/host/dev/providers/opencode/opencode serve",
+      }),
+    );
+    // Expanded root reveals the full command for inspection.
+    expect(
+      screen.getByText(
+        "/Users/dev/.traycer/host/dev/providers/opencode/opencode serve",
+      ),
+    ).not.toBeNull();
+  });
+
+  it("keeps the legacy headline and hides Other on resources.subscribe@1.1", () => {
+    streamVersionMock.version = { major: 1, minor: 1 };
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          app: app(),
+          hostTree: hostTree({ cpuPercent: 50 }),
+          other: other({}),
+          owners: [owner({ cpuPercent: 2, rssBytes: 100 * 1024 * 1024 })],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    expect(screen.getByText("3.0%")).not.toBeNull();
+    expect(screen.queryByText("Other")).toBeNull();
+  });
+
   it("shows global app resources and task process trees", async () => {
     const stub = installStubFactory();
     const getDesktopMetrics = vi.fn().mockResolvedValue({
@@ -427,46 +776,104 @@ describe("ResourceMonitorPopover", () => {
     expect(screen.getByText("Resource Task")).not.toBeNull();
     expect(screen.getByText("Background Task")).not.toBeNull();
     expect(screen.getByText("Terminal Alpha")).not.toBeNull();
+    // Owner trees start collapsed, so their inclusive values are visible on the
+    // owner rows while no individual process is rendered yet.
     expect(
-      screen.getAllByText("node dev-server.js (2 sub-processes)"),
-    ).toHaveLength(2);
+      screen.queryByText("node dev-server.js (2 sub-processes)"),
+    ).toBeNull();
     expect(screen.queryByText("/bin/sh")).toBeNull();
     expect(screen.queryByText("make")).toBeNull();
     expect(screen.getByText("2 open terminals")).not.toBeNull();
     expect(screen.queryByText(/terminal processes/)).toBeNull();
 
-    const cappedProcessRow = screen
-      .getAllByText("node dev-server.js (2 sub-processes)")[0]
-      .closest("button");
-    if (cappedProcessRow === null) {
-      throw new Error("Expected capped process row to be an expand button");
-    }
-    // Clicking the boundary reveals its whole sub-tree (to the leaves) inline,
-    // with each revealed row carrying its own CPU/memory columns.
-    fireEvent.click(cappedProcessRow);
-    expect(screen.getByText("/bin/sh")).not.toBeNull();
-    expect(screen.getByText("make")).not.toBeNull();
-    expect(screen.getAllByText("2.0 MB").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("4.0 MB").length).toBeGreaterThan(0);
-    // The expanded row drops its "(N sub-processes)" summary; the other owner's
-    // tree stays collapsed (expansion is per-node, and multiple may be open).
-    expect(screen.getByText("node dev-server.js")).not.toBeNull();
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Expand process tree" })[0],
+    );
     expect(
-      screen.getAllByText("node dev-server.js (2 sub-processes)"),
-    ).toHaveLength(1);
-
-    // Clicking again collapses it back to the summarized boundary.
-    const expandedRow = screen
-      .getByText("node dev-server.js")
-      .closest("button");
-    if (expandedRow === null) {
-      throw new Error("Expected expanded row to be a collapse button");
-    }
-    fireEvent.click(expandedRow);
+      screen.getByText("node dev-server.js (2 sub-processes)"),
+    ).not.toBeNull();
     expect(screen.queryByText("/bin/sh")).toBeNull();
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Expand sub-processes of node dev-server.js",
+      }),
+    );
+    expect(screen.getByText("/bin/sh (1 sub-process)")).not.toBeNull();
+    expect(screen.queryByText("make")).toBeNull();
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Expand sub-processes of /bin/sh",
+      }),
+    );
+    expect(screen.getByText("make")).not.toBeNull();
+  });
+
+  it("swaps tree values for self values without double-counting visible rows", async () => {
+    const stub = installStubFactory();
+    render(
+      <TooltipProvider delayDuration={0}>
+        <ResourcesStreamMount epicId="epic-1" />
+        <ResourceMonitorPopover className={undefined} />
+      </TooltipProvider>,
+    );
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [
+            owner({
+              cpuPercent: 13,
+              rssBytes: 106 * 1024 * 1024,
+            }),
+          ],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+
+    const ownerRow = screen.getByText("Terminal Alpha").closest("button");
+    if (ownerRow === null) throw new Error("Expected owner row button");
+    expect(ownerRow.textContent).toContain("13%");
+    expect(ownerRow.textContent).toContain("106 MB");
     expect(
-      screen.getAllByText("node dev-server.js (2 sub-processes)"),
-    ).toHaveLength(2);
+      screen.queryByText("node dev-server.js (2 sub-processes)"),
+    ).toBeNull();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Expand process tree" }),
+    );
+    expect(ownerRow.textContent).toContain("2.0%");
+    expect(ownerRow.textContent).toContain("40.0 MB");
+    const nodeRow = screen
+      .getByText("node dev-server.js (2 sub-processes)")
+      .closest("button");
+    if (nodeRow === null) throw new Error("Expected node row button");
+    expect(nodeRow.textContent).toContain("11%");
+    expect(nodeRow.textContent).toContain("66.0 MB");
+
+    const metrics = ownerRow.querySelector('[data-slot="tooltip-trigger"]');
+    if (metrics === null)
+      throw new Error("Expected owner metric tooltip trigger");
+    fireEvent.pointerMove(metrics);
+    expect(
+      await screen.findAllByText(/Self: 2\.0% CPU · 40\.0 MB memory/),
+    ).not.toHaveLength(0);
+    expect(
+      await screen.findAllByText(/Tree: 13% CPU · 106 MB memory/),
+    ).not.toHaveLength(0);
+
+    fireEvent.click(nodeRow);
+    expect(nodeRow.textContent).toContain("10%");
+    expect(nodeRow.textContent).toContain("60.0 MB");
+    const shellRow = screen
+      .getByText("/bin/sh (1 sub-process)")
+      .closest("button");
+    if (shellRow === null) throw new Error("Expected shell row button");
+    expect(shellRow.textContent).toContain("1.0%");
+    expect(shellRow.textContent).toContain("6.0 MB");
   });
 
   it("commits an already-open owner in the CURRENT tab through the same-route boundary", async () => {
@@ -658,7 +1065,7 @@ describe("ResourceMonitorPopover", () => {
     );
   });
 
-  it("pins root section headers to the top of the scroll region", () => {
+  it("pins an expanded owner row beneath its sticky section header", () => {
     const stub = installStubFactory();
     render(
       <TooltipProvider>
@@ -672,15 +1079,19 @@ describe("ResourceMonitorPopover", () => {
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Expand process tree" }),
+    );
 
-    // The section root ("Traycer Host") header sticks so it stays visible as its
-    // rows scroll under it; the current header swaps per section (not stacked).
-    const hostHeader = screen.getByText("Traycer Host").closest(".sticky");
-    expect(hostHeader).not.toBeNull();
-    expect(hostHeader?.className).toContain("top-0");
+    // Layout engines, not jsdom, validate scroll positioning; this verifies the
+    // structural sticky container and its measured section-header offset.
+    const ownerRow = screen.getByText("Terminal Alpha").closest(".sticky");
+    expect(ownerRow).not.toBeNull();
+    expect(ownerRow?.className).toContain("bg-popover");
+    expect(ownerRow?.getAttribute("style")).toContain("top: 0px");
   });
 
-  it("hides terminal rows with no subprocesses while keeping aggregate metrics", () => {
+  it("shows idle terminals even when they have no subprocesses", () => {
     const stub = installStubFactory();
 
     render(
@@ -707,9 +1118,8 @@ describe("ResourceMonitorPopover", () => {
               processCount: 1,
               cpuPercent: 77,
               rssBytes: 900 * 1024 * 1024,
-              // A bare shell with nothing running under it: its whole tree is a
-              // single process, so the terminal owner row is hidden entirely
-              // while its metrics still fold into the aggregate below.
+              // A bare shell with nothing running under it is still a terminal
+              // session and must remain visible in the compact default view.
               processes: [
                 resourceProcess({
                   pid: 900,
@@ -730,9 +1140,7 @@ describe("ResourceMonitorPopover", () => {
     fireEvent.click(screen.getByRole("button", { name: "Resources" }));
 
     expect(screen.getByText("Terminal Alpha")).not.toBeNull();
-    // The whole terminal owner row is hidden - neither its label nor its lone
-    // shell process renders.
-    expect(screen.queryByText("idle-shell")).toBeNull();
+    expect(screen.getByText("idle-shell")).not.toBeNull();
     expect(screen.queryByText("/usr/bin/idle-zsh")).toBeNull();
     expect(screen.getByText("2 open terminals")).not.toBeNull();
     expect(screen.getAllByText("89%").length).toBeGreaterThan(0);

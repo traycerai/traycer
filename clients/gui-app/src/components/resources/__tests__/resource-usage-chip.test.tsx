@@ -78,6 +78,8 @@ function projection(
     owners: [],
     epic: null,
     epics: [],
+    hostTree: undefined,
+    other: undefined,
     ...over,
   };
 }

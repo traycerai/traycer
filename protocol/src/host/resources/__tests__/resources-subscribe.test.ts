@@ -4,8 +4,10 @@ import {
   resourcesSubscribeClientFrameSchema,
   resourcesSubscribeOpenRequestV11Schema,
   resourcesSubscribeServerFrameSchema,
+  resourcesSubscribeServerFrameSchemaV12,
   resourcesSubscribeV10,
   resourcesSubscribeV11,
+  resourcesSubscribeV12,
 } from "@traycer/protocol/host/resources/subscribe";
 
 /**
@@ -59,6 +61,29 @@ const APP_FIXTURE = {
   processCount: 1,
   cpuPercent: 1.5,
   rssBytes: 256 * 1024 * 1024,
+};
+
+const HOST_TREE_FIXTURE = {
+  sampledAt: 1_000,
+  processCount: 5,
+  cpuPercent: 21.5,
+  rssBytes: 512 * 1024 * 1024,
+};
+
+const OTHER_FIXTURE = {
+  sampledAt: 1_000,
+  rootPids: [99],
+  processCount: 2,
+  cpuPercent: 8.5,
+  rssBytes: 128 * 1024 * 1024,
+  processes: [
+    {
+      ...PROCESS_FIXTURE,
+      pid: 99,
+      rootPid: 99,
+      name: "shared-provider",
+    },
+  ],
 };
 
 describe("resources.subscribe@1.0 open request", () => {
@@ -231,6 +256,36 @@ describe("resources.subscribe@1.0 server frames", () => {
   });
 });
 
+describe("resources.subscribe@1.2 server frames", () => {
+  it("carries the host-tree aggregate and Other process self snapshots", () => {
+    const parsed = resourcesSubscribeServerFrameSchemaV12.parse({
+      kind: "snapshot",
+      epicId: "__global__",
+      sampledAt: 1_000,
+      app: APP_FIXTURE,
+      owners: [OWNER_FIXTURE],
+      epic: null,
+      epics: [EPIC_FIXTURE],
+      hostTree: HOST_TREE_FIXTURE,
+      other: OTHER_FIXTURE,
+      hasBinaryPayload: false,
+    });
+
+    if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
+    expect(parsed.hostTree).toEqual(HOST_TREE_FIXTURE);
+    expect(parsed.other?.rootPids).toEqual([99]);
+    expect(parsed.other?.processes[0]).toMatchObject({
+      pid: 99,
+      parentPid: 1,
+      rootPid: 99,
+      name: "shared-provider",
+      command: "/bin/bash",
+      cpuPercent: 12.5,
+      rssBytes: 4_096,
+    });
+  });
+});
+
 describe("resources.subscribe@1.0 client frames", () => {
   it("parses a text-only ping frame", () => {
     const parsed = resourcesSubscribeClientFrameSchema.parse({
@@ -245,10 +300,12 @@ describe("resources.subscribe@1.0 registry membership", () => {
   it("is registered on the stream registry at major 1 / minor 0", () => {
     const entry = hostStreamRpcRegistry["resources.subscribe"];
     expect(entry).toBeDefined();
-    expect(entry[1].latestMinor).toBe(1);
+    expect(entry[1].latestMinor).toBe(2);
     expect(entry[1].versions[0].contract).toBe(resourcesSubscribeV10);
     expect(entry[1].versions[1].contract).toBe(resourcesSubscribeV11);
+    expect(entry[1].versions[2].contract).toBe(resourcesSubscribeV12);
     expect(resourcesSubscribeV10.schemaVersion).toEqual({ major: 1, minor: 0 });
     expect(resourcesSubscribeV11.schemaVersion).toEqual({ major: 1, minor: 1 });
+    expect(resourcesSubscribeV12.schemaVersion).toEqual({ major: 1, minor: 2 });
   });
 });
