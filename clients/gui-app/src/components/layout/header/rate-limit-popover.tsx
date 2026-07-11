@@ -25,6 +25,7 @@ import {
   type ProviderRateLimitQueryState,
 } from "@/components/settings/panels/provider-rate-limit-views";
 import { useHostProviderRateLimitsQuery } from "@/hooks/host/use-host-provider-rate-limits-query";
+import { useRefreshProviderRateLimitsOnMount } from "@/hooks/host/use-refresh-provider-rate-limits-on-mount";
 import { useHostQueriesWithResponseMap } from "@/hooks/host/use-host-queries";
 import { providerRateLimitQueryOptions } from "@/hooks/host/provider-rate-limit-query-options";
 import {
@@ -63,6 +64,7 @@ import {
 import { queryKeys } from "@/lib/query-keys";
 import {
   PROVIDER_RATE_LIMITS_STALE_TIME_MS,
+  rateLimitFetchLane,
   type RateLimitProviderId,
 } from "@/lib/rate-limit-providers";
 import { useRelativeTimestamp, useSampledNow } from "@/lib/relative-time";
@@ -709,8 +711,9 @@ function RateLimitRefreshAllButton({
 type PopoverBlockVariant = "popover-detail" | "popover-overview";
 
 /**
- * One provider's block - a header (name + plan/tier chip + "Updated Xm ago" +
- * per-provider refresh) over its state-driven body. Shared by the
+ * One provider's block. Providers with profile metadata always render the
+ * same profile-card layout, whether they have one profile or many; older hosts
+ * that do not report profiles fall back to the provider-wide reading. Shared by the
  * single-provider tab (`variant="popover-detail"`, full detail) and each
  * Overview entry (`variant="popover-overview"`, condensed). The plan/tier
  * chip (`resolveProviderPlanLabel`) is single-provider-tab only, same scoping
@@ -736,9 +739,9 @@ function RateLimitProviderBlock({
   readonly onReady: (() => void) | null;
   readonly profileSelection: RateLimitProfileSelection;
 }): ReactNode {
-  if (profiles.length > 1) {
+  if (profiles.length > 0) {
     return (
-      <MultiProfileRateLimitProviderBlock
+      <ProfileRateLimitProviderBlock
         providerId={providerId}
         profiles={profiles}
         variant={variant}
@@ -852,7 +855,7 @@ function SingleProfileRateLimitProviderBlock({
   );
 }
 
-function MultiProfileRateLimitProviderBlock({
+function ProfileRateLimitProviderBlock({
   providerId,
   profiles,
   variant,
@@ -865,12 +868,68 @@ function MultiProfileRateLimitProviderBlock({
   readonly onReady: (() => void) | null;
   readonly profileSelection: RateLimitProfileSelection;
 }): ReactNode {
+  const draining = useIsRateLimitQueueDraining();
+  const queryClient = useQueryClient();
+  const hostId = useReactiveActiveHostId();
+  const client = useHostClient();
   const activeProfileId = resolveRateLimitProfileId(
     profileSelection,
     providerId,
     profiles,
   );
   const rows = profiles.filter(profileLoggedInForUsage);
+  const targets = rows.map((profile) => ({
+    profile,
+    profileId: rateLimitProfileId(profile),
+  }));
+  const queryOptions = providerRateLimitQueryOptions(providerId, null).options;
+  const queries = useHostQueriesWithResponseMap<
+    HostRpcRegistry,
+    "host.getRateLimitUsage",
+    ProviderRateLimitEnvelope
+  >({
+    client,
+    requests: targets.map((target) => {
+      const { method, params } = providerRateLimitQueryOptions(
+        providerId,
+        target.profileId,
+      );
+      return { method, params };
+    }),
+    options: queryOptions,
+    mapResponse: mapResponseToProviderRateLimitEnvelope,
+  });
+  const lane = rateLimitFetchLane(providerId);
+  const isRefreshing =
+    lane === "ephemeralProcess"
+      ? draining
+      : queries.some((query) => query.isFetching);
+
+  const refresh = (): Promise<void> => {
+    if (lane === "ephemeralProcess") {
+      targets.forEach((target) => {
+        void enqueueRateLimitFetch(providerId, DEFAULT_ACCOUNT_CONTEXT, {
+          force: true,
+          profileId: target.profileId,
+        });
+      });
+      return Promise.resolve();
+    }
+    targets.forEach((target) => {
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.hostMethod<
+          HostRpcRegistry,
+          "host.getRateLimitUsage"
+        >(hostId, "host.getRateLimitUsage", {
+          accountContext: DEFAULT_ACCOUNT_CONTEXT,
+          providerId,
+          profileId: target.profileId,
+        }),
+        exact: true,
+      });
+    });
+    return Promise.resolve();
+  };
 
   useEffect(() => {
     if (onReady !== null) onReady();
@@ -879,7 +938,12 @@ function MultiProfileRateLimitProviderBlock({
   if (rows.length === 0) {
     return (
       <div className="flex flex-col gap-2">
-        <ProviderGroupHeader providerId={providerId} variant={variant} />
+        <ProviderGroupHeader
+          providerId={providerId}
+          variant={variant}
+          refresh={refresh}
+          isRefreshing={isRefreshing}
+        />
         <RateLimitErrorMessage message="No logged-in profiles." />
       </div>
     );
@@ -887,18 +951,23 @@ function MultiProfileRateLimitProviderBlock({
 
   return (
     <div className="flex flex-col gap-2">
-      <ProviderGroupHeader providerId={providerId} variant={variant} />
+      <ProviderGroupHeader
+        providerId={providerId}
+        variant={variant}
+        refresh={refresh}
+        isRefreshing={isRefreshing}
+      />
       <div className="flex flex-col gap-2">
-        {rows.map((profile) => {
-          const rowProfileId = rateLimitProfileId(profile);
+        {targets.map((target, index) => {
           return (
             <RateLimitProviderProfileRow
-              key={profile.profileId}
+              key={target.profile.profileId}
               providerId={providerId}
-              profile={profile}
-              profileId={rowProfileId}
-              active={activeProfileId === rowProfileId}
+              profile={target.profile}
+              profileId={target.profileId}
+              active={activeProfileId === target.profileId}
               variant={variant}
+              query={queries[index]}
             />
           );
         })}
@@ -910,18 +979,31 @@ function MultiProfileRateLimitProviderBlock({
 function ProviderGroupHeader({
   providerId,
   variant,
+  refresh,
+  isRefreshing,
 }: {
   readonly providerId: RateLimitProviderId;
   readonly variant: PopoverBlockVariant;
+  readonly refresh: () => Promise<void>;
+  readonly isRefreshing: boolean;
 }): ReactNode {
   return (
-    <div className="flex min-w-0 items-center gap-1.5">
-      {variant === "popover-overview" ? (
-        <HarnessIcon harnessId={providerIdToGuiHarnessId(providerId)} />
+    <div className="flex min-w-0 items-center justify-between gap-2">
+      <div className="flex min-w-0 items-center gap-1.5">
+        {variant === "popover-overview" ? (
+          <HarnessIcon harnessId={providerIdToGuiHarnessId(providerId)} />
+        ) : null}
+        <span className="text-ui-sm font-medium text-foreground">
+          {providerDisplayName(providerId)}
+        </span>
+      </div>
+      {variant === "popover-detail" ? (
+        <RefreshIconButton
+          onRefresh={refresh}
+          label={`Refresh ${providerDisplayName(providerId)}`}
+          refreshing={isRefreshing}
+        />
       ) : null}
-      <span className="text-ui-sm font-medium text-foreground">
-        {providerDisplayName(providerId)}
-      </span>
     </div>
   );
 }
@@ -932,24 +1014,28 @@ function RateLimitProviderProfileRow({
   profileId,
   active,
   variant,
+  query,
 }: {
   readonly providerId: RateLimitProviderId;
   readonly profile: ProviderProfile;
   readonly profileId: string | null;
   readonly active: boolean;
   readonly variant: PopoverBlockVariant;
+  readonly query: {
+    readonly isPending: boolean;
+    readonly isFetching: boolean;
+    readonly isError: boolean;
+    readonly data: ProviderRateLimitEnvelope | undefined;
+  };
 }): ReactNode {
-  const query = useHostProviderRateLimitsQuery(providerId, profileId);
-  const { refresh, isRefreshing } = useProviderRateLimitRefresh({
+  useRefreshProviderRateLimitsOnMount(
     providerId,
     profileId,
-    usageUpdatedAt: profile.usageUpdatedAt,
-    isFetching: query.isFetching,
-    refetch: query.refetch,
-  });
+    profile.usageUpdatedAt,
+  );
   const queryState: ProviderRateLimitQueryState = {
     isPending: query.isPending,
-    isFetching: isRefreshing,
+    isFetching: query.isFetching,
     isError: query.isError,
     envelope: query.data,
   };
@@ -1000,16 +1086,9 @@ function RateLimitProviderProfileRow({
           </div>
           <ProfileUsageUpdatedLabel
             updatedAt={profile.usageUpdatedAt}
-            refreshing={isRefreshing}
+            refreshing={query.isFetching}
           />
         </div>
-        {variant === "popover-detail" ? (
-          <RefreshIconButton
-            onRefresh={refresh}
-            label={`Refresh ${profileDisplayLabel(profile)}`}
-            refreshing={isRefreshing}
-          />
-        ) : null}
       </div>
       <RateLimitProviderBody state={state} variant={variant} />
     </div>
