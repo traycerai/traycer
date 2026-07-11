@@ -528,7 +528,19 @@ function WorktreesBody(props: {
   const reachability = useHostReachability(hostId ?? "");
   const reachable = hostId !== null && reachability.status === "reachable";
   const listing = useWorktreeListing(client, reachable);
-  const enrichment = useWorktreeActivityEnrichment(client, reachable, hostId);
+  // The full listing's paths seed the background enrichment sweep: rows the
+  // user never scrolls to still get probed (in bounded chunks), so tier pills
+  // and filtered counts converge without manual scrolling.
+  const worktreePaths = useMemo(
+    () => listing.worktrees.map((entry) => entry.worktreePath),
+    [listing.worktrees],
+  );
+  const enrichment = useWorktreeActivityEnrichment(
+    client,
+    reachable,
+    hostId,
+    worktreePaths,
+  );
   // Owning-Task titles come from the cloud epic-tasks caches the app already
   // maintains (keyed by the signed-in user, any host) - no host-side title join.
   const taskTitlesByEpicId = useWorktreeTaskTitles(listing.worktrees);
@@ -782,11 +794,12 @@ export function WorktreesList(props: {
   // The BASE listing (cheap fields for every row). Per-row activity enrichment
   // arrives lazily through `enrichedByPath`.
   readonly worktrees: readonly WorktreeHostEntryV12[];
-  // The per-viewport enrichment overlay, keyed by `worktreePath`. A row present
-  // here carries its full activity-probed fields (branchStatus, prState, …); a row
-  // ABSENT here is still "pending" - its base fields are painted but its tier is
-  // not known yet, so the pill shows "Checking…" and it stays out of tier-based
-  // filtering. Grows as rows scroll into view.
+  // The enrichment overlay, keyed by `worktreePath`. A row present here carries
+  // its full activity-probed fields (branchStatus, prState, …); a row ABSENT
+  // here is still "pending" - its base fields are painted but its tier is not
+  // known yet, so the pill shows "Checking…" and it stays out of tier-based
+  // filtering. On-screen rows fill in first; the background sweep covers the
+  // rest of the list without scrolling.
   readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV12>;
   // Paths whose enrichment SETTLED to an error. Such a row is un-enriched just like
   // a pending one (kept out of tier filtering, base presentation), but its pill
@@ -864,7 +877,8 @@ export function WorktreesList(props: {
   );
   // Only offer filter options for tiers actually present in this host's list.
   // Un-enriched rows have no known tier, so they cannot contribute an option -
-  // the menu grows as rows scroll into view and enrich.
+  // the menu fills in as rows enrich (on-screen rows first, then the
+  // background sweep over the rest).
   const availableTiers = useMemo(() => {
     const present = new Set<WorktreeTier>();
     for (const entry of mergedWorktrees) {
@@ -882,10 +896,10 @@ export function WorktreesList(props: {
   // toolbar reads.
   //
   // Pending rows are KEPT under an active tier filter (tier unknown ⇒ can't be
-  // excluded yet): they render as "Checking…", which is what drives their
-  // enrichment - dropping them would starve the very fetch that resolves them and
-  // dead-end the filtered view to empty. Once enriched, a non-matching row drops
-  // out on the next pass, so the filtered list converges as you scroll.
+  // excluded yet): they render as "Checking…" until their probe lands (viewport
+  // or background sweep). Once enriched, a non-matching row drops out on the
+  // next pass, so the filtered list converges on its own - scrolling only
+  // changes which rows resolve first.
   const filteredWorktrees = useMemo(() => {
     const searched = filterWorktrees(
       mergedWorktrees,
