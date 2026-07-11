@@ -412,16 +412,18 @@ function ProfileEditDialog({
   const [committedLabel, setCommittedLabel] = useState(profile.label);
   const [accentColor, setAccentColor] =
     useState<ProviderProfileAccentColor | null>(profile.accentColor);
+  const [committedAccentColor, setCommittedAccentColor] =
+    useState<ProviderProfileAccentColor | null>(profile.accentColor);
   const trimmedLabel = label.trim();
   const savePending = renameProfile.isPending || recolorProfile.isPending;
   const changed =
-    trimmedLabel !== committedLabel || accentColor !== profile.accentColor;
+    trimmedLabel !== committedLabel || accentColor !== committedAccentColor;
   const invalid = trimmedLabel.length === 0;
 
   const commitProfile = (onSuccess: () => void): void => {
     if (savePending || invalid) return;
     const recolorIfNeeded = (): void => {
-      if (accentColor === null || accentColor === profile.accentColor) {
+      if (accentColor === null || accentColor === committedAccentColor) {
         onSuccess();
         return;
       }
@@ -431,7 +433,12 @@ function ProfileEditDialog({
           profileId: profile.profileId,
           accentColor,
         },
-        { onSuccess },
+        {
+          onSuccess: () => {
+            setCommittedAccentColor(accentColor);
+            onSuccess();
+          },
+        },
       );
     };
     if (trimmedLabel !== committedLabel) {
