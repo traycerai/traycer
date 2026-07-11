@@ -640,7 +640,7 @@ describe("<RateLimitPopover /> rail", () => {
     expect(screen.getByText("Pro 5x")).toBeTruthy();
   });
 
-  it("keeps the old single-provider layout when profiles has only one entry", () => {
+  it("renders the profile-card layout when a provider has only one profile", () => {
     mocks.configured = [
       {
         providerId: "codex",
@@ -656,12 +656,15 @@ describe("<RateLimitPopover /> rail", () => {
         ],
       },
     ];
-    mocks.results = { codex: readyResult(codexReady()) };
+    mocks.results = {
+      [resultKey("codex", "work-profile")]: readyResult(codexReady()),
+    };
     renderPopover();
 
     expect(screen.getByText("Codex")).toBeTruthy();
     expect(screen.getByText("Current session")).toBeTruthy();
-    expect(screen.queryByText("Work")).toBeNull();
+    expect(screen.getByText("Work")).toBeTruthy();
+    expect(screen.getByText("Pro 5x")).toBeTruthy();
   });
 
   it("enqueues open-time refresh only for stale multi-profile rows", async () => {
@@ -1314,6 +1317,93 @@ describe("<RateLimitPopover /> per-provider refresh", () => {
     fireEvent.click(screen.getByRole("button", { name: "Refresh Kilo Code" }));
     expect(refetch).toHaveBeenCalledTimes(1);
     expect(mocks.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("refreshes every profile from one provider-heading control", () => {
+    mocks.configured = [
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [
+          providerProfile({
+            profileId: "ambient",
+            kind: "ambient",
+            label: "Terminal",
+            tier: "Pro",
+            usageUpdatedAt: NOW - 10_000,
+          }),
+          providerProfile({
+            profileId: "work-profile",
+            kind: "managed",
+            label: "Work",
+            tier: "Pro 5x",
+            usageUpdatedAt: NOW - 10_000,
+          }),
+        ],
+      },
+    ];
+    mocks.results = {
+      codex: readyResult(codexReady()),
+      [resultKey("codex", "work-profile")]: readyResult(codexReady()),
+    };
+    renderPopover();
+    fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
+
+    const refreshProvider = screen.getByRole("button", {
+      name: "Refresh Codex",
+    });
+    expect(screen.queryByRole("button", { name: "Refresh Work" })).toBeNull();
+    fireEvent.click(refreshProvider);
+
+    expect(mocks.enqueue).toHaveBeenCalledWith(
+      "codex",
+      { type: "PERSONAL" },
+      { force: true, profileId: null },
+    );
+    expect(mocks.enqueue).toHaveBeenCalledWith(
+      "codex",
+      { type: "PERSONAL" },
+      { force: true, profileId: "work-profile" },
+    );
+  });
+
+  it("keeps profile cards out of a shared loading state while the provider refresh queue drains", () => {
+    mocks.configured = [
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [
+          providerProfile({
+            profileId: "ambient",
+            kind: "ambient",
+            label: "Terminal",
+            tier: "Pro",
+            usageUpdatedAt: NOW - 10_000,
+          }),
+          providerProfile({
+            profileId: "work-profile",
+            kind: "managed",
+            label: "Work",
+            tier: "Pro 5x",
+            usageUpdatedAt: NOW - 10_000,
+          }),
+        ],
+      },
+    ];
+    mocks.results = {
+      codex: readyResult(codexReady()),
+      [resultKey("codex", "work-profile")]: readyResult(codexReady()),
+    };
+    mocks.draining = true;
+    renderPopover();
+    fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
+
+    expect(
+      screen
+        .getByRole("button", { name: "Refresh Codex" })
+        .getAttribute("disabled"),
+    ).not.toBeNull();
+    expect(screen.queryByText("Refreshing")).toBeNull();
   });
 });
 
