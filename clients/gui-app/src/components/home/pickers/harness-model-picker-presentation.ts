@@ -26,7 +26,7 @@ interface HarnessModelPickerPresentationInput {
   readonly modelsPending: boolean;
   readonly selectedHarnessAvailable: boolean;
   /** The SELECTED (committed) harness's profiles - drives the composer
-   *  chip's send-identity dot + suffix, distinct from the panel's browsed
+   *  chip's send-identity badge, distinct from the panel's browsed
    *  provider. */
   readonly selectedHarnessProfiles: ReadonlyArray<ProviderProfile>;
 }
@@ -37,7 +37,6 @@ export interface HarnessModelPickerPresentation {
   readonly activeServiceTierLabel: string | null;
   readonly serviceTierActive: boolean;
   readonly isLoading: boolean;
-  readonly hasMultipleProfiles: boolean;
   readonly profileLabel: string | null;
   readonly profileAccentDot: ProfileAccentDotInput | null;
 }
@@ -79,7 +78,7 @@ export function deriveHarnessModelPickerPresentation(
   // The profile a send will actually burn: the committed selection's profile,
   // resolved only once the provider crosses the 2-profile progressive-
   // disclosure gate. A stale/removed profileId that no longer matches any
-  // known profile silently omits the dot + suffix rather than guessing.
+  // known profile silently omits the badge rather than guessing.
   const activeProfile = hasMultipleProfiles
     ? (selectedHarnessProfiles.find(
         (profile) => profileCommitId(profile) === selection.profileId,
@@ -96,7 +95,6 @@ export function deriveHarnessModelPickerPresentation(
     activeServiceTierLabel,
     serviceTierActive,
     isLoading,
-    hasMultipleProfiles,
     profileLabel,
     profileAccentDot,
   };

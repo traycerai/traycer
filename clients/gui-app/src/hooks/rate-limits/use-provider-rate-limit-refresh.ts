@@ -2,7 +2,8 @@ import { useCallback } from "react";
 import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
 import { useRefreshProviderRateLimitsOnMount } from "@/hooks/host/use-refresh-provider-rate-limits-on-mount";
 import { useIsRateLimitQueueDraining } from "@/hooks/rate-limits/use-is-rate-limit-queue-draining";
-import { enqueueRateLimitFetch } from "@/lib/rate-limits/ephemeral-fetch-queue";
+import { useRateLimitQueueScope } from "@/hooks/rate-limits/use-rate-limit-queue-scope";
+import { enqueueRateLimitFetchForScope } from "@/lib/rate-limits/ephemeral-fetch-queue";
 import {
   rateLimitFetchLane,
   type RateLimitProviderId,
@@ -58,6 +59,7 @@ export function useProviderRateLimitRefresh({
   readonly isRefreshing: boolean;
 } {
   const draining = useIsRateLimitQueueDraining();
+  const queueScope = useRateLimitQueueScope();
   const lane = rateLimitFetchLane(providerId);
   // Fresh-data-on-open for the ephemeralProcess lane, routed through the shared
   // serial queue rather than TanStack's own (deliberately disabled)
@@ -67,14 +69,19 @@ export function useProviderRateLimitRefresh({
 
   const refresh = useCallback(async (): Promise<void> => {
     if (lane === "ephemeralProcess") {
-      await enqueueRateLimitFetch(providerId, DEFAULT_ACCOUNT_CONTEXT, {
-        force: true,
-        profileId,
-      });
+      await enqueueRateLimitFetchForScope(
+        queueScope,
+        providerId,
+        DEFAULT_ACCOUNT_CONTEXT,
+        {
+          force: true,
+          profileId,
+        },
+      );
       return;
     }
     await refetch();
-  }, [lane, profileId, providerId, refetch]);
+  }, [lane, profileId, providerId, queueScope, refetch]);
 
   const isRefreshing = isFetching || (lane === "ephemeralProcess" && draining);
 

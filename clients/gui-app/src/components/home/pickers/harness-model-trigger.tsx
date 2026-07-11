@@ -18,10 +18,9 @@ interface HarnessModelTriggerProps extends Omit<
   serviceTierLabel: string | null;
   serviceTierActive: boolean;
   profileLabel: string | null;
-  hasMultipleProfiles: boolean;
-  /** Bottom-right corner dot on the harness icon (T3's `AccentDot` primitive) -
-   *  `null` whenever `hasMultipleProfiles` is false or the selection's
-   *  profileId no longer matches a known profile. */
+  /** Bottom-right corner dot on the harness icon (T3's `AccentDot` primitive).
+   *  `null` unless the provider has multiple profiles and the selection's
+   *  profileId matches a known profile. */
   profileAccentDot: ProfileAccentDotInput | null;
   isLoading: boolean;
   disabled: boolean;
@@ -36,14 +35,12 @@ export function HarnessModelTrigger(props: HarnessModelTriggerProps) {
     serviceTierLabel,
     serviceTierActive,
     profileLabel,
-    hasMultipleProfiles,
     profileAccentDot,
     isLoading,
     disabled,
     ref,
     ...rest
   } = props;
-  const profileSummary = hasMultipleProfiles ? profileLabel : null;
   const serviceTierSummary =
     serviceTierLabel === null || !serviceTierActive
       ? null
@@ -52,7 +49,7 @@ export function HarnessModelTrigger(props: HarnessModelTriggerProps) {
     label,
     reasoningLabel === null ? null : `Thinking ${reasoningLabel}`,
     serviceTierSummary,
-    profileSummary,
+    profileLabel,
   ]
     .filter((part): part is string => part !== null)
     .join(", ");
@@ -105,22 +102,6 @@ export function HarnessModelTrigger(props: HarnessModelTriggerProps) {
           </span>
           <span className="shrink-0 whitespace-nowrap text-muted-foreground @max-lg:hidden">
             {reasoningLabel}
-          </span>
-        </>
-      )}
-      {profileSummary === null ? null : (
-        <>
-          {/* Truncates/drops before the model label as space tightens - `@max-xl`
-              is a WIDER threshold than the label's `@max-lg`, so this segment
-              disappears first while the container is still shrinking. */}
-          <span
-            aria-hidden="true"
-            className="shrink-0 text-muted-foreground/70 @max-xl:hidden"
-          >
-            ·
-          </span>
-          <span className="min-w-0 shrink truncate whitespace-nowrap text-muted-foreground @max-xl:hidden">
-            {profileSummary}
           </span>
         </>
       )}

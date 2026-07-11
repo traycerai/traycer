@@ -391,10 +391,12 @@ export type ProviderProfile = z.infer<typeof providerProfileSchema>;
  * handshake-fatal against an already-released peer, see
  * `released-surface-compat.test.ts`).
  *
- * `acknowledgeAmbientDrift` durably clears the ambient profile's pending
+ * Rename/recolor apply to managed profiles and the ambient profile sentinel;
+ * remove remains managed-only. `acknowledgeAmbientDrift` durably clears the
+ * ambient profile's pending
  * `ambientDriftNotice` (see that field's comment below). No `profileId`:
- * unlike the managed-profile actions, there is exactly one ambient identity
- * per provider. It rides the same `@2.1` minor as the other actions because
+ * there is exactly one ambient identity per provider. It rides the same
+ * `@2.1` minor as the other actions because
  * `@2.1` itself is unreleased (the released surface, host-v1.0.0, is `@2.0`)
  * - versions exist to protect released peers, so an unreleased minor widens
  * in place instead of minting `@2.2`.
@@ -891,6 +893,10 @@ export const providersAwaitLoginResponseSchema = z.object({
   // The provider's state after the login child closed and auth was re-probed.
   // Null when no login was in flight for this provider (nothing to await).
   state: providerCliStateSchema.nullable(),
+  // Create-profile only: when the authenticated account already belongs to
+  // an active profile, the host discards the pending profile instead of
+  // activating a duplicate and identifies the existing profile here.
+  existingProfileId: z.string().nullable().default(null),
 });
 export const providersAwaitLoginResponseSchemaV10 = z.object({
   state: providerCliStateSchemaV10.nullable(),

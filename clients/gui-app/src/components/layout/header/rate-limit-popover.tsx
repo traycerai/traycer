@@ -179,7 +179,7 @@ function rateLimitProfileId(profile: ProviderProfile): string | null {
 }
 
 function profileRateLimitLabel(profile: ProviderProfile): string {
-  return profile.kind === "ambient" ? "Terminal account" : profile.label;
+  return profile.label;
 }
 
 /**

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { useTabProvidersList } from "@/hooks/providers/use-tab-providers-list-query";
@@ -28,20 +29,24 @@ export interface ProfileRateLimitProfileChip {
 export type ProfileRateLimitAlternative = ProfileRateLimitProfileChip;
 
 export interface ProfileRateLimitSwitchPrompt {
-  /** True only when the composer's OWN committed profile is near/at its limit
-   *  and at least one other authenticated, non-limited profile exists to
-   *  switch to - the progressive-disclosure gate (a single-profile provider,
-   *  or a provider with no viable alternative, never shows this banner). */
+  /** True only when the composer's OWN committed profile is near/at its limit,
+   *  at least one authenticated non-limited alternative exists, and the user
+   *  has not dismissed this exact warning. */
   readonly limited: boolean;
   readonly hardLimited: boolean;
-  /** The limited profile the banner switches away from - `null` whenever
-   *  `limited` is false, since there is then nothing to render a chip for. */
+  /** The limited profile the banner switches away from. Remains populated
+   *  after dismissal while the underlying rate-limit condition still holds. */
   readonly current: ProfileRateLimitProfileChip | null;
   readonly alternatives: ReadonlyArray<ProfileRateLimitAlternative>;
+  /** Hides this exact warning for the lifetime of the composer. A change in
+   *  source profile, severity, or viable alternatives creates a new warning. */
+  readonly dismiss: () => void;
 }
 
 const NO_ALTERNATIVES: ReadonlyArray<ProfileRateLimitAlternative> = [];
 const NO_PROFILES: ReadonlyArray<ProviderProfile> = [];
+
+function noop(): void {}
 
 /**
  * Composer-facing rate-limit signal for the mid-chat "Continue on <profile>"
@@ -57,6 +62,9 @@ export function useProfileRateLimitSwitchPrompt(
   profileId: string | null,
   active: boolean,
 ): ProfileRateLimitSwitchPrompt {
+  const [dismissedPromptKey, setDismissedPromptKey] = useState<string | null>(
+    null,
+  );
   const providerId = providerIdForHarness(harnessId);
   const enabled = active && providerId !== null;
   const query = useTabProvidersList({ enabled, subscribed: enabled });
@@ -70,6 +78,7 @@ export function useProfileRateLimitSwitchPrompt(
       hardLimited: false,
       current: null,
       alternatives: NO_ALTERNATIVES,
+      dismiss: noop,
     };
   }
 
@@ -82,6 +91,7 @@ export function useProfileRateLimitSwitchPrompt(
       hardLimited: false,
       current: null,
       alternatives: NO_ALTERNATIVES,
+      dismiss: noop,
     };
   }
 
@@ -105,11 +115,19 @@ export function useProfileRateLimitSwitchPrompt(
       label: profileDisplayLabel(profile),
       accentColor: profile.accentColor,
     }));
+  const hardLimited = current.rateLimitStatus === "hard_limit";
+  const promptKey = JSON.stringify([
+    harnessId,
+    currentChip.accentDotId,
+    hardLimited,
+    alternatives.map((alternative) => alternative.accentDotId).sort(),
+  ]);
 
   return {
-    limited: alternatives.length > 0,
-    hardLimited: current.rateLimitStatus === "hard_limit",
+    limited: alternatives.length > 0 && dismissedPromptKey !== promptKey,
+    hardLimited,
     current: currentChip,
     alternatives,
+    dismiss: () => setDismissedPromptKey(promptKey),
   };
 }

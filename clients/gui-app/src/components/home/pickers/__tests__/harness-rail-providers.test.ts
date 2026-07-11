@@ -139,7 +139,7 @@ describe("visibleRailEntries", () => {
     expect(entries[0].accentDot).toEqual({
       profileId: "ambient",
       accentColor: null,
-      label: "Terminal account",
+      label: "Claude Terminal account",
     });
   });
 });
