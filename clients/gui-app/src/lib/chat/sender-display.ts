@@ -150,6 +150,7 @@ const AGENT_PROVIDER_LABEL: Record<GuiHarnessId, string> = {
   kilocode: "Kilo Code",
   amp: "Amp",
   devin: "Devin",
+  pi: "Pi",
 };
 
 function agentProviderLabel(provider: GuiHarnessId): string {

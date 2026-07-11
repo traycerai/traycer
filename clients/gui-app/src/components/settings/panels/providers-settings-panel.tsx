@@ -94,6 +94,7 @@ const PROVIDER_DESCRIPTIONS: Record<ProviderId, string> = {
   amp: "Amp agent - Ampcode's coding CLI via your Amp account or API key.",
   devin:
     "Devin agent - Cognition's coding CLI via Windsurf/Devin login or API key.",
+  pi: "Pi agent - pi.dev coding agent via your configured model API key (BYOK).",
 };
 
 function hasPendingProviderProbe(

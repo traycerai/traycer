@@ -12,6 +12,7 @@ import {
   KimiIcon,
   OpenCodeIcon,
   OpenRouterIcon,
+  PiIcon,
   QwenIcon,
   TraycerIcon,
   type HarnessIcon,
@@ -39,4 +40,5 @@ export const PROVIDER_ICON_CONFIG: Record<ProviderId, HarnessIconConfig> = {
   kilocode: { Icon: KiloCodeIcon, className: "text-foreground" },
   amp: { Icon: AmpIcon, className: "text-foreground" },
   devin: { Icon: DevinIcon, className: "text-foreground" },
+  pi: { Icon: PiIcon, className: "text-foreground" },
 };

@@ -28,6 +28,7 @@ export const providerIdSchema = z.enum([
   "openrouter",
   "amp",
   "devin",
+  "pi",
 ]);
 export type ProviderId = z.infer<typeof providerIdSchema>;
 
@@ -111,6 +112,7 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderId, string> = {
   openrouter: "OpenRouter",
   amp: "Amp",
   devin: "Devin",
+  pi: "Pi",
 };
 
 /**
