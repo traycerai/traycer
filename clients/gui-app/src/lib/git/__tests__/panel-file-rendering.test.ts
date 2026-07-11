@@ -13,6 +13,7 @@ import {
   buildGitFileRowMetadata,
   buildGitPanelFileSections,
   buildGitTreeDirectoryPaths,
+  buildGitTreeRowDirectoryPaths,
   gitChangedFileTooltipContent,
   gitChangedFileToPierreStatus,
   gitChangedFileToPierreStatusEntry,
@@ -278,6 +279,27 @@ describe("git panel file rendering helpers", () => {
       "test",
       "test/unit",
     ]);
+  });
+
+  it("counts Pierre-flattened directory chains as single rendered rows", () => {
+    expect(
+      buildGitTreeRowDirectoryPaths([
+        "Profile/components/PlatformRatings.jsx",
+        "Trace-20260603T220311.json.gz",
+        "Trace-20260604T133730.json.gz",
+      ]),
+    ).toEqual(["Profile"]);
+
+    expect(
+      buildGitTreeRowDirectoryPaths(["clients/gui/src/components/button.tsx"]),
+    ).toEqual(["clients"]);
+
+    expect(
+      buildGitTreeRowDirectoryPaths([
+        "src/components/button.tsx",
+        "src/lib/git.ts",
+      ]),
+    ).toEqual(["src", "src/components", "src/lib"]);
   });
 
   it("expands Pierre's compacted Git tree rows to the deepest changed file", () => {
