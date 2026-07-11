@@ -15,6 +15,7 @@ import {
   adjacentDedupedProgressItems,
   cleanSubagentNotificationText,
 } from "@/components/chat/segments/subagent-display";
+import { singleSpecialSegment } from "@/components/chat/chat-special-segment";
 import { parseTraycerNextStepsMarkdown } from "@/markdown/traycer-next-steps";
 import { composerClipboardPlainText } from "@/lib/composer/composer-clipboard";
 import { artifactOperationVerb } from "@/lib/chat/artifact-operation-verb";
@@ -159,8 +160,9 @@ function chatFindUnitsForMessage(
   }
 
   // A synthesized row whose single segment is a setup-card / forked-chat-link
-  // renders that segment's own find anchor and no content block (mirrors
-  // renderSingleSpecialSegment in chat-message.tsx), so index the segment.
+  // renders that segment's own find anchor and no content block (the render side
+  // is renderSingleSpecialSegment in chat-message.tsx; both key off the shared
+  // singleSpecialSegment predicate), so index the segment.
   const specialSegment = singleSpecialSegment(message.segments);
   if (specialSegment !== null) {
     return segmentSearchUnits(specialSegment, tileInstanceId);
@@ -182,20 +184,6 @@ function chatFindUnitsForMessage(
       owningChain: [],
     }),
   ]);
-}
-
-// Mirror renderSingleSpecialSegment (chat-message.tsx): a row whose single
-// segment is a setup-card or forked-chat-link renders that segment directly with
-// its own find anchor, bypassing the user/system content block.
-function singleSpecialSegment(
-  segments: ReadonlyArray<MessageSegment>,
-): MessageSegment | null {
-  if (segments.length !== 1) return null;
-  const segment = segments[0];
-  if (segment.kind === "setup-card" || segment.kind === "forked-chat-link") {
-    return segment;
-  }
-  return null;
 }
 
 function timelineItemSearchUnits(
