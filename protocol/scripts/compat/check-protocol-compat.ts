@@ -16,7 +16,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   checkSurfaceCompatibility,
-  compatExceptionsFileSchema,
+  parseCompatExceptionsFile,
   protocolSurfaceSchema,
   type CompatFinding,
 } from "../../src/framework/surface-compat";
@@ -104,7 +104,7 @@ function formatFinding(finding: CompatFinding): string {
 const { minePath, baselines, json } = parseArgs(process.argv.slice(2));
 const mine = readSurface(minePath);
 const exceptionsPath = join(import.meta.dirname, "compat-exceptions.json");
-const { exceptions } = compatExceptionsFileSchema.parse(
+const { exceptions } = parseCompatExceptionsFile(
   JSON.parse(readFileSync(exceptionsPath, "utf8")),
 );
 
