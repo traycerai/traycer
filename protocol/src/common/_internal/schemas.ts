@@ -64,4 +64,5 @@ export const harnessIdSchema = z.enum([
   "openrouter",
   "amp",
   "devin",
+  "pi",
 ]);

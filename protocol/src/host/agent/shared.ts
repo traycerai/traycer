@@ -60,6 +60,7 @@ export const guiHarnessIdSchema = harnessIdSchema.extract([
   "openrouter",
   "amp",
   "devin",
+  "pi",
 ]);
 export type GuiHarnessId = z.infer<typeof guiHarnessIdSchema>;
 
@@ -191,6 +192,7 @@ export const AGENT_FACING_HARNESS_IDS = [
   "openrouter",
   "amp",
   "devin",
+  "pi",
 ] as const;
 
 export const AGENT_FACING_HARNESS_ID_LIST = AGENT_FACING_HARNESS_IDS.join(", ");

@@ -400,14 +400,15 @@ describe("post-v2.0 Amp non-breaking v3→v2 / v3→v1 downgrade bridges", () =>
   });
 });
 
-describe("post-v3.0 Devin downgrade bridges (agent.gui.listHarnesses/agent.list v4, providers.list v3.2)", () => {
-  it("drops Devin from agent.gui.listHarnesses for v3.0, v2.0, and v1.0 callers", () => {
+describe("post-v3.0 Devin/Pi downgrade bridges (agent.gui.listHarnesses/agent.list v4, providers.list v3.2)", () => {
+  it("drops Devin/Pi from agent.gui.listHarnesses for v3.0, v2.0, and v1.0 callers", () => {
     const v4Response = listGuiHarnessesResponseSchema.parse({
       harnesses: [
         harnessOption("claude"),
         harnessOption("cursor"),
         harnessOption("amp"),
         harnessOption("devin"),
+        harnessOption("pi"),
       ],
     });
 
@@ -446,7 +447,7 @@ describe("post-v3.0 Devin downgrade bridges (agent.gui.listHarnesses/agent.list 
     ).not.toThrow();
   });
 
-  it("drops Devin agents from agent.list for v3.0, v2.0, and v1.0 callers", () => {
+  it("drops Devin/Pi agents from agent.list for v3.0, v2.0, and v1.0 callers", () => {
     const v4Response = listAgentsResponseSchema.parse({
       caller: { agentId: "self", canSendMessages: true },
       scope: "all",
@@ -454,6 +455,7 @@ describe("post-v3.0 Devin downgrade bridges (agent.gui.listHarnesses/agent.list 
         agentSummary("a-claude", "claude"),
         agentSummary("a-amp", "amp"),
         agentSummary("a-devin", "devin"),
+        agentSummary("a-pi", "pi"),
         agentSummary("a-null", null),
       ],
     });
@@ -487,12 +489,13 @@ describe("post-v3.0 Devin downgrade bridges (agent.gui.listHarnesses/agent.list 
     expect(() => listAgentsResponseSchemaV10.parse(toV1.value)).not.toThrow();
   });
 
-  it("drops Devin from providers.list for v2.0 and v1.0 callers (v3.2, shipped as a minor)", () => {
+  it("drops Devin/Pi from providers.list for v2.0 and v1.0 callers (v3.2, shipped as a minor)", () => {
     const v32Response = providersListResponseSchema.parse({
       providers: [
         providerState("cursor", "unknown"),
         providerState("amp", "unknown"),
         providerState("devin", "unknown"),
+        providerState("pi", "unknown"),
       ],
     });
 
