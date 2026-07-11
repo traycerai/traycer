@@ -141,7 +141,10 @@ describe("readSeededLaunchWorkspace", () => {
 
     const primaries =
       result.worktreeIntent?.entries.filter((entry) => entry.isPrimary) ?? [];
-    expect(primaries.length).toBeGreaterThanOrEqual(1);
+    // EXACTLY one, never "at least one": `isPrimary` is stamped from a single
+    // resolved path, so a multi-primary intent is as much a regression as a
+    // zero-primary one.
+    expect(primaries).toHaveLength(1);
   });
 
   it("uses the live global workspace for an unseeded add-node launch", () => {

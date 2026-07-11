@@ -107,7 +107,7 @@ describe("effectiveWorktreeIntent", () => {
     expect(gitEntry?.kind).toBe("worktree");
   });
 
-  it("still resolves a primary via the seed's own marked entry when nothing is staged at all", () => {
+  it("resolves a primary from workspace.primaryPath when there is no seed and nothing is staged", () => {
     // Neither folder is git, so nothing auto-stages; the user switches
     // primary before anything ever reaches the staging store.
     const nonGitA = { path: "/a", name: "a", repoIdentifier: null };

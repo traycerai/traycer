@@ -121,9 +121,10 @@ export function workspaceRunBranchLabel(input: {
   if (input.currentIntent.kind === "local")
     return input.currentBranch ?? "Local";
   if (input.currentIntent.kind === "worktree") {
-    const { branch } = input.currentIntent;
-    if (branch.type !== "new") return branch.name;
-    return branch.name;
+    // Both a `new` fork and an `existing` checkout read as the branch the
+    // worktree will run on; a `new` fork's SOURCE is separate, secondary
+    // context supplied by `workspaceRunBranchSourceLabel`.
+    return input.currentIntent.branch.name;
   }
   const importIntent = input.currentIntent;
   const matching =

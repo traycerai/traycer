@@ -221,7 +221,6 @@ function mergeWorkspaceFolderInfo(
     mergeOneFolder(accumulator, folder);
   }
   if (!accumulator.changed) return state;
-  const nextInfoByPath = accumulator.infoByPath;
   // Cap eviction must never silently move primary: trim the oldest
   // SECONDARY folders first, keeping the resolved primary's slot intact even
   // when it sits at the front (the most eviction-prone position under naive
@@ -232,9 +231,12 @@ function mergeWorkspaceFolderInfo(
     MAX_FOLDERS,
   );
   const nextFolderSet = new Set(nextFolders);
-  for (const path of Object.keys(nextInfoByPath)) {
-    if (!nextFolderSet.has(path)) delete nextInfoByPath[path];
-  }
+  // Prune evicted metadata the same functional way `merge()` does on rehydrate.
+  const nextInfoByPath = Object.fromEntries(
+    Object.entries(accumulator.infoByPath).filter(([path]) =>
+      nextFolderSet.has(path),
+    ),
+  );
   return {
     folders: nextFolders,
     folderInfoByPath: nextInfoByPath,
