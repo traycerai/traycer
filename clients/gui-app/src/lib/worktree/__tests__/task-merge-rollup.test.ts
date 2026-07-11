@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type {
-  WorktreeHostEntryV11,
-  WorktreeSubmoduleMergeFact,
+  WorktreeHostEntryV12,
+  WorktreeSubmoduleMergeFactV12,
 } from "@traycer/protocol/host/index";
 import {
   buildTaskMergeRollups,
@@ -23,8 +23,8 @@ function owner(epicId: string) {
  * match); each test opts into the fields it exercises.
  */
 function submodule(
-  over: Partial<WorktreeSubmoduleMergeFact>,
-): WorktreeSubmoduleMergeFact {
+  over: Partial<WorktreeSubmoduleMergeFactV12>,
+): WorktreeSubmoduleMergeFactV12 {
   return {
     repoIdentifier: { owner: "acme", repo: "sub" },
     branch: "feat/x",
@@ -33,6 +33,7 @@ function submodule(
     prUrl: null,
     mergedHeadShaMatches: false,
     mergedIntoDefault: false,
+    atPinnedCommit: false,
     ...over,
   };
 }
@@ -42,7 +43,7 @@ function submodule(
  * signal / v1.0 or pre-M4 host" shape (null PR bundle, `[]` submodules) that
  * claims nothing.
  */
-function entry(over: Partial<WorktreeHostEntryV11>): WorktreeHostEntryV11 {
+function entry(over: Partial<WorktreeHostEntryV12>): WorktreeHostEntryV12 {
   return {
     worktreePath: "/wt/x",
     repoLabel: "acme/app",

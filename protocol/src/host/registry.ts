@@ -172,6 +172,8 @@ import {
   worktreeListAllForHostResponseSchema,
   worktreeListAllForHostRequestSchemaV11,
   worktreeListAllForHostResponseSchemaV11,
+  worktreeListAllForHostRequestSchemaV12,
+  worktreeListAllForHostResponseSchemaV12,
   worktreeImportRequestSchema,
   worktreeImportResponseSchema,
   worktreeListBranchesRequestSchema,
@@ -443,6 +445,16 @@ export const worktreeListAllForHostV11 = defineRpcContract({
   responseSchema: worktreeListAllForHostResponseSchemaV11,
 });
 
+// v1.2 adds `submodules[].atPinnedCommit`, a positive proof that the submodule
+// branch/tip equals the superproject's pinned gitlink. Request shape is
+// identical to v1.1.
+export const worktreeListAllForHostV12 = defineRpcContract({
+  method: "worktree.listAllForHost",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: worktreeListAllForHostRequestSchemaV12,
+  responseSchema: worktreeListAllForHostResponseSchemaV12,
+});
+
 // Additive upgrade from v1.0: an older peer neither asks for activity nor
 // carries pagination posture or the enriched fields, so the request defaults
 // `includeActivity: false`, `activityPaths: null` (whole-list mode, no
@@ -480,6 +492,25 @@ export const worktreeListAllForHostUpgradeV10ToV11 = defineUpgradePath<
       atBaseCommit: false,
     })),
     nextCursor: null,
+  }),
+});
+
+export const worktreeListAllForHostUpgradeV11ToV12 = defineUpgradePath<
+  typeof worktreeListAllForHostV11,
+  typeof worktreeListAllForHostV12
+>({
+  from: worktreeListAllForHostV11.schemaVersion,
+  to: worktreeListAllForHostV12.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    worktrees: response.worktrees.map((entry) => ({
+      ...entry,
+      submodules: entry.submodules.map((fact) => ({
+        ...fact,
+        atPinnedCommit: false,
+      })),
+    })),
+    nextCursor: response.nextCursor,
   }),
 });
 
@@ -2537,7 +2568,7 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
   },
   "worktree.listAllForHost": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: worktreeListAllForHostV10,
@@ -2546,6 +2577,10 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
         1: {
           contract: worktreeListAllForHostV11,
           upgradeFromPreviousVersion: worktreeListAllForHostUpgradeV10ToV11,
+        },
+        2: {
+          contract: worktreeListAllForHostV12,
+          upgradeFromPreviousVersion: worktreeListAllForHostUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},

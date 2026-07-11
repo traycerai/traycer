@@ -22,12 +22,16 @@ import {
   worktreeListAllForHostResponseSchema,
   worktreeListAllForHostRequestSchemaV11,
   worktreeListAllForHostResponseSchemaV11,
+  worktreeListAllForHostRequestSchemaV12,
+  worktreeListAllForHostResponseSchemaV12,
   worktreeListBindingsForEpicResponseSchemaV11,
   worktreeSubmoduleMergeFactSchema,
+  worktreeSubmoduleMergeFactSchemaV12,
 } from "@traycer/protocol/host/worktree-schemas";
 
 const V10 = { major: 1, minor: 0 } as const;
 const V11 = { major: 1, minor: 1 } as const;
+const V12 = { major: 1, minor: 2 } as const;
 
 const listAllForHostRegistry = hostRpcRegistry["worktree.listAllForHost"];
 
@@ -331,7 +335,115 @@ describe("worktreeListAllForHostResponseSchemaV11", () => {
   });
 });
 
-describe("worktree.listAllForHost v1.0 <-> v1.1 negotiation", () => {
+describe("worktreeListAllForHostResponseSchemaV12", () => {
+  it("requires atPinnedCommit on submodule facts", () => {
+    const response = {
+      worktrees: [
+        {
+          ...v10Entry,
+          lastActivityAt: null,
+          owners: [],
+          branchStatus: null,
+          createdAt: null,
+          ...mergeProvenanceAbsent,
+          submodules: [
+            {
+              repoIdentifier: { owner: "acme", repo: "protocol" },
+              branch: "feature-x",
+              prState: "none" as const,
+              prNumber: null,
+              prUrl: null,
+              mergedHeadShaMatches: false,
+              mergedIntoDefault: false,
+              atPinnedCommit: true,
+            },
+          ],
+        },
+      ],
+      nextCursor: null,
+    };
+
+    expect(worktreeListAllForHostResponseSchemaV12.parse(response)).toEqual(
+      response,
+    );
+    expect(() =>
+      worktreeListAllForHostResponseSchemaV12.parse({
+        ...response,
+        worktrees: [
+          {
+            ...response.worktrees[0],
+            submodules: [
+              {
+                repoIdentifier: { owner: "acme", repo: "protocol" },
+                branch: "feature-x",
+                prState: "none" as const,
+                prNumber: null,
+                prUrl: null,
+                mergedHeadShaMatches: false,
+                mergedIntoDefault: false,
+              },
+            ],
+          },
+        ],
+      }),
+    ).toThrow();
+  });
+
+  it("strips v1.2 submodule proof fields when parsed as v1.1", () => {
+    expect(
+      worktreeListAllForHostResponseSchemaV11.parse({
+        worktrees: [
+          {
+            ...v10Entry,
+            lastActivityAt: null,
+            owners: [],
+            branchStatus: null,
+            createdAt: null,
+            ...mergeProvenanceAbsent,
+            submodules: [
+              {
+                repoIdentifier: { owner: "acme", repo: "protocol" },
+                branch: "feature-x",
+                prState: "none" as const,
+                prNumber: null,
+                prUrl: null,
+                mergedHeadShaMatches: false,
+                mergedIntoDefault: false,
+                atPinnedCommit: true,
+              },
+            ],
+          },
+        ],
+        nextCursor: null,
+      }),
+    ).toEqual({
+      worktrees: [
+        {
+          ...v10Entry,
+          lastActivityAt: null,
+          owners: [],
+          branchStatus: null,
+          createdAt: null,
+          ...mergeProvenanceAbsent,
+          submodules: [
+            {
+              repoIdentifier: { owner: "acme", repo: "protocol" },
+              branch: "feature-x",
+              prState: "none",
+              prNumber: null,
+              prUrl: null,
+              mergedHeadShaMatches: false,
+              mergedIntoDefault: false,
+            },
+          ],
+        },
+      ],
+      nextCursor: null,
+    });
+  });
+});
+
+describe("worktree.listAllForHost v1.0 <-> v1.2 negotiation", () => {
   it("upgrades a v1.0 request to v1.1 with explicit unpaginated no-probe defaults", () => {
     const upgraded = upgradeRequestToVersion(
       listAllForHostRegistry,
@@ -380,11 +492,68 @@ describe("worktree.listAllForHost v1.0 <-> v1.1 negotiation", () => {
     );
   });
 
-  it("exposes v1.1 as the latest installed minor of major 1", () => {
-    expect(listAllForHostRegistry[1].latestMinor).toBe(1);
+  it("upgrades a v1.1 request to v1.2 unchanged", () => {
+    const request = {
+      includeActivity: true,
+      activityPaths: ["/Users/dev/.traycer/worktrees/acme__web/feature-x"],
+      cursor: null,
+      limit: null,
+    };
+    const upgraded = upgradeRequestToVersion(
+      listAllForHostRegistry,
+      V11,
+      V12,
+      request,
+    );
+    expect(upgraded).toEqual(request);
+    expect(worktreeListAllForHostRequestSchemaV12.parse(upgraded)).toEqual(
+      request,
+    );
+  });
+
+  it("upgrades a v1.1 response by defaulting submodule atPinnedCommit to false", () => {
+    const response = {
+      worktrees: [
+        {
+          ...v10Entry,
+          lastActivityAt: null,
+          owners: [],
+          branchStatus: null,
+          createdAt: null,
+          ...mergeProvenanceAbsent,
+          submodules: [
+            {
+              repoIdentifier: { owner: "acme", repo: "protocol" },
+              branch: "feature-x",
+              prState: "none" as const,
+              prNumber: null,
+              prUrl: null,
+              mergedHeadShaMatches: false,
+              mergedIntoDefault: false,
+            },
+          ],
+        },
+      ],
+      nextCursor: null,
+    };
+    const upgraded = upgradeResponseToVersion(
+      listAllForHostRegistry,
+      V11,
+      V12,
+      response,
+    );
+    expect(upgraded.worktrees[0].submodules[0].atPinnedCommit).toBe(false);
+    expect(worktreeListAllForHostResponseSchemaV12.parse(upgraded)).toEqual(
+      upgraded,
+    );
+  });
+
+  it("exposes v1.2 as the latest installed minor of major 1", () => {
+    expect(listAllForHostRegistry[1].latestMinor).toBe(2);
     expect(Object.keys(listAllForHostRegistry[1].versions).sort()).toEqual([
       "0",
       "1",
+      "2",
     ]);
   });
 });
@@ -521,5 +690,32 @@ describe("worktreeSubmoduleMergeFactSchema", () => {
     });
     expect(parsed.prState).toBeNull();
     expect(parsed.mergedHeadShaMatches).toBe(false);
+  });
+});
+
+describe("worktreeSubmoduleMergeFactSchemaV12", () => {
+  it("requires atPinnedCommit", () => {
+    const fact = {
+      repoIdentifier: { owner: "acme", repo: "lib" },
+      branch: "traycer/sub",
+      prState: "none" as const,
+      prNumber: null,
+      prUrl: null,
+      mergedHeadShaMatches: false,
+      mergedIntoDefault: false,
+      atPinnedCommit: true,
+    };
+    expect(worktreeSubmoduleMergeFactSchemaV12.parse(fact)).toEqual(fact);
+    expect(() =>
+      worktreeSubmoduleMergeFactSchemaV12.parse({
+        repoIdentifier: { owner: "acme", repo: "lib" },
+        branch: "traycer/sub",
+        prState: "none" as const,
+        prNumber: null,
+        prUrl: null,
+        mergedHeadShaMatches: false,
+        mergedIntoDefault: false,
+      }),
+    ).toThrow();
   });
 });
