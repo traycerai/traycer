@@ -18,6 +18,10 @@ import type {
   ProviderCliState,
   ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
+import type {
+  WorktreeBindingWorkspaceMode,
+  WorktreeIntent,
+} from "@traycer/protocol/host/worktree-schemas";
 
 /**
  * D4 (durability audit), end-to-end for `chat-fork-dialog.tsx`: "Fork dialog
@@ -34,7 +38,10 @@ import type {
  */
 
 const dialogMocks = vi.hoisted(() => ({
-  createMutate: vi.fn<(input: ChatForkCreateInput) => void>(),
+  createMutate:
+    vi.fn<
+      (input: ChatForkCreateInput, options: ChatForkMutationOptions) => void
+    >(),
   providersByClient: new Map<unknown, ProviderCliState[]>(),
 }));
 
@@ -127,9 +134,20 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
 }));
 
 import { ChatForkDialog, type ChatForkDialogTarget } from "../chat-fork-dialog";
+import {
+  pendingForkChatStagingKey,
+  useWorktreeIntentStagingStore,
+} from "@/stores/worktree/worktree-intent-staging-store";
+import { useSeededWorkspaceSnapshotStore } from "@/stores/worktree/seeded-workspace-snapshot-store";
 
 interface ChatForkCreateInput {
   readonly settings: ChatRunSettings | null;
+  readonly workspaceMode: WorktreeBindingWorkspaceMode;
+  readonly worktreeIntent: WorktreeIntent | null;
+}
+
+interface ChatForkMutationOptions {
+  readonly onSuccess: (result: { readonly chatId: string }) => void;
 }
 
 function buildHostClient(hostId: string): HostClient<HostRpcRegistry> {
@@ -229,7 +247,7 @@ function forkTarget(profileId: string | null): ChatForkDialogTarget {
       profileId,
     },
     workspaceSeed: {
-      workspace: { folders: [], folderInfoByPath: {} },
+      workspace: { folders: [], folderInfoByPath: {}, primaryPath: null },
       intent: null,
     },
     // A plain fork, matching `forkAtAssistantMessage`'s non-"ab-worktree"
@@ -264,13 +282,211 @@ async function submitFork(): Promise<void> {
   });
 }
 
+function seedLiveForkWorkspace(): void {
+  const stagingKey = pendingForkChatStagingKey("epic-test");
+  const folder = {
+    path: "/repo/lifecycle",
+    name: "lifecycle",
+    repoIdentifier: null,
+  };
+  useSeededWorkspaceSnapshotStore.getState().setSnapshot(stagingKey, {
+    folders: [folder.path],
+    folderInfoByPath: { [folder.path]: folder },
+    primaryPath: folder.path,
+  });
+  useWorktreeIntentStagingStore.getState().setIntent(stagingKey, {
+    entries: [
+      {
+        kind: "local",
+        workspacePath: folder.path,
+        repoIdentifier: null,
+        isPrimary: true,
+      },
+    ],
+  });
+}
+
+function expectForkWorkspaceCleared(): void {
+  expect(useSeededWorkspaceSnapshotStore.getState().snapshotByKey).toEqual({});
+  expect(useWorktreeIntentStagingStore.getState().intentByKey).toEqual({});
+}
+
 describe("D4: ChatForkDialog seeded from a tombstoned profile", () => {
   beforeEach(() => {
     dialogMocks.providersByClient.clear();
   });
   afterEach(() => {
     dialogMocks.createMutate.mockReset();
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    useSeededWorkspaceSnapshotStore.getState().resetForTests();
     cleanup();
+  });
+
+  it("preserves live workspace edits after a failed attempt so retry submits the same snapshot", async () => {
+    dialogMocks.providersByClient.set(TAB_HOST_CLIENT, [
+      claudeState([profile("ambient", "ambient", "Terminal account")]),
+    ]);
+    const stagingKey = pendingForkChatStagingKey("epic-test");
+    const folder = {
+      path: "/repo/added-after-open",
+      name: "added-after-open",
+      repoIdentifier: null,
+    };
+    const stagedEntry = {
+      kind: "worktree" as const,
+      scripts: null,
+      workspacePath: folder.path,
+      repoIdentifier: null,
+      isPrimary: true,
+      branch: {
+        type: "new" as const,
+        name: "traycer/retry",
+        source: "main",
+        carryUncommittedChanges: false,
+      },
+    };
+    useSeededWorkspaceSnapshotStore.getState().setSnapshot(stagingKey, {
+      folders: [folder.path],
+      folderInfoByPath: { [folder.path]: folder },
+      primaryPath: folder.path,
+    });
+    useWorktreeIntentStagingStore.getState().setIntent(stagingKey, {
+      entries: [stagedEntry],
+    });
+    renderDialog(forkTarget(null));
+
+    await submitFork();
+
+    expect(
+      useSeededWorkspaceSnapshotStore.getState().snapshotByKey,
+    ).not.toEqual({});
+    expect(useWorktreeIntentStagingStore.getState().intentByKey).not.toEqual(
+      {},
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Fork" }));
+    await waitFor(() => {
+      expect(dialogMocks.createMutate).toHaveBeenCalledTimes(2);
+    });
+    const [firstRequest] = dialogMocks.createMutate.mock.calls[0];
+    const [retryRequest] = dialogMocks.createMutate.mock.calls[1];
+    expect(firstRequest).toEqual(
+      expect.objectContaining({
+        workspaceMode: "inherit",
+        worktreeIntent: { entries: [stagedEntry] },
+      }),
+    );
+    expect(retryRequest).toEqual(
+      expect.objectContaining({
+        workspaceMode: "inherit",
+        worktreeIntent: { entries: [stagedEntry] },
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(useSeededWorkspaceSnapshotStore.getState().snapshotByKey).toEqual(
+      {},
+    );
+    expect(useWorktreeIntentStagingStore.getState().intentByKey).toEqual({});
+  });
+
+  it("clears active ownership on controlled close and a later active fork on unmount", async () => {
+    const target = forkTarget(null);
+    const view = render(
+      <ChatForkDialog
+        open
+        target={target}
+        epicId="epic-test"
+        tabId="tab-test"
+        onOpenChange={() => undefined}
+      />,
+    );
+    seedLiveForkWorkspace();
+
+    view.rerender(
+      <ChatForkDialog
+        open={false}
+        target={target}
+        epicId="epic-test"
+        tabId="tab-test"
+        onOpenChange={() => undefined}
+      />,
+    );
+    await waitFor(expectForkWorkspaceCleared);
+
+    view.rerender(
+      <ChatForkDialog
+        open
+        target={{ ...target, assistantMessageId: "assistant-message-later" }}
+        epicId="epic-test"
+        tabId="tab-test"
+        onOpenChange={() => undefined}
+      />,
+    );
+    seedLiveForkWorkspace();
+    view.unmount();
+
+    expectForkWorkspaceCleared();
+  });
+
+  it("clears active ownership when the controlled target changes", async () => {
+    const target = forkTarget(null);
+    const view = render(
+      <ChatForkDialog
+        open
+        target={target}
+        epicId="epic-test"
+        tabId="tab-test"
+        onOpenChange={() => undefined}
+      />,
+    );
+    seedLiveForkWorkspace();
+
+    view.rerender(
+      <ChatForkDialog
+        open
+        target={{ ...target, assistantMessageId: "assistant-message-next" }}
+        epicId="epic-test"
+        tabId="tab-test"
+        onOpenChange={() => undefined}
+      />,
+    );
+
+    await waitFor(expectForkWorkspaceCleared);
+  });
+
+  it("does not let an inactive dialog clear another active fork in the same epic", () => {
+    const inactive = render(
+      <ChatForkDialog
+        open={false}
+        target={forkTarget(null)}
+        epicId="epic-test"
+        tabId="inactive-tab"
+        onOpenChange={() => undefined}
+      />,
+    );
+    const active = render(
+      <ChatForkDialog
+        open
+        target={forkTarget(null)}
+        epicId="epic-test"
+        tabId="active-tab"
+        onOpenChange={() => undefined}
+      />,
+    );
+    seedLiveForkWorkspace();
+
+    inactive.unmount();
+
+    expect(
+      useSeededWorkspaceSnapshotStore.getState().snapshotByKey,
+    ).not.toEqual({});
+    expect(useWorktreeIntentStagingStore.getState().intentByKey).not.toEqual(
+      {},
+    );
+
+    active.unmount();
+    expectForkWorkspaceCleared();
   });
 
   it("forking without touching the picker falls back to ambient when the source profile is tombstoned", async () => {

@@ -48,7 +48,8 @@ import { preserveWhenNestedOverlay } from "@/components/home/host-workspace-sele
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import type { ForkWorkspaceSeed } from "@/lib/worktree/fork-workspace-seed";
 import type { TerminalAgentWorktreeCreateInput } from "@/components/epic-canvas/hooks/use-terminal-agent-worktree-gate";
-import { readSeededLaunchWorktreeIntent } from "@/lib/worktree/seeded-launch-worktree-intent";
+import { readSeededLaunchWorkspace } from "@/lib/worktree/seeded-launch-worktree-intent";
+import { useSeededWorkspaceSnapshotStore } from "@/stores/worktree/seeded-workspace-snapshot-store";
 import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
 
 export interface AddArtifactDropdownProps {
@@ -331,9 +332,10 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
   const start = useCallback((): void => {
     if (launchDisabled) return;
     if (!isTuiHarnessId(selectedHarnessId)) return;
-    const worktreeIntent = readSeededLaunchWorktreeIntent({
+    const launchWorkspace = readSeededLaunchWorkspace({
       stagingKey,
-      fallbackIntent: workspaceSeed?.intent ?? null,
+      seedIntent: workspaceSeed?.intent ?? null,
+      fallbackWorkspace: workspaceSeed?.workspace ?? null,
     });
     onAddTerminalAgent({
       harnessId: selectedHarnessId,
@@ -342,10 +344,10 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
       agentMode,
       terminalAgentArgs: argsTouched ? argsDraft : null,
       profileId: selection.profileId,
-      worktreeIntent,
+      worktreeIntent: launchWorkspace.worktreeIntent,
       workspaceMode: deriveWorkspaceMode(
-        workspaceSeed?.workspace.folders.length ?? 1,
-        worktreeIntent,
+        launchWorkspace.folderCount,
+        launchWorkspace.worktreeIntent,
       ),
     });
   }, [
@@ -374,6 +376,7 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
   useEffect(() => {
     return () => {
       clearStagedIntent(stagingKey);
+      useSeededWorkspaceSnapshotStore.getState().clear(stagingKey);
     };
   }, [clearStagedIntent, stagingKey]);
 

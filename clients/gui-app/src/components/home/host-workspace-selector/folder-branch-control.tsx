@@ -14,9 +14,13 @@ import {
 import {
   FOLDER_CONTROL_TRIGGER_CLASS,
   folderLocationValue,
+  workspaceRunBranchSourceLabel,
   type WorkspaceRunItem,
 } from "./workspace-run-item";
 import { preserveWhenNestedOverlay } from "./preserve-when-nested-overlay";
+import { WorkspaceBranchLabel } from "./workspace-branch-label";
+
+const BRANCH_CONTROL_WIDTH_CLASS = "w-[clamp(8rem,25vw,16rem)]";
 
 /**
  * The per-row Branch control. In Local / Existing-worktree mode the branch is
@@ -32,6 +36,8 @@ export function FolderBranchControl(props: {
   readonly readOnly: boolean;
 }) {
   const { item } = props;
+  const sourceLabel = workspaceRunBranchSourceLabel(item.currentIntent);
+  const tooltipLabel = branchTooltipLabel(item);
   const [open, setOpen] = useState(false);
   // The popover's own content node, used to tell a nested overlay (stacked
   // above) from the host dialog (an ancestor) on outside-click - see
@@ -62,7 +68,7 @@ export function FolderBranchControl(props: {
     return (
       <Popover open={open} onOpenChange={setOpen}>
         <TooltipWrapper
-          label={item.branchLabel}
+          label={tooltipLabel}
           side="top"
           sideOffset={undefined}
           align={undefined}
@@ -72,16 +78,22 @@ export function FolderBranchControl(props: {
               type="button"
               aria-label="View existing worktree branch"
               data-testid="folder-branch-import-trigger"
-              className={cn(FOLDER_CONTROL_TRIGGER_CLASS)}
+              className={cn(
+                FOLDER_CONTROL_TRIGGER_CLASS,
+                BRANCH_CONTROL_WIDTH_CLASS,
+                "text-foreground/75",
+              )}
             >
               <GitBranch
-                className="size-3.5 shrink-0 text-muted-foreground"
+                className="size-3.5 shrink-0 text-muted-foreground/65"
                 aria-hidden
               />
-              <span className="min-w-0 flex-1 truncate text-left">
-                {item.branchLabel}
-              </span>
-              <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+              <WorkspaceBranchLabel
+                target={item.branchLabel}
+                source={null}
+                className={undefined}
+              />
+              <ChevronDown className="size-3.5 shrink-0 text-muted-foreground/60" />
             </button>
           </PopoverTrigger>
         </TooltipWrapper>
@@ -117,16 +129,22 @@ export function FolderBranchControl(props: {
       aria-disabled={props.readOnly ? true : undefined}
       aria-label="Choose worktree branch"
       data-testid="folder-branch-trigger"
-      className={cn(FOLDER_CONTROL_TRIGGER_CLASS)}
+      className={cn(
+        FOLDER_CONTROL_TRIGGER_CLASS,
+        BRANCH_CONTROL_WIDTH_CLASS,
+        "text-foreground/75",
+      )}
     >
       <GitBranch
-        className="size-3.5 shrink-0 text-muted-foreground"
+        className="size-3.5 shrink-0 text-muted-foreground/65"
         aria-hidden
       />
-      <span className="min-w-0 flex-1 truncate text-left">
-        {item.branchLabel}
-      </span>
-      <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+      <WorkspaceBranchLabel
+        target={item.branchLabel}
+        source={sourceLabel}
+        className={undefined}
+      />
+      <ChevronDown className="size-3.5 shrink-0 text-muted-foreground/60" />
     </button>
   );
 
@@ -152,7 +170,7 @@ export function FolderBranchControl(props: {
   if (item.summary === null) {
     return (
       <TooltipWrapper
-        label={item.branchLabel}
+        label={tooltipLabel}
         side="top"
         sideOffset={undefined}
         align={undefined}
@@ -165,7 +183,7 @@ export function FolderBranchControl(props: {
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <TooltipWrapper
-        label={item.branchLabel}
+        label={tooltipLabel}
         side="top"
         sideOffset={undefined}
         align={undefined}
@@ -209,6 +227,13 @@ export function FolderBranchControl(props: {
   );
 }
 
+function branchTooltipLabel(item: WorkspaceRunItem): string {
+  const source = workspaceRunBranchSourceLabel(item.currentIntent);
+  return source === null
+    ? item.branchLabel
+    : `${item.branchLabel} · from ${source}`;
+}
+
 function ReadonlyBranchTrigger(props: {
   readonly ariaLabel: string;
   readonly item: WorkspaceRunItem;
@@ -226,16 +251,22 @@ function ReadonlyBranchTrigger(props: {
         aria-disabled
         aria-label={props.ariaLabel}
         data-testid={props.testId}
-        className={cn(FOLDER_CONTROL_TRIGGER_CLASS)}
+        className={cn(
+          FOLDER_CONTROL_TRIGGER_CLASS,
+          BRANCH_CONTROL_WIDTH_CLASS,
+          "text-foreground/75",
+        )}
       >
         <GitBranch
-          className="size-3.5 shrink-0 text-muted-foreground"
+          className="size-3.5 shrink-0 text-muted-foreground/65"
           aria-hidden
         />
-        <span className="min-w-0 flex-1 truncate text-left">
-          {props.item.branchLabel}
-        </span>
-        <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+        <WorkspaceBranchLabel
+          target={props.item.branchLabel}
+          source={null}
+          className={undefined}
+        />
+        <ChevronDown className="size-3.5 shrink-0 text-muted-foreground/60" />
       </button>
     </TooltipWrapper>
   );
@@ -250,11 +281,14 @@ function ReadonlyBranchLabel(props: { readonly item: WorkspaceRunItem }) {
       align={undefined}
     >
       <span
-        className="inline-flex min-w-0 items-center gap-1.5 px-1.5 py-1 text-ui-sm text-[color:var(--fc-text,var(--color-muted-foreground))] opacity-[var(--fc-opacity,0.7)]"
+        className={cn(
+          "inline-flex min-w-0 items-center gap-1.5 px-1.5 py-1 text-ui-sm text-foreground/75",
+          BRANCH_CONTROL_WIDTH_CLASS,
+        )}
         data-testid="folder-branch-readonly"
       >
         <GitBranch
-          className="size-3.5 shrink-0 text-muted-foreground"
+          className="size-3.5 shrink-0 text-muted-foreground/65"
           aria-hidden
         />
         <span className="min-w-0 max-w-[min(40vw,12rem)] truncate">
