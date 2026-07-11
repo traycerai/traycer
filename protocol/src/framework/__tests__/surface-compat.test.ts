@@ -22,6 +22,10 @@ import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-flo
 import { buildProtocolSurface } from "@traycer/protocol/framework/surface-build";
 import {
   checkSurfaceCompatibility,
+  matchMethodGlob,
+  matchPathGlob,
+  parseCompatExceptionsFile,
+  validateCompatExceptions,
   manifestFromSurface,
   protocolSurfaceSchema,
   type CompatException,
@@ -707,7 +711,7 @@ describe("same-version wire-schema evolution rules", () => {
     ]);
   });
 
-  it("reports enum value additions as advisory (feature-gated additive growth)", () => {
+  it("reports request enum value additions as advisory (client→host growth)", () => {
     const withEnum = defineVersionedRpcRegistry({
       "host.echo": unaryV10(
         z.object({ a: z.string(), mode: z.enum(["x", "y"]) }),
@@ -806,5 +810,348 @@ describe("same-version wire-schema evolution rules", () => {
       exceptions: [],
     });
     expect(result.blocking).toEqual([]);
+  });
+});
+
+
+describe("direction-aware enum/union addition severity", () => {
+  const catalogRequest = z.object({});
+  const catalogResponseV10 = z.object({
+    harnesses: z.array(z.object({ id: z.enum(["claude", "cursor"]) })),
+  });
+  const catalogResponseV10PlusDevin = z.object({
+    harnesses: z.array(
+      z.object({ id: z.enum(["claude", "cursor", "devin"]) }),
+    ),
+  });
+
+  function catalogRegistry(response: z.ZodType) {
+    return defineVersionedRpcRegistry({
+      "agent.gui.listHarnesses": {
+        1: {
+          latestMinor: 0,
+          versions: {
+            0: {
+              contract: defineRpcContract({
+                method: "agent.gui.listHarnesses",
+                schemaVersion: { major: 1, minor: 0 } as const,
+                requestSchema: catalogRequest,
+                responseSchema: response,
+              }),
+              upgradeFromPreviousVersion: null,
+            },
+          },
+          downgradePathsFromLatest: {},
+        },
+      },
+    });
+  }
+
+  it("response enum add at the shared canonical version is blocking", () => {
+    const released = surfaceOfUnary(catalogRegistry(catalogResponseV10));
+    const mine = surfaceOfUnary(catalogRegistry(catalogResponseV10PlusDevin));
+    const result = checkSurfaceCompatibility({
+      mine,
+      theirs: released,
+      theirsLabel: "released",
+      exceptions: [],
+    });
+    const blocking = result.blocking.filter(
+      (finding) => finding.method === "agent.gui.listHarnesses",
+    );
+    expect(blocking.length).toBeGreaterThanOrEqual(1);
+    expect(blocking[0].severity).toBe("breaking");
+    expect(blocking[0].payload).toBe("response");
+    expect(blocking[0].detail).toContain("host→client");
+    expect(blocking[0].detail).toContain("freeze the shipped line");
+  });
+
+  it("frozen old line + new major with downgrade bridge is clean", () => {
+    const released = surfaceOfUnary(catalogRegistry(catalogResponseV10));
+    // v1 frozen without devin; v2 canonical carries it - no shared-version
+    // divergence at 1.0 for the response enum (v1 response stays frozen).
+    const frozenV10 = catalogResponseV10;
+    const liveV20 = catalogResponseV10PlusDevin;
+    const v10 = defineRpcContract({
+      method: "agent.gui.listHarnesses",
+      schemaVersion: { major: 1, minor: 0 } as const,
+      requestSchema: catalogRequest,
+      responseSchema: frozenV10,
+    });
+    const v20 = defineRpcContract({
+      method: "agent.gui.listHarnesses",
+      schemaVersion: { major: 2, minor: 0 } as const,
+      requestSchema: catalogRequest,
+      responseSchema: liveV20,
+    });
+    const mine = defineVersionedRpcRegistry({
+      "agent.gui.listHarnesses": {
+        1: {
+          latestMinor: 0,
+          versions: {
+            0: { contract: v10, upgradeFromPreviousVersion: null },
+          },
+          downgradePathsFromLatest: {},
+        },
+        2: {
+          latestMinor: 0,
+          versions: {
+            0: {
+              contract: v20,
+              upgradeFromPreviousVersion: defineUpgradePath<typeof v10, typeof v20>({
+                from: { major: 1, minor: 0 },
+                to: { major: 2, minor: 0 },
+                upgradeRequest: (request) => request,
+                upgradeResponse: (response) => response,
+              }),
+            },
+          },
+          downgradePathsFromLatest: {
+            1: defineDowngradePath<typeof v20, typeof v10>({
+              from: { major: 2, minor: 0 },
+              to: { major: 1, minor: 0 },
+              downgradeRequest: (request) => ({ ok: true, value: request }),
+              downgradeResponse: (response) => {
+                const harnesses: { id: "claude" | "cursor" }[] = [];
+                for (const row of response.harnesses) {
+                  if (row.id === "claude" || row.id === "cursor") {
+                    harnesses.push({ id: row.id });
+                  }
+                }
+                return { ok: true, value: { harnesses } };
+              },
+            }),
+          },
+        },
+      },
+    });
+    const result = checkSurfaceCompatibility({
+      mine: surfaceOfUnary(mine),
+      theirs: released,
+      theirsLabel: "released",
+      exceptions: [],
+    });
+    const catalogBlocking = result.blocking.filter(
+      (finding) =>
+        finding.method === "agent.gui.listHarnesses" &&
+        finding.payload === "response",
+    );
+    expect(catalogBlocking).toEqual([]);
+  });
+
+  it("request enum add stays advisory", () => {
+    const requestV10 = z.object({ a: z.string(), mode: z.enum(["x"]) });
+    const requestV10Plus = z.object({
+      a: z.string(),
+      mode: z.enum(["x", "y"]),
+    });
+    const result = checkSurfaceCompatibility({
+      mine: surfaceOfUnary(defineVersionedRpcRegistry({
+        "host.echo": unaryV10(requestV10Plus, baseResponse),
+      })),
+      theirs: surfaceOfUnary(defineVersionedRpcRegistry({
+        "host.echo": unaryV10(requestV10, baseResponse),
+      })),
+      theirsLabel: "released",
+      exceptions: [],
+    });
+    const requestFindings = result.findings.filter(
+      (finding) =>
+        finding.method === "host.echo" &&
+        finding.payload === "request" &&
+        finding.path?.includes("enum"),
+    );
+    expect(requestFindings.length).toBeGreaterThanOrEqual(1);
+    expect(requestFindings.every((f) => f.severity === "advisory")).toBe(true);
+    expect(result.blocking.filter((f) => f.payload === "request")).toEqual([]);
+  });
+});
+
+describe("exception pattern matching", () => {
+  it("matchPathGlob supports ** and bracket-safe segments", () => {
+    expect(
+      matchPathGlob(
+        "**.harnessId.enum",
+        "properties.source.properties.harnessId.enum",
+      ),
+    ).toBe(true);
+    expect(
+      matchPathGlob(
+        "**.providerId.enum",
+        "properties.state.anyOf[object].properties.providerId.enum",
+      ),
+    ).toBe(true);
+    expect(matchMethodGlob("providers.set*", "providers.setApiKey")).toBe(true);
+    expect(matchMethodGlob("providers.set*", "providers.list")).toBe(false);
+  });
+
+  it("rejects exceptions that cover catalog host→client methods", () => {
+    const problems = validateCompatExceptions([
+      {
+        family: "unary",
+        method: "agent.list",
+        version: "*",
+        payload: "response",
+        path: "**.enum",
+        reason: "should be rejected",
+      },
+    ]);
+    expect(problems.length).toBeGreaterThanOrEqual(1);
+    expect(() =>
+      parseCompatExceptionsFile({
+        exceptions: [
+          {
+            family: "unary",
+            method: "providers.list",
+            version: "*",
+            payload: "response",
+            path: "**.enum",
+            reason: "should be rejected",
+          },
+        ],
+      }),
+    ).toThrow(/catalog method/);
+  });
+
+  it("serverFrame variant add is breaking unless excepted", () => {
+    const openRequest = z.object({ chatId: z.string() });
+    const clientFrame = z.object({ kind: z.literal("ping") });
+    const serverFrameReleased = z.discriminatedUnion("kind", [
+      z.object({ kind: z.literal("ready") }),
+    ]);
+    const serverFrameMine = z.discriminatedUnion("kind", [
+      z.object({ kind: z.literal("ready") }),
+      z.object({ kind: z.literal("extra"), harnessId: z.literal("devin") }),
+    ]);
+
+    function streamSurface(serverFrame: z.ZodType) {
+      return buildProtocolSurface({
+        unary: defineVersionedRpcRegistry({
+          "host.echo": unaryV10(baseRequest, baseResponse),
+        }),
+        unaryFloorMethodNames: ["host.echo"],
+        stream: defineVersionedStreamRpcRegistry({
+          "chat.subscribe": {
+            1: {
+              latestMinor: 0,
+              versions: {
+                0: {
+                  contract: defineStreamRpcContract({
+                    method: "chat.subscribe",
+                    schemaVersion: { major: 1, minor: 0 } as const,
+                    openRequestSchema: openRequest,
+                    serverFrameSchema: serverFrame,
+                    clientFrameSchema: clientFrame,
+                  }),
+                  upgradeFromPreviousVersion: null,
+                },
+              },
+              downgradePathsFromLatest: {},
+            },
+          },
+        }),
+      });
+    }
+
+    const withoutException = checkSurfaceCompatibility({
+      mine: streamSurface(serverFrameMine),
+      theirs: streamSurface(serverFrameReleased),
+      theirsLabel: "released",
+      exceptions: [],
+    });
+    const blocking = withoutException.blocking.filter(
+      (finding) =>
+        finding.method === "chat.subscribe" &&
+        finding.payload === "serverFrame",
+    );
+    expect(blocking.length).toBeGreaterThanOrEqual(1);
+    expect(blocking[0].severity).toBe("breaking");
+
+    const withException = checkSurfaceCompatibility({
+      mine: streamSurface(serverFrameMine),
+      theirs: streamSurface(serverFrameReleased),
+      theirsLabel: "released",
+      exceptions: [
+        {
+          family: "stream",
+          method: "chat.subscribe",
+          version: "*",
+          payload: "serverFrame",
+          path: "anyOf[*]",
+          reason: "gated stream growth",
+        },
+      ],
+    });
+    expect(
+      withException.blocking.filter(
+        (finding) =>
+          finding.method === "chat.subscribe" &&
+          finding.payload === "serverFrame",
+      ),
+    ).toEqual([]);
+    expect(
+      withException.findings.some(
+        (finding) =>
+          finding.method === "chat.subscribe" &&
+          finding.excepted &&
+          finding.severity === "breaking",
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("catalog methods at the oracle boundary", () => {
+  it("a hand-built exception never suppresses catalog host→client growth", () => {
+    const catalogContract = (harnessIds: readonly [string, ...string[]]) =>
+      defineRpcContract({
+        method: "agent.gui.listHarnesses",
+        schemaVersion: { major: 1, minor: 0 } as const,
+        requestSchema: z.object({}),
+        responseSchema: z.object({
+          harnesses: z.array(z.enum(harnessIds)),
+        }),
+      });
+    const catalogRegistry = (harnessIds: readonly [string, ...string[]]) =>
+      defineVersionedRpcRegistry({
+        "agent.gui.listHarnesses": {
+          1: {
+            latestMinor: 0,
+            versions: {
+              0: {
+                contract: catalogContract(harnessIds),
+                upgradeFromPreviousVersion: null,
+              },
+            },
+            downgradePathsFromLatest: {},
+          },
+        },
+      });
+
+    // This exceptions array deliberately bypasses parseCompatExceptionsFile
+    // (which rejects it at load time) to prove the oracle itself refuses it.
+    const result = checkSurfaceCompatibility({
+      mine: surfaceOfUnary(catalogRegistry(["amp", "devin"])),
+      theirs: surfaceOfUnary(catalogRegistry(["amp"])),
+      theirsLabel: "released",
+      exceptions: [
+        {
+          family: "unary",
+          method: "agent.gui.listHarnesses",
+          version: "*",
+          payload: "response",
+          path: "**",
+          reason: "attempted catalog grandfathering",
+        },
+      ],
+    });
+
+    const catalogFindings = result.blocking.filter(
+      (finding) =>
+        finding.method === "agent.gui.listHarnesses" &&
+        finding.payload === "response",
+    );
+    expect(catalogFindings).toHaveLength(1);
+    expect(catalogFindings[0].excepted).toBe(false);
+    expect(catalogFindings[0].severity).toBe("breaking");
   });
 });
