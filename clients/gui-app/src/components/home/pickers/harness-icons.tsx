@@ -10,6 +10,7 @@ import KiloCodeMono from "@lobehub/icons/es/KiloCode/components/Mono";
 import GithubCopilotMono from "@lobehub/icons/es/GithubCopilot/components/Mono";
 import OpenRouterMono from "@lobehub/icons/es/OpenRouter/components/Mono";
 import KimiMono from "@lobehub/icons/es/Kimi/components/Mono";
+import DevinMono from "@lobehub/icons/es/Devin/components/Mono";
 
 export type HarnessIcon = (props: SVGProps<SVGSVGElement>) => ReactElement;
 
@@ -61,6 +62,9 @@ export const AmpIcon: HarnessIcon = (props) => (
     />
   </svg>
 );
+
+// Devin (Cognition) — lobehub monochrome brand mark (`currentColor` theming).
+export const DevinIcon: HarnessIcon = (props) => <DevinMono {...props} />;
 
 // Traycer does not have a lobehub entry — hand-rolled from the brand mark.
 export const TraycerIcon: HarnessIcon = (props) => (

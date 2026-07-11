@@ -11,36 +11,26 @@ import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 
 type ProviderId = ProviderCliState["providerId"];
 
-const TERMINAL_AGENT_ARGS_PLACEHOLDER: Record<
-  Extract<ProviderId, "claude-code" | "codex" | "opencode">,
-  string
-> = {
+const TERMINAL_AGENT_ARGS_PLACEHOLDER: Record<ProviderId, string> = {
   "claude-code": "--dangerously-skip-permissions",
   codex: "--full-auto",
   opencode: "--model anthropic/claude-opus-4-8",
+  cursor: "CLI arguments (optional)",
+  traycer: "CLI arguments (optional)",
+  openrouter: "CLI arguments (optional)",
+  grok: "CLI arguments (optional)",
+  qwen: "CLI arguments (optional)",
+  kiro: "CLI arguments (optional)",
+  copilot: "CLI arguments (optional)",
+  droid: "CLI arguments (optional)",
+  kimi: "CLI arguments (optional)",
+  kilocode: "CLI arguments (optional)",
+  amp: "CLI arguments (optional)",
+  devin: "CLI arguments (optional)",
 };
 
 function terminalAgentArgsPlaceholder(providerId: ProviderId): string {
-  switch (providerId) {
-    case "claude-code":
-      return TERMINAL_AGENT_ARGS_PLACEHOLDER["claude-code"];
-    case "codex":
-      return TERMINAL_AGENT_ARGS_PLACEHOLDER.codex;
-    case "opencode":
-      return TERMINAL_AGENT_ARGS_PLACEHOLDER.opencode;
-    case "cursor":
-    case "traycer":
-    case "openrouter":
-    case "grok":
-    case "qwen":
-    case "kiro":
-    case "copilot":
-    case "droid":
-    case "kimi":
-    case "kilocode":
-    case "amp":
-      return "CLI arguments (optional)";
-  }
+  return TERMINAL_AGENT_ARGS_PLACEHOLDER[providerId];
 }
 
 // Extra CLI args appended when launching this provider as a terminal agent.

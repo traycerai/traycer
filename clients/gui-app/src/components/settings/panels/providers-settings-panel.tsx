@@ -92,6 +92,8 @@ const PROVIDER_DESCRIPTIONS: Record<ProviderId, string> = {
     "GitHub Copilot CLI agent via your active Copilot subscription or policy.",
   kilocode: "Kilo Code CLI agent via Kilo login or configured providers.",
   amp: "Amp agent - Ampcode's coding CLI via your Amp account or API key.",
+  devin:
+    "Devin agent - Cognition's coding CLI via Windsurf/Devin login or API key.",
 };
 
 function hasPendingProviderProbe(

@@ -24,6 +24,7 @@ const PROVIDER_ID_ORDER = [
   "kimi",
   "qwen",
   "amp",
+  "devin",
 ] as const satisfies ReadonlyArray<ProviderId>;
 
 type MissingProviderIdFromOrder = Exclude<
@@ -53,6 +54,7 @@ const GUI_HARNESS_BY_PROVIDER_ID = {
   kimi: "kimi",
   qwen: "qwen",
   amp: "amp",
+  devin: "devin",
 } satisfies Readonly<Record<ProviderId, GuiHarnessId>>;
 
 export const ORDERED_PROVIDERS: ExhaustiveOrderedProviders =

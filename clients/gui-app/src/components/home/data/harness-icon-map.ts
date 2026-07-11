@@ -4,6 +4,7 @@ import {
   CodexIcon,
   CopilotIcon,
   CursorIcon,
+  DevinIcon,
   DroidIcon,
   GrokIcon,
   KiroIcon,
@@ -37,4 +38,5 @@ export const PROVIDER_ICON_CONFIG: Record<ProviderId, HarnessIconConfig> = {
   copilot: { Icon: CopilotIcon, className: "text-foreground" },
   kilocode: { Icon: KiloCodeIcon, className: "text-foreground" },
   amp: { Icon: AmpIcon, className: "text-foreground" },
+  devin: { Icon: DevinIcon, className: "text-foreground" },
 };

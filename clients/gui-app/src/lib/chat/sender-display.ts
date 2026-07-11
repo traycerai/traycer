@@ -132,37 +132,26 @@ function normalizeReasoningEffort(
   return trimmed.length === 0 ? null : trimmed;
 }
 
+// Exhaustive Record over GuiHarnessId: a new harness id fails to compile
+// instead of silently mislabeling.
+const AGENT_PROVIDER_LABEL: Record<GuiHarnessId, string> = {
+  claude: "Claude Code",
+  codex: "Codex",
+  opencode: "OpenCode",
+  traycer: "Traycer",
+  openrouter: "OpenRouter",
+  cursor: "Cursor",
+  grok: "Grok",
+  qwen: "Qwen Code",
+  kiro: "Kiro",
+  droid: "Droid",
+  kimi: "Kimi",
+  copilot: "Copilot",
+  kilocode: "Kilo Code",
+  amp: "Amp",
+  devin: "Devin",
+};
+
 function agentProviderLabel(provider: GuiHarnessId): string {
-  // Exhaustive switch over GuiHarnessId: a new harness id makes this fail to
-  // compile (no return on the new path) instead of silently mislabeling.
-  switch (provider) {
-    case "claude":
-      return "Claude Code";
-    case "codex":
-      return "Codex";
-    case "opencode":
-      return "OpenCode";
-    case "traycer":
-      return "Traycer";
-    case "openrouter":
-      return "OpenRouter";
-    case "cursor":
-      return "Cursor";
-    case "grok":
-      return "Grok";
-    case "qwen":
-      return "Qwen Code";
-    case "kiro":
-      return "Kiro";
-    case "droid":
-      return "Droid";
-    case "kimi":
-      return "Kimi";
-    case "copilot":
-      return "Copilot";
-    case "kilocode":
-      return "Kilo Code";
-    case "amp":
-      return "Amp";
-  }
+  return AGENT_PROVIDER_LABEL[provider];
 }

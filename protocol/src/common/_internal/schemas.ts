@@ -63,4 +63,5 @@ export const harnessIdSchema = z.enum([
   "kilocode",
   "openrouter",
   "amp",
+  "devin",
 ]);

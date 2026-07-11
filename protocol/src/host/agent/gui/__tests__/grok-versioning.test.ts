@@ -4,22 +4,30 @@ import {
   agentListDowngradeV2ToV1,
   agentListDowngradeV3ToV1,
   agentListDowngradeV3ToV2,
+  agentListDowngradeV4ToV1,
+  agentListDowngradeV4ToV2,
+  agentListDowngradeV4ToV3,
 } from "@traycer/protocol/host/agent/contracts";
 import {
   listAgentsResponseSchema,
   listAgentsResponseSchemaV10,
   listAgentsResponseSchemaV20,
+  listAgentsResponseSchemaV30,
 } from "@traycer/protocol/host/agent/shared";
 import {
   agentGuiListHarnessesDowngradeV2ToV1,
   agentGuiListHarnessesDowngradeV3ToV1,
   agentGuiListHarnessesDowngradeV3ToV2,
+  agentGuiListHarnessesDowngradeV4ToV1,
+  agentGuiListHarnessesDowngradeV4ToV2,
+  agentGuiListHarnessesDowngradeV4ToV3,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   guiHarnessOptionSchema,
   listGuiHarnessesResponseSchema,
   listGuiHarnessesResponseSchemaV10,
   listGuiHarnessesResponseSchemaV20,
+  listGuiHarnessesResponseSchemaV30,
 } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import {
   PROVIDER_AUTH_STATUS_SCHEMA,
@@ -28,17 +36,21 @@ import {
   providersListResponseSchema,
   providersListResponseSchemaV10,
   providersListResponseSchemaV20,
+  providersListResponseSchemaV30,
   providersSetApiKeyResponseSchemaV10,
 } from "@traycer/protocol/host/provider-schemas";
 // Importing from the registry runs `defineVersionedRpcRegistry` (full structural
 // + schema-compatibility validation) at module load, so this import alone
-// asserts the new v2.0/v3.0 lines and their upgrade/downgrade bridges are
+// asserts the new v2.0/v3.0/v4.0 lines and their upgrade/downgrade bridges are
 // well-formed.
 import {
   providersAwaitLoginDowngradeV2ToV1,
   providersListDowngradeV2ToV1,
   providersListDowngradeV3ToV1,
   providersListDowngradeV3ToV2,
+  providersListDowngradeV4ToV1,
+  providersListDowngradeV4ToV2,
+  providersListDowngradeV4ToV3,
   providersSetApiKeyDowngradeV2ToV1,
 } from "@traycer/protocol/host/registry";
 
@@ -288,8 +300,12 @@ describe("post-v1.0 GUI harness non-breaking v2→v1 downgrade bridges", () => {
 
 describe("post-v2.0 Amp non-breaking v3→v2 / v3→v1 downgrade bridges", () => {
   it("drops Amp from agent.gui.listHarnesses for v2.0 and v1.0 callers", () => {
-    const v3Response = listGuiHarnessesResponseSchema.parse({
-      harnesses: [harnessOption("claude"), harnessOption("cursor"), harnessOption("amp")],
+    const v3Response = listGuiHarnessesResponseSchemaV30.parse({
+      harnesses: [
+        harnessOption("claude"),
+        harnessOption("cursor"),
+        harnessOption("amp"),
+      ],
     });
 
     const toV2 = agentGuiListHarnessesDowngradeV3ToV2.downgradeResponse(v3Response);
@@ -299,8 +315,6 @@ describe("post-v2.0 Amp non-breaking v3→v2 / v3→v1 downgrade bridges", () =>
       "claude",
       "cursor",
     ]);
-    // The downgraded value must satisfy the frozen v2.0 schema - i.e. an
-    // already-shipped v2.0 client's strict decode would accept it.
     expect(() =>
       listGuiHarnessesResponseSchemaV20.parse(toV2.value),
     ).not.toThrow();
@@ -318,7 +332,7 @@ describe("post-v2.0 Amp non-breaking v3→v2 / v3→v1 downgrade bridges", () =>
   });
 
   it("drops Amp agents from agent.list for v2.0 and v1.0 callers", () => {
-    const v3Response = listAgentsResponseSchema.parse({
+    const v3Response = listAgentsResponseSchemaV30.parse({
       caller: { agentId: "self", canSendMessages: true },
       scope: "all",
       agents: [
@@ -348,7 +362,7 @@ describe("post-v2.0 Amp non-breaking v3→v2 / v3→v1 downgrade bridges", () =>
   });
 
   it("drops the Amp provider from providers.list for v2.0 and v1.0 callers", () => {
-    const v3Response = providersListResponseSchema.parse({
+    const v3Response = providersListResponseSchemaV30.parse({
       providers: [
         providerState("cursor", "unknown"),
         providerState("amp", "unknown"),
@@ -366,6 +380,135 @@ describe("post-v2.0 Amp non-breaking v3→v2 / v3→v1 downgrade bridges", () =>
     ).not.toThrow();
 
     const toV1 = providersListDowngradeV3ToV1.downgradeResponse(v3Response);
+    expect(toV1.ok).toBe(true);
+    if (!toV1.ok) return;
+    expect(toV1.value.providers.map((provider) => provider.providerId)).toEqual([
+      "cursor",
+    ]);
+    expect(() =>
+      providersListResponseSchemaV10.parse(toV1.value),
+    ).not.toThrow();
+  });
+});
+
+describe("post-v3.0 Devin non-breaking v4→v3 / v4→v2 / v4→v1 downgrade bridges", () => {
+  it("drops Devin from agent.gui.listHarnesses for v3.0, v2.0, and v1.0 callers", () => {
+    const v4Response = listGuiHarnessesResponseSchema.parse({
+      harnesses: [
+        harnessOption("claude"),
+        harnessOption("cursor"),
+        harnessOption("amp"),
+        harnessOption("devin"),
+      ],
+    });
+
+    const toV3 = agentGuiListHarnessesDowngradeV4ToV3.downgradeResponse(v4Response);
+    expect(toV3.ok).toBe(true);
+    if (!toV3.ok) return;
+    expect(toV3.value.harnesses.map((harness) => harness.id)).toEqual([
+      "claude",
+      "cursor",
+      "amp",
+    ]);
+    expect(() =>
+      listGuiHarnessesResponseSchemaV30.parse(toV3.value),
+    ).not.toThrow();
+
+    const toV2 = agentGuiListHarnessesDowngradeV4ToV2.downgradeResponse(v4Response);
+    expect(toV2.ok).toBe(true);
+    if (!toV2.ok) return;
+    expect(toV2.value.harnesses.map((harness) => harness.id)).toEqual([
+      "claude",
+      "cursor",
+    ]);
+    expect(() =>
+      listGuiHarnessesResponseSchemaV20.parse(toV2.value),
+    ).not.toThrow();
+
+    const toV1 = agentGuiListHarnessesDowngradeV4ToV1.downgradeResponse(v4Response);
+    expect(toV1.ok).toBe(true);
+    if (!toV1.ok) return;
+    expect(toV1.value.harnesses.map((harness) => harness.id)).toEqual([
+      "claude",
+      "cursor",
+    ]);
+    expect(() =>
+      listGuiHarnessesResponseSchemaV10.parse(toV1.value),
+    ).not.toThrow();
+  });
+
+  it("drops Devin agents from agent.list for v3.0, v2.0, and v1.0 callers", () => {
+    const v4Response = listAgentsResponseSchema.parse({
+      caller: { agentId: "self", canSendMessages: true },
+      scope: "all",
+      agents: [
+        agentSummary("a-claude", "claude"),
+        agentSummary("a-amp", "amp"),
+        agentSummary("a-devin", "devin"),
+        agentSummary("a-null", null),
+      ],
+    });
+
+    const toV3 = agentListDowngradeV4ToV3.downgradeResponse(v4Response);
+    expect(toV3.ok).toBe(true);
+    if (!toV3.ok) return;
+    expect(toV3.value.agents.map((agent) => agent.id)).toEqual([
+      "a-claude",
+      "a-amp",
+      "a-null",
+    ]);
+    expect(() => listAgentsResponseSchemaV30.parse(toV3.value)).not.toThrow();
+
+    const toV2 = agentListDowngradeV4ToV2.downgradeResponse(v4Response);
+    expect(toV2.ok).toBe(true);
+    if (!toV2.ok) return;
+    expect(toV2.value.agents.map((agent) => agent.id)).toEqual([
+      "a-claude",
+      "a-null",
+    ]);
+    expect(() => listAgentsResponseSchemaV20.parse(toV2.value)).not.toThrow();
+
+    const toV1 = agentListDowngradeV4ToV1.downgradeResponse(v4Response);
+    expect(toV1.ok).toBe(true);
+    if (!toV1.ok) return;
+    expect(toV1.value.agents.map((agent) => agent.id)).toEqual([
+      "a-claude",
+      "a-null",
+    ]);
+    expect(() => listAgentsResponseSchemaV10.parse(toV1.value)).not.toThrow();
+  });
+
+  it("drops Devin from providers.list for v3.0, v2.0, and v1.0 callers", () => {
+    const v4Response = providersListResponseSchema.parse({
+      providers: [
+        providerState("cursor", "unknown"),
+        providerState("amp", "unknown"),
+        providerState("devin", "unknown"),
+      ],
+    });
+
+    const toV3 = providersListDowngradeV4ToV3.downgradeResponse(v4Response);
+    expect(toV3.ok).toBe(true);
+    if (!toV3.ok) return;
+    expect(toV3.value.providers.map((provider) => provider.providerId)).toEqual([
+      "cursor",
+      "amp",
+    ]);
+    expect(() =>
+      providersListResponseSchemaV30.parse(toV3.value),
+    ).not.toThrow();
+
+    const toV2 = providersListDowngradeV4ToV2.downgradeResponse(v4Response);
+    expect(toV2.ok).toBe(true);
+    if (!toV2.ok) return;
+    expect(toV2.value.providers.map((provider) => provider.providerId)).toEqual([
+      "cursor",
+    ]);
+    expect(() =>
+      providersListResponseSchemaV20.parse(toV2.value),
+    ).not.toThrow();
+
+    const toV1 = providersListDowngradeV4ToV1.downgradeResponse(v4Response);
     expect(toV1.ok).toBe(true);
     if (!toV1.ok) return;
     expect(toV1.value.providers.map((provider) => provider.providerId)).toEqual([
