@@ -640,7 +640,7 @@ describe("<RateLimitPopover /> rail", () => {
     expect(screen.getByText("Pro 5x")).toBeTruthy();
   });
 
-  it("keeps the old single-provider layout when profiles has only one entry", () => {
+  it("renders the profile-card layout when a provider has only one profile", () => {
     mocks.configured = [
       {
         providerId: "codex",
@@ -656,12 +656,15 @@ describe("<RateLimitPopover /> rail", () => {
         ],
       },
     ];
-    mocks.results = { codex: readyResult(codexReady()) };
+    mocks.results = {
+      [resultKey("codex", "work-profile")]: readyResult(codexReady()),
+    };
     renderPopover();
 
     expect(screen.getByText("Codex")).toBeTruthy();
     expect(screen.getByText("Current session")).toBeTruthy();
-    expect(screen.queryByText("Work")).toBeNull();
+    expect(screen.getByText("Work")).toBeTruthy();
+    expect(screen.getByText("Pro 5x")).toBeTruthy();
   });
 
   it("enqueues open-time refresh only for stale multi-profile rows", async () => {
@@ -1314,6 +1317,167 @@ describe("<RateLimitPopover /> per-provider refresh", () => {
     fireEvent.click(screen.getByRole("button", { name: "Refresh Kilo Code" }));
     expect(refetch).toHaveBeenCalledTimes(1);
     expect(mocks.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("refreshes every profile from one provider-heading control", () => {
+    mocks.configured = [
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [
+          providerProfile({
+            profileId: "ambient",
+            kind: "ambient",
+            label: "Terminal",
+            tier: "Pro",
+            usageUpdatedAt: NOW - 10_000,
+          }),
+          providerProfile({
+            profileId: "work-profile",
+            kind: "managed",
+            label: "Work",
+            tier: "Pro 5x",
+            usageUpdatedAt: NOW - 10_000,
+          }),
+        ],
+      },
+    ];
+    mocks.results = {
+      codex: readyResult(codexReady()),
+      [resultKey("codex", "work-profile")]: readyResult(codexReady()),
+    };
+    renderPopover();
+    fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
+
+    const refreshProvider = screen.getByRole("button", {
+      name: "Refresh Codex",
+    });
+    expect(screen.queryByRole("button", { name: "Refresh Work" })).toBeNull();
+    fireEvent.click(refreshProvider);
+
+    expect(mocks.enqueue).toHaveBeenCalledWith(
+      "codex",
+      { type: "PERSONAL" },
+      { force: true, profileId: null },
+    );
+    expect(mocks.enqueue).toHaveBeenCalledWith(
+      "codex",
+      { type: "PERSONAL" },
+      { force: true, profileId: "work-profile" },
+    );
+  });
+
+  it("keeps profile cards out of a shared loading state while the provider refresh queue drains", () => {
+    mocks.configured = [
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [
+          providerProfile({
+            profileId: "ambient",
+            kind: "ambient",
+            label: "Terminal",
+            tier: "Pro",
+            usageUpdatedAt: NOW - 10_000,
+          }),
+          providerProfile({
+            profileId: "work-profile",
+            kind: "managed",
+            label: "Work",
+            tier: "Pro 5x",
+            usageUpdatedAt: NOW - 10_000,
+          }),
+        ],
+      },
+    ];
+    mocks.results = {
+      codex: readyResult(codexReady()),
+      [resultKey("codex", "work-profile")]: readyResult(codexReady()),
+    };
+    mocks.draining = true;
+    renderPopover();
+    fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
+
+    expect(
+      screen
+        .getByRole("button", { name: "Refresh Codex" })
+        .getAttribute("disabled"),
+    ).not.toBeNull();
+    expect(screen.queryByText("Refreshing")).toBeNull();
+  });
+
+  // The queue's `draining` flag is lane-global, not per-provider, so a refresh
+  // on ANY ephemeralProcess provider disables every provider's control in that
+  // lane - not just the one whose fetch is in flight. Deliberate: the lane runs
+  // providers one at a time, so this matches a "refresh round is in progress"
+  // mental model rather than "my own fetch is in flight". See the spinner-state
+  // note in `use-provider-rate-limit-refresh.ts`. Pinned here so the shared
+  // disable isn't mistaken for cross-provider leakage and "fixed" away.
+  it("disables both ephemeralProcess providers' refresh controls while the shared queue drains", () => {
+    mocks.configured = [
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [
+          providerProfile({
+            profileId: "ambient",
+            kind: "ambient",
+            label: "Terminal",
+            tier: "Pro",
+            usageUpdatedAt: NOW - 10_000,
+          }),
+          providerProfile({
+            profileId: "work-profile",
+            kind: "managed",
+            label: "Work",
+            tier: "Pro 5x",
+            usageUpdatedAt: NOW - 10_000,
+          }),
+        ],
+      },
+      {
+        providerId: "claude-code",
+        lane: "ephemeralProcess",
+        profiles: [
+          providerProfile({
+            profileId: "ambient",
+            kind: "ambient",
+            label: "Personal",
+            tier: "Max",
+            usageUpdatedAt: NOW - 10_000,
+          }),
+          providerProfile({
+            profileId: "team-profile",
+            kind: "managed",
+            label: "Team",
+            tier: "Max 20x",
+            usageUpdatedAt: NOW - 10_000,
+          }),
+        ],
+      },
+    ];
+    mocks.results = {
+      codex: readyResult(codexReady()),
+      [resultKey("codex", "work-profile")]: readyResult(codexReady()),
+      "claude-code": readyResult(claudeReady()),
+      [resultKey("claude-code", "team-profile")]: readyResult(claudeReady()),
+    };
+    mocks.draining = true;
+    renderPopover();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
+    const refreshCodex = screen.getByRole("button", { name: "Refresh Codex" });
+    expect((refreshCodex as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.click(screen.getByRole("tab", { name: "Claude Code" }));
+    const refreshClaude = screen.getByRole("button", {
+      name: "Refresh Claude Code",
+    });
+    expect((refreshClaude as HTMLButtonElement).disabled).toBe(true);
+
+    // The shared lane gates the control, but it must not bleed into the profile
+    // cards' own loading state.
+    expect(screen.queryByText("Refreshing")).toBeNull();
   });
 });
 
