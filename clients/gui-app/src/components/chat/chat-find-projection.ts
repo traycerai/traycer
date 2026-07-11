@@ -158,6 +158,19 @@ function chatFindUnitsForMessage(
     ]);
   }
 
+  // A synthesized row whose single segment is a setup-card / forked-chat-link
+  // renders that segment's own find anchor and no content block (mirrors
+  // renderSingleSpecialSegment in chat-message.tsx), so index the segment.
+  const specialSegment = singleSpecialSegment(message.segments);
+  if (specialSegment !== null) {
+    return segmentSearchUnits(specialSegment, tileInstanceId);
+  }
+
+  // Every other user/system message renders its whole body as ONE anchor
+  // (message:{id}:content) via UserMessageBody - never per-segment anchors. Its
+  // `text` segments mirror that content, so also projecting them would
+  // double-count every match with a phantom unit that has no anchor to paint.
+  // Project the content unit alone so the count matches what actually renders.
   const contentText =
     message.structuredContent === null
       ? message.content
@@ -168,10 +181,21 @@ function chatFindUnitsForMessage(
       text: contentText,
       owningChain: [],
     }),
-    ...message.segments.flatMap((segment) =>
-      segmentSearchUnits(segment, tileInstanceId),
-    ),
   ]);
+}
+
+// Mirror renderSingleSpecialSegment (chat-message.tsx): a row whose single
+// segment is a setup-card or forked-chat-link renders that segment directly with
+// its own find anchor, bypassing the user/system content block.
+function singleSpecialSegment(
+  segments: ReadonlyArray<MessageSegment>,
+): MessageSegment | null {
+  if (segments.length !== 1) return null;
+  const segment = segments[0];
+  if (segment.kind === "setup-card" || segment.kind === "forked-chat-link") {
+    return segment;
+  }
+  return null;
 }
 
 function timelineItemSearchUnits(
