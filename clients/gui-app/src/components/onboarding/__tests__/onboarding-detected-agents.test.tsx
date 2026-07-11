@@ -40,6 +40,7 @@ describe("OnboardingDetectedAgents", () => {
       "Qwen Code",
       "Amp",
       "Devin",
+      "Pi",
     ];
     const textOrEmpty = (text: string | null): string => text ?? "";
 
