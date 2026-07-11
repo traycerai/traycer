@@ -582,9 +582,12 @@ interface TraycerRefreshTarget {
   readonly refetch: () => Promise<unknown>;
 }
 
-function useTraycerRateLimitUsageFetching(
+function useTraycerRateLimitUsageState(
   accountContexts: ReadonlyArray<AccountContext>,
-): boolean {
+): {
+  readonly isFetching: boolean;
+  readonly updatedAtByAccount: ReadonlyMap<string, number>;
+} {
   const client = useHostClient();
   const queries = useHostQueries<HostRpcRegistry, "host.getRateLimitUsage">({
     client,
@@ -596,7 +599,15 @@ function useTraycerRateLimitUsageFetching(
     // each rendered RateLimitView remains the enabled owner of its account pull.
     options: { enabled: false },
   });
-  return queries.some((query) => query.isFetching);
+  return {
+    isFetching: queries.some((query) => query.isFetching),
+    updatedAtByAccount: new Map(
+      accountContexts.map((accountContext, index) => [
+        accountContextValue(accountContext),
+        queries[index]?.dataUpdatedAt ?? 0,
+      ]),
+    ),
+  };
 }
 
 /**
@@ -628,7 +639,7 @@ function RateLimitRefreshAllButton({
   const queryClient = useQueryClient();
   const hostId = useReactiveActiveHostId();
   const client = useHostClient();
-  const traycerRateLimitUsageFetching = useTraycerRateLimitUsageFetching(
+  const traycerRateLimitUsageState = useTraycerRateLimitUsageState(
     traycerRefreshTarget.rateLimitAccountContexts,
   );
   const httpFetchProviders = providers.filter(
@@ -673,7 +684,7 @@ function RateLimitRefreshAllButton({
   });
   const traycerRefreshing =
     traycerRefreshTarget.enabled &&
-    (traycerRefreshTarget.isFetching || traycerRateLimitUsageFetching);
+    (traycerRefreshTarget.isFetching || traycerRateLimitUsageState.isFetching);
   const refreshing =
     draining ||
     httpFetchQueries.some((query) => query.isFetching) ||
@@ -1297,11 +1308,11 @@ function TraycerRateLimitBlock({
   }, [state.kind, onReady]);
 
   const overview = variant === "popover-overview";
-  const rateLimitUsageFetching = useTraycerRateLimitUsageFetching(
+  const rateLimitUsageState = useTraycerRateLimitUsageState(
     traycerSubscription.rateLimitAccountContexts,
   );
   const isRefreshing =
-    traycerSubscription.query.isFetching || rateLimitUsageFetching;
+    traycerSubscription.query.isFetching || rateLimitUsageState.isFetching;
   // Refetch the subscription and every rendered rate-limit account. Exact
   // invalidation targets only aperture `{ accountContext }` keys, never provider
   // `{ accountContext, providerId }` pulls.
@@ -1344,6 +1355,7 @@ function TraycerRateLimitBlock({
         personalSubscription={traycerSubscription.personalSubscription}
         activeAccountContext={traycerSubscription.resolvedAccountContext}
         updatedAt={traycerSubscription.query.dataUpdatedAt}
+        rateLimitUpdatedAtByAccount={rateLimitUsageState.updatedAtByAccount}
         refreshing={isRefreshing}
         onSelect={setAccountContext}
       />
@@ -1357,6 +1369,7 @@ function TraycerAccountCards({
   personalSubscription,
   activeAccountContext,
   updatedAt,
+  rateLimitUpdatedAtByAccount,
   refreshing,
   onSelect,
 }: {
@@ -1365,6 +1378,7 @@ function TraycerAccountCards({
   readonly personalSubscription: TraycerSubscription | null;
   readonly activeAccountContext: AccountContext;
   readonly updatedAt: number;
+  readonly rateLimitUpdatedAtByAccount: ReadonlyMap<string, number>;
   readonly refreshing: boolean;
   readonly onSelect: (accountContext: AccountContext) => void;
 }): ReactNode {
@@ -1434,7 +1448,9 @@ function TraycerAccountCards({
                 ) : null}
               </div>
               <ProfileUsageUpdatedLabel
-                updatedAt={updatedAt}
+                updatedAt={
+                  rateLimitUpdatedAtByAccount.get(account.key) ?? updatedAt
+                }
                 refreshing={refreshing}
               />
             </div>
