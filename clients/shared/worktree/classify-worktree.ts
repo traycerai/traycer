@@ -176,6 +176,60 @@ export function classifyWorktreeTier(
 }
 
 /**
+ * Specific, non-exclusive blockers for a Review row. Kept separate from the
+ * tier classifier: the ladder still picks one tier, while this reports every
+ * contributing risk the user should inspect.
+ */
+export function describeReviewReasons(
+  entry: WorktreeHostEntryV12,
+): readonly string[] {
+  if (classifyWorktreeTier(entry) !== "review") return [];
+  const status = entry.branchStatus;
+  return [
+    ...(entry.uncommittedCount > 0
+      ? [
+          `${entry.uncommittedCount} uncommitted change${entry.uncommittedCount === 1 ? "" : "s"}`,
+        ]
+      : []),
+    ...(entry.branch === null ? ["Detached HEAD"] : []),
+    ...entry.submodules
+      .filter((fact) => !submoduleMergeProven(fact))
+      .map(describeUnprovenSubmodule),
+    ...(entry.prState === "merged" && !entry.mergedHeadShaMatches
+      ? ["Merged PR does not cover the current HEAD"]
+      : []),
+    ...(entry.prState === "open" ? ["Superproject PR is open"] : []),
+    ...(entry.prState === "closed"
+      ? ["Superproject PR was closed without merging"]
+      : []),
+    ...(entry.prState === "none" &&
+    status !== null &&
+    status.ahead !== null &&
+    status.ahead > 0
+      ? [
+          `No PR for ${status.ahead} unmerged commit${status.ahead === 1 ? "" : "s"}`,
+        ]
+      : []),
+    // `ahead === null` = no upstream to diff against: the branch was never
+    // pushed (or its remote ref is gone), so its unmerged commits are not
+    // recoverable from anywhere else - the highest-stakes Review shape, and it
+    // must say so rather than fall back to the generic tier help.
+    ...(entry.prState === "none" &&
+    status !== null &&
+    status.ahead === null &&
+    !status.mergedIntoDefault
+      ? [
+          "Commits with no PR that were never pushed - they exist only in this worktree",
+        ]
+      : []),
+    ...(entry.prState === null ? ["Checking merge status…"] : []),
+    ...(status !== null && status.ahead === 0 && entry.owners.length > 0
+      ? ["Referenced by a Task at the upstream tip"]
+      : []),
+  ];
+}
+
+/**
  * A single owned-submodule branch is proven merged the same two ways the
  * superproject greens, plus the submodule-specific at-pin proof: a
  * HEAD-validated merged PR (`prState === "merged"` with the host's live-HEAD
@@ -186,6 +240,23 @@ export function classifyWorktreeTier(
 function submoduleMergeProven(fact: WorktreeSubmoduleMergeFactV12): boolean {
   if (fact.prState === "merged" && fact.mergedHeadShaMatches) return true;
   return fact.mergedIntoDefault || fact.atPinnedCommit;
+}
+
+function describeUnprovenSubmodule(
+  fact: WorktreeSubmoduleMergeFactV12,
+): string {
+  const name = `${fact.repoIdentifier.owner}/${fact.repoIdentifier.repo} (${fact.branch})`;
+  if (fact.unmergedCommitCount !== null && fact.unmergedCommitCount >= 1) {
+    return `${name}: ${fact.unmergedCommitCount} unmerged commit${fact.unmergedCommitCount === 1 ? "" : "s"}`;
+  }
+  if (fact.prState === "open" || fact.prState === "closed") {
+    return `${name}: PR is ${fact.prState}`;
+  }
+  if (fact.prState === null) return `${name}: still checking merge status`;
+  if (fact.prState === "merged") {
+    return `${name}: merged PR does not cover the current HEAD`;
+  }
+  return `${name}: unmerged commits`;
 }
 
 /**

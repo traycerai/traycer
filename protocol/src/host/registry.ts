@@ -530,6 +530,8 @@ export const worktreeListAllForHostUpgradeV11ToV12 = defineUpgradePath<
       submodules: entry.submodules.map((fact) => ({
         ...fact,
         atPinnedCommit: false,
+        unmergedCommitCount: null,
+        unmergedCommitSubjects: null,
       })),
     })),
     nextCursor: response.nextCursor,
