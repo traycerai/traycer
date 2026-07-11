@@ -56,6 +56,11 @@ interface ColdPrRefetchState {
 interface SweepRetryState {
   readonly attempts: number;
   readonly nextEligibleAt: number;
+  // True when this entry's budget was already reset for the invalidation the
+  // path is CURRENTLY under. `isInvalidated` only clears on a SUCCESSFUL
+  // refetch, so without this marker a permanently rejecting path would get a
+  // fresh budget on every sweep pass - an unbounded probe spin.
+  readonly sawInvalidated: boolean;
 }
 
 // The per-path enrichment params, shared by the viewport observers and the
@@ -135,14 +140,40 @@ function sweepRetryGate(
   return { kind: "eligible" };
 }
 
+// A deliberate refresh grants ONE fresh retry budget for a path whose budget
+// was already spent. The grant is remembered on the entry because
+// `isInvalidated` stays true until a refetch SUCCEEDS - re-granting on every
+// pass would let a permanently rejecting path bypass its budget and probe
+// forever.
+function grantInvalidationBudgetOnce(
+  ledger: Map<string, SweepRetryState>,
+  path: string,
+): void {
+  const prior = ledger.get(path);
+  if (prior === undefined || prior.sawInvalidated) return;
+  ledger.set(path, { attempts: 0, nextEligibleAt: 0, sawInvalidated: true });
+}
+
+// Drops ledger entries for paths that left the listing (deleted worktrees):
+// a spent budget must not outlive its row - it would permanently skip a path
+// that later reappears on the same host, and it inflates `unresolvedCount`.
+function pruneSweepLedger(
+  ledger: Map<string, SweepRetryState>,
+  listedPaths: ReadonlySet<string>,
+): void {
+  for (const path of ledger.keys()) {
+    if (!listedPaths.has(path)) ledger.delete(path);
+  }
+}
+
 /**
  * Selects the next chunk of paths the background sweep should probe, walking
  * `worktreePaths` in listing order. A path needs a probe when its per-path
  * cache entry is missing, was invalidated by a refresh, or landed with a cold
  * (`prState: null`) leg. Merely time-stale entries are NOT re-swept - steady
  * state stays quiet; refresh invalidation is the deliberate re-probe path.
- * Prunes the ledger as a side effect: settled paths drop their bookkeeping,
- * and an invalidated path gets its retry budget back.
+ * Prunes the ledger as a side effect: settled and de-listed paths drop their
+ * bookkeeping, and a fresh invalidation grants a path ONE new retry budget.
  */
 function selectSweepChunk(args: {
   readonly queryClient: QueryClient;
@@ -157,6 +188,7 @@ function selectSweepChunk(args: {
 } {
   const { queryClient, hostId, worktreePaths, viewportPaths, ledger, now } =
     args;
+  pruneSweepLedger(ledger, new Set(worktreePaths));
   const candidates: string[] = [];
   let nextWakeAt: number | null = null;
   for (const path of worktreePaths) {
@@ -177,16 +209,14 @@ function selectSweepChunk(args: {
       continue;
     }
     if (state?.isInvalidated === true) {
-      // An explicit refresh resets the path's retry budget.
-      ledger.delete(path);
-    } else {
-      const gate = sweepRetryGate(ledger.get(path), now);
-      if (gate.kind === "exhausted") continue;
-      if (gate.kind === "waiting") {
-        nextWakeAt =
-          nextWakeAt === null ? gate.wakeAt : Math.min(nextWakeAt, gate.wakeAt);
-        continue;
-      }
+      grantInvalidationBudgetOnce(ledger, path);
+    }
+    const gate = sweepRetryGate(ledger.get(path), now);
+    if (gate.kind === "exhausted") continue;
+    if (gate.kind === "waiting") {
+      nextWakeAt =
+        nextWakeAt === null ? gate.wakeAt : Math.min(nextWakeAt, gate.wakeAt);
+      continue;
     }
     candidates.push(path);
   }
@@ -602,10 +632,19 @@ export function useWorktreeActivityEnrichment(
             return;
           }
           const attempts = (ledger.get(path)?.attempts ?? 0) + 1;
+          // `sawInvalidated` mirrors the LIVE flag: a rejected refetch leaves
+          // `isInvalidated` set (→ true: this invalidation's one budget grant
+          // stays consumed), while a successful-but-cold refetch clears it
+          // (→ false: the NEXT refresh may grant a fresh budget again).
+          const stateNow =
+            queryClient.getQueryState<WorktreeListAllForHostResponseV12>(
+              perPathEnrichmentQueryKey(sweepHostId, path),
+            );
           ledger.set(path, {
             attempts,
             nextEligibleAt:
               settledAt + WORKTREE_COLD_PR_REFETCH_BASE_MS * attempts,
+            sawInvalidated: stateNow?.isInvalidated === true,
           });
         });
       }

@@ -357,21 +357,24 @@ function emitTaskDeleteSummaryToast(
 
 // Refresh the host-wide worktree list plus the shared binding-backed caches
 // after the cleanup lands, so Settings ▸ Worktrees and the folder/worktree
-// pickers stop showing the removed worktrees. `refetchType: "all"` reaches the
-// often-unmounted pickers too. Mirrors the Settings delete flow's invalidation.
+// pickers stop showing the removed worktrees. Mirrors the Settings delete
+// flow's invalidation: the listing scope stays `refetchType: "active"` (the
+// enrichment sweep keeps an observer-less per-path entry for EVERY worktree,
+// so "all" would fan out the whole list; invalidated entries re-probe via the
+// sweep or on their next observer mount), while the binding-backed picker
+// scopes keep "all" to reach the often-unmounted pickers eagerly.
 function invalidateWorktreeCachesForHost(
   queryClient: QueryClient,
   hostId: string,
 ): void {
-  const refetchType = "all" as const;
   void queryClient.invalidateQueries({
     queryKey: hostQueryKeys.methodScope(hostId, "worktree.listAllForHost"),
-    refetchType,
+    refetchType: "active",
   });
   for (const method of WORKTREE_BINDING_INVALIDATIONS) {
     void queryClient.invalidateQueries({
       queryKey: hostQueryKeys.methodScope(hostId, method),
-      refetchType,
+      refetchType: "all",
     });
   }
 }

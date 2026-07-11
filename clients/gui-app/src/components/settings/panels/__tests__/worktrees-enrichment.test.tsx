@@ -704,18 +704,25 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
       expect(requests).toHaveLength(3);
     });
 
-    it("re-probes swept entries after a method-scope invalidation (refresh)", async () => {
-      const paths = ["/wt/a", "/wt/b"];
+    it("re-probes swept entries after a method-scope invalidation (refresh), still in bounded chunks", async () => {
+      const paths = Array.from({ length: 12 }, (_, i) => `/wt/refresh-${i}`);
       const entriesByPath = new Map<string, WorktreeHostEntryV12>(
-        paths.map((path) => [path, warmEntry(path, "feat")]),
+        paths.map((path, i) => [path, warmEntry(path, `feat-${i}`)]),
       );
       const requests: string[] = [];
+      let inFlight = 0;
+      let maxInFlight = 0;
       const fixture = createFixture(
         entriesByPath,
         (path) => {
           requests.push(path);
         },
-        null,
+        async () => {
+          inFlight += 1;
+          maxInFlight = Math.max(maxInFlight, inFlight);
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          inFlight -= 1;
+        },
         createAppQueryClient(),
       );
       const { result } = renderHook(
@@ -724,22 +731,91 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
         { wrapper: fixture.Wrapper },
       );
       await waitFor(() => {
-        expect(result.current.enrichedByPath.size).toBe(2);
+        expect(result.current.enrichedByPath.size).toBe(12);
       });
-      expect(requests).toHaveLength(2);
+      expect(requests).toHaveLength(12);
+      maxInFlight = 0;
 
-      // A refresh invalidates the method scope. The swept entries have no
-      // observers, so `refetchType: "all"` refetches NOTHING here - only the
-      // sweep can pick them back up, woken by the invalidation cache event.
+      // A refresh invalidates the method scope with `refetchType: "active"`
+      // (mirroring `WorktreesBody.onRefresh`). The swept entries have no
+      // observers, so nothing refetches directly - only the sweep can pick
+      // them back up, woken by the invalidation cache event. The re-sweep must
+      // be the same bounded chunk walk, never a whole-list fan-out: every path
+      // re-probed exactly once, and never more than one chunk's worth of
+      // probes in flight.
       await act(async () => {
         await fixture.queryClient.invalidateQueries({
           queryKey: METHOD_SCOPE,
-          refetchType: "all",
+          refetchType: "active",
         });
       });
       await waitFor(() => {
-        expect(requests).toHaveLength(4);
+        expect(requests).toHaveLength(24);
       });
+      expect([...requests.slice(12)].sort()).toEqual([...paths].sort());
+      expect(maxInFlight).toBeLessThanOrEqual(8);
+      expect(maxInFlight).toBeGreaterThan(1);
+    });
+
+    it("keeps a permanently rejecting refresh bounded (regression: isInvalidated persists across failed refetches)", async () => {
+      vi.useFakeTimers();
+      const entriesByPath = new Map<string, WorktreeHostEntryV12>([
+        ["/wt/a", warmEntry("/wt/a", "feat-a")],
+      ]);
+      const requests: string[] = [];
+      const fixture = createFixture(
+        entriesByPath,
+        (path) => {
+          requests.push(path);
+          // Every request after the initial sweep fails - the host went away.
+          if (requests.length > 1) throw new Error("host unreachable");
+        },
+        null,
+        createAppQueryClient(),
+      );
+      renderHook(
+        () =>
+          useWorktreeActivityEnrichment(fixture.client, true, HOST_ID, [
+            "/wt/a",
+          ]),
+        { wrapper: fixture.Wrapper },
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(requests).toHaveLength(1);
+
+      // Refresh. A rejected refetch does NOT clear `isInvalidated` - only a
+      // successful one does - so the sweep must consume its ONE granted
+      // budget and then stop, instead of re-granting on every pass and
+      // probing forever. The budget allows 3 probes, each at most 2 handler
+      // calls (the app QueryClient's single query-level retry): ceiling
+      // 1 + 3×2 = 7. Effect scheduling under fake timers flushes at act()
+      // boundaries, so walk several generous windows and assert the total
+      // STABILIZES under that ceiling - the regression (re-granting the
+      // budget on every pass) keeps probing in every window and blows far
+      // past it.
+      await act(async () => {
+        await fixture.queryClient.invalidateQueries({
+          queryKey: METHOD_SCOPE,
+          refetchType: "active",
+        });
+      });
+      for (let window = 0; window < 8; window += 1) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(20_000);
+        });
+      }
+      const settled = requests.length;
+      expect(settled).toBeGreaterThan(1); // the grant did allow re-probing
+      expect(settled).toBeLessThanOrEqual(7);
+
+      // No further probes, ever - the budget stays consumed while the
+      // invalidation persists.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+      expect(requests).toHaveLength(settled);
     });
   });
 });

@@ -549,11 +549,16 @@ function WorktreesBody(props: {
   // per-path enrichment query live under the same `worktree.listAllForHost` method
   // scope, so refetching that prefix re-probes the on-screen rows in place (no
   // "Checking…" flash - the rows keep their current tier until fresh data lands).
+  //
+  // `refetchType: "active"`, deliberately NOT "all": the background sweep keeps
+  // a per-path cache entry for EVERY row, and those entries have no observers -
+  // "all" would refetch the entire list in one concurrent fan-out. "active"
+  // only MARKS them invalidated; the sweep re-probes them in bounded chunks.
   const onRefresh = useCallback(() => {
     if (hostId === null) return Promise.resolve();
     return queryClient.invalidateQueries({
       queryKey: hostQueryKeys.methodScope(hostId, "worktree.listAllForHost"),
-      refetchType: "all",
+      refetchType: "active",
     });
   }, [queryClient, hostId]);
   const toolbarProps = {
@@ -796,10 +801,11 @@ export function WorktreesList(props: {
   readonly worktrees: readonly WorktreeHostEntryV12[];
   // The enrichment overlay, keyed by `worktreePath`. A row present here carries
   // its full activity-probed fields (branchStatus, prState, …); a row ABSENT
-  // here is still "pending" - its base fields are painted but its tier is not
-  // known yet, so the pill shows "Checking…" and it stays out of tier-based
-  // filtering. On-screen rows fill in first; the background sweep covers the
-  // rest of the list without scrolling.
+  // here is un-enriched - its tier is unknown, so it stays out of tier-based
+  // filtering either way. Absence splits on `erroredPaths`: absent + errored
+  // renders a settled "Unknown" pill, absent + not errored is still pending
+  // ("Checking…"). On-screen rows fill in first; the background sweep covers
+  // the rest of the list without scrolling.
   readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV12>;
   // Paths whose enrichment SETTLED to an error. Such a row is un-enriched just like
   // a pending one (kept out of tier filtering, base presentation), but its pill
@@ -3328,21 +3334,28 @@ function invalidateWorktreeDeleteCaches(
   queryClient: QueryClient,
   hostId: string,
 ): void {
-  // `refetchType: "all"` forces inactive queries to refetch too, not just the
-  // mounted ones. The binding-backed pickers (git-diff worktree picker, the
-  // folder chip, the create-worktree dialog) are often unmounted when a delete
-  // runs from Settings, and the app's query defaults skip refetch-on-focus
-  // (and the git picker pins `staleTime: Infinity`), so a plain invalidate
-  // would leave them serving the pre-delete binding until they next remounted.
-  const refetchType = "all" as const;
+  // The listing scope must stay `refetchType: "active"`: the enrichment sweep
+  // keeps an observer-less per-path cache entry for EVERY worktree, so "all"
+  // would refetch the whole list in one concurrent fan-out after each delete.
+  // "active" refetches the mounted base list / on-screen rows in place and
+  // only MARKS the rest invalidated - the sweep re-probes those in bounded
+  // chunks while the panel is open, and an invalidated entry refetches on its
+  // next observer mount regardless of staleTime.
   void queryClient.invalidateQueries({
     queryKey: hostQueryKeys.methodScope(hostId, "worktree.listAllForHost"),
-    refetchType,
+    refetchType: "active",
   });
+  // The binding-backed pickers (git-diff worktree picker, the folder chip, the
+  // create-worktree dialog) keep `refetchType: "all"`: they are often unmounted
+  // when a delete runs from Settings, the app's query defaults skip
+  // refetch-on-focus (and the git picker pins `staleTime: Infinity`), so a
+  // plain invalidate would leave them serving the pre-delete binding until they
+  // next remounted. Each of these scopes is a handful of small queries, not a
+  // per-path fan-out.
   for (const method of WORKTREE_BINDING_INVALIDATIONS) {
     void queryClient.invalidateQueries({
       queryKey: hostQueryKeys.methodScope(hostId, method),
-      refetchType,
+      refetchType: "all",
     });
   }
   // A deleted worktree's directory is gone, so its cached `git.getCapabilities`
