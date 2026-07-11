@@ -199,6 +199,9 @@ export function describeReviewReasons(
       ? ["Merged PR does not cover the current HEAD"]
       : []),
     ...(entry.prState === "open" ? ["Superproject PR is open"] : []),
+    ...(entry.prState === "closed"
+      ? ["Superproject PR was closed without merging"]
+      : []),
     ...(entry.prState === "none" &&
     status !== null &&
     status.ahead !== null &&

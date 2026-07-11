@@ -662,6 +662,17 @@ describe("provenRemovable - single green / bulk-eligible predicate", () => {
 });
 
 describe("describeReviewReasons", () => {
+  it("names a closed superproject PR instead of the generic fallback", () => {
+    expect(
+      describeReviewReasons(
+        entry({
+          prState: "closed",
+          branchStatus: status({ ahead: 2, mergedIntoDefault: false }),
+        }),
+      ),
+    ).toEqual(["Superproject PR was closed without merging"]);
+  });
+
   it("names the never-pushed shape: no PR, no upstream, not contained", () => {
     // The gui-agent-cli-env fleet shape: clean tree, local-only commits, no PR
     // ever, branch never pushed (`ahead: null`). Falling back to the generic

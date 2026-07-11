@@ -693,8 +693,8 @@ export type WorktreeSubmoduleMergeFact = z.infer<
 export const worktreeSubmoduleMergeFactSchemaV12 =
   worktreeSubmoduleMergeFactSchema.extend({
     atPinnedCommit: z.boolean(),
-    unmergedCommitCount: z.number().int().nullable(),
-    unmergedCommitSubjects: z.array(z.string()).nullable(),
+    unmergedCommitCount: z.number().int().nonnegative().nullable(),
+    unmergedCommitSubjects: z.array(z.string()).max(5).nullable(),
   });
 export type WorktreeSubmoduleMergeFactV12 = z.infer<
   typeof worktreeSubmoduleMergeFactSchemaV12

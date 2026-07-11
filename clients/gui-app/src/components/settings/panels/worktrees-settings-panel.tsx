@@ -2312,6 +2312,15 @@ function submoduleUnmergedChip(
   }
   const count = submodule.unmergedCommitCount ?? null;
   const subjects = submodule.unmergedCommitSubjects ?? null;
+  // Subjects are display-only and NOT unique ("wip", "Merge branch …" repeat),
+  // so key each by its occurrence ordinal - unique without leaning on the
+  // array index (react/no-array-index-key).
+  const occurrences = new Map<string, number>();
+  const subjectItems = (subjects ?? []).map((subject) => {
+    const ordinal = (occurrences.get(subject) ?? 0) + 1;
+    occurrences.set(subject, ordinal);
+    return { key: `${subject}#${ordinal}`, subject };
+  });
   return [
     {
       key: `submodule-unmerged:${submodule.repoIdentifier.owner}/${submodule.repoIdentifier.repo}:${submodule.branch}`,
@@ -2330,8 +2339,8 @@ function submoduleUnmergedChip(
           {subjects === null ? null : (
             <>
               <ul className="list-inside list-disc">
-                {subjects.map((subject) => (
-                  <li key={subject}>{subject}</li>
+                {subjectItems.map((item) => (
+                  <li key={item.key}>{item.subject}</li>
                 ))}
               </ul>
               {count !== null && count > subjects.length ? (
