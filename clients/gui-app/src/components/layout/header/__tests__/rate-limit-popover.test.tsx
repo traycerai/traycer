@@ -16,7 +16,10 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
+import {
+  DEFAULT_ACCOUNT_CONTEXT,
+  type AccountContext,
+} from "@traycer/protocol/common/schemas";
 import type { ProviderRateLimits } from "@traycer/protocol/host";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
@@ -140,20 +143,36 @@ vi.mock("@/hooks/host/use-host-provider-rate-limits-query", () => ({
 // production passes is irrelevant to this fixture-backed double.
 function mockUseHostQueriesImpl(args: {
   requests: ReadonlyArray<{
-    params: { providerId: string; profileId: string | null };
+    params:
+      | { providerId: string; profileId: string | null }
+      | { accountContext: AccountContext; profileId: null };
   }>;
-  options: { retry: boolean | undefined } | null;
+  options: { retry: boolean | undefined } | { enabled: boolean } | null;
 }) {
-  mocks.lastUseHostQueriesOptions = args.options;
-  mocks.lastUseHostQueriesProviderIds = args.requests.map(
-    (request) => request.params.providerId,
+  const providerRequests = args.requests.filter(
+    (
+      request,
+    ): request is {
+      params: { providerId: string; profileId: string | null };
+    } => "providerId" in request.params,
   );
-  return args.requests.map(
-    (request) =>
+  if (providerRequests.length > 0) {
+    mocks.lastUseHostQueriesOptions =
+      args.options !== null && "retry" in args.options
+        ? { retry: args.options.retry }
+        : null;
+    mocks.lastUseHostQueriesProviderIds = providerRequests.map(
+      (request) => request.params.providerId,
+    );
+  }
+  return args.requests.map((request) => {
+    if (!("providerId" in request.params)) return readyResult(null);
+    return (
       mocks.results[
         resultKey(request.params.providerId, request.params.profileId)
-      ] ?? readyResult(null),
-  );
+      ] ?? readyResult(null)
+    );
+  });
 }
 vi.mock("@/hooks/host/use-host-queries", () => ({
   useHostQueries: mockUseHostQueriesImpl,
@@ -432,8 +451,8 @@ function readyAuthUser(data: AuthenticatedUser): MockAuthUser {
   };
 }
 
-function traycerUsageQueryKey() {
-  return queryKeys.hostTraycerRateLimitUsage("host-1", DEFAULT_ACCOUNT_CONTEXT);
+function traycerUsageQueryKey(accountContext: AccountContext) {
+  return queryKeys.hostTraycerRateLimitUsage("host-1", accountContext);
 }
 
 let onClose: () => void;
@@ -1255,7 +1274,30 @@ describe("<RateLimitPopover /> Refresh all", () => {
 
     expect(authUser.refetch).toHaveBeenCalledTimes(1);
     expect(invalidateSpy).toHaveBeenCalledWith({
-      queryKey: traycerUsageQueryKey(),
+      queryKey: traycerUsageQueryKey(DEFAULT_ACCOUNT_CONTEXT),
+      exact: true,
+    });
+  });
+
+  it("refreshes every rendered rate-limit-based Traycer account", () => {
+    mocks.configured = [];
+    const fixture = authUserFixture({ status: "PRO", withTeam: true });
+    const team = fixture.teamSubscriptions[0];
+    mocks.authUser = readyAuthUser({
+      ...fixture,
+      teamSubscriptions: [{ ...team, subscriptionStatus: "PRO" }],
+    });
+    const { client } = renderPopover();
+    const invalidateSpy = vi.spyOn(client, "invalidateQueries");
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh all" }));
+
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: traycerUsageQueryKey(DEFAULT_ACCOUNT_CONTEXT),
+      exact: true,
+    });
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: traycerUsageQueryKey({ type: "TEAM", teamId: "team-1" }),
       exact: true,
     });
   });
@@ -1552,6 +1594,22 @@ describe("<RateLimitPopover /> Traycer tab", () => {
       "Overview",
       "Codex",
     ]);
+  });
+
+  it("keeps paid team accounts selectable when Personal is ineligible", () => {
+    mocks.configured = [];
+    mocks.authUser = readyAuthUser(
+      authUserFixture({ status: "FREE", withTeam: true }),
+    );
+
+    renderPopover();
+
+    expect(screen.getByRole("tab", { name: "Traycer Inference" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Use acme account" }));
+    expect(useAccountContextStore.getState().accountContext).toEqual({
+      type: "TEAM",
+      teamId: "team-1",
+    });
   });
 
   it("orders the Traycer tab per PROVIDER_ID_ORDER (after Codex, before Kilo Code)", () => {

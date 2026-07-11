@@ -5,7 +5,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { useIsFetching, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { Gauge, Settings } from "lucide-react";
 import {
   DEFAULT_ACCOUNT_CONTEXT,
@@ -26,7 +26,10 @@ import {
 } from "@/components/settings/panels/provider-rate-limit-views";
 import { useHostProviderRateLimitsQuery } from "@/hooks/host/use-host-provider-rate-limits-query";
 import { useRefreshProviderRateLimitsOnMount } from "@/hooks/host/use-refresh-provider-rate-limits-on-mount";
-import { useHostQueriesWithResponseMap } from "@/hooks/host/use-host-queries";
+import {
+  useHostQueries,
+  useHostQueriesWithResponseMap,
+} from "@/hooks/host/use-host-queries";
 import { providerRateLimitQueryOptions } from "@/hooks/host/provider-rate-limit-query-options";
 import {
   mapResponseToProviderRateLimitEnvelope,
@@ -118,20 +121,37 @@ function useTraycerSubscription() {
     storedAccountContext,
     teamIds,
   );
+  const personalSubscription = user?.userSubscription ?? null;
   const subscription = selectSubscription(user, resolvedAccountContext, teams);
-  const eligible = subscription !== null && isTraycerEligible(subscription);
-  const rateLimitBased =
-    subscription !== null &&
-    !isCreditBasedPricing(subscription.subscriptionStatus);
+  const accountSubscriptions = [
+    {
+      accountContext: PERSONAL_ACCOUNT_CONTEXT,
+      subscription: personalSubscription,
+    },
+    ...teams.map((team) => ({
+      accountContext: { type: "TEAM" as const, teamId: team.team.id },
+      subscription: team,
+    })),
+  ];
+  const eligible = accountSubscriptions.some(
+    (account) =>
+      account.subscription !== null && isTraycerEligible(account.subscription),
+  );
+  const rateLimitAccountContexts = accountSubscriptions
+    .filter(
+      (account) =>
+        account.subscription !== null &&
+        !isCreditBasedPricing(account.subscription.subscriptionStatus),
+    )
+    .map((account) => account.accountContext);
   return {
     query,
-    storedAccountContext,
     resolvedAccountContext,
     teams,
-    personalSubscription: user?.userSubscription ?? null,
+    personalSubscription,
     subscription,
     eligible,
-    rateLimitBased,
+    rateLimitAccountContexts,
   };
 }
 
@@ -283,8 +303,8 @@ function RateLimitPopoverBody({
         providers={providers}
         traycerRefreshTarget={{
           enabled: traycerSubscription.eligible,
-          accountContext: traycerSubscription.storedAccountContext,
-          rateLimitBased: traycerSubscription.rateLimitBased,
+          rateLimitAccountContexts:
+            traycerSubscription.rateLimitAccountContexts,
           isFetching: traycerSubscription.query.isFetching,
           refetch: traycerSubscription.query.refetch,
         }}
@@ -557,10 +577,26 @@ function RateLimitOverviewLoading(): ReactNode {
 
 interface TraycerRefreshTarget {
   readonly enabled: boolean;
-  readonly accountContext: AccountContext;
-  readonly rateLimitBased: boolean;
+  readonly rateLimitAccountContexts: ReadonlyArray<AccountContext>;
   readonly isFetching: boolean;
   readonly refetch: () => Promise<unknown>;
+}
+
+function useTraycerRateLimitUsageFetching(
+  accountContexts: ReadonlyArray<AccountContext>,
+): boolean {
+  const client = useHostClient();
+  const queries = useHostQueries<HostRpcRegistry, "host.getRateLimitUsage">({
+    client,
+    requests: accountContexts.map((accountContext) => ({
+      method: "host.getRateLimitUsage",
+      params: { accountContext, profileId: null },
+    })),
+    // Observe the exact shared query states without initiating a second fetch;
+    // each rendered RateLimitView remains the enabled owner of its account pull.
+    options: { enabled: false },
+  });
+  return queries.some((query) => query.isFetching);
 }
 
 /**
@@ -592,14 +628,9 @@ function RateLimitRefreshAllButton({
   const queryClient = useQueryClient();
   const hostId = useReactiveActiveHostId();
   const client = useHostClient();
-  const traycerRateLimitUsageFetching =
-    useIsFetching({
-      queryKey: queryKeys.hostTraycerRateLimitUsage(
-        hostId,
-        traycerRefreshTarget.accountContext,
-      ),
-      exact: true,
-    }) > 0;
+  const traycerRateLimitUsageFetching = useTraycerRateLimitUsageFetching(
+    traycerRefreshTarget.rateLimitAccountContexts,
+  );
   const httpFetchProviders = providers.filter(
     (provider) => provider.lane === "httpFetch",
   );
@@ -642,8 +673,7 @@ function RateLimitRefreshAllButton({
   });
   const traycerRefreshing =
     traycerRefreshTarget.enabled &&
-    (traycerRefreshTarget.isFetching ||
-      (traycerRefreshTarget.rateLimitBased && traycerRateLimitUsageFetching));
+    (traycerRefreshTarget.isFetching || traycerRateLimitUsageFetching);
   const refreshing =
     draining ||
     httpFetchQueries.some((query) => query.isFetching) ||
@@ -681,15 +711,17 @@ function RateLimitRefreshAllButton({
       });
     if (traycerRefreshTarget.enabled) {
       void traycerRefreshTarget.refetch();
-      if (traycerRefreshTarget.rateLimitBased) {
-        void queryClient.invalidateQueries({
-          queryKey: queryKeys.hostTraycerRateLimitUsage(
-            hostId,
-            traycerRefreshTarget.accountContext,
-          ),
-          exact: true,
-        });
-      }
+      traycerRefreshTarget.rateLimitAccountContexts.forEach(
+        (accountContext) => {
+          void queryClient.invalidateQueries({
+            queryKey: queryKeys.hostTraycerRateLimitUsage(
+              hostId,
+              accountContext,
+            ),
+            exact: true,
+          });
+        },
+      );
     }
     return Promise.resolve();
   };
@@ -1265,33 +1297,22 @@ function TraycerRateLimitBlock({
   }, [state.kind, onReady]);
 
   const overview = variant === "popover-overview";
-  const rateLimitUsageFetching =
-    useIsFetching({
-      queryKey: queryKeys.hostTraycerRateLimitUsage(
-        hostId,
-        traycerSubscription.storedAccountContext,
-      ),
-      exact: true,
-    }) > 0;
+  const rateLimitUsageFetching = useTraycerRateLimitUsageFetching(
+    traycerSubscription.rateLimitAccountContexts,
+  );
   const isRefreshing =
-    traycerSubscription.query.isFetching ||
-    (traycerSubscription.rateLimitBased && rateLimitUsageFetching);
-  // Refetch the subscription, and - only for rate-limit-based plans, whose
-  // aperture bar is live host data - invalidate that exact query so the mounted
-  // `RateLimitView` refetches it too. `exact: true` targets only the aperture
-  // `{ accountContext }` key, never the providers' `{ accountContext, providerId }`
-  // pulls (which a Traycer refresh can't have changed).
+    traycerSubscription.query.isFetching || rateLimitUsageFetching;
+  // Refetch the subscription and every rendered rate-limit account. Exact
+  // invalidation targets only aperture `{ accountContext }` keys, never provider
+  // `{ accountContext, providerId }` pulls.
   const refresh = async (): Promise<void> => {
     await traycerSubscription.query.refetch();
-    if (traycerSubscription.rateLimitBased) {
+    traycerSubscription.rateLimitAccountContexts.forEach((accountContext) => {
       void queryClient.invalidateQueries({
-        queryKey: queryKeys.hostTraycerRateLimitUsage(
-          hostId,
-          traycerSubscription.storedAccountContext,
-        ),
+        queryKey: queryKeys.hostTraycerRateLimitUsage(hostId, accountContext),
         exact: true,
       });
-    }
+    });
   };
 
   return (
