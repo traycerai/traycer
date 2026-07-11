@@ -34,6 +34,7 @@ import type {
   AvailableProviderRateLimits,
   ProviderRateLimitEnvelope,
 } from "@/lib/rate-limits/rate-limit-envelope";
+import { accountContextValue } from "@/lib/auth/traycer-subscription-content";
 import { queryKeys } from "@/lib/query-keys";
 
 type QueryResult = {
@@ -63,7 +64,7 @@ type MockState = {
   results: Record<string, QueryResult>;
   draining: boolean;
   traycerUsageFetching: boolean;
-  traycerUsageUpdatedAt: number;
+  traycerUsageUpdatedAt: Readonly<Record<string, number>>;
   openSettings: Mock<(...args: unknown[]) => void>;
   enqueue: Mock<(...args: unknown[]) => Promise<void>>;
   authUser: MockAuthUser;
@@ -97,7 +98,7 @@ const mocks = vi.hoisted<MockState>(() => ({
   results: {},
   draining: false,
   traycerUsageFetching: false,
-  traycerUsageUpdatedAt: 0,
+  traycerUsageUpdatedAt: {},
   openSettings: vi.fn(),
   enqueue: vi.fn((..._args: unknown[]) => Promise.resolve()),
   lastUseHostQueriesOptions: null,
@@ -174,7 +175,10 @@ function mockUseHostQueriesImpl(args: {
       return {
         ...readyResult(null),
         isFetching: mocks.traycerUsageFetching,
-        dataUpdatedAt: mocks.traycerUsageUpdatedAt,
+        dataUpdatedAt:
+          mocks.traycerUsageUpdatedAt[
+            accountContextValue(request.params.accountContext)
+          ] ?? 0,
       };
     }
     return (
@@ -490,7 +494,7 @@ beforeEach(() => {
   mocks.results = {};
   mocks.draining = false;
   mocks.traycerUsageFetching = false;
-  mocks.traycerUsageUpdatedAt = 0;
+  mocks.traycerUsageUpdatedAt = {};
   mocks.openSettings = vi.fn();
   mocks.enqueue = vi.fn((..._args: unknown[]) => Promise.resolve());
   mocks.lastUseHostQueriesOptions = null;
@@ -1347,16 +1351,27 @@ describe("<RateLimitPopover /> Refresh all", () => {
     ).not.toBeNull();
   });
 
-  it("uses account usage freshness for a rate-limit-based Traycer card", () => {
+  it("keeps rate-limit usage freshness scoped to its Traycer account", () => {
     mocks.configured = [];
-    mocks.authUser = readyAuthUser(
-      authUserFixture({ status: "PRO", withTeam: false }),
-    );
-    mocks.traycerUsageUpdatedAt = NOW - 1_000;
+    const fixture = authUserFixture({ status: "PRO", withTeam: true });
+    const team = fixture.teamSubscriptions[0];
+    mocks.authUser = readyAuthUser({
+      ...fixture,
+      teamSubscriptions: [{ ...team, subscriptionStatus: "PRO" }],
+    });
+    mocks.traycerUsageUpdatedAt = {
+      [accountContextValue(DEFAULT_ACCOUNT_CONTEXT)]: NOW - 1_000,
+      [accountContextValue({ type: "TEAM", teamId: "team-1" })]: 0,
+    };
 
     renderPopover();
 
-    expect(screen.getByText("Just now")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Use Personal account" }).textContent,
+    ).toContain("Just now");
+    expect(
+      screen.getByRole("button", { name: "Use acme account" }).textContent,
+    ).toContain("stale");
   });
 });
 
