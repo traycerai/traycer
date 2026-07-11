@@ -62,6 +62,7 @@ type MockState = {
   }>;
   results: Record<string, QueryResult>;
   draining: boolean;
+  traycerUsageFetching: boolean;
   openSettings: Mock<(...args: unknown[]) => void>;
   enqueue: Mock<(...args: unknown[]) => Promise<void>>;
   authUser: MockAuthUser;
@@ -94,6 +95,7 @@ const mocks = vi.hoisted<MockState>(() => ({
   configured: [],
   results: {},
   draining: false,
+  traycerUsageFetching: false,
   openSettings: vi.fn(),
   enqueue: vi.fn((..._args: unknown[]) => Promise.resolve()),
   lastUseHostQueriesOptions: null,
@@ -166,7 +168,12 @@ function mockUseHostQueriesImpl(args: {
     );
   }
   return args.requests.map((request) => {
-    if (!("providerId" in request.params)) return readyResult(null);
+    if (!("providerId" in request.params)) {
+      return {
+        ...readyResult(null),
+        isFetching: mocks.traycerUsageFetching,
+      };
+    }
     return (
       mocks.results[
         resultKey(request.params.providerId, request.params.profileId)
@@ -479,6 +486,7 @@ beforeEach(() => {
   mocks.configured = [];
   mocks.results = {};
   mocks.draining = false;
+  mocks.traycerUsageFetching = false;
   mocks.openSettings = vi.fn();
   mocks.enqueue = vi.fn((..._args: unknown[]) => Promise.resolve());
   mocks.lastUseHostQueriesOptions = null;
@@ -1316,6 +1324,23 @@ describe("<RateLimitPopover /> Refresh all", () => {
     expect(screen.getByTestId("usage-limit-refreshing-dots")).toBeTruthy();
     const refreshAll = screen.getByRole("button", { name: "Refresh all" });
     expect(refreshAll.getAttribute("disabled")).not.toBeNull();
+  });
+
+  it("keeps the Traycer card refreshing while account usage refetches", () => {
+    mocks.configured = [];
+    mocks.authUser = readyAuthUser(
+      authUserFixture({ status: "PRO", withTeam: false }),
+    );
+    mocks.traycerUsageFetching = true;
+
+    renderPopover();
+
+    expect(screen.getByText("Refreshing")).toBeTruthy();
+    expect(
+      screen
+        .getByRole("button", { name: "Refresh all" })
+        .getAttribute("disabled"),
+    ).not.toBeNull();
   });
 });
 

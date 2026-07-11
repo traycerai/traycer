@@ -1344,7 +1344,7 @@ function TraycerRateLimitBlock({
         personalSubscription={traycerSubscription.personalSubscription}
         activeAccountContext={traycerSubscription.resolvedAccountContext}
         updatedAt={traycerSubscription.query.dataUpdatedAt}
-        refreshing={traycerSubscription.query.isFetching}
+        refreshing={isRefreshing}
         onSelect={setAccountContext}
       />
     </div>
