@@ -356,6 +356,8 @@ describe("worktreeListAllForHostResponseSchemaV12", () => {
               mergedHeadShaMatches: false,
               mergedIntoDefault: false,
               atPinnedCommit: true,
+              unmergedCommitCount: null,
+              unmergedCommitSubjects: null,
             },
           ],
         },
@@ -381,6 +383,8 @@ describe("worktreeListAllForHostResponseSchemaV12", () => {
                 prUrl: null,
                 mergedHeadShaMatches: false,
                 mergedIntoDefault: false,
+                unmergedCommitCount: null,
+                unmergedCommitSubjects: null,
               },
             ],
           },
@@ -410,6 +414,8 @@ describe("worktreeListAllForHostResponseSchemaV12", () => {
                 mergedHeadShaMatches: false,
                 mergedIntoDefault: false,
                 atPinnedCommit: true,
+                unmergedCommitCount: 7,
+                unmergedCommitSubjects: ["Newest", "Older"],
               },
             ],
           },
@@ -439,6 +445,96 @@ describe("worktreeListAllForHostResponseSchemaV12", () => {
         },
       ],
       nextCursor: null,
+    });
+  });
+});
+
+describe("worktreeListAllForHostResponseSchemaV12 unmerged commit details", () => {
+  it("requires nullable unmerged-commit display fields on submodule facts", () => {
+    const response = {
+      worktrees: [
+        {
+          ...v10Entry,
+          lastActivityAt: null,
+          owners: [],
+          branchStatus: null,
+          createdAt: null,
+          ...mergeProvenanceAbsent,
+          submodules: [
+            {
+              repoIdentifier: { owner: "acme", repo: "protocol" },
+              branch: "feature-x",
+              prState: "none" as const,
+              prNumber: null,
+              prUrl: null,
+              mergedHeadShaMatches: false,
+              mergedIntoDefault: false,
+              atPinnedCommit: false,
+              unmergedCommitCount: null,
+              unmergedCommitSubjects: null,
+            },
+          ],
+        },
+      ],
+      nextCursor: null,
+    };
+    expect(worktreeListAllForHostResponseSchemaV12.parse(response)).toEqual(
+      response,
+    );
+    expect(() =>
+      worktreeListAllForHostResponseSchemaV12.parse({
+        ...response,
+        worktrees: [
+          {
+            ...response.worktrees[0],
+            submodules: [
+              {
+                ...response.worktrees[0].submodules[0],
+                unmergedCommitCount: undefined,
+              },
+            ],
+          },
+        ],
+      }),
+    ).toThrow();
+  });
+
+  it("strips unmerged-commit display fields when parsed as a v1.1 peer", () => {
+    const parsed = worktreeListAllForHostResponseSchemaV11.parse({
+      worktrees: [
+        {
+          ...v10Entry,
+          lastActivityAt: null,
+          owners: [],
+          branchStatus: null,
+          createdAt: null,
+          ...mergeProvenanceAbsent,
+          submodules: [
+            {
+              repoIdentifier: { owner: "acme", repo: "protocol" },
+              branch: "feature-x",
+              prState: "none" as const,
+              prNumber: null,
+              prUrl: null,
+              mergedHeadShaMatches: false,
+              mergedIntoDefault: false,
+              atPinnedCommit: false,
+              unmergedCommitCount: 7,
+              unmergedCommitSubjects: ["Newest", "Older"],
+            },
+          ],
+        },
+      ],
+      nextCursor: null,
+    });
+    expect(parsed.worktrees[0]?.submodules[0]).toEqual({
+      repoIdentifier: { owner: "acme", repo: "protocol" },
+      branch: "feature-x",
+      prState: "none",
+      prNumber: null,
+      prUrl: null,
+      mergedHeadShaMatches: false,
+      mergedIntoDefault: false,
     });
   });
 });
@@ -542,7 +638,11 @@ describe("worktree.listAllForHost v1.0 <-> v1.2 negotiation", () => {
       V12,
       response,
     );
-    expect(upgraded.worktrees[0].submodules[0].atPinnedCommit).toBe(false);
+    expect(upgraded.worktrees[0].submodules[0]).toMatchObject({
+      atPinnedCommit: false,
+      unmergedCommitCount: null,
+      unmergedCommitSubjects: null,
+    });
     expect(worktreeListAllForHostResponseSchemaV12.parse(upgraded)).toEqual(
       upgraded,
     );
@@ -704,6 +804,8 @@ describe("worktreeSubmoduleMergeFactSchemaV12", () => {
       mergedHeadShaMatches: false,
       mergedIntoDefault: false,
       atPinnedCommit: true,
+      unmergedCommitCount: 2,
+      unmergedCommitSubjects: ["Newest", "Older"],
     };
     expect(worktreeSubmoduleMergeFactSchemaV12.parse(fact)).toEqual(fact);
     expect(() =>
@@ -715,6 +817,8 @@ describe("worktreeSubmoduleMergeFactSchemaV12", () => {
         prUrl: null,
         mergedHeadShaMatches: false,
         mergedIntoDefault: false,
+        unmergedCommitCount: null,
+        unmergedCommitSubjects: null,
       }),
     ).toThrow();
   });

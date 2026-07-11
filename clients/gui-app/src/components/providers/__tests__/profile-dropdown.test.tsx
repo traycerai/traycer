@@ -133,7 +133,6 @@ function renderDropdown(input: RenderDropdownInput) {
       activeProfileId={input.activeProfileId}
       onSelectProfile={input.onSelectProfile}
       onCreateProfile={input.onCreateProfile}
-      onEditProfile={null}
       createProfileDisabled={input.createProfileDisabled}
       createProfileDisabledReason={input.createProfileDisabledReason}
       shortcutHintForIndex={input.shortcutHintForIndex}
@@ -162,34 +161,6 @@ describe("<ProfileDropdown />", () => {
       name: "Codex profile: Work",
     });
     expect(trigger.textContent).toContain("Work");
-  });
-
-  it("places the settings edit action directly after the profile name", () => {
-    const onEditProfile = vi.fn();
-    render(
-      <ProfileDropdown
-        providerLabel="Codex"
-        profiles={[AMBIENT, WORK]}
-        activeProfileId="work-profile"
-        onSelectProfile={vi.fn()}
-        onCreateProfile={vi.fn()}
-        onEditProfile={onEditProfile}
-        createProfileDisabled={false}
-        createProfileDisabledReason={undefined}
-        shortcutHintForIndex={noShortcutHint}
-        contentContainer={null}
-        onCloseAutoFocus={null}
-      />,
-    );
-
-    const edit = screen.getByRole("button", { name: "Edit Work profile" });
-    expect(edit.previousElementSibling?.textContent).toBe("Work");
-    expect(edit.previousElementSibling?.getAttribute("aria-hidden")).toBe(
-      "true",
-    );
-    expect(edit.closest('[aria-hidden="true"]')).toBeNull();
-    fireEvent.click(edit);
-    expect(onEditProfile).toHaveBeenCalledTimes(1);
   });
 
   it("renders non-modal so nested picker clicks can dismiss only the profile menu", () => {
@@ -299,7 +270,7 @@ describe("<ProfileDropdown />", () => {
   // This file only verifies the contract: render whatever the caller's
   // `shortcutHintForIndex` returns, per row, and nothing when it returns
   // `null` - `ProfileDropdown` itself owns no keybinding-formatting logic.
-  it("renders the injected shortcut hint's digit and label verbatim, per row", () => {
+  it("renders each injected shortcut hint in the native Kbd component", () => {
     renderDropdown({
       profiles: [AMBIENT, WORK],
       activeProfileId: "work-profile",
@@ -311,12 +282,12 @@ describe("<ProfileDropdown />", () => {
       onCloseAutoFocus: null,
     });
 
-    expect(screen.getByTestId("model-profile-digit-1").textContent).toBe(
-      "Hint 1",
-    );
-    expect(screen.getByTestId("model-profile-digit-2").textContent).toBe(
-      "Hint 2",
-    );
+    const firstHint = screen.getByTestId("model-profile-digit-1");
+    const secondHint = screen.getByTestId("model-profile-digit-2");
+    expect(firstHint.textContent).toBe("Hint 1");
+    expect(secondHint.textContent).toBe("Hint 2");
+    expect(firstHint.querySelector('[data-slot="kbd"]')).not.toBeNull();
+    expect(secondHint.querySelector('[data-slot="kbd"]')).not.toBeNull();
   });
 
   it("hides shortcut hints when the caller (Settings) disables them", () => {

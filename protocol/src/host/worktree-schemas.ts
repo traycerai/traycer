@@ -686,14 +686,20 @@ export type WorktreeSubmoduleMergeFact = z.infer<
  * v1.2 adds the submodule equivalent of `atBaseCommit`: the owned branch's live
  * checkout or resolved tip is exactly the superproject's pinned gitlink, so it
  * carries no committed work beyond what the superproject already references.
+ * It also carries a bounded, newest-first display summary of commits on an
+ * unproven branch that are absent from its default branch; `null` means the
+ * host did not compute that display detail.
  */
 export const worktreeSubmoduleMergeFactSchemaV12 =
   worktreeSubmoduleMergeFactSchema.extend({
     atPinnedCommit: z.boolean(),
+    unmergedCommitCount: z.number().int().nonnegative().nullable(),
+    unmergedCommitSubjects: z.array(z.string()).max(5).nullable(),
   });
 export type WorktreeSubmoduleMergeFactV12 = z.infer<
   typeof worktreeSubmoduleMergeFactSchemaV12
 >;
+
 
 /**
  * `worktree.listAllForHost` v1.1 entry. Adds the staleness signals the
@@ -768,6 +774,7 @@ export const worktreeHostEntrySchemaV12 = worktreeHostEntrySchemaV11.extend({
   submodules: z.array(worktreeSubmoduleMergeFactSchemaV12),
 });
 export type WorktreeHostEntryV12 = z.infer<typeof worktreeHostEntrySchemaV12>;
+
 
 /**
  * `worktree.listAllForHost` v1.1 request. Adds `includeActivity`: the git
@@ -851,6 +858,7 @@ export const worktreeListAllForHostRequestSchemaV12 =
 export type WorktreeListAllForHostRequestV12 =
   WorktreeListAllForHostRequestV11;
 
+
 /**
  * `worktree.listAllForHost` v1.1 response. Same `worktrees` field, enriched
  * entry shape ({@link worktreeHostEntrySchemaV11}), plus `nextCursor` for the
@@ -875,6 +883,7 @@ export const worktreeListAllForHostResponseSchemaV12 = z.object({
 export type WorktreeListAllForHostResponseV12 = z.infer<
   typeof worktreeListAllForHostResponseSchemaV12
 >;
+
 
 /**
  * Returns `null` when no row exists yet so a fresh terminal-agent
