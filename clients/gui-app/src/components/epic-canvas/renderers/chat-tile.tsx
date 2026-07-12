@@ -96,7 +96,10 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useHostClient, useHostBinding } from "@/lib/host";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
-import { useEpicCreateChat } from "@/hooks/epic/use-epic-chat-mutations";
+import {
+  useEpicCreateChat,
+  useEpicUpdateChatRunSettings,
+} from "@/hooks/epic/use-epic-chat-mutations";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { cloneChatOnHostSwitch } from "@/lib/commands/actions/clone-chat-on-host-switch";
 import { ChatDeadTileBanner } from "./dead-tile-banner";
@@ -1404,6 +1407,22 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       sendImplementPlanMessage,
     ],
   );
+  // Durable settings sync: mirror composer selection changes onto the host's
+  // per-chat record so headless turns (incoming A2A messages) run on the
+  // freshly picked profile. Best-effort - an old host rejects the optional
+  // method with E_HOST_UNSUPPORTED and behavior degrades to persist-on-send.
+  const updateChatRunSettings = useEpicUpdateChatRunSettings();
+  const updateChatRunSettingsMutate = updateChatRunSettings.mutate;
+  const persistChatRunSettings = useCallback(
+    (settings: ChatRunSettings): void => {
+      updateChatRunSettingsMutate({
+        epicId: currentEpicId,
+        chatId: node.id,
+        settings,
+      });
+    },
+    [currentEpicId, node.id, updateChatRunSettingsMutate],
+  );
   const {
     editQueuedItem,
     cancelQueuedItem,
@@ -1425,6 +1444,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     activeEditingQueueItemId,
     dispatchUi,
     setEpicRunSettings,
+    persistChatRunSettings,
   });
   const handleForkOpenChange = useCallback((open: boolean): void => {
     if (!open) setForkTarget(null);

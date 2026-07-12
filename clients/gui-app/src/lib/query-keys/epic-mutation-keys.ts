@@ -3,4 +3,5 @@ export const epicMutationKeys = {
   batchDelete: () => ["epic.batchDelete"] as const,
   sendQueuedInvites: () => ["epic.sendQueuedInvites"] as const,
   createChat: () => ["epic.createChat"] as const,
+  updateChatRunSettings: () => ["epic.updateChatRunSettings"] as const,
 };

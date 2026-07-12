@@ -110,6 +110,7 @@ import {
   epicRemoveRepoV10,
   epicRenameArtifactV10,
   epicRenameChatV10,
+  epicUpdateChatRunSettingsV10,
   epicRenameTuiAgentV10,
   epicReparentArtifactV10,
   epicReparentChatV10,
@@ -2240,6 +2241,23 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
       },
       downgradePathsFromLatest: {},
     },
+  },
+  // Optional (non-floor) capability: settings-only chat update, no send.
+  // Old peers lack it in their optional manifest; callers get
+  // E_HOST_UNSUPPORTED for this call only and degrade to the legacy
+  // persist-on-next-send behavior.
+  "epic.updateChatRunSettings": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicUpdateChatRunSettingsV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
   },
   "epic.deleteChat": {
     1: {

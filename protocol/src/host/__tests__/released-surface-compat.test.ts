@@ -33,8 +33,23 @@ import { releasedMethodNames } from "./__fixtures__/released-method-names";
  * (see `worktree.listByWorkspacePaths@1.1` / `worktree.listBindingsForEpic@1.1`).
  */
 describe("released method-name set (host-v1.0.0) is frozen", () => {
-  it("advertises exactly the baselined method names", () => {
-    const current = Object.keys(hostRpcRegistry).sort();
-    expect(current).toEqual([...releasedMethodNames].sort());
+  it("advertises every baselined method name in the fatal floor channel", () => {
+    // Post-#272 the registry may grow ADDITIVE optional methods beyond the
+    // floor; those ride the optional manifest channel and are not
+    // handshake-fatal. The frozen floor itself must remain fully present.
+    const current = new Set(Object.keys(hostRpcRegistry));
+    const missing = [...releasedMethodNames].filter(
+      (name) => !current.has(name),
+    );
+    expect(missing).toEqual([]);
+  });
+
+  it("requires every non-floor method to declare a degrade story", () => {
+    const floor = new Set<string>(releasedMethodNames);
+    const optionalWithoutDegrade = Object.entries(hostRpcRegistry)
+      .filter(([name]) => !floor.has(name))
+      .filter(([, entry]) => !("degrade" in entry))
+      .map(([name]) => name);
+    expect(optionalWithoutDegrade).toEqual([]);
   });
 });
