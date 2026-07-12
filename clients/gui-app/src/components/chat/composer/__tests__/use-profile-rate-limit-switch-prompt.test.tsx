@@ -192,8 +192,6 @@ describe("useProfileRateLimitSwitchPrompt", () => {
     act(() => {
       first.result.current.dismiss();
     });
-    first.rerender();
-    second.rerender();
 
     expect(first.result.current.limited).toBe(false);
     expect(second.result.current.limited).toBe(false);
