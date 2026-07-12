@@ -18,9 +18,10 @@ import { buildConfigShellRemoveCommand } from "../config-shell-remove";
 import { readCliConfig, setShell } from "../../store/config-store";
 import { makeCtx } from "./hook-test-helpers";
 
-// The add/remove gate hinges on `fs.access(X_OK)`, which on Windows collapses to
-// a plain existence check - a non-executable fixture would read as executable, so
-// the executable-bit assertions can't be exercised honestly there.
+// `fs.access(X_OK)` collapses to a plain existence check on Windows, so a
+// non-executable fixture reads as executable there. Only the case that hinges on
+// that distinction is skipped; the rest (path validation, remove semantics) is
+// platform-independent and stays enabled everywhere.
 const skipOnWindows = process.platform === "win32";
 
 let workdir = "";
@@ -44,7 +45,7 @@ async function makeNonExecutable(name: string): Promise<string> {
   return path;
 }
 
-describe.skipIf(skipOnWindows)("config shell add", () => {
+describe("config shell add", () => {
   it("rejects a relative path", async () => {
     await expect(
       buildConfigShellAddCommand({ path: "relative/sh" })(makeCtx()),
@@ -57,12 +58,15 @@ describe.skipIf(skipOnWindows)("config shell add", () => {
     ).rejects.toMatchObject({ code: "E_CONFIG_INVALID_VALUE" });
   });
 
-  it("rejects a path that exists but is not executable", async () => {
-    const path = await makeNonExecutable("notexec");
-    await expect(
-      buildConfigShellAddCommand({ path })(makeCtx()),
-    ).rejects.toMatchObject({ code: "E_CONFIG_INVALID_VALUE" });
-  });
+  it.skipIf(skipOnWindows)(
+    "rejects a path that exists but is not executable",
+    async () => {
+      const path = await makeNonExecutable("notexec");
+      await expect(
+        buildConfigShellAddCommand({ path })(makeCtx()),
+      ).rejects.toMatchObject({ code: "E_CONFIG_INVALID_VALUE" });
+    },
+  );
 
   it("remembers and selects an executable path", async () => {
     const path = await makeExecutable("myshell");
@@ -74,7 +78,7 @@ describe.skipIf(skipOnWindows)("config shell add", () => {
   });
 });
 
-describe.skipIf(skipOnWindows)("config shell remove", () => {
+describe("config shell remove", () => {
   it("drops an added shell and falls back to default when it was selected", async () => {
     const path = await makeExecutable("myshell");
     await buildConfigShellAddCommand({ path })(makeCtx());
