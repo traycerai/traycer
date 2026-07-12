@@ -11,13 +11,25 @@ describe("dev desktop runtime helpers", () => {
     });
   });
 
-  it("adds a slot suffix only to Electron runtime identity", () => {
+  it("uses the worktree name in the dev display identity while preserving the full slot for isolation", () => {
+    expect(
+      resolveDesktopRuntimeIdentity("Traycer Dev", "dev", {
+        [DEV_DESKTOP_SLOT_ENV]: "traycer-spry-panda-a2acaa5e",
+      }),
+    ).toEqual({
+      appName: "Traycer Dev — spry-panda",
+      userDataDirName: "Traycer Dev-traycer-spry-panda-a2acaa5e",
+      slot: "traycer-spry-panda-a2acaa5e",
+    });
+  });
+
+  it("keeps an explicitly requested slot intact in the dev display identity", () => {
     expect(
       resolveDesktopRuntimeIdentity("Traycer Dev", "dev", {
         [DEV_DESKTOP_SLOT_ENV]: "Worktree Slot",
       }),
     ).toEqual({
-      appName: "Traycer Dev (worktree-slot)",
+      appName: "Traycer Dev — worktree-slot",
       userDataDirName: "Traycer Dev-worktree-slot",
       slot: "worktree-slot",
     });

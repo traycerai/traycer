@@ -34,6 +34,7 @@ import {
 const STRUCTURED_RENDERER_LOG_PREFIX = "[traycer-gui]";
 
 export interface MainWindowOptions {
+  readonly devWindowTitle: string | null;
   readonly preloadPath: string;
   readonly windowId: string;
   readonly initialRoute: string | null;
@@ -66,6 +67,9 @@ export function createMainWindow(options: MainWindowOptions): BrowserWindow {
           y: undefined,
         };
   const window = new BrowserWindow({
+    ...(options.devWindowTitle === null
+      ? {}
+      : { title: options.devWindowTitle }),
     width: placementBounds.width,
     height: placementBounds.height,
     x: placementBounds.x,
@@ -127,6 +131,17 @@ export function createMainWindow(options: MainWindowOptions): BrowserWindow {
   installNavigationGuard(window.webContents);
   installContextMenu(window.webContents);
   installResponsivenessListeners(window.webContents);
+
+  const devWindowTitle = options.devWindowTitle;
+  if (devWindowTitle !== null) {
+    // The renderer's document title is the generic product name. Keep the
+    // native title bound to the runtime app identity so concurrent dev stacks
+    // stay distinguishable in the window switcher and Dock.
+    window.on("page-title-updated", (event) => {
+      event.preventDefault();
+      window.setTitle(devWindowTitle);
+    });
+  }
 
   window.once("ready-to-show", () => {
     // Open filling the screen's work area (full width/height minus OS

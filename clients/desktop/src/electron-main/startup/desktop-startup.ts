@@ -125,8 +125,6 @@ import { installHostWakeRecovery } from "./host-wake-recovery";
 import { startHostHealthMonitor } from "../host/host-health-monitor";
 import { DESKTOP_APP_NAME } from "../../config";
 
-const APP_DISPLAY_NAME = DESKTOP_APP_NAME;
-
 // Per-window fresh-snapshot query budget during `before-quit`. Each renderer,
 // on receiving `getFreshUnsyncedSnapshot`, first AWAITS its debounced per-window
 // projection flush (open epic tabs / pane layout / drafts -> main's
@@ -281,6 +279,9 @@ async function runOnReady(state: BootState): Promise<void> {
 // provisioned post-auth via the ensure IPC.
 async function runWindowPhase(state: BootState): Promise<AppServices> {
   const { config } = state;
+  const appDisplayName = app.getName();
+  const devWindowTitle =
+    appDisplayName === DESKTOP_APP_NAME ? null : appDisplayName;
 
   const desktopStateStore = new DesktopStateStore({
     filePath: resolveDesktopStateFilePath(),
@@ -317,6 +318,7 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
               topology: readDisplayTopology(),
             });
       const createdWindow = createMainWindow({
+        devWindowTitle,
         preloadPath: config.preloadPath,
         windowId: request.windowId,
         initialRoute: request.initialRoute,
@@ -386,7 +388,7 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
     reachabilityProbe: undefined,
   });
   const support = new DesktopSupportService({
-    appName: APP_DISPLAY_NAME,
+    appName: appDisplayName,
     host,
     authSession,
     hostLayout,
@@ -430,7 +432,7 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
   });
 
   const menu = new MenuController({
-    appName: APP_DISPLAY_NAME,
+    appName: appDisplayName,
     platform: process.platform,
     windowRegistry,
     host,
@@ -968,7 +970,7 @@ function createMruWindowProxy(registry: WindowRegistry): TrayManagedWindow {
 }
 
 async function configureAppIdentity(iconPath: string): Promise<void> {
-  configureNativeAboutPanel(APP_DISPLAY_NAME, iconPath);
+  configureNativeAboutPanel(app.getName(), iconPath);
   if (process.platform !== "darwin") {
     return;
   }

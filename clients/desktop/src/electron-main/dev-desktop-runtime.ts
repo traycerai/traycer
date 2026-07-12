@@ -21,8 +21,13 @@ export function resolveDesktopRuntimeIdentity(
     };
   }
   return {
-    appName: `${baseAppName} (${slot})`,
+    appName: `${baseAppName} — ${displayNameForDevDesktopSlot(slot)}`,
     userDataDirName: `${baseAppName}-${slot}`,
     slot,
   };
+}
+
+function displayNameForDevDesktopSlot(slot: string): string {
+  const worktreeMatch = /^traycer-(.+)-[a-f0-9]{8}$/.exec(slot);
+  return worktreeMatch?.[1] ?? slot;
 }
