@@ -122,6 +122,36 @@ export async function resolveTraycerCliInvocation(): Promise<TraycerCliInvocatio
   );
 }
 
+/**
+ * Windows spawn shape for the CLI binary + subcommand args.
+ *
+ * Production uses a real `traycer.exe` (spawn directly). `make dev-desktop`
+ * stages a `traycer.cmd` wrapper that execs bun + the source entry. Node/
+ * Electron cannot CreateProcess a `.cmd` without a shell (`spawn EINVAL`),
+ * and paths with spaces need a fully-quoted cmd line. Mirror the CLI
+ * host-start helper: `cmd.exe /d /s /c` with windowsVerbatimArguments.
+ */
+export interface CliSpawnInvocation {
+  readonly command: string;
+  readonly args: readonly string[];
+  readonly windowsVerbatimArguments: boolean;
+}
+
+export function resolveCliSpawnInvocation(
+  command: string,
+  args: readonly string[],
+): CliSpawnInvocation {
+  if (process.platform === "win32" && /\.(cmd|bat)$/i.test(command)) {
+    const line = [command, ...args].map((token) => `"${token}"`).join(" ");
+    return {
+      command: process.env.ComSpec ?? "cmd.exe",
+      args: ["/d", "/s", "/c", `"${line}"`],
+      windowsVerbatimArguments: true,
+    };
+  }
+  return { command, args, windowsVerbatimArguments: false };
+}
+
 export interface RunTraycerCliOptions {
   /**
    * Subcommand args appended after the resolved CLI command. E.g.
@@ -151,15 +181,19 @@ export async function runTraycerCli(
 ): Promise<TraycerCliResult> {
   const inv = await resolveTraycerCliInvocation();
   const allArgs = [...inv.args, ...opts.args];
+  const launch = resolveCliSpawnInvocation(inv.command, allArgs);
   return new Promise((resolve, reject) => {
     execFile(
-      inv.command,
-      allArgs,
+      launch.command,
+      [...launch.args],
       {
         encoding: "utf8",
         maxBuffer: opts.maxBuffer,
         timeout: opts.timeoutMs,
         windowsHide: true,
+        ...(launch.windowsVerbatimArguments
+          ? { windowsVerbatimArguments: true }
+          : {}),
       },
       (err, stdout, stderr) => {
         if (err !== null) {
@@ -410,10 +444,14 @@ export async function runTraycerCliWithStdin<T>(
   const inv = await resolveTraycerCliInvocation();
   const augmentedArgs = ensureJsonFlag(opts.args);
   const allArgs = [...inv.args, ...augmentedArgs];
+  const launch = resolveCliSpawnInvocation(inv.command, allArgs);
   return new Promise<T>((resolve, reject) => {
-    const child = spawn(inv.command, allArgs, {
+    const child = spawn(launch.command, [...launch.args], {
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
+      ...(launch.windowsVerbatimArguments
+        ? { windowsVerbatimArguments: true }
+        : {}),
     });
     let stdout = "";
     let stderrTail = "";
@@ -550,11 +588,15 @@ export async function streamTraycerCliJson<T>(
   const inv = await resolveTraycerCliInvocation();
   const augmentedArgs = ensureJsonFlag(opts.args);
   const allArgs = [...inv.args, ...augmentedArgs];
+  const launch = resolveCliSpawnInvocation(inv.command, allArgs);
   return new Promise<StreamTraycerCliResult<T>>((resolve, reject) => {
-    const child = spawn(inv.command, allArgs, {
+    const child = spawn(launch.command, [...launch.args], {
       env: opts.env === null ? process.env : { ...process.env, ...opts.env },
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
+      ...(launch.windowsVerbatimArguments
+        ? { windowsVerbatimArguments: true }
+        : {}),
     });
     let stdoutBuffer = "";
     let stderrTail = "";
