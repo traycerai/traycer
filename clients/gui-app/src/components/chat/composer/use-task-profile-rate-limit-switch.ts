@@ -53,15 +53,20 @@ export function useTaskProfileRateLimitSwitch(input: {
   const { enabled, harnessId, profileId, epicId, chatId } = input;
   const tabHostId = useTabHostId();
   const epicHandle = useMaybeOpenEpicHandle();
+  // Gated on `enabled` (not just `epicHandle`): every mounted composer in the
+  // task calls this hook, so without the gate each one subscribes to the
+  // full `chats` slice and re-renders on every chat-list mutation even in
+  // the common case where the profile isn't limited and `affected` below
+  // would short-circuit to `NO_AFFECTED` anyway.
   const subscribe = useCallback(
     (onStoreChange: () => void) => {
-      if (epicHandle === null) return () => {};
+      if (!enabled || epicHandle === null) return () => {};
       return epicHandle.store.subscribe(onStoreChange);
     },
-    [epicHandle],
+    [enabled, epicHandle],
   );
   const chats = useSyncExternalStore<ChatsSlice | null>(subscribe, () =>
-    epicHandle === null ? null : epicHandle.store.getState().chats,
+    !enabled || epicHandle === null ? null : epicHandle.store.getState().chats,
   );
 
   const affected = useMemo<ReadonlyArray<AffectedTaskChat>>(() => {

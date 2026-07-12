@@ -98,8 +98,6 @@ describe("rate-limit banner task-wide switch", () => {
       }),
     );
     expect(onSwitchProfile).toHaveBeenCalledWith(ALTERNATIVE.profileId);
-    expect(onSwitchProfileForTask).toHaveBeenCalledWith(
-      ALTERNATIVE.profileId,
-    );
+    expect(onSwitchProfileForTask).toHaveBeenCalledWith(ALTERNATIVE.profileId);
   });
 });

@@ -56,6 +56,22 @@ export function ProfileRateLimitSwitchBanner({
     onSwitchProfile(profileId);
     onSwitchProfileForTask(profileId);
   };
+  const renderAlternativeButton = (
+    alternative: ProfileRateLimitAlternative,
+    label: string,
+    onClick: (profileId: string | null) => void,
+  ): ReactNode => (
+    <Button
+      key={alternative.accentDotId}
+      size="sm"
+      variant="secondary"
+      className="gap-1.5"
+      onClick={() => onClick(alternative.profileId)}
+    >
+      {label}{" "}
+      <ProfileRateLimitChip harnessId={harnessId} profile={alternative} />
+    </Button>
+  );
   return (
     <div className="flex w-full flex-col gap-1.5">
       <div className="flex w-full flex-col gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-ui-sm">
@@ -76,39 +92,23 @@ export function ProfileRateLimitSwitchBanner({
               </span>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              {alternatives.map((alternative) => (
-                <Button
-                  key={alternative.accentDotId}
-                  size="sm"
-                  variant="secondary"
-                  className="gap-1.5"
-                  onClick={() => onSwitchProfile(alternative.profileId)}
-                >
-                  Continue this session on{" "}
-                  <ProfileRateLimitChip
-                    harnessId={harnessId}
-                    profile={alternative}
-                  />
-                </Button>
-              ))}
+              {alternatives.map((alternative) =>
+                renderAlternativeButton(
+                  alternative,
+                  "Continue this session on",
+                  onSwitchProfile,
+                ),
+              )}
             </div>
             {affectedChatCount > 1 ? (
               <div className="flex flex-wrap items-center gap-2">
-                {alternatives.map((alternative) => (
-                  <Button
-                    key={alternative.accentDotId}
-                    size="sm"
-                    variant="secondary"
-                    className="gap-1.5"
-                    onClick={() => handleSwitchTask(alternative.profileId)}
-                  >
-                    Switch all {affectedChatCount} chats in this task to{" "}
-                    <ProfileRateLimitChip
-                      harnessId={harnessId}
-                      profile={alternative}
-                    />
-                  </Button>
-                ))}
+                {alternatives.map((alternative) =>
+                  renderAlternativeButton(
+                    alternative,
+                    `Switch all ${affectedChatCount} chats in this task to`,
+                    handleSwitchTask,
+                  ),
+                )}
               </div>
             ) : null}
           </div>
