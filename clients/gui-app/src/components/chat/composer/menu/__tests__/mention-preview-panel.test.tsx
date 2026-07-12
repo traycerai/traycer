@@ -34,6 +34,10 @@ function makeActiveRow(): HTMLElement {
   return row;
 }
 
+function makePanelRef(): { current: HTMLDivElement | null } {
+  return { current: null };
+}
+
 describe("panelFitFor", () => {
   it("shows the panel unconstrained when there's ample room on the chosen side", () => {
     const fit = panelFitFor(500, 400);
@@ -80,7 +84,12 @@ describe("MentionPreviewPanel", () => {
   it("renders nothing when the active preview is null", async () => {
     const listRef = makeListRef(makeActiveRow());
     render(
-      <MentionPreviewPanel listRef={listRef} activeIndex={0} preview={null} />,
+      <MentionPreviewPanel
+        panelRef={makePanelRef()}
+        listRef={listRef}
+        activeIndex={0}
+        preview={null}
+      />,
     );
     await flush();
     expect(
@@ -98,6 +107,7 @@ describe("MentionPreviewPanel", () => {
     };
     render(
       <MentionPreviewPanel
+        panelRef={makePanelRef()}
         listRef={listRef}
         activeIndex={0}
         preview={preview}
@@ -119,6 +129,7 @@ describe("MentionPreviewPanel", () => {
     };
     render(
       <MentionPreviewPanel
+        panelRef={makePanelRef()}
         listRef={listRef}
         activeIndex={0}
         preview={preview}
@@ -141,6 +152,7 @@ describe("MentionPreviewPanel", () => {
     };
     render(
       <MentionPreviewPanel
+        panelRef={makePanelRef()}
         listRef={listRef}
         activeIndex={0}
         preview={preview}
@@ -162,6 +174,7 @@ describe("MentionPreviewPanel", () => {
     };
     render(
       <MentionPreviewPanel
+        panelRef={makePanelRef()}
         listRef={titleListRef}
         activeIndex={0}
         preview={titlePreview}
@@ -187,6 +200,7 @@ describe("MentionPreviewPanel", () => {
     };
     render(
       <MentionPreviewPanel
+        panelRef={makePanelRef()}
         listRef={listRef}
         activeIndex={0}
         preview={preview}
@@ -200,7 +214,7 @@ describe("MentionPreviewPanel", () => {
     expect(titleEl.className).not.toContain("font-mono");
   });
 
-  it("is pointer-events-none and aria-hidden so it never intercepts input", async () => {
+  it("allows pointer scrolling while remaining hidden from assistive technology", async () => {
     const listRef = makeListRef(makeActiveRow());
     const preview: MentionPreview = {
       kind: "text",
@@ -210,6 +224,7 @@ describe("MentionPreviewPanel", () => {
     };
     render(
       <MentionPreviewPanel
+        panelRef={makePanelRef()}
         listRef={listRef}
         activeIndex={0}
         preview={preview}
@@ -220,13 +235,20 @@ describe("MentionPreviewPanel", () => {
     const panel = document.querySelector('[data-slot="mention-preview-panel"]');
     expect(panel).not.toBeNull();
     expect(panel?.getAttribute("aria-hidden")).toBe("true");
-    expect(panel?.className).toContain("pointer-events-none");
+    expect(panel?.className).toContain("pointer-events-auto");
+    expect(panel?.className).toContain("flex");
+    const scrollArea = document.querySelector(
+      '[data-slot="mention-preview-panel-scroll-area"]',
+    );
+    expect(scrollArea?.className).toContain("min-h-0");
+    expect(scrollArea?.className).toContain("overflow-y-auto");
   });
 
   it("follows content updates instantly across activeIndex changes", async () => {
     const listRef = makeListRef(makeActiveRow());
     const { rerender } = render(
       <MentionPreviewPanel
+        panelRef={makePanelRef()}
         listRef={listRef}
         activeIndex={0}
         preview={{
@@ -242,6 +264,7 @@ describe("MentionPreviewPanel", () => {
 
     rerender(
       <MentionPreviewPanel
+        panelRef={makePanelRef()}
         listRef={listRef}
         activeIndex={1}
         preview={{
@@ -268,6 +291,7 @@ describe("MentionPreviewPanel", () => {
     };
     render(
       <MentionPreviewPanel
+        panelRef={makePanelRef()}
         listRef={listRef}
         activeIndex={0}
         preview={preview}
@@ -304,6 +328,7 @@ describe("MentionPreviewPanel", () => {
     };
     render(
       <MentionPreviewPanel
+        panelRef={makePanelRef()}
         listRef={listRef}
         activeIndex={0}
         preview={preview}
@@ -337,6 +362,7 @@ describe("MentionPreviewPanel", () => {
     };
     render(
       <MentionPreviewPanel
+        panelRef={makePanelRef()}
         listRef={listRef}
         activeIndex={0}
         preview={preview}
@@ -370,6 +396,7 @@ describe("MentionPreviewPanel", () => {
     };
     render(
       <MentionPreviewPanel
+        panelRef={makePanelRef()}
         listRef={listRef}
         activeIndex={0}
         preview={preview}
@@ -395,6 +422,7 @@ describe("MentionPreviewPanel", () => {
     };
     render(
       <MentionPreviewPanel
+        panelRef={makePanelRef()}
         listRef={listRef}
         activeIndex={0}
         preview={preview}
@@ -419,6 +447,7 @@ describe("MentionPreviewPanel", () => {
     };
     render(
       <MentionPreviewPanel
+        panelRef={makePanelRef()}
         listRef={listRef}
         activeIndex={0}
         preview={preview}
@@ -446,6 +475,7 @@ describe("MentionPreviewPanel", () => {
     };
     render(
       <MentionPreviewPanel
+        panelRef={makePanelRef()}
         listRef={listRef}
         activeIndex={0}
         preview={preview}
