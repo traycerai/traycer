@@ -102,6 +102,7 @@ import {
 } from "@/hooks/epic/use-epic-chat-mutations";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { cloneChatOnHostSwitch } from "@/lib/commands/actions/clone-chat-on-host-switch";
+import { enqueuePersistChatRunSettings } from "@/lib/chats/chat-run-settings-write-queue";
 import { ChatDeadTileBanner } from "./dead-tile-banner";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
@@ -1411,36 +1412,19 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   // per-chat record so headless turns (incoming A2A messages) run on the
   // freshly picked profile. Best-effort - an old host rejects the optional
   // method with E_HOST_UNSUPPORTED and behavior degrades to persist-on-send.
-  //
-  // Each `request()` on the WS RPC client opens a fresh connection with no
-  // ordering guarantee across concurrent calls (`WsRpcClient` holds no
-  // socket state between requests), so firing every settings change as an
-  // independent `mutate()` risks an older write's response landing after a
-  // newer one and pinning the chat to stale settings. This chain forces
-  // strict per-chat ordering (never two in-flight writes for the same chat)
-  // and collapses any settings changes queued while a write is in flight
-  // down to just the latest one, via `pendingSettingsRef` - a rapid burst of
-  // changes only sends the final value.
+  // Routed through the module-scoped `enqueuePersistChatRunSettings` (not a
+  // local chain) so a task-wide switch's sibling writes
+  // (`useTaskProfileRateLimitSwitch`) serialize against THIS chat's own
+  // composer writes too, not just against each other.
   const updateChatRunSettings = useEpicUpdateChatRunSettings();
   const updateChatRunSettingsMutateAsync = updateChatRunSettings.mutateAsync;
-  const persistChatRunSettingsChainRef = useRef<Promise<void>>(
-    Promise.resolve(),
-  );
-  const pendingChatRunSettingsRef = useRef<ChatRunSettings | null>(null);
   const persistChatRunSettings = useCallback(
     (settings: ChatRunSettings): void => {
-      pendingChatRunSettingsRef.current = settings;
-      persistChatRunSettingsChainRef.current =
-        persistChatRunSettingsChainRef.current.then(async () => {
-          const latest = pendingChatRunSettingsRef.current;
-          if (latest === null) return;
-          pendingChatRunSettingsRef.current = null;
-          await updateChatRunSettingsMutateAsync({
-            epicId: currentEpicId,
-            chatId: node.id,
-            settings: latest,
-          }).catch(() => undefined);
-        });
+      enqueuePersistChatRunSettings(updateChatRunSettingsMutateAsync, {
+        epicId: currentEpicId,
+        chatId: node.id,
+        settings,
+      });
     },
     [currentEpicId, node.id, updateChatRunSettingsMutateAsync],
   );
