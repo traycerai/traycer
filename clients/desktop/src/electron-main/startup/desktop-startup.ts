@@ -124,11 +124,6 @@ import {
 import { installHostWakeRecovery } from "./host-wake-recovery";
 import { startHostHealthMonitor } from "../host/host-health-monitor";
 import { DESKTOP_APP_NAME } from "../../config";
-import {
-  registerDevSharedLocalStorage,
-  resolveDevSharedLocalStorageFilePath,
-  type DevSharedLocalStorageHandle,
-} from "../dev/dev-shared-local-storage";
 
 const APP_DISPLAY_NAME = DESKTOP_APP_NAME;
 
@@ -167,7 +162,6 @@ export async function runDesktopStartup(): Promise<void> {
     config,
     pendingAuthReturnSignal: false,
     bridge: null,
-    devSharedLocalStorage: null,
   };
 
   runPreReady(state);
@@ -181,9 +175,6 @@ export async function runDesktopStartup(): Promise<void> {
   });
 
   const services = await runWindowPhase(state);
-  state.devSharedLocalStorage?.startPolling(
-    () => services.windowRegistry.getMruRecord()?.window.webContents ?? null,
-  );
 
   runDeferred(state, services);
 }
@@ -195,9 +186,6 @@ interface BootState {
   // a payload-free nudge, so repeated cold-start arrivals collapse.
   pendingAuthReturnSignal: boolean;
   bridge: RunnerIpcBridge | null;
-  // Non-null only when a `DEV_DESKTOP_SLOT` is active (see `runOnReady`);
-  // registration itself (not just polling) is the slot gate.
-  devSharedLocalStorage: DevSharedLocalStorageHandle | null;
 }
 
 // Single delivery path for the browser-return signal: focus + nudge the
@@ -265,17 +253,6 @@ async function runOnReady(state: BootState): Promise<void> {
   setActiveEnvironment(state.config.environment);
 
   await Promise.all([
-    timed("on-ready", "dev-shared-local-storage", () => {
-      // Must register (the extra preload + the ipcMain sync handler) before
-      // the window phase creates the first window - a page's own module-load
-      // scripts (theme-applier.ts, the auth bootstrap) read localStorage at
-      // that point, and the seed preload has to have already run.
-      state.devSharedLocalStorage = registerDevSharedLocalStorage({
-        environment: state.config.environment,
-        env: process.env,
-        filePath: resolveDevSharedLocalStorageFilePath(),
-      });
-    }),
     timed("on-ready", "app-protocol", () => installAppProtocolHandler()),
     timed("on-ready", "app-identity", () =>
       configureAppIdentity(state.config.iconPath),
@@ -805,14 +782,6 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
       services.windowGeometryPersistence.flushLatest().catch((err) => {
         log.warn("[desktop] window-geometry flush failed", err);
       }),
-      (
-        state.devSharedLocalStorage?.flush(
-          () =>
-            services.windowRegistry.getMruRecord()?.window.webContents ?? null,
-        ) ?? Promise.resolve()
-      ).catch((err) => {
-        log.warn("[desktop] dev-shared-local-storage flush failed", err);
-      }),
     ]);
   };
 
@@ -821,7 +790,6 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
     services.menu.dispose();
     services.bridge.dispose();
     services.tray?.dispose();
-    state.devSharedLocalStorage?.stopPolling();
   };
 
   const authorizeQuitAfterFlush = (): void => {
