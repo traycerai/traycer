@@ -32,6 +32,14 @@ describe("buildChildEnv", () => {
     expect(childEnv.VITE_DEV_DESKTOP_SLOT).toBe("my-worktree");
   });
 
+  it("forwards the loopback Cloud UI override to the renderer", () => {
+    const childEnv = devStack.buildChildEnv({
+      TRAYCER_DEV_CLOUD_UI_BASE_URL: "http://localhost:21003",
+    });
+
+    expect(childEnv.VITE_DEV_CLOUD_UI_BASE_URL).toBe("http://localhost:21003");
+  });
+
   // The renderer derives its deep-link scheme from VITE_DEV_DESKTOP_SLOT while
   // the main process reads DEV_DESKTOP_SLOT. A stale VITE_ value inherited from
   // the parent shell would desynchronize them, so a no-slot run must clear it.
