@@ -16,7 +16,10 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
+import {
+  DEFAULT_ACCOUNT_CONTEXT,
+  type AccountContext,
+} from "@traycer/protocol/common/schemas";
 import type { ProviderRateLimits } from "@traycer/protocol/host";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
@@ -31,6 +34,7 @@ import type {
   AvailableProviderRateLimits,
   ProviderRateLimitEnvelope,
 } from "@/lib/rate-limits/rate-limit-envelope";
+import { accountContextValue } from "@/lib/auth/traycer-subscription-content";
 import { queryKeys } from "@/lib/query-keys";
 
 type QueryResult = {
@@ -59,6 +63,8 @@ type MockState = {
   }>;
   results: Record<string, QueryResult>;
   draining: boolean;
+  traycerUsageFetching: boolean;
+  traycerUsageUpdatedAt: Readonly<Record<string, number>>;
   openSettings: Mock<(...args: unknown[]) => void>;
   enqueue: Mock<(...args: unknown[]) => Promise<void>>;
   authUser: MockAuthUser;
@@ -91,6 +97,8 @@ const mocks = vi.hoisted<MockState>(() => ({
   configured: [],
   results: {},
   draining: false,
+  traycerUsageFetching: false,
+  traycerUsageUpdatedAt: {},
   openSettings: vi.fn(),
   enqueue: vi.fn((..._args: unknown[]) => Promise.resolve()),
   lastUseHostQueriesOptions: null,
@@ -140,20 +148,45 @@ vi.mock("@/hooks/host/use-host-provider-rate-limits-query", () => ({
 // production passes is irrelevant to this fixture-backed double.
 function mockUseHostQueriesImpl(args: {
   requests: ReadonlyArray<{
-    params: { providerId: string; profileId: string | null };
+    params:
+      | { providerId: string; profileId: string | null }
+      | { accountContext: AccountContext; profileId: null };
   }>;
-  options: { retry: boolean | undefined } | null;
+  options: { retry: boolean | undefined } | { enabled: boolean } | null;
 }) {
-  mocks.lastUseHostQueriesOptions = args.options;
-  mocks.lastUseHostQueriesProviderIds = args.requests.map(
-    (request) => request.params.providerId,
+  const providerRequests = args.requests.filter(
+    (
+      request,
+    ): request is {
+      params: { providerId: string; profileId: string | null };
+    } => "providerId" in request.params,
   );
-  return args.requests.map(
-    (request) =>
+  if (providerRequests.length > 0) {
+    mocks.lastUseHostQueriesOptions =
+      args.options !== null && "retry" in args.options
+        ? { retry: args.options.retry }
+        : null;
+    mocks.lastUseHostQueriesProviderIds = providerRequests.map(
+      (request) => request.params.providerId,
+    );
+  }
+  return args.requests.map((request) => {
+    if (!("providerId" in request.params)) {
+      return {
+        ...readyResult(null),
+        isFetching: mocks.traycerUsageFetching,
+        dataUpdatedAt:
+          mocks.traycerUsageUpdatedAt[
+            accountContextValue(request.params.accountContext)
+          ] ?? 0,
+      };
+    }
+    return (
       mocks.results[
         resultKey(request.params.providerId, request.params.profileId)
-      ] ?? readyResult(null),
-  );
+      ] ?? readyResult(null)
+    );
+  });
 }
 vi.mock("@/hooks/host/use-host-queries", () => ({
   useHostQueries: mockUseHostQueriesImpl,
@@ -432,8 +465,8 @@ function readyAuthUser(data: AuthenticatedUser): MockAuthUser {
   };
 }
 
-function traycerUsageQueryKey() {
-  return queryKeys.hostTraycerRateLimitUsage("host-1", DEFAULT_ACCOUNT_CONTEXT);
+function traycerUsageQueryKey(accountContext: AccountContext) {
+  return queryKeys.hostTraycerRateLimitUsage("host-1", accountContext);
 }
 
 let onClose: () => void;
@@ -460,6 +493,8 @@ beforeEach(() => {
   mocks.configured = [];
   mocks.results = {};
   mocks.draining = false;
+  mocks.traycerUsageFetching = false;
+  mocks.traycerUsageUpdatedAt = {};
   mocks.openSettings = vi.fn();
   mocks.enqueue = vi.fn((..._args: unknown[]) => Promise.resolve());
   mocks.lastUseHostQueriesOptions = null;
@@ -640,7 +675,7 @@ describe("<RateLimitPopover /> rail", () => {
     expect(screen.getByText("Pro 5x")).toBeTruthy();
   });
 
-  it("keeps the old single-provider layout when profiles has only one entry", () => {
+  it("renders the profile-card layout when a provider has only one profile", () => {
     mocks.configured = [
       {
         providerId: "codex",
@@ -656,12 +691,15 @@ describe("<RateLimitPopover /> rail", () => {
         ],
       },
     ];
-    mocks.results = { codex: readyResult(codexReady()) };
+    mocks.results = {
+      [resultKey("codex", "work-profile")]: readyResult(codexReady()),
+    };
     renderPopover();
 
     expect(screen.getByText("Codex")).toBeTruthy();
     expect(screen.getByText("Current session")).toBeTruthy();
-    expect(screen.queryByText("Work")).toBeNull();
+    expect(screen.getByText("Work")).toBeTruthy();
+    expect(screen.getByText("Pro 5x")).toBeTruthy();
   });
 
   it("enqueues open-time refresh only for stale multi-profile rows", async () => {
@@ -1252,7 +1290,30 @@ describe("<RateLimitPopover /> Refresh all", () => {
 
     expect(authUser.refetch).toHaveBeenCalledTimes(1);
     expect(invalidateSpy).toHaveBeenCalledWith({
-      queryKey: traycerUsageQueryKey(),
+      queryKey: traycerUsageQueryKey(DEFAULT_ACCOUNT_CONTEXT),
+      exact: true,
+    });
+  });
+
+  it("refreshes every rendered rate-limit-based Traycer account", () => {
+    mocks.configured = [];
+    const fixture = authUserFixture({ status: "PRO", withTeam: true });
+    const team = fixture.teamSubscriptions[0];
+    mocks.authUser = readyAuthUser({
+      ...fixture,
+      teamSubscriptions: [{ ...team, subscriptionStatus: "PRO" }],
+    });
+    const { client } = renderPopover();
+    const invalidateSpy = vi.spyOn(client, "invalidateQueries");
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh all" }));
+
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: traycerUsageQueryKey(DEFAULT_ACCOUNT_CONTEXT),
+      exact: true,
+    });
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: traycerUsageQueryKey({ type: "TEAM", teamId: "team-1" }),
       exact: true,
     });
   });
@@ -1271,6 +1332,46 @@ describe("<RateLimitPopover /> Refresh all", () => {
     expect(screen.getByTestId("usage-limit-refreshing-dots")).toBeTruthy();
     const refreshAll = screen.getByRole("button", { name: "Refresh all" });
     expect(refreshAll.getAttribute("disabled")).not.toBeNull();
+  });
+
+  it("keeps the Traycer card refreshing while account usage refetches", () => {
+    mocks.configured = [];
+    mocks.authUser = readyAuthUser(
+      authUserFixture({ status: "PRO", withTeam: false }),
+    );
+    mocks.traycerUsageFetching = true;
+
+    renderPopover();
+
+    expect(screen.getByText("Refreshing")).toBeTruthy();
+    expect(
+      screen
+        .getByRole("button", { name: "Refresh all" })
+        .getAttribute("disabled"),
+    ).not.toBeNull();
+  });
+
+  it("keeps rate-limit usage freshness scoped to its Traycer account", () => {
+    mocks.configured = [];
+    const fixture = authUserFixture({ status: "PRO", withTeam: true });
+    const team = fixture.teamSubscriptions[0];
+    mocks.authUser = readyAuthUser({
+      ...fixture,
+      teamSubscriptions: [{ ...team, subscriptionStatus: "PRO" }],
+    });
+    mocks.traycerUsageUpdatedAt = {
+      [accountContextValue(DEFAULT_ACCOUNT_CONTEXT)]: NOW - 1_000,
+      [accountContextValue({ type: "TEAM", teamId: "team-1" })]: 0,
+    };
+
+    renderPopover();
+
+    expect(
+      screen.getByRole("button", { name: "Use Personal account" }).textContent,
+    ).toContain("Just now");
+    expect(
+      screen.getByRole("button", { name: "Use acme account" }).textContent,
+    ).toContain("stale");
   });
 });
 
@@ -1314,6 +1415,167 @@ describe("<RateLimitPopover /> per-provider refresh", () => {
     fireEvent.click(screen.getByRole("button", { name: "Refresh Kilo Code" }));
     expect(refetch).toHaveBeenCalledTimes(1);
     expect(mocks.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("refreshes every profile from one provider-heading control", () => {
+    mocks.configured = [
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [
+          providerProfile({
+            profileId: "ambient",
+            kind: "ambient",
+            label: "Terminal",
+            tier: "Pro",
+            usageUpdatedAt: NOW - 10_000,
+          }),
+          providerProfile({
+            profileId: "work-profile",
+            kind: "managed",
+            label: "Work",
+            tier: "Pro 5x",
+            usageUpdatedAt: NOW - 10_000,
+          }),
+        ],
+      },
+    ];
+    mocks.results = {
+      codex: readyResult(codexReady()),
+      [resultKey("codex", "work-profile")]: readyResult(codexReady()),
+    };
+    renderPopover();
+    fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
+
+    const refreshProvider = screen.getByRole("button", {
+      name: "Refresh Codex",
+    });
+    expect(screen.queryByRole("button", { name: "Refresh Work" })).toBeNull();
+    fireEvent.click(refreshProvider);
+
+    expect(mocks.enqueue).toHaveBeenCalledWith(
+      "codex",
+      { type: "PERSONAL" },
+      { force: true, profileId: null },
+    );
+    expect(mocks.enqueue).toHaveBeenCalledWith(
+      "codex",
+      { type: "PERSONAL" },
+      { force: true, profileId: "work-profile" },
+    );
+  });
+
+  it("keeps profile cards out of a shared loading state while the provider refresh queue drains", () => {
+    mocks.configured = [
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [
+          providerProfile({
+            profileId: "ambient",
+            kind: "ambient",
+            label: "Terminal",
+            tier: "Pro",
+            usageUpdatedAt: NOW - 10_000,
+          }),
+          providerProfile({
+            profileId: "work-profile",
+            kind: "managed",
+            label: "Work",
+            tier: "Pro 5x",
+            usageUpdatedAt: NOW - 10_000,
+          }),
+        ],
+      },
+    ];
+    mocks.results = {
+      codex: readyResult(codexReady()),
+      [resultKey("codex", "work-profile")]: readyResult(codexReady()),
+    };
+    mocks.draining = true;
+    renderPopover();
+    fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
+
+    expect(
+      screen
+        .getByRole("button", { name: "Refresh Codex" })
+        .getAttribute("disabled"),
+    ).not.toBeNull();
+    expect(screen.queryByText("Refreshing")).toBeNull();
+  });
+
+  // The queue's `draining` flag is lane-global, not per-provider, so a refresh
+  // on ANY ephemeralProcess provider disables every provider's control in that
+  // lane - not just the one whose fetch is in flight. Deliberate: the lane runs
+  // providers one at a time, so this matches a "refresh round is in progress"
+  // mental model rather than "my own fetch is in flight". See the spinner-state
+  // note in `use-provider-rate-limit-refresh.ts`. Pinned here so the shared
+  // disable isn't mistaken for cross-provider leakage and "fixed" away.
+  it("disables both ephemeralProcess providers' refresh controls while the shared queue drains", () => {
+    mocks.configured = [
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [
+          providerProfile({
+            profileId: "ambient",
+            kind: "ambient",
+            label: "Terminal",
+            tier: "Pro",
+            usageUpdatedAt: NOW - 10_000,
+          }),
+          providerProfile({
+            profileId: "work-profile",
+            kind: "managed",
+            label: "Work",
+            tier: "Pro 5x",
+            usageUpdatedAt: NOW - 10_000,
+          }),
+        ],
+      },
+      {
+        providerId: "claude-code",
+        lane: "ephemeralProcess",
+        profiles: [
+          providerProfile({
+            profileId: "ambient",
+            kind: "ambient",
+            label: "Personal",
+            tier: "Max",
+            usageUpdatedAt: NOW - 10_000,
+          }),
+          providerProfile({
+            profileId: "team-profile",
+            kind: "managed",
+            label: "Team",
+            tier: "Max 20x",
+            usageUpdatedAt: NOW - 10_000,
+          }),
+        ],
+      },
+    ];
+    mocks.results = {
+      codex: readyResult(codexReady()),
+      [resultKey("codex", "work-profile")]: readyResult(codexReady()),
+      "claude-code": readyResult(claudeReady()),
+      [resultKey("claude-code", "team-profile")]: readyResult(claudeReady()),
+    };
+    mocks.draining = true;
+    renderPopover();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
+    const refreshCodex = screen.getByRole("button", { name: "Refresh Codex" });
+    expect((refreshCodex as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.click(screen.getByRole("tab", { name: "Claude Code" }));
+    const refreshClaude = screen.getByRole("button", {
+      name: "Refresh Claude Code",
+    });
+    expect((refreshClaude as HTMLButtonElement).disabled).toBe(true);
+
+    // The shared lane gates the control, but it must not bleed into the profile
+    // cards' own loading state.
+    expect(screen.queryByText("Refreshing")).toBeNull();
   });
 });
 
@@ -1390,6 +1652,22 @@ describe("<RateLimitPopover /> Traycer tab", () => {
     ]);
   });
 
+  it("keeps paid team accounts selectable when Personal is ineligible", () => {
+    mocks.configured = [];
+    mocks.authUser = readyAuthUser(
+      authUserFixture({ status: "FREE", withTeam: true }),
+    );
+
+    renderPopover();
+
+    expect(screen.getByRole("tab", { name: "Traycer Inference" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Use acme account" }));
+    expect(useAccountContextStore.getState().accountContext).toEqual({
+      type: "TEAM",
+      teamId: "team-1",
+    });
+  });
+
   it("orders the Traycer tab per PROVIDER_ID_ORDER (after Codex, before Kilo Code)", () => {
     mocks.configured = [
       { providerId: "kilocode", lane: "httpFetch", profiles: undefined },
@@ -1417,37 +1695,56 @@ describe("<RateLimitPopover /> Traycer tab", () => {
     ]);
   });
 
-  it("shows the subscription detail with an account picker on the Traycer tab", () => {
+  it("shows one subscription card per Traycer account and marks the active one", () => {
     mocks.configured = [];
     mocks.authUser = readyAuthUser(
       authUserFixture({ status: "PRO_V3", withTeam: true }),
     );
     renderPopover();
     fireEvent.click(screen.getByRole("tab", { name: "Traycer Inference" }));
-    // Shared subscription view: plan credit breakdown (30 of 100).
+    // Shared subscription view: personal plan credit breakdown (30 of 100).
     expect(screen.getByText("$30.00 / $100.00")).toBeTruthy();
-    // Detail tab surfaces the same Personal/Team picker as the Settings card.
-    expect(screen.getByRole("combobox", { name: "Account" })).toBeTruthy();
-    // Plan/tier chip next to the name - the trailing "_V3" pricing-generation
-    // tag is stripped (matching Cloud UI's own Settings pages), so "PRO_V3"
-    // reads as "Pro", not "Pro V3".
+    expect(
+      screen.getByRole("button", { name: "Use Personal account" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Use acme account" }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("combobox", { name: "Account" })).toBeNull();
+    const activeCards = document.querySelectorAll('[aria-current="true"]');
+    expect(activeCards).toHaveLength(1);
+    expect(activeCards[0].textContent).toContain("Personal");
+    expect(screen.getByText("Active")).toBeTruthy();
+    // Plan chips live on their matching cards. The trailing "_V3"
+    // pricing-generation tag remains hidden.
     expect(screen.getByText("Pro")).toBeTruthy();
+    expect(screen.getByText("Ultra")).toBeTruthy();
   });
 
-  it("renders a condensed Traycer block with no picker or plan chip on Overview", () => {
+  it("renders Traycer account cards with active state on Overview", () => {
     mocks.configured = [];
     mocks.authUser = readyAuthUser(
       authUserFixture({ status: "PRO_V3", withTeam: true }),
     );
     renderPopover();
-    // Overview reflects the selected account's numbers, but exposes no controls.
+    // Overview now uses the same account-card structure as the Traycer detail tab.
     expect(screen.getByText("$30.00 / $100.00")).toBeTruthy();
     expect(screen.queryByRole("combobox", { name: "Account" })).toBeNull();
-    // Overview is condensed, same as the host-RPC providers' plan chip.
-    expect(screen.queryByText("Pro")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Use Personal account" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Use acme account" }),
+    ).toBeTruthy();
+    expect(screen.getByText("Pro")).toBeTruthy();
+    expect(screen.getByText("Ultra")).toBeTruthy();
+    expect(screen.getByText("Active")).toBeTruthy();
+    const activeCards = document.querySelectorAll('[aria-current="true"]');
+    expect(activeCards).toHaveLength(1);
+    expect(activeCards[0].textContent).toContain("Personal");
   });
 
-  it("reflects the selected account's own plan in the chip, not the personal account's", () => {
+  it("marks the selected team card active while retaining every account's plan", () => {
     mocks.configured = [];
     mocks.authUser = readyAuthUser(
       authUserFixture({ status: "PRO_V3", withTeam: true }),
@@ -1459,11 +1756,30 @@ describe("<RateLimitPopover /> Traycer tab", () => {
     });
     renderPopover();
     fireEvent.click(screen.getByRole("tab", { name: "Traycer Inference" }));
-    // "ULTRA_1X_V3" reads as the bare "Ultra" tier name (matching
-    // `subscriptionPlanLabel`'s own tier-name mapping), not the personal
-    // account's "Pro".
+    const activeCards = document.querySelectorAll('[aria-current="true"]');
+    expect(activeCards).toHaveLength(1);
+    expect(activeCards[0].textContent).toContain("acme");
     expect(screen.getByText("Ultra")).toBeTruthy();
-    expect(screen.queryByText("Pro")).toBeNull();
+    expect(screen.getByText("Pro")).toBeTruthy();
+  });
+
+  it("switches the active Traycer account from its profile card", () => {
+    mocks.configured = [];
+    mocks.authUser = readyAuthUser(
+      authUserFixture({ status: "PRO_V3", withTeam: true }),
+    );
+    renderPopover();
+    fireEvent.click(screen.getByRole("tab", { name: "Traycer Inference" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Use acme account" }));
+
+    expect(useAccountContextStore.getState().accountContext).toEqual({
+      type: "TEAM",
+      teamId: "team-1",
+    });
+    const activeCards = document.querySelectorAll('[aria-current="true"]');
+    expect(activeCards).toHaveLength(1);
+    expect(activeCards[0].textContent).toContain("acme");
   });
 
   it("refetches the subscription from the Traycer tab's refresh button", () => {

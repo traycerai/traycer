@@ -1065,6 +1065,148 @@ describe("ResourceMonitorPopover", () => {
     );
   });
 
+  it("sorts sibling process rows by aggregated subtree usage", () => {
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [
+            owner({
+              processes: [
+                resourceProcess({
+                  pid: 100,
+                  rootPid: 100,
+                  name: "zsh",
+                  command: "/bin/zsh",
+                  cpuPercent: 0,
+                  rssBytes: 1 * 1024 * 1024,
+                }),
+                // Wire order puts the light sibling first; the heavy-subtree
+                // sibling must still bubble above it under the memory sort.
+                resourceProcess({
+                  pid: 101,
+                  parentPid: 100,
+                  rootPid: 100,
+                  name: "alpha",
+                  command: "alpha",
+                  cpuPercent: 8,
+                  rssBytes: 10 * 1024 * 1024,
+                }),
+                // Small on its own, but carries a heavy grandchild: subtree
+                // totals (21% / 205 MB) dominate alpha's (8% / 10 MB).
+                resourceProcess({
+                  pid: 102,
+                  parentPid: 100,
+                  rootPid: 100,
+                  name: "beta",
+                  command: "beta",
+                  cpuPercent: 1,
+                  rssBytes: 5 * 1024 * 1024,
+                }),
+                resourceProcess({
+                  pid: 103,
+                  parentPid: 102,
+                  rootPid: 100,
+                  name: "gamma",
+                  command: "gamma",
+                  cpuPercent: 20,
+                  rssBytes: 200 * 1024 * 1024,
+                }),
+              ],
+            }),
+          ],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Expand process tree" }),
+    );
+
+    const expectBefore = (firstText: string, secondText: string) => {
+      const first = screen.getByText(firstText);
+      const second = screen.getByText(secondText);
+      expect(
+        first.compareDocumentPosition(second) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).not.toBe(0);
+    };
+
+    // Default memory sort: beta's 205 MB subtree outranks alpha's 10 MB.
+    expectBefore("beta (1 sub-process)", "alpha");
+
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Sort resource rows" }),
+      { button: 0, ctrlKey: false, pointerType: "mouse" },
+    );
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Name" }));
+    expectBefore("alpha", "beta (1 sub-process)");
+
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Sort resource rows" }),
+      { button: 0, ctrlKey: false, pointerType: "mouse" },
+    );
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Tab order" }));
+    // Tab order has no process meaning: fall back to the host's wire order.
+    expectBefore("alpha", "beta (1 sub-process)");
+  });
+
+  it("sorts the desktop process groups by the selected option", async () => {
+    const stub = installStubFactory();
+    Reflect.set(globalThis, "runnerHost", {
+      platform: {
+        diagnostics: {
+          getMetrics: vi.fn().mockResolvedValue({
+            appMetrics: [
+              {
+                pid: 10,
+                type: "Browser",
+                cpu: { percentCPUUsage: 0.5 },
+                memory: { workingSetSize: 100 * 1024 },
+              },
+              {
+                pid: 11,
+                type: "Tab",
+                cpu: { percentCPUUsage: 2 },
+                memory: { workingSetSize: 300 * 1024 },
+              },
+            ],
+          }),
+        },
+      },
+    });
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(projection({ app: app(), owners: [owner({})] }));
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    const renderer = await screen.findByText("Renderer");
+    const main = screen.getByText("Main");
+
+    // Default memory sort: the renderer (300 KB) outweighs the main
+    // process (100 KB), so the hardcoded Main-first order must not win.
+    expect(
+      renderer.compareDocumentPosition(main) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
+
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Sort resource rows" }),
+      { button: 0, ctrlKey: false, pointerType: "mouse" },
+    );
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Name" }));
+    expect(
+      screen
+        .getByText("Main")
+        .compareDocumentPosition(screen.getByText("Renderer")) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
+  });
+
   it("pins an expanded owner row beneath its sticky section header", () => {
     const stub = installStubFactory();
     render(

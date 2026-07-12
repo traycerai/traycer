@@ -11,11 +11,16 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { cn } from "@/lib/utils";
 import { WorkspaceFolderHoverList } from "./workspace-folder-hover-list";
 import { WorkspaceFolderRows } from "./workspace-folder-rows";
 import { WorkspaceModeIcon } from "./workspace-mode-icon";
-import type { WorkspaceRunItem } from "./workspace-run-item";
+import {
+  workspaceRunBranchSourceLabel,
+  type WorkspaceRunItem,
+} from "./workspace-run-item";
+import { WorkspaceBranchLabel } from "./workspace-branch-label";
 
 const NOOP = (): void => undefined;
 const NOOP_ADD = (): Promise<boolean> => Promise.resolve(false);
@@ -31,22 +36,28 @@ export function WorkspaceSummaryTrigger(
     readonly items: ReadonlyArray<WorkspaceRunItem>;
     readonly readOnly: boolean;
     readonly bindingResolved: boolean;
+    readonly tooltipEnabled: boolean;
     readonly ref?: Ref<HTMLButtonElement>;
   },
 ) {
   const { items, readOnly, bindingResolved, className, ref, ...rest } = props;
-  const primary = items.length === 0 ? null : items[0];
+  // Resolve by the marked `isPrimary` row, not array order: the host
+  // normalizes binding flags without reordering entries, so the collapsed
+  // chip must agree with the primary pin/row rather than always reading
+  // position 0.
+  const primary =
+    items.length === 0
+      ? null
+      : (items.find((item) => item.isPrimary) ?? items[0]);
   const extraCount = Math.max(0, items.length - 1);
   const anyMissing = items.some((item) => item.missing);
-  const title = summaryTitle(items, anyMissing, bindingResolved);
   const [readOnlyPopoverOpen, setReadOnlyPopoverOpen] = useState(false);
   const [readOnlyHoverOpen, setReadOnlyHoverOpen] = useState(false);
 
-  const trigger = (
+  const triggerButton = (
     <button
       type="button"
       ref={ref}
-      title={title}
       data-testid="workspace-summary-trigger"
       aria-disabled={readOnly && items.length === 0 ? true : undefined}
       className={cn(
@@ -76,8 +87,12 @@ export function WorkspaceSummaryTrigger(
           <span className="shrink-0 text-lg leading-none text-current/70">
             ·
           </span>
-          <span className="min-w-0 max-w-[min(44vw,18rem)] flex-1 truncate">
-            {primary.branchLabel}
+          <span className="flex min-w-0 max-w-[min(44vw,18rem)] flex-1">
+            <WorkspaceBranchLabel
+              target={primary.branchLabel}
+              source={workspaceRunBranchSourceLabel(primary.currentIntent)}
+              className={undefined}
+            />
           </span>
           {extraCount > 0 ? (
             <span className="shrink-0 rounded-md bg-muted/80 px-1.5 py-0.5 text-overline font-medium text-current">
@@ -88,6 +103,24 @@ export function WorkspaceSummaryTrigger(
       )}
       <ChevronDown className="size-3.5 shrink-0 text-current" />
     </button>
+  );
+  const trigger = props.tooltipEnabled ? (
+    <TooltipWrapper
+      label={
+        <WorkspaceSummaryTooltip
+          items={items}
+          anyMissing={anyMissing}
+          bindingResolved={bindingResolved}
+        />
+      }
+      side="top"
+      sideOffset={6}
+      align="start"
+    >
+      {triggerButton}
+    </TooltipWrapper>
+  ) : (
+    triggerButton
   );
 
   // Read-only (terminal-agent): hover keeps the compact preview; click expands
@@ -126,8 +159,9 @@ export function WorkspaceSummaryTrigger(
           side="bottom"
           align="start"
           collisionPadding={12}
-          className="w-fit max-w-[min(92vw,40rem)] max-h-[min(var(--radix-popover-content-available-height),32rem)] gap-0 overflow-y-auto p-3"
+          className="w-[min(92vw,42rem)] max-w-[var(--radix-popover-content-available-width)] max-h-[min(var(--radix-popover-content-available-height),32rem)] gap-0 overflow-y-auto p-3"
           data-testid="workspace-readonly-folders-popover"
+          onOpenAutoFocus={(event) => event.preventDefault()}
         >
           <WorkspaceFolderRows
             items={items}
@@ -152,20 +186,44 @@ export function WorkspaceSummaryTrigger(
   return trigger;
 }
 
-function summaryTitle(
-  items: ReadonlyArray<WorkspaceRunItem>,
-  anyMissing: boolean,
-  bindingResolved: boolean,
-): string {
-  if (anyMissing) {
-    return `A bound folder is missing on disk. ${items
-      .map((item) => item.hoverLabel)
-      .join("\n")}`;
+function WorkspaceSummaryTooltip(props: {
+  readonly items: ReadonlyArray<WorkspaceRunItem>;
+  readonly anyMissing: boolean;
+  readonly bindingResolved: boolean;
+}) {
+  if (props.items.length === 0) {
+    return props.bindingResolved ? "No workspace linked" : "Linking workspace…";
   }
-  if (items.length === 0) {
-    return bindingResolved ? "No workspace linked" : "Linking workspace…";
-  }
-  return items.map((item) => item.hoverLabel).join("\n");
+  return (
+    <span
+      className="flex max-w-[min(80vw,20rem)] flex-col gap-2 py-0.5"
+      data-testid="workspace-summary-tooltip"
+    >
+      {props.anyMissing ? (
+        <span className="text-background">
+          A bound folder is missing on disk.
+        </span>
+      ) : null}
+      {props.items.map((item) => {
+        const source = workspaceRunBranchSourceLabel(item.currentIntent);
+        return (
+          <span key={item.key} className="flex min-w-0 flex-col gap-0.5">
+            <span className="break-words font-medium text-background">
+              {item.displayName}
+            </span>
+            <span className="break-words text-background/75">
+              {item.branchLabel}
+            </span>
+            {source === null ? null : (
+              <span className="break-words text-background/55">
+                From {source}
+              </span>
+            )}
+          </span>
+        );
+      })}
+    </span>
+  );
 }
 
 function SummaryEmptyState(props: { readonly bindingResolved: boolean }) {

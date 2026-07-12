@@ -1,9 +1,9 @@
 import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
+import type { AccountContext } from "@traycer/protocol/common/schemas";
 import { subscribeChatTurnCompletions } from "@/lib/notifications/chat-turn-completion";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
-import { useAccountContextStore } from "@/stores/auth/account-context-store";
 import { queryKeys } from "@/lib/query-keys";
 
 /**
@@ -20,13 +20,14 @@ import { queryKeys } from "@/lib/query-keys";
  * Traycer turn even though a Traycer turn can't have changed a Codex/Claude
  * account's rate limits.
  *
- * Mounted by `RateLimitView` (rate-limit tiers only), mirroring
- * `useRefreshCreditsOnTraycerTurn`.
+ * Mounted by each `RateLimitView` (rate-limit tiers only) with its explicit
+ * account context, mirroring `useRefreshCreditsOnTraycerTurn`.
  */
-export function useRefreshRateLimitUsageOnTraycerTurn(): void {
+export function useRefreshRateLimitUsageOnTraycerTurn(
+  accountContext: AccountContext,
+): void {
   const queryClient = useQueryClient();
   const hostId = useReactiveActiveHostId();
-  const accountContext = useAccountContextStore((s) => s.accountContext);
 
   useEffect(() => {
     return subscribeChatTurnCompletions((completion) => {

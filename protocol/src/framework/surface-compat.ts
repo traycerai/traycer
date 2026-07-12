@@ -28,14 +28,23 @@ import {
  *   change that makes existing payloads unparseable (removed/renamed
  *   properties, required-set changes, removed enum values or union variants,
  *   structural type changes).
- * - **advisory** (reported, non-blocking): additive growth the codebase
- *   deliberately practices behind feature gating - new enum values, new
- *   union variants, and new stream methods. An old peer only meets these
- *   values when a flow it does not have triggers them; the risk is accepted
- *   and visible in the report rather than silently ignored.
+ * - **advisory** (reported, non-blocking): additive growth that cannot break a
+ *   released peer's strict decode of what it already receives - new stream
+ *   methods, and enum-value / union-variant additions on **client→host**
+ *   slots (`request`, `openRequest`, `clientFrame`). An old peer never emits
+ *   the new value; a new peer sending it to an old host fails per-call with
+ *   a clear upgrade path.
+ * - **breaking** (for additions): enum-value / union-variant additions at a
+ *   released negotiated version on **host→client** slots (`response`,
+ *   `serverFrame`) - catalogs and broadcast frames a released client
+ *   strict-decodes unconditionally. Fix by freezing the shipped line and
+ *   opening a new major with downgrade bridges that drop the new values
+ *   (amp 003d7586 / devin 407d110 template).
  *
- * Deliberate `breaking` tolerances are recorded in a reviewed exceptions
- * file, matched by exact finding coordinates.
+ * Paths that are deliberately catalog-gated (additive ids safe only because a
+ * negotiated catalog already gated the client) are encoded as static policy
+ * in `compat-exceptions.json` — id-agnostic method/path patterns, not a
+ * per-change review mechanism (see `compatExceptionsFileSchema`).
  *
  * Pure data-in/data-out - no registry imports - so a single checker built
  * from the PR tree can adjudicate surfaces dumped from arbitrary old tags.
@@ -90,20 +99,64 @@ export type SurfaceFamily = "unary" | "stream";
 
 export const compatExceptionSchema = z.object({
   family: z.enum(["unary", "stream"]),
+  /**
+   * Exact method name, or a narrow glob: `*` matches any characters within a
+   * single method-name segment (no `.`). Examples: `providers.set*`,
+   * `agent.gui.listModels`. Do not use a glob that would match the full
+   * catalog methods (`agent.gui.listHarnesses`, `agent.list`, `providers.list`)
+   * for host→client slots - those must always block (validated on load).
+   */
   method: z.string().min(1),
-  /** `"M.m"` version key the tolerated schema divergence lives at. */
+  /**
+   * `"M.m"` version key, or `"*"` to match any negotiated version.
+   */
   version: z.string().min(1),
   /** Payload slot: request/response (unary) or openRequest/serverFrame/clientFrame (stream). */
   payload: z.string().min(1),
-  /** Exact finding path, e.g. `properties.harnesses.items.enum`. */
+  /**
+   * Finding path glob. Path segments are `.`-separated with bracket depth
+   * respected (`anyOf[{...}]` is one segment). `*` matches one segment (and
+   * also works as a within-segment wildcard when the segment pattern itself
+   * contains `*`, e.g. `anyOf[*]`). `**` matches zero or more segments.
+   */
   path: z.string().min(1),
   reason: z.string().min(1),
 });
 export type CompatException = z.infer<typeof compatExceptionSchema>;
 
+/**
+ * Host→client catalog methods whose response (or equivalent) enum/union
+ * growth at a released version must NEVER be grandfathered. Adding an
+ * exception that matches these for host→client payloads is a load-time error.
+ */
+export const CATALOG_HOST_TO_CLIENT_METHODS = [
+  "agent.gui.listHarnesses",
+  "agent.list",
+  "providers.list",
+] as const;
+
+export const HOST_TO_CLIENT_PAYLOADS = [
+  "response",
+  "serverFrame",
+] as const;
+
+export const CLIENT_TO_HOST_PAYLOADS = [
+  "request",
+  "openRequest",
+  "clientFrame",
+] as const;
+
+// Widened readonly views so membership checks derive from the canonical
+// arrays above without duplicating literals or asserting tuple element types.
+const hostToClientPayloadNames: readonly string[] = HOST_TO_CLIENT_PAYLOADS;
+const clientToHostPayloadNames: readonly string[] = CLIENT_TO_HOST_PAYLOADS;
+const catalogHostToClientMethodNames: readonly string[] =
+  CATALOG_HOST_TO_CLIENT_METHODS;
+
 export const compatExceptionsFileSchema = z.object({
   exceptions: z.array(compatExceptionSchema),
 });
+export type CompatExceptionsFile = z.infer<typeof compatExceptionsFileSchema>;
 
 export type CompatSeverity = "fatal" | "blocking" | "breaking" | "advisory";
 
@@ -361,6 +414,192 @@ function stableStringify(value: unknown): string {
   return JSON.stringify(value);
 }
 
+
+/** True when this payload slot is host→client (unconditionally decoded by clients). */
+export function isHostToClientPayload(payload: string | null): boolean {
+  return payload !== null && hostToClientPayloadNames.includes(payload);
+}
+
+/** True when this payload slot is client→host. */
+export function isClientToHostPayload(payload: string | null): boolean {
+  return payload !== null && clientToHostPayloadNames.includes(payload);
+}
+
+/**
+ * Split a finding path into segments, treating `.` inside `[...]` as part of
+ * the segment (so `anyOf[{...nested...}]` is one segment).
+ */
+export function splitPathSegments(path: string): string[] {
+  const segments: string[] = [];
+  let current = "";
+  let depth = 0;
+  for (const char of path) {
+    if (char === "[") {
+      depth += 1;
+      current += char;
+      continue;
+    }
+    if (char === "]") {
+      depth = Math.max(0, depth - 1);
+      current += char;
+      continue;
+    }
+    if (char === "." && depth === 0) {
+      segments.push(current);
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  if (current.length > 0 || path.endsWith(".")) {
+    segments.push(current);
+  }
+  return segments;
+}
+
+function matchSegmentGlob(pattern: string, segment: string): boolean {
+  // Within a segment, `*` matches any characters (including empty).
+  let regex = "^";
+  for (let i = 0; i < pattern.length; i += 1) {
+    const char = pattern[i];
+    if (char === "*") {
+      regex += ".*";
+      continue;
+    }
+    if ("\\.^$+?()[]{}|".includes(char)) {
+      regex += `\\${char}`;
+      continue;
+    }
+    regex += char;
+  }
+  regex += "$";
+  return new RegExp(regex).test(segment);
+}
+
+/**
+ * Match a path against a glob. `*` = one segment (with within-segment `*`
+ * wildcards), `**` = zero or more segments.
+ */
+export function matchPathGlob(pattern: string, path: string): boolean {
+  const patternSegments = splitPathSegments(pattern);
+  const pathSegments = splitPathSegments(path);
+
+  function matchAt(pi: number, si: number): boolean {
+    if (pi === patternSegments.length) {
+      return si === pathSegments.length;
+    }
+    const pat = patternSegments[pi];
+    if (pat === "**") {
+      // Consume zero or more path segments.
+      if (pi === patternSegments.length - 1) return true;
+      for (let next = si; next <= pathSegments.length; next += 1) {
+        if (matchAt(pi + 1, next)) return true;
+      }
+      return false;
+    }
+    if (si === pathSegments.length) return false;
+    if (!matchSegmentGlob(pat, pathSegments[si])) return false;
+    return matchAt(pi + 1, si + 1);
+  }
+
+  return matchAt(0, 0);
+}
+
+/** Method name glob: `*` matches any run of characters that is not `.`. */
+export function matchMethodGlob(pattern: string, method: string): boolean {
+  let regex = "^";
+  for (const char of pattern) {
+    if (char === "*") {
+      regex += "[^.]*";
+      continue;
+    }
+    if ("\\.^$+?()[]{}|".includes(char)) {
+      regex += `\\${char}`;
+      continue;
+    }
+    regex += char;
+  }
+  regex += "$";
+  return new RegExp(regex).test(method);
+}
+
+export function matchVersionGlob(pattern: string, version: string | null): boolean {
+  if (pattern === "*") return true;
+  return pattern === version;
+}
+
+/**
+ * Whether an exception entry matches a finding. Uses method/path/version
+ * globs; family and payload must match exactly.
+ */
+export function exceptionMatchesFinding(
+  exception: CompatException,
+  finding: {
+    readonly family: SurfaceFamily;
+    readonly method: string;
+    readonly severity: CompatSeverity;
+    readonly version: string | null;
+    readonly payload: string | null;
+    readonly path: string | null;
+  },
+): boolean {
+  // Oracle-boundary hard rule: catalog host→client findings can never be
+  // excepted - not even by a hand-built exceptions array that never went
+  // through parseCompatExceptionsFile. Unrecognized payload slots count as
+  // host→client (fail closed).
+  if (
+    !isClientToHostPayload(finding.payload) &&
+    catalogHostToClientMethodNames.includes(finding.method)
+  ) {
+    return false;
+  }
+  if (exception.family !== finding.family) return false;
+  if (exception.payload !== finding.payload) return false;
+  if (finding.path === null) return false;
+  if (!matchMethodGlob(exception.method, finding.method)) return false;
+  if (!matchVersionGlob(exception.version, finding.version)) return false;
+  return matchPathGlob(exception.path, finding.path);
+}
+
+/**
+ * Reject exception files that would grandfather host→client catalog growth.
+ * Returns human-readable problems (empty = ok).
+ */
+export function validateCompatExceptions(
+  exceptions: readonly CompatException[],
+): string[] {
+  const problems: string[] = [];
+  for (const exception of exceptions) {
+    // Only known client→host slots are exempt from the catalog ban;
+    // unrecognized payload names count as host→client (fail closed).
+    if (isClientToHostPayload(exception.payload)) {
+      continue;
+    }
+    for (const catalogMethod of CATALOG_HOST_TO_CLIENT_METHODS) {
+      if (matchMethodGlob(exception.method, catalogMethod)) {
+        problems.push(
+          `exception method pattern ${JSON.stringify(exception.method)} matches catalog method ${catalogMethod} for host→client payload ${exception.payload} - catalog response growth must never be grandfathered`,
+        );
+      }
+    }
+  }
+  return problems;
+}
+
+export function parseCompatExceptionsFile(raw: unknown): CompatExceptionsFile {
+  const parsed = compatExceptionsFileSchema.parse(raw);
+  const problems = validateCompatExceptions(parsed.exceptions);
+  if (problems.length > 0) {
+    throw new Error(
+      `invalid compat-exceptions.json:\n${problems.map((p) => `  - ${p}`).join("\n")}`,
+    );
+  }
+  return parsed;
+}
+
+const HOST_TO_CLIENT_ADDITION_HINT =
+  "freeze the shipped line and open a new major with downgrade bridges that drop the new values (amp 003d7586 / devin 407d110 template); for genuinely catalog-gated growth on non-catalog methods, encode the path in protocol/scripts/compat/compat-exceptions.json";
+
 type SchemaDivergence = {
   readonly path: string;
   readonly detail: string;
@@ -389,6 +628,7 @@ function diffSchemasAtSameVersion(
   theirs: unknown,
   mine: unknown,
   path: string,
+  hostToClient: boolean,
 ): SchemaDivergence[] {
   if (isUnavailableSentinel(theirs) || isUnavailableSentinel(mine)) {
     // One side could not serialize this schema - nothing to compare. Layer-1
@@ -440,6 +680,7 @@ function diffSchemasAtSameVersion(
           theirObject.properties[property],
           mineObject.properties[property],
           propertyPath,
+          hostToClient,
         ),
       );
     }
@@ -470,6 +711,7 @@ function diffSchemasAtSameVersion(
       theirArray,
       mineArray,
       joinPath(path, "items"),
+      hostToClient,
     );
   }
 
@@ -485,6 +727,7 @@ function diffSchemasAtSameVersion(
             pair.theirs,
             pair.mine,
             joinPath(path, `anyOf[${pair.signature}]`),
+            hostToClient,
           ),
         );
       }
@@ -497,12 +740,21 @@ function diffSchemasAtSameVersion(
         });
       }
       for (const signature of matched.addedInMine) {
-        divergences.push({
-          path: joinPath(path, `anyOf[${signature}]`),
-          severity: "advisory",
-          detail:
-            "union variant added at a released version - safe only while feature-gated (released peers fail to parse payloads that carry it)",
-        });
+        if (hostToClient) {
+          divergences.push({
+            path: joinPath(path, `anyOf[${signature}]`),
+            severity: "breaking",
+            detail:
+              `union variant added at a released version on a host→client slot - a released client strict-decodes this frame and will fail; ${HOST_TO_CLIENT_ADDITION_HINT}`,
+          });
+        } else {
+          divergences.push({
+            path: joinPath(path, `anyOf[${signature}]`),
+            severity: "advisory",
+            detail:
+              "union variant added at a released version on a client→host slot - safe only while feature-gated (old hosts reject per-call when a new client emits the value)",
+          });
+        }
       }
       return divergences;
     }
@@ -533,11 +785,19 @@ function diffSchemasAtSameVersion(
     const removed = [...theirSet].filter((value) => !mineSet.has(value));
     const divergences: SchemaDivergence[] = [];
     if (added.length > 0) {
-      divergences.push({
-        path: joinPath(path, "enum"),
-        severity: "advisory",
-        detail: `enum values added at a released version (${added.join(", ")}) - safe only while feature-gated (released peers fail to parse payloads that carry them)`,
-      });
+      if (hostToClient) {
+        divergences.push({
+          path: joinPath(path, "enum"),
+          severity: "breaking",
+          detail: `enum values added at a released version on a host→client slot (${added.join(", ")}) - a released client strict-decodes this payload and will fail; ${HOST_TO_CLIENT_ADDITION_HINT}`,
+        });
+      } else {
+        divergences.push({
+          path: joinPath(path, "enum"),
+          severity: "advisory",
+          detail: `enum values added at a released version on a client→host slot (${added.join(", ")}) - safe only while feature-gated (old hosts reject per-call when a new client emits the value)`,
+        });
+      }
     }
     if (removed.length > 0) {
       divergences.push({
@@ -661,6 +921,9 @@ function checkFamily(
           theirSlots[slot],
           mineSlots[slot],
           "",
+          // Only known client→host slots get the lenient branch;
+          // unrecognized slots are treated as host→client (fail closed).
+          !isClientToHostPayload(slot),
         )) {
           pushFinding({
             family,
@@ -852,6 +1115,9 @@ function checkOptionalUnary(
           theirSlots[slot],
           mineSlots[slot],
           "",
+          // Only known client→host slots get the lenient branch;
+          // unrecognized slots are treated as host→client (fail closed).
+          !isClientToHostPayload(slot),
         )) {
           pushFinding({
             family: "unary",
@@ -883,13 +1149,8 @@ export function checkSurfaceCompatibility(args: {
 }): SurfaceCompatibilityResult {
   const isExcepted = (finding: Omit<CompatFinding, "excepted">): boolean =>
     finding.severity === "breaking" &&
-    args.exceptions.some(
-      (exception) =>
-        exception.family === finding.family &&
-        exception.method === finding.method &&
-        exception.version === finding.version &&
-        exception.payload === finding.payload &&
-        exception.path === finding.path,
+    args.exceptions.some((exception) =>
+      exceptionMatchesFinding(exception, finding),
     );
 
   const findings = [

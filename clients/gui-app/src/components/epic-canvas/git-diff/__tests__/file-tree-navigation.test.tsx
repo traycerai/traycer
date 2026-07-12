@@ -32,6 +32,10 @@ vi.mock("@pierre/trees/react", () => ({
       Git file tree
     </button>
   ),
+  useFileTreeSelector: (
+    model: object,
+    selector: (currentModel: object) => number,
+  ) => selector(model),
 }));
 
 vi.mock("../git-diff-section", () => ({
@@ -52,8 +56,11 @@ vi.mock("../use-git-pierre-file-tree-model", () => ({
     model: {
       getSelectedPaths: () => [],
       getItem: () => null,
+      getItemHeight: () => 24,
       scrollToPath: () => undefined,
     },
+    paths: files.map((file) => file.path),
+    rowDirectoryPaths: ["src"],
   }),
 }));
 

@@ -7,16 +7,16 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type { WorktreeHostEntryV11 } from "@traycer/protocol/host/index";
+import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/index";
 import { WorktreesList } from "@/components/settings/panels/worktrees-settings-panel";
 import { installWorktreeVirtualizerOffsetHeight } from "./worktrees-virtualizer-test-utils";
 
 function entry(
-  over: Partial<WorktreeHostEntryV11> & {
+  over: Partial<WorktreeHostEntryV12> & {
     worktreePath: string;
     branch: string;
   },
-): WorktreeHostEntryV11 {
+): WorktreeHostEntryV12 {
   return {
     repoLabel: "acme/app",
     repoIdentifier: { owner: "acme", repo: "app" },
@@ -53,7 +53,7 @@ afterEach(() => {
 });
 
 function renderSingleRow(
-  overrides: Partial<WorktreeHostEntryV11> & {
+  overrides: Partial<WorktreeHostEntryV12> & {
     worktreePath: string;
     branch: string;
   },

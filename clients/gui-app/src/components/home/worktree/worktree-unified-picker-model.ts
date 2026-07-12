@@ -49,7 +49,7 @@ export interface UnifiedPickerSourceOption {
    * clean fork and so needs a distinct id ({@link WORKING_TREE_SOURCE_ID}).
    */
   readonly id: string;
-  /** The branch this forks from (→ `branch.source` and the label base). */
+  /** The branch this forks from (→ `branch.source` and secondary source context). */
   readonly name: string;
   readonly label: string;
   /** Snapshots the source's uncommitted WIP into the new worktree. Only ever
