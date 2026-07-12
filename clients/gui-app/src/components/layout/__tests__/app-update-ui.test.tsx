@@ -35,7 +35,7 @@ type ToastOptions = {
   description?: ReactNode;
   duration?: number;
   action?: ToastAction;
-  cancel?: ToastAction;
+  cancel?: ToastAction | null;
 };
 
 type ToastCall = (
@@ -243,6 +243,7 @@ describe("desktop app update UI", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     useDesktopDialogStore.getState().close();
+    useDesktopDialogStore.setState({ reportIssueAvailable: false });
   });
 
   afterEach(() => {
@@ -478,7 +479,12 @@ describe("desktop app update UI", () => {
     await waitFor(() => {
       expect(toastMock.info).toHaveBeenCalledWith(
         "Checking for Traycer updates...",
-        { id: "traycer-app-update", description: null, duration: 4000 },
+        {
+          id: "traycer-app-update",
+          description: null,
+          duration: 4000,
+          cancel: null,
+        },
       );
     });
 
@@ -515,7 +521,7 @@ describe("desktop app update UI", () => {
       throw new Error("Expected update available toast content");
     }
     expect(options.action).toBeUndefined();
-    expect(options.cancel).toBeUndefined();
+    expect(options.cancel).toBeNull();
     render(<>{message}</>);
     screen.getByText("Update available");
     screen.getByText("Version 1.2.3 is ready to download.");
@@ -639,7 +645,7 @@ describe("desktop app update UI", () => {
       throw new Error("Expected update ready toast content");
     }
     expect(options.action).toBeUndefined();
-    expect(options.cancel).toBeUndefined();
+    expect(options.cancel).toBeNull();
     render(<>{message}</>);
     screen.getByText("Update ready to install");
     screen.getByText("Restart Traycer to finish updating.");
@@ -687,6 +693,7 @@ describe("desktop app update UI", () => {
   });
 
   it("offers a Report an issue action that opens the report dialog on error", async () => {
+    useDesktopDialogStore.setState({ reportIssueAvailable: true });
     const bridge = new FakeAppUpdatesBridge(IDLE_SNAPSHOT);
     renderWithHost(<AppUpdateToastController />, bridge);
     await waitFor(() => {
@@ -711,7 +718,7 @@ describe("desktop app update UI", () => {
       throw new Error("Expected update error toast options");
     }
     expect(options.action).toBeUndefined();
-    expect(options.cancel).toBeUndefined();
+    expect(options.cancel).toBeNull();
     render(<>{options.description}</>);
     screen.getByText(
       "Traycer couldn't reach the update service right now. Please try again in a little while.",
@@ -722,9 +729,16 @@ describe("desktop app update UI", () => {
     expect(useDesktopDialogStore.getState().activeDialog).toBeNull();
     fireEvent.click(reportButton);
     expect(useDesktopDialogStore.getState().activeDialog).toBe("report-issue");
+    expect(useDesktopDialogStore.getState().reportIssueContext).toEqual({
+      title: "Could not update Traycer",
+      message: null,
+      code: null,
+      source: "App update",
+    });
   });
 
   it("offers View instructions alongside Report an issue when a live install failure has guidance", async () => {
+    useDesktopDialogStore.setState({ reportIssueAvailable: true });
     const bridge = new FakeAppUpdatesBridge(IDLE_SNAPSHOT);
     renderWithHost(<AppUpdateToastController />, bridge);
     await waitFor(() => {
@@ -749,12 +763,75 @@ describe("desktop app update UI", () => {
     const viewInstructions = screen.getByRole("button", {
       name: "View instructions",
     });
-    screen.getByRole("button", { name: "Report an issue" });
+    const reportIssue = screen.getByRole("button", {
+      name: "Report an issue",
+    });
+    expect(viewInstructions.getAttribute("data-variant")).toBe("default");
+    expect(reportIssue.getAttribute("data-variant")).toBe("secondary");
     expect(useDesktopDialogStore.getState().activeDialog).toBeNull();
     fireEvent.click(viewInstructions);
     expect(useDesktopDialogStore.getState().activeDialog).toBe(
       "install-guidance",
     );
+  });
+
+  it("does not offer reporting when the support capability is unavailable", async () => {
+    const bridge = new FakeAppUpdatesBridge(IDLE_SNAPSHOT);
+    renderWithHost(<AppUpdateToastController />, bridge);
+    await waitFor(() => {
+      expect(bridge.subscriptionCount()).toBe(1);
+    });
+
+    act(() => {
+      bridge.emit(errorSnapshot(1));
+    });
+    await waitFor(() => {
+      expect(toastMock.error).toHaveBeenCalled();
+    });
+
+    const [, options] = toastMock.error.mock.lastCall ?? [];
+    if (options === undefined) {
+      throw new Error("Expected update error toast options");
+    }
+    render(<>{options.description}</>);
+
+    screen.getByText(
+      "Traycer couldn't reach the update service right now. Please try again in a little while.",
+    );
+    expect(
+      screen.queryByRole("button", { name: "Report an issue" }),
+    ).toBeNull();
+  });
+
+  it("updates the current error toast when reporting becomes available", async () => {
+    const bridge = new FakeAppUpdatesBridge(IDLE_SNAPSHOT);
+    renderWithHost(<AppUpdateToastController />, bridge);
+    await waitFor(() => {
+      expect(bridge.subscriptionCount()).toBe(1);
+    });
+
+    act(() => {
+      bridge.emit(errorSnapshot(1));
+    });
+    await waitFor(() => {
+      expect(toastMock.error).toHaveBeenCalledTimes(1);
+    });
+
+    act(() => {
+      useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    });
+    await waitFor(() => {
+      expect(toastMock.error).toHaveBeenCalledTimes(2);
+    });
+
+    const [, options] = toastMock.error.mock.lastCall ?? [];
+    if (options === undefined) {
+      throw new Error("Expected update error toast options");
+    }
+    render(<>{options.description}</>);
+    expect(
+      screen.getByRole("button", { name: "Report an issue" }),
+    ).not.toBeNull();
   });
 
   it("does not replay stale manual-check results in a newly opened window", async () => {

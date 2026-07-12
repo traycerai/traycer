@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -14,6 +21,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/index";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 
 // `WorktreesSettingsPanel` sits above `WorktreesList` (covered exhaustively by
 // `worktrees-settings-panel.test.tsx`) and owns the host-scoped states from
@@ -152,6 +160,11 @@ afterEach(() => {
     restoreOffsetHeight();
   }
   restoreOffsetHeight = null;
+  useDesktopDialogStore.setState({
+    activeDialog: null,
+    reportIssueAvailable: false,
+    reportIssueContext: null,
+  });
 });
 
 describe("WorktreesSettingsPanel host-scoped states", () => {
@@ -230,6 +243,75 @@ describe("WorktreesSettingsPanel host-scoped states", () => {
     });
     const refresh = screen.getByRole("button", { name: "Refresh worktrees" });
     expect(refresh.hasAttribute("disabled")).toBe(false);
+  });
+
+  it("gates the partial-listing report action on capability and reports only fixed generic context", async () => {
+    state.hosts = [host({ hostId: "host-a" })];
+    state.activeHostId = "host-a";
+    const cleanWorktree = {
+      repoLabel: "acme/app",
+      repoIdentifier: { owner: "acme", repo: "app" },
+      worktreePath: "/wt/clean",
+      branch: "feat-clean",
+      inUse: false,
+      uncommittedCount: 0,
+      gitRemovable: true,
+      scripts: null,
+      owners: [],
+      lastActivityAt: null,
+      branchStatus: null,
+      createdAt: null,
+      prState: null,
+      prNumber: null,
+      prUrl: null,
+      mergedHeadShaMatches: false,
+      submodules: [],
+      atBaseCommit: false,
+    } satisfies WorktreeHostEntryV12;
+    let call = 0;
+    state.client = clientWithHandler(() => {
+      call += 1;
+      if (call === 1) {
+        return { worktrees: [cleanWorktree], nextCursor: "cursor-2" };
+      }
+      throw new HostRpcError({
+        code: "RPC_ERROR",
+        message: "secret-token-should-never-render",
+        requestId: "req-partial",
+        method: "worktree.listAllForHost",
+        fatalDetails: null,
+      });
+    });
+    state.enrichment = {
+      enrichedByPath: new Map([["/wt/clean", cleanWorktree]]),
+      erroredPaths: new Set(),
+      reportVisiblePaths: vi.fn(),
+      enriching: false,
+    };
+
+    renderPanel();
+
+    await waitFor(() => {
+      screen.getByRole("status");
+    });
+    // Capability-gated off by default.
+    expect(screen.queryByRole("button", { name: "Report issue" })).toBeNull();
+
+    act(() => {
+      useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
+    // The report draft carries only fixed generic context - never the raw
+    // host error message threaded through the banner's own visible copy.
+    expect(useDesktopDialogStore.getState()).toMatchObject({
+      activeDialog: "report-issue",
+      reportIssueContext: {
+        title: "Some worktrees could not be loaded",
+        message: null,
+        code: null,
+        source: "Worktrees",
+      },
+    });
   });
 
   it("says nothing was created when the host's list is empty", async () => {

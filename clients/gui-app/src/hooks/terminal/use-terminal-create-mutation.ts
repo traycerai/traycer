@@ -3,7 +3,6 @@ import {
   useQueryClient,
   type UseMutationResult,
 } from "@tanstack/react-query";
-import { toast } from "sonner";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { HostRpcError as HostRpcErrorCtor } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -13,6 +12,7 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys, terminalMutationKeys } from "@/lib/query-keys";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
 interface CreateTerminalMutationContext {
   readonly hostId: string | null;
@@ -59,6 +59,12 @@ export function useTerminalCreate(
         queryKey: hostQueryKeys.methodScope(ctx.hostId, "terminal.list"),
       });
     },
-    onError: (error) => toast.error(error.message),
+    onError: (error) =>
+      reportableErrorToast(error.message, undefined, {
+        title: "Could not create terminal",
+        message: null,
+        code: null,
+        source: "Terminal",
+      }),
   });
 }

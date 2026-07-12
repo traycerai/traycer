@@ -1,5 +1,6 @@
-import { toast } from "sonner";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { createReportIssueContext } from "@/lib/report-issue-context";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
 /**
  * Maps a HostRpcError to the appropriate toast copy mandated by the
@@ -12,14 +13,34 @@ export function toastFromHostError(
   error: HostRpcError,
   fallback: string,
 ): void {
-  toast.error(hostErrorToastMessage(error, fallback));
+  const message = hostErrorToastMessage(error, fallback);
+  reportableErrorToast(
+    message,
+    undefined,
+    createReportIssueContext({
+      title: "Host operation failed",
+      message: null,
+      code: error.code,
+      source: "Host",
+    }),
+  );
 }
 
 export function toastFromHostErrorWithDetail(
   error: HostRpcError,
   fallback: string,
 ): void {
-  toast.error(hostErrorToastMessageWithDetail(error, fallback));
+  const message = hostErrorToastMessageWithDetail(error, fallback);
+  reportableErrorToast(
+    message,
+    undefined,
+    createReportIssueContext({
+      title: "Host operation failed",
+      message: null,
+      code: error.code,
+      source: "Host",
+    }),
+  );
 }
 
 function hostErrorToastMessage(error: HostRpcError, fallback: string) {

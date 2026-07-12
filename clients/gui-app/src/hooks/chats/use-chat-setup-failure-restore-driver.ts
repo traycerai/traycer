@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { toast } from "sonner";
 import { useStore } from "zustand";
 import { selectRestorableSetupInterruption } from "@/stores/chats/chat-session-selectors";
 import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
 /**
  * Drives the "restore-to-composer" half of Flow 8 for chats.
@@ -96,7 +96,16 @@ export function useChatSetupFailureRestoreDriver(
       (interruption.workspacePath === null ||
         interruption.workspacePath.length === 0)
     ) {
-      toast.error("Setup failed before the first message could run.");
+      reportableErrorToast(
+        "Setup failed before the first message could run.",
+        undefined,
+        {
+          title: "Workspace setup failed",
+          message: "Setup failed before the first message could run.",
+          code: null,
+          source: "Chat setup",
+        },
+      );
     }
   }, [dedupe, interruption, handle.store, nodeId, replaceDraft]);
 }

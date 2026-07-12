@@ -1,5 +1,7 @@
 import { AlertTriangleIcon } from "lucide-react";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 
 interface GitErrorBlockProps {
   readonly error: HostRpcError;
@@ -13,6 +15,16 @@ export function GitErrorBlock(props: GitErrorBlockProps) {
       <p className="text-sm text-muted-foreground">
         {props.error.message || "An error occurred while loading the diff"}
       </p>
+      <ReportIssueAction
+        context={createReportIssueContext({
+          title: "Diff loading error",
+          message: "The Git diff could not be loaded.",
+          code: props.error.code,
+          source: "Git changes",
+        })}
+        presentation="text"
+        className={undefined}
+      />
     </div>
   );
 }

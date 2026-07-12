@@ -4,11 +4,11 @@ import {
   type ClipboardEvent,
   type DragEvent,
 } from "react";
-import { toast } from "sonner";
 import type { Editor } from "@tiptap/core";
 import { v4 as uuidv4 } from "uuid";
 
 import type { ImageAttachmentAttrs } from "@/components/chat/composer/editor/extensions/image-attachment-extension";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
 export const IMAGE_MIME_PREFIX = "image/";
 export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
@@ -36,9 +36,18 @@ export function collectImages(files: ReadonlyArray<File>): File[] {
   for (const file of files) {
     if (!file.type.startsWith(IMAGE_MIME_PREFIX)) continue;
     if (file.size > MAX_IMAGE_BYTES) {
-      toast.error("Image too large", {
-        description: `${file.name || "Image"} exceeds the 5MB limit.`,
-      });
+      reportableErrorToast(
+        "Image too large",
+        {
+          description: `${file.name || "Image"} exceeds the 5MB limit.`,
+        },
+        {
+          title: "Image exceeded the size limit",
+          message: null,
+          code: null,
+          source: "Chat composer",
+        },
+      );
       continue;
     }
     accepted.push(file);

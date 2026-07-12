@@ -1,13 +1,32 @@
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import type { MouseEvent as ReactMouseEvent, ReactNode } from "react";
+import type { ExternalToast } from "sonner";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 import { TraycerMarkdown } from "@/markdown";
 import { classifyHref } from "@/markdown/links/classify-href";
 import { markdownUrlTransform } from "@/markdown/links/markdown-url-transform";
 import { MarkdownLinkContext } from "@/markdown/links/markdown-link-context";
+import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 
-afterEach(cleanup);
+const neutralToast = vi.hoisted(() =>
+  vi.fn<(message: ReactNode, options: ExternalToast | undefined) => string>(
+    () => "toast-id",
+  ),
+);
+
+vi.mock("sonner", () => ({ toast: neutralToast }));
+
+afterEach(() => {
+  cleanup();
+  neutralToast.mockClear();
+  useDesktopDialogStore.setState({
+    activeDialog: null,
+    reportIssueAvailable: false,
+    reportIssueContext: null,
+  });
+});
 
 function createRunnerHost(): MockRunnerHost {
   return new MockRunnerHost({
@@ -99,6 +118,55 @@ describe("MarkdownAnchor", () => {
       isDirectory: false,
     });
     expect(host.openedExternalLinks).toEqual([]);
+  });
+
+  it("keeps an unresolved-link toast neutral and reports only fixed context", () => {
+    const host = createRunnerHost();
+    const openFileLink = vi.fn(() => false);
+    useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    render(
+      <RunnerHostContext.Provider value={host}>
+        <MarkdownLinkContext.Provider value={{ openFileLink }}>
+          <TraycerMarkdown
+            className={null}
+            proseSize="normal"
+            components={null}
+            remarkPlugins={null}
+            rehypePlugins={null}
+            quotable={false}
+            isStreaming={false}
+          >
+            {"[Private file](/Users/me/private/api-key.txt)"}
+          </TraycerMarkdown>
+        </MarkdownLinkContext.Provider>
+      </RunnerHostContext.Provider>,
+    );
+
+    fireEvent.click(screen.getByRole("link", { name: "Private file" }));
+
+    const options = readNeutralToastOptions();
+    const cancel = options.cancel;
+    if (
+      typeof cancel !== "object" ||
+      cancel === null ||
+      !("onClick" in cancel)
+    ) {
+      throw new Error("Expected a report issue action.");
+    }
+    cancel.onClick({} as ReactMouseEvent<HTMLButtonElement>);
+
+    expect(neutralToast).toHaveBeenCalledTimes(1);
+    expect(neutralToast.mock.lastCall?.[0]).toBe("Couldn't open link");
+    expect(cancel.label).toBe("Report issue");
+    expect(useDesktopDialogStore.getState().reportIssueContext).toEqual({
+      title: "Markdown link could not be opened",
+      message: "The requested markdown link could not be opened.",
+      code: null,
+      source: "Markdown link",
+    });
+    expect(JSON.stringify(neutralToast.mock.lastCall)).not.toContain(
+      "/Users/me/private/api-key.txt",
+    );
   });
 
   it("decodes file URLs before routing them through the surface policy", () => {
@@ -205,6 +273,14 @@ describe("MarkdownAnchor", () => {
     expect(host.openedExternalLinks).toEqual([]);
   });
 });
+
+function readNeutralToastOptions(): ExternalToast {
+  const call = neutralToast.mock.lastCall;
+  if (call === undefined || call[1] === undefined) {
+    throw new Error("Expected neutral toast options.");
+  }
+  return call[1];
+}
 
 // The real render order: react-markdown runs `markdownUrlTransform` on the
 // href first, then the anchor classifies the result. Driving the drive-letter

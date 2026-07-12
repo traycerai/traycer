@@ -1,9 +1,45 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { MouseEvent as ReactMouseEvent, ReactNode } from "react";
+import type { ExternalToast } from "sonner";
+
+const toastWarning = vi.hoisted(() =>
+  vi.fn<(message: ReactNode, options: ExternalToast | undefined) => string>(
+    () => "warning-toast",
+  ),
+);
+
+vi.mock("sonner", () => ({
+  toast: {
+    success: vi.fn(),
+    warning: toastWarning,
+    error: vi.fn(),
+  },
+}));
+
 import {
   deletedEpicSuccessToastMessage,
+  emitEpicDeleteToast,
   pickNeighborAfterDeletingEpics,
 } from "@/hooks/epic/use-epic-batch-delete-mutation";
+import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import type { HeaderTab } from "@/stores/tabs/types";
+
+beforeEach(() => {
+  toastWarning.mockClear();
+  useDesktopDialogStore.setState({
+    activeDialog: null,
+    reportIssueAvailable: false,
+    reportIssueContext: null,
+  });
+});
+
+afterEach(() => {
+  useDesktopDialogStore.setState({
+    activeDialog: null,
+    reportIssueAvailable: false,
+    reportIssueContext: null,
+  });
+});
 
 function epicTab(id: string, epicId: string): HeaderTab {
   return {
@@ -149,3 +185,48 @@ describe("deletedEpicSuccessToastMessage", () => {
     ).toBe("2 epics deleted");
   });
 });
+
+describe("emitEpicDeleteToast", () => {
+  it("keeps partial deletions as warnings with fixed report context", () => {
+    useDesktopDialogStore.setState({ reportIssueAvailable: true });
+
+    emitEpicDeleteToast("warning", "Deleted 1 of 2; 1 failed.");
+
+    expect(toastWarning.mock.lastCall?.[0]).toBe("Deleted 1 of 2; 1 failed.");
+    expect(readWarningOptions().cancel).toMatchObject({
+      label: "Report issue",
+    });
+    clickWarningReportAction();
+    expect(useDesktopDialogStore.getState().reportIssueContext).toEqual({
+      title: "Epic deletion incomplete",
+      message: null,
+      code: null,
+      source: "Epic deletion",
+    });
+    expect(
+      JSON.stringify(useDesktopDialogStore.getState().reportIssueContext),
+    ).not.toMatch(/epic-[a-z0-9]+|Customer onboarding|Deleted 1 of 2/);
+  });
+
+  it("does not expose reporting when the capability is unavailable", () => {
+    emitEpicDeleteToast("warning", "Deleted 1 of 2; 1 failed.");
+
+    expect(toastWarning).toHaveBeenCalledWith("Deleted 1 of 2; 1 failed.");
+  });
+});
+
+function clickWarningReportAction(): void {
+  const cancel = readWarningOptions().cancel;
+  if (typeof cancel !== "object" || cancel === null || !("onClick" in cancel)) {
+    throw new Error("Expected a warning report action.");
+  }
+  cancel.onClick({} as ReactMouseEvent<HTMLButtonElement>);
+}
+
+function readWarningOptions(): ExternalToast {
+  const options = toastWarning.mock.lastCall?.[1];
+  if (options === undefined) {
+    throw new Error("Expected warning toast options.");
+  }
+  return options;
+}

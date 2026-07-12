@@ -45,7 +45,6 @@ import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import { getHostBindingSnapshot } from "@/lib/host/runtime";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { toastFromHostError } from "@/lib/host-error-toast";
-import { toast } from "sonner";
 import { useInlineRename } from "@/hooks/ui/use-inline-rename";
 import { updateEpicTitleInCloudTaskCaches } from "@/lib/cloud-epic-tasks-query/cache";
 import { useTabLeaderModifierForIndex } from "@/providers/keybinding-context";
@@ -65,6 +64,7 @@ import {
   useEpicActivityStatus,
   type EpicActivityStatus,
 } from "@/hooks/epic/use-epic-activity-status";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
 const TAB_CLASS_BASE =
   "group/tab relative flex h-10 w-full min-w-0 items-center gap-1.5 px-[clamp(0.75rem,10%,1.5rem)] text-ui-sm transition-[color,transform] duration-300 ease-spring";
@@ -177,7 +177,16 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
       const binding = getHostBindingSnapshot();
       if (binding === null) {
         rollback();
-        toast.error("Couldn't reach the host to rename the epic.");
+        reportableErrorToast(
+          "Couldn't reach the host to rename the epic.",
+          undefined,
+          {
+            title: "Could not rename Epic",
+            message: "The host was unavailable.",
+            code: null,
+            source: "Epic tabs",
+          },
+        );
         return;
       }
       const hostId = binding.hostClient.getActiveHostId();
@@ -201,7 +210,12 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
             if (error instanceof HostRpcError) {
               toastFromHostError(error, "Couldn't rename epic.");
             } else {
-              toast.error("Couldn't rename epic.");
+              reportableErrorToast("Couldn't rename epic.", undefined, {
+                title: "Could not rename Epic",
+                message: null,
+                code: null,
+                source: "Epic tabs",
+              });
             }
           },
         );

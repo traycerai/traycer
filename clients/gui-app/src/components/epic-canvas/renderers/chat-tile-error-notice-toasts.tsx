@@ -8,6 +8,18 @@ import {
   type ChatSessionStoreHandle,
   type DeliveredNoticeTracker,
 } from "@/stores/chats/chat-session-store";
+import { createReportIssueContext } from "@/lib/report-issue-context";
+import {
+  reportableErrorToast,
+  reportableWarningToast,
+} from "@/lib/reportable-error-toast";
+
+const CHAT_ACTION_REPORT_CONTEXT = createReportIssueContext({
+  title: "Chat action failed",
+  message: null,
+  code: null,
+  source: "Chat",
+});
 
 interface ChatTileErrorNoticeToastsProps {
   readonly handle: ChatSessionStoreHandle;
@@ -62,11 +74,11 @@ function rememberErrorNotice(
 function showErrorNoticeToast(notice: ChatErrorNotice): void {
   const message = notice.message.length > 0 ? notice.message : "Action failed.";
   if (notice.severity === "error") {
-    toast.error(message);
+    reportableErrorToast(message, undefined, CHAT_ACTION_REPORT_CONTEXT);
     return;
   }
   if (notice.severity === "warning") {
-    toast.warning(message);
+    reportableWarningToast(message, undefined, CHAT_ACTION_REPORT_CONTEXT);
     return;
   }
   toast(message);

@@ -6,6 +6,7 @@ import { readMermaidPalette } from "@/editor-core/nodes/mermaid/mermaid-theme";
 import { saveBlobToDisk } from "@/lib/files/save-blob-to-disk";
 import { appLogger } from "@/lib/logger";
 import { runnerMutationKeys } from "@/lib/query-keys";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
 export interface UseMermaidPngDownloadParams {
   readonly svg: string;
@@ -46,7 +47,12 @@ export function useMermaidPngDownload(
     },
     onError: (err) => {
       appLogger.errorSummary("[mermaid] download failed", {}, err);
-      toast.error("Failed to download diagram");
+      reportableErrorToast("Failed to download diagram", undefined, {
+        title: "Could not download diagram",
+        message: null,
+        code: null,
+        source: "Mermaid diagram",
+      });
     },
   });
 

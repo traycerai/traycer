@@ -50,7 +50,7 @@ import {
   planHeadline,
 } from "./plan-display";
 import { cn } from "@/lib/utils";
-import { toast } from "sonner";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
 interface PlanSegmentProps {
   readonly segment: PlanSegmentModel;
@@ -69,7 +69,12 @@ const STATUS_ICONS: Record<PlanSegmentModel["planStatus"], LucideIcon> = {
 };
 
 const handleCopyError = (): void => {
-  toast.error("Couldn't copy to clipboard.");
+  reportableErrorToast("Couldn't copy to clipboard.", undefined, {
+    title: "Could not copy to clipboard",
+    message: null,
+    code: null,
+    source: "Clipboard",
+  });
 };
 
 export function PlanSegment(props: PlanSegmentProps) {

@@ -4,6 +4,8 @@ import type { WorktreeDeletePhase } from "@traycer/protocol/host/worktree-delete
 import type { WorktreeHostEntry } from "@traycer/protocol/host/index";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 import { cn } from "@/lib/utils";
 import type {
   LogSegment,
@@ -37,6 +39,7 @@ export function WorktreeDeleteProgressModal(
   const { target, run, onClose } = props;
   const inProgress = run.status === "queued" || run.status === "running";
   const branch = target.branch ?? "detached HEAD";
+  const errorMessage = errorMessageFor(run);
 
   const steps: StepDefinition[] = run.hasTeardown
     ? [
@@ -83,13 +86,23 @@ export function WorktreeDeleteProgressModal(
         ))}
       </ol>
 
-      {errorMessageFor(run) !== null ? (
-        <p
+      {errorMessage !== null ? (
+        <div
           data-testid="worktree-delete-error"
-          className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-ui-sm wrap-anywhere text-destructive"
+          className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-ui-sm wrap-anywhere text-destructive"
         >
-          {errorMessageFor(run)}
-        </p>
+          <span className="min-w-0 flex-1">{errorMessage}</span>
+          <ReportIssueAction
+            context={createReportIssueContext({
+              title: "Could not delete worktree",
+              message: null,
+              code: null,
+              source: "Worktrees",
+            })}
+            presentation="icon"
+            className="-my-1 shrink-0 text-current"
+          />
+        </div>
       ) : null}
     </output>
   );

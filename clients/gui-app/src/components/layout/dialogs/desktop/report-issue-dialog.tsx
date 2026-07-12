@@ -1,7 +1,6 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Bug } from "lucide-react";
 import { useMutation } from "@tanstack/react-query";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -18,8 +17,10 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { cn } from "@/lib/utils";
 import { buildGitHubIssueUrl } from "@traycer-clients/shared/support/issue-reporter";
 import { runnerMutationKeys } from "@/lib/query-keys";
+import type { ReportIssueContext } from "@/lib/report-issue-context";
 import type { DesktopSupportSnapshot } from "@/lib/windows/types";
 import { useRunnerHost } from "@/providers/use-runner-host";
+import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import type { DesktopSupportDialogProps } from "./types";
 
 interface ReportIssueForm {
@@ -30,6 +31,12 @@ interface ReportIssueForm {
   actualBehavior: string;
 }
 
+interface ReportIssueSubmission {
+  readonly draftId: number;
+  readonly form: ReportIssueForm;
+  readonly snapshot: DesktopSupportSnapshot | null;
+}
+
 const EMPTY_FORM: ReportIssueForm = {
   title: "",
   whatHappened: "",
@@ -38,11 +45,20 @@ const EMPTY_FORM: ReportIssueForm = {
   actualBehavior: "",
 };
 
-export function ReportIssueDialog(props: DesktopSupportDialogProps): ReactNode {
-  const { onOpenChange, open, support } = props;
+export function ReportIssueDialog(
+  props: DesktopSupportDialogProps & { readonly draftId: number },
+): ReactNode {
+  const { draftId, onOpenChange, open, support } = props;
   const runnerHost = useRunnerHost();
-  const [form, setForm] = useState<ReportIssueForm>(EMPTY_FORM);
+  const context = useDesktopDialogStore((state) => state.reportIssueContext);
+  const closeReportIssueDraft = useDesktopDialogStore(
+    (state) => state.closeReportIssueDraft,
+  );
+  const [form, setForm] = useState<ReportIssueForm>(() =>
+    reportIssueFormFromContext(context),
+  );
   const [snapshot, setSnapshot] = useState<DesktopSupportSnapshot | null>(null);
+  const submitErrorRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!open || support === null) return;
@@ -51,24 +67,26 @@ export function ReportIssueDialog(props: DesktopSupportDialogProps): ReactNode {
 
   const submitMutation = useMutation({
     mutationKey: runnerMutationKeys.supportSubmitReport(),
-    mutationFn: async () => {
+    mutationFn: async (submission: ReportIssueSubmission) => {
       if (support === null) throw new Error("Support bridge unavailable");
-      const result = await support.submitReport(form);
+      const result = await support.submitReport(submission.form);
       return result.reportId;
     },
-    onSuccess: (reportId) => {
-      const url = buildSupportIssueUrl(snapshot, form, reportId);
+    onSuccess: (reportId, submission) => {
+      const url = buildSupportIssueUrl(
+        submission.snapshot,
+        submission.form,
+        reportId,
+      );
       void runnerHost.openExternalLink(url);
-      // Close directly: handleOpenChange short-circuits while the mutation
-      // is still in its onSuccess callback (isPending hasn't flipped yet).
-      setForm(EMPTY_FORM);
-      setSnapshot(null);
-      onOpenChange(false);
-    },
-    onError: () => {
-      toast.error("Failed to submit report. Please try again.");
+      closeReportIssueDraft(submission.draftId);
     },
   });
+
+  useEffect(() => {
+    if (!submitMutation.isError) return;
+    submitErrorRef.current?.focus();
+  }, [submitMutation.isError]);
 
   const handleOpenChange = (open: boolean) => {
     if (!open && submitMutation.isPending) return;
@@ -156,6 +174,17 @@ export function ReportIssueDialog(props: DesktopSupportDialogProps): ReactNode {
           </div>
         </div>
 
+        {submitMutation.isError ? (
+          <div
+            ref={submitErrorRef}
+            role="alert"
+            tabIndex={-1}
+            className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-ui-sm text-destructive outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            Failed to submit report. Please try again.
+          </div>
+        ) : null}
+
         <DialogFooter>
           <Button
             variant="outline"
@@ -165,7 +194,7 @@ export function ReportIssueDialog(props: DesktopSupportDialogProps): ReactNode {
             Cancel
           </Button>
           <Button
-            onClick={() => submitMutation.mutate()}
+            onClick={() => submitMutation.mutate({ draftId, form, snapshot })}
             disabled={
               submitMutation.isPending || form.title.trim().length === 0
             }
@@ -183,6 +212,22 @@ export function ReportIssueDialog(props: DesktopSupportDialogProps): ReactNode {
       </DialogContent>
     </Dialog>
   );
+}
+
+function reportIssueFormFromContext(
+  context: ReportIssueContext | null,
+): ReportIssueForm {
+  if (context === null) return EMPTY_FORM;
+  const contextLines = [
+    context.source === null ? null : `Area: ${context.source}`,
+    context.code === null ? null : `Error code: ${context.code}`,
+    context.message,
+  ].filter((line): line is string => line !== null);
+  return {
+    ...EMPTY_FORM,
+    title: context.title,
+    whatHappened: contextLines.join("\n\n"),
+  };
 }
 
 function buildSupportIssueUrl(

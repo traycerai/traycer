@@ -15,6 +15,8 @@ import type { UseQueryResult } from "@tanstack/react-query";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import type { AccountContext } from "@traycer/protocol/common/schemas";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 import { RefreshIconButton } from "@/components/refresh-icon-button";
 import {
   TraycerAccountSelect,
@@ -116,6 +118,16 @@ function SubscriptionBody({
     return (
       <div className="text-ui-sm text-destructive">
         Couldn't load your subscription. Try refreshing.
+        <ReportIssueAction
+          context={createReportIssueContext({
+            title: "Couldn't load your subscription",
+            message: null,
+            code: null,
+            source: "Subscription",
+          })}
+          presentation="link"
+          className="ml-1 h-auto p-0 text-current"
+        />
       </div>
     );
   }
