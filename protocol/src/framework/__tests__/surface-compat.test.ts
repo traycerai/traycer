@@ -666,7 +666,7 @@ describe("stream bridging mirrors the shipped stream checker", () => {
 });
 
 describe("same-version wire-schema evolution rules", () => {
-  it("accepts adding an optional property", () => {
+  it("accepts adding an optional property on a client→host slot (advisory only)", () => {
     const mine = defineVersionedRpcRegistry({
       "host.echo": unaryV10(
         baseRequest.extend({ extra: z.string().optional() }),
@@ -674,6 +674,42 @@ describe("same-version wire-schema evolution rules", () => {
       ),
     });
     expect(blockingOf(mine, [])).toEqual([]);
+    const result = checkSurfaceCompatibility({
+      mine: surfaceOfUnary(mine),
+      theirs: baselineSurface,
+      theirsLabel: "released",
+      exceptions: [],
+    });
+    const requestFinding = result.findings.find(
+      (finding) => finding.payload === "request" && finding.path === "properties.extra",
+    );
+    expect(requestFinding?.severity).toBe("advisory");
+  });
+
+  it("rejects a tolerated (.catch()/optional) property added at a released version on a host→client slot - the providers.list #258 class", () => {
+    // Mirrors the historical miss: a `.catch()`-tolerant field lands on an
+    // already-released response shape without a version bump. Schema-level
+    // parsing still succeeds (that's the whole point of `.catch()`), but the
+    // released peer's wire payload never carries the key.
+    const mine = defineVersionedRpcRegistry({
+      "host.echo": unaryV10(
+        baseRequest,
+        baseResponse.extend({ profiles: z.array(z.string()).catch([]) }),
+      ),
+    });
+    const result = checkSurfaceCompatibility({
+      mine: surfaceOfUnary(mine),
+      theirs: baselineSurface,
+      theirsLabel: "released",
+      exceptions: [],
+    });
+    const finding = result.blocking.find(
+      (f) => f.payload === "response" && f.path === "properties.profiles",
+    );
+    expect(finding).toBeDefined();
+    expect(finding?.severity).toBe("breaking");
+    expect(finding?.detail).toContain("host→client");
+    expect(finding?.detail).toContain("never carries this key");
   });
 
   it("rejects adding a required property at a released version", () => {

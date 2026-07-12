@@ -11,6 +11,7 @@ import {
 import {
   providersListResponseSchemaV10,
   providersListResponseSchemaV20,
+  providersListResponseSchemaV30,
 } from "@traycer/protocol/host/provider-schemas";
 import { FROZEN_CATALOG_LINE_SNAPSHOTS } from "./__fixtures__/frozen-catalog-lines";
 
@@ -37,6 +38,7 @@ const LIVE_FROZEN_EXPORTS = {
   "agent.list@2.0": listAgentsResponseSchemaV20,
   "providers.list@1.0": providersListResponseSchemaV10,
   "providers.list@2.0": providersListResponseSchemaV20,
+  "providers.list@3.0": providersListResponseSchemaV30,
 } as const;
 
 describe("frozen catalog line snapshots", () => {
