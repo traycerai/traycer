@@ -212,4 +212,68 @@ describe("enqueuePersistChatRunSettings", () => {
     );
     errorSpy.mockRestore();
   });
+
+  it("does not permanently starve a chat's chain when mutateAsync throws synchronously", async () => {
+    const errorSpy = vi.spyOn(appLogger, "error").mockImplementation(() => {});
+    const mutateAsync = vi
+      .fn<
+        (
+          params: UpdateChatRunSettingsRequest,
+        ) => Promise<UpdateChatRunSettingsResponse>
+      >()
+      .mockImplementationOnce(() => {
+        throw new Error("synchronous boom");
+      })
+      .mockImplementationOnce(() => Promise.resolve({ updated: true }));
+
+    enqueuePersistChatRunSettings(
+      mutateAsync,
+      makeRequest("chat-sync-throw", {}),
+    );
+    await vi.waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+
+    // A later write for the SAME chat must still go through - the earlier
+    // synchronous throw must not leave this chat's chain permanently rejected.
+    enqueuePersistChatRunSettings(
+      mutateAsync,
+      makeRequest("chat-sync-throw", {}),
+    );
+    await vi.waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(2));
+    errorSpy.mockRestore();
+  });
+
+  it("does not permanently starve a chat's chain when appLogger.error itself throws", async () => {
+    const errorSpy = vi.spyOn(appLogger, "error").mockImplementation(() => {
+      throw new Error("logger boom");
+    });
+    const failure = new HostRpcError({
+      code: "RPC_ERROR",
+      message: "connection reset",
+      requestId: "req-3",
+      method: "epic.updateChatRunSettings",
+      fatalDetails: null,
+    });
+    const mutateAsync = vi
+      .fn<
+        (
+          params: UpdateChatRunSettingsRequest,
+        ) => Promise<UpdateChatRunSettingsResponse>
+      >()
+      .mockRejectedValueOnce(failure)
+      .mockImplementationOnce(() => Promise.resolve({ updated: true }));
+
+    enqueuePersistChatRunSettings(
+      mutateAsync,
+      makeRequest("chat-logger-throw", {}),
+    );
+    await vi.waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
+
+    enqueuePersistChatRunSettings(
+      mutateAsync,
+      makeRequest("chat-logger-throw", {}),
+    );
+    await vi.waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(2));
+    errorSpy.mockRestore();
+  });
 });

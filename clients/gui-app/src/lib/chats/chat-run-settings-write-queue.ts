@@ -1,4 +1,4 @@
-import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   UpdateChatRunSettingsRequest,
   UpdateChatRunSettingsResponse,
@@ -38,19 +38,38 @@ export function enqueuePersistChatRunSettings(
   const { chatId } = request;
   pending.set(chatId, request);
   const prior = chains.get(chatId) ?? Promise.resolve();
-  const next = prior.then(async () => {
-    const latest = pending.get(chatId);
-    if (latest === undefined) return;
-    pending.delete(chatId);
-    await mutateAsync(latest).catch((error: HostRpcError) => {
-      if (error.code !== "E_HOST_UNSUPPORTED") {
-        appLogger.error(
-          "Failed to persist chat run settings",
-          { chatId, epicId: latest.epicId },
-          error,
-        );
-      }
-    });
-  });
+  const next = prior.then(() => runPendingWrite(mutateAsync, chatId));
   chains.set(chatId, next);
+}
+
+/**
+ * Never rejects: a rejected link in a chat's chain would permanently starve
+ * every future write queued behind it (`.then()` on a rejected promise skips
+ * its handler and just re-throws), so every failure mode - `mutateAsync`
+ * rejecting OR throwing synchronously, or even `appLogger.error` itself
+ * throwing - is contained here rather than escaping to `chains`.
+ */
+async function runPendingWrite(
+  mutateAsync: UpdateChatRunSettingsMutateAsync,
+  chatId: string,
+): Promise<void> {
+  const latest = pending.get(chatId);
+  if (latest === undefined) return;
+  pending.delete(chatId);
+  try {
+    await mutateAsync(latest);
+  } catch (error) {
+    if (error instanceof HostRpcError && error.code === "E_HOST_UNSUPPORTED") {
+      return;
+    }
+    try {
+      appLogger.error(
+        "Failed to persist chat run settings",
+        { chatId, epicId: latest.epicId },
+        error,
+      );
+    } catch {
+      // Logging itself must not poison the chain either.
+    }
+  }
 }
