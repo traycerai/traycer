@@ -1,7 +1,9 @@
 import { type ReactNode } from "react";
 import { Dialog as DialogPrimitive } from "radix-ui";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 import {
   epicsSeen,
   taskChainsSeen,
@@ -125,7 +127,17 @@ function ErrorBody(props: ErrorBodyProps): ReactNode {
         Migration interrupted
       </DialogPrimitive.Title>
       <p className="text-sm text-muted-foreground">{message}</p>
-      <div className="flex justify-end">
+      <div className="flex flex-wrap justify-end gap-2">
+        <ReportIssueAction
+          context={createReportIssueContext({
+            title: "Migration interrupted",
+            message: "The migration did not finish.",
+            code: null,
+            source: "Data migration",
+          })}
+          presentation="text"
+          className={undefined}
+        />
         <Button type="button" onClick={onAcknowledge}>
           Dismiss
         </Button>

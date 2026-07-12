@@ -1,8 +1,17 @@
 import { use, useCallback, type MouseEvent, type ReactNode } from "react";
 import { toast } from "sonner";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 import { classifyHref } from "@/markdown/links/classify-href";
 import { MarkdownLinkContext } from "@/markdown/links/markdown-link-context";
+import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
+
+const MARKDOWN_LINK_REPORT_CONTEXT = createReportIssueContext({
+  title: "Markdown link could not be opened",
+  message: "The requested markdown link could not be opened.",
+  code: null,
+  source: "Markdown link",
+});
 
 interface MarkdownAnchorProps {
   href?: string;
@@ -32,7 +41,9 @@ export function MarkdownAnchor({
 }: MarkdownAnchorProps) {
   const runnerHost = use(RunnerHostContext);
   const linkPolicy = use(MarkdownLinkContext);
-
+  const reportIssueAvailable = useDesktopDialogStore(
+    (state) => state.reportIssueAvailable,
+  );
   const routeLinkClick = useCallback(
     (event: MouseEvent<HTMLAnchorElement>): void => {
       // Same-document anchors should keep native browser hash scrolling.
@@ -59,13 +70,31 @@ export function MarkdownAnchor({
           col: classified.col,
           isDirectory: false,
         });
-        if (opened === false) toast("Couldn't open link");
+        if (opened === false) {
+          toast(
+            "Couldn't open link",
+            reportIssueAvailable
+              ? {
+                  cancel: {
+                    label: "Report issue",
+                    onClick: () => {
+                      const current = useDesktopDialogStore.getState();
+                      if (!current.reportIssueAvailable) return;
+                      current.openReportIssueWithContext(
+                        MARKDOWN_LINK_REPORT_CONTEXT,
+                      );
+                    },
+                  },
+                }
+              : undefined,
+          );
+        }
         return;
       }
 
       if (runnerHost !== null) void runnerHost.openExternalLink(classified.url);
     },
-    [href, linkPolicy, runnerHost],
+    [href, linkPolicy, reportIssueAvailable, runnerHost],
   );
 
   return (

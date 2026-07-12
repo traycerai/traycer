@@ -1,4 +1,5 @@
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { MermaidBlockToolbar } from "@/editor-core/nodes/mermaid/mermaid-block-toolbar";
 import { MermaidFullscreenDialog } from "@/editor-core/nodes/mermaid/mermaid-fullscreen-dialog";
 import {
@@ -12,6 +13,7 @@ import { useMermaidPngDownload } from "@/editor-core/nodes/mermaid/use-mermaid-p
 import { useMermaidThemeKey } from "@/editor-core/nodes/mermaid/use-mermaid-theme-key";
 import { useDebouncedValue } from "@/hooks/ui/use-debounced-value";
 import { trustedMarkupToReactNodes } from "@/lib/trusted-markup";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
@@ -168,7 +170,7 @@ function MermaidRenderSession(props: {
 
       <figure
         className="tc-node-mermaid__preview m-0"
-        role="img"
+        role={render.status === "error" ? undefined : "img"}
         aria-label={ariaLabel}
       >
         {render.status === "pending" ? (
@@ -189,6 +191,16 @@ function MermaidRenderSession(props: {
               Mermaid parse error
             </div>
             <div className="tc-node-block__error-detail">{render.error}</div>
+            <ReportIssueAction
+              context={createReportIssueContext({
+                title: "Mermaid parse error",
+                message: null,
+                code: null,
+                source: "Chat diagram",
+              })}
+              presentation="icon"
+              className={undefined}
+            />
           </div>
         ) : null}
       </figure>

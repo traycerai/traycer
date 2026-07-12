@@ -1,6 +1,8 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { ExternalLink, Info } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 import {
   Dialog,
   DialogContent,
@@ -44,6 +46,36 @@ function AboutDetailsDialogContent(
     });
   };
 
+  let snapshotContent: ReactNode;
+  if (snapshot.status === "ready") {
+    snapshotContent = (
+      <>
+        <DetailsGrid snapshot={snapshot.snapshot} />
+        <SupportLinks snapshot={snapshot.snapshot} openLink={openLink} />
+      </>
+    );
+  } else if (snapshot.status === "unavailable") {
+    snapshotContent = (
+      <div className="flex items-center gap-2 text-ui-sm text-muted-foreground">
+        <span>{snapshot.message}</span>
+        <ReportIssueAction
+          context={createReportIssueContext({
+            title: "Couldn't load desktop details",
+            message: null,
+            code: null,
+            source: "About Traycer",
+          })}
+          presentation="link"
+          className="h-auto p-0 text-current"
+        />
+      </div>
+    );
+  } else {
+    snapshotContent = (
+      <p className="text-ui-sm text-muted-foreground">{snapshot.message}</p>
+    );
+  }
+
   return (
     <DialogContent className="sm:max-w-xl">
       <DialogHeader>
@@ -55,20 +87,24 @@ function AboutDetailsDialogContent(
           Desktop runtime and diagnostics details.
         </DialogDescription>
       </DialogHeader>
-      <div className="grid gap-3">
-        {snapshot.status === "ready" ? (
-          <>
-            <DetailsGrid snapshot={snapshot.snapshot} />
-            <SupportLinks snapshot={snapshot.snapshot} openLink={openLink} />
-          </>
-        ) : (
-          <p className="text-ui-sm text-muted-foreground">{snapshot.message}</p>
-        )}
-      </div>
+      <div className="grid gap-3">{snapshotContent}</div>
       {linkError === null ? null : (
-        <p className="text-ui-sm text-destructive" role="alert">
-          {linkError}
-        </p>
+        <div
+          className="flex items-center gap-2 text-ui-sm text-destructive"
+          role="alert"
+        >
+          <span>{linkError}</span>
+          <ReportIssueAction
+            context={createReportIssueContext({
+              title: "Couldn't open the link",
+              message: null,
+              code: null,
+              source: "About Traycer",
+            })}
+            presentation="link"
+            className="h-auto p-0 text-current"
+          />
+        </div>
       )}
       <DialogFooter showCloseButton />
     </DialogContent>

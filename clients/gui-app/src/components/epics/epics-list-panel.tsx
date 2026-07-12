@@ -34,6 +34,7 @@ import {
 } from "@/components/epics/use-history-open-in-new-window";
 import { UnsyncedEpicMoveDialog } from "@/components/layout/dialogs/unsynced-epic-move-dialog";
 import { Button } from "@/components/ui/button";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { DeleteTasksDialog } from "@/components/epics/delete-tasks-dialog";
 import {
@@ -48,6 +49,7 @@ import { useEpicUpdateTitle } from "@/hooks/epic/use-epic-title-mutation";
 import { useInlineRename } from "@/hooks/ui/use-inline-rename";
 import { withMemberToggled } from "@/lib/immutable-set";
 import { cn } from "@/lib/utils";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 import {
   InputGroup,
   InputGroupAddon,
@@ -1406,7 +1408,7 @@ function EpicsListError(props: EpicsListErrorProps) {
       role="alert"
     >
       <p className="font-medium text-destructive">{errorHeadline(error)}</p>
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <Button
           type="button"
           size="sm"
@@ -1428,6 +1430,16 @@ function EpicsListError(props: EpicsListErrorProps) {
         >
           {showDetails ? "Hide details" : "Show details"}
         </Button>
+        <ReportIssueAction
+          context={createReportIssueContext({
+            title: "Failed to load Epics",
+            message: "The Epic list could not be loaded.",
+            code: error instanceof HostRpcError ? error.code : null,
+            source: "Epic list",
+          })}
+          presentation="text"
+          className={undefined}
+        />
       </div>
       {showDetails ? (
         <pre

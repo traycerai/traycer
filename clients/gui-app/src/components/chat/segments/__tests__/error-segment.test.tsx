@@ -1,12 +1,15 @@
 import "../../../../../__tests__/test-browser-apis";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { ErrorSegment } from "../error-segment";
 
 describe("<ErrorSegment />", () => {
   afterEach(() => {
     cleanup();
+    useDesktopDialogStore.getState().close();
+    useDesktopDialogStore.setState({ reportIssueAvailable: false });
   });
 
   // Auth errors never reach this component - they're suppressed at the
@@ -34,5 +37,29 @@ describe("<ErrorSegment />", () => {
 
     expect(screen.getByText("Error")).toBeDefined();
     expect(screen.getByText("Something failed")).toBeDefined();
+  });
+
+  it("does not copy a hostile transcript code into public report context", () => {
+    useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    const hostileCode = "/Users/alice/private.txt?token=sk-secret";
+
+    render(
+      <TooltipProvider>
+        <ErrorSegment
+          message="Something failed"
+          code={hostileCode}
+          findUnitId={null}
+        />
+      </TooltipProvider>,
+    );
+
+    expect(screen.getByText(hostileCode)).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
+    expect(useDesktopDialogStore.getState().reportIssueContext).toEqual({
+      title: "Chat error",
+      message: null,
+      code: null,
+      source: "Chat",
+    });
   });
 });

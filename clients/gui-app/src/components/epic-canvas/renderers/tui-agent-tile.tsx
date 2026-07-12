@@ -8,7 +8,6 @@ import {
   useState,
 } from "react";
 import { ChevronDown, GitFork, Users } from "lucide-react";
-import { toast } from "sonner";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import {
@@ -82,6 +81,9 @@ import {
 } from "@/stores/worktree/worktree-intent-staging-store";
 import { TerminalAgentForkDialog } from "./terminal-agent-fork-dialog";
 import { useCloseCanvasTileWithNestedFocus } from "./use-close-canvas-tile-with-nested-focus";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { createReportIssueContext } from "@/lib/report-issue-context";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
 const WORKTREE_SETUP_ERROR_CODES: ReadonlyArray<string> = [
   "WORKTREE_SETUP_FAILED",
@@ -625,6 +627,35 @@ function TerminalAgentBody(props: TerminalAgentBodyProps): React.ReactNode {
             Restore the missing folder or worktree at its bound path, then retry
             — or close this terminal agent.
           </span>
+          <div className="flex flex-wrap justify-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={props.onRetry}
+            >
+              Retry
+            </Button>
+            <ReportIssueAction
+              context={createReportIssueContext({
+                title: "Terminal agent folder is missing",
+                message:
+                  "A bound folder for a terminal agent was missing on disk.",
+                code: null,
+                source: "Terminal agent",
+              })}
+              presentation="text"
+              className={undefined}
+            />
+          </div>
+        </div>
+      );
+    }
+    const message = error?.message ?? "Unknown error";
+    return (
+      <div className="flex h-full w-full flex-col items-center justify-center gap-2 px-6 text-center text-ui-sm text-destructive">
+        <span>Failed to start terminal: {message}</span>
+        <div className="flex flex-wrap items-center justify-center gap-2">
           <Button
             type="button"
             variant="outline"
@@ -633,22 +664,17 @@ function TerminalAgentBody(props: TerminalAgentBodyProps): React.ReactNode {
           >
             Retry
           </Button>
+          <ReportIssueAction
+            context={createReportIssueContext({
+              title: "Failed to start terminal agent",
+              message: "The terminal agent session could not be started.",
+              code: null,
+              source: "Terminal agent",
+            })}
+            presentation="text"
+            className={undefined}
+          />
         </div>
-      );
-    }
-    const message = error?.message ?? "Unknown error";
-    return (
-      <div className="flex h-full w-full items-center justify-center text-ui-sm text-destructive">
-        <span>Failed to start terminal: {message}</span>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="ml-3"
-          onClick={props.onRetry}
-        >
-          Retry
-        </Button>
       </div>
     );
   }
@@ -1040,11 +1066,20 @@ function TerminalAgentLive(props: TerminalAgentLiveProps) {
     if (exitReason === "reaped") return;
     if (!exitToastShownRef.current && exitCode !== null && exitCode !== 0) {
       exitToastShownRef.current = true;
-      toast.error("Terminal agent exited with an error.", {
-        description:
-          lastOutputPreview ??
-          "The agent stopped before reporting a readable error. Try restarting it.",
-      });
+      reportableErrorToast(
+        "Terminal agent exited with an error.",
+        {
+          description:
+            lastOutputPreview ??
+            "The agent stopped before reporting a readable error. Try restarting it.",
+        },
+        createReportIssueContext({
+          title: "Terminal agent exited with an error",
+          message: null,
+          code: String(exitCode),
+          source: "Terminal agent",
+        }),
+      );
     }
   }, [
     status,

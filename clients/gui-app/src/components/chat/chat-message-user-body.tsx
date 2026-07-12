@@ -9,7 +9,6 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { toast } from "sonner";
 import { v4 as uuidv4 } from "uuid";
 import {
   useCallback,
@@ -77,6 +76,7 @@ import { useTombstonedProfileLabel } from "./use-tombstoned-profile-label";
 import { AccentDot } from "@/components/providers/accent-dot";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import type { ProviderId } from "@/components/home/data/landing-options";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
 const NOOP: () => void = () => undefined;
 const NOOP_CLIPBOARD: ClipboardEventHandler<HTMLElement> = () => undefined;
@@ -89,7 +89,12 @@ const DISPLAY_MAX_HEIGHT_PX = 120;
 const COPIED_RESET_MS = 1600;
 
 const handleCopyError = (): void => {
-  toast.error("Couldn't copy to clipboard.");
+  reportableErrorToast("Couldn't copy to clipboard.", undefined, {
+    title: "Could not copy to clipboard",
+    message: null,
+    code: null,
+    source: "Clipboard",
+  });
 };
 
 interface UserBodyProps {

@@ -1,11 +1,17 @@
-import { toast } from "sonner";
 import { readErrorMessage } from "@/lib/read-error-message";
+import { createReportIssueContext } from "@/lib/report-issue-context";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
 export function toastFromRunnerError(error: unknown, fallback: string): void {
   const message = readErrorMessage(error);
-  if (message !== null) {
-    toast.error(fallback, { description: message });
-    return;
-  }
-  toast.error(fallback);
+  reportableErrorToast(
+    fallback,
+    message === null ? undefined : { description: message },
+    createReportIssueContext({
+      title: "Desktop operation failed",
+      message: null,
+      code: null,
+      source: "Desktop",
+    }),
+  );
 }

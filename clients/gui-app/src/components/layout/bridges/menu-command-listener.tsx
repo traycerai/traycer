@@ -80,9 +80,6 @@ export function MenuCommandListener() {
   const openEpicInNewWindow = useDesktopDialogStore(
     (state) => state.openEpicInNewWindow,
   );
-  const openReportIssue = useDesktopDialogStore(
-    (state) => state.openReportIssue,
-  );
   const management = runnerHost.hostManagement;
   const service = runnerHost.service;
   const traycerCli = runnerHost.traycerCli;
@@ -174,7 +171,11 @@ export function MenuCommandListener() {
         requestHostRestart: () => {
           setPendingHostRestart(true);
         },
-        reportIssue: openReportIssue,
+        reportIssue: () => {
+          const state = useDesktopDialogStore.getState();
+          if (!state.reportIssueAvailable) return;
+          state.openReportIssue();
+        },
       });
     });
     return () => {
@@ -189,7 +190,6 @@ export function MenuCommandListener() {
     openLogs,
     runnerHost,
     mutateInstallUpdate,
-    openReportIssue,
   ]);
 
   return (

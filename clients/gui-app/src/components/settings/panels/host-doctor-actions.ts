@@ -4,6 +4,7 @@ import type {
   FreePortAndRestartInput,
   IHostManagement,
 } from "@traycer-clients/shared/platform/runner-host";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
 export function copyTerminalCommand(command: string): void {
   void navigator.clipboard.writeText(command).then(
@@ -11,7 +12,12 @@ export function copyTerminalCommand(command: string): void {
       toast.success("Command copied to clipboard");
     },
     () => {
-      toast.error("Could not copy command");
+      reportableErrorToast("Could not copy command", undefined, {
+        title: "Could not copy command",
+        message: null,
+        code: null,
+        source: "Host Doctor",
+      });
     },
   );
 }

@@ -2,7 +2,6 @@ import { useCallback, useMemo, useRef } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { v4 as uuidv4 } from "uuid";
-import { toast } from "sonner";
 import type {
   CreateEpicChatSeed,
   CreateEpicResponse,
@@ -75,6 +74,7 @@ import type {
   ServiceTier,
 } from "@/components/home/data/landing-options";
 import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
 export interface LandingComposerSubmitArgs {
   readonly editor: ComposerPromptEditorHandle | null;
@@ -255,9 +255,18 @@ export function useLandingComposerActions(): LandingComposerActions {
       // The folded chat is bound to a device for life, so a host must be
       // active to mint its binding (workspaces already imply one).
       if (activeHostId === null) {
-        toast.error("Couldn't create epic.", {
-          description: "No active device. Reconnect and try again.",
-        });
+        reportableErrorToast(
+          "Couldn't create epic.",
+          {
+            description: "No active device. Reconnect and try again.",
+          },
+          {
+            title: "Could not create Epic",
+            message: "No active device was available.",
+            code: null,
+            source: "Epic creation",
+          },
+        );
         return;
       }
       const userId = profile?.userId ?? null;
@@ -434,9 +443,18 @@ export function useLandingComposerActions(): LandingComposerActions {
         .then((bytesByHash) => {
           const missing = hashes.filter((hash) => !bytesByHash.has(hash));
           if (missing.length > 0) {
-            toast.error("Couldn't attach an image.", {
-              description: "Re-add the image and try sending again.",
-            });
+            reportableErrorToast(
+              "Couldn't attach an image.",
+              {
+                description: "Re-add the image and try sending again.",
+              },
+              {
+                title: "Could not attach image",
+                message: null,
+                code: null,
+                source: "Chat composer",
+              },
+            );
             return;
           }
           finalizeSubmission(
@@ -447,9 +465,18 @@ export function useLandingComposerActions(): LandingComposerActions {
           );
         })
         .catch(() => {
-          toast.error("Couldn't attach an image.", {
-            description: "Image storage is unavailable. Please try again.",
-          });
+          reportableErrorToast(
+            "Couldn't attach an image.",
+            {
+              description: "Image storage is unavailable. Please try again.",
+            },
+            {
+              title: "Could not attach image",
+              message: "Image storage was unavailable.",
+              code: null,
+              source: "Chat composer",
+            },
+          );
         })
         .finally(() => {
           submissionInFlightRef.current = false;

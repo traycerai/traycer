@@ -5,6 +5,8 @@ import { Check } from "lucide-react";
 import type { EpicMigrationPhase } from "@traycer/protocol/host/epic/subscribe";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 import { cn } from "@/lib/utils";
 import {
   useEpicMigrationState,
@@ -221,10 +223,20 @@ function ErrorBody(props: ErrorBodyProps): ReactNode {
         {TITLE_ERROR}
       </DialogPrimitive.Title>
       <p className="text-sm text-muted-foreground">{BODY_ERROR}</p>
-      <div className="flex justify-end gap-2">
+      <div className="flex flex-wrap justify-end gap-2">
         <Button type="button" variant="ghost" onClick={props.onClose}>
           Close
         </Button>
+        <ReportIssueAction
+          context={createReportIssueContext({
+            title: TITLE_ERROR,
+            message: BODY_ERROR,
+            code: null,
+            source: "Epic migration",
+          })}
+          presentation="text"
+          className={undefined}
+        />
         <Button
           type="button"
           onClick={props.onRetry}
