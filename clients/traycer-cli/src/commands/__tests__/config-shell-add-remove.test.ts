@@ -18,6 +18,11 @@ import { buildConfigShellRemoveCommand } from "../config-shell-remove";
 import { readCliConfig, setShell } from "../../store/config-store";
 import { makeCtx } from "./hook-test-helpers";
 
+// The add/remove gate hinges on `fs.access(X_OK)`, which on Windows collapses to
+// a plain existence check - a non-executable fixture would read as executable, so
+// the executable-bit assertions can't be exercised honestly there.
+const skipOnWindows = process.platform === "win32";
+
 let workdir = "";
 
 beforeEach(async () => {
@@ -39,7 +44,7 @@ async function makeNonExecutable(name: string): Promise<string> {
   return path;
 }
 
-describe("config shell add", () => {
+describe.skipIf(skipOnWindows)("config shell add", () => {
   it("rejects a relative path", async () => {
     await expect(
       buildConfigShellAddCommand({ path: "relative/sh" })(makeCtx()),
@@ -69,7 +74,7 @@ describe("config shell add", () => {
   });
 });
 
-describe("config shell remove", () => {
+describe.skipIf(skipOnWindows)("config shell remove", () => {
   it("drops an added shell and falls back to default when it was selected", async () => {
     const path = await makeExecutable("myshell");
     await buildConfigShellAddCommand({ path })(makeCtx());
