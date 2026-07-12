@@ -47,7 +47,6 @@ export interface AppHeaderProps {
 
 interface DevDesktopDisplayNameProps {
   readonly displayName: string | null;
-  readonly dragStyle: CSSProperties | undefined;
 }
 
 /**
@@ -74,9 +73,7 @@ export function AppHeader(props: AppHeaderProps): ReactNode {
   const draggable = framelessDesktop && !dragSuppressed;
   const spacerDragStyle = titleBarSpacerStyle(framelessDesktop, dragSuppressed);
   const devDesktopDisplayName =
-    framelessDesktop && import.meta.env.DEV
-      ? readDevDesktopDisplayName(import.meta.env.VITE_DEV_DESKTOP_DISPLAY_NAME)
-      : null;
+    devDesktopDisplayNameForRenderer(framelessDesktop);
 
   return (
     <header
@@ -94,10 +91,6 @@ export function AppHeader(props: AppHeaderProps): ReactNode {
       )}
     >
       {showTabStrip ? <HistoryNavButtons /> : null}
-      <DevDesktopDisplayName
-        displayName={devDesktopDisplayName}
-        dragStyle={spacerDragStyle}
-      />
       {/* Left drag handle: breathing room beside the traffic lights +
           back/forward arrows so the window can be grabbed from the left end
           too. Desktop-only (the browser app has neither traffic lights nor
@@ -126,15 +119,18 @@ export function AppHeader(props: AppHeaderProps): ReactNode {
         {showTabStrip ? <TabStrip /> : null}
       </div>
       <div
-        aria-hidden
+        aria-hidden={devDesktopDisplayName === null}
+        data-testid="app-header-right-drag-spacer"
         className={cn(
-          "relative z-10 h-full",
+          "relative z-10 h-full items-center justify-end",
           showTabStrip
-            ? "hidden shrink-0 basis-[clamp(2rem,6vw,6rem)] md:block"
-            : "min-w-0 flex-1",
+            ? "hidden shrink-0 basis-[clamp(2rem,6vw,6rem)] md:flex"
+            : "flex min-w-0 flex-1",
         )}
         style={spacerDragStyle}
-      />
+      >
+        <DevDesktopDisplayName displayName={devDesktopDisplayName} />
+      </div>
       <div
         className="relative z-10 flex shrink-0 items-center gap-2"
         style={framelessDesktop ? NO_DRAG_STYLE : undefined}
@@ -160,20 +156,30 @@ export function DevDesktopDisplayName(
   }
 
   return (
-    <div
+    <span
       data-testid="dev-desktop-display-name"
       className={cn(
-        "pointer-events-none absolute inset-x-0 z-0 flex h-full items-center justify-center px-[12vw] text-xs font-medium tracking-wide text-muted-foreground/70",
+        "pointer-events-none block max-w-full truncate text-right text-xs font-medium tracking-wide text-muted-foreground/70",
       )}
-      style={props.dragStyle}
     >
-      <span className="max-w-full truncate">{props.displayName}</span>
-    </div>
+      {props.displayName}
+    </span>
   );
 }
 
 function readDevDesktopDisplayName(value: string | undefined): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function devDesktopDisplayNameForRenderer(
+  framelessDesktop: boolean,
+): string | null {
+  if (!framelessDesktop || !import.meta.env.DEV) {
+    return null;
+  }
+  return readDevDesktopDisplayName(
+    import.meta.env.VITE_DEV_DESKTOP_DISPLAY_NAME,
+  );
 }
 
 // Hiding the bell when signed-out keeps the notifications-store +

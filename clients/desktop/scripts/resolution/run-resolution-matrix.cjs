@@ -204,7 +204,7 @@ async function runElectronPass(
     workspaceRoot,
   ];
   const childEnv = {
-    ...process.env,
+    ...createResolutionChildEnv(process.env),
     HOME: homeDir,
     TRAYCER_DESKTOP_DEV_APP_PATH: workspaceRoot,
     TRAYCER_RESOLUTION_TEST_DISABLE_MAXIMIZE: "1",
@@ -269,6 +269,13 @@ async function runElectronPass(
     child.kill("SIGTERM");
     await waitForExit(child, 5_000);
   }
+}
+
+function createResolutionChildEnv(env) {
+  const childEnv = { ...env };
+  delete childEnv.DEV_DESKTOP_SLOT;
+  delete childEnv.TRAYCER_DESKTOP_DEV_DISPLAY_NAME;
+  return childEnv;
 }
 
 function ensureBuiltDesktop() {
@@ -431,8 +438,12 @@ function tail(value, maxLength) {
   return value.slice(value.length - maxLength);
 }
 
-main().catch((err) => {
-  console.error("[resolution] failed");
-  console.error(err);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((err) => {
+    console.error("[resolution] failed");
+    console.error(err);
+    process.exit(1);
+  });
+}
+
+module.exports = { createResolutionChildEnv };

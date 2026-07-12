@@ -102,20 +102,17 @@ describe("DevDesktopDisplayName", () => {
   });
 
   it("renders the dev worktree name without adding an interactive control", () => {
-    render(
-      <DevDesktopDisplayName
-        displayName="Traycer Dev — spry-panda"
-        dragStyle={undefined}
-      />,
-    );
+    render(<DevDesktopDisplayName displayName="Traycer Dev — spry-panda" />);
 
-    expect(screen.getByTestId("dev-desktop-display-name").textContent).toBe(
-      "Traycer Dev — spry-panda",
-    );
+    const label = screen.getByTestId("dev-desktop-display-name");
+    expect(label.textContent).toBe("Traycer Dev — spry-panda");
+    expect(label.className).toContain("max-w-full");
+    expect(label.className).toContain("text-right");
+    expect(label.className).not.toContain("absolute");
   });
 
   it("renders nothing when the dev display name is absent", () => {
-    render(<DevDesktopDisplayName displayName={null} dragStyle={undefined} />);
+    render(<DevDesktopDisplayName displayName={null} />);
 
     expect(screen.queryByTestId("dev-desktop-display-name")).toBeNull();
   });
