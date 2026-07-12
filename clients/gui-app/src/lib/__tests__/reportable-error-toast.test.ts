@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { MouseEvent as ReactMouseEvent, ReactNode } from "react";
+import { fireEvent, render } from "@testing-library/react";
+import { createElement, type ReactNode } from "react";
 import type { ExternalToast } from "sonner";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 
@@ -122,6 +123,21 @@ describe("reportableErrorToast", () => {
     expect(readToastOptions().cancel).toBeNull();
   });
 
+  it("preserves a caller-supplied cancel action for a stable toast when reporting is unavailable", () => {
+    const cancel = { label: "Dismiss", onClick: vi.fn() };
+
+    reportableErrorToast(
+      "Couldn't update",
+      { id: "stable-error", cancel },
+      SAFE_CONTEXT,
+    );
+
+    expect(errorToast).toHaveBeenCalledWith("Couldn't update", {
+      id: "stable-error",
+      cancel,
+    });
+  });
+
   it("keeps warning severity and a primary action while adding reporting", () => {
     useDesktopDialogStore.setState({ reportIssueAvailable: true });
     const retry = vi.fn();
@@ -231,7 +247,15 @@ function clickReportAction(cancel: ExternalToast["cancel"]): void {
   if (typeof cancel !== "object" || cancel === null || !("onClick" in cancel)) {
     throw new Error("Expected a report issue action.");
   }
-  cancel.onClick({} as ReactMouseEvent<HTMLButtonElement>);
+  const action = render(
+    createElement(
+      "button",
+      { type: "button", onClick: cancel.onClick },
+      "Trigger report issue",
+    ),
+  );
+  fireEvent.click(action.getByRole("button", { name: "Trigger report issue" }));
+  action.unmount();
 }
 
 function readToastOptions(): ExternalToast {

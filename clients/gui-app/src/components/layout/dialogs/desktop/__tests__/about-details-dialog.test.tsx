@@ -17,6 +17,7 @@ afterEach(() => {
     activeDialog: null,
     reportIssueAvailable: false,
     reportIssueContext: null,
+    reportIssueDraftId: 0,
   });
 });
 

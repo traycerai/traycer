@@ -1,7 +1,7 @@
 import "../../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render } from "@testing-library/react";
-import type { MouseEvent as ReactMouseEvent, ReactNode } from "react";
+import { act, cleanup, fireEvent, render } from "@testing-library/react";
+import type { ReactNode } from "react";
 import type { ExternalToast } from "sonner";
 
 vi.mock(
@@ -196,6 +196,7 @@ beforeEach(() => {
     activeDialog: null,
     reportIssueAvailable: false,
     reportIssueContext: null,
+    reportIssueDraftId: 0,
   });
 });
 
@@ -205,6 +206,7 @@ afterEach(() => {
     activeDialog: null,
     reportIssueAvailable: false,
     reportIssueContext: null,
+    reportIssueDraftId: 0,
   });
 });
 
@@ -927,7 +929,15 @@ function clickWarningReportAction(): void {
   if (typeof cancel !== "object" || cancel === null || !("onClick" in cancel)) {
     throw new Error("Expected a warning report action.");
   }
-  cancel.onClick({} as ReactMouseEvent<HTMLButtonElement>);
+  const action = render(
+    <button type="button" onClick={cancel.onClick}>
+      Trigger warning report
+    </button>,
+  );
+  fireEvent.click(
+    action.getByRole("button", { name: "Trigger warning report" }),
+  );
+  action.unmount();
 }
 
 function readWarningOptions(): ExternalToast {

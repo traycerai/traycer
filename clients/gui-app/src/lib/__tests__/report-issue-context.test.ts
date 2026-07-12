@@ -28,7 +28,7 @@ describe("createReportIssueContext", () => {
 
     expect(context.title).toBe("Traycer error");
     expect(context.message?.endsWith("…")).toBe(true);
-    expect(context.message?.length).toBe(301);
+    expect(context.message?.length).toBe(300);
     expect(context.code).toBeNull();
     expect(context.source).toBeNull();
   });

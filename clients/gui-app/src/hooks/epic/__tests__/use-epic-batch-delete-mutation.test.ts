@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { MouseEvent as ReactMouseEvent, ReactNode } from "react";
+import { fireEvent, render } from "@testing-library/react";
+import { createElement, type ReactNode } from "react";
 import type { ExternalToast } from "sonner";
 
 const toastWarning = vi.hoisted(() =>
@@ -220,7 +221,17 @@ function clickWarningReportAction(): void {
   if (typeof cancel !== "object" || cancel === null || !("onClick" in cancel)) {
     throw new Error("Expected a warning report action.");
   }
-  cancel.onClick({} as ReactMouseEvent<HTMLButtonElement>);
+  const action = render(
+    createElement(
+      "button",
+      { type: "button", onClick: cancel.onClick },
+      "Trigger warning report",
+    ),
+  );
+  fireEvent.click(
+    action.getByRole("button", { name: "Trigger warning report" }),
+  );
+  action.unmount();
 }
 
 function readWarningOptions(): ExternalToast {

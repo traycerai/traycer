@@ -1,6 +1,6 @@
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import type { MouseEvent as ReactMouseEvent, ReactNode } from "react";
+import type { ReactNode } from "react";
 import type { ExternalToast } from "sonner";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RunnerHostContext } from "@/providers/runner-host-context";
@@ -153,7 +153,23 @@ describe("MarkdownAnchor", () => {
     ) {
       throw new Error("Expected a report issue action.");
     }
-    cancel.onClick({} as ReactMouseEvent<HTMLButtonElement>);
+    const action = render(
+      <button type="button" onClick={cancel.onClick}>
+        Trigger report issue
+      </button>,
+    );
+
+    useDesktopDialogStore.setState({ reportIssueAvailable: false });
+    fireEvent.click(
+      action.getByRole("button", { name: "Trigger report issue" }),
+    );
+    expect(useDesktopDialogStore.getState().reportIssueContext).toBeNull();
+
+    useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    fireEvent.click(
+      action.getByRole("button", { name: "Trigger report issue" }),
+    );
+    action.unmount();
 
     expect(neutralToast).toHaveBeenCalledTimes(1);
     expect(neutralToast.mock.lastCall?.[0]).toBe("Couldn't open link");

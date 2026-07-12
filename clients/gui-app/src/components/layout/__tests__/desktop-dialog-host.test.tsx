@@ -480,7 +480,10 @@ async function flushDialogEffects(): Promise<void> {
 function resetStores(): void {
   cloudEpicTasks.data = [];
   useDesktopDialogStore.getState().close();
-  useDesktopDialogStore.setState({ reportIssueAvailable: false });
+  useDesktopDialogStore.setState({
+    reportIssueAvailable: false,
+    reportIssueDraftId: 0,
+  });
   useEpicCanvasStore.setState({
     tabsById: {},
     openTabOrder: [],
@@ -566,10 +569,14 @@ describe("<DesktopDialogHost />", () => {
     renderDesktopDialogHost(createRunnerHost([], [], []), "/");
     await flushDialogEffects();
 
-    expect(screen.getByDisplayValue("Failed to load epic")).not.toBeNull();
-    const whatHappened = screen.getByPlaceholderText(
-      "A clear description of the bug. Include any error messages you saw.",
-    );
+    const title = screen.getByRole("textbox", { name: "Title" });
+    if (!(title instanceof HTMLInputElement)) {
+      throw new Error("Expected the report title field.");
+    }
+    expect(title.value).toBe("Failed to load epic");
+    const whatHappened = screen.getByRole("textbox", {
+      name: "What happened?",
+    });
     if (!(whatHappened instanceof HTMLTextAreaElement)) {
       throw new Error("Expected the report description field.");
     }

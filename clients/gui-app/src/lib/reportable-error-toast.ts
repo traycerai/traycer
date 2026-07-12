@@ -34,7 +34,10 @@ function showReportableToast(
   if (!state.reportIssueAvailable) {
     if (options === undefined) return showToast(message);
     if (options.id === undefined) return showToast(message, options);
-    return showToast(message, { ...options, cancel: null });
+    return showToast(
+      message,
+      options.cancel === undefined ? { ...options, cancel: null } : options,
+    );
   }
   const cancel =
     options !== undefined && "cancel" in options

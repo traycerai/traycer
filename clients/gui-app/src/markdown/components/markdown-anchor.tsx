@@ -44,10 +44,6 @@ export function MarkdownAnchor({
   const reportIssueAvailable = useDesktopDialogStore(
     (state) => state.reportIssueAvailable,
   );
-  const openReportIssueWithContext = useDesktopDialogStore(
-    (state) => state.openReportIssueWithContext,
-  );
-
   const routeLinkClick = useCallback(
     (event: MouseEvent<HTMLAnchorElement>): void => {
       // Same-document anchors should keep native browser hash scrolling.
@@ -81,8 +77,13 @@ export function MarkdownAnchor({
               ? {
                   cancel: {
                     label: "Report issue",
-                    onClick: () =>
-                      openReportIssueWithContext(MARKDOWN_LINK_REPORT_CONTEXT),
+                    onClick: () => {
+                      const current = useDesktopDialogStore.getState();
+                      if (!current.reportIssueAvailable) return;
+                      current.openReportIssueWithContext(
+                        MARKDOWN_LINK_REPORT_CONTEXT,
+                      );
+                    },
                   },
                 }
               : undefined,
@@ -93,13 +94,7 @@ export function MarkdownAnchor({
 
       if (runnerHost !== null) void runnerHost.openExternalLink(classified.url);
     },
-    [
-      href,
-      linkPolicy,
-      openReportIssueWithContext,
-      reportIssueAvailable,
-      runnerHost,
-    ],
+    [href, linkPolicy, reportIssueAvailable, runnerHost],
   );
 
   return (

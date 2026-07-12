@@ -170,7 +170,7 @@ function MermaidRenderSession(props: {
 
       <figure
         className="tc-node-mermaid__preview m-0"
-        role="img"
+        role={render.status === "error" ? undefined : "img"}
         aria-label={ariaLabel}
       >
         {render.status === "pending" ? (

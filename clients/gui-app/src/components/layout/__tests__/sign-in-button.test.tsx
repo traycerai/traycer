@@ -264,6 +264,7 @@ describe("<SignInButton />", () => {
       activeDialog: null,
       reportIssueAvailable: false,
       reportIssueContext: null,
+      reportIssueDraftId: 0,
     });
     vi.clearAllMocks();
     // Default profile fetch is unused by these tests; install a benign 401
@@ -280,6 +281,7 @@ describe("<SignInButton />", () => {
       activeDialog: null,
       reportIssueAvailable: false,
       reportIssueContext: null,
+      reportIssueDraftId: 0,
     });
     restoreFetch();
   });

@@ -11,8 +11,8 @@ import type {
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
+import { toastFromHostError } from "@/lib/host-error-toast";
 import { hostQueryKeys, terminalMutationKeys } from "@/lib/query-keys";
-import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
 interface CreateTerminalMutationContext {
   readonly hostId: string | null;
@@ -59,12 +59,6 @@ export function useTerminalCreate(
         queryKey: hostQueryKeys.methodScope(ctx.hostId, "terminal.list"),
       });
     },
-    onError: (error) =>
-      reportableErrorToast(error.message, undefined, {
-        title: "Could not create terminal",
-        message: null,
-        code: null,
-        source: "Terminal",
-      }),
+    onError: (error) => toastFromHostError(error, "Could not create terminal"),
   });
 }

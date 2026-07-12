@@ -49,6 +49,7 @@ beforeEach(() => {
     activeDialog: null,
     reportIssueAvailable: false,
     reportIssueContext: null,
+    reportIssueDraftId: 0,
   });
 });
 
@@ -57,6 +58,7 @@ afterEach(() => {
     activeDialog: null,
     reportIssueAvailable: false,
     reportIssueContext: null,
+    reportIssueDraftId: 0,
   });
 });
 

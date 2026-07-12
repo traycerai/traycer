@@ -120,8 +120,9 @@ export function ReportIssueDialog(
           <div className="grid gap-4 py-1 pr-1">
             {snapshot !== null && <EnvBadge snapshot={snapshot} />}
 
-            <Field label="Title" required>
+            <Field htmlFor="report-issue-title" label="Title" required>
               <Input
+                id="report-issue-title"
                 placeholder="Short summary of the issue"
                 value={form.title}
                 onChange={update("title")}
@@ -129,8 +130,9 @@ export function ReportIssueDialog(
               />
             </Field>
 
-            <Field label="What happened?">
+            <Field htmlFor="report-issue-what-happened" label="What happened?">
               <Textarea
+                id="report-issue-what-happened"
                 placeholder="A clear description of the bug. Include any error messages you saw."
                 value={form.whatHappened}
                 onChange={update("whatHappened")}
@@ -139,8 +141,12 @@ export function ReportIssueDialog(
               />
             </Field>
 
-            <Field label="Steps to reproduce">
+            <Field
+              htmlFor="report-issue-steps-to-reproduce"
+              label="Steps to reproduce"
+            >
               <Textarea
+                id="report-issue-steps-to-reproduce"
                 placeholder={"1.\n2.\n3."}
                 value={form.stepsToReproduce}
                 onChange={update("stepsToReproduce")}
@@ -150,8 +156,12 @@ export function ReportIssueDialog(
             </Field>
 
             <div className="grid grid-cols-2 gap-4">
-              <Field label="Expected behavior">
+              <Field
+                htmlFor="report-issue-expected-behavior"
+                label="Expected behavior"
+              >
                 <Textarea
+                  id="report-issue-expected-behavior"
                   placeholder="What did you expect to happen?"
                   value={form.expectedBehavior}
                   onChange={update("expectedBehavior")}
@@ -159,8 +169,12 @@ export function ReportIssueDialog(
                   className="min-h-20 resize-none"
                 />
               </Field>
-              <Field label="Actual behavior">
+              <Field
+                htmlFor="report-issue-actual-behavior"
+                label="Actual behavior"
+              >
                 <Textarea
+                  id="report-issue-actual-behavior"
                   placeholder="What actually happened instead?"
                   value={form.actualBehavior}
                   onChange={update("actualBehavior")}
@@ -273,10 +287,12 @@ function supportHostIssueFields(snapshot: DesktopSupportSnapshot | null) {
 }
 
 function Field({
+  htmlFor,
   label,
   required,
   children,
 }: {
+  htmlFor: string;
   label: string;
   required?: boolean;
   children: ReactNode;
@@ -284,6 +300,7 @@ function Field({
   return (
     <div className="grid gap-1.5">
       <Label
+        htmlFor={htmlFor}
         className={cn(
           "text-ui-sm",
           required && "after:ml-0.5 after:text-destructive after:content-['*']",

@@ -31,5 +31,5 @@ function normalizeReportContextValue(value: string | null): string | null {
   const normalized = value.replace(/\s+/g, " ").trim();
   if (normalized.length === 0) return null;
   if (normalized.length <= MAX_REPORT_CONTEXT_LENGTH) return normalized;
-  return `${normalized.slice(0, MAX_REPORT_CONTEXT_LENGTH)}…`;
+  return `${normalized.slice(0, MAX_REPORT_CONTEXT_LENGTH - 1)}…`;
 }

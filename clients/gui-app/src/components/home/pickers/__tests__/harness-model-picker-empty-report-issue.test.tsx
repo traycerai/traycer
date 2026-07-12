@@ -50,6 +50,7 @@ describe("<ModelRowsState /> catalog and model failure report actions", () => {
       activeDialog: null,
       reportIssueAvailable: false,
       reportIssueContext: null,
+      reportIssueDraftId: 0,
     });
   });
 
@@ -62,7 +63,7 @@ describe("<ModelRowsState /> catalog and model failure report actions", () => {
       rowsCount: 0,
     });
 
-    screen.getByText("Couldn't load providers");
+    screen.getByRole("option", { name: "Couldn't load providers" });
     expect(screen.queryByRole("button", { name: "Report issue" })).toBeNull();
   });
 
@@ -112,7 +113,9 @@ describe("<ModelRowsState /> catalog and model failure report actions", () => {
     expect(reportButton.closest('[aria-disabled="true"]')).toBeNull();
     expect(reportButton.hasAttribute("disabled")).toBe(false);
     // The option row itself is still present, describing the same failure.
-    expect(screen.getByRole("option")).toBeTruthy();
+    expect(
+      screen.getByRole("option", { name: "Couldn't load providers" }),
+    ).toBeTruthy();
   });
 
   it("reports only fixed generic context for a selected-provider model load failure, never the raw host message", () => {
@@ -135,7 +138,9 @@ describe("<ModelRowsState /> catalog and model failure report actions", () => {
 
     // The raw host reason is still shown to the user inline (existing UX) -
     // only the report context must stay generic.
-    screen.getByText("secret-token-should-never-render /Users/hostile/path");
+    screen.getByRole("option", {
+      name: "secret-token-should-never-render /Users/hostile/path",
+    });
     expect(screen.queryByRole("button", { name: "Report issue" })).toBeNull();
 
     act(() => {
@@ -165,7 +170,7 @@ describe("<ModelRowsState /> catalog and model failure report actions", () => {
       activeProvider: null,
       rowsCount: 0,
     });
-    screen.getByText("No models available");
+    screen.getByRole("option", { name: "No models available" });
     expect(screen.queryByRole("button", { name: "Report issue" })).toBeNull();
 
     cleanup();
@@ -179,7 +184,7 @@ describe("<ModelRowsState /> catalog and model failure report actions", () => {
       activeProvider: null,
       rowsCount: 0,
     });
-    screen.getByText("Loading models");
+    screen.getByRole("option", { name: "Loading models" });
     expect(screen.queryByRole("button", { name: "Report issue" })).toBeNull();
   });
 
@@ -199,7 +204,7 @@ describe("<ModelRowsState /> catalog and model failure report actions", () => {
       rowsCount: 0,
     });
 
-    screen.getByText("Add API key");
+    screen.getByRole("button", { name: "Add API key" });
     expect(screen.queryByRole("button", { name: "Report issue" })).toBeNull();
   });
 });
