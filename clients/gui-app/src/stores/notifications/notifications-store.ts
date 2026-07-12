@@ -88,10 +88,9 @@ function createNotificationsReplica(): NotificationsReplica {
     }
     out.sort((a, b) => b.createdAt - a.createdAt);
     const entryIds = out.map((entry) => entry.id);
-    let projectionKey = `${out.length}`;
-    for (const entry of out) {
-      projectionKey += `|${entry.id}:${entry.createdAt}:${entry.readAt ?? ""}`;
-    }
+    const projectionKey = `${out.length}${out
+      .map((entry) => `|${entry.id}:${entry.createdAt}:${entry.readAt ?? ""}`)
+      .join("")}`;
     if (projectionKey === lastProjectionKey) {
       return {
         entries: lastEntries,

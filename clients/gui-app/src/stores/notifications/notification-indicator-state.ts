@@ -23,11 +23,7 @@ export const EMPTY_NOTIFICATION_INDICATOR_STATE: NotificationIndicatorState = {
   unreadDone: false,
 };
 
-const EMPTY_HOST_INDICATOR_STATE: NotificationIndicatorState = {
-  unreadFailure: false,
-  pendingPrompt: false,
-  unreadDone: false,
-};
+const EMPTY_HOST_INDICATOR_STATE = EMPTY_NOTIFICATION_INDICATOR_STATE;
 
 export function selectNotificationIndicatorState(
   state: Pick<AppLocalNotificationsState, "byId">,

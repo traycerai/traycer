@@ -191,7 +191,7 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
   });
   useEffect(() => {
     crashExitReportedRef.current = false;
-  }, [recovery.recoverNonce]);
+  }, [props.node.instanceId]);
   // Open the load timeline at the outermost mount so the reachability gate
   // (which can show a skeleton first) counts toward first-paint time.
   const sessionId = props.node.id;

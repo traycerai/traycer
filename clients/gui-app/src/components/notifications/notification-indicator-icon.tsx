@@ -28,20 +28,13 @@ export function NotificationIndicatorIcon(
   }
   if (props.running) {
     return (
-      <span
-        className={cn(
-          "inline-flex size-3.5 shrink-0 items-center justify-center",
-          props.className,
-        )}
-        style={props.style}
+      <IndicatorSpan
+        indicatorProps={props}
         title={props.runningTitle}
-      >
-        <AgentSpinningDots
-          className="text-current"
-          testId={`${props.testIdPrefix}-activity-${props.subjectId}`}
-          variant={undefined}
-        />
-      </span>
+        dotsClassName="text-current"
+        testId={`${props.testIdPrefix}-activity-${props.subjectId}`}
+        variant={undefined}
+      />
     );
   }
   if (props.state.unreadDone) {
@@ -87,18 +80,38 @@ function IndicatorDot(props: {
   readonly indicatorProps: NotificationIndicatorIconProps;
 }): ReactNode {
   return (
+    <IndicatorSpan
+      indicatorProps={props.indicatorProps}
+      title={props.tone.title}
+      dotsClassName={props.tone.className}
+      testId={`${props.indicatorProps.testIdPrefix}-${props.tone.testId}-${props.indicatorProps.subjectId}`}
+      variant="static"
+    />
+  );
+}
+
+function IndicatorSpan(props: {
+  readonly indicatorProps: NotificationIndicatorIconProps;
+  readonly title: string;
+  readonly dotsClassName: string;
+  readonly testId: string;
+  readonly variant: "static" | undefined;
+}): ReactNode {
+  return (
     <span
+      role="status"
+      aria-label={props.title}
       className={cn(
         "inline-flex size-3.5 shrink-0 items-center justify-center",
         props.indicatorProps.className,
       )}
       style={props.indicatorProps.style}
-      title={props.tone.title}
+      title={props.title}
     >
       <AgentSpinningDots
-        className={cn(props.tone.className)}
-        testId={`${props.indicatorProps.testIdPrefix}-${props.tone.testId}-${props.indicatorProps.subjectId}`}
-        variant="static"
+        className={cn(props.dotsClassName)}
+        testId={props.testId}
+        variant={props.variant}
       />
     </span>
   );

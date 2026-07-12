@@ -152,10 +152,12 @@ export function createAppLocalNotificationsStore(initialName: string) {
                 notificationPayloadBelongsToEntity(entry.payload, entity),
             );
             if (unreadEntries.length === 0) return state;
-            const byId = { ...state.byId };
-            for (const entry of unreadEntries) {
-              byId[entry.id] = { ...entry, readAt };
-            }
+            const byId = {
+              ...state.byId,
+              ...Object.fromEntries(
+                unreadEntries.map((entry) => [entry.id, { ...entry, readAt }]),
+              ),
+            };
             const projection = projectAppLocalNotifications(byId);
             return {
               byId,
@@ -172,10 +174,12 @@ export function createAppLocalNotificationsStore(initialName: string) {
               (entry) => entry.readAt === null,
             );
             if (unreadEntries.length === 0) return state;
-            const byId = { ...state.byId };
-            for (const entry of unreadEntries) {
-              byId[entry.id] = { ...entry, readAt };
-            }
+            const byId = {
+              ...state.byId,
+              ...Object.fromEntries(
+                unreadEntries.map((entry) => [entry.id, { ...entry, readAt }]),
+              ),
+            };
             const projection = projectAppLocalNotifications(byId);
             return {
               byId,

@@ -17,7 +17,9 @@ describe("indicatorRequests", () => {
     expect(requests[0].epicIds).toHaveLength(
       HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP,
     );
-    expect(requests[1].epicIds).toEqual(["epic-500"]);
+    expect(requests[1].epicIds).toEqual([
+      `epic-${String(HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP).padStart(3, "0")}`,
+    ]);
     expect(requests[0].chatIds).toEqual(["chat-a", "chat-b"]);
     expect(requests[1].chatIds).toEqual([]);
   });

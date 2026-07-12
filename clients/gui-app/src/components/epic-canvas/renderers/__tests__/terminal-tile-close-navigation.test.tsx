@@ -243,6 +243,11 @@ describe("<TerminalTile /> close navigation", () => {
         1,
       );
     });
+    const notificationId =
+      useAppLocalNotificationsStore.getState().orderedIds[0];
+    expect(
+      useAppLocalNotificationsStore.getState().byId[notificationId].kind,
+    ).toBe("terminal.crashed");
     expectTileOpen(fixture.viewTabId, fixture.closingNode.instanceId);
     expect(testState.navigateNested).not.toHaveBeenCalled();
   });

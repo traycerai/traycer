@@ -19,14 +19,16 @@ export function displayNotificationRows(
   if (rows.length === 0) return;
   const content = buildNotificationToastContent(rows);
   try {
-    void target.showNotification(
-      content.title,
-      content.body,
-      content.payload,
-      content.replaceKey,
-    ).catch(() => {
-      // The feed remains authoritative; a failed native toast is non-critical.
-    });
+    void target
+      .showNotification(
+        content.title,
+        content.body,
+        content.payload,
+        content.replaceKey,
+      )
+      .catch(() => {
+        // The feed remains authoritative; a failed native toast is non-critical.
+      });
   } catch {
     // The feed remains authoritative; a failed native toast is non-critical.
   }

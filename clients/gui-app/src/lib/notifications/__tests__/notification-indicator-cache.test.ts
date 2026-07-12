@@ -18,7 +18,7 @@ import {
   invalidateNotificationIndicatorsForEntities,
 } from "@/lib/notifications/notification-indicator-cache";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
-import { notificationsQueryKeys } from "@/lib/query-keys";
+import { notificationsQueryKeys, queryKeys } from "@/lib/query-keys";
 
 function indicatorKey(input: {
   readonly hostId: string;
@@ -27,10 +27,13 @@ function indicatorKey(input: {
   readonly chatIds: ReadonlyArray<string>;
 }) {
   return [
-    "host",
-    input.hostId,
-    "host.notifications.indicatorState",
-    { epicIds: input.epicIds, chatIds: input.chatIds },
+    ...queryKeys.hostMethod<
+      HostRpcRegistry,
+      "host.notifications.indicatorState"
+    >(input.hostId, "host.notifications.indicatorState", {
+      epicIds: [...input.epicIds],
+      chatIds: [...input.chatIds],
+    }),
     notificationsQueryKeys.indicatorIdentity(input.userId),
   ] as const;
 }

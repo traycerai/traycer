@@ -53,6 +53,16 @@ describe("notification display", () => {
       sourceId: "epic-entry",
       payload: { kind: "epic", epicId: "epic-2" },
     };
+    const interviewRow: MergedNotificationRow = {
+      ...chatRow,
+      sourceId: "interview-entry",
+      payload: {
+        kind: "interview",
+        epicId: "epic-3",
+        chatId: "chat-3",
+        interviewBlockId: "interview-1",
+      },
+    };
     const idFallbackRow: MergedNotificationRow = {
       ...chatRow,
       sourceId: "unparseable-entry",
@@ -66,6 +76,7 @@ describe("notification display", () => {
 
     expect(notificationReplaceKey(chatRow)).toBe("host:chat:chat-1");
     expect(notificationReplaceKey(epicRow)).toBe("host:epic:epic-2");
+    expect(notificationReplaceKey(interviewRow)).toBe("host:chat:chat-3");
     expect(notificationReplaceKey(idFallbackRow)).toBe(
       "host:id:unparseable-entry",
     );
@@ -109,5 +120,21 @@ describe("notification display", () => {
       expect.anything(),
       "notification-batch",
     );
+  });
+
+  it("still plays the chime when native notification setup throws", () => {
+    const showNotification = vi.fn(() => {
+      throw new Error("native notification unavailable");
+    });
+    const playChime = vi.fn();
+
+    expect(() => {
+      displayNotificationRows([row("Agent finished")], {
+        showNotification,
+        playChime,
+      });
+    }).not.toThrow();
+
+    expect(playChime).toHaveBeenCalledOnce();
   });
 });

@@ -197,10 +197,10 @@ export function useHostQueriesWithResponseMap<
       },
     });
   });
-  const combine: (
-    results: Array<UseQueryResult<TData, HostRpcError>>,
-  ) => unknown = hasCombine(args) ? args.combine : (results) => results;
-  return useQueries({ queries, combine });
+  const useQueriesOptions = hasCombine(args)
+    ? { queries, combine: args.combine }
+    : { queries };
+  return useQueries(useQueriesOptions);
 }
 
 function hasCombine<

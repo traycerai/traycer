@@ -37,12 +37,11 @@ describe("<EpicNodeTabIcon /> terminal indicator", () => {
 
     renderTerminalTabIcon();
 
-    expect(
-      screen.getByTestId("terminal-tab-failure-terminal-1").className,
-    ).toContain("text-red-500");
-    expect(
-      screen.getByTestId("terminal-tab-failure-terminal-1").textContent,
-    ).toBe("⠿");
+    const indicator = screen.getByRole("status", {
+      name: "Task needs attention",
+    });
+    expect(indicator.firstElementChild?.className).toContain("text-red-500");
+    expect(indicator.textContent).toBe("⠿");
 
     act(() => {
       useAppLocalNotificationsStore
@@ -53,7 +52,9 @@ describe("<EpicNodeTabIcon /> terminal indicator", () => {
         );
     });
 
-    expect(screen.queryByTestId("terminal-tab-failure-terminal-1")).toBeNull();
+    expect(
+      screen.queryByRole("status", { name: "Task needs attention" }),
+    ).toBeNull();
   });
 });
 
