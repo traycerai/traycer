@@ -64,6 +64,7 @@ import { useProviderReauthGate } from "../use-provider-reauth-gate";
 import { useProfileRateLimitSwitchPrompt } from "../use-profile-rate-limit-switch-prompt";
 import { ProfileRateLimitSwitchBanner } from "../profile-rate-limit-switch-banner";
 import { resolveComposerTopBannerKind } from "../chat-composer-top-banner";
+import { useRateLimitSwitchPromptDismissalsStore } from "@/stores/rate-limits/rate-limit-switch-prompt-dismissals-store";
 
 function profile(
   profileId: string,
@@ -278,6 +279,9 @@ describe("D2: rate-limit switch prompt race (stale click vs. live re-validation)
     mocks.refresh.mockClear();
     mocks.toastSuccess.mockClear();
     mocks.toastError.mockClear();
+    useRateLimitSwitchPromptDismissalsStore.setState({
+      dismissedKeys: new Set<string>(),
+    });
   });
 
   it("shows ambient drift before rate-limit and moves to rate-limit after acknowledging drift without submitting", () => {
@@ -469,6 +473,9 @@ describe("D2: rate-limit switch prompt race (stale click vs. live re-validation)
 describe("D3: every profile of the provider is hard-limited", () => {
   beforeEach(() => {
     mocks.providers = [];
+    useRateLimitSwitchPromptDismissalsStore.setState({
+      dismissedKeys: new Set<string>(),
+    });
   });
   afterEach(() => {
     cleanup();
