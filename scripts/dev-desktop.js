@@ -546,6 +546,28 @@ function buildDevDesktopEntries(hostLogPath, slot, port) {
   ];
 }
 
+// Collapse every shutdown trigger (terminal signal, child exit, spawn error)
+// onto one promise. A boolean-only guard lets later triggers return while the
+// first async teardown is still running; their process.exit() can then cut the
+// host uninstall short and leave the slot's host alive for the next launch.
+function createTeardown(onTeardown) {
+  let teardownPromise = null;
+  return function teardown() {
+    if (teardownPromise !== null) return teardownPromise;
+    teardownPromise = (async () => {
+      if (typeof onTeardown !== "function") return;
+      try {
+        await onTeardown();
+      } catch (err) {
+        console.warn(
+          `[dev-desktop] teardown error: ${err && err.message ? err.message : err}`,
+        );
+      }
+    })();
+    return teardownPromise;
+  };
+}
+
 // Spawn `concurrently` with the supplied stream entries, install signal
 // forwarders, and exit when either the user hits Ctrl-C or a child dies. Calls
 // `onTeardown` exactly once (signal path or exit/error path) before exiting.
@@ -573,19 +595,7 @@ function runConcurrentStack(options) {
     { stdio: "inherit", cwd, env: process.env },
   );
 
-  let tornDown = false;
-  async function teardown() {
-    if (tornDown) return;
-    tornDown = true;
-    if (typeof onTeardown !== "function") return;
-    try {
-      await onTeardown();
-    } catch (err) {
-      console.warn(
-        `[dev-desktop] teardown error: ${err && err.message ? err.message : err}`,
-      );
-    }
-  }
+  const teardown = createTeardown(onTeardown);
 
   const forwardSignal = (signal) => async () => {
     await teardown();
@@ -720,6 +730,7 @@ module.exports = {
   buildHostUninstallArgs,
   buildDevDesktopEntries,
   buildDevDesktopSlotEnv,
+  createTeardown,
   parseReleaseArg,
   parseSlotArg,
   resolveDevDesktopSlot,
