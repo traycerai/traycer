@@ -630,11 +630,32 @@ function upgradeResponseAlongChain<Payload>(
   method: string,
 ): Payload {
   try {
+    // The host is the older side here, so `result` is raw wire data framed at
+    // `fromVersion` - the one place old-host payloads enter the client. Parse
+    // it through that version's response schema before upgrading so the
+    // line's `.catch(...)` tolerances (fields added mid-line that old host
+    // builds omit, e.g. `providers.list@3.0`'s `profiles`) actually apply -
+    // otherwise the upgraded payload can violate the caller's canonical type
+    // and blow up deep in app code instead of at this boundary. A version
+    // absent from the registry falls through untouched and surfaces the
+    // chain's own not-installed error below.
+    const fromEntry =
+      methodRegistry[fromVersion.major].versions[fromVersion.minor];
+    let chainInput = result;
+    if (fromEntry !== undefined) {
+      const parsed = fromEntry.contract.responseSchema.safeParse(result);
+      if (!parsed.success) {
+        throw new Error(
+          `response does not match the ${fromVersion.major}.${fromVersion.minor} response schema: ${parsed.error.message}`,
+        );
+      }
+      chainInput = parsed.data;
+    }
     const upgraded = upgradeResponseToVersion(
       methodRegistry,
       fromVersion,
       toVersion,
-      result as never,
+      chainInput as never,
     );
     return upgraded as Payload;
   } catch (cause) {

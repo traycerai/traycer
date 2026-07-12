@@ -670,18 +670,11 @@ export const providersListUpgradeV2ToV3 = defineUpgradePath<
 >({
   from: { major: 2, minor: 0 },
   to: { major: 3, minor: 0 },
-  // A v2.0 response without Amp is a valid v3.0 response modulo `profiles`,
-  // and the request shape is identical - the request upgrade is identity. A
-  // v2.0 host predates profiles entirely, so its response upgrades to
-  // `profiles: []` per provider (same "old host never had this feature"
-  // semantics as the v1.0 -> v2.0 upgrade above).
+  // A v2.0 response without Amp is a valid v3.0 response, and the request
+  // shape is identical - both upgrades are identity. (`profiles` belongs to
+  // the v4.0 line; the v3→v4 upgrade below fills it.)
   upgradeRequest: (request) => request,
-  upgradeResponse: (response) => ({
-    providers: response.providers.map((provider) => ({
-      ...provider,
-      profiles: [],
-    })),
-  }),
+  upgradeResponse: (response) => response,
 });
 
 export const providersListDowngradeV3ToV2 = defineDowngradePath<
@@ -727,11 +720,19 @@ export const providersListUpgradeV3ToV4 = defineUpgradePath<
 >({
   from: { major: 3, minor: 0 },
   to: { major: 4, minor: 0 },
-  // A v3.0 response without Devin/Pi is a valid v4.0 response (purely
-  // additive), and the request shape is identical - both upgrades are
-  // identity.
+  // The request shape is identical - the request upgrade is identity. The
+  // response gains `profiles`, which ships with the v4.0 line: every host on
+  // the v3.0 line (and below) predates it, so its providers upgrade to
+  // `profiles: []` (same "old host never had this feature" semantics as the
+  // v1.0 -> v2.0 `availabilityPending` fill above). Devin/Pi absence needs no
+  // transform - a v3.0 provider set is a valid v4.0 subset.
   upgradeRequest: (request) => request,
-  upgradeResponse: (response) => response,
+  upgradeResponse: (response) => ({
+    providers: response.providers.map((provider) => ({
+      ...provider,
+      profiles: [],
+    })),
+  }),
 });
 
 export const providersListDowngradeV4ToV3 = defineDowngradePath<

@@ -481,10 +481,11 @@ const providerCliStateBaseShape = {
   // Per-profile rows for this provider: the ambient login plus any
   // Traycer-managed subscriptions. `[]` for providers that don't support the
   // multi-profile capability (gated per-adapter, see the decision log's
-  // rollout row) and for old host builds that predate profiles - `.catch([])`
-  // tolerates both the same way `availabilityPending` does above. UI
-  // affordances only appear once a provider has 2+ rows (progressive
-  // disclosure).
+  // rollout row). The field ships with the v4.0 line: hosts on older lines
+  // never send it and the v3→v4 upgrade bridge fills `profiles: []` ("old
+  // host never had this feature"), with `.catch([])` kept as parse-time
+  // hardening. UI affordances only appear once a provider has 2+ rows
+  // (progressive disclosure).
   profiles: z.array(providerProfileSchema).catch([]),
 };
 
@@ -568,14 +569,21 @@ export type ProvidersListResponseV20 = z.infer<
 
 // ── Frozen protocol-v3.0 provider state + list response (with Amp, before ──
 // Devin/Pi). `providers.list` always returns every provider; v3.0 shipped with
-// Amp (and profiles[]). The v4.0 line adds Devin/Pi and a v4→v3 (and v4→v2 /
-// v4→v1) downgrade bridge filters them for older callers. Do not add new
-// providers here - use the existing v4 bridge.
+// Amp and WITHOUT `profiles` - multi-profile landed mid-line but never reached
+// a released host on this line, so `profiles` belongs to the v4.0 cut and the
+// v3→v4 upgrade fills `profiles: []` for v3.0 hosts. The v4.0 line also adds
+// Devin/Pi, and the v4→v3 (and v4→v2 / v4→v1) downgrade bridges filter them
+// for older callers. Do not add new providers or fields here - use the
+// existing v4 bridge.
 //
-// Built as a snapshot of the live base shape as of the v3.0 freeze (includes
-// `profiles`) with the frozen v3.0 provider-id enum - NOT derived via
+// Built as a hand-frozen snapshot of the base shape as actually released on
+// the v3.0 line, with the frozen v3.0 provider-id enum - NOT derived via
 // `.extend()` from the live schema, so future live-only fields do not leak
-// into the v3.0 wire for already-shipped clients.
+// into the v3.0 wire for already-shipped clients. The plain (non-strict)
+// `z.object` built from this shape also silently DROPS an unmodeled
+// `profiles` key, so the v4.0->v3.0 downgrade strips profile identity
+// (email, label) off the wire for v3.0 callers that never negotiated profile
+// support - same mechanism as `providerCliStateBaseShapeV20`.
 const providerCliStateBaseShapeV30 = {
   enabled: z.boolean(),
   disabledBy: providerDisabledBySchema.nullable(),
@@ -588,7 +596,6 @@ const providerCliStateBaseShapeV30 = {
   envOverrides: z.array(providerEnvOverrideSchema).catch([]),
   loginCapability: providerLoginCapabilitySchema.nullable().catch(null),
   availabilityPending: z.boolean().catch(false),
-  profiles: z.array(providerProfileSchema).catch([]),
 };
 
 export const providerCliStateSchemaV30 = z.object({
@@ -1060,7 +1067,10 @@ export function downgradeProviderCliStateListToV20(
 
 // Downgrades a latest-shaped (v4.0) provider-state list to the frozen v3.0
 // shape, dropping Devin/Pi (or any future post-v3.0 provider) so an already-
-// shipped v3.0 client's strict decode never sees it.
+// shipped v3.0 client's strict decode never sees it. The reparse also strips
+// `profiles` - the frozen v3.0 object doesn't model it - keeping profile
+// identity (email, label) off the wire for callers that never negotiated
+// profile support.
 export function downgradeProviderCliStateListToV30(
   states: readonly unknown[],
 ): ProviderCliStateV30[] {
