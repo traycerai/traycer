@@ -50,6 +50,7 @@ vi.mock("@/components/onboarding/onboarding-diorama", () => ({
         <>
           <textarea
             data-testid="mock-agent-guide-input"
+            aria-label="Agent selection guide"
             value={props.agentGuide.value}
             disabled={props.agentGuide.loading || props.agentGuide.saving}
             onChange={(event) =>
@@ -393,15 +394,17 @@ describe("OnboardingPage", () => {
 
     await advanceToStage(4);
 
-    const input = screen.getByTestId<HTMLTextAreaElement>(
-      "mock-agent-guide-input",
-    );
+    const input = screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: "Agent selection guide",
+    });
     expect(input.disabled).toBe(true);
     expect(
-      screen.getByTestId<HTMLButtonElement>("onboarding-advance").disabled,
+      screen.getByRole<HTMLButtonElement>("button", { name: /continue/i })
+        .disabled,
     ).toBe(false);
     expect(
-      screen.getByTestId<HTMLButtonElement>("onboarding-skip").disabled,
+      screen.getByRole<HTMLButtonElement>("button", { name: /skip intro/i })
+        .disabled,
     ).toBe(false);
 
     fireEvent.keyDown(window, { key: "Escape" });
@@ -424,15 +427,15 @@ describe("OnboardingPage", () => {
 
     await advanceToStage(4);
 
-    const input = screen.getByTestId<HTMLTextAreaElement>(
-      "mock-agent-guide-input",
-    );
+    const input = screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: "Agent selection guide",
+    });
     expect(input.disabled).toBe(false);
 
     fireEvent.change(input, {
       target: { value: "edited while providers settle" },
     });
-    fireEvent.click(screen.getByTestId("onboarding-skip"));
+    fireEvent.click(screen.getByRole("button", { name: /skip intro/i }));
 
     await waitFor(() => {
       expect(setGlobalGuideMock).toHaveBeenCalledWith({
