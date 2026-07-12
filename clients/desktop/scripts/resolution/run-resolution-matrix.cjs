@@ -189,7 +189,11 @@ async function runElectronPass(
   launchIndex,
 ) {
   const port = await getFreePort();
-  const electronBin = prepareElectronBinary(require("electron"), workspaceRoot);
+  const electronBin = prepareElectronBinary(
+    require("electron"),
+    workspaceRoot,
+    null,
+  );
   const args = [
     `--remote-debugging-port=${port}`,
     "--remote-allow-origins=*",

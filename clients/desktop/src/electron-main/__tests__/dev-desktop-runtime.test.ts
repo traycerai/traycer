@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { resolveDesktopRuntimeIdentity } from "../dev-desktop-runtime";
+import {
+  DEV_DESKTOP_DISPLAY_NAME_ENV,
+  resolveDesktopRuntimeIdentity,
+} from "../dev-desktop-runtime";
 import { DEV_DESKTOP_SLOT_ENV } from "../host/dev-desktop-slot";
 
 describe("dev desktop runtime helpers", () => {
@@ -15,6 +18,7 @@ describe("dev desktop runtime helpers", () => {
     expect(
       resolveDesktopRuntimeIdentity("Traycer Dev", "dev", {
         [DEV_DESKTOP_SLOT_ENV]: "traycer-spry-panda-a2acaa5e",
+        [DEV_DESKTOP_DISPLAY_NAME_ENV]: "Traycer Dev — spry-panda",
       }),
     ).toEqual({
       appName: "Traycer Dev — spry-panda",
@@ -23,10 +27,12 @@ describe("dev desktop runtime helpers", () => {
     });
   });
 
-  it("removes the generated hash from a worktree name without the traycer prefix", () => {
+  it("uses the threaded display name for a worktree without the traycer prefix", () => {
     expect(
       resolveDesktopRuntimeIdentity("Traycer Dev", "dev", {
         [DEV_DESKTOP_SLOT_ENV]: "fix-macos-ctrl-chord-passthrough-e1d873c7",
+        [DEV_DESKTOP_DISPLAY_NAME_ENV]:
+          "Traycer Dev — fix-macos-ctrl-chord-passthrough",
       }),
     ).toEqual({
       appName: "Traycer Dev — fix-macos-ctrl-chord-passthrough",
@@ -35,10 +41,11 @@ describe("dev desktop runtime helpers", () => {
     });
   });
 
-  it("keeps a slot with no worktree segment intact", () => {
+  it("uses the threaded full display name for a slot with no worktree segment", () => {
     expect(
       resolveDesktopRuntimeIdentity("Traycer Dev", "dev", {
         [DEV_DESKTOP_SLOT_ENV]: "traycer-85cb2355",
+        [DEV_DESKTOP_DISPLAY_NAME_ENV]: "Traycer Dev — traycer-85cb2355",
       }),
     ).toEqual({
       appName: "Traycer Dev — traycer-85cb2355",
@@ -51,6 +58,7 @@ describe("dev desktop runtime helpers", () => {
     expect(
       resolveDesktopRuntimeIdentity("Traycer Dev", "dev", {
         [DEV_DESKTOP_SLOT_ENV]: "Worktree Slot",
+        [DEV_DESKTOP_DISPLAY_NAME_ENV]: "Traycer Dev — worktree-slot",
       }),
     ).toEqual({
       appName: "Traycer Dev — worktree-slot",
