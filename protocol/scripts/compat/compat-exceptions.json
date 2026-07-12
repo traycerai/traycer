@@ -144,6 +144,38 @@
       "payload": "serverFrame",
       "path": "**.blocks.items.anyOf[*]",
       "reason": "Content-block union variants grow with gated product surfaces; old clients only render blocks their version knows for chats they can open."
+    },
+    {
+      "family": "stream",
+      "method": "chat.subscribe",
+      "version": "*",
+      "payload": "serverFrame",
+      "path": "**.profileId",
+      "reason": "Persistence-mirror profile field on a parsed stream: the chat stream client parses every serverFrame through the live schema, and the field is nullable/.default(null) where null IS the pre-profile semantic (ambient/legacy session) - an old 1.3 host's frames materialize exactly what a pre-profile session genuinely has. Old 1.3 clients parse with plain (stripping) objects, so a new host's frames degrade cleanly. Streams have no per-frame version transforms, so a minor bump would change nothing at runtime; the exception is scoped by field path, so unrelated additions stay guarded."
+    },
+    {
+      "family": "stream",
+      "method": "chat.subscribe",
+      "version": "*",
+      "payload": "serverFrame",
+      "path": "**.labelSnapshot",
+      "reason": "Persistence-mirror profile field on a parsed stream (see the **.profileId entry for the full rationale): nullable/.default(null), null is the pre-profile semantic, frames are live-schema-parsed both directions; scoped by field path."
+    },
+    {
+      "family": "stream",
+      "method": "chat.subscribe",
+      "version": "*",
+      "payload": "serverFrame",
+      "path": "**.accountUuid",
+      "reason": "Persistence-mirror profile field on a parsed stream (see the **.profileId entry for the full rationale): nullable/.default(null), null is the pre-profile semantic, frames are live-schema-parsed both directions; scoped by field path."
+    },
+    {
+      "family": "stream",
+      "method": "chat.subscribe",
+      "version": "*",
+      "payload": "serverFrame",
+      "path": "**.accentColor",
+      "reason": "Persistence-mirror profile field on a parsed stream (see the **.profileId entry for the full rationale): nullable/.default(null), null is the pre-profile semantic, the GUI additionally falls back to its own palette hash when null; scoped by field path."
     }
   ]
 }
