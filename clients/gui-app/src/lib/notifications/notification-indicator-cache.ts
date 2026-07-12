@@ -33,21 +33,7 @@ function invalidateMatchingNotificationIndicators(
   queryClient: QueryClient,
   filters: QueryFilters,
 ): void {
-  const fetchingQueries = queryClient
-    .getQueryCache()
-    .findAll(filters)
-    .filter((query) => query.state.fetchStatus === "fetching");
-  if (fetchingQueries.length === 0) {
-    void queryClient.invalidateQueries(filters);
-    return;
-  }
-  void queryClient
-    .cancelQueries({
-      predicate: (query) =>
-        query.state.fetchStatus === "fetching" &&
-        fetchingQueries.includes(query),
-    })
-    .then(() => queryClient.invalidateQueries(filters));
+  void queryClient.invalidateQueries(filters);
 }
 
 export function clearNotificationIndicatorCaches(

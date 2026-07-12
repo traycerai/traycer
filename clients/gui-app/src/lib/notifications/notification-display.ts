@@ -18,16 +18,18 @@ export function displayNotificationRows(
 ): void {
   if (rows.length === 0) return;
   const content = buildNotificationToastContent(rows);
-  void target
-    .showNotification(
+  try {
+    void target.showNotification(
       content.title,
       content.body,
       content.payload,
       content.replaceKey,
-    )
-    .catch(() => {
+    ).catch(() => {
       // The feed remains authoritative; a failed native toast is non-critical.
     });
+  } catch {
+    // The feed remains authoritative; a failed native toast is non-critical.
+  }
   target.playChime();
 }
 

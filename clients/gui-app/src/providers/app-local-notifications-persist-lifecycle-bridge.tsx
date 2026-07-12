@@ -35,6 +35,8 @@ export function AppLocalNotificationsPersistLifecycleBridge(
         useAppLocalNotificationsStore
           .getState()
           .activateIdentity(transitionUserId);
+      } else {
+        useAppLocalNotificationsStore.getState().deactivateIdentity();
       }
       return;
     }

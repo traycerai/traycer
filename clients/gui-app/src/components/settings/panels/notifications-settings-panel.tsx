@@ -186,6 +186,7 @@ function NotificationMatrix(props: {
       <SectionHeading
         title="Interruptions"
         description="Choose which severities can interrupt you in each channel. Informational collaboration activity stays feed-only."
+        trailing={undefined}
       />
       <div className="overflow-x-auto">
         <div className="grid min-w-full grid-cols-[minmax(0,1.35fr)_repeat(2,minmax(0,1fr))] gap-px overflow-hidden rounded-md border border-border/60 bg-border/60">
@@ -339,7 +340,7 @@ function WebhookSettingsFormDraft(props: {
                 setDraft((previous) => ({
                   ...previous,
                   secret: next,
-                  secretMode: next.length === 0 ? "clear" : "set",
+                  secretMode: next.length === 0 ? "leaveUnchanged" : "set",
                 }));
               }}
             />
@@ -385,7 +386,7 @@ function WebhookSettingsFormDraft(props: {
 function SectionHeading(props: {
   readonly title: string;
   readonly description: string;
-  readonly trailing?: ReactNode;
+  readonly trailing: ReactNode | undefined;
 }) {
   return (
     <div className="flex flex-wrap items-start justify-between gap-3">
