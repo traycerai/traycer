@@ -98,6 +98,7 @@ describe("F4: hostile profile labels - rate-limit switch banner", () => {
           },
         ]}
         onSwitchProfile={() => undefined}
+        onDismiss={() => undefined}
       />,
     );
 

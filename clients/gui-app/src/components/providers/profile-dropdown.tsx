@@ -7,6 +7,7 @@ import {
   DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Kbd } from "@/components/ui/kbd";
 import { AccentDot } from "@/components/providers/accent-dot";
 import {
   profileCommitId,
@@ -144,7 +145,9 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
                 <DropdownMenuShortcut
                   data-testid={`model-profile-digit-${shortcutHint.digit}`}
                 >
-                  {shortcutHint.label}
+                  <Kbd className="font-mono tabular-nums">
+                    {shortcutHint.label}
+                  </Kbd>
                 </DropdownMenuShortcut>
               ) : null}
               <span className="pointer-events-none flex size-4 shrink-0 items-center justify-center">

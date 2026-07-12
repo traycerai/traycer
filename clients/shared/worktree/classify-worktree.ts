@@ -1,7 +1,7 @@
 import type {
   WorktreeBranchStatus,
-  WorktreeHostEntryV11,
-  WorktreeSubmoduleMergeFact,
+  WorktreeHostEntryV12,
+  WorktreeSubmoduleMergeFactV12,
 } from "@traycer/protocol/host/index";
 
 /**
@@ -116,7 +116,9 @@ export function worktreeTierRank(tier: WorktreeTier): number {
  *     case: submodule commits landed on the submodule branch but its PR hasn't
  *     merged, while the superproject gitlink was never bumped - the superproject
  *     looks clean/at-base). Proof per fact mirrors the superproject greens:
- *     a HEAD-validated merged PR, or local `mergedIntoDefault` ancestry.
+ *     a HEAD-validated merged PR, local `mergedIntoDefault` ancestry, or
+ *     `atPinnedCommit` (the branch/tip equals the superproject's pinned gitlink
+ *     and carries nothing beyond that pin).
  *     `submodules: []` (none owned, or `includeActivity: false`) gates nothing.
  *  6. `prState === "merged" && mergedHeadShaMatches` → **merged** (green, PR
  *     provenance). Highest green - the authoritative signal that the work landed.
@@ -147,7 +149,7 @@ export function worktreeTierRank(tier: WorktreeTier): number {
  * branch is only ever Landed (proven contained), At base commit, or Review.
  */
 export function classifyWorktreeTier(
-  entry: WorktreeHostEntryV11,
+  entry: WorktreeHostEntryV12,
 ): WorktreeTier {
   if (entry.inUse) return "in-use";
   if (!entry.gitRemovable) return "orphaned";
@@ -174,15 +176,87 @@ export function classifyWorktreeTier(
 }
 
 /**
- * A single owned-submodule branch is proven merged the same two ways the
- * superproject greens: a HEAD-validated merged PR (`prState === "merged"` with
- * the host's live-HEAD match), or local `mergedIntoDefault` ancestry. `prState`
- * null (not probed) or `"none"` proves nothing on its own - the local ancestry
- * bit is then the only possible proof.
+ * Specific, non-exclusive blockers for a Review row. Kept separate from the
+ * tier classifier: the ladder still picks one tier, while this reports every
+ * contributing risk the user should inspect.
  */
-function submoduleMergeProven(fact: WorktreeSubmoduleMergeFact): boolean {
+export function describeReviewReasons(
+  entry: WorktreeHostEntryV12,
+): readonly string[] {
+  if (classifyWorktreeTier(entry) !== "review") return [];
+  const status = entry.branchStatus;
+  return [
+    ...(entry.uncommittedCount > 0
+      ? [
+          `${entry.uncommittedCount} uncommitted change${entry.uncommittedCount === 1 ? "" : "s"}`,
+        ]
+      : []),
+    ...(entry.branch === null ? ["Detached HEAD"] : []),
+    ...entry.submodules
+      .filter((fact) => !submoduleMergeProven(fact))
+      .map(describeUnprovenSubmodule),
+    ...(entry.prState === "merged" && !entry.mergedHeadShaMatches
+      ? ["Merged PR does not cover the current HEAD"]
+      : []),
+    ...(entry.prState === "open" ? ["Superproject PR is open"] : []),
+    ...(entry.prState === "closed"
+      ? ["Superproject PR was closed without merging"]
+      : []),
+    ...(entry.prState === "none" &&
+    status !== null &&
+    status.ahead !== null &&
+    status.ahead > 0
+      ? [
+          `No PR for ${status.ahead} unmerged commit${status.ahead === 1 ? "" : "s"}`,
+        ]
+      : []),
+    // `ahead === null` = no upstream to diff against: the branch was never
+    // pushed (or its remote ref is gone), so its unmerged commits are not
+    // recoverable from anywhere else - the highest-stakes Review shape, and it
+    // must say so rather than fall back to the generic tier help.
+    ...(entry.prState === "none" &&
+    status !== null &&
+    status.ahead === null &&
+    !status.mergedIntoDefault
+      ? [
+          "Commits with no PR that were never pushed - they exist only in this worktree",
+        ]
+      : []),
+    ...(entry.prState === null ? ["Checking merge status…"] : []),
+    ...(status !== null && status.ahead === 0 && entry.owners.length > 0
+      ? ["Referenced by a Task at the upstream tip"]
+      : []),
+  ];
+}
+
+/**
+ * A single owned-submodule branch is proven merged the same two ways the
+ * superproject greens, plus the submodule-specific at-pin proof: a
+ * HEAD-validated merged PR (`prState === "merged"` with the host's live-HEAD
+ * match), local `mergedIntoDefault` ancestry, or `atPinnedCommit`. `prState`
+ * null (not probed) or `"none"` proves nothing on its own - the local proof bits
+ * are then the only possible proof.
+ */
+function submoduleMergeProven(fact: WorktreeSubmoduleMergeFactV12): boolean {
   if (fact.prState === "merged" && fact.mergedHeadShaMatches) return true;
-  return fact.mergedIntoDefault;
+  return fact.mergedIntoDefault || fact.atPinnedCommit;
+}
+
+function describeUnprovenSubmodule(
+  fact: WorktreeSubmoduleMergeFactV12,
+): string {
+  const name = `${fact.repoIdentifier.owner}/${fact.repoIdentifier.repo} (${fact.branch})`;
+  if (fact.unmergedCommitCount !== null && fact.unmergedCommitCount >= 1) {
+    return `${name}: ${fact.unmergedCommitCount} unmerged commit${fact.unmergedCommitCount === 1 ? "" : "s"}`;
+  }
+  if (fact.prState === "open" || fact.prState === "closed") {
+    return `${name}: PR is ${fact.prState}`;
+  }
+  if (fact.prState === null) return `${name}: still checking merge status`;
+  if (fact.prState === "merged") {
+    return `${name}: merged PR does not cover the current HEAD`;
+  }
+  return `${name}: unmerged commits`;
 }
 
 /**
@@ -193,7 +267,7 @@ function submoduleMergeProven(fact: WorktreeSubmoduleMergeFact): boolean {
  * `unreferenced`. Deriving it from `classifyWorktreeTier` guarantees the pill the
  * user sees and the bulk cohort can never disagree.
  */
-export function provenRemovable(entry: WorktreeHostEntryV11): boolean {
+export function provenRemovable(entry: WorktreeHostEntryV12): boolean {
   const tier = classifyWorktreeTier(entry);
   return (
     tier === "merged" || tier === "at-base-commit" || tier === "unreferenced"
@@ -201,7 +275,7 @@ export function provenRemovable(entry: WorktreeHostEntryV11): boolean {
 }
 
 export function classifyWorktree(
-  entry: WorktreeHostEntryV11,
+  entry: WorktreeHostEntryV12,
 ): WorktreeClassification {
   const tier = classifyWorktreeTier(entry);
   const facts = worktreeFacts(entry, tier);
@@ -220,7 +294,7 @@ interface WorktreeFacts {
 }
 
 function worktreeFacts(
-  entry: WorktreeHostEntryV11,
+  entry: WorktreeHostEntryV12,
   tier: WorktreeTier,
 ): WorktreeFacts {
   // "clean" only reads as reassuring on the green-leaning tiers; elsewhere it is
@@ -257,7 +331,7 @@ function worktreeFacts(
  * classifier evaluates the PR row first.
  */
 function mergedProvenanceFacts(
-  entry: WorktreeHostEntryV11,
+  entry: WorktreeHostEntryV12,
   tier: WorktreeTier,
 ): string[] {
   if (tier !== "merged") return [];
@@ -282,7 +356,7 @@ function mergedProvenanceFacts(
  * covered by the tier itself.
  */
 function unprovenSubmoduleFacts(
-  submodules: readonly WorktreeSubmoduleMergeFact[],
+  submodules: readonly WorktreeSubmoduleMergeFactV12[],
 ): string[] {
   return submodules
     .filter((fact) => !submoduleMergeProven(fact))

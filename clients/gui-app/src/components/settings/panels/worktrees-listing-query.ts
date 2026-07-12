@@ -1,12 +1,12 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import {
   type InfiniteData,
   infiniteQueryOptions,
   useInfiniteQuery,
 } from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import type { WorktreeHostEntryV11 } from "@traycer/protocol/host/index";
-import type { WorktreeListAllForHostResponseV11 } from "@traycer/protocol/host/worktree-schemas";
+import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/index";
+import type { WorktreeListAllForHostResponseV12 } from "@traycer/protocol/host/worktree-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { type HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
@@ -24,7 +24,7 @@ const SETTINGS_WORKTREE_LIST_BASE_PARAMS = {
   cursor: null,
   limit: SETTINGS_WORKTREE_LIST_PAGE_LIMIT,
 } as const;
-const EMPTY_WORKTREES: readonly WorktreeHostEntryV11[] = [];
+const EMPTY_WORKTREES: readonly WorktreeHostEntryV12[] = [];
 
 /**
  * Base worktree listing - the instant, viewport-independent leg. It walks the
@@ -37,7 +37,7 @@ export function useWorktreeListing(
   client: HostClient<HostRpcRegistry> | null,
   reachable: boolean,
 ): {
-  readonly worktrees: readonly WorktreeHostEntryV11[];
+  readonly worktrees: readonly WorktreeHostEntryV12[];
   readonly isPending: boolean;
   readonly isError: boolean;
   readonly errorMessage: string | null;
@@ -66,7 +66,7 @@ export function useWorktreeListing(
     pageParam,
   }: {
     readonly pageParam: string | null;
-  }): Promise<WorktreeListAllForHostResponseV11> => {
+  }): Promise<WorktreeListAllForHostResponseV12> => {
     if (client === null) {
       throw hostClientUnavailableError("worktree.listAllForHost");
     }
@@ -92,9 +92,9 @@ export function useWorktreeListing(
     status,
   } = useInfiniteQuery(
     infiniteQueryOptions<
-      WorktreeListAllForHostResponseV11,
+      WorktreeListAllForHostResponseV12,
       HostRpcError,
-      InfiniteData<WorktreeListAllForHostResponseV11, string | null>,
+      InfiniteData<WorktreeListAllForHostResponseV12, string | null>,
       readonly unknown[],
       string | null
     >({
@@ -118,8 +118,13 @@ export function useWorktreeListing(
     if (isFetchingNextPage || isError) return;
     void fetchNextPage();
   }, [enabled, fetchNextPage, hasNextPage, isError, isFetchingNextPage]);
-  const worktrees =
-    data?.pages.flatMap((page) => page.worktrees) ?? EMPTY_WORKTREES;
+  // Memoized on `data` (structurally shared by TanStack), so consumers keyed on
+  // the array identity - the merge/search memos and the enrichment sweep's
+  // denominator - re-derive only when a page actually changes, not per render.
+  const worktrees = useMemo(
+    () => data?.pages.flatMap((page) => page.worktrees) ?? EMPTY_WORKTREES,
+    [data],
+  );
   // Perf telemetry (gated + non-throwing). Both legs now track the BASE query -
   // the real time-to-usable-list, which is what "snappy in any environment" means.
   useWorktreeListQueryPerf({

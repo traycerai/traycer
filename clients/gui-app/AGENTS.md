@@ -256,6 +256,17 @@ adding fields, actions, or selectors.
 - Start in `src/components/command-palette/` for the dialog shell, chips, pin
   toggle, and sub-page rendering.
 
+## Testing Philosophy
+
+- Prefer end-to-end tests that run as much of the real machinery as possible
+  (real filesystem, real watchers, real docs/stores) over isolated unit tests.
+  Most bugs live in the seams between layers, and an end-to-end test also fails
+  when an underlying unit is wrong — its capture group is strictly larger.
+- Fake only true external boundaries (network, cloud services) or sources of
+  nondeterminism.
+- Unit tests are acceptable for isolated logic, but treat them as a supplement,
+  never as the reason to skip exercising the integrated path.
+
 ## Testing Notes
 
 - Tests use Testing Library role queries, so semantic markup and accessible

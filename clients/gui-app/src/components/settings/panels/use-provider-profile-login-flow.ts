@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import type { UseMutationResult } from "@tanstack/react-query";
 import type {
   HostRpcError,
@@ -36,6 +36,7 @@ export type ProviderProfileLoginFlowMode = "create" | "reauth";
 
 export type ProviderProfileLoginFlowState =
   | { readonly kind: "start" }
+  | { readonly kind: "starting"; readonly cancelRequested: boolean }
   | {
       readonly kind: "waiting";
       readonly profileId: string | null;
@@ -46,18 +47,17 @@ export type ProviderProfileLoginFlowState =
       readonly profileId: string;
       readonly profile: ProviderProfile;
       readonly profiles: readonly ProviderProfile[];
+      readonly existingProfileId: string | null;
     }
-  | { readonly kind: "failed"; readonly message: string };
+  | { readonly kind: "failed"; readonly message: string }
+  | { readonly kind: "cancelled" };
 
 interface UseProviderProfileLoginFlowInput {
   readonly mode: ProviderProfileLoginFlowMode;
   readonly providerId: ProviderCliState["providerId"];
   /** Reauth mode always targets this existing profile - the flow awaits THIS
-   *  id regardless of what `startLogin`'s response echoes, and begins in
-   *  `waiting` immediately (there is no "start" screen for a reauth: mounting
-   *  the dialog always means a sign-in attempt is already underway). Create
-   *  mode has no profile yet, so it begins in `start` and awaits whatever id
-   *  `startLogin` mints. */
+   *  id regardless of what `startLogin`'s response echoes. Create mode has no
+   *  profile yet, so it awaits whatever id `startLogin` mints. */
   readonly existingProfileId: string | null;
   readonly startLogin: StartLoginMutation;
   readonly awaitLogin: AwaitLoginMutation;
@@ -84,34 +84,22 @@ export interface ProviderProfileLoginFlow {
    *  is pending. */
   readonly startPending: boolean;
   readonly start: (options: {
+    readonly label: string | null;
     readonly shareSkillsAndPlugins: boolean;
   }) => void;
   readonly cancel: () => void;
 }
 
-function initialState(
-  mode: ProviderProfileLoginFlowMode,
-  existingProfileId: string | null,
-): ProviderProfileLoginFlowState {
-  return mode === "reauth"
-    ? { kind: "waiting", profileId: existingProfileId, url: null }
-    : { kind: "start" };
-}
-
 /**
  * Shared OAuth login-flow state machine (multi-profile UX overhaul, S10):
- * owns the start -> waiting -> identity | failed transitions and the
- * `providers.startLogin` / `providers.awaitLogin` / `providers.cancelLogin`
- * mutation callbacks, so the add-profile and reauth dialogs stop hand-rolling
- * the same flow twice (each previously carried parallel nullable fields and
- * an empty `onSettled`).
+ * owns the start -> starting -> waiting -> identity | failed transitions,
+ * including cancellation before `startLogin` returns, and the three provider
+ * login mutations shared by the add-profile and inline reauth panels.
  *
- * Callers render their own UI per `state.kind`; naming/coloring (the
- * add-profile dialog's "details" step) is form state layered on top of a
- * resolved `identity`, not part of this machine. Callers are expected to stay
- * conditionally mounted (as both dialogs already are) so closing discards
- * this hook's state and any still-pending mutate-level callbacks land on an
- * already-unmounted instance - never a reopened one.
+ * Callers render their own UI per `state.kind`; profile naming/coloring stays
+ * outside this machine. Callers remain conditionally mounted so closing
+ * discards the flow state and late mutation callbacks cannot leak into a
+ * later attempt.
  */
 export function useProviderProfileLoginFlow(
   input: UseProviderProfileLoginFlowInput,
@@ -126,8 +114,27 @@ export function useProviderProfileLoginFlow(
     failureMessages,
     onFailed,
   } = input;
-  const [state, setState] = useState<ProviderProfileLoginFlowState>(() =>
-    initialState(mode, existingProfileId),
+  const [state, setState] = useState<ProviderProfileLoginFlowState>({
+    kind: "start",
+  });
+  const cancelRequestedRef = useRef(false);
+  const cancelledProfileIdRef = useRef<string | null>(null);
+
+  const cancelProfile = useCallback(
+    (profileId: string): void => {
+      if (cancelledProfileIdRef.current === profileId) return;
+      cancelledProfileIdRef.current = profileId;
+      cancelLogin.mutate({ providerId, profileId });
+    },
+    [cancelLogin, providerId],
+  );
+
+  const finishCancellation = useCallback(
+    (profileId: string | null): void => {
+      if (profileId !== null) cancelProfile(profileId);
+      setState({ kind: "cancelled" });
+    },
+    [cancelProfile],
   );
 
   const fail = useCallback(
@@ -139,8 +146,21 @@ export function useProviderProfileLoginFlow(
   );
 
   const start = useCallback(
-    (options: { readonly shareSkillsAndPlugins: boolean }): void => {
-      if (startLogin.isPending || awaitLogin.isPending) return;
+    (options: {
+      readonly label: string | null;
+      readonly shareSkillsAndPlugins: boolean;
+    }): void => {
+      if (
+        state.kind === "starting" ||
+        state.kind === "waiting" ||
+        startLogin.isPending ||
+        awaitLogin.isPending
+      ) {
+        return;
+      }
+      cancelRequestedRef.current = false;
+      cancelledProfileIdRef.current = null;
+      setState({ kind: "starting", cancelRequested: false });
       startLogin.mutate(
         {
           providerId,
@@ -148,7 +168,7 @@ export function useProviderProfileLoginFlow(
           createProfile:
             mode === "create"
               ? {
-                  label: "",
+                  label: options.label ?? "",
                   shareSkillsAndPlugins: options.shareSkillsAndPlugins,
                 }
               : null,
@@ -160,6 +180,10 @@ export function useProviderProfileLoginFlow(
             // Create has no id until this response supplies one.
             const nextProfileId =
               mode === "reauth" ? existingProfileId : data.profileId;
+            if (cancelRequestedRef.current) {
+              finishCancellation(nextProfileId);
+              return;
+            }
             if (!data.started || nextProfileId === null) {
               fail(failureMessages.notStarted);
               return;
@@ -174,9 +198,11 @@ export function useProviderProfileLoginFlow(
               {
                 onSuccess: (result) => {
                   const profiles = result.state?.profiles ?? [];
+                  const existingProfileId = result.existingProfileId ?? null;
+                  const resolvedProfileId = existingProfileId ?? nextProfileId;
                   const profile =
                     profiles.find(
-                      (candidate) => candidate.profileId === nextProfileId,
+                      (candidate) => candidate.profileId === resolvedProfileId,
                     ) ?? null;
                   if (profile === null) {
                     fail(failureMessages.notFinished);
@@ -187,13 +213,20 @@ export function useProviderProfileLoginFlow(
                     profileId: profile.profileId,
                     profile,
                     profiles,
+                    existingProfileId,
                   });
                 },
                 onError: () => fail(failureMessages.notFinished),
               },
             );
           },
-          onError: () => fail(failureMessages.notStarted),
+          onError: () => {
+            if (cancelRequestedRef.current) {
+              finishCancellation(null);
+              return;
+            }
+            fail(failureMessages.notStarted);
+          },
         },
       );
     },
@@ -202,22 +235,43 @@ export function useProviderProfileLoginFlow(
       existingProfileId,
       fail,
       failureMessages,
+      finishCancellation,
       mode,
       providerId,
+      state.kind,
       startLogin,
     ],
   );
 
   const cancel = useCallback((): void => {
-    if (state.kind !== "waiting" || state.profileId === null) return;
-    cancelLogin.mutate({ providerId, profileId: state.profileId });
-  }, [cancelLogin, providerId, state]);
+    cancelRequestedRef.current = true;
+    if (state.kind === "starting") {
+      if (mode === "reauth" && existingProfileId !== null) {
+        finishCancellation(existingProfileId);
+        return;
+      }
+      setState({ kind: "starting", cancelRequested: true });
+      return;
+    }
+    if (state.kind === "waiting" && state.profileId !== null) {
+      finishCancellation(state.profileId);
+      return;
+    }
+    if (
+      mode === "reauth" &&
+      state.kind === "start" &&
+      existingProfileId !== null
+    ) {
+      finishCancellation(existingProfileId);
+    }
+  }, [existingProfileId, finishCancellation, mode, state]);
 
   return {
     mode,
     state,
-    busy: startLogin.isPending || awaitLogin.isPending,
-    startPending: startLogin.isPending,
+    busy:
+      state.kind === "starting" || startLogin.isPending || awaitLogin.isPending,
+    startPending: state.kind === "starting" || startLogin.isPending,
     start,
     cancel,
   };

@@ -23,7 +23,6 @@ describe("<HarnessModelTrigger />", () => {
         serviceTierLabel={null}
         serviceTierActive={false}
         profileLabel={null}
-        hasMultipleProfiles={false}
         profileAccentDot={null}
         isLoading={false}
         disabled={false}
@@ -37,7 +36,7 @@ describe("<HarnessModelTrigger />", () => {
     ).toBeDefined();
   });
 
-  it("includes the active profile label in the accessible summary for multi-profile providers", () => {
+  it("keeps the profile accessible without repeating its name in the collapsed trigger", () => {
     render(
       <HarnessModelTrigger
         selection={SELECTION}
@@ -46,7 +45,6 @@ describe("<HarnessModelTrigger />", () => {
         serviceTierLabel={null}
         serviceTierActive={false}
         profileLabel="Work"
-        hasMultipleProfiles
         profileAccentDot={{
           profileId: "work-profile",
           accentColor: null,
@@ -61,9 +59,7 @@ describe("<HarnessModelTrigger />", () => {
       name: "GPT-5.5, Thinking High, Work",
     });
     expect(trigger).toBeDefined();
-    // The visible chip shows the truncatable "· Work" suffix too, not just the
-    // accessible name.
-    expect(trigger.textContent).toContain("Work");
+    expect(trigger.textContent).not.toContain("Work");
     expect(trigger.textContent).toContain("W");
     const profileBadge = Array.from(trigger.querySelectorAll("span")).find(
       (element) =>
@@ -82,7 +78,6 @@ describe("<HarnessModelTrigger />", () => {
         serviceTierLabel={null}
         serviceTierActive={false}
         profileLabel={null}
-        hasMultipleProfiles={false}
         profileAccentDot={null}
         isLoading={false}
         disabled={false}

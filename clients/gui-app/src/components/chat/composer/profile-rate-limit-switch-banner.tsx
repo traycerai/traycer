@@ -1,4 +1,4 @@
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, X } from "lucide-react";
 import type { ReactNode } from "react";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { Button } from "@/components/ui/button";
@@ -20,6 +20,7 @@ interface ProfileRateLimitSwitchBannerProps {
   /** User-confirmed only - never called automatically. Commits the picked
    *  profile to the composer for the NEXT turn (turn-boundary switch). */
   readonly onSwitchProfile: (profileId: string | null) => void;
+  readonly onDismiss: () => void;
 }
 
 /**
@@ -38,9 +39,10 @@ export function ProfileRateLimitSwitchBanner({
   current,
   alternatives,
   onSwitchProfile,
+  onDismiss,
 }: ProfileRateLimitSwitchBannerProps) {
   return (
-    <div className="mb-3 flex w-full flex-col gap-1.5">
+    <div className="flex w-full flex-col gap-1.5">
       <div className="flex w-full flex-col gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-ui-sm">
         <div className="flex items-start gap-2">
           <AlertTriangle
@@ -76,6 +78,14 @@ export function ProfileRateLimitSwitchBanner({
               ))}
             </div>
           </div>
+          <button
+            type="button"
+            aria-label="Dismiss rate limit suggestion"
+            className="rounded p-0.5 text-foreground/70 transition-colors hover:bg-foreground/10 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+            onClick={onDismiss}
+          >
+            <X className="size-3.5" />
+          </button>
         </div>
       </div>
     </div>

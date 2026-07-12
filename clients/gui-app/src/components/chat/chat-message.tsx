@@ -5,6 +5,7 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { AssistantMessageBody } from "./chat-message-assistant-body";
 import { chatFindSegmentUnitId } from "./chat-find";
+import { singleSpecialSegment } from "./chat-special-segment";
 import { UserMessageBody } from "./chat-message-user-body";
 import { ForkedChatLinkSegment } from "./segments/forked-chat-link-segment";
 import { SetupCardSegment } from "./segments/setup-card-segment";
@@ -99,8 +100,8 @@ function messageAlignmentClass(message: ChatMessageModel): string {
 function renderSingleSpecialSegment(
   message: ChatMessageModel,
 ): ReactElement | null {
-  if (message.segments.length !== 1) return null;
-  const segment = message.segments[0];
+  const segment = singleSpecialSegment(message.segments);
+  if (segment === null) return null;
   if (segment.kind === "setup-card") {
     return (
       <div

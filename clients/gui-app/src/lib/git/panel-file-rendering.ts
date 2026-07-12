@@ -36,6 +36,31 @@ function directoryPathsForPath(filePath: string): ReadonlyArray<string> {
   );
 }
 
+function parentDirectoryPath(path: string): string | null {
+  const segments = path.split("/").filter((segment) => segment.length > 0);
+  if (segments.length <= 1) return null;
+  return segments.slice(0, -1).join("/");
+}
+
+interface GitTreeDirectoryChildSummary {
+  readonly count: number;
+  readonly onlyDirectoryPath: string | null;
+}
+
+function addGitTreeDirectoryChild(
+  summaryByDirectory: Map<string, GitTreeDirectoryChildSummary>,
+  parentPath: string | null,
+  directoryPath: string | null,
+): void {
+  if (parentPath === null) return;
+  const current = summaryByDirectory.get(parentPath);
+  if (current === undefined) return;
+  summaryByDirectory.set(parentPath, {
+    count: current.count + 1,
+    onlyDirectoryPath: current.count === 0 ? directoryPath : null,
+  });
+}
+
 export function gitChangedFileToPierreStatus(
   file: GitChangedFile,
 ): GitStatusEntry["status"] {
@@ -139,6 +164,46 @@ export function buildGitTreeDirectoryPaths(
   return Array.from(
     new Set(paths.flatMap((path) => directoryPathsForPath(path))),
   );
+}
+
+/**
+ * Pierre flattens a directory into its sole directory child by default, so a
+ * chain such as `Profile/components` occupies one rendered row rather than
+ * one row per directory segment. Return only the directory paths that start a
+ * rendered row while preserving the full directory list for expansion state.
+ */
+export function buildGitTreeRowDirectoryPaths(
+  paths: ReadonlyArray<string>,
+): ReadonlyArray<string> {
+  const directoryPaths = buildGitTreeDirectoryPaths(paths);
+  const summaryByDirectory = new Map<string, GitTreeDirectoryChildSummary>(
+    directoryPaths.map((path) => [path, { count: 0, onlyDirectoryPath: null }]),
+  );
+
+  for (const directoryPath of directoryPaths) {
+    addGitTreeDirectoryChild(
+      summaryByDirectory,
+      parentDirectoryPath(directoryPath),
+      directoryPath,
+    );
+  }
+  for (const path of paths) {
+    addGitTreeDirectoryChild(
+      summaryByDirectory,
+      parentDirectoryPath(path),
+      null,
+    );
+  }
+
+  return directoryPaths.filter((directoryPath) => {
+    const parentPath = parentDirectoryPath(directoryPath);
+    if (parentPath === null) return true;
+    const parentSummary = summaryByDirectory.get(parentPath);
+    return !(
+      parentSummary?.count === 1 &&
+      parentSummary.onlyDirectoryPath === directoryPath
+    );
+  });
 }
 
 export function mergeGitTreeExpandedDirectoryPaths(

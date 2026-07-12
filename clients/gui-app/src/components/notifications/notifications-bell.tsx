@@ -10,6 +10,7 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { NotificationsPopover } from "@/components/notifications/notifications-popover";
 import { useMergedNotificationUnreadCount } from "@/stores/notifications/merged-notifications";
 import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
+import { useTitleBarDragSuppression } from "@/stores/layout/title-bar-drag-store";
 import { cn } from "@/lib/utils";
 
 /**
@@ -22,6 +23,7 @@ export function NotificationsBell() {
   const open = useNotificationsPopoverStore((state) => state.open);
   const setOpen = useNotificationsPopoverStore((state) => state.setOpen);
   const unread = useMergedNotificationUnreadCount();
+  useTitleBarDragSuppression("notifications", open);
 
   const handleNavigate = useCallback(() => {
     setOpen(false);

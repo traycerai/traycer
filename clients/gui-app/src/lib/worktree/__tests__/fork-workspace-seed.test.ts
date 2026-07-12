@@ -174,6 +174,7 @@ describe("buildForkWorkspaceSeed", () => {
           repoIdentifier: { owner: "traycerai", repo: "traycer" },
         },
       },
+      primaryPath: "/Users/me/traycer",
     });
   });
 

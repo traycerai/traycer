@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { useEffect } from "react";
 
 /**
  * Electron title-bar drag regions (`-webkit-app-region: drag`) swallow every
@@ -30,4 +31,18 @@ export const useTitleBarDragStore = create<TitleBarDragState>((set) => ({
 
 export function useTitleBarDraggingSuppressed(): boolean {
   return useTitleBarDragStore((state) => state.suppressors.size > 0);
+}
+
+export function useTitleBarDragSuppression(
+  key: string,
+  suppressed: boolean,
+): void {
+  const setTitleBarDragSuppressed = useTitleBarDragStore(
+    (state) => state.setSuppressed,
+  );
+
+  useEffect(() => {
+    setTitleBarDragSuppressed(key, suppressed);
+    return () => setTitleBarDragSuppressed(key, false);
+  }, [key, suppressed, setTitleBarDragSuppressed]);
 }

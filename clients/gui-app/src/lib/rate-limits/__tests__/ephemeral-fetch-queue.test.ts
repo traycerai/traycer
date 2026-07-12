@@ -14,6 +14,7 @@ import {
   __resetRateLimitQueueForTests,
   configureRateLimitQueue,
   enqueueRateLimitFetch,
+  enqueueRateLimitFetchForScope,
   isRateLimitQueueDraining,
   subscribeRateLimitQueueDraining,
   type RateLimitQueueRequestFn,
@@ -39,10 +40,18 @@ function unavailableResponse(reason: RateLimitUnavailableReason) {
 }
 
 function keyFor(providerId: ProviderId) {
+  return keyForHost(HOST_ID, providerId, null);
+}
+
+function keyForHost(
+  hostId: string,
+  providerId: ProviderId,
+  profileId: string | null,
+) {
   return queryKeys.hostMethod<HostRpcRegistry, "host.getRateLimitUsage">(
-    HOST_ID,
+    hostId,
     "host.getRateLimitUsage",
-    { accountContext: DEFAULT_ACCOUNT_CONTEXT, providerId, profileId: null },
+    { accountContext: DEFAULT_ACCOUNT_CONTEXT, providerId, profileId },
   );
 }
 
@@ -113,6 +122,92 @@ describe("ephemeral-fetch-queue", () => {
 
     settlers[1].ok();
     await flush();
+  });
+
+  it("targets an explicit selected host instead of the configured default host and writes only its cache key", async () => {
+    const queryClient = newQueryClient();
+    const defaultRequest = vi.fn<RateLimitQueueRequestFn>(() =>
+      Promise.resolve(response()),
+    );
+    const selectedRequest = vi.fn<RateLimitQueueRequestFn>(() =>
+      Promise.resolve(response()),
+    );
+    configureRateLimitQueue({
+      hostId: "host-a",
+      queryClient,
+      request: defaultRequest,
+    });
+
+    await enqueueRateLimitFetchForScope(
+      {
+        hostId: "host-b",
+        queryClient,
+        request: selectedRequest,
+      },
+      "codex",
+      DEFAULT_ACCOUNT_CONTEXT,
+      { force: true, profileId: "work-profile" },
+    );
+
+    expect(defaultRequest).not.toHaveBeenCalled();
+    expect(selectedRequest).toHaveBeenCalledWith(
+      "host-b",
+      "host.getRateLimitUsage",
+      {
+        accountContext: DEFAULT_ACCOUNT_CONTEXT,
+        providerId: "codex",
+        profileId: "work-profile",
+      },
+    );
+    expect(
+      queryClient.getQueryData(keyForHost("host-b", "codex", "work-profile")),
+    ).toEqual({
+      latest: null,
+      lastGood: null,
+      lastGoodAt: null,
+      lastFailureAt: null,
+    });
+    expect(
+      queryClient.getQueryData(keyForHost("host-a", "codex", "work-profile")),
+    ).toBeUndefined();
+  });
+
+  it("serializes default-host and selected-host subprocess work on the same lane", async () => {
+    const queryClient = newQueryClient();
+    const defaultHost = makeControllableRequest();
+    const selectedHost = makeControllableRequest();
+    configureRateLimitQueue({
+      hostId: "host-a",
+      queryClient,
+      request: defaultHost.request,
+    });
+
+    void enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
+      force: true,
+      profileId: null,
+    });
+    void enqueueRateLimitFetchForScope(
+      {
+        hostId: "host-b",
+        queryClient,
+        request: selectedHost.request,
+      },
+      "claude-code",
+      DEFAULT_ACCOUNT_CONTEXT,
+      { force: true, profileId: "selected-profile" },
+    );
+
+    await flush();
+    expect(defaultHost.request).toHaveBeenCalledTimes(1);
+    expect(selectedHost.request).not.toHaveBeenCalled();
+
+    defaultHost.settlers[0].ok();
+    await flush();
+    expect(selectedHost.request).toHaveBeenCalledTimes(1);
+
+    selectedHost.settlers[0].ok();
+    await flush();
+    expect(isRateLimitQueueDraining()).toBe(false);
   });
 
   it("serializes many rapid same-provider force refreshes one at a time", async () => {

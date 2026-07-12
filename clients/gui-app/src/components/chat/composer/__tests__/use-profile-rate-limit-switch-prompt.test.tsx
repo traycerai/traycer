@@ -109,10 +109,13 @@ describe("useProfileRateLimitSwitchPrompt", () => {
         profile("work-uuid", "managed", "Work", "ok"),
       ]),
     ];
-    const { result } = renderHook(() =>
+    const { result, rerender } = renderHook(() =>
       useProfileRateLimitSwitchPrompt("claude", null, true),
     );
+    const dismiss = result.current.dismiss;
+    rerender();
     expect(result.current.limited).toBe(true);
+    expect(result.current.dismiss).toBe(dismiss);
     expect(result.current.hardLimited).toBe(false);
     expect(result.current.current).toEqual({
       profileId: null,

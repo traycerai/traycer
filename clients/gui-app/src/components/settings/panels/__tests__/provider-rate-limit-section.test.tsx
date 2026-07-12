@@ -20,7 +20,10 @@ const mocks = vi.hoisted(() => ({
   isFetching: false,
   refetch: vi.fn(() => Promise.resolve({})),
   draining: false,
+  queueScope: { hostId: "host-b" },
   enqueue: vi.fn((..._args: unknown[]) => Promise.resolve()),
+  refreshProviders: vi.fn(() => Promise.resolve()),
+  refreshOnMount: vi.fn(),
 }));
 
 // A fresh, cold-start envelope wrapping a single response - matches what the
@@ -43,7 +46,9 @@ vi.mock("@/hooks/host/use-refresh-provider-rate-limits-on-turn", () => ({
   useRefreshProviderRateLimitsOnTurn: () => {},
 }));
 vi.mock("@/hooks/host/use-refresh-provider-rate-limits-on-mount", () => ({
-  useRefreshProviderRateLimitsOnMount: () => {},
+  useRefreshProviderRateLimitsOnMount: (...args: unknown[]) => {
+    mocks.refreshOnMount(...args);
+  },
 }));
 vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
   useReactiveActiveHostId: () => "host-1",
@@ -51,11 +56,21 @@ vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
 vi.mock("@/hooks/rate-limits/use-is-rate-limit-queue-draining", () => ({
   useIsRateLimitQueueDraining: () => mocks.draining,
 }));
+vi.mock("@/hooks/rate-limits/use-rate-limit-queue-scope", () => ({
+  useRateLimitQueueScope: () => mocks.queueScope,
+}));
 vi.mock("@/lib/rate-limits/ephemeral-fetch-queue", () => ({
-  enqueueRateLimitFetch: (...args: unknown[]) => mocks.enqueue(...args),
+  enqueueRateLimitFetchForScope: (...args: unknown[]) => mocks.enqueue(...args),
+}));
+vi.mock("@/hooks/providers/use-refresh-providers", () => ({
+  useRefreshProviders: () => mocks.refreshProviders,
 }));
 
-import { ProviderRateLimitForProvider } from "../provider-rate-limit-section";
+import {
+  EmbeddedProviderRateLimitForProvider,
+  ProviderProfilesRefreshButton,
+  ProviderRateLimitForProvider,
+} from "../provider-rate-limit-section";
 
 const CLAUDE_FIVE_HOUR_RESETS_AT = Date.now() + 60 * 60 * 1000;
 const CLAUDE_SEVEN_DAY_RESETS_AT = Date.now() + 2 * 24 * 60 * 60 * 1000;
@@ -129,10 +144,33 @@ describe("ProviderRateLimitForProvider", () => {
     mocks.isFetching = false;
     mocks.draining = false;
     mocks.enqueue = vi.fn((..._args: unknown[]) => Promise.resolve());
+    mocks.refreshProviders.mockClear();
+    mocks.refreshOnMount.mockClear();
   });
 
   afterEach(() => {
     cleanup();
+  });
+
+  it("renders the embedded variant as an integrated section without a nested card border", () => {
+    const { container } = render(
+      <EmbeddedProviderRateLimitForProvider
+        providerId="codex"
+        profileId="work-profile"
+        usageUpdatedAt={123}
+      />,
+    );
+
+    expect(container.firstElementChild?.className).toContain("border-t");
+    expect(container.firstElementChild?.className).not.toContain("rounded-lg");
+    expect(
+      screen.queryByRole("button", { name: "Refresh usage limits" }),
+    ).toBeNull();
+    expect(mocks.refreshOnMount).toHaveBeenCalledWith(
+      "codex",
+      "work-profile",
+      123,
+    );
   });
 
   it("renders nothing for a provider without native usage limits", () => {
@@ -369,6 +407,7 @@ describe("ProviderRateLimitForProvider", () => {
     );
 
     expect(mocks.enqueue).toHaveBeenCalledWith(
+      mocks.queueScope,
       "codex",
       DEFAULT_ACCOUNT_CONTEXT,
       {
@@ -377,6 +416,34 @@ describe("ProviderRateLimitForProvider", () => {
       },
     );
     expect(mocks.refetch).not.toHaveBeenCalled();
+  });
+
+  it("combines the selected host's profile-status and managed-profile usage refresh", () => {
+    mocks.data = envelope(CODEX_RATE_LIMITS);
+    render(
+      <ProviderProfilesRefreshButton
+        providerId="codex"
+        profileId="work-profile"
+        usageUpdatedAt={null}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Refresh profile statuses and usage limits",
+      }),
+    );
+
+    expect(mocks.refreshProviders).toHaveBeenCalledTimes(1);
+    expect(mocks.enqueue).toHaveBeenCalledWith(
+      mocks.queueScope,
+      "codex",
+      DEFAULT_ACCOUNT_CONTEXT,
+      {
+        force: true,
+        profileId: "work-profile",
+      },
+    );
   });
 
   it("keeps the refresh button disabled while the shared queue is draining, even once this provider's own isFetching has settled", () => {

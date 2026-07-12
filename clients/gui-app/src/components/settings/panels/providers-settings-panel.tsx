@@ -92,6 +92,9 @@ const PROVIDER_DESCRIPTIONS: Record<ProviderId, string> = {
     "GitHub Copilot CLI agent via your active Copilot subscription or policy.",
   kilocode: "Kilo Code CLI agent via Kilo login or configured providers.",
   amp: "Amp agent - Ampcode's coding CLI via your Amp account or API key.",
+  devin:
+    "Devin agent - Cognition's coding CLI via Windsurf/Devin login or API key.",
+  pi: "Pi agent - pi.dev coding agent via your configured model API key (BYOK).",
 };
 
 function hasPendingProviderProbe(
@@ -187,6 +190,7 @@ export function ProvidersSettingsPanel() {
   const inner = (
     <ProvidersSettingsPanelInner
       hostPicker={hostPicker}
+      hostId={effectiveId}
       isSelectedHostLocal={isSelectedHostLocal}
     />
   );
@@ -230,9 +234,11 @@ function hostOptionLabel(host: HostDirectoryEntry): string {
 
 function ProvidersSettingsPanelInner({
   hostPicker,
+  hostId,
   isSelectedHostLocal,
 }: {
   readonly hostPicker: ReactNode;
+  readonly hostId: string | null;
   readonly isSelectedHostLocal: boolean;
 }) {
   const query = useProvidersList({ enabled: true, subscribed: true });
@@ -264,6 +270,7 @@ function ProvidersSettingsPanelInner({
     >
       <ProvidersPanelBody
         query={query}
+        hostId={hostId}
         isSelectedHostLocal={isSelectedHostLocal}
       />
     </SettingsPanelShell>
@@ -272,9 +279,11 @@ function ProvidersSettingsPanelInner({
 
 function ProvidersPanelBody({
   query,
+  hostId,
   isSelectedHostLocal,
 }: {
   readonly query: ProvidersListQuery;
+  readonly hostId: string | null;
   readonly isSelectedHostLocal: boolean;
 }): ReactNode {
   if (query.isPending) {
@@ -301,6 +310,7 @@ function ProvidersPanelBody({
   return (
     <ProvidersRailLayout
       providers={query.data.providers}
+      hostId={hostId}
       isSelectedHostLocal={isSelectedHostLocal}
     />
   );
@@ -308,9 +318,11 @@ function ProvidersPanelBody({
 
 function ProvidersRailLayout({
   providers,
+  hostId,
   isSelectedHostLocal,
 }: {
   readonly providers: readonly ProviderCliState[];
+  readonly hostId: string | null;
   readonly isSelectedHostLocal: boolean;
 }) {
   const orderedProviders = useMemo(
@@ -360,9 +372,10 @@ function ProvidersRailLayout({
       </nav>
       <div className="min-h-0 min-w-0 flex-1 overflow-y-auto p-5">
         <ProviderDetail
-          key={active.providerId}
+          key={`${hostId}:${active.providerId}`}
           state={active}
           providers={orderedProviders}
+          hostId={hostId}
           isSelectedHostLocal={isSelectedHostLocal}
         />
       </div>
@@ -414,10 +427,12 @@ function ProviderEnableSwitch(props: {
 function ProviderDetail({
   state,
   providers,
+  hostId,
   isSelectedHostLocal,
 }: {
   readonly state: ProviderCliState;
   readonly providers: readonly ProviderCliState[];
+  readonly hostId: string | null;
   readonly isSelectedHostLocal: boolean;
 }) {
   const providerId = state.providerId;
@@ -460,14 +475,18 @@ function ProviderDetail({
             <div className="font-medium text-foreground">
               {PROVIDER_DISPLAY_NAMES[providerId]}
             </div>
-            <ProviderAuthBadge state={state} />
+            {state.profiles.length === 0 ? (
+              <ProviderAuthBadge state={state} />
+            ) : null}
           </div>
           <p className="text-ui-sm text-muted-foreground">
             {PROVIDER_DESCRIPTIONS[providerId]}
           </p>
-          <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-2">
-            <ProviderAuthLine state={state} />
-          </div>
+          {state.profiles.length === 0 ? (
+            <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-2">
+              <ProviderAuthLine state={state} />
+            </div>
+          ) : null}
         </div>
         <div className="flex shrink-0 items-center gap-2 text-ui-sm">
           <label htmlFor={switchId} className="text-muted-foreground">
@@ -502,6 +521,7 @@ function ProviderDetail({
       ) : null}
       <ProviderProfileScopedSection
         state={state}
+        hostId={hostId}
         isSelectedHostLocal={isSelectedHostLocal}
         canAddProfile={canAddProfile}
         failedAttempt={failedProfileAttempt}
@@ -527,6 +547,7 @@ function ProviderDetail({
       </div>
       {addProfileOpen ? (
         <AddProviderProfileDialog
+          key={state.providerId}
           state={state}
           client={hostClient}
           open

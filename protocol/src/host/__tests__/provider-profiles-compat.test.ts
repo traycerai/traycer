@@ -248,7 +248,7 @@ describe("ProviderCliState.profiles[] downgrade to v1.0", () => {
   });
 });
 
-describe("providers.list v3.0 -> v2.0 downgrade strips profiles[]", () => {
+describe("providers.list latest -> v2.0 downgrade strips profiles[]", () => {
   const stateWithProfile = providerCliStateSchema.parse({
     ...providerState("claude-code"),
     profiles: [
@@ -287,9 +287,12 @@ describe("providers.list v3.0 -> v2.0 downgrade strips profiles[]", () => {
   });
 
   it("downgradeProviderCliStateListToV20 never leaks profile identity to a v2.0 caller", () => {
+    // Latest major carries profiles[]; the path from latest → v2.0 must strip
+    // them (whether latest is v3.0 or v4.0). Use 4 explicitly - providers.list
+    // latest after the Devin/Pi freeze is v4.0.
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      3,
+      4,
       2,
       { providers: [stateWithProfile] },
     );

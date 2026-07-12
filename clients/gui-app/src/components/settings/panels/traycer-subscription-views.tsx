@@ -11,7 +11,7 @@
  * and credits"). Unlike `ProviderRateLimitDetail`, it is NOT
  * variant-parameterized: the Traycer body has no per-model / extra-window rows
  * to drop, so the Overview-vs-detail difference is purely the surrounding
- * chrome (the account picker, the "Manage subscription" link), which each
+ * chrome (account cards or picker, the "Manage subscription" link), which each
  * caller composes around this body. Each bucket (Plan/Bonus/Bundle/Artifacts)
  * renders through `CreditMeterRow`, the same shared `MeterRow` shell the
  * Codex/Claude windows use, so Traycer's own bars read identically
@@ -25,6 +25,7 @@
  */
 import type { ReactNode } from "react";
 import type { TraycerTeamSubscription } from "@traycer/protocol/auth";
+import type { AccountContext } from "@traycer/protocol/common/schemas";
 import {
   Select,
   SelectContent,
@@ -95,14 +96,19 @@ export function TraycerAccountSelect({
  */
 export function TraycerSubscriptionView({
   subscription,
+  accountContext,
 }: {
   readonly subscription: TraycerSubscription;
+  readonly accountContext: AccountContext;
 }): ReactNode {
   const status = subscription.subscriptionStatus;
   return isCreditBasedPricing(status) ? (
     <CreditBreakdownView breakdown={creditBreakdown(subscription)} />
   ) : (
-    <RateLimitView subscription={subscription} />
+    <RateLimitView
+      subscription={subscription}
+      accountContext={accountContext}
+    />
   );
 }
 
@@ -115,13 +121,15 @@ export function TraycerSubscriptionView({
 // its `useHostRateLimitUsageQuery` mount is the implicit tier-gate.
 function RateLimitView({
   subscription,
+  accountContext,
 }: {
   readonly subscription: TraycerSubscription;
+  readonly accountContext: AccountContext;
 }) {
-  const usageQuery = useHostRateLimitUsageQuery(null);
+  const usageQuery = useHostRateLimitUsageQuery(accountContext, null);
   // Keep the bar live: a Traycer turn finishing while this is on screen
   // re-fetches usage. Only mounted here, so it costs nothing elsewhere.
-  useRefreshRateLimitUsageOnTraycerTurn();
+  useRefreshRateLimitUsageOnTraycerTurn(accountContext);
 
   const recharge = formatRechargeRate(subscription.rechargeRateSeconds);
   const usage = usageQuery.data ?? null;

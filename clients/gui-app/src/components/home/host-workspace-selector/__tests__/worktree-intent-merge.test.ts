@@ -7,6 +7,7 @@ import {
   mergeWorktreeIntent,
   mergeWorktreeIntentEntry,
   removeWorktreeIntentEntry,
+  restampWorktreeIntentPrimary,
   setWorktreeIntentEntryScripts,
 } from "../worktree-intent-merge";
 
@@ -139,5 +140,94 @@ describe("worktree intent merge", () => {
     expect(
       setWorktreeIntentEntryScripts(null, "/workspace/x", SCRIPTS),
     ).toBeNull();
+  });
+
+  describe("restampWorktreeIntentPrimary", () => {
+    it("flips the target entry primary and demotes the previous primary, preserving scripts", () => {
+      const first = {
+        ...createEntry({
+          workspacePath: "/workspace/first",
+          newBranch: "traycer/first",
+          isPrimary: true,
+        }),
+        scripts: SCRIPTS,
+      };
+      const second = createEntry({
+        workspacePath: "/workspace/second",
+        newBranch: "traycer/second",
+        isPrimary: false,
+      });
+
+      const result = restampWorktreeIntentPrimary(
+        { entries: [first, second] },
+        "/workspace/second",
+      );
+
+      expect(result).toEqual({
+        entries: [
+          { ...first, isPrimary: false },
+          { ...second, isPrimary: true },
+        ],
+      });
+      const restampedFirst = result?.entries.find(
+        (e) => e.workspacePath === "/workspace/first",
+      );
+      expect(
+        restampedFirst?.kind === "worktree" ? restampedFirst.scripts : null,
+      ).toEqual(SCRIPTS);
+    });
+
+    it("preserves entry identity (reference equality) for entries whose isPrimary bit doesn't change", () => {
+      const first = createEntry({
+        workspacePath: "/workspace/first",
+        newBranch: "traycer/first",
+        isPrimary: true,
+      });
+      const second = createEntry({
+        workspacePath: "/workspace/second",
+        newBranch: "traycer/second",
+        isPrimary: false,
+      });
+
+      const result = restampWorktreeIntentPrimary(
+        { entries: [first, second] },
+        "/workspace/first",
+      );
+
+      // No entry's flag actually changes (first is already primary, second
+      // already isn't), so the whole intent - and every entry - is the SAME
+      // reference. This is the invariant `setPrimaryFolder` relies on to skip
+      // a redundant staged-intent write.
+      expect(result?.entries[0]).toBe(first);
+      expect(result?.entries[1]).toBe(second);
+    });
+
+    it("never removes or reorders entries - a target with no staged entry only demotes others", () => {
+      const first = createEntry({
+        workspacePath: "/workspace/first",
+        newBranch: "traycer/first",
+        isPrimary: true,
+      });
+      const second = createEntry({
+        workspacePath: "/workspace/second",
+        newBranch: "traycer/second",
+        isPrimary: false,
+      });
+
+      const result = restampWorktreeIntentPrimary(
+        { entries: [first, second] },
+        "/workspace/third",
+      );
+
+      expect(result?.entries.map((e) => e.workspacePath)).toEqual([
+        "/workspace/first",
+        "/workspace/second",
+      ]);
+      expect(result?.entries.every((e) => !e.isPrimary)).toBe(true);
+    });
+
+    it("returns null unchanged for a null intent", () => {
+      expect(restampWorktreeIntentPrimary(null, "/workspace/first")).toBeNull();
+    });
   });
 });

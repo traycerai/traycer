@@ -6,6 +6,8 @@ import {
   resourceOwnerKey,
   type AppResourceUsage,
   type EpicResourceUsage,
+  type HostTreeResourceUsage,
+  type OtherResourceUsage,
   type OwnerResourceUsage,
   type ResourcesState,
   type ResourcesStoreHandle,
@@ -36,6 +38,8 @@ export interface GlobalResourceEpicEntry {
   readonly epicId: string;
   readonly sampledAt: number | null;
   readonly app: AppResourceUsage | null;
+  readonly hostTree: HostTreeResourceUsage | null;
+  readonly other: OtherResourceUsage | null;
   readonly owners: readonly OwnerResourceUsage[];
   readonly epic: EpicResourceUsage | null;
   readonly taskSummary: TaskResourceSummary | null;
@@ -44,6 +48,8 @@ export interface GlobalResourceEpicEntry {
 export interface GlobalResourceProjection {
   readonly sampledAt: number | null;
   readonly app: AppResourceUsage | null;
+  readonly hostTree: HostTreeResourceUsage | null;
+  readonly other: OtherResourceUsage | null;
   readonly owners: readonly OwnerResourceUsage[];
   readonly entries: readonly GlobalResourceEpicEntry[];
   readonly summary: TaskResourceSummary | null;
@@ -110,6 +116,8 @@ class ResourcesRegistry {
         epicId,
         sampledAt: state.sampledAt,
         app: state.app,
+        hostTree: state.hostTree,
+        other: state.other,
         owners: [...state.owners.values()],
         epic: state.epic,
         taskSummary: state.taskSummary,
@@ -117,6 +125,8 @@ class ResourcesRegistry {
     });
     const owners = entries.flatMap((entry) => entry.owners);
     const app = latestAppSnapshot(entries);
+    const hostTree = latestHostTreeSnapshot(entries);
+    const other = latestOtherSnapshot(entries);
     const sampledAt = Math.max(
       app?.sampledAt ?? 0,
       ...entries.map((entry) => entry.sampledAt ?? 0),
@@ -124,6 +134,8 @@ class ResourcesRegistry {
     const projection = {
       sampledAt: sampledAt > 0 ? sampledAt : null,
       app,
+      hostTree,
+      other,
       owners,
       entries,
       summary: deriveTaskResourceSummary(app, owners),
@@ -160,6 +172,8 @@ class ResourcesRegistry {
         epicId,
         sampledAt: sampledAt > 0 ? sampledAt : null,
         app: state.app,
+        hostTree: state.hostTree,
+        other: state.other,
         owners: scopedOwners,
         epic,
         taskSummary: deriveTaskResourceSummary(null, scopedOwners),
@@ -168,6 +182,8 @@ class ResourcesRegistry {
     return {
       sampledAt: state.sampledAt,
       app: state.app,
+      hostTree: state.hostTree,
+      other: state.other,
       owners,
       entries,
       summary: deriveTaskResourceSummary(state.app, owners),
@@ -310,6 +326,40 @@ function latestAppSnapshot(
   return latest;
 }
 
+// Both selectors compare the ENTRY-level `sampledAt`, not the nested
+// snapshot's: identity-stable merges intentionally keep the previous nested
+// object (with its old timestamp) when display values are unchanged, so the
+// nested `sampledAt` can lag the frame that actually delivered it.
+function latestHostTreeSnapshot(
+  entries: readonly GlobalResourceEpicEntry[],
+): HostTreeResourceUsage | null {
+  const latest = entries
+    .filter((entry) => entry.hostTree !== null)
+    .reduce(
+      (best: GlobalResourceEpicEntry | null, entry) =>
+        best === null || (entry.sampledAt ?? 0) > (best.sampledAt ?? 0)
+          ? entry
+          : best,
+      null,
+    );
+  return latest?.hostTree ?? null;
+}
+
+function latestOtherSnapshot(
+  entries: readonly GlobalResourceEpicEntry[],
+): OtherResourceUsage | null {
+  const latest = entries
+    .filter((entry) => entry.other !== null)
+    .reduce(
+      (best: GlobalResourceEpicEntry | null, entry) =>
+        best === null || (entry.sampledAt ?? 0) > (best.sampledAt ?? 0)
+          ? entry
+          : best,
+      null,
+    );
+  return latest?.other ?? null;
+}
+
 export const resourcesRegistry = new ResourcesRegistry();
 
 // Stable fallback for `useStore` when no entry exists for an epic yet: every
@@ -320,6 +370,8 @@ const emptyResourcesStore = create<ResourcesState>()(() => ({
   sampledAt: null,
   owners: new Map(),
   app: null,
+  hostTree: null,
+  other: null,
   epic: null,
   epics: new Map(),
   taskSummary: null,

@@ -42,7 +42,7 @@ import {
 } from "lucide-react";
 import type {
   WorktreeHostEntry,
-  WorktreeHostEntryV11,
+  WorktreeHostEntryV12,
 } from "@traycer/protocol/host/index";
 import {
   WORKTREE_TIER_LABEL,
@@ -50,6 +50,7 @@ import {
   WORKTREE_TIER_TOOLTIP,
   classifyWorktree,
   classifyWorktreeTier,
+  describeReviewReasons,
   type WorktreeTier,
 } from "@traycer-clients/shared/worktree/classify-worktree";
 import {
@@ -60,7 +61,7 @@ import {
 import type {
   WorktreeEntryScripts,
   WorktreePrState,
-  WorktreeSubmoduleMergeFact,
+  WorktreeSubmoduleMergeFactV12,
 } from "@traycer/protocol/host/worktree-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
@@ -112,7 +113,7 @@ import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
 import { useRelativeTimestamp } from "@/lib/relative-time";
 import { useCloudEpicTasksQuery } from "@/hooks/epics/use-cloud-epic-tasks-query";
 import { readEpicTitlesFromCloudTaskCaches } from "@/lib/cloud-epic-tasks-query/cache";
-import { WORKTREE_BINDING_INVALIDATIONS } from "@/hooks/worktree/invalidations";
+import { invalidateWorktreeListingAndBindingCaches } from "@/hooks/worktree/invalidations";
 import {
   backgroundForegroundWorktreeDeleteForHost,
   clearSettledWorktreeDeleteSuccessesForHostIfQuiescent,
@@ -527,7 +528,19 @@ function WorktreesBody(props: {
   const reachability = useHostReachability(hostId ?? "");
   const reachable = hostId !== null && reachability.status === "reachable";
   const listing = useWorktreeListing(client, reachable);
-  const enrichment = useWorktreeActivityEnrichment(client, reachable, hostId);
+  // The full listing's paths seed the background enrichment sweep: rows the
+  // user never scrolls to still get probed (in bounded chunks), so tier pills
+  // and filtered counts converge without manual scrolling.
+  const worktreePaths = useMemo(
+    () => listing.worktrees.map((entry) => entry.worktreePath),
+    [listing.worktrees],
+  );
+  const enrichment = useWorktreeActivityEnrichment(
+    client,
+    reachable,
+    hostId,
+    worktreePaths,
+  );
   // Owning-Task titles come from the cloud epic-tasks caches the app already
   // maintains (keyed by the signed-in user, any host) - no host-side title join.
   const taskTitlesByEpicId = useWorktreeTaskTitles(listing.worktrees);
@@ -536,11 +549,16 @@ function WorktreesBody(props: {
   // per-path enrichment query live under the same `worktree.listAllForHost` method
   // scope, so refetching that prefix re-probes the on-screen rows in place (no
   // "Checking…" flash - the rows keep their current tier until fresh data lands).
+  //
+  // `refetchType: "active"`, deliberately NOT "all": the background sweep keeps
+  // a per-path cache entry for EVERY row, and those entries have no observers -
+  // "all" would refetch the entire list in one concurrent fan-out. "active"
+  // only MARKS them invalidated; the sweep re-probes them in bounded chunks.
   const onRefresh = useCallback(() => {
     if (hostId === null) return Promise.resolve();
     return queryClient.invalidateQueries({
       queryKey: hostQueryKeys.methodScope(hostId, "worktree.listAllForHost"),
-      refetchType: "all",
+      refetchType: "active",
     });
   }, [queryClient, hostId]);
   const toolbarProps = {
@@ -689,7 +707,7 @@ function WorktreesPartialListingBanner(props: {
  * chip renderer degrades gracefully.
  */
 function useWorktreeTaskTitles(
-  worktrees: readonly WorktreeHostEntryV11[],
+  worktrees: readonly WorktreeHostEntryV12[],
 ): ReadonlyMap<string, string> {
   const queryClient = useQueryClient();
   const epicIds = useMemo(
@@ -740,7 +758,7 @@ type WorktreeFlatItem =
     }
   | {
       readonly kind: "row";
-      readonly entry: WorktreeHostEntryV11;
+      readonly entry: WorktreeHostEntryV12;
       readonly group: WorktreeRepoGroup;
       readonly firstInGroup: boolean;
     };
@@ -780,13 +798,15 @@ export function WorktreesList(props: {
   readonly hostId: string;
   // The BASE listing (cheap fields for every row). Per-row activity enrichment
   // arrives lazily through `enrichedByPath`.
-  readonly worktrees: readonly WorktreeHostEntryV11[];
-  // The per-viewport enrichment overlay, keyed by `worktreePath`. A row present
-  // here carries its full activity-probed fields (branchStatus, prState, …); a row
-  // ABSENT here is still "pending" - its base fields are painted but its tier is
-  // not known yet, so the pill shows "Checking…" and it stays out of tier-based
-  // filtering. Grows as rows scroll into view.
-  readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV11>;
+  readonly worktrees: readonly WorktreeHostEntryV12[];
+  // The enrichment overlay, keyed by `worktreePath`. A row present here carries
+  // its full activity-probed fields (branchStatus, prState, …); a row ABSENT
+  // here is un-enriched - its tier is unknown, so it stays out of tier-based
+  // filtering either way. Absence splits on `erroredPaths`: absent + errored
+  // renders a settled "Unknown" pill, absent + not errored is still pending
+  // ("Checking…"). On-screen rows fill in first; the background sweep covers
+  // the rest of the list without scrolling.
+  readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV12>;
   // Paths whose enrichment SETTLED to an error. Such a row is un-enriched just like
   // a pending one (kept out of tier filtering, base presentation), but its pill
   // reads a non-animated "Unknown" instead of an infinite "Checking…" spinner.
@@ -863,7 +883,8 @@ export function WorktreesList(props: {
   );
   // Only offer filter options for tiers actually present in this host's list.
   // Un-enriched rows have no known tier, so they cannot contribute an option -
-  // the menu grows as rows scroll into view and enrich.
+  // the menu fills in as rows enrich (on-screen rows first, then the
+  // background sweep over the rest).
   const availableTiers = useMemo(() => {
     const present = new Set<WorktreeTier>();
     for (const entry of mergedWorktrees) {
@@ -881,10 +902,10 @@ export function WorktreesList(props: {
   // toolbar reads.
   //
   // Pending rows are KEPT under an active tier filter (tier unknown ⇒ can't be
-  // excluded yet): they render as "Checking…", which is what drives their
-  // enrichment - dropping them would starve the very fetch that resolves them and
-  // dead-end the filtered view to empty. Once enriched, a non-matching row drops
-  // out on the next pass, so the filtered list converges as you scroll.
+  // excluded yet): they render as "Checking…" until their probe lands (viewport
+  // or background sweep). Once enriched, a non-matching row drops out on the
+  // next pass, so the filtered list converges on its own - scrolling only
+  // changes which rows resolve first.
   const filteredWorktrees = useMemo(() => {
     const searched = filterWorktrees(
       mergedWorktrees,
@@ -938,7 +959,7 @@ export function WorktreesList(props: {
     () => new Set(),
   );
   const [pendingDeleteTargets, setPendingDeleteTargets] =
-    useState<ReadonlyArray<WorktreeHostEntryV11> | null>(null);
+    useState<ReadonlyArray<WorktreeHostEntryV12> | null>(null);
   const [pendingScriptReview, setPendingScriptReview] =
     useState<WorktreeScriptReviewDraft | null>(null);
   const reviewedScriptsByPathRef = useRef<ReadonlyMap<
@@ -1056,8 +1077,8 @@ export function WorktreesList(props: {
   // delete, matching the rule that `Checking` rows are never deletable.
   const pendingResolution = useMemo(() => {
     if (pendingDeleteTargets === null) return null;
-    const kept: WorktreeHostEntryV11[] = [];
-    const dropped: WorktreeHostEntryV11[] = [];
+    const kept: WorktreeHostEntryV12[] = [];
+    const dropped: WorktreeHostEntryV12[] = [];
     for (const captured of pendingDeleteTargets) {
       const fresh = worktreesByPath.get(captured.worktreePath) ?? null;
       if (fresh === null) {
@@ -1184,7 +1205,7 @@ export function WorktreesList(props: {
     setSelectedPaths(new Set());
   }, [allReposCollapsed, repoKeys]);
   const requestDeleteTargets = useCallback(
-    (targets: ReadonlyArray<WorktreeHostEntryV11>) => {
+    (targets: ReadonlyArray<WorktreeHostEntryV12>) => {
       // A `Checking` row's tier isn't known yet, so it never opens a delete
       // confirmation - not even a generic one - until enrichment settles.
       const deletableTargets = targets.filter(
@@ -1198,7 +1219,7 @@ export function WorktreesList(props: {
     [selectablePathSet, enrichmentStateFor],
   );
   const requestDeleteTarget = useCallback(
-    (target: WorktreeHostEntryV11) => {
+    (target: WorktreeHostEntryV12) => {
       requestDeleteTargets([target]);
     },
     [requestDeleteTargets],
@@ -1206,7 +1227,7 @@ export function WorktreesList(props: {
   const requestDeleteSelectedTargets = useCallback(() => {
     requestDeleteTargets(selectedTargets);
   }, [requestDeleteTargets, selectedTargets]);
-  const openScriptReviewFor = useCallback((target: WorktreeHostEntryV11) => {
+  const openScriptReviewFor = useCallback((target: WorktreeHostEntryV12) => {
     const reviewedScriptsByPath = reviewedScriptsByPathRef.current;
     setPendingScriptReview({
       target,
@@ -1216,7 +1237,7 @@ export function WorktreesList(props: {
   }, []);
 
   const clearSelectionForTargets = (
-    targets: ReadonlyArray<WorktreeHostEntryV11>,
+    targets: ReadonlyArray<WorktreeHostEntryV12>,
   ): void => {
     setSelectedPaths((prev) => removeSelectedWorktrees(prev, targets));
     setPendingDeleteTargets(null);
@@ -1919,7 +1940,7 @@ const WorktreeRepoHeader = memo(function WorktreeRepoHeader(props: {
  * generic one.
  */
 function worktreeDeleteDisabledReason(
-  entry: WorktreeHostEntryV11,
+  entry: WorktreeHostEntryV12,
   enrichment: WorktreeEnrichmentState,
 ): "in-use" | "checking" | null {
   if (entry.inUse) return "in-use";
@@ -1928,7 +1949,7 @@ function worktreeDeleteDisabledReason(
 }
 
 const WorktreeRow = memo(function WorktreeRow(props: {
-  readonly entry: WorktreeHostEntryV11;
+  readonly entry: WorktreeHostEntryV12;
   // This row's activity-enrichment state, driving the tier pill: `pending` (still
   // in flight → "Checking…"), `unknown` (settled to error → non-animated fallback),
   // or `ready` (enriched → real tier). Base fields paint regardless.
@@ -1939,8 +1960,8 @@ const WorktreeRow = memo(function WorktreeRow(props: {
   readonly selected: boolean;
   readonly canSelect: boolean;
   readonly onToggleSelection: (worktreePath: string) => void;
-  readonly onManageScripts: (target: WorktreeHostEntryV11) => void;
-  readonly onDelete: (target: WorktreeHostEntryV11) => void;
+  readonly onManageScripts: (target: WorktreeHostEntryV12) => void;
+  readonly onDelete: (target: WorktreeHostEntryV12) => void;
 }): ReactNode {
   const {
     entry,
@@ -2005,7 +2026,11 @@ const WorktreeRow = memo(function WorktreeRow(props: {
       </div>
       <div className="min-w-0 flex-1 space-y-1 pr-10">
         <div className="flex flex-wrap items-center gap-2">
-          <WorktreeTierPill tier={classification.tier} state={enrichment} />
+          <WorktreeTierPill
+            entry={entry}
+            tier={classification.tier}
+            state={enrichment}
+          />
           <WorktreePrChips entry={entry} />
           <span className="truncate text-ui-sm font-medium text-foreground">
             {branchLabel(entry)}
@@ -2056,6 +2081,7 @@ const WorktreeRow = memo(function WorktreeRow(props: {
  * amber; `orphaned` and `in-use` stay neutral.
  */
 function WorktreeTierPill(props: {
+  readonly entry: WorktreeHostEntryV12;
   readonly tier: WorktreeTier;
   readonly state: WorktreeEnrichmentState;
 }): ReactNode {
@@ -2115,9 +2141,23 @@ function WorktreeTierPill(props: {
     );
   }
   const style = WORKTREE_TIER_PILL_STYLE[props.tier];
+  const reviewReasons =
+    props.tier === "review" && props.entry.branchStatus !== null
+      ? describeReviewReasons(props.entry)
+      : [];
+  const tooltip =
+    reviewReasons.length === 0 ? (
+      WORKTREE_TIER_TOOLTIP[props.tier]
+    ) : (
+      <div className="max-w-[min(90vw,24rem)] space-y-1">
+        {reviewReasons.map((reason) => (
+          <p key={reason}>{reason}</p>
+        ))}
+      </div>
+    );
   return (
     <TooltipWrapper
-      label={WORKTREE_TIER_TOOLTIP[props.tier]}
+      label={tooltip}
       side="top"
       sideOffset={undefined}
       align="center"
@@ -2210,10 +2250,11 @@ interface WorktreePrChipModel {
 interface WorktreeMutedPrChipModel {
   readonly key: string;
   readonly label: string;
+  readonly tooltip: ReactNode;
 }
 
 function WorktreePrChips(props: {
-  readonly entry: WorktreeHostEntryV11;
+  readonly entry: WorktreeHostEntryV12;
 }): ReactNode {
   const chips = worktreePrChips(props.entry);
   if (chips.length === 0) return null;
@@ -2227,7 +2268,7 @@ function WorktreePrChips(props: {
 }
 
 function worktreePrChips(
-  entry: WorktreeHostEntryV11,
+  entry: WorktreeHostEntryV12,
 ): readonly (WorktreePrChipModel | WorktreeMutedPrChipModel)[] {
   return [
     ...superprojectPrChip(entry),
@@ -2239,7 +2280,7 @@ function worktreePrChips(
 }
 
 function superprojectPrChip(
-  entry: WorktreeHostEntryV11,
+  entry: WorktreeHostEntryV12,
 ): readonly WorktreePrChipModel[] {
   const prState = displayedPrState(entry.prState);
   if (prState === null || entry.prNumber === null || entry.prUrl === null) {
@@ -2257,7 +2298,7 @@ function superprojectPrChip(
 }
 
 function submodulePrChip(
-  submodule: WorktreeSubmoduleMergeFact,
+  submodule: WorktreeSubmoduleMergeFactV12,
 ): readonly WorktreePrChipModel[] {
   const prState = displayedPrState(submodule.prState);
   if (
@@ -2280,13 +2321,55 @@ function submodulePrChip(
 }
 
 function submoduleUnmergedChip(
-  submodule: WorktreeSubmoduleMergeFact,
+  submodule: WorktreeSubmoduleMergeFactV12,
 ): readonly WorktreeMutedPrChipModel[] {
-  if (submodule.prState !== "none" || submodule.mergedIntoDefault) return [];
+  if (
+    submodule.prState !== "none" ||
+    submodule.mergedIntoDefault ||
+    submodule.atPinnedCommit
+  ) {
+    return [];
+  }
+  const count = submodule.unmergedCommitCount ?? null;
+  const subjects = submodule.unmergedCommitSubjects ?? null;
+  // Subjects are display-only and NOT unique ("wip", "Merge branch …" repeat),
+  // so key each by its occurrence ordinal - unique without leaning on the
+  // array index (react/no-array-index-key).
+  const occurrences = new Map<string, number>();
+  const subjectItems = (subjects ?? []).map((subject) => {
+    const ordinal = (occurrences.get(subject) ?? 0) + 1;
+    occurrences.set(subject, ordinal);
+    return { key: `${subject}#${ordinal}`, subject };
+  });
   return [
     {
       key: `submodule-unmerged:${submodule.repoIdentifier.owner}/${submodule.repoIdentifier.repo}:${submodule.branch}`,
-      label: `${submodule.repoIdentifier.repo} · unmerged`,
+      label:
+        count !== null && count >= 1
+          ? `${submodule.repoIdentifier.repo} · ${count} unmerged commit${count === 1 ? "" : "s"}`
+          : `${submodule.repoIdentifier.repo} · unmerged commits`,
+      tooltip: (
+        <div className="max-w-[min(90vw,24rem)] space-y-1.5">
+          <p>
+            This submodule branch has commits that never landed on{" "}
+            {submodule.repoIdentifier.repo}'s main branch. Deleting the worktree
+            deletes the branch and these commits with it
+            {subjects === null ? "." : ":"}
+          </p>
+          {subjects === null ? null : (
+            <>
+              <ul className="list-inside list-disc">
+                {subjectItems.map((item) => (
+                  <li key={item.key}>{item.subject}</li>
+                ))}
+              </ul>
+              {count !== null && count > subjects.length ? (
+                <p>…and {count - subjects.length} more</p>
+              ) : null}
+            </>
+          )}
+        </div>
+      ),
     },
   ];
 }
@@ -2354,16 +2437,23 @@ function WorktreeMutedPrChip(props: {
   readonly chip: WorktreeMutedPrChipModel;
 }): ReactNode {
   return (
-    <Badge
-      variant="outline"
-      className="gap-1 border-border/40 bg-muted/30 font-medium text-muted-foreground"
-      data-testid="worktree-pr-chip"
-      data-pr-state="unmerged"
+    <TooltipWrapper
+      label={props.chip.tooltip}
+      side="top"
+      sideOffset={undefined}
+      align="center"
     >
-      <span className="max-w-[min(60vw,16rem)] truncate">
-        {props.chip.label}
-      </span>
-    </Badge>
+      <Badge
+        variant="outline"
+        className="gap-1 border-border/40 bg-muted/30 font-medium text-muted-foreground"
+        data-testid="worktree-pr-chip"
+        data-pr-state="unmerged"
+      >
+        <span className="max-w-[min(60vw,16rem)] truncate">
+          {props.chip.label}
+        </span>
+      </Badge>
+    </TooltipWrapper>
   );
 }
 
@@ -2414,7 +2504,7 @@ function WorktreePrAnchor(props: {
  * "Orphaned" tier, which means `gitRemovable: false`.
  */
 function WorktreeTaskAssociation(props: {
-  readonly owners: WorktreeHostEntryV11["owners"];
+  readonly owners: WorktreeHostEntryV12["owners"];
   readonly taskTitlesByEpicId: ReadonlyMap<string, string>;
   readonly taskRollupByEpicId: ReadonlyMap<string, TaskMergeRollup>;
   readonly onOpenTask: (epicId: string) => void;
@@ -2745,7 +2835,7 @@ function WorktreesStateMessage(props: {
 interface WorktreeRepoGroup {
   readonly key: string;
   readonly label: string;
-  readonly items: WorktreeHostEntryV11[];
+  readonly items: WorktreeHostEntryV12[];
 }
 
 type WorktreeRepoCollapseAction =
@@ -2789,7 +2879,7 @@ function collapsedRepoKeysReducer(
  * `createdAt` sorts last in both directions.
  */
 function groupByRepo(
-  worktrees: readonly WorktreeHostEntryV11[],
+  worktrees: readonly WorktreeHostEntryV12[],
   sortMode: WorktreeSortMode,
 ): WorktreeRepoGroup[] {
   const byKey = new Map<string, WorktreeRepoGroup>();
@@ -2813,8 +2903,8 @@ function groupByRepo(
 }
 
 function compareByCreatedAt(
-  a: WorktreeHostEntryV11,
-  b: WorktreeHostEntryV11,
+  a: WorktreeHostEntryV12,
+  b: WorktreeHostEntryV12,
   sortMode: WorktreeSortMode,
 ): number {
   const aAt = a.createdAt;
@@ -2833,10 +2923,10 @@ function compareByCreatedAt(
  * in memory.
  */
 function filterWorktrees(
-  worktrees: readonly WorktreeHostEntryV11[],
+  worktrees: readonly WorktreeHostEntryV12[],
   searchText: string,
   searchHaystackByPath: ReadonlyMap<string, string>,
-): readonly WorktreeHostEntryV11[] {
+): readonly WorktreeHostEntryV12[] {
   const needle = searchText.trim().toLowerCase();
   if (needle.length === 0) return worktrees;
   return worktrees.filter((entry) =>
@@ -2845,7 +2935,7 @@ function filterWorktrees(
 }
 
 function buildWorktreeSearchHaystackByPath(
-  worktrees: readonly WorktreeHostEntryV11[],
+  worktrees: readonly WorktreeHostEntryV12[],
   taskTitlesByEpicId: ReadonlyMap<string, string>,
 ): ReadonlyMap<string, string> {
   return new Map(
@@ -2857,7 +2947,7 @@ function buildWorktreeSearchHaystackByPath(
 }
 
 function worktreeSearchHaystack(
-  entry: WorktreeHostEntryV11,
+  entry: WorktreeHostEntryV12,
   taskTitlesByEpicId: ReadonlyMap<string, string>,
 ): string {
   const titles = entry.owners.flatMap((owner) => {
@@ -2869,7 +2959,7 @@ function worktreeSearchHaystack(
     .toLowerCase();
 }
 
-function deleteDialogCopy(entry: WorktreeHostEntryV11): {
+function deleteDialogCopy(entry: WorktreeHostEntryV12): {
   readonly title: string;
   readonly description: string;
   readonly actionLabel: string;
@@ -2926,7 +3016,7 @@ function deleteDialogCopy(entry: WorktreeHostEntryV11): {
  * so a dirty Unknown row still leads with the known, stronger dirty-loss
  * warning - the unknown-risk caveat is ADDED, never substituted for it.
  */
-function unknownRiskDeleteDialogCopy(entry: WorktreeHostEntryV11): {
+function unknownRiskDeleteDialogCopy(entry: WorktreeHostEntryV12): {
   readonly title: string;
   readonly description: string;
   readonly actionLabel: string;
@@ -2955,7 +3045,7 @@ function unknownRiskDeleteDialogCopy(entry: WorktreeHostEntryV11): {
  * status was never proven.
  */
 function singleWorktreeDeleteDialogCopy(
-  entry: WorktreeHostEntryV11,
+  entry: WorktreeHostEntryV12,
   enrichment: WorktreeEnrichmentState,
 ): {
   readonly title: string;
@@ -2976,7 +3066,7 @@ function singleWorktreeDeleteDialogCopy(
  * naming the real reason it was dropped.
  */
 function worktreeDropMessage(
-  dropped: readonly WorktreeHostEntryV11[],
+  dropped: readonly WorktreeHostEntryV12[],
   isChecking: (worktreePath: string) => boolean,
 ): string {
   const checkingDropped = dropped.filter((entry) =>
@@ -3023,7 +3113,7 @@ type WorktreeDeleteClass =
   | "orphaned"
   | "dirty";
 
-function worktreeDeleteClass(entry: WorktreeHostEntryV11): WorktreeDeleteClass {
+function worktreeDeleteClass(entry: WorktreeHostEntryV12): WorktreeDeleteClass {
   if (entry.inUse) return "in-use";
   // Derive the tier-level bucket from the ONE shared classifier so the bulk copy
   // and the row pill can never disagree (no parallel precedence ladder). The
@@ -3045,7 +3135,7 @@ function worktreeDeleteClass(entry: WorktreeHostEntryV11): WorktreeDeleteClass {
  * now that green, orphaned, and in-use cases are already handled above.
  */
 function worktreeReviewLossClass(
-  entry: WorktreeHostEntryV11,
+  entry: WorktreeHostEntryV12,
 ): WorktreeDeleteClass {
   const status = entry.branchStatus;
   if (entry.uncommittedCount > 0) return "dirty";
@@ -3098,7 +3188,7 @@ const WORKTREE_EXCLUSION_ORDER: readonly WorktreeDeleteClass[] = [
 ];
 
 function countWorktreeClasses(
-  entries: readonly WorktreeHostEntryV11[],
+  entries: readonly WorktreeHostEntryV12[],
   order: readonly WorktreeDeleteClass[],
 ): string {
   const counts = new Map<WorktreeDeleteClass, number>();
@@ -3128,8 +3218,8 @@ function countWorktreeClasses(
  * for the expandable list; delete is path-addressed.
  */
 function summarizeBulkWorktreeDelete(
-  targets: ReadonlyArray<WorktreeHostEntryV11>,
-  visible: readonly WorktreeHostEntryV11[],
+  targets: ReadonlyArray<WorktreeHostEntryV12>,
+  visible: readonly WorktreeHostEntryV12[],
   unknownPaths: ReadonlySet<string>,
 ): WorktreeBulkDeleteSummary {
   const targetPaths = new Set(targets.map((entry) => entry.worktreePath));
@@ -3244,23 +3334,9 @@ function invalidateWorktreeDeleteCaches(
   queryClient: QueryClient,
   hostId: string,
 ): void {
-  // `refetchType: "all"` forces inactive queries to refetch too, not just the
-  // mounted ones. The binding-backed pickers (git-diff worktree picker, the
-  // folder chip, the create-worktree dialog) are often unmounted when a delete
-  // runs from Settings, and the app's query defaults skip refetch-on-focus
-  // (and the git picker pins `staleTime: Infinity`), so a plain invalidate
-  // would leave them serving the pre-delete binding until they next remounted.
-  const refetchType = "all" as const;
-  void queryClient.invalidateQueries({
-    queryKey: hostQueryKeys.methodScope(hostId, "worktree.listAllForHost"),
-    refetchType,
-  });
-  for (const method of WORKTREE_BINDING_INVALIDATIONS) {
-    void queryClient.invalidateQueries({
-      queryKey: hostQueryKeys.methodScope(hostId, method),
-      refetchType,
-    });
-  }
+  // Listing ("active", sweep-aware) + binding-backed pickers ("all") - the
+  // shared post-delete slice; see the helper for the refetchType rationale.
+  invalidateWorktreeListingAndBindingCaches(queryClient, hostId);
   // A deleted worktree's directory is gone, so its cached `git.getCapabilities`
   // (5-min staleTime) would otherwise keep reporting the stale `available: true`
   // and strand the git panel. Force a re-probe so the gate sees the repo is
