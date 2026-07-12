@@ -640,13 +640,13 @@ function upgradeResponseAlongChain<Payload>(
     // absent from the registry falls through untouched and surfaces the
     // chain's own not-installed error below.
     const fromEntry =
-      methodRegistry[fromVersion.major].versions[fromVersion.minor];
+      methodRegistry[fromVersion.major]?.versions[fromVersion.minor];
     let chainInput = result;
     if (fromEntry !== undefined) {
       const parsed = fromEntry.contract.responseSchema.safeParse(result);
       if (!parsed.success) {
         throw new Error(
-          `response does not match the ${fromVersion.major}.${fromVersion.minor} response schema: ${parsed.error.message}`,
+          `response does not match the ${fromVersion.major}.${fromVersion.minor} response schema`,
         );
       }
       chainInput = parsed.data;

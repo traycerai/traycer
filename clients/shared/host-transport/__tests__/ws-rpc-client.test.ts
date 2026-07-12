@@ -1581,7 +1581,8 @@ describe("WsRpcClient", () => {
             error instanceof HostRpcError &&
             error.code === "RPC_ERROR" &&
             error.method === "host.echo" &&
-            error.message.includes("1.0")
+            error.message ===
+              "Failed to upgrade response from 1.0 to 2.0: response does not match the 1.0 response schema"
           );
         });
       });
