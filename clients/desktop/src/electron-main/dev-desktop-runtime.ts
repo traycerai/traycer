@@ -28,6 +28,9 @@ export function resolveDesktopRuntimeIdentity(
 }
 
 function displayNameForDevDesktopSlot(slot: string): string {
-  const worktreeMatch = /^traycer-(.+)-[a-f0-9]{8}$/.exec(slot);
+  if (/^traycer-[a-f0-9]{8}$/.test(slot)) {
+    return slot;
+  }
+  const worktreeMatch = /^(?:traycer-)?(.+)-[a-f0-9]{8}$/.exec(slot);
   return worktreeMatch?.[1] ?? slot;
 }

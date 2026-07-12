@@ -36,6 +36,7 @@ function buildChildEnv(env) {
     env.TRAYCER_DESKTOP_DEV_URL ?? `http://localhost:${rendererPort}`;
   const childEnv = {
     ...env,
+    NODE_ENV: "development",
     PORT: String(rendererPort),
     TRAYCER_DESKTOP_DEV: "1",
     TRAYCER_DESKTOP_DEV_URL: rendererUrl,

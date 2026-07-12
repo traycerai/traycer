@@ -23,6 +23,30 @@ describe("dev desktop runtime helpers", () => {
     });
   });
 
+  it("removes the generated hash from a worktree name without the traycer prefix", () => {
+    expect(
+      resolveDesktopRuntimeIdentity("Traycer Dev", "dev", {
+        [DEV_DESKTOP_SLOT_ENV]: "fix-macos-ctrl-chord-passthrough-e1d873c7",
+      }),
+    ).toEqual({
+      appName: "Traycer Dev — fix-macos-ctrl-chord-passthrough",
+      userDataDirName: "Traycer Dev-fix-macos-ctrl-chord-passthrough-e1d873c7",
+      slot: "fix-macos-ctrl-chord-passthrough-e1d873c7",
+    });
+  });
+
+  it("keeps a slot with no worktree segment intact", () => {
+    expect(
+      resolveDesktopRuntimeIdentity("Traycer Dev", "dev", {
+        [DEV_DESKTOP_SLOT_ENV]: "traycer-85cb2355",
+      }),
+    ).toEqual({
+      appName: "Traycer Dev — traycer-85cb2355",
+      userDataDirName: "Traycer Dev-traycer-85cb2355",
+      slot: "traycer-85cb2355",
+    });
+  });
+
   it("keeps an explicitly requested slot intact in the dev display identity", () => {
     expect(
       resolveDesktopRuntimeIdentity("Traycer Dev", "dev", {

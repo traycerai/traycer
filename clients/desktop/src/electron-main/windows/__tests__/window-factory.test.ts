@@ -7,6 +7,7 @@ const electronState = vi.hoisted(() => ({
     readonly readyToShow: () => void;
     readonly maximizeCalls: number;
     readonly pageTitleUpdated: () => void;
+    readonly preventDefault: () => void;
     readonly setTitleCalls: string[];
   }>,
   webContentsOnChannels: [] as string[],
@@ -69,6 +70,7 @@ vi.mock("electron", () => ({
 
     constructor(options: unknown) {
       const self = this;
+      const preventDefault = vi.fn();
       electronState.browserWindowOptions.push(options);
       electronState.browserWindows.push({
         readyToShow: () => {
@@ -78,8 +80,9 @@ vi.mock("electron", () => ({
           return self.maximizeCalls;
         },
         pageTitleUpdated: () => {
-          self.pageTitleUpdated?.({ preventDefault: () => undefined });
+          self.pageTitleUpdated?.({ preventDefault });
         },
+        preventDefault,
         get setTitleCalls() {
           return self.setTitleCalls;
         },
@@ -242,6 +245,9 @@ describe("loadMainWindow", () => {
 
     electronState.browserWindows[0].pageTitleUpdated();
 
+    expect(
+      electronState.browserWindows[0].preventDefault,
+    ).toHaveBeenCalledOnce();
     expect(electronState.browserWindows[0].setTitleCalls).toEqual([
       "Traycer Dev — spry-panda",
     ]);
