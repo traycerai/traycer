@@ -1,7 +1,7 @@
 import {
   defineDowngradePath,
+  defineFloorAwareVersionedRpcRegistry,
   defineUpgradePath,
-  defineVersionedRpcRegistry,
   type DowngradeResult,
 } from "@traycer/protocol/framework/index";
 import { defineVersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
@@ -145,7 +145,17 @@ import {
   terminalSubscribeV12,
   terminalSubscribeV13,
 } from "@traycer/protocol/host/terminal/contracts";
-import { notificationsSubscribeV10 } from "@traycer/protocol/host/notifications/contracts";
+import {
+  hostNotificationsGetConfig,
+  hostNotificationsIndicatorState,
+  hostNotificationsList,
+  hostNotificationsMarkAllRead,
+  hostNotificationsMarkRead,
+  hostNotificationsSetConfig,
+  hostNotificationsSubscribe,
+  notificationsSubscribeV10,
+} from "@traycer/protocol/host/notifications/contracts";
+import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import {
   resourcesSubscribeV10,
   resourcesSubscribeV11,
@@ -1437,7 +1447,9 @@ export const worktreeListBindingsForEpicUpgradeV10ToV11 = defineUpgradePath<
 // Note: git contract definitions are imported from git-contracts.ts above
 // and registered inline in hostRpcRegistry and hostStreamRpcRegistry below.
 
-export const hostRpcRegistry = defineVersionedRpcRegistry({
+export const hostRpcRegistry = defineFloorAwareVersionedRpcRegistry(
+  RELEASED_FLOOR_METHOD_NAMES,
+  {
   "host.status": {
     1: {
       latestMinor: 0,
@@ -1490,6 +1502,84 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
         },
       },
       downgradePathsFromLatest: { 1: hostGetRateLimitUsageDowngradeV2ToV1 },
+    },
+  },
+  "host.notifications.list": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationsList,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.notifications.getConfig": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationsGetConfig,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.notifications.setConfig": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationsSetConfig,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.notifications.markRead": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationsMarkRead,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.notifications.markAllRead": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationsMarkAllRead,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.notifications.indicatorState": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationsIndicatorState,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
     },
   },
   "comments.listThreads": {
@@ -3103,7 +3193,8 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
       downgradePathsFromLatest: {},
     },
   },
-});
+  },
+);
 
 export type HostRpcRegistry = typeof hostRpcRegistry;
 
@@ -3167,6 +3258,16 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
       versions: {
         0: {
           contract: notificationsSubscribeV10,
+        },
+      },
+    },
+  },
+  "host.notifications.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationsSubscribe,
         },
       },
     },

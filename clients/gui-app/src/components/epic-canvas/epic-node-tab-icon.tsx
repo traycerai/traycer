@@ -1,5 +1,8 @@
+import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { ChatProgressIcon } from "@/components/chat/chat-progress-icon";
+import { NotificationIndicatorIcon } from "@/components/notifications/notification-indicator-icon";
+import { useSurfaceNotificationIndicatorState } from "@/components/notifications/notification-indicator-context";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import {
   EPIC_NODE_ICONS,
@@ -50,6 +53,32 @@ export function EpicNodeTabIcon(props: {
       />
     );
   }
+  if (props.variant === "live" && props.node.type === "terminal") {
+    return (
+      <TerminalNodeTabIcon
+        nodeId={props.node.id}
+        epicId={props.epicId}
+        defaultIcon={
+          <StaticEpicNodeIcon type="terminal" className={props.className} />
+        }
+      />
+    );
+  }
+  if (props.variant === "live" && props.node.type === "terminal-agent") {
+    return (
+      <TerminalNodeTabIcon
+        nodeId={props.node.id}
+        epicId={props.epicId}
+        defaultIcon={
+          <TuiAgentTabIcon
+            nodeId={props.node.id}
+            pendingTuiHarnessId={props.node.pendingTuiHarnessId}
+            className={props.className}
+          />
+        }
+      />
+    );
+  }
   if (props.node.type === "terminal-agent") {
     return (
       <TuiAgentTabIcon
@@ -61,6 +90,29 @@ export function EpicNodeTabIcon(props: {
   }
   return (
     <StaticEpicNodeIcon type={props.node.type} className={props.className} />
+  );
+}
+
+function TerminalNodeTabIcon(props: {
+  readonly nodeId: string;
+  readonly epicId: string;
+  readonly defaultIcon: ReactNode;
+}) {
+  const indicatorState = useSurfaceNotificationIndicatorState({
+    epicId: props.epicId,
+    chatId: props.nodeId,
+  });
+  return (
+    <NotificationIndicatorIcon
+      state={indicatorState}
+      running={false}
+      subjectId={props.nodeId}
+      testIdPrefix="terminal-tab"
+      className={undefined}
+      style={undefined}
+      runningTitle=""
+      defaultIcon={props.defaultIcon}
+    />
   );
 }
 

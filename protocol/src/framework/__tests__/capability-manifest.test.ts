@@ -63,7 +63,8 @@ describe("capability manifest helpers", () => {
   it("keeps the host legacy manifest exactly the released floor set", () => {
     // Old peers negotiate against `manifest` alone with fail-closed name-set
     // semantics, so it must carry the frozen floor methods and nothing else.
-    // Post-#272 additive methods land in `optionalManifest` instead.
+    // Post-#272 additive methods (e.g. the notifications RPCs, or this PR's
+    // `epic.updateChatRunSettings`) land in `optionalManifest` instead.
     const fullManifest = buildConnectionManifest(hostRpcRegistry);
     const split = splitConnectionManifest(hostRpcRegistry, releasedMethodNames);
 
@@ -80,6 +81,9 @@ describe("capability manifest helpers", () => {
     expect({ ...split.manifest, ...split.optionalManifest }).toEqual(
       fullManifest,
     );
+    expect(
+      mergeConnectionManifests(split.manifest, split.optionalManifest),
+    ).toEqual(fullManifest);
   });
 
   it("splits non-floor methods into the optional channel", () => {

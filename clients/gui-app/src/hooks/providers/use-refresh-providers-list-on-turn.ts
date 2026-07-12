@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
-import { subscribeChatTurnCompletions } from "@/lib/notifications/chat-turn-completion";
+import { subscribeChatTurnCompletions } from "@/lib/chats/chat-turn-completions";
 import { queryKeys } from "@/lib/query-keys";
 import { PROVIDER_RATE_LIMITS_STALE_TIME_MS } from "@/lib/rate-limit-providers";
 

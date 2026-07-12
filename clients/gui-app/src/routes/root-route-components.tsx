@@ -5,7 +5,7 @@ import { HostReadyGate } from "@/components/layout/host-ready-gate";
 import { AppShell } from "@/components/layout/app-shell";
 import { MenuCommandListener } from "@/components/layout/bridges/menu-command-listener";
 import { PreventSleepController } from "@/components/layout/bridges/prevent-sleep-controller";
-import { ChatTurnNotificationController } from "@/components/layout/bridges/chat-turn-notification-controller";
+import { NotificationEmissionController } from "@/components/layout/bridges/notification-emission-controller";
 import { NotificationFocusBridge } from "@/components/layout/bridges/notification-focus-bridge";
 import { SystemTabModalHost } from "@/components/layout/dialogs/system-tab-modal-host";
 import { TrayOpenEpicBridge } from "@/components/layout/bridges/tray-open-epic-bridge";
@@ -49,7 +49,7 @@ export function RootComponent() {
       <HostReadyGate>
         <HostTrayCommandListener />
         <PreventSleepController />
-        <ChatTurnNotificationController />
+        <NotificationEmissionController />
         <TrayOpenEpicBridge />
         <NotificationFocusBridge />
         <DeepLinkTabSync />

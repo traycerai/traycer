@@ -1,4 +1,5 @@
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { emitHostErrorNotification } from "@/stores/notifications/app-local-notifications-store";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
@@ -14,6 +15,7 @@ export function toastFromHostError(
   fallback: string,
 ): void {
   const message = hostErrorToastMessage(error, fallback);
+  emitHostFatalErrorNotification(error, message);
   reportableErrorToast(
     message,
     undefined,
@@ -31,6 +33,7 @@ export function toastFromHostErrorWithDetail(
   fallback: string,
 ): void {
   const message = hostErrorToastMessageWithDetail(error, fallback);
+  emitHostFatalErrorNotification(error, message);
   reportableErrorToast(
     message,
     undefined,
@@ -98,4 +101,17 @@ function isLastOwnerRevokeError(message: string): boolean {
     normalized.includes("cannot revoke the only owner") ||
     normalized.includes("can't revoke the only owner")
   );
+}
+
+function emitHostFatalErrorNotification(
+  error: HostRpcError,
+  message: string,
+): void {
+  if (error.fatalDetails === null) return;
+  emitHostErrorNotification({
+    id: `${error.method}:${error.requestId}`,
+    message,
+    detail: error.fatalDetails.reason,
+    payload: null,
+  });
 }

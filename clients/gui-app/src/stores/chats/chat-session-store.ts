@@ -2250,8 +2250,8 @@ function findRestorableSendByMessageId<
 /**
  * A chat session is "fully settled" when no turn is running, none is active,
  * and the queue is empty/idle. Single source of truth for the
- * render-send-as-pending check and the turn-completion notifier
- * (`lib/notifications/chat-turn-completion.ts`).
+ * render-send-as-pending check and the turn-completion refresh subscribers
+ * (`lib/chats/chat-turn-completions.ts`).
  */
 export function isChatSessionSettled(
   state: Pick<ChatSessionState, "runStatus" | "activeTurn" | "queue">,

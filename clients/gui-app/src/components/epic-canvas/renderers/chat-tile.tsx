@@ -116,6 +116,7 @@ import { useChatActions } from "@/hooks/chats/use-chat-actions";
 import { useChatSetupFailureRestoreDriver } from "@/hooks/chats/use-chat-setup-failure-restore-driver";
 import { useSetupTerminalListRefreshDriver } from "@/hooks/chats/use-setup-terminal-list-refresh-driver";
 import { useSetupTerminalTabRegisterDriver } from "@/hooks/chats/use-setup-terminal-tab-register-driver";
+import { emitChatStreamErrorNotification } from "@/stores/notifications/app-local-notifications-store";
 import { type InitialChatHandoffScope } from "@/stores/epics/initial-chat-handoff-store";
 import { contentBlocksText } from "@/lib/chat/content-block-text";
 import { buildSubmittedChatJSONContent } from "@/lib/composer/tiptap-json-content";
@@ -693,6 +694,7 @@ function ChatTileSessionView(props: ChatTileSessionViewProps) {
             onRetry={view.onChatRetry}
             restoreContext={view.restoreContext}
             node={view.node}
+            epicId={view.currentEpicId}
             viewTabId={view.viewTabId}
             tabHostId={view.tabHostId}
             workspaceRoots={view.linkResolutionRoots}
@@ -1707,6 +1709,7 @@ interface ChatSessionMessagesSurfaceProps {
   readonly onRetry: () => void;
   readonly restoreContext: ChatRestoreContextValue;
   readonly node: EpicNodeRef;
+  readonly epicId: string;
   readonly viewTabId: string;
   readonly tabHostId: string | null;
   readonly workspaceRoots: ReadonlyArray<string>;
@@ -1759,6 +1762,15 @@ function ContextUsageChipForChat(props: {
 function ChatSessionMessagesSurface(
   props: ChatSessionMessagesSurfaceProps,
 ): ReactNode {
+  useEffect(() => {
+    if (props.fatalClose === null) return;
+    emitChatStreamErrorNotification({
+      epicId: props.epicId,
+      chatId: props.node.id,
+      details: props.fatalClose,
+    });
+  }, [props.fatalClose, props.epicId, props.node.id]);
+
   // A fatal close before any snapshot (CHAT_INVALID, CHAT_NOT_VISIBLE, …) means
   // the host will never send one. Surface the reason + a retry instead of an
   // indefinite spinner.

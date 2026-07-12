@@ -1,4 +1,14 @@
 import "../../../../__tests__/test-browser-apis";
+
+vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
+  useHostNotificationIndicators: () => ({
+    data: { epics: {}, chats: {} },
+    isPending: false,
+    isFetching: false,
+    error: null,
+    refetch: () => Promise.resolve(),
+  }),
+}));
 import {
   act,
   cleanup,

@@ -27,6 +27,10 @@ import {
   useTerminalSessionRecovery,
   type TerminalSessionRecovery,
 } from "@/hooks/terminal/use-terminal-session-recovery";
+import {
+  isTerminalCrashExit,
+  useTerminalCrashNotification,
+} from "@/hooks/terminal/use-terminal-crash-notification";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { beginTerminalLoad } from "@/lib/perf/terminal-load-perf";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
@@ -46,6 +50,10 @@ import { TerminalLoadingSkeleton } from "./terminal-loading-skeleton";
 import { TerminalDeadTileBanner } from "./dead-tile-banner";
 import { TerminalConnectionOverlay } from "./terminal-connection-overlay";
 import { resolveTerminalOverlayState } from "./terminal-connection-overlay-state";
+import {
+  emitTerminalClosedNotification,
+  emitTerminalCrashedNotification,
+} from "@/stores/notifications/app-local-notifications-store";
 import { Button } from "@/components/ui/button";
 import {
   Popover,
@@ -149,7 +157,30 @@ export interface TuiAgentTileProps {
 
 export function TuiAgentTile(props: TuiAgentTileProps) {
   const hostId = useTabHostId();
+  const epicId = useOpenEpicId();
   const reachability = useHostReachability(hostId);
+  const crashReportedRef = useRef(false);
+  const reportCrashExit = useCallback(() => {
+    if (crashReportedRef.current) return;
+    crashReportedRef.current = true;
+    emitTerminalCrashedNotification({
+      instanceId: props.node.instanceId,
+      epicId,
+      chatId: props.node.id,
+      cause: "exit",
+    });
+  }, [epicId, props.node.id, props.node.instanceId]);
+  const reportRecoveryExhausted = useCallback(() => {
+    // Whichever path observes this terminal death first owns its notification.
+    if (crashReportedRef.current) return;
+    crashReportedRef.current = true;
+    emitTerminalCrashedNotification({
+      instanceId: props.node.instanceId,
+      epicId,
+      chatId: props.node.id,
+      cause: "recovery-exhausted",
+    });
+  }, [epicId, props.node.id, props.node.instanceId]);
   const closeCanvasTile = useCloseCanvasTileWithNestedFocus(
     props.viewTabId,
     props.tileId,
@@ -160,7 +191,11 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
   const recovery = useTerminalSessionRecovery({
     hostId,
     instanceId: props.node.instanceId,
+    onRecoveryExhausted: reportRecoveryExhausted,
   });
+  useEffect(() => {
+    crashReportedRef.current = false;
+  }, [props.node.instanceId]);
   // Open the load timeline at the outermost mount so the reachability gate
   // (which can show a skeleton first) counts toward first-paint time.
   const sessionId = props.node.id;
@@ -170,6 +205,21 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
       kind: "agent",
     });
   }, [sessionId]);
+  useEffect(() => {
+    if (reachability.status !== "unreachable") return;
+    emitTerminalClosedNotification({
+      instanceId: props.node.instanceId,
+      hostLabel: reachability.hostLabel,
+      epicId,
+      chatId: props.node.id,
+    });
+  }, [
+    reachability.status,
+    reachability.hostLabel,
+    epicId,
+    props.node.id,
+    props.node.instanceId,
+  ]);
   if (reachability.status === "unreachable") {
     return (
       <TerminalDeadTileBanner
@@ -201,6 +251,7 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
     <TuiAgentTileLive
       key={recovery.recoverNonce}
       recovery={recovery}
+      onCrashExit={reportCrashExit}
       {...props}
     />
   );
@@ -213,7 +264,10 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
 const RESTART_SUPPRESS_TIMEOUT_MS = 15_000;
 
 function TuiAgentTileLive(
-  props: TuiAgentTileProps & { readonly recovery: TerminalSessionRecovery },
+  props: TuiAgentTileProps & {
+    readonly recovery: TerminalSessionRecovery;
+    readonly onCrashExit: () => void;
+  },
 ) {
   const hostId = useTabHostId();
   const epicId = useOpenEpicId();
@@ -518,6 +572,7 @@ function TuiAgentTileLive(
           onReapedExit={reviveAfterReap}
           isActive={props.isActive}
           recovery={props.recovery}
+          onCrashExit={props.onCrashExit}
         />
       </div>
     </TerminalAgentTileShell>
@@ -545,6 +600,7 @@ interface TerminalAgentBodyProps {
   readonly isActive: boolean;
   readonly isRestartKillSuppressed: () => boolean;
   readonly recovery: TerminalSessionRecovery;
+  readonly onCrashExit: () => void;
 }
 
 function TerminalAgentBody(props: TerminalAgentBodyProps): React.ReactNode {
@@ -642,6 +698,7 @@ function TerminalAgentBody(props: TerminalAgentBodyProps): React.ReactNode {
       isRestartKillSuppressed={props.isRestartKillSuppressed}
       onReapedExit={props.onReapedExit}
       recovery={props.recovery}
+      onCrashExit={props.onCrashExit}
     />
   );
 }
@@ -971,6 +1028,7 @@ interface TerminalAgentLiveProps {
   /** Revive (recreate + resume) after the host's idle-reap of this agent. */
   readonly onReapedExit: () => void;
   readonly recovery: TerminalSessionRecovery;
+  readonly onCrashExit: () => void;
 }
 
 function TerminalAgentLive(props: TerminalAgentLiveProps) {
@@ -992,6 +1050,11 @@ function TerminalAgentLive(props: TerminalAgentLiveProps) {
   // still reports the same exited state (dep identity churn), and stacking
   // `terminal.create` retries for one reap would race each other.
   const reapedReviveRequestedRef = useRef(false);
+  useTerminalCrashNotification({
+    handle,
+    isExitSuppressed: props.isRestartKillSuppressed,
+    onCrashExit: props.onCrashExit,
+  });
 
   const isRestartKillSuppressed = props.isRestartKillSuppressed;
   const showExitToast = useCallback(() => {
@@ -1054,6 +1117,16 @@ function TerminalAgentLive(props: TerminalAgentLiveProps) {
       }
       return;
     }
+    if (
+      isTerminalCrashExit({
+        status,
+        exitCode,
+        exitReason,
+        isExitSuppressed: isRestartKillSuppressed,
+      })
+    ) {
+      return;
+    }
     // `closeCanvasTab` resolves the tile by its pane tab *instance* id
     // (`pane.tabInstanceIds`), not the content/session id. Passing
     // `handle.sessionId` (the agent record id) silently no-ops, leaving the
@@ -1061,6 +1134,7 @@ function TerminalAgentLive(props: TerminalAgentLiveProps) {
     closeCanvasTile();
   }, [
     status,
+    exitCode,
     exitReason,
     onReapedExit,
     closeCanvasTile,

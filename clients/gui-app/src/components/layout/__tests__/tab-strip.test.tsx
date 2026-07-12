@@ -38,6 +38,16 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../../../__tests__/test-browser-apis";
 
+vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
+  useHostNotificationIndicators: () => ({
+    data: { epics: {}, chats: {} },
+    isPending: false,
+    isFetching: false,
+    error: null,
+    refetch: () => Promise.resolve(),
+  }),
+}));
+
 interface EpicTab {
   readonly id: string;
   readonly name: string;
@@ -501,10 +511,10 @@ describe("<TabStrip />", () => {
 
     expect(await screen.findByTestId(`tab-epic-${EPIC_A.id}`)).toBeDefined();
     expect(screen.queryByTestId(`header-tab-activity-${EPIC_A.id}`)).toBeNull();
-    expect(screen.queryByTestId(`header-tab-waiting-${EPIC_A.id}`)).toBeNull();
+    expect(screen.queryByTestId(`header-tab-prompt-${EPIC_A.id}`)).toBeNull();
   });
 
-  it("shows a waiting spinner when a chat in the epic needs user input", async () => {
+  it("does not derive a prompt indicator from a chat session's pending interview", () => {
     openEpicFixture(EPIC_A);
     registerLiveEpicHeader(EPIC_A, "owner", ["chat-waiting"]);
     registerChatSession(EPIC_A.id, "chat-waiting");
@@ -519,15 +529,10 @@ describe("<TabStrip />", () => {
     const router = buildRouter("/epics/e-a/e-a");
     render(<RouterProvider router={router} />);
 
-    expect(
-      await screen.findByTestId(`header-tab-waiting-${EPIC_A.id}`),
-    ).toBeDefined();
-    expect(
-      screen.queryByTitle("Task waiting for your approval"),
-    ).not.toBeNull();
+    expect(screen.queryByTestId(`header-tab-prompt-${EPIC_A.id}`)).toBeNull();
   });
 
-  it("shows a waiting spinner when a chat in the epic needs permission approval", async () => {
+  it("does not derive a prompt indicator from a chat session's pending approval", () => {
     openEpicFixture(EPIC_A);
     registerLiveEpicHeader(EPIC_A, "owner", ["chat-permission"]);
     registerChatSession(EPIC_A.id, "chat-permission");
@@ -553,12 +558,7 @@ describe("<TabStrip />", () => {
     const router = buildRouter("/epics/e-a/e-a");
     render(<RouterProvider router={router} />);
 
-    expect(
-      await screen.findByTestId(`header-tab-waiting-${EPIC_A.id}`),
-    ).toBeDefined();
-    expect(
-      screen.queryByTitle("Task waiting for your approval"),
-    ).not.toBeNull();
+    expect(screen.queryByTestId(`header-tab-prompt-${EPIC_A.id}`)).toBeNull();
   });
 
   it("hides the header epic edit-title menu item for viewer role", async () => {
