@@ -81,7 +81,7 @@ const CHANNELS: ReadonlyArray<{
   {
     id: "renderer",
     label: "In-app",
-    description: "Toast and chime in the Traycer window.",
+    description: "Native OS toast and chime from the Traycer app.",
   },
   {
     id: "webhook",

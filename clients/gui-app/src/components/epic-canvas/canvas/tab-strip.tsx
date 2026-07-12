@@ -52,6 +52,8 @@ import {
 } from "@/components/epic-canvas/canvas/tab-strip-context-menu";
 import { EpicNodeTabIcon } from "@/components/epic-canvas/epic-node-tab-icon";
 import { useHorizontalWheelScroll } from "@/hooks/use-horizontal-wheel-scroll";
+import { useHostNotificationIndicators } from "@/hooks/notifications/use-host-notification-indicators-query";
+import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
 import { useCanvasTabLeaderModifierForIndex } from "@/providers/keybinding-context";
 import { LeaderDigitBadge } from "@/components/ui/leader-digit-badge";
 import {
@@ -190,25 +192,35 @@ export function TabStrip(props: TabStripProps) {
   // Narrow per-strip subscription: preview ticks re-render only the strip
   // actually hovered, not every strip on the canvas.
   const dndDropIndicator = useTabStripDropIndex(groupId);
+  const chatIds = useMemo(
+    () => tabs.flatMap((tab) => (tab.type === "chat" ? [tab.id] : [])),
+    [tabs],
+  );
+  const notificationIndicators = useHostNotificationIndicators({
+    epicIds: [],
+    chatIds,
+    enabled: chatIds.length > 0,
+  });
 
   return (
-    <div
-      ref={stripRef}
-      data-testid="tab-strip"
-      data-group-id={groupId}
-      className={cn(
-        "relative flex h-9 shrink-0 items-stretch border-b border-canvas-border/70 bg-canvas",
-      )}
-    >
-      <div className="relative flex min-w-0 flex-1 items-stretch">
-        <div
-          ref={stripEndDropRef}
-          data-testid="tab-strip-end"
-          onWheel={handleWheel}
-          onDoubleClick={handleStripEndDoubleClick}
-          className="no-scrollbar flex min-w-0 flex-1 touch-pan-x items-stretch overflow-x-auto overscroll-x-contain"
-        >
-          {/*
+    <NotificationIndicatorsProvider indicators={notificationIndicators.data}>
+      <div
+        ref={stripRef}
+        data-testid="tab-strip"
+        data-group-id={groupId}
+        className={cn(
+          "relative flex h-9 shrink-0 items-stretch border-b border-canvas-border/70 bg-canvas",
+        )}
+      >
+        <div className="relative flex min-w-0 flex-1 items-stretch">
+          <div
+            ref={stripEndDropRef}
+            data-testid="tab-strip-end"
+            onWheel={handleWheel}
+            onDoubleClick={handleStripEndDoubleClick}
+            className="no-scrollbar flex min-w-0 flex-1 touch-pan-x items-stretch overflow-x-auto overscroll-x-contain"
+          >
+            {/*
             Per-tab active/preview/globally-active state is read inside TabItem
             via `useTabActivation`, NOT computed here from `activeTabId`. If it
             were a map dep, React Compiler would re-run this whole map on every
@@ -216,60 +228,61 @@ export function TabStrip(props: TabStripProps) {
             deps to `tabs` + stable handlers means a pure active-switch
             re-renders only the two tabs whose flags flip.
           */}
-          <LayoutGroup id={`epic-tab-strip-${groupId}`}>
-            {tabs.map((tab, index) => (
-              <TabItem
-                key={tab.instanceId}
-                domRef={setTabRef(tab.instanceId)}
-                tab={tab}
-                epicId={epicId}
-                tabId={tabId}
-                groupId={groupId}
-                showDropIndicatorBefore={dndDropIndicator === index}
-                index={index}
-                onSelect={onSelectTab}
-                onClose={onCloseTab}
-                onPromotePreview={onPromotePreview}
-                canRenameTabs={canRenameTabs}
-                menuProps={{
-                  groupId,
-                  tabId: tab.instanceId,
-                  canCloseRight: index < tabs.length - 1,
-                  ...menuHandlers,
-                }}
+            <LayoutGroup id={`epic-tab-strip-${groupId}`}>
+              {tabs.map((tab, index) => (
+                <TabItem
+                  key={tab.instanceId}
+                  domRef={setTabRef(tab.instanceId)}
+                  tab={tab}
+                  epicId={epicId}
+                  tabId={tabId}
+                  groupId={groupId}
+                  showDropIndicatorBefore={dndDropIndicator === index}
+                  index={index}
+                  onSelect={onSelectTab}
+                  onClose={onCloseTab}
+                  onPromotePreview={onPromotePreview}
+                  canRenameTabs={canRenameTabs}
+                  menuProps={{
+                    groupId,
+                    tabId: tab.instanceId,
+                    canCloseRight: index < tabs.length - 1,
+                    ...menuHandlers,
+                  }}
+                />
+              ))}
+              <TabStripEndDropIndicator
+                visible={
+                  dndDropIndicator !== null && dndDropIndicator >= tabs.length
+                }
               />
-            ))}
-            <TabStripEndDropIndicator
-              visible={
-                dndDropIndicator !== null && dndDropIndicator >= tabs.length
-              }
-            />
-          </LayoutGroup>
+            </LayoutGroup>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-0.5 border-l border-canvas-border/70 bg-canvas px-1">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => onSplitRight(groupId)}
+            aria-label="Split group right"
+            data-testid="tab-strip-split-right"
+          >
+            <SplitSquareHorizontal className="size-4" />
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => onCloseGroup(groupId)}
+            aria-label="Close group"
+            data-testid="tab-strip-close-group"
+          >
+            <X className="size-4" />
+          </Button>
         </div>
       </div>
-      <div className="flex shrink-0 items-center gap-0.5 border-l border-canvas-border/70 bg-canvas px-1">
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          onClick={() => onSplitRight(groupId)}
-          aria-label="Split group right"
-          data-testid="tab-strip-split-right"
-        >
-          <SplitSquareHorizontal className="size-4" />
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          onClick={() => onCloseGroup(groupId)}
-          aria-label="Close group"
-          data-testid="tab-strip-close-group"
-        >
-          <X className="size-4" />
-        </Button>
-      </div>
-    </div>
+    </NotificationIndicatorsProvider>
   );
 }
 

@@ -4,9 +4,9 @@ import {
   type HostStreamRpcRegistry,
 } from "@traycer/protocol/host/registry";
 import {
-  hostNotificationsSubscribeClientFrameV11Schema,
-  type HostNotificationEntryV11,
-  type HostNotificationsSubscribeClientFrameV11,
+  hostNotificationsSubscribeClientFrameSchema,
+  type HostNotificationEntry,
+  type HostNotificationsSubscribeClientFrame,
 } from "@traycer/protocol/host/notifications/contracts";
 import type {
   IStreamSession,
@@ -28,7 +28,7 @@ function entry(
   id: string,
   updatedAt: number,
   readAt: number | null,
-): HostNotificationEntryV11 {
+): HostNotificationEntry {
   return {
     id,
     updatedAt,
@@ -45,15 +45,29 @@ function entry(
   };
 }
 
+function promptEntry(id: string): HostNotificationEntry {
+  return {
+    id,
+    updatedAt: 10,
+    readAt: null,
+    kind: "interview.requested",
+    sourceRef: id,
+    severity: "needs_action",
+    outcome: null,
+    resolvedAt: null,
+    payload: { epicId: "epic-1", chatId: "chat-1" },
+  };
+}
+
 class MockStreamSession implements IStreamSession {
   private serverFrameHandler: ServerFrameHandler | null = null;
   private statusChangeHandler: StatusChangeHandler | null = null;
-  readonly clientFrames: HostNotificationsSubscribeClientFrameV11[] = [];
+  readonly clientFrames: HostNotificationsSubscribeClientFrame[] = [];
   closed = false;
 
   sendClientFrame(envelope: StreamFrameEnvelope): void {
     this.clientFrames.push(
-      hostNotificationsSubscribeClientFrameV11Schema.parse(envelope),
+      hostNotificationsSubscribeClientFrameSchema.parse(envelope),
     );
   }
 
@@ -154,6 +168,95 @@ describe("host notifications store", () => {
     expect(useHostNotificationsStore.getState().snapshotEpoch).toBe(2);
   });
 
+  it("patches resolvedAt with read-state frames without changing entry order", () => {
+    useHostNotificationsStore
+      .getState()
+      .replaceFromSnapshot([promptEntry("question")], 50);
+    const snapshotEpoch = useHostNotificationsStore.getState().snapshotEpoch;
+
+    useHostNotificationsStore
+      .getState()
+      .applyReadState(["question"], 20, 20, snapshotEpoch);
+
+    expect(useHostNotificationsStore.getState().byId.question).toMatchObject({
+      readAt: 20,
+      resolvedAt: 20,
+      updatedAt: 10,
+    });
+    expect(useHostNotificationsStore.getState().orderedIds).toEqual([
+      "question",
+    ]);
+  });
+
+  it("preserves frame read state over an equal-timestamp pagination row", () => {
+    useHostNotificationsStore
+      .getState()
+      .replaceFromSnapshot([promptEntry("question")], 50);
+    const snapshotEpoch = useHostNotificationsStore.getState().snapshotEpoch;
+
+    useHostNotificationsStore
+      .getState()
+      .applyReadState(["question"], 20, 20, snapshotEpoch);
+    useHostNotificationsStore
+      .getState()
+      .mergePage([promptEntry("question")], null, snapshotEpoch);
+
+    expect(useHostNotificationsStore.getState().byId.question).toMatchObject({
+      readAt: 20,
+      resolvedAt: 20,
+    });
+  });
+
+  it("allows a genuinely newer upsert to replace a prior read state", () => {
+    useHostNotificationsStore
+      .getState()
+      .replaceFromSnapshot([entry("target", 10, null)], 50);
+    const snapshotEpoch = useHostNotificationsStore.getState().snapshotEpoch;
+    useHostNotificationsStore
+      .getState()
+      .applyReadState(["target"], 20, undefined, snapshotEpoch);
+
+    useHostNotificationsStore.getState().upsert(entry("target", 11, null));
+
+    expect(useHostNotificationsStore.getState().byId.target.readAt).toBeNull();
+  });
+
+  it("surfaces entity refs from read-state frames even when their ids are not loaded", () => {
+    const client = new MockWsStreamClient();
+    const frames: Array<{
+      readonly kind: string;
+      readonly entityRefs?: unknown;
+    }> = [];
+    const close = openHostNotificationsStream(client, null, {
+      windowId: "window-1",
+      now: () => 123,
+      displayChannelEmission: () => undefined,
+      onFeedFrame: (frame) => frames.push(frame),
+      onPresenceChanged: () => undefined,
+      onStreamOpened: () => undefined,
+    });
+
+    client.session.emitServerFrame({
+      kind: "readStateChanged",
+      hasBinaryPayload: false,
+      ids: ["out-of-window"],
+      entityRefs: [{ epicId: "epic-1", chatId: "chat-1" }],
+      readAt: 20,
+      resolvedAt: null,
+    });
+
+    expect(frames).toEqual([
+      expect.objectContaining({
+        kind: "readStateChanged",
+        entityRefs: [{ epicId: "epic-1", chatId: "chat-1" }],
+      }),
+    ]);
+    expect(
+      useHostNotificationsStore.getState().byId["out-of-window"],
+    ).toBeUndefined();
+    close();
+  });
+
   it("merges back-pages by id and keeps newer upsert state", () => {
     useHostNotificationsStore
       .getState()
@@ -209,7 +312,7 @@ describe("host notifications store", () => {
     );
     useHostNotificationsStore
       .getState()
-      .applyReadState(["fresh"], 250, staleEpoch);
+      .applyReadState(["fresh"], 250, undefined, staleEpoch);
 
     expect(useHostNotificationsStore.getState().orderedIds).toEqual(["fresh"]);
     expect(
@@ -221,7 +324,7 @@ describe("host notifications store", () => {
 
   it("uses channelEmission as the only host-source display path", () => {
     const client = new MockWsStreamClient();
-    const displayed: Array<ReadonlyArray<HostNotificationEntryV11>> = [];
+    const displayed: Array<ReadonlyArray<HostNotificationEntry>> = [];
     const liveEntry = entry("live", 200, null);
 
     const close = openHostNotificationsStream(client, null, {
@@ -230,6 +333,9 @@ describe("host notifications store", () => {
       displayChannelEmission: (entries) => {
         displayed.push(entries);
       },
+      onFeedFrame: () => undefined,
+      onPresenceChanged: () => undefined,
+      onStreamOpened: () => undefined,
     });
 
     client.session.emitServerFrame({
@@ -259,7 +365,7 @@ describe("host notifications store", () => {
 
   it("ignores non-renderer channelEmission frames for in-app display", () => {
     const client = new MockWsStreamClient();
-    const displayed: Array<ReadonlyArray<HostNotificationEntryV11>> = [];
+    const displayed: Array<ReadonlyArray<HostNotificationEntry>> = [];
     const liveEntry = entry("webhook-live", 240, null);
 
     const close = openHostNotificationsStream(client, null, {
@@ -268,6 +374,9 @@ describe("host notifications store", () => {
       displayChannelEmission: (entries) => {
         displayed.push(entries);
       },
+      onFeedFrame: () => undefined,
+      onPresenceChanged: () => undefined,
+      onStreamOpened: () => undefined,
     });
 
     client.session.emitServerFrame({
@@ -286,13 +395,16 @@ describe("host notifications store", () => {
     close();
   });
 
-  it("sends v1.1 presence frames initially and when the stream opens", () => {
+  it("sends flat presence frames initially and when the stream opens", () => {
     const client = new MockWsStreamClient();
 
     const close = openHostNotificationsStream(client, null, {
       windowId: "window-1",
       now: () => 456,
       displayChannelEmission: () => undefined,
+      onFeedFrame: () => undefined,
+      onPresenceChanged: () => undefined,
+      onStreamOpened: () => undefined,
     });
 
     const initialPresenceFrame = client.session.clientFrames[0];

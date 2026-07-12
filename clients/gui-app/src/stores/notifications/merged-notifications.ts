@@ -214,7 +214,10 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
   >({
     client,
     method: "host.notifications.markRead",
-    mapVariables: (variables) => ({ ids: [variables.sourceId] }),
+    mapVariables: (variables) => ({
+      kind: "ids",
+      ids: [variables.sourceId],
+    }),
     options: {
       mutationKey: notificationsMutationKeys.markRead(),
       onMutate: () => captureHostNotificationMutationContext(client),
@@ -225,6 +228,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
           .applyReadState(
             [variables.sourceId],
             Date.now(),
+            undefined,
             context.snapshotEpoch,
           );
       },

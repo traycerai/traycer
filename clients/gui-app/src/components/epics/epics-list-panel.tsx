@@ -68,12 +68,15 @@ import {
 } from "@/components/home/data/home-page.data";
 import { EpicsFilterPopover } from "@/components/epics/epics-filter-popover";
 import { EpicsSortMenu } from "@/components/epics/epics-sort-menu";
-import { EpicActivityStatusIcon } from "@/components/epics/epic-activity-status-icon";
+import { NotificationIndicatorIcon } from "@/components/notifications/notification-indicator-icon";
+import { useSurfaceNotificationIndicatorState } from "@/components/notifications/notification-indicator-context";
+import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
 import {
   useHistoryQuery,
   type HistoryFacets,
 } from "@/hooks/home/use-history-query";
 import { useEpicActivityStatus } from "@/hooks/epic/use-epic-activity-status";
+import { useHostNotificationIndicators } from "@/hooks/notifications/use-host-notification-indicators-query";
 import {
   useAmbientHistorySearchState,
   useRouteHistorySearchState,
@@ -241,6 +244,15 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   });
 
   const items = data?.items ?? EMPTY_ITEMS;
+  const indicatorEpicIds = useMemo(
+    () => items.map((item) => item.epicId),
+    [items],
+  );
+  const notificationIndicators = useHostNotificationIndicators({
+    epicIds: indicatorEpicIds,
+    chatIds: [],
+    enabled: indicatorEpicIds.length > 0,
+  });
   const availableRepos = data?.availableRepos ?? EMPTY_REPOS;
   const availableWorkspaces = data?.availableWorkspaces ?? EMPTY_WORKSPACES;
   const facets = data?.facets;
@@ -447,26 +459,30 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
           facets={facets}
           refresh={{ isFetching, hostId, onRefetch: refetch }}
         />
-        <div className="min-h-0 flex-1 overflow-y-auto pb-10">
-          <EpicsListBody
-            error={error}
-            isPending={isPending}
-            isFetching={isFetching}
-            hasActiveFilters={hasActiveFilters}
-            items={items}
-            onRetry={handleRetry}
-            selectionMode={selectionMode}
-            selectedIds={selectedIds}
-            onToggleSelection={toggleSelection}
-            onRequestDelete={requestDelete}
-            hasNextPage={hasNextPage}
-            isFetchingNextPage={isFetchingNextPage}
-            onLoadMore={fetchNextPage}
-            onSelectEpic={onSelectEpic}
-            onOpenInNewWindow={openInNewWindowFlow.requestOpen}
-            openInNewWindowAvailable={openInNewWindowFlow.isAvailable}
-          />
-        </div>
+        <NotificationIndicatorsProvider
+          indicators={notificationIndicators.data}
+        >
+          <div className="min-h-0 flex-1 overflow-y-auto pb-10">
+            <EpicsListBody
+              error={error}
+              isPending={isPending}
+              isFetching={isFetching}
+              hasActiveFilters={hasActiveFilters}
+              items={items}
+              onRetry={handleRetry}
+              selectionMode={selectionMode}
+              selectedIds={selectedIds}
+              onToggleSelection={toggleSelection}
+              onRequestDelete={requestDelete}
+              hasNextPage={hasNextPage}
+              isFetchingNextPage={isFetchingNextPage}
+              onLoadMore={fetchNextPage}
+              onSelectEpic={onSelectEpic}
+              onOpenInNewWindow={openInNewWindowFlow.requestOpen}
+              openInNewWindowAvailable={openInNewWindowFlow.isAvailable}
+            />
+          </div>
+        </NotificationIndicatorsProvider>
       </section>
       <DeleteTasksDialog
         open={pendingDeleteIds !== null}
@@ -1157,18 +1173,22 @@ function HistoryRowLeadingIcon(props: { readonly item: HistoryItem }) {
   const activityStatus = useEpicActivityStatus(
     props.item.taskType === "epic" ? props.item.epicId : null,
   );
-  if (activityStatus !== "idle") {
-    return (
-      <EpicActivityStatusIcon
-        status={activityStatus}
-        subjectId={props.item.epicId}
-        testIdPrefix="epics-list-row"
-        className="text-muted-foreground group-hover/list-row:text-foreground"
-      />
-    );
-  }
+  const indicatorState = useSurfaceNotificationIndicatorState({
+    epicId: props.item.epicId,
+  });
   return (
-    <Layers className="size-4 shrink-0 text-muted-foreground group-hover/list-row:text-foreground" />
+    <NotificationIndicatorIcon
+      state={indicatorState}
+      running={activityStatus === "running"}
+      subjectId={props.item.epicId}
+      testIdPrefix="epics-list-row"
+      className="text-muted-foreground group-hover/list-row:text-foreground"
+      style={undefined}
+      runningTitle="Task activity in progress"
+      defaultIcon={
+        <Layers className="size-4 shrink-0 text-muted-foreground group-hover/list-row:text-foreground" />
+      }
+    />
   );
 }
 

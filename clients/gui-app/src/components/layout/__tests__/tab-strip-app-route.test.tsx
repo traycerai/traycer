@@ -47,6 +47,20 @@ vi.mock("@/components/layout/bridges/notification-focus-bridge", () => ({
   NotificationFocusBridge: () => null,
 }));
 
+vi.mock("@/components/layout/bridges/notification-emission-controller", () => ({
+  NotificationEmissionController: () => null,
+}));
+
+vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
+  useHostNotificationIndicators: () => ({
+    data: { epics: {}, chats: {} },
+    isPending: false,
+    isFetching: false,
+    error: null,
+    refetch: () => Promise.resolve(),
+  }),
+}));
+
 vi.mock("@/components/layout/bridges/tray-open-epic-bridge", () => ({
   TrayOpenEpicBridge: () => null,
 }));

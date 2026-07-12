@@ -6,22 +6,29 @@ import type {
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import {
-  hostNotificationsSubscribeClientFrameV11Schema,
+  hostNotificationsSubscribeClientFrameSchema,
   hostNotificationsSubscribeServerFrameSchema,
-  hostNotificationsSubscribeServerFrameV11Schema,
   type HostNotificationCursor,
   type HostNotificationEntry,
-  type HostNotificationEntryV11,
+  type HostNotificationsSubscribeServerFrame,
 } from "@traycer/protocol/host/notifications/contracts";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import {
   readHostNotificationPresenceFrame,
   subscribeHostNotificationPresence,
+  type HostNotificationPresenceFrame,
 } from "@/lib/notifications/notification-presence";
 
 export const HOST_NOTIFICATIONS_INITIAL_LIMIT = 50;
 
-export type HostNotificationFeedEntry = HostNotificationEntryV11;
+export type HostNotificationFeedEntry = HostNotificationEntry;
+
+export type HostNotificationsFeedFrame = Extract<
+  HostNotificationsSubscribeServerFrame,
+  | { readonly kind: "snapshot" }
+  | { readonly kind: "upserted" }
+  | { readonly kind: "readStateChanged" }
+>;
 
 interface HostNotificationsProjection {
   readonly orderedIds: ReadonlyArray<string>;
@@ -49,6 +56,7 @@ interface HostNotificationsState {
   applyReadState: (
     ids: ReadonlyArray<string>,
     readAt: number | null,
+    resolvedAt: number | null | undefined,
     expectedSnapshotEpoch: number,
   ) => void;
   markAllReadLocally: (
@@ -101,29 +109,49 @@ function mergeById(
   if (entries.length === 0) return current;
   const next: Record<string, HostNotificationFeedEntry> = { ...current };
   for (const entry of entries) {
-    if (
-      Object.hasOwn(current, entry.id) &&
-      current[entry.id].updatedAt > entry.updatedAt
-    ) {
+    const hasCurrent = Object.hasOwn(current, entry.id);
+    if (hasCurrent && current[entry.id].updatedAt > entry.updatedAt) {
       continue;
     }
-    next[entry.id] = entry;
+    next[entry.id] =
+      hasCurrent && current[entry.id].updatedAt === entry.updatedAt
+        ? preserveReadState(current[entry.id], entry)
+        : entry;
   }
   return next;
+}
+
+function preserveReadState(
+  current: HostNotificationFeedEntry,
+  incoming: HostNotificationFeedEntry,
+): HostNotificationFeedEntry {
+  const readAt = current.readAt;
+  if ("resolvedAt" in current && "resolvedAt" in incoming) {
+    return { ...incoming, readAt, resolvedAt: current.resolvedAt };
+  }
+  return { ...incoming, readAt };
 }
 
 function applyReadStateById(
   current: Readonly<Record<string, HostNotificationFeedEntry>>,
   ids: ReadonlyArray<string>,
   readAt: number | null,
+  resolvedAt: number | null | undefined,
 ): Readonly<Record<string, HostNotificationFeedEntry>> {
   let changed = false;
   const next: Record<string, HostNotificationFeedEntry> = { ...current };
   for (const id of ids) {
     if (!Object.hasOwn(current, id)) continue;
     const entry = current[id];
-    if (entry.readAt === readAt) continue;
-    next[id] = { ...entry, readAt };
+    const resolvedAtChanged =
+      "resolvedAt" in entry &&
+      resolvedAt !== undefined &&
+      entry.resolvedAt !== resolvedAt;
+    if (entry.readAt === readAt && !resolvedAtChanged) continue;
+    next[id] =
+      "resolvedAt" in entry && resolvedAt !== undefined
+        ? { ...entry, readAt, resolvedAt }
+        : { ...entry, readAt };
     changed = true;
   }
   return changed ? next : current;
@@ -190,10 +218,10 @@ export const useHostNotificationsStore = create<HostNotificationsState>()(
       });
     },
 
-    applyReadState: (ids, readAt, expectedSnapshotEpoch) => {
+    applyReadState: (ids, readAt, resolvedAt, expectedSnapshotEpoch) => {
       set((state) => {
         if (state.snapshotEpoch !== expectedSnapshotEpoch) return state;
-        const byId = applyReadStateById(state.byId, ids, readAt);
+        const byId = applyReadStateById(state.byId, ids, readAt, resolvedAt);
         if (byId === state.byId) return state;
         const projection = projectHostNotifications(byId);
         return {
@@ -211,7 +239,7 @@ export const useHostNotificationsStore = create<HostNotificationsState>()(
           const entry = state.byId[id];
           return entry.readAt === null && entry.updatedAt <= beforeUpdatedAt;
         });
-        const byId = applyReadStateById(state.byId, ids, readAt);
+        const byId = applyReadStateById(state.byId, ids, readAt, undefined);
         if (byId === state.byId) return state;
         const projection = projectHostNotifications(byId);
         return {
@@ -235,6 +263,9 @@ export function openHostNotificationsStream(
     readonly displayChannelEmission: (
       entries: ReadonlyArray<HostNotificationFeedEntry>,
     ) => void;
+    readonly onFeedFrame: (frame: HostNotificationsFeedFrame) => void;
+    readonly onPresenceChanged: (frame: HostNotificationPresenceFrame) => void;
+    readonly onStreamOpened: () => void;
   },
 ): () => void {
   const session = wsStreamClient.subscribe("host.notifications.subscribe", {
@@ -247,8 +278,7 @@ export function openHostNotificationsStream(
       windowId: options.windowId,
       now: options.now,
     });
-    const parsed =
-      hostNotificationsSubscribeClientFrameV11Schema.safeParse(frame);
+    const parsed = hostNotificationsSubscribeClientFrameSchema.safeParse(frame);
     if (!parsed.success) return;
     if (parsed.data.kind !== "presence") return;
     const presence = parsed.data;
@@ -259,45 +289,12 @@ export function openHostNotificationsStream(
     if (presenceKey === lastPresenceKey) return;
     lastPresenceKey = presenceKey;
     session.sendClientFrame(presence, null);
+    options.onPresenceChanged(presence);
   };
   const unsubscribePresence = subscribeHostNotificationPresence(sendPresence);
   sendPresence();
   session.onServerFrame((envelope, binaryPayload) => {
     if (binaryPayload !== null) return;
-    const parsedV11 =
-      hostNotificationsSubscribeServerFrameV11Schema.safeParse(envelope);
-    if (parsedV11.success) {
-      const frame = parsedV11.data;
-      switch (frame.kind) {
-        case "snapshot":
-          useHostNotificationsStore
-            .getState()
-            .replaceFromSnapshot(
-              frame.entries,
-              HOST_NOTIFICATIONS_INITIAL_LIMIT,
-            );
-          return;
-        case "upserted":
-          useHostNotificationsStore.getState().upsert(frame.entry);
-          return;
-        case "readStateChanged":
-          useHostNotificationsStore
-            .getState()
-            .applyReadState(
-              frame.ids,
-              frame.readAt,
-              useHostNotificationsStore.getState().snapshotEpoch,
-            );
-          return;
-        case "channelEmission":
-          if (frame.channelId === "renderer") {
-            options.displayChannelEmission(frame.rows);
-          }
-          return;
-        case "pong":
-          return;
-      }
-    }
     const parsed =
       hostNotificationsSubscribeServerFrameSchema.safeParse(envelope);
     if (!parsed.success) return;
@@ -306,15 +303,12 @@ export function openHostNotificationsStream(
       case "snapshot":
         useHostNotificationsStore
           .getState()
-          .replaceFromSnapshot(
-            frame.entries.map(projectV10EntryToV11),
-            HOST_NOTIFICATIONS_INITIAL_LIMIT,
-          );
+          .replaceFromSnapshot(frame.entries, HOST_NOTIFICATIONS_INITIAL_LIMIT);
+        options.onFeedFrame(frame);
         return;
       case "upserted":
-        useHostNotificationsStore
-          .getState()
-          .upsert(projectV10EntryToV11(frame.entry));
+        useHostNotificationsStore.getState().upsert(frame.entry);
+        options.onFeedFrame(frame);
         return;
       case "readStateChanged":
         useHostNotificationsStore
@@ -322,8 +316,15 @@ export function openHostNotificationsStream(
           .applyReadState(
             frame.ids,
             frame.readAt,
+            frame.resolvedAt,
             useHostNotificationsStore.getState().snapshotEpoch,
           );
+        options.onFeedFrame(frame);
+        return;
+      case "channelEmission":
+        if (frame.channelId === "renderer") {
+          options.displayChannelEmission(frame.rows);
+        }
         return;
       case "pong":
         return;
@@ -333,6 +334,7 @@ export function openHostNotificationsStream(
     useHostNotificationsStore.setState({ connectionStatus: status });
     if (status === "open") {
       lastPresenceKey = null;
+      options.onStreamOpened();
       sendPresence();
     }
     handleHostNotificationsCloseReason(reason, onAuthError);
@@ -341,49 +343,6 @@ export function openHostNotificationsStream(
     unsubscribePresence();
     session.close();
   };
-}
-
-function projectV10EntryToV11(
-  entry: HostNotificationEntry,
-): HostNotificationFeedEntry {
-  switch (entry.kind) {
-    case "agent.stopped":
-      return {
-        id: entry.id,
-        updatedAt: entry.updatedAt,
-        readAt: entry.readAt,
-        kind: "agent.stopped",
-        sourceRef: entry.sourceRef,
-        severity: "done",
-        outcome: "completed",
-        payload: {
-          ...entry.payload,
-          outcome: "completed",
-        },
-      };
-    case "approval.requested":
-      return {
-        id: entry.id,
-        updatedAt: entry.updatedAt,
-        readAt: entry.readAt,
-        kind: "approval.requested",
-        sourceRef: entry.sourceRef,
-        severity: "needs_action",
-        outcome: null,
-        payload: entry.payload,
-      };
-    case "interview.requested":
-      return {
-        id: entry.id,
-        updatedAt: entry.updatedAt,
-        readAt: entry.readAt,
-        kind: "interview.requested",
-        sourceRef: entry.sourceRef,
-        severity: "needs_action",
-        outcome: null,
-        payload: entry.payload,
-      };
-  }
 }
 
 function handleHostNotificationsCloseReason(

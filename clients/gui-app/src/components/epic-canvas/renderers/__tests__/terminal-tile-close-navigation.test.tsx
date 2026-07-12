@@ -9,11 +9,16 @@ import {
 } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { create } from "zustand";
+import type { TerminalSessionExitReason } from "@traycer/protocol/host/terminal/unary-schemas";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import type { EpicTerminalRef } from "@/stores/epics/canvas/types";
 import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
+import {
+  __resetAppLocalNotificationsStoreForTests,
+  useAppLocalNotificationsStore,
+} from "@/stores/notifications/app-local-notifications-store";
 
 const testState = vi.hoisted(() => ({
   reachability: {
@@ -32,7 +37,7 @@ const exitedHandle = {
     status: "exited" as const,
     connectionStatus: "open" as const,
     exitCode: 0,
-    exitReason: null,
+    exitReason: null as TerminalSessionExitReason | null,
     effectiveCols: 80,
     effectiveRows: 24,
     lastOutputPreview: null,
@@ -149,6 +154,8 @@ describe("<TerminalTile /> close navigation", () => {
   beforeEach(() => {
     cleanup();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    __resetAppLocalNotificationsStoreForTests();
+    exitedHandle.store.setState({ exitCode: 0, exitReason: null });
     testState.reachability = { status: "reachable", hostLabel: "Host A" };
     resetNavigationSpy();
   });
@@ -212,6 +219,34 @@ describe("<TerminalTile /> close navigation", () => {
     expectTileClosed(fixture.viewTabId, fixture.closingNode.instanceId);
   });
 
+  it("keeps an abnormal exit mounted and emits its terminal failure", async () => {
+    exitedHandle.store.setState({
+      exitCode: 1,
+      exitReason: "process-exit",
+    });
+    useAppLocalNotificationsStore.getState().activateIdentity("user-a");
+    const fixture = openTerminalFixture(false);
+
+    render(
+      withTabHost(
+        <TerminalTile
+          viewTabId={fixture.viewTabId}
+          node={fixture.closingNode}
+          tileId={fixture.paneId}
+          isActive
+        />,
+      ),
+    );
+
+    await waitFor(() => {
+      expect(useAppLocalNotificationsStore.getState().orderedIds).toHaveLength(
+        1,
+      );
+    });
+    expectTileOpen(fixture.viewTabId, fixture.closingNode.instanceId);
+    expect(testState.navigateNested).not.toHaveBeenCalled();
+  });
+
   it("closes an inactive exited tile without producing a route-write target", async () => {
     const fixture = openTerminalFixture(true);
 
@@ -239,3 +274,9 @@ describe("<TerminalTile /> close navigation", () => {
     expect(pane.activeTabId).toBe(fixture.activeNode.instanceId);
   });
 });
+
+function expectTileOpen(viewTabId: string, instanceId: string): void {
+  const canvas = useEpicCanvasStore.getState().canvasByTabId[viewTabId];
+  if (canvas === undefined) throw new Error("expected view tab canvas");
+  expect(canvas.tilesByInstanceId[instanceId]).toBeDefined();
+}

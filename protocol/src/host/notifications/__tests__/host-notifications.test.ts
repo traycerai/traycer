@@ -4,30 +4,29 @@ import {
   hostStreamRpcRegistry,
 } from "@traycer/protocol/host/registry";
 import {
-  hostNotificationEntryV11Schema,
+  HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP,
   hostNotificationEntrySchema,
-  hostNotificationsConfigResponseSchema,
-  hostNotificationsGetConfigV10,
+  hostNotificationsGetConfig,
+  hostNotificationsIndicatorState,
+  hostNotificationsList,
   hostNotificationsListRequestSchema,
-  hostNotificationsListV10,
-  hostNotificationsListV11,
-  hostNotificationsMarkAllReadV10,
-  hostNotificationsMarkReadV10,
-  hostNotificationsSetConfigV10,
-  hostNotificationsSubscribeClientFrameV11Schema,
+  hostNotificationsMarkAllRead,
+  hostNotificationsMarkRead,
+  hostNotificationsSetConfig,
+  hostNotificationsSubscribe,
   hostNotificationsSubscribeClientFrameSchema,
-  hostNotificationsSubscribeServerFrameV11Schema,
   hostNotificationsSubscribeServerFrameSchema,
-  hostNotificationsSubscribeV10,
-  hostNotificationsSubscribeV11,
 } from "@traycer/protocol/host/notifications/contracts";
 
-const ENTRY_FIXTURE = {
+const APPROVAL_ENTRY = {
   id: "notification-1",
   updatedAt: 1_700_000_000_000,
   readAt: null,
+  resolvedAt: null,
   kind: "approval.requested" as const,
   sourceRef: "approval-1",
+  severity: "needs_action" as const,
+  outcome: null,
   payload: {
     epicId: "epic-1",
     chatId: "chat-1",
@@ -35,7 +34,7 @@ const ENTRY_FIXTURE = {
   },
 };
 
-const STOPPED_ENTRY_V11_FIXTURE = {
+const STOPPED_ENTRY = {
   id: "notification-2",
   updatedAt: 1_700_000_000_010,
   readAt: null,
@@ -53,91 +52,54 @@ const STOPPED_ENTRY_V11_FIXTURE = {
   },
 };
 
-const STALLED_ENTRY_V11_FIXTURE = {
-  id: "notification-3",
-  updatedAt: 1_700_000_000_020,
-  readAt: null,
-  kind: "agent.stalled" as const,
-  sourceRef: "agent-1",
-  severity: "failure" as const,
-  outcome: null,
-  payload: {
-    epicId: "epic-1",
-    chatId: "chat-1",
-    agentId: "agent-1",
-    reason: "provider_throttle",
-  },
-};
-
-describe("host notification entry schema", () => {
-  it("parses the v1 entry shape with an opaque object payload", () => {
-    const parsed = hostNotificationEntrySchema.parse(ENTRY_FIXTURE);
-
-    expect(parsed.id).toBe("notification-1");
-    expect(parsed.kind).toBe("approval.requested");
-    expect(parsed.readAt).toBeNull();
-    expect(parsed.payload.approvalId).toBe("approval-1");
-  });
-
-  it("rejects unknown host notification kinds", () => {
-    expect(() =>
-      hostNotificationEntrySchema.parse({
-        ...ENTRY_FIXTURE,
-        kind: "agent.started",
-      }),
-    ).toThrow();
-  });
-
-  it("rejects non-object payloads", () => {
-    expect(() =>
-      hostNotificationEntrySchema.parse({
-        ...ENTRY_FIXTURE,
-        payload: "approval-1",
-      }),
-    ).toThrow();
-  });
-});
-
-describe("host notification entry schema v1.1", () => {
-  it("parses agent.stopped with outcome and failure details", () => {
-    const parsed = hostNotificationEntryV11Schema.parse(
-      STOPPED_ENTRY_V11_FIXTURE,
+describe("flat host notification entry schema", () => {
+  it("parses complete needs-action and failure entries", () => {
+    expect(hostNotificationEntrySchema.parse(APPROVAL_ENTRY)).toEqual(
+      APPROVAL_ENTRY,
     );
-
-    expect(parsed.kind).toBe("agent.stopped");
-    expect(parsed.outcome).toBe("errored");
-    expect(parsed.payload.code).toBe("rate_limit");
-    expect(parsed.severity).toBe("failure");
+    expect(hostNotificationEntrySchema.parse(STOPPED_ENTRY)).toEqual(
+      STOPPED_ENTRY,
+    );
   });
 
-  it("parses agent.stalled under v1.1 but rejects it under v1.0", () => {
-    expect(hostNotificationEntryV11Schema.parse(STALLED_ENTRY_V11_FIXTURE).kind)
-      .toBe("agent.stalled");
+  it("requires unresolved-state metadata on needs-action rows", () => {
+    const { resolvedAt: _resolvedAt, ...entryWithoutResolvedAt } =
+      APPROVAL_ENTRY;
+    expect(() =>
+      hostNotificationEntrySchema.parse(entryWithoutResolvedAt),
+    ).toThrow();
+  });
 
+  it("keeps agent.stalled aligned with the persisted errored outcome", () => {
+    expect(
+      hostNotificationEntrySchema.parse({
+        ...STOPPED_ENTRY,
+        id: "notification-3",
+        kind: "agent.stalled",
+        outcome: "errored",
+        payload: { agentId: "agent-1", reason: "provider_throttle" },
+      }).outcome,
+    ).toBe("errored");
     expect(() =>
       hostNotificationEntrySchema.parse({
-        id: STALLED_ENTRY_V11_FIXTURE.id,
-        updatedAt: STALLED_ENTRY_V11_FIXTURE.updatedAt,
-        readAt: STALLED_ENTRY_V11_FIXTURE.readAt,
-        kind: STALLED_ENTRY_V11_FIXTURE.kind,
-        sourceRef: STALLED_ENTRY_V11_FIXTURE.sourceRef,
-        payload: STALLED_ENTRY_V11_FIXTURE.payload,
+        ...STOPPED_ENTRY,
+        id: "notification-3",
+        kind: "agent.stalled",
+        outcome: null,
+        payload: { agentId: "agent-1", reason: "provider_throttle" },
       }),
     ).toThrow();
   });
 });
 
 describe("host.notifications.list@1.0", () => {
-  it("parses the first-page request without a cursor", () => {
+  it("parses the complete entry surface on the one flat version", () => {
     expect(
-      hostNotificationsListRequestSchema.parse({
-        filter: "all",
-        limit: 25,
+      hostNotificationsList.responseSchema.parse({
+        entries: [APPROVAL_ENTRY, STOPPED_ENTRY],
+        nextCursor: null,
       }),
-    ).toEqual({
-      filter: "all",
-      limit: 25,
-    });
+    ).toEqual({ entries: [APPROVAL_ENTRY, STOPPED_ENTRY], nextCursor: null });
   });
 
   it("parses all/unread filters and keyset cursors", () => {
@@ -145,325 +107,152 @@ describe("host.notifications.list@1.0", () => {
       hostNotificationsListRequestSchema.parse({
         filter: "unread",
         limit: 25,
-        cursor: {
-          updatedAt: 1_700_000_000_000,
-          id: "notification-1",
-        },
+        cursor: { updatedAt: 1_700_000_000_000, id: "notification-1" },
       }),
     ).toEqual({
       filter: "unread",
       limit: 25,
-      cursor: {
-        updatedAt: 1_700_000_000_000,
-        id: "notification-1",
-      },
-    });
-
-    expect(
-      hostNotificationsListV10.responseSchema.parse({
-        entries: [ENTRY_FIXTURE],
-        nextCursor: null,
-      }),
-    ).toEqual({
-      entries: [ENTRY_FIXTURE],
-      nextCursor: null,
-    });
-  });
-
-  it("rejects a zero limit", () => {
-    expect(() =>
-      hostNotificationsListRequestSchema.parse({
-        filter: "unread",
-        limit: 0,
-      }),
-    ).toThrow();
-  });
-});
-
-describe("host.notifications.list@1.1", () => {
-  it("parses entries with top-level severity and outcome", () => {
-    expect(
-      hostNotificationsListV11.responseSchema.parse({
-        entries: [STOPPED_ENTRY_V11_FIXTURE, STALLED_ENTRY_V11_FIXTURE],
-        nextCursor: null,
-      }),
-    ).toEqual({
-      entries: [STOPPED_ENTRY_V11_FIXTURE, STALLED_ENTRY_V11_FIXTURE],
-      nextCursor: null,
+      cursor: { updatedAt: 1_700_000_000_000, id: "notification-1" },
     });
   });
 });
 
 describe("host.notifications.markRead@1.0", () => {
-  it("rejects empty id sets", () => {
+  it("uses an explicit ids/entity discriminant", () => {
+    expect(
+      hostNotificationsMarkRead.requestSchema.parse({
+        kind: "ids",
+        ids: ["notification-1"],
+      }),
+    ).toEqual({ kind: "ids", ids: ["notification-1"] });
+    expect(
+      hostNotificationsMarkRead.requestSchema.parse({
+        kind: "entity",
+        entity: { epicId: "epic-1" },
+      }),
+    ).toEqual({ kind: "entity", entity: { epicId: "epic-1" } });
     expect(() =>
-      hostNotificationsMarkReadV10.requestSchema.parse({
-        ids: [],
+      hostNotificationsMarkRead.requestSchema.parse({
+        ids: ["notification-1"],
+      }),
+    ).toThrow();
+  });
+});
+
+describe("host.notifications.indicatorState@1.0", () => {
+  it("accepts bounded separate epic and chat batches", () => {
+    expect(
+      hostNotificationsIndicatorState.requestSchema.parse({
+        epicIds: ["epic-1"],
+        chatIds: ["chat-1"],
+      }),
+    ).toEqual({ epicIds: ["epic-1"], chatIds: ["chat-1"] });
+    expect(
+      hostNotificationsIndicatorState.responseSchema.parse({
+        epics: {
+          "epic-1": {
+            pendingPrompt: true,
+            unreadFailure: false,
+            unreadDone: false,
+          },
+        },
+        chats: {},
+      }),
+    ).toBeDefined();
+    expect(() =>
+      hostNotificationsIndicatorState.requestSchema.parse({
+        epicIds: Array.from(
+          { length: HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP + 1 },
+          (_, index) => `epic-${index}`,
+        ),
+        chatIds: [],
       }),
     ).toThrow();
   });
 });
 
 describe("host.notifications.subscribe@1.0", () => {
-  it("parses snapshot, upserted, read-state, pong, and ping frames", () => {
+  it("parses the full feed, emission, presence, and entity-bearing state frames", () => {
     expect(
-      hostNotificationsSubscribeV10.openRequestSchema.parse({
+      hostNotificationsSubscribe.openRequestSchema.parse({
         filter: "all",
         initialLimit: 50,
       }),
     ).toEqual({ filter: "all", initialLimit: 50 });
-
-    expect(
-      hostNotificationsSubscribeServerFrameSchema.parse({
-        kind: "snapshot",
-        hasBinaryPayload: false,
-        entries: [ENTRY_FIXTURE],
-      }).kind,
-    ).toBe("snapshot");
-
-    expect(
-      hostNotificationsSubscribeServerFrameSchema.parse({
-        kind: "upserted",
-        hasBinaryPayload: false,
-        entry: ENTRY_FIXTURE,
-      }).kind,
-    ).toBe("upserted");
-
     expect(
       hostNotificationsSubscribeServerFrameSchema.parse({
         kind: "readStateChanged",
         hasBinaryPayload: false,
         ids: ["notification-1"],
+        entityRefs: [{ epicId: "epic-1", chatId: "chat-1" }],
         readAt: 1_700_000_000_001,
+        resolvedAt: 1_700_000_000_001,
       }).kind,
     ).toBe("readStateChanged");
-
+    const legacyReadState = hostNotificationsSubscribeServerFrameSchema.parse({
+      kind: "readStateChanged",
+      hasBinaryPayload: false,
+      ids: ["legacy-notification-1"],
+      entityRefs: [],
+      readAt: 1_700_000_000_001,
+      resolvedAt: null,
+    });
+    if (legacyReadState.kind !== "readStateChanged") {
+      throw new Error("expected read-state frame");
+    }
+    expect(legacyReadState.entityRefs).toEqual([]);
     expect(
       hostNotificationsSubscribeServerFrameSchema.parse({
-        kind: "pong",
+        kind: "channelEmission",
         hasBinaryPayload: false,
+        emissionId: "emission-1",
+        channelId: "renderer",
+        severity: "failure",
+        rows: [STOPPED_ENTRY],
+        reason: "new",
       }).kind,
-    ).toBe("pong");
-
+    ).toBe("channelEmission");
     expect(
       hostNotificationsSubscribeClientFrameSchema.parse({
-        kind: "ping",
-        hasBinaryPayload: false,
-      }).kind,
-    ).toBe("ping");
-  });
-
-  it("rejects host notification frames that claim a binary payload", () => {
-    expect(() =>
-      hostNotificationsSubscribeServerFrameSchema.parse({
-        kind: "snapshot",
-        hasBinaryPayload: true,
-        entries: [],
-      }),
-    ).toThrow();
-  });
-
-  it("rejects a zero initialLimit", () => {
-    expect(() =>
-      hostNotificationsSubscribeV10.openRequestSchema.parse({
-        filter: "all",
-        initialLimit: 0,
-      }),
-    ).toThrow();
-  });
-});
-
-describe("host.notifications.subscribe@1.1", () => {
-  it("parses channelEmission server frames without feed-state semantics", () => {
-    const parsed = hostNotificationsSubscribeServerFrameV11Schema.parse({
-      kind: "channelEmission",
-      hasBinaryPayload: false,
-      emissionId: "emission-1",
-      channelId: "renderer",
-      severity: "failure",
-      rows: [STOPPED_ENTRY_V11_FIXTURE],
-      reason: "new",
-    });
-
-    expect(parsed.kind).toBe("channelEmission");
-    if (parsed.kind !== "channelEmission") throw new Error("expected emission");
-    expect(parsed.rows[0].kind).toBe("agent.stopped");
-    expect(parsed.rows[0].outcome).toBe("errored");
-  });
-
-  it("parses presence client frames", () => {
-    const parsed = hostNotificationsSubscribeClientFrameV11Schema.parse({
-      kind: "presence",
-      hasBinaryPayload: false,
-      windowId: "window-1",
-      focused: true,
-      entity: {
-        epicId: "epic-1",
-        chatId: "chat-1",
-      },
-      at: 1_700_000_000_030,
-    });
-
-    expect(parsed.kind).toBe("presence");
-    if (parsed.kind !== "presence") throw new Error("expected presence");
-    expect(parsed.entity?.chatId).toBe("chat-1");
-  });
-
-  it("accepts null presence entity for windows without a focused artifact", () => {
-    expect(
-      hostNotificationsSubscribeClientFrameV11Schema.parse({
         kind: "presence",
         hasBinaryPayload: false,
         windowId: "window-1",
-        focused: false,
-        entity: null,
-        at: 1_700_000_000_040,
+        focused: true,
+        entity: { epicId: "epic-1", chatId: "chat-1" },
+        at: 1_700_000_000_030,
       }).kind,
     ).toBe("presence");
   });
 });
 
-describe("host.notifications config contracts", () => {
-  it("parses channel matrix and response state without secret-bearing fields", () => {
-    const response = {
-      matrix: {
-        info: {
-          renderer: true,
-          webhook: false,
-          email: false,
-        },
-        needs_action: {
-          renderer: true,
-          webhook: true,
-          email: true,
-        },
-        failure: {
-          renderer: true,
-          webhook: true,
-          email: true,
-        },
-        done: {
-          renderer: true,
-          webhook: false,
-          email: false,
-        },
-      },
-      channels: {
-        renderer: {
-          lastError: null,
-        },
-        webhook: {
-          url: "https://example.com/traycer",
-          credentialConfigured: true,
-          lastError: null,
-        },
-        email: {
-          host: "smtp.example.com",
-          port: 587,
-          user: "me@example.com",
-          from: "Traycer <me@example.com>",
-          credentialConfigured: true,
-          lastError: "last delivery failed",
-        },
-      },
-    };
-
-    expect(hostNotificationsConfigResponseSchema.parse(response)).toEqual(
-      response,
-    );
-    expect(JSON.stringify(response)).not.toContain("password");
-    expect(JSON.stringify(response).toLowerCase()).not.toContain("secret");
-  });
-
-  it("allows setConfig to update credentials without echoing them in the response", () => {
-    const request = hostNotificationsSetConfigV10.requestSchema.parse({
-      matrix: {
-        info: {
-          renderer: true,
-          webhook: false,
-          email: false,
-        },
-        needs_action: {
-          renderer: true,
-          webhook: true,
-          email: true,
-        },
-        failure: {
-          renderer: true,
-          webhook: true,
-          email: true,
-        },
-        done: {
-          renderer: true,
-          webhook: false,
-          email: false,
-        },
-      },
-      channels: {
-        renderer: {},
-        webhook: {
-          url: "https://example.com/traycer",
-          signingSecret: {
-            kind: "set",
-            value: "new-webhook-secret",
-          },
-        },
-        email: {
-          host: "smtp.example.com",
-          port: 587,
-          user: "me@example.com",
-          password: {
-            kind: "set",
-            value: "new-smtp-password",
-          },
-          from: "Traycer <me@example.com>",
-        },
-      },
-    });
-
-    expect(request.channels.webhook.signingSecret.kind).toBe("set");
-    expect(request.channels.email.password.kind).toBe("set");
-    expect(hostNotificationsGetConfigV10.requestSchema.parse({})).toEqual({});
-  });
-});
-
 describe("host.notifications registry membership", () => {
-  it("registers unary contracts under host.notifications.*", () => {
-    expect(hostRpcRegistry["host.notifications.list"][1].latestMinor).toBe(1);
+  it("registers one flat unary contract per method", () => {
     expect(
       hostRpcRegistry["host.notifications.list"][1].versions[0].contract,
-    ).toBe(hostNotificationsListV10);
-    expect(
-      hostRpcRegistry["host.notifications.list"][1].versions[1].contract,
-    ).toBe(hostNotificationsListV11);
+    ).toBe(hostNotificationsList);
     expect(
       hostRpcRegistry["host.notifications.getConfig"][1].versions[0].contract,
-    ).toBe(hostNotificationsGetConfigV10);
+    ).toBe(hostNotificationsGetConfig);
     expect(
       hostRpcRegistry["host.notifications.setConfig"][1].versions[0].contract,
-    ).toBe(hostNotificationsSetConfigV10);
+    ).toBe(hostNotificationsSetConfig);
     expect(
       hostRpcRegistry["host.notifications.markRead"][1].versions[0].contract,
-    ).toBe(hostNotificationsMarkReadV10);
+    ).toBe(hostNotificationsMarkRead);
     expect(
-      hostRpcRegistry["host.notifications.markAllRead"][1].versions[0]
+      hostRpcRegistry["host.notifications.markAllRead"][1].versions[0].contract,
+    ).toBe(hostNotificationsMarkAllRead);
+    expect(
+      hostRpcRegistry["host.notifications.indicatorState"][1].versions[0]
         .contract,
-    ).toBe(hostNotificationsMarkAllReadV10);
+    ).toBe(hostNotificationsIndicatorState);
   });
 
-  it("registers the stream without colliding with global notifications.subscribe", () => {
+  it("registers the full stream without colliding with global notifications.subscribe", () => {
     expect(hostStreamRpcRegistry["notifications.subscribe"]).toBeDefined();
-    expect(hostStreamRpcRegistry["host.notifications.subscribe"]).toBeDefined();
-    expect(
-      hostStreamRpcRegistry["host.notifications.subscribe"][1].latestMinor,
-    ).toBe(1);
     expect(
       hostStreamRpcRegistry["host.notifications.subscribe"][1].versions[0]
         .contract,
-    ).toBe(hostNotificationsSubscribeV10);
-    expect(
-      hostStreamRpcRegistry["host.notifications.subscribe"][1].versions[1]
-        .contract,
-    ).toBe(hostNotificationsSubscribeV11);
+    ).toBe(hostNotificationsSubscribe);
   });
 });

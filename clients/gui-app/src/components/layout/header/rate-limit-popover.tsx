@@ -630,6 +630,7 @@ function RateLimitRefreshAllButton({
     ProviderRateLimitEnvelope
   >({
     client,
+    cacheKeyIdentity: undefined,
     requests: httpFetchRequests.map((target) => {
       const { method, params } = providerRateLimitQueryOptions(
         target.providerId,

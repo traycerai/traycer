@@ -8,7 +8,7 @@ import { isDiffTileRef } from "@/stores/epics/canvas/types";
 import { findPaneById } from "@/stores/epics/canvas/tile-tree";
 import type {
   HostNotificationsPresenceEntity,
-  HostNotificationsSubscribeClientFrameV11,
+  HostNotificationsSubscribeClientFrame,
 } from "@traycer/protocol/host/notifications/contracts";
 
 export interface HostNotificationPresenceInput {
@@ -17,7 +17,7 @@ export interface HostNotificationPresenceInput {
 }
 
 export type HostNotificationPresenceFrame = Extract<
-  HostNotificationsSubscribeClientFrameV11,
+  HostNotificationsSubscribeClientFrame,
   { readonly kind: "presence" }
 >;
 
@@ -71,7 +71,11 @@ function readActiveHostNotificationPresenceEntity(): HostNotificationsPresenceEn
   if (activeTab === null || activeTab === undefined) return null;
   const canvas = state.canvasByTabId[activeTab.tabId] ?? EMPTY_CANVAS;
   const active = activeCanvasTile(canvas);
-  if (active?.type === "chat") {
+  if (
+    active?.type === "chat" ||
+    active?.type === "terminal" ||
+    active?.type === "terminal-agent"
+  ) {
     return { epicId: activeTab.epicId, chatId: active.id };
   }
   return { epicId: activeTab.epicId };

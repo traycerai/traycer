@@ -3,8 +3,12 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { appLocalNotificationsKey } from "@/lib/persist";
 import {
   APP_LOCAL_NOTIFICATIONS_ROW_CAP,
+  __resetAppLocalNotificationsStoreForTests,
   createAppLocalNotificationsStore,
+  emitTerminalClosedNotification,
+  emitTerminalCrashedNotification,
   type AppLocalNotificationEntry,
+  useAppLocalNotificationsStore,
 } from "@/stores/notifications/app-local-notifications-store";
 
 function entry(
@@ -27,6 +31,7 @@ function entry(
 describe("app-local notifications store", () => {
   beforeEach(() => {
     window.localStorage.clear();
+    __resetAppLocalNotificationsStoreForTests();
   });
 
   it("persists entries across store re-create", () => {
@@ -90,6 +95,42 @@ describe("app-local notifications store", () => {
     expect(store.getState().unreadCount).toBe(0);
   });
 
+  it("consumes only app-local rows in the viewed entity", () => {
+    const store = createAppLocalNotificationsStore(
+      appLocalNotificationsKey("user-a"),
+    );
+    store.getState().activateIdentity("user-a");
+    store.getState().upsert(entry("match", 10, null));
+    store.getState().upsert({
+      ...entry("other", 11, null),
+      payload: { kind: "chat", epicId: "epic-1", chatId: "chat-2" },
+    });
+
+    store
+      .getState()
+      .markEntityAsRead({ epicId: "epic-1", chatId: "chat-1" }, 20);
+
+    expect(store.getState().byId.match.readAt).toBe(20);
+    expect(store.getState().byId.other.readAt).toBeNull();
+  });
+
+  it("consumes only epic-level rows for an epic-only presence", () => {
+    const store = createAppLocalNotificationsStore(
+      appLocalNotificationsKey("user-a"),
+    );
+    store.getState().activateIdentity("user-a");
+    store.getState().upsert({
+      ...entry("epic", 10, null),
+      payload: { kind: "epic", epicId: "epic-1" },
+    });
+    store.getState().upsert(entry("chat", 11, null));
+
+    store.getState().markEntityAsRead({ epicId: "epic-1" }, 20);
+
+    expect(store.getState().byId.epic.readAt).toBe(20);
+    expect(store.getState().byId.chat.readAt).toBeNull();
+  });
+
   it("does not resurface an existing client-error row when the producer repeats", () => {
     const store = createAppLocalNotificationsStore(
       appLocalNotificationsKey("user-a"),
@@ -105,5 +146,52 @@ describe("app-local notifications store", () => {
     expect(store.getState().byId.target.updatedAt).toBe(10);
     expect(store.getState().byId.target.readAt).toBe(20);
     expect(store.getState().unreadCount).toBe(1);
+  });
+
+  it("enriches terminal closed entries with their epic and tile entity", () => {
+    useAppLocalNotificationsStore.getState().activateIdentity("user-a");
+
+    emitTerminalClosedNotification({
+      instanceId: "terminal-instance",
+      hostLabel: "MacBook",
+      epicId: "epic-1",
+      chatId: "terminal-tile-1",
+    });
+
+    expect(
+      useAppLocalNotificationsStore.getState().byId[
+        "terminal.closed:terminal-instance"
+      ].payload,
+    ).toEqual({ kind: "chat", epicId: "epic-1", chatId: "terminal-tile-1" });
+  });
+
+  it("keeps successive terminal deaths as distinct entity-addressable rows", () => {
+    useAppLocalNotificationsStore.getState().activateIdentity("user-a");
+
+    emitTerminalCrashedNotification({
+      instanceId: "terminal-instance",
+      epicId: "epic-1",
+      chatId: "terminal-tile-1",
+      cause: "exit",
+    });
+    emitTerminalCrashedNotification({
+      instanceId: "terminal-instance",
+      epicId: "epic-1",
+      chatId: "terminal-tile-1",
+      cause: "recovery-exhausted",
+    });
+
+    const entries = Object.values(
+      useAppLocalNotificationsStore.getState().byId,
+    );
+    expect(entries).toHaveLength(2);
+    expect(entries.map((entry) => entry.kind)).toEqual([
+      "terminal.crashed",
+      "terminal.crashed",
+    ]);
+    expect(entries.map((entry) => entry.payload)).toEqual([
+      { kind: "chat", epicId: "epic-1", chatId: "terminal-tile-1" },
+      { kind: "chat", epicId: "epic-1", chatId: "terminal-tile-1" },
+    ]);
   });
 });

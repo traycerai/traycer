@@ -9,7 +9,7 @@ import {
   useHostNotificationsStore,
 } from "@/stores/notifications/host-notifications-store";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
-import type { HostNotificationEntryV11 } from "@traycer/protocol/host/notifications/contracts";
+import type { HostNotificationEntry } from "@traycer/protocol/host/notifications/contracts";
 
 function createRunnerHost(): MockRunnerHost {
   return new MockRunnerHost({
@@ -27,8 +27,8 @@ function hostEntry(input: {
   readonly id: string;
   readonly updatedAt: number;
   readonly readAt: number | null;
-  readonly kind: HostNotificationEntryV11["kind"];
-}): HostNotificationEntryV11 {
+  readonly kind: HostNotificationEntry["kind"];
+}): HostNotificationEntry {
   if (input.kind === "agent.stopped") {
     return {
       id: input.id,
@@ -55,7 +55,7 @@ function hostEntry(input: {
       kind: "agent.stalled",
       sourceRef: input.id,
       severity: "failure",
-      outcome: null,
+      outcome: "errored",
       payload: {
         epicId: "epic-1",
         chatId: "chat-1",
@@ -73,6 +73,7 @@ function hostEntry(input: {
       sourceRef: input.id,
       severity: "needs_action",
       outcome: null,
+      resolvedAt: null,
       payload: {
         epicId: "epic-1",
         chatId: "chat-1",
@@ -89,6 +90,7 @@ function hostEntry(input: {
     sourceRef: input.id,
     severity: "needs_action",
     outcome: null,
+    resolvedAt: null,
     payload: {
       epicId: "epic-1",
       chatId: "chat-1",

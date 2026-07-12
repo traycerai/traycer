@@ -49,6 +49,40 @@ describe("notification presence", () => {
     });
   });
 
+  it("projects terminal and terminal-agent tiles into their own presence entity", () => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic 1");
+
+    useEpicCanvasStore.getState().openTileInTab(tabId, {
+      id: "terminal-1",
+      instanceId: "terminal-instance-1",
+      type: "terminal",
+      name: "Terminal",
+      titleSource: "default",
+      hostId: "host-1",
+      cwd: "/repo",
+    });
+    expect(
+      readHostNotificationPresenceFrame({ windowId: "window-1", now: () => 1 })
+        .entity,
+    ).toEqual({ epicId: "epic-1", chatId: "terminal-1" });
+
+    useEpicCanvasStore.getState().openTileInTab(
+      tabId,
+      makeOpenableNodeRef({
+        id: "agent-1",
+        instanceId: "agent-instance-1",
+        type: "terminal-agent",
+        name: "Agent terminal",
+        hostId: "host-1",
+      }),
+    );
+    expect(
+      readHostNotificationPresenceFrame({ windowId: "window-1", now: () => 2 })
+        .entity,
+    ).toEqual({ epicId: "epic-1", chatId: "agent-1" });
+  });
+
   it("emits presence updates on focus and active route changes", () => {
     const sendPresence = vi.fn();
     const unsubscribe = subscribeHostNotificationPresence(sendPresence);

@@ -1,28 +1,20 @@
 /**
- * `host.notifications.*@1.0` / `@1.1` - host-local notification feed contracts.
+ * `host.notifications.*@1.0` - host-local notification feed contracts.
  *
- * These contracts are separate from the existing global
- * `notifications.subscribe@1.0` YJS relay. Host notification rows are owned by
- * the authenticated user context on the host side; userId never appears in
- * request parameters.
- *
- * Compatibility: `@1.0` remains registered with only the v1.0 kinds. Host-side
- * resolvers must project newer rows for old subscribers: `agent.stalled` is not
- * visible to `@1.0`, `snapshot` entries are filtered to v1.0 kinds, `upserted`
- * frames for unsupported kinds are dropped, and read-state frames for filtered
- * ids are omitted or reduced to visible ids. `channelEmission` is a `@1.1`
- * side-effect frame only and carries no feed-state semantics.
+ * The notifications surface was never released. Its one flat version therefore
+ * carries the complete feed, stream, and indicator shapes; the unary methods
+ * advertise through the optional-capabilities channel rather than the released
+ * RPC floor.
  */
 import { z } from "zod";
-import {
-  defineRpcContract,
-  defineUpgradePath,
-} from "@traycer/protocol/framework/index";
+import { defineRpcContract } from "@traycer/protocol/framework/index";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 
 const textFrameFields = {
   hasBinaryPayload: z.literal(false),
 } as const;
+
+export const HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP = 500;
 
 export const hostNotificationFilterSchema = z.enum(["all", "unread"]);
 export type HostNotificationFilter = z.infer<
@@ -31,20 +23,11 @@ export type HostNotificationFilter = z.infer<
 
 export const hostNotificationKindSchema = z.enum([
   "agent.stopped",
-  "approval.requested",
-  "interview.requested",
-]);
-export type HostNotificationKind = z.infer<typeof hostNotificationKindSchema>;
-
-export const hostNotificationKindV11Schema = z.enum([
-  "agent.stopped",
   "agent.stalled",
   "approval.requested",
   "interview.requested",
 ]);
-export type HostNotificationKindV11 = z.infer<
-  typeof hostNotificationKindV11Schema
->;
+export type HostNotificationKind = z.infer<typeof hostNotificationKindSchema>;
 
 export const hostNotificationOutcomeSchema = z.enum([
   "completed",
@@ -79,30 +62,18 @@ export type HostNotificationPayload = z.infer<
   typeof hostNotificationPayloadSchema
 >;
 
-export const hostNotificationAgentStoppedPayloadV11Schema = z
+export const hostNotificationAgentStoppedPayloadSchema = z
   .object({
     outcome: hostNotificationOutcomeSchema,
     code: z.string().optional(),
     message: z.string().optional(),
   })
   .catchall(z.unknown());
-export type HostNotificationAgentStoppedPayloadV11 = z.infer<
-  typeof hostNotificationAgentStoppedPayloadV11Schema
+export type HostNotificationAgentStoppedPayload = z.infer<
+  typeof hostNotificationAgentStoppedPayloadSchema
 >;
 
-export const hostNotificationEntrySchema = z.object({
-  id: z.string(),
-  updatedAt: z.number().int().nonnegative(),
-  readAt: z.number().int().nonnegative().nullable(),
-  kind: hostNotificationKindSchema,
-  sourceRef: z.string().nullable(),
-  payload: hostNotificationPayloadSchema,
-});
-export type HostNotificationEntry = z.infer<
-  typeof hostNotificationEntrySchema
->;
-
-const hostNotificationEntryBaseV11Fields = {
+const hostNotificationEntryBaseFields = {
   id: z.string(),
   updatedAt: z.number().int().nonnegative(),
   readAt: z.number().int().nonnegative().nullable(),
@@ -110,35 +81,35 @@ const hostNotificationEntryBaseV11Fields = {
   severity: hostNotificationSeveritySchema,
 } as const;
 
-export const hostNotificationEntryV11Schema = z.discriminatedUnion("kind", [
+export const hostNotificationEntrySchema = z.discriminatedUnion("kind", [
   z.object({
-    ...hostNotificationEntryBaseV11Fields,
+    ...hostNotificationEntryBaseFields,
     kind: z.literal("agent.stopped"),
     outcome: hostNotificationOutcomeSchema,
-    payload: hostNotificationAgentStoppedPayloadV11Schema,
+    payload: hostNotificationAgentStoppedPayloadSchema,
   }),
   z.object({
-    ...hostNotificationEntryBaseV11Fields,
+    ...hostNotificationEntryBaseFields,
     kind: z.literal("agent.stalled"),
-    outcome: z.null(),
+    outcome: z.literal("errored"),
     payload: hostNotificationPayloadSchema,
   }),
   z.object({
-    ...hostNotificationEntryBaseV11Fields,
+    ...hostNotificationEntryBaseFields,
     kind: z.literal("approval.requested"),
     outcome: z.null(),
+    resolvedAt: z.number().int().nonnegative().nullable(),
     payload: hostNotificationPayloadSchema,
   }),
   z.object({
-    ...hostNotificationEntryBaseV11Fields,
+    ...hostNotificationEntryBaseFields,
     kind: z.literal("interview.requested"),
     outcome: z.null(),
+    resolvedAt: z.number().int().nonnegative().nullable(),
     payload: hostNotificationPayloadSchema,
   }),
 ]);
-export type HostNotificationEntryV11 = z.infer<
-  typeof hostNotificationEntryV11Schema
->;
+export type HostNotificationEntry = z.infer<typeof hostNotificationEntrySchema>;
 
 export const hostNotificationCursorSchema = z.object({
   updatedAt: z.number().int().nonnegative(),
@@ -165,17 +136,32 @@ export type HostNotificationsListResponse = z.infer<
   typeof hostNotificationsListResponseSchema
 >;
 
-export const hostNotificationsListResponseV11Schema = z.object({
-  entries: z.array(hostNotificationEntryV11Schema),
-  nextCursor: hostNotificationCursorSchema.nullable(),
+export const hostNotificationsEntityRefSchema = z.object({
+  epicId: z.string(),
+  chatId: z.string().optional(),
 });
-export type HostNotificationsListResponseV11 = z.infer<
-  typeof hostNotificationsListResponseV11Schema
+export type HostNotificationsEntityRef = z.infer<
+  typeof hostNotificationsEntityRefSchema
 >;
 
-export const hostNotificationsMarkReadRequestSchema = z.object({
-  ids: z.array(z.string()).min(1),
-});
+/**
+ * The entity branch is an atomic view-consumption request. Hosts must only
+ * mark unread `done`/`failure` rows in the named entity: `{ epicId }` means
+ * epic-level (`chatId IS NULL`) rows only, never every chat in that epic.
+ */
+export const hostNotificationsMarkReadRequestSchema = z.discriminatedUnion(
+  "kind",
+  [
+    z.object({
+      kind: z.literal("ids"),
+      ids: z.array(z.string()).min(1),
+    }),
+    z.object({
+      kind: z.literal("entity"),
+      entity: hostNotificationsEntityRefSchema,
+    }),
+  ],
+);
 export type HostNotificationsMarkReadRequest = z.infer<
   typeof hostNotificationsMarkReadRequestSchema
 >;
@@ -205,45 +191,6 @@ export type HostNotificationsSubscribeOpenRequest = z.infer<
   typeof hostNotificationsSubscribeOpenRequestSchema
 >;
 
-export const hostNotificationsSubscribeServerFrameSchema =
-  z.discriminatedUnion("kind", [
-    z.object({
-      kind: z.literal("snapshot"),
-      ...textFrameFields,
-      entries: z.array(hostNotificationEntrySchema),
-    }),
-    z.object({
-      kind: z.literal("upserted"),
-      ...textFrameFields,
-      entry: hostNotificationEntrySchema,
-    }),
-    z.object({
-      kind: z.literal("readStateChanged"),
-      ...textFrameFields,
-      ids: z.array(z.string()).min(1),
-      // Nullable branch is reserved for future mark-unread; v1 only produces timestamps.
-      readAt: z.number().int().nonnegative().nullable(),
-    }),
-    z.object({
-      kind: z.literal("pong"),
-      ...textFrameFields,
-    }),
-  ]);
-export type HostNotificationsSubscribeServerFrame = z.infer<
-  typeof hostNotificationsSubscribeServerFrameSchema
->;
-
-export const hostNotificationsSubscribeClientFrameSchema =
-  z.discriminatedUnion("kind", [
-    z.object({
-      kind: z.literal("ping"),
-      ...textFrameFields,
-    }),
-  ]);
-export type HostNotificationsSubscribeClientFrame = z.infer<
-  typeof hostNotificationsSubscribeClientFrameSchema
->;
-
 export const hostNotificationsChannelEmissionReasonSchema = z.enum([
   "new",
   "coalesced",
@@ -260,23 +207,28 @@ export type HostNotificationsPresenceEntity = z.infer<
   typeof hostNotificationsPresenceEntitySchema
 >;
 
-export const hostNotificationsSubscribeServerFrameV11Schema =
-  z.discriminatedUnion("kind", [
+export const hostNotificationsSubscribeServerFrameSchema = z.discriminatedUnion(
+  "kind",
+  [
     z.object({
       kind: z.literal("snapshot"),
       ...textFrameFields,
-      entries: z.array(hostNotificationEntryV11Schema),
+      entries: z.array(hostNotificationEntrySchema),
     }),
     z.object({
       kind: z.literal("upserted"),
       ...textFrameFields,
-      entry: hostNotificationEntryV11Schema,
+      entry: hostNotificationEntrySchema,
     }),
     z.object({
       kind: z.literal("readStateChanged"),
       ...textFrameFields,
       ids: z.array(z.string()).min(1),
+      // Supplementary targeted-invalidation hints. Legacy/entity-less rows
+      // legitimately emit an empty set; ids and state timestamps are canonical.
+      entityRefs: z.array(hostNotificationsEntityRefSchema),
       readAt: z.number().int().nonnegative().nullable(),
+      resolvedAt: z.number().int().nonnegative().nullable(),
     }),
     z.object({
       kind: z.literal("channelEmission"),
@@ -284,20 +236,22 @@ export const hostNotificationsSubscribeServerFrameV11Schema =
       emissionId: z.string(),
       channelId: hostNotificationChannelIdSchema,
       severity: hostNotificationSeveritySchema,
-      rows: z.array(hostNotificationEntryV11Schema).min(1),
+      rows: z.array(hostNotificationEntrySchema).min(1),
       reason: hostNotificationsChannelEmissionReasonSchema,
     }),
     z.object({
       kind: z.literal("pong"),
       ...textFrameFields,
     }),
-  ]);
-export type HostNotificationsSubscribeServerFrameV11 = z.infer<
-  typeof hostNotificationsSubscribeServerFrameV11Schema
+  ],
+);
+export type HostNotificationsSubscribeServerFrame = z.infer<
+  typeof hostNotificationsSubscribeServerFrameSchema
 >;
 
-export const hostNotificationsSubscribeClientFrameV11Schema =
-  z.discriminatedUnion("kind", [
+export const hostNotificationsSubscribeClientFrameSchema = z.discriminatedUnion(
+  "kind",
+  [
     z.object({
       kind: z.literal("ping"),
       ...textFrameFields,
@@ -310,9 +264,35 @@ export const hostNotificationsSubscribeClientFrameV11Schema =
       entity: hostNotificationsPresenceEntitySchema.nullable(),
       at: z.number().int().nonnegative(),
     }),
-  ]);
-export type HostNotificationsSubscribeClientFrameV11 = z.infer<
-  typeof hostNotificationsSubscribeClientFrameV11Schema
+  ],
+);
+export type HostNotificationsSubscribeClientFrame = z.infer<
+  typeof hostNotificationsSubscribeClientFrameSchema
+>;
+
+export const hostNotificationsIndicatorStateSchema = z.object({
+  pendingPrompt: z.boolean(),
+  unreadFailure: z.boolean(),
+  unreadDone: z.boolean(),
+});
+export type HostNotificationsIndicatorState = z.infer<
+  typeof hostNotificationsIndicatorStateSchema
+>;
+
+export const hostNotificationsIndicatorStateRequestSchema = z.object({
+  epicIds: z.array(z.string()).max(HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP),
+  chatIds: z.array(z.string()).max(HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP),
+});
+export type HostNotificationsIndicatorStateRequest = z.infer<
+  typeof hostNotificationsIndicatorStateRequestSchema
+>;
+
+export const hostNotificationsIndicatorStateResponseSchema = z.object({
+  epics: z.record(z.string(), hostNotificationsIndicatorStateSchema),
+  chats: z.record(z.string(), hostNotificationsIndicatorStateSchema),
+});
+export type HostNotificationsIndicatorStateResponse = z.infer<
+  typeof hostNotificationsIndicatorStateResponseSchema
 >;
 
 export const hostNotificationsChannelMatrixSchema = z.record(
@@ -410,75 +390,28 @@ export type HostNotificationsConfigResponse = z.infer<
   typeof hostNotificationsConfigResponseSchema
 >;
 
-export const hostNotificationsListV10 = defineRpcContract({
+export const hostNotificationsList = defineRpcContract({
   method: "host.notifications.list",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: hostNotificationsListRequestSchema,
   responseSchema: hostNotificationsListResponseSchema,
 });
 
-export const hostNotificationsListV11 = defineRpcContract({
-  method: "host.notifications.list",
-  schemaVersion: { major: 1, minor: 1 } as const,
-  requestSchema: hostNotificationsListRequestSchema,
-  responseSchema: hostNotificationsListResponseV11Schema,
-});
-
-export const hostNotificationsListUpgradeV10ToV11 = defineUpgradePath<
-  typeof hostNotificationsListV10,
-  typeof hostNotificationsListV11
->({
-  from: hostNotificationsListV10.schemaVersion,
-  to: hostNotificationsListV11.schemaVersion,
-  upgradeRequest: (request) => request,
-  upgradeResponse: (response) => ({
-    entries: response.entries.map((entry) => {
-      if (entry.kind === "agent.stopped") {
-        return {
-          id: entry.id,
-          updatedAt: entry.updatedAt,
-          readAt: entry.readAt,
-          kind: entry.kind,
-          sourceRef: entry.sourceRef,
-          payload: {
-            ...entry.payload,
-            outcome: "completed" as const,
-          },
-          severity: "done" as const,
-          outcome: "completed" as const,
-        };
-      }
-
-      return {
-        id: entry.id,
-        updatedAt: entry.updatedAt,
-        readAt: entry.readAt,
-        kind: entry.kind,
-        sourceRef: entry.sourceRef,
-        payload: entry.payload,
-        severity: "needs_action" as const,
-        outcome: null,
-      };
-    }),
-    nextCursor: response.nextCursor,
-  }),
-});
-
-export const hostNotificationsMarkReadV10 = defineRpcContract({
+export const hostNotificationsMarkRead = defineRpcContract({
   method: "host.notifications.markRead",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: hostNotificationsMarkReadRequestSchema,
   responseSchema: hostNotificationsMarkReadResponseSchema,
 });
 
-export const hostNotificationsMarkAllReadV10 = defineRpcContract({
+export const hostNotificationsMarkAllRead = defineRpcContract({
   method: "host.notifications.markAllRead",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: hostNotificationsMarkAllReadRequestSchema,
   responseSchema: hostNotificationsMarkAllReadResponseSchema,
 });
 
-export const hostNotificationsSubscribeV10 = defineStreamRpcContract({
+export const hostNotificationsSubscribe = defineStreamRpcContract({
   method: "host.notifications.subscribe",
   schemaVersion: { major: 1, minor: 0 } as const,
   openRequestSchema: hostNotificationsSubscribeOpenRequestSchema,
@@ -486,24 +419,23 @@ export const hostNotificationsSubscribeV10 = defineStreamRpcContract({
   clientFrameSchema: hostNotificationsSubscribeClientFrameSchema,
 });
 
-export const hostNotificationsSubscribeV11 = defineStreamRpcContract({
-  method: "host.notifications.subscribe",
-  schemaVersion: { major: 1, minor: 1 } as const,
-  openRequestSchema: hostNotificationsSubscribeOpenRequestSchema,
-  serverFrameSchema: hostNotificationsSubscribeServerFrameV11Schema,
-  clientFrameSchema: hostNotificationsSubscribeClientFrameV11Schema,
-});
-
-export const hostNotificationsGetConfigV10 = defineRpcContract({
+export const hostNotificationsGetConfig = defineRpcContract({
   method: "host.notifications.getConfig",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: hostNotificationsConfigRequestSchema,
   responseSchema: hostNotificationsConfigResponseSchema,
 });
 
-export const hostNotificationsSetConfigV10 = defineRpcContract({
+export const hostNotificationsSetConfig = defineRpcContract({
   method: "host.notifications.setConfig",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: hostNotificationsSetConfigRequestSchema,
   responseSchema: hostNotificationsConfigResponseSchema,
+});
+
+export const hostNotificationsIndicatorState = defineRpcContract({
+  method: "host.notifications.indicatorState",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: hostNotificationsIndicatorStateRequestSchema,
+  responseSchema: hostNotificationsIndicatorStateResponseSchema,
 });

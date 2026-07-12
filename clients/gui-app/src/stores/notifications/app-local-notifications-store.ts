@@ -1,14 +1,18 @@
 import { useMemo } from "react";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
+import { v4 as uuidv4 } from "uuid";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type { NotificationPayload } from "@/lib/notifications";
+import { notificationPayloadBelongsToEntity } from "@/lib/notifications";
 import { appLocalNotificationsKey, basePersistOptions } from "@/lib/persist";
+import type { HostNotificationsEntityRef } from "@traycer/protocol/host/notifications/contracts";
 
 export const APP_LOCAL_NOTIFICATIONS_ROW_CAP = 200;
 
 export type AppLocalNotificationKind =
   | "terminal.closed"
+  | "terminal.crashed"
   | "worktree.setup.failed"
   | "stream.transport.error"
   | "host.error";
@@ -39,6 +43,10 @@ export interface AppLocalNotificationsState {
   deactivateIdentity: () => void;
   upsert: (entry: AppLocalNotificationEntry) => void;
   markAsRead: (id: string, readAt: number) => void;
+  markEntityAsRead: (
+    entity: HostNotificationsEntityRef,
+    readAt: number,
+  ) => void;
   markAllAsRead: (readAt: number) => void;
   clearAll: () => void;
   resetForTests: () => void;
@@ -135,6 +143,28 @@ export function createAppLocalNotificationsStore(initialName: string) {
           });
         },
 
+        markEntityAsRead: (entity, readAt) => {
+          if (get().activeUserId === null) return;
+          set((state) => {
+            const unreadEntries = Object.values(state.byId).filter(
+              (entry) =>
+                entry.readAt === null &&
+                notificationPayloadBelongsToEntity(entry.payload, entity),
+            );
+            if (unreadEntries.length === 0) return state;
+            const byId = { ...state.byId };
+            for (const entry of unreadEntries) {
+              byId[entry.id] = { ...entry, readAt };
+            }
+            const projection = projectAppLocalNotifications(byId);
+            return {
+              byId,
+              orderedIds: projection.orderedIds,
+              unreadCount: projection.unreadCount,
+            };
+          });
+        },
+
         markAllAsRead: (readAt) => {
           if (get().activeUserId === null) return;
           set((state) => {
@@ -184,6 +214,8 @@ export const useAppLocalNotificationsStore = createAppLocalNotificationsStore(
 export function emitTerminalClosedNotification(input: {
   readonly instanceId: string;
   readonly hostLabel: string;
+  readonly epicId: string;
+  readonly chatId: string;
 }): void {
   const message = `Terminal closed: host "${input.hostLabel}" is unreachable.`;
   useAppLocalNotificationsStore.getState().upsert({
@@ -192,9 +224,44 @@ export function emitTerminalClosedNotification(input: {
     readAt: null,
     kind: "terminal.closed",
     sourceRef: input.instanceId,
-    payload: null,
+    payload: {
+      kind: "chat",
+      epicId: input.epicId,
+      chatId: input.chatId,
+    },
     message,
     detail: "The terminal is bound to that host and cannot migrate.",
+  });
+}
+
+export function emitTerminalCrashedNotification(input: {
+  readonly instanceId: string;
+  readonly epicId: string;
+  readonly chatId: string;
+  readonly cause: "exit" | "recovery-exhausted";
+}): void {
+  const isRecoveryExhausted = input.cause === "recovery-exhausted";
+  useAppLocalNotificationsStore.getState().upsert({
+    // Deaths must not key only on `instanceId`: app-local upsert is
+    // first-write-wins, while a terminal-agent can die more than once over its
+    // lifetime. UUIDs make two independent death observations distinct even if
+    // they occur in the same millisecond.
+    id: `terminal.crashed:${input.instanceId}:${uuidv4()}`,
+    updatedAt: Date.now(),
+    readAt: null,
+    kind: "terminal.crashed",
+    sourceRef: input.instanceId,
+    payload: {
+      kind: "chat",
+      epicId: input.epicId,
+      chatId: input.chatId,
+    },
+    message: isRecoveryExhausted
+      ? "Terminal connection could not be recovered."
+      : "Terminal exited unexpectedly.",
+    detail: isRecoveryExhausted
+      ? "Reconnect manually to try again."
+      : "The terminal process ended with an error.",
   });
 }
 

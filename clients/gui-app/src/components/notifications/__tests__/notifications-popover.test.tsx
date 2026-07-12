@@ -42,7 +42,7 @@ import {
   NOTIFICATIONS_ARRAY_KEY,
   createNotificationRoomEntryMap,
 } from "@traycer/protocol/notifications/notification-room";
-import type { HostNotificationEntryV11 } from "@traycer/protocol/host/notifications/contracts";
+import type { HostNotificationEntry } from "@traycer/protocol/host/notifications/contracts";
 
 function seedEntries(
   callbacks: NotificationsStreamCallbacks,
@@ -137,7 +137,7 @@ function hostAgentEntry(input: {
   readonly kind: "agent.stopped" | "agent.stalled";
   readonly severity: "failure" | "done";
   readonly outcome: "completed" | "stopped" | "errored" | null;
-}): HostNotificationEntryV11 {
+}): HostNotificationEntry {
   if (input.kind === "agent.stopped") {
     return {
       id: input.id,
@@ -162,7 +162,7 @@ function hostAgentEntry(input: {
     kind: "agent.stalled",
     sourceRef: input.id,
     severity: input.severity,
-    outcome: null,
+    outcome: "errored",
     payload: {
       epicId: "epic-1",
       chatId: "chat-1",
@@ -365,7 +365,7 @@ describe("NotificationsPopover click routing", () => {
           id: "stalled",
           kind: "agent.stalled",
           severity: "failure",
-          outcome: null,
+          outcome: "errored",
         }),
       ],
       50,

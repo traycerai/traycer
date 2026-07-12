@@ -5,7 +5,7 @@ import {
   type MergedNotificationRow,
 } from "@/stores/notifications/merged-notifications";
 import type { AppLocalNotificationEntry } from "@/stores/notifications/app-local-notifications-store";
-import type { HostNotificationEntryV11 } from "@traycer/protocol/host/notifications/contracts";
+import type { HostNotificationEntry } from "@traycer/protocol/host/notifications/contracts";
 
 export interface NotificationDisplayTarget {
   readonly showNotification: NotificationShow;
@@ -19,7 +19,12 @@ export function displayNotificationRows(
   if (rows.length === 0) return;
   const content = buildNotificationToastContent(rows);
   void target
-    .showNotification(content.title, content.body, content.payload)
+    .showNotification(
+      content.title,
+      content.body,
+      content.payload,
+      content.replaceKey,
+    )
     .catch(() => {
       // The feed remains authoritative; a failed native toast is non-critical.
     });
@@ -27,7 +32,7 @@ export function displayNotificationRows(
 }
 
 export function displayHostChannelEmission(
-  entries: ReadonlyArray<HostNotificationEntryV11>,
+  entries: ReadonlyArray<HostNotificationEntry>,
   target: NotificationDisplayTarget,
 ): void {
   displayNotificationRows(entries.map(rowFromHostEntry), target);
@@ -70,6 +75,7 @@ function buildNotificationToastContent(
   readonly title: string;
   readonly body: string;
   readonly payload: unknown;
+  readonly replaceKey: string;
 } {
   const first = rows[0];
   if (rows.length === 1) {
@@ -77,11 +83,49 @@ function buildNotificationToastContent(
       title: "Traycer",
       body: first.text,
       payload: first.payload,
+      replaceKey: notificationReplaceKey(first),
     };
   }
   return {
     title: "Traycer",
     body: `${rows.length} new notifications`,
     payload: first.payload,
+    replaceKey: "notification-batch",
   };
+}
+
+export function notificationReplaceKey(row: MergedNotificationRow): string {
+  if (row.source === "app-local") return row.sourceId;
+  return hostEntityReplaceKey(row.payload) ?? `host:id:${row.sourceId}`;
+}
+
+function hostEntityReplaceKey(
+  payload: MergedNotificationRow["payload"],
+): string | null {
+  if (payload === null) return null;
+
+  switch (payload.kind) {
+    case "approval":
+    case "chat":
+      return chatOrEpicReplaceKey(payload.chatId, payload.epicId);
+    case "interview":
+      return `host:chat:${payload.chatId}`;
+    case "artifact":
+    case "epic":
+      return epicReplaceKey(payload.epicId);
+    case "session":
+      return null;
+  }
+}
+
+function chatOrEpicReplaceKey(
+  chatId: string | undefined,
+  epicId: string | undefined,
+): string | null {
+  if (chatId !== undefined) return `host:chat:${chatId}`;
+  return epicReplaceKey(epicId);
+}
+
+function epicReplaceKey(epicId: string | undefined): string | null {
+  return epicId === undefined ? null : `host:epic:${epicId}`;
 }

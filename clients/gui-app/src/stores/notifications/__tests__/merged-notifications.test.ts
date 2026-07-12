@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { HostNotificationEntryV11 } from "@traycer/protocol/host/notifications/contracts";
+import type { HostNotificationEntry } from "@traycer/protocol/host/notifications/contracts";
 import {
   type NotificationEntry,
   NOTIFICATION_EVENT_TYPES,
@@ -19,7 +19,7 @@ function hostEntry(
   id: string,
   updatedAt: number,
   readAt: number | null,
-): HostNotificationEntryV11 {
+): HostNotificationEntry {
   return {
     id,
     updatedAt,
@@ -28,6 +28,7 @@ function hostEntry(
     sourceRef: "approval-1",
     severity: "needs_action",
     outcome: null,
+    resolvedAt: null,
     payload: {
       epicId: "epic-1",
       chatId: "chat-1",

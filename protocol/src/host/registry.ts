@@ -1,7 +1,7 @@
 import {
   defineDowngradePath,
+  defineFloorAwareVersionedRpcRegistry,
   defineUpgradePath,
-  defineVersionedRpcRegistry,
   type DowngradeResult,
 } from "@traycer/protocol/framework/index";
 import { defineVersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
@@ -135,17 +135,16 @@ import {
   terminalSubscribeV13,
 } from "@traycer/protocol/host/terminal/contracts";
 import {
-  hostNotificationsGetConfigV10,
-  hostNotificationsListV10,
-  hostNotificationsListV11,
-  hostNotificationsListUpgradeV10ToV11,
-  hostNotificationsMarkAllReadV10,
-  hostNotificationsMarkReadV10,
-  hostNotificationsSetConfigV10,
-  hostNotificationsSubscribeV10,
-  hostNotificationsSubscribeV11,
+  hostNotificationsGetConfig,
+  hostNotificationsIndicatorState,
+  hostNotificationsList,
+  hostNotificationsMarkAllRead,
+  hostNotificationsMarkRead,
+  hostNotificationsSetConfig,
+  hostNotificationsSubscribe,
   notificationsSubscribeV10,
 } from "@traycer/protocol/host/notifications/contracts";
+import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import {
   resourcesSubscribeV10,
   resourcesSubscribeV11,
@@ -1333,7 +1332,9 @@ export const worktreeListBindingsForEpicUpgradeV10ToV11 = defineUpgradePath<
 // Note: git contract definitions are imported from git-contracts.ts above
 // and registered inline in hostRpcRegistry and hostStreamRpcRegistry below.
 
-export const hostRpcRegistry = defineVersionedRpcRegistry({
+export const hostRpcRegistry = defineFloorAwareVersionedRpcRegistry(
+  RELEASED_FLOOR_METHOD_NAMES,
+  {
   "host.status": {
     1: {
       latestMinor: 0,
@@ -1389,27 +1390,25 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
     },
   },
   "host.notifications.list": {
+    degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 1,
+      latestMinor: 0,
       versions: {
         0: {
-          contract: hostNotificationsListV10,
+          contract: hostNotificationsList,
           upgradeFromPreviousVersion: null,
-        },
-        1: {
-          contract: hostNotificationsListV11,
-          upgradeFromPreviousVersion: hostNotificationsListUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
     },
   },
   "host.notifications.getConfig": {
+    degrade: { kind: "unsupported" },
     1: {
       latestMinor: 0,
       versions: {
         0: {
-          contract: hostNotificationsGetConfigV10,
+          contract: hostNotificationsGetConfig,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -1417,11 +1416,12 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
     },
   },
   "host.notifications.setConfig": {
+    degrade: { kind: "unsupported" },
     1: {
       latestMinor: 0,
       versions: {
         0: {
-          contract: hostNotificationsSetConfigV10,
+          contract: hostNotificationsSetConfig,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -1429,11 +1429,12 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
     },
   },
   "host.notifications.markRead": {
+    degrade: { kind: "unsupported" },
     1: {
       latestMinor: 0,
       versions: {
         0: {
-          contract: hostNotificationsMarkReadV10,
+          contract: hostNotificationsMarkRead,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -1441,11 +1442,25 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
     },
   },
   "host.notifications.markAllRead": {
+    degrade: { kind: "unsupported" },
     1: {
       latestMinor: 0,
       versions: {
         0: {
-          contract: hostNotificationsMarkAllReadV10,
+          contract: hostNotificationsMarkAllRead,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.notifications.indicatorState": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationsIndicatorState,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -2999,7 +3014,8 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
       downgradePathsFromLatest: {},
     },
   },
-});
+  },
+);
 
 export type HostRpcRegistry = typeof hostRpcRegistry;
 
@@ -3069,13 +3085,10 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
   },
   "host.notifications.subscribe": {
     1: {
-      latestMinor: 1,
+      latestMinor: 0,
       versions: {
         0: {
-          contract: hostNotificationsSubscribeV10,
-        },
-        1: {
-          contract: hostNotificationsSubscribeV11,
+          contract: hostNotificationsSubscribe,
         },
       },
     },

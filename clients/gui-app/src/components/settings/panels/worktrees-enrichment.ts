@@ -248,6 +248,7 @@ export function useWorktreeActivityEnrichment(
   );
   const results = useHostQueries({
     client,
+    cacheKeyIdentity: undefined,
     requests,
     options: { enabled: reachable },
   });

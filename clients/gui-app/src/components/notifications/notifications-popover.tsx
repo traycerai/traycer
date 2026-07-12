@@ -401,6 +401,8 @@ const INVITE_TONE =
   "bg-[color-mix(in_oklch,var(--primary)_16%,transparent)] text-[color-mix(in_oklch,var(--primary)_55%,var(--foreground)_45%)]";
 const DANGER_TONE =
   "bg-[color-mix(in_oklch,var(--destructive)_16%,transparent)] text-[color-mix(in_oklch,var(--destructive)_65%,var(--foreground)_35%)]";
+const PROMPT_TONE = "bg-amber-500/16 text-amber-600 dark:text-amber-400";
+const DONE_TONE = "bg-blue-500/16 text-blue-700 dark:text-blue-300";
 const NEUTRAL_TONE =
   "bg-[color-mix(in_oklch,var(--muted-foreground)_14%,transparent)] text-[color-mix(in_oklch,var(--muted-foreground)_70%,var(--foreground)_30%)]";
 const SUCCESS_TONE =
@@ -422,11 +424,23 @@ function getRowMeta(row: MergedNotificationRow): EventMeta {
       tone: DANGER_TONE,
     };
   }
+  if (row.severity === "needs_action") {
+    return {
+      icon: row.hostKind === "approval.requested" ? Shield : MessageCircle,
+      tone: PROMPT_TONE,
+    };
+  }
+  if (row.severity === "done") {
+    return {
+      icon: Bell,
+      tone: DONE_TONE,
+    };
+  }
   switch (row.hostKind) {
     case "agent.stopped":
       return {
         icon: Bell,
-        tone: SUCCESS_TONE,
+        tone: DONE_TONE,
       };
     case "agent.stalled":
       return {
@@ -436,12 +450,12 @@ function getRowMeta(row: MergedNotificationRow): EventMeta {
     case "approval.requested":
       return {
         icon: Shield,
-        tone: INVITE_TONE,
+        tone: PROMPT_TONE,
       };
     case "interview.requested":
       return {
         icon: MessageCircle,
-        tone: NEUTRAL_TONE,
+        tone: PROMPT_TONE,
       };
     case null:
       return {
