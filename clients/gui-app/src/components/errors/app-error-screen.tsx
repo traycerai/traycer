@@ -2,6 +2,8 @@ import type { ReactNode } from "react";
 import { AlertTriangle, House, RotateCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 
 export interface AppErrorScreenProps {
   /** The thrown value, surfaced as a short technical detail for support. */
@@ -67,6 +69,16 @@ export function AppErrorScreen(props: AppErrorScreenProps): ReactNode {
               <House aria-hidden />
               Return to Home
             </Button>
+            <ReportIssueAction
+              context={createReportIssueContext({
+                title: "Something went wrong",
+                message: "The app hit an unexpected error.",
+                code: null,
+                source: "Traycer app",
+              })}
+              presentation="text"
+              className="w-full"
+            />
           </div>
         </CardContent>
       </Card>

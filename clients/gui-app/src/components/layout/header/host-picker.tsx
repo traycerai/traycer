@@ -15,6 +15,8 @@ import {
   useHostPickerList,
 } from "@/hooks/host/use-host-picker-list";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 import { useRunnerHost } from "@/providers/use-runner-host";
 
 /**
@@ -146,12 +148,22 @@ function HostPickerList(props: HostPickerListProps) {
 
   if (query.isError) {
     return (
-      <p
-        className="text-ui-sm text-destructive"
+      <div
+        className="flex items-center gap-2 text-ui-sm text-destructive"
         data-testid="host-picker-error"
       >
-        Failed to load hosts.
-      </p>
+        <span>Failed to load hosts.</span>
+        <ReportIssueAction
+          context={createReportIssueContext({
+            title: "Failed to load hosts",
+            message: null,
+            code: null,
+            source: "Host picker",
+          })}
+          presentation="icon"
+          className="text-current"
+        />
+      </div>
     );
   }
 

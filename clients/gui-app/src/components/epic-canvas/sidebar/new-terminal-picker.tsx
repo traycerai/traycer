@@ -15,6 +15,8 @@ import { v4 as uuidv4 } from "uuid";
 import { Plus } from "lucide-react";
 import type { WorktreeBindingSelectorRow } from "@traycer/protocol/host";
 import { Button } from "@/components/ui/button";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 import {
   Popover,
   PopoverContent,
@@ -131,10 +133,20 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
   if (folderlessCwdFailed) {
     folderlessCwdStatus = (
       <span
-        className="text-destructive"
+        className="flex items-center gap-1.5 text-destructive"
         data-testid="new-terminal-folderless-cwd-error"
       >
         Couldn't resolve terminal directory.
+        <ReportIssueAction
+          context={createReportIssueContext({
+            title: "Couldn't resolve terminal directory",
+            message: "The terminal working directory could not be resolved.",
+            code: null,
+            source: "New terminal",
+          })}
+          presentation="icon"
+          className={undefined}
+        />
       </span>
     );
   }

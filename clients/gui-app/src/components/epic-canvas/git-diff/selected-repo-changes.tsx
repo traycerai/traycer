@@ -40,7 +40,9 @@ import {
   InputGroupInput,
 } from "@/components/ui/input-group";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { cn } from "@/lib/utils";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
 import { FileList } from "./file-list";
 import { RepoStateBanner } from "./repo-state-banner";
@@ -760,6 +762,16 @@ function GitSnapshotErrorBanner(props: { readonly error: HostRpcError }) {
       <span className="min-w-0 truncate">
         {props.error.message || "Could not refresh git changes"}
       </span>
+      <ReportIssueAction
+        context={createReportIssueContext({
+          title: "Could not refresh git changes",
+          message: "The Git changes snapshot could not be refreshed.",
+          code: props.error.code,
+          source: "Git changes",
+        })}
+        presentation="icon"
+        className="-my-1 shrink-0 text-warning-foreground"
+      />
     </div>
   );
 }

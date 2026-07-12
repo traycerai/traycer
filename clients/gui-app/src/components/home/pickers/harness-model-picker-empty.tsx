@@ -1,5 +1,7 @@
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 import type { GuiHarnessCatalogEntry } from "@/hooks/harnesses/use-gui-harness-catalog";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 import { KeyRound } from "lucide-react";
@@ -8,18 +10,28 @@ import type { ReactNode } from "react";
 interface PickerStateRowProps {
   readonly label: string;
   readonly icon: ReactNode | undefined;
+  readonly action: ReactNode | undefined;
 }
 function PickerStateRow(props: PickerStateRowProps) {
-  const { label, icon } = props;
+  const { label, icon, action } = props;
   return (
-    <div
-      role="option"
-      aria-selected="false"
-      aria-disabled="true"
-      className="flex items-center gap-2 rounded-lg p-2 text-ui-sm text-muted-foreground"
-    >
-      {icon}
-      {label}
+    <div className="flex items-center justify-between gap-2 rounded-lg p-2 text-ui-sm text-muted-foreground">
+      {/* The action (when present) must stay OUTSIDE the option element: an
+          `option` role's descendants are flattened/treated as disabled by
+          assistive tech, which would make a nested Report issue button
+          unreachable. Keeping the row's flex layout on the outer div and the
+          option semantics on this inner span preserves the visual row while
+          leaving the action independently focusable/announced. */}
+      <span
+        role="option"
+        aria-selected="false"
+        aria-disabled="true"
+        className="flex min-w-0 items-center gap-2"
+      >
+        {icon}
+        {label}
+      </span>
+      {action}
     </div>
   );
 }
@@ -45,12 +57,33 @@ export function ModelRowsState(props: ModelRowsStateProps): ReactNode | null {
 
   if (catalogLoading && rowsCount === 0) {
     return (
-      <PickerStateRow icon={<MutedAgentSpinner />} label="Loading models" />
+      <PickerStateRow
+        icon={<MutedAgentSpinner />}
+        label="Loading models"
+        action={undefined}
+      />
     );
   }
 
   if (catalogError) {
-    return <PickerStateRow label="Couldn't load providers" icon={undefined} />;
+    return (
+      <PickerStateRow
+        label="Couldn't load providers"
+        icon={undefined}
+        action={
+          <ReportIssueAction
+            context={createReportIssueContext({
+              title: "Couldn't load providers",
+              message: "The harness/provider catalog could not be loaded.",
+              code: null,
+              source: "Model picker",
+            })}
+            presentation="icon"
+            className={undefined}
+          />
+        }
+      />
+    );
   }
 
   // A provider that can't list models (unavailable / missing API key / load
@@ -62,7 +95,11 @@ export function ModelRowsState(props: ModelRowsStateProps): ReactNode | null {
 
   if (activeProvider?.modelsLoading === true) {
     return (
-      <PickerStateRow icon={<MutedAgentSpinner />} label="Loading models" />
+      <PickerStateRow
+        icon={<MutedAgentSpinner />}
+        label="Loading models"
+        action={undefined}
+      />
     );
   }
 
@@ -75,6 +112,18 @@ export function ModelRowsState(props: ModelRowsStateProps): ReactNode | null {
       <PickerStateRow
         label={reason.length > 0 ? reason : "Couldn't load models"}
         icon={undefined}
+        action={
+          <ReportIssueAction
+            context={createReportIssueContext({
+              title: "Couldn't load models",
+              message: "Models for the selected provider could not be loaded.",
+              code: null,
+              source: "Model picker",
+            })}
+            presentation="icon"
+            className={undefined}
+          />
+        }
       />
     );
   }
@@ -84,6 +133,7 @@ export function ModelRowsState(props: ModelRowsStateProps): ReactNode | null {
       <PickerStateRow
         label={noModelsLabel(hasQuery, activeProvider)}
         icon={undefined}
+        action={undefined}
       />
     );
   }
@@ -120,7 +170,11 @@ function unavailableProviderState(
     );
   }
   return (
-    <PickerStateRow label={`${provider.label} unavailable`} icon={undefined} />
+    <PickerStateRow
+      label={`${provider.label} unavailable`}
+      icon={undefined}
+      action={undefined}
+    />
   );
 }
 

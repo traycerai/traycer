@@ -17,6 +17,11 @@ import { PopoverContent } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { RefreshIconButton } from "@/components/refresh-icon-button";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import {
+  createReportIssueContext,
+  type ReportIssueContext,
+} from "@/lib/report-issue-context";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { AccentDot } from "@/components/providers/accent-dot";
 import { profileDisplayLabel } from "@/components/providers/provider-profile-model";
@@ -988,7 +993,10 @@ function ProfileRateLimitProviderBlock({
           refresh={refresh}
           isRefreshing={isRefreshing}
         />
-        <RateLimitErrorMessage message="No logged-in profiles." />
+        <RateLimitErrorMessage
+          message="No logged-in profiles."
+          reportContext={null}
+        />
       </div>
     );
   }
@@ -1253,12 +1261,26 @@ function RateLimitProviderBody({
       return <RateLimitDetailSkeleton />;
     case "error":
       return (
-        <RateLimitErrorMessage message="Couldn't load usage limits right now." />
+        <RateLimitErrorMessage
+          message="Couldn't load usage limits right now."
+          reportContext={createReportIssueContext({
+            title: "Couldn't load usage limits",
+            message: null,
+            code: null,
+            source: "Usage limits",
+          })}
+        />
       );
     case "unavailable":
       return (
         <RateLimitErrorMessage
           message={`Usage limits unavailable - ${formatUnavailableReason(state.reason)}`}
+          reportContext={createReportIssueContext({
+            title: "Usage limits unavailable",
+            message: null,
+            code: null,
+            source: "Usage limits",
+          })}
         />
       );
     case "ready":
@@ -1477,7 +1499,15 @@ function TraycerRateLimitBody({
       return <RateLimitDetailSkeleton />;
     case "error":
       return (
-        <RateLimitErrorMessage message="Couldn't load your Traycer subscription right now." />
+        <RateLimitErrorMessage
+          message="Couldn't load your Traycer subscription right now."
+          reportContext={createReportIssueContext({
+            title: "Couldn't load your Traycer subscription",
+            message: null,
+            code: null,
+            source: "Subscription",
+          })}
+        />
       );
     case "empty":
       return (
@@ -1503,10 +1533,24 @@ function TraycerRateLimitBody({
 // for the same action.
 function RateLimitErrorMessage({
   message,
+  reportContext,
 }: {
   readonly message: string;
+  readonly reportContext: ReportIssueContext | null;
 }): ReactNode {
-  return <p className="text-ui-xs text-muted-foreground">{message}</p>;
+  if (reportContext === null) {
+    return <p className="text-ui-xs text-muted-foreground">{message}</p>;
+  }
+  return (
+    <div className="flex items-center gap-2 text-ui-xs text-muted-foreground">
+      <span>{message}</span>
+      <ReportIssueAction
+        context={reportContext}
+        presentation="link"
+        className="h-auto p-0 text-current"
+      />
+    </div>
+  );
 }
 
 /**

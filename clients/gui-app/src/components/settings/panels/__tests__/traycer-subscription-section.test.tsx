@@ -4,12 +4,20 @@ import type {
   TraycerTeamSubscription,
   TraycerUserSubscription,
 } from "@traycer/protocol/auth";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
+import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 
 const mocks = vi.hoisted(() => ({
   data: null as AuthenticatedUser | null,
+  isError: false,
   refetch: vi.fn(() => Promise.resolve({})),
   openExternalLink: vi.fn(),
 }));
@@ -18,8 +26,11 @@ vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   useAuthUser: () => ({
     data: mocks.data,
     isPending: false,
-    isError: false,
+    isError: mocks.isError,
     isFetching: false,
+    error: mocks.isError
+      ? { message: "secret-token-should-never-render" }
+      : null,
     refetch: mocks.refetch,
   }),
 }));
@@ -134,11 +145,18 @@ const user: AuthenticatedUser = {
 describe("TraycerSubscriptionSection", () => {
   beforeEach(() => {
     mocks.data = user;
+    mocks.isError = false;
     useAccountContextStore.setState({ accountContext: { type: "PERSONAL" } });
   });
 
   afterEach(() => {
     cleanup();
+    useDesktopDialogStore.setState({
+      activeDialog: null,
+      reportIssueAvailable: false,
+      reportIssueContext: null,
+      reportIssueDraftId: 0,
+    });
   });
 
   it("renders the personal subscription by default", () => {
@@ -180,5 +198,29 @@ describe("TraycerSubscriptionSection", () => {
     expect(
       screen.getByText("Live artifact usage is unavailable."),
     ).toBeDefined();
+  });
+
+  it("gates the subscription-error report action on capability and never forwards the raw query error", () => {
+    mocks.isError = true;
+
+    render(<TraycerSubscriptionSection />);
+
+    expect(screen.queryByText(/secret-token-should-never-render/)).toBeNull();
+    // Capability-gated off by default.
+    expect(screen.queryByRole("button", { name: "Report issue" })).toBeNull();
+
+    act(() => {
+      useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
+    expect(useDesktopDialogStore.getState()).toMatchObject({
+      activeDialog: "report-issue",
+      reportIssueContext: {
+        title: "Couldn't load your subscription",
+        message: null,
+        code: null,
+        source: "Subscription",
+      },
+    });
   });
 });

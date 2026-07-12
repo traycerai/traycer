@@ -1,5 +1,7 @@
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 import {
   formatInstallDate,
   VERSION_LIST_PREVIEW,
@@ -52,7 +54,7 @@ export function AvailableVersionsList(props: AvailableVersionsListProps) {
         <div className="break-words font-mono text-code-xs text-muted-foreground">
           {errorMessage}
         </div>
-        <div>
+        <div className="flex flex-wrap items-center gap-2">
           <Button
             variant="secondary"
             size="sm"
@@ -68,6 +70,16 @@ export function AvailableVersionsList(props: AvailableVersionsListProps) {
             ) : null}
             Retry
           </Button>
+          <ReportIssueAction
+            context={createReportIssueContext({
+              title: "Couldn't load host versions",
+              message: "The host version registry could not be loaded.",
+              code: null,
+              source: "Host versions",
+            })}
+            presentation="text"
+            className={undefined}
+          />
         </div>
       </div>
     );

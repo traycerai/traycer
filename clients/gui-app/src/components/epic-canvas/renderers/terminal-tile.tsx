@@ -23,6 +23,8 @@ import { TerminalDeadTileBanner } from "./dead-tile-banner";
 import { TerminalConnectionOverlay } from "./terminal-connection-overlay";
 import { resolveTerminalOverlayState } from "./terminal-connection-overlay-state";
 import { Button } from "@/components/ui/button";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 import { useCloseCanvasTileWithNestedFocus } from "./use-close-canvas-tile-with-nested-focus";
 
 export interface TerminalTileProps {
@@ -114,22 +116,33 @@ function TerminalTileLive(
   if (bootstrap.createIsError) {
     return (
       <div
-        className="flex h-full w-full items-center justify-center bg-canvas text-ui-sm text-destructive"
+        className="flex h-full w-full flex-col items-center justify-center gap-2 bg-canvas p-4 text-center text-ui-sm text-destructive"
         data-testid={`terminal-tile-${props.tileId}`}
       >
         <span>
           Failed to start terminal:{" "}
           {bootstrap.createError?.message ?? "Unknown error"}
         </span>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="ml-3"
-          onClick={bootstrap.retry}
-        >
-          Retry
-        </Button>
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={bootstrap.retry}
+          >
+            Retry
+          </Button>
+          <ReportIssueAction
+            context={createReportIssueContext({
+              title: "Failed to start terminal",
+              message: "The terminal session could not be started.",
+              code: null,
+              source: "Terminal",
+            })}
+            presentation="text"
+            className={undefined}
+          />
+        </div>
       </div>
     );
   }

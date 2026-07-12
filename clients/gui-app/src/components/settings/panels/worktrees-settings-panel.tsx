@@ -133,6 +133,9 @@ import {
 } from "@/lib/tab-navigation";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 
 type WorktreeRowDeleteStatus = "deleting";
 // Per-row activity-enrichment state, driving ONLY the tier pill's presentation:
@@ -690,6 +693,16 @@ function WorktreesPartialListingBanner(props: {
       >
         Retry
       </Button>
+      <ReportIssueAction
+        context={createReportIssueContext({
+          title: "Some worktrees could not be loaded",
+          message: null,
+          code: null,
+          source: "Worktrees",
+        })}
+        presentation="link"
+        className="h-auto shrink-0 p-0 text-current"
+      />
     </div>
   );
 }
@@ -2000,7 +2013,13 @@ const WorktreeRow = memo(function WorktreeRow(props: {
   const { copy: copyToClipboard } = useClipboardCopy({
     resetMs: 2000,
     onSuccess: () => toast.success("Copied worktree path"),
-    onError: () => toast.error("Couldn't copy path to clipboard."),
+    onError: () =>
+      reportableErrorToast("Couldn't copy path to clipboard.", undefined, {
+        title: "Could not copy worktree path",
+        message: null,
+        code: null,
+        source: "Worktrees",
+      }),
   });
   const copyPath = useCallback(() => {
     copyToClipboard(entry.worktreePath);
@@ -2828,6 +2847,18 @@ function WorktreesStateMessage(props: {
         />
       ) : null}
       <span className="max-w-md wrap-anywhere">{props.children}</span>
+      {props.tone === "error" ? (
+        <ReportIssueAction
+          context={createReportIssueContext({
+            title: "Could not load worktrees",
+            message: null,
+            code: null,
+            source: "Worktrees",
+          })}
+          presentation="icon"
+          className="text-current"
+        />
+      ) : null}
     </div>
   );
 }

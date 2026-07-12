@@ -27,6 +27,8 @@ import {
 } from "lucide-react";
 import type { TerminalSessionInfo } from "@traycer/protocol/host/terminal/unary-schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -200,10 +202,22 @@ function TerminalSidebarBody(props: TerminalSidebarBodyProps) {
   if (props.isError) {
     return (
       <div
-        className="px-2 py-1.5 text-ui-sm text-destructive"
+        className="flex items-center gap-2 px-2 py-1.5 text-ui-sm text-destructive"
         data-testid="epic-terminal-sidebar-error"
       >
-        {props.errorMessage ?? "Failed to load terminals."}
+        <span className="min-w-0 flex-1">
+          {props.errorMessage ?? "Failed to load terminals."}
+        </span>
+        <ReportIssueAction
+          context={createReportIssueContext({
+            title: "Failed to load terminals",
+            message: "The terminal list could not be loaded.",
+            code: null,
+            source: "Terminals",
+          })}
+          presentation="icon"
+          className="text-current"
+        />
       </div>
     );
   }

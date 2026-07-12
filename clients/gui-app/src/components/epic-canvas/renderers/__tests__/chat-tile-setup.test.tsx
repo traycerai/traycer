@@ -1,6 +1,8 @@
 import "../../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup, fireEvent, render } from "@testing-library/react";
+import type { ReactNode } from "react";
+import type { ExternalToast } from "sonner";
 
 vi.mock(
   "@/components/home/host-workspace-selector/host-workspace-selector",
@@ -37,7 +39,11 @@ vi.mock("@/stores/epics/canvas/store", () => ({
   findOpenArtifactInTab: () => null,
 }));
 
-const sonnerToastWarning = vi.hoisted(() => vi.fn());
+const sonnerToastWarning = vi.hoisted(() =>
+  vi.fn<(message: ReactNode, options: ExternalToast | undefined) => string>(
+    () => "warning-toast",
+  ),
+);
 const sonnerToastError = vi.hoisted(() => vi.fn());
 const sonnerToast = vi.hoisted(() => vi.fn());
 
@@ -61,6 +67,7 @@ import {
 } from "@/stores/chats/chat-session-store";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
+import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { ChatControlStrip } from "../chat-tile-control-strip";
 import { ChatTileErrorNoticeToasts } from "../chat-tile-error-notice-toasts";
 import { useChatSetupFailureRestoreDriver } from "@/hooks/chats/use-chat-setup-failure-restore-driver";
@@ -182,12 +189,25 @@ beforeEach(() => {
   setActiveTilePane.mockReset();
   sonnerToast.mockReset();
   sonnerToastWarning.mockReset();
+  sonnerToastWarning.mockReturnValue("warning-toast");
   sonnerToastError.mockReset();
   useComposerDraftStore.setState({ drafts: {} });
+  useDesktopDialogStore.setState({
+    activeDialog: null,
+    reportIssueAvailable: false,
+    reportIssueContext: null,
+    reportIssueDraftId: 0,
+  });
 });
 
 afterEach(() => {
   cleanup();
+  useDesktopDialogStore.setState({
+    activeDialog: null,
+    reportIssueAvailable: false,
+    reportIssueContext: null,
+    reportIssueDraftId: 0,
+  });
 });
 
 describe("useChatSetupFailureRestoreDriver", () => {
@@ -812,7 +832,48 @@ describe("useChatSetupFailureRestoreDriver", () => {
 });
 
 describe("<ChatTileErrorNoticeToasts />", () => {
-  it("shows new chat error notices as toasts", () => {
+  it("keeps warning severity and reports with fixed chat context", () => {
+    const harness = createHarness();
+    emitSnapshot(harness.callbacks(), [], []);
+    useDesktopDialogStore.setState({ reportIssueAvailable: true });
+
+    render(<ChatTileErrorNoticeToasts handle={harness.handle} />);
+
+    const unsafeMessage =
+      "The request for alice@example.com in /Users/alice/private failed.";
+    act(() => {
+      harness.callbacks().onErrorNotice({
+        kind: "errorNotice",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        notice: {
+          code: "SECRET_/Users/alice/private",
+          message: unsafeMessage,
+          severity: "warning",
+          clientActionId: "interview-1",
+        },
+      });
+    });
+
+    expect(sonnerToastWarning.mock.lastCall?.[0]).toBe(unsafeMessage);
+    expect(readWarningOptions().cancel).toMatchObject({
+      label: "Report issue",
+    });
+    clickWarningReportAction();
+
+    expect(useDesktopDialogStore.getState().reportIssueContext).toEqual({
+      title: "Chat action failed",
+      message: null,
+      code: null,
+      source: "Chat",
+    });
+    expect(
+      JSON.stringify(useDesktopDialogStore.getState().reportIssueContext),
+    ).not.toMatch(/alice@example\.com|\/Users\/alice|SECRET_/);
+  });
+
+  it("keeps warning notices non-reportable when capability is unavailable", () => {
     const harness = createHarness();
     emitSnapshot(harness.callbacks(), [], []);
 
@@ -862,6 +923,30 @@ describe("<ChatTileErrorNoticeToasts />", () => {
     expect(sonnerToastWarning).not.toHaveBeenCalled();
   });
 });
+
+function clickWarningReportAction(): void {
+  const cancel = readWarningOptions().cancel;
+  if (typeof cancel !== "object" || cancel === null || !("onClick" in cancel)) {
+    throw new Error("Expected a warning report action.");
+  }
+  const action = render(
+    <button type="button" onClick={cancel.onClick}>
+      Trigger warning report
+    </button>,
+  );
+  fireEvent.click(
+    action.getByRole("button", { name: "Trigger warning report" }),
+  );
+  action.unmount();
+}
+
+function readWarningOptions(): ExternalToast {
+  const options = sonnerToastWarning.mock.lastCall?.[1];
+  if (options === undefined) {
+    throw new Error("Expected warning toast options.");
+  }
+  return options;
+}
 
 describe("<ChatControlStrip />", () => {
   it("does not reserve persistent space for chat error notices", () => {

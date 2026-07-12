@@ -1,5 +1,7 @@
 import type { GitSubscribeStatusEvent } from "@traycer/protocol/host/git-schemas";
 import { AlertCircle } from "lucide-react";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 
 export interface SubscriptionErrorStateProps {
   readonly event: GitSubscribeStatusEvent;
@@ -16,6 +18,16 @@ export function SubscriptionErrorState(props: SubscriptionErrorStateProps) {
         <p className="text-sm font-medium text-foreground">Error</p>
         <p className="text-xs text-muted-foreground max-w-sm">{message}</p>
       </div>
+      <ReportIssueAction
+        context={createReportIssueContext({
+          title: "Git subscription error",
+          message: "The Git changes subscription failed.",
+          code: null,
+          source: "Git changes",
+        })}
+        presentation="text"
+        className={undefined}
+      />
     </div>
   );
 }

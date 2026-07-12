@@ -5,6 +5,7 @@ import { HostOperationStatusListener } from "@/components/layout/bridges/host-op
 import { HostRegistryUpdateListener } from "@/components/layout/bridges/host-registry-update-listener";
 import { RunnerHostBridges } from "@/components/layout/bridges/runner-host-bridges";
 import { WorktreeDeleteProgressToastBridge } from "@/components/layout/bridges/worktree-delete-progress-toast-bridge";
+import { ReportIssueDialogHost } from "@/components/layout/dialogs/report-issue-dialog-host";
 import { CenteredCard } from "@/components/centered-card";
 import { RootErrorBoundary } from "@/components/errors/root-error-boundary";
 import { Toaster } from "@/components/ui/sonner";
@@ -122,6 +123,8 @@ export function TraycerApp(props: TraycerAppProps): ReactNode {
               <TooltipProvider>
                 <KeybindingProvider router={router}>
                   <DesktopZoomController />
+                  <ReportIssueDialogHost />
+                  <Toaster />
                   <HostRuntimeProvider
                     registry={props.registry}
                     messengerFactory={props.messengerFactory ?? null}
@@ -212,7 +215,6 @@ function TraycerAppRuntimeSurface(props: TraycerAppRuntimeSurfaceProps) {
       <HistoryPruneProvider router={props.router} />
       <RouterProvider router={props.router} />
       <HostPicker />
-      <Toaster />
     </>
   );
 }

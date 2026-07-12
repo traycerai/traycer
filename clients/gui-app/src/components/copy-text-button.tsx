@@ -1,8 +1,8 @@
 import { Check, Copy } from "lucide-react";
 import { useCallback } from "react";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
 const COPIED_RESET_MS = 1600;
 
@@ -26,7 +26,13 @@ export function CopyTextButton(props: CopyTextButtonProps) {
   const { copied, copy } = useClipboardCopy({
     resetMs: COPIED_RESET_MS,
     onSuccess: null,
-    onError: () => toast.error("Couldn't copy to clipboard."),
+    onError: () =>
+      reportableErrorToast("Couldn't copy to clipboard.", undefined, {
+        title: "Could not copy to clipboard",
+        message: null,
+        code: null,
+        source: "Clipboard",
+      }),
   });
   const handleCopy = useCallback(() => copy(value), [copy, value]);
   const Icon = copied ? Check : Copy;

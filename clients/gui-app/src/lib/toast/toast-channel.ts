@@ -1,4 +1,13 @@
 import { toast } from "sonner";
+import { createReportIssueContext } from "@/lib/report-issue-context";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
+
+const TOAST_CHANNEL_REPORT_CONTEXT = createReportIssueContext({
+  title: "Traycer operation failed",
+  message: null,
+  code: null,
+  source: "Traycer app",
+});
 
 /**
  * A toast "channel" is a single, stable sonner id together with the variant
@@ -31,11 +40,12 @@ export interface ToastChannel {
 function createToastChannel(id: string): ToastChannel {
   return {
     id,
-    message: (message) => toast(message, { id }),
-    success: (message) => toast.success(message, { id }),
-    info: (message) => toast.info(message, { id }),
-    warning: (message) => toast.warning(message, { id }),
-    error: (message) => toast.error(message, { id }),
+    message: (message) => toast(message, { id, cancel: null }),
+    success: (message) => toast.success(message, { id, cancel: null }),
+    info: (message) => toast.info(message, { id, cancel: null }),
+    warning: (message) => toast.warning(message, { id, cancel: null }),
+    error: (message) =>
+      reportableErrorToast(message, { id }, TOAST_CHANNEL_REPORT_CONTEXT),
     dismiss: () => {
       toast.dismiss(id);
     },
