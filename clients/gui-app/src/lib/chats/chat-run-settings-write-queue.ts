@@ -16,8 +16,18 @@ type UpdateChatRunSettingsMutateAsync = (
 // requests, so independent fire-and-forget writes for the same chat could
 // let an older write's response land after a newer one and pin the chat to
 // stale settings.
+//
+// Each chatId's entry is removed once its chain settles (see the cleanup in
+// `enqueuePersistChatRunSettings`) - otherwise every chat ever touched over
+// the app's lifetime would accumulate here with no bound.
 const chains = new Map<string, Promise<void>>();
 const pending = new Map<string, UpdateChatRunSettingsRequest>();
+
+/** Test-only: number of chats with a chain currently tracked (idle chats are
+ *  removed once their chain settles - see the module comment above). */
+export function __chainCountForTests(): number {
+  return chains.size;
+}
 
 /**
  * Enqueues a durable `epic.updateChatRunSettings` write for `chatId`,
@@ -38,7 +48,17 @@ export function enqueuePersistChatRunSettings(
   const { chatId } = request;
   pending.set(chatId, request);
   const prior = chains.get(chatId) ?? Promise.resolve();
-  const next = prior.then(() => runPendingWrite(mutateAsync, chatId));
+  const next: Promise<void> = prior
+    .then(() => runPendingWrite(mutateAsync, chatId))
+    .then(() => {
+      // Only this chatId's OWN (latest) link may clear the entry - if a
+      // newer write was already enqueued (and so already replaced this
+      // entry with its own chain) before this link finished, deleting here
+      // would drop that newer, still-pending chain instead of an idle one.
+      if (chains.get(chatId) === next) {
+        chains.delete(chatId);
+      }
+    });
   chains.set(chatId, next);
 }
 

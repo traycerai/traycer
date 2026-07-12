@@ -5,7 +5,10 @@ import type {
   UpdateChatRunSettingsResponse,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import { appLogger } from "@/lib/logger";
-import { enqueuePersistChatRunSettings } from "../chat-run-settings-write-queue";
+import {
+  __chainCountForTests,
+  enqueuePersistChatRunSettings,
+} from "../chat-run-settings-write-queue";
 
 function makeRequest(
   chatId: string,
@@ -275,5 +278,63 @@ describe("enqueuePersistChatRunSettings", () => {
     );
     await vi.waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(2));
     errorSpy.mockRestore();
+  });
+
+  it("removes an idle chat's chain once its write settles, instead of growing unbounded", async () => {
+    const mutateAsync = vi
+      .fn<
+        (
+          params: UpdateChatRunSettingsRequest,
+        ) => Promise<UpdateChatRunSettingsResponse>
+      >()
+      .mockResolvedValue({ updated: true });
+    const before = __chainCountForTests();
+
+    enqueuePersistChatRunSettings(mutateAsync, makeRequest("chat-cleanup", {}));
+    await vi.waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(__chainCountForTests()).toBe(before));
+  });
+
+  it("keeps a newer write's chain when an older write's cleanup fires after it", async () => {
+    const order: string[] = [];
+    const before = __chainCountForTests();
+    let resolveFirst: () => void = () => {};
+    const mutateAsync = vi
+      .fn<
+        (
+          params: UpdateChatRunSettingsRequest,
+        ) => Promise<UpdateChatRunSettingsResponse>
+      >()
+      .mockImplementationOnce(async () => {
+        await new Promise<void>((resolve) => {
+          resolveFirst = resolve;
+        });
+        order.push("first-settled");
+        return { updated: true };
+      })
+      .mockImplementationOnce(() => {
+        order.push("second-start");
+        return Promise.resolve({ updated: true });
+      });
+
+    enqueuePersistChatRunSettings(
+      mutateAsync,
+      makeRequest("chat-cleanup-race", {}),
+    );
+    await vi.waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
+    // Queue a second write for the SAME chat while the first is still in
+    // flight - it replaces the chains entry with a NEW chain before the
+    // first one settles.
+    enqueuePersistChatRunSettings(
+      mutateAsync,
+      makeRequest("chat-cleanup-race", {}),
+    );
+
+    resolveFirst();
+    await vi.waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(2));
+    expect(order).toEqual(["first-settled", "second-start"]);
+    // The second write's own chain must still be tracked/settle correctly -
+    // the first write's (now-stale) cleanup must not have deleted it early.
+    await vi.waitFor(() => expect(__chainCountForTests()).toBe(before));
   });
 });
