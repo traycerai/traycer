@@ -138,6 +138,7 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
   } = props;
   const listRef = useRef<HTMLDivElement | null>(null);
   const floatingRef = useRef<HTMLDivElement | null>(null);
+  const previewPanelRef = useRef<HTMLDivElement | null>(null);
 
   const renderedItems = useMemo<ReadonlyArray<RenderedItem>>(
     () => items.map((item, index) => renderPickerItem(item, index, menuId)),
@@ -222,7 +223,10 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
   const emptyLabel = copy.empty;
   const dialogContentShard = useMemo(() => activeDialogContentShard(), []);
   const removeScrollShards = useMemo(
-    () => (dialogContentShard === null ? [] : [dialogContentShard]),
+    () =>
+      dialogContentShard === null
+        ? [previewPanelRef]
+        : [dialogContentShard, previewPanelRef],
     [dialogContentShard],
   );
   const isolateOutsideScroll = dialogContentShard !== null;
@@ -320,6 +324,7 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
     <>
       {createPortal(menu, document.body)}
       <MentionPreviewPanel
+        panelRef={previewPanelRef}
         listRef={listRef}
         activeIndex={activeIndex}
         preview={activePreview}
