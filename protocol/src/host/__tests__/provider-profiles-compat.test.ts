@@ -12,6 +12,7 @@ import {
   providerCliStateSchemaV10,
   providerCliStateSchemaV20,
   providerCliStateSchemaV30,
+  providerMutationCliStateSchemaV20,
   providerProfileActionSchema,
   providersListResponseSchemaV20,
   providersListResponseSchemaV30,
@@ -363,6 +364,93 @@ describe("providers.list v3.0 line predates profiles[]", () => {
     expect(serialized).not.toContain("work@example.com");
     expect(serialized).not.toContain("alice@example.com");
     expect(serialized).not.toContain("profile-0");
+  });
+});
+
+describe("provider.* mutation major-2 lines predate profiles[]", () => {
+  it("providerMutationCliStateSchemaV20 drops an unmodeled profiles key on parse", () => {
+    // The released 2.0 mutation responses reused the live state and silently
+    // gained `profiles` - the frozen shape must stay pinned to what released
+    // 2.0 hosts actually send (and what host-side projection onto 2.0 may
+    // put on the wire).
+    const parsed = providerMutationCliStateSchemaV20.parse(stateWithProfile);
+    expect(parsed).not.toHaveProperty("profiles");
+  });
+
+  it("upgrades a released 2.0 setSelection response to 2.1 with profiles: []", () => {
+    const upgraded = upgradeResponseToVersion(
+      hostRpcRegistry["providers.setSelection"],
+      { major: 2, minor: 0 },
+      { major: 2, minor: 1 },
+      {
+        state: providerMutationCliStateSchemaV20.parse(
+          providerState("claude-code"),
+        ),
+      },
+    );
+    expect(upgraded.state.profiles).toEqual([]);
+  });
+
+  it("upgrades a 1.0 setEnabled response to the 2.1 canonical along the chain", () => {
+    const upgraded = upgradeResponseToVersion(
+      hostRpcRegistry["providers.setEnabled"],
+      { major: 1, minor: 0 },
+      { major: 2, minor: 1 },
+      {
+        state: providerCliStateSchemaV10.parse(providerState("codex")),
+      },
+    );
+    expect(upgraded.state.profiles).toEqual([]);
+    expect(upgraded.state.availabilityPending).toBe(false);
+  });
+
+  it("upgrades a released 2.0 awaitLogin response to 2.1 with profiles and existingProfileId defaults", () => {
+    const upgraded = upgradeResponseToVersion(
+      hostRpcRegistry["providers.awaitLogin"],
+      { major: 2, minor: 0 },
+      { major: 2, minor: 1 },
+      {
+        state: providerMutationCliStateSchemaV20.parse(
+          providerState("claude-code"),
+        ),
+      },
+    );
+    expect(upgraded.state?.profiles).toEqual([]);
+    expect(upgraded.existingProfileId).toBeNull();
+
+    const upgradedNull = upgradeResponseToVersion(
+      hostRpcRegistry["providers.awaitLogin"],
+      { major: 2, minor: 0 },
+      { major: 2, minor: 1 },
+      { state: null },
+    );
+    expect(upgradedNull.state).toBeNull();
+    expect(upgradedNull.existingProfileId).toBeNull();
+  });
+
+  it("upgrades a released 2.0 awaitLogin request to 2.1 with profileId: null", () => {
+    const upgraded = upgradeRequestToVersion(
+      hostRpcRegistry["providers.awaitLogin"],
+      { major: 2, minor: 0 },
+      { major: 2, minor: 1 },
+      { providerId: "claude-code" },
+    );
+    expect(upgraded).toEqual({ providerId: "claude-code", profileId: null });
+  });
+
+  it("2.1 -> 1.0 downgrade still strips profiles and profile identity", () => {
+    const downgraded = downgradeResponseAcrossMajors(
+      hostRpcRegistry["providers.setSelection"],
+      2,
+      1,
+      { state: stateWithProfile },
+    );
+    expect(downgraded.ok).toBe(true);
+    if (!downgraded.ok) return;
+    expect(downgraded.value.state).not.toHaveProperty("profiles");
+    expect(JSON.stringify(downgraded.value)).not.toContain(
+      "work@example.com",
+    );
   });
 });
 
