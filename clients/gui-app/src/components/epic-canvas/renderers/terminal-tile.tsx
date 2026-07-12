@@ -53,10 +53,11 @@ export function TerminalTile(props: TerminalTileProps) {
     (state) => state.tabsById[props.viewTabId]?.epicId ?? null,
   );
   const reachability = useHostReachability(hostId);
-  const crashExitReportedRef = useRef(false);
+  const crashReportedRef = useRef(false);
   const reportCrashExit = useCallback(() => {
     if (epicId === null) return;
-    crashExitReportedRef.current = true;
+    if (crashReportedRef.current) return;
+    crashReportedRef.current = true;
     emitTerminalCrashedNotification({
       instanceId: props.node.instanceId,
       epicId,
@@ -65,11 +66,10 @@ export function TerminalTile(props: TerminalTileProps) {
     });
   }, [epicId, props.node.id, props.node.instanceId]);
   const reportRecoveryExhausted = useCallback(() => {
-    // An exit is authoritative if both paths observe the same terminal death.
-    // In normal operation the paths are mutually exclusive (`exited` versus
-    // `lost`), but this guard pins that precedence against frame-order races.
-    if (crashExitReportedRef.current) return;
+    // Whichever path observes this terminal death first owns its notification.
+    if (crashReportedRef.current) return;
     if (epicId === null) return;
+    crashReportedRef.current = true;
     emitTerminalCrashedNotification({
       instanceId: props.node.instanceId,
       epicId,
@@ -89,6 +89,9 @@ export function TerminalTile(props: TerminalTileProps) {
     instanceId: props.node.instanceId,
     onRecoveryExhausted: reportRecoveryExhausted,
   });
+  useEffect(() => {
+    crashReportedRef.current = false;
+  }, [props.node.instanceId]);
   // Open the load timeline at the outermost mount so the reachability gate
   // (which can show a skeleton first) counts toward first-paint time.
   const sessionId = props.node.id;

@@ -159,9 +159,10 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
   const hostId = useTabHostId();
   const epicId = useOpenEpicId();
   const reachability = useHostReachability(hostId);
-  const crashExitReportedRef = useRef(false);
+  const crashReportedRef = useRef(false);
   const reportCrashExit = useCallback(() => {
-    crashExitReportedRef.current = true;
+    if (crashReportedRef.current) return;
+    crashReportedRef.current = true;
     emitTerminalCrashedNotification({
       instanceId: props.node.instanceId,
       epicId,
@@ -170,8 +171,9 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
     });
   }, [epicId, props.node.id, props.node.instanceId]);
   const reportRecoveryExhausted = useCallback(() => {
-    // Exit observation wins over recovery exhaustion for one terminal death.
-    if (crashExitReportedRef.current) return;
+    // Whichever path observes this terminal death first owns its notification.
+    if (crashReportedRef.current) return;
+    crashReportedRef.current = true;
     emitTerminalCrashedNotification({
       instanceId: props.node.instanceId,
       epicId,
@@ -192,7 +194,7 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
     onRecoveryExhausted: reportRecoveryExhausted,
   });
   useEffect(() => {
-    crashExitReportedRef.current = false;
+    crashReportedRef.current = false;
   }, [props.node.instanceId]);
   // Open the load timeline at the outermost mount so the reachability gate
   // (which can show a skeleton first) counts toward first-paint time.
