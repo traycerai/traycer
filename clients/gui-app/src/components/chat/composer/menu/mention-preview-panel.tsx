@@ -1,6 +1,5 @@
 import {
   useLayoutEffect,
-  useRef,
   useState,
   type ReactElement,
   type RefObject,
@@ -35,6 +34,7 @@ const ROOT_LABEL_CHAR_BUDGET = 42;
 const TREE_ROW_INDENT_CLASSES = ["pl-0", "pl-4", "pl-8", "pl-12"] as const;
 
 export interface MentionPreviewPanelProps {
+  readonly panelRef: RefObject<HTMLDivElement | null>;
   readonly listRef: RefObject<HTMLDivElement | null>;
   readonly activeIndex: number;
   readonly preview: MentionPreview | null;
@@ -49,8 +49,7 @@ export interface MentionPreviewPanelProps {
  * than letting it render past the viewport edge or overlap the list.
  */
 export function MentionPreviewPanel(props: MentionPreviewPanelProps) {
-  const { listRef, activeIndex, preview } = props;
-  const panelRef = useRef<HTMLDivElement | null>(null);
+  const { panelRef, listRef, activeIndex, preview } = props;
   const [fits, setFits] = useState(false);
 
   useLayoutEffect(() => {
@@ -116,7 +115,7 @@ export function MentionPreviewPanel(props: MentionPreviewPanelProps) {
 
     reposition();
     return autoUpdate(virtualReference, panel, reposition);
-  }, [listRef, activeIndex, preview]);
+  }, [panelRef, listRef, activeIndex, preview]);
 
   if (preview === null) return null;
   if (typeof document === "undefined") return null;
@@ -128,11 +127,14 @@ export function MentionPreviewPanel(props: MentionPreviewPanelProps) {
       role="presentation"
       aria-hidden
       className={cn(
-        "pointer-events-none fixed top-0 left-0 z-50 w-[min(90vw,22rem)] overflow-hidden rounded-xl border border-border/70 bg-popover text-popover-foreground shadow-lg",
+        "pointer-events-auto fixed top-0 left-0 z-50 flex w-[min(90vw,22rem)] flex-col overflow-hidden rounded-xl border border-border/70 bg-popover text-popover-foreground shadow-lg",
         !fits && "invisible",
       )}
     >
-      <div className="max-h-[min(50vh,16rem)] overflow-y-auto px-3 py-2">
+      <div
+        data-slot="mention-preview-panel-scroll-area"
+        className="min-h-0 max-h-[min(50vh,16rem)] overflow-y-auto overscroll-contain px-3 py-2"
+      >
         <PreviewBody preview={preview} />
       </div>
     </div>,
