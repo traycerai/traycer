@@ -30,6 +30,7 @@ export function useEpicMentionEntries(
 
   const queries = useHostQueries<HostRpcRegistry, EpicMentionMethod>({
     client,
+    cacheKeyIdentity: undefined,
     requests: params.requests,
     options: { staleTime: 15_000, placeholderData: keepPreviousData },
   });

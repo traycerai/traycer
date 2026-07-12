@@ -161,4 +161,41 @@ describe("useNotificationActivation", () => {
       migrationSource: undefined,
     });
   });
+
+  it("routes approval notifications to the owning chat artifact", async () => {
+    const hook = renderHook(() => useNotificationActivation(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      hook.result.current.activate({
+        payload: {
+          kind: "approval",
+          epicId: "epic-approval",
+          chatId: "chat-approval",
+          approvalId: "approval-1",
+          sessionId: undefined,
+          artifactId: undefined,
+        },
+        receivedAt: 789,
+        onActivated: null,
+      });
+    });
+
+    const navigateArg = navigateSpy.mock.calls[0][0];
+    expect(navigateArg.to).toBe("/epics/$epicId/$tabId");
+    expect(navigateArg.params.epicId).toBe("epic-approval");
+    expect(navigateArg.search).toEqual({
+      focusedAt: 789,
+      focusArtifactId: "chat-approval",
+      focusThreadId: undefined,
+      migrationSource: undefined,
+    });
+
+    await waitFor(() => {
+      expect(requestMock).toHaveBeenCalledWith("epic.listCollaborators", {
+        epicId: "epic-approval",
+      });
+    });
+  });
 });

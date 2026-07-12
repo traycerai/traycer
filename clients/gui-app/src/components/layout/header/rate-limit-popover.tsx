@@ -600,6 +600,7 @@ function useTraycerRateLimitUsageState(
       method: "host.getRateLimitUsage",
       params: { accountContext, profileId: null },
     })),
+    cacheKeyIdentity: undefined,
     // Observe the exact shared query states without initiating a second fetch;
     // each rendered RateLimitView remains the enabled owner of its account pull.
     options: { enabled: false },
@@ -677,6 +678,7 @@ function RateLimitRefreshAllButton({
     ProviderRateLimitEnvelope
   >({
     client,
+    cacheKeyIdentity: undefined,
     requests: httpFetchRequests.map((target) => {
       const { method, params } = providerRateLimitQueryOptions(
         target.providerId,
@@ -945,6 +947,7 @@ function ProfileRateLimitProviderBlock({
       );
       return { method, params };
     }),
+    cacheKeyIdentity: undefined,
     options: queryOptions,
     mapResponse: mapResponseToProviderRateLimitEnvelope,
   });

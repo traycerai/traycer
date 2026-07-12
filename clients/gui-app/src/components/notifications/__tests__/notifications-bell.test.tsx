@@ -17,7 +17,6 @@ import { useNotificationsPopoverStore } from "@/stores/notifications/notificatio
 import {
   __resetNotificationsStoreForTests,
   openNotificationsStream,
-  useNotificationsStore,
 } from "@/stores/notifications/notifications-store";
 import { useTitleBarDragStore } from "@/stores/layout/title-bar-drag-store";
 import type { NotificationsStreamCallbacks } from "@traycer-clients/shared/host-transport/notifications-stream-client";
@@ -42,14 +41,6 @@ function buildSnapshot(entries: ReadonlyArray<NotificationEntry>): Uint8Array {
   return Y.encodeStateAsUpdate(donor);
 }
 
-function appendEntryToStore(entry: NotificationEntry): void {
-  const doc = useNotificationsStore.getState().doc;
-  const arr = doc.getArray<NotificationRoomEntryMap>(NOTIFICATIONS_ARRAY_KEY);
-  doc.transact(() => {
-    arr.push([createNotificationRoomEntryMap(entry)]);
-  }, "stream");
-}
-
 function invitedEntry(
   id: string,
   createdAt: number,
@@ -64,31 +55,6 @@ function invitedEntry(
       kind: NOTIFICATION_EVENT_TYPES.INVITED,
       epicId,
       actorName: "Alice",
-    },
-  };
-}
-
-interface ThreadEntryArgs {
-  readonly id: string;
-  readonly createdAt: number;
-  readonly readAt: number | null;
-  readonly epicId: string;
-  readonly artifactId: string;
-  readonly threadId: string;
-}
-
-function threadEntry(args: ThreadEntryArgs): NotificationEntry {
-  return {
-    id: args.id,
-    createdAt: args.createdAt,
-    readAt: args.readAt,
-    event: {
-      kind: NOTIFICATION_EVENT_TYPES.COMMENT_ADDED,
-      epicId: args.epicId,
-      artifactId: args.artifactId,
-      artifactType: "ticket",
-      threadId: args.threadId,
-      actorName: "Bob",
     },
   };
 }
@@ -151,7 +117,7 @@ function createRunnerHost(): MockRunnerHost {
   });
 }
 
-describe("NotificationsBell - OS toast bridge", () => {
+describe("NotificationsBell", () => {
   beforeEach(() => {
     __resetNotificationsStoreForTests();
     useNotificationsPopoverStore.getState().setOpen(false);
@@ -162,33 +128,6 @@ describe("NotificationsBell - OS toast bridge", () => {
     cleanup();
     useNotificationsPopoverStore.getState().setOpen(false);
     useTitleBarDragStore.setState({ suppressors: new Set() });
-  });
-
-  it("fires OS toast when a new unread notification arrives while the popover is closed", async () => {
-    const runnerHost = createRunnerHost();
-    const { factory, handle } = fakeFactory();
-    openNotificationsStream(factory, null);
-
-    mountBell(runnerHost);
-
-    act(() => {
-      handle().callbacks.onSnapshot(
-        { schemaVersion: "2" },
-        buildSnapshot([invitedEntry("toast-seed", 1, 500, "e1")]),
-      );
-    });
-    expect(runnerHost.notificationsSent.length).toBe(0);
-
-    act(() => {
-      appendEntryToStore(invitedEntry("toast-new", 999, null, "e1"));
-    });
-
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    expect(runnerHost.notificationsSent.length).toBe(1);
-    expect(runnerHost.notificationsSent[0].title).toBe("Traycer");
   });
 
   it("keeps bell click open and close behavior unchanged", async () => {
@@ -258,97 +197,5 @@ describe("NotificationsBell - OS toast bridge", () => {
     expect(document.activeElement).not.toBe(markAll);
     expect(markAll.getAttribute("data-state")).toBe("closed");
     expect(screen.queryByText("Mark all as read")).toBeNull();
-  });
-
-  it("suppresses OS toasts while the popover is open", async () => {
-    const runnerHost = createRunnerHost();
-    const { factory, handle } = fakeFactory();
-    openNotificationsStream(factory, null);
-    mountBell(runnerHost);
-
-    act(() => {
-      handle().callbacks.onSnapshot(
-        { schemaVersion: "2" },
-        buildSnapshot([invitedEntry("sup-seed", 1, 500, "e1")]),
-      );
-    });
-
-    fireEvent.click(screen.getByTestId("notifications-bell"));
-
-    act(() => {
-      appendEntryToStore(invitedEntry("sup-new", 1000, null, "e1"));
-    });
-
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    expect(runnerHost.notificationsSent.length).toBe(0);
-  });
-
-  it("carries a typed epic payload on toast for permission events", async () => {
-    const runnerHost = createRunnerHost();
-    const { factory, handle } = fakeFactory();
-    openNotificationsStream(factory, null);
-    mountBell(runnerHost);
-
-    act(() => {
-      handle().callbacks.onSnapshot(
-        { schemaVersion: "2" },
-        buildSnapshot([invitedEntry("pre-1", 1, 500, "e-seed")]),
-      );
-    });
-
-    act(() => {
-      appendEntryToStore(invitedEntry("epic-new", 999, null, "epic-alpha"));
-    });
-
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    expect(runnerHost.notificationsSent.length).toBe(1);
-    const sent = runnerHost.notificationsSent[0];
-    expect(sent.payload).toEqual({ kind: "epic", epicId: "epic-alpha" });
-  });
-
-  it("carries a typed artifact payload with threadId on toast for comment events", async () => {
-    const runnerHost = createRunnerHost();
-    const { factory, handle } = fakeFactory();
-    openNotificationsStream(factory, null);
-    mountBell(runnerHost);
-
-    act(() => {
-      handle().callbacks.onSnapshot(
-        { schemaVersion: "2" },
-        buildSnapshot([invitedEntry("pre-2", 1, 500, "e-seed")]),
-      );
-    });
-
-    act(() => {
-      appendEntryToStore(
-        threadEntry({
-          id: "thread-new",
-          createdAt: 1000,
-          readAt: null,
-          epicId: "epic-beta",
-          artifactId: "artifact-42",
-          threadId: "thread-7",
-        }),
-      );
-    });
-
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    expect(runnerHost.notificationsSent.length).toBe(1);
-    const sent = runnerHost.notificationsSent[0];
-    expect(sent.payload).toEqual({
-      kind: "artifact",
-      epicId: "epic-beta",
-      artifactId: "artifact-42",
-      threadId: "thread-7",
-    });
   });
 });

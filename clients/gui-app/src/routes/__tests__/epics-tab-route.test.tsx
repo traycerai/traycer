@@ -39,6 +39,9 @@ vi.mock("@/components/layout/bridges/host-tray-command-listener", () => ({
 vi.mock("@/components/layout/bridges/notification-focus-bridge", () => ({
   NotificationFocusBridge: () => null,
 }));
+vi.mock("@/components/layout/bridges/notification-emission-controller", () => ({
+  NotificationEmissionController: () => null,
+}));
 
 vi.mock("@/components/layout/dialogs/system-tab-modal-host", () => ({
   SystemTabModalHost: () => null,

@@ -16,7 +16,6 @@ function resetSettingsStore(): void {
     defaultPermission: DEFAULT_PERMISSION,
     defaultAgentMode: DEFAULT_AGENT_MODE,
     defaultEditor: "vscode",
-    notifyOnChatTurnComplete: true,
     showGlobalResourceMonitor: true,
     showNavigatorResourceStats: false,
     pinContextUsageBreakdown: false,
@@ -135,37 +134,6 @@ describe("useSettingsStore", () => {
     await useSettingsStore.persist.rehydrate();
 
     expect(useSettingsStore.getState().defaultEditor).toBe("vscode");
-  });
-
-  it("defaults chat turn-completion notifications to on", () => {
-    expect(useSettingsStore.getState().notifyOnChatTurnComplete).toBe(true);
-  });
-
-  it("toggles chat turn-completion notifications off", () => {
-    useSettingsStore.getState().setNotifyOnChatTurnComplete(false);
-
-    expect(useSettingsStore.getState().notifyOnChatTurnComplete).toBe(false);
-  });
-
-  it("persists the chat turn-completion notification preference", () => {
-    useSettingsStore.getState().setNotifyOnChatTurnComplete(false);
-    const persisted = window.localStorage.getItem("traycer-gui-app:settings");
-
-    expect(persisted ?? "").toContain('"notifyOnChatTurnComplete":false');
-  });
-
-  it("rehydrates the chat turn-completion preference from persisted settings", async () => {
-    window.localStorage.setItem(
-      "traycer-gui-app:settings",
-      JSON.stringify({
-        state: { notifyOnChatTurnComplete: false },
-        version: 1,
-      }),
-    );
-
-    await useSettingsStore.persist.rehydrate();
-
-    expect(useSettingsStore.getState().notifyOnChatTurnComplete).toBe(false);
   });
 
   it("defaults the global resource monitor button to on", () => {

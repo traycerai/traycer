@@ -446,6 +446,7 @@ export function useWorktreeActivityEnrichment(
   );
   const results = useHostQueries({
     client,
+    cacheKeyIdentity: undefined,
     requests,
     options: { enabled: reachable, gcTime: WORKTREE_ENRICHMENT_GC_MS },
   });

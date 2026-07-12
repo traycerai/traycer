@@ -39,6 +39,16 @@ vi.mock("@/components/epic-canvas/canvas/use-rename-canvas-tab", () => ({
   useRenameCanvasTab: () => () => undefined,
 }));
 
+vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
+  useHostNotificationIndicators: () => ({
+    data: { epics: {}, chats: {} },
+    isPending: false,
+    isFetching: false,
+    error: null,
+    refetch: () => Promise.resolve(),
+  }),
+}));
+
 vi.mock("@/lib/epic-selectors", () => ({
   useEpicArtifact: (id: string) => ({ id }),
   useEpicTabDisplayTitle: (node: { readonly name: string }) => node.name,

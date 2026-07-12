@@ -59,7 +59,8 @@ import { tabResolveIntent } from "@/stores/tabs/registry";
 import type { HeaderTabKind } from "@/stores/tabs/registry";
 import type { HeaderTab, TabIcon } from "@/stores/tabs/types";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
-import { EpicActivityStatusIcon } from "@/components/epics/epic-activity-status-icon";
+import { NotificationIndicatorIcon } from "@/components/notifications/notification-indicator-icon";
+import { useSurfaceNotificationIndicatorState } from "@/components/notifications/notification-indicator-context";
 import {
   useEpicActivityStatus,
   type EpicActivityStatus,
@@ -313,6 +314,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
                 titleGenerationPending={titleGenerationPending}
                 activityStatus={activityStatus}
                 tabId={tab.id}
+                epicId={tab.kind === "epic" ? tab.epicId : null}
               />
               {rename.isEditing ? (
                 <input
@@ -445,29 +447,36 @@ function TabLeadingIcon(props: {
   readonly titleGenerationPending: boolean;
   readonly activityStatus: EpicActivityStatus;
   readonly tabId: string;
+  readonly epicId: string | null;
 }) {
+  const indicatorState = useSurfaceNotificationIndicatorState({
+    epicId: props.epicId ?? props.tabId,
+  });
+  let defaultIcon: React.ReactNode = null;
   if (props.titleGenerationPending) {
-    return (
+    defaultIcon = (
       <AgentSpinningDots
         className="size-3.5 text-muted-foreground"
         testId={`header-tab-title-generating-${props.tabId}`}
         variant="dots2"
       />
     );
+  } else if (props.icon !== null) {
+    const Icon = props.icon;
+    defaultIcon = <Icon className="size-3.5 shrink-0" />;
   }
-  if (props.activityStatus !== "idle") {
-    return (
-      <EpicActivityStatusIcon
-        status={props.activityStatus}
-        subjectId={props.tabId}
-        testIdPrefix="header-tab"
-        className="text-muted-foreground"
-      />
-    );
-  }
-  if (props.icon === null) return null;
-  const Icon = props.icon;
-  return <Icon className="size-3.5 shrink-0" />;
+  return (
+    <NotificationIndicatorIcon
+      state={indicatorState}
+      running={props.activityStatus === "running"}
+      subjectId={props.tabId}
+      testIdPrefix="header-tab"
+      className="text-muted-foreground"
+      style={undefined}
+      runningTitle="Task activity in progress"
+      defaultIcon={defaultIcon}
+    />
+  );
 }
 
 function HeaderTabMotionFrame(props: {

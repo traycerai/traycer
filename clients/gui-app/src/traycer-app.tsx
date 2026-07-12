@@ -26,6 +26,7 @@ import { ComposerHarnessMemoryPersistLifecycleBridge } from "@/providers/compose
 import { WorktreeIntentMemoryPersistLifecycleBridge } from "@/providers/worktree-intent-memory-persist-lifecycle-bridge";
 import { WorktreeIntentStagingPersistLifecycleBridge } from "@/providers/worktree-intent-staging-persist-lifecycle-bridge";
 import { EpicCanvasPersistLifecycleBridge } from "@/providers/epic-canvas-persist-lifecycle-bridge";
+import { AppLocalNotificationsPersistLifecycleBridge } from "@/providers/app-local-notifications-persist-lifecycle-bridge";
 import { EpicTabExistenceReconciler } from "@/providers/epic-tab-existence-reconciler";
 import { CliCredentialSeeder } from "@/providers/cli-credential-seeder";
 import { HarnessCatalogPrefetcher } from "@/providers/harness-catalog-prefetcher";
@@ -178,9 +179,11 @@ function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
                   <EpicCanvasPersistLifecycleBridge>
                     <EpicTabExistenceReconciler />
                     <HostStreamProvider>
-                      <NotificationsSessionProvider>
-                        <TraycerAppRuntimeSurface router={props.router} />
-                      </NotificationsSessionProvider>
+                      <AppLocalNotificationsPersistLifecycleBridge>
+                        <NotificationsSessionProvider>
+                          <TraycerAppRuntimeSurface router={props.router} />
+                        </NotificationsSessionProvider>
+                      </AppLocalNotificationsPersistLifecycleBridge>
                     </HostStreamProvider>
                   </EpicCanvasPersistLifecycleBridge>
                 </WorktreeIntentStagingPersistLifecycleBridge>

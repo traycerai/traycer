@@ -102,7 +102,7 @@ describe("NotificationFocusBridge", () => {
     });
   });
 
-  it("routes chat payloads to the epic without opening the popover", () => {
+  it("opens the popover and routes chat payloads to the epic", () => {
     const tabId = useEpicCanvasStore.getState().openEpicTab("epic-9", "Epic 9");
     renderBridge();
 
@@ -112,13 +112,13 @@ describe("NotificationFocusBridge", () => {
         .recordClick({ kind: "chat", epicId: "epic-9", chatId: "chat-1" });
     });
 
-    expect(useNotificationsPopoverStore.getState().open).toBe(false);
+    expect(useNotificationsPopoverStore.getState().open).toBe(true);
     expect(navigateSpy).toHaveBeenCalledWith({
       to: "/epics/$epicId/$tabId",
       params: { epicId: "epic-9", tabId },
       search: {
         focusedAt: 1_777_768_800_000,
-        focusArtifactId: undefined,
+        focusArtifactId: "chat-1",
         focusThreadId: undefined,
         migrationSource: undefined,
       },

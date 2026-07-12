@@ -70,12 +70,6 @@ export interface SettingsState {
    */
   composerMode: ComposerMode;
   preventSleepWhileRunning: boolean;
-  /**
-   * Show a native OS notification when a chat turn finishes while the app
-   * window is not focused. On by default; the macOS notification-permission
-   * prompt surfaces on the first unfocused completion.
-   */
-  notifyOnChatTurnComplete: boolean;
   /** Show the app-global resource monitor button in the header. */
   showGlobalResourceMonitor: boolean;
   /** Show inline resource usage chips in task navigator/sidebar rows. */
@@ -132,7 +126,6 @@ export interface SettingsState {
   setDefaultAgentMode: (mode: AgentMode) => void;
   setComposerMode: (mode: ComposerMode) => void;
   setPreventSleepWhileRunning: (value: boolean) => void;
-  setNotifyOnChatTurnComplete: (value: boolean) => void;
   setShowGlobalResourceMonitor: (value: boolean) => void;
   setShowNavigatorResourceStats: (value: boolean) => void;
   setPinContextUsageBreakdown: (value: boolean) => void;
@@ -167,7 +160,6 @@ type PersistedSettingsState = Pick<
   | "defaultAgentMode"
   | "composerMode"
   | "preventSleepWhileRunning"
-  | "notifyOnChatTurnComplete"
   | "showGlobalResourceMonitor"
   | "showNavigatorResourceStats"
   | "pinContextUsageBreakdown"
@@ -234,7 +226,6 @@ function partializeSettingsState(state: SettingsState): PersistedSettingsState {
     defaultAgentMode: state.defaultAgentMode,
     composerMode: state.composerMode,
     preventSleepWhileRunning: state.preventSleepWhileRunning,
-    notifyOnChatTurnComplete: state.notifyOnChatTurnComplete,
     showGlobalResourceMonitor: state.showGlobalResourceMonitor,
     showNavigatorResourceStats: state.showNavigatorResourceStats,
     pinContextUsageBreakdown: state.pinContextUsageBreakdown,
@@ -269,7 +260,6 @@ export const useSettingsStore = create<SettingsState>()(
       defaultAgentMode: DEFAULT_AGENT_MODE,
       composerMode: DEFAULT_COMPOSER_MODE,
       preventSleepWhileRunning: false,
-      notifyOnChatTurnComplete: true,
       showGlobalResourceMonitor: true,
       showNavigatorResourceStats: false,
       pinContextUsageBreakdown: false,
@@ -294,7 +284,6 @@ export const useSettingsStore = create<SettingsState>()(
       setDefaultAgentMode: makeSetter(set, "defaultAgentMode"),
       setComposerMode: makeSetter(set, "composerMode"),
       setPreventSleepWhileRunning: makeSetter(set, "preventSleepWhileRunning"),
-      setNotifyOnChatTurnComplete: makeSetter(set, "notifyOnChatTurnComplete"),
       setShowGlobalResourceMonitor: makeSetter(
         set,
         "showGlobalResourceMonitor",
