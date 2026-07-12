@@ -25,6 +25,10 @@ import type {
 } from "@/lib/windows/types";
 import type { DesktopPerWindowProjectionBridge } from "@/lib/windows/per-window-projection-debounce";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
+import {
+  resolvePrimaryPath,
+  trimFoldersPreservingPrimary,
+} from "@/lib/worktree/resolve-primary-path";
 import { EMPTY_LANDING_DRAFT_CONTENT } from "./landing-draft-content";
 import {
   markLandingDraftsReady,
@@ -60,6 +64,7 @@ export { EMPTY_LANDING_DRAFT_CONTENT };
 export interface LandingDraftWorkspaceSnapshot {
   readonly folders: ReadonlyArray<string>;
   readonly folderInfoByPath: Readonly<Record<string, WorkspaceFolderInfo>>;
+  readonly primaryPath: string | null;
 }
 
 interface LandingDraftStoreState {
@@ -87,11 +92,14 @@ interface LandingDraftStoreState {
   setDraftSettings: (id: string, settings: ChatRunSettings) => void;
   /** Update the chat-vs-terminal starting point of a specific draft. */
   setDraftComposerMode: (id: string, mode: ComposerMode) => void;
+  // Returns the paths EVICTED by the 50-folder cap (empty when nothing was
+  // evicted) so callers can unstage any in-flight worktree intent for them.
   addDraftResolvedFolders: (
     id: string,
     folders: ReadonlyArray<WorkspaceFolderInfo>,
-  ) => void;
+  ) => ReadonlyArray<string>;
   removeDraftFolder: (id: string, folderPath: string) => void;
+  setDraftWorkspacePrimary: (id: string, folderPath: string) => void;
 }
 
 export const LANDING_DRAFT_PERSIST_KEY = persistKey(STORE_KEYS.landingDraft);
@@ -372,17 +380,31 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
       },
 
       addDraftResolvedFolders: (id, folders) => {
+        const before =
+          get().drafts.find((d) => d.id === id)?.workspace.folders ?? [];
         set((state) =>
           updateDraftWorkspace(state, id, (workspace) =>
             mergeLandingDraftWorkspaceFolders(workspace, folders),
           ),
         );
+        const afterSet = new Set(
+          get().drafts.find((d) => d.id === id)?.workspace.folders ?? [],
+        );
+        return before.filter((path) => !afterSet.has(path));
       },
 
       removeDraftFolder: (id, folderPath) => {
         set((state) =>
           updateDraftWorkspace(state, id, (workspace) =>
             removeLandingDraftWorkspaceFolder(workspace, folderPath),
+          ),
+        );
+      },
+
+      setDraftWorkspacePrimary: (id, folderPath) => {
+        set((state) =>
+          updateDraftWorkspace(state, id, (workspace) =>
+            setLandingDraftWorkspacePrimary(workspace, folderPath),
           ),
         );
       },
@@ -606,11 +628,13 @@ function normalizeChatRunSettings(
 }
 
 function readCurrentLandingDraftWorkspaceSnapshot(): LandingDraftWorkspaceSnapshot {
+  const globalState = useWorkspaceFoldersStore.getState();
   return normalizeLandingDraftWorkspace({
-    folders: [...useWorkspaceFoldersStore.getState().folders],
+    folders: [...globalState.folders],
     folderInfoByPath: copyWorkspaceFolderInfoByPath(
-      useWorkspaceFoldersStore.getState().folderInfoByPath,
+      globalState.folderInfoByPath,
     ),
+    primaryPath: globalState.primaryPath,
   });
 }
 
@@ -618,6 +642,7 @@ export function emptyLandingDraftWorkspaceSnapshot(): LandingDraftWorkspaceSnaps
   return {
     folders: [],
     folderInfoByPath: {},
+    primaryPath: null,
   };
 }
 
@@ -688,11 +713,32 @@ export function removeLandingDraftWorkspaceFolder(
   if (!workspace.folders.includes(folderPath)) return workspace;
   const nextInfoByPath = { ...workspace.folderInfoByPath };
   delete nextInfoByPath[folderPath];
+  const nextFolders = workspace.folders.filter((path) => path !== folderPath);
   return {
     ...workspace,
-    folders: workspace.folders.filter((path) => path !== folderPath),
+    folders: nextFolders,
     folderInfoByPath: nextInfoByPath,
+    // Deterministic fallback to the first remaining folder when the removed
+    // folder WAS the explicit primary; `resolvePrimaryPath` also covers the
+    // "no folders left" case (`null`).
+    primaryPath: resolvePrimaryPath(nextFolders, workspace.primaryPath),
   };
+}
+
+/**
+ * Sets the explicit primary folder for a draft/modal workspace snapshot,
+ * matching the `mergeLandingDraftWorkspaceFolders` / `removeLandingDraft-
+ * WorkspaceFolder` pure-helper pattern so every action (draft store, modal
+ * store) routes through one implementation. No-op (same reference) when
+ * `folderPath` isn't a member of the snapshot, or is already primary.
+ */
+export function setLandingDraftWorkspacePrimary(
+  workspace: LandingDraftWorkspaceSnapshot,
+  folderPath: string,
+): LandingDraftWorkspaceSnapshot {
+  if (!workspace.folders.includes(folderPath)) return workspace;
+  if (workspace.primaryPath === folderPath) return workspace;
+  return { ...workspace, primaryPath: folderPath };
 }
 
 function parseLandingDraftWorkspaceSnapshot(
@@ -706,7 +752,12 @@ function parseLandingDraftWorkspaceSnapshot(
   return normalizeLandingDraftWorkspace({
     folders,
     folderInfoByPath,
+    primaryPath: parsePersistedPrimaryPath(value.primaryPath),
   });
+}
+
+function parsePersistedPrimaryPath(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
 }
 
 function parseWorkspaceFolders(
@@ -766,12 +817,13 @@ function parseRepoIdentifier(
 function normalizeLandingDraftWorkspace(
   workspace: LandingDraftWorkspaceSnapshot,
 ): LandingDraftWorkspaceSnapshot {
-  const folders =
-    workspace.folders.length > MAX_DRAFT_WORKSPACE_FOLDERS
-      ? workspace.folders.slice(
-          workspace.folders.length - MAX_DRAFT_WORKSPACE_FOLDERS,
-        )
-      : workspace.folders;
+  // Cap eviction must never silently move primary: trim the oldest
+  // SECONDARY folders first, keeping the resolved primary's slot intact.
+  const folders = trimFoldersPreservingPrimary(
+    workspace.folders,
+    workspace.primaryPath,
+    MAX_DRAFT_WORKSPACE_FOLDERS,
+  );
   const folderSet = new Set(folders);
   return {
     ...workspace,
@@ -780,6 +832,7 @@ function normalizeLandingDraftWorkspace(
       workspace.folderInfoByPath,
       folderSet,
     ),
+    primaryPath: resolvePrimaryPath(folders, workspace.primaryPath),
   };
 }
 
@@ -822,6 +875,7 @@ function sameLandingDraftWorkspace(
   b: LandingDraftWorkspaceSnapshot,
 ): boolean {
   return (
+    a.primaryPath === b.primaryPath &&
     sameStringArrays(a.folders, b.folders) &&
     sameWorkspaceFolderInfoByPath(a.folderInfoByPath, b.folderInfoByPath)
   );
@@ -869,6 +923,7 @@ function landingDraftWorkspaceToDesktopValue(
     folderInfoByPath: workspaceFolderInfoByPathToDesktopValue(
       normalizedWorkspace.folderInfoByPath,
     ),
+    primaryPath: normalizedWorkspace.primaryPath,
   };
 }
 

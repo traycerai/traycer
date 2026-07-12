@@ -15,11 +15,16 @@ import {
   agentListDowngradeV2ToV1,
   agentListDowngradeV3ToV1,
   agentListDowngradeV3ToV2,
+  agentListDowngradeV4ToV1,
+  agentListDowngradeV4ToV2,
+  agentListDowngradeV4ToV3,
   agentListUpgradeV1ToV2,
   agentListUpgradeV2ToV3,
+  agentListUpgradeV3ToV4,
   agentListV10,
   agentListV20,
   agentListV30,
+  agentListV40,
   agentSelectionGuideV10,
   agentSelectionGuideGlobalGetV10,
   agentSelectionGuideGlobalOnboardingDraftGetV10,
@@ -38,11 +43,16 @@ import {
   agentGuiListHarnessesDowngradeV2ToV1,
   agentGuiListHarnessesDowngradeV3ToV1,
   agentGuiListHarnessesDowngradeV3ToV2,
+  agentGuiListHarnessesDowngradeV4ToV1,
+  agentGuiListHarnessesDowngradeV4ToV2,
+  agentGuiListHarnessesDowngradeV4ToV3,
   agentGuiListHarnessesUpgradeV1ToV2,
   agentGuiListHarnessesUpgradeV2ToV3,
+  agentGuiListHarnessesUpgradeV3ToV4,
   agentGuiListHarnessesV10,
   agentGuiListHarnessesV20,
   agentGuiListHarnessesV30,
+  agentGuiListHarnessesV40,
   agentGuiListModelsV10,
   chatSubscribeV10,
   chatSubscribeV11,
@@ -234,8 +244,10 @@ import {
   providersListResponseSchema,
   providersListResponseSchemaV10,
   providersListResponseSchemaV20,
+  providersListResponseSchemaV30,
   downgradeProviderCliStateToV10,
   downgradeProviderCliStateListToV20,
+  downgradeProviderCliStateListToV30,
   upgradeProviderCliStateV10ToV20,
   upgradeProviderCliStateV10ToLatest,
   providersRemoveCustomPathRequestSchema,
@@ -649,7 +661,7 @@ export const providersListV30 = defineRpcContract({
   method: "providers.list",
   schemaVersion: { major: 3, minor: 0 } as const,
   requestSchema: providersListRequestSchema,
-  responseSchema: providersListResponseSchema,
+  responseSchema: providersListResponseSchemaV30,
 });
 
 export const providersListUpgradeV2ToV3 = defineUpgradePath<
@@ -692,6 +704,71 @@ export const providersListDowngradeV3ToV1 = defineDowngradePath<
   typeof providersListV10
 >({
   from: { major: 3, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV10.parse({
+      providers: downgradeProviderStateListForV10(response.providers),
+    }),
+  }),
+});
+
+export const providersListV40 = defineRpcContract({
+  method: "providers.list",
+  schemaVersion: { major: 4, minor: 0 } as const,
+  requestSchema: providersListRequestSchema,
+  responseSchema: providersListResponseSchema,
+});
+
+export const providersListUpgradeV3ToV4 = defineUpgradePath<
+  typeof providersListV30,
+  typeof providersListV40
+>({
+  from: { major: 3, minor: 0 },
+  to: { major: 4, minor: 0 },
+  // A v3.0 response without Devin/Pi is a valid v4.0 response (purely
+  // additive), and the request shape is identical - both upgrades are
+  // identity.
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const providersListDowngradeV4ToV3 = defineDowngradePath<
+  typeof providersListV40,
+  typeof providersListV30
+>({
+  from: { major: 4, minor: 0 },
+  to: { major: 3, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV30.parse({
+      providers: downgradeProviderCliStateListToV30(response.providers),
+    }),
+  }),
+});
+
+export const providersListDowngradeV4ToV2 = defineDowngradePath<
+  typeof providersListV40,
+  typeof providersListV20
+>({
+  from: { major: 4, minor: 0 },
+  to: { major: 2, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV20.parse({
+      providers: downgradeProviderCliStateListToV20(response.providers),
+    }),
+  }),
+});
+
+export const providersListDowngradeV4ToV1 = defineDowngradePath<
+  typeof providersListV40,
+  typeof providersListV10
+>({
+  from: { major: 4, minor: 0 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
@@ -1508,6 +1585,20 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
         2: agentGuiListHarnessesDowngradeV3ToV2,
       },
     },
+    4: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentGuiListHarnessesV40,
+          upgradeFromPreviousVersion: agentGuiListHarnessesUpgradeV3ToV4,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentGuiListHarnessesDowngradeV4ToV1,
+        2: agentGuiListHarnessesDowngradeV4ToV2,
+        3: agentGuiListHarnessesDowngradeV4ToV3,
+      },
+    },
   },
   "agent.gui.listModels": {
     1: {
@@ -1737,6 +1828,20 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
       downgradePathsFromLatest: {
         1: agentListDowngradeV3ToV1,
         2: agentListDowngradeV3ToV2,
+      },
+    },
+    4: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentListV40,
+          upgradeFromPreviousVersion: agentListUpgradeV3ToV4,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentListDowngradeV4ToV1,
+        2: agentListDowngradeV4ToV2,
+        3: agentListDowngradeV4ToV3,
       },
     },
   },
@@ -2644,6 +2749,20 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
       downgradePathsFromLatest: {
         1: providersListDowngradeV3ToV1,
         2: providersListDowngradeV3ToV2,
+      },
+    },
+    4: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersListV40,
+          upgradeFromPreviousVersion: providersListUpgradeV3ToV4,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: providersListDowngradeV4ToV1,
+        2: providersListDowngradeV4ToV2,
+        3: providersListDowngradeV4ToV3,
       },
     },
   },

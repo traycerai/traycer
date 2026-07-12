@@ -302,6 +302,36 @@ export const ampChatSessionAnchorSchema = z.object({
 });
 export type AmpChatSessionAnchor = z.infer<typeof ampChatSessionAnchorSchema>;
 
+// Devin (ACP) resumes at session granularity only — `session/load` reloads the
+// whole ACP session, with no per-message truncation/fork point — so the anchor
+// carries just the ACP session id. `sessionId` is that ACP session id.
+export const devinChatSessionAnchorSchema = z.object({
+  harnessId: z.literal("devin"),
+  hostId: z.string(),
+  sessionId: z.string(),
+  sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+  createdAt: z.number(),
+  coveredUntilMessageId: z.string().nullable().default(null),
+  ...profileSnapshotFields,
+});
+export type DevinChatSessionAnchor = z.infer<
+  typeof devinChatSessionAnchorSchema
+>;
+
+// Pi resumes at session granularity only — no per-message truncation/fork
+// point — so the anchor carries just the session id. `sessionId` is the Pi
+// session id.
+export const piChatSessionAnchorSchema = z.object({
+  harnessId: z.literal("pi"),
+  hostId: z.string(),
+  sessionId: z.string(),
+  sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+  createdAt: z.number(),
+  coveredUntilMessageId: z.string().nullable().default(null),
+  ...profileSnapshotFields,
+});
+export type PiChatSessionAnchor = z.infer<typeof piChatSessionAnchorSchema>;
+
 export const chatSessionAnchorSchema = z.discriminatedUnion("harnessId", [
   claudeChatSessionAnchorSchema,
   codexChatSessionAnchorSchema,
@@ -317,5 +347,7 @@ export const chatSessionAnchorSchema = z.discriminatedUnion("harnessId", [
   copilotChatSessionAnchorSchema,
   kilocodeChatSessionAnchorSchema,
   ampChatSessionAnchorSchema,
+  devinChatSessionAnchorSchema,
+  piChatSessionAnchorSchema,
 ]);
 export type ChatSessionAnchor = z.infer<typeof chatSessionAnchorSchema>;

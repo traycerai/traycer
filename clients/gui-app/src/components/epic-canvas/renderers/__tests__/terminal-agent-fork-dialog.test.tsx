@@ -10,6 +10,17 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { TuiAgentProjection } from "@/stores/epics/open-epic/types";
 import type { ForkWorkspaceSeed } from "@/lib/worktree/fork-workspace-seed";
+import type { WorktreeFolderIntent } from "@traycer/protocol/host/worktree-schemas";
+import type { WorkspaceFolderInfo } from "@/stores/workspace/workspace-folders-store";
+import {
+  pendingForkTerminalAgentStagingKey,
+  readStagedWorktreeIntent,
+  useWorktreeIntentStagingStore,
+} from "@/stores/worktree/worktree-intent-staging-store";
+import {
+  readSeededWorkspaceSnapshot,
+  useSeededWorkspaceSnapshotStore,
+} from "@/stores/worktree/seeded-workspace-snapshot-store";
 
 const dialogMocks = vi.hoisted(() => ({
   create: vi.fn<(input: TerminalForkCreateInput) => Promise<string | null>>(),
@@ -113,7 +124,161 @@ describe("<TerminalAgentForkDialog />", () => {
   afterEach(() => {
     dialogMocks.create.mockReset();
     dialogMocks.providersByClient.clear();
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    useSeededWorkspaceSnapshotStore.getState().resetForTests();
     cleanup();
+  });
+
+  it("submits folderless when the live picker removes the seed's last folder", async () => {
+    const folder = {
+      path: "/workspace",
+      name: "workspace",
+      repoIdentifier: null,
+    };
+    const workspaceSeed: ForkWorkspaceSeed = {
+      workspace: {
+        folders: [folder.path],
+        folderInfoByPath: { [folder.path]: folder },
+        primaryPath: folder.path,
+      },
+      intent: {
+        entries: [
+          {
+            kind: "local",
+            workspacePath: folder.path,
+            repoIdentifier: null,
+            isPrimary: true,
+          },
+        ],
+      },
+    };
+    useSeededWorkspaceSnapshotStore
+      .getState()
+      .setSnapshot(pendingForkTerminalAgentStagingKey("epic-test"), {
+        folders: [],
+        folderInfoByPath: {},
+        primaryPath: null,
+      });
+    dialogMocks.create.mockResolvedValue("forked-agent");
+    render(
+      <TerminalAgentForkDialog
+        open
+        target={{ sourceAgent: sourceAgent(), workspaceSeed }}
+        epicId="epic-test"
+        tabId="tab-test"
+        hostId="host-test"
+        hostClient={null}
+        onOpenChange={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Fork" }));
+
+    await waitFor(() => {
+      expect(dialogMocks.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workspaceMode: "folderless",
+          worktreeIntent: null,
+        }),
+      );
+    });
+  });
+
+  it("does not bleed a CANCELLED fork's workspace into the next fork in the same epic", async () => {
+    // `pendingForkTerminalAgentStagingKey` is per-epic, so both forks below
+    // share one staging slot - and `readSeededLaunchWorkspace` prefers the
+    // live snapshot over the new target's own `workspaceSeed`. Cancelling
+    // must therefore drop this fork's scratch workspace, or fork B silently
+    // launches into fork A's folders and primary.
+    const stagingKey = pendingForkTerminalAgentStagingKey("epic-test");
+    const onOpenChange = vi.fn();
+
+    const { rerender } = render(
+      <TerminalAgentForkDialog
+        open
+        target={{
+          sourceAgent: sourceAgent(),
+          workspaceSeed: workspaceSeedForFolder(REPO_A),
+        }}
+        epicId="epic-test"
+        tabId="tab-test"
+        hostId="host-test"
+        hostClient={null}
+        onOpenChange={onOpenChange}
+      />,
+    );
+
+    // The picker is mocked out in this file, so stand in for it: the user adds
+    // a second folder and promotes it to primary, which the real picker
+    // mirrors into exactly these two slots.
+    act(() => {
+      useSeededWorkspaceSnapshotStore.getState().setSnapshot(stagingKey, {
+        folders: [REPO_A.path, REPO_A_EXTRA.path],
+        folderInfoByPath: {
+          [REPO_A.path]: REPO_A,
+          [REPO_A_EXTRA.path]: REPO_A_EXTRA,
+        },
+        primaryPath: REPO_A_EXTRA.path,
+      });
+      useWorktreeIntentStagingStore.getState().setIntent(stagingKey, {
+        entries: [
+          localIntentEntry(REPO_A.path, false),
+          localIntentEntry(REPO_A_EXTRA.path, true),
+        ],
+      });
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(readSeededWorkspaceSnapshot(stagingKey)).toBeNull();
+    expect(readStagedWorktreeIntent(stagingKey)).toBeNull();
+
+    // The parent closes the dialog, then reopens it for a DIFFERENT source
+    // agent - the same per-epic staging slot, a fresh seed.
+    rerender(
+      <TerminalAgentForkDialog
+        open={false}
+        target={null}
+        epicId="epic-test"
+        tabId="tab-test"
+        hostId="host-test"
+        hostClient={null}
+        onOpenChange={onOpenChange}
+      />,
+    );
+    dialogMocks.create.mockResolvedValue("forked-agent");
+    rerender(
+      <TerminalAgentForkDialog
+        open
+        target={{
+          sourceAgent: { ...sourceAgent(), id: "other-source-agent" },
+          workspaceSeed: workspaceSeedForFolder(REPO_B),
+        }}
+        epicId="epic-test"
+        tabId="tab-test"
+        hostId="host-test"
+        hostClient={null}
+        onOpenChange={onOpenChange}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Fork" }));
+
+    await waitFor(() => {
+      expect(dialogMocks.create).toHaveBeenCalledTimes(1);
+    });
+    // Fork B launches into its OWN single folder. Without the cancel-time
+    // clear it would inherit fork A's two folders and A's `/repo-a-extra`
+    // primary out of the shared slot.
+    expect(dialogMocks.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceMode: "inherit",
+        worktreeIntent: {
+          entries: [localIntentEntry(REPO_B.path, true)],
+        },
+      }),
+    );
   });
 
   it("submits an edited sibling title and reports fork progress", async () => {
@@ -319,7 +484,43 @@ function sourceAgentWithTerminalArgs(
 
 function emptyWorkspaceSeed(): ForkWorkspaceSeed {
   return {
-    workspace: { folders: [], folderInfoByPath: {} },
+    workspace: { folders: [], folderInfoByPath: {}, primaryPath: null },
     intent: null,
+  };
+}
+
+const REPO_A: WorkspaceFolderInfo = {
+  path: "/repo-a",
+  name: "repo-a",
+  repoIdentifier: null,
+};
+const REPO_A_EXTRA: WorkspaceFolderInfo = {
+  path: "/repo-a-extra",
+  name: "repo-a-extra",
+  repoIdentifier: null,
+};
+const REPO_B: WorkspaceFolderInfo = {
+  path: "/repo-b",
+  name: "repo-b",
+  repoIdentifier: null,
+};
+
+function localIntentEntry(
+  workspacePath: string,
+  isPrimary: boolean,
+): WorktreeFolderIntent {
+  return { kind: "local", workspacePath, repoIdentifier: null, isPrimary };
+}
+
+function workspaceSeedForFolder(
+  folder: WorkspaceFolderInfo,
+): ForkWorkspaceSeed {
+  return {
+    workspace: {
+      folders: [folder.path],
+      folderInfoByPath: { [folder.path]: folder },
+      primaryPath: folder.path,
+    },
+    intent: { entries: [localIntentEntry(folder.path, true)] },
   };
 }

@@ -10,6 +10,7 @@ import KiloCodeMono from "@lobehub/icons/es/KiloCode/components/Mono";
 import GithubCopilotMono from "@lobehub/icons/es/GithubCopilot/components/Mono";
 import OpenRouterMono from "@lobehub/icons/es/OpenRouter/components/Mono";
 import KimiMono from "@lobehub/icons/es/Kimi/components/Mono";
+import DevinMono from "@lobehub/icons/es/Devin/components/Mono";
 
 export type HarnessIcon = (props: SVGProps<SVGSVGElement>) => ReactElement;
 
@@ -59,6 +60,24 @@ export const AmpIcon: HarnessIcon = (props) => (
       fill="#F34E3F"
       d="M12.9126 15.4902L15.2756 14.8439L12.9213 5.87659L4.09639 3.48648L3.46799 5.901L10.9201 7.92537L12.9126 15.4902Z"
     />
+  </svg>
+);
+
+// Devin (Cognition) — lobehub monochrome brand mark (`currentColor` theming).
+export const DevinIcon: HarnessIcon = (props) => <DevinMono {...props} />;
+
+// Pi (pi.dev) has no lobehub entry — official badge mark from pi.dev/favicon.svg
+// (press kit). Brand dark plate + white glyph so it keeps identity in both themes
+// (same idea as Amp brand red / Claude colored sunburst).
+export const PiIcon: HarnessIcon = (props) => (
+  <svg {...props} viewBox="0 0 800 800" fill="none">
+    <rect width="800" height="800" rx="120" fill="#09090b" />
+    <path
+      fill="#fff"
+      fillRule="evenodd"
+      d="M165.29 165.29H517.36V400H400V517.36H282.65V634.72H165.29ZM282.65 282.65V400H400V282.65Z"
+    />
+    <path fill="#fff" d="M517.36 400H634.72V634.72H517.36Z" />
   </svg>
 );
 

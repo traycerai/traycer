@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { FolderTree, List, RotateCcw } from "lucide-react";
 import type { LeftPanelSlotProps } from "@/components/epic-canvas/sidebar/left-panel-registry";
 import { Button } from "@/components/ui/button";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { cn } from "@/lib/utils";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
 import {
@@ -26,6 +27,8 @@ export function GitDiffPanelActions(props: LeftPanelSlotProps) {
   const ignoreWhitespace = useSettingsStore(
     (s) => s.diffViewerPreferences.ignoreWhitespace,
   );
+  const layoutToggleLabel =
+    listLayout === "sections" ? "Switch to tree view" : "Switch to list view";
 
   const handleToggleLayout = useCallback(() => {
     const nextLayout = listLayout === "sections" ? "tree" : "sections";
@@ -53,25 +56,28 @@ export function GitDiffPanelActions(props: LeftPanelSlotProps) {
 
   return (
     <div className="flex items-center gap-0.5">
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-sm"
-        onClick={handleToggleLayout}
-        aria-label={
-          listLayout === "sections"
-            ? "Switch to tree layout"
-            : "Switch to list layout"
-        }
-        data-testid="git-diff-panel-layout-toggle"
-        className="text-muted-foreground hover:text-foreground"
+      <TooltipWrapper
+        label={layoutToggleLabel}
+        side="bottom"
+        sideOffset={4}
+        align="end"
       >
-        {listLayout === "sections" ? (
-          <FolderTree className="size-4" />
-        ) : (
-          <List className="size-4" />
-        )}
-      </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          onClick={handleToggleLayout}
+          aria-label={layoutToggleLabel}
+          data-testid="git-diff-panel-layout-toggle"
+          className="text-muted-foreground hover:text-foreground"
+        >
+          {listLayout === "sections" ? (
+            <FolderTree className="size-4" />
+          ) : (
+            <List className="size-4" />
+          )}
+        </Button>
+      </TooltipWrapper>
 
       <Button
         type="button"

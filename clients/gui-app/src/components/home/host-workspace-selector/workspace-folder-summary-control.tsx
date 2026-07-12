@@ -100,6 +100,7 @@ export function WorkspaceFolderSummaryControl(props: {
         items={props.items}
         readOnly
         bindingResolved={props.bindingResolved}
+        tooltipEnabled={false}
         className="max-w-full"
       />
     );
@@ -121,6 +122,7 @@ export function WorkspaceFolderSummaryControl(props: {
       items={props.items}
       readOnly={false}
       bindingResolved={props.bindingResolved}
+      tooltipEnabled={!props.hoverPreviewEnabled}
       className="justify-start overflow-hidden"
     />
   );
@@ -171,8 +173,9 @@ export function WorkspaceFolderSummaryControl(props: {
         align="start"
         collisionPadding={12}
         container={dialogBoundaryEl ?? undefined}
-        className="w-fit max-w-[min(92vw,40rem)] max-h-[min(var(--radix-popover-content-available-height),32rem)] gap-0 overflow-y-auto p-3"
+        className="w-[min(92vw,42rem)] max-w-[var(--radix-popover-content-available-width)] max-h-[min(var(--radix-popover-content-available-height),32rem)] gap-0 overflow-y-auto p-3"
         data-testid={props.popoverTestId}
+        onOpenAutoFocus={(event) => event.preventDefault()}
         onInteractOutside={(event) =>
           preserveWhenNestedOverlay(event, contentRef.current)
         }

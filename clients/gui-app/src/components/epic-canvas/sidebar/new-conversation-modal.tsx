@@ -14,10 +14,7 @@ import { toast } from "sonner";
 import { ArrowLeftRight, Plus, XIcon } from "lucide-react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
-import type {
-  WorktreeFolderIntent,
-  WorktreeIntent,
-} from "@traycer/protocol/host/worktree-schemas";
+import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
 
 import {
   AttachmentStrip,
@@ -77,7 +74,7 @@ import {
   deriveFolderlessAllowedWorkspaceAvailability,
   workspaceComposerCanStart,
 } from "@/lib/composer/workspace-composer-availability";
-import { buildForkWorkspaceSeedFromWorkspaceFolders } from "@/lib/worktree/fork-workspace-seed";
+import { effectiveWorktreeIntent } from "@/lib/worktree/effective-worktree-intent";
 import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
 import { cn } from "@/lib/utils";
 import { ActiveHostWorkspaceControls } from "@/components/home/host-workspace-selector/host-workspace-selector";
@@ -969,6 +966,7 @@ function useGlobalWorkspaceSnapshot(): LandingDraftWorkspaceSnapshot {
     useShallow((state) => ({
       folders: state.folders,
       folderInfoByPath: state.folderInfoByPath,
+      primaryPath: state.primaryPath,
     })),
   );
 }
@@ -986,68 +984,4 @@ function toTuiPlacement(
     return { kind: "target-group", groupId: placement.groupId };
   }
   return { kind: "active-tile" };
-}
-
-function effectiveWorktreeIntent(input: {
-  readonly workspace: LandingDraftWorkspaceSnapshot;
-  readonly seedIntent: WorktreeIntent | null;
-  readonly stagedIntent: WorktreeIntent | null;
-}): WorktreeIntent | null {
-  const fallback =
-    input.seedIntent ??
-    buildForkWorkspaceSeedFromWorkspaceFolders(input.workspace.folders).intent;
-  if (input.stagedIntent === null) {
-    return trimIntentToWorkspace(input.workspace, fallback);
-  }
-  const fallbackByPath = intentEntriesByWorkspacePath(fallback);
-  const stagedByPath = intentEntriesByWorkspacePath(input.stagedIntent);
-  const entries = input.workspace.folders.flatMap((workspacePath, index) => {
-    const entry =
-      stagedByPath.get(workspacePath) ?? fallbackByPath.get(workspacePath);
-    if (entry === undefined) {
-      return localIntentEntry(input.workspace, workspacePath, index);
-    }
-    return [{ ...entry, isPrimary: index === 0 }];
-  });
-  return entries.length === 0 ? null : { entries };
-}
-
-function trimIntentToWorkspace(
-  workspace: LandingDraftWorkspaceSnapshot,
-  intent: WorktreeIntent | null,
-): WorktreeIntent | null {
-  const intentByPath = intentEntriesByWorkspacePath(intent);
-  const entries = workspace.folders.flatMap((workspacePath, index) => {
-    const entry = intentByPath.get(workspacePath);
-    if (entry === undefined) {
-      return localIntentEntry(workspace, workspacePath, index);
-    }
-    return [{ ...entry, isPrimary: index === 0 }];
-  });
-  return entries.length === 0 ? null : { entries };
-}
-
-function localIntentEntry(
-  workspace: LandingDraftWorkspaceSnapshot,
-  workspacePath: string,
-  index: number,
-): WorktreeFolderIntent[] {
-  if (!Object.hasOwn(workspace.folderInfoByPath, workspacePath)) return [];
-  const folder = workspace.folderInfoByPath[workspacePath];
-  return [
-    {
-      kind: "local",
-      workspacePath,
-      repoIdentifier: folder.repoIdentifier,
-      isPrimary: index === 0,
-    },
-  ];
-}
-
-function intentEntriesByWorkspacePath(
-  intent: WorktreeIntent | null,
-): ReadonlyMap<string, WorktreeFolderIntent> {
-  return new Map(
-    intent?.entries.map((entry) => [entry.workspacePath, entry]) ?? [],
-  );
 }
