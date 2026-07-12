@@ -51,6 +51,12 @@ export const epicCanvasKey = (identity: string | null): string =>
 export const openEpicKey = (identity: string | null, epicId: string): string =>
   scopedPersistKey("open-epic", scopeBucket(identity), epicId);
 
+// Host-scoped (not identity-scoped): the worktrees panel's warm-open snapshot
+// of per-path activity entries (worktrees-enrichment-persistence.ts). A host
+// id is always non-empty, so no `scopeBucket` collapse applies.
+export const worktreeActivityCacheKey = (hostId: string): string =>
+  scopedPersistKey("worktree-activity-cache", hostId);
+
 // ── Catalog ────────────────────────────────────────────────────────────────
 // `kind` tells enumeration the shape of each persisted surface:
 //   - "static"  : plain `traycer-gui-app:<leaf>` localStorage key.
@@ -159,6 +165,13 @@ export const PERSIST_STORES = [
     camelName: "deletedEpicEventsChannel",
     leaf: "deleted-epic-events:v1",
     kind: "channel",
+  },
+  // `worktree-activity-cache:<hostId>` — the worktrees panel's warm-open
+  // TanStack snapshot (worktrees-enrichment-persistence.ts), host-scoped.
+  {
+    camelName: "worktreeActivityCache",
+    leaf: "worktree-activity-cache",
+    kind: "scoped",
   },
 ] as const satisfies ReadonlyArray<PersistStoreEntry>;
 

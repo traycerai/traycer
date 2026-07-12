@@ -9,6 +9,7 @@ export {
   persistKey,
   scopeBucket,
   scopedPersistKey,
+  worktreeActivityCacheKey,
   worktreeIntentMemoryKey,
   worktreeIntentStagingKey,
   type PersistStoreEntry,

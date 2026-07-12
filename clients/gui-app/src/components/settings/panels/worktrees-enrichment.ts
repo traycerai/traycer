@@ -22,6 +22,11 @@ import { logPerfEvent } from "@/lib/perf/perf-telemetry";
 import { useHostQueries } from "@/hooks/host/use-host-queries";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useWorktreeEnrichSettlePerf } from "@/components/settings/panels/worktrees-settings-perf";
+import {
+  persistWorktreeActivitySnapshot,
+  pruneWorktreeActivitySnapshots,
+  readWorktreeActivitySnapshot,
+} from "@/components/settings/panels/worktrees-enrichment-persistence";
 
 const EMPTY_PATHS: readonly string[] = [];
 const EMPTY_ENRICHED: ReadonlyMap<string, WorktreeHostEntryV12> = new Map();
@@ -47,6 +52,11 @@ const WORKTREE_SWEEP_CHUNK_SIZE = 8;
 // pointless churn loop. Refresh (method-scope invalidation) remains the way
 // entries are re-probed deliberately.
 const WORKTREE_ENRICHMENT_GC_MS = 30 * 60_000;
+// Debounce for the warm-open snapshot writes: the cache fold's identity
+// changes on every relevant cache event (each settled probe), so writes wait
+// for a quiet window instead of serializing the fleet once per chunk while
+// the sweep converges.
+const WORKTREE_ACTIVITY_PERSIST_DEBOUNCE_MS = 1_500;
 
 interface ColdPrRefetchState {
   readonly attempts: number;
@@ -236,6 +246,19 @@ function isPerPathEnrichmentQueryKey(key: QueryKey): boolean {
   if (typeof params !== "object" || params === null) return false;
   if (!("activityPaths" in params)) return false;
   return Array.isArray(params.activityPaths);
+}
+
+// The worktree path a per-path enrichment key targets (`activityPaths[0]`),
+// or null for any other key under the method scope. Used by the warm-open
+// restore to invalidate exactly the seeded queries in ONE cache scan.
+function perPathEnrichmentQueryPath(key: QueryKey): string | null {
+  const params = key[3];
+  if (typeof params !== "object" || params === null) return null;
+  if (!("activityPaths" in params)) return null;
+  const { activityPaths } = params;
+  return Array.isArray(activityPaths) && typeof activityPaths[0] === "string"
+    ? activityPaths[0]
+    : null;
 }
 
 function queryKeyHasPrefix(key: unknown, prefix: readonly unknown[]): boolean {
@@ -521,6 +544,93 @@ export function useWorktreeActivityEnrichment(
 
   // Overlay from the cache (monotonic, remount-warm) - NOT from `results`.
   const enrichedByPath = useCachedWorktreeEnrichment(queryClient, hostId);
+
+  // ---- Warm-open restore (persisted last-known tiers) ----------------------
+  // The query cache is renderer-memory only, so an app relaunch used to open
+  // the panel fully cold: every row at "Checking…" until its probe resolved.
+  // The last run's snapshot (see worktrees-enrichment-persistence.ts) is
+  // seeded back into the per-path queries on the first open per host - keyed
+  // by the PASSED hostId (the same scope the cache fold reads), so last-known
+  // tiers render even while the host is still dialing. Seeded queries are
+  // then marked invalidated WITHOUT refetching: viewport observers refetch
+  // them on mount, and the sweep treats `isInvalidated` as needs-probe - so
+  // every restored row revalidates through the existing bounded machinery,
+  // never a whole-list fan-out. Live truth always wins: paths with live data
+  // are never overwritten, and a restored entry is replaced the moment its
+  // revalidation lands. (Seeded, observer-less entries carry TanStack's
+  // default 5-minute gcTime until the sweep re-fetches them under the pinned
+  // 30-minute gcTime - on an unreachable host they eventually regress to
+  // "Checking…", which is honest for data that can't be revalidated.)
+  const restoredHostsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (hostId === null) return;
+    // Once per host per app session: afterwards the live cache is the richer
+    // source and re-seeding would only churn cache events.
+    if (restoredHostsRef.current.has(hostId)) return;
+    restoredHostsRef.current.add(hostId);
+    const now = Date.now();
+    pruneWorktreeActivitySnapshots(now);
+    const snapshot = readWorktreeActivitySnapshot(hostId, now);
+    if (snapshot === null) return;
+    const seededPaths = new Set<string>();
+    for (const entry of snapshot.entries) {
+      const key = perPathEnrichmentQueryKey(hostId, entry.worktreePath);
+      const state =
+        queryClient.getQueryState<WorktreeListAllForHostResponseV12>(key);
+      if (state?.data !== undefined) continue;
+      queryClient.setQueryData<WorktreeListAllForHostResponseV12>(
+        key,
+        { worktrees: [entry], nextCursor: null },
+        // The snapshot's own age: restored entries are stale from birth, so
+        // observers refetch them on mount like any stale query.
+        { updatedAt: snapshot.savedAt },
+      );
+      seededPaths.add(entry.worktreePath);
+    }
+    if (seededPaths.size === 0) return;
+    void queryClient.invalidateQueries({
+      queryKey: hostQueryKeys.methodScope(hostId, "worktree.listAllForHost"),
+      refetchType: "none",
+      predicate: (query) => {
+        const path = perPathEnrichmentQueryPath(query.queryKey);
+        return path !== null && seededPaths.has(path);
+      },
+    });
+    logPerfEvent("worktree.enrich_restore", {
+      restoredCount: seededPaths.size,
+    });
+  }, [queryClient, hostId]);
+
+  // Debounced snapshot writes off the fold: a quiet window after the last
+  // cache event serializes the warm entries of the CURRENT listing (deleted
+  // worktrees drop out; an empty fold never writes - guards in the writer).
+  const persistDebounceRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (hostId === null || worktreePaths.length === 0) return;
+    if (persistDebounceRef.current !== null) {
+      window.clearTimeout(persistDebounceRef.current);
+    }
+    persistDebounceRef.current = window.setTimeout(() => {
+      persistDebounceRef.current = null;
+      persistWorktreeActivitySnapshot({
+        hostId,
+        worktreePaths,
+        enrichedByPath,
+        now: Date.now(),
+      });
+    }, WORKTREE_ACTIVITY_PERSIST_DEBOUNCE_MS);
+  }, [hostId, worktreePaths, enrichedByPath]);
+  useEffect(
+    () => () => {
+      if (persistDebounceRef.current !== null) {
+        window.clearTimeout(persistDebounceRef.current);
+        // Reset the ref, not just the timer, for the same StrictMode
+        // mount-cycle reason as the report debounce above.
+        persistDebounceRef.current = null;
+      }
+    },
+    [],
+  );
 
   // ---- Background enrichment sweep ----------------------------------------
   // The viewport drives the rows on screen; the sweep drives everything else.
