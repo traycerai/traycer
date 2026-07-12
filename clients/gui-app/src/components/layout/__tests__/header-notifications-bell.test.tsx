@@ -2,7 +2,10 @@ import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
-import { HeaderNotificationsBell } from "@/components/layout/header/app-header";
+import {
+  DevDesktopDisplayName,
+  HeaderNotificationsBell,
+} from "@/components/layout/header/app-header";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -90,5 +93,30 @@ describe("HeaderNotificationsBell auth gate", () => {
     });
 
     expect(screen.queryByTestId("notifications-bell")).toBeNull();
+  });
+});
+
+describe("DevDesktopDisplayName", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("renders the dev worktree name without adding an interactive control", () => {
+    render(
+      <DevDesktopDisplayName
+        displayName="Traycer Dev — spry-panda"
+        dragStyle={undefined}
+      />,
+    );
+
+    expect(screen.getByTestId("dev-desktop-display-name").textContent).toBe(
+      "Traycer Dev — spry-panda",
+    );
+  });
+
+  it("renders nothing when the dev display name is absent", () => {
+    render(<DevDesktopDisplayName displayName={null} dragStyle={undefined} />);
+
+    expect(screen.queryByTestId("dev-desktop-display-name")).toBeNull();
   });
 });

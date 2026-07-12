@@ -45,6 +45,11 @@ export interface AppHeaderProps {
   readonly variant: AppHeaderVariant;
 }
 
+interface DevDesktopDisplayNameProps {
+  readonly displayName: string | null;
+  readonly dragStyle: CSSProperties | undefined;
+}
+
 /**
  * App navigation chrome. Frameless desktop shells use this row as the native
  * title bar: tabs and controls stay interactive, while the empty spacer before
@@ -68,6 +73,10 @@ export function AppHeader(props: AppHeaderProps): ReactNode {
   const dragSuppressed = useTitleBarDraggingSuppressed();
   const draggable = framelessDesktop && !dragSuppressed;
   const spacerDragStyle = titleBarSpacerStyle(framelessDesktop, dragSuppressed);
+  const devDesktopDisplayName =
+    framelessDesktop && import.meta.env.DEV
+      ? readDevDesktopDisplayName(import.meta.env.VITE_DEV_DESKTOP_DISPLAY_NAME)
+      : null;
 
   return (
     <header
@@ -85,6 +94,10 @@ export function AppHeader(props: AppHeaderProps): ReactNode {
       )}
     >
       {showTabStrip ? <HistoryNavButtons /> : null}
+      <DevDesktopDisplayName
+        displayName={devDesktopDisplayName}
+        dragStyle={spacerDragStyle}
+      />
       {/* Left drag handle: breathing room beside the traffic lights +
           back/forward arrows so the window can be grabbed from the left end
           too. Desktop-only (the browser app has neither traffic lights nor
@@ -137,6 +150,30 @@ export function AppHeader(props: AppHeaderProps): ReactNode {
       </div>
     </header>
   );
+}
+
+export function DevDesktopDisplayName(
+  props: DevDesktopDisplayNameProps,
+): ReactNode {
+  if (props.displayName === null) {
+    return null;
+  }
+
+  return (
+    <div
+      data-testid="dev-desktop-display-name"
+      className={cn(
+        "pointer-events-none absolute inset-x-0 z-0 flex h-full items-center justify-center px-[12vw] text-xs font-medium tracking-wide text-muted-foreground/70",
+      )}
+      style={props.dragStyle}
+    >
+      <span className="max-w-full truncate">{props.displayName}</span>
+    </div>
+  );
+}
+
+function readDevDesktopDisplayName(value: string | undefined): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
 }
 
 // Hiding the bell when signed-out keeps the notifications-store +
