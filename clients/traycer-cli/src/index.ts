@@ -37,8 +37,10 @@ import { buildConfigEnvGetCommand } from "./commands/config-env-get";
 import { buildConfigEnvListCommand } from "./commands/config-env-list";
 import { buildConfigEnvSetCommand } from "./commands/config-env-set";
 import { buildConfigEnvUnsetCommand } from "./commands/config-env-unset";
+import { buildConfigShellAddCommand } from "./commands/config-shell-add";
 import { configShellGetCommand } from "./commands/config-shell-get";
 import { configShellListCommand } from "./commands/config-shell-list";
+import { buildConfigShellRemoveCommand } from "./commands/config-shell-remove";
 import { configShellResetCommand } from "./commands/config-shell-reset";
 import { buildConfigShellSetCommand } from "./commands/config-shell-set";
 import { buildHostAvailableCommand } from "./commands/host-available";
@@ -792,6 +794,35 @@ function registerConfigCommands(program: Command): void {
     };
     await runCommand(fn, extractRunnerFlags(optsBag));
   });
+
+  withRunner(
+    shell
+      .command("add")
+      .description(
+        "Remember a shell (any executable) and select it. Unlike `set`, the path must exist and be executable.",
+      )
+      .requiredOption("--path <path>", "Absolute path to the program to add"),
+    (opts) =>
+      buildConfigShellAddCommand({
+        path: typeof opts.path === "string" ? opts.path : "",
+      }),
+  );
+
+  withRunner(
+    shell
+      .command("remove")
+      .description(
+        "Forget a previously-added shell; if it was selected, fall back to the OS default",
+      )
+      .requiredOption(
+        "--path <path>",
+        "Absolute path to the program to remove",
+      ),
+    (opts) =>
+      buildConfigShellRemoveCommand({
+        path: typeof opts.path === "string" ? opts.path : "",
+      }),
+  );
 
   withRunner(
     shell

@@ -6,6 +6,7 @@ import type {
   TraycerEnvOverride,
   TraycerShellConfig,
   TraycerShellConfigSetInput,
+  TraycerShellProbeResult,
 } from "@traycer-clients/shared/platform/runner-host";
 
 /**
@@ -21,6 +22,12 @@ export interface TraycerCliBridgeSurface {
   shellConfigGet(): Promise<TraycerShellConfig>;
   shellConfigSet(input: TraycerShellConfigSetInput): Promise<void>;
   shellConfigReset(): Promise<void>;
+  shellConfigAdd(input: { readonly path: string }): Promise<void>;
+  shellConfigRemove(input: { readonly path: string }): Promise<void>;
+  shellProbe(input: {
+    readonly path: string;
+  }): Promise<TraycerShellProbeResult>;
+  pickShellProgramFile(): Promise<string | null>;
   shellListDetected(): Promise<readonly TraycerDetectedShell[]>;
   envOverrideList(): Promise<readonly TraycerEnvOverride[]>;
   envOverrideSet(input: {
@@ -54,6 +61,25 @@ export function buildTraycerCliBridge(): TraycerCliBridgeSurface {
       ipcRenderer.invoke(
         RunnerHostInvoke.traycerConfigShellReset,
       ) as Promise<void>,
+    shellConfigAdd: (input) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.traycerConfigShellAdd,
+        input,
+      ) as Promise<void>,
+    shellConfigRemove: (input) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.traycerConfigShellRemove,
+        input,
+      ) as Promise<void>,
+    shellProbe: (input) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.traycerConfigShellProbe,
+        input,
+      ) as Promise<TraycerShellProbeResult>,
+    pickShellProgramFile: () =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.traycerConfigShellPickProgramFile,
+      ) as Promise<string | null>,
     shellListDetected: () =>
       ipcRenderer.invoke(RunnerHostInvoke.traycerConfigShellList) as Promise<
         readonly TraycerDetectedShell[]

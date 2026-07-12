@@ -1,20 +1,39 @@
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Redirect `~/.traycer/cli/config.json` to a per-test temp home by mocking
 // `os.homedir()` (paths.ts derives the config path from it). `os.platform()`
-// stays real so the OS-default shell logic is exercised honestly.
-const h = vi.hoisted(() => ({ home: "" }));
+// stays real so the OS-default shell logic is exercised honestly. `userInfo`
+// is mockable so the passwd-vs-$SHELL precedence in `defaultShellPath` can be
+// driven deterministically; `passwdShell: undefined` delegates to the real
+// implementation, a string overrides it, and `passwdThrows` simulates no
+// passwd entry.
+const h = vi.hoisted(() => ({
+  home: "",
+  passwdShell: undefined as string | undefined,
+  passwdThrows: false,
+}));
 vi.mock("node:os", async (importActual) => {
   const actual = await importActual<typeof import("node:os")>();
-  return { ...actual, homedir: () => h.home };
+  return {
+    ...actual,
+    homedir: () => h.home,
+    userInfo: (...args: Parameters<typeof actual.userInfo>) => {
+      if (h.passwdThrows) throw new Error("no passwd entry");
+      const base = actual.userInfo(...args);
+      return h.passwdShell === undefined
+        ? base
+        : { ...base, shell: h.passwdShell };
+    },
+  };
 });
 
 import { cliConfigPath } from "../paths";
 import { EMPTY_CLI_CONFIG } from "../schema";
 import {
+  addShell,
   applyEnvOverrides,
   defaultShellArgs,
   defaultShellPath,
@@ -24,6 +43,8 @@ import {
   readCliConfig,
   readLogLevels,
   readLogLevelsSync,
+  removeShell,
+  resetShell,
   setEnvOverride,
   setLogLevels,
   setShell,
@@ -33,6 +54,8 @@ import { CLI_CONFIG_VERSION } from "../schema";
 
 beforeEach(async () => {
   h.home = await mkdtemp(join(tmpdir(), "traycer-cli-config-"));
+  h.passwdShell = undefined;
+  h.passwdThrows = false;
 });
 
 async function writeRaw(contents: string): Promise<void> {
@@ -49,7 +72,7 @@ describe("cli config store", () => {
   it("round-trips a written config through the schema", async () => {
     const cfg = {
       version: 1 as const,
-      shell: { path: "/bin/fish", args: ["-l"] },
+      shell: { path: "/bin/fish", args: ["-l"], added: [] },
       envOverrides: { FOO: "bar" },
       logs: { cliLogLevel: "info" as const, hostLogLevel: "info" as const },
     };
@@ -183,7 +206,7 @@ describe("cli config store", () => {
     await writeRaw(JSON.stringify({ version: 1, shell: { path: "/bin/zsh" } }));
     expect(await readCliConfig()).toEqual({
       version: CLI_CONFIG_VERSION,
-      shell: { path: "/bin/zsh", args: null },
+      shell: { path: "/bin/zsh", args: null, added: [] },
       envOverrides: {},
       logs: { cliLogLevel: "info", hostLogLevel: "info" },
     });
@@ -206,6 +229,96 @@ describe("cli config store", () => {
     );
     await expect(readCliConfig()).rejects.toThrow(
       /does not match the expected schema/,
+    );
+  });
+});
+
+describe("added shells", () => {
+  it("remembers an added shell and selects it", async () => {
+    const result = await addShell("/opt/homebrew/bin/nu");
+    expect(result).toEqual({
+      path: "/opt/homebrew/bin/nu",
+      added: ["/opt/homebrew/bin/nu"],
+    });
+    const cfg = await readCliConfig();
+    expect(cfg.shell.path).toBe("/opt/homebrew/bin/nu");
+    expect(cfg.shell.added).toEqual(["/opt/homebrew/bin/nu"]);
+  });
+
+  it("dedupes an already-added path while re-selecting it", async () => {
+    await addShell("/opt/homebrew/bin/nu");
+    await setShell("/bin/bash", null);
+    await addShell("/opt/homebrew/bin/nu");
+    const cfg = await readCliConfig();
+    expect(cfg.shell.added).toEqual(["/opt/homebrew/bin/nu"]);
+    expect(cfg.shell.path).toBe("/opt/homebrew/bin/nu");
+  });
+
+  it("preserves the added list across shell/reset/env writes", async () => {
+    await addShell("/opt/homebrew/bin/nu");
+    await setShell("/bin/bash", ["-l"]);
+    await resetShell();
+    await setEnvOverride("FOO", "bar");
+    expect((await readCliConfig()).shell.added).toEqual([
+      "/opt/homebrew/bin/nu",
+    ]);
+  });
+
+  it("removing the selected added shell falls back to the OS default", async () => {
+    await addShell("/opt/homebrew/bin/nu");
+    const result = await removeShell("/opt/homebrew/bin/nu");
+    expect(result).toEqual({ removed: true, path: null });
+    const cfg = await readCliConfig();
+    expect(cfg.shell.added).toEqual([]);
+    expect(cfg.shell.path).toBeNull();
+  });
+
+  it("removing a non-selected added shell keeps the current selection", async () => {
+    await addShell("/opt/homebrew/bin/nu");
+    await setShell("/bin/bash", null);
+    const result = await removeShell("/opt/homebrew/bin/nu");
+    expect(result).toEqual({ removed: true, path: "/bin/bash" });
+    expect((await readCliConfig()).shell.added).toEqual([]);
+  });
+
+  it("removing a path that was never added is a no-op success", async () => {
+    const result = await removeShell("/never/added");
+    expect(result).toEqual({ removed: false, path: null });
+  });
+});
+
+// POSIX-only: on win32 `defaultShellPath` takes the COMSPEC branch and never
+// consults passwd, so these assertions are meaningless there.
+describe.skipIf(process.platform === "win32")("defaultShellPath - POSIX", () => {
+  const originalShell = process.env.SHELL;
+  afterEach(() => {
+    if (originalShell === undefined) delete process.env.SHELL;
+    else process.env.SHELL = originalShell;
+  });
+
+  it("prefers the passwd login shell over a leaked $SHELL", () => {
+    h.passwdShell = "/usr/bin/fish";
+    process.env.SHELL = "/bin/bash";
+    expect(defaultShellPath()).toBe("/usr/bin/fish");
+  });
+
+  it("falls back to $SHELL when there is no passwd entry", () => {
+    h.passwdThrows = true;
+    process.env.SHELL = "/bin/bash";
+    expect(defaultShellPath()).toBe("/bin/bash");
+  });
+
+  it("falls back to $SHELL when the passwd shell field is empty", () => {
+    h.passwdShell = "";
+    process.env.SHELL = "/bin/bash";
+    expect(defaultShellPath()).toBe("/bin/bash");
+  });
+
+  it("falls back to the platform default when passwd and $SHELL are both absent", () => {
+    h.passwdThrows = true;
+    delete process.env.SHELL;
+    expect(defaultShellPath()).toBe(
+      process.platform === "darwin" ? "/bin/zsh" : "/bin/bash",
     );
   });
 });

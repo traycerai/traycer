@@ -11,13 +11,17 @@ export type {
   EffectiveShellConfig,
 } from "@traycer/protocol/config/schema";
 export {
+  addShell,
   applyEnvOverrides,
   deleteEnvOverride,
   detectShells,
   getEnvOverride,
   listEnvOverrides,
+  listShells,
   loadEffectiveShellConfig,
+  probeShellPath,
   readCliConfig,
+  removeShell,
   resetShell,
   setEnvOverride,
   setShell,

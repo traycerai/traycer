@@ -56,6 +56,12 @@ export type LogsConfig = z.infer<typeof logsConfigSchema>;
  * `shell.path === null` and `shell.args === null` both mean "fall back to
  * OS defaults" - tracked separately so a user who customised args but not
  * path (or vice versa) keeps the partial override.
+ *
+ * `shell.added` is the set of shells the user has explicitly added through the
+ * Settings picker (absolute paths). It is the "remembered" half of the picker's
+ * list - detection finds the rest - and persists until the user removes an
+ * entry. Additive and `.default([])`-ed, so config files written before the
+ * feature keep validating without a version bump.
  */
 export const cliConfigSchema = z.object({
   version: z.literal(CLI_CONFIG_VERSION),
@@ -68,8 +74,9 @@ export const cliConfigSchema = z.object({
     .object({
       path: z.string().nullable().default(null),
       args: z.array(z.string()).nullable().default(null),
+      added: z.array(z.string()).default([]),
     })
-    .default({ path: null, args: null }),
+    .default({ path: null, args: null, added: [] }),
   envOverrides: envOverrideMapSchema.default({}),
   logs: logsConfigSchema,
 });
@@ -89,16 +96,18 @@ export interface EffectiveShellConfig {
 }
 
 /**
- * A shell binary detected on the machine, surfaced as a quick-pick in the
- * Settings → Shell combobox. `path` is absolute and was verified executable
- * at detection time, except an OS default that may be a bare command name
- * (e.g. Windows `powershell.exe`). `isDefault` marks the OS-default shell so
- * the UI can sort/annotate it.
+ * An entry in the Settings → Shell picker list. `path` is absolute; a
+ * `"detected"` entry was verified executable at detection time (except an OS
+ * default that may be a bare command name, e.g. Windows `powershell.exe`),
+ * while an `"added"` entry is listed straight from `shell.added` and stays even
+ * if the file no longer exists. `isDefault` marks the OS-default shell so the UI
+ * can sort/annotate it. `source` tells the UI which rows are user-removable.
  */
 export interface DetectedShell {
   readonly name: string;
   readonly path: string;
   readonly isDefault: boolean;
+  readonly source: "detected" | "added";
 }
 
 /**
@@ -107,7 +116,7 @@ export interface DetectedShell {
  */
 export const EMPTY_CLI_CONFIG: CliConfig = {
   version: CLI_CONFIG_VERSION,
-  shell: { path: null, args: null },
+  shell: { path: null, args: null, added: [] },
   envOverrides: {},
   logs: { cliLogLevel: DEFAULT_LOG_LEVEL, hostLogLevel: DEFAULT_LOG_LEVEL },
 };

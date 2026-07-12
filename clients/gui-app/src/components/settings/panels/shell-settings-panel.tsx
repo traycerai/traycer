@@ -5,11 +5,12 @@ import { EnvOverrideEditor } from "@/components/settings/panels/env-override-edi
 import { ShellFlagChips } from "@/components/settings/panels/shell/shell-flag-chips";
 import { ShellProgramCombobox } from "@/components/settings/panels/shell/shell-program-combobox";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import { Button } from "@/components/ui/button";
 import { useRunnerTraycerEnvOverrideDeleteMutation } from "@/hooks/runner/use-runner-traycer-env-override-delete-mutation";
 import { useRunnerTraycerEnvOverrideListQuery } from "@/hooks/runner/use-runner-traycer-env-override-list-query";
 import { useRunnerTraycerEnvOverrideSetMutation } from "@/hooks/runner/use-runner-traycer-env-override-set-mutation";
+import { useRunnerTraycerShellConfigAddMutation } from "@/hooks/runner/use-runner-traycer-shell-add-mutation";
 import { useRunnerTraycerShellConfigQuery } from "@/hooks/runner/use-runner-traycer-shell-config-query";
+import { useRunnerTraycerShellConfigRemoveMutation } from "@/hooks/runner/use-runner-traycer-shell-remove-mutation";
 import { useRunnerTraycerShellConfigResetMutation } from "@/hooks/runner/use-runner-traycer-shell-config-reset-mutation";
 import { useRunnerTraycerShellConfigSetMutation } from "@/hooks/runner/use-runner-traycer-shell-config-set-mutation";
 import { useRunnerTraycerShellListQuery } from "@/hooks/runner/use-runner-traycer-shell-list-query";
@@ -41,19 +42,39 @@ function ShellSettingsPanelInner() {
   const envListQuery = useRunnerTraycerEnvOverrideListQuery();
   const setMutation = useRunnerTraycerShellConfigSetMutation();
   const resetMutation = useRunnerTraycerShellConfigResetMutation();
+  const addMutation = useRunnerTraycerShellConfigAddMutation();
+  const removeMutation = useRunnerTraycerShellConfigRemoveMutation();
   const envSetMutation = useRunnerTraycerEnvOverrideSetMutation();
   const envDeleteMutation = useRunnerTraycerEnvOverrideDeleteMutation();
 
   const config = configQuery.data;
-  const detected = shellListQuery.data ?? [];
+  const shells = shellListQuery.data ?? [];
   const overrides = envListQuery.data ?? [];
 
-  const shellPending = setMutation.isPending || resetMutation.isPending;
+  const shellPending =
+    setMutation.isPending ||
+    resetMutation.isPending ||
+    addMutation.isPending ||
+    removeMutation.isPending;
   const envPending = envSetMutation.isPending || envDeleteMutation.isPending;
 
   const onSavePath = (path: string): void => {
     if (shellPending) return;
     setMutation.mutate({ path, args: null });
+  };
+  const onAddShell = (path: string): void => {
+    if (shellPending) return;
+    addMutation.mutate({ path });
+  };
+  const onRemoveShell = (path: string): void => {
+    if (shellPending) return;
+    removeMutation.mutate({ path });
+  };
+  // Picking "System default" clears the stored override entirely (path AND
+  // flags), the same full reset the old footer button performed.
+  const onUseSystemDefault = (): void => {
+    if (shellPending) return;
+    resetMutation.mutate();
   };
   const onAddFlag = (flag: string): void => {
     if (config === undefined || shellPending) return;
@@ -115,25 +136,25 @@ function ShellSettingsPanelInner() {
             <ShellCardSkeleton />
           ) : (
             <>
-              <EffectiveCommandPreview
-                path={config.path}
-                args={config.args}
-                synthesised={config.synthesised}
-              />
+              <EffectiveCommandPreview path={config.path} args={config.args} />
               <div className="flex flex-wrap items-center justify-between gap-4">
                 <div className="space-y-1">
                   <div className="text-ui-sm font-medium text-foreground">
                     Shell program
                   </div>
                   <p className="text-ui-xs text-muted-foreground">
-                    Detected on your machine — or type a custom path.
+                    Pick a shell, or add any program on this machine.
                   </p>
                 </div>
                 <ShellProgramCombobox
                   value={config.path}
-                  detected={detected}
+                  synthesised={config.synthesised}
+                  shells={shells}
                   disabled={shellPending}
-                  onSave={onSavePath}
+                  onSelect={onSavePath}
+                  onAdd={onAddShell}
+                  onRemove={onRemoveShell}
+                  onUseSystemDefault={onUseSystemDefault}
                 />
               </div>
               <div className="flex flex-wrap items-start justify-between gap-4">
@@ -155,26 +176,7 @@ function ShellSettingsPanelInner() {
             </>
           )}
         </div>
-        <div className="flex items-center justify-between border-t border-border/40 px-5 py-3">
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            disabled={
-              shellPending || config === undefined || config.synthesised
-            }
-            onClick={() => resetMutation.mutate()}
-            data-testid="settings-shell-reset"
-          >
-            {resetMutation.isPending ? (
-              <AgentSpinningDots
-                className="text-muted-foreground"
-                testId="settings-shell-reset-spinner"
-                variant={undefined}
-              />
-            ) : null}
-            Reset to defaults
-          </Button>
+        <div className="flex items-center justify-end border-t border-border/40 px-5 py-3">
           <SaveStatus pending={shellPending} />
         </div>
       </div>

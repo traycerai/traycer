@@ -4,12 +4,13 @@ import {
   access,
   mkdir,
   readFile,
+  realpath,
   rename,
   rm,
   writeFile,
 } from "node:fs/promises";
-import { platform as osPlatform } from "node:os";
-import { basename } from "node:path";
+import { platform as osPlatform, userInfo } from "node:os";
+import * as nodePath from "node:path";
 import { cliConfigDir, cliConfigPath } from "./paths";
 import {
   cliConfigSchema,
@@ -33,16 +34,41 @@ import { DEFAULT_LOG_LEVEL, type LogLevel } from "./log-level";
 
 /**
  * OS-appropriate default shell binary.
- *   POSIX: `$SHELL` if set, else `/bin/zsh` (macOS) / `/bin/bash` (Linux).
+ *   POSIX: the passwd login shell, else `$SHELL`, else `/bin/zsh` (macOS) /
+ *     `/bin/bash` (Linux).
  *   Windows: `$COMSPEC` if set, else `powershell.exe`.
+ *
+ * The passwd entry (`os.userInfo().shell`) is preferred over `$SHELL` because
+ * launchers routinely leak an inherited `$SHELL` into the app's environment
+ * that is NOT the user's real login shell - the desktop dev stack (make →
+ * Electron) leaks `SHELL=/bin/bash` even when the user's login shell is zsh, so
+ * trusting `$SHELL` reported bash as the "system default". The passwd `shell`
+ * field is the authoritative login shell; `$SHELL` is only a fallback for the
+ * rare case with no passwd entry.
  */
 export function defaultShellPath(): string {
   if (osPlatform() === "win32") {
     return process.env.COMSPEC ?? "powershell.exe";
   }
+  const passwdShell = passwdLoginShell();
+  if (passwdShell !== null) return passwdShell;
   return (
     process.env.SHELL ?? (osPlatform() === "darwin" ? "/bin/zsh" : "/bin/bash")
   );
+}
+
+/**
+ * The current user's login shell from the passwd database, or `null` when it is
+ * unavailable (no passwd entry - `userInfo` throws - or an empty/absent shell
+ * field, as on Windows).
+ */
+function passwdLoginShell(): string | null {
+  try {
+    const shell = userInfo().shell;
+    return typeof shell === "string" && shell.length > 0 ? shell : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -71,12 +97,42 @@ const POSIX_SHELL_PROBE_PATHS: readonly string[] = [
   "/usr/local/bin/fish",
 ];
 
-/** Known absolute shell locations probed on Windows. */
-const WINDOWS_SHELL_PROBE_PATHS: readonly string[] = [
-  "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
-  "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
-  "C:\\Windows\\System32\\cmd.exe",
+/**
+ * Shell binary basenames scanned across every `PATH` directory. Deliberately a
+ * fixed set (not "anything on PATH") so the probe stays cheap and predictable -
+ * it catches whatever an installer (homebrew, nix, scoop, winget, Git Bash) put
+ * on PATH without stat-ing every executable on the machine.
+ */
+const POSIX_PATH_SCAN_NAMES: readonly string[] = [
+  "zsh",
+  "bash",
+  "fish",
+  "nu",
+  "pwsh",
 ];
+const WINDOWS_PATH_SCAN_NAMES: readonly string[] = [
+  "pwsh.exe",
+  "powershell.exe",
+  "cmd.exe",
+  "bash.exe",
+  "nu.exe",
+  "wsl.exe",
+];
+
+/**
+ * The `path` submodule matching a target platform, so detection builds and
+ * splits paths with the target's separators regardless of the host OS. This is
+ * what lets the win32 detection logic be exercised honestly from a POSIX test
+ * runner (and vice versa).
+ */
+function pathApiFor(isWindows: boolean) {
+  return isWindows ? nodePath.win32 : nodePath.posix;
+}
+
+export interface ShellProbeResult {
+  readonly exists: boolean;
+  readonly executable: boolean;
+}
 
 async function isExecutableFile(path: string): Promise<boolean> {
   try {
@@ -85,6 +141,23 @@ async function isExecutableFile(path: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/**
+ * Whether a path points at something that exists and is executable, using the
+ * same `X_OK` check detection relies on. Backs the Settings picker's live
+ * "Add a shell" validation (surfaced natively by the desktop shell, which
+ * mirrors this logic rather than spawning the CLI per keystroke).
+ */
+export async function probeShellPath(path: string): Promise<ShellProbeResult> {
+  const [exists, executable] = await Promise.all([
+    access(path, fsConstants.F_OK).then(
+      () => true,
+      () => false,
+    ),
+    isExecutableFile(path),
+  ]);
+  return { exists, executable };
 }
 
 /** `/etc/shells` entries (existing, non-comment lines), or `[]` if unreadable. */
@@ -100,27 +173,110 @@ async function readEtcShells(): Promise<readonly string[]> {
   }
 }
 
+/** Case-insensitive on win32 (its filesystem is), exact elsewhere. */
+function shellPathsEqual(a: string, b: string, isWindows: boolean): boolean {
+  return isWindows ? a.toLowerCase() === b.toLowerCase() : a === b;
+}
+
+/**
+ * Well-known Windows shell locations, built from environment variables rather
+ * than hardcoded `C:\` prefixes so a machine with a relocated `%SystemRoot%` or
+ * `%ProgramFiles%` still resolves them. Any entry whose backing env var is
+ * unset is skipped.
+ */
+function windowsWellKnownShellPaths(): string[] {
+  const { join } = nodePath.win32;
+  const env = process.env;
+  const paths: string[] = [];
+  const add = (base: string | undefined, ...segments: string[]): void => {
+    if (base !== undefined && base.length > 0) paths.push(join(base, ...segments));
+  };
+  add(env.SystemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  add(env.SystemRoot, "System32", "cmd.exe");
+  add(env.SystemRoot, "System32", "wsl.exe");
+  add(env.ProgramFiles, "PowerShell", "7", "pwsh.exe");
+  add(env.ProgramFiles, "Git", "bin", "bash.exe");
+  add(env["ProgramFiles(x86)"], "Git", "bin", "bash.exe");
+  add(env.LOCALAPPDATA, "Programs", "Git", "bin", "bash.exe");
+  add(env.LOCALAPPDATA, "Microsoft", "WindowsApps", "pwsh.exe");
+  return paths;
+}
+
+/** `dir/<name>` candidates for every `PATH` directory × the platform name set. */
+function pathScanCandidates(isWindows: boolean): string[] {
+  const raw = process.env.PATH;
+  if (raw === undefined || raw.length === 0) return [];
+  const api = pathApiFor(isWindows);
+  const names = isWindows ? WINDOWS_PATH_SCAN_NAMES : POSIX_PATH_SCAN_NAMES;
+  return raw
+    .split(api.delimiter)
+    .filter((dir) => dir.length > 0)
+    .flatMap((dir) => names.map((name) => api.join(dir, name)));
+}
+
+/**
+ * A friendly display name for a detected shell: WSL and Git Bash get recognised
+ * labels (both are `*.exe` whose basename would otherwise read as `wsl.exe` /
+ * `bash.exe`); everything else is just its basename. Purely cosmetic - never a
+ * badge or marker, so an added shell and a detected one with the same name are
+ * visually indistinguishable.
+ */
+function friendlyShellName(shellPath: string, isWindows: boolean): string {
+  const api = pathApiFor(isWindows);
+  const base = api.basename(shellPath);
+  if (base.toLowerCase() === "wsl.exe") return "WSL";
+  const lower = shellPath.toLowerCase();
+  if (
+    base.toLowerCase() === "bash.exe" &&
+    (lower.includes("\\git\\bin\\") || lower.includes("\\git\\usr\\bin\\"))
+  ) {
+    return "Git Bash";
+  }
+  return base;
+}
+
+/** Resolved real path, or the original path when it cannot be resolved. */
+async function resolveRealPath(path: string): Promise<string> {
+  try {
+    return await realpath(path);
+  } catch {
+    return path;
+  }
+}
+
+function sortShellsDefaultFirst(a: DetectedShell, b: DetectedShell): number {
+  if (a.isDefault !== b.isDefault) return a.isDefault ? -1 : 1;
+  return a.name.localeCompare(b.name) || a.path.localeCompare(b.path);
+}
+
 /**
  * Best-effort enumeration of shells installed on this machine, for the
- * Settings → Shell quick-picks. POSIX unions `/etc/shells` with a common
- * probe set and `$SHELL`, keeping only entries that exist and are executable;
- * Windows probes known PowerShell/cmd locations plus `%COMSPEC%`. The OS
- * default ({@link defaultShellPath}) is always included even when it is a bare
- * command name that cannot be stat-ed. Never throws - an unreadable
- * `/etc/shells` or a failed probe just yields a shorter list, and the UI still
- * accepts an arbitrary custom path.
+ * Settings → Shell picker. POSIX unions `/etc/shells`, a common probe set,
+ * `$SHELL`, and a scan of every `PATH` directory for known shell names; Windows
+ * scans `PATH` plus env-var-derived well-known locations (WSL, Git Bash, Store
+ * PowerShell) and `%COMSPEC%`. Every candidate passes the same `X_OK` filter,
+ * duplicates that resolve to the same real file (usr-merged `/bin` vs
+ * `/usr/bin`) collapse to one entry - preferring the OS default - and WSL /
+ * Git Bash get friendly names. The OS default ({@link defaultShellPath}) is
+ * always included even when it is a bare command name that cannot be stat-ed.
+ * Never throws - an unreadable `/etc/shells`, a permission error on a PATH
+ * directory, or a failed probe just yields a shorter list, and the UI still
+ * accepts an arbitrary added path.
  */
 export async function detectShells(): Promise<readonly DetectedShell[]> {
+  const isWindows = osPlatform() === "win32";
   const defaultPath = defaultShellPath();
   const candidates = new Set<string>([defaultPath]);
-  if (osPlatform() === "win32") {
+  if (isWindows) {
     if (process.env.COMSPEC) candidates.add(process.env.COMSPEC);
-    for (const path of WINDOWS_SHELL_PROBE_PATHS) candidates.add(path);
+    for (const path of windowsWellKnownShellPaths()) candidates.add(path);
   } else {
     if (process.env.SHELL) candidates.add(process.env.SHELL);
     for (const path of await readEtcShells()) candidates.add(path);
     for (const path of POSIX_SHELL_PROBE_PATHS) candidates.add(path);
   }
+  for (const path of pathScanCandidates(isWindows)) candidates.add(path);
+
   const probed = await Promise.all(
     [...candidates].map(async (path) => ({
       path,
@@ -135,16 +291,58 @@ export async function detectShells(): Promise<readonly DetectedShell[]> {
   const paths = existing.includes(defaultPath)
     ? existing
     : [defaultPath, ...existing];
-  return paths
+
+  // Collapse paths that resolve to the same real file, preferring the OS
+  // default so its row keeps the default marker and canonical spelling.
+  const resolved = await Promise.all(
+    paths.map(async (path) => ({ path, real: await resolveRealPath(path) })),
+  );
+  const chosenByRealPath = new Map<string, string>();
+  for (const { path, real } of resolved) {
+    const key = isWindows ? real.toLowerCase() : real;
+    if (!chosenByRealPath.has(key) || path === defaultPath) {
+      chosenByRealPath.set(key, path);
+    }
+  }
+
+  return [...chosenByRealPath.values()]
     .map((path) => ({
-      name: basename(path),
+      name: friendlyShellName(path, isWindows),
       path,
       isDefault: path === defaultPath,
+      source: "detected" as const,
     }))
-    .sort((a, b) => {
-      if (a.isDefault !== b.isDefault) return a.isDefault ? -1 : 1;
-      return a.name.localeCompare(b.name) || a.path.localeCompare(b.path);
-    });
+    .sort(sortShellsDefaultFirst);
+}
+
+/**
+ * The full Settings → Shell picker list: detected shells unioned with the
+ * user's remembered `shell.added` paths, deduped by path (case-insensitive on
+ * win32; a path that is both keeps `source: "detected"`), sorted default-first
+ * then alphabetically. Added entries are always listed - even when the file no
+ * longer exists - so a removable row is never silently dropped. This is what
+ * `traycer config shell list` returns, so every client and the host see one
+ * list.
+ */
+export async function listShells(): Promise<readonly DetectedShell[]> {
+  const isWindows = osPlatform() === "win32";
+  const detected = await detectShells();
+  const api = pathApiFor(isWindows);
+  const config = await readCliConfig();
+  const added: DetectedShell[] = config.shell.added
+    .filter(
+      (path) =>
+        !detected.some((entry) =>
+          shellPathsEqual(entry.path, path, isWindows),
+        ),
+    )
+    .map((path) => ({
+      name: api.basename(path),
+      path,
+      isDefault: false,
+      source: "added" as const,
+    }));
+  return [...detected, ...added].sort(sortShellsDefaultFirst);
 }
 
 // Oldest on-disk shape we know how to migrate from. A file whose `version`
@@ -286,18 +484,77 @@ export async function setShell(
   const nextArgs = args !== null ? [...args] : current.shell.args;
   await writeCliConfig({
     version: CLI_CONFIG_VERSION,
-    shell: { path: nextPath, args: nextArgs },
+    shell: { path: nextPath, args: nextArgs, added: current.shell.added },
     envOverrides: current.envOverrides,
     logs: current.logs,
   });
   return { path: nextPath, args: nextArgs };
 }
 
+/**
+ * Remembers `path` in `shell.added` (deduped, case-insensitive on win32) AND
+ * selects it as `shell.path`, in one read-modify-write. `shell.args` is left
+ * untouched. The caller is responsible for having validated the path first
+ * (the CLI's `config shell add` enforces absolute + executable); this helper is
+ * the persistence step only.
+ */
+export async function addShell(
+  path: string,
+): Promise<{ readonly path: string; readonly added: readonly string[] }> {
+  const current = await readCliConfig();
+  const isWindows = osPlatform() === "win32";
+  const already = current.shell.added.some((entry) =>
+    shellPathsEqual(entry, path, isWindows),
+  );
+  const added = already ? current.shell.added : [...current.shell.added, path];
+  await writeCliConfig({
+    version: CLI_CONFIG_VERSION,
+    shell: { path, args: current.shell.args, added },
+    envOverrides: current.envOverrides,
+    logs: current.logs,
+  });
+  return { path, added };
+}
+
+/**
+ * Drops `path` from `shell.added`; if it was the selected `shell.path`, clears
+ * the selection back to `null` (the synthesised OS default) while leaving
+ * `shell.args` untouched. Removing a path that was never added is a no-op
+ * success. Returns whether an entry was removed and the resulting selection.
+ */
+export async function removeShell(
+  path: string,
+): Promise<{ readonly removed: boolean; readonly path: string | null }> {
+  const current = await readCliConfig();
+  const isWindows = osPlatform() === "win32";
+  const added = current.shell.added.filter(
+    (entry) => !shellPathsEqual(entry, path, isWindows),
+  );
+  const removed = added.length !== current.shell.added.length;
+  const wasSelected =
+    current.shell.path !== null &&
+    shellPathsEqual(current.shell.path, path, isWindows);
+  const nextPath = wasSelected ? null : current.shell.path;
+  // Nothing to persist when the path was neither remembered nor selected.
+  if (!removed && !wasSelected) {
+    return { removed: false, path: current.shell.path };
+  }
+  await writeCliConfig({
+    version: CLI_CONFIG_VERSION,
+    shell: { path: nextPath, args: current.shell.args, added },
+    envOverrides: current.envOverrides,
+    logs: current.logs,
+  });
+  return { removed, path: nextPath };
+}
+
 export async function resetShell(): Promise<void> {
   const current = await readCliConfig();
   await writeCliConfig({
     version: CLI_CONFIG_VERSION,
-    shell: { path: null, args: null },
+    // Reset clears only the current selection; the remembered `added` list is
+    // independent of which shell is selected, so it survives.
+    shell: { path: null, args: null, added: current.shell.added },
     envOverrides: current.envOverrides,
     logs: current.logs,
   });

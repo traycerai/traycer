@@ -22,6 +22,7 @@ import type {
   TraycerEnvOverride,
   TraycerShellConfig,
   TraycerShellConfigSetInput,
+  TraycerShellProbeResult,
   TrayEpic,
   TrayIndicatorState,
 } from "../../platform/runner-host";
@@ -379,9 +380,23 @@ export class MockTraycerCli implements ITraycerCli {
   };
   envOverrides: TraycerEnvOverride[] = [];
   detectedShells: readonly TraycerDetectedShell[] = [
-    { name: "zsh", path: "/bin/zsh", isDefault: true },
-    { name: "bash", path: "/bin/bash", isDefault: false },
+    { name: "zsh", path: "/bin/zsh", isDefault: true, source: "detected" },
+    { name: "bash", path: "/bin/bash", isDefault: false, source: "detected" },
   ];
+  /** Remembered ("added") shells, mutated by `shellConfigAdd`/`Remove`. */
+  addedShells: readonly string[] = [];
+  /**
+   * Filesystem the mock probe answers against - absolute paths mapped to
+   * whether they're executable. A missing entry probes as "not found".
+   */
+  probeFs: ReadonlyMap<string, boolean> = new Map([
+    ["/bin/zsh", true],
+    ["/bin/bash", true],
+    ["/usr/local/bin/nu", true],
+    ["/etc/hosts", false],
+  ]);
+  /** Path the next `pickShellProgramFile` resolves with, or null to cancel. */
+  pickedProgramFile: string | null = null;
   /** Last bearer seeded via `cliLogin`, so tests can assert it was forwarded. */
   lastLoginToken: string | null = null;
   /** Last refresh token seeded via `cliLogin`, so tests can assert it too. */
@@ -411,8 +426,47 @@ export class MockTraycerCli implements ITraycerCli {
     };
   }
 
+  async shellConfigAdd(input: { readonly path: string }): Promise<void> {
+    if (!this.addedShells.includes(input.path)) {
+      this.addedShells = [...this.addedShells, input.path];
+    }
+    this.shellConfig = {
+      path: input.path,
+      args: this.shellConfig.args,
+      synthesised: false,
+    };
+  }
+
+  async shellConfigRemove(input: { readonly path: string }): Promise<void> {
+    this.addedShells = this.addedShells.filter((p) => p !== input.path);
+    if (this.shellConfig.path === input.path) {
+      await this.shellConfigReset();
+    }
+  }
+
+  async shellProbe(input: {
+    readonly path: string;
+  }): Promise<TraycerShellProbeResult> {
+    const executable = this.probeFs.get(input.path);
+    return {
+      exists: executable !== undefined,
+      executable: executable === true,
+    };
+  }
+
+  pickShellProgramFile: (() => Promise<string | null>) | null = () =>
+    Promise.resolve(this.pickedProgramFile);
+
   async shellListDetected(): Promise<readonly TraycerDetectedShell[]> {
-    return this.detectedShells;
+    const added: TraycerDetectedShell[] = this.addedShells
+      .filter((p) => !this.detectedShells.some((d) => d.path === p))
+      .map((p) => ({
+        name: p.split(/[\\/]/).pop() ?? p,
+        path: p,
+        isDefault: false,
+        source: "added" as const,
+      }));
+    return [...this.detectedShells, ...added];
   }
 
   async envOverrideList(): Promise<readonly TraycerEnvOverride[]> {
