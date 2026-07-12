@@ -32,14 +32,12 @@ describe("buildChildEnv", () => {
     expect(childEnv.VITE_DEV_DESKTOP_SLOT).toBe("my-worktree");
   });
 
-  it("forwards the derived dev display name to the renderer", () => {
+  it("forwards the derived worktree label to the renderer", () => {
     const childEnv = devStack.buildChildEnv({
       DEV_DESKTOP_SLOT: "traycer-spry-panda-a2acaa5e",
     });
 
-    expect(childEnv.VITE_DEV_DESKTOP_DISPLAY_NAME).toBe(
-      "Traycer Dev — spry-panda",
-    );
+    expect(childEnv.VITE_DEV_DESKTOP_WORKTREE_LABEL).toBe("spry-panda");
   });
 
   it("forwards the loopback Cloud UI override to the renderer", () => {
@@ -68,11 +66,13 @@ describe("buildChildEnv", () => {
     expect(childEnv.VITE_DEV_DESKTOP_SLOT).toBeUndefined();
   });
 
-  it("clears an inherited VITE display name when no dev slot is active", () => {
+  it("clears an inherited VITE worktree label when no dev slot is active", () => {
     const childEnv = devStack.buildChildEnv({
+      VITE_DEV_DESKTOP_WORKTREE_LABEL: "stale-slot",
       VITE_DEV_DESKTOP_DISPLAY_NAME: "Traycer Dev — stale-slot",
     });
 
+    expect(childEnv.VITE_DEV_DESKTOP_WORKTREE_LABEL).toBeUndefined();
     expect(childEnv.VITE_DEV_DESKTOP_DISPLAY_NAME).toBeUndefined();
   });
 

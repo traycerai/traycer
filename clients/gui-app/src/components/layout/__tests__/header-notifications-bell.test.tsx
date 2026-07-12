@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import {
-  DevDesktopDisplayName,
+  DevDesktopWorktreeLabel,
   HeaderNotificationsBell,
 } from "@/components/layout/header/app-header";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -96,23 +96,23 @@ describe("HeaderNotificationsBell auth gate", () => {
   });
 });
 
-describe("DevDesktopDisplayName", () => {
+describe("DevDesktopWorktreeLabel", () => {
   afterEach(() => {
     cleanup();
   });
 
-  it("renders the dev worktree name without adding an interactive control", () => {
-    render(<DevDesktopDisplayName displayName="Traycer Dev — spry-panda" />);
+  it("renders only the distinguishing worktree label without adding an interactive control", () => {
+    render(<DevDesktopWorktreeLabel worktreeLabel="spry-panda" />);
 
     const label = screen.getByTestId("dev-desktop-display-name");
-    expect(label.textContent).toBe("Traycer Dev — spry-panda");
+    expect(label.textContent).toBe("spry-panda");
     expect(label.className).toContain("max-w-full");
     expect(label.className).toContain("text-right");
     expect(label.className).not.toContain("absolute");
   });
 
-  it("renders nothing when the dev display name is absent", () => {
-    render(<DevDesktopDisplayName displayName={null} />);
+  it("renders nothing when the dev worktree label is absent", () => {
+    render(<DevDesktopWorktreeLabel worktreeLabel={null} />);
 
     expect(screen.queryByTestId("dev-desktop-display-name")).toBeNull();
   });

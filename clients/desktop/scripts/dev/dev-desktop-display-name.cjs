@@ -2,7 +2,7 @@
 
 const DEV_DESKTOP_DISPLAY_NAME_ENV = "TRAYCER_DESKTOP_DEV_DISPLAY_NAME";
 
-function resolveDevDesktopDisplayName(env) {
+function resolveDevDesktopIdentity(env) {
   const rawSlot = env.DEV_DESKTOP_SLOT;
   if (typeof rawSlot !== "string") {
     return null;
@@ -11,7 +11,19 @@ function resolveDevDesktopDisplayName(env) {
   if (slot.length === 0) {
     throw new Error("DEV_DESKTOP_SLOT must contain a usable slot name");
   }
-  return `Traycer Dev — ${displayNameForSlot(slot)}`;
+  const worktreeLabel = displayNameForSlot(slot);
+  return {
+    displayName: `Traycer Dev — ${worktreeLabel}`,
+    worktreeLabel,
+  };
+}
+
+function resolveDevDesktopDisplayName(env) {
+  return resolveDevDesktopIdentity(env)?.displayName ?? null;
+}
+
+function resolveDevDesktopWorktreeLabel(env) {
+  return resolveDevDesktopIdentity(env)?.worktreeLabel ?? null;
 }
 
 function sanitizeDevDesktopSlot(value) {
@@ -34,5 +46,7 @@ function displayNameForSlot(slot) {
 
 module.exports = {
   DEV_DESKTOP_DISPLAY_NAME_ENV,
+  resolveDevDesktopIdentity,
   resolveDevDesktopDisplayName,
+  resolveDevDesktopWorktreeLabel,
 };

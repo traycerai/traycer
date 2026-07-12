@@ -2,9 +2,7 @@
 
 const { spawn } = require("node:child_process");
 const path = require("node:path");
-const {
-  resolveDevDesktopDisplayName,
-} = require("./dev-desktop-display-name.cjs");
+const { resolveDevDesktopIdentity } = require("./dev-desktop-display-name.cjs");
 
 const workspaceRoot = path.resolve(__dirname, "..", "..");
 const DEFAULT_RENDERER_PORT = 5173;
@@ -35,7 +33,7 @@ function readRendererPort(env) {
 // it so both sides always derive from the same source.
 function buildChildEnv(env) {
   const rendererPort = readRendererPort(env);
-  const devDesktopDisplayName = resolveDevDesktopDisplayName(env);
+  const devDesktopIdentity = resolveDevDesktopIdentity(env);
   const rendererUrl =
     env.TRAYCER_DESKTOP_DEV_URL ?? `http://localhost:${rendererPort}`;
   const childEnv = {
@@ -50,10 +48,11 @@ function buildChildEnv(env) {
   } else {
     delete childEnv.VITE_DEV_DESKTOP_SLOT;
   }
-  if (devDesktopDisplayName === null) {
-    delete childEnv.VITE_DEV_DESKTOP_DISPLAY_NAME;
+  delete childEnv.VITE_DEV_DESKTOP_DISPLAY_NAME;
+  if (devDesktopIdentity === null) {
+    delete childEnv.VITE_DEV_DESKTOP_WORKTREE_LABEL;
   } else {
-    childEnv.VITE_DEV_DESKTOP_DISPLAY_NAME = devDesktopDisplayName;
+    childEnv.VITE_DEV_DESKTOP_WORKTREE_LABEL = devDesktopIdentity.worktreeLabel;
   }
   if (typeof env.TRAYCER_DEV_CLOUD_UI_BASE_URL === "string") {
     childEnv.VITE_DEV_CLOUD_UI_BASE_URL = env.TRAYCER_DEV_CLOUD_UI_BASE_URL;
