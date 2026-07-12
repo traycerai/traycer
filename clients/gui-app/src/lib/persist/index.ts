@@ -12,6 +12,7 @@ export {
   worktreeActivityCacheKey,
   worktreeIntentMemoryKey,
   worktreeIntentStagingKey,
+  worktreeListingCacheKey,
   type PersistStoreEntry,
   type PersistStoreKind,
 } from "@/lib/persist/keys";

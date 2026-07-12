@@ -10,6 +10,7 @@ import {
   worktreeActivityCacheKey,
   worktreeIntentMemoryKey,
   worktreeIntentStagingKey,
+  worktreeListingCacheKey,
 } from "@/lib/persist/keys";
 
 // CRITICAL: every literal below is HAND-TRANSCRIBED from the current store
@@ -120,11 +121,14 @@ describe("persist key builders — output-preserving against current source", ()
     expect(openEpicKey("u1", "e1")).toBe("traycer-gui-app:open-epic:u1:e1");
   });
 
-  it("emits the current localStorage key for the host-scoped worktree activity cache (non-zustand)", () => {
+  it("emits the current localStorage keys for the host-scoped worktree caches (non-zustand)", () => {
     // Source: src/components/settings/panels/worktrees-enrichment-persistence.ts
     // (host-scoped - a host id is always non-empty, so no `anon` bucket).
     expect(worktreeActivityCacheKey("host-1")).toBe(
       "traycer-gui-app:worktree-activity-cache:host-1",
+    );
+    expect(worktreeListingCacheKey("host-1")).toBe(
+      "traycer-gui-app:worktree-listing-cache:host-1",
     );
   });
 

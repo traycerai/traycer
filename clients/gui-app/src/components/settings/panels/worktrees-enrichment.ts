@@ -24,20 +24,50 @@ import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readine
 import { useWorktreeEnrichSettlePerf } from "@/components/settings/panels/worktrees-settings-perf";
 import {
   persistWorktreeActivitySnapshot,
-  pruneWorktreeActivitySnapshots,
+  pruneWorktreeSnapshots,
   readWorktreeActivitySnapshot,
 } from "@/components/settings/panels/worktrees-enrichment-persistence";
 
 const EMPTY_PATHS: readonly string[] = [];
 const EMPTY_ENRICHED: ReadonlyMap<string, WorktreeHostEntryV12> = new Map();
+const EMPTY_SEEDED: ReadonlySet<string> = new Set();
+const EMPTY_ERRORED: ReadonlySet<string> = new Set();
+// The boundary between snapshot-seeded and live cache data: the warm-open
+// restore seeds queries with their snapshot-era `updatedAt` (always a PREVIOUS
+// run - the writer stamps wall-clock time and restore skips paths with live
+// data), while every fetch this session stamps a fresh `dataUpdatedAt`. So
+// "this entry is still the seed" is exactly "its dataUpdatedAt predates this
+// module's load".
+const APP_SESSION_START_MS = Date.now();
 // Coalesce the per-viewport enrichment fetch across a scroll gesture: collect the
 // on-screen row paths for this long before firing one batch of per-path activity
 // queries for the paths not already cached. One batch per settle window, bounded
 // by the viewport. (Off-screen rows are covered separately by the background
 // sweep below, in equally bounded chunks - never one whole-list request.)
 const WORKTREE_ENRICH_DEBOUNCE_MS = 80;
-const WORKTREE_COLD_PR_REFETCH_MAX_ATTEMPTS = 3;
+// Cold-row (`prState: null`) retry schedule, shared by the viewport ledger and
+// the sweep ledger: exponential backoff from the base, capped per-wait, with a
+// generous total budget (~2 minutes of patience). The host serves a cold row
+// and warms its PR fact through a BACKGROUND `gh` probe whose result only a
+// refetch picks up - and on a busy fleet those probes take tens of seconds to
+// drain (field-observed enrichment settles of 45-80s), so a short budget
+// abandons rows as permanently "Checking…" long before the host ever answers.
+// `null` always means probe-pending (a settled no-PR answer is `"none"`), so
+// patience is what converges; the cap + budget still bound a pathological
+// host, and a refresh re-grants one budget as before.
+const WORKTREE_COLD_PR_REFETCH_MAX_ATTEMPTS = 10;
 const WORKTREE_COLD_PR_REFETCH_BASE_MS = 750;
+const WORKTREE_COLD_PR_REFETCH_MAX_DELAY_MS = 20_000;
+
+// Wait before retry number `attempts` (1-indexed): 750ms, 1.5s, 3s, 6s, 12s,
+// then 20s flat - front-loaded for hosts that warm quickly, patient for the
+// fleet-under-load tail.
+function coldRetryDelayMs(attempts: number): number {
+  return Math.min(
+    WORKTREE_COLD_PR_REFETCH_BASE_MS * 2 ** (attempts - 1),
+    WORKTREE_COLD_PR_REFETCH_MAX_DELAY_MS,
+  );
+}
 // Background sweep: once the visible rows' batch settles, the remaining
 // un-enriched rows are probed automatically in chunks of this size, one chunk
 // in flight at a time, until every row has resolved - so tier pills and
@@ -335,6 +365,21 @@ export function useCachedWorktreeEnrichment(
         ) {
           return;
         }
+        // Within `updated`, only DATA-bearing actions can change the fold:
+        // `success` (a fetch landing or `setQueryData`) and `setState` (raw
+        // state replacement). Fetch-starts, invalidation marks, errors, and
+        // pause/continue all fire `updated` too - during a convergence pass
+        // that is 2+ events per probe across the whole fleet, and each one
+        // used to force a fresh fold identity and a full list re-render (the
+        // 100-450ms main-thread blocks the perf log calls
+        // `main_thread_block`).
+        if (
+          event.type === "updated" &&
+          event.action.type !== "success" &&
+          event.action.type !== "setState"
+        ) {
+          return;
+        }
         if (queryKeyHasPrefix(event.query.queryKey, methodScope)) {
           dirtyRef.current = true;
           onStoreChange();
@@ -352,7 +397,19 @@ export function useCachedWorktreeEnrichment(
     }
     dirtyRef.current = false;
     snapshotScopeRef.current = methodScope;
-    snapshotRef.current = foldEnrichedWorktrees(queryClient, methodScope);
+    const next = foldEnrichedWorktrees(queryClient, methodScope);
+    // Keep the PREVIOUS identity when the refold is content-identical (same
+    // paths, same entry references - structural sharing preserves an entry's
+    // identity across a refetch that lands equal data, the common case for
+    // re-probes and refreshes on a quiet fleet). Every distinct identity here
+    // fans out through the panel into a full list re-render - 100-450ms on a
+    // 50-row fleet - so identity is only allowed to change when a row's data
+    // actually did.
+    const prev = snapshotRef.current;
+    const identical =
+      prev.size === next.size &&
+      [...next].every(([path, entry]) => prev.get(path) === entry);
+    if (!identical) snapshotRef.current = next;
     return snapshotRef.current;
   }, [queryClient, methodScope]);
 
@@ -414,6 +471,10 @@ export function useWorktreeActivityEnrichment(
   // forever. Kept disjoint from `enrichedByPath` - a later successful refetch moves
   // the path from errored to enriched.
   readonly erroredPaths: ReadonlySet<string>;
+  // Paths whose overlay entry is still the restored warm-open seed - display
+  // data only. Delete surfaces treat these as not-yet-verified ("pending")
+  // until a live probe replaces the seed.
+  readonly seededPaths: ReadonlySet<string>;
   readonly reportVisiblePaths: (paths: readonly string[]) => void;
   readonly enriching: boolean;
 } {
@@ -534,7 +595,7 @@ export function useWorktreeActivityEnrichment(
           });
         }
         void result.refetch();
-      }, WORKTREE_COLD_PR_REFETCH_BASE_MS * nextAttempts);
+      }, coldRetryDelayMs(nextAttempts));
       coldPrRefetchStateRef.current.set(path, {
         attempts: nextAttempts,
         timer,
@@ -569,7 +630,7 @@ export function useWorktreeActivityEnrichment(
     if (restoredHostsRef.current.has(hostId)) return;
     restoredHostsRef.current.add(hostId);
     const now = Date.now();
-    pruneWorktreeActivitySnapshots(now);
+    pruneWorktreeSnapshots(now);
     const snapshot = readWorktreeActivitySnapshot(hostId, now);
     if (snapshot === null) return;
     const seededPaths = new Set<string>();
@@ -643,6 +704,35 @@ export function useWorktreeActivityEnrichment(
   // and the observers read.
   const readiness = useReactiveHostReadiness(client);
   const [sweepTick, bumpSweepTick] = useReducer((tick: number) => tick + 1, 0);
+  const [seedTick, bumpSeedTick] = useReducer((tick: number) => tick + 1, 0);
+  const seedsOutstandingRef = useRef(false);
+  // Two wake signals the identity-stable fold deliberately does NOT carry:
+  //  - `invalidate` actions change no data, so the fold ignores them - but a
+  //    refresh marks observer-less swept entries invalidated WITHOUT
+  //    refetching, and the sweep must notice to re-probe them.
+  //  - a `success` that lands data IDENTICAL to a warm-open seed keeps the
+  //    fold identity (structural sharing preserves the entry), but the
+  //    query's `dataUpdatedAt` is now this session's - the seeded-paths
+  //    derivation below must re-run so the path flips seeded → live and the
+  //    delete gate unlocks. Only ticked while seeds are outstanding, so a
+  //    converged panel stays event-quiet.
+  useEffect(() => {
+    if (hostId === null) return;
+    const scope = hostQueryKeys.methodScope(hostId, "worktree.listAllForHost");
+    const cache = queryClient.getQueryCache();
+    return cache.subscribe((event) => {
+      if (event.type !== "updated") return;
+      if (!queryKeyHasPrefix(event.query.queryKey, scope)) return;
+      if (event.action.type === "invalidate") {
+        bumpSweepTick();
+      } else if (
+        event.action.type === "success" &&
+        seedsOutstandingRef.current
+      ) {
+        bumpSeedTick();
+      }
+    });
+  }, [queryClient, hostId]);
   const sweepLedgerRef = useRef<Map<string, SweepRetryState>>(new Map());
   const sweepInFlightRef = useRef(false);
   const sweepWakeTimerRef = useRef<number | null>(null);
@@ -664,11 +754,12 @@ export function useWorktreeActivityEnrichment(
     [client, hostId, reachable],
   );
   useEffect(() => {
-    // `sweepTick` is a pure re-run trigger: chunk completion and backoff
-    // wake-ups bump it. `enrichedByPath` doubles as the method-scope cache
-    // EVENT feed - the fold recomputes (fresh identity) on any query event
-    // under the scope, so an invalidation (refresh) or a GC removal wakes the
-    // sweep even when no observer refetch churns `results`.
+    // `sweepTick` is a pure re-run trigger: chunk completion, backoff
+    // wake-ups, and the invalidation subscription above all bump it (the
+    // identity-stable fold no longer churns on invalidation marks, so a
+    // refresh's wake comes from that subscription). `enrichedByPath` covers
+    // the data-driven wakes - a probe landing CHANGED data or a GC removal
+    // gives the fold a fresh identity.
     void sweepTick;
     void enrichedByPath;
     if (!reachable || client === null || !readiness.isReady) return;
@@ -752,8 +843,7 @@ export function useWorktreeActivityEnrichment(
             );
           ledger.set(path, {
             attempts,
-            nextEligibleAt:
-              settledAt + WORKTREE_COLD_PR_REFETCH_BASE_MS * attempts,
+            nextEligibleAt: settledAt + coldRetryDelayMs(attempts),
             sawInvalidated: stateNow?.isInvalidated === true,
           });
         });
@@ -787,7 +877,9 @@ export function useWorktreeActivityEnrichment(
         errored.add(requestedPaths[index]);
       }
     });
-    return errored;
+    // The stable constant in the (overwhelmingly common) empty case, so this
+    // prop can't defeat downstream memoization on every `results` identity.
+    return errored.size === 0 ? EMPTY_ERRORED : errored;
   }, [results, requestedPaths]);
 
   const enriching = results.some((result) => result.isFetching);
@@ -800,9 +892,38 @@ export function useWorktreeActivityEnrichment(
     erroredCount: erroredPaths.size,
   });
 
+  // Paths whose overlay entry is still the warm-open SEED (see
+  // `APP_SESSION_START_MS`): last-known display data this session has not yet
+  // re-verified. The panel renders their restored tier but must gate
+  // destructive flows (delete) on live data - a seeded "Landed" may have
+  // gained commits since the snapshot was written. Keyed on the fold PLUS
+  // `seedTick`: a data change or GC removal recomputes via the fold, and a
+  // revalidation that landed data IDENTICAL to the seed (fold identity
+  // deliberately unchanged) recomputes via the tick - either way a live
+  // fetch's fresh `dataUpdatedAt` drops the path immediately.
+  const seededPaths = useMemo(() => {
+    void seedTick;
+    if (hostId === null || enrichedByPath.size === 0) return EMPTY_SEEDED;
+    const seeded = new Set<string>();
+    for (const path of enrichedByPath.keys()) {
+      const state =
+        queryClient.getQueryState<WorktreeListAllForHostResponseV12>(
+          perPathEnrichmentQueryKey(hostId, path),
+        );
+      if (state !== undefined && state.dataUpdatedAt < APP_SESSION_START_MS) {
+        seeded.add(path);
+      }
+    }
+    return seeded.size === 0 ? EMPTY_SEEDED : seeded;
+  }, [enrichedByPath, hostId, queryClient, seedTick]);
+  useEffect(() => {
+    seedsOutstandingRef.current = seededPaths.size > 0;
+  }, [seededPaths]);
+
   return {
     enrichedByPath,
     erroredPaths,
+    seededPaths,
     reportVisiblePaths,
     enriching,
   };

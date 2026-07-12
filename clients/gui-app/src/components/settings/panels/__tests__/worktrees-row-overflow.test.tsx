@@ -75,6 +75,7 @@ function renderSingleRow(
         worktrees={[worktree]}
         enrichedByPath={new Map([[worktree.worktreePath, worktree]])}
         erroredPaths={new Set()}
+        seededPaths={new Set()}
         onVisiblePathsChange={() => {}}
         taskTitlesByEpicId={new Map()}
         toolbarProps={{

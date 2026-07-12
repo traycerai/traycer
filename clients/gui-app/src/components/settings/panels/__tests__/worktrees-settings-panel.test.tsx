@@ -318,6 +318,7 @@ function renderList(args: {
   readonly enrichedByPath:
     ReadonlyMap<string, WorktreeHostEntryV12> | undefined;
   readonly erroredPaths: ReadonlySet<string> | undefined;
+  readonly seededPaths: ReadonlySet<string> | undefined;
   readonly onVisiblePathsChange:
     ((paths: readonly string[]) => void) | undefined;
   readonly taskTitlesByEpicId: ReadonlyMap<string, string> | undefined;
@@ -335,6 +336,7 @@ function renderList(args: {
         worktrees={args.worktrees}
         enrichedByPath={args.enrichedByPath ?? fullyEnriched(args.worktrees)}
         erroredPaths={args.erroredPaths ?? new Set()}
+        seededPaths={args.seededPaths ?? new Set()}
         onVisiblePathsChange={args.onVisiblePathsChange ?? vi.fn()}
         taskTitlesByEpicId={args.taskTitlesByEpicId ?? new Map()}
         toolbarProps={testToolbarProps()}
@@ -350,6 +352,7 @@ function renderDefault(): void {
     worktrees: WORKTREES,
     enrichedByPath: undefined,
     erroredPaths: undefined,
+    seededPaths: undefined,
     onVisiblePathsChange: undefined,
     taskTitlesByEpicId: undefined,
   });
@@ -563,6 +566,90 @@ describe("WorktreesList delete flow", () => {
     expect(busyButton.hasAttribute("disabled")).toBe(true);
   });
 
+  it("gates delete on live data: a snapshot-seeded row keeps its restored tier but is not deletable", () => {
+    const seededRow = entry({
+      worktreePath: "/wt/seeded",
+      branch: "feat-seeded",
+      branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+    });
+    const rendered = renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [seededRow],
+      enrichedByPath: undefined, // overlay present, exactly as the restore seeds it
+      erroredPaths: undefined,
+      seededPaths: new Set(["/wt/seeded"]),
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
+    });
+
+    // Display keeps the restored tier - warm-open value is not sacrificed:
+    // the row shows its "Landed" pill, never the pending spinner. (The tier
+    // filter menu also says "Landed", hence getAllByText.)
+    expect(screen.getAllByText("Landed").length).toBeGreaterThan(0);
+    expect(
+      screen.queryByTestId("worktree-tier-pill-pending-spinner"),
+    ).toBeNull();
+    // But the delete affordance reads the DELETE-scoped state: seeded =
+    // still-checking, so the row action is disabled with the checking copy.
+    const gatedButton = screen.getByRole("button", {
+      name: /status is still being checked/i,
+    });
+    expect(gatedButton.hasAttribute("disabled")).toBe(true);
+
+    // Once the live probe replaces the seed (the path leaves `seededPaths`),
+    // the same row becomes deletable through the normal confirmation.
+    rendered.unmount();
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [seededRow],
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      seededPaths: undefined,
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Delete worktree feat-seeded" }),
+    );
+    screen.getByText("Delete worktree?");
+  });
+
+  it("drops snapshot-seeded rows from a bulk delete request", () => {
+    const seeded = entry({
+      worktreePath: "/wt/seeded",
+      branch: "feat-seeded",
+      branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+    });
+    const live = entry({
+      worktreePath: "/wt/live",
+      branch: "feat-live",
+      branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+    });
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [seeded, live],
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      seededPaths: new Set(["/wt/seeded"]),
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
+    });
+
+    fireEvent.click(screen.getByTestId("worktrees-select-all"));
+
+    // A seeded row counts as still-checking for the selection action bar:
+    // bulk delete is blocked with the checking notice (same rule as a row
+    // whose probe genuinely hasn't landed), so no confirmation can open that
+    // would trust the seeded entry.
+    screen.getByText("1 selected worktree is still checking status");
+    fireEvent.click(screen.getByTestId("worktrees-list-delete-selected"));
+    expect(screen.queryByText("Delete 2 worktrees?")).toBeNull();
+    expect(screen.queryByText("Delete worktree?")).toBeNull();
+  });
+
   it("keeps a stable toolbar; the selection action bar is separate and only shown when selecting", () => {
     renderDefault();
 
@@ -763,6 +850,7 @@ describe("WorktreesList delete flow", () => {
       worktrees: multiRepoWorktrees,
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
       taskTitlesByEpicId: undefined,
     });
@@ -810,6 +898,7 @@ describe("WorktreesList delete flow", () => {
       worktrees: multiRepoWorktrees,
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
       taskTitlesByEpicId: undefined,
     });
@@ -1074,6 +1163,7 @@ describe("WorktreesList delete flow", () => {
       worktrees: multiRepoWorktrees,
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
       taskTitlesByEpicId: undefined,
     });
@@ -1155,6 +1245,7 @@ describe("WorktreesList delete flow", () => {
       worktrees: multiRepoWorktrees,
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
       taskTitlesByEpicId: undefined,
     });
@@ -1280,6 +1371,7 @@ describe("WorktreesList delete flow", () => {
       worktrees: WORKTREES,
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
       taskTitlesByEpicId: undefined,
     });
@@ -1297,6 +1389,7 @@ describe("WorktreesList delete flow", () => {
             worktrees={WORKTREES}
             enrichedByPath={fullyEnriched(WORKTREES)}
             erroredPaths={new Set()}
+            seededPaths={new Set()}
             onVisiblePathsChange={vi.fn()}
             taskTitlesByEpicId={new Map()}
             toolbarProps={testToolbarProps()}
@@ -1355,6 +1448,7 @@ describe("WorktreesList delete flow", () => {
       worktrees: WORKTREES,
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
       taskTitlesByEpicId: undefined,
     });
@@ -1384,6 +1478,7 @@ describe("WorktreesList delete flow", () => {
       worktrees: WORKTREES,
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
       taskTitlesByEpicId: undefined,
     });
@@ -1460,6 +1555,7 @@ describe("WorktreesList delete flow", () => {
       worktrees: WORKTREES,
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
       taskTitlesByEpicId: undefined,
     });
@@ -1497,6 +1593,7 @@ describe("WorktreesList delete flow", () => {
               ),
             )}
             erroredPaths={new Set()}
+            seededPaths={new Set()}
             onVisiblePathsChange={vi.fn()}
             taskTitlesByEpicId={new Map()}
             toolbarProps={testToolbarProps()}
@@ -1556,6 +1653,7 @@ describe("WorktreesList delete flow", () => {
       worktrees: WORKTREES,
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
       taskTitlesByEpicId: undefined,
     });
@@ -1614,6 +1712,7 @@ describe("WorktreesList confirm-time re-check", () => {
             worktrees={worktrees}
             enrichedByPath={fullyEnriched(worktrees)}
             erroredPaths={new Set()}
+            seededPaths={new Set()}
             onVisiblePathsChange={vi.fn()}
             taskTitlesByEpicId={new Map()}
             toolbarProps={testToolbarProps()}
@@ -1933,6 +2032,34 @@ describe("WorktreesList confirm-time re-check", () => {
     screen.getByText(/2 commits not on the default branch/i);
   });
 
+  it("skips the unpushed-commits warning when the branch's PR is proven merged, even if local ancestry can't see it (squash merge)", () => {
+    render(
+      renderWith(new QueryClient(), [
+        entry({
+          worktreePath: "/wt/squash-merged",
+          branch: "feat-squash-merged",
+          // A squash merge creates a new default-branch commit that isn't a
+          // literal ancestor of these commits, so mergedIntoDefault stays
+          // false and ahead stays >0 — but the GitHub-proven merge fact
+          // (prState/mergedHeadShaMatches) means the work already landed.
+          branchStatus: { ahead: 2, behind: 0, mergedIntoDefault: false },
+          prState: "merged",
+          mergedHeadShaMatches: true,
+        }),
+      ]),
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Delete worktree feat-squash-merged",
+      }),
+    );
+    screen.getByText("Delete worktree?");
+    expect(
+      screen.queryByText("Delete worktree with 2 unpushed commits?"),
+    ).toBeNull();
+  });
+
   it("warns about never-pushed local-only commits in the per-row confirm", () => {
     render(
       renderWith(new QueryClient(), [
@@ -1998,6 +2125,7 @@ describe("WorktreesList v1.2 signals", () => {
       taskTitlesByEpicId: new Map([["epic-1", "Ship the audit"]]),
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
     });
 
@@ -2029,6 +2157,7 @@ describe("WorktreesList v1.2 signals", () => {
       taskTitlesByEpicId: new Map([["epic-1", "Ship the audit"]]),
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
     });
 
@@ -2074,6 +2203,7 @@ describe("WorktreesList v1.2 signals", () => {
       taskTitlesByEpicId: new Map(),
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
     });
 
@@ -2150,6 +2280,7 @@ describe("WorktreesList v1.2 signals", () => {
       taskTitlesByEpicId: undefined,
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
     });
 
@@ -2226,6 +2357,7 @@ describe("WorktreesList v1.2 signals", () => {
       taskTitlesByEpicId: undefined,
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
     });
 
@@ -2273,6 +2405,7 @@ describe("WorktreesList v1.2 signals", () => {
       taskTitlesByEpicId: undefined,
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
     });
 
@@ -2300,6 +2433,7 @@ describe("WorktreesList v1.2 signals", () => {
       taskTitlesByEpicId: undefined,
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
     });
 
@@ -2338,6 +2472,7 @@ describe("WorktreesList v1.2 signals", () => {
       taskTitlesByEpicId: undefined,
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
     });
 
@@ -2375,6 +2510,7 @@ describe("WorktreesList v1.2 signals", () => {
       taskTitlesByEpicId: undefined,
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
     });
 
@@ -2388,6 +2524,7 @@ describe("WorktreesList v1.2 signals", () => {
       worktrees: [entry({ worktreePath: "/wt/free", branch: "feat-free" })],
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
       taskTitlesByEpicId: undefined,
     });
@@ -2412,6 +2549,7 @@ describe("WorktreesList v1.2 signals", () => {
       ],
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
       taskTitlesByEpicId: undefined,
     });
@@ -2444,6 +2582,7 @@ describe("WorktreesList v1.2 signals", () => {
       // No path enriched yet: the base row paints but its tier isn't known.
       enrichedByPath: new Map(),
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
       taskTitlesByEpicId: undefined,
     });
@@ -2485,6 +2624,7 @@ describe("WorktreesList v1.2 signals", () => {
       taskTitlesByEpicId: new Map([["epic-1", "Payments revamp"]]),
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
     });
 
@@ -2546,6 +2686,7 @@ describe("WorktreesList v1.2 signals", () => {
       taskTitlesByEpicId: new Map([["epic-1", "Payments revamp"]]),
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
     });
     const rollup = screen.getByTestId("task-merge-rollup");
@@ -2589,6 +2730,7 @@ describe("WorktreesList v1.2 signals", () => {
       taskTitlesByEpicId: new Map([["epic-1", "Payments revamp"]]),
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
     });
     const rollup = screen.getByTestId("task-merge-rollup");
@@ -2619,6 +2761,7 @@ describe("WorktreesList v1.2 signals", () => {
       taskTitlesByEpicId: new Map([["epic-1", "Payments revamp"]]),
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
     });
     // The Task title still renders; the merge-rollup badge does not.
@@ -2650,6 +2793,7 @@ describe("WorktreesList v1.2 signals", () => {
       ],
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
       taskTitlesByEpicId: undefined,
     });
@@ -2701,6 +2845,7 @@ describe("WorktreesList v1.2 signals", () => {
       ],
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
       taskTitlesByEpicId: undefined,
     });
@@ -2746,6 +2891,7 @@ describe("WorktreesList v1.2 signals", () => {
         [orphanRow.worktreePath, orphanRow],
       ]),
       erroredPaths: new Set([unknownRow.worktreePath]),
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
       taskTitlesByEpicId: undefined,
     });
@@ -2786,6 +2932,7 @@ describe("WorktreesList v1.2 signals", () => {
       // `unknownRow` is out of the overlay AND settled to an error (Unknown).
       enrichedByPath: new Map([[readyRow.worktreePath, readyRow]]),
       erroredPaths: new Set([unknownRow.worktreePath]),
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
       taskTitlesByEpicId: undefined,
     });
@@ -2847,6 +2994,7 @@ describe("WorktreesList v1.2 signals", () => {
       taskTitlesByEpicId: new Map([["epic-1", "Payments revamp"]]),
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
     });
 
@@ -2892,6 +3040,7 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
             worktrees={args.worktrees}
             enrichedByPath={args.enrichedByPath}
             erroredPaths={args.erroredPaths ?? new Set()}
+            seededPaths={new Set()}
             onVisiblePathsChange={args.onVisiblePathsChange ?? vi.fn()}
             taskTitlesByEpicId={new Map()}
             toolbarProps={testToolbarProps()}
@@ -2921,6 +3070,7 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
       worktrees,
       enrichedByPath: fullyEnriched(worktrees),
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
       taskTitlesByEpicId: undefined,
     });
@@ -2978,6 +3128,7 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
       worktrees,
       enrichedByPath: new Map(),
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
       taskTitlesByEpicId: undefined,
     });
@@ -3224,6 +3375,7 @@ describe("WorktreesList status-aware delete safety", () => {
             worktrees={args.worktrees}
             enrichedByPath={args.enrichedByPath}
             erroredPaths={args.erroredPaths}
+            seededPaths={new Set()}
             onVisiblePathsChange={vi.fn()}
             taskTitlesByEpicId={new Map()}
             toolbarProps={testToolbarProps()}
@@ -3245,6 +3397,7 @@ describe("WorktreesList status-aware delete safety", () => {
       // Never enriched - the row stays "Checking…" for the whole test.
       enrichedByPath: new Map(),
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
       taskTitlesByEpicId: undefined,
     });
@@ -3275,6 +3428,7 @@ describe("WorktreesList status-aware delete safety", () => {
       worktrees: [mergedRow, pendingRow],
       enrichedByPath: new Map([[mergedRow.worktreePath, mergedRow]]),
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
       taskTitlesByEpicId: undefined,
     });
@@ -3300,6 +3454,7 @@ describe("WorktreesList status-aware delete safety", () => {
       worktrees: [erroredRow],
       enrichedByPath: new Map(),
       erroredPaths: new Set([erroredRow.worktreePath]),
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
       taskTitlesByEpicId: undefined,
     });
@@ -3332,6 +3487,7 @@ describe("WorktreesList status-aware delete safety", () => {
       worktrees: [mergedRow, erroredRow],
       enrichedByPath: new Map([[mergedRow.worktreePath, mergedRow]]),
       erroredPaths: new Set([erroredRow.worktreePath]),
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
       taskTitlesByEpicId: undefined,
     });
@@ -3508,6 +3664,7 @@ describe("WorktreesList status-aware delete safety", () => {
       // uncommitted count is still known: it is a cheap base-listing field.
       enrichedByPath: new Map(),
       erroredPaths: new Set([dirtyErroredRow.worktreePath]),
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
       taskTitlesByEpicId: undefined,
     });
