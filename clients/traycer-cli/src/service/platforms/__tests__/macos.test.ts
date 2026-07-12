@@ -1,4 +1,13 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
+import { mkdtempSync } from "node:fs";
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,7 +21,7 @@ import { ProcessRunError, type RunResult } from "../../process-runner";
 import { serviceLabelFor } from "../../label";
 import { CLI_ERROR_CODES } from "../../../runner/errors";
 
-const mocks = vi.hoisted(() => ({
+const MOCKS = vi.hoisted(() => ({
   readHostPidMetadata: vi.fn(),
   isProcessAlive: vi.fn(),
 }));
@@ -26,22 +35,25 @@ const HOST_PID_METADATA = {
 };
 
 vi.mock("../../../host/pid-metadata", () => ({
-  readHostPidMetadata: mocks.readHostPidMetadata,
+  readHostPidMetadata: MOCKS.readHostPidMetadata,
 }));
 
 vi.mock("../../../store/cli-lock", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../../store/cli-lock")>();
-  return { ...actual, isProcessAlive: mocks.isProcessAlive };
+  return { ...actual, isProcessAlive: MOCKS.isProcessAlive };
 });
 
 // Test isolation: `serviceManifestPath` normally resolves to the REAL
 // `~/Library/LaunchAgents/<label>.plist` (via `os.homedir()`, which ignores
 // `$HOME`), so running this suite would write - and `afterEach`-remove - the
 // developer's actual host LaunchAgent, deregistering a running host.
-// Redirect the manifest path to a temp dir so the suite never touches real
-// macOS service registration.
-const TEST_LAUNCH_AGENTS_DIR = join(tmpdir(), "traycer-macos-service-test");
+// Redirect the manifest path to a private, uniquely-created temp dir so the
+// suite never touches real macOS service registration or follows a predictable
+// path another local user could pre-create.
+const TEST_LAUNCH_AGENTS_DIR = mkdtempSync(
+  join(tmpdir(), "traycer-macos-service-test-"),
+);
 vi.mock("../../label", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../label")>();
   return {
@@ -91,10 +103,10 @@ describe("macOS service lifecycle", () => {
 
   beforeEach(() => {
     createdPlistPath = null;
-    mocks.readHostPidMetadata.mockReset();
-    mocks.readHostPidMetadata.mockResolvedValue(null);
-    mocks.isProcessAlive.mockReset();
-    mocks.isProcessAlive.mockReturnValue(false);
+    MOCKS.readHostPidMetadata.mockReset();
+    MOCKS.readHostPidMetadata.mockResolvedValue(null);
+    MOCKS.isProcessAlive.mockReset();
+    MOCKS.isProcessAlive.mockReturnValue(false);
   });
 
   afterEach(async () => {
@@ -106,6 +118,10 @@ describe("macOS service lifecycle", () => {
     if (createdPlistPath !== null) {
       await rm(createdPlistPath, { force: true });
     }
+  });
+
+  afterAll(async () => {
+    await rm(tempPlistDir, { recursive: true, force: true });
   });
 
   it("on an existing registration runs print → bootout → bootstrap → kickstart and returns cleanly", async () => {
@@ -383,8 +399,8 @@ describe("macOS service lifecycle", () => {
         tolerateNonZeroExit: false,
       },
     ]);
-    expect(mocks.readHostPidMetadata).not.toHaveBeenCalled();
-    expect(mocks.isProcessAlive).not.toHaveBeenCalled();
+    expect(MOCKS.readHostPidMetadata).not.toHaveBeenCalled();
+    expect(MOCKS.isProcessAlive).not.toHaveBeenCalled();
   });
 
   it("treats an already-removed launchd service as a successful uninstall", async () => {
@@ -446,8 +462,8 @@ describe("macOS service lifecycle", () => {
 
   it("waits through delayed host exit when stopping", async () => {
     vi.useFakeTimers();
-    mocks.readHostPidMetadata.mockResolvedValue(HOST_PID_METADATA);
-    mocks.isProcessAlive
+    MOCKS.readHostPidMetadata.mockResolvedValue(HOST_PID_METADATA);
+    MOCKS.isProcessAlive
       .mockReturnValueOnce(true)
       .mockReturnValueOnce(true)
       .mockReturnValue(false);
@@ -458,13 +474,13 @@ describe("macOS service lifecycle", () => {
     await vi.advanceTimersByTimeAsync(300);
 
     await expect(stopping).resolves.toBeUndefined();
-    expect(mocks.isProcessAlive).toHaveBeenCalledTimes(3);
+    expect(MOCKS.isProcessAlive).toHaveBeenCalledTimes(3);
   });
 
   it("rejects when a stopped host remains alive through the shutdown timeout", async () => {
     vi.useFakeTimers();
-    mocks.readHostPidMetadata.mockResolvedValue(HOST_PID_METADATA);
-    mocks.isProcessAlive.mockReturnValue(true);
+    MOCKS.readHostPidMetadata.mockResolvedValue(HOST_PID_METADATA);
+    MOCKS.isProcessAlive.mockReturnValue(true);
     const runner: ProcessRunner = async () => buildSuccessResult();
     const controller = createMacosController(runner);
 
