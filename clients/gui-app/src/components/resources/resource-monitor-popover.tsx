@@ -182,6 +182,11 @@ interface DesktopResourceSummary {
   readonly processCount: number;
 }
 
+interface DesktopProcessGroupEntry {
+  readonly label: string;
+  readonly usage: DesktopAppProcessGroupUsage;
+}
+
 interface ProcessDisplayRow {
   readonly process: ResourceProcessSnapshotWire;
   readonly depth: number;
@@ -504,7 +509,10 @@ function ResourceMonitorContent(props: { readonly onClose: () => void }) {
 
         <div className="max-h-[min(58vh,36rem)] overflow-y-auto">
           {desktopApp === null ? null : (
-            <DesktopAppResourceSection app={desktopApp} />
+            <DesktopAppResourceSection
+              app={desktopApp}
+              sortOption={sortOption}
+            />
           )}
           {projection.app === null ? null : (
             <HostAppResourceSection app={projection.app} />
@@ -522,6 +530,7 @@ function ResourceMonitorContent(props: { readonly onClose: () => void }) {
                     task={task}
                     expandedOwners={expandedOwners}
                     expandedProcesses={expandedProcesses}
+                    sortOption={sortOption}
                     onToggleOwner={toggleOwner}
                     onToggleProcess={toggleProcess}
                     onOpenOwner={openOwner}
@@ -532,6 +541,7 @@ function ResourceMonitorContent(props: { readonly onClose: () => void }) {
                 <OtherResourceSection
                   other={projection.other}
                   expandedProcesses={expandedProcesses}
+                  sortOption={sortOption}
                   onToggleProcess={toggleProcess}
                 />
               )}
@@ -659,11 +669,20 @@ function ResourceCounts(props: { readonly summary: TaskResourceSummary }) {
 
 function DesktopAppResourceSection(props: {
   readonly app: DesktopAppResourceUsage;
+  readonly sortOption: ResourceSortOption;
 }) {
   const showOther =
     props.app.other.cpuPercent > 0 ||
     props.app.other.rssBytes > 0 ||
     props.app.other.processCount > 0;
+  const groups = sortDesktopProcessGroups(
+    [
+      { label: "Main", usage: props.app.main },
+      { label: "Renderer", usage: props.app.renderer },
+      ...(showOther ? [{ label: "Other", usage: props.app.other }] : []),
+    ],
+    props.sortOption,
+  );
 
   return (
     <div className="border-b border-border/60 py-1">
@@ -685,11 +704,13 @@ function DesktopAppResourceSection(props: {
           className="text-ui-sm text-foreground"
         />
       </div>
-      <DesktopAppProcessGroupRow label="Main" usage={props.app.main} />
-      <DesktopAppProcessGroupRow label="Renderer" usage={props.app.renderer} />
-      {showOther ? (
-        <DesktopAppProcessGroupRow label="Other" usage={props.app.other} />
-      ) : null}
+      {groups.map((group) => (
+        <DesktopAppProcessGroupRow
+          key={group.label}
+          label={group.label}
+          usage={group.usage}
+        />
+      ))}
     </div>
   );
 }
@@ -822,6 +843,7 @@ function TaskResourceSection(props: {
   readonly task: TaskDisplayRow;
   readonly expandedOwners: ReadonlySet<string>;
   readonly expandedProcesses: ReadonlySet<string>;
+  readonly sortOption: ResourceSortOption;
   readonly onToggleOwner: (key: string) => void;
   readonly onToggleProcess: (key: string) => void;
   readonly onOpenOwner: (row: OwnerDisplayRow) => void;
@@ -870,6 +892,7 @@ function TaskResourceSection(props: {
             row={row}
             expanded={props.expandedOwners.has(key)}
             expandedProcesses={props.expandedProcesses}
+            sortOption={props.sortOption}
             stickyTop={headerHeight}
             onToggle={() => props.onToggleOwner(key)}
             onToggleProcess={props.onToggleProcess}
@@ -884,6 +907,7 @@ function TaskResourceSection(props: {
 function OtherResourceSection(props: {
   readonly other: OtherResourceSnapshotWire;
   readonly expandedProcesses: ReadonlySet<string>;
+  readonly sortOption: ResourceSortOption;
   readonly onToggleProcess: (key: string) => void;
 }) {
   const headerRef = useRef<HTMLDivElement | null>(null);
@@ -896,6 +920,7 @@ function OtherResourceSection(props: {
     props.other.processes,
     props.expandedProcesses,
     props.other,
+    props.sortOption,
   );
 
   useLayoutEffect(() => {
@@ -961,6 +986,7 @@ function OwnerTreeRow(props: {
   readonly row: OwnerDisplayRow;
   readonly expanded: boolean;
   readonly expandedProcesses: ReadonlySet<string>;
+  readonly sortOption: ResourceSortOption;
   readonly stickyTop: number;
   readonly onToggle: () => void;
   readonly onToggleProcess: (key: string) => void;
@@ -981,6 +1007,7 @@ function OwnerTreeRow(props: {
     props.row.snapshot.processes,
     props.expandedProcesses,
     props.row.snapshot,
+    props.sortOption,
   );
   const visibleCpuPercent = props.expanded
     ? processRows.selfCpuPercent
@@ -1241,6 +1268,7 @@ function buildTaskRows(input: {
         snapshot.processes,
         NO_EXPANDED_PROCESSES,
         snapshot,
+        input.sortOption,
       );
       return {
         snapshot,
@@ -1352,6 +1380,29 @@ function sortTaskRows(
       break;
     case "tab":
       sorted.sort((a, b) => a.tabOrder - b.tabOrder);
+      break;
+  }
+  return sorted;
+}
+
+function sortDesktopProcessGroups(
+  groups: readonly DesktopProcessGroupEntry[],
+  sortOption: ResourceSortOption,
+): readonly DesktopProcessGroupEntry[] {
+  const sorted = [...groups];
+  switch (sortOption) {
+    case "memory":
+      sorted.sort((a, b) => b.usage.rssBytes - a.usage.rssBytes);
+      break;
+    case "cpu":
+      sorted.sort((a, b) => b.usage.cpuPercent - a.usage.cpuPercent);
+      break;
+    case "name":
+      sorted.sort((a, b) => a.label.localeCompare(b.label));
+      break;
+    case "tab":
+      // Process groups have no tab identity; keep the fixed
+      // Main / Renderer / Other order.
       break;
   }
   return sorted;
@@ -1673,10 +1724,34 @@ function processRowKey(process: ResourceProcessSnapshotWire): string {
   return `${process.rootPid}:${process.pid}`;
 }
 
+/**
+ * Comparator for sibling process rows. Sorts on the SUBTREE aggregates, not a
+ * process's own usage, so a parent with a heavy descendant bubbles above a
+ * lighter sibling even while collapsed - matching the inclusive values the
+ * collapsed rows display. "tab" has no meaning for OS processes; null keeps
+ * the host's wire order.
+ */
+function processRowComparator(
+  sortOption: ResourceSortOption,
+): ((a: ProcessDisplayRow, b: ProcessDisplayRow) => number) | null {
+  switch (sortOption) {
+    case "memory":
+      return (a, b) => b.treeRssBytes - a.treeRssBytes;
+    case "cpu":
+      return (a, b) => b.treeCpuPercent - a.treeCpuPercent;
+    case "name":
+      return (a, b) =>
+        processLabel(a.process).localeCompare(processLabel(b.process));
+    case "tab":
+      return null;
+  }
+}
+
 function buildProcessRows(
   processes: readonly ResourceProcessSnapshotWire[],
   expandedKeys: ReadonlySet<string>,
   fallback: { readonly cpuPercent: number; readonly rssBytes: number },
+  sortOption: ResourceSortOption,
 ): OwnerProcessRows {
   if (processes.length === 0) {
     return {
@@ -1714,6 +1789,12 @@ function buildProcessRows(
   );
   const completeRoots = roots.length === 0 ? processes : roots;
 
+  const compareRows = processRowComparator(sortOption);
+  const sortSiblingRows = (
+    siblingRows: readonly ProcessDisplayRow[],
+  ): readonly ProcessDisplayRow[] =>
+    compareRows === null ? siblingRows : [...siblingRows].sort(compareRows);
+
   const buildRow = (
     process: ResourceProcessSnapshotWire,
     depth: number,
@@ -1724,8 +1805,8 @@ function buildProcessRows(
     );
     const nextAncestors = new Set(ancestors);
     nextAncestors.add(process.pid);
-    const children = childProcesses.map((child) =>
-      buildRow(child, depth + 1, nextAncestors),
+    const children = sortSiblingRows(
+      childProcesses.map((child) => buildRow(child, depth + 1, nextAncestors)),
     );
     const treeCpuPercent = children.reduce(
       (sum, child) => sum + child.treeCpuPercent,
@@ -1750,7 +1831,9 @@ function buildProcessRows(
     };
   };
 
-  const rootRows = completeRoots.map((root) => buildRow(root, 0, new Set()));
+  const rootRows = sortSiblingRows(
+    completeRoots.map((root) => buildRow(root, 0, new Set())),
+  );
   const rows = rootRows.flatMap((root) => root.children);
   return {
     rows,

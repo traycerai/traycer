@@ -12,6 +12,7 @@ import type {
 } from "@traycer/protocol/host/worktree-schemas";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { createAppQueryClient } from "@/lib/query-client";
 import { hostQueryKeys } from "@/lib/query-keys";
 import {
   useCachedWorktreeEnrichment,
@@ -21,6 +22,9 @@ import {
 const HOST_ID = mockLocalHostEntry.hostId;
 // Slightly over the hook's internal 80ms report debounce.
 const WORKTREE_DEBOUNCE_SETTLE_MS = 120;
+// Passed as `worktreePaths` where a test exercises only the viewport
+// machinery - an empty denominator keeps the background sweep inert.
+const NO_SWEEP_PATHS: readonly string[] = [];
 
 function enrichedEntry(
   worktreePath: string,
@@ -179,7 +183,7 @@ describe("useWorktreeActivityEnrichment (window-independent overlay)", () => {
     // client=null / reachable=false: no live fetching, so the ONLY source of the
     // overlay is the cache - proving it is independent of the reported window.
     const { result } = renderHook(
-      () => useWorktreeActivityEnrichment(null, false, HOST_ID),
+      () => useWorktreeActivityEnrichment(null, false, HOST_ID, NO_SWEEP_PATHS),
       { wrapper: wrapperFor(qc) },
     );
     expect(result.current.enrichedByPath.has("/wt/a")).toBe(true);
@@ -207,8 +211,12 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
   function createFixture(
     entriesByPath: ReadonlyMap<string, WorktreeHostEntryV12>,
     onPathRequest: ((path: string) => void) | null,
+    // Awaited per requested path before the response resolves - lets a test
+    // hold probes in flight to observe concurrency/dedupe. `null` = respond
+    // immediately (no extra microtask boundary for the sync-handler tests).
+    requestGate: ((path: string) => Promise<void>) | null,
+    queryClient: QueryClient,
   ) {
-    const queryClient = new QueryClient();
     const client = new HostClient<HostRpcRegistry>({
       registry: hostRpcRegistry,
       invalidator: createHostQueryInvalidator(queryClient),
@@ -216,21 +224,24 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
         registry: hostRpcRegistry,
         requestId: () => "req-1",
         handlers: {
-          "worktree.listAllForHost": (params) => {
+          "worktree.listAllForHost": async (params) => {
             // Per-path enrichment: return the enriched entry for each requested
             // path (the panel always requests exactly one path per query).
             const paths =
               "activityPaths" in params && params.activityPaths !== null
                 ? params.activityPaths
                 : [];
-            return {
-              worktrees: paths.flatMap((path) => {
-                const entry = entriesByPath.get(path);
-                if (onPathRequest !== null) onPathRequest(path);
-                return entry === undefined ? [] : [entry];
-              }),
-              nextCursor: null,
-            };
+            const worktrees: WorktreeHostEntryV12[] = [];
+            for (const path of paths) {
+              // Snapshot the entry BEFORE the callbacks, so a callback that
+              // mutates `entriesByPath` affects the NEXT request's response
+              // (the warming-host shape the cold-retry tests model).
+              const entry = entriesByPath.get(path);
+              if (onPathRequest !== null) onPathRequest(path);
+              if (requestGate !== null) await requestGate(path);
+              if (entry !== undefined) worktrees.push(entry);
+            }
+            return { worktrees, nextCursor: null };
           },
         },
       }),
@@ -244,7 +255,7 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
         {props.children}
       </QueryClientProvider>
     );
-    return { client, Wrapper };
+    return { client, Wrapper, queryClient };
   }
 
   it("enriches a reported window, then keeps it enriched after the window shrinks", async () => {
@@ -252,9 +263,15 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
       ["/wt/a", enrichedEntry("/wt/a", "feat-a")],
       ["/wt/b", enrichedEntry("/wt/b", "feat-b")],
     ]);
-    const fixture = createFixture(entriesByPath, null);
+    const fixture = createFixture(entriesByPath, null, null, new QueryClient());
     const { result } = renderHook(
-      () => useWorktreeActivityEnrichment(fixture.client, true, HOST_ID),
+      () =>
+        useWorktreeActivityEnrichment(
+          fixture.client,
+          true,
+          HOST_ID,
+          NO_SWEEP_PATHS,
+        ),
       { wrapper: fixture.Wrapper },
     );
 
@@ -300,7 +317,7 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
     const entriesByPath = new Map<string, WorktreeHostEntryV12>([
       ["/wt/a", enrichedEntry("/wt/a", "feat-a")],
     ]);
-    const fixture = createFixture(entriesByPath, null);
+    const fixture = createFixture(entriesByPath, null, null, new QueryClient());
     // Mimic the list: report on-screen paths from a MOUNT EFFECT, exactly where
     // StrictMode's double-invoked effect cycle bites.
     function useEnrichmentReportingOnMount() {
@@ -308,6 +325,7 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
         fixture.client,
         true,
         HOST_ID,
+        NO_SWEEP_PATHS,
       );
       const { reportVisiblePaths } = enrichment;
       useEffect(() => {
@@ -341,12 +359,23 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
       ["/wt/a", coldEntry],
     ]);
     const requests: string[] = [];
-    const fixture = createFixture(entriesByPath, (path) => {
-      requests.push(path);
-      if (requests.length === 1) entriesByPath.set(path, resolvedEntry);
-    });
+    const fixture = createFixture(
+      entriesByPath,
+      (path) => {
+        requests.push(path);
+        if (requests.length === 1) entriesByPath.set(path, resolvedEntry);
+      },
+      null,
+      new QueryClient(),
+    );
     const { result } = renderHook(
-      () => useWorktreeActivityEnrichment(fixture.client, true, HOST_ID),
+      () =>
+        useWorktreeActivityEnrichment(
+          fixture.client,
+          true,
+          HOST_ID,
+          NO_SWEEP_PATHS,
+        ),
       { wrapper: fixture.Wrapper },
     );
 
@@ -409,12 +438,23 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
       ["/wt/a", coldEntry],
     ]);
     const requests: string[] = [];
-    const fixture = createFixture(entriesByPath, (path) => {
-      requests.push(path);
-      if (requests.length === 1) entriesByPath.set(path, resolvedEntry);
-    });
+    const fixture = createFixture(
+      entriesByPath,
+      (path) => {
+        requests.push(path);
+        if (requests.length === 1) entriesByPath.set(path, resolvedEntry);
+      },
+      null,
+      new QueryClient(),
+    );
     const { result } = renderHook(
-      () => useWorktreeActivityEnrichment(fixture.client, true, HOST_ID),
+      () =>
+        useWorktreeActivityEnrichment(
+          fixture.client,
+          true,
+          HOST_ID,
+          NO_SWEEP_PATHS,
+        ),
       { wrapper: fixture.Wrapper },
     );
 
@@ -446,11 +486,22 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
       ["/wt/a", enrichedEntry("/wt/a", "feat-a")],
     ]);
     const requests: string[] = [];
-    const fixture = createFixture(entriesByPath, (path) => {
-      requests.push(path);
-    });
+    const fixture = createFixture(
+      entriesByPath,
+      (path) => {
+        requests.push(path);
+      },
+      null,
+      new QueryClient(),
+    );
     const { result } = renderHook(
-      () => useWorktreeActivityEnrichment(fixture.client, true, HOST_ID),
+      () =>
+        useWorktreeActivityEnrichment(
+          fixture.client,
+          true,
+          HOST_ID,
+          NO_SWEEP_PATHS,
+        ),
       { wrapper: fixture.Wrapper },
     );
 
@@ -476,5 +527,295 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
       await vi.advanceTimersByTimeAsync(10_000);
     });
     expect(requests).toHaveLength(4);
+  });
+
+  describe("background sweep (no scrolling required)", () => {
+    function warmEntry(path: string, branch: string): WorktreeHostEntryV12 {
+      // `prState: "none"` = probed, no PR - a WARM row the sweep must fetch
+      // exactly once and then leave alone (the shared fixture's `null` means
+      // cold/unprobed and would re-arm the retry budget).
+      return { ...enrichedEntry(path, branch), prState: "none" };
+    }
+
+    it("sweeps every un-reported path in bounded chunks until the whole list enriches", async () => {
+      const paths = Array.from({ length: 20 }, (_, i) => `/wt/sweep-${i}`);
+      const entriesByPath = new Map<string, WorktreeHostEntryV12>(
+        paths.map((path, i) => [path, warmEntry(path, `feat-${i}`)]),
+      );
+      const requests: string[] = [];
+      let inFlight = 0;
+      let maxInFlight = 0;
+      const fixture = createFixture(
+        entriesByPath,
+        (path) => {
+          requests.push(path);
+        },
+        async () => {
+          inFlight += 1;
+          maxInFlight = Math.max(maxInFlight, inFlight);
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          inFlight -= 1;
+        },
+        createAppQueryClient(),
+      );
+      const { result } = renderHook(
+        () =>
+          useWorktreeActivityEnrichment(fixture.client, true, HOST_ID, paths),
+        { wrapper: fixture.Wrapper },
+      );
+
+      // NO reportVisiblePaths at all - the sweep alone must converge the list.
+      await waitFor(() => {
+        expect(result.current.enrichedByPath.size).toBe(20);
+      });
+      // Every path probed exactly once…
+      expect([...requests].sort()).toEqual([...paths].sort());
+      // …never more than one chunk's worth of probes in flight at a time, and
+      // genuinely chunked (concurrent within a chunk, not serialized).
+      expect(maxInFlight).toBeLessThanOrEqual(8);
+      expect(maxInFlight).toBeGreaterThan(1);
+    });
+
+    it("probes a path exactly once when the sweep and the viewport race for it", async () => {
+      const entriesByPath = new Map<string, WorktreeHostEntryV12>([
+        ["/wt/a", warmEntry("/wt/a", "feat-a")],
+      ]);
+      const requests: string[] = [];
+      const fixture = createFixture(
+        entriesByPath,
+        (path) => {
+          requests.push(path);
+        },
+        // Hold the probe past the 80ms report debounce, so the mount-time sweep
+        // chunk and the viewport observer overlap on the same in-flight query.
+        async () => {
+          await new Promise((resolve) => setTimeout(resolve, 150));
+        },
+        createAppQueryClient(),
+      );
+      const { result } = renderHook(
+        () =>
+          useWorktreeActivityEnrichment(fixture.client, true, HOST_ID, [
+            "/wt/a",
+          ]),
+        { wrapper: fixture.Wrapper },
+      );
+      act(() => {
+        result.current.reportVisiblePaths(["/wt/a"]);
+      });
+
+      await waitFor(() => {
+        expect(result.current.enrichedByPath.has("/wt/a")).toBe(true);
+      });
+      // Settle window: a spurious second fetch would fire right after the first
+      // resolves, so give it the chance to prove absent.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(requests).toHaveLength(1);
+    });
+
+    it("retries a swept path that lands cold, then stops once it resolves", async () => {
+      vi.useFakeTimers();
+      const coldEntry = enrichedEntry("/wt/a", "feat-a"); // prState null = cold
+      const resolvedEntry = warmEntry("/wt/a", "feat-a");
+      const entriesByPath = new Map<string, WorktreeHostEntryV12>([
+        ["/wt/a", coldEntry],
+      ]);
+      const requests: string[] = [];
+      const fixture = createFixture(
+        entriesByPath,
+        (path) => {
+          requests.push(path);
+          if (requests.length === 1) entriesByPath.set(path, resolvedEntry);
+        },
+        null,
+        createAppQueryClient(),
+      );
+      const { result } = renderHook(
+        () =>
+          useWorktreeActivityEnrichment(fixture.client, true, HOST_ID, [
+            "/wt/a",
+          ]),
+        { wrapper: fixture.Wrapper },
+      );
+
+      // The mount-time sweep chunk fires without any visible-paths report.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(requests).toHaveLength(1);
+
+      // Cold → the sweep's backoff (750ms × attempts) re-probes it.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+      expect(requests).toHaveLength(2);
+      expect(result.current.enrichedByPath.get("/wt/a")?.prState).toBe("none");
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(requests).toHaveLength(2);
+    });
+
+    it("stops sweeping a permanently cold path after the bounded probe budget", async () => {
+      vi.useFakeTimers();
+      const entriesByPath = new Map<string, WorktreeHostEntryV12>([
+        ["/wt/a", enrichedEntry("/wt/a", "feat-a")],
+      ]);
+      const requests: string[] = [];
+      const fixture = createFixture(
+        entriesByPath,
+        (path) => {
+          requests.push(path);
+        },
+        null,
+        createAppQueryClient(),
+      );
+      renderHook(
+        () =>
+          useWorktreeActivityEnrichment(fixture.client, true, HOST_ID, [
+            "/wt/a",
+          ]),
+        { wrapper: fixture.Wrapper },
+      );
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(requests).toHaveLength(1);
+
+      // The sweep budgets PROBES per path (3): initial at t=0, retries after
+      // 750ms and a further 1500ms; after that the path is left to the
+      // viewport machinery (scrolling to it still retries on its own budget).
+      const retrySteps = [
+        { advanceMs: 800, expectedCount: 2 },
+        { advanceMs: 1_600, expectedCount: 3 },
+      ];
+      for (const step of retrySteps) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(step.advanceMs);
+        });
+        expect(requests).toHaveLength(step.expectedCount);
+      }
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(requests).toHaveLength(3);
+    });
+
+    it("re-probes swept entries after a method-scope invalidation (refresh), still in bounded chunks", async () => {
+      const paths = Array.from({ length: 12 }, (_, i) => `/wt/refresh-${i}`);
+      const entriesByPath = new Map<string, WorktreeHostEntryV12>(
+        paths.map((path, i) => [path, warmEntry(path, `feat-${i}`)]),
+      );
+      const requests: string[] = [];
+      let inFlight = 0;
+      let maxInFlight = 0;
+      const fixture = createFixture(
+        entriesByPath,
+        (path) => {
+          requests.push(path);
+        },
+        async () => {
+          inFlight += 1;
+          maxInFlight = Math.max(maxInFlight, inFlight);
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          inFlight -= 1;
+        },
+        createAppQueryClient(),
+      );
+      const { result } = renderHook(
+        () =>
+          useWorktreeActivityEnrichment(fixture.client, true, HOST_ID, paths),
+        { wrapper: fixture.Wrapper },
+      );
+      await waitFor(() => {
+        expect(result.current.enrichedByPath.size).toBe(12);
+      });
+      expect(requests).toHaveLength(12);
+      maxInFlight = 0;
+
+      // A refresh invalidates the method scope with `refetchType: "active"`
+      // (mirroring `WorktreesBody.onRefresh`). The swept entries have no
+      // observers, so nothing refetches directly - only the sweep can pick
+      // them back up, woken by the invalidation cache event. The re-sweep must
+      // be the same bounded chunk walk, never a whole-list fan-out: every path
+      // re-probed exactly once, and never more than one chunk's worth of
+      // probes in flight.
+      await act(async () => {
+        await fixture.queryClient.invalidateQueries({
+          queryKey: METHOD_SCOPE,
+          refetchType: "active",
+        });
+      });
+      await waitFor(() => {
+        expect(requests).toHaveLength(24);
+      });
+      expect([...requests.slice(12)].sort()).toEqual([...paths].sort());
+      expect(maxInFlight).toBeLessThanOrEqual(8);
+      expect(maxInFlight).toBeGreaterThan(1);
+    });
+
+    it("keeps a permanently rejecting refresh bounded (regression: isInvalidated persists across failed refetches)", async () => {
+      vi.useFakeTimers();
+      const entriesByPath = new Map<string, WorktreeHostEntryV12>([
+        ["/wt/a", warmEntry("/wt/a", "feat-a")],
+      ]);
+      const requests: string[] = [];
+      const fixture = createFixture(
+        entriesByPath,
+        (path) => {
+          requests.push(path);
+          // Every request after the initial sweep fails - the host went away.
+          if (requests.length > 1) throw new Error("host unreachable");
+        },
+        null,
+        createAppQueryClient(),
+      );
+      renderHook(
+        () =>
+          useWorktreeActivityEnrichment(fixture.client, true, HOST_ID, [
+            "/wt/a",
+          ]),
+        { wrapper: fixture.Wrapper },
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(requests).toHaveLength(1);
+
+      // Refresh. A rejected refetch does NOT clear `isInvalidated` - only a
+      // successful one does - so the sweep must consume its ONE granted
+      // budget and then stop, instead of re-granting on every pass and
+      // probing forever. The budget allows 3 probes, each at most 2 handler
+      // calls (the app QueryClient's single query-level retry): ceiling
+      // 1 + 3×2 = 7. Effect scheduling under fake timers flushes at act()
+      // boundaries, so walk several generous windows and assert the total
+      // STABILIZES under that ceiling - the regression (re-granting the
+      // budget on every pass) keeps probing in every window and blows far
+      // past it.
+      await act(async () => {
+        await fixture.queryClient.invalidateQueries({
+          queryKey: METHOD_SCOPE,
+          refetchType: "active",
+        });
+      });
+      for (let window = 0; window < 8; window += 1) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(20_000);
+        });
+      }
+      const settled = requests.length;
+      expect(settled).toBeGreaterThan(1); // the grant did allow re-probing
+      expect(settled).toBeLessThanOrEqual(7);
+
+      // No further probes, ever - the budget stays consumed while the
+      // invalidation persists.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+      expect(requests).toHaveLength(settled);
+    });
   });
 });

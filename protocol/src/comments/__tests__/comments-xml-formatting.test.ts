@@ -103,9 +103,9 @@ body &amp; &lt;tag&gt;
 </comment>
 </thread>
 
-<thread id="thread-resolved" created_at="2026-06-17T10:20:00.000Z" status="resolved">
+<thread id="thread-resolved" user_id="user-2" created_at="2026-06-17T10:20:00.000Z" status="resolved">
 <quoted_section anchor="unavailable" reason="failed to parse anchor position">old wording</quoted_section>
-<comment id="comment-2" n="1" created_at="2026-06-17T10:21:00.000Z" edited_at="2026-06-17T10:22:00.000Z">
+<comment id="comment-2" n="1" user_id="user-2" created_at="2026-06-17T10:21:00.000Z" edited_at="2026-06-17T10:22:00.000Z">
 fixed
 </comment>
 </thread>

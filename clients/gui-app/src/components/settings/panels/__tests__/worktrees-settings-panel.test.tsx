@@ -1128,7 +1128,7 @@ describe("WorktreesList delete flow", () => {
     );
     expect(invalidateSpy).toHaveBeenCalledWith({
       queryKey: hostQueryKeys.methodScope("host-a", "worktree.listAllForHost"),
-      refetchType: "all",
+      refetchType: "active",
     });
   });
 
@@ -1311,7 +1311,7 @@ describe("WorktreesList delete flow", () => {
 
     expect(invalidateSpy).toHaveBeenCalledWith({
       queryKey: hostQueryKeys.methodScope("host-a", "worktree.listAllForHost"),
-      refetchType: "all",
+      refetchType: "active",
     });
     for (const method of WORKTREE_BINDING_INVALIDATIONS) {
       expect(invalidateSpy).toHaveBeenCalledWith({
@@ -1321,7 +1321,7 @@ describe("WorktreesList delete flow", () => {
     }
     expect(invalidateSpy).not.toHaveBeenCalledWith({
       queryKey: hostQueryKeys.methodScope("host-b", "worktree.listAllForHost"),
-      refetchType: "all",
+      refetchType: "active",
     });
   });
 

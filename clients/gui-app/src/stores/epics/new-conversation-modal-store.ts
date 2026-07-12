@@ -7,6 +7,7 @@ import type { LandingDraftWorkspaceSnapshot } from "@/stores/home/landing-draft-
 import {
   mergeLandingDraftWorkspaceFolders,
   removeLandingDraftWorkspaceFolder,
+  setLandingDraftWorkspacePrimary,
 } from "@/stores/home/landing-draft-store";
 import type { WorkspaceFolderInfo } from "@/stores/workspace/workspace-folders-store";
 
@@ -39,15 +40,22 @@ interface NewConversationModalStore {
     settings: ChatRunSettings | null,
   ) => void;
   readonly setComposerMode: (epicId: string, mode: ComposerMode) => void;
+  // Returns the paths EVICTED by the 50-folder cap (empty when nothing was
+  // evicted) so callers can unstage any in-flight worktree intent for them.
   readonly addResolvedFolders: (
     epicId: string,
     seedWorkspace: LandingDraftWorkspaceSnapshot,
     folders: ReadonlyArray<WorkspaceFolderInfo>,
-  ) => void;
+  ) => ReadonlyArray<string>;
   readonly removeFolder: (
     epicId: string,
     seedWorkspace: LandingDraftWorkspaceSnapshot,
     folderKey: string,
+  ) => void;
+  readonly setPrimaryFolder: (
+    epicId: string,
+    seedWorkspace: LandingDraftWorkspaceSnapshot,
+    folderPath: string,
   ) => void;
   readonly clearDraft: (epicId: string) => void;
   readonly resetForTests: () => void;
@@ -74,7 +82,7 @@ const mergePatch = (
 };
 
 export const useNewConversationModalStore = create<NewConversationModalStore>()(
-  (set) => ({
+  (set, get) => ({
     draftPatchesByEpicId: {},
     setContent: (epicId, content) =>
       set((state) => ({
@@ -94,7 +102,9 @@ export const useNewConversationModalStore = create<NewConversationModalStore>()(
           composerMode: mode,
         }),
       })),
-    addResolvedFolders: (epicId, seedWorkspace, folders) =>
+    addResolvedFolders: (epicId, seedWorkspace, folders) => {
+      const beforeWorkspace =
+        get().draftPatchesByEpicId[epicId]?.workspace ?? seedWorkspace;
       set((state) => {
         const current = state.draftPatchesByEpicId[epicId] ?? EMPTY_DRAFT_PATCH;
         const workspace = mergeLandingDraftWorkspaceFolders(
@@ -106,13 +116,31 @@ export const useNewConversationModalStore = create<NewConversationModalStore>()(
             workspace,
           }),
         };
-      }),
+      });
+      const afterWorkspace =
+        get().draftPatchesByEpicId[epicId]?.workspace ?? seedWorkspace;
+      const afterSet = new Set(afterWorkspace.folders);
+      return beforeWorkspace.folders.filter((path) => !afterSet.has(path));
+    },
     removeFolder: (epicId, seedWorkspace, folderKey) =>
       set((state) => {
         const current = state.draftPatchesByEpicId[epicId] ?? EMPTY_DRAFT_PATCH;
         const workspace = removeLandingDraftWorkspaceFolder(
           current.workspace ?? seedWorkspace,
           folderKey,
+        );
+        return {
+          draftPatchesByEpicId: mergePatch(state.draftPatchesByEpicId, epicId, {
+            workspace,
+          }),
+        };
+      }),
+    setPrimaryFolder: (epicId, seedWorkspace, folderPath) =>
+      set((state) => {
+        const current = state.draftPatchesByEpicId[epicId] ?? EMPTY_DRAFT_PATCH;
+        const workspace = setLandingDraftWorkspacePrimary(
+          current.workspace ?? seedWorkspace,
+          folderPath,
         );
         return {
           draftPatchesByEpicId: mergePatch(state.draftPatchesByEpicId, epicId, {

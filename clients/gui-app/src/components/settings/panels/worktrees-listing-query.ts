@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import {
   type InfiniteData,
   infiniteQueryOptions,
@@ -118,8 +118,13 @@ export function useWorktreeListing(
     if (isFetchingNextPage || isError) return;
     void fetchNextPage();
   }, [enabled, fetchNextPage, hasNextPage, isError, isFetchingNextPage]);
-  const worktrees =
-    data?.pages.flatMap((page) => page.worktrees) ?? EMPTY_WORKTREES;
+  // Memoized on `data` (structurally shared by TanStack), so consumers keyed on
+  // the array identity - the merge/search memos and the enrichment sweep's
+  // denominator - re-derive only when a page actually changes, not per render.
+  const worktrees = useMemo(
+    () => data?.pages.flatMap((page) => page.worktrees) ?? EMPTY_WORKTREES,
+    [data],
+  );
   // Perf telemetry (gated + non-throwing). Both legs now track the BASE query -
   // the real time-to-usable-list, which is what "snappy in any environment" means.
   useWorktreeListQueryPerf({

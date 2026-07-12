@@ -24,12 +24,14 @@ function folder(over: {
     isGitRepo: true,
     mode: over.mode,
     branchLabel: over.branchLabel,
-    hoverLabel: over.displayPath,
     summary: null,
     currentIntent: over.currentIntent,
     defaultNewBranchName: "traycer/swift-otter",
     repoIdentifier: null,
     isPrimary: true,
+    canChangePrimary: true,
+    makePrimaryDisabled: false,
+    makePrimaryDisabledReason: null,
     hostClient: null,
     modeDisabled: false,
     modeDisabledReason: null,
@@ -39,6 +41,7 @@ function folder(over: {
     onSelectMode: NOOP,
     onEmit: NOOP,
     onLocate: null,
+    onMakePrimary: NOOP,
     onRemove: null,
   };
 }
@@ -104,6 +107,53 @@ describe("WorkspaceFolderHoverList", () => {
     // The source folder path and a copy button are not shown — there's no path yet.
     expect(screen.queryByText("/Users/me/Work/traycer")).toBeNull();
     expect(screen.queryByLabelText("Copy folder path")).toBeNull();
+  });
+
+  it("wraps full folder, target, and source names instead of truncating the hover details", () => {
+    render(
+      <WorkspaceFolderHoverList
+        items={[
+          folder({
+            key: "/a",
+            displayName: "a-very-long-repository-name-that-needs-more-room",
+            branchLabel: "traycer/a-very-long-target-branch-name",
+            displayPath: "/Users/me/Work/traycer",
+            mode: "worktree",
+            currentIntent: {
+              kind: "worktree",
+              workspacePath: "/Users/me/Work/traycer",
+              repoIdentifier: null,
+              isPrimary: true,
+              scripts: null,
+              branch: {
+                type: "new",
+                name: "traycer/a-very-long-target-branch-name",
+                source: "release/a-very-long-base-branch-name",
+                carryUncommittedChanges: false,
+              },
+            },
+          }),
+        ]}
+      />,
+    );
+
+    const folderName = screen.getByTestId("workspace-hover-folder-name");
+    const branchName = screen.getByTestId("workspace-hover-branch-name");
+    expect(folderName.textContent).toBe(
+      "a-very-long-repository-name-that-needs-more-room",
+    );
+    expect(folderName.className).toContain("break-words");
+    expect(folderName.className).not.toContain("truncate");
+    expect(branchName.textContent).toBe(
+      "traycer/a-very-long-target-branch-name",
+    );
+    expect(branchName.className).toContain("break-words");
+    expect(branchName.className).not.toContain("truncate");
+    expect(
+      screen.getByText(
+        "From release/a-very-long-base-branch-name · created on send",
+      ),
+    ).toBeTruthy();
   });
 
   it("copies the run path when the copy button is clicked", () => {
