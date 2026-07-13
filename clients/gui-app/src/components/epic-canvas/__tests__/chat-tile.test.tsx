@@ -12,10 +12,26 @@ import {
 } from "@testing-library/react";
 import { VirtuosoMessageListTestingContext } from "@virtuoso.dev/message-list";
 
+const loadingSurfaceTestState = vi.hoisted(() => ({
+  unresolvedWorkspaceRenderCount: 0,
+}));
+
 vi.mock(
   "@/components/home/host-workspace-selector/host-workspace-selector",
   () => ({
-    HostWorkspaceSelector: () => null,
+    HostWorkspaceSelector: (props: {
+      readonly surface: { readonly bindingResolved: boolean };
+    }) => {
+      if (!props.surface.bindingResolved) {
+        loadingSurfaceTestState.unresolvedWorkspaceRenderCount += 1;
+      }
+      return (
+        <div
+          data-testid="host-workspace-selector"
+          data-binding-resolved={String(props.surface.bindingResolved)}
+        />
+      );
+    },
     ActiveHostWorkspaceControls: () => null,
   }),
 );
@@ -220,6 +236,8 @@ interface ChatHarness {
     queueItems: ReadonlyArray<ChatQueuedItem>,
     settings: ChatRunSettings | null,
   ): void;
+  installDeferred(): void;
+  streamCreations(): number;
   callbacks(): ChatStreamCallbacks;
   teardown(): void;
 }
@@ -254,17 +272,28 @@ function seedDocWithChat(doc: Y.Doc): void {
 function createChatHarness(): ChatHarness {
   const sent: ChatSubscribeClientFrame[] = [];
   let callbacks: ChatStreamCallbacks | null = null;
-  const installWithSettings = (
-    access: "owner" | "viewer",
-    queueItems: ReadonlyArray<ChatQueuedItem>,
-    settings: ChatRunSettings | null,
+  let streamCreations = 0;
+  const installStream = (
+    snapshot: {
+      readonly access: "owner" | "viewer";
+      readonly queueItems: ReadonlyArray<ChatQueuedItem>;
+      readonly settings: ChatRunSettings | null;
+    } | null,
   ): void => {
     __setChatStreamClientFactoryForTests((_epicId, _chatId, nextCallbacks) => {
       callbacks = nextCallbacks;
-      setTimeout(() => {
-        nextCallbacks.onConnectionStatus("open", null);
-        emitChatSnapshot(nextCallbacks, access, queueItems, settings);
-      }, 0);
+      streamCreations += 1;
+      if (snapshot !== null) {
+        setTimeout(() => {
+          nextCallbacks.onConnectionStatus("open", null);
+          emitChatSnapshot(
+            nextCallbacks,
+            snapshot.access,
+            snapshot.queueItems,
+            snapshot.settings,
+          );
+        }, 0);
+      }
       const client: Pick<ChatStreamClient, "sendAction" | "close"> = {
         sendAction: (frame) => {
           sent.push(frame);
@@ -274,12 +303,25 @@ function createChatHarness(): ChatHarness {
       return client;
     });
   };
+  const installWithSettings = (
+    access: "owner" | "viewer",
+    queueItems: ReadonlyArray<ChatQueuedItem>,
+    settings: ChatRunSettings | null,
+  ): void => {
+    installStream({
+      access,
+      queueItems,
+      settings,
+    });
+  };
   return {
     sent,
     install: (access, queueItems) => {
       installWithSettings(access, queueItems, null);
     },
     installWithSettings,
+    installDeferred: () => installStream(null),
+    streamCreations: () => streamCreations,
     callbacks: () => {
       if (callbacks === null) throw new Error("expected chat callbacks");
       return callbacks;
@@ -289,6 +331,7 @@ function createChatHarness(): ChatHarness {
       __getChatSessionRegistryForTests().disposeAll();
       sent.length = 0;
       callbacks = null;
+      streamCreations = 0;
     },
   };
 }
@@ -534,7 +577,24 @@ function renderChatTile() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
-  return render(
+  return render(chatTileTestTree(queryClient, true));
+}
+
+function renderSwitchableChatTile() {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
+  const rendered = render(chatTileTestTree(queryClient, true));
+  return {
+    ...rendered,
+    setChatVisible: (visible: boolean) => {
+      rendered.rerender(chatTileTestTree(queryClient, visible));
+    },
+  };
+}
+
+function chatTileTestTree(queryClient: QueryClient, chatVisible: boolean) {
+  return (
     <TestRouterProvider>
       <VirtuosoMessageListTestingContext.Provider
         value={{ itemHeight: 120, viewportHeight: 900 }}
@@ -556,18 +616,20 @@ function renderChatTile() {
             <TooltipProvider>
               <TestEpicSessionWrapper epicId={EPIC_ID}>
                 <TabHostProvider hostId={CHAT_ARTIFACT.hostId}>
-                  <ChatTile
-                    node={CHAT_ARTIFACT}
-                    viewTabId="tab-test"
-                    isActive
-                  />
+                  {chatVisible ? (
+                    <ChatTile
+                      node={CHAT_ARTIFACT}
+                      viewTabId="tab-test"
+                      isActive
+                    />
+                  ) : null}
                 </TabHostProvider>
               </TestEpicSessionWrapper>
             </TooltipProvider>
           </RunnerHostProvider>
         </QueryClientProvider>
       </VirtuosoMessageListTestingContext.Provider>
-    </TestRouterProvider>,
+    </TestRouterProvider>
   );
 }
 
@@ -650,6 +712,7 @@ describe("<ChatTile />", () => {
     });
     useComposerRunSettingsStore.getState().resetForTests();
     useComposerHarnessMemoryStore.getState().resetForTests();
+    loadingSurfaceTestState.unresolvedWorkspaceRenderCount = 0;
     // The composer gates Send on a resolved (non-empty) model slug. Without a
     // host binding the catalog never resolves the empty default, so seed a
     // concrete default model so the composer reaches a sendable state.
@@ -705,6 +768,53 @@ describe("<ChatTile />", () => {
 
     expect(chatStreamSpy).not.toHaveBeenCalled();
     expect(screen.queryByTestId("chat-tile-loading")).not.toBeNull();
+  });
+
+  it("keeps a cold sidebar-opened chat in one loading state until its first snapshot", async () => {
+    chatHarness.teardown();
+    chatHarness.installDeferred();
+
+    renderChatTile();
+
+    await waitFor(() => {
+      expect(chatHarness.streamCreations()).toBe(1);
+    });
+    expect(screen.getByRole("status", { name: "Loading chat" })).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+    expect(screen.queryByTestId("host-workspace-selector")).toBeNull();
+    expect(loadingSurfaceTestState.unresolvedWorkspaceRenderCount).toBe(0);
+
+    act(() => {
+      emitChatSnapshot(chatHarness.callbacks(), "owner", [], SESSION_SETTINGS);
+    });
+
+    await waitForChatTileLoaded();
+    expect(screen.getByRole("button", { name: "Send" })).not.toBeNull();
+    expect(
+      screen
+        .getByTestId("host-workspace-selector")
+        .getAttribute("data-binding-resolved"),
+    ).toBe("true");
+  });
+
+  it("does not mount unresolved controls when switching back to a warm chat", async () => {
+    const rendered = renderSwitchableChatTile();
+    await waitForChatTileLoaded();
+    expect(chatHarness.streamCreations()).toBe(1);
+
+    rendered.setChatVisible(false);
+    loadingSurfaceTestState.unresolvedWorkspaceRenderCount = 0;
+    rendered.setChatVisible(true);
+
+    await waitForChatTileLoaded();
+    expect(chatHarness.streamCreations()).toBe(1);
+    expect(loadingSurfaceTestState.unresolvedWorkspaceRenderCount).toBe(0);
+    expect(screen.queryByRole("status", { name: "Loading chat" })).toBeNull();
+    expect(
+      screen
+        .getByTestId("host-workspace-selector")
+        .getAttribute("data-binding-resolved"),
+    ).toBe("true");
   });
 
   it("renders host chat content and sends through chat.subscribe", async () => {
