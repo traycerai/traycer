@@ -1,11 +1,17 @@
-import { uninstallHost } from "../installer";
+import {
+  uninstallHost,
+  type UninstallHostOptions,
+  type UninstallHostResult,
+} from "../installer";
 import type { ILogger } from "../logger";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import type { Environment } from "../runner/environment";
+import type { ProgressInfo } from "../runner/output";
 import {
   createServiceController,
   serviceLabelFor,
   type ServiceLabel,
+  type UninstallServiceOptions,
 } from "../service";
 import { withCliLock } from "../store/cli-lock";
 
@@ -20,6 +26,21 @@ export interface HostUninstallArgs {
 
 export interface RuntimePurgeStopController {
   stop(label: ServiceLabel): Promise<void>;
+}
+
+export interface HostUninstallServiceController extends RuntimePurgeStopController {
+  uninstall(options: UninstallServiceOptions): Promise<void>;
+}
+
+export interface RunHostUninstallDeps {
+  createServiceController(): HostUninstallServiceController;
+  uninstallHost(options: UninstallHostOptions): Promise<UninstallHostResult>;
+}
+
+export interface RunHostUninstallContext {
+  readonly environment: Environment;
+  readonly logger: ILogger;
+  progress(info: ProgressInfo): void;
 }
 
 interface StopServiceBeforeRuntimePurgeArgs {
@@ -62,83 +83,101 @@ export function buildHostUninstallCommand(args: HostUninstallArgs): CommandFn {
         waitMs: 30_000,
         pollIntervalMs: 100,
       },
-      async () => {
-        let serviceUninstalled = false;
-        let purgeChannelRuntime = false;
-        if (args.all) {
-          ctx.runtime.logger.warn(
-            "Host uninstall command will deregister service and purge runtime",
-            {
-              environment: ctx.runtime.environment,
-            },
-          );
-          ctx.progress({
-            stage: "service-stop",
-            message: `stopping service for ${ctx.runtime.environment} environment`,
-            percent: null,
-            bytes: null,
-            totalBytes: null,
-          });
-          const controller = createServiceController();
-          const label = serviceLabelFor(ctx.runtime.environment);
-          // Deregister BEFORE waiting for the process to exit. On macOS the
-          // running job stays under launchd's `KeepAlive` supervision until
-          // its registration is torn down (`uninstall` -> `launchctl
-          // bootout`); stopping first and deregistering after leaves a
-          // window where a non-clean SIGTERM exit gets treated as a
-          // failed/crashed exit and launchd respawns the host before we
-          // ever reach `uninstall`. Deregistering first removes that
-          // supervision so no exit outcome can trigger a respawn.
-          await controller.uninstall({ label });
-          serviceUninstalled = true;
-          ctx.runtime.logger.info("Host uninstall service deregistered", {
+      () =>
+        runHostUninstall(
+          args,
+          {
             environment: ctx.runtime.environment,
-            label: label.id,
-          });
-          // Install removal stays best-effort, but runtime files are preserved
-          // unless stop confirms the process is gone. A failed stop can leave
-          // the host actively writing its pid metadata and log.
-          purgeChannelRuntime = await stopServiceBeforeRuntimePurge({
-            controller,
-            environment: ctx.runtime.environment,
-            label,
             logger: ctx.runtime.logger,
-          });
-        }
-        ctx.progress({
-          stage: "uninstall",
-          message: "removing installed host",
-          percent: null,
-          bytes: null,
-          totalBytes: null,
-        });
-        const result = await uninstallHost({
-          environment: ctx.runtime.environment,
-          purgeChannelRuntime,
-        });
-        ctx.runtime.logger.info("Host uninstall command completed", {
-          environment: ctx.runtime.environment,
-          serviceUninstalled,
-          removedInstallDir: result.removedInstallDir,
-          purgedRuntime: result.purgedRuntime,
-          hadInstallRecord: result.removedRecord !== null,
-        });
-        return {
-          data: {
-            removedRecord: result.removedRecord,
-            removedInstallDir: result.removedInstallDir,
-            serviceUninstalled,
-            purgedRuntime: result.purgedRuntime,
+            progress: ctx.progress,
           },
-          human: humanSummary({
-            removedVersion: result.removedRecord?.version ?? null,
-            serviceUninstalled,
-            purgedRuntime: result.purgedRuntime,
-          }),
-          exitCode: 0,
-        };
+          {
+            createServiceController,
+            uninstallHost,
+          },
+        ),
+    );
+  };
+}
+
+export async function runHostUninstall(
+  args: HostUninstallArgs,
+  ctx: RunHostUninstallContext,
+  deps: RunHostUninstallDeps,
+): Promise<CommandResult> {
+  let serviceUninstalled = false;
+  let purgeChannelRuntime = false;
+  if (args.all) {
+    ctx.logger.warn(
+      "Host uninstall command will deregister service and purge runtime",
+      {
+        environment: ctx.environment,
       },
     );
+    ctx.progress({
+      stage: "service-stop",
+      message: `stopping service for ${ctx.environment} environment`,
+      percent: null,
+      bytes: null,
+      totalBytes: null,
+    });
+    const controller = deps.createServiceController();
+    const label = serviceLabelFor(ctx.environment);
+    // Deregister BEFORE waiting for the process to exit. On macOS the
+    // running job stays under launchd's `KeepAlive` supervision until
+    // its registration is torn down (`uninstall` -> `launchctl
+    // bootout`); stopping first and deregistering after leaves a
+    // window where a non-clean SIGTERM exit gets treated as a
+    // failed/crashed exit and launchd respawns the host before we
+    // ever reach `uninstall`. Deregistering first removes that
+    // supervision so no exit outcome can trigger a respawn.
+    await controller.uninstall({ label });
+    serviceUninstalled = true;
+    ctx.logger.info("Host uninstall service deregistered", {
+      environment: ctx.environment,
+      label: label.id,
+    });
+    // Install removal stays best-effort, but runtime files are preserved
+    // unless stop confirms the process is gone. A failed stop can leave
+    // the host actively writing its pid metadata and log.
+    purgeChannelRuntime = await stopServiceBeforeRuntimePurge({
+      controller,
+      environment: ctx.environment,
+      label,
+      logger: ctx.logger,
+    });
+  }
+  ctx.progress({
+    stage: "uninstall",
+    message: "removing installed host",
+    percent: null,
+    bytes: null,
+    totalBytes: null,
+  });
+  const result = await deps.uninstallHost({
+    environment: ctx.environment,
+    purgeChannelRuntime,
+  });
+  ctx.logger.info("Host uninstall command completed", {
+    environment: ctx.environment,
+    serviceUninstalled,
+    removedInstallDir: result.removedInstallDir,
+    purgedRuntime: result.purgedRuntime,
+    hadInstallRecord: result.removedRecord !== null,
+  });
+  return {
+    data: {
+      removedRecord: result.removedRecord,
+      removedInstallDir: result.removedInstallDir,
+      serviceUninstalled,
+      purgedRuntime: result.purgedRuntime,
+    },
+    human: humanSummary({
+      removedVersion: result.removedRecord?.version ?? null,
+      serviceUninstalled,
+      purgedRuntime: result.purgedRuntime,
+    }),
+    exitCode: 0,
   };
 }
 
