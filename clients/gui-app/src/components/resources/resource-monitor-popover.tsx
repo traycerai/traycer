@@ -1305,7 +1305,16 @@ function buildCanvasResourceIndex(
 ): CanvasResourceIndex {
   const locationByOwner = new Map<string, OpenOwnerLocation>();
   const tabOrderByOwner = new Map<string, number>();
-  const candidates = canvas.openTabOrder.flatMap((tabId) => {
+  const openTabIds = new Set(canvas.openTabOrder);
+  // Closing a task only removes its tab from the visible strip; its tab and
+  // canvas stay preserved so reopening can restore the exact pane/tile focus.
+  // Scan visible tabs first, then retained hidden tabs, so an open location
+  // wins when duplicate task tabs contain the same owner.
+  const indexedTabIds = [
+    ...canvas.openTabOrder,
+    ...Object.keys(canvas.tabsById).filter((tabId) => !openTabIds.has(tabId)),
+  ];
+  const candidates = indexedTabIds.flatMap((tabId) => {
     const tab = canvas.tabsById[tabId];
     const state = canvas.canvasByTabId[tabId];
     if (tab === undefined || state === undefined || state.root === null) {

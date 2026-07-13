@@ -51,12 +51,13 @@ const toastMock = vi.hoisted(() => {
     actions.action = options?.action?.onClick ?? null;
   });
   const error = vi.fn<ToastCall>();
+  const message = vi.fn<ToastCall>();
   return Object.assign(toast, {
     dismiss: vi.fn(),
     error,
     info: vi.fn<ToastCall>(),
+    message,
     success: vi.fn<ToastCall>(),
-    loading: vi.fn<ToastCall>(),
     actions,
   });
 });
@@ -568,7 +569,7 @@ describe("desktop app update UI", () => {
     expect(bridge.downloadUpdate).not.toHaveBeenCalled();
   });
 
-  it("shows download progress in a loading toast", async () => {
+  it("shows download progress in the shared closable toast", async () => {
     const bridge = new FakeAppUpdatesBridge(IDLE_SNAPSHOT);
     renderWithHost(<AppUpdateToastController />, bridge);
     await waitFor(() => {
@@ -579,11 +580,12 @@ describe("desktop app update UI", () => {
       bridge.emit(downloadingSnapshot(1, 50));
     });
     await waitFor(() => {
-      expect(toastMock.loading).toHaveBeenCalledWith(
+      expect(toastMock.message).toHaveBeenCalledWith(
         "Downloading update…",
         expect.objectContaining({
           id: "traycer-app-update",
           description: "50% complete",
+          closeButton: true,
         }),
       );
     });
@@ -600,11 +602,12 @@ describe("desktop app update UI", () => {
       bridge.emit(downloadingSnapshot(1, 0));
     });
     await waitFor(() => {
-      expect(toastMock.loading).toHaveBeenCalledWith(
+      expect(toastMock.message).toHaveBeenCalledWith(
         "Downloading update…",
         expect.objectContaining({
           id: "traycer-app-update",
           description: "0% complete",
+          closeButton: true,
         }),
       );
     });
