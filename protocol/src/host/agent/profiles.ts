@@ -16,7 +16,6 @@ import { permissionModeSchema } from "@traycer/protocol/persistence/epic/foundat
 import {
   PROVIDER_AUTH_STATUS_SCHEMA,
   providerIdSchema,
-  providerProfileKindSchema,
   providerProfileRateLimitStatusSchema,
 } from "@traycer/protocol/host/provider-schemas";
 import { providerRateLimitsSchema } from "@traycer/protocol/host/rate-limit/schemas";
@@ -50,10 +49,15 @@ export type AgentListProviderProfilesRequest = z.infer<
  * UUID, tier identity, config paths, environment overrides, CLI candidates,
  * and credential-derived labels never reach an agent. See the A2A
  * profile-awareness ticket's guardrails.
+ *
+ * `selection.kind` (`ambient` | `profile`) is the sole ambient-vs-managed
+ * discriminant - there is deliberately no separate `kind` field, so a row
+ * can never claim ambient/managed identity that disagrees with its own
+ * selection (the batch-1 review's "structurally correlate or remove the
+ * redundant independent kind" finding).
  */
 export const agentProviderProfileSummarySchema = z.object({
   selection: concreteProfileSelectionSchema,
-  kind: providerProfileKindSchema,
   label: z.string(),
   authStatus: PROVIDER_AUTH_STATUS_SCHEMA,
   rateLimitStatus: providerProfileRateLimitStatusSchema,
@@ -97,8 +101,13 @@ export type AgentGetProviderProfileRateLimitsRequest = z.infer<
   typeof agentGetProviderProfileRateLimitsRequestSchema
 >;
 
+// No standalone `providerId` field: every arm of `providerRateLimitsSchema`
+// (including the `available: false` arm) already carries its own `provider`,
+// so an outer field would be a second, independently-settable source of
+// truth that could disagree with the nested one (the batch-1 review's
+// "remove or validate redundant provider identity" finding). Callers read
+// `rateLimits.provider`.
 export const agentGetProviderProfileRateLimitsResponseSchema = z.object({
-  providerId: providerIdSchema,
   rateLimits: providerRateLimitsSchema,
   usageUpdatedAt: z.number().nullable(),
 });

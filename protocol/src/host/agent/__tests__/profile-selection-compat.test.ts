@@ -105,15 +105,17 @@ describe("agent.create v1 <-> v2 profile-selection translation", () => {
     });
   });
 
-  it("downgrades a v2.0 ambient selection to profileId: null", () => {
+  it("never silently downgrades ambient - it fails with actionable upgrade guidance, never profileId: null", () => {
     const downgraded = agentCreateDowngradeV20ToV10.downgradeRequest({
       ...baseV1Request,
       profileSelection: { kind: "ambient" },
     });
-    expect(downgraded).toMatchObject({
-      ok: true,
-      value: { profileId: null },
-    });
+    expect(downgraded.ok).toBe(false);
+    if (downgraded.ok) return;
+    expect(downgraded.error.code).toBe("DOWNGRADE_UNSUPPORTED");
+    expect(downgraded.error.message.length).toBeGreaterThan(0);
+    // The message must never suggest ambient is usable against an old host.
+    expect(downgraded.error.message).not.toMatch(/or ambient/i);
   });
 
   it("downgrades a v2.0 managed selection to the profile id string", () => {
@@ -147,6 +149,8 @@ describe("agent.create v1 <-> v2 profile-selection translation", () => {
     if (downgraded.ok) return;
     expect(downgraded.error.code).toBe("DOWNGRADE_UNSUPPORTED");
     expect(downgraded.error.message.length).toBeGreaterThan(0);
+    // The message must never suggest ambient is usable against an old host.
+    expect(downgraded.error.message).not.toMatch(/or ambient/i);
   });
 
   it("round-trips through the host registry (major 1 -> major 2 -> major 1)", () => {
@@ -165,17 +169,36 @@ describe("agent.create v1 <-> v2 profile-selection translation", () => {
       hostRpcRegistry["agent.create"],
       2,
       1,
+      {
+        ...baseV1Request,
+        profileSelection: { kind: "profile", profileId: "profile-1" },
+      },
+    );
+    expect(downgraded).toMatchObject({
+      ok: true,
+      value: { profileId: "profile-1" },
+    });
+
+    // Explicit ambient has no v1.0-representable shape either, same as
+    // last_used - it must never silently project to profileId: null.
+    const ambientRejected = downgradeRequestAcrossMajors(
+      hostRpcRegistry["agent.create"],
+      2,
+      1,
       { ...baseV1Request, profileSelection: { kind: "ambient" } },
     );
-    expect(downgraded).toMatchObject({ ok: true, value: { profileId: null } });
+    expect(ambientRejected).toMatchObject({
+      ok: false,
+      error: { code: "DOWNGRADE_UNSUPPORTED" },
+    });
 
-    const rejected = downgradeRequestAcrossMajors(
+    const lastUsedRejected = downgradeRequestAcrossMajors(
       hostRpcRegistry["agent.create"],
       2,
       1,
       { ...baseV1Request, profileSelection: { kind: "last_used" } },
     );
-    expect(rejected).toMatchObject({
+    expect(lastUsedRejected).toMatchObject({
       ok: false,
       error: { code: "DOWNGRADE_UNSUPPORTED" },
     });
@@ -203,7 +226,6 @@ describe("agent.listProviderProfiles / agent.getProviderProfileRateLimits / agen
   it("accepts a full profile summary row and strips nothing agent-safe", () => {
     const summary = agentProviderProfileSummarySchema.parse({
       selection: { kind: "profile", profileId: "profile-1" },
-      kind: "managed",
       label: "Work",
       authStatus: "authenticated",
       rateLimitStatus: "ok",
@@ -217,6 +239,28 @@ describe("agent.listProviderProfiles / agent.getProviderProfileRateLimits / agen
     // Guardrail: the agent-safe DTO never carries identity fields.
     expect(JSON.stringify(summary)).not.toContain("email");
     expect(JSON.stringify(summary)).not.toContain("accountUuid");
+  });
+
+  it("has no independent kind field that could disagree with the selection - a contradictory kind is never trusted", () => {
+    // `selection.kind` is the sole ambient-vs-managed discriminant; there is
+    // no separate `kind` property left on the schema for a caller to set
+    // inconsistently (batch-1 review correction).
+    expect(agentProviderProfileSummarySchema.shape).not.toHaveProperty("kind");
+
+    const summary = agentProviderProfileSummarySchema.parse({
+      selection: { kind: "ambient" },
+      // A stale/contradictory extra key a pre-amendment caller might still
+      // send - non-strict `z.object` drops it, so it can never surface as a
+      // disagreeing `kind`.
+      kind: "managed",
+      label: "Terminal account",
+      authStatus: "authenticated",
+      rateLimitStatus: "unknown",
+      usageUpdatedAt: null,
+      isEffectiveLastUsed: false,
+    });
+    expect(summary).not.toHaveProperty("kind");
+    expect(summary.selection).toEqual({ kind: "ambient" });
   });
 
   it("accepts the agent.listProviderProfiles request/response shapes", () => {
@@ -238,7 +282,6 @@ describe("agent.listProviderProfiles / agent.getProviderProfileRateLimits / agen
         profiles: [
           {
             selection: { kind: "ambient" },
-            kind: "ambient",
             label: "Terminal account",
             authStatus: "authenticated",
             rateLimitStatus: "unknown",
@@ -247,7 +290,10 @@ describe("agent.listProviderProfiles / agent.getProviderProfileRateLimits / agen
           },
         ],
       }),
-    ).toMatchObject({ providerId: "codex", profiles: [{ kind: "ambient" }] });
+    ).toMatchObject({
+      providerId: "codex",
+      profiles: [{ selection: { kind: "ambient" } }],
+    });
   });
 
   it("requires a concrete profile selection for agent.getProviderProfileRateLimits", () => {
@@ -273,7 +319,6 @@ describe("agent.listProviderProfiles / agent.getProviderProfileRateLimits / agen
   it("accepts an unavailable rate-limit result", () => {
     expect(
       agentGetProviderProfileRateLimitsResponseSchema.parse({
-        providerId: "codex",
         rateLimits: {
           provider: "codex",
           available: false,
@@ -281,7 +326,27 @@ describe("agent.listProviderProfiles / agent.getProviderProfileRateLimits / agen
         },
         usageUpdatedAt: null,
       }),
-    ).toMatchObject({ providerId: "codex" });
+    ).toMatchObject({ rateLimits: { provider: "codex" } });
+  });
+
+  it("has no independent providerId field that could disagree with rateLimits.provider", () => {
+    // The provider identity lives solely on `rateLimits.provider` (every arm,
+    // including `available: false`, carries it); there is no outer field for
+    // a caller to set inconsistently (batch-1 review correction).
+    expect(
+      agentGetProviderProfileRateLimitsResponseSchema.shape,
+    ).not.toHaveProperty("providerId");
+
+    const response = agentGetProviderProfileRateLimitsResponseSchema.parse({
+      // A stale/contradictory outer field a pre-amendment caller might still
+      // send - non-strict `z.object` drops it, so it can never surface as a
+      // disagreeing provider identity.
+      providerId: "claude-code",
+      rateLimits: { provider: "codex", available: false, reason: "timeout" },
+      usageUpdatedAt: null,
+    });
+    expect(response).not.toHaveProperty("providerId");
+    expect(response.rateLimits.provider).toBe("codex");
   });
 
   it("accepts the agent.configure request/response shapes", () => {

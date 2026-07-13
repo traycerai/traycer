@@ -243,8 +243,12 @@ export type CreateAgentWorkspace = z.infer<typeof createAgentWorkspaceSchema>;
  *     no v1.0 equivalent, so it can never downgrade to `agent.create@1.0`
  *     (see `agentCreateDowngradeV20ToV10` in `contracts.ts`).
  *   - `ambient` - explicitly use the provider's ambient CLI login, distinct
- *     from `inherit_sender` below even though both currently project onto a
- *     `profileId: null` v1.0 wire value.
+ *     from `inherit_sender` below despite both resolving to the same runtime
+ *     account: frozen v1.0's `profileId: null` already means sender
+ *     inheritance for a same-surface/same-harness child, so an explicit
+ *     `ambient` choice has no v1.0-representable wire value and, like
+ *     `last_used`, can never downgrade to `agent.create@1.0` (batch-1 review
+ *     correction - see `agentCreateDowngradeV20ToV10`).
  *   - `profile` - pin to a specific managed profile by id.
  *   - `inherit_sender` - version-bridge-only arm: what a v1.0 caller's
  *     `profileId: null` upgrades to (inherit the sender agent's profile).

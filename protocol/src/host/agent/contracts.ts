@@ -90,12 +90,22 @@ export const agentCreateUpgradeV10ToV20 = defineUpgradePath<
 
 /**
  * Projects a v2.0 request back onto the frozen v1.0 wire for an old host.
- * Ambient, managed, and compatibility-only inherited selections all have a
- * v1.0-representable shape (`profileId: null` or a string); `last_used` does
- * not - it is a preference lookup with no v1.0 equivalent - so it fails the
- * downgrade with actionable upgrade guidance instead of silently falling
- * back to sender inheritance (see the profile-awareness technical plan's
- * "Versioned host contracts" section).
+ * Explicit managed and compatibility-only inherited selections have a
+ * v1.0-representable shape (a profile-id string, or `profileId: null`
+ * meaning sender inheritance); `ambient` and `last_used` do not, so both fail
+ * the downgrade with actionable upgrade guidance instead of silently
+ * projecting onto `profileId: null`.
+ *
+ * Batch-1 review correction: the original plan treated explicit `ambient` as
+ * downgrade-compatible (also projecting to `profileId: null`), but frozen
+ * v1.0 already gives `null` a fixed meaning - sender inheritance for a
+ * same-surface/same-harness child. Silently reusing `null` for an explicit
+ * ambient choice could route the new agent onto the sender's managed
+ * account instead of the ambient login the caller actually asked for. Nor
+ * does the legacy `"ambient"` sentinel string help: v1.0 may persist it as a
+ * literal profile id, violating the runtime/persistence normalization
+ * invariant (see the profile-awareness decision log's "Old-host creation
+ * downgrade" row).
  */
 export const agentCreateDowngradeV20ToV10 = defineDowngradePath<
   typeof agentCreateV20,
@@ -111,7 +121,17 @@ export const agentCreateDowngradeV20ToV10 = defineDowngradePath<
         error: {
           code: "DOWNGRADE_UNSUPPORTED",
           message:
-            "Creating an agent with the last-used provider profile requires a newer Traycer host. Choose a specific profile or ambient, or upgrade the host.",
+            "Creating an agent with the last-used provider profile requires a newer Traycer host. Choose a specific profile, or upgrade the host.",
+        },
+      };
+    }
+    if (profileSelection.kind === "ambient") {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Creating an agent with the ambient provider login requires a newer Traycer host - the frozen v1.0 wire cannot distinguish an explicit ambient choice from inheriting the sender's profile. Choose a specific profile, or upgrade the host.",
         },
       };
     }
