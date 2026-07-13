@@ -142,6 +142,7 @@ export function useVisibleRateLimitProviders(): ReadonlyArray<ConfiguredRateLimi
     ProviderRateLimitEnvelope
   >({
     client,
+    cacheKeyIdentity: undefined,
     requests: candidates.map((provider) => {
       const { method, params } = providerRateLimitQueryOptions(
         provider.providerId,

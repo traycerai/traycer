@@ -21,6 +21,8 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { FilePathTooltip } from "@/components/file-path-tooltip";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
 import { useFocusEpicTerminalSession } from "@/components/epic-canvas/renderers/chat-tile-focus-terminal";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
@@ -348,6 +350,19 @@ function WorkspaceSetupDetail(
         onRetry={() => onRetry(entry.workspacePath)}
       />
     ) : null;
+  const reportIssue =
+    entry.state === "failed" ? (
+      <ReportIssueAction
+        context={createReportIssueContext({
+          title: "Worktree setup failed",
+          message: null,
+          code: null,
+          source: "Setup",
+        })}
+        presentation="icon"
+        className={undefined}
+      />
+    ) : null;
   return (
     <div
       data-testid={`setup-card-workspace-${entry.workspacePath}`}
@@ -395,6 +410,7 @@ function WorkspaceSetupDetail(
             }
           />
           {retry}
+          {reportIssue}
         </li>
       </ol>
     </div>

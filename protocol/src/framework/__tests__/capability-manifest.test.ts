@@ -60,13 +60,30 @@ const REGISTRY_WITH_UNSUPPORTED_OPTIONAL = defineFloorAwareVersionedRpcRegistry(
 );
 
 describe("capability manifest helpers", () => {
-  it("keeps today's host legacy manifest byte-identical to the full manifest", () => {
+  it("keeps the host legacy manifest exactly the released floor set", () => {
+    // Old peers negotiate against `manifest` alone with fail-closed name-set
+    // semantics, so it must carry the frozen floor methods and nothing else.
+    // Post-#272 additive methods (e.g. the notifications RPCs, or this PR's
+    // `epic.updateChatRunSettings`) land in `optionalManifest` instead.
     const fullManifest = buildConnectionManifest(hostRpcRegistry);
     const split = splitConnectionManifest(hostRpcRegistry, releasedMethodNames);
 
-    expect(split.manifest).toEqual(fullManifest);
-    expect(split.optionalManifest).toEqual({});
-    expect(JSON.stringify(split.manifest)).toBe(JSON.stringify(fullManifest));
+    expect(Object.keys(split.manifest).sort()).toEqual(
+      [...releasedMethodNames].sort(),
+    );
+    for (const [method, version] of Object.entries(split.manifest)) {
+      expect(version).toEqual(fullManifest[method]);
+    }
+    for (const method of Object.keys(split.optionalManifest)) {
+      expect(releasedMethodNames).not.toContain(method);
+      expect(fullManifest[method]).toEqual(split.optionalManifest[method]);
+    }
+    expect({ ...split.manifest, ...split.optionalManifest }).toEqual(
+      fullManifest,
+    );
+    expect(
+      mergeConnectionManifests(split.manifest, split.optionalManifest),
+    ).toEqual(fullManifest);
   });
 
   it("splits non-floor methods into the optional channel", () => {

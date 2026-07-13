@@ -21,6 +21,10 @@ const TOAST_CLOSE_BUTTON_CLASS_NAME = cn(
   "focus-visible:pointer-events-auto",
   "focus-visible:opacity-100",
 );
+const TOAST_CANCEL_BUTTON_CLASS_NAME = cn(
+  "border border-border bg-background text-foreground",
+  "hover:bg-muted",
+);
 
 const Toaster = ({ ...props }: ToasterProps) => {
   const { theme = "system" } = useTheme();
@@ -56,6 +60,7 @@ const Toaster = ({ ...props }: ToasterProps) => {
           classNames: {
             toast: TOAST_CLASS_NAME,
             closeButton: TOAST_CLOSE_BUTTON_CLASS_NAME,
+            cancelButton: TOAST_CANCEL_BUTTON_CLASS_NAME,
           },
         }}
         {...props}

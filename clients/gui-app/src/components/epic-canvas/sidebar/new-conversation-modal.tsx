@@ -10,7 +10,6 @@ import {
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { v4 as uuidv4 } from "uuid";
-import { toast } from "sonner";
 import { ArrowLeftRight, Plus, XIcon } from "lucide-react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -113,6 +112,7 @@ import {
   worktreeStagingKeyString,
 } from "@/stores/worktree/worktree-intent-staging-store";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
 /**
  * Isolated subscriber for the live draft content. The editor rewrites content
@@ -634,9 +634,18 @@ function NewConversationModalBody(props: {
     // open with no feedback - mirror the landing flow's host-first toast.
     const activeHostId = hostClient.getActiveHostId();
     if (activeHostId === null) {
-      toast.error("Couldn't start the chat.", {
-        description: "No active device. Reconnect and try again.",
-      });
+      reportableErrorToast(
+        "Couldn't start the chat.",
+        {
+          description: "No active device. Reconnect and try again.",
+        },
+        {
+          title: "Could not start chat",
+          message: "No active device was available.",
+          code: null,
+          source: "Chat",
+        },
+      );
       return;
     }
     const content = buildSubmittedChatJSONContent(editor.getJSON());

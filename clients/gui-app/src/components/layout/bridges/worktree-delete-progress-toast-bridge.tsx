@@ -5,8 +5,16 @@ import {
   worktreeDeleteProgressDetail,
   type WorktreeDeleteProgressSummary,
 } from "@/components/settings/panels/use-worktree-delete-run";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 
 const WORKTREE_DELETE_PROGRESS_TOAST_ID = "worktree-delete-progress";
+const WORKTREE_DELETE_REPORT_CONTEXT = createReportIssueContext({
+  title: "Could not delete worktree",
+  message: null,
+  code: null,
+  source: "Worktrees",
+});
 
 export function WorktreeDeleteProgressToastBridge(): null {
   const summary = useWorktreeDeleteProgressSummary();
@@ -47,6 +55,7 @@ function showWorktreeDeleteProgressToast(
       id: WORKTREE_DELETE_PROGRESS_TOAST_ID,
       description,
       duration: Infinity,
+      cancel: null,
     });
     return;
   }
@@ -54,18 +63,23 @@ function showWorktreeDeleteProgressToast(
     toast.success(`Deleted ${worktreeCountLabel(summary.deleted)}`, {
       id: WORKTREE_DELETE_PROGRESS_TOAST_ID,
       description,
+      cancel: null,
     });
     return;
   }
   // A failure toast persists (no auto-expiry) and is directly dismissable, so a
   // user who never reopens the Worktrees panel to dismiss the strip can still
   // clear it.
-  toast.error(worktreeDeleteFailureTitle(summary), {
-    id: WORKTREE_DELETE_PROGRESS_TOAST_ID,
-    description,
-    duration: Infinity,
-    closeButton: true,
-  });
+  reportableErrorToast(
+    worktreeDeleteFailureTitle(summary),
+    {
+      id: WORKTREE_DELETE_PROGRESS_TOAST_ID,
+      description,
+      duration: Infinity,
+      closeButton: true,
+    },
+    WORKTREE_DELETE_REPORT_CONTEXT,
+  );
 }
 
 function worktreeDeleteToastKey(

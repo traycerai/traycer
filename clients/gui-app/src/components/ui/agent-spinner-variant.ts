@@ -32,4 +32,5 @@ export type AgentSpinnerVariant =
   | "fillsweep"
   | "diagswipe"
   | "infinity"
+  | "static"
   | "waiting";

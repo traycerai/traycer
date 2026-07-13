@@ -1,8 +1,8 @@
 import { Check, Copy } from "lucide-react";
 import { useCallback } from "react";
-import { toast } from "sonner";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { cn } from "@/lib/utils";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
 interface SegmentCopyButtonProps {
   value: string;
@@ -13,7 +13,12 @@ interface SegmentCopyButtonProps {
 const COPIED_RESET_MS = 1600;
 
 const handleCopyError = (): void => {
-  toast.error("Couldn't copy to clipboard.");
+  reportableErrorToast("Couldn't copy to clipboard.", undefined, {
+    title: "Could not copy to clipboard",
+    message: null,
+    code: null,
+    source: "Clipboard",
+  });
 };
 
 /**

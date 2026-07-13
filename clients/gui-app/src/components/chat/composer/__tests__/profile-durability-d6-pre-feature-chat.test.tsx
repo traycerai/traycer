@@ -153,6 +153,8 @@ function PreFeatureComposerHarness({
           current={rateLimitPrompt.current}
           alternatives={rateLimitPrompt.alternatives}
           onSwitchProfile={onSwitchProfile}
+          affectedChatCount={1}
+          onSwitchProfileForTask={() => undefined}
           onDismiss={rateLimitPrompt.dismiss}
         />
       ) : null}

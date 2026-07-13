@@ -1,10 +1,11 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useState } from "react";
 import {
   Bell,
   BellOff,
   Check,
   CheckCheck,
   CheckCircle2,
+  CircleAlert,
   MessageCircle,
   MessageSquarePlus,
   MessageSquareX,
@@ -19,27 +20,23 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import {
-  useNotificationsActions,
-  useNotificationsList,
-} from "@/hooks/notifications/use-notifications-stream";
 import { useNotificationActivation } from "@/hooks/notifications/use-notification-activation";
-import { buildPayloadFromEvent } from "@/lib/notifications";
 import { useRelativeTimestamp } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
 import {
-  type NotificationEntry,
+  type MergedNotificationRow,
+  useMergedNotificationIds,
+  useMergedNotificationRow,
+  useMergedNotificationUnreadCount,
+  useMergedNotificationsActions,
+} from "@/stores/notifications/merged-notifications";
+import {
   type NotificationEvent,
   NOTIFICATION_EVENT_TYPES,
 } from "@traycer/protocol/notifications/notification-entry";
-import { formatNotification } from "@traycer/protocol/notifications/notification-formatter";
 
 interface NotificationsPopoverProps {
   readonly onNavigate: () => void;
-}
-
-interface PartitionedEntries {
-  readonly unread: ReadonlyArray<NotificationEntry>;
 }
 
 type NotificationsTab = "unread" | "all";
@@ -57,25 +54,23 @@ type NotificationsTab = "unread" | "all";
  */
 export function NotificationsPopover(props: NotificationsPopoverProps) {
   const { onNavigate } = props;
-  const entries = useNotificationsList();
-  const actions = useNotificationsActions();
+  const ids = useMergedNotificationIds();
+  const actions = useMergedNotificationsActions();
   const { activate } = useNotificationActivation();
   const [activeTab, setActiveTab] = useState<NotificationsTab>("unread");
 
-  const partitioned = useMemo<PartitionedEntries>(
-    () => ({ unread: entries.filter((entry) => entry.readAt === null) }),
-    [entries],
-  );
-
   const handleClick = useCallback(
-    (entry: NotificationEntry) => {
-      const payload = buildPayloadFromEvent(entry.event);
+    (row: MergedNotificationRow) => {
+      if (row.payload === null) {
+        actions.markAsRead(row.feedId);
+        return;
+      }
       onNavigate();
       activate({
-        payload,
+        payload: row.payload,
         receivedAt: Date.now(),
         onActivated: () => {
-          actions.markAsRead(entry.id);
+          actions.markAsRead(row.feedId);
         },
       });
     },
@@ -88,8 +83,8 @@ export function NotificationsPopover(props: NotificationsPopoverProps) {
     }
   }, []);
 
-  const isEmpty = entries.length === 0;
-  const unreadCount = partitioned.unread.length;
+  const isEmpty = ids.length === 0;
+  const unreadCount = useMergedNotificationUnreadCount();
 
   return (
     <TooltipProvider delayDuration={300}>
@@ -182,14 +177,15 @@ export function NotificationsPopover(props: NotificationsPopoverProps) {
           data-testid="notifications-tab-content-unread"
           className="min-h-0 flex-1 overflow-y-auto overscroll-contain data-[state=inactive]:hidden"
         >
-          {partitioned.unread.length === 0 ? (
+          {unreadCount === 0 ? (
             <EmptyState
               title="You're all caught up"
               description="Unread notifications will appear here."
             />
           ) : (
             <NotificationList
-              entries={partitioned.unread}
+              ids={ids}
+              filter="unread"
               onActivate={handleClick}
               onMarkRead={actions.markAsRead}
             />
@@ -207,11 +203,26 @@ export function NotificationsPopover(props: NotificationsPopoverProps) {
             />
           ) : (
             <NotificationList
-              entries={entries}
+              ids={ids}
+              filter="all"
               onActivate={handleClick}
               onMarkRead={actions.markAsRead}
             />
           )}
+          {activeTab === "all" && actions.canLoadMoreHost ? (
+            <div className="border-t border-border/60 p-2">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => actions.loadMoreHost()}
+                disabled={actions.isLoadingMoreHost}
+                className="w-full text-ui-xs"
+              >
+                Load older notifications
+              </Button>
+            </div>
+          ) : null}
         </TabsContent>
       </Tabs>
     </TooltipProvider>
@@ -219,18 +230,20 @@ export function NotificationsPopover(props: NotificationsPopoverProps) {
 }
 
 interface NotificationListProps {
-  readonly entries: ReadonlyArray<NotificationEntry>;
-  readonly onActivate: (entry: NotificationEntry) => void;
+  readonly ids: ReadonlyArray<string>;
+  readonly filter: NotificationsTab;
+  readonly onActivate: (row: MergedNotificationRow) => void;
   readonly onMarkRead: (id: string) => void;
 }
 
 function NotificationList(props: NotificationListProps) {
   return (
     <ul className="flex flex-col py-1">
-      {props.entries.map((entry) => (
+      {props.ids.map((id) => (
         <NotificationRow
-          key={entry.id}
-          entry={entry}
+          key={id}
+          feedId={id}
+          filter={props.filter}
           onActivate={props.onActivate}
           onMarkRead={props.onMarkRead}
         />
@@ -266,24 +279,30 @@ function EmptyState(props: EmptyStateProps) {
 }
 
 interface NotificationRowProps {
-  readonly entry: NotificationEntry;
-  readonly onActivate: (entry: NotificationEntry) => void;
+  readonly feedId: string;
+  readonly filter: NotificationsTab;
+  readonly onActivate: (row: MergedNotificationRow) => void;
   readonly onMarkRead: (id: string) => void;
 }
 
 function NotificationRow(props: NotificationRowProps) {
-  const { entry, onActivate, onMarkRead } = props;
-  const isRead = entry.readAt !== null;
-  const text = formatNotification(entry.event, undefined);
-  const meta = getEventMeta(entry.event);
+  const { feedId, filter, onActivate, onMarkRead } = props;
+  const row = useMergedNotificationRow(feedId);
+  if (row === null) return null;
+  const isRead = row.readAt !== null;
+  if (filter === "unread" && isRead) return null;
+  const meta = getRowMeta(row);
   const Icon = meta.icon;
 
   return (
     <li
       className="group/row relative"
       data-testid="notification-entry"
-      data-notification-id={entry.id}
+      data-notification-id={row.feedId}
+      data-notification-source={row.source}
       data-notification-read={isRead ? "true" : "false"}
+      data-notification-severity={row.severity}
+      data-notification-outcome={row.outcome ?? "none"}
     >
       {!isRead && (
         <span
@@ -294,7 +313,7 @@ function NotificationRow(props: NotificationRowProps) {
       )}
       <button
         type="button"
-        onClick={() => onActivate(entry)}
+        onClick={() => onActivate(row)}
         className={cn(
           "flex w-full items-start gap-3 px-4 py-2.5 text-left transition-colors",
           "hover:bg-accent focus-visible:bg-accent focus-visible:outline-none",
@@ -318,9 +337,9 @@ function NotificationRow(props: NotificationRowProps) {
               isRead ? "text-muted-foreground" : "text-foreground",
             )}
           >
-            {text}
+            {row.text}
           </span>
-          <NotificationTimestamp createdAt={entry.createdAt} />
+          <NotificationTimestamp createdAt={row.createdAt} />
         </div>
       </button>
       {!isRead && (
@@ -334,7 +353,7 @@ function NotificationRow(props: NotificationRowProps) {
             type="button"
             onClick={(event) => {
               event.stopPropagation();
-              onMarkRead(entry.id);
+              onMarkRead(row.feedId);
             }}
             aria-label="Mark as read"
             data-testid="notification-mark-read"
@@ -382,12 +401,71 @@ const INVITE_TONE =
   "bg-[color-mix(in_oklch,var(--primary)_16%,transparent)] text-[color-mix(in_oklch,var(--primary)_55%,var(--foreground)_45%)]";
 const DANGER_TONE =
   "bg-[color-mix(in_oklch,var(--destructive)_16%,transparent)] text-[color-mix(in_oklch,var(--destructive)_65%,var(--foreground)_35%)]";
+const PROMPT_TONE = "bg-amber-500/16 text-amber-600 dark:text-amber-400";
+const DONE_TONE = "bg-blue-500/16 text-blue-700 dark:text-blue-300";
 const NEUTRAL_TONE =
   "bg-[color-mix(in_oklch,var(--muted-foreground)_14%,transparent)] text-[color-mix(in_oklch,var(--muted-foreground)_70%,var(--foreground)_30%)]";
 const SUCCESS_TONE =
   "bg-[color-mix(in_oklch,var(--success)_16%,transparent)] text-[color-mix(in_oklch,var(--success)_65%,var(--foreground)_35%)]";
 
-function getEventMeta(event: NotificationEvent): EventMeta {
+function getRowMeta(row: MergedNotificationRow): EventMeta {
+  if (row.globalEntry !== null) {
+    return getGlobalEventMeta(row.globalEntry.event);
+  }
+  if (row.appLocalKind !== null) {
+    return {
+      icon: CircleAlert,
+      tone: DANGER_TONE,
+    };
+  }
+  if (row.severity === "failure") {
+    return {
+      icon: CircleAlert,
+      tone: DANGER_TONE,
+    };
+  }
+  if (row.severity === "needs_action") {
+    return {
+      icon: row.hostKind === "approval.requested" ? Shield : MessageCircle,
+      tone: PROMPT_TONE,
+    };
+  }
+  if (row.severity === "done") {
+    return {
+      icon: Bell,
+      tone: DONE_TONE,
+    };
+  }
+  switch (row.hostKind) {
+    case "agent.stopped":
+      return {
+        icon: Bell,
+        tone: DONE_TONE,
+      };
+    case "agent.stalled":
+      return {
+        icon: CircleAlert,
+        tone: DANGER_TONE,
+      };
+    case "approval.requested":
+      return {
+        icon: Shield,
+        tone: PROMPT_TONE,
+      };
+    case "interview.requested":
+      return {
+        icon: MessageCircle,
+        tone: PROMPT_TONE,
+      };
+    case null:
+      return {
+        icon: Bell,
+        tone: NEUTRAL_TONE,
+      };
+  }
+}
+
+function getGlobalEventMeta(event: NotificationEvent): EventMeta {
   switch (event.kind) {
     case NOTIFICATION_EVENT_TYPES.INVITED:
       return {

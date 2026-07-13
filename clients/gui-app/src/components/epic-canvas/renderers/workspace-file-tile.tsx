@@ -1,7 +1,9 @@
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
 import { useWorkspaceReadFile } from "@/hooks/workspace/use-read-file-query";
 import { languageFromFilePath } from "@/lib/file-change-diff-hunks";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 import { cn } from "@/lib/utils";
 import { TraycerMarkdown } from "@/markdown";
 import { useShikiHighlighter } from "@/markdown/shiki-highlighter";
@@ -356,8 +358,18 @@ function WorkspaceFilePreviewContent(props: {
 
   if (props.displayError !== null) {
     return (
-      <div className="flex h-full items-center justify-center px-6 text-center text-ui-sm text-muted-foreground">
-        {props.displayError}
+      <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-ui-sm text-muted-foreground">
+        <p>{props.displayError}</p>
+        <ReportIssueAction
+          context={createReportIssueContext({
+            title: "Workspace file could not be read",
+            message: "The workspace file preview could not be loaded.",
+            code: null,
+            source: "Workspace file",
+          })}
+          presentation="text"
+          className={undefined}
+        />
       </div>
     );
   }

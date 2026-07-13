@@ -231,15 +231,37 @@ async function uninstallService(
   options: UninstallServiceOptions,
   run: ProcessRunner,
 ): Promise<void> {
-  // `bootout` non-zero exit on uninstall is a legitimate "already gone"
-  // signal - keep this tolerant so repeat uninstalls stay idempotent.
-  await run("launchctl", ["bootout", `${guiDomain()}/${options.label.id}`], {
-    env: undefined,
-    cwd: undefined,
-    timeoutMs: 10_000,
-    tolerateNonZeroExit: true,
-  });
+  const serviceTarget = `${guiDomain()}/${options.label.id}`;
+  try {
+    await run("launchctl", ["bootout", "--wait", serviceTarget], {
+      env: undefined,
+      cwd: undefined,
+      // `--wait` is launchd's authoritative completion barrier but may block
+      // indefinitely. Keep the subprocess bound above the host's own forced
+      // shutdown watchdog so normal graceful shutdown has time to finish.
+      timeoutMs: STOP_EXIT_TIMEOUT_MS,
+      tolerateNonZeroExit: false,
+    });
+  } catch (cause) {
+    if (!isBenignBootoutFailure(cause)) {
+      throw cliError({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: `launchctl bootout failed for ${options.label.id}: ${describeCause(cause)}`,
+        details: { label: options.label.id, cause: describeCause(cause) },
+        exitCode: 1,
+      });
+    }
+  }
   await rm(serviceManifestPath(options.label), { force: true });
+}
+
+function isBenignBootoutFailure(cause: unknown): boolean {
+  if (!(cause instanceof ProcessRunError)) return false;
+  const haystack = `${cause.stderr}\n${cause.stdout}`.toLowerCase();
+  return (
+    haystack.includes("no such process") ||
+    haystack.includes("could not find specified service")
+  );
 }
 
 async function statusService(label: ServiceLabel): Promise<ServiceStatus> {

@@ -1,9 +1,16 @@
 import "../../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 
 vi.mock(
   "@/components/home/host-workspace-selector/host-workspace-selector",
@@ -165,6 +172,11 @@ describe("<TuiAgentTile /> setup error rendering", () => {
 
   afterEach(() => {
     cleanup();
+    useDesktopDialogStore.setState({
+      activeDialog: null,
+      reportIssueAvailable: false,
+      reportIssueContext: null,
+    });
   });
 
   it("renders no persistent failure banner when prepareLaunch fails with WORKTREE_SETUP_FAILED", () => {
@@ -198,6 +210,13 @@ describe("<TuiAgentTile /> setup error rendering", () => {
     expect(screen.queryByText(/Failed to start terminal/)).toBeNull();
     expect(screen.queryByRole("button", { name: /Retry/i })).toBeNull();
     expect(screen.getByText(/Waiting for worktree setup/)).toBeTruthy();
+    // The worktree-setup waiting state must never surface a report
+    // affordance, even once the support capability is available - recovery
+    // for this state is the setup terminal tab, not a report action.
+    act(() => {
+      useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    });
+    expect(screen.queryByRole("button", { name: "Report issue" })).toBeNull();
   });
 
   it("classifies typed WORKTREE_SETUP_FAILED code without the code in the message", () => {
@@ -303,6 +322,53 @@ describe("<TuiAgentTile /> setup error rendering", () => {
     expect(screen.getByRole("button", { name: /Retry/i })).toBeTruthy();
   });
 
+  it("gates the generic failure banner's report action on capability and reports only fixed context", () => {
+    mockPrepare = {
+      isError: true,
+      isPending: false,
+      isIdle: false,
+      error: new Error("secret-token-should-never-render /Users/hostile/path"),
+      reset: () => undefined,
+      mutateAsync: () => Promise.reject(new Error("boom")),
+    };
+    render(
+      withQueryClient(
+        <TuiAgentTile
+          viewTabId="tab-test"
+          node={{
+            id: "agent-1",
+            instanceId: "inst-agent-1",
+            type: "terminal-agent",
+            name: "claude",
+            hostId: "test-host",
+          }}
+          tileId="tile-1"
+          isActive
+        />,
+      ),
+    );
+
+    expect(screen.queryByRole("button", { name: "Report issue" })).toBeNull();
+
+    act(() => {
+      useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
+
+    expect(useDesktopDialogStore.getState()).toMatchObject({
+      activeDialog: "report-issue",
+      reportIssueContext: {
+        title: "Failed to start terminal agent",
+        message: "The terminal agent session could not be started.",
+        code: null,
+        source: "Terminal agent",
+      },
+    });
+    const context = useDesktopDialogStore.getState().reportIssueContext;
+    expect(JSON.stringify(context)).not.toContain("secret-token");
+    expect(JSON.stringify(context)).not.toContain("/Users/hostile/path");
+  });
+
   it("renders a distinct missing-worktree body (not the generic banner) for WORKTREE_MISSING", () => {
     // The host refuses to launch into a missing cwd (no silent demote-to-Local)
     // and rejects with the typed WORKTREE_MISSING envelope. The tile surfaces an
@@ -346,5 +412,57 @@ describe("<TuiAgentTile /> setup error rendering", () => {
       screen.getByText(/Restore the missing folder or worktree/),
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: /Retry/i })).toBeTruthy();
+  });
+
+  it("gates the missing-worktree body's report action on capability and reports only fixed context", () => {
+    const error = Object.assign(
+      new Error(
+        "Cannot launch this terminal agent: bound folder(s) missing on disk: /repo-wt-secret.",
+      ),
+      { code: "WORKTREE_MISSING" as const },
+    );
+    mockPrepare = {
+      isError: true,
+      isPending: false,
+      isIdle: false,
+      error,
+      reset: () => undefined,
+      mutateAsync: () => Promise.reject(error),
+    };
+    render(
+      withQueryClient(
+        <TuiAgentTile
+          viewTabId="tab-test"
+          node={{
+            id: "agent-1",
+            instanceId: "inst-agent-1",
+            type: "terminal-agent",
+            name: "claude",
+            hostId: "test-host",
+          }}
+          tileId="tile-1"
+          isActive
+        />,
+      ),
+    );
+
+    expect(screen.queryByRole("button", { name: "Report issue" })).toBeNull();
+
+    act(() => {
+      useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
+
+    expect(useDesktopDialogStore.getState()).toMatchObject({
+      activeDialog: "report-issue",
+      reportIssueContext: {
+        title: "Terminal agent folder is missing",
+        message: "A bound folder for a terminal agent was missing on disk.",
+        code: null,
+        source: "Terminal agent",
+      },
+    });
+    const context = useDesktopDialogStore.getState().reportIssueContext;
+    expect(JSON.stringify(context)).not.toContain("/repo-wt-secret");
   });
 });

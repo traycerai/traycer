@@ -12,6 +12,8 @@ import type {
 } from "@traycer/protocol/host/provider-schemas";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 import { useProvidersStartLogin } from "@/hooks/providers/use-providers-start-login-mutation";
 import { useHostScopedProvidersAwaitLogin } from "@/hooks/providers/use-providers-await-login-mutation";
 import { useProvidersCancelLogin } from "@/hooks/providers/use-providers-cancel-login-mutation";
@@ -188,6 +190,16 @@ function ProviderProfileReauthState({
         <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-ui-sm text-destructive">
           <AlertTriangle className="mt-0.5 size-4 shrink-0" />
           <span>{flow.state.message}</span>
+          <ReportIssueAction
+            context={createReportIssueContext({
+              title: "Provider reauthentication failed",
+              message: null,
+              code: null,
+              source: "Provider reauth",
+            })}
+            presentation="link"
+            className="h-auto p-0 text-current"
+          />
         </div>
       ) : null}
 

@@ -33,6 +33,10 @@ import { pickNeighborAfterRemovingTabs } from "@/stores/tabs/neighbor";
 import { tabResolveIntent } from "@/stores/tabs/registry";
 import type { HeaderTab } from "@/stores/tabs/types";
 import { getHeaderTabs } from "@/stores/tabs/use-header-tabs";
+import {
+  reportableErrorToast,
+  reportableWarningToast,
+} from "@/lib/reportable-error-toast";
 
 interface BatchDeleteEpicMutationContext {
   readonly hostId: string | null;
@@ -143,7 +147,7 @@ export function useEpicBatchDelete(): UseMutationResult<
           successes,
         );
         if (ctx.hostId === null || eligibleWorktreePaths.length === 0) {
-          emitToast(epicToast.level, epicToast.message);
+          emitEpicDeleteToast(epicToast.level, epicToast.message);
         } else {
           // The Task(s) are already deleted; stream the approved worktree
           // removals and report a single combined summary once they settle.
@@ -290,16 +294,29 @@ function epicDeleteToastParts(args: {
   };
 }
 
-function emitToast(level: EpicDeleteToastLevel, message: string): void {
+export function emitEpicDeleteToast(
+  level: EpicDeleteToastLevel,
+  message: string,
+): void {
   if (level === "success") {
     toast.success(message);
     return;
   }
   if (level === "warning") {
-    toast.warning(message);
+    reportableWarningToast(message, undefined, {
+      title: "Epic deletion incomplete",
+      message: null,
+      code: null,
+      source: "Epic deletion",
+    });
     return;
   }
-  toast.error(message);
+  reportableErrorToast(message, undefined, {
+    title: "Could not delete Epics",
+    message: null,
+    code: null,
+    source: "Epic deletion",
+  });
 }
 
 // A worktree is safe to remove only when EVERY owning Task actually succeeded -
@@ -346,13 +363,13 @@ function emitTaskDeleteSummaryToast(
     outcome.failed.length,
   );
   if (summary === null) {
-    emitToast(epicToast.level, epicToast.message);
+    emitEpicDeleteToast(epicToast.level, epicToast.message);
     return;
   }
   // A worktree that couldn't be removed downgrades the combined toast to a
   // warning even when every Task deleted cleanly.
   const level = outcome.failed.length > 0 ? "warning" : epicToast.level;
-  emitToast(level, `${epicToast.message} · ${summary}`);
+  emitEpicDeleteToast(level, `${epicToast.message} · ${summary}`);
 }
 
 // Refresh the host-wide worktree list plus the shared binding-backed caches

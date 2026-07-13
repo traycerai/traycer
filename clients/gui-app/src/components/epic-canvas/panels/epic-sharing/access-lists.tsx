@@ -3,6 +3,11 @@ import type { ReactNode } from "react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import {
+  createReportIssueContext,
+  type ReportIssueContext,
+} from "@/lib/report-issue-context";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   ROLE_PILL_CLASS,
@@ -54,10 +59,29 @@ export interface TeamsAccessProps {
   readonly onRevokeRequest: (team: TeamRow) => void;
 }
 
+const COLLABORATORS_LOAD_ERROR_CONTEXT = createReportIssueContext({
+  title: "Couldn't load collaborators",
+  message: "Epic collaborators could not be loaded.",
+  code: null,
+  source: "Epic sharing",
+});
+
+const TEAMS_LOAD_ERROR_CONTEXT = createReportIssueContext({
+  title: "Couldn't load teams",
+  message: "Epic teams could not be loaded.",
+  code: null,
+  source: "Epic sharing",
+});
+
 export function PeopleWithAccess(props: PeopleWithAccessProps) {
   if (props.loadState === "loading") return <SharingLoadingRows />;
   if (props.loadState === "error") {
-    return <SharingError label="Couldn't load collaborators." />;
+    return (
+      <SharingError
+        label="Couldn't load collaborators."
+        reportContext={COLLABORATORS_LOAD_ERROR_CONTEXT}
+      />
+    );
   }
   if (props.collaborators.length === 0) {
     return (
@@ -98,7 +122,12 @@ export function PeopleWithAccess(props: PeopleWithAccessProps) {
 export function TeamsAccess(props: TeamsAccessProps) {
   if (props.loadState === "loading") return <SharingLoadingRows />;
   if (props.loadState === "error") {
-    return <SharingError label="Couldn't load teams." />;
+    return (
+      <SharingError
+        label="Couldn't load teams."
+        reportContext={TEAMS_LOAD_ERROR_CONTEXT}
+      />
+    );
   }
   if (props.rows.length === 0) {
     return (
@@ -162,14 +191,22 @@ function SharingLoadingRows() {
   );
 }
 
-function SharingError(props: { label: string }) {
+function SharingError(props: {
+  readonly label: string;
+  readonly reportContext: ReportIssueContext;
+}) {
   return (
-    <p
-      className="rounded-md border border-dashed border-destructive/40 px-3 py-2 text-ui-xs text-destructive"
+    <div
+      className="flex items-center justify-between gap-2 rounded-md border border-dashed border-destructive/40 px-3 py-2 text-ui-xs text-destructive"
       data-testid="epic-sharing-error"
     >
-      {props.label}
-    </p>
+      <span>{props.label}</span>
+      <ReportIssueAction
+        context={props.reportContext}
+        presentation="icon"
+        className={undefined}
+      />
+    </div>
   );
 }
 

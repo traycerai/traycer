@@ -10,7 +10,6 @@ import { InstallGuidanceDialog } from "@/components/layout/dialogs/install-guida
 import { AboutDetailsDialog } from "./desktop/about-details-dialog";
 import { LogsChooserDialog } from "./desktop/logs-chooser-dialog";
 import { OpenEpicInNewWindowDialog } from "./desktop/open-epic-in-new-window-dialog";
-import { ReportIssueDialog } from "./desktop/report-issue-dialog";
 
 export function DesktopDialogHost(): ReactNode {
   const runnerHost = useRunnerHost();
@@ -74,15 +73,6 @@ export function DesktopDialogHost(): ReactNode {
           }}
           close={close}
           flow={openEpicInNewWindowFlow}
-        />
-      ) : null}
-      {activeDialog === "report-issue" ? (
-        <ReportIssueDialog
-          open
-          onOpenChange={(open) => {
-            if (!open) close();
-          }}
-          support={support}
         />
       ) : null}
       {activeDialog === "confirm-restart-update" &&

@@ -19,6 +19,7 @@ import {
 import {
   providersListResponseSchemaV10,
   providersListResponseSchemaV20,
+  providersListResponseSchemaV30,
 } from "../../src/host/provider-schemas";
 
 function dump(schema: z.ZodType): unknown {
@@ -32,6 +33,11 @@ const FIXTURES = {
   "agent.list@2.0": dump(listAgentsResponseSchemaV20),
   "providers.list@1.0": dump(providersListResponseSchemaV10),
   "providers.list@2.0": dump(providersListResponseSchemaV20),
+  // Frozen with Amp, before `profiles` (the v4.0 cut) - pinned now that this
+  // line is released, so a future `.extend()` onto the live shape leaking
+  // back into this frozen export goes red locally (see the providers.list
+  // #258 incident this whole gate exists to catch).
+  "providers.list@3.0": dump(providersListResponseSchemaV30),
 };
 
 const HEADER =

@@ -93,7 +93,10 @@ function serializeThread(
   platform: "POSIX" | "WINDOWS",
 ): string {
   const { thread } = input;
-  const author = authorName(thread.data.createdByHandle ?? null);
+  const author = authorAttribute(
+    thread.data.createdByHandle ?? null,
+    thread.data.createdByUserId,
+  );
   const attrs = [
     attribute("id", thread.threadId),
     author,
@@ -118,7 +121,10 @@ function serializeThread(
   }
 
   thread.comments.forEach((comment, index) => {
-    const commentAuthor = authorName(comment.author.fallbackHandle);
+    const commentAuthor = authorAttribute(
+      comment.author.fallbackHandle,
+      comment.author.userId,
+    );
     const commentAttrs = [
       attribute("id", comment.commentId),
       attribute("n", String(index + 1)),
@@ -144,9 +150,22 @@ function serializeThread(
   return lines.join("\n");
 }
 
-function authorName(providerHandle: string | null): string | null {
+// Legacy comments were persisted before author handles were guaranteed at
+// write time; fall back to the stable user id (as `user_id=`, mirroring what
+// the GUI shows) so the model always gets an attribution signal instead of an
+// anonymous comment.
+function authorAttribute(
+  providerHandle: string | null,
+  userId: string,
+): string | null {
   const trimmedHandle = providerHandle?.trim() ?? "";
-  return trimmedHandle.length > 0 ? attribute("author", trimmedHandle) : null;
+  if (trimmedHandle.length > 0) {
+    return attribute("author", trimmedHandle);
+  }
+  const trimmedUserId = userId.trim();
+  return trimmedUserId.length > 0
+    ? attribute("user_id", trimmedUserId)
+    : null;
 }
 
 function attribute(name: string, value: string): string {

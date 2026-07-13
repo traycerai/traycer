@@ -19,6 +19,8 @@ import {
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import {
   Dialog,
@@ -235,6 +237,16 @@ export function ProviderProfileScopedSection(
               >
                 Dismiss
               </Button>
+              <ReportIssueAction
+                context={createReportIssueContext({
+                  title: "Provider sign-in failed",
+                  message: "Sign-in did not finish for a provider profile.",
+                  code: null,
+                  source: "Provider sign-in",
+                })}
+                presentation="icon"
+                className={undefined}
+              />
             </div>
           </div>
         ) : null}

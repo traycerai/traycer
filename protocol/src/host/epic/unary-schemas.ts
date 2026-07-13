@@ -894,6 +894,29 @@ export type RenameChatRequest = z.infer<typeof renameChatRequestSchema>;
 export const renameChatResponseSchema = z.object({ updated: z.boolean() });
 export type RenameChatResponse = z.infer<typeof renameChatResponseSchema>;
 
+// Persists a chat's run settings (harness/model/profile/…) WITHOUT sending a
+// message. Composer selection changes call this so the durable per-chat
+// settings — the ones a headless turn (e.g. an incoming agent-to-agent
+// message) resolves its provider profile from — never lag behind the UI.
+// Optional (non-floor) capability: old hosts fail only this call with
+// E_HOST_UNSUPPORTED and the renderer degrades to the legacy
+// persist-on-next-send behavior.
+export const updateChatRunSettingsRequestSchema = z.object({
+  epicId: z.string(),
+  chatId: z.string(),
+  settings: chatRunSettingsSchema,
+});
+export type UpdateChatRunSettingsRequest = z.infer<
+  typeof updateChatRunSettingsRequestSchema
+>;
+
+export const updateChatRunSettingsResponseSchema = z.object({
+  updated: z.boolean(),
+});
+export type UpdateChatRunSettingsResponse = z.infer<
+  typeof updateChatRunSettingsResponseSchema
+>;
+
 export const deleteChatRequestSchema = z.object({
   epicId: z.string(),
   chatId: z.string(),

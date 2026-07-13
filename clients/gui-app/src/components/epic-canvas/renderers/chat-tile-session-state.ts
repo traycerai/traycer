@@ -16,6 +16,7 @@ import type {
 import { isTransientLiveAssistantMessageId } from "@/lib/chat/transient-live-assistant-message-id";
 import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-json-content";
 import { containsImageAtoms } from "@/lib/composer/image-atoms";
+import { reportableWarningToast } from "@/lib/reportable-error-toast";
 import type { PendingInterviewView } from "./chat-tile-types";
 
 /**
@@ -317,7 +318,12 @@ export function showRestoreResultToast(
     },
   };
   if (counts.failed > 0) {
-    toast.warning(title, options);
+    reportableWarningToast(title, options, {
+      title: "File restore incomplete",
+      message: null,
+      code: null,
+      source: "File restore",
+    });
     return;
   }
   toast.success(title, options);

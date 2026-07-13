@@ -578,6 +578,7 @@ function HomeWorkspaceRows(props: {
     "worktree.listBranches"
   >({
     client: activeHostClient,
+    cacheKeyIdentity: undefined,
     requests: branchValidationPaths.map((workspacePath) => ({
       method: "worktree.listBranches",
       params: { workspacePath, includeRemote: true },
