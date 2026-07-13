@@ -2,13 +2,36 @@ import {
   mkdtemp,
   mkdir,
   readFile,
+  readdir,
   rm,
   stat,
   writeFile,
 } from "node:fs/promises";
+import type { PathLike } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const renameFaults = vi.hoisted(() => {
+  const codes: Array<string | null> = [];
+  return { codes };
+});
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    rename: async (oldPath: PathLike, newPath: PathLike): Promise<void> => {
+      const code = renameFaults.codes.shift();
+      if (code !== undefined && code !== null) {
+        throw Object.assign(new Error(`injected rename failure: ${code}`), {
+          code,
+        });
+      }
+      await actual.rename(oldPath, newPath);
+    },
+  };
+});
 
 // `hostLogPath` resolves under the real `homedir()`, so redirect both paths into
 // a temp dir and let the rotation run against a real filesystem - the `rename` /
@@ -54,6 +77,7 @@ async function exists(path: string): Promise<boolean> {
 }
 
 beforeEach(async () => {
+  renameFaults.codes.length = 0;
   logDir = await mkdtemp(join(tmpdir(), "traycer-host-log-"));
   await mkdir(logDir, { recursive: true });
   livePid = null;
@@ -143,6 +167,22 @@ describe("rotateHostLogIfOversized (host start)", () => {
     expect(await readFile(join(BACKUP(), "prior-evidence.txt"), "utf8")).toBe(
       "keep me",
     );
+  });
+
+  it("restores the previous generation when Windows replacement fails after displacement", async () => {
+    await writeFile(BACKUP(), "prior evidence");
+    await writeFile(LOG(), "n".repeat(MAX_HOST_LOG_BYTES + 1));
+
+    // Simulate Windows refusing the initial replace because host.log.1 exists,
+    // then an unrelated failure promoting host.log after the prior backup has
+    // been moved aside. The fourth rename is the rollback.
+    renameFaults.codes.push("EPERM", null, "EACCES", null);
+
+    expect(await rotateHostLogIfOversized("dev")).toBe("skipped");
+
+    expect(await readFile(BACKUP(), "utf8")).toBe("prior evidence");
+    expect((await stat(LOG())).size).toBe(MAX_HOST_LOG_BYTES + 1);
+    expect((await readdir(logDir)).sort()).toEqual(["host.log", "host.log.1"]);
   });
 });
 

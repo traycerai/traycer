@@ -262,7 +262,11 @@ export async function runHostStart(
   // roll it: the fd opened below lives for the child's whole lifetime and would
   // follow the file across a rename, splitting one session across two files.
   // Under the cap this is a no-op, so consecutive starts still share one log.
-  await deps.rotateLog(opts.environment);
+  const rotation = await deps.rotateLog(opts.environment);
+  logger.debug("Host supervisor checked log rotation", {
+    environment: opts.environment,
+    rotation,
+  });
 
   await deps.writeMarker(opts.environment, "starting", {
     shell: undefined,

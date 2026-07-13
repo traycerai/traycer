@@ -1,5 +1,7 @@
+import { randomUUID } from "node:crypto";
 import { rename, rm, stat } from "node:fs/promises";
 import type { Environment } from "../runner/environment";
+import { isErrnoException } from "../runner/errors";
 import { hostLogBackupPath, hostLogPath } from "../store/paths";
 import { readHostPidMetadata } from "./pid-metadata";
 
@@ -75,6 +77,16 @@ async function removeQuietly(filePath: string): Promise<void> {
   }
 }
 
+const REPLACE_EXISTING_CODES = new Set(["EACCES", "EEXIST", "EPERM"]);
+
+async function isRegularFile(filePath: string): Promise<boolean> {
+  try {
+    return (await stat(filePath)).isFile();
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Move `logPath` onto `backupPath`, keeping exactly one generation.
  *
@@ -82,9 +94,11 @@ async function removeQuietly(filePath: string): Promise<void> {
  * happen never destroys the evidence it was supposed to preserve. On POSIX that
  * single call atomically replaces the destination, so the old backup is dropped
  * only once the new one is safely in place. Windows `rename` refuses an existing
- * destination, so that (and only that) case falls back to removing the previous
- * backup and retrying - by which point we already know the destination exists
- * and the source is intact.
+ * destination, so that (and only that) case falls back to moving the previous
+ * backup aside and retrying - by which point we already know the destination
+ * exists and the source is intact. The displaced backup is restored if the
+ * retry fails, so an unrelated source/permission failure cannot destroy the
+ * previous generation.
  */
 async function rotate(
   logPath: string,
@@ -93,16 +107,40 @@ async function rotate(
   try {
     await rename(logPath, backupPath);
     return "rotated";
-  } catch {
-    // Fall through to the replace-existing-destination retry below.
+  } catch (cause) {
+    const code = isErrnoException(cause) ? cause.code : null;
+    if (
+      typeof code !== "string" ||
+      !REPLACE_EXISTING_CODES.has(code) ||
+      !(await isRegularFile(backupPath))
+    ) {
+      return "skipped";
+    }
   }
+
+  const displacedBackupPath = `${backupPath}.replace-${randomUUID()}`;
   try {
-    await rm(backupPath, { force: true });
-    await rename(logPath, backupPath);
-    return "rotated";
+    await rename(backupPath, displacedBackupPath);
   } catch {
     return "skipped";
   }
+
+  try {
+    await rename(logPath, backupPath);
+  } catch {
+    // If rollback itself is blocked, the prior evidence still survives at the
+    // displaced path rather than being deleted. A successful rollback removes
+    // that exceptional extra file and restores the normal single generation.
+    try {
+      await rename(displacedBackupPath, backupPath);
+    } catch {
+      // Best-effort contract: never block host start or uninstall.
+    }
+    return "skipped";
+  }
+
+  await removeQuietly(displacedBackupPath);
+  return "rotated";
 }
 
 /**
