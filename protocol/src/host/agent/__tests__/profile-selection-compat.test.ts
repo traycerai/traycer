@@ -14,6 +14,7 @@ import {
   agentListProviderProfilesRequestSchema,
   agentListProviderProfilesResponseSchema,
   agentProviderProfileSummarySchema,
+  AMBIENT_PROFILE_ID_SENTINEL,
   concreteProfileSelectionSchema,
   createAgentRequestSchemaV20,
   hostRpcRegistry,
@@ -52,6 +53,30 @@ describe("ProfileSelection / ConcreteProfileSelection schemas", () => {
     ).toBe(false);
   });
 
+  it("rejects the reserved ambient sentinel as a managed profileId, but keeps normal ids and the explicit ambient arm valid", () => {
+    // The contradictory shape a direct RPC caller could otherwise construct:
+    // a "profile" arm naming the "ambient" sentinel instead of using the
+    // dedicated { kind: "ambient" } arm (batch-2 review finding).
+    expect(
+      profileSelectionSchema.safeParse({
+        kind: "profile",
+        profileId: AMBIENT_PROFILE_ID_SENTINEL,
+      }).success,
+    ).toBe(false);
+    // Explicit ambient is unaffected - it never carries a profileId.
+    expect(profileSelectionSchema.safeParse({ kind: "ambient" }).success).toBe(
+      true,
+    );
+    // A normal managed id, including one that merely contains "ambient" as a
+    // substring, still parses - only an exact sentinel match is rejected.
+    expect(
+      profileSelectionSchema.safeParse({
+        kind: "profile",
+        profileId: "ambient-work-account",
+      }).success,
+    ).toBe(true);
+  });
+
   it("ConcreteProfileSelection accepts only ambient/profile, never last_used or inherit_sender", () => {
     expect(
       concreteProfileSelectionSchema.safeParse({ kind: "ambient" }).success,
@@ -68,6 +93,15 @@ describe("ProfileSelection / ConcreteProfileSelection schemas", () => {
     expect(
       concreteProfileSelectionSchema.safeParse({ kind: "inherit_sender" })
         .success,
+    ).toBe(false);
+  });
+
+  it("ConcreteProfileSelection also rejects the reserved ambient sentinel as a managed profileId", () => {
+    expect(
+      concreteProfileSelectionSchema.safeParse({
+        kind: "profile",
+        profileId: AMBIENT_PROFILE_ID_SENTINEL,
+      }).success,
     ).toBe(false);
   });
 });
@@ -220,6 +254,37 @@ describe("agent.create v1 <-> v2 profile-selection translation", () => {
       }).success,
     ).toBe(false);
   });
+
+  it("rejects the ambient sentinel as agent.create@2.0's managed profileId, even reconstructed through the v1->v2 upgrade bridge", () => {
+    // The registry-level schema is the actual enforcement boundary: the
+    // upgrade bridge itself is a plain mapping function (batch-1's frozen
+    // v1.0 wire has no way to express the distinction), so a legacy v1
+    // caller that happened to persist the literal string "ambient" as a
+    // profile id upgrades into the contradictory shape - the v2.0 request
+    // schema is what must reject it once parsed at the RPC boundary.
+    const upgraded = agentCreateUpgradeV10ToV20.upgradeRequest({
+      ...baseV1Request,
+      profileId: AMBIENT_PROFILE_ID_SENTINEL,
+    });
+    expect(upgraded.profileSelection).toEqual({
+      kind: "profile",
+      profileId: AMBIENT_PROFILE_ID_SENTINEL,
+    });
+    expect(createAgentRequestSchemaV20.safeParse(upgraded).success).toBe(
+      false,
+    );
+
+    // Directly constructed v2.0 requests are rejected the same way.
+    expect(
+      createAgentRequestSchemaV20.safeParse({
+        ...baseV1Request,
+        profileSelection: {
+          kind: "profile",
+          profileId: AMBIENT_PROFILE_ID_SENTINEL,
+        },
+      }).success,
+    ).toBe(false);
+  });
 });
 
 describe("agent.listProviderProfiles / agent.getProviderProfileRateLimits / agent.configure schemas", () => {
@@ -314,6 +379,36 @@ describe("agent.listProviderProfiles / agent.getProviderProfileRateLimits / agen
         profileSelection: { kind: "ambient" },
       }),
     ).toMatchObject({ profileSelection: { kind: "ambient" } });
+  });
+
+  it("rejects the ambient sentinel as a managed profileId on agent.getProviderProfileRateLimits and agent.configure requests", () => {
+    expect(
+      agentGetProviderProfileRateLimitsRequestSchema.safeParse({
+        epicId: "epic-1",
+        senderAgentId: "agent-1",
+        harnessId: "codex",
+        profileSelection: {
+          kind: "profile",
+          profileId: AMBIENT_PROFILE_ID_SENTINEL,
+        },
+      }).success,
+    ).toBe(false);
+
+    expect(
+      agentConfigureRequestSchema.safeParse({
+        epicId: "epic-1",
+        senderAgentId: "agent-1",
+        agentId: "agent-2",
+        harnessId: "claude",
+        model: "opus-4.7",
+        profileSelection: {
+          kind: "profile",
+          profileId: AMBIENT_PROFILE_ID_SENTINEL,
+        },
+        reasoningEffort: "high",
+        fastMode: false,
+      }).success,
+    ).toBe(false);
   });
 
   it("accepts an unavailable rate-limit result", () => {

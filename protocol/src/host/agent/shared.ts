@@ -232,6 +232,24 @@ export const createAgentWorkspaceSchema = z
 export type CreateAgentWorkspace = z.infer<typeof createAgentWorkspaceSchema>;
 
 /**
+ * Reserved `profileId` value naming the provider's ambient CLI login (mirrors
+ * the host's persisted `AMBIENT_PROFILE_ID` sentinel). Ambient is expressed
+ * exclusively through `{ kind: "ambient" }` - a managed `{ kind: "profile" }`
+ * arm must never carry this literal as its `profileId`, or the two arms could
+ * claim the same identity through disagreeing shapes. Batch-2 review finding:
+ * these contracts are unreleased, so the schema is hardened directly rather
+ * than through a version bridge.
+ */
+export const AMBIENT_PROFILE_ID_SENTINEL = "ambient";
+
+const managedProfileIdSchema = z
+  .string()
+  .refine((profileId) => profileId !== AMBIENT_PROFILE_ID_SENTINEL, {
+    message:
+      'profileId must not be the reserved "ambient" sentinel - use { kind: "ambient" } to select the ambient login.',
+  });
+
+/**
  * Explicit selection of which provider profile (subscription) an agent
  * surface should use. Replaces the plain nullable `profileId` `agent.create@1.0`
  * carries, which cannot distinguish omission, an intentional ambient choice,
@@ -258,7 +276,7 @@ export type CreateAgentWorkspace = z.infer<typeof createAgentWorkspaceSchema>;
 export const profileSelectionSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("last_used") }),
   z.object({ kind: z.literal("ambient") }),
-  z.object({ kind: z.literal("profile"), profileId: z.string() }),
+  z.object({ kind: z.literal("profile"), profileId: managedProfileIdSchema }),
   z.object({ kind: z.literal("inherit_sender") }),
 ]);
 export type ProfileSelection = z.infer<typeof profileSelectionSchema>;
@@ -272,7 +290,7 @@ export type ProfileSelection = z.infer<typeof profileSelectionSchema>;
  */
 export const concreteProfileSelectionSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("ambient") }),
-  z.object({ kind: z.literal("profile"), profileId: z.string() }),
+  z.object({ kind: z.literal("profile"), profileId: managedProfileIdSchema }),
 ]);
 export type ConcreteProfileSelection = z.infer<
   typeof concreteProfileSelectionSchema
