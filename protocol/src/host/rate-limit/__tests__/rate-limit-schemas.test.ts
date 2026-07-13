@@ -5,12 +5,55 @@ import { hostGetRateLimitUsageDowngradeV2ToV1 } from "@traycer/protocol/host/rat
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import {
   providerRateLimitsSchema,
+  providersConsumeRateLimitResetCreditRequestSchema,
+  providersConsumeRateLimitResetCreditResponseSchema,
   rateLimitUnavailableReasonSchemaV1,
   rateLimitUnavailableReasonSchemaV2,
   rateLimitUsageRequestSchemaV12,
   rateLimitUsageResponseSchemaV12,
   rateLimitUsageResponseSchemaV20,
 } from "@traycer/protocol/host/rate-limit/schemas";
+
+describe("providers.consumeRateLimitResetCredit schemas", () => {
+  it("accepts a profile-scoped idempotent Codex reset request and every upstream outcome", () => {
+    expect(
+      providersConsumeRateLimitResetCreditRequestSchema.parse({
+        providerId: "codex",
+        profileId: "personal",
+        idempotencyKey: "reset-attempt-1",
+      }),
+    ).toEqual({
+      providerId: "codex",
+      profileId: "personal",
+      idempotencyKey: "reset-attempt-1",
+    });
+
+    ["reset", "nothingToReset", "noCredit", "alreadyRedeemed"].forEach(
+      (outcome) => {
+        expect(
+          providersConsumeRateLimitResetCreditResponseSchema.parse({ outcome }),
+        ).toEqual({ outcome });
+      },
+    );
+  });
+
+  it("rejects another provider and an empty idempotency key", () => {
+    expect(
+      providersConsumeRateLimitResetCreditRequestSchema.safeParse({
+        providerId: "claude-code",
+        profileId: null,
+        idempotencyKey: "attempt",
+      }).success,
+    ).toBe(false);
+    expect(
+      providersConsumeRateLimitResetCreditRequestSchema.safeParse({
+        providerId: "codex",
+        profileId: null,
+        idempotencyKey: "",
+      }).success,
+    ).toBe(false);
+  });
+});
 
 // `providerRateLimitsSchema` is a plain `z.union`, not a `z.discriminatedUnion`,
 // because its "unavailable" arm's `provider` field ranges over the full
