@@ -3,11 +3,13 @@ import { useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import type { TaskLight } from "@traycer/protocol/host/epic/unary-schemas";
 import { EpicShell } from "@/components/epic-canvas/epic-shell";
 import { EpicRouteSessionBody } from "@/components/epic-canvas/epic-route-session-body";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { useCloudEpicTasksQuery } from "@/hooks/epics/use-cloud-epic-tasks-query";
 import { usePhaseMigrateToEpic } from "@/hooks/migration/use-phase-migrate-to-epic-mutation";
 import { EpicSessionProvider } from "@/providers/epic-session-provider";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 import {
   navigateToTabIntent,
   openOrFocusEpicIntent,
@@ -219,19 +221,31 @@ function PhaseToEpicMigrationGateInner(props: {
               </p>
             ) : null}
             {migration.isError ? (
-              <Button
-                onClick={() =>
-                  migration.mutate(
-                    { phaseId: props.phaseId },
-                    { onSuccess: (data) => openMigratedEpic(data.epicId) },
-                  )
-                }
-                size="sm"
-                type="button"
-                variant="outline"
-              >
-                Re-attempt migration
-              </Button>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  onClick={() =>
+                    migration.mutate(
+                      { phaseId: props.phaseId },
+                      { onSuccess: (data) => openMigratedEpic(data.epicId) },
+                    )
+                  }
+                  size="sm"
+                  type="button"
+                  variant="outline"
+                >
+                  Re-attempt migration
+                </Button>
+                <ReportIssueAction
+                  context={createReportIssueContext({
+                    title: "Phase migration did not finish",
+                    message: "The legacy Phase migration did not complete.",
+                    code: null,
+                    source: "Phase migration",
+                  })}
+                  presentation="text"
+                  className={undefined}
+                />
+              </div>
             ) : null}
           </div>
         </div>

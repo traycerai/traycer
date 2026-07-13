@@ -1,6 +1,8 @@
 import type { WorktreeBindingSelectorRow } from "@traycer/protocol/host";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { WorktreeFolderList } from "@/components/worktree/worktree-folder-list";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 import { formatWorktreeFolderDisabledReason } from "@/lib/worktree/worktree-folder-disabled-reason";
 
 /**
@@ -30,8 +32,18 @@ export function WorktreeFolderListBody(props: WorktreeFolderListBodyProps) {
   }
   if (props.isError) {
     return (
-      <div className="p-2.5 text-ui-sm text-destructive">
-        Failed to load workspaces.
+      <div className="flex items-center gap-2 p-2.5 text-ui-sm text-destructive">
+        <span className="min-w-0 flex-1">Failed to load workspaces.</span>
+        <ReportIssueAction
+          context={createReportIssueContext({
+            title: "Failed to load workspaces",
+            message: null,
+            code: null,
+            source: "Workspaces",
+          })}
+          presentation="icon"
+          className="text-current"
+        />
       </div>
     );
   }

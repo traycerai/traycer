@@ -27,6 +27,8 @@ import { draftTabIntent, navigateToTabIntent } from "@/lib/tab-navigation";
 import { TabItem } from "@/components/layout/tabs/tab-strip-item";
 import { TabStripNewButton } from "@/components/layout/tabs/tab-strip-new-button";
 import { useHorizontalWheelScroll } from "@/hooks/use-horizontal-wheel-scroll";
+import { useHostNotificationIndicators } from "@/hooks/notifications/use-host-notification-indicators-query";
+import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
 
 export function TabStrip() {
   const hasHydrated = useWindowsBridgeHydrated();
@@ -57,6 +59,15 @@ function TabStripBody() {
     () => allTabs.map((tab) => isTabActive(tab, activePathname)),
     [activePathname, allTabs],
   );
+  const indicatorEpicIds = useMemo(
+    () => allTabs.flatMap((tab) => (tab.kind === "epic" ? [tab.epicId] : [])),
+    [allTabs],
+  );
+  const notificationIndicators = useHostNotificationIndicators({
+    epicIds: indicatorEpicIds,
+    chatIds: [],
+    enabled: indicatorEpicIds.length > 0,
+  });
 
   // Trailing slot: the strip's empty space after the last tab accepts drops
   // at index `allTabs.length` (both reorder and tear-off).
@@ -112,52 +123,56 @@ function TabStripBody() {
   const canCloseOtherTabs = allTabs.length > 1;
 
   return (
-    <div
-      role="tablist"
-      aria-label="Open tabs"
-      data-testid="tab-strip"
-      className="relative flex min-w-0 flex-1 items-end"
-    >
-      <div className="relative flex min-w-0 max-w-full flex-[0_1_auto] items-end">
-        <LayoutGroup id="header-tabs">
-          <div
-            ref={trailingSlotRef}
-            data-testid="header-tab-strip-scroll"
-            onWheel={handleWheel}
-            className="no-scrollbar flex min-w-0 max-w-full flex-[0_1_auto] touch-pan-x items-end overflow-x-auto overscroll-x-contain"
-          >
-            {allTabs.map((tab, index) => {
-              const isLastTab = index === allTabs.length - 1;
-              const isActive = activeTabs[index];
-              const isNextActive = activeTabs[index + 1];
-              const showDropIndicatorBefore = dropIndicatorIndex === index;
-              const showDropIndicatorAfter =
-                dropIndicatorIndex === index + 1 && isLastTab;
-              return (
-                <TabItem
-                  key={refKey(tab.kind, tab.id)}
-                  tab={tab}
-                  index={index}
-                  isActive={isActive}
-                  showSeparatorAfter={!isLastTab && !isActive && !isNextActive}
-                  showDropIndicatorBefore={showDropIndicatorBefore}
-                  showDropIndicatorAfter={showDropIndicatorAfter}
-                  onClose={closeTabFlow.requestCloseTab}
-                  onCloseOtherTabs={closeTabFlow.closeOtherTabs}
-                  onDuplicateTab={handleDuplicateTab}
-                  canCloseOtherTabs={canCloseOtherTabs}
-                  onOpenInNewWindow={openInNewWindowFlow.requestOpen}
-                  canOpenInNewWindow={openInNewWindowFlow.isAvailable}
-                />
-              );
-            })}
-          </div>
-        </LayoutGroup>
-        <TabStripNewButton onNewTab={handleNewTab} />
+    <NotificationIndicatorsProvider indicators={notificationIndicators.data}>
+      <div
+        role="tablist"
+        aria-label="Open tabs"
+        data-testid="tab-strip"
+        className="relative flex min-w-0 flex-1 items-end"
+      >
+        <div className="relative flex min-w-0 max-w-full flex-[0_1_auto] items-end">
+          <LayoutGroup id="header-tabs">
+            <div
+              ref={trailingSlotRef}
+              data-testid="header-tab-strip-scroll"
+              onWheel={handleWheel}
+              className="no-scrollbar flex min-w-0 max-w-full flex-[0_1_auto] touch-pan-x items-end overflow-x-auto overscroll-x-contain"
+            >
+              {allTabs.map((tab, index) => {
+                const isLastTab = index === allTabs.length - 1;
+                const isActive = activeTabs[index];
+                const isNextActive = activeTabs[index + 1];
+                const showDropIndicatorBefore = dropIndicatorIndex === index;
+                const showDropIndicatorAfter =
+                  dropIndicatorIndex === index + 1 && isLastTab;
+                return (
+                  <TabItem
+                    key={refKey(tab.kind, tab.id)}
+                    tab={tab}
+                    index={index}
+                    isActive={isActive}
+                    showSeparatorAfter={
+                      !isLastTab && !isActive && !isNextActive
+                    }
+                    showDropIndicatorBefore={showDropIndicatorBefore}
+                    showDropIndicatorAfter={showDropIndicatorAfter}
+                    onClose={closeTabFlow.requestCloseTab}
+                    onCloseOtherTabs={closeTabFlow.closeOtherTabs}
+                    onDuplicateTab={handleDuplicateTab}
+                    canCloseOtherTabs={canCloseOtherTabs}
+                    onOpenInNewWindow={openInNewWindowFlow.requestOpen}
+                    canOpenInNewWindow={openInNewWindowFlow.isAvailable}
+                  />
+                );
+              })}
+            </div>
+          </LayoutGroup>
+          <TabStripNewButton onNewTab={handleNewTab} />
+        </div>
+        {closeTabFlow.unsyncedDialog}
+        <UnsyncedEpicMoveDialog flow={openInNewWindowFlow.epicFlow} />
       </div>
-      {closeTabFlow.unsyncedDialog}
-      <UnsyncedEpicMoveDialog flow={openInNewWindowFlow.epicFlow} />
-    </div>
+    </NotificationIndicatorsProvider>
   );
 }
 

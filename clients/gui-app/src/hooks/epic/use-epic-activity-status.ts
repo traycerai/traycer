@@ -13,7 +13,7 @@ import {
 
 const CHAT_REGISTRY = getChatSessionRegistry();
 
-export type EpicActivityStatus = "idle" | "running" | "waiting";
+export type EpicActivityStatus = "idle" | "running";
 
 export function useEpicActivityStatus(
   epicId: string | null,
@@ -34,7 +34,6 @@ export function useEpicActivityStatus(
     getLocalChatActivity,
     () => "idle" as const,
   );
-  if (localChatActivity === "waiting") return "waiting";
   return hasLiveActiveAgent(activeAgentIds, liveAgentIds) ||
     localChatActivity === "running"
     ? "running"
@@ -51,7 +50,6 @@ function getEpicChatSessionActivity(
     if (handle.epicId !== epicId) continue;
     if (!liveAgentIds.has(handle.chatId)) continue;
     const activity = chatSessionActivity(handle.store.getState());
-    if (activity === "waiting") return "waiting";
     if (activity === "running") hasRunningChat = true;
   }
   return hasRunningChat ? "running" : "idle";
@@ -95,13 +93,6 @@ function subscribeEpicChatSessionActivity(
 }
 
 function chatSessionActivity(state: ChatSessionState): EpicActivityStatus {
-  if (
-    state.pendingApprovals.length > 0 ||
-    state.pendingFileEditApprovals.length > 0 ||
-    state.pendingInterviews.length > 0
-  ) {
-    return "waiting";
-  }
   return isChatRunInProgress(state.runStatus) ? "running" : "idle";
 }
 

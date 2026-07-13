@@ -18,6 +18,8 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 import { RepoScriptsFields } from "@/components/workspaces/repo-scripts-fields";
 import {
   repoScriptsRequestPayload,
@@ -146,13 +148,23 @@ export function ScriptsReviewDialog(props: {
             </code>
           </div>
           {props.errorNote !== null ? (
-            <p
+            <div
               className="text-ui-xs text-destructive"
               role="alert"
               data-testid={`${props.testId}-error-note`}
             >
-              {props.errorNote}
-            </p>
+              <span>{props.errorNote}</span>
+              <ReportIssueAction
+                context={createReportIssueContext({
+                  title: "Could not load workspace scripts",
+                  message: null,
+                  code: null,
+                  source: "Workspace scripts",
+                })}
+                presentation="link"
+                className="ml-1 h-auto p-0 text-current"
+              />
+            </div>
           ) : null}
           {props.seedPending ? (
             <div

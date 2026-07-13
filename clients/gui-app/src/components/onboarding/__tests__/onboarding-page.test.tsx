@@ -50,6 +50,7 @@ vi.mock("@/components/onboarding/onboarding-diorama", () => ({
         <>
           <textarea
             data-testid="mock-agent-guide-input"
+            aria-label="Agent selection guide"
             value={props.agentGuide.value}
             disabled={props.agentGuide.loading || props.agentGuide.saving}
             onChange={(event) =>
@@ -380,7 +381,7 @@ describe("OnboardingPage", () => {
     });
   });
 
-  it("waits for provider authorization to settle before editing a missing onboarding guide", async () => {
+  it("keeps onboarding navigation available while provider discovery settles", async () => {
     guideQueryState = {
       data: {
         content: null,
@@ -393,13 +394,57 @@ describe("OnboardingPage", () => {
 
     await advanceToStage(4);
 
-    const input = screen.getByTestId<HTMLTextAreaElement>(
-      "mock-agent-guide-input",
-    );
+    const input = screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: "Agent selection guide",
+    });
     expect(input.disabled).toBe(true);
     expect(
-      screen.getByTestId<HTMLButtonElement>("onboarding-advance").disabled,
-    ).toBe(true);
+      screen.getByRole<HTMLButtonElement>("button", { name: /continue/i })
+        .disabled,
+    ).toBe(false);
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", { name: /skip intro/i })
+        .disabled,
+    ).toBe(false);
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => {
+      expect(useOnboardingStore.getState().completedAt).not.toBeNull();
+    });
+    expect(setGlobalGuideMock).not.toHaveBeenCalled();
+  });
+
+  it("persists an edited existing guide even while provider discovery is still settling", async () => {
+    guideQueryState = {
+      data: {
+        content: "saved guide",
+        generatedDefaultContent: "claude guide",
+        providersSettled: false,
+      },
+      isError: false,
+    };
+    renderPage({ replay: false });
+
+    await advanceToStage(4);
+
+    const input = screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: "Agent selection guide",
+    });
+    expect(input.disabled).toBe(false);
+
+    fireEvent.change(input, {
+      target: { value: "edited while providers settle" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /skip intro/i }));
+
+    await waitFor(() => {
+      expect(setGlobalGuideMock).toHaveBeenCalledWith({
+        content: "edited while providers settle",
+      });
+    });
+    await waitFor(() => {
+      expect(useOnboardingStore.getState().completedAt).not.toBeNull();
+    });
   });
 
   it("never traps the user when the onboarding guide fails to load", async () => {

@@ -16,6 +16,7 @@ const testState = vi.hoisted(() => ({
     readonly onError?: (error: {
       readonly code: string;
       readonly message: string;
+      readonly fatalDetails: null;
     }) => void;
   } | null,
   getActiveHostId: vi.fn(() => "host-active-1"),
@@ -89,6 +90,7 @@ describe("usePhaseMigrateToEpic", () => {
     testState.capturedOptions?.onError?.({
       code: "UNAUTHORIZED",
       message: "missing user",
+      fatalDetails: null,
     });
 
     expect(toast.error).toHaveBeenCalledWith("Please sign in again.");

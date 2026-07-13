@@ -26,10 +26,6 @@ export const FROZEN_CATALOG_LINE_SNAPSHOTS = {
               "label": {
                 "type": "string"
               },
-              "enabled": {
-                "default": true,
-                "type": "boolean"
-              },
               "available": {
                 "type": "boolean"
               },
@@ -71,22 +67,16 @@ export const FROZEN_CATALOG_LINE_SNAPSHOTS = {
                     "full_access"
                   ]
                 }
-              },
-              "availabilityPending": {
-                "default": false,
-                "type": "boolean"
               }
             },
             "required": [
               "id",
               "label",
-              "enabled",
               "available",
               "error",
               "modes",
               "requiresApiKey",
-              "supportedPermissionModes",
-              "availabilityPending"
+              "supportedPermissionModes"
             ],
             "additionalProperties": false
           }
@@ -127,10 +117,6 @@ export const FROZEN_CATALOG_LINE_SNAPSHOTS = {
               "label": {
                 "type": "string"
               },
-              "enabled": {
-                "default": true,
-                "type": "boolean"
-              },
               "available": {
                 "type": "boolean"
               },
@@ -181,7 +167,6 @@ export const FROZEN_CATALOG_LINE_SNAPSHOTS = {
             "required": [
               "id",
               "label",
-              "enabled",
               "available",
               "error",
               "modes",
@@ -863,6 +848,370 @@ export const FROZEN_CATALOG_LINE_SNAPSHOTS = {
                   "copilot",
                   "kilocode",
                   "openrouter"
+                ]
+              },
+              "enabled": {
+                "type": "boolean"
+              },
+              "disabledBy": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "userId": {
+                        "type": "string"
+                      },
+                      "handle": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "at": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "userId",
+                      "handle",
+                      "at"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "selected": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "bundled"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "path"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "custom"
+                      },
+                      "path": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "path"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "candidates": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "bundled",
+                        "path",
+                        "custom"
+                      ]
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "version": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "available": {
+                      "type": "boolean"
+                    },
+                    "versionPending": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "path",
+                    "version",
+                    "available",
+                    "versionPending"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "authPending": {
+                "type": "boolean"
+              },
+              "checkedAt": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "apiKey": {
+                "type": "object",
+                "properties": {
+                  "supported": {
+                    "type": "boolean"
+                  },
+                  "configured": {
+                    "type": "boolean"
+                  },
+                  "source": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "enum": [
+                          "stored",
+                          "env"
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "supported",
+                  "configured",
+                  "source"
+                ],
+                "additionalProperties": false
+              },
+              "terminalAgentArgs": {
+                "default": "",
+                "type": "string"
+              },
+              "envOverrides": {
+                "default": [],
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "key": {
+                      "type": "string"
+                    },
+                    "value": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "key",
+                    "value"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "loginCapability": {
+                "default": null,
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "oauthArgs": {
+                        "anyOf": [
+                          {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "token": {
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "vars": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              }
+                            },
+                            "required": [
+                              "vars"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "oauthArgs",
+                      "token"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "availabilityPending": {
+                "default": false,
+                "type": "boolean"
+              },
+              "auth": {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "authenticated",
+                      "unauthenticated",
+                      "configured",
+                      "unavailable",
+                      "unknown"
+                    ]
+                  },
+                  "badgeText": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "label": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "detail": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "status",
+                  "badgeText",
+                  "label",
+                  "detail"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "providerId",
+              "enabled",
+              "disabledBy",
+              "selected",
+              "candidates",
+              "authPending",
+              "checkedAt",
+              "apiKey",
+              "terminalAgentArgs",
+              "envOverrides",
+              "loginCapability",
+              "availabilityPending",
+              "auth"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "providers"
+      ],
+      "additionalProperties": false
+    },
+    "providers.list@3.0": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "providers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "providerId": {
+                "type": "string",
+                "enum": [
+                  "claude-code",
+                  "codex",
+                  "opencode",
+                  "cursor",
+                  "traycer",
+                  "grok",
+                  "qwen",
+                  "kiro",
+                  "droid",
+                  "kimi",
+                  "copilot",
+                  "kilocode",
+                  "openrouter",
+                  "amp"
                 ]
               },
               "enabled": {

@@ -590,6 +590,13 @@ const AGENT_SPINNER_PRESETS: AgentSpinnerPresets = {
     intervalMs: 530,
     widthCh: 1,
   },
+  // Fixed six-dot braille cell: exactly the same 3 × 2 glyph geometry as the
+  // animated spinner, but with no frame cycling. Used for notification state.
+  static: {
+    frames: ["⠿"],
+    intervalMs: 0,
+    widthCh: 1,
+  },
 };
 
 export interface AgentSpinningDotsProps {
@@ -619,14 +626,13 @@ export function AgentSpinningDots(props: AgentSpinningDotsProps) {
     if (node === null) return;
     let frameIndex = 0;
     node.textContent = preset.frames[0];
+    if (preset.frames.length === 1) return;
     const intervalId = window.setInterval(() => {
       frameIndex = (frameIndex + 1) % preset.frames.length;
       node.textContent = preset.frames[frameIndex];
     }, preset.intervalMs);
 
-    return () => {
-      window.clearInterval(intervalId);
-    };
+    return () => window.clearInterval(intervalId);
   }, [preset.frames, preset.intervalMs]);
 
   return (

@@ -11,6 +11,8 @@ import {
   AgentSelectionGuideEditorSurface,
 } from "@/components/agent-selection-guide-editor-surface";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useAgentSelectionGuideGlobalQuery } from "@/hooks/agent/use-agent-selection-guide-global-query";
@@ -106,6 +108,16 @@ export function AgentSelectionGuideSection() {
       <AgentSelectionGuideMessage>
         <div className="text-ui-sm text-muted-foreground">
           Couldn't load agent instructions for this host.
+          <ReportIssueAction
+            context={createReportIssueContext({
+              title: "Couldn't load agent instructions",
+              message: null,
+              code: null,
+              source: "Agent instructions",
+            })}
+            presentation="link"
+            className="ml-1 h-auto p-0"
+          />
         </div>
       </AgentSelectionGuideMessage>
     );

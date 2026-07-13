@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   PERSIST_STORES,
+  appLocalNotificationsKey,
   composerHarnessMemoryKey,
   composerRunSettingsKey,
   epicCanvasKey,
@@ -78,7 +79,7 @@ describe("persist key builders — output-preserving against current source", ()
     );
   });
 
-  it("emits the current localStorage key for each of the 6 scoped stores", () => {
+  it("emits the current localStorage key for each of the 7 scoped stores", () => {
     // Source: src/stores/composer/composer-run-settings-store.ts
     // (`composerRunSettingsPersistKey`).
     expect(composerRunSettingsKey(null)).toBe(
@@ -119,6 +120,13 @@ describe("persist key builders — output-preserving against current source", ()
     // `persistKey(epicId, userId)` emits `…:open-epic:{userBucket}:{epicId}`).
     expect(openEpicKey(null, "e1")).toBe("traycer-gui-app:open-epic:anon:e1");
     expect(openEpicKey("u1", "e1")).toBe("traycer-gui-app:open-epic:u1:e1");
+    // Source: src/stores/notifications/app-local-notifications-store.ts
+    expect(appLocalNotificationsKey(null)).toBe(
+      "traycer-gui-app:app-local-notifications:anon",
+    );
+    expect(appLocalNotificationsKey("u1")).toBe(
+      "traycer-gui-app:app-local-notifications:u1",
+    );
   });
 
   it("emits the current localStorage keys for the host-scoped worktree caches (non-zustand)", () => {

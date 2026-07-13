@@ -41,10 +41,12 @@ export interface TerminalSessionRecovery {
 export function useTerminalSessionRecovery(input: {
   readonly hostId: string;
   readonly instanceId: string;
+  readonly onRecoveryExhausted: () => void;
 }): TerminalSessionRecovery {
-  const { hostId, instanceId } = input;
+  const { hostId, instanceId, onRecoveryExhausted } = input;
   const queryClient = useQueryClient();
   const autoAttemptsRef = useRef(0);
+  const recoveryExhaustionReportedRef = useRef(false);
   const [recoverNonce, setRecoverNonce] = useState(0);
   const [recoveryExhausted, setRecoveryExhausted] = useState(false);
 
@@ -63,19 +65,25 @@ export function useTerminalSessionRecovery(input: {
   const onSessionLost = useCallback(() => {
     if (autoAttemptsRef.current >= MAX_AUTO_RECOVERIES) {
       setRecoveryExhausted(true);
+      if (!recoveryExhaustionReportedRef.current) {
+        recoveryExhaustionReportedRef.current = true;
+        onRecoveryExhausted();
+      }
       return;
     }
     autoAttemptsRef.current += 1;
     doRecover();
-  }, [doRecover]);
+  }, [doRecover, onRecoveryExhausted]);
 
   const onSessionHealthy = useCallback(() => {
     autoAttemptsRef.current = 0;
+    recoveryExhaustionReportedRef.current = false;
     setRecoveryExhausted(false);
   }, []);
 
   const onManualReconnect = useCallback(() => {
     autoAttemptsRef.current = 0;
+    recoveryExhaustionReportedRef.current = false;
     setRecoveryExhausted(false);
     doRecover();
   }, [doRecover]);

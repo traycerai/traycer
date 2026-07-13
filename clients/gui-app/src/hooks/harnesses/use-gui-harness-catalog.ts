@@ -262,6 +262,7 @@ export function useGuiHarnessCatalog(
 
   const modelQueries = useHostQueries<HostRpcRegistry, "agent.gui.listModels">({
     client,
+    cacheKeyIdentity: undefined,
     requests,
     options: {
       enabled: activity.enabled,

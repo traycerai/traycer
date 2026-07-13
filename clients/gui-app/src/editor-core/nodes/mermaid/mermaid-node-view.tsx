@@ -11,6 +11,8 @@ import { NodeViewWrapper, type NodeViewProps } from "@tiptap/react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 import { trustedMarkupToReactNodes } from "@/lib/trusted-markup";
 import { BlockErrorBoundary } from "../shared/block-error-boundary";
 import { MermaidBlockToolbar } from "./mermaid-block-toolbar";
@@ -236,6 +238,16 @@ export function MermaidNodeView(props: NodeViewProps) {
                 Mermaid parse error
               </div>
               <div className="tc-node-block__error-detail">{render.error}</div>
+              <ReportIssueAction
+                context={createReportIssueContext({
+                  title: "Mermaid parse error",
+                  message: null,
+                  code: null,
+                  source: "Artifact editor",
+                })}
+                presentation="icon"
+                className={undefined}
+              />
             </div>
           )}
           {render.status === "idle" && rawCode.trim().length === 0 && (

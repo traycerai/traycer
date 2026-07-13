@@ -1,4 +1,14 @@
 import "../../../../__tests__/test-browser-apis";
+
+vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
+  useHostNotificationIndicators: () => ({
+    data: { epics: {}, chats: {} },
+    isPending: false,
+    isFetching: false,
+    error: null,
+    refetch: () => Promise.resolve(),
+  }),
+}));
 import {
   Outlet,
   RouterProvider,
@@ -128,7 +138,7 @@ const testState = vi.hoisted(() => ({
   items: [] as HistoryItem[],
   availableRepos: [] as string[],
   availableWorkspaces: [] as HistoryItem["linkedWorkspaces"],
-  activityByEpicId: new Map<string, "idle" | "running" | "waiting">(),
+  activityByEpicId: new Map<string, "idle" | "running">(),
   facets: {
     repos: [] as HistoryFacets["repos"],
     workspaces: [] as HistoryFacets["workspaces"],
@@ -383,18 +393,6 @@ describe("<EpicsListPanel />", () => {
       await screen.findByTestId("epics-list-row-activity-epic-from-history"),
     ).toBeDefined();
     expect(screen.queryByTitle("Task activity in progress")).not.toBeNull();
-  });
-
-  it("shows the waiting activity status on history rows", async () => {
-    testState.activityByEpicId.set("epic-from-history", "waiting");
-    renderPanel("embedded", "/");
-
-    expect(
-      await screen.findByTestId("epics-list-row-waiting-epic-from-history"),
-    ).toBeDefined();
-    expect(
-      screen.queryByTitle("Task waiting for your approval"),
-    ).not.toBeNull();
   });
 
   it("selects a history row from the outside checkbox without opening the epic", async () => {

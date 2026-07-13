@@ -12,6 +12,7 @@ import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-
 const EPIC_ID = "epic-1";
 const CHAT_ID = "chat-1";
 const TEST_ID = "chat-progress";
+const RUNNING_TEST_ID = `${TEST_ID}-activity-${CHAT_ID}`;
 
 const mockSessionState = vi.hoisted<{
   readonly activeAgentIds: Set<string>;
@@ -48,14 +49,14 @@ describe("<ChatProgressIcon />", () => {
 
     renderIcon();
 
-    expect(screen.queryByTestId(TEST_ID)).not.toBeNull();
+    expect(screen.queryByTestId(RUNNING_TEST_ID)).not.toBeNull();
     expect(screen.queryByTitle("Chat in progress")).not.toBeNull();
   });
 
   it("shows the static chat icon when an unopened chat is not active", () => {
     renderIcon();
 
-    expect(screen.queryByTestId(TEST_ID)).toBeNull();
+    expect(screen.queryByTestId(RUNNING_TEST_ID)).toBeNull();
     expect(screen.queryByTitle("Chat in progress")).toBeNull();
     expect(screen.queryByTitle("Waiting for your approval")).toBeNull();
   });
@@ -67,11 +68,11 @@ describe("<ChatProgressIcon />", () => {
 
     renderIcon();
 
-    expect(screen.queryByTestId(TEST_ID)).not.toBeNull();
+    expect(screen.queryByTestId(RUNNING_TEST_ID)).not.toBeNull();
     expect(screen.queryByTitle("Chat in progress")).not.toBeNull();
   });
 
-  it("uses the waiting spinner when an active opened chat needs approval", () => {
+  it("keeps the running spinner for an active opened chat that needs approval", () => {
     const handle = createHandle();
     handle.store.setState({
       pendingInterviews: [{ blockId: "question-1", requestedAt: 1 }],
@@ -81,9 +82,9 @@ describe("<ChatProgressIcon />", () => {
 
     renderIcon();
 
-    expect(screen.queryByTestId(TEST_ID)).not.toBeNull();
-    expect(screen.queryByTitle("Waiting for your approval")).not.toBeNull();
-    expect(screen.queryByTitle("Chat in progress")).toBeNull();
+    expect(screen.queryByTestId(RUNNING_TEST_ID)).not.toBeNull();
+    expect(screen.queryByTitle("Waiting for your approval")).toBeNull();
+    expect(screen.queryByTitle("Chat in progress")).not.toBeNull();
   });
 });
 

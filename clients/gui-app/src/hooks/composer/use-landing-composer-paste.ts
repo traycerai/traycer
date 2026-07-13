@@ -1,5 +1,4 @@
 import { useCallback } from "react";
-import { toast } from "sonner";
 import { v4 as uuidv4 } from "uuid";
 
 import type { ImageAttachmentAttrs } from "@/components/chat/composer/editor/extensions/image-attachment-extension";
@@ -14,6 +13,7 @@ import {
   reserveLandingImageBudget,
   scheduleLandingImageReconcile,
 } from "@/lib/composer/landing-image-gc";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
 /**
  * Landing-composer paste/drop ingest. Unlike the shared base64 adapter
@@ -72,9 +72,18 @@ export function useLandingComposerPaste(editorRef: {
           // or store) inserts nothing, but earlier images may already be stored —
           // now orphaned. Surface the failure and schedule a reconcile to reclaim
           // them (their session entries keep the bytes safe until it runs).
-          toast.error("Couldn't attach the image.", {
-            description: "Please try adding it again.",
-          });
+          reportableErrorToast(
+            "Couldn't attach the image.",
+            {
+              description: "Please try adding it again.",
+            },
+            {
+              title: "Could not attach image",
+              message: null,
+              code: null,
+              source: "Chat composer",
+            },
+          );
           scheduleLandingImageReconcile();
         });
     },

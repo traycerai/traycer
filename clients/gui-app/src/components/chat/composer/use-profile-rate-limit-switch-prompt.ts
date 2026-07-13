@@ -1,7 +1,8 @@
-import { useCallback, useState } from "react";
+import { useCallback } from "react";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { useTabProvidersList } from "@/hooks/providers/use-tab-providers-list-query";
+import { useRateLimitSwitchPromptDismissalsStore } from "@/stores/rate-limits/rate-limit-switch-prompt-dismissals-store";
 import {
   profileCommitId,
   profileDisplayLabel,
@@ -38,7 +39,8 @@ export interface ProfileRateLimitSwitchPrompt {
    *  after dismissal while the underlying rate-limit condition still holds. */
   readonly current: ProfileRateLimitProfileChip | null;
   readonly alternatives: ReadonlyArray<ProfileRateLimitAlternative>;
-  /** Hides this exact warning for the lifetime of the composer. A change in
+  /** Hides this exact warning in EVERY composer for the rest of the app
+   *  session (shared dismissal store, not per-composer state). A change in
    *  source profile, severity, or viable alternatives creates a new warning. */
   readonly dismiss: () => void;
 }
@@ -62,8 +64,8 @@ export function useProfileRateLimitSwitchPrompt(
   profileId: string | null,
   active: boolean,
 ): ProfileRateLimitSwitchPrompt {
-  const [dismissedPromptKey, setDismissedPromptKey] = useState<string | null>(
-    null,
+  const dismissPromptKey = useRateLimitSwitchPromptDismissalsStore(
+    (state) => state.dismiss,
   );
   const providerId = providerIdForHarness(harnessId);
   const enabled = active && providerId !== null;
@@ -111,9 +113,14 @@ export function useProfileRateLimitSwitchPrompt(
           hardLimited,
           alternatives.map((alternative) => alternative.accentDotId).sort(),
         ]);
+  // Subscribes to this exact key's dismissed bit (a boolean, so a dismissal
+  // of an unrelated prompt key never re-renders this composer).
+  const dismissed = useRateLimitSwitchPromptDismissalsStore(
+    (state) => promptKey !== null && state.dismissedKeys.has(promptKey),
+  );
   const dismiss = useCallback((): void => {
-    if (promptKey !== null) setDismissedPromptKey(promptKey);
-  }, [promptKey]);
+    if (promptKey !== null) dismissPromptKey(promptKey);
+  }, [dismissPromptKey, promptKey]);
 
   if (currentChip === null || promptKey === null) {
     return {
@@ -126,7 +133,7 @@ export function useProfileRateLimitSwitchPrompt(
   }
 
   return {
-    limited: alternatives.length > 0 && dismissedPromptKey !== promptKey,
+    limited: alternatives.length > 0 && !dismissed,
     hardLimited,
     current: currentChip,
     alternatives,

@@ -2,6 +2,7 @@ export {
   PERSIST_PREFIX,
   PERSIST_STORES,
   STORE_KEYS,
+  appLocalNotificationsKey,
   composerHarnessMemoryKey,
   composerRunSettingsKey,
   epicCanvasKey,
