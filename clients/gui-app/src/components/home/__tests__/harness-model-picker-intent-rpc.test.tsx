@@ -123,16 +123,18 @@ vi.mock("react-virtuoso", async () => {
   }
 
   interface MockVirtuosoProps {
-    readonly id?: string;
-    readonly role?: string;
-    readonly "aria-label"?: string;
-    readonly className?: string;
-    readonly data?: ReadonlyArray<unknown>;
-    readonly totalCount?: number;
-    readonly computeItemKey?: (index: number, item: undefined) => Key;
-    readonly initialTopMostItemIndex?:
-      number | { readonly index: number | "LAST" };
-    readonly itemContent?: (index: number, item: undefined) => ReactNode;
+    readonly id: string | undefined;
+    readonly role: string | undefined;
+    readonly "aria-label": string | undefined;
+    readonly className: string | undefined;
+    readonly data: ReadonlyArray<unknown> | undefined;
+    readonly totalCount: number | undefined;
+    readonly computeItemKey:
+      ((index: number, item: undefined) => Key) | undefined;
+    readonly initialTopMostItemIndex:
+      number | { readonly index: number | "LAST" } | undefined;
+    readonly itemContent:
+      ((index: number, item: undefined) => ReactNode) | undefined;
   }
 
   const Virtuoso = React.forwardRef<MockVirtuosoHandle, MockVirtuosoProps>(
