@@ -1,6 +1,12 @@
 import { uninstallHost } from "../installer";
+import type { ILogger } from "../logger";
 import type { CommandFn, CommandResult } from "../runner/runner";
-import { createServiceController, serviceLabelFor } from "../service";
+import type { Environment } from "../runner/environment";
+import {
+  createServiceController,
+  serviceLabelFor,
+  type ServiceLabel,
+} from "../service";
 import { withCliLock } from "../store/cli-lock";
 
 // `traycer host uninstall [--all]`:
@@ -10,6 +16,37 @@ import { withCliLock } from "../store/cli-lock";
 // is never removed - there is no destructive "purge" path.
 export interface HostUninstallArgs {
   readonly all: boolean;
+}
+
+export interface RuntimePurgeStopController {
+  stop(label: ServiceLabel): Promise<void>;
+}
+
+interface StopServiceBeforeRuntimePurgeArgs {
+  readonly controller: RuntimePurgeStopController;
+  readonly environment: Environment;
+  readonly label: ServiceLabel;
+  readonly logger: ILogger;
+}
+
+// Runtime state belongs to the live host process, so deleting pid metadata or
+// rotating its active log is only safe after the service controller confirms
+// the process exited. Service deregistration/install removal remain
+// best-effort even when this confirmation fails.
+export async function stopServiceBeforeRuntimePurge(
+  args: StopServiceBeforeRuntimePurgeArgs,
+): Promise<boolean> {
+  try {
+    await args.controller.stop(args.label);
+    return true;
+  } catch (err) {
+    args.logger.warn("Host uninstall service stop failed; preserving runtime", {
+      environment: args.environment,
+      errorName: err instanceof Error ? err.name : "Error",
+      errorMessage: err instanceof Error ? err.message : String(err),
+    });
+    return false;
+  }
 }
 
 export function buildHostUninstallCommand(args: HostUninstallArgs): CommandFn {
@@ -27,6 +64,7 @@ export function buildHostUninstallCommand(args: HostUninstallArgs): CommandFn {
       },
       async () => {
         let serviceUninstalled = false;
+        let purgeChannelRuntime = false;
         if (args.all) {
           ctx.runtime.logger.warn(
             "Host uninstall command will deregister service and purge runtime",
@@ -57,23 +95,15 @@ export function buildHostUninstallCommand(args: HostUninstallArgs): CommandFn {
             environment: ctx.runtime.environment,
             label: label.id,
           });
-          // Best-effort: confirm the process actually exited so any held
-          // file handles release before the install dir is removed below.
-          // Tolerate failures - the uninstall path forces removal
-          // regardless.
-          try {
-            await controller.stop(label);
-          } catch (err) {
-            ctx.runtime.logger.warn(
-              "Host uninstall service stop failed; continuing",
-              {
-                environment: ctx.runtime.environment,
-                errorName: err instanceof Error ? err.name : "Error",
-                errorMessage: err instanceof Error ? err.message : String(err),
-              },
-            );
-            // Service may not be running; proceed.
-          }
+          // Install removal stays best-effort, but runtime files are preserved
+          // unless stop confirms the process is gone. A failed stop can leave
+          // the host actively writing its pid metadata and log.
+          purgeChannelRuntime = await stopServiceBeforeRuntimePurge({
+            controller,
+            environment: ctx.runtime.environment,
+            label,
+            logger: ctx.runtime.logger,
+          });
         }
         ctx.progress({
           stage: "uninstall",
@@ -84,9 +114,7 @@ export function buildHostUninstallCommand(args: HostUninstallArgs): CommandFn {
         });
         const result = await uninstallHost({
           environment: ctx.runtime.environment,
-          // --all also clears environment runtime state (pid metadata,
-          // log) - the host is gone, those are just stale files.
-          purgeChannelRuntime: args.all,
+          purgeChannelRuntime,
         });
         ctx.runtime.logger.info("Host uninstall command completed", {
           environment: ctx.runtime.environment,
