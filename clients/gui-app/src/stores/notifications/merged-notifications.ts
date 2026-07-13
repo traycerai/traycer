@@ -45,7 +45,8 @@ export interface MergedNotificationRow {
   readonly sourceId: string;
   readonly createdAt: number;
   readonly readAt: number | null;
-  readonly text: string;
+  readonly title: string;
+  readonly body: string;
   readonly payload: NotificationPayload | null;
   readonly hostKind: HostNotificationFeedEntry["kind"] | null;
   readonly appLocalKind: AppLocalNotificationEntry["kind"] | null;
@@ -355,13 +356,15 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
 export function rowFromHostEntry(
   entry: HostNotificationFeedEntry,
 ): MergedNotificationRow {
+  const presentation = hostNotificationPresentation(entry);
   return {
     feedId: hostFeedId(entry.id),
     source: "host",
     sourceId: entry.id,
     createdAt: entry.updatedAt,
     readAt: entry.readAt,
-    text: formatHostNotification(entry),
+    title: presentation.title,
+    body: presentation.body,
     payload: payloadFromHostEntry(entry),
     hostKind: entry.kind,
     appLocalKind: null,
@@ -380,10 +383,8 @@ export function rowFromAppLocalEntry(
     sourceId: entry.id,
     createdAt: entry.updatedAt,
     readAt: entry.readAt,
-    text:
-      entry.detail === null
-        ? entry.message
-        : `${entry.message} ${entry.detail}`,
+    title: entry.message,
+    body: entry.detail ?? "Traycer notification",
     payload: entry.payload,
     hostKind: null,
     appLocalKind: entry.kind,
@@ -402,7 +403,8 @@ export function rowFromGlobalEntry(
     sourceId: entry.id,
     createdAt: entry.createdAt,
     readAt: entry.readAt,
-    text: formatNotification(entry.event, undefined),
+    title: formatNotification(entry.event, undefined),
+    body: "Collaboration",
     payload: buildPayloadFromEvent(entry.event),
     hostKind: null,
     appLocalKind: null,
@@ -476,33 +478,59 @@ function payloadFromHostEntry(
   return { kind: "chat", epicId, chatId };
 }
 
-function formatHostNotification(entry: HostNotificationFeedEntry): string {
-  const agentName = readPayloadString(entry.payload, "agentName");
-  const chatTitle = readPayloadString(entry.payload, "chatTitle");
+interface NotificationPresentation {
+  readonly title: string;
+  readonly body: string;
+}
+
+function hostNotificationPresentation(
+  entry: HostNotificationFeedEntry,
+): NotificationPresentation {
+  const agentName = readNotificationTitle(entry.payload, "agentName");
+  const chatTitle = readNotificationTitle(entry.payload, "chatTitle");
+  const taskTitle = readNotificationTitle(entry.payload, "taskTitle");
+  const title = taskTitle ?? chatTitle ?? agentName ?? "Task";
+  const chatContext =
+    chatTitle !== null && chatTitle !== title ? chatTitle : "Chat";
   switch (entry.kind) {
-    case "agent.stopped":
-      return formatAgentStoppedNotification(agentName, entry.outcome);
+    case "agent.stopped": {
+      const context = notificationContext(agentName, title, entry.payload);
+      return {
+        title,
+        body: `${context} • ${agentStoppedStatus(entry.outcome, readPayloadString(entry.payload, "code"))}`,
+      };
+    }
     case "agent.stalled":
-      return agentName === null ? "Agent stalled" : `${agentName} stalled`;
+      return {
+        title,
+        body: `${notificationContext(agentName, title, entry.payload)} • Stalled`,
+      };
     case "approval.requested":
-      return chatTitle === null
-        ? "Approval requested"
-        : `Approval requested in ${chatTitle}`;
+      return { title, body: `${chatContext} • Approval requested` };
     case "interview.requested":
-      return chatTitle === null
-        ? "Question waiting"
-        : `Question waiting in ${chatTitle}`;
+      return { title, body: `${chatContext} • Question waiting` };
   }
 }
 
-function formatAgentStoppedNotification(
-  agentName: string | null,
+function agentStoppedStatus(
   outcome: HostNotificationOutcome,
+  code: string | null,
 ): string {
-  const name = agentName ?? "Agent";
-  if (outcome === "errored") return `${name} failed`;
-  if (outcome === "stopped") return `${name} stopped`;
-  return `${name} finished`;
+  if (code === "RATE_LIMIT") return "Rate limit reached";
+  if (outcome === "errored") return "Failed";
+  if (outcome === "stopped") return "Stopped";
+  return "Done";
+}
+
+function notificationContext(
+  agentName: string | null,
+  title: string,
+  payload: HostNotificationFeedEntry["payload"],
+): string {
+  if (agentName !== null && agentName !== title) return agentName;
+  return readPayloadString(payload, "kind") === "epic"
+    ? "Terminal agent"
+    : "Chat";
 }
 
 function readPayloadString(
@@ -513,4 +541,16 @@ function readPayloadString(
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+function readNotificationTitle(
+  payload: HostNotificationFeedEntry["payload"],
+  key: string,
+): string | null {
+  const value = readPayloadString(payload, key);
+  return value !== null && !LEGACY_ENTITY_UUID_PATTERN.test(value)
+    ? value
+    : null;
+}
+
 const HOST_PAGE_LIMIT = 50;
+const LEGACY_ENTITY_UUID_PATTERN =
+  /^(?:Chat|Task) [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

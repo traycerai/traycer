@@ -39,6 +39,12 @@ import { DEFAULT_HISTORY_SEARCH } from "@/lib/history-search";
 import { WindowsBridgeContext } from "@/providers/windows-bridge-context";
 import { setDesktopEpicOwnershipBridge } from "@/lib/windows/desktop-epic-ownership";
 import type { DesktopWindowsBridge } from "@/lib/windows/types";
+import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/worktree-schemas";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+
+const queryClient = new QueryClient({
+  defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+});
 
 /**
  * Light up the desktop "Open in New Window" path: both the renderer context
@@ -147,6 +153,7 @@ const testState = vi.hoisted(() => ({
   isFetching: false,
   bridge: null as DesktopWindowsBridge | null,
   worktreeCandidates: [] as WorktreeCleanupCandidateStub[],
+  worktreesByEpicId: new Map<string, readonly WorktreeHostEntryV12[]>(),
   mutate:
     vi.fn<
       (
@@ -193,6 +200,10 @@ vi.mock("@/hooks/epic/use-task-delete-worktree-candidates-query", () => ({
   }),
 }));
 
+vi.mock("@/hooks/worktree/use-task-worktree-metadata-query", () => ({
+  useTaskWorktreeMetadata: () => testState.worktreesByEpicId,
+}));
+
 vi.mock("@/hooks/epic/use-epic-title-mutation", () => ({
   useEpicUpdateTitle: () => ({
     isPending: false,
@@ -222,6 +233,36 @@ function historyItem(overrides: Partial<HistoryItem>): HistoryItem {
     ownership: "mine",
     permissionRole: "owner",
     ...overrides,
+  };
+}
+
+function historyWorktree(): WorktreeHostEntryV12 {
+  return {
+    worktreePath: "/worktrees/app/feature-history",
+    repoLabel: "acme/app",
+    repoIdentifier: { owner: "acme", repo: "app" },
+    branch: "feature/history",
+    inUse: false,
+    uncommittedCount: 0,
+    gitRemovable: true,
+    scripts: null,
+    lastActivityAt: null,
+    owners: [
+      {
+        epicId: "epic-from-history",
+        ownerKind: "chat",
+        ownerId: "chat-1",
+        updatedAt: 1,
+      },
+    ],
+    branchStatus: { ahead: 1, behind: 0, mergedIntoDefault: false },
+    createdAt: null,
+    prState: "open",
+    prNumber: 84,
+    prUrl: "https://github.com/acme/app/pull/84",
+    mergedHeadShaMatches: false,
+    submodules: [],
+    atBaseCommit: false,
   };
 }
 
@@ -262,9 +303,11 @@ function renderPanel(variant: EpicsListPanelVariant, initialEntry: string) {
 
 function RootOutlet(): ReactNode {
   const content = (
-    <TooltipProvider>
-      <Outlet />
-    </TooltipProvider>
+    <QueryClientProvider client={queryClient}>
+      <TooltipProvider>
+        <Outlet />
+      </TooltipProvider>
+    </QueryClientProvider>
   );
   if (testState.bridge === null) return content;
   return (
@@ -290,12 +333,14 @@ describe("<EpicsListPanel />", () => {
     testState.isFetching = false;
     testState.bridge = null;
     testState.worktreeCandidates = [];
+    testState.worktreesByEpicId = new Map();
     setDesktopEpicOwnershipBridge(null);
     testState.mutate.mockReset();
     testState.renameMutate.mockReset();
     testState.refetch.mockReset();
     testState.fetchNextPage.mockReset();
     testState.activityByEpicId.clear();
+    queryClient.clear();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useHistorySearchStore.setState({ search: DEFAULT_HISTORY_SEARCH });
   });
@@ -324,6 +369,35 @@ describe("<EpicsListPanel />", () => {
       );
     });
     expect(screen.queryByTestId("old-epic-route")).toBeNull();
+  });
+
+  it("shows task PR pills without replacing the row navigation layer", async () => {
+    testState.worktreesByEpicId = new Map([
+      ["epic-from-history", [historyWorktree()]],
+    ]);
+    renderPanel("embedded", "/");
+
+    const pr = await screen.findByRole("link", { name: "Open PR #84 Open" });
+    expect(pr.getAttribute("href")).toBe("https://github.com/acme/app/pull/84");
+    const pills = screen.getByTestId("task-history-prs-epic-from-history");
+    expect(pills.className).toContain("opacity-0");
+    expect(pills.className).toContain("group-hover/list-row:opacity-100");
+    expect(pills.className).toContain(
+      "group-focus-within/list-row:opacity-100",
+    );
+    expect(
+      screen.getByRole("link", { name: /open task open from landing/i }),
+    ).not.toBeNull();
+  });
+
+  it("keeps the updated timestamp visible when a task has no PR pills", async () => {
+    renderPanel("embedded", "/");
+
+    const updated = await screen.findByText("updated about 2 hours ago");
+    expect(updated.className).not.toContain("group-hover/list-row:opacity-0");
+    expect(updated.className).not.toContain(
+      "group-focus-within/list-row:opacity-0",
+    );
   });
 
   it("offers both context-menu actions for an epic row", async () => {

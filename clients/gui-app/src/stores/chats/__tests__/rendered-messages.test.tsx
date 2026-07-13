@@ -5,6 +5,7 @@ import type {
   AgentSender,
   ChatEvent,
   Message,
+  UserMessageSender,
 } from "@traycer/protocol/persistence/epic/schemas";
 import type { TurnCheckpointManifest } from "@traycer/protocol/persistence/epic/checkpoint-manifests";
 import type {
@@ -922,6 +923,7 @@ describe("useRenderedMessages", () => {
           queueItemId: "queue-1",
           messageId: "message-queue-1",
           mode: "safe_point",
+          sender: null,
           content: {
             type: "doc",
             content: [
@@ -989,6 +991,7 @@ describe("useRenderedMessages", () => {
           queueItemId: "queue-1",
           messageId: "message-queue-1",
           mode: "safe_point",
+          sender: null,
           content,
         },
         {
@@ -1087,6 +1090,7 @@ describe("useRenderedMessages", () => {
           queueItemId: "queue-1",
           messageId: "message-queue-1",
           mode: "safe_point",
+          sender: null,
           content,
         },
         {
@@ -4533,6 +4537,7 @@ describe("useRenderedMessages head/tail partition", () => {
     blockId: string,
     messageId: string,
     timestamp: number,
+    sender: UserMessageSender | null,
   ): Extract<Message, { role: "assistant" }>["blocks"][number] {
     return {
       blockId,
@@ -4544,6 +4549,7 @@ describe("useRenderedMessages head/tail partition", () => {
       messageId,
       content: CONTENT,
       mode: "safe_point",
+      sender,
     };
   }
 
@@ -4649,7 +4655,7 @@ describe("useRenderedMessages head/tail partition", () => {
     const messages = [userMessage("u1"), steered, activeRecord];
     const live = liveTurn(
       "turn-2",
-      [turnSteerBlock("steer-1", "steered-user-1", 4100)],
+      [turnSteerBlock("steer-1", "steered-user-1", 4100, null)],
       4000,
     );
 
@@ -4665,6 +4671,82 @@ describe("useRenderedMessages head/tail partition", () => {
     // standalone user row at its own send timestamp.
     expect(steeredRows[0]?.createdAt).toBe(4000);
     expect(steeredRows[0]?.steerBadge).not.toBeNull();
+  });
+
+  // An ORPHANED steer block - one whose steered user row is absent from
+  // `messages` - falls back to rendering the block's own content. These three
+  // pin the provenance of that fallback: it is the only thing standing between
+  // an agent-to-agent message and a bubble that looks like the user typed it.
+  const AGENT_STEER_SENDER: UserMessageSender = {
+    type: "agent",
+    harnessId: "claude",
+    agentId: "agent-7",
+    displayName: "Reviewer",
+    reply: { expectsReply: true, responseId: "resp-1" },
+  };
+
+  // `turnKey` must be unique per case: rendered rows are memoized by turn/block
+  // id, so reusing one would hand back the previous case's row.
+  function orphanedSteerRow(turnKey: string, sender: UserMessageSender | null) {
+    // Deliberately NOT including the steered user row in `messages` - this is a
+    // chat whose mid-turn reload dropped it.
+    const activeRecord = {
+      ...assistantMessage(turnKey, 4000),
+      blocks: [turnTextBlock(`block:${turnKey}`, 4000, "before steer")],
+    };
+    const live = liveTurn(
+      turnKey,
+      [
+        turnSteerBlock(
+          `steer:${turnKey}`,
+          `steered-user:${turnKey}`,
+          4100,
+          sender,
+        ),
+      ],
+      4000,
+    );
+    const { result } = renderHook(() =>
+      useRenderedMessages(
+        partitionInput([userMessage("u1"), activeRecord], live),
+        displayContext,
+      ),
+    );
+    return result.current.find((row) => row.steerBadge?.status === "steered");
+  }
+
+  it("renders an orphaned AGENT steer as an agent card, never as a user-authored row", () => {
+    const row = orphanedSteerRow("turn-orphan-agent", AGENT_STEER_SENDER);
+
+    expect(row).toBeDefined();
+    // The regression: with no sender on the block this rendered as a plain
+    // "YOU" bubble - an A2A message impersonating the user.
+    expect(row?.agentSenderInfo).toEqual({
+      agentId: "agent-7",
+      senderTitle: "Reviewer",
+      expectReply: true,
+      responseId: "resp-1",
+    });
+  });
+
+  it("keeps an orphaned HUMAN steer a user row", () => {
+    const row = orphanedSteerRow("turn-orphan-human", {
+      type: "user",
+      userId: "owner-1",
+    });
+
+    expect(row).toBeDefined();
+    expect(row?.agentSenderInfo).toBeNull();
+  });
+
+  it("renders an orphaned steer block persisted before the sender field as a user row", () => {
+    // Legacy blocks parse with `sender: null` (the schema default), which must
+    // keep the pre-fix behavior rather than inventing provenance.
+    const row = orphanedSteerRow("turn-orphan-legacy", null);
+
+    expect(row).toBeDefined();
+    expect(row?.agentSenderInfo).toBeNull();
+    expect(row?.senderLabel).toBeNull();
   });
 
   it("re-interleaves settled and active-turn rows in transcript order", () => {

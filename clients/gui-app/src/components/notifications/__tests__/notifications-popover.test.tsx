@@ -44,6 +44,8 @@ import {
 } from "@traycer/protocol/notifications/notification-room";
 import type { HostNotificationEntry } from "@traycer/protocol/host/notifications/contracts";
 
+const TASK_TITLE = "Checkout notification title and hover behavior";
+
 function seedEntries(
   callbacks: NotificationsStreamCallbacks,
   entries: ReadonlyArray<NotificationEntry>,
@@ -151,6 +153,7 @@ function hostAgentEntry(input: {
         epicId: "epic-1",
         chatId: "chat-1",
         agentName: "Agent",
+        taskTitle: TASK_TITLE,
         outcome: input.outcome ?? "completed",
       },
     };
@@ -167,6 +170,7 @@ function hostAgentEntry(input: {
       epicId: "epic-1",
       chatId: "chat-1",
       agentName: "Agent",
+      taskTitle: TASK_TITLE,
     },
   };
 }
@@ -323,7 +327,7 @@ describe("NotificationsPopover click routing", () => {
       "notification-unread-marker",
     );
     expect(unreadMarker.className).toContain("absolute");
-    expect(unreadMarker.className).toContain("inset-y-0");
+    expect(unreadMarker.className).toContain("inset-y-2");
     expect(unreadMarker.className).toContain("left-0");
     expect(unreadMarker.className).toContain("rounded-r-full");
 
@@ -393,11 +397,22 @@ describe("NotificationsPopover click routing", () => {
 
     expect(failed?.dataset.notificationSeverity).toBe("failure");
     expect(failed?.dataset.notificationOutcome).toBe("errored");
-    expect(failed?.textContent).toContain("Agent failed");
+    expect(failed?.textContent).toContain(TASK_TITLE);
+    expect(failed?.textContent).toContain("Agent • Failed");
     expect(completed?.dataset.notificationSeverity).toBe("done");
-    expect(completed?.textContent).toContain("Agent finished");
+    expect(completed?.textContent).toContain(TASK_TITLE);
+    expect(completed?.textContent).toContain("Agent • Done");
     expect(stalled?.dataset.notificationSeverity).toBe("failure");
-    expect(stalled?.textContent).toContain("Agent stalled");
+    expect(stalled?.textContent).toContain(TASK_TITLE);
+    expect(stalled?.textContent).toContain("Agent • Stalled");
+
+    if (completed === undefined) throw new Error("missing completed row");
+    const notificationTitle =
+      within(completed).getByTestId("notification-title");
+    expect(notificationTitle.className).toContain("truncate");
+    expect(notificationTitle.className).toContain("font-semibold");
+    fireEvent.pointerMove(notificationTitle, { pointerType: "mouse" });
+    expect((await screen.findByRole("tooltip")).textContent).toBe(TASK_TITLE);
   });
 
   it("keeps the Unread tab visible when every notification is read", async () => {

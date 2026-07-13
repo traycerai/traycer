@@ -9,6 +9,7 @@ import type {
 } from "@/lib/windows/types";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import { progressToast } from "@/lib/toast/progress-toast";
 
 const APP_UPDATE_TOAST_ID = "traycer-app-update";
 const APP_UPDATE_TRANSIENT_TOAST_DURATION_MS = 4000;
@@ -147,7 +148,7 @@ function showAppUpdateToast(
       );
       return;
     case "downloading":
-      toast.loading("Downloading update…", {
+      progressToast("Downloading update…", {
         id: APP_UPDATE_TOAST_ID,
         description:
           snapshot.downloadProgress === null

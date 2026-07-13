@@ -72,6 +72,7 @@ export function useOwnerWorkspaceInheritanceSeed(args: {
     enabled: bindingReadEnabled,
     staleTime: 0,
     refetchOnWindowFocus: false,
+    refetchInterval: false,
   });
   const ownerStagingKey = useMemo<WorktreeStagingKey | null>(() => {
     if (!args.enabled || args.ownerKind === null) return null;
