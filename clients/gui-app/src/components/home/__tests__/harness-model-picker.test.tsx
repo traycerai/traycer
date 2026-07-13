@@ -136,6 +136,24 @@ const queryMock = vi.hoisted(() => ({
       readonly enabled: boolean;
       readonly subscribed: boolean;
     }>,
+    // Explicit intent-edge refetches issued against `useGuiHarnessModelsQuery`
+    // (picker open, harness selection change) - the reaper trap's regression
+    // guard, since these are now the ONLY thing that ever refreshes a
+    // selected harness's models.
+    modelsRefetch: [] as Array<{ readonly harnessId: string }>,
+    commands: [] as Array<{
+      readonly harnessId: string;
+      readonly workingDirectories: ReadonlyArray<string>;
+      readonly enabled: boolean;
+      readonly subscribed: boolean;
+    }>,
+    // Same regression guard as `modelsRefetch`, for the commands prewarm
+    // (RC-2): Traycer/OpenRouter never touch their managed server through
+    // `listModels` (remote HTTP catalogs) - only `listCommands` does, so the
+    // same two intent edges must also refetch commands for the selected
+    // harness, and must skip it under the identical disabled/unavailable gate
+    // (RC-1) that guards the models refetch.
+    commandsRefetch: [] as Array<{ readonly harnessId: string }>,
   },
 }));
 
@@ -326,6 +344,12 @@ function catalogHarnessesForRender(): CatalogHarness[] {
 }
 
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
+  // The real hook resolves the app-wide default host's client via
+  // `useHostBinding()`; this suite renders the picker without a
+  // `<HostRuntimeProvider>`, so a real call would just resolve to `null`
+  // anyway (`useHostBinding` tolerates a missing provider) - stub it
+  // directly rather than exercising that context machinery.
+  useDefaultHostClient: () => null,
   useGuiHarnessesQuery: (activity: QueryActivity) => {
     queryMock.calls.harnesses.push({
       enabled: activity.enabled,
@@ -357,6 +381,32 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
         : undefined,
       isPending: false,
       error: null,
+      refetch: () => {
+        queryMock.calls.modelsRefetch.push({ harnessId });
+        return Promise.resolve({ data: undefined });
+      },
+    };
+  },
+  useGuiHarnessCommandsQuery: (
+    _client: unknown,
+    harnessId: string,
+    workingDirectories: ReadonlyArray<string>,
+    activity: QueryActivity,
+  ) => {
+    queryMock.calls.commands.push({
+      harnessId,
+      workingDirectories,
+      enabled: activity.enabled,
+      subscribed: activity.subscribed,
+    });
+    return {
+      data: activity.enabled ? { harnessId, commands: [] } : undefined,
+      isPending: false,
+      error: null,
+      refetch: () => {
+        queryMock.calls.commandsRefetch.push({ harnessId });
+        return Promise.resolve({ data: undefined });
+      },
     };
   },
   useGuiHarnessCatalog: (
@@ -765,6 +815,9 @@ describe("<HarnessModelPicker />", () => {
     queryMock.calls.catalog = [];
     queryMock.calls.models = [];
     queryMock.calls.providers = [];
+    queryMock.calls.modelsRefetch = [];
+    queryMock.calls.commands = [];
+    queryMock.calls.commandsRefetch = [];
     openSettingsMock.mockClear();
     useProvidersFocusStore.getState().clearFocusHarnessId();
     useKeybindingStore.getState().resetAll();
@@ -1054,6 +1107,86 @@ describe("<HarnessModelPicker />", () => {
     expect(
       screen.getByRole("tab", { name: "Claude" }).getAttribute("aria-selected"),
     ).toBe("true");
+  });
+
+  // Regression guard for the removed model-query interval (F4 / R2-F1): the
+  // selected harness's `useGuiHarnessModelsQuery` observer stays enabled for
+  // the whole active surface, so its own `enabled` never toggles when the
+  // popover opens - nothing refreshes it unless the picker explicitly asks.
+  // Also covers RC-2: the same edge must refetch commands (the prewarm path
+  // for Traycer/OpenRouter, whose model catalogs are remote HTTP and never
+  // otherwise touch their managed OpenCode server).
+  it("refetches the already-selected harness's models and commands exactly once on picker open", async () => {
+    renderPicker({
+      selection: { harnessId: "codex", modelSlug: "gpt-5.5", profileId: null },
+    });
+
+    // Mount alone must not refetch - only the closed->open transition does.
+    expect(queryMock.calls.modelsRefetch).toEqual([]);
+    expect(queryMock.calls.commandsRefetch).toEqual([]);
+
+    await openPicker();
+
+    expect(queryMock.calls.modelsRefetch).toEqual([{ harnessId: "codex" }]);
+    expect(queryMock.calls.commandsRefetch).toEqual([{ harnessId: "codex" }]);
+  });
+
+  it("refetches the newly selected harness's models and commands exactly once on a rail selection change", async () => {
+    renderPicker(undefined);
+
+    await openPicker();
+    // Opening the picker already issued one refetch for the still-selected
+    // Codex harness (the previous test's edge) - isolate the rail edge here.
+    queryMock.calls.modelsRefetch = [];
+    queryMock.calls.commandsRefetch = [];
+
+    fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+
+    expect(queryMock.calls.modelsRefetch).toEqual([{ harnessId: "claude" }]);
+    expect(queryMock.calls.commandsRefetch).toEqual([{ harnessId: "claude" }]);
+  });
+
+  // RC-1: TanStack's imperative `.refetch()` ignores `enabled`, so the intent
+  // edges must re-check the disabled/unavailable gate themselves before
+  // calling it - otherwise opening the picker on (or switching to) a
+  // provider the user has disabled/that isn't available would still spawn
+  // its server. `OPENCODE_HARNESS` is `available: false` in this suite's
+  // fixtures.
+  it("issues zero refetches when the picker opens on an unavailable selection", async () => {
+    renderPicker({
+      selection: { harnessId: "opencode", modelSlug: "", profileId: null },
+    });
+
+    // The trigger's accessible name is the MODEL label, not the harness's -
+    // with no models available for a disabled/unavailable selection it falls
+    // back to "Select model" (`findModelLabel`).
+    await openPickerByTriggerName("Select model");
+
+    expect(queryMock.calls.modelsRefetch).toEqual([]);
+    expect(queryMock.calls.commandsRefetch).toEqual([]);
+  });
+
+  it("issues zero refetches on a programmatic selection change to an unavailable harness", async () => {
+    const { store } = renderPicker(undefined);
+
+    await openPicker();
+    queryMock.calls.modelsRefetch = [];
+    queryMock.calls.commandsRefetch = [];
+
+    // Bypasses the rail-click gate (which only commits available harnesses)
+    // to reproduce a selection change arriving from elsewhere (e.g. another
+    // surface) while unavailable - the same case CR-3's original finding
+    // called out ("programmatic/inactive/unavailable changes").
+    act(() => {
+      store.getState().setSelection({
+        harnessId: "opencode",
+        modelSlug: "",
+        profileId: null,
+      });
+    });
+
+    expect(queryMock.calls.modelsRefetch).toEqual([]);
+    expect(queryMock.calls.commandsRefetch).toEqual([]);
   });
 
   it("keeps other rail providers visible but disabled when locked", async () => {

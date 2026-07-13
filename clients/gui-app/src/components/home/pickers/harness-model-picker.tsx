@@ -15,7 +15,9 @@ import { useSurfaceActivity } from "@/components/home/composer/surface-activity-
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 import { commitSelection } from "@/stores/composer/commit-selection";
 import {
+  useDefaultHostClient,
   useGuiHarnessCatalog,
+  useGuiHarnessCommandsQuery,
   useGuiHarnessModelsQuery,
   useGuiHarnessesQuery,
   useRefreshHarnessCatalog,
@@ -86,6 +88,10 @@ import {
 export type { ReasoningFooterConfig, ServiceTierFooterConfig };
 
 const EMPTY_MODELS: ReadonlyArray<ModelOption> = [];
+// No working directory is scoped to the picker surface itself - this feeds
+// the commands prewarm query below, where an empty set is the correct shape
+// (see the comment at its call site).
+const EMPTY_COMMANDS_WORKING_DIRECTORIES: ReadonlyArray<string> = [];
 const EMPTY_DEGRADED_HARNESS_IDS: ReadonlySet<GuiHarnessId> = new Set();
 const EMPTY_PROFILES_BY_HARNESS_ID: ReadonlyMap<
   GuiHarnessId,
@@ -274,14 +280,93 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   const selectedHarness = harnesses.find(
     (harness) => harness.id === selection.harnessId,
   );
+  const selectedHarnessAvailable = selectedHarness?.available === true;
+  // Shared gate for every intent-edge refetch below (models AND the commands
+  // prewarm): mirrors `selectedModelsQuery`'s own `enabled`. TanStack's
+  // imperative `.refetch()` ignores `enabled` - it runs the queryFn
+  // regardless - so an unguarded refetch here would still spawn a server (or
+  // hit a disabled provider's `listModels`/`listCommands`) for a harness the
+  // user disabled or that isn't available. `harness-runtime.ts`'s
+  // `prewarmCatalog` re-checks provider enablement for the same reason.
+  const selectedHarnessRefetchGate =
+    activityEnabled && selectedHarnessAvailable;
   const selectedModelsQuery = useGuiHarnessModelsQuery(
     selection.harnessId,
     null,
     {
-      enabled: activityEnabled && selectedHarness?.available === true,
+      enabled: selectedHarnessRefetchGate,
       subscribed: activityEnabled,
     },
   );
+  // Traycer and OpenRouter fetch their model catalogs over remote HTTP, so
+  // `selectedModelsQuery` never touches their managed OpenCode server - only
+  // `listCommands` (or chat) does. The intent edges below therefore also
+  // refetch this harness's commands purely to prewarm that server; the
+  // returned catalog itself is unused here (the composer owns rendering
+  // commands). The picker isn't scoped to any working directory, and an empty
+  // `workingDirectories` still reaches the adapter/server - every adapter's
+  // `listCommands` falls back to a single `{ workingDirectory: null }`
+  // request when given none - so it's the simplest correct shape for a
+  // prewarm-only call.
+  const defaultHostClient = useDefaultHostClient();
+  const selectedCommandsQuery = useGuiHarnessCommandsQuery(
+    defaultHostClient,
+    selection.harnessId,
+    EMPTY_COMMANDS_WORKING_DIRECTORIES,
+    {
+      enabled: selectedHarnessRefetchGate,
+      subscribed: activityEnabled,
+    },
+  );
+  // Latest-ref indirection: `.refetch` identity is a TanStack implementation
+  // detail, and `selectedHarnessRefetchGate` must be read at the moment the
+  // intent effects below actually fire rather than captured as a stale
+  // closure from whenever `visibleOpen` / `selection.harnessId` last changed
+  // - so neither ref is a dependency of those effects. Adding the gate as a
+  // dependency would re-run them (double-fetching on top of TanStack's own
+  // enabled-transition fetch) every time the gate itself flips, not just on
+  // an actual open/selection edge.
+  const selectedModelsRefetchRef = useRef(selectedModelsQuery.refetch);
+  const selectedCommandsRefetchRef = useRef(selectedCommandsQuery.refetch);
+  const selectedHarnessRefetchGateRef = useRef(selectedHarnessRefetchGate);
+  useEffect(() => {
+    selectedModelsRefetchRef.current = selectedModelsQuery.refetch;
+    selectedCommandsRefetchRef.current = selectedCommandsQuery.refetch;
+    selectedHarnessRefetchGateRef.current = selectedHarnessRefetchGate;
+  });
+  // Shared by both intent effects below - a stable identity (empty deps) so
+  // listing it as an effect dependency never itself retriggers them. Kept as
+  // its own function (rather than inlined) so the disabled/unavailable guard
+  // is a single source of truth and doesn't duplicate the branch into both
+  // effect bodies.
+  const runSelectedHarnessIntentRefetch = useCallback(() => {
+    if (!selectedHarnessRefetchGateRef.current) return;
+    void selectedModelsRefetchRef.current();
+    void selectedCommandsRefetchRef.current();
+  }, []);
+  // Explicit intent edges. Model and command queries no longer poll on an
+  // interval (see `use-gui-harness-catalog.ts`), and `selectedModelsQuery`'s
+  // `enabled` stays continuously true across an open/close cycle (gated on
+  // surface activity, not popover visibility) - so TanStack's own
+  // enabled-transition refetch never fires for it, however stale the cached
+  // data gets. These two edges are not the only place these queries refresh -
+  // app-load prefetch, the batched catalog's own mount/enabled edges, the
+  // command palette, and the picker's manual refresh button all still refresh
+  // independently - but they are what double as intent-driven prewarm for a
+  // reaped OpenCode-backed server, and are the error-recovery path now that a
+  // failed fetch no longer self-heals on a background timer.
+  useEffect(() => {
+    if (!visibleOpen) return;
+    runSelectedHarnessIntentRefetch();
+  }, [runSelectedHarnessIntentRefetch, visibleOpen]);
+  const skipInitialHarnessRefetchRef = useRef(true);
+  useEffect(() => {
+    if (skipInitialHarnessRefetchRef.current) {
+      skipInitialHarnessRefetchRef.current = false;
+      return;
+    }
+    runSelectedHarnessIntentRefetch();
+  }, [runSelectedHarnessIntentRefetch, selection.harnessId]);
   const catalogActive = activityEnabled && visibleOpen;
   const catalog = useGuiHarnessCatalog(null, {
     enabled: catalogActive,
@@ -300,7 +385,6 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   );
   const refreshCatalog = useRefreshHarnessCatalog();
   const selectedModels = selectedModelsQuery.data?.models ?? EMPTY_MODELS;
-  const selectedHarnessAvailable = selectedHarness?.available === true;
   const presentation = useMemo(
     () =>
       deriveHarnessModelPickerPresentation({

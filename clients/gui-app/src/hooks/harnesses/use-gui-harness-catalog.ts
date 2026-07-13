@@ -23,6 +23,16 @@ import { useHostQueries } from "@/hooks/host/use-host-queries";
 // model fetch can spawn the OpenCode server + resolve the shell env. Cache for
 // 15 min and stop background polling; users force an update via the picker's
 // refresh button (`useRefreshHarnessCatalog`) when they change provider config.
+//
+// Model queries (success AND error paths) intentionally have NO
+// `refetchInterval` at all - unlike availability below. The host's OpenCode
+// adapter keeps a long-lived `opencode serve` process alive only while
+// something keeps touching it; an app-lifetime interval (even an error
+// backoff, since `harness-runtime.ts` deliberately does not cache failed
+// model calls) would hit `OpenCodeAdapter.listModels` forever and reset that
+// idle clock on every tick, making a spawned server permanently unreapable.
+// Recovery instead happens at explicit user-intent edges (picker open,
+// harness selection, manual refresh) - see `harness-model-picker.tsx`.
 const HARNESS_CATALOG_STALE_TIME_MS = 15 * 60 * 1000;
 const HARNESS_AVAILABILITY_REFRESH_MS = 15 * 60 * 1000;
 
@@ -49,8 +59,6 @@ const HARNESS_AVAILABILITY_REFRESH_MS = 15 * 60 * 1000;
 const HARNESS_AVAILABILITY_PENDING_REFRESH_MS = 800;
 const HARNESS_AVAILABILITY_RETRY_MIN_MS = 30 * 1000;
 const HARNESS_AVAILABILITY_RETRY_MAX_MS = 5 * 60 * 1000;
-const HARNESS_MODEL_ERROR_RETRY_MIN_MS = 30 * 1000;
-const HARNESS_MODEL_ERROR_RETRY_MAX_MS = 5 * 60 * 1000;
 
 // Consecutive "saw an unavailable harness" fetches, keyed by query hash
 // (host + method + params), so the backoff advances once per fetch rather
@@ -60,10 +68,6 @@ const HARNESS_MODEL_ERROR_RETRY_MAX_MS = 5 * 60 * 1000;
 const unavailableStreaks = new Map<
   string,
   { readonly updateCount: number; readonly attempts: number }
->();
-const modelErrorStreaks = new Map<
-  string,
-  { readonly errorUpdateCount: number; readonly attempts: number }
 >();
 
 export function nextHarnessAvailabilityRefetchInterval(args: {
@@ -99,28 +103,6 @@ export function nextHarnessAvailabilityRefetchInterval(args: {
   return Math.min(
     HARNESS_AVAILABILITY_RETRY_MIN_MS * 2 ** (attempts - 1),
     HARNESS_AVAILABILITY_RETRY_MAX_MS,
-  );
-}
-
-export function nextHarnessModelRefetchInterval(args: {
-  readonly queryHash: string;
-  readonly errorUpdateCount: number;
-  readonly error: unknown;
-}): number {
-  const { queryHash, errorUpdateCount, error } = args;
-  if (error === null) {
-    modelErrorStreaks.delete(queryHash);
-    return HARNESS_CATALOG_STALE_TIME_MS;
-  }
-  const previous = modelErrorStreaks.get(queryHash);
-  const attempts =
-    previous !== undefined && previous.errorUpdateCount === errorUpdateCount
-      ? previous.attempts
-      : (previous?.attempts ?? 0) + 1;
-  modelErrorStreaks.set(queryHash, { errorUpdateCount, attempts });
-  return Math.min(
-    HARNESS_MODEL_ERROR_RETRY_MIN_MS * 2 ** (attempts - 1),
-    HARNESS_MODEL_ERROR_RETRY_MAX_MS,
   );
 }
 
@@ -160,10 +142,21 @@ const EMPTY_GUI_MODEL_REQUESTS: ReadonlyArray<{
   };
 }> = [];
 
+/**
+ * The app-wide default host's client (`null` while unbound), factored out so
+ * the `?.`/`??` fallback lives in one place instead of being repeated at
+ * every call site below - and so callers outside this module (e.g. the model
+ * picker's commands-prewarm query) can resolve the same default-host scope
+ * without duplicating it inline.
+ */
+export function useDefaultHostClient(): HostClient<HostRpcRegistry> | null {
+  return useHostBinding()?.hostClient ?? null;
+}
+
 export function useGuiHarnessesQuery(
   activity: QueryActivityOptions,
 ): UseQueryResult<ListGuiHarnessesResponse, HostRpcError> {
-  const client = useHostBinding()?.hostClient ?? null;
+  const client = useDefaultHostClient();
   return useHostQuery<HostRpcRegistry, "agent.gui.listHarnesses">({
     cacheKeyIdentity: undefined,
     client,
@@ -188,7 +181,7 @@ export function useGuiHarnessModelsQuery(
   workingDirectory: string | null,
   activity: QueryActivityOptions,
 ): UseQueryResult<ListGuiAgentModelsResponse, HostRpcError> {
-  const client = useHostBinding()?.hostClient ?? null;
+  const client = useDefaultHostClient();
   const params = useMemo(
     () => ({ harnessId, workingDirectory }),
     [harnessId, workingDirectory],
@@ -201,12 +194,6 @@ export function useGuiHarnessModelsQuery(
     options: {
       enabled: activity.enabled,
       subscribed: activity.subscribed,
-      refetchInterval: (query) =>
-        nextHarnessModelRefetchInterval({
-          queryHash: query.queryHash,
-          errorUpdateCount: query.state.errorUpdateCount,
-          error: query.state.error,
-        }),
       staleTime: HARNESS_CATALOG_STALE_TIME_MS,
     },
   });
@@ -240,7 +227,7 @@ export function useGuiHarnessCatalog(
   activity: QueryActivityOptions,
 ): GuiHarnessCatalog {
   const harnessesQuery = useGuiHarnessesQuery(activity);
-  const client = useHostBinding()?.hostClient ?? null;
+  const client = useDefaultHostClient();
   const active = activity.enabled && activity.subscribed;
 
   const harnessIds = useMemo(() => {
@@ -266,12 +253,6 @@ export function useGuiHarnessCatalog(
     requests,
     options: {
       enabled: activity.enabled,
-      refetchInterval: (query) =>
-        nextHarnessModelRefetchInterval({
-          queryHash: query.queryHash,
-          errorUpdateCount: query.state.errorUpdateCount,
-          error: query.state.error,
-        }),
       staleTime: HARNESS_CATALOG_STALE_TIME_MS,
     },
   });
