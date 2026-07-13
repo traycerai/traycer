@@ -186,6 +186,7 @@ import {
 } from "./chat-tile-session-state";
 import { ChatTileLoading, ChatTileError } from "./chat-tile-runtime-gate";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
+import { ChatStatusWorktreePrPills } from "@/components/worktree/worktree-owner-metadata";
 
 const EMPTY_MENTION_ROOTS: ReadonlyArray<string> = [];
 const EMPTY_WORKSPACE_PATH_SET: ReadonlySet<string> = new Set();
@@ -1512,10 +1513,25 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     () => (
       <>
         <div className="min-w-0 overflow-hidden">{hostWorkspaceSelector}</div>
+        <ChatStatusWorktreePrPills
+          hostId={activeHostId}
+          epicId={currentEpicId}
+          chatId={node.id}
+          binding={state.worktreeBinding}
+          enabled={surfaceVisible}
+        />
         {usageChip}
       </>
     ),
-    [hostWorkspaceSelector, usageChip],
+    [
+      activeHostId,
+      currentEpicId,
+      hostWorkspaceSelector,
+      node.id,
+      state.worktreeBinding,
+      surfaceVisible,
+      usageChip,
+    ],
   );
 
   const lowerRuntime = useMemo(
