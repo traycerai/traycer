@@ -23,7 +23,7 @@ import {
   readWorktreeListingSnapshot,
 } from "@/components/settings/panels/worktrees-enrichment-persistence";
 
-const SETTINGS_WORKTREE_LIST_PAGE_LIMIT = 32;
+export const SETTINGS_WORKTREE_LIST_PAGE_LIMIT = 32;
 const SETTINGS_WORKTREE_LIST_BASE_PARAMS = {
   includeActivity: false,
   activityPaths: null,
@@ -41,7 +41,7 @@ const APP_SESSION_START_MS = Date.now();
 
 // The base listing's cache identity, shared by the query options, the
 // warm-open restore, and the live-data gate on persist.
-function listingQueryKeyFor(hostId: string | null): readonly unknown[] {
+export function listingQueryKeyFor(hostId: string | null): readonly unknown[] {
   return hostQueryKeys.method<HostRpcRegistry, "worktree.listAllForHost">(
     hostId,
     "worktree.listAllForHost",

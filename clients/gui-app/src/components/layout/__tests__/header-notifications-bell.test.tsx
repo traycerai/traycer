@@ -104,8 +104,7 @@ describe("DevDesktopWorktreeLabel", () => {
   it("renders only the distinguishing worktree label without adding an interactive control", () => {
     render(<DevDesktopWorktreeLabel worktreeLabel="spry-panda" />);
 
-    const label = screen.getByTestId("dev-desktop-display-name");
-    expect(label.textContent).toBe("spry-panda");
+    const label = screen.getByText("spry-panda");
     expect(label.className).toContain("max-w-full");
     expect(label.className).toContain("text-right");
     expect(label.className).not.toContain("absolute");

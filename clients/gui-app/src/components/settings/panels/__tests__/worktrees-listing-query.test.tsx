@@ -10,7 +10,11 @@ import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/worktree-schem
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { createAppQueryClient } from "@/lib/query-client";
-import { useWorktreeListing } from "@/components/settings/panels/worktrees-listing-query";
+import {
+  SETTINGS_WORKTREE_LIST_PAGE_LIMIT,
+  listingQueryKeyFor,
+  useWorktreeListing,
+} from "@/components/settings/panels/worktrees-listing-query";
 import {
   persistWorktreeListingSnapshot,
   readWorktreeListingSnapshot,
@@ -26,8 +30,7 @@ afterEach(() => {
 });
 
 const HOST_ID = mockLocalHostEntry.hostId;
-// Mirrors SETTINGS_WORKTREE_LIST_PAGE_LIMIT in worktrees-listing-query.ts.
-const PAGE_LIMIT = 32;
+const PAGE_LIMIT = SETTINGS_WORKTREE_LIST_PAGE_LIMIT;
 
 function listedEntry(
   worktreePath: string,
@@ -190,17 +193,7 @@ describe("useWorktreeListing (warm-open listing snapshot)", () => {
       readonly pages: ReadonlyArray<{
         readonly worktrees: readonly WorktreeHostEntryV12[];
       }>;
-    }>([
-      "host",
-      HOST_ID,
-      "worktree.listAllForHost",
-      {
-        includeActivity: false,
-        activityPaths: null,
-        cursor: null,
-        limit: PAGE_LIMIT,
-      },
-    ]);
+    }>(listingQueryKeyFor(HOST_ID));
     expect(seeded?.pages.map((page) => page.worktrees.length)).toEqual([
       PAGE_LIMIT,
       8,

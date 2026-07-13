@@ -572,9 +572,10 @@ describe("WorktreesList delete flow", () => {
       branch: "feat-seeded",
       branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
     });
+    const queryClient = new QueryClient();
     const rendered = renderList({
       hostId: "host-a",
-      queryClient: new QueryClient(),
+      queryClient,
       worktrees: [seededRow],
       enrichedByPath: undefined, // overlay present, exactly as the restore seeds it
       erroredPaths: undefined,
@@ -598,18 +599,27 @@ describe("WorktreesList delete flow", () => {
     expect(gatedButton.hasAttribute("disabled")).toBe(true);
 
     // Once the live probe replaces the seed (the path leaves `seededPaths`),
-    // the same row becomes deletable through the normal confirmation.
-    rendered.unmount();
-    renderList({
-      hostId: "host-a",
-      queryClient: new QueryClient(),
-      worktrees: [seededRow],
-      enrichedByPath: undefined,
-      erroredPaths: undefined,
-      seededPaths: undefined,
-      onVisiblePathsChange: undefined,
-      taskTitlesByEpicId: undefined,
-    });
+    // the same row becomes deletable through the normal confirmation. Drive
+    // that as a prop update on the LIVE tree rather than a remount: the row's
+    // memo comparator is what has to notice the change, and a fresh mount
+    // would sidestep it entirely.
+    rendered.rerender(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <WorktreesList
+            openStreamTransport={() => stubOpenStreamTransport()}
+            hostId="host-a"
+            worktrees={[seededRow]}
+            enrichedByPath={fullyEnriched([seededRow])}
+            erroredPaths={new Set()}
+            seededPaths={new Set()}
+            onVisiblePathsChange={vi.fn()}
+            taskTitlesByEpicId={new Map()}
+            toolbarProps={testToolbarProps()}
+          />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
     fireEvent.click(
       screen.getByRole("button", { name: "Delete worktree feat-seeded" }),
     );
