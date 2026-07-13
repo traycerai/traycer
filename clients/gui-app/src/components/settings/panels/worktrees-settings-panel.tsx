@@ -900,18 +900,6 @@ export function WorktreesList(props: {
     () => buildWorktreePrHaystackByPath(mergedWorktrees),
     [mergedWorktrees],
   );
-  // Rows still waiting on their probe. A PR-number query CANNOT match them yet
-  // (their `prNumber` is null), so an empty result set only honestly reads "no
-  // matches" once this hits zero - until then the empty state says "still
-  // checking". Errored rows are excluded deliberately: they settle to "Unknown"
-  // and will never enrich, so counting them would hold the notice open forever.
-  const stillCheckingCount = useMemo(
-    () =>
-      mergedWorktrees.filter(
-        (entry) => enrichmentStateFor(entry.worktreePath) === "pending",
-      ).length,
-    [mergedWorktrees, enrichmentStateFor],
-  );
   // Only offer filter options for tiers actually present in this host's list.
   // Un-enriched rows have no known tier, so they cannot contribute an option -
   // the menu fills in as rows enrich (on-screen rows first, then the
@@ -924,6 +912,34 @@ export function WorktreesList(props: {
     }
     return WORKTREE_TIER_ORDER.filter((tier) => present.has(tier));
   }, [mergedWorktrees, isPending]);
+  // Intersects the raw selection with the tiers actually present (mirroring
+  // `worktreeTierFilterLabel`): a stale selection for a now-absent tier is
+  // ignored, so the effective filter is empty and every row shows, matching
+  // the "All" the toolbar reads. Hoisted so the tier-filter stage below and the
+  // "still checking" notice agree on whether a filter is ACTUALLY narrowing
+  // the list.
+  const effectiveTierFilters = useMemo(
+    () => new Set(availableTiers.filter((tier) => tierFilters.has(tier))),
+    [availableTiers, tierFilters],
+  );
+  // Rows still waiting on their probe. A PR-number query CANNOT match them yet
+  // (their `prNumber` is null), so an empty result set only honestly reads "no
+  // matches" once this hits zero - until then the empty state says "still
+  // checking". Errored rows are excluded deliberately: they settle to "Unknown"
+  // and will never enrich, so counting them would hold the notice open forever.
+  //
+  // Suppressed entirely while a tier filter is active: a pending row bypasses
+  // the tier stage only WHILE it's pending (see `filteredWorktrees` below) - if
+  // it resolves into an excluded tier, it drops out right where a plain PR
+  // match would otherwise have shown it. Promising "still checking" in that
+  // case overclaims; the tier-filtered empty state falls back to the honest
+  // plain "no matches" copy instead.
+  const stillCheckingCount = useMemo(() => {
+    if (effectiveTierFilters.size > 0) return 0;
+    return mergedWorktrees.filter(
+      (entry) => enrichmentStateFor(entry.worktreePath) === "pending",
+    ).length;
+  }, [mergedWorktrees, enrichmentStateFor, effectiveTierFilters]);
   // The status filter composes with the search box (both apply) before repo
   // grouping. The repo / branch / path / Task legs of search run on cheap base
   // fields, so they work before enrichment; only the PR-number leg waits on a
@@ -946,22 +962,18 @@ export function WorktreesList(props: {
       searchHaystackByPath,
       prHaystackByPath,
     );
-    const effectiveTiers = new Set(
-      availableTiers.filter((tier) => tierFilters.has(tier)),
-    );
-    if (effectiveTiers.size === 0) return searched;
+    if (effectiveTierFilters.size === 0) return searched;
     return searched.filter(
       (entry) =>
         isPending(entry.worktreePath) ||
-        effectiveTiers.has(classifyWorktreeTier(entry)),
+        effectiveTierFilters.has(classifyWorktreeTier(entry)),
     );
   }, [
     mergedWorktrees,
     deferredSearchText,
     searchHaystackByPath,
     prHaystackByPath,
-    tierFilters,
-    availableTiers,
+    effectiveTierFilters,
     isPending,
   ]);
   const toggleTierFilter = useCallback((tier: WorktreeTier) => {

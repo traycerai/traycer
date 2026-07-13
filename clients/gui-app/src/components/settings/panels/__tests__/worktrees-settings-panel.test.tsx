@@ -3693,4 +3693,44 @@ describe("WorktreesList PR-number search", () => {
     screen.getByText("No worktrees match your search.");
     expect(screen.queryByText(/still checking/)).toBeNull();
   });
+
+  it("suppresses the 'still checking' notice while a tier filter is active", () => {
+    // A pending row bypasses the tier stage only WHILE it's pending (see
+    // `filteredWorktrees`) - once it resolves it might land in a tier the
+    // active filter excludes, and the search would never surface it despite
+    // the notice having promised to. `/wt/atbase` is enriched purely so
+    // "At base commit" is an available filter option to select; the two rows
+    // that matter, `/wt/super-pr` and `/wt/other-pending`, are left pending
+    // and irrelevant to the "4360" query either way.
+    const atBase = entry({
+      worktreePath: "/wt/atbase",
+      branch: "feat-atbase",
+      atBaseCommit: true,
+    });
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [
+        entry({ worktreePath: "/wt/super-pr", branch: "feat-super-pr" }),
+        entry({
+          worktreePath: "/wt/other-pending",
+          branch: "feat-other-pending",
+        }),
+        atBase,
+      ],
+      enrichedByPath: new Map([[atBase.worktreePath, atBase]]),
+      erroredPaths: undefined,
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
+    });
+
+    fireEvent.click(screen.getByTestId("worktrees-filter-at-base-commit"));
+    search("4360");
+
+    expect(
+      screen.queryByRole("button", { name: "Delete worktree feat-super-pr" }),
+    ).toBeNull();
+    screen.getByText("No worktrees match your search.");
+    expect(screen.queryByText(/still checking/)).toBeNull();
+  });
 });
