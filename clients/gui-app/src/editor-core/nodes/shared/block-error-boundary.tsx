@@ -1,5 +1,7 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
 import { appLogger } from "@/lib/logger";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 
 interface BlockErrorBoundaryProps {
   /** Headline shown in the fallback panel. */
@@ -78,6 +80,16 @@ export class BlockErrorBoundary extends Component<
           >
             Retry
           </button>
+          <ReportIssueAction
+            context={createReportIssueContext({
+              title: this.props.title,
+              message: null,
+              code: null,
+              source: "Artifact editor",
+            })}
+            presentation="icon"
+            className={undefined}
+          />
         </div>
       </div>
     );

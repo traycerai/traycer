@@ -21,7 +21,12 @@ export interface SupportBridgeSurface {
   requestMicrophoneAccess(): Promise<"granted" | "denied">;
   openMicrophoneSettings(): Promise<void>;
   notifications: {
-    show(title: string, body: string, payload: unknown): Promise<void>;
+    show(
+      title: string,
+      body: string,
+      payload: unknown,
+      replaceKey: string | null,
+    ): Promise<void>;
     onClick(handler: Listener<unknown>): Disposable;
   };
   workspaceFolders: {
@@ -60,12 +65,13 @@ export function buildSupportBridge(): SupportBridgeSurface {
       ipcRenderer.invoke(RunnerHostInvoke.openMicrophoneSettings),
 
     notifications: {
-      show: (title, body, payload) =>
+      show: (title, body, payload, replaceKey) =>
         ipcRenderer.invoke(
           RunnerHostInvoke.notificationShow,
           title,
           body,
           payload,
+          replaceKey,
         ),
       onClick: (handler) =>
         subscribe<unknown>(RunnerHostEvent.notificationClick, handler),

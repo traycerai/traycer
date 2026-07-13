@@ -1,4 +1,4 @@
-import { renderHook } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ProviderCliState,
@@ -19,6 +19,7 @@ vi.mock("@/hooks/providers/use-tab-providers-list-query", () => ({
 }));
 
 import { useProfileRateLimitSwitchPrompt } from "../use-profile-rate-limit-switch-prompt";
+import { useRateLimitSwitchPromptDismissalsStore } from "@/stores/rate-limits/rate-limit-switch-prompt-dismissals-store";
 
 function profile(
   profileId: string,
@@ -74,6 +75,9 @@ function claudeState(profiles: ProviderProfile[]): ProviderCliState {
 describe("useProfileRateLimitSwitchPrompt", () => {
   beforeEach(() => {
     mocks.providers = [];
+    useRateLimitSwitchPromptDismissalsStore.setState({
+      dismissedKeys: new Set<string>(),
+    });
   });
 
   it("stays inert with fewer than 2 profiles even if somehow marked limited", () => {
@@ -167,6 +171,30 @@ describe("useProfileRateLimitSwitchPrompt", () => {
       useProfileRateLimitSwitchPrompt("claude", null, true),
     );
     expect(result.current.hardLimited).toBe(true);
+  });
+
+  it("shares a dismissal across every hook instance (dismiss in one composer hides it everywhere)", () => {
+    mocks.providers = [
+      claudeState([
+        profile("ambient", "ambient", "Terminal account", "near_limit"),
+        profile("work-uuid", "managed", "Work", "ok"),
+      ]),
+    ];
+    const first = renderHook(() =>
+      useProfileRateLimitSwitchPrompt("claude", null, true),
+    );
+    const second = renderHook(() =>
+      useProfileRateLimitSwitchPrompt("claude", null, true),
+    );
+    expect(first.result.current.limited).toBe(true);
+    expect(second.result.current.limited).toBe(true);
+
+    act(() => {
+      first.result.current.dismiss();
+    });
+
+    expect(first.result.current.limited).toBe(false);
+    expect(second.result.current.limited).toBe(false);
   });
 
   it("stays inert when the composer is inactive", () => {

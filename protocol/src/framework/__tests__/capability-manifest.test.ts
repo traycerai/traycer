@@ -60,13 +60,22 @@ const REGISTRY_WITH_UNSUPPORTED_OPTIONAL = defineFloorAwareVersionedRpcRegistry(
 );
 
 describe("capability manifest helpers", () => {
-  it("keeps today's host legacy manifest byte-identical to the full manifest", () => {
+  it("keeps the released floor separate from the additive host capabilities", () => {
     const fullManifest = buildConnectionManifest(hostRpcRegistry);
     const split = splitConnectionManifest(hostRpcRegistry, releasedMethodNames);
 
-    expect(split.manifest).toEqual(fullManifest);
-    expect(split.optionalManifest).toEqual({});
-    expect(JSON.stringify(split.manifest)).toBe(JSON.stringify(fullManifest));
+    expect(split.manifest).not.toHaveProperty("host.notifications.list");
+    expect(split.optionalManifest).toMatchObject({
+      "host.notifications.list": { major: 1, minor: 0 },
+      "host.notifications.markRead": { major: 1, minor: 0 },
+      "host.notifications.markAllRead": { major: 1, minor: 0 },
+      "host.notifications.getConfig": { major: 1, minor: 0 },
+      "host.notifications.setConfig": { major: 1, minor: 0 },
+      "host.notifications.indicatorState": { major: 1, minor: 0 },
+    });
+    expect(
+      mergeConnectionManifests(split.manifest, split.optionalManifest),
+    ).toEqual(fullManifest);
   });
 
   it("splits non-floor methods into the optional channel", () => {

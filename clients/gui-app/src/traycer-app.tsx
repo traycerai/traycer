@@ -5,6 +5,7 @@ import { HostOperationStatusListener } from "@/components/layout/bridges/host-op
 import { HostRegistryUpdateListener } from "@/components/layout/bridges/host-registry-update-listener";
 import { RunnerHostBridges } from "@/components/layout/bridges/runner-host-bridges";
 import { WorktreeDeleteProgressToastBridge } from "@/components/layout/bridges/worktree-delete-progress-toast-bridge";
+import { ReportIssueDialogHost } from "@/components/layout/dialogs/report-issue-dialog-host";
 import { CenteredCard } from "@/components/centered-card";
 import { RootErrorBoundary } from "@/components/errors/root-error-boundary";
 import { Toaster } from "@/components/ui/sonner";
@@ -25,6 +26,7 @@ import { ComposerHarnessMemoryPersistLifecycleBridge } from "@/providers/compose
 import { WorktreeIntentMemoryPersistLifecycleBridge } from "@/providers/worktree-intent-memory-persist-lifecycle-bridge";
 import { WorktreeIntentStagingPersistLifecycleBridge } from "@/providers/worktree-intent-staging-persist-lifecycle-bridge";
 import { EpicCanvasPersistLifecycleBridge } from "@/providers/epic-canvas-persist-lifecycle-bridge";
+import { AppLocalNotificationsPersistLifecycleBridge } from "@/providers/app-local-notifications-persist-lifecycle-bridge";
 import { EpicTabExistenceReconciler } from "@/providers/epic-tab-existence-reconciler";
 import { CliCredentialSeeder } from "@/providers/cli-credential-seeder";
 import { HarnessCatalogPrefetcher } from "@/providers/harness-catalog-prefetcher";
@@ -122,6 +124,8 @@ export function TraycerApp(props: TraycerAppProps): ReactNode {
               <TooltipProvider>
                 <KeybindingProvider router={router}>
                   <DesktopZoomController />
+                  <ReportIssueDialogHost />
+                  <Toaster />
                   <HostRuntimeProvider
                     registry={props.registry}
                     messengerFactory={props.messengerFactory ?? null}
@@ -175,9 +179,11 @@ function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
                   <EpicCanvasPersistLifecycleBridge>
                     <EpicTabExistenceReconciler />
                     <HostStreamProvider>
-                      <NotificationsSessionProvider>
-                        <TraycerAppRuntimeSurface router={props.router} />
-                      </NotificationsSessionProvider>
+                      <AppLocalNotificationsPersistLifecycleBridge>
+                        <NotificationsSessionProvider>
+                          <TraycerAppRuntimeSurface router={props.router} />
+                        </NotificationsSessionProvider>
+                      </AppLocalNotificationsPersistLifecycleBridge>
                     </HostStreamProvider>
                   </EpicCanvasPersistLifecycleBridge>
                 </WorktreeIntentStagingPersistLifecycleBridge>
@@ -212,7 +218,6 @@ function TraycerAppRuntimeSurface(props: TraycerAppRuntimeSurfaceProps) {
       <HistoryPruneProvider router={props.router} />
       <RouterProvider router={props.router} />
       <HostPicker />
-      <Toaster />
     </>
   );
 }

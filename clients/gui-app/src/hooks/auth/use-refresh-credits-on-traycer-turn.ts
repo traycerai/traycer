@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { subscribeChatTurnCompletions } from "@/lib/notifications/chat-turn-completion";
+import { subscribeChatTurnCompletions } from "@/lib/chats/chat-turn-completions";
 import { useAuthService } from "@/lib/host";
 import { authQueryKeys } from "@/lib/query-keys";
 

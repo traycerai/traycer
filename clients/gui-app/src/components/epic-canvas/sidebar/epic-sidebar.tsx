@@ -164,6 +164,8 @@ import { GitDiffPanelBodyLive } from "@/components/epic-canvas/git-diff/git-diff
 import { GitDiffPanelActions } from "@/components/epic-canvas/git-diff/git-diff-panel-actions";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import {
   InputGroup,
@@ -1282,9 +1284,19 @@ function FileTreePanelBodyForWorkspace(props: {
           </output>
         ) : null}
         {query.error !== null && files.length === 0 ? (
-          <p className="p-1 text-ui-xs text-destructive">
-            Unable to load files.
-          </p>
+          <div className="flex items-center justify-between gap-2 p-1 text-ui-xs text-destructive">
+            <span>Unable to load files.</span>
+            <ReportIssueAction
+              context={createReportIssueContext({
+                title: "Unable to load files",
+                message: "The workspace file tree could not be loaded.",
+                code: null,
+                source: "File tree",
+              })}
+              presentation="icon"
+              className={undefined}
+            />
+          </div>
         ) : null}
       </div>
       {query.data?.truncated === true ? (

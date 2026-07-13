@@ -1,10 +1,10 @@
 import { ArrowRight, Check, Copy } from "lucide-react";
 import { useCallback } from "react";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import type { TraycerNextStepOption } from "@/markdown/traycer-next-steps";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
 export interface NextStepActionHandler {
   readonly canSend: boolean;
@@ -23,7 +23,12 @@ interface NextStepsActionGroupProps {
 const COPIED_RESET_MS = 1600;
 
 const handleCopyError = (): void => {
-  toast.error("Couldn't copy to clipboard.");
+  reportableErrorToast("Couldn't copy to clipboard.", undefined, {
+    title: "Could not copy to clipboard",
+    message: null,
+    code: null,
+    source: "Clipboard",
+  });
 };
 
 export function NextStepsActionGroup(props: NextStepsActionGroupProps) {

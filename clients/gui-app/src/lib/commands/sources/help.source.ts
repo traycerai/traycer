@@ -8,21 +8,25 @@ import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 export const helpSource: ReactCommandSource = {
   id: "help",
   useItems: (): ReadonlyArray<CommandItem> => {
-    const openReportIssue = useDesktopDialogStore((s) => s.openReportIssue);
+    const reportIssueAvailable = useDesktopDialogStore(
+      (s) => s.reportIssueAvailable,
+    );
+    const keybindings: CommandItem = {
+      id: "help:keybindings",
+      label: "Open keybindings reference",
+      description:
+        "Jump to the keybindings settings panel to see and edit every shortcut.",
+      keywords: ["help", "keybindings", "shortcuts", "hotkeys"],
+      group: "help",
+      scope: "help",
+      shortcut: null,
+      actionId: null,
+      run: (ctx) => ctx.router.navigateSettingsSection("keybindings"),
+      subpage: null,
+    };
+    if (!reportIssueAvailable) return [keybindings];
     return [
-      {
-        id: "help:keybindings",
-        label: "Open keybindings reference",
-        description:
-          "Jump to the keybindings settings panel to see and edit every shortcut.",
-        keywords: ["help", "keybindings", "shortcuts", "hotkeys"],
-        group: "help",
-        scope: "help",
-        shortcut: null,
-        actionId: null,
-        run: (ctx) => ctx.router.navigateSettingsSection("keybindings"),
-        subpage: null,
-      },
+      keybindings,
       {
         id: "help:report-issue",
         label: "Report issue",
@@ -34,7 +38,9 @@ export const helpSource: ReactCommandSource = {
         shortcut: null,
         actionId: null,
         run: () => {
-          openReportIssue();
+          const state = useDesktopDialogStore.getState();
+          if (!state.reportIssueAvailable) return;
+          state.openReportIssue();
         },
         subpage: null,
       },

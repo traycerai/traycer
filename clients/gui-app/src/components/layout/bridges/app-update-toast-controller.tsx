@@ -7,22 +7,34 @@ import type {
   DesktopAppUpdateSnapshot,
   DesktopAppUpdatesBridge,
 } from "@/lib/windows/types";
+import { createReportIssueContext } from "@/lib/report-issue-context";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
 const APP_UPDATE_TOAST_ID = "traycer-app-update";
 const APP_UPDATE_TRANSIENT_TOAST_DURATION_MS = 4000;
+const APP_UPDATE_REPORT_CONTEXT = createReportIssueContext({
+  title: "Could not update Traycer",
+  message: null,
+  code: null,
+  source: "App update",
+});
 
 export function AppUpdateToastController(): null {
   const { bridge, snapshot } = useDesktopAppUpdates();
-  const openReportIssue = useDesktopDialogStore(
-    (state) => state.openReportIssue,
-  );
   const openConfirmRestartUpdate = useDesktopDialogStore(
     (state) => state.openConfirmRestartUpdate,
   );
   const openInstallGuidance = useDesktopDialogStore(
     (state) => state.openInstallGuidance,
   );
+  const openReportIssueWithContext = useDesktopDialogStore(
+    (state) => state.openReportIssueWithContext,
+  );
+  const reportIssueAvailable = useDesktopDialogStore(
+    (state) => state.reportIssueAvailable,
+  );
   const handledSequenceRef = useRef(0);
+  const handledReportCapabilityRef = useRef<boolean | null>(null);
   const bridgeRef = useRef<DesktopAppUpdatesBridge | null | undefined>(
     undefined,
   );
@@ -34,14 +46,26 @@ export function AppUpdateToastController(): null {
       const isInitialBridge = bridgeRef.current === undefined;
       bridgeRef.current = bridge;
       handledSequenceRef.current = 0;
+      handledReportCapabilityRef.current = null;
       if (!isInitialBridge) {
         mountedAtMsRef.current = Date.now();
       }
     }
     if (bridge === null) return;
     if (snapshot.sequence === 0) return;
-    if (handledSequenceRef.current >= snapshot.sequence) return;
+    const capabilityChangedForCurrentError =
+      snapshot.status === "error" &&
+      handledSequenceRef.current === snapshot.sequence &&
+      handledReportCapabilityRef.current !== reportIssueAvailable;
+    if (
+      handledSequenceRef.current > snapshot.sequence ||
+      (handledSequenceRef.current === snapshot.sequence &&
+        !capabilityChangedForCurrentError)
+    ) {
+      return;
+    }
     handledSequenceRef.current = snapshot.sequence;
+    handledReportCapabilityRef.current = reportIssueAvailable;
     const mountedAtMs = mountedAtMsRef.current;
     if (isManualReplayFromBeforeMount(snapshot, mountedAtMs)) {
       return;
@@ -52,15 +76,18 @@ export function AppUpdateToastController(): null {
         void bridge.downloadUpdate();
       },
       onRestart: openConfirmRestartUpdate,
-      onReportIssue: openReportIssue,
       onViewInstructions: openInstallGuidance,
+      onReportIssue: reportIssueAvailable
+        ? () => openReportIssueWithContext(APP_UPDATE_REPORT_CONTEXT)
+        : null,
     });
   }, [
     bridge,
     snapshot,
-    openReportIssue,
     openConfirmRestartUpdate,
     openInstallGuidance,
+    openReportIssueWithContext,
+    reportIssueAvailable,
   ]);
 
   return null;
@@ -69,8 +96,8 @@ export function AppUpdateToastController(): null {
 interface AppUpdateToastActions {
   readonly onDownload: () => void;
   readonly onRestart: () => void;
-  readonly onReportIssue: () => void;
   readonly onViewInstructions: () => void;
+  readonly onReportIssue: (() => void) | null;
 }
 
 function showAppUpdateToast(
@@ -84,6 +111,7 @@ function showAppUpdateToast(
           id: APP_UPDATE_TOAST_ID,
           description: null,
           duration: APP_UPDATE_TRANSIENT_TOAST_DURATION_MS,
+          cancel: null,
         });
       }
       return;
@@ -97,6 +125,7 @@ function showAppUpdateToast(
           id: APP_UPDATE_TOAST_ID,
           description: snapshot.installBlockedReason,
           duration: APP_UPDATE_TRANSIENT_TOAST_DURATION_MS,
+          cancel: null,
         });
         return;
       }
@@ -113,6 +142,7 @@ function showAppUpdateToast(
           id: APP_UPDATE_TOAST_ID,
           description: null,
           duration: Infinity,
+          cancel: null,
         },
       );
       return;
@@ -124,6 +154,7 @@ function showAppUpdateToast(
             ? "Starting download…"
             : `${snapshot.downloadProgress}% complete`,
         duration: Infinity,
+        cancel: null,
       });
       return;
     case "ready":
@@ -150,26 +181,33 @@ function showAppUpdateToast(
           id: APP_UPDATE_TOAST_ID,
           description: null,
           duration: Infinity,
+          cancel: null,
         },
       );
       return;
-    case "error":
-      toast.error("Couldn't update Traycer", {
-        id: APP_UPDATE_TOAST_ID,
-        description: (
-          <AppUpdateErrorToastDescription
-            message={snapshot.errorMessage}
-            onReportIssue={actions.onReportIssue}
-            onViewInstructions={
-              snapshot.installGuidance === null
-                ? null
-                : actions.onViewInstructions
-            }
-          />
-        ),
-        duration: Infinity,
-      });
+    case "error": {
+      reportableErrorToast(
+        "Couldn't update Traycer",
+        {
+          id: APP_UPDATE_TOAST_ID,
+          cancel: null,
+          description: (
+            <AppUpdateErrorToastDescription
+              message={snapshot.errorMessage}
+              onReportIssue={actions.onReportIssue}
+              onViewInstructions={
+                snapshot.installGuidance === null
+                  ? null
+                  : actions.onViewInstructions
+              }
+            />
+          ),
+          duration: Infinity,
+        },
+        APP_UPDATE_REPORT_CONTEXT,
+      );
       return;
+    }
     case "up-to-date":
       toast.success("Traycer is up to date", {
         id: APP_UPDATE_TOAST_ID,
@@ -178,6 +216,7 @@ function showAppUpdateToast(
             ? null
             : `Current version: v${snapshot.currentVersion}`,
         duration: APP_UPDATE_TRANSIENT_TOAST_DURATION_MS,
+        cancel: null,
       });
       return;
     case "unavailable":
@@ -185,6 +224,7 @@ function showAppUpdateToast(
         id: APP_UPDATE_TOAST_ID,
         description: null,
         duration: APP_UPDATE_TRANSIENT_TOAST_DURATION_MS,
+        cancel: null,
       });
       return;
     case "idle":
@@ -277,26 +317,33 @@ function AppUpdateActionToastContent(props: {
 
 function AppUpdateErrorToastDescription(props: {
   readonly message: string | null;
-  readonly onReportIssue: () => void;
+  readonly onReportIssue: (() => void) | null;
   readonly onViewInstructions: (() => void) | null;
 }) {
   return (
     <div className="flex flex-col items-start gap-3">
       {props.message === null ? null : <span>{props.message}</span>}
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2">
         {props.onViewInstructions === null ? null : (
           <Button
             type="button"
             size="sm"
-            variant="secondary"
+            variant="default"
             onClick={props.onViewInstructions}
           >
             View instructions
           </Button>
         )}
-        <Button type="button" size="sm" onClick={props.onReportIssue}>
-          Report an issue
-        </Button>
+        {props.onReportIssue === null ? null : (
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            onClick={props.onReportIssue}
+          >
+            Report an issue
+          </Button>
+        )}
       </div>
     </div>
   );

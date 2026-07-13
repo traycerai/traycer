@@ -2,6 +2,8 @@ import { type ReactNode } from "react";
 import { AlertTriangle } from "lucide-react";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 
 // Display-only components for the chat tile's pre-snapshot states (loading and
 // fatal-close error). Kept separate from chat-tile.tsx so Fast Refresh stays
@@ -42,14 +44,26 @@ export function ChatTileError(props: {
           <span>This chat could not be opened.</span>
         </div>
         <p className="text-ui-sm text-muted-foreground">{detail}</p>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={props.onRetry}
-        >
-          Retry
-        </Button>
+        <div className="flex flex-wrap justify-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={props.onRetry}
+          >
+            Retry
+          </Button>
+          <ReportIssueAction
+            context={createReportIssueContext({
+              title: "This chat could not be opened",
+              message: "The chat could not be opened.",
+              code: null,
+              source: "Chat",
+            })}
+            presentation="text"
+            className={undefined}
+          />
+        </div>
       </div>
     </div>
   );
