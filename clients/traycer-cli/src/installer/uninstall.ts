@@ -6,11 +6,8 @@ import {
 } from "../manifest/host-install";
 import type { Environment } from "../runner/environment";
 import { createCliLogger, errorFromUnknown } from "../logger";
-import {
-  hostInstallDir,
-  hostLogPath,
-  hostPidMetadataPath,
-} from "../store/paths";
+import { rotateHostLogForPurge } from "../host/host-log-rotation";
+import { hostInstallDir, hostPidMetadataPath } from "../store/paths";
 import { sweepOldTrash } from "./install";
 
 // Uninstall the installed host directory for a single environment. Always
@@ -70,14 +67,22 @@ export async function uninstallHost(
 
   let purgedRuntime = false;
   if (opts.purgeChannelRuntime) {
-    // Remove pid metadata + log + any other environment-scoped runtime
+    // Clear pid metadata + log + any other environment-scoped runtime
     // state. We don't blow away ~/.traycer/host/ wholesale because
     // the dev environment's install lives under it.
+    //
+    // The log is ROTATED, not deleted. `make dev-desktop` runs
+    // `host uninstall --all` on every Ctrl-C teardown, so deleting here meant
+    // the session you most wanted to investigate was routinely gone before you
+    // could read it. Rotating still clears the live log (a purge that leaves an
+    // orphan behind is its own surprise) while keeping one generation, and it
+    // cannot accumulate.
     await rm(hostPidMetadataPath(opts.environment), { force: true });
-    await rm(hostLogPath(opts.environment), { force: true });
+    const rotated = await rotateHostLogForPurge(opts.environment);
     purgedRuntime = true;
     logger.warn("Host uninstall purged runtime files", {
       environment: opts.environment,
+      rotatedLog: rotated === "rotated",
     });
   }
 
