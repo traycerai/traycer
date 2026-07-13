@@ -26,11 +26,12 @@ export function HostSection(props: HostSectionProps) {
     <section
       aria-label="Host"
       data-testid="host-workspace-selector-host-section"
+      className="w-full max-w-full min-w-0"
     >
       <DropdownMenuLabel className="px-1 text-ui-xs font-medium uppercase tracking-wide text-muted-foreground/70">
         Host
       </DropdownMenuLabel>
-      <ul className="flex flex-col gap-0.5">
+      <ul className="flex min-w-0 flex-col gap-0.5">
         {props.entries.length === 0 ? (
           <li className="rounded-md px-1.5 py-1 text-ui-sm text-muted-foreground">
             No hosts available.
@@ -39,7 +40,7 @@ export function HostSection(props: HostSectionProps) {
           props.entries.map((entry) => {
             const isActive = entry.hostId === props.activeHostId;
             return (
-              <li key={entry.hostId}>
+              <li key={entry.hostId} className="min-w-0">
                 <button
                   type="button"
                   data-testid={`host-workspace-selector-host-row-${entry.hostId}`}

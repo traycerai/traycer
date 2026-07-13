@@ -20,6 +20,9 @@ function readRendererPort(env) {
 // The renderer bundle has no `process.env`; the multi-run slot reaches it
 // through Vite (`VITE_DEV_DESKTOP_SLOT`) so `renderer-shell/sign-in-url.ts`
 // derives the same slot-suffixed deep-link scheme the main process registers.
+// The local Cloud UI endpoint follows the same Vite-only path: config.ts reads
+// `process.env` correctly in main/preload, but renderer-side sign-in URL
+// composition must receive an explicitly exposed value.
 //
 // The result is spread from `env`, so an inherited `VITE_DEV_DESKTOP_SLOT` -
 // exported by hand, or left over from a prior slotted run - would survive into
@@ -33,6 +36,7 @@ function buildChildEnv(env) {
     env.TRAYCER_DESKTOP_DEV_URL ?? `http://localhost:${rendererPort}`;
   const childEnv = {
     ...env,
+    NODE_ENV: "development",
     PORT: String(rendererPort),
     TRAYCER_DESKTOP_DEV: "1",
     TRAYCER_DESKTOP_DEV_URL: rendererUrl,
@@ -41,6 +45,14 @@ function buildChildEnv(env) {
     childEnv.VITE_DEV_DESKTOP_SLOT = env.DEV_DESKTOP_SLOT;
   } else {
     delete childEnv.VITE_DEV_DESKTOP_SLOT;
+  }
+  // Worktree display identity belongs to native app chrome, never the renderer.
+  delete childEnv.VITE_DEV_DESKTOP_DISPLAY_NAME;
+  delete childEnv.VITE_DEV_DESKTOP_WORKTREE_LABEL;
+  if (typeof env.TRAYCER_DEV_CLOUD_UI_BASE_URL === "string") {
+    childEnv.VITE_DEV_CLOUD_UI_BASE_URL = env.TRAYCER_DEV_CLOUD_UI_BASE_URL;
+  } else {
+    delete childEnv.VITE_DEV_CLOUD_UI_BASE_URL;
   }
   return childEnv;
 }

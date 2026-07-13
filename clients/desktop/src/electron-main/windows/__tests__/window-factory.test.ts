@@ -6,6 +6,9 @@ const electronState = vi.hoisted(() => ({
   browserWindows: [] as Array<{
     readonly readyToShow: () => void;
     readonly maximizeCalls: number;
+    readonly pageTitleUpdated: () => void;
+    readonly preventDefault: () => void;
+    readonly setTitleCalls: string[];
   }>,
   webContentsOnChannels: [] as string[],
   // Captures the LATEST listener registered per channel, so a test can drive
@@ -52,7 +55,10 @@ vi.mock("electron", () => ({
   },
   BrowserWindow: class {
     maximizeCalls = 0;
+    setTitleCalls: string[] = [];
     private readyToShow: (() => void) | null = null;
+    private pageTitleUpdated:
+      ((event: { preventDefault(): void }) => void) | null = null;
     readonly webContents = {
       setVisualZoomLevelLimits: vi.fn(() => Promise.resolve()),
       setWindowOpenHandler: vi.fn(),
@@ -64,6 +70,7 @@ vi.mock("electron", () => ({
 
     constructor(options: unknown) {
       const self = this;
+      const preventDefault = vi.fn();
       electronState.browserWindowOptions.push(options);
       electronState.browserWindows.push({
         readyToShow: () => {
@@ -71,6 +78,13 @@ vi.mock("electron", () => ({
         },
         get maximizeCalls() {
           return self.maximizeCalls;
+        },
+        pageTitleUpdated: () => {
+          self.pageTitleUpdated?.({ preventDefault });
+        },
+        preventDefault,
+        get setTitleCalls() {
+          return self.setTitleCalls;
         },
       });
     }
@@ -81,7 +95,14 @@ vi.mock("electron", () => ({
       }
     }
 
-    on(): void {}
+    on(
+      event: string,
+      listener: (event: { preventDefault(): void }) => void,
+    ): void {
+      if (event === "page-title-updated") {
+        this.pageTitleUpdated = listener;
+      }
+    }
 
     maximize(): void {
       this.maximizeCalls += 1;
@@ -94,6 +115,10 @@ vi.mock("electron", () => ({
     minimize(): void {}
 
     setSkipTaskbar(): void {}
+
+    setTitle(title: string): void {
+      this.setTitleCalls.push(title);
+    }
   },
   shell: { openExternal: vi.fn() },
 }));
@@ -142,8 +167,13 @@ const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(
 );
 const originalEnv = process.env;
 
-function createMainWindowForTest(options: MainWindowOptions): void {
-  createMainWindow(options);
+function createMainWindowForTest(
+  options: Omit<MainWindowOptions, "devWindowTitle">,
+): void {
+  createMainWindow({
+    devWindowTitle: "Traycer Dev — spry-panda",
+    ...options,
+  });
 }
 
 describe("loadMainWindow", () => {
@@ -198,6 +228,46 @@ describe("loadMainWindow", () => {
         }),
       }),
     ]);
+  });
+
+  it("keeps the dev display name after the renderer updates its document title", () => {
+    createMainWindowForTest({
+      preloadPath: "/preload.js",
+      windowId: "window-a",
+      initialRoute: "/",
+      zoomFactor: 1,
+      placement: createFirstLaunchWindowPlacement(),
+    });
+
+    expect(electronState.browserWindowOptions).toEqual([
+      expect.objectContaining({ title: "Traycer Dev — spry-panda" }),
+    ]);
+
+    electronState.browserWindows[0].pageTitleUpdated();
+
+    expect(
+      electronState.browserWindows[0].preventDefault,
+    ).toHaveBeenCalledOnce();
+    expect(electronState.browserWindows[0].setTitleCalls).toEqual([
+      "Traycer Dev — spry-panda",
+    ]);
+  });
+
+  it("leaves the renderer title flow unchanged when no dev slot is active", () => {
+    createMainWindow({
+      devWindowTitle: null,
+      preloadPath: "/preload.js",
+      windowId: "window-a",
+      initialRoute: "/",
+      zoomFactor: 1,
+      placement: createFirstLaunchWindowPlacement(),
+    });
+
+    expect(electronState.browserWindowOptions[0]).not.toHaveProperty("title");
+
+    electronState.browserWindows[0].pageTitleUpdated();
+
+    expect(electronState.browserWindows[0].setTitleCalls).toEqual([]);
   });
 
   it("omits preload bootstrap route arguments when no initial route is provided", () => {

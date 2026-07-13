@@ -9,6 +9,7 @@ import {
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { useTabProvidersList } from "@/hooks/providers/use-tab-providers-list-query";
 import type { ComposerSeedSourceKind } from "@/lib/composer/composer-seed-source";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
 // The harness id set is a superset of the provider-CLI id set (it also carries
 // `traycer`, which has no provider-CLI login). Only CLI harnesses gate. Grok,
@@ -218,7 +219,16 @@ export function useProviderReauthGate(
     if (providerUnauthenticated && providerId !== null) {
       if (signedOutProviderRef.current !== providerId) {
         signedOutProviderRef.current = providerId;
-        toast.error(`${PROVIDER_DISPLAY_NAMES[providerId]} is signed out`);
+        reportableErrorToast(
+          `${PROVIDER_DISPLAY_NAMES[providerId]} is signed out`,
+          undefined,
+          {
+            title: "Provider signed out",
+            message: null,
+            code: null,
+            source: "Chat",
+          },
+        );
       }
     } else if (
       authStatus === "authenticated" &&

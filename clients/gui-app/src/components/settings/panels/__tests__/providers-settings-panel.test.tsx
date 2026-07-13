@@ -92,6 +92,7 @@ const providerMocks = vi.hoisted(() => ({
     isPending: false,
     isError: false,
     isFetching: false,
+    error: undefined as { message: string; code: string } | undefined,
   },
   setSelectionMutate: vi.fn(),
   addCustomPathMutate: vi.fn(),
@@ -417,6 +418,7 @@ import { ProvidersSettingsPanel } from "@/components/settings/panels/providers-s
 import { ProviderProfileScopedSection } from "@/components/settings/panels/provider-profile-scoped-section";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { redactEmail } from "@/lib/providers/redact-email";
+import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 
 const OPENCODE_CANDIDATES: readonly ProviderCliCandidate[] = [
   {
@@ -593,6 +595,8 @@ describe("<ProvidersSettingsPanel />", () => {
         }),
       ],
     };
+    providerMocks.listResult.isError = false;
+    providerMocks.listResult.error = undefined;
     providerMocks.setSelectionMutate.mockClear();
     providerMocks.setEnabledMutate.mockClear();
     providerMocks.setEnvOverrideMutate.mockClear();
@@ -609,6 +613,43 @@ describe("<ProvidersSettingsPanel />", () => {
 
   afterEach(() => {
     cleanup();
+    useDesktopDialogStore.setState({
+      activeDialog: null,
+      reportIssueAvailable: false,
+      reportIssueContext: null,
+    });
+  });
+
+  it("gates the provider-list-error report action on capability and never forwards the raw host error", () => {
+    providerMocks.listResult.isError = true;
+    providerMocks.listResult.error = {
+      message: "secret-token-should-never-render",
+      code: "RPC_ERROR",
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(screen.queryByText(/secret-token-should-never-render/)).toBeNull();
+    // Capability-gated off by default.
+    expect(screen.queryByRole("button", { name: "Report issue" })).toBeNull();
+
+    act(() => {
+      useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
+    expect(useDesktopDialogStore.getState()).toMatchObject({
+      activeDialog: "report-issue",
+      reportIssueContext: {
+        title: "Couldn't load provider state",
+        message: null,
+        code: "RPC_ERROR",
+        source: "Providers",
+      },
+    });
   });
 
   it("lists OpenCode CLI candidates for Traycer and mutates Traycer selection", () => {
@@ -1541,6 +1582,65 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(typeof awaitOptions.onSuccess).toBe("function");
   });
 
+  it("gates the add-profile failure report action on capability and reports only fixed generic context", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        {
+          ...providerState({
+            providerId: "codex",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+            profiles: [
+              profile({
+                profileId: "ambient",
+                kind: "ambient",
+                label: "Terminal account",
+                email: "ambient@example.test",
+                tier: null,
+                authStatus: "authenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+            ],
+          }),
+          loginCapability: { oauthArgs: ["auth", "login"], token: null },
+        },
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+
+    const [, startOptions] = firstStartLoginCall();
+    act(() => startOptions.onError());
+
+    screen.getByText(
+      "Sign-in did not start. You can retry when the provider is available.",
+    );
+    expect(screen.queryByRole("button", { name: "Report issue" })).toBeNull();
+
+    act(() => {
+      useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
+    expect(useDesktopDialogStore.getState()).toMatchObject({
+      activeDialog: "report-issue",
+      reportIssueContext: {
+        title: "Provider sign-in failed",
+        message: null,
+        code: null,
+        source: "Add profile",
+      },
+    });
+  });
+
   it("keeps a cancelled profile creation mounted until its minted id is cleaned up", () => {
     providerMocks.listResult.data = {
       providers: [
@@ -1727,6 +1827,76 @@ describe("<ProvidersSettingsPanel />", () => {
 
     expect(providerMocks.cancelLoginMutate).toHaveBeenCalledTimes(1);
     expect(providerMocks.awaitLoginMutate).not.toHaveBeenCalled();
+  });
+
+  it("gates the reauth-failure report action on capability and reports only fixed generic context", async () => {
+    providerMocks.listResult.data = {
+      providers: [
+        {
+          ...providerState({
+            providerId: "codex",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+            profiles: [
+              profile({
+                profileId: "ambient",
+                kind: "ambient",
+                label: "Terminal account",
+                email: "ambient@example.test",
+                tier: null,
+                authStatus: "authenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+              profile({
+                profileId: "managed-1",
+                kind: "managed",
+                label: "Work",
+                email: "work@example.test",
+                tier: "Pro",
+                authStatus: "authenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+            ],
+          }),
+          loginCapability: { oauthArgs: ["auth", "login"], token: null },
+        },
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
+    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
+    await waitFor(() => {
+      expect(providerMocks.startLoginMutate).toHaveBeenCalledTimes(1);
+    });
+    const [, startOptions] = firstStartLoginCall();
+    act(() => startOptions.onError());
+
+    screen.getByText("Sign-in did not start. Try again when ready.");
+    expect(screen.queryByRole("button", { name: "Report issue" })).toBeNull();
+
+    act(() => {
+      useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
+    expect(useDesktopDialogStore.getState()).toMatchObject({
+      activeDialog: "report-issue",
+      reportIssueContext: {
+        title: "Provider reauthentication failed",
+        message: null,
+        code: null,
+        source: "Provider reauth",
+      },
+    });
   });
 
   it("cancels the known re-auth profile while a retry start is pending", async () => {

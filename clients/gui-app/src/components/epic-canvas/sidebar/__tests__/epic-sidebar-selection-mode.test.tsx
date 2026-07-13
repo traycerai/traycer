@@ -162,6 +162,21 @@ vi.mock("@/components/chat/chat-progress-icon", () => ({
   ChatProgressIcon: () => <span data-testid="chat-sidebar-spinner" />,
 }));
 
+vi.mock("@/components/worktree/worktree-owner-metadata", () => ({
+  WorktreeOwnerMetadataHoverCard: (props: { readonly trigger: ReactNode }) =>
+    props.trigger,
+}));
+
+vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
+  useHostNotificationIndicators: () => ({
+    data: { epics: {}, chats: {} },
+    isPending: false,
+    isFetching: false,
+    error: null,
+    refetch: () => Promise.resolve(),
+  }),
+}));
+
 vi.mock("@/components/ui/dropdown-menu", () => ({
   DropdownMenu: (props: { readonly children: ReactNode }) => props.children,
   DropdownMenuTrigger: (props: { readonly children: ReactNode }) =>

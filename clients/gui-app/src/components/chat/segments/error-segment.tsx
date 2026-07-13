@@ -1,4 +1,6 @@
 import { AlertTriangle } from "lucide-react";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 
 interface ErrorSegmentProps {
   message: string;
@@ -35,6 +37,16 @@ export function ErrorSegment({ code, findUnitId, message }: ErrorSegmentProps) {
             {message}
           </span>
         </div>
+        <ReportIssueAction
+          context={createReportIssueContext({
+            title: "Chat error",
+            message: null,
+            code: null,
+            source: "Chat",
+          })}
+          presentation="icon"
+          className="-mt-1 -mr-1 shrink-0"
+        />
       </div>
     </div>
   );

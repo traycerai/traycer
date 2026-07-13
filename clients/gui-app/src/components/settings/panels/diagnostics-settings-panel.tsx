@@ -4,6 +4,8 @@ import { ChevronDown, ChevronUp, FolderOpen } from "lucide-react";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { LogLevelRow } from "@/components/settings/panels/log-level-row";
 import { Button } from "@/components/ui/button";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { CopyTextButton } from "@/components/copy-text-button";
 import { useRunnerHost } from "@/providers/use-runner-host";
@@ -214,12 +216,26 @@ function DiagnosticsLogEntry(props: {
         </div>
       </div>
       {open ? (
-        <pre
-          className="mt-3 max-h-52 w-full overflow-auto rounded-md border border-border/60 bg-muted/30 px-3 py-2 font-mono text-code-xs text-muted-foreground"
-          data-testid={`diagnostics-log-output-${entry.target}`}
-        >
-          {tailText}
-        </pre>
+        <div className="mt-3 flex items-start gap-2">
+          <pre
+            className="max-h-52 min-w-0 flex-1 overflow-auto rounded-md border border-border/60 bg-muted/30 px-3 py-2 font-mono text-code-xs text-muted-foreground"
+            data-testid={`diagnostics-log-output-${entry.target}`}
+          >
+            {tailText}
+          </pre>
+          {tailQuery.isError ? (
+            <ReportIssueAction
+              context={createReportIssueContext({
+                title: "Couldn't load log output",
+                message: null,
+                code: null,
+                source: "Diagnostics",
+              })}
+              presentation="icon"
+              className={undefined}
+            />
+          ) : null}
+        </div>
       ) : null}
     </div>
   );

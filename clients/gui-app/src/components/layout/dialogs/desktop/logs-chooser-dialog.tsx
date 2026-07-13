@@ -2,6 +2,8 @@ import { useEffect, useReducer, useState, type ReactNode } from "react";
 import { queryOptions, useQuery } from "@tanstack/react-query";
 import { ChevronDown, ChevronUp, FolderOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 import { CopyTextButton } from "@/components/copy-text-button";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
 import {
@@ -94,6 +96,44 @@ function LogsChooserDialogContent(
     );
   };
 
+  let snapshotContent: ReactNode;
+  if (snapshot.status === "ready") {
+    snapshotContent = (
+      <div className="grid gap-2">
+        {snapshot.snapshot.logs.map((entry) => (
+          <LogEntryPanel
+            key={entry.target}
+            entry={entry}
+            support={props.support}
+            revealDisabled={revealState.pendingTarget !== null}
+            revealPending={revealState.pendingTarget === entry.target}
+            onReveal={() => revealLog(entry.target)}
+          />
+        ))}
+      </div>
+    );
+  } else if (snapshot.status === "unavailable") {
+    snapshotContent = (
+      <div className="flex items-center gap-2 text-ui-sm text-muted-foreground">
+        <span>{snapshot.message}</span>
+        <ReportIssueAction
+          context={createReportIssueContext({
+            title: "Couldn't load desktop details",
+            message: null,
+            code: null,
+            source: "Logs",
+          })}
+          presentation="link"
+          className="h-auto p-0 text-current"
+        />
+      </div>
+    );
+  } else {
+    snapshotContent = (
+      <p className="text-ui-sm text-muted-foreground">{snapshot.message}</p>
+    );
+  }
+
   return (
     <DialogContent className="sm:max-w-lg">
       <DialogHeader>
@@ -105,26 +145,24 @@ function LogsChooserDialogContent(
           Desktop and host diagnostics.
         </DialogDescription>
       </DialogHeader>
-      {snapshot.status === "ready" ? (
-        <div className="grid gap-2">
-          {snapshot.snapshot.logs.map((entry) => (
-            <LogEntryPanel
-              key={entry.target}
-              entry={entry}
-              support={props.support}
-              revealDisabled={revealState.pendingTarget !== null}
-              revealPending={revealState.pendingTarget === entry.target}
-              onReveal={() => revealLog(entry.target)}
-            />
-          ))}
-        </div>
-      ) : (
-        <p className="text-ui-sm text-muted-foreground">{snapshot.message}</p>
-      )}
+      {snapshotContent}
       {revealState.error === null ? null : (
-        <p className="text-ui-sm text-destructive" role="alert">
-          {revealState.error}
-        </p>
+        <div
+          className="flex items-center gap-2 text-ui-sm text-destructive"
+          role="alert"
+        >
+          <span>{revealState.error}</span>
+          <ReportIssueAction
+            context={createReportIssueContext({
+              title: "Couldn't reveal the log file",
+              message: null,
+              code: null,
+              source: "Logs",
+            })}
+            presentation="link"
+            className="h-auto p-0 text-current"
+          />
+        </div>
       )}
       <DialogFooter showCloseButton />
     </DialogContent>
@@ -316,6 +354,24 @@ function LogTailView(props: { readonly state: LogTailState }): ReactNode {
         <pre className="max-h-72 w-full overflow-auto rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-left font-mono text-code-xs text-muted-foreground">
           {content}
         </pre>
+      </div>
+    );
+  }
+
+  if (props.state.status === "error") {
+    return (
+      <div className="flex items-center justify-center gap-2 rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-center text-ui-xs text-muted-foreground">
+        <span>{props.state.message}</span>
+        <ReportIssueAction
+          context={createReportIssueContext({
+            title: "Couldn't load log output",
+            message: null,
+            code: null,
+            source: "Logs",
+          })}
+          presentation="link"
+          className="h-auto p-0 text-current"
+        />
       </div>
     );
   }

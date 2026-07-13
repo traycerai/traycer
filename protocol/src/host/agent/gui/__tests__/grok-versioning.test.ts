@@ -27,6 +27,7 @@ import {
   listGuiHarnessesResponseSchema,
   listGuiHarnessesResponseSchemaV10,
   listGuiHarnessesResponseSchemaV20,
+  listGuiHarnessesResponseSchemaV21,
   listGuiHarnessesResponseSchemaV30,
 } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import {
@@ -101,7 +102,8 @@ function providerState(providerId: string, status: string) {
 
 describe("post-v1.0 GUI harness non-breaking v2→v1 downgrade bridges", () => {
   it("drops post-v1.0 harnesses from agent.gui.listHarnesses for v1.0 callers", () => {
-    const v2Response = listGuiHarnessesResponseSchemaV20.parse({
+    // The v2→v1 bridge is anchored at 2.1, major 2's latest installed minor.
+    const v2Response = listGuiHarnessesResponseSchemaV21.parse({
       harnesses: [
         harnessOption("claude"),
         harnessOption("grok"),

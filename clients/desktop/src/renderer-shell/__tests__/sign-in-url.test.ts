@@ -19,6 +19,30 @@ describe("composeDesktopSignInUrl", () => {
   it("uses the production Cloud UI base URL in source", () => {
     expect(DESKTOP_SIGN_IN_BASE_URL).toBe("https://platform.traycer.ai");
   });
+
+  it("uses the Vite-injected loopback Cloud UI URL for a dev desktop run", async () => {
+    vi.stubEnv("VITE_DEV_CLOUD_UI_BASE_URL", "http://localhost:21003");
+    vi.resetModules();
+
+    const slotted = await import("../sign-in-url");
+
+    expect(
+      slotted.composeDesktopSignInUrl("http://127.0.0.1:41000/callback"),
+    ).toBe(
+      "http://localhost:21003?redirect_uri=http%3A%2F%2F127.0.0.1%3A41000%2Fcallback",
+    );
+  });
+
+  it("rejects a non-loopback Cloud UI override", async () => {
+    vi.stubEnv("VITE_DEV_CLOUD_UI_BASE_URL", "https://platform.traycer.ai");
+    vi.resetModules();
+
+    const slotted = await import("../sign-in-url");
+
+    expect(() =>
+      slotted.composeDesktopSignInUrl("http://127.0.0.1:41000/callback"),
+    ).toThrow(/must use http/);
+  });
 });
 
 /**

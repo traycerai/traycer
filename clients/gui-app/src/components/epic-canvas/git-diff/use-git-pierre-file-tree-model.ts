@@ -11,6 +11,7 @@ import type { GitChangedFile } from "@traycer/protocol/host";
 import {
   buildGitFileRowMetadata,
   buildGitTreeDirectoryPaths,
+  buildGitTreeRowDirectoryPaths,
   gitChangedFileToPierreStatusEntry,
   mergeGitTreeExpandedDirectoryPaths,
 } from "@/lib/git/panel-file-rendering";
@@ -19,6 +20,8 @@ import { GIT_PANEL_PIERRE_FILE_TREE_UNSAFE_CSS } from "@/components/epic-canvas/
 interface GitPierreFileTreeModel {
   readonly model: PierreFileTreeModel;
   readonly fileByPath: ReadonlyMap<string, GitChangedFile>;
+  readonly paths: ReadonlyArray<string>;
+  readonly rowDirectoryPaths: ReadonlyArray<string>;
 }
 
 export function useGitPierreFileTreeModel(
@@ -27,6 +30,10 @@ export function useGitPierreFileTreeModel(
   const paths = useMemo(() => files.map((file) => file.path), [files]);
   const directoryPaths = useMemo(
     () => buildGitTreeDirectoryPaths(paths),
+    [paths],
+  );
+  const rowDirectoryPaths = useMemo(
+    () => buildGitTreeRowDirectoryPaths(paths),
     [paths],
   );
   const fileByPath = useMemo(
@@ -56,6 +63,7 @@ export function useGitPierreFileTreeModel(
 
   const { model } = useFileTree({
     paths,
+    flattenEmptyDirectories: true,
     initialExpansion: "closed",
     initialExpandedPaths: directoryPaths,
     density: "compact",
@@ -85,7 +93,7 @@ export function useGitPierreFileTreeModel(
     model.setGitStatus(gitStatus);
   }, [model, gitStatus]);
 
-  return { model, fileByPath };
+  return { model, fileByPath, paths, rowDirectoryPaths };
 }
 
 function collectExpandedDirectoryPaths(

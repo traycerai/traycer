@@ -8,6 +8,7 @@ import {
   DeviceFlowController,
   type DeviceFlowResultPayload,
 } from "../auth/device-flow-controller";
+import { PROTOCOL_SCHEME } from "../auth/deep-link";
 
 /**
  * Wires the renderer-facing device-flow IPC to the main-process
@@ -22,7 +23,13 @@ import {
  * device-flow never leaks a 10-minute poll (Finding 9).
  */
 export function registerDeviceFlowIpc(bridge: RunnerIpcBridge): void {
-  const controller = new DeviceFlowController(bridge.options.authnBaseUrl);
+  // The registered scheme (environment- and slot-specific) rides the
+  // verification URL so the browser's return deep link reopens THIS build,
+  // never an installed sibling.
+  const controller = new DeviceFlowController(
+    bridge.options.authnBaseUrl,
+    PROTOCOL_SCHEME,
+  );
   // Tracks each started attempt's owner-window listener cleanup so EVERY
   // terminal path removes it exactly once: `deviceFlowCancel`, `disposeAll`, and
   // a thrown `controller.start()` would otherwise leave stale `destroyed`

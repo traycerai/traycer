@@ -12,6 +12,8 @@ import type {
 import type { ProviderRateLimitEnvelope } from "@/lib/rate-limits/rate-limit-envelope";
 import { Badge } from "@/components/ui/badge";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 import { MeterRow } from "@/components/settings/panels/traycer-subscription-views";
 import { contextUsageTone } from "@/components/chat/context-usage";
 import {
@@ -762,6 +764,16 @@ export function ProviderRateLimitBody(
     return (
       <div className="text-ui-sm text-destructive">
         Couldn't load usage limits. Try refreshing.
+        <ReportIssueAction
+          context={createReportIssueContext({
+            title: "Couldn't load usage limits",
+            message: null,
+            code: null,
+            source: "Provider usage limits",
+          })}
+          presentation="link"
+          className="ml-1 h-auto p-0 text-current"
+        />
       </div>
     );
   }

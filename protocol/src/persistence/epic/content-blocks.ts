@@ -1,5 +1,6 @@
 import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
+import { userMessageSenderSchema } from "@traycer/protocol/persistence/epic/senders";
 import { z } from "zod";
 
 /**
@@ -702,6 +703,17 @@ export const steerBlockSchema = z.object({
   messageId: z.string(),
   content: jsonContentSchema,
   mode: z.enum(["safe_point", "interrupt_restart"]).default("safe_point"),
+  // Who authored the steered message. Duplicated from the steered USER row
+  // (`messageId`) on purpose: the two records have asymmetric durability - this
+  // block is execution-owned and rewritten on every persistence checkpoint,
+  // while the user row is written once into `chat.messages`. When a renderer
+  // sees the block but not the row, it falls back to rendering the block's own
+  // content, and without this field an agent-to-agent message would render as a
+  // plain user-authored bubble - an agent impersonating the user. Carrying the
+  // sender here means the fallback can never lose provenance.
+  // Additive + nullable: blocks persisted before this field parse to `null`,
+  // which the renderer treats exactly as it did before (a "you" row).
+  sender: userMessageSenderSchema.nullable().default(null),
 });
 export type SteerBlock = z.infer<typeof steerBlockSchema>;
 

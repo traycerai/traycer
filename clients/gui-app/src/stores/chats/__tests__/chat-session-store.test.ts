@@ -344,6 +344,7 @@ function assistantSteerMessage(
         messageId,
         content: CONTENT,
         mode: "safe_point",
+        sender: null,
       },
     ],
     startedAt: 4,

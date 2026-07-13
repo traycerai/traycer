@@ -6,6 +6,7 @@ import {
 } from "@traycer/protocol/common/schemas";
 import { guiHarnessIdSchema } from "@traycer/protocol/host/agent/shared";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
+import { userMessageSenderSchema } from "@traycer/protocol/persistence/epic/senders";
 import {
   interviewAnswerSchema,
   interviewQuestionOptionSchema,
@@ -526,6 +527,14 @@ export const steerSubmittedEventSchema = z.object({
   messageId: z.string(),
   content: jsonContentSchema,
   mode: chatQueueSteerModeSchema.default("safe_point"),
+  // Who authored the steered message, carried onto the `steer` content block by
+  // the shared accumulator. The steered USER row (`messageId`) is the primary
+  // record, but it and the block have asymmetric durability - so a renderer that
+  // sees only the block must still be able to tell an agent-to-agent message
+  // from a human one. Additive + nullable: a host that predates this field sends
+  // no sender, the block's stays `null`, and the fallback renders a plain user
+  // row exactly as before.
+  sender: userMessageSenderSchema.nullable().default(null),
 });
 export type SteerSubmittedEvent = z.infer<typeof steerSubmittedEventSchema>;
 

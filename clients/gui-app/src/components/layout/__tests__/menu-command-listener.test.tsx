@@ -336,12 +336,14 @@ describe("<MenuCommandListener />", () => {
     routerState.pathname = "/";
     resetStores();
     useDesktopDialogStore.getState().close();
+    useDesktopDialogStore.setState({ reportIssueAvailable: false });
   });
 
   afterEach(() => {
     cleanup();
     resetStores();
     useDesktopDialogStore.getState().close();
+    useDesktopDialogStore.setState({ reportIssueAvailable: false });
   });
 
   it("dispatches native menu commands to renderer-owned actions", () => {
@@ -372,6 +374,22 @@ describe("<MenuCommandListener />", () => {
     );
     expect(runnerHost.windows.requestNew).toHaveBeenCalledWith(null);
     expect(runnerHost.hostPickerRequestOpen).not.toHaveBeenCalled();
+  });
+
+  it("gates the native report command on current support capability", () => {
+    const menu = createMenu();
+    renderMenuCommandListener(menu);
+
+    act(() => {
+      menu.emit("app.reportIssue");
+    });
+    expect(useDesktopDialogStore.getState().activeDialog).toBeNull();
+
+    useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    act(() => {
+      menu.emit("app.reportIssue");
+    });
+    expect(useDesktopDialogStore.getState().activeDialog).toBe("report-issue");
   });
 
   it("requests close for the sender window from the native close-window command", () => {

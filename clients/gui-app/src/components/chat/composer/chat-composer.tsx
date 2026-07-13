@@ -61,6 +61,7 @@ import {
 } from "./use-ambient-drift-gate";
 import { useComposerPickerItems } from "./picker/use-composer-picker-items";
 import { commitSelection } from "@/stores/composer/commit-selection";
+import { useTaskProfileRateLimitSwitch } from "./use-task-profile-rate-limit-switch";
 
 interface ChatComposerProps {
   readonly taskId: string;
@@ -243,6 +244,15 @@ function ChatComposerImpl(props: ChatComposerProps) {
     },
     [toolbarStore, harnessId, modelSlug],
   );
+  // Task-wide extension of the rate-limit switch: sibling chats of this task
+  // pinned to the same limited profile, and the action moving them together.
+  const taskProfileSwitch = useTaskProfileRateLimitSwitch({
+    enabled: rateLimitPrompt.limited,
+    harnessId,
+    profileId,
+    epicId: currentEpicId,
+    chatId: taskId,
+  });
   const selectedModel = useStore(toolbarStore, (s) => s.selectedModel);
   const imagesUnsupported = imageAttachmentsUnsupported(
     draftHasImages,
@@ -332,6 +342,8 @@ function ChatComposerImpl(props: ChatComposerProps) {
                 current={rateLimitPrompt.current}
                 alternatives={rateLimitPrompt.alternatives}
                 onSwitchProfile={onSwitchProfile}
+                affectedChatCount={taskProfileSwitch.affectedChatCount}
+                onSwitchProfileForTask={taskProfileSwitch.switchOtherTaskChats}
                 onDismiss={rateLimitPrompt.dismiss}
               />
             </div>

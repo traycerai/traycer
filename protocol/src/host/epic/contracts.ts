@@ -63,6 +63,8 @@ import {
   setCommentThreadResolvedResponseSchema,
   updateArtifactStatusRequestSchema,
   updateArtifactStatusResponseSchema,
+  updateChatRunSettingsRequestSchema,
+  updateChatRunSettingsResponseSchema,
   updateEpicRequestSchema,
   updateEpicResponseSchema,
 } from "@traycer/protocol/host/epic/unary-schemas";
@@ -204,6 +206,15 @@ export const epicRenameChatV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: renameChatRequestSchema,
   responseSchema: renameChatResponseSchema,
+});
+
+// Optional (non-floor) capability: persists a chat's run settings without a
+// send. See the schema doc in `unary-schemas.ts`.
+export const epicUpdateChatRunSettingsV10 = defineRpcContract({
+  method: "epic.updateChatRunSettings",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: updateChatRunSettingsRequestSchema,
+  responseSchema: updateChatRunSettingsResponseSchema,
 });
 
 export const epicDeleteChatV10 = defineRpcContract({

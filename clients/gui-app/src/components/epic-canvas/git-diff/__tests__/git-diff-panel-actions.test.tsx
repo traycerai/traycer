@@ -7,6 +7,7 @@ import { useGitPanelStore } from "@/stores/epics/git-panel-store";
 import { DEFAULT_DIFF_VIEWER_PREFERENCES } from "@/lib/diff/diff-viewer-preferences";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { gitQueryKeys } from "@/lib/query-keys/git-query-keys";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
 function setup() {
   const queryClient = new QueryClient({
@@ -14,7 +15,9 @@ function setup() {
   });
   const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
   const wrapper = ({ children }: { readonly children: ReactNode }) => (
-    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    <QueryClientProvider client={queryClient}>
+      <TooltipProvider delayDuration={0}>{children}</TooltipProvider>
+    </QueryClientProvider>
   );
   return { invalidateSpy, wrapper };
 }
@@ -49,6 +52,31 @@ describe("<GitDiffPanelActions />", () => {
 
     expect(useGitPanelStore.getState().stateByEpicId["epic-1"].listLayout).toBe(
       "tree",
+    );
+  });
+
+  it("explains the layout switch action in a keyboard-accessible tooltip", async () => {
+    const { wrapper } = setup();
+    render(<GitDiffPanelActions epicId="epic-1" tabId="tab-1" />, { wrapper });
+
+    const toggle = screen.getByRole("button", {
+      name: "Switch to tree view",
+    });
+    fireEvent.focus(toggle);
+
+    expect((await screen.findByRole("tooltip")).textContent).toBe(
+      "Switch to tree view",
+    );
+
+    fireEvent.blur(toggle);
+    fireEvent.click(toggle);
+
+    const nextToggle = screen.getByRole("button", {
+      name: "Switch to list view",
+    });
+    fireEvent.focus(nextToggle);
+    expect((await screen.findByRole("tooltip")).textContent).toBe(
+      "Switch to list view",
     );
   });
 

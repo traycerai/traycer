@@ -78,12 +78,6 @@ export function GeneralSettingsPanel() {
   const setPreventSleepWhileRunning = useSettingsStore(
     (s) => s.setPreventSleepWhileRunning,
   );
-  const notifyOnChatTurnComplete = useSettingsStore(
-    (s) => s.notifyOnChatTurnComplete,
-  );
-  const setNotifyOnChatTurnComplete = useSettingsStore(
-    (s) => s.setNotifyOnChatTurnComplete,
-  );
   const showGlobalResourceMonitor = useSettingsStore(
     (s) => s.showGlobalResourceMonitor,
   );
@@ -107,17 +101,6 @@ export function GeneralSettingsPanel() {
 
   return (
     <SettingsPanelShell title="General">
-      <SettingsRow
-        label="Notify on chat turn completion"
-        description="Show a system notification when an agent finishes responding and Traycer isn't focused."
-        control={
-          <Switch
-            checked={notifyOnChatTurnComplete}
-            onCheckedChange={setNotifyOnChatTurnComplete}
-            aria-label="Notify on chat turn completion"
-          />
-        }
-      />
       <SettingsRow
         label="Prevent sleep while running"
         description="Keep the computer awake while a chat or terminal agent is running, so work continues when you step away."

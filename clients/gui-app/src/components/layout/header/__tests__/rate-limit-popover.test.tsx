@@ -9,6 +9,7 @@ import {
   type Mock,
 } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -30,6 +31,7 @@ import type {
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Popover, PopoverTrigger } from "@/components/ui/popover";
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
+import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import type {
   AvailableProviderRateLimits,
   ProviderRateLimitEnvelope,
@@ -512,6 +514,11 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  useDesktopDialogStore.setState({
+    activeDialog: null,
+    reportIssueAvailable: false,
+    reportIssueContext: null,
+  });
 });
 
 describe("<RateLimitPopover /> zero-provider state", () => {
@@ -1140,6 +1147,68 @@ describe("<RateLimitPopover /> per-provider states", () => {
     expect(
       screen.getByText("Usage limits unavailable - the CLI isn't installed"),
     ).toBeTruthy();
+  });
+
+  it("gates the hard-failure report action on capability and reports only fixed generic context", () => {
+    mocks.configured = [
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+    ];
+    mocks.results = {
+      codex: {
+        data: undefined,
+        isPending: false,
+        isFetching: false,
+        isError: true,
+        dataUpdatedAt: 0,
+        refetch: vi.fn(() => Promise.resolve({})),
+      },
+    };
+    renderPopover();
+
+    // Capability-gated off by default.
+    expect(screen.queryByRole("button", { name: "Report issue" })).toBeNull();
+
+    act(() => {
+      useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
+    expect(useDesktopDialogStore.getState()).toMatchObject({
+      activeDialog: "report-issue",
+      reportIssueContext: {
+        title: "Couldn't load usage limits",
+        message: null,
+        code: null,
+        source: "Usage limits",
+      },
+    });
+  });
+
+  it("gates the unavailable-reason report action on capability without leaking the reason into the report context beyond its fixed label", () => {
+    mocks.configured = [
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+    ];
+    mocks.results = {
+      codex: readyResult({
+        provider: "codex",
+        available: false,
+        reason: "cli_not_found",
+      }),
+    };
+    renderPopover();
+
+    act(() => {
+      useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
+    expect(useDesktopDialogStore.getState()).toMatchObject({
+      activeDialog: "report-issue",
+      reportIssueContext: {
+        title: "Usage limits unavailable",
+        message: null,
+        code: null,
+        source: "Usage limits",
+      },
+    });
   });
 });
 
