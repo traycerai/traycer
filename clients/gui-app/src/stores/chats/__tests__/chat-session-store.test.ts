@@ -178,6 +178,7 @@ interface SnapshotFrameInput {
   readonly messages: ReadonlyArray<Message>;
   readonly queue: ChatQueueState;
   readonly pendingFileEditApprovals: ReadonlyArray<ChatFileEditApprovalState>;
+  readonly settings?: ChatRunSettings | null;
   readonly pendingInterviews?: ReadonlyArray<ChatPendingInterviewState>;
   readonly backgroundItems?: ReadonlyArray<BackgroundItem>;
   readonly claudePendingWakes?: ReadonlyArray<ClaudePendingWake>;
@@ -200,7 +201,7 @@ function emitSnapshotFrame(input: SnapshotFrameInput): void {
         createdAt: 1,
         updatedAt: 1,
         isTitleEditedByUser: false,
-        settings: null,
+        settings: input.settings ?? null,
         activeSessionChain: null,
         claudePendingWakes: [...(input.claudePendingWakes ?? [])],
         messages: [...input.messages],
@@ -506,6 +507,23 @@ describe("createChatSessionStore", () => {
     expect(harness.handle.store.getState().chat?.claudePendingWakes).toEqual([
       PENDING_CLAUDE_WAKE,
     ]);
+  });
+
+  it("seeds composer settings from the initial persisted chat snapshot", () => {
+    const harness = createHarness();
+
+    emitSnapshotFrame({
+      callbacks: harness.callbacks(),
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      settings: SETTINGS,
+    });
+
+    expect(harness.handle.store.getState().currentComposerSettings).toEqual(
+      SETTINGS,
+    );
   });
 
   it("tracks send actions until actionAck and accepts host messages", () => {

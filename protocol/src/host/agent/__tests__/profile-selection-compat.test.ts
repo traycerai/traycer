@@ -270,9 +270,7 @@ describe("agent.create v1 <-> v2 profile-selection translation", () => {
       kind: "profile",
       profileId: AMBIENT_PROFILE_ID_SENTINEL,
     });
-    expect(createAgentRequestSchemaV20.safeParse(upgraded).success).toBe(
-      false,
-    );
+    expect(createAgentRequestSchemaV20.safeParse(upgraded).success).toBe(false);
 
     // Directly constructed v2.0 requests are rejected the same way.
     expect(
@@ -472,6 +470,21 @@ describe("agent.listProviderProfiles / agent.getProviderProfileRateLimits / agen
         warnings: [],
       }),
     ).toMatchObject({ warnings: [] });
+
+    expect(
+      agentConfigureResponseSchema.safeParse({
+        settings: {
+          harnessId: "claude",
+          model: "",
+          profileSelection: { kind: "ambient" },
+          reasoningEffort: null,
+          fastMode: false,
+          permissionMode: "supervised",
+          agentMode: "regular",
+        },
+        warnings: [],
+      }).success,
+    ).toBe(false);
   });
 });
 

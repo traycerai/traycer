@@ -79,10 +79,7 @@ function createOpts(profile: string | null) {
 }
 
 function findSubcommand(parent: Command, name: string): Command | null {
-  for (const child of parent.commands) {
-    if (child.name() === name) return child;
-  }
-  return null;
+  return parent.commands.find((child) => child.name() === name) ?? null;
 }
 
 function expectAgentCommand(name: string): Command {

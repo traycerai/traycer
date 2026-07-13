@@ -736,7 +736,7 @@ export function createChatSessionStore(
           // An unchanged tuple is ordinary stream traffic, so keep any local
           // composer edits that have not been committed by a send yet.
           const authoritativeSettingsChanged =
-            state.chat !== null &&
+            state.chat === null ||
             !nullableChatRunSettingsEqual(
               state.chat.settings,
               frame.snapshot.chat.settings,

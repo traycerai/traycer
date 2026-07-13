@@ -145,7 +145,7 @@ export type AgentConfigureRequest = z.infer<typeof agentConfigureRequestSchema>;
 
 export const agentConfigureSettingsSchema = z.object({
   harnessId: guiHarnessIdSchema,
-  model: z.string(),
+  model: z.string().min(1),
   profileSelection: concreteProfileSelectionSchema,
   reasoningEffort: z.string().nullable(),
   fastMode: z.boolean(),
