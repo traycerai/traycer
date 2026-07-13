@@ -1,4 +1,8 @@
 import {
+  DEV_CLOUD_UI_BASE_URL_ENV,
+  devBackendUrlFromEnv,
+} from "@traycer-clients/shared/platform/dev-backend-urls";
+import {
   devDesktopSlotProtocolScheme,
   sanitizeDevDesktopSlot,
 } from "@traycer-clients/shared/platform/dev-desktop-slot";
@@ -18,6 +22,19 @@ function rendererProtocolScheme(): string {
   return devDesktopSlotProtocolScheme(DESKTOP_PROTOCOL_SCHEME, slot);
 }
 
+function rendererSignInBaseUrl(): string {
+  const raw = import.meta.env.VITE_DEV_CLOUD_UI_BASE_URL;
+  if (!import.meta.env.DEV || typeof raw !== "string" || raw.length === 0) {
+    return DESKTOP_SIGN_IN_BASE_URL;
+  }
+  return devBackendUrlFromEnv(
+    "dev",
+    DEV_CLOUD_UI_BASE_URL_ENV,
+    DESKTOP_SIGN_IN_BASE_URL,
+    { [DEV_CLOUD_UI_BASE_URL_ENV]: raw },
+  );
+}
+
 // The cloud redirects the browser to this exact URI; its scheme must match the
 // one this build registers (`DESKTOP_PROTOCOL_SCHEME`, slot-suffixed under
 // multi-run dev) so the OS opens THIS app, not a sibling install or sibling
@@ -30,7 +47,7 @@ export const DESKTOP_REDIRECT_URI = `${rendererProtocolScheme()}://auth/callback
  * `config`). `environment` decides which deployment we're pointed at.
  */
 export function composeDesktopSignInUrl(redirectUri: string): string {
-  const signInBaseUrl = DESKTOP_SIGN_IN_BASE_URL;
+  const signInBaseUrl = rendererSignInBaseUrl();
   const separator = signInBaseUrl.includes("?") ? "&" : "?";
   return `${signInBaseUrl}${separator}redirect_uri=${encodeURIComponent(
     redirectUri,

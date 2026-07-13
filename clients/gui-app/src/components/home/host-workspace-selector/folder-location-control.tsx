@@ -125,7 +125,7 @@ export function FolderLocationControl(props: {
       {/* Reserve the widest label's width with an invisible ghost so the control
           is static across mode switches AND snug to the longest label — no empty
           space trailing "Existing worktree". */}
-      <span className="grid min-w-0 text-left">
+      <span className="grid min-w-0 flex-1 text-left">
         <span
           aria-hidden
           className="invisible col-start-1 row-start-1 truncate"

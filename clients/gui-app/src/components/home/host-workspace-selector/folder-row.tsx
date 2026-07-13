@@ -32,7 +32,7 @@ export function FolderRow(props: {
     >
       <PrimaryPinControl item={item} readOnly={props.readOnly} />
       <span
-        className="inline-flex min-w-0 max-w-[min(28vw,12rem)] items-center gap-1.5 px-1 py-1 text-ui-sm"
+        className="inline-flex w-full max-w-full min-w-0 items-center gap-1.5 px-1 py-1 text-ui-sm"
         data-testid="folder-chip"
         title={item.displayPath}
       >

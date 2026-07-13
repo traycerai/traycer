@@ -54,6 +54,18 @@ export const openEpicKey = (identity: string | null, epicId: string): string =>
 export const appLocalNotificationsKey = (userId: string | null): string =>
   scopedPersistKey("app-local-notifications", scopeBucket(userId));
 
+// Host-scoped (not identity-scoped): the worktrees panel's warm-open snapshot
+// of per-path activity entries (worktrees-enrichment-persistence.ts). A host
+// id is always non-empty, so no `scopeBucket` collapse applies.
+export const worktreeActivityCacheKey = (hostId: string): string =>
+  scopedPersistKey("worktree-activity-cache", hostId);
+
+// Host-scoped sibling of `worktreeActivityCacheKey`: the base listing rows
+// (worktrees-listing-query.ts), so the panel paints its row list instantly on
+// launch while the live listing refetches behind it.
+export const worktreeListingCacheKey = (hostId: string): string =>
+  scopedPersistKey("worktree-listing-cache", hostId);
+
 // ── Catalog ────────────────────────────────────────────────────────────────
 // `kind` tells enumeration the shape of each persisted surface:
 //   - "static"  : plain `traycer-gui-app:<leaf>` localStorage key.
@@ -167,6 +179,20 @@ export const PERSIST_STORES = [
     camelName: "deletedEpicEventsChannel",
     leaf: "deleted-epic-events:v1",
     kind: "channel",
+  },
+  // `worktree-activity-cache:<hostId>` — the worktrees panel's warm-open
+  // TanStack snapshot (worktrees-enrichment-persistence.ts), host-scoped.
+  {
+    camelName: "worktreeActivityCache",
+    leaf: "worktree-activity-cache",
+    kind: "scoped",
+  },
+  // `worktree-listing-cache:<hostId>` — the worktrees panel's base listing
+  // snapshot (worktrees-listing-query.ts), host-scoped.
+  {
+    camelName: "worktreeListingCache",
+    leaf: "worktree-listing-cache",
+    kind: "scoped",
   },
 ] as const satisfies ReadonlyArray<PersistStoreEntry>;
 

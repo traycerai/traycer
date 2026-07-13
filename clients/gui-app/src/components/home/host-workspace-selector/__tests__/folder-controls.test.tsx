@@ -341,8 +341,9 @@ describe("FolderRow", () => {
     expect(row.contains(branch)).toBe(true);
     expect(row.contains(actions)).toBe(true);
     expect(screen.queryByTestId("folder-row-details")).toBeNull();
-    expect(location.className).toContain("w-max");
-    expect(branch.className).toContain("w-[clamp(8rem,25vw,16rem)]");
+    expect(location.className).toContain("w-full");
+    expect(branch.className).toContain("w-full");
+    expect(identity.className).toContain("w-full");
     expect(identity.className).not.toContain("opacity-[var(--fc-opacity,0.7)]");
     expect(identity.children[1].className).toContain("text-foreground/90");
     expect(location.className).toContain("var(--color-muted-foreground)");
@@ -427,11 +428,46 @@ describe("FolderRow", () => {
     const source = screen.getByTestId("folder-branch-source");
     expect(source.className).toContain("text-ui-xs");
     expect(source.className).toContain("text-muted-foreground");
-    expect(trigger.className).toContain("w-[clamp(8rem,25vw,16rem)]");
+    expect(trigger.className).toContain("w-full");
+    expect(trigger.className).toContain("max-w-full");
     fireEvent.focus(trigger);
     expect((await screen.findByRole("tooltip")).textContent).toContain(
       "traycer/new-feature · from development",
     );
+  });
+
+  it("keeps a short target content-sized and gives its source the remaining branch space", () => {
+    renderRow(
+      {
+        branchLabel: "helo",
+        currentIntent: {
+          kind: "worktree",
+          workspacePath: "/repo",
+          repoIdentifier: { owner: "acme", repo: "app" },
+          isPrimary: true,
+          scripts: null,
+          branch: {
+            type: "new",
+            name: "helo",
+            source: "origin/main",
+            carryUncommittedChanges: false,
+          },
+        },
+      },
+      NOOP,
+    );
+
+    const relationship = screen.getByTestId("folder-branch-label");
+    const target = screen.getByTestId("folder-branch-target");
+    const source = screen.getByTestId("folder-branch-source");
+    expect(relationship.className).toContain("flex");
+    expect(relationship.className).not.toContain("grid-cols");
+    expect(target.textContent).toBe("helo");
+    expect(target.className).toContain("max-w-[60%]");
+    expect(target.className).toContain("shrink-0");
+    expect(source.textContent).toBe("from origin/main");
+    expect(source.className).toContain("flex-1");
+    expect(source.className).toContain("min-w-0");
   });
 
   it("renders a read-only branch picker for an adopted worktree", () => {
@@ -657,12 +693,32 @@ describe("WorkspaceFolderRows", () => {
     expect(screen.getByTestId("folder-add")).toBeTruthy();
   });
 
-  it("keeps a stable branch width and truncates labels independently of content", () => {
+  it("lets the container own all text-track widths so long values cannot overflow a modal", () => {
     render(
       <TooltipProvider>
         <WorkspaceFolderRows
           items={[
-            item({ key: "/repo", branchLabel: "development" }),
+            item({
+              key: "/repo",
+              displayName:
+                "a-repository-name-long-enough-to-exceed-a-dialog-column",
+              branchLabel:
+                "traycer/a-target-branch-long-enough-to-exceed-a-dialog-column",
+              currentIntent: {
+                kind: "worktree",
+                workspacePath: "/repo",
+                repoIdentifier: { owner: "acme", repo: "app" },
+                isPrimary: true,
+                scripts: null,
+                branch: {
+                  type: "new",
+                  name: "traycer/a-target-branch-long-enough-to-exceed-a-dialog-column",
+                  source:
+                    "release/a-base-branch-long-enough-to-exceed-a-dialog-column",
+                  carryUncommittedChanges: false,
+                },
+              },
+            }),
             item({ key: "/repo/infra", branchLabel: "main" }),
           ]}
           trailingSlot={null}
@@ -681,14 +737,31 @@ describe("WorkspaceFolderRows", () => {
       </TooltipProvider>,
     );
 
+    const grid = screen.getByTestId("workspace-folder-grid");
+    expect(grid.className).toContain(
+      "grid-cols-[1.5rem_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.5fr)_auto]",
+    );
+    expect(grid.className).not.toContain("max-content");
+
     const triggers = screen.getAllByTestId("folder-branch-trigger");
     expect(triggers).toHaveLength(2);
     for (const trigger of triggers) {
-      expect(trigger.className).toContain("w-[clamp(8rem,25vw,16rem)]");
+      expect(trigger.className).toContain("w-full");
+      expect(trigger.className).toContain("max-w-full");
+      expect(trigger.className).not.toContain("vw");
       expect(
         trigger.querySelector('[data-testid="folder-branch-label"]')?.className,
-      ).toContain("truncate");
+      ).toContain("min-w-0");
     }
+    expect(screen.getAllByTestId("folder-chip")[0].className).toContain(
+      "min-w-0",
+    );
+    expect(screen.getByTestId("folder-branch-target").className).toContain(
+      "truncate",
+    );
+    expect(screen.getByTestId("folder-branch-source").className).toContain(
+      "truncate",
+    );
   });
 
   it("opens the OS folder picker from Add folder when empty and resolved", () => {

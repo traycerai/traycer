@@ -1,11 +1,8 @@
 /**
- * Dev renderer URL/origin resolution, shared between the main process
- * (`electron-main/app/security.ts`, `electron-main/windows/window-factory.ts`,
- * `electron-main/dev/dev-shared-local-storage.ts`) and the standalone dev-seed
- * preload (`electron-preload/dev/dev-shared-local-storage-seed-preload.ts`).
- * Kept free of `electron`/`node:*` imports, and outside `electron-main/`, so
- * the preload's own esbuild entry can pull it in without importing anything
- * main-process-owned.
+ * Dev renderer URL/origin resolution for the main process
+ * (`electron-main/app/security.ts`, `electron-main/windows/window-factory.ts`).
+ * Kept free of `electron`/`node:*` imports so preload-side bundles could pull
+ * it in as well if one ever needs the dev origin again.
  */
 
 export const TRAYCER_DESKTOP_DEV_URL_ENV = "TRAYCER_DESKTOP_DEV_URL";

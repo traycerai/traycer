@@ -10,6 +10,8 @@ import { CONTENT_SECURITY_POLICY } from "./src/shared/content-security-policy";
 const rendererEnvPrefix = [
   "VITE_APP_",
   "VITE_DESKTOP_",
+  "VITE_DEV_CLOUD_UI_BASE_URL",
+  "VITE_DEV_DESKTOP_WORKTREE_LABEL",
   "VITE_DEV_DESKTOP_SLOT",
   "VITE_POSTHOG_KEY",
   "VITE_TRAYCER_OSS_REPO",

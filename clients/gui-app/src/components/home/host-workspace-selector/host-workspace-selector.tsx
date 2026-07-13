@@ -343,7 +343,7 @@ export function ActiveHostWorkspaceControls(
     // `--fc-text` brightens location labels to match the panel's other sections;
     // identity, branch values, icons, and actions retain their semantic hierarchy.
     return (
-      <div className="flex min-w-0 flex-col gap-3 [--fc-opacity:1] [--fc-text:var(--color-foreground)]">
+      <div className="flex w-full max-w-full min-w-0 flex-col gap-3 [--fc-opacity:1] [--fc-text:var(--color-foreground)]">
         <HostSection
           entries={visibleHostEntries}
           activeHostId={activeHostId}
@@ -352,6 +352,7 @@ export function ActiveHostWorkspaceControls(
         <section
           aria-label="Workspaces"
           data-testid="host-workspace-selector-folders-section"
+          className="w-full max-w-full min-w-0"
         >
           <DropdownMenuLabel className="px-1 text-ui-xs font-medium uppercase tracking-wide text-muted-foreground/70">
             Workspaces
