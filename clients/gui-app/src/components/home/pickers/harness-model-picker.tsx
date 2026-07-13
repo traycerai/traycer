@@ -308,14 +308,22 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   // `listCommands` falls back to a single `{ workingDirectory: null }`
   // request when given none - so it's the simplest correct shape for a
   // prewarm-only call.
+  //
+  // Held permanently disabled (and unsubscribed - nothing here renders its
+  // result) so the ONLY thing that can ever fire it is the guarded
+  // `runSelectedHarnessIntentRefetch` below. `enabled: true` would let
+  // TanStack fetch it on mount and on other automatic triggers - i.e. spawn a
+  // provider's server outside an intent edge and outside that guard.
+  // `.refetch()` ignores `enabled` (the same quirk the guard exists to
+  // contain), so the intent edges still drive it.
   const defaultHostClient = useDefaultHostClient();
   const selectedCommandsQuery = useGuiHarnessCommandsQuery(
     defaultHostClient,
     selection.harnessId,
     EMPTY_COMMANDS_WORKING_DIRECTORIES,
     {
-      enabled: selectedHarnessRefetchGate,
-      subscribed: activityEnabled,
+      enabled: false,
+      subscribed: false,
     },
   );
   // Latest-ref indirection: `.refetch` identity is a TanStack implementation
