@@ -26,10 +26,6 @@ export const FROZEN_CATALOG_LINE_SNAPSHOTS = {
               "label": {
                 "type": "string"
               },
-              "enabled": {
-                "default": true,
-                "type": "boolean"
-              },
               "available": {
                 "type": "boolean"
               },
@@ -71,22 +67,16 @@ export const FROZEN_CATALOG_LINE_SNAPSHOTS = {
                     "full_access"
                   ]
                 }
-              },
-              "availabilityPending": {
-                "default": false,
-                "type": "boolean"
               }
             },
             "required": [
               "id",
               "label",
-              "enabled",
               "available",
               "error",
               "modes",
               "requiresApiKey",
-              "supportedPermissionModes",
-              "availabilityPending"
+              "supportedPermissionModes"
             ],
             "additionalProperties": false
           }
@@ -127,10 +117,6 @@ export const FROZEN_CATALOG_LINE_SNAPSHOTS = {
               "label": {
                 "type": "string"
               },
-              "enabled": {
-                "default": true,
-                "type": "boolean"
-              },
               "available": {
                 "type": "boolean"
               },
@@ -181,7 +167,6 @@ export const FROZEN_CATALOG_LINE_SNAPSHOTS = {
             "required": [
               "id",
               "label",
-              "enabled",
               "available",
               "error",
               "modes",

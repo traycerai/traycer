@@ -47,10 +47,12 @@ import {
   agentGuiListHarnessesDowngradeV4ToV2,
   agentGuiListHarnessesDowngradeV4ToV3,
   agentGuiListHarnessesUpgradeV1ToV2,
+  agentGuiListHarnessesUpgradeV20ToV21,
   agentGuiListHarnessesUpgradeV2ToV3,
   agentGuiListHarnessesUpgradeV3ToV4,
   agentGuiListHarnessesV10,
   agentGuiListHarnessesV20,
+  agentGuiListHarnessesV21,
   agentGuiListHarnessesV30,
   agentGuiListHarnessesV40,
   agentGuiListModelsV10,
@@ -1907,11 +1909,15 @@ export const hostRpcRegistry = defineFloorAwareVersionedRpcRegistry(
       downgradePathsFromLatest: {},
     },
     2: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: agentGuiListHarnessesV20,
           upgradeFromPreviousVersion: agentGuiListHarnessesUpgradeV1ToV2,
+        },
+        1: {
+          contract: agentGuiListHarnessesV21,
+          upgradeFromPreviousVersion: agentGuiListHarnessesUpgradeV20ToV21,
         },
       },
       downgradePathsFromLatest: { 1: agentGuiListHarnessesDowngradeV2ToV1 },
