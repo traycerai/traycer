@@ -30,7 +30,7 @@ const testState = vi.hoisted(() => ({
 }));
 
 const exitedHandle = {
-  epicId: "epic-test",
+  scope: { kind: "epic" as const, epicId: "epic-test" },
   sessionId: "terminal-1",
   dispose: () => undefined,
   store: create(() => ({
@@ -55,6 +55,10 @@ vi.mock("@/hooks/agent/use-host-reachability", () => ({
   useHostReachability: () => testState.reachability,
 }));
 
+vi.mock("@/lib/epic-selectors", () => ({
+  useOpenEpicId: () => "epic-1",
+}));
+
 vi.mock("@/hooks/terminal/use-terminal-session-recovery", () => ({
   useTerminalSessionRecovery: () => ({
     recoverNonce: 0,
@@ -73,6 +77,7 @@ vi.mock("@/hooks/agent/use-terminal-tile-bootstrap", () => ({
     createError: null,
     retry: () => undefined,
     hostHasSession: false,
+    hostSessionExited: false,
   }),
 }));
 

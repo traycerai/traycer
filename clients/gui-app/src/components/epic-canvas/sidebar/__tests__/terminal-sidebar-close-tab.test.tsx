@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { TerminalSessionInfo } from "@traycer/protocol/host/terminal/unary-schemas";
+import type { CanonicalTerminalSessionInfo } from "@traycer/protocol/host/terminal/unary-schemas";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { SnapshotLoadingProvider } from "@/components/epic-canvas/snapshots/snapshot-loading-context";
 
@@ -12,7 +12,7 @@ const TAB_ID = "tab-1";
 
 const killMutate = vi.fn();
 const terminalSessions = vi.hoisted<{
-  value: ReadonlyArray<TerminalSessionInfo>;
+  value: ReadonlyArray<CanonicalTerminalSessionInfo>;
 }>(() => ({ value: [] }));
 
 vi.mock("@/lib/host", () => ({
@@ -23,9 +23,9 @@ vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
   useReactiveActiveHostId: () => "host-1",
 }));
 
-const RUNNING_SESSION: TerminalSessionInfo = {
+const RUNNING_SESSION: CanonicalTerminalSessionInfo = {
   sessionId: SESSION_ID,
-  epicId: "epic-1",
+  scope: { kind: "epic", epicId: "epic-1" },
   sessionKind: "terminal",
   cwd: "/tmp/work",
   shellCommand: "/bin/zsh",

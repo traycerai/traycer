@@ -365,6 +365,7 @@ function TuiAgentTileLive(
 
   const bootstrap = useTerminalTileBootstrap({
     hostId,
+    scope: { kind: "epic", epicId },
     sessionId,
     instanceId,
     sessionKind: "terminal-agent",

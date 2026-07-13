@@ -1,6 +1,7 @@
 import { useStore } from "zustand";
 import { Suspense, useCallback, useEffect, useMemo, useRef } from "react";
 import type { EpicTerminalRef } from "@/stores/epics/canvas/types";
+import { useOpenEpicId } from "@/lib/epic-selectors";
 import { beginTerminalLoad } from "@/lib/perf/terminal-load-perf";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import {
@@ -155,6 +156,7 @@ function TerminalTileLive(
   },
 ) {
   const hostId = useTabHostId();
+  const epicId = useOpenEpicId();
   const sessionId = props.node.id;
   const instanceId = props.node.instanceId;
   const cwd = props.node.cwd;
@@ -171,6 +173,7 @@ function TerminalTileLive(
   );
   const bootstrap = useTerminalTileBootstrap({
     hostId,
+    scope: { kind: "epic", epicId },
     sessionId,
     instanceId,
     sessionKind: "terminal",

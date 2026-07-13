@@ -1,15 +1,15 @@
 import { describe, expect, it } from "vitest";
-import type { TerminalSessionInfo } from "@traycer/protocol/host/terminal/unary-schemas";
+import type { CanonicalTerminalSessionInfo } from "@traycer/protocol/host/terminal/unary-schemas";
 import { isVisibleRawTerminalSession } from "../terminal-session-filters";
 
 function session(
   sessionId: string,
-  sessionKind: TerminalSessionInfo["sessionKind"],
-  status: TerminalSessionInfo["status"],
-): TerminalSessionInfo {
+  sessionKind: CanonicalTerminalSessionInfo["sessionKind"],
+  status: CanonicalTerminalSessionInfo["status"],
+): CanonicalTerminalSessionInfo {
   return {
     sessionId,
-    epicId: "epic-1",
+    scope: { kind: "epic", epicId: "epic-1" },
     sessionKind,
     cwd: "/tmp",
     shellCommand: "/bin/zsh",

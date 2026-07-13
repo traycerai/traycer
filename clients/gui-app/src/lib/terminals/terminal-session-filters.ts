@@ -1,4 +1,4 @@
-import type { TerminalSessionInfo } from "@traycer/protocol/host/terminal/unary-schemas";
+import type { CanonicalTerminalSessionInfo } from "@traycer/protocol/host/terminal/unary-schemas";
 
 /**
  * Shared "is this a live raw terminal?" predicate for every surface that lists
@@ -11,7 +11,7 @@ import type { TerminalSessionInfo } from "@traycer/protocol/host/terminal/unary-
  * is on its way out via grace eviction.
  */
 export function isVisibleRawTerminalSession(
-  session: TerminalSessionInfo,
+  session: CanonicalTerminalSessionInfo,
 ): boolean {
   return session.sessionKind === "terminal" && session.status === "running";
 }
