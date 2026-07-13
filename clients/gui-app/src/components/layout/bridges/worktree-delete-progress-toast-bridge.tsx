@@ -7,6 +7,7 @@ import {
 } from "@/components/settings/panels/use-worktree-delete-run";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { createReportIssueContext } from "@/lib/report-issue-context";
+import { progressToast } from "@/lib/toast/progress-toast";
 
 const WORKTREE_DELETE_PROGRESS_TOAST_ID = "worktree-delete-progress";
 const WORKTREE_DELETE_REPORT_CONTEXT = createReportIssueContext({
@@ -20,7 +21,7 @@ export function WorktreeDeleteProgressToastBridge(): null {
   const summary = useWorktreeDeleteProgressSummary();
   const lastToastKeyRef = useRef<string | null>(null);
   // Whether the toast currently on screen is one that will NOT expire on its
-  // own: the in-progress loading toast and the failure toast both use
+  // own: the in-progress toast and the failure toast both use
   // `duration: Infinity`. A plain success toast keeps its short default
   // duration. Tracked so that when the runs drain we dismiss the former two but
   // leave a success toast to live out its time.
@@ -51,7 +52,7 @@ function showWorktreeDeleteProgressToast(
 ): void {
   const description = worktreeDeleteProgressDetail(summary);
   if (summary.active > 0) {
-    toast.loading("Deleting worktrees", {
+    progressToast("Deleting worktrees", {
       id: WORKTREE_DELETE_PROGRESS_TOAST_ID,
       description,
       duration: Infinity,
@@ -76,7 +77,6 @@ function showWorktreeDeleteProgressToast(
       id: WORKTREE_DELETE_PROGRESS_TOAST_ID,
       description,
       duration: Infinity,
-      closeButton: true,
     },
     WORKTREE_DELETE_REPORT_CONTEXT,
   );

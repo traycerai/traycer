@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { toast, type ToastT } from "sonner";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import { progressToast } from "@/lib/toast/progress-toast";
 import { scopedToastChannel } from "@/lib/toast/toast-channel";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 
-const LOADING_TOAST_ID = "report-action-error-to-loading";
+const PROGRESS_TOAST_ID = "report-action-error-to-progress";
 const SUCCESS_TOAST_PREFIX = "report-action-error-to-success";
 const REPORT_CONTEXT = {
   title: "Traycer operation failed",
@@ -14,29 +15,29 @@ const REPORT_CONTEXT = {
 };
 
 afterEach(() => {
-  toast.dismiss(LOADING_TOAST_ID);
+  toast.dismiss(PROGRESS_TOAST_ID);
   toast.dismiss(`${SUCCESS_TOAST_PREFIX}:scope`);
   useDesktopDialogStore.getState().close();
   useDesktopDialogStore.setState({ reportIssueAvailable: false });
 });
 
 describe("stable-id toast report actions", () => {
-  it("clears the report action when an error is replaced by loading", () => {
+  it("clears the report action when an error is replaced by progress", () => {
     useDesktopDialogStore.setState({ reportIssueAvailable: true });
     reportableErrorToast(
       "Operation failed",
-      { id: LOADING_TOAST_ID },
+      { id: PROGRESS_TOAST_ID },
       REPORT_CONTEXT,
     );
-    expect(readToast(LOADING_TOAST_ID).cancel).not.toBeNull();
+    expect(readToast(PROGRESS_TOAST_ID).cancel).not.toBeNull();
 
-    toast.loading("Trying again", {
-      id: LOADING_TOAST_ID,
+    progressToast("Trying again", {
+      id: PROGRESS_TOAST_ID,
       cancel: null,
     });
 
-    expect(readToast(LOADING_TOAST_ID)).toMatchObject({
-      type: "loading",
+    expect(readToast(PROGRESS_TOAST_ID)).toMatchObject({
+      closeButton: true,
       cancel: null,
     });
   });
@@ -59,19 +60,19 @@ describe("stable-id toast report actions", () => {
     useDesktopDialogStore.setState({ reportIssueAvailable: true });
     reportableErrorToast(
       "Operation failed",
-      { id: LOADING_TOAST_ID },
+      { id: PROGRESS_TOAST_ID },
       REPORT_CONTEXT,
     );
-    expect(readToast(LOADING_TOAST_ID).cancel).not.toBeNull();
+    expect(readToast(PROGRESS_TOAST_ID).cancel).not.toBeNull();
 
     useDesktopDialogStore.setState({ reportIssueAvailable: false });
     reportableErrorToast(
       "Operation still failed",
-      { id: LOADING_TOAST_ID },
+      { id: PROGRESS_TOAST_ID },
       REPORT_CONTEXT,
     );
 
-    expect(readToast(LOADING_TOAST_ID)).toMatchObject({
+    expect(readToast(PROGRESS_TOAST_ID)).toMatchObject({
       type: "error",
       cancel: null,
     });
