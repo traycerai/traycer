@@ -171,11 +171,44 @@ function inlinePdfContent(nodes: JSONContent[] | undefined): Content[] {
 }
 
 function listItemPdfContent(node: JSONContent): Content {
-  const blocks = blockPdfContent(node.content);
+  return { stack: blockPdfContent(node.content) };
+}
+
+function taskListChildPdfContent(node: JSONContent): Content[] {
+  if (node.type === "taskList") return taskListPdfContent(node, true);
+  return blockNodePdfContent(node);
+}
+
+function taskItemPdfContent(node: JSONContent): Content {
+  const children = node.content ?? [];
   const checkedValue: unknown = node.attrs?.checked;
-  if (node.type !== "taskItem") return { stack: blocks };
-  const checkbox = checkedValue === true ? "☑ " : "☐ ";
-  return { stack: [{ text: checkbox }, ...blocks] };
+  const checkbox: ContentText = {
+    text: checkedValue === true ? "☑ " : "☐ ",
+  };
+  if (children.length > 0 && children[0].type === "paragraph") {
+    const firstChild = children[0];
+    return {
+      stack: [
+        { text: [checkbox, ...inlinePdfContent(firstChild.content)] },
+        ...children.slice(1).flatMap(taskListChildPdfContent),
+      ],
+    };
+  }
+  return {
+    stack: [
+      { text: [checkbox] },
+      ...children.flatMap(taskListChildPdfContent),
+    ],
+  };
+}
+
+function taskListPdfContent(node: JSONContent, nested: boolean): Content[] {
+  return [
+    {
+      stack: (node.content ?? []).map(taskItemPdfContent),
+      margin: [nested ? 12 : 0, 0, 0, nested ? 0 : 8],
+    },
+  ];
 }
 
 function tableCellChildPdfContent(child: JSONContent): Content[] {
@@ -238,7 +271,58 @@ function tablePdfContent(node: JSONContent): Content[] {
   ];
 }
 
+function stringAttribute(node: JSONContent, attribute: string): string {
+  const value: unknown = node.attrs?.[attribute];
+  return typeof value === "string" ? value : "";
+}
+
+function codeSourcePdfContent(source: string): ContentText {
+  return {
+    text: source,
+    fontSize: 9,
+    background: "#f3f4f6",
+    preserveLeadingSpaces: true,
+  };
+}
+
+function labeledSourcePdfContent(label: string, source: string): Content[] {
+  return [
+    {
+      stack: [
+        { text: label, bold: true, margin: [0, 4, 0, 4] },
+        {
+          ...codeSourcePdfContent(source),
+          margin: [0, 0, 0, 8],
+        },
+      ],
+    },
+  ];
+}
+
+const LABELED_SOURCE_NODES = [
+  {
+    type: "mermaidBlock",
+    label: "Mermaid source",
+    sourceAttribute: "code",
+  },
+  {
+    type: "uiPreviewBlock",
+    label: "UI preview source",
+    sourceAttribute: "htmlContent",
+  },
+] as const;
+
 function blockNodePdfContent(node: JSONContent): Content[] {
+  const labeledSourceConfig = LABELED_SOURCE_NODES.find(
+    (config) => config.type === node.type,
+  );
+  if (labeledSourceConfig !== undefined) {
+    return labeledSourcePdfContent(
+      labeledSourceConfig.label,
+      stringAttribute(node, labeledSourceConfig.sourceAttribute),
+    );
+  }
+
   switch (node.type) {
     case "doc":
       return blockPdfContent(node.content);
@@ -247,13 +331,14 @@ function blockNodePdfContent(node: JSONContent): Content[] {
     case "paragraph":
       return [{ text: inlinePdfContent(node.content), margin: [0, 0, 0, 8] }];
     case "bulletList":
-    case "taskList":
       return [
         {
           ul: (node.content ?? []).map(listItemPdfContent),
           margin: [0, 0, 0, 8],
         },
       ];
+    case "taskList":
+      return taskListPdfContent(node, false);
     case "orderedList":
       return orderedListPdfContent(node);
     case "blockquote":
@@ -267,10 +352,9 @@ function blockNodePdfContent(node: JSONContent): Content[] {
     case "codeBlock":
       return [
         {
-          text: node.content?.map((child) => child.text ?? "").join("") ?? "",
-          fontSize: 9,
-          background: "#f3f4f6",
-          preserveLeadingSpaces: true,
+          ...codeSourcePdfContent(
+            node.content?.map((child) => child.text ?? "").join("") ?? "",
+          ),
           margin: [0, 4, 0, 8],
         },
       ];

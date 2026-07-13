@@ -131,4 +131,107 @@ describe("PDF artifact export", () => {
       ],
     });
   });
+
+  it("preserves Mermaid and wireframe sources as labeled code blocks", async () => {
+    const { createArtifactExport } = await import("@/lib/artifacts");
+    const mermaidSource = "flowchart TD\n  A --> B";
+    const wireframeSource =
+      '<div data-kind="hero">\n  <h1>Exact wireframe</h1>\n</div>';
+
+    await createArtifactExport({
+      artifacts: [
+        {
+          id: "visual-pdf",
+          title: "Visual PDF",
+          fragment: createFragment(
+            `\`\`\`mermaid\n${mermaidSource}\n\`\`\`\n\n\`\`\`wireframe\n${wireframeSource}\n\`\`\``,
+          ),
+        },
+      ],
+      format: "pdf",
+      archive: false,
+      archiveTitle: "ignored",
+    });
+
+    expect(pdfMake.state.definition).toMatchObject({
+      content: [
+        {
+          stack: [
+            { text: "Mermaid source", bold: true },
+            {
+              text: mermaidSource,
+              fontSize: 9,
+              background: "#f3f4f6",
+              preserveLeadingSpaces: true,
+            },
+          ],
+        },
+        {
+          stack: [
+            { text: "UI preview source", bold: true },
+            {
+              text: wireframeSource,
+              fontSize: 9,
+              background: "#f3f4f6",
+              preserveLeadingSpaces: true,
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("renders nested task lists as markerless stacks with inline checkboxes", async () => {
+    const { createArtifactExport } = await import("@/lib/artifacts");
+
+    await createArtifactExport({
+      artifacts: [
+        {
+          id: "tasks-pdf",
+          title: "Tasks PDF",
+          fragment: createFragment(
+            "- [ ] Draft copy\n- [x] Ship release\n  - [ ] Notify team",
+          ),
+        },
+      ],
+      format: "pdf",
+      archive: false,
+      archiveTitle: "ignored",
+    });
+
+    expect(pdfMake.state.definition).toMatchObject({
+      content: [
+        {
+          stack: [
+            {
+              stack: [
+                {
+                  text: [{ text: "☐ " }, { text: "Draft copy" }],
+                },
+              ],
+            },
+            {
+              stack: [
+                {
+                  text: [{ text: "☑ " }, { text: "Ship release" }],
+                },
+                {
+                  stack: [
+                    {
+                      stack: [
+                        {
+                          text: [{ text: "☐ " }, { text: "Notify team" }],
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    expect(JSON.stringify(pdfMake.state.definition)).not.toContain('"ul"');
+  });
 });
