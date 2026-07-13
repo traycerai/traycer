@@ -339,6 +339,22 @@ describe("host notifications store", () => {
     expect(useHostNotificationsStore.getState().nextCursor).toBeNull();
   });
 
+  it("ignores a clear request from a stale snapshot epoch", () => {
+    useHostNotificationsStore
+      .getState()
+      .replaceFromSnapshot([entry("old", 10, null)], 2);
+    const staleEpoch = useHostNotificationsStore.getState().snapshotEpoch;
+
+    useHostNotificationsStore
+      .getState()
+      .replaceFromSnapshot([entry("fresh", 20, null)], 50);
+
+    useHostNotificationsStore.getState().clearBeforeLocally(20, staleEpoch);
+
+    expect(useHostNotificationsStore.getState().orderedIds).toEqual(["fresh"]);
+    expect(useHostNotificationsStore.getState().unreadCount).toBe(1);
+  });
+
   it("applies clear frames from another window without removing newer rows", () => {
     const client = new MockWsStreamClient();
     const frames: Array<{ readonly kind: string }> = [];

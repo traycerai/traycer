@@ -359,9 +359,9 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
         const newestHostId = hostState.orderedIds.at(0);
         const newestHostEntry =
           newestHostId === undefined ? undefined : hostState.byId[newestHostId];
-        if (client !== null && newestHostEntry !== undefined) {
+        if (client !== null) {
           clearHostAll.mutate({
-            beforeUpdatedAt: newestHostEntry.updatedAt,
+            beforeUpdatedAt: newestHostEntry?.updatedAt ?? Date.now(),
           });
         }
       },
