@@ -116,6 +116,19 @@ describe("AgentSelectionGuideSection", () => {
     expect(guideMocks.resetGlobalMutateAsync).not.toHaveBeenCalled();
   });
 
+  it("keeps the opening height stable and allows vertical resizing", () => {
+    renderPanel();
+    const editor = screen.getByTestId<HTMLTextAreaElement>(
+      "agents-selection-guide-input",
+    );
+
+    expect(editor.className).toContain("field-sizing-fixed");
+    expect(editor.className).not.toContain("field-sizing-content");
+    expect(editor.className).toContain("h-[min(32vh,16rem)]");
+    expect(editor.className).toContain("resize-y");
+    expect(editor.className).not.toContain("max-h-[min(32vh,16rem)]");
+  });
+
   it("reverts through the host reset API instead of sending generated content back", async () => {
     guideMocks.queryData = {
       content: "claude guide",
