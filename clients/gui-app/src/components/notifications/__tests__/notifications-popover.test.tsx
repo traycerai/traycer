@@ -11,6 +11,10 @@ import {
 } from "@testing-library/react";
 import * as Y from "yjs";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import {
   createMemoryHistory,
   createRootRoute,
@@ -43,6 +47,19 @@ import {
   createNotificationRoomEntryMap,
 } from "@traycer/protocol/notifications/notification-room";
 import type { HostNotificationEntry } from "@traycer/protocol/host/notifications/contracts";
+import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
+
+const hostBindingState = vi.hoisted<{
+  current: { readonly hostClient: HostClient<HostRpcRegistry> } | null;
+}>(() => ({ current: null }));
+
+vi.mock("@/lib/host", async (importActual) => {
+  const actual = await importActual<typeof import("@/lib/host")>();
+  return {
+    ...actual,
+    useHostBinding: () => hostBindingState.current,
+  };
+});
 
 const TASK_TITLE = "Checkout notification title and hover behavior";
 
@@ -132,6 +149,33 @@ function renderRouter(router: AnyRouter): void {
       <RouterProvider router={router} />
     </QueryClientProvider>,
   );
+}
+
+function createHostClient(
+  clearAllRequests: Array<{ readonly beforeUpdatedAt: number }>,
+): HostClient<HostRpcRegistry> {
+  const client = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: { invalidateHostScope: () => undefined },
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "clear-all-request",
+      handlers: {
+        "host.notifications.clearAll": (request) => {
+          clearAllRequests.push(request);
+          return {};
+        },
+      },
+    }),
+  });
+  client.bind(mockLocalHostEntry);
+  client.setRequestContext(
+    createRequestContextFixture({
+      origin: "renderer",
+      bearerToken: "test-token",
+    }),
+  );
+  return client;
 }
 
 function hostAgentEntry(input: {
@@ -230,6 +274,7 @@ async function selectTab(testId: string) {
 
 describe("NotificationsPopover click routing", () => {
   beforeEach(() => {
+    hostBindingState.current = null;
     __resetNotificationsStoreForTests();
     __resetHostNotificationsStoreForTests();
     useEpicCanvasStore.setState({
@@ -242,6 +287,7 @@ describe("NotificationsPopover click routing", () => {
 
   afterEach(() => {
     cleanup();
+    hostBindingState.current = null;
     __resetHostNotificationsStoreForTests();
   });
 
@@ -541,6 +587,21 @@ describe("NotificationsPopover click routing", () => {
   });
 
   it("clears every notification when Clear all is clicked", async () => {
+    const clearAllRequests: Array<{ readonly beforeUpdatedAt: number }> = [];
+    hostBindingState.current = {
+      hostClient: createHostClient(clearAllRequests),
+    };
+    useHostNotificationsStore.getState().replaceFromSnapshot(
+      [
+        hostAgentEntry({
+          id: "clear-host",
+          kind: "agent.stopped",
+          severity: "done",
+          outcome: "completed",
+        }),
+      ],
+      50,
+    );
     const captured: TargetCapture = {
       epicId: null,
       tabId: null,
@@ -564,6 +625,11 @@ describe("NotificationsPopover click routing", () => {
     fireEvent.click(await screen.findByTestId("notifications-clear-all"));
 
     expect(useNotificationsStore.getState().entries.length).toBe(0);
+    await waitFor(() => {
+      expect(clearAllRequests).toHaveLength(1);
+      expect(clearAllRequests.at(0)?.beforeUpdatedAt).toBe(10);
+      expect(useHostNotificationsStore.getState().orderedIds).toEqual([]);
+    });
     expect(await screen.findByTestId("notifications-empty")).not.toBeNull();
   });
 });

@@ -105,7 +105,7 @@ export function NotificationsSessionProvider(
   const onFeedFrame = useCallback(
     (frame: HostNotificationsFeedFrame, hostId: string): void => {
       if (activeHostId !== hostId) return;
-      if (frame.kind === "snapshot") {
+      if (frame.kind === "snapshot" || frame.kind === "cleared") {
         invalidateNotificationIndicators(queryClient, hostId);
         return;
       }

@@ -29,6 +29,7 @@ import {
   ProviderRateLimitDetail,
   type ProviderRateLimitQueryState,
 } from "@/components/settings/panels/provider-rate-limit-views";
+import { resolveCodexResetCreditAction } from "@/components/settings/panels/codex-reset-credit-availability";
 import { useHostProviderRateLimitsQuery } from "@/hooks/host/use-host-provider-rate-limits-query";
 import { useRefreshProviderRateLimitsOnMount } from "@/hooks/host/use-refresh-provider-rate-limits-on-mount";
 import {
@@ -239,6 +240,17 @@ export function RateLimitPopover({
       // focusable is its search input, so it wants and keeps the auto-focus), so
       // opting out of the initial focus is harmless and stops the stuck tooltip.
       onOpenAutoFocus={(event) => event.preventDefault()}
+      onInteractOutside={(event) => {
+        const target = event.target;
+        if (
+          target instanceof Element &&
+          (target.closest('[data-testid="confirm-destructive-dialog"]') !==
+            null ||
+            target.closest('[data-slot="dialog-overlay"]') !== null)
+        ) {
+          event.preventDefault();
+        }
+      }}
     >
       <RateLimitPopoverBody
         onClose={onClose}
@@ -901,7 +913,7 @@ function SingleProfileRateLimitProviderBlock({
           ) : null}
         </div>
       </div>
-      <RateLimitProviderBody state={state} variant={variant} />
+      <RateLimitProviderBody state={state} variant={variant} profileId={null} />
     </div>
   );
 }
@@ -1145,7 +1157,11 @@ function RateLimitProviderProfileRow({
           />
         </div>
       </div>
-      <RateLimitProviderBody state={state} variant={variant} />
+      <RateLimitProviderBody
+        state={state}
+        variant={variant}
+        profileId={profileId}
+      />
     </div>
   );
 }
@@ -1255,9 +1271,11 @@ function UpdatedAgoText({
 function RateLimitProviderBody({
   state,
   variant,
+  profileId,
 }: {
   readonly state: PopoverProviderRateLimitState;
   readonly variant: PopoverBlockVariant;
+  readonly profileId: string | null;
 }): ReactNode {
   switch (state.kind) {
     case "cold":
@@ -1291,7 +1309,15 @@ function RateLimitProviderBody({
       // than replacing it with an error (Core Flows).
       return (
         <div className={cn(state.degraded && "opacity-60")}>
-          <ProviderRateLimitDetail data={state.data} variant={variant} />
+          <ProviderRateLimitDetail
+            data={state.data}
+            variant={variant}
+            codexResetAction={resolveCodexResetCreditAction(
+              state.data.provider,
+              profileId,
+              variant === "popover-detail",
+            )}
+          />
         </div>
       );
   }

@@ -314,3 +314,34 @@ export const rateLimitUsageResponseSchemaV20 =
 export type RateLimitUsageResponseV20 = z.infer<
   typeof rateLimitUsageResponseSchemaV20
 >;
+
+/**
+ * Uses one of Codex's account-level manual rate-limit reset credits for the
+ * selected profile. The idempotency key is generated once by the GUI for a
+ * confirmation attempt and reused by the transport if that request is retried.
+ */
+export const providersConsumeRateLimitResetCreditRequestSchema = z.object({
+  providerId: z.literal("codex"),
+  profileId: z.string().nullable(),
+  idempotencyKey: z.string().min(1),
+});
+export type ProvidersConsumeRateLimitResetCreditRequest = z.infer<
+  typeof providersConsumeRateLimitResetCreditRequestSchema
+>;
+
+export const codexRateLimitResetOutcomeSchema = z.enum([
+  "reset",
+  "nothingToReset",
+  "noCredit",
+  "alreadyRedeemed",
+]);
+export type CodexRateLimitResetOutcome = z.infer<
+  typeof codexRateLimitResetOutcomeSchema
+>;
+
+export const providersConsumeRateLimitResetCreditResponseSchema = z.object({
+  outcome: codexRateLimitResetOutcomeSchema,
+});
+export type ProvidersConsumeRateLimitResetCreditResponse = z.infer<
+  typeof providersConsumeRateLimitResetCreditResponseSchema
+>;

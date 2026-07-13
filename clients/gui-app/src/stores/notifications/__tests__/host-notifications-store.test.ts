@@ -322,6 +322,70 @@ describe("host notifications store", () => {
     expect(useHostNotificationsStore.getState().nextCursor).toBeNull();
   });
 
+  it("clears only rows at or before the requested boundary", () => {
+    useHostNotificationsStore
+      .getState()
+      .replaceFromSnapshot(
+        [entry("old", 10, null), entry("boundary", 20, null)],
+        2,
+      );
+    const snapshotEpoch = useHostNotificationsStore.getState().snapshotEpoch;
+    useHostNotificationsStore.getState().upsert(entry("new", 21, null));
+
+    useHostNotificationsStore.getState().clearBeforeLocally(20, snapshotEpoch);
+
+    expect(useHostNotificationsStore.getState().orderedIds).toEqual(["new"]);
+    expect(useHostNotificationsStore.getState().unreadCount).toBe(1);
+    expect(useHostNotificationsStore.getState().nextCursor).toBeNull();
+  });
+
+  it("ignores a clear request from a stale snapshot epoch", () => {
+    useHostNotificationsStore
+      .getState()
+      .replaceFromSnapshot([entry("old", 10, null)], 2);
+    const staleEpoch = useHostNotificationsStore.getState().snapshotEpoch;
+
+    useHostNotificationsStore
+      .getState()
+      .replaceFromSnapshot([entry("fresh", 20, null)], 50);
+
+    useHostNotificationsStore.getState().clearBeforeLocally(20, staleEpoch);
+
+    expect(useHostNotificationsStore.getState().orderedIds).toEqual(["fresh"]);
+    expect(useHostNotificationsStore.getState().unreadCount).toBe(1);
+  });
+
+  it("applies clear frames from another window without removing newer rows", () => {
+    const client = new MockWsStreamClient();
+    const frames: Array<{ readonly kind: string }> = [];
+    useHostNotificationsStore
+      .getState()
+      .replaceFromSnapshot(
+        [entry("old", 10, null), entry("new", 30, null)],
+        50,
+      );
+    const close = openHostNotificationsStream(client, null, {
+      windowId: "window-1",
+      now: () => 123,
+      displayChannelEmission: () => undefined,
+      onFeedFrame: (frame) => frames.push(frame),
+      onPresenceChanged: () => undefined,
+      onStreamOpened: () => undefined,
+    });
+
+    client.session.emitServerFrame({
+      kind: "cleared",
+      hasBinaryPayload: false,
+      beforeUpdatedAt: 20,
+    });
+
+    expect(useHostNotificationsStore.getState().orderedIds).toEqual(["new"]);
+    expect(frames).toEqual([
+      { kind: "cleared", hasBinaryPayload: false, beforeUpdatedAt: 20 },
+    ]);
+    close();
+  });
+
   it("uses channelEmission as the only host-source display path", () => {
     const client = new MockWsStreamClient();
     const displayed: Array<ReadonlyArray<HostNotificationEntry>> = [];

@@ -5,12 +5,67 @@ import { hostGetRateLimitUsageDowngradeV2ToV1 } from "@traycer/protocol/host/rat
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import {
   providerRateLimitsSchema,
+  providersConsumeRateLimitResetCreditRequestSchema,
+  providersConsumeRateLimitResetCreditResponseSchema,
   rateLimitUnavailableReasonSchemaV1,
   rateLimitUnavailableReasonSchemaV2,
   rateLimitUsageRequestSchemaV12,
   rateLimitUsageResponseSchemaV12,
   rateLimitUsageResponseSchemaV20,
 } from "@traycer/protocol/host/rate-limit/schemas";
+
+describe("providers.consumeRateLimitResetCredit schemas", () => {
+  it("accepts a profile-scoped idempotent Codex reset request and every upstream outcome", () => {
+    expect(
+      providersConsumeRateLimitResetCreditRequestSchema.parse({
+        providerId: "codex",
+        profileId: "personal",
+        idempotencyKey: "reset-attempt-1",
+      }),
+    ).toEqual({
+      providerId: "codex",
+      profileId: "personal",
+      idempotencyKey: "reset-attempt-1",
+    });
+
+    expect(
+      providersConsumeRateLimitResetCreditRequestSchema.parse({
+        providerId: "codex",
+        profileId: null,
+        idempotencyKey: "reset-attempt-ambient",
+      }),
+    ).toEqual({
+      providerId: "codex",
+      profileId: null,
+      idempotencyKey: "reset-attempt-ambient",
+    });
+
+    ["reset", "nothingToReset", "noCredit", "alreadyRedeemed"].forEach(
+      (outcome) => {
+        expect(
+          providersConsumeRateLimitResetCreditResponseSchema.parse({ outcome }),
+        ).toEqual({ outcome });
+      },
+    );
+  });
+
+  it("rejects another provider and an empty idempotency key", () => {
+    expect(
+      providersConsumeRateLimitResetCreditRequestSchema.safeParse({
+        providerId: "claude-code",
+        profileId: null,
+        idempotencyKey: "attempt",
+      }).success,
+    ).toBe(false);
+    expect(
+      providersConsumeRateLimitResetCreditRequestSchema.safeParse({
+        providerId: "codex",
+        profileId: null,
+        idempotencyKey: "",
+      }).success,
+    ).toBe(false);
+  });
+});
 
 // `providerRateLimitsSchema` is a plain `z.union`, not a `z.discriminatedUnion`,
 // because its "unavailable" arm's `provider` field ranges over the full
@@ -28,13 +83,21 @@ describe("providerRateLimitsSchema", () => {
       planType: "plus",
       limitId: "plus-primary",
       limitName: "Plus",
-      primary: { usedPercent: 42, resetsAt: 1735689600000, durationMinutes: 300 },
+      primary: {
+        usedPercent: 42,
+        resetsAt: 1735689600000,
+        durationMinutes: 300,
+      },
       secondary: null,
       extraWindows: [
         {
           limitId: "plus-secondary",
           limitName: "Plus (weekly)",
-          primary: { usedPercent: 12, resetsAt: 1735776000000, durationMinutes: 10080 },
+          primary: {
+            usedPercent: 12,
+            resetsAt: 1735776000000,
+            durationMinutes: 10080,
+          },
           secondary: null,
         },
       ],
@@ -58,7 +121,12 @@ describe("providerRateLimitsSchema", () => {
       sevenDayOpus: null,
       sevenDaySonnet: null,
       modelScoped: [
-        { displayName: "Opus", usedPercent: 5, resetsAt: null, durationMinutes: null },
+        {
+          displayName: "Opus",
+          usedPercent: 5,
+          resetsAt: null,
+          durationMinutes: null,
+        },
       ],
       extraUsage: null,
     };
