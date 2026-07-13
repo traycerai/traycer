@@ -1,3 +1,4 @@
+import { useStore } from "zustand";
 import type { LucideIcon } from "lucide-react";
 import { NotificationIndicatorIcon } from "@/components/notifications/notification-indicator-icon";
 import { useSurfaceNotificationIndicatorState } from "@/components/notifications/notification-indicator-context";
@@ -64,7 +65,10 @@ function ChatProgressIconWithHandle(props: {
   readonly testId: string;
   readonly subjectId: string;
 }) {
-  const runStatus = props.handle.store((state) => state.runStatus);
+  // `useStore(api, selector)` instead of `props.handle.store(...)`: the
+  // bound-store call form isn't recognizable as a hook to the React Compiler,
+  // which memoizes it away and corrupts the hook order.
+  const runStatus = useStore(props.handle.store, (state) => state.runStatus);
   return (
     <ChatProgressPresentation
       indicatorState={props.indicatorState}
