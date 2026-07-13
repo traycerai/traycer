@@ -148,6 +148,7 @@ import {
   terminalSubscribeV13,
 } from "@traycer/protocol/host/terminal/contracts";
 import {
+  hostNotificationsClearAll,
   hostNotificationsGetConfig,
   hostNotificationsIndicatorState,
   hostNotificationsList,
@@ -1819,6 +1820,19 @@ export const hostRpcRegistry = defineFloorAwareVersionedRpcRegistry(
       versions: {
         0: {
           contract: hostNotificationsMarkAllRead,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.notifications.clearAll": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationsClearAll,
           upgradeFromPreviousVersion: null,
         },
       },

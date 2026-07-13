@@ -299,6 +299,33 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
     },
   });
 
+  const clearHostAll = useHostMutation<
+    HostRpcRegistry,
+    "host.notifications.clearAll",
+    HostNotificationMutationContext,
+    { readonly beforeUpdatedAt: number }
+  >({
+    client,
+    method: "host.notifications.clearAll",
+    mapVariables: (variables) => ({
+      beforeUpdatedAt: variables.beforeUpdatedAt,
+    }),
+    options: {
+      mutationKey: notificationsMutationKeys.clearAll(),
+      onMutate: () => captureHostNotificationMutationContext(client),
+      onSuccess: (_data, variables, context) => {
+        if (!isCurrentHostNotificationMutation(client, context)) return;
+        useHostNotificationsStore
+          .getState()
+          .clearBeforeLocally(variables.beforeUpdatedAt, context.snapshotEpoch);
+      },
+      onError: (error, _variables, context) => {
+        if (!isCurrentHostNotificationMutation(client, context)) return;
+        toastFromHostError(error, "Couldn't clear notifications.");
+      },
+    },
+  });
+
   return useMemo(
     () => ({
       markAsRead: (feedId) => {
@@ -328,6 +355,15 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       clearAll: () => {
         globalClearAll();
         appLocalClearAll();
+        const hostState = useHostNotificationsStore.getState();
+        const newestHostId = hostState.orderedIds.at(0);
+        const newestHostEntry =
+          newestHostId === undefined ? undefined : hostState.byId[newestHostId];
+        if (client !== null && newestHostEntry !== undefined) {
+          clearHostAll.mutate({
+            beforeUpdatedAt: newestHostEntry.updatedAt,
+          });
+        }
       },
       loadMoreHost: () => {
         if (hostNextCursor === null || client === null) return;
@@ -346,6 +382,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       markHostRead,
       markHostAllRead,
       loadMoreHost,
+      clearHostAll,
       hostNextCursor,
       client,
     ],
