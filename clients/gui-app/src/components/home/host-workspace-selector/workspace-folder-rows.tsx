@@ -139,7 +139,10 @@ export function WorkspaceFolderRows(props: {
       data-testid="workspace-folder-rows"
     >
       <div className="flex min-w-0 flex-1 flex-col items-stretch gap-1.5">
-        <div className="grid w-full min-w-0 grid-cols-[1.5rem_minmax(6rem,max-content)_max-content_max-content_auto] items-center gap-x-1.5 gap-y-1.5">
+        <div
+          className="grid w-full min-w-0 grid-cols-[1.5rem_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.5fr)_auto] items-center gap-x-1.5 gap-y-1.5"
+          data-testid="workspace-folder-grid"
+        >
           {items.map((item) => (
             <FolderRow
               key={item.key}
