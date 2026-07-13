@@ -73,31 +73,46 @@ export function createRetryingMessenger<Registry extends VersionedRpcRegistry>(
   inner: IHostMessenger<Registry>,
   policy: TransportRetryPolicy,
 ): IHostMessenger<Registry> {
+  const runWithRetries = async <Response>(
+    attemptCall: () => Promise<Response>,
+  ): Promise<Response> => {
+    for (let attempt = 0; attempt < policy.maxRetries; attempt += 1) {
+      try {
+        return await attemptCall();
+      } catch (cause) {
+        if (!(cause instanceof RetryableTransportError)) {
+          throw cause;
+        }
+        await policy.sleep(
+          jitteredBackoffFor(
+            attempt,
+            policy.initialDelayMs,
+            policy.maxDelayMs,
+            policy.random,
+          ),
+        );
+      }
+    }
+    // Final attempt: out of the retry budget, so let whatever it throws -
+    // retryable or not - propagate to the caller unchanged.
+    return attemptCall();
+  };
+
   return {
-    async request<Method extends keyof Registry & string>(
+    request<Method extends keyof Registry & string>(
       method: Method,
       params: RequestOfMethod<Registry, Method>,
     ): Promise<ResponseOfMethod<Registry, Method>> {
-      for (let attempt = 0; attempt < policy.maxRetries; attempt += 1) {
-        try {
-          return await inner.request(method, params);
-        } catch (cause) {
-          if (!(cause instanceof RetryableTransportError)) {
-            throw cause;
-          }
-          await policy.sleep(
-            jitteredBackoffFor(
-              attempt,
-              policy.initialDelayMs,
-              policy.maxDelayMs,
-              policy.random,
-            ),
-          );
-        }
-      }
-      // Final attempt: out of the retry budget, so let whatever it throws -
-      // retryable or not - propagate to the caller unchanged.
-      return inner.request(method, params);
+      return runWithRetries(() => inner.request(method, params));
+    },
+    requestWithResponseTimeout<Method extends keyof Registry & string>(
+      method: Method,
+      params: RequestOfMethod<Registry, Method>,
+      responseTimeoutMs: number,
+    ): Promise<ResponseOfMethod<Registry, Method>> {
+      return runWithRetries(() =>
+        inner.requestWithResponseTimeout(method, params, responseTimeoutMs),
+      );
     },
   };
 }

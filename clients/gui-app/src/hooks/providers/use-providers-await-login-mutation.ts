@@ -6,9 +6,10 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { useQueryClient } from "@tanstack/react-query";
+import { PROVIDERS_AWAIT_LOGIN_RESPONSE_BUDGET_MS } from "@traycer/protocol/host/provider-schemas";
 import { type HostRpcRegistry } from "@/lib/host";
 import { useHostClient } from "@/lib/host";
-import { useHostMutation } from "@/hooks/host/use-host-query";
+import { useHostMutationWithResponseTimeout } from "@/hooks/host/use-host-query";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { hostQueryKeys, providersMutationKeys } from "@/lib/query-keys";
@@ -87,7 +88,7 @@ export function useProvidersAwaitLoginForClient(args: {
   AwaitLoginContext
 > {
   const queryClient = useQueryClient();
-  return useHostMutation<
+  return useHostMutationWithResponseTimeout<
     HostRpcRegistry,
     "providers.awaitLogin",
     AwaitLoginContext
@@ -95,6 +96,11 @@ export function useProvidersAwaitLoginForClient(args: {
     client: args.client,
     method: "providers.awaitLogin",
     mapVariables: (variables: AwaitLoginRequest) => variables,
+    // Long-poll: the host holds the response until the OAuth child
+    // terminates (bounded by its own 3-minute login timeout). The default
+    // ~30 s frame timeout would abandon a healthy sign-in as soon as the
+    // user takes longer than that in the browser.
+    responseTimeoutMs: PROVIDERS_AWAIT_LOGIN_RESPONSE_BUDGET_MS,
     options: {
       mutationKey: providersMutationKeys.awaitLogin(),
       onMutate: () => ({ hostId: args.getCacheHostId() }),

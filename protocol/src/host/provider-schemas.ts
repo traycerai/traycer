@@ -1045,6 +1045,22 @@ export type ProvidersAwaitLoginResponse = z.infer<
   typeof providersAwaitLoginResponseSchema
 >;
 
+/**
+ * Client-side response-frame budget for `providers.awaitLogin`, which is a
+ * long-poll: the host's response is contractually silent until the OAuth
+ * login child terminates. A transport-default frame timeout (~30 s) misreads
+ * that silence as a dead host and abandons a healthy in-flight sign-in as
+ * soon as the user takes longer than the timeout in the browser.
+ *
+ * Derivation: the host force-kills a login child after 3 minutes and its
+ * await path self-resolves at most 5 s later even when the child never
+ * confirms termination, followed by bounded auth re-probes before the
+ * response is framed. 4 minutes covers that worst case with slack. The host
+ * must keep its internal deadline strictly under this budget - clients wait
+ * exactly this long before declaring the call dead.
+ */
+export const PROVIDERS_AWAIT_LOGIN_RESPONSE_BUDGET_MS = 4 * 60_000;
+
 /** Kill an in-flight `providers.startLogin` child for this provider. */
 export const providersCancelLoginRequestSchema = z.object({
   providerId: providerIdSchema,
