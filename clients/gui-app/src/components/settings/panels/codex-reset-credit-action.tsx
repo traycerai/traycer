@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from "react";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { useConsumeRateLimitResetCreditMutation } from "@/hooks/providers/use-consume-rate-limit-reset-credit-mutation";
@@ -22,6 +23,13 @@ export function CodexResetCreditAction({
           setOpen(true);
         }}
       >
+        {mutation.isPending ? (
+          <AgentSpinningDots
+            className={undefined}
+            testId={undefined}
+            variant={undefined}
+          />
+        ) : null}
         Use reset
       </Button>
       <ConfirmDestructiveDialog

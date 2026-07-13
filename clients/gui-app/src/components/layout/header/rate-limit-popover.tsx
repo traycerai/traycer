@@ -30,6 +30,7 @@ import {
   type ProviderRateLimitQueryState,
 } from "@/components/settings/panels/provider-rate-limit-views";
 import { CodexResetCreditAction } from "@/components/settings/panels/codex-reset-credit-action";
+import { canUseCodexResetCredit } from "@/components/settings/panels/codex-reset-credit-availability";
 import { useHostProviderRateLimitsQuery } from "@/hooks/host/use-host-provider-rate-limits-query";
 import { useRefreshProviderRateLimitsOnMount } from "@/hooks/host/use-refresh-provider-rate-limits-on-mount";
 import {
@@ -244,7 +245,9 @@ export function RateLimitPopover({
         const target = event.target;
         if (
           target instanceof Element &&
-          target.closest('[data-testid="confirm-destructive-dialog"]') !== null
+          (target.closest('[data-testid="confirm-destructive-dialog"]') !==
+            null ||
+            target.closest('[data-slot="dialog-overlay"]') !== null)
         ) {
           event.preventDefault();
         }
@@ -1311,8 +1314,10 @@ function RateLimitProviderBody({
             data={state.data}
             variant={variant}
             codexResetAction={
-              variant === "popover-detail" &&
-              state.data.provider === "codex" ? (
+              canUseCodexResetCredit(
+                state.data.provider,
+                variant === "popover-detail",
+              ) ? (
                 <CodexResetCreditAction profileId={profileId} />
               ) : null
             }

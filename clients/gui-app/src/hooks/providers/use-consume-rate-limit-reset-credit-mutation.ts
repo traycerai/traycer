@@ -63,10 +63,10 @@ export function useConsumeRateLimitResetCreditMutation(): UseMutationResult<
         hostId: client.getActiveHostId() ?? null,
         queueScope,
       }),
-      onSuccess: (data, variables, context) => {
+      onSuccess: async (data, variables, context) => {
         toastResetOutcome(data);
         if (context.hostId === null) return;
-        void queryClient.invalidateQueries({
+        const rateLimitQueryFilters = {
           queryKey: hostQueryKeys.method<
             HostRpcRegistry,
             "host.getRateLimitUsage"
@@ -75,7 +75,10 @@ export function useConsumeRateLimitResetCreditMutation(): UseMutationResult<
             providerId: "codex",
             profileId: variables.profileId,
           }),
-        });
+          exact: true,
+        };
+        await queryClient.cancelQueries(rateLimitQueryFilters);
+        await queryClient.invalidateQueries(rateLimitQueryFilters);
         if (context.queueScope?.hostId !== context.hostId) return;
         void enqueueRateLimitFetchForScope(
           context.queueScope,

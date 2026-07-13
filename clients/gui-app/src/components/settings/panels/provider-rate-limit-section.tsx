@@ -3,6 +3,7 @@ import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { RefreshIconButton } from "@/components/refresh-icon-button";
 import { ProviderRateLimitBody } from "@/components/settings/panels/provider-rate-limit-views";
 import { CodexResetCreditAction } from "@/components/settings/panels/codex-reset-credit-action";
+import { canUseCodexResetCredit } from "@/components/settings/panels/codex-reset-credit-availability";
 import { useHostProviderRateLimitsQuery } from "@/hooks/host/use-host-provider-rate-limits-query";
 import { useRefreshProviderRateLimitsOnMount } from "@/hooks/host/use-refresh-provider-rate-limits-on-mount";
 import { useRefreshProviderRateLimitsOnTurn } from "@/hooks/host/use-refresh-provider-rate-limits-on-turn";
@@ -138,7 +139,7 @@ function EmbeddedProviderRateLimitSettingsCard({
         isError={query.isError}
         envelope={query.data}
         codexResetAction={
-          providerId === "codex" ? (
+          canUseCodexResetCredit(providerId, true) ? (
             <CodexResetCreditAction profileId={profileId} />
           ) : null
         }
@@ -184,7 +185,7 @@ function ProviderRateLimitSettingsCard({
         isError={query.isError}
         envelope={query.data}
         codexResetAction={
-          providerId === "codex" ? (
+          canUseCodexResetCredit(providerId, true) ? (
             <CodexResetCreditAction profileId={profileId} />
           ) : null
         }
