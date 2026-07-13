@@ -2,10 +2,7 @@ import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
-import {
-  DevDesktopWorktreeLabel,
-  HeaderNotificationsBell,
-} from "@/components/layout/header/app-header";
+import { HeaderNotificationsBell } from "@/components/layout/header/app-header";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -93,26 +90,5 @@ describe("HeaderNotificationsBell auth gate", () => {
     });
 
     expect(screen.queryByTestId("notifications-bell")).toBeNull();
-  });
-});
-
-describe("DevDesktopWorktreeLabel", () => {
-  afterEach(() => {
-    cleanup();
-  });
-
-  it("renders only the distinguishing worktree label without adding an interactive control", () => {
-    render(<DevDesktopWorktreeLabel worktreeLabel="spry-panda" />);
-
-    const label = screen.getByText("spry-panda");
-    expect(label.className).toContain("max-w-full");
-    expect(label.className).toContain("text-right");
-    expect(label.className).not.toContain("absolute");
-  });
-
-  it("renders nothing when the dev worktree label is absent", () => {
-    render(<DevDesktopWorktreeLabel worktreeLabel={null} />);
-
-    expect(screen.queryByTestId("dev-desktop-display-name")).toBeNull();
   });
 });
