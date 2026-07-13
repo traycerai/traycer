@@ -8,10 +8,15 @@ describe("removeHostPidMetadataForPurge", () => {
     const receivedPaths: string[] = [];
 
     await expect(
-      removeHostPidMetadataForPurge("dev", noopLogger, async (path) => {
-        receivedPaths.push(path);
-        throw Object.assign(new Error("file is locked"), { code: "EBUSY" });
-      }),
+      removeHostPidMetadataForPurge(
+        "dev",
+        noopLogger,
+        async (path, options) => {
+          receivedPaths.push(path);
+          expect(options).toEqual({ force: true });
+          throw Object.assign(new Error("file is locked"), { code: "EBUSY" });
+        },
+      ),
     ).resolves.toBeUndefined();
 
     expect(receivedPaths).toEqual([hostPidMetadataPath("dev")]);
