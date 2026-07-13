@@ -307,7 +307,12 @@ export default tseslint.config(
     // Registers a server-created terminal as a saved background tab without
     // activating it - prepareOpenTileInBackgroundTabFocusTarget always
     // returns a null focus delta, so this call never needs a route write.
-    files: ["src/hooks/chats/use-setup-terminal-tab-register-driver.ts"],
+    // The terminal-agent driver is the exact analog for the tui-agent tile
+    // (chat has no store there), so it earns the same background-tab exemption.
+    files: [
+      "src/hooks/chats/use-setup-terminal-tab-register-driver.ts",
+      "src/hooks/agent/use-tui-setup-terminal-tab-register-driver.ts",
+    ],
     rules: {
       "no-restricted-syntax": [
         "error",

@@ -1,5 +1,4 @@
 import { useEffect } from "react";
-import { useStore } from "zustand";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useSetupTerminalRegistrationStore } from "@/stores/chats/setup-terminal-registration-store";
@@ -7,21 +6,22 @@ import {
   setupTerminalCwd,
   setupTerminalTitle,
 } from "@/lib/setup-terminal-tab-descriptor";
-import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
+import type { WorktreeBinding } from "@traycer/protocol/host/worktree-schemas";
 
 /**
- * Registers each worktree SETUP terminal as a real (background) canvas tab the
- * first time setup starts running, so it survives a host/GUI restart exactly
- * like a user-opened terminal.
+ * Terminal-agent analog of `useSetupTerminalTabRegisterDriver`: registers each
+ * worktree SETUP terminal as a real (background) canvas tab the first time setup
+ * starts running, so it survives a host/GUI restart exactly like a user-opened
+ * terminal.
  *
  * The host keeps no terminal state across a restart - persistence comes only
  * from a saved canvas tab, which re-creates the shell on next open. The setup
  * PTY is spawned server-side (never through the renderer's `terminal.create`),
  * so without this it has no saved tab and vanishes on a host restart while
  * user terminals (always opened as tabs) come back. This registers it as a
- * BACKGROUND tab (no focus change, so the user is not yanked off the chat),
- * keyed on the SAME id the card's "Open terminal" uses - so the two converge
- * on one tab.
+ * BACKGROUND tab (no focus change, so the user is not yanked off the terminal
+ * agent), keyed on the SAME id the card's "Open terminal" uses - so the two
+ * converge on one tab.
  *
  * The tab is auto-opened EXACTLY ONCE PER VIEW. Two guards together give that:
  *  - the `running` gate, so a settled (succeeded / failed / cancelled) or
@@ -29,22 +29,22 @@ import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
  *  - `useSetupTerminalRegistrationStore`, which records each
  *    `${viewTabId}:${sessionId}` it opens, so a binding update or a remount
  *    while setup is still running does NOT re-open a tab the user has closed.
- * Registration is VIEW-scoped: the same chat shown in two view tabs auto-opens
+ * Registration is VIEW-scoped: the same agent shown in two view tabs auto-opens
  * the terminal in each, while within one view it pops once and, once closed,
  * stays closed - never returning on binding churn, remount, or completion.
- * Restart survival is unaffected (it comes from the persisted canvas tab); a
- * finished setup terminal the user wants back is one click away on the setup
- * card's "Open terminal".
  *
- * Live-stream (worktree binding) -> external-store (canvas tabs) sync, so it
- * legitimately lives in an effect. Bound to the tab host, matching the setup
- * card / focus-terminal wiring.
+ * A chat drives this off its live `chat.subscribe` binding, but a terminal
+ * agent has no chat store; the polled `worktree.getBinding` (kept fresh by the
+ * tile while setup is in flight) is its only binding source, so the caller
+ * passes that binding in. Live-stream (worktree binding) -> external-store
+ * (canvas tabs) sync, so it legitimately lives in an effect. Bound to the tab
+ * host, matching the setup card / focus-terminal wiring.
  */
-export function useSetupTerminalTabRegisterDriver(options: {
-  handle: ChatSessionStoreHandle;
+export function useTuiSetupTerminalTabRegisterDriver(options: {
+  binding: WorktreeBinding | null;
   viewTabId: string;
 }): void {
-  const { handle, viewTabId } = options;
+  const { binding, viewTabId } = options;
   const hostId = useTabHostId();
   const openTileInBackgroundTab = useEpicCanvasStore(
     (s) => s.openTileInBackgroundTab,
@@ -52,7 +52,6 @@ export function useSetupTerminalTabRegisterDriver(options: {
   const registerSetupTerminalOnce = useSetupTerminalRegistrationStore(
     (s) => s.registerOnce,
   );
-  const binding = useStore(handle.store, (state) => state.worktreeBinding);
 
   useEffect(() => {
     if (binding === null) return;
@@ -66,7 +65,7 @@ export function useSetupTerminalTabRegisterDriver(options: {
       // Exactly once per (view, session): `registerOnce` returns false on
       // every call after the first, so a binding update or a remount while
       // setup is still running cannot re-open a tab the user has closed.
-      // Keyed by `viewTabId` so the same chat in another view gets its own tab.
+      // Keyed by `viewTabId` so the same agent in another view gets its own tab.
       if (!registerSetupTerminalOnce(`${viewTabId}:${sessionId}`)) return;
       openTileInBackgroundTab(viewTabId, {
         id: sessionId,
