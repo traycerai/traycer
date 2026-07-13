@@ -195,10 +195,7 @@ function taskItemPdfContent(node: JSONContent): Content {
     };
   }
   return {
-    stack: [
-      { text: [checkbox] },
-      ...children.flatMap(taskListChildPdfContent),
-    ],
+    stack: [{ text: [checkbox] }, ...children.flatMap(taskListChildPdfContent)],
   };
 }
 
@@ -261,9 +258,7 @@ function tablePdfContent(node: JSONContent): Content[] {
       table: {
         headerRows: hasHeader ? 1 : 0,
         widths: Array.from({ length: columnCount }, () => "*"),
-        body: rows.map((row) =>
-          (row.content ?? []).map(tableCellPdfContent),
-        ),
+        body: rows.map((row) => (row.content ?? []).map(tableCellPdfContent)),
       },
       layout: "lightHorizontalLines",
       margin: [0, 4, 0, 8],
@@ -405,9 +400,7 @@ async function pdfBytes(markdown: string): Promise<Uint8Array<ArrayBuffer>> {
     defaultStyle: { font: "Roboto", fontSize: 11, lineHeight: 1.25 },
     styles: PDF_HEADING_STYLES,
   };
-  const blob = await pdfMake
-    .createPdf(definition)
-    .getBlob();
+  const blob = await pdfMake.createPdf(definition).getBlob();
   return new Uint8Array(await blob.arrayBuffer());
 }
 
