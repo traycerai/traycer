@@ -339,7 +339,7 @@ function WorktreesFilterControls(props: {
           type="search"
           value={props.searchText}
           onChange={(event) => props.onSearchChange(event.target.value)}
-          placeholder="Search repo, branch, path, or Task"
+          placeholder="Search repo, branch, path, PR, or Task"
           aria-label="Search worktrees"
           className="pl-8"
         />
@@ -894,6 +894,24 @@ export function WorktreesList(props: {
     () => buildWorktreeSearchHaystackByPath(worktrees, taskTitlesByEpicId),
     [worktrees, taskTitlesByEpicId],
   );
+  // Keyed on the ENRICHED list, unlike the text haystack above: a PR number only
+  // exists once a path's activity probe has landed.
+  const prHaystackByPath = useMemo(
+    () => buildWorktreePrHaystackByPath(mergedWorktrees),
+    [mergedWorktrees],
+  );
+  // Rows still waiting on their probe. A PR-number query CANNOT match them yet
+  // (their `prNumber` is null), so an empty result set only honestly reads "no
+  // matches" once this hits zero - until then the empty state says "still
+  // checking". Errored rows are excluded deliberately: they settle to "Unknown"
+  // and will never enrich, so counting them would hold the notice open forever.
+  const stillCheckingCount = useMemo(
+    () =>
+      mergedWorktrees.filter(
+        (entry) => enrichmentStateFor(entry.worktreePath) === "pending",
+      ).length,
+    [mergedWorktrees, enrichmentStateFor],
+  );
   // Only offer filter options for tiers actually present in this host's list.
   // Un-enriched rows have no known tier, so they cannot contribute an option -
   // the menu fills in as rows enrich (on-screen rows first, then the
@@ -907,7 +925,9 @@ export function WorktreesList(props: {
     return WORKTREE_TIER_ORDER.filter((tier) => present.has(tier));
   }, [mergedWorktrees, isPending]);
   // The status filter composes with the search box (both apply) before repo
-  // grouping. Search runs on cheap base fields, so it works before enrichment.
+  // grouping. The repo / branch / path / Task legs of search run on cheap base
+  // fields, so they work before enrichment; only the PR-number leg waits on a
+  // probe, and the empty state owns that gap.
   // Tier comes from the shared classifier, so the filter options exactly match the
   // row pills. Intersect the selection with the tiers actually present (mirroring
   // `worktreeTierFilterLabel`): a stale selection for a now-absent tier is ignored,
@@ -924,6 +944,7 @@ export function WorktreesList(props: {
       mergedWorktrees,
       deferredSearchText,
       searchHaystackByPath,
+      prHaystackByPath,
     );
     const effectiveTiers = new Set(
       availableTiers.filter((tier) => tierFilters.has(tier)),
@@ -938,6 +959,7 @@ export function WorktreesList(props: {
     mergedWorktrees,
     deferredSearchText,
     searchHaystackByPath,
+    prHaystackByPath,
     tierFilters,
     availableTiers,
     isPending,
@@ -1472,8 +1494,20 @@ export function WorktreesList(props: {
             }
           >
             {groups.length === 0 ? (
-              <WorktreesStateMessage tone="muted" spinner={false}>
-                No worktrees match your search.
+              /**
+               * Empty because the search excluded everything - a tier filter
+               * alone can't land here, since un-enriched rows always pass it.
+               * So while probes are outstanding, "no matches" would be a lie for
+               * a PR-number query: the row exists, it just doesn't know its PR
+               * yet. Say what's actually true and keep the spinner honest.
+               */
+              <WorktreesStateMessage
+                tone="muted"
+                spinner={stillCheckingCount > 0}
+              >
+                {stillCheckingCount > 0
+                  ? worktreeSearchCheckingNoticeText(stillCheckingCount)
+                  : "No worktrees match your search."}
               </WorktreesStateMessage>
             ) : (
               <div
@@ -1782,6 +1816,11 @@ function WorktreeSelectionActionBar(props: {
 function worktreeCheckingNoticeText(checkingCount: number): string {
   const plural = checkingCount === 1 ? "worktree is" : "worktrees are";
   return `${checkingCount} selected ${plural} still checking status`;
+}
+
+function worktreeSearchCheckingNoticeText(checkingCount: number): string {
+  const plural = checkingCount === 1 ? "worktree" : "worktrees";
+  return `No matches yet - still checking ${checkingCount} ${plural}.`;
 }
 
 /**
@@ -2948,20 +2987,27 @@ function compareByCreatedAt(
 }
 
 /**
- * Client-side text filter over the four fields the tab searches: repo label,
- * branch, worktree path, and each owning Task's resolved title. Whitespace-only
- * queries pass everything through. Pure renderer work - the full list is already
- * in memory.
+ * Client-side text filter over the fields the tab searches: repo label, branch,
+ * worktree path, each owning Task's resolved title, and the row's PR numbers.
+ * Whitespace-only queries pass everything through. Pure renderer work - the full
+ * list is already in memory.
+ *
+ * Two haystacks, because they resolve on different clocks (see
+ * {@link buildWorktreePrHaystackByPath}). A hit in either matches, so a query is
+ * never made narrower by the PR leg being cold.
  */
 function filterWorktrees(
   worktrees: readonly WorktreeHostEntryV12[],
   searchText: string,
   searchHaystackByPath: ReadonlyMap<string, string>,
+  prHaystackByPath: ReadonlyMap<string, string>,
 ): readonly WorktreeHostEntryV12[] {
   const needle = searchText.trim().toLowerCase();
   if (needle.length === 0) return worktrees;
-  return worktrees.filter((entry) =>
-    (searchHaystackByPath.get(entry.worktreePath) ?? "").includes(needle),
+  return worktrees.filter(
+    (entry) =>
+      (searchHaystackByPath.get(entry.worktreePath) ?? "").includes(needle) ||
+      (prHaystackByPath.get(entry.worktreePath) ?? "").includes(needle),
   );
 }
 
@@ -2988,6 +3034,39 @@ function worktreeSearchHaystack(
   return [entry.repoLabel, entry.branch ?? "", entry.worktreePath, ...titles]
     .join("\n")
     .toLowerCase();
+}
+
+/**
+ * PR numbers get their OWN index because they live on a different clock to the
+ * base fields: the host pins `prNumber: null` on every base row and only the
+ * per-path activity probe fills it in. Folding them into the text haystack would
+ * rekey that memo on the enriched list, rebuilding every row's joined string on
+ * each enrichment chunk; kept apart, repo / branch / path / Task search stays
+ * churn-free and instant, and only this cheap `#N` map rebuilds as probes land.
+ *
+ * The cost of that split is honest and visible: a PR-number query is eventually
+ * consistent - a row joins the result set when its probe lands, which is why an
+ * empty result set with probes outstanding reads "still checking" rather than
+ * "no matches" (see `WorktreesList`).
+ *
+ * Both the superproject PR and each owned submodule's PR are indexed, matching
+ * the two kinds of `#N` pill the row renders. The `#` is kept in the token so
+ * that `4360` and `#4360` both hit under the same plain substring rule the other
+ * fields use.
+ */
+function buildWorktreePrHaystackByPath(
+  worktrees: readonly WorktreeHostEntryV12[],
+): ReadonlyMap<string, string> {
+  return new Map(
+    worktrees.map((entry) => [entry.worktreePath, worktreePrHaystack(entry)]),
+  );
+}
+
+function worktreePrHaystack(entry: WorktreeHostEntryV12): string {
+  return [entry.prNumber, ...entry.submodules.map((sub) => sub.prNumber)]
+    .filter((prNumber): prNumber is number => prNumber !== null)
+    .map((prNumber) => `#${prNumber}`)
+    .join("\n");
 }
 
 function deleteDialogCopy(entry: WorktreeHostEntryV12): {

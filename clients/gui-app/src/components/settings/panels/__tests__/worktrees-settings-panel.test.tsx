@@ -3532,3 +3532,165 @@ describe("WorktreesList status-aware delete safety", () => {
     expect(streamMock.paths).toEqual(["/wt/errored-dirty"]);
   });
 });
+
+describe("WorktreesList PR-number search", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  // The BASE listing exactly as the host serves it: `prNumber` pinned to null on
+  // every row (see `worktree-setup-orchestrator`'s base shape). PR facts do not
+  // exist here - they only arrive on the enrichment overlay below. Building the
+  // fixture this way is what makes the un-enriched cases honest.
+  const PR_BASE: readonly WorktreeHostEntryV12[] = [
+    entry({ worktreePath: "/wt/super-pr", branch: "feat-super-pr" }),
+    entry({ worktreePath: "/wt/sub-pr", branch: "feat-sub-pr" }),
+    entry({ worktreePath: "/wt/no-pr", branch: "feat-no-pr" }),
+  ];
+
+  // What those rows resolve to once probed: a superproject PR, a submodule-only
+  // PR, and a row that genuinely has none.
+  const PR_ENRICHED: readonly WorktreeHostEntryV12[] = [
+    entry({
+      worktreePath: "/wt/super-pr",
+      branch: "feat-super-pr",
+      prState: "merged",
+      prNumber: 4360,
+      prUrl: "https://github.com/acme/app/pull/4360",
+    }),
+    entry({
+      worktreePath: "/wt/sub-pr",
+      branch: "feat-sub-pr",
+      submodules: [
+        {
+          repoIdentifier: { owner: "acme", repo: "sub" },
+          branch: "feat-sub-pr",
+          prState: "open",
+          prNumber: 256,
+          prUrl: "https://github.com/acme/sub/pull/256",
+          mergedHeadShaMatches: false,
+          mergedIntoDefault: false,
+          atPinnedCommit: false,
+        },
+      ],
+    }),
+    entry({ worktreePath: "/wt/no-pr", branch: "feat-no-pr" }),
+  ];
+
+  // The overlay with the named paths held back - i.e. still awaiting their probe.
+  function enrichedExcept(
+    unprobedPaths: readonly string[],
+  ): ReadonlyMap<string, WorktreeHostEntryV12> {
+    return new Map(
+      PR_ENRICHED.filter(
+        (worktree) => !unprobedPaths.includes(worktree.worktreePath),
+      ).map((worktree) => [worktree.worktreePath, worktree]),
+    );
+  }
+
+  function search(value: string): void {
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search worktrees" }),
+      { target: { value } },
+    );
+  }
+
+  function renderPrList(args: {
+    readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV12>;
+    readonly erroredPaths: ReadonlySet<string> | undefined;
+  }): void {
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: PR_BASE,
+      enrichedByPath: args.enrichedByPath,
+      erroredPaths: args.erroredPaths,
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
+    });
+  }
+
+  function visibleBranches(): readonly string[] {
+    return PR_BASE.map((worktree) => worktree.branch).filter(
+      (branch): branch is string =>
+        branch !== null &&
+        screen.queryByRole("button", { name: `Delete worktree ${branch}` }) !==
+          null,
+    );
+  }
+
+  it.each([
+    ["4360", "feat-super-pr"],
+    ["#4360", "feat-super-pr"],
+    // The submodule leg is indexed too - the row wears a `#256` pill, so the
+    // number on that pill has to find it.
+    ["256", "feat-sub-pr"],
+    ["#256", "feat-sub-pr"],
+  ])("narrows to the row owning PR %s", (query, expectedBranch) => {
+    renderPrList({
+      enrichedByPath: enrichedExcept([]),
+      erroredPaths: undefined,
+    });
+    search(query);
+    expect(visibleBranches()).toEqual([expectedBranch]);
+  });
+
+  it("still matches repo, branch, path, and Task after the PR leg is added", () => {
+    renderPrList({
+      enrichedByPath: enrichedExcept([]),
+      erroredPaths: undefined,
+    });
+    // The PR index is a UNION with the text haystack, never a replacement: a
+    // non-PR query must keep behaving exactly as it did before.
+    search("feat-no-pr");
+    expect(visibleBranches()).toEqual(["feat-no-pr"]);
+    search("acme/app");
+    expect(visibleBranches()).toEqual([
+      "feat-super-pr",
+      "feat-sub-pr",
+      "feat-no-pr",
+    ]);
+  });
+
+  it("reads 'still checking' - not 'no matches' - while the PR row is un-enriched", () => {
+    // `/wt/super-pr` is held back from the overlay, so its base row still carries
+    // `prNumber: null`. It genuinely cannot match `4360` yet - but claiming "no
+    // matches" would be a lie, because the worktree being looked for is right
+    // there, one probe away.
+    renderPrList({
+      enrichedByPath: enrichedExcept(["/wt/super-pr"]),
+      erroredPaths: undefined,
+    });
+    search("4360");
+
+    expect(visibleBranches()).toEqual([]);
+    screen.getByText("No matches yet - still checking 1 worktree.");
+    expect(screen.queryByText("No worktrees match your search.")).toBeNull();
+  });
+
+  it("settles to 'no matches' once every probe has landed", () => {
+    renderPrList({
+      enrichedByPath: enrichedExcept([]),
+      erroredPaths: undefined,
+    });
+    search("9999");
+
+    expect(visibleBranches()).toEqual([]);
+    screen.getByText("No worktrees match your search.");
+  });
+
+  it("does not hold the 'still checking' notice open for an errored row", () => {
+    // An errored row is un-enriched too, but its probe SETTLED - it will never
+    // learn its PR number. Counting it would pin the spinner on forever, so the
+    // empty state has to fall through to the plain no-match copy.
+    renderPrList({
+      enrichedByPath: enrichedExcept(["/wt/super-pr"]),
+      erroredPaths: new Set(["/wt/super-pr"]),
+    });
+    search("4360");
+
+    expect(visibleBranches()).toEqual([]);
+    screen.getByText("No worktrees match your search.");
+    expect(screen.queryByText(/still checking/)).toBeNull();
+  });
+});

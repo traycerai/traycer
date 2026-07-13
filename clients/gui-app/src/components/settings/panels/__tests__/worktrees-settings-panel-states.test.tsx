@@ -372,7 +372,7 @@ describe("WorktreesSettingsPanel host-scoped states", () => {
       screen.getByText("feat-clean");
     });
     screen.getByTestId("worktrees-host-select");
-    screen.getByPlaceholderText("Search repo, branch, path, or Task");
+    screen.getByPlaceholderText("Search repo, branch, path, PR, or Task");
     screen.getByTestId("worktrees-filter-trigger");
     screen.getByTestId("worktrees-sort-trigger");
     screen.getByRole("button", { name: "Refresh worktrees" });
