@@ -132,6 +132,17 @@ export class MockHostMessenger<
     };
   }
 
+  requestWithResponseTimeout<Method extends keyof Registry & string>(
+    method: Method,
+    params: RequestOfMethod<Registry, Method>,
+    responseTimeoutMs: number,
+  ): Promise<ResponseOfMethod<Registry, Method>> {
+    // The mock runs handlers inline with no transport timers, so the extended
+    // response budget has nothing to bound - the call delegates unchanged.
+    void responseTimeoutMs;
+    return this.request(method, params);
+  }
+
   async request<Method extends keyof Registry & string>(
     method: Method,
     params: RequestOfMethod<Registry, Method>,

@@ -212,6 +212,52 @@ export function useHostMutation<
   });
 }
 
+/**
+ * `useHostMutation` for long-poll methods whose response is contractually
+ * silent until a domain event fires (e.g. `providers.awaitLogin` blocks until
+ * the OAuth child terminates): the request runs with the caller's extended
+ * response-frame budget instead of the transport's default frame timeout,
+ * which would misread that silence as a dead host. Dial and handshake keep
+ * the transport defaults, so an unreachable host still fails fast.
+ */
+export function useHostMutationWithResponseTimeout<
+  Registry extends VersionedRpcRegistry,
+  Method extends keyof Registry & string,
+  TContext = unknown,
+  TVariables = RequestOfMethod<Registry, Method>,
+>(
+  args: UseHostMutationOptions<Registry, Method, TContext, TVariables> & {
+    readonly responseTimeoutMs: number;
+  },
+): UseMutationResult<
+  ResponseOfMethod<Registry, Method>,
+  HostRpcError,
+  TVariables,
+  TContext
+> {
+  const baseOptions = args.options ?? {};
+  return useMutation<
+    ResponseOfMethod<Registry, Method>,
+    HostRpcError,
+    TVariables,
+    TContext
+  >({
+    ...baseOptions,
+    mutationFn: (variables) => {
+      if (args.client === null) {
+        return Promise.reject<ResponseOfMethod<Registry, Method>>(
+          hostClientUnavailableError(args.method),
+        );
+      }
+      return args.client.requestWithResponseTimeout(
+        args.method,
+        args.mapVariables(variables),
+        args.responseTimeoutMs,
+      );
+    },
+  });
+}
+
 export function hostClientUnavailableError(method: string): HostRpcError {
   return new HostRpcError({
     code: "RPC_ERROR",

@@ -60,44 +60,59 @@ export function createAuthAwareMessenger<Registry extends VersionedRpcRegistry>(
   auth: AuthRevalidator,
   options: { readonly retry: AuthAwareRetryPolicy } | null,
 ): IHostMessenger<Registry> {
+  const runWithAuthRecovery = async <Response>(
+    call: () => Promise<Response>,
+  ): Promise<Response> => {
+    try {
+      return await call();
+    } catch (cause) {
+      if (!(cause instanceof HostRpcError) || cause.code !== "UNAUTHORIZED") {
+        throw cause;
+      }
+      // A transient, host-side rejection (e.g. a JWKS fetch timeout) rides in
+      // as `code: "UNAUTHORIZED"` with `fatalDetails.retryable === true`. Our
+      // bearer is fine, so revalidating it can't help - rethrow the transient
+      // failure and let the caller retry the request instead of churning authn.
+      if (cause.fatalDetails?.retryable === true) {
+        throw cause;
+      }
+      const retry = options?.retry ?? null;
+      const before = readBearer(retry);
+      try {
+        await auth.revalidateCurrentContext();
+      } catch {
+        // Revalidation itself failed (e.g. a renderer provider torn down
+        // mid-flight). Surface the ORIGINAL UNAUTHORIZED, not the revalidation
+        // error: callers key recovery (session-expired cascade, error toasts)
+        // on `code === "UNAUTHORIZED"`, which a generic error would defeat.
+        throw cause;
+      }
+      if (retry === null) {
+        throw cause;
+      }
+      const after = readBearer(retry);
+      if (after === null || after === before) {
+        throw cause;
+      }
+      return call();
+    }
+  };
+
   return {
-    async request<Method extends keyof Registry & string>(
+    request<Method extends keyof Registry & string>(
       method: Method,
       params: RequestOfMethod<Registry, Method>,
     ): Promise<ResponseOfMethod<Registry, Method>> {
-      try {
-        return await inner.request(method, params);
-      } catch (cause) {
-        if (!(cause instanceof HostRpcError) || cause.code !== "UNAUTHORIZED") {
-          throw cause;
-        }
-        // A transient, host-side rejection (e.g. a JWKS fetch timeout) rides in
-        // as `code: "UNAUTHORIZED"` with `fatalDetails.retryable === true`. Our
-        // bearer is fine, so revalidating it can't help - rethrow the transient
-        // failure and let the caller retry the request instead of churning authn.
-        if (cause.fatalDetails?.retryable === true) {
-          throw cause;
-        }
-        const retry = options?.retry ?? null;
-        const before = readBearer(retry);
-        try {
-          await auth.revalidateCurrentContext();
-        } catch {
-          // Revalidation itself failed (e.g. a renderer provider torn down
-          // mid-flight). Surface the ORIGINAL UNAUTHORIZED, not the revalidation
-          // error: callers key recovery (session-expired cascade, error toasts)
-          // on `code === "UNAUTHORIZED"`, which a generic error would defeat.
-          throw cause;
-        }
-        if (retry === null) {
-          throw cause;
-        }
-        const after = readBearer(retry);
-        if (after === null || after === before) {
-          throw cause;
-        }
-        return inner.request(method, params);
-      }
+      return runWithAuthRecovery(() => inner.request(method, params));
+    },
+    requestWithResponseTimeout<Method extends keyof Registry & string>(
+      method: Method,
+      params: RequestOfMethod<Registry, Method>,
+      responseTimeoutMs: number,
+    ): Promise<ResponseOfMethod<Registry, Method>> {
+      return runWithAuthRecovery(() =>
+        inner.requestWithResponseTimeout(method, params, responseTimeoutMs),
+      );
     },
   };
 }

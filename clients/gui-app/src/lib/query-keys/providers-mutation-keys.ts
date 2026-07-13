@@ -16,4 +16,6 @@ export const providersMutationKeys = {
   removeProfile: () => ["providers.removeProfile"] as const,
   refresh: () => ["providers.refresh"] as const,
   acknowledgeAmbientDrift: () => ["providers.acknowledgeAmbientDrift"] as const,
+  consumeRateLimitResetCredit: () =>
+    ["providers.consumeRateLimitResetCredit"] as const,
 };

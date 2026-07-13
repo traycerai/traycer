@@ -446,6 +446,7 @@ describe("ProviderRateLimitDetail dispatch", () => {
           balance: 12,
         }}
         variant="settings"
+        codexResetAction={null}
       />,
     );
     expect(screen.getByText("Balance")).toBeTruthy();
@@ -462,6 +463,7 @@ describe("ProviderRateLimitDetail dispatch", () => {
           passState: null,
         }}
         variant="settings"
+        codexResetAction={null}
       />,
     );
     expect(screen.getByText("Credit balance")).toBeTruthy();
@@ -486,6 +488,7 @@ describe("ProviderRateLimitBody (unavailable state)", () => {
           lastGoodAt: null,
           lastFailureAt: NOW,
         }}
+        codexResetAction={null}
       />,
     );
     expect(
@@ -493,5 +496,40 @@ describe("ProviderRateLimitBody (unavailable state)", () => {
         "Usage limits unavailable - not available for this account",
       ),
     ).toBeTruthy();
+  });
+});
+
+describe("ProviderRateLimitBody (Codex reset action)", () => {
+  it("places the supplied action beside a positive manual-reset count", () => {
+    render(
+      <ProviderRateLimitBody
+        isPending={false}
+        isFetching={false}
+        isError={false}
+        envelope={{
+          latest: {
+            provider: "codex",
+            available: true,
+            planType: "pro_5x",
+            limitId: "codex",
+            limitName: "Codex",
+            primary: null,
+            secondary: null,
+            extraWindows: [],
+            credits: null,
+            individualLimit: null,
+            resetCredits: { availableCount: 3 },
+            rateLimitReachedType: null,
+          },
+          lastGood: null,
+          lastGoodAt: null,
+          lastFailureAt: null,
+        }}
+        codexResetAction={<button type="button">Use reset</button>}
+      />,
+    );
+
+    expect(screen.getByText("3 available")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Use reset" })).toBeTruthy();
   });
 });
