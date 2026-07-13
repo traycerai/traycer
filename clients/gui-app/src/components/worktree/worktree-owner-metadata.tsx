@@ -50,6 +50,7 @@ export function WorktreeOwnerMetadataHoverCard(props: {
           binding={metadata.binding}
           worktrees={metadata.worktrees}
           pending={metadata.isPending}
+          error={metadata.error !== null}
         />
       </HoverCardContent>
     </HoverCard>
@@ -61,6 +62,7 @@ export function ChatStatusWorktreePrPills(props: {
   readonly epicId: string;
   readonly chatId: string;
   readonly binding: WorktreeBinding | null;
+  readonly enabled: boolean;
 }): ReactNode {
   const client = useHostClientForHostId(props.hostId);
   const metadata = useWorktreeOwnerMetadata({
@@ -69,7 +71,7 @@ export function ChatStatusWorktreePrPills(props: {
     ownerId: props.chatId,
     ownerKind: "chat",
     binding: props.binding,
-    enabled: true,
+    enabled: props.enabled,
   });
   return (
     <WorktreePrPills

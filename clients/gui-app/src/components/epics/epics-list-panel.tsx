@@ -101,6 +101,7 @@ import { useTaskWorktreeMetadata } from "@/hooks/worktree/use-task-worktree-meta
 const EMPTY_REPOS: ReadonlyArray<string> = [];
 const EMPTY_WORKSPACES: ReadonlyArray<HistoryWorkspaceRef> = [];
 const EMPTY_ITEMS: ReadonlyArray<HistoryItem> = [];
+const EMPTY_WORKTREES: readonly WorktreeHostEntryV12[] = [];
 const VIEWER_DELETE_TOOLTIP = "Viewers cannot select task for deletion.";
 const NO_DELETE_PERMISSION_TOOLTIP =
   "You don't have permission to delete this task.";
@@ -834,7 +835,7 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
               onSelectEpic={onSelectEpic}
               onOpenInNewWindow={onOpenInNewWindow}
               openInNewWindowAvailable={openInNewWindowAvailable}
-              worktrees={worktreesByEpicId.get(item.epicId) ?? []}
+              worktrees={worktreesByEpicId.get(item.epicId) ?? EMPTY_WORKTREES}
             />
           ))}
         </ul>

@@ -136,6 +136,7 @@ export function OwnerWorkspaceMetadataContent(props: {
   readonly binding: WorktreeBinding | null;
   readonly worktrees: readonly WorktreeHostEntryV12[];
   readonly pending: boolean;
+  readonly error: boolean;
 }): ReactNode {
   if (props.pending && props.binding === null) {
     return (
@@ -146,6 +147,13 @@ export function OwnerWorkspaceMetadataContent(props: {
           className="size-4"
         />
         Loading workspace…
+      </span>
+    );
+  }
+  if (props.error) {
+    return (
+      <span className="block px-2.5 py-2 text-ui-xs text-background/70">
+        Unable to load workspace details
       </span>
     );
   }

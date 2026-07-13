@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   WorktreeBinding,
   WorktreeBindingOwnerKind,
@@ -15,6 +16,7 @@ export interface WorktreeOwnerMetadata {
   readonly binding: WorktreeBinding | null;
   readonly worktrees: readonly WorktreeHostEntryV12[];
   readonly isPending: boolean;
+  readonly error: HostRpcError | null;
 }
 
 /**
@@ -80,5 +82,9 @@ export function useWorktreeOwnerMetadata(args: {
       args.enabled &&
       ((args.binding === undefined && bindingQuery.isPending) ||
         (worktreePaths.length > 0 && worktreesQuery.isPending)),
+    error: args.enabled
+      ? ((args.binding === undefined ? bindingQuery.error : null) ??
+        worktreesQuery.error)
+      : null,
   };
 }

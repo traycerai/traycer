@@ -1518,6 +1518,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
           epicId={currentEpicId}
           chatId={node.id}
           binding={state.worktreeBinding}
+          enabled={surfaceVisible}
         />
         {usageChip}
       </>
@@ -1528,6 +1529,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       hostWorkspaceSelector,
       node.id,
       state.worktreeBinding,
+      surfaceVisible,
       usageChip,
     ],
   );

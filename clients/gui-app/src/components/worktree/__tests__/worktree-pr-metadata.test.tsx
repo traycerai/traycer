@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import type {
   WorktreeBinding,
   WorktreeHostEntryV12,
@@ -74,7 +74,7 @@ function renderWithProviders(node: React.ReactNode): void {
 
 describe("worktree PR metadata", () => {
   afterEach(() => {
-    document.body.innerHTML = "";
+    cleanup();
   });
 
   it("carries branch and worktree path onto superproject and submodule PRs", () => {
@@ -139,6 +139,7 @@ describe("worktree PR metadata", () => {
           binding={BINDING}
           worktrees={[entry]}
           pending={false}
+          error={false}
         />
       </>,
     );
