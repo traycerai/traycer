@@ -1,3 +1,4 @@
+import { useStore } from "zustand";
 import { useEffect, useRef } from "react";
 import type { TerminalSessionExitReason } from "@traycer/protocol/host/terminal/unary-schemas";
 import type {
@@ -35,9 +36,12 @@ export function useTerminalCrashNotification(input: {
   readonly onCrashExit: () => void;
 }): void {
   const { handle, isExitSuppressed, onCrashExit } = input;
-  const status = handle.store((state) => state.status);
-  const exitCode = handle.store((state) => state.exitCode);
-  const exitReason = handle.store((state) => state.exitReason);
+  // Read via `useStore(api, selector)` rather than calling `handle.store(...)`
+  // directly: the bound-store call form isn't recognizable as a hook to the
+  // React Compiler, which memoizes it away and corrupts the hook order.
+  const status = useStore(handle.store, (state) => state.status);
+  const exitCode = useStore(handle.store, (state) => state.exitCode);
+  const exitReason = useStore(handle.store, (state) => state.exitReason);
   const crashReportedRef = useRef(false);
 
   useEffect(() => {
