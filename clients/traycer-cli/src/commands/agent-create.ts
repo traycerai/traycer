@@ -1,7 +1,6 @@
 import path from "node:path";
-import { agentCreateUpgradeV10ToV20 } from "@traycer/protocol/host/agent/contracts";
 import {
-  createAgentRequestSchema,
+  createAgentRequestSchemaV20,
   createAgentResponseSchema,
   type CreateAgentWorkspace,
 } from "@traycer/protocol/host/agent/shared";
@@ -12,6 +11,7 @@ import {
   toAgentCliError,
 } from "../internal/host-rpc";
 import { resolveEpicId, resolveSenderAgentId } from "../internal/agent-context";
+import { parseCreateProfileSelection } from "../internal/profile-selection";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { CommandFn } from "../runner/runner";
 
@@ -25,6 +25,14 @@ import type { CommandFn } from "../runner/runner";
  *   - `--harness` without `--surface`: the host infers the surface from
  *     the sender and requested harness.
  *   - neither: the child inherits the sender's surface + harness.
+ *
+ * Profile selection (`--profile`, see `internal/profile-selection.ts`):
+ * omission sends `last_used`, `ambient` sends the ambient login, anything
+ * else sends that managed profile. Against a host too old to speak
+ * `agent.create@2.0`, the `last_used` and `ambient` selections have no
+ * representable v1.0 wire value and the transport's downgrade fails the call
+ * with upgrade guidance rather than silently falling back to the sender's
+ * profile.
  */
 export function buildAgentCreateCommand(opts: {
   readonly epicId: string | null;
@@ -36,6 +44,7 @@ export function buildAgentCreateCommand(opts: {
   readonly agentMode: string | null;
   readonly reasoningEffort: string | null;
   readonly fast: boolean;
+  readonly profile: string | null;
   readonly cwd: string | null;
   readonly workspacePaths: readonly string[];
   readonly workspaceEntries: readonly string[];
@@ -47,7 +56,7 @@ export function buildAgentCreateCommand(opts: {
     // Validate the full request locally so a bad --surface / --harness
     // fails fast with a clear E_INVALID_ARGUMENT (listing the allowed harness
     // values) instead of round-tripping or leaking a raw ZodError stack.
-    const request = parseUserInput(createAgentRequestSchema, {
+    const request = parseUserInput(createAgentRequestSchemaV20, {
       senderAgentId,
       epicId,
       name: opts.name,
@@ -62,18 +71,9 @@ export function buildAgentCreateCommand(opts: {
         workspacePaths: opts.workspacePaths,
         workspaceEntries: opts.workspaceEntries,
       }),
+      profileSelection: parseCreateProfileSelection(opts.profile),
     });
-    // The CLI has no `--profile` option yet (see the profile-aware CLI
-    // ticket), so it still builds a v1.0-shaped request and upgrades it
-    // through the same bridge a v1.0 caller's request takes on the wire -
-    // `profileId: null` becomes `inherit_sender`, preserving today's
-    // sender-inheritance behavior unchanged.
-    const result = await toAgentCliError(
-      callHostRpc(
-        "agent.create",
-        agentCreateUpgradeV10ToV20.upgradeRequest(request),
-      ),
-    );
+    const result = await toAgentCliError(callHostRpc("agent.create", request));
     const { agentId, warnings } = parseHostResponse(
       createAgentResponseSchema,
       result,
