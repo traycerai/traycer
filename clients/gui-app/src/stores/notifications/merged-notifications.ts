@@ -490,6 +490,8 @@ function hostNotificationPresentation(
   const chatTitle = readNotificationTitle(entry.payload, "chatTitle");
   const taskTitle = readNotificationTitle(entry.payload, "taskTitle");
   const title = taskTitle ?? chatTitle ?? agentName ?? "Task";
+  const chatContext =
+    chatTitle !== null && chatTitle !== title ? chatTitle : "Chat";
   switch (entry.kind) {
     case "agent.stopped": {
       const context = notificationContext(agentName, title, entry.payload);
@@ -504,9 +506,9 @@ function hostNotificationPresentation(
         body: `${notificationContext(agentName, title, entry.payload)} • Stalled`,
       };
     case "approval.requested":
-      return { title, body: `${chatTitle ?? "Chat"} • Approval requested` };
+      return { title, body: `${chatContext} • Approval requested` };
     case "interview.requested":
-      return { title, body: `${chatTitle ?? "Chat"} • Question waiting` };
+      return { title, body: `${chatContext} • Question waiting` };
   }
 }
 

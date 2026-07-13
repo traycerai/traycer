@@ -11,6 +11,7 @@ import {
   mergeNotificationFeedIds,
   mergedUnreadCount,
   rowFromAppLocalEntry,
+  rowFromGlobalEntry,
   rowFromHostEntry,
 } from "@/stores/notifications/merged-notifications";
 import type { AppLocalNotificationEntry } from "@/stores/notifications/app-local-notifications-store";
@@ -105,6 +106,13 @@ describe("merged notifications feed", () => {
       approvalId: "approval-1",
       sessionId: undefined,
       artifactId: undefined,
+    });
+  });
+
+  it("splits global notification titles from their collaboration context", () => {
+    expect(rowFromGlobalEntry(globalEntry("global", 10, null))).toMatchObject({
+      title: "Alice invited you to an epic",
+      body: "Collaboration",
     });
   });
 
