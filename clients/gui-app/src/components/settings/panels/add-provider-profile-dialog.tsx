@@ -61,7 +61,12 @@ export function AddProviderProfileDialog({
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
-  readonly onFailedAttempt: (attempt: FailedProviderProfileAttempt) => void;
+  /** `null` retracts a previously reported failure: fired when a new attempt
+   *  starts and when an attempt completes, so a stale "sign-in did not
+   *  finish" banner never sits next to a profile that DID sign in. */
+  readonly onFailedAttempt: (
+    attempt: FailedProviderProfileAttempt | null,
+  ) => void;
   readonly onProfileCreated: (profileId: string) => void;
 }): ReactNode {
   const runnerHost = useRunnerHost();
@@ -104,6 +109,7 @@ export function AddProviderProfileDialog({
 
   const complete = (profileId: string): void => {
     savedRef.current = true;
+    onFailedAttempt(null);
     onProfileCreated(profileId);
     onOpenChange(false);
   };
@@ -163,6 +169,9 @@ export function AddProviderProfileDialog({
 
   const linkAccount = (): void => {
     if (trimmedLabel.length === 0) return;
+    // A fresh attempt supersedes any previously reported failure - covers
+    // both the initial "Link account" and the failed-state Retry.
+    onFailedAttempt(null);
     flow.start({
       label: trimmedLabel,
       shareSkillsAndPlugins:
