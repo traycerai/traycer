@@ -54,6 +54,7 @@ function hostErrorToastMessage(error: HostRpcError, fallback: string) {
     return "You don't have permission to do that.";
   }
   if (error.code === "UNAUTHORIZED") {
+    if (error.fatalDetails?.retryable === true) return fallback;
     return "Please sign in again.";
   }
   if (error.code === "WORKTREE_BUSY") {
