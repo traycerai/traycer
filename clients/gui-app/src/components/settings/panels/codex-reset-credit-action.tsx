@@ -10,6 +10,7 @@ export function CodexResetCreditAction({
   readonly profileId: string | null;
 }): ReactNode {
   const [open, setOpen] = useState(false);
+  const [idempotencyKey, setIdempotencyKey] = useState<string | null>(null);
   const mutation = useConsumeRateLimitResetCreditMutation();
 
   return (
@@ -20,6 +21,7 @@ export function CodexResetCreditAction({
         size="xs"
         disabled={mutation.isPending}
         onClick={() => {
+          setIdempotencyKey(crypto.randomUUID());
           setOpen(true);
         }}
       >
@@ -34,21 +36,26 @@ export function CodexResetCreditAction({
       </Button>
       <ConfirmDestructiveDialog
         open={open}
-        onOpenChange={setOpen}
+        onOpenChange={(nextOpen) => {
+          setOpen(nextOpen);
+          if (!nextOpen) setIdempotencyKey(null);
+        }}
         title="Use a Codex manual reset?"
         description="This uses one manual reset on the currently reached Codex usage limit. The reset can't be returned or undone."
         cascadeSummary={null}
         actionLabel="Use reset"
         isPending={mutation.isPending}
         onConfirm={() => {
+          if (idempotencyKey === null) return;
           mutation.mutate(
             {
               providerId: "codex",
               profileId,
-              idempotencyKey: crypto.randomUUID(),
+              idempotencyKey,
             },
             {
               onSuccess: () => {
+                setIdempotencyKey(null);
                 setOpen(false);
               },
             },

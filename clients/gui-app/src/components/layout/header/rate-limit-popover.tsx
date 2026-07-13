@@ -29,8 +29,7 @@ import {
   ProviderRateLimitDetail,
   type ProviderRateLimitQueryState,
 } from "@/components/settings/panels/provider-rate-limit-views";
-import { CodexResetCreditAction } from "@/components/settings/panels/codex-reset-credit-action";
-import { canUseCodexResetCredit } from "@/components/settings/panels/codex-reset-credit-availability";
+import { resolveCodexResetCreditAction } from "@/components/settings/panels/codex-reset-credit-availability";
 import { useHostProviderRateLimitsQuery } from "@/hooks/host/use-host-provider-rate-limits-query";
 import { useRefreshProviderRateLimitsOnMount } from "@/hooks/host/use-refresh-provider-rate-limits-on-mount";
 import {
@@ -1313,14 +1312,11 @@ function RateLimitProviderBody({
           <ProviderRateLimitDetail
             data={state.data}
             variant={variant}
-            codexResetAction={
-              canUseCodexResetCredit(
-                state.data.provider,
-                variant === "popover-detail",
-              ) ? (
-                <CodexResetCreditAction profileId={profileId} />
-              ) : null
-            }
+            codexResetAction={resolveCodexResetCreditAction(
+              state.data.provider,
+              profileId,
+              variant === "popover-detail",
+            )}
           />
         </div>
       );

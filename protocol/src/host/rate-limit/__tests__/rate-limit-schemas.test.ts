@@ -28,6 +28,18 @@ describe("providers.consumeRateLimitResetCredit schemas", () => {
       idempotencyKey: "reset-attempt-1",
     });
 
+    expect(
+      providersConsumeRateLimitResetCreditRequestSchema.parse({
+        providerId: "codex",
+        profileId: null,
+        idempotencyKey: "reset-attempt-ambient",
+      }),
+    ).toEqual({
+      providerId: "codex",
+      profileId: null,
+      idempotencyKey: "reset-attempt-ambient",
+    });
+
     ["reset", "nothingToReset", "noCredit", "alreadyRedeemed"].forEach(
       (outcome) => {
         expect(
@@ -71,13 +83,21 @@ describe("providerRateLimitsSchema", () => {
       planType: "plus",
       limitId: "plus-primary",
       limitName: "Plus",
-      primary: { usedPercent: 42, resetsAt: 1735689600000, durationMinutes: 300 },
+      primary: {
+        usedPercent: 42,
+        resetsAt: 1735689600000,
+        durationMinutes: 300,
+      },
       secondary: null,
       extraWindows: [
         {
           limitId: "plus-secondary",
           limitName: "Plus (weekly)",
-          primary: { usedPercent: 12, resetsAt: 1735776000000, durationMinutes: 10080 },
+          primary: {
+            usedPercent: 12,
+            resetsAt: 1735776000000,
+            durationMinutes: 10080,
+          },
           secondary: null,
         },
       ],
@@ -101,7 +121,12 @@ describe("providerRateLimitsSchema", () => {
       sevenDayOpus: null,
       sevenDaySonnet: null,
       modelScoped: [
-        { displayName: "Opus", usedPercent: 5, resetsAt: null, durationMinutes: null },
+        {
+          displayName: "Opus",
+          usedPercent: 5,
+          resetsAt: null,
+          durationMinutes: null,
+        },
       ],
       extraUsage: null,
     };

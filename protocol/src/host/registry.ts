@@ -1712,7 +1712,7 @@ export const worktreeListBindingsForEpicUpgradeV10ToV11 = defineUpgradePath<
 // Note: git contract definitions are imported from git-contracts.ts above
 // and registered inline in hostRpcRegistry and hostStreamRpcRegistry below.
 
-const hostRpcRegistryDefinition = {
+const HOST_RPC_REGISTRY_DEFINITION = {
   "host.status": {
     1: {
       latestMinor: 0,
@@ -3576,7 +3576,7 @@ const hostRpcRegistryDefinition = {
 
 export const hostRpcRegistry = defineFloorAwareVersionedRpcRegistry(
   RELEASED_FLOOR_METHOD_NAMES,
-  hostRpcRegistryDefinition,
+  HOST_RPC_REGISTRY_DEFINITION,
 );
 
 export type HostRpcRegistry = typeof hostRpcRegistry;

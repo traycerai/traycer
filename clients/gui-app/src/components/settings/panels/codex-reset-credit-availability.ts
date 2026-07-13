@@ -1,8 +1,12 @@
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
+import { createElement, type ReactNode } from "react";
+import { CodexResetCreditAction } from "@/components/settings/panels/codex-reset-credit-action";
 
-export function canUseCodexResetCredit(
+export function resolveCodexResetCreditAction(
   providerId: ProviderId,
+  profileId: string | null,
   enabled: boolean,
-): boolean {
-  return enabled && providerId === "codex";
+): ReactNode {
+  if (!enabled || providerId !== "codex") return null;
+  return createElement(CodexResetCreditAction, { profileId });
 }

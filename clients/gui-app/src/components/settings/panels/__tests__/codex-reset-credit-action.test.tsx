@@ -48,5 +48,9 @@ describe("CodexResetCreditAction", () => {
       profileId: "personal",
     });
     expect(typeof request.idempotencyKey).toBe("string");
+
+    fireEvent.click(screen.getByTestId("confirm-action"));
+    const retry = mocks.mutate.mock.calls[1]?.[0];
+    expect(retry.idempotencyKey).toBe(request.idempotencyKey);
   });
 });
