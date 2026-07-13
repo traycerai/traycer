@@ -1,17 +1,11 @@
 import { useState, type ReactElement, type ReactNode } from "react";
-import type {
-  WorktreeBinding,
-  WorktreeBindingOwnerKind,
-} from "@traycer/protocol/host/worktree-schemas";
+import type { WorktreeBindingOwnerKind } from "@traycer/protocol/host/worktree-schemas";
 import {
   HoverCard,
   HoverCardContent,
   HoverCardTrigger,
 } from "@/components/ui/hover-card";
-import {
-  OwnerWorkspaceMetadataContent,
-  WorktreePrPills,
-} from "@/components/worktree/worktree-pr-metadata";
+import { OwnerWorkspaceMetadataContent } from "@/components/worktree/worktree-pr-metadata";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useWorktreeOwnerMetadata } from "@/hooks/worktree/use-worktree-owner-metadata-query";
 
@@ -54,31 +48,5 @@ export function WorktreeOwnerMetadataHoverCard(props: {
         />
       </HoverCardContent>
     </HoverCard>
-  );
-}
-
-export function ChatStatusWorktreePrPills(props: {
-  readonly hostId: string;
-  readonly epicId: string;
-  readonly chatId: string;
-  readonly binding: WorktreeBinding | null;
-  readonly enabled: boolean;
-}): ReactNode {
-  const client = useHostClientForHostId(props.hostId);
-  const metadata = useWorktreeOwnerMetadata({
-    client,
-    epicId: props.epicId,
-    ownerId: props.chatId,
-    ownerKind: "chat",
-    binding: props.binding,
-    enabled: props.enabled,
-  });
-  return (
-    <WorktreePrPills
-      worktrees={metadata.worktrees}
-      detailOnHover
-      className="max-w-[min(34vw,18rem)] shrink-0"
-      testId="chat-status-worktree-prs"
-    />
   );
 }

@@ -36,6 +36,7 @@ interface TestState {
   readonly deleteArtifactMutateAsync: Mock;
   readonly deleteChatMutateAsync: Mock;
   readonly deleteTuiAgentMutateAsync: Mock;
+  readonly exportArtifactsMutate: Mock;
   readonly localDeleteArtifact: Mock;
   readonly closeCanvasTab: Mock;
   readonly markArtifactSelfDeleted: Mock;
@@ -72,6 +73,7 @@ const testState = vi.hoisted<TestState>(() => ({
   deleteArtifactMutateAsync: vi.fn(),
   deleteChatMutateAsync: vi.fn(),
   deleteTuiAgentMutateAsync: vi.fn(),
+  exportArtifactsMutate: vi.fn(),
   localDeleteArtifact: vi.fn(),
   closeCanvasTab: vi.fn(),
   markArtifactSelfDeleted: vi.fn(),
@@ -297,6 +299,13 @@ vi.mock("@/hooks/epic/use-epic-node-mutations", () => ({
   useEpicRenameArtifact: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
+vi.mock("@/hooks/epic/use-epic-export-artifacts-mutation", () => ({
+  useEpicExportArtifacts: () => ({
+    mutate: testState.exportArtifactsMutate,
+    isPending: false,
+  }),
+}));
+
 vi.mock("@/hooks/epic/use-epic-tui-agent-mutations", () => ({
   useEpicDeleteTuiAgent: () => ({
     mutate: vi.fn(),
@@ -412,6 +421,7 @@ vi.mock("@/lib/epic-selectors", () => ({
   // effect's dependency never changes and it never seeds in these tests.
   useEpicNodeWorkspaceFolders: () => EMPTY_WORKSPACE_FOLDERS,
   useEpicPermissionRole: () => testState.permissionRole,
+  useEpicSnapshotMeta: () => ({ epicLight: { title: "Test epic" } }),
   useEpicTreeIndex: () => testState.tree,
   useEpicTreeNode: (nodeId: string) => testState.tree.nodeById[nodeId] ?? null,
   useMaybeEpicTuiAgentHarnessId: () => null,
@@ -874,6 +884,71 @@ describe("epic sidebar selection mode", () => {
 
     expect(markRead).toHaveBeenCalledWith(EPIC_ID, "spec-root", 2);
     expect(markRead).toHaveBeenCalledWith(EPIC_ID, "ticket-child", 2);
+  });
+
+  it("exports one artifact from its row actions for viewers", () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+    testState.permissionRole = "viewer";
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    fireEvent.click(
+      screen.getByTestId("epic-sidebar-export-markdown-spec-root"),
+    );
+
+    expect(testState.exportArtifactsMutate).toHaveBeenCalledWith({
+      archive: false,
+      archiveTitle: null,
+      artifacts: [{ id: "spec-root", title: "Root spec" }],
+      format: "markdown",
+    });
+    expect(
+      screen.getByTestId("epic-sidebar-rename-spec-root").matches(":disabled"),
+    ).toBe(true);
+    expect(
+      screen.getByTestId("epic-sidebar-delete-spec-root").matches(":disabled"),
+    ).toBe(true);
+  });
+
+  it("bulk-exports every selected visible artifact, including descendants", () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+    testState.permissionRole = "viewer";
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Select artifacts" }));
+    fireEvent.click(screen.getByTestId("epic-sidebar-select-spec-root"));
+    expect(
+      screen
+        .getByTestId("epic-sidebar-export-selected-markdown")
+        .matches(":disabled"),
+    ).toBe(true);
+    fireEvent.click(screen.getByTestId("epic-sidebar-select-ticket-child"));
+    expect(
+      screen
+        .getByTestId("epic-sidebar-export-selected-markdown")
+        .matches(":disabled"),
+    ).toBe(false);
+    fireEvent.click(
+      screen.getByTestId("epic-sidebar-export-selected-markdown"),
+    );
+
+    expect(testState.exportArtifactsMutate).toHaveBeenCalledWith({
+      archive: true,
+      archiveTitle: "Test epic",
+      artifacts: [
+        { id: "spec-root", title: "Root spec" },
+        { id: "ticket-child", title: "Child ticket" },
+      ],
+      format: "markdown",
+    });
+    expect(
+      screen
+        .getByTestId("epic-sidebar-delete-selected-artifacts")
+        .matches(":disabled"),
+    ).toBe(true);
   });
 
   it("selects artifact rows explicitly and bulk-deletes topmost selected artifacts", async () => {

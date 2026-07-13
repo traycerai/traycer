@@ -1,4 +1,5 @@
 import type { NotificationShow } from "@/hooks/notifications/use-notifications";
+import { toast } from "sonner";
 import {
   rowFromAppLocalEntry,
   rowFromHostEntry,
@@ -32,6 +33,10 @@ export function displayNotificationRows(
   } catch {
     // The feed remains authoritative; a failed native toast is non-critical.
   }
+  toast(content.title, {
+    description: content.body,
+    id: content.replaceKey,
+  });
   target.playChime();
 }
 
@@ -84,8 +89,8 @@ function buildNotificationToastContent(
   const first = rows[0];
   if (rows.length === 1) {
     return {
-      title: "Traycer",
-      body: first.text,
+      title: first.title,
+      body: first.body,
       payload: first.payload,
       replaceKey: notificationReplaceKey(first),
     };
