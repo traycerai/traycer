@@ -28,6 +28,10 @@ export function useEpicExportArtifacts() {
   return useMutation<string | null, Error, EpicExportArtifactsInput>({
     mutationKey: epicMutationKeys.exportArtifacts(),
     mutationFn: async (input) => {
+      const firstArtifact = input.artifacts.at(0);
+      if (firstArtifact === undefined) {
+        throw new Error("Select at least one artifact to export.");
+      }
       const state = epicHandle.store.getState();
       const artifacts = input.artifacts.map((artifact) => {
         const fragment = state.getArtifactFragment(artifact.id);
@@ -40,7 +44,7 @@ export function useEpicExportArtifacts() {
         artifacts,
         format: input.format,
         archive: input.archive,
-        archiveTitle: input.archiveTitle ?? input.artifacts[0].title,
+        archiveTitle: input.archiveTitle ?? firstArtifact.title,
       });
       return saveBlobToDisk(output.blob, output.suggestedName);
     },
