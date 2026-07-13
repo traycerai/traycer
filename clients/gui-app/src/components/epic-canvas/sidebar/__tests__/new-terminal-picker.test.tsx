@@ -1,10 +1,18 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import type {
   WorktreeBindingSelectorDisabledReason,
   WorktreeBindingSelectorRow,
 } from "@traycer/protocol/host";
 import { NewTerminalPicker } from "../new-terminal-picker";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { paneTabRefs } from "@/stores/epics/canvas/actions";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
@@ -97,7 +105,11 @@ function resetCanvas(): void {
 
 function openPicker(): string {
   const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic");
-  render(<NewTerminalPicker epicId="epic-1" tabId={tabId} />);
+  render(
+    <TooltipProvider>
+      <NewTerminalPicker epicId="epic-1" tabId={tabId} />
+    </TooltipProvider>,
+  );
   fireEvent.click(screen.getByTestId("epic-terminals-panel-add"));
   return tabId;
 }
@@ -114,6 +126,14 @@ describe("<NewTerminalPicker />", () => {
     resetCanvas();
     selectById.mockClear();
     stubLoadedBindings();
+  });
+
+  afterEach(() => {
+    useDesktopDialogStore.setState({
+      activeDialog: null,
+      reportIssueAvailable: false,
+      reportIssueContext: null,
+    });
   });
 
   it("opens a popover with the host section and workspace rows", () => {
@@ -313,6 +333,24 @@ describe("<NewTerminalPicker />", () => {
       (tile) => tile.type === "terminal",
     );
     expect(terminals).toHaveLength(0);
+
+    // Capability-gated off by default.
+    expect(screen.queryByRole("button", { name: "Report issue" })).toBeNull();
+
+    act(() => {
+      useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
+
+    expect(useDesktopDialogStore.getState()).toMatchObject({
+      activeDialog: "report-issue",
+      reportIssueContext: {
+        title: "Couldn't resolve terminal directory",
+        message: "The terminal working directory could not be resolved.",
+        code: null,
+        source: "New terminal",
+      },
+    });
   });
 
   it("selects a workspace without creating a terminal on a single click", () => {

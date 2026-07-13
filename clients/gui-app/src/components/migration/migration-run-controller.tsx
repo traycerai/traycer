@@ -13,6 +13,7 @@ import {
 import { useHostClient } from "@/lib/host";
 import { useWsStreamClient } from "@/lib/host/stream-runtime-context";
 import { hostQueryKeys } from "@/lib/query-keys";
+import { reportableWarningToast } from "@/lib/reportable-error-toast";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useMigrationRunStore } from "@/stores/migration/migration-run-store";
 import {
@@ -82,8 +83,15 @@ export function MigrationRunController(): null {
           if (payload.success) {
             toast.success("Migration re-attempt complete.");
           } else {
-            toast.warning(
+            reportableWarningToast(
               "Migration re-attempt incomplete. Some local data still needs migration.",
+              undefined,
+              {
+                title: "Migration incomplete",
+                message: null,
+                code: null,
+                source: "Data migration",
+              },
             );
           }
           closeClient();

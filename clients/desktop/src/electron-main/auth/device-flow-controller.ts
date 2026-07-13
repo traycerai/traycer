@@ -120,10 +120,36 @@ interface AttemptHandle {
   readonly waker: PollWaker;
 }
 
+/**
+ * Appends this build's registered deep-link scheme to the browser verification
+ * URL as `return_scheme`, so the cloud's /device approval page can deep-link
+ * back to THE APP THAT ASKED - per-environment (`traycer` / `traycer-dev`) and
+ * slot-suffixed under multi-run dev - instead of a hardcoded production scheme
+ * (which launches an installed prod Traycer when a dev build signs in). The
+ * page validates the value against a strict allowlist and fires nothing when
+ * it is absent or malformed, so a manually typed verification URL simply gets
+ * no return deep link. Defensive: an unparseable URL passes through untouched.
+ */
+function withReturnScheme(uri: string, scheme: string): string {
+  try {
+    const url = new URL(uri);
+    url.searchParams.set("return_scheme", scheme);
+    return url.toString();
+  } catch {
+    return uri;
+  }
+}
+
 export class DeviceFlowController {
   private readonly attempts = new Map<string, AttemptHandle>();
 
-  constructor(private readonly authnBaseUrl: string) {}
+  constructor(
+    private readonly authnBaseUrl: string,
+    // The deep-link scheme this build registered (see
+    // `electron-main/auth/deep-link.ts`); threaded into the verification URL
+    // so the browser's return deep link targets this exact app.
+    private readonly returnScheme: string,
+  ) {}
 
   /**
    * Authorizes a new device attempt and kicks off the poll loop. Resolves once
@@ -163,8 +189,13 @@ export class DeviceFlowController {
       attemptId,
       authorization: {
         userCode: authorization.userCode,
+        // The short display URI stays clean for manual entry; only the
+        // pre-filled URL the shell opens carries the return scheme.
         verificationUri: authorization.verificationUri,
-        verificationUriComplete: authorization.verificationUriComplete,
+        verificationUriComplete: withReturnScheme(
+          authorization.verificationUriComplete,
+          this.returnScheme,
+        ),
         expiresInSeconds: authorization.expiresInSeconds,
         intervalSeconds: authorization.intervalSeconds,
       },

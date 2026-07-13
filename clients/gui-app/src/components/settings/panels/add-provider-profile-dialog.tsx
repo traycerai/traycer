@@ -18,6 +18,8 @@ import {
 } from "@traycer/protocol/host/provider-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
 import { ProviderProfileCard } from "@/components/providers/provider-profile-card";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -559,6 +561,16 @@ function AddProfileFailureStep({
         <Button type="button" size="sm" variant="secondary" onClick={onRetry}>
           Retry
         </Button>
+        <ReportIssueAction
+          context={createReportIssueContext({
+            title: "Provider sign-in failed",
+            message: null,
+            code: null,
+            source: "Add profile",
+          })}
+          presentation="link"
+          className="h-auto p-0 text-current"
+        />
       </div>
     </div>
   );

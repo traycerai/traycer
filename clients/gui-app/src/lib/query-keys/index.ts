@@ -30,6 +30,7 @@ export { snapshotsMutationKeys } from "@/lib/query-keys/snapshots-mutation-keys"
 export { providersMutationKeys } from "@/lib/query-keys/providers-mutation-keys";
 export { speechMutationKeys } from "@/lib/query-keys/speech-mutation-keys";
 export { notificationsMutationKeys } from "@/lib/query-keys/notifications-mutation-keys";
+export { notificationsQueryKeys } from "@/lib/query-keys/notifications-query-keys";
 
 export const queryKeys = {
   hostBase: hostQueryKeys.base,

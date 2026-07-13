@@ -32,6 +32,7 @@ import type {
   FreePortAndRestartInput,
   IHostManagement,
 } from "@traycer-clients/shared/platform/runner-host";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
 export interface HostDoctorCardProps {
   readonly recurrenceState?: RecurrenceState;
@@ -140,8 +141,15 @@ function HostDoctorCardInner(props: HostDoctorCardInnerProps) {
   const handleFix = useCallback(
     (issue: HostDoctorIssue) => {
       if (recurrenceModel.recurrence.locked) {
-        toast.error(
+        reportableErrorToast(
           "Doctor paused after 3 failed fixes. Click Re-run Doctor to retry.",
+          undefined,
+          {
+            title: "Host Doctor paused",
+            message: "Host Doctor paused after repeated failed fixes.",
+            code: null,
+            source: "Host Doctor",
+          },
         );
         return;
       }

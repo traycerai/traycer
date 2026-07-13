@@ -276,7 +276,11 @@ export function projectChat(id: string, entry: Y.Map<unknown>): ChatProjection {
  * compare undefined and produce spurious inequality.
  */
 function coerceChatRunSettings(raw: unknown): ChatRunSettings | null {
-  const parsed = chatRunSettingsSchema.safeParse(raw);
+  // The host persists settings as a nested Y.Map (`createTypedMap`), so the
+  // replicated entry must be serialized before schema validation - zod cannot
+  // read fields off a Y.Map and would reject every real record.
+  const value = raw instanceof Y.Map ? raw.toJSON() : raw;
+  const parsed = chatRunSettingsSchema.safeParse(value);
   return parsed.success ? parsed.data : null;
 }
 

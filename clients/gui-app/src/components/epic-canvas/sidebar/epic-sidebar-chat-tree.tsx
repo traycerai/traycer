@@ -27,6 +27,7 @@ import { cn } from "@/lib/utils";
 import { OwnerResourceChip } from "@/components/resources/resource-usage-chip";
 import type { ResourceOwnerKindWire } from "@traycer/protocol/host/resources/subscribe";
 import { ChatProgressIcon } from "@/components/chat/chat-progress-icon";
+import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -77,6 +78,8 @@ import {
   useEpicActiveAgentIds,
   useEpicArtifactRecords,
   useEpicConnectionStatus,
+  useEpicNodeHostId,
+  useEpicNodeOwnerKind,
   useEpicPermissionRole,
   useEpicTreeIndex,
   useEpicTreeNode,
@@ -133,6 +136,8 @@ import {
 import { SidebarReparentRowDropWrapper } from "@/components/epic-canvas/sidebar/sidebar-reparent-row-drop-wrapper";
 import { NewConversationModalAction } from "@/components/epic-canvas/sidebar/new-conversation-modal";
 import { SidebarPanelEmptyState } from "@/components/epic-canvas/sidebar/sidebar-panel-empty-state";
+import { useHostNotificationIndicators } from "@/hooks/notifications/use-host-notification-indicators-query";
+import { WorktreeOwnerMetadataHoverCard } from "@/components/worktree/worktree-owner-metadata";
 
 interface ChatTreePanelBodyProps {
   readonly epicId: string;
@@ -287,6 +292,15 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
       }),
     [rootIds, expandedIds, tree, visibleIds, comparator],
   );
+  const indicatorChatIds = useMemo(
+    () => selectableIds.filter((id) => tree.nodeById[id].type === "chat"),
+    [selectableIds, tree],
+  );
+  const notificationIndicators = useHostNotificationIndicators({
+    epicIds: [],
+    chatIds: indicatorChatIds,
+    enabled: indicatorChatIds.length > 0,
+  });
   const setSelectableIds = bulkSelection?.setSelectableIds ?? null;
   useEffect(() => {
     setSelectableIds?.(selectableIds);
@@ -375,17 +389,19 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   }
 
   return (
-    <SidebarSortContext.Provider value={comparator}>
-      <SidebarFilterVisibilityContext.Provider value={visibleIds}>
-        <SidebarContent className="gap-0">
-          <SidebarGroup className="min-h-0 flex-1 px-2 py-1">
-            <SidebarGroupContent className="flex min-h-0 flex-1 flex-col">
-              {panelContent}
-            </SidebarGroupContent>
-          </SidebarGroup>
-        </SidebarContent>
-      </SidebarFilterVisibilityContext.Provider>
-    </SidebarSortContext.Provider>
+    <NotificationIndicatorsProvider indicators={notificationIndicators.data}>
+      <SidebarSortContext.Provider value={comparator}>
+        <SidebarFilterVisibilityContext.Provider value={visibleIds}>
+          <SidebarContent className="gap-0">
+            <SidebarGroup className="min-h-0 flex-1 px-2 py-1">
+              <SidebarGroupContent className="flex min-h-0 flex-1 flex-col">
+                {panelContent}
+              </SidebarGroupContent>
+            </SidebarGroup>
+          </SidebarContent>
+        </SidebarFilterVisibilityContext.Provider>
+      </SidebarSortContext.Provider>
+    </NotificationIndicatorsProvider>
   );
 }
 
@@ -1205,6 +1221,8 @@ function ChatRowButton(props: ChatRowButtonProps) {
   const showNavigatorResourceStats = useSettingsStore(
     (state) => state.showNavigatorResourceStats,
   );
+  const ownerHostId = useEpicNodeHostId(nodeId);
+  const ownerKind = useEpicNodeOwnerKind(nodeId);
 
   // A chat row's "+" (add child) and "⋯" (more menu) are both gated by canEdit
   // and hidden in selection mode, so both pad-right zones share one flag. The
@@ -1262,7 +1280,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
     );
   }
 
-  return (
+  const button = (
     <button
       ref={dragRef}
       {...attributes}
@@ -1302,6 +1320,16 @@ function ChatRowButton(props: ChatRowButtonProps) {
         )}
       </span>
     </button>
+  );
+  if (ownerHostId === null || ownerKind === null) return button;
+  return (
+    <WorktreeOwnerMetadataHoverCard
+      trigger={button}
+      hostId={ownerHostId}
+      epicId={epicId}
+      ownerId={nodeId}
+      ownerKind={ownerKind}
+    />
   );
 }
 

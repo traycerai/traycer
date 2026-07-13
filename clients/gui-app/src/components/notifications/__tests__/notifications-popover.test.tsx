@@ -27,6 +27,10 @@ import {
   openNotificationsStream,
   useNotificationsStore,
 } from "@/stores/notifications/notifications-store";
+import {
+  __resetHostNotificationsStoreForTests,
+  useHostNotificationsStore,
+} from "@/stores/notifications/host-notifications-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { NotificationsStreamCallbacks } from "@traycer-clients/shared/host-transport/notifications-stream-client";
 import {
@@ -38,6 +42,9 @@ import {
   NOTIFICATIONS_ARRAY_KEY,
   createNotificationRoomEntryMap,
 } from "@traycer/protocol/notifications/notification-room";
+import type { HostNotificationEntry } from "@traycer/protocol/host/notifications/contracts";
+
+const TASK_TITLE = "Checkout notification title and hover behavior";
 
 function seedEntries(
   callbacks: NotificationsStreamCallbacks,
@@ -127,6 +134,47 @@ function renderRouter(router: AnyRouter): void {
   );
 }
 
+function hostAgentEntry(input: {
+  readonly id: string;
+  readonly kind: "agent.stopped" | "agent.stalled";
+  readonly severity: "failure" | "done";
+  readonly outcome: "completed" | "stopped" | "errored" | null;
+}): HostNotificationEntry {
+  if (input.kind === "agent.stopped") {
+    return {
+      id: input.id,
+      updatedAt: input.id === "failed" ? 20 : 10,
+      readAt: null,
+      kind: "agent.stopped",
+      sourceRef: input.id,
+      severity: input.severity,
+      outcome: input.outcome ?? "completed",
+      payload: {
+        epicId: "epic-1",
+        chatId: "chat-1",
+        agentName: "Agent",
+        taskTitle: TASK_TITLE,
+        outcome: input.outcome ?? "completed",
+      },
+    };
+  }
+  return {
+    id: input.id,
+    updatedAt: input.id === "failed" ? 20 : 10,
+    readAt: null,
+    kind: "agent.stalled",
+    sourceRef: input.id,
+    severity: input.severity,
+    outcome: "errored",
+    payload: {
+      epicId: "epic-1",
+      chatId: "chat-1",
+      agentName: "Agent",
+      taskTitle: TASK_TITLE,
+    },
+  };
+}
+
 function threadEntry(
   id: string,
   epicId: string,
@@ -183,6 +231,7 @@ async function selectTab(testId: string) {
 describe("NotificationsPopover click routing", () => {
   beforeEach(() => {
     __resetNotificationsStoreForTests();
+    __resetHostNotificationsStoreForTests();
     useEpicCanvasStore.setState({
       tabsById: {},
       openTabOrder: [],
@@ -193,6 +242,7 @@ describe("NotificationsPopover click routing", () => {
 
   afterEach(() => {
     cleanup();
+    __resetHostNotificationsStoreForTests();
   });
 
   it("renders a relative timestamp on every notification row", async () => {
@@ -271,13 +321,13 @@ describe("NotificationsPopover click routing", () => {
     );
     const unreadRows =
       within(unreadContent).getAllByTestId("notification-entry");
-    expect(notificationIds(unreadRows)).toEqual(["unread-new"]);
+    expect(notificationIds(unreadRows)).toEqual(["global:unread-new"]);
     const unreadRow = unreadRows[0];
     const unreadMarker = within(unreadRow).getByTestId(
       "notification-unread-marker",
     );
     expect(unreadMarker.className).toContain("absolute");
-    expect(unreadMarker.className).toContain("inset-y-0");
+    expect(unreadMarker.className).toContain("inset-y-2");
     expect(unreadMarker.className).toContain("left-0");
     expect(unreadMarker.className).toContain("rounded-r-full");
 
@@ -289,12 +339,80 @@ describe("NotificationsPopover click routing", () => {
     let allRows: ReadonlyArray<HTMLElement> = [];
     await waitFor(() => {
       allRows = within(allContent).getAllByTestId("notification-entry");
-      expect(notificationIds(allRows)).toEqual(["unread-new", "read-old"]);
+      expect(notificationIds(allRows)).toEqual([
+        "global:unread-new",
+        "global:read-old",
+      ]);
     });
     const readRow = allRows[1];
     expect(
       within(readRow).queryByTestId("notification-unread-marker"),
     ).toBeNull();
+  });
+
+  it("renders failed host outcomes and stalled rows as failure severity", async () => {
+    useHostNotificationsStore.getState().replaceFromSnapshot(
+      [
+        hostAgentEntry({
+          id: "completed",
+          kind: "agent.stopped",
+          severity: "done",
+          outcome: "completed",
+        }),
+        hostAgentEntry({
+          id: "failed",
+          kind: "agent.stopped",
+          severity: "failure",
+          outcome: "errored",
+        }),
+        hostAgentEntry({
+          id: "stalled",
+          kind: "agent.stalled",
+          severity: "failure",
+          outcome: "errored",
+        }),
+      ],
+      50,
+    );
+
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
+    renderRouter(router);
+
+    const rows = await screen.findAllByTestId("notification-entry");
+    const failed = rows.find(
+      (row) => row.dataset.notificationId === "host:failed",
+    );
+    const completed = rows.find(
+      (row) => row.dataset.notificationId === "host:completed",
+    );
+    const stalled = rows.find(
+      (row) => row.dataset.notificationId === "host:stalled",
+    );
+
+    expect(failed?.dataset.notificationSeverity).toBe("failure");
+    expect(failed?.dataset.notificationOutcome).toBe("errored");
+    expect(failed?.textContent).toContain(TASK_TITLE);
+    expect(failed?.textContent).toContain("Agent • Failed");
+    expect(completed?.dataset.notificationSeverity).toBe("done");
+    expect(completed?.textContent).toContain(TASK_TITLE);
+    expect(completed?.textContent).toContain("Agent • Done");
+    expect(stalled?.dataset.notificationSeverity).toBe("failure");
+    expect(stalled?.textContent).toContain(TASK_TITLE);
+    expect(stalled?.textContent).toContain("Agent • Stalled");
+
+    if (completed === undefined) throw new Error("missing completed row");
+    const notificationTitle =
+      within(completed).getByTestId("notification-title");
+    expect(notificationTitle.className).toContain("truncate");
+    expect(notificationTitle.className).toContain("font-semibold");
+    fireEvent.pointerMove(notificationTitle, { pointerType: "mouse" });
+    expect((await screen.findByRole("tooltip")).textContent).toBe(TASK_TITLE);
   });
 
   it("keeps the Unread tab visible when every notification is read", async () => {
@@ -345,7 +463,7 @@ describe("NotificationsPopover click routing", () => {
         notificationIds(
           within(allContent).getAllByTestId("notification-entry"),
         ),
-      ).toEqual(["read-only"]);
+      ).toEqual(["global:read-only"]);
     });
   });
 

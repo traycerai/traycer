@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { create, type UseBoundStore, type StoreApi } from "zustand";
 import * as Y from "yjs";
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
@@ -23,6 +24,7 @@ interface NotificationsState {
   readonly snapshotMeta: NotificationsSnapshotMeta | null;
   readonly connectionStatus: StreamConnectionStatus;
   readonly entries: ReadonlyArray<NotificationEntry>;
+  readonly entryIds: ReadonlyArray<string>;
   readonly unreadCount: number;
   readonly revision: number;
 
@@ -39,6 +41,11 @@ function getNotificationsArray(target: Y.Doc): NotificationRoomEntriesArray {
   return target.getArray<NotificationRoomEntryMap>(NOTIFICATIONS_ARRAY_KEY);
 }
 
+function sameIds(a: ReadonlyArray<string>, b: ReadonlyArray<string>): boolean {
+  if (a.length !== b.length) return false;
+  return a.every((id, index) => id === b[index]);
+}
+
 /**
  * Owns the replaceable Y.Doc plus the cached projection tuple for the
  * notifications singleton. Kept inside an IIFE closure so no module-level
@@ -49,6 +56,7 @@ function getNotificationsArray(target: Y.Doc): NotificationRoomEntriesArray {
  */
 interface NotificationsProjection {
   readonly entries: ReadonlyArray<NotificationEntry>;
+  readonly entryIds: ReadonlyArray<string>;
   readonly unreadCount: number;
   readonly changed: boolean;
 }
@@ -64,6 +72,7 @@ function createNotificationsReplica(): NotificationsReplica {
   let doc = new Y.Doc();
   let lastProjectionKey: string | null = null;
   let lastEntries: ReadonlyArray<NotificationEntry> = [];
+  let lastEntryIds: ReadonlyArray<string> = [];
   let lastUnread = 0;
 
   function project(): NotificationsProjection {
@@ -78,17 +87,28 @@ function createNotificationsReplica(): NotificationsReplica {
       }
     }
     out.sort((a, b) => b.createdAt - a.createdAt);
-    let projectionKey = `${out.length}`;
-    for (const entry of out) {
-      projectionKey += `|${entry.id}:${entry.readAt ?? ""}`;
-    }
+    const entryIds = out.map((entry) => entry.id);
+    const projectionKey = `${out.length}${out
+      .map((entry) => `|${entry.id}:${entry.createdAt}:${entry.readAt ?? ""}`)
+      .join("")}`;
     if (projectionKey === lastProjectionKey) {
-      return { entries: lastEntries, unreadCount: lastUnread, changed: false };
+      return {
+        entries: lastEntries,
+        entryIds: lastEntryIds,
+        unreadCount: lastUnread,
+        changed: false,
+      };
     }
     lastProjectionKey = projectionKey;
     lastEntries = out;
+    lastEntryIds = sameIds(entryIds, lastEntryIds) ? lastEntryIds : entryIds;
     lastUnread = unread;
-    return { entries: out, unreadCount: unread, changed: true };
+    return {
+      entries: out,
+      entryIds: lastEntryIds,
+      unreadCount: unread,
+      changed: true,
+    };
   }
 
   function onProjection(handler: () => void): () => void {
@@ -103,6 +123,7 @@ function createNotificationsReplica(): NotificationsReplica {
     doc = new Y.Doc();
     lastProjectionKey = null;
     lastEntries = [];
+    lastEntryIds = [];
     lastUnread = 0;
   }
 
@@ -125,6 +146,7 @@ function createNotificationsStore(
       if (!projected.changed) return;
       set({
         entries: projected.entries,
+        entryIds: projected.entryIds,
         unreadCount: projected.unreadCount,
         revision: Date.now(),
       });
@@ -137,6 +159,7 @@ function createNotificationsStore(
       snapshotMeta: null,
       connectionStatus: "connecting",
       entries: [],
+      entryIds: [],
       unreadCount: 0,
       revision: 0,
 
@@ -191,6 +214,7 @@ function createNotificationsStore(
           doc: replica.getDoc(),
           snapshotMeta: null,
           entries: [],
+          entryIds: [],
           unreadCount: 0,
           revision: 0,
           connectionStatus: "connecting" as StreamConnectionStatus,
@@ -265,6 +289,26 @@ export function openNotificationsStream(
 
 export function useNotificationEntries(): ReadonlyArray<NotificationEntry> {
   return useNotificationsStore((state) => state.entries);
+}
+
+export function selectNotificationEntryIds(
+  state: NotificationsState,
+): ReadonlyArray<string> {
+  return state.entryIds;
+}
+
+export function makeSelectNotificationEntryById(id: string) {
+  return (state: NotificationsState): NotificationEntry | null =>
+    state.entries.find((entry) => entry.id === id) ?? null;
+}
+
+export function useNotificationEntryIds(): ReadonlyArray<string> {
+  return useNotificationsStore(selectNotificationEntryIds);
+}
+
+export function useNotificationEntryById(id: string): NotificationEntry | null {
+  const selector = useMemo(() => makeSelectNotificationEntryById(id), [id]);
+  return useNotificationsStore(selector);
 }
 
 export function useNotificationUnreadCount(): number {

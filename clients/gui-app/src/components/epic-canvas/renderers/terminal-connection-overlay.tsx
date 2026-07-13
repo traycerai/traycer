@@ -1,6 +1,8 @@
 import type { ReactNode } from "react";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 import type { TerminalConnectionOverlayState } from "./terminal-connection-overlay-state";
 
 /**
@@ -46,14 +48,26 @@ export function TerminalConnectionOverlay(
             This session disconnected and could not be restarted. It may have
             ended while the app was asleep.
           </p>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={props.onReconnect}
-          >
-            Reconnect
-          </Button>
+          <div className="flex flex-wrap justify-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={props.onReconnect}
+            >
+              Reconnect
+            </Button>
+            <ReportIssueAction
+              context={createReportIssueContext({
+                title: "Terminal session could not reconnect",
+                message: "The terminal session could not be restarted.",
+                code: null,
+                source: "Terminal",
+              })}
+              presentation="text"
+              className={undefined}
+            />
+          </div>
         </>
       ) : (
         <div className="flex items-center gap-2">

@@ -40,6 +40,17 @@ import {
  *   strict-decodes unconditionally. Fix by freezing the shipped line and
  *   opening a new major with downgrade bridges that drop the new values
  *   (amp 003d7586 / devin 407d110 template).
+ * - **breaking** (for additions, same rule as above): a brand-new PROPERTY
+ *   KEY added at a released version on a host→client slot, even when it is
+ *   parse-tolerant (optional, or `.catch()`/default-backed). Tolerance makes
+ *   the schema-level parse succeed; it says nothing about whether the
+ *   released peer's wire payload ever carries the key, and nothing about
+ *   whether every consumer actually runs that parse before touching the
+ *   field (the providers.list #258 incident: `profiles: z.array(...).catch([])`
+ *   landed on the live 3.0 line, the gate credited the tolerance, and the
+ *   untouched-by-parse transport delivered `undefined` to code typed as if
+ *   the field were always populated). Mirrored on **client→host** slots as
+ *   **advisory**: a released host simply ignores the unrecognized key.
  *
  * Paths that are deliberately catalog-gated (additive ids safe only because a
  * negotiated catalog already gated the client) are encoded as static policy
@@ -689,16 +700,42 @@ function diffSchemasAtSameVersion(
       if (property in theirObject.properties) {
         continue;
       }
+      const propertyPath = joinPath(path, `properties.${property}`);
       if (mineRequired.has(property)) {
         divergences.push({
-          path: joinPath(path, `properties.${property}`),
+          path: propertyPath,
           severity: "breaking",
           detail:
             "new property added as required - released peers do not produce it and this tree fails to parse their payloads",
         });
+        continue;
       }
-      // Added optional properties are safe in both directions: released
-      // receivers strip the unknown key, this tree accepts its absence.
+      // A tolerated addition (optional, or backed by .catch()/default) is
+      // schema-parse-safe but is still a same-version wire-shape change on an
+      // already-released line: the key genuinely does not exist on the
+      // released peer's wire. This is the exact shape of the providers.list
+      // incident - `profiles: z.array(...).catch([])` landed on the live 3.0
+      // line without a version bump, the gate credited the tolerance and
+      // passed, and the client transport (which did not parse responses at
+      // the time) never ran the catch default, so code typed as if the field
+      // is always populated read `undefined` at runtime against released
+      // 1.1.5/1.1.6 hosts. `.catch()`/optional tolerance is parse-time
+      // hardening only, not a versioning mechanism - see the "Conventions
+      // going forward" note in the fix's decision log.
+      if (hostToClient) {
+        divergences.push({
+          path: propertyPath,
+          severity: "breaking",
+          detail: `new property added (tolerated via optional/.catch()/default) at a released version on a host→client slot - a released peer's wire payload never carries this key, so any consumer that assumes it is always populated reads undefined; ${HOST_TO_CLIENT_ADDITION_HINT}`,
+        });
+      } else {
+        divergences.push({
+          path: propertyPath,
+          severity: "advisory",
+          detail:
+            "new property added (tolerated via optional/.catch()/default) at a released version on a client→host slot - safe because a released host ignores unrecognized request fields; still prefer a minor bump so the field's presence stays a version fact instead of a runtime coin flip",
+        });
+      }
     }
 
     return divergences;

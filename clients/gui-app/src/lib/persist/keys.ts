@@ -10,7 +10,7 @@
 
 export const PERSIST_PREFIX = "traycer-gui-app";
 
-// Six stores bucket their key by the signed-in identity; an absent/empty
+// Seven stores bucket their key by the signed-in identity; an absent/empty
 // identity collapses to the shared anonymous bucket. Preserved verbatim from
 // the per-store `ANONYMOUS_USER_KEY = "anon"` + `value.length > 0` logic.
 export const scopeBucket = (value: string | null): string =>
@@ -51,6 +51,21 @@ export const epicCanvasKey = (identity: string | null): string =>
 export const openEpicKey = (identity: string | null, epicId: string): string =>
   scopedPersistKey("open-epic", scopeBucket(identity), epicId);
 
+export const appLocalNotificationsKey = (userId: string | null): string =>
+  scopedPersistKey("app-local-notifications", scopeBucket(userId));
+
+// Host-scoped (not identity-scoped): the worktrees panel's warm-open snapshot
+// of per-path activity entries (worktrees-enrichment-persistence.ts). A host
+// id is always non-empty, so no `scopeBucket` collapse applies.
+export const worktreeActivityCacheKey = (hostId: string): string =>
+  scopedPersistKey("worktree-activity-cache", hostId);
+
+// Host-scoped sibling of `worktreeActivityCacheKey`: the base listing rows
+// (worktrees-listing-query.ts), so the panel paints its row list instantly on
+// launch while the live listing refetches behind it.
+export const worktreeListingCacheKey = (hostId: string): string =>
+  scopedPersistKey("worktree-listing-cache", hostId);
+
 // ── Catalog ────────────────────────────────────────────────────────────────
 // `kind` tells enumeration the shape of each persisted surface:
 //   - "static"  : plain `traycer-gui-app:<leaf>` localStorage key.
@@ -71,7 +86,7 @@ export interface PersistStoreEntry {
 }
 
 export const PERSIST_STORES = [
-  // ── Scoped zustand stores (6) ────────────────────────────────────────────
+  // ── Scoped zustand stores (7) ────────────────────────────────────────────
   {
     camelName: "composerRunSettings",
     leaf: "composer-run-settings",
@@ -94,6 +109,11 @@ export const PERSIST_STORES = [
   },
   { camelName: "epicCanvas", leaf: "epic-canvas", kind: "scoped" },
   { camelName: "openEpic", leaf: "open-epic", kind: "scoped" },
+  {
+    camelName: "appLocalNotifications",
+    leaf: "app-local-notifications",
+    kind: "scoped",
+  },
 
   // ── Static zustand stores (18) ───────────────────────────────────────────
   { camelName: "onboarding", leaf: "onboarding", kind: "static" },
@@ -159,6 +179,20 @@ export const PERSIST_STORES = [
     camelName: "deletedEpicEventsChannel",
     leaf: "deleted-epic-events:v1",
     kind: "channel",
+  },
+  // `worktree-activity-cache:<hostId>` — the worktrees panel's warm-open
+  // TanStack snapshot (worktrees-enrichment-persistence.ts), host-scoped.
+  {
+    camelName: "worktreeActivityCache",
+    leaf: "worktree-activity-cache",
+    kind: "scoped",
+  },
+  // `worktree-listing-cache:<hostId>` — the worktrees panel's base listing
+  // snapshot (worktrees-listing-query.ts), host-scoped.
+  {
+    camelName: "worktreeListingCache",
+    leaf: "worktree-listing-cache",
+    kind: "scoped",
   },
 ] as const satisfies ReadonlyArray<PersistStoreEntry>;
 

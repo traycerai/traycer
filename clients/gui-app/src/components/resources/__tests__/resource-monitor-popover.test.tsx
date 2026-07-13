@@ -132,6 +132,11 @@ const canvasMock = vi.hoisted(() => {
     tabsById: {
       "tab-1": { tabId: "tab-1", epicId: "epic-1", name: "Resource Task" },
       "tab-2": { tabId: "tab-2", epicId: "epic-1", name: "Resource Task" },
+      "tab-closed": {
+        tabId: "tab-closed",
+        epicId: "epic-2",
+        name: "Background Task",
+      },
     },
     canvasByTabId: {
       "tab-1": {
@@ -176,6 +181,29 @@ const canvasMock = vi.hoisted(() => {
             titleSource: "manual",
             hostId: "host-1",
             cwd: "/work",
+          },
+        },
+        sizesByGroupId: {},
+      },
+      "tab-closed": {
+        root: {
+          kind: "pane",
+          id: "pane-closed",
+          tabInstanceIds: ["tile-term-closed"],
+          activeTabId: "tile-term-closed",
+          previewTabId: null,
+          activationHistory: ["tile-term-closed"],
+        },
+        activePaneId: "pane-closed",
+        tilesByInstanceId: {
+          "tile-term-closed": {
+            id: "term-closed",
+            instanceId: "tile-term-closed",
+            type: "terminal",
+            name: "Background Terminal",
+            titleSource: "manual",
+            hostId: "host-1",
+            cwd: "/work/background",
           },
         },
         sizesByGroupId: {},
@@ -960,6 +988,59 @@ describe("ResourceMonitorPopover", () => {
     expect(tabNavigationMock.navigateToTabIntent).toHaveBeenCalledWith(
       routerMock.navigate,
       expect.objectContaining({ tabId: "tab-2" }),
+    );
+  });
+
+  it("reopens a closed task and focuses its preserved terminal", async () => {
+    routerMock.pathname = "/epics/epic-1/tab-1";
+    canvasMock.prepareSetActiveTileTabFocusTarget.mockReturnValue({
+      paneId: "pane-closed",
+      tileInstanceId: "tile-term-closed",
+    });
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [
+            owner({
+              owner: {
+                kind: "terminal",
+                hostId: "host-1",
+                epicId: "epic-2",
+                ownerId: "term-closed",
+              },
+              activeProcessName: "make",
+            }),
+          ],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.click(await screen.findByText("Background Terminal"));
+
+    expect(canvasMock.prepareSetActiveTileTabFocusTarget).toHaveBeenCalledWith(
+      "tab-closed",
+      "pane-closed",
+      "tile-term-closed",
+    );
+    expect(
+      tabNavigationMock.existingEpicTabIntentWithNestedFocus,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({
+        epicId: "epic-2",
+        tabId: "tab-closed",
+        nestedFocus: {
+          paneId: "pane-closed",
+          tileInstanceId: "tile-term-closed",
+        },
+      }),
+    );
+    expect(tabNavigationMock.navigateToTabIntent).toHaveBeenCalledWith(
+      routerMock.navigate,
+      expect.objectContaining({ tabId: "tab-closed" }),
     );
   });
 

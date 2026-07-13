@@ -153,16 +153,16 @@ export function workspaceRunBranchSourceLabel(
  * secondary text, subtle hover. Branch callers raise their selected value to
  * medium-emphasis foreground. Pass through `cn(...)`.
  */
-// Controls size to their content instead of stretching across the detail tier.
-// The shared cap keeps long branch names from determining the whole surface;
-// labels truncate inside it while short values keep compact hit/hover areas.
+// The row grid owns each control's width. Filling its minmax(0, …) track keeps
+// intrinsic label widths from increasing a modal or submenu's minimum width;
+// labels truncate inside the control instead.
 // Resting tone is secondary muted text by default; a mount can set `--fc-text`
 // to brighten location labels (e.g. fork / terminal panels).
 export const FOLDER_CONTROL_TRIGGER_CLASS =
   // A disabled control (active-run lock / non-git folder) keeps the same text
   // tone. Its affordance is the not-allowed cursor + no hover-brighten + the
   // rebind tooltip, rather than another layer of fading.
-  "inline-flex w-max max-w-[min(100%,18rem)] min-w-0 items-center gap-1.5 rounded-md px-1.5 py-1 text-ui-sm text-[color:var(--fc-text,var(--color-muted-foreground))] transition-[background-color,color] hover:bg-accent/50 hover:text-foreground focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-[color:var(--fc-text,var(--color-muted-foreground))] aria-disabled:cursor-not-allowed aria-disabled:hover:bg-transparent aria-disabled:hover:text-[color:var(--fc-text,var(--color-muted-foreground))] data-[state=open]:bg-accent/50 data-[state=open]:text-foreground";
+  "inline-flex w-full max-w-full min-w-0 items-center gap-1.5 rounded-md px-1.5 py-1 text-ui-sm text-[color:var(--fc-text,var(--color-muted-foreground))] transition-[background-color,color] hover:bg-accent/50 hover:text-foreground focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-[color:var(--fc-text,var(--color-muted-foreground))] aria-disabled:cursor-not-allowed aria-disabled:hover:bg-transparent aria-disabled:hover:text-[color:var(--fc-text,var(--color-muted-foreground))] data-[state=open]:bg-accent/50 data-[state=open]:text-foreground";
 
 // The ⚙ scripts button opens the modal in every mode with no per-folder
 // "configured" indicator, so no scripts-content derivation lives here.

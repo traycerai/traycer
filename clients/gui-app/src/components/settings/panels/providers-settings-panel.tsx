@@ -12,6 +12,8 @@ import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/hos
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { RefreshIconButton } from "@/components/refresh-icon-button";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 import {
   Select,
   SelectContent,
@@ -297,6 +299,16 @@ function ProvidersPanelBody({
     return (
       <div className="px-6 py-8 text-ui-sm text-destructive">
         Couldn't load provider state. The host may need to be updated.
+        <ReportIssueAction
+          context={createReportIssueContext({
+            title: "Couldn't load provider state",
+            message: null,
+            code: query.error.code,
+            source: "Providers",
+          })}
+          presentation="link"
+          className="ml-1 h-auto p-0 text-current"
+        />
       </div>
     );
   }

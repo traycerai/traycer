@@ -1,10 +1,11 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useState } from "react";
 import {
   Bell,
   BellOff,
   Check,
   CheckCheck,
   CheckCircle2,
+  CircleAlert,
   MessageCircle,
   MessageSquarePlus,
   MessageSquareX,
@@ -19,27 +20,23 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import {
-  useNotificationsActions,
-  useNotificationsList,
-} from "@/hooks/notifications/use-notifications-stream";
 import { useNotificationActivation } from "@/hooks/notifications/use-notification-activation";
-import { buildPayloadFromEvent } from "@/lib/notifications";
 import { useRelativeTimestamp } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
 import {
-  type NotificationEntry,
+  type MergedNotificationRow,
+  useMergedNotificationIds,
+  useMergedNotificationRow,
+  useMergedNotificationUnreadCount,
+  useMergedNotificationsActions,
+} from "@/stores/notifications/merged-notifications";
+import {
   type NotificationEvent,
   NOTIFICATION_EVENT_TYPES,
 } from "@traycer/protocol/notifications/notification-entry";
-import { formatNotification } from "@traycer/protocol/notifications/notification-formatter";
 
 interface NotificationsPopoverProps {
   readonly onNavigate: () => void;
-}
-
-interface PartitionedEntries {
-  readonly unread: ReadonlyArray<NotificationEntry>;
 }
 
 type NotificationsTab = "unread" | "all";
@@ -57,25 +54,23 @@ type NotificationsTab = "unread" | "all";
  */
 export function NotificationsPopover(props: NotificationsPopoverProps) {
   const { onNavigate } = props;
-  const entries = useNotificationsList();
-  const actions = useNotificationsActions();
+  const ids = useMergedNotificationIds();
+  const actions = useMergedNotificationsActions();
   const { activate } = useNotificationActivation();
   const [activeTab, setActiveTab] = useState<NotificationsTab>("unread");
 
-  const partitioned = useMemo<PartitionedEntries>(
-    () => ({ unread: entries.filter((entry) => entry.readAt === null) }),
-    [entries],
-  );
-
   const handleClick = useCallback(
-    (entry: NotificationEntry) => {
-      const payload = buildPayloadFromEvent(entry.event);
+    (row: MergedNotificationRow) => {
+      if (row.payload === null) {
+        actions.markAsRead(row.feedId);
+        return;
+      }
       onNavigate();
       activate({
-        payload,
+        payload: row.payload,
         receivedAt: Date.now(),
         onActivated: () => {
-          actions.markAsRead(entry.id);
+          actions.markAsRead(row.feedId);
         },
       });
     },
@@ -88,8 +83,8 @@ export function NotificationsPopover(props: NotificationsPopoverProps) {
     }
   }, []);
 
-  const isEmpty = entries.length === 0;
-  const unreadCount = partitioned.unread.length;
+  const isEmpty = ids.length === 0;
+  const unreadCount = useMergedNotificationUnreadCount();
 
   return (
     <TooltipProvider delayDuration={300}>
@@ -182,14 +177,15 @@ export function NotificationsPopover(props: NotificationsPopoverProps) {
           data-testid="notifications-tab-content-unread"
           className="min-h-0 flex-1 overflow-y-auto overscroll-contain data-[state=inactive]:hidden"
         >
-          {partitioned.unread.length === 0 ? (
+          {unreadCount === 0 ? (
             <EmptyState
               title="You're all caught up"
               description="Unread notifications will appear here."
             />
           ) : (
             <NotificationList
-              entries={partitioned.unread}
+              ids={ids}
+              filter="unread"
               onActivate={handleClick}
               onMarkRead={actions.markAsRead}
             />
@@ -207,11 +203,26 @@ export function NotificationsPopover(props: NotificationsPopoverProps) {
             />
           ) : (
             <NotificationList
-              entries={entries}
+              ids={ids}
+              filter="all"
               onActivate={handleClick}
               onMarkRead={actions.markAsRead}
             />
           )}
+          {activeTab === "all" && actions.canLoadMoreHost ? (
+            <div className="border-t border-border/60 p-2">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => actions.loadMoreHost()}
+                disabled={actions.isLoadingMoreHost}
+                className="w-full text-ui-xs"
+              >
+                Load older notifications
+              </Button>
+            </div>
+          ) : null}
         </TabsContent>
       </Tabs>
     </TooltipProvider>
@@ -219,18 +230,20 @@ export function NotificationsPopover(props: NotificationsPopoverProps) {
 }
 
 interface NotificationListProps {
-  readonly entries: ReadonlyArray<NotificationEntry>;
-  readonly onActivate: (entry: NotificationEntry) => void;
+  readonly ids: ReadonlyArray<string>;
+  readonly filter: NotificationsTab;
+  readonly onActivate: (row: MergedNotificationRow) => void;
   readonly onMarkRead: (id: string) => void;
 }
 
 function NotificationList(props: NotificationListProps) {
   return (
-    <ul className="flex flex-col py-1">
-      {props.entries.map((entry) => (
+    <ul className="flex flex-col gap-2 p-2">
+      {props.ids.map((id) => (
         <NotificationRow
-          key={entry.id}
-          entry={entry}
+          key={id}
+          feedId={id}
+          filter={props.filter}
           onActivate={props.onActivate}
           onMarkRead={props.onMarkRead}
         />
@@ -266,61 +279,88 @@ function EmptyState(props: EmptyStateProps) {
 }
 
 interface NotificationRowProps {
-  readonly entry: NotificationEntry;
-  readonly onActivate: (entry: NotificationEntry) => void;
+  readonly feedId: string;
+  readonly filter: NotificationsTab;
+  readonly onActivate: (row: MergedNotificationRow) => void;
   readonly onMarkRead: (id: string) => void;
 }
 
 function NotificationRow(props: NotificationRowProps) {
-  const { entry, onActivate, onMarkRead } = props;
-  const isRead = entry.readAt !== null;
-  const text = formatNotification(entry.event, undefined);
-  const meta = getEventMeta(entry.event);
+  const { feedId, filter, onActivate, onMarkRead } = props;
+  const row = useMergedNotificationRow(feedId);
+  if (row === null) return null;
+  const isRead = row.readAt !== null;
+  if (filter === "unread" && isRead) return null;
+  const meta = getRowMeta(row);
   const Icon = meta.icon;
 
   return (
     <li
-      className="group/row relative"
+      className={cn(
+        "group/row relative overflow-hidden rounded-2xl border border-border/60 bg-muted/35 shadow-sm",
+        !isRead && "bg-accent/55",
+      )}
       data-testid="notification-entry"
-      data-notification-id={entry.id}
+      data-notification-id={row.feedId}
+      data-notification-source={row.source}
       data-notification-read={isRead ? "true" : "false"}
+      data-notification-severity={row.severity}
+      data-notification-outcome={row.outcome ?? "none"}
     >
       {!isRead && (
         <span
           aria-hidden
           data-testid="notification-unread-marker"
-          className="pointer-events-none absolute inset-y-0 left-0 z-10 w-1 rounded-r-full bg-blue-500 dark:bg-blue-400"
+          className="pointer-events-none absolute inset-y-2 left-0 z-10 w-1 rounded-r-full bg-blue-500 dark:bg-blue-400"
         />
       )}
       <button
         type="button"
-        onClick={() => onActivate(entry)}
+        onClick={() => onActivate(row)}
+        aria-label={`${row.title}. ${row.body}`}
         className={cn(
-          "flex w-full items-start gap-3 px-4 py-2.5 text-left transition-colors",
-          "hover:bg-accent focus-visible:bg-accent focus-visible:outline-none",
-          !isRead && "bg-accent/30",
+          "flex w-full items-start gap-3 rounded-2xl px-3 py-3 text-left transition-colors",
+          "hover:bg-accent/70 focus-visible:bg-accent/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
         )}
       >
-        <span aria-hidden className="mt-1.5 h-4 w-0.5 shrink-0" />
         <span
           aria-hidden
           className={cn(
-            "relative mt-0.5 grid size-7 shrink-0 place-items-center rounded-full",
+            "relative grid size-10 shrink-0 place-items-center rounded-xl",
             meta.tone,
           )}
         >
-          <Icon className="size-3.5" />
+          <Icon className="size-5" />
         </span>
-        <div className="flex min-w-0 flex-1 flex-col gap-0.5 pr-7">
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <div className="flex min-w-0 items-baseline gap-2">
+            <TooltipWrapper
+              label={row.title}
+              side="bottom"
+              sideOffset={6}
+              align="start"
+            >
+              <span
+                data-testid="notification-title"
+                className={cn(
+                  "min-w-0 flex-1 truncate text-ui-sm font-semibold leading-snug",
+                  isRead ? "text-muted-foreground" : "text-foreground",
+                )}
+              >
+                {row.title}
+              </span>
+            </TooltipWrapper>
+            <NotificationTimestamp createdAt={row.createdAt} />
+          </div>
           <span
+            data-testid="notification-body"
             className={cn(
-              "line-clamp-2 text-ui-sm leading-snug",
-              isRead ? "text-muted-foreground" : "text-foreground",
+              "truncate text-ui-sm leading-snug",
+              isRead ? "text-muted-foreground/80" : "text-foreground/80",
             )}
           >
-            {text}
+            {row.body}
           </span>
-          <NotificationTimestamp createdAt={entry.createdAt} />
         </div>
       </button>
       {!isRead && (
@@ -334,13 +374,13 @@ function NotificationRow(props: NotificationRowProps) {
             type="button"
             onClick={(event) => {
               event.stopPropagation();
-              onMarkRead(entry.id);
+              onMarkRead(row.feedId);
             }}
             aria-label="Mark as read"
             data-testid="notification-mark-read"
             className={cn(
-              "absolute right-2 top-2 inline-flex size-6 items-center justify-center rounded-md",
-              "text-muted-foreground opacity-0 transition-opacity",
+              "absolute right-2.5 top-2.5 inline-flex size-6 items-center justify-center rounded-md",
+              "bg-background/90 text-muted-foreground opacity-0 shadow-sm transition-opacity",
               "hover:bg-background hover:text-foreground",
               "focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
               "group-hover/row:opacity-100",
@@ -382,12 +422,71 @@ const INVITE_TONE =
   "bg-[color-mix(in_oklch,var(--primary)_16%,transparent)] text-[color-mix(in_oklch,var(--primary)_55%,var(--foreground)_45%)]";
 const DANGER_TONE =
   "bg-[color-mix(in_oklch,var(--destructive)_16%,transparent)] text-[color-mix(in_oklch,var(--destructive)_65%,var(--foreground)_35%)]";
+const PROMPT_TONE = "bg-amber-500/16 text-amber-600 dark:text-amber-400";
+const DONE_TONE = "bg-blue-500/16 text-blue-700 dark:text-blue-300";
 const NEUTRAL_TONE =
   "bg-[color-mix(in_oklch,var(--muted-foreground)_14%,transparent)] text-[color-mix(in_oklch,var(--muted-foreground)_70%,var(--foreground)_30%)]";
 const SUCCESS_TONE =
   "bg-[color-mix(in_oklch,var(--success)_16%,transparent)] text-[color-mix(in_oklch,var(--success)_65%,var(--foreground)_35%)]";
 
-function getEventMeta(event: NotificationEvent): EventMeta {
+function getRowMeta(row: MergedNotificationRow): EventMeta {
+  if (row.globalEntry !== null) {
+    return getGlobalEventMeta(row.globalEntry.event);
+  }
+  if (row.appLocalKind !== null) {
+    return {
+      icon: CircleAlert,
+      tone: DANGER_TONE,
+    };
+  }
+  if (row.severity === "failure") {
+    return {
+      icon: CircleAlert,
+      tone: DANGER_TONE,
+    };
+  }
+  if (row.severity === "needs_action") {
+    return {
+      icon: row.hostKind === "approval.requested" ? Shield : MessageCircle,
+      tone: PROMPT_TONE,
+    };
+  }
+  if (row.severity === "done") {
+    return {
+      icon: Bell,
+      tone: DONE_TONE,
+    };
+  }
+  switch (row.hostKind) {
+    case "agent.stopped":
+      return {
+        icon: Bell,
+        tone: DONE_TONE,
+      };
+    case "agent.stalled":
+      return {
+        icon: CircleAlert,
+        tone: DANGER_TONE,
+      };
+    case "approval.requested":
+      return {
+        icon: Shield,
+        tone: PROMPT_TONE,
+      };
+    case "interview.requested":
+      return {
+        icon: MessageCircle,
+        tone: PROMPT_TONE,
+      };
+    case null:
+      return {
+        icon: Bell,
+        tone: NEUTRAL_TONE,
+      };
+  }
+}
+
+function getGlobalEventMeta(event: NotificationEvent): EventMeta {
   switch (event.kind) {
     case NOTIFICATION_EVENT_TYPES.INVITED:
       return {

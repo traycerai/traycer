@@ -4,31 +4,20 @@ import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-flo
 import { releasedMethodNames } from "./__fixtures__/released-method-names";
 
 /**
- * Released method-name guard for the unary `/rpc` handshake's FLOOR channel.
+ * Released method-name guard for the unary `/rpc` handshake.
  *
- * The per-method handshake (`compatibility-checker`) is fail-closed on the
- * floor METHOD-NAME SET: a floor method name present on only one peer is a
- * fatal `Incompatible methods` error that makes EVERY RPC fail against a peer
- * on the other version. That is exactly how `1.0.1-rc.1` broke against the
- * shipped `host-v1.0.0` - `worktree.readScriptsAtRef` was added as a NEW
- * floor method name.
+ * The released floor is fail-closed on the METHOD-NAME SET: a method name
+ * present on only one peer is a fatal `Incompatible methods` error that makes
+ * EVERY RPC fail against a peer on the other version. That is exactly how
+ * `1.0.1-rc.1` broke against the shipped `host-v1.0.0` -
+ * `worktree.readScriptsAtRef` was added as a NEW method name.
  *
- * So the floor method-name set is frozen to the last release a peer in the
- * field may still be running (`__fixtures__/released-method-names.ts`, a
- * snapshot of `host-v1.0.0`; regenerate with
- * `protocol/scripts/snapshot-released-method-names.ts`). A new FLOOR
- * capability must ride a new `{ major, minor }` of an EXISTING floor method,
- * never a new method name.
- *
- * This does NOT apply to methods registered outside `RELEASED_FLOOR_METHOD_NAMES`
- * (`released-floor.ts`) with a declared `degrade` policy (`{ kind:
- * "unsupported" }` or `"fallback"`, see `capability-manifest.ts`). Those ride
- * the separate `optionalManifest` channel, which the WS handshake negotiates
- * non-fatally - an old peer just lacks the capability. Their wire-compat is
- * instead checked by `released-baseline-compat.test.ts` (`checkOptionalUnary`
- * in `surface-compat.ts` classifies an optional method missing from an old
- * baseline as advisory when its degrade is `unsupported`, blocking only when
- * it declares no degrade story or the declared fallback is unreachable).
+ * The method-name set is frozen to the last release a peer in the field may
+ * still be running (`__fixtures__/released-method-names.ts`, a floor-only
+ * snapshot of `host-v1.0.0`; regenerate it with
+ * `protocol/scripts/snapshot-released-method-names.ts`). New unary methods
+ * live on the optional-capabilities channel, declare their behavior when an
+ * old peer does not advertise them, and never enter this snapshot.
  *
  * ROLE: this test is a FAST LOCAL TRIPWIRE only. The authoritative gate is the
  * `protocol-compat` CI workflow, which dumps every released baseline's surface
@@ -38,42 +27,32 @@ import { releasedMethodNames } from "./__fixtures__/released-method-names";
  * handshake-incompatible in #227), and the fixture file itself is tripwired:
  * changing it requires the `protocol-compat-override` label.
  *
- * Scope: this guards only the handshake-fatal class (floor name-set mismatch).
- * It does NOT freeze per-method schemas - the CI gate covers those
- * (same-version wire-schema rules with reviewed exceptions in
- * `compat-exceptions.json`).
+ * Scope: this guards only the handshake-fatal class (name-set mismatch). It does
+ * NOT freeze per-method schemas - the CI gate covers those (same-version
+ * wire-schema rules with reviewed exceptions in `compat-exceptions.json`).
  *
- * When this fails for a floor method, fold the capability into an existing
- * method and version it (see `worktree.listByWorkspacePaths@1.1` /
- * `worktree.listBindingsForEpic@1.1`). A genuinely new capability that can
- * tolerate an old-host degrade belongs on the optional channel instead (see
- * `agent.listProviderProfiles` / `agent.getProviderProfileRateLimits` /
- * `agent.configure` in `host/registry.ts` for the template).
+ * When this fails, restore the released floor rather than adding the method to
+ * it. Then register the additive method with an explicit degradation strategy.
  */
 describe("released method-name set (host-v1.0.0) is frozen", () => {
-  it("still registers every baselined floor method name", () => {
-    const current = new Set(Object.keys(hostRpcRegistry));
-    for (const method of releasedMethodNames) {
-      expect(current.has(method)).toBe(true);
-    }
-  });
-
-  it("keeps the released floor method-name set byte-identical to the baseline", () => {
+  it("keeps every released method in the registry", () => {
+    // Post-#272 the registry may grow ADDITIVE optional methods beyond the
+    // floor; those ride the optional manifest channel and are not
+    // handshake-fatal. The frozen floor itself must remain fully present, and
+    // `RELEASED_FLOOR_METHOD_NAMES` (the canonical floor export other modules
+    // key off of) must stay in sync with this guarded fixture.
     expect([...RELEASED_FLOOR_METHOD_NAMES].sort()).toEqual(
       [...releasedMethodNames].sort(),
     );
+    expect(Object.keys(hostRpcRegistry)).toEqual(
+      expect.arrayContaining([...releasedMethodNames]),
+    );
   });
 
-  it("registers every non-floor method with a degrade policy", () => {
-    const floorMethods = new Set(RELEASED_FLOOR_METHOD_NAMES);
-    const registry = hostRpcRegistry as Readonly<
-      Record<string, { readonly degrade?: unknown }>
-    >;
-    for (const method of Object.keys(hostRpcRegistry)) {
-      if (floorMethods.has(method)) {
-        continue;
-      }
-      expect(registry[method].degrade).toBeDefined();
+  it("requires each optional method to state its missing-peer behavior", () => {
+    for (const [method, registry] of Object.entries(hostRpcRegistry)) {
+      if (RELEASED_FLOOR_METHOD_NAMES.includes(method)) continue;
+      expect(Object.hasOwn(registry, "degrade")).toBe(true);
     }
   });
 });

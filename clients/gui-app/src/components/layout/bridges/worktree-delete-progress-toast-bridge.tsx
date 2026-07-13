@@ -5,14 +5,23 @@ import {
   worktreeDeleteProgressDetail,
   type WorktreeDeleteProgressSummary,
 } from "@/components/settings/panels/use-worktree-delete-run";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import { createReportIssueContext } from "@/lib/report-issue-context";
+import { progressToast } from "@/lib/toast/progress-toast";
 
 const WORKTREE_DELETE_PROGRESS_TOAST_ID = "worktree-delete-progress";
+const WORKTREE_DELETE_REPORT_CONTEXT = createReportIssueContext({
+  title: "Could not delete worktree",
+  message: null,
+  code: null,
+  source: "Worktrees",
+});
 
 export function WorktreeDeleteProgressToastBridge(): null {
   const summary = useWorktreeDeleteProgressSummary();
   const lastToastKeyRef = useRef<string | null>(null);
   // Whether the toast currently on screen is one that will NOT expire on its
-  // own: the in-progress loading toast and the failure toast both use
+  // own: the in-progress toast and the failure toast both use
   // `duration: Infinity`. A plain success toast keeps its short default
   // duration. Tracked so that when the runs drain we dismiss the former two but
   // leave a success toast to live out its time.
@@ -43,10 +52,11 @@ function showWorktreeDeleteProgressToast(
 ): void {
   const description = worktreeDeleteProgressDetail(summary);
   if (summary.active > 0) {
-    toast.loading("Deleting worktrees", {
+    progressToast("Deleting worktrees", {
       id: WORKTREE_DELETE_PROGRESS_TOAST_ID,
       description,
       duration: Infinity,
+      cancel: null,
     });
     return;
   }
@@ -54,18 +64,22 @@ function showWorktreeDeleteProgressToast(
     toast.success(`Deleted ${worktreeCountLabel(summary.deleted)}`, {
       id: WORKTREE_DELETE_PROGRESS_TOAST_ID,
       description,
+      cancel: null,
     });
     return;
   }
   // A failure toast persists (no auto-expiry) and is directly dismissable, so a
   // user who never reopens the Worktrees panel to dismiss the strip can still
   // clear it.
-  toast.error(worktreeDeleteFailureTitle(summary), {
-    id: WORKTREE_DELETE_PROGRESS_TOAST_ID,
-    description,
-    duration: Infinity,
-    closeButton: true,
-  });
+  reportableErrorToast(
+    worktreeDeleteFailureTitle(summary),
+    {
+      id: WORKTREE_DELETE_PROGRESS_TOAST_ID,
+      description,
+      duration: Infinity,
+    },
+    WORKTREE_DELETE_REPORT_CONTEXT,
+  );
 }
 
 function worktreeDeleteToastKey(

@@ -18,6 +18,7 @@ import type {
   LocalHostSnapshot,
 } from "@traycer-clients/shared/platform/runner-host";
 import { Button } from "@/components/ui/button";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { Card, CardContent } from "@/components/ui/card";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { AppHeader } from "@/components/layout/header/app-header";
@@ -34,6 +35,7 @@ import {
 import { requestAppQuit } from "@/lib/desktop-app-lifecycle";
 import { runnerQueryKeys } from "@/lib/query-keys";
 import { cn } from "@/lib/utils";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 
 /**
  * URL prefix that bypasses the host-readiness gate. Settings work without
@@ -635,6 +637,16 @@ function GateIncompatibleHost(props: GateIncompatibleBusyProps) {
                   {isBusyKeep ? "Force update host" : "Update host"}
                 </Button>
               ) : null}
+              <ReportIssueAction
+                context={createReportIssueContext({
+                  title: "Host update required",
+                  message: "Traycer Host requires an update.",
+                  code: null,
+                  source: "Host startup",
+                })}
+                presentation="text"
+                className="w-full"
+              />
             </div>
           </CardContent>
         </Card>
@@ -658,7 +670,7 @@ function GateProvisioningError(props: GateProvisioningErrorProps) {
       <Card className="w-full max-w-md">
         <CardContent className="flex flex-col gap-4 py-6 text-ui-sm">
           <p className="text-center">{props.message}</p>
-          <div className="flex justify-center">
+          <div className="flex flex-wrap justify-center gap-2">
             <Button
               type="button"
               size="sm"
@@ -678,6 +690,16 @@ function GateProvisioningError(props: GateProvisioningErrorProps) {
                 ) : null}
               </span>
             </Button>
+            <ReportIssueAction
+              context={createReportIssueContext({
+                title: "Could not start Traycer Host",
+                message: "Traycer Host could not start.",
+                code: null,
+                source: "Host startup",
+              })}
+              presentation="text"
+              className={undefined}
+            />
           </div>
         </CardContent>
       </Card>
@@ -908,7 +930,7 @@ export function LocalHostUnavailable(props: LocalHostUnavailableProps) {
               bootstrapLogPath={status.data?.bootstrapLogPath ?? null}
             />
           ) : null}
-          <div className="flex justify-center">
+          <div className="flex flex-wrap justify-center gap-2">
             <Button
               type="button"
               size="sm"
@@ -930,6 +952,16 @@ export function LocalHostUnavailable(props: LocalHostUnavailableProps) {
                 ) : null}
               </span>
             </Button>
+            <ReportIssueAction
+              context={createReportIssueContext({
+                title: "Traycer Host is unavailable",
+                message: "Traycer Host was unavailable.",
+                code: null,
+                source: "Host startup",
+              })}
+              presentation="text"
+              className={undefined}
+            />
           </div>
         </CardContent>
       </Card>

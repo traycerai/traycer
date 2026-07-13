@@ -14,15 +14,27 @@ const path = require("node:path");
 const { createHash } = require("node:crypto");
 const { execFileSync } = require("node:child_process");
 
-function prepareElectronBinary(defaultElectronBinary, workspaceRoot) {
+function prepareElectronBinary(
+  defaultElectronBinary,
+  workspaceRoot,
+  devDesktopDisplayName,
+) {
   if (process.platform !== "darwin") {
     return defaultElectronBinary;
   }
 
-  return prepareMacDevBundle(defaultElectronBinary, workspaceRoot);
+  return prepareMacDevBundle(
+    defaultElectronBinary,
+    workspaceRoot,
+    devDesktopDisplayName,
+  );
 }
 
-function prepareMacDevBundle(defaultElectronBinary, workspaceRoot) {
+function prepareMacDevBundle(
+  defaultElectronBinary,
+  workspaceRoot,
+  devDesktopDisplayName,
+) {
   const checkoutTag = createHash("sha1")
     .update(workspaceRoot)
     .digest("hex")
@@ -55,18 +67,15 @@ function prepareMacDevBundle(defaultElectronBinary, workspaceRoot) {
     "Electron",
   );
   const metadataPath = path.join(outputRoot, "bundle-state.json");
-  const nextState = JSON.stringify(
-    {
-      bundleLayoutVersion: 4,
-      devBundleId,
-      electronVersion: require("electron/package.json").version,
-      sourceInfoPlistMtimeMs: statSync(sourceInfoPlistPath).mtimeMs,
-      sourceExecutableMtimeMs: statSync(sourceExecutablePath).mtimeMs,
-      iconMtimeMs: statSync(sourceIconPath).mtimeMs,
-    },
-    null,
-    2,
-  );
+  const bundleDisplayName = devDesktopDisplayName ?? "Traycer";
+  const nextState = createDevBundleState({
+    devBundleId,
+    bundleDisplayName,
+    electronVersion: require("electron/package.json").version,
+    sourceInfoPlistMtimeMs: statSync(sourceInfoPlistPath).mtimeMs,
+    sourceExecutableMtimeMs: statSync(sourceExecutablePath).mtimeMs,
+    iconMtimeMs: statSync(sourceIconPath).mtimeMs,
+  });
 
   if (
     existsSync(devExecutablePath) &&
@@ -86,18 +95,41 @@ function prepareMacDevBundle(defaultElectronBinary, workspaceRoot) {
   );
 
   const plistPath = path.join(devAppPath, "Contents", "Info.plist");
-  replacePlistString(plistPath, "CFBundleDisplayName", "Traycer");
+  replacePlistString(plistPath, "CFBundleDisplayName", bundleDisplayName);
   replacePlistString(plistPath, "CFBundleIconFile", "traycer.icns");
   replacePlistString(plistPath, "CFBundleIdentifier", devBundleId);
-  replacePlistString(plistPath, "CFBundleName", "Traycer");
+  replacePlistString(plistPath, "CFBundleName", bundleDisplayName);
   execFileSync("codesign", ["--force", "--deep", "--sign", "-", devAppPath]);
 
   writeFileSync(metadataPath, nextState);
   return devExecutablePath;
 }
 
+function createDevBundleState({
+  devBundleId,
+  bundleDisplayName,
+  electronVersion,
+  sourceInfoPlistMtimeMs,
+  sourceExecutableMtimeMs,
+  iconMtimeMs,
+}) {
+  return JSON.stringify(
+    {
+      bundleLayoutVersion: 5,
+      devBundleId,
+      bundleDisplayName,
+      electronVersion,
+      sourceInfoPlistMtimeMs,
+      sourceExecutableMtimeMs,
+      iconMtimeMs,
+    },
+    null,
+    2,
+  );
+}
+
 function replacePlistString(plistPath, key, value) {
   execFileSync("plutil", ["-replace", key, "-string", value, plistPath]);
 }
 
-module.exports = { prepareElectronBinary };
+module.exports = { createDevBundleState, prepareElectronBinary };

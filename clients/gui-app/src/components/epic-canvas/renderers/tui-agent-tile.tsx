@@ -8,7 +8,6 @@ import {
   useState,
 } from "react";
 import { ChevronDown, GitFork, Users } from "lucide-react";
-import { toast } from "sonner";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import {
@@ -28,6 +27,10 @@ import {
   useTerminalSessionRecovery,
   type TerminalSessionRecovery,
 } from "@/hooks/terminal/use-terminal-session-recovery";
+import {
+  isTerminalCrashExit,
+  useTerminalCrashNotification,
+} from "@/hooks/terminal/use-terminal-crash-notification";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { beginTerminalLoad } from "@/lib/perf/terminal-load-perf";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
@@ -47,6 +50,10 @@ import { TerminalLoadingSkeleton } from "./terminal-loading-skeleton";
 import { TerminalDeadTileBanner } from "./dead-tile-banner";
 import { TerminalConnectionOverlay } from "./terminal-connection-overlay";
 import { resolveTerminalOverlayState } from "./terminal-connection-overlay-state";
+import {
+  emitTerminalClosedNotification,
+  emitTerminalCrashedNotification,
+} from "@/stores/notifications/app-local-notifications-store";
 import { Button } from "@/components/ui/button";
 import {
   Popover,
@@ -55,8 +62,11 @@ import {
 } from "@/components/ui/popover";
 import { HostWorkspaceSelector } from "@/components/home/host-workspace-selector/host-workspace-selector";
 import { useWorktreeGetBinding } from "@/hooks/worktree/use-worktree-get-binding-query";
+import { useTuiSetupTerminalListRefreshDriver } from "@/hooks/agent/use-tui-setup-terminal-list-refresh-driver";
+import { useTuiSetupTerminalTabRegisterDriver } from "@/hooks/agent/use-tui-setup-terminal-tab-register-driver";
 import { SetupCardSegment } from "@/components/chat/segments/setup-card-segment";
 import { buildTuiAgentSetupCardModel } from "@/stores/chats/tui-agent-setup-card-model";
+import type { WorktreeBinding } from "@traycer/protocol/host/worktree-schemas";
 import { AgentModeReadonlyLabel } from "@/components/home/pickers/agent-mode-toggle";
 import type { AgentMode } from "@/components/home/data/landing-options";
 import { useAgentStopControls } from "@/hooks/agent/use-agent-stop-controls";
@@ -74,43 +84,26 @@ import {
 } from "@/stores/worktree/worktree-intent-staging-store";
 import { TerminalAgentForkDialog } from "./terminal-agent-fork-dialog";
 import { useCloseCanvasTileWithNestedFocus } from "./use-close-canvas-tile-with-nested-focus";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { createReportIssueContext } from "@/lib/report-issue-context";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
-const WORKTREE_SETUP_ERROR_CODES: ReadonlyArray<string> = [
-  "WORKTREE_SETUP_FAILED",
-  "WORKTREE_SETUP_CANCELLED",
-];
+// Poll cadence for the setup card's binding while a worktree setup script is
+// still in flight. The script runs in a background PTY server-side and only
+// mutates the binding, so without polling a completion/failure would not
+// surface until the next window refocus - the card would stay "setting up".
+const SETUP_BINDING_POLL_INTERVAL_MS = 2_000;
 
-const WORKTREE_SETUP_ERROR_PATTERNS: ReadonlyArray<string> = [
-  "WORKTREE_SETUP_FAILED",
-  "WORKTREE_SETUP_CANCELLED",
-  "WorktreeSetupFailed",
-  "WorktreeSetupCancelled",
-];
-
-/**
- * Setup-related errors surface to the user via toasts (raised by the
- * `agent.startTerminalSession` mutation hook) plus the host's setup
- * terminal tab. The terminal-agent tile must not render a persistent
- * "Failed to start terminal: …" banner for those - recovery is through
- * the setup terminal context.
- *
- * The host's RPC handler maps setup failures to typed `WORKTREE_SETUP_*`
- * codes on `HostRpcError`; check the typed code first so messages that
- * do not include the code string still classify correctly. The legacy
- * message-pattern path stays as a fallback for non-`HostRpcError`
- * carriers (raw `Error` instances thrown by the harness layer, etc.).
- */
-function isWorktreeSetupError(
-  error: { readonly code?: string; readonly message?: string } | null,
-): boolean {
-  if (error === null) return false;
-  const code = typeof error.code === "string" ? error.code : "";
-  if (code.length > 0 && WORKTREE_SETUP_ERROR_CODES.includes(code)) {
-    return true;
-  }
-  const message = typeof error.message === "string" ? error.message : "";
-  return WORKTREE_SETUP_ERROR_PATTERNS.some((pattern) =>
-    message.includes(pattern),
+// A created worktree whose setup script has neither settled nor failed yet.
+// `pending`/`running` are the only non-terminal setup states; every other
+// state (succeeded / not_required / failed / cancelled) is final, so polling
+// stops once no entry is in flight.
+function hasInFlightWorktreeSetup(binding: WorktreeBinding | null): boolean {
+  if (binding === null) return false;
+  return binding.entries.some(
+    (entry) =>
+      entry.mode === "worktree" &&
+      (entry.setupState === "pending" || entry.setupState === "running"),
   );
 }
 
@@ -147,7 +140,30 @@ export interface TuiAgentTileProps {
 
 export function TuiAgentTile(props: TuiAgentTileProps) {
   const hostId = useTabHostId();
+  const epicId = useOpenEpicId();
   const reachability = useHostReachability(hostId);
+  const crashReportedRef = useRef(false);
+  const reportCrashExit = useCallback(() => {
+    if (crashReportedRef.current) return;
+    crashReportedRef.current = true;
+    emitTerminalCrashedNotification({
+      instanceId: props.node.instanceId,
+      epicId,
+      chatId: props.node.id,
+      cause: "exit",
+    });
+  }, [epicId, props.node.id, props.node.instanceId]);
+  const reportRecoveryExhausted = useCallback(() => {
+    // Whichever path observes this terminal death first owns its notification.
+    if (crashReportedRef.current) return;
+    crashReportedRef.current = true;
+    emitTerminalCrashedNotification({
+      instanceId: props.node.instanceId,
+      epicId,
+      chatId: props.node.id,
+      cause: "recovery-exhausted",
+    });
+  }, [epicId, props.node.id, props.node.instanceId]);
   const closeCanvasTile = useCloseCanvasTileWithNestedFocus(
     props.viewTabId,
     props.tileId,
@@ -158,7 +174,11 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
   const recovery = useTerminalSessionRecovery({
     hostId,
     instanceId: props.node.instanceId,
+    onRecoveryExhausted: reportRecoveryExhausted,
   });
+  useEffect(() => {
+    crashReportedRef.current = false;
+  }, [props.node.instanceId]);
   // Open the load timeline at the outermost mount so the reachability gate
   // (which can show a skeleton first) counts toward first-paint time.
   const sessionId = props.node.id;
@@ -168,6 +188,21 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
       kind: "agent",
     });
   }, [sessionId]);
+  useEffect(() => {
+    if (reachability.status !== "unreachable") return;
+    emitTerminalClosedNotification({
+      instanceId: props.node.instanceId,
+      hostLabel: reachability.hostLabel,
+      epicId,
+      chatId: props.node.id,
+    });
+  }, [
+    reachability.status,
+    reachability.hostLabel,
+    epicId,
+    props.node.id,
+    props.node.instanceId,
+  ]);
   if (reachability.status === "unreachable") {
     return (
       <TerminalDeadTileBanner
@@ -199,6 +234,7 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
     <TuiAgentTileLive
       key={recovery.recoverNonce}
       recovery={recovery}
+      onCrashExit={reportCrashExit}
       {...props}
     />
   );
@@ -211,7 +247,10 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
 const RESTART_SUPPRESS_TIMEOUT_MS = 15_000;
 
 function TuiAgentTileLive(
-  props: TuiAgentTileProps & { readonly recovery: TerminalSessionRecovery },
+  props: TuiAgentTileProps & {
+    readonly recovery: TerminalSessionRecovery;
+    readonly onCrashExit: () => void;
+  },
 ) {
   const hostId = useTabHostId();
   const epicId = useOpenEpicId();
@@ -516,6 +555,7 @@ function TuiAgentTileLive(
           onReapedExit={reviveAfterReap}
           isActive={props.isActive}
           recovery={props.recovery}
+          onCrashExit={props.onCrashExit}
         />
       </div>
     </TerminalAgentTileShell>
@@ -543,18 +583,12 @@ interface TerminalAgentBodyProps {
   readonly isActive: boolean;
   readonly isRestartKillSuppressed: () => boolean;
   readonly recovery: TerminalSessionRecovery;
+  readonly onCrashExit: () => void;
 }
 
 function TerminalAgentBody(props: TerminalAgentBodyProps): React.ReactNode {
   if (props.prepareLaunchIsError || props.createIsError) {
     const error = props.prepareLaunchError ?? props.createError;
-    if (isWorktreeSetupError(error)) {
-      return (
-        <div className="flex h-full w-full items-center justify-center text-ui-sm text-muted-foreground">
-          Waiting for worktree setup. Check the setup terminal tab.
-        </div>
-      );
-    }
     if (isWorktreeMissingError(error)) {
       // No silent demote-to-Local: the host refused to launch into a missing
       // cwd. A terminal agent stays bound to its folder for life (a PTY can't
@@ -571,6 +605,35 @@ function TerminalAgentBody(props: TerminalAgentBodyProps): React.ReactNode {
             Restore the missing folder or worktree at its bound path, then retry
             — or close this terminal agent.
           </span>
+          <div className="flex flex-wrap justify-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={props.onRetry}
+            >
+              Retry
+            </Button>
+            <ReportIssueAction
+              context={createReportIssueContext({
+                title: "Terminal agent folder is missing",
+                message:
+                  "A bound folder for a terminal agent was missing on disk.",
+                code: null,
+                source: "Terminal agent",
+              })}
+              presentation="text"
+              className={undefined}
+            />
+          </div>
+        </div>
+      );
+    }
+    const message = error?.message ?? "Unknown error";
+    return (
+      <div className="flex h-full w-full flex-col items-center justify-center gap-2 px-6 text-center text-ui-sm text-destructive">
+        <span>Failed to start terminal: {message}</span>
+        <div className="flex flex-wrap items-center justify-center gap-2">
           <Button
             type="button"
             variant="outline"
@@ -579,22 +642,17 @@ function TerminalAgentBody(props: TerminalAgentBodyProps): React.ReactNode {
           >
             Retry
           </Button>
+          <ReportIssueAction
+            context={createReportIssueContext({
+              title: "Failed to start terminal agent",
+              message: "The terminal agent session could not be started.",
+              code: null,
+              source: "Terminal agent",
+            })}
+            presentation="text"
+            className={undefined}
+          />
         </div>
-      );
-    }
-    const message = error?.message ?? "Unknown error";
-    return (
-      <div className="flex h-full w-full items-center justify-center text-ui-sm text-destructive">
-        <span>Failed to start terminal: {message}</span>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="ml-3"
-          onClick={props.onRetry}
-        >
-          Retry
-        </Button>
       </div>
     );
   }
@@ -616,6 +674,7 @@ function TerminalAgentBody(props: TerminalAgentBodyProps): React.ReactNode {
       isRestartKillSuppressed={props.isRestartKillSuppressed}
       onReapedExit={props.onReapedExit}
       recovery={props.recovery}
+      onCrashExit={props.onCrashExit}
     />
   );
 }
@@ -661,6 +720,9 @@ function TerminalAgentPreLaunchToolbar(
     // enabled regardless of focus so the chip always renders.
     staleTime: 0,
     refetchOnWindowFocus: paneVisible,
+    // The nested setup notice owns the in-flight polling; this observer only
+    // needs the binding for the chip, so it shares the cache without polling.
+    refetchInterval: false,
   });
   const binding = bindingQuery.data?.binding ?? null;
   const sourceStagingKey = useMemo<WorktreeStagingKey>(
@@ -824,8 +886,24 @@ function TerminalAgentWorktreeNotice(props: {
     // pane is visible, so a completed setup flips the card without a reopen).
     staleTime: 0,
     refetchOnWindowFocus: paneVisible,
+    // Poll while a setup script is in flight so a background completion/failure
+    // surfaces on the card even while the agent PTY runs (no chat subscription
+    // to push binding transitions). TanStack re-runs this against the freshest
+    // binding after each fetch, so polling stops the moment every entry settles.
+    refetchInterval: (query) =>
+      hasInFlightWorktreeSetup(query.state.data?.binding ?? null)
+        ? SETUP_BINDING_POLL_INTERVAL_MS
+        : false,
   });
   const binding = bindingQuery.data?.binding ?? null;
+  // Setup PTYs are spawned server-side, so nothing invalidates the renderer's
+  // one-shot `terminal.list` query on its own; drive that off the binding so the
+  // card's "Open terminal" liveness tracks the setup terminal as it starts/ends.
+  useTuiSetupTerminalListRefreshDriver({ binding });
+  // Register the running setup PTY as a background canvas tab so it auto-appears
+  // in the canvas and survives a host/GUI restart (the host keeps no terminal
+  // state across restarts - persistence comes only from a saved canvas tab).
+  useTuiSetupTerminalTabRegisterDriver({ binding, viewTabId: props.viewTabId });
   const model = useMemo(
     () =>
       buildTuiAgentSetupCardModel(binding, { epicId, ownerId: props.agentId }),
@@ -945,6 +1023,7 @@ interface TerminalAgentLiveProps {
   /** Revive (recreate + resume) after the host's idle-reap of this agent. */
   readonly onReapedExit: () => void;
   readonly recovery: TerminalSessionRecovery;
+  readonly onCrashExit: () => void;
 }
 
 function TerminalAgentLive(props: TerminalAgentLiveProps) {
@@ -966,6 +1045,11 @@ function TerminalAgentLive(props: TerminalAgentLiveProps) {
   // still reports the same exited state (dep identity churn), and stacking
   // `terminal.create` retries for one reap would race each other.
   const reapedReviveRequestedRef = useRef(false);
+  useTerminalCrashNotification({
+    handle,
+    isExitSuppressed: props.isRestartKillSuppressed,
+    onCrashExit: props.onCrashExit,
+  });
 
   const isRestartKillSuppressed = props.isRestartKillSuppressed;
   const showExitToast = useCallback(() => {
@@ -979,11 +1063,20 @@ function TerminalAgentLive(props: TerminalAgentLiveProps) {
     if (exitReason === "reaped") return;
     if (!exitToastShownRef.current && exitCode !== null && exitCode !== 0) {
       exitToastShownRef.current = true;
-      toast.error("Terminal agent exited with an error.", {
-        description:
-          lastOutputPreview ??
-          "The agent stopped before reporting a readable error. Try restarting it.",
-      });
+      reportableErrorToast(
+        "Terminal agent exited with an error.",
+        {
+          description:
+            lastOutputPreview ??
+            "The agent stopped before reporting a readable error. Try restarting it.",
+        },
+        createReportIssueContext({
+          title: "Terminal agent exited with an error",
+          message: null,
+          code: String(exitCode),
+          source: "Terminal agent",
+        }),
+      );
     }
   }, [
     status,
@@ -1019,6 +1112,16 @@ function TerminalAgentLive(props: TerminalAgentLiveProps) {
       }
       return;
     }
+    if (
+      isTerminalCrashExit({
+        status,
+        exitCode,
+        exitReason,
+        isExitSuppressed: isRestartKillSuppressed,
+      })
+    ) {
+      return;
+    }
     // `closeCanvasTab` resolves the tile by its pane tab *instance* id
     // (`pane.tabInstanceIds`), not the content/session id. Passing
     // `handle.sessionId` (the agent record id) silently no-ops, leaving the
@@ -1026,6 +1129,7 @@ function TerminalAgentLive(props: TerminalAgentLiveProps) {
     closeCanvasTile();
   }, [
     status,
+    exitCode,
     exitReason,
     onReapedExit,
     closeCanvasTile,

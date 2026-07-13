@@ -2,6 +2,7 @@ import "../../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { WorkspaceFileRef } from "@/stores/epics/canvas/types";
+import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 
 interface GateTestState {
   activeHostId: string | null;
@@ -105,8 +106,20 @@ describe("<WorkspaceFileTile /> host-binding gate", () => {
       isError: false,
       error: null,
     };
+    useDesktopDialogStore.setState({
+      activeDialog: null,
+      reportIssueAvailable: false,
+      reportIssueContext: null,
+    });
   });
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    useDesktopDialogStore.setState({
+      activeDialog: null,
+      reportIssueAvailable: false,
+      reportIssueContext: null,
+    });
+  });
 
   it("shows the offline banner when the bound host is unreachable", () => {
     state.reachability = { status: "unreachable", hostLabel: "Host A" };
@@ -135,6 +148,33 @@ describe("<WorkspaceFileTile /> host-binding gate", () => {
     expect(screen.queryByText(/Switch your active host/)).toBeNull();
     expect(screen.queryByText(/currently unreachable/)).toBeNull();
     expect(screen.getByText("src/index.ts")).toBeTruthy();
+  });
+
+  it("reports a file-read failure without copying its raw path or error", () => {
+    state.readFile = {
+      data: {
+        content: "",
+        error: "Could not read /Users/me/private/api-key.txt",
+        truncated: false,
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+    };
+    useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    renderTile("host-A", NODE);
+
+    expect(
+      screen.getByText("Could not read /Users/me/private/api-key.txt"),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
+
+    expect(useDesktopDialogStore.getState().reportIssueContext).toEqual({
+      title: "Workspace file could not be read",
+      message: "The workspace file preview could not be loaded.",
+      code: null,
+      source: "Workspace file",
+    });
   });
 
   it("shows markdown source and preview modes for markdown files", () => {

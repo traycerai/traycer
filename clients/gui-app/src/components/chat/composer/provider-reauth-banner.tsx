@@ -35,6 +35,8 @@ import { useTabRefreshProviders } from "@/hooks/providers/use-tab-refresh-provid
 import { HostRuntimeContext, useHostBinding } from "@/lib/host/runtime";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 
 // Static destructive icon shared by every banner state. Hoisted to module scope
 // so it isn't rebuilt on each render.
@@ -133,7 +135,19 @@ function ReauthBannerShell({
         <div className="flex items-start gap-2">
           {icon}
           <div className="flex min-w-0 flex-1 flex-col gap-2">{children}</div>
-          {action}
+          <div className="flex shrink-0 items-center gap-1">
+            {action}
+            <ReportIssueAction
+              context={createReportIssueContext({
+                title: "Provider needs to be reconnected",
+                message: null,
+                code: null,
+                source: "Provider sign-in",
+              })}
+              presentation="icon"
+              className="-my-1 -mr-1 text-destructive"
+            />
+          </div>
         </div>
       </div>
     </div>

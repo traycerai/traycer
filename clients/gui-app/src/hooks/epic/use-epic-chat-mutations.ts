@@ -10,6 +10,8 @@ import type {
   CreateChatResponse,
   DeleteChatRequest,
   DeleteChatResponse,
+  UpdateChatRunSettingsRequest,
+  UpdateChatRunSettingsResponse,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -175,6 +177,49 @@ function invalidateBindingsForEpic(
   if (hostId === null) return;
   void queryClient.invalidateQueries({
     queryKey: hostQueryKeys.methodScope(hostId, "worktree.listBindingsForEpic"),
+  });
+}
+
+/**
+ * Mutation hook for `epic.updateChatRunSettings` (optional host capability).
+ *
+ * Persists a chat's run settings without sending a message, so the durable
+ * per-chat profile a headless turn (e.g. an incoming agent-to-agent message)
+ * runs on tracks the composer's selection immediately instead of at the next
+ * send. Tab-host scoped: chat settings belong to the chat's bound host.
+ *
+ * Intentionally has no `onError` toast: callers are fire-and-forget syncs or
+ * bulk switches that decide themselves how to surface failures. Against an
+ * old host the call fails with `E_HOST_UNSUPPORTED` (declared degrade), which
+ * callers treat as "legacy behavior: settings persist on next send".
+ */
+export function useEpicUpdateChatRunSettings(): UseMutationResult<
+  UpdateChatRunSettingsResponse,
+  HostRpcError,
+  UpdateChatRunSettingsRequest
+> {
+  const client = useTabHostClient();
+  return useMutation<
+    UpdateChatRunSettingsResponse,
+    HostRpcError,
+    UpdateChatRunSettingsRequest
+  >({
+    mutationKey: epicMutationKeys.updateChatRunSettings(),
+    mutationFn: (params) => {
+      if (client === null) {
+        return Promise.reject<UpdateChatRunSettingsResponse>(
+          new HostRpcError({
+            code: "RPC_ERROR",
+            message:
+              "Host client unavailable - directory not resolved or signed out.",
+            requestId: "client-pre-flight",
+            method: "epic.updateChatRunSettings",
+            fatalDetails: null,
+          }),
+        );
+      }
+      return client.request("epic.updateChatRunSettings", params);
+    },
   });
 }
 

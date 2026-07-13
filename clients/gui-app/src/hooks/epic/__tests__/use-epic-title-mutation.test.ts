@@ -118,6 +118,7 @@ describe("useEpicUpdateTitle", () => {
     capturedOptions.onError?.({
       code: "RPC_ERROR",
       message: "test",
+      fatalDetails: null,
     });
     expect(toast.error).toHaveBeenCalledWith("Couldn't rename epic.");
   });
@@ -127,6 +128,7 @@ describe("useEpicUpdateTitle", () => {
     capturedOptions.onError?.({
       code: "UNAUTHORIZED",
       message: "test",
+      fatalDetails: null,
     });
     expect(toast.error).toHaveBeenCalledWith("Please sign in again.");
   });

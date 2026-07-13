@@ -60,31 +60,30 @@ const REGISTRY_WITH_UNSUPPORTED_OPTIONAL = defineFloorAwareVersionedRpcRegistry(
 );
 
 describe("capability manifest helpers", () => {
-  it("splits today's host manifest into the unchanged legacy floor plus the additive optional channel", () => {
+  it("keeps the host legacy manifest exactly the released floor set", () => {
+    // Old peers negotiate against `manifest` alone with fail-closed name-set
+    // semantics, so it must carry the frozen floor methods and nothing else.
+    // Post-#272 additive methods (e.g. the notifications RPCs, or this PR's
+    // `epic.updateChatRunSettings`) land in `optionalManifest` instead.
     const fullManifest = buildConnectionManifest(hostRpcRegistry);
     const split = splitConnectionManifest(hostRpcRegistry, releasedMethodNames);
 
-    // The floor (legacy) channel is still exactly the released method-name
-    // set, at each method's canonical version in the full manifest - no
-    // floor method dropped or reversioned.
     expect(Object.keys(split.manifest).sort()).toEqual(
       [...releasedMethodNames].sort(),
     );
-    for (const method of releasedMethodNames) {
-      expect(split.manifest[method]).toEqual(fullManifest[method]);
+    for (const [method, version] of Object.entries(split.manifest)) {
+      expect(version).toEqual(fullManifest[method]);
     }
-
-    // Everything else (today: the A2A profile-awareness additions -
-    // `agent.listProviderProfiles` / `agent.getProviderProfileRateLimits` /
-    // `agent.configure`) lands in the optional channel instead of the fatal
-    // legacy manifest.
-    const nonFloorMethods = Object.keys(fullManifest)
-      .filter((method) => !releasedMethodNames.includes(method))
-      .sort();
-    expect(Object.keys(split.optionalManifest).sort()).toEqual(nonFloorMethods);
-    for (const method of nonFloorMethods) {
-      expect(split.optionalManifest[method]).toEqual(fullManifest[method]);
+    for (const method of Object.keys(split.optionalManifest)) {
+      expect(releasedMethodNames).not.toContain(method);
+      expect(fullManifest[method]).toEqual(split.optionalManifest[method]);
     }
+    expect({ ...split.manifest, ...split.optionalManifest }).toEqual(
+      fullManifest,
+    );
+    expect(
+      mergeConnectionManifests(split.manifest, split.optionalManifest),
+    ).toEqual(fullManifest);
   });
 
   it("splits non-floor methods into the optional channel", () => {

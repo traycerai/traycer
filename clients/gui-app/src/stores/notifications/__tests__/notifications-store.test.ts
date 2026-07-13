@@ -122,6 +122,27 @@ describe("notifications store", () => {
     expect(unread).toBe(2);
   });
 
+  it("keeps the projected entry id array stable across read-state-only changes", () => {
+    const { factory, handle } = fakeFactory();
+    openNotificationsStream(factory, null);
+    handle().callbacks.onSnapshot(
+      { schemaVersion: "2" },
+      buildSnapshotBytes([
+        invitedEntry("ids-1", 1, null, "epic-a"),
+        invitedEntry("ids-2", 2, null, "epic-b"),
+      ]),
+    );
+    const before = useNotificationsStore.getState().entryIds;
+
+    useNotificationsStore.getState().markAsRead("ids-1");
+
+    expect(useNotificationsStore.getState().entryIds).toBe(before);
+    expect(useNotificationsStore.getState().entryIds).toEqual([
+      "ids-2",
+      "ids-1",
+    ]);
+  });
+
   it("markAsRead mutates readAt on the typed entry map and emits upstream", () => {
     const { factory, handle } = fakeFactory();
     openNotificationsStream(factory, null);
