@@ -7,6 +7,9 @@ import {
 import { defineVersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
   agentCreateV10,
+  agentCreateV20,
+  agentCreateDowngradeV20ToV10,
+  agentCreateUpgradeV10ToV20,
   agentGetTranscriptV10,
   agentListHarnessModelsDowngradeV2ToV1,
   agentListHarnessModelsV10,
@@ -33,6 +36,11 @@ import {
   agentSendMessageV10,
   agentStopV10,
 } from "@traycer/protocol/host/agent/contracts";
+import {
+  agentConfigureV10,
+  agentGetProviderProfileRateLimitsV10,
+  agentListProviderProfilesV10,
+} from "@traycer/protocol/host/agent/profiles";
 import {
   agentInboxReadV10,
   agentInboxSubscribeV10,
@@ -1125,8 +1133,7 @@ export const providersAwaitLoginUpgradeV20ToV21 = defineUpgradePath<
   to: { major: 2, minor: 1 },
   upgradeRequest: (request) => ({ ...request, profileId: null }),
   upgradeResponse: (response) => ({
-    state:
-      response.state === null ? null : { ...response.state, profiles: [] },
+    state: response.state === null ? null : { ...response.state, profiles: [] },
     existingProfileId: null,
   }),
 });
@@ -1703,9 +1710,7 @@ export const worktreeListBindingsForEpicUpgradeV10ToV11 = defineUpgradePath<
 // Note: git contract definitions are imported from git-contracts.ts above
 // and registered inline in hostRpcRegistry and hostStreamRpcRegistry below.
 
-export const hostRpcRegistry = defineFloorAwareVersionedRpcRegistry(
-  RELEASED_FLOOR_METHOD_NAMES,
-  {
+const hostRpcRegistryDefinition = {
   "host.status": {
     1: {
       latestMinor: 0,
@@ -2061,6 +2066,16 @@ export const hostRpcRegistry = defineFloorAwareVersionedRpcRegistry(
         },
       },
       downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentCreateV20,
+          upgradeFromPreviousVersion: agentCreateUpgradeV10ToV20,
+        },
+      },
+      downgradePathsFromLatest: { 1: agentCreateDowngradeV20ToV10 },
     },
   },
   "agent.selectionGuide": {
@@ -3356,7 +3371,8 @@ export const hostRpcRegistry = defineFloorAwareVersionedRpcRegistry(
         },
         1: {
           contract: providersSetTerminalAgentArgsV21,
-          upgradeFromPreviousVersion: providersSetTerminalAgentArgsUpgradeV20ToV21,
+          upgradeFromPreviousVersion:
+            providersSetTerminalAgentArgsUpgradeV20ToV21,
         },
       },
       downgradePathsFromLatest: {
@@ -3489,7 +3505,50 @@ export const hostRpcRegistry = defineFloorAwareVersionedRpcRegistry(
       downgradePathsFromLatest: {},
     },
   },
+  "agent.listProviderProfiles": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentListProviderProfilesV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
   },
+  "agent.getProviderProfileRateLimits": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentGetProviderProfileRateLimitsV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "agent.configure": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentConfigureV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+} as const;
+
+export const hostRpcRegistry = defineFloorAwareVersionedRpcRegistry(
+  RELEASED_FLOOR_METHOD_NAMES,
+  hostRpcRegistryDefinition,
 );
 
 export type HostRpcRegistry = typeof hostRpcRegistry;
