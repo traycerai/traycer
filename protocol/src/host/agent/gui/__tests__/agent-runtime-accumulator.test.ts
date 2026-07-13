@@ -5,6 +5,7 @@ import {
   createTurnContentState,
 } from "../agent-runtime-accumulator";
 import {
+  steerSubmittedEventSchema,
   toolCallCompletedEventSchema,
   toolCallErroredEventSchema,
   toolCallStartedEventSchema,
@@ -27,6 +28,7 @@ type PlanBlock = Extract<ContentBlock, { type: "plan" }>;
 type ErrorBlock = Extract<ContentBlock, { type: "error" }>;
 type CompactionBlock = Extract<ContentBlock, { type: "compaction" }>;
 type InterviewBlock = Extract<ContentBlock, { type: "interview" }>;
+type SteerBlock = Extract<ContentBlock, { type: "steer" }>;
 
 function expectPlanBlock(block: ContentBlock | undefined): PlanBlock {
   if (block?.type !== "plan") {
@@ -2957,5 +2959,78 @@ describe("accumulateEvent - provider_notice.upsert", () => {
     expect(block.status).toBe("completed");
     expect(block.timestamp).toBe(5);
     expect(block.providerNotice).not.toBeNull();
+  });
+
+  // ── steer provenance ────────────────────────────────────────
+  //
+  // The steered USER row is the primary record of who sent a steered message,
+  // but it and this block are not equally durable (the block is rewritten on
+  // every checkpoint; the row is written once). So the block carries the sender
+  // too, and a renderer holding only the block can still tell an agent-to-agent
+  // steer from a human one instead of rendering it as user-authored text.
+  it("carries an agent sender from the steer.submitted event onto the steer block", () => {
+    const blocks = accumulateEvent(makeBlocks(), {
+      type: "steer.submitted",
+      blockId: "steer:q1",
+      timestamp: 7,
+      queueItemId: "q1",
+      messageId: "m1",
+      content: { type: "doc", content: [] },
+      mode: "safe_point",
+      sender: {
+        type: "agent",
+        harnessId: "claude",
+        agentId: "agent-7",
+        displayName: "Reviewer",
+        reply: { expectsReply: true, responseId: "resp-1" },
+      },
+    });
+
+    const block = blocks[0] as SteerBlock;
+    expect(block.type).toBe("steer");
+    expect(block.sender).toEqual({
+      type: "agent",
+      harnessId: "claude",
+      agentId: "agent-7",
+      displayName: "Reviewer",
+      reply: { expectsReply: true, responseId: "resp-1" },
+    });
+  });
+
+  it("carries a human sender through unchanged", () => {
+    const blocks = accumulateEvent(makeBlocks(), {
+      type: "steer.submitted",
+      blockId: "steer:q2",
+      timestamp: 7,
+      queueItemId: "q2",
+      messageId: "m2",
+      content: { type: "doc", content: [] },
+      mode: "safe_point",
+      sender: { type: "user", userId: "owner-1" },
+    });
+
+    expect((blocks[0] as SteerBlock).sender).toEqual({
+      type: "user",
+      userId: "owner-1",
+    });
+  });
+
+  it("leaves the block sender null for an event from a host that predates the field", () => {
+    // `steerSubmittedEventSchema.sender` is nullable/.default(null), so an old
+    // host's event parses to null - and the renderer's orphan fallback then
+    // renders the plain user row it always did.
+    const parsed = steerSubmittedEventSchema.parse({
+      type: "steer.submitted",
+      blockId: "steer:q3",
+      timestamp: 7,
+      queueItemId: "q3",
+      messageId: "m3",
+      content: { type: "doc", content: [] },
+    });
+
+    const blocks = accumulateEvent(makeBlocks(), parsed);
+
+    expect(parsed.sender).toBeNull();
+    expect((blocks[0] as SteerBlock).sender).toBeNull();
   });
 });

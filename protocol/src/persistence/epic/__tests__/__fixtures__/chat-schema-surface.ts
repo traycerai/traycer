@@ -4214,6 +4214,118 @@ export const chatSchemaSurfaceBaseline = {
                               "safe_point",
                               "interrupt_restart"
                             ]
+                          },
+                          "sender": {
+                            "default": null,
+                            "anyOf": [
+                              {
+                                "oneOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "type": {
+                                        "type": "string",
+                                        "const": "user"
+                                      },
+                                      "userId": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "type",
+                                      "userId"
+                                    ]
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "type": {
+                                        "type": "string",
+                                        "const": "agent"
+                                      },
+                                      "harnessId": {
+                                        "type": "string",
+                                        "enum": [
+                                          "claude",
+                                          "codex",
+                                          "opencode",
+                                          "traycer",
+                                          "cursor",
+                                          "grok",
+                                          "qwen",
+                                          "kiro",
+                                          "droid",
+                                          "kimi",
+                                          "copilot",
+                                          "kilocode",
+                                          "openrouter",
+                                          "amp",
+                                          "devin",
+                                          "pi"
+                                        ]
+                                      },
+                                      "agentId": {
+                                        "type": "string"
+                                      },
+                                      "displayName": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "reply": {
+                                        "default": {
+                                          "expectsReply": false
+                                        },
+                                        "oneOf": [
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "expectsReply": {
+                                                "type": "boolean",
+                                                "const": true
+                                              },
+                                              "responseId": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "required": [
+                                              "expectsReply",
+                                              "responseId"
+                                            ]
+                                          },
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "expectsReply": {
+                                                "type": "boolean",
+                                                "const": false
+                                              }
+                                            },
+                                            "required": [
+                                              "expectsReply"
+                                            ]
+                                          }
+                                        ]
+                                      }
+                                    },
+                                    "required": [
+                                      "type",
+                                      "harnessId",
+                                      "agentId",
+                                      "displayName"
+                                    ]
+                                  }
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
@@ -9378,6 +9490,123 @@ export const chatSchemaSurfaceBaseline = {
                               "safe_point",
                               "interrupt_restart"
                             ]
+                          },
+                          "sender": {
+                            "default": null,
+                            "anyOf": [
+                              {
+                                "oneOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "type": {
+                                        "type": "string",
+                                        "const": "user"
+                                      },
+                                      "userId": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "type",
+                                      "userId"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "type": {
+                                        "type": "string",
+                                        "const": "agent"
+                                      },
+                                      "harnessId": {
+                                        "type": "string",
+                                        "enum": [
+                                          "claude",
+                                          "codex",
+                                          "opencode",
+                                          "traycer",
+                                          "cursor",
+                                          "grok",
+                                          "qwen",
+                                          "kiro",
+                                          "droid",
+                                          "kimi",
+                                          "copilot",
+                                          "kilocode",
+                                          "openrouter",
+                                          "amp",
+                                          "devin",
+                                          "pi"
+                                        ]
+                                      },
+                                      "agentId": {
+                                        "type": "string"
+                                      },
+                                      "displayName": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "reply": {
+                                        "default": {
+                                          "expectsReply": false
+                                        },
+                                        "oneOf": [
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "expectsReply": {
+                                                "type": "boolean",
+                                                "const": true
+                                              },
+                                              "responseId": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "required": [
+                                              "expectsReply",
+                                              "responseId"
+                                            ],
+                                            "additionalProperties": false
+                                          },
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "expectsReply": {
+                                                "type": "boolean",
+                                                "const": false
+                                              }
+                                            },
+                                            "required": [
+                                              "expectsReply"
+                                            ],
+                                            "additionalProperties": false
+                                          }
+                                        ]
+                                      }
+                                    },
+                                    "required": [
+                                      "type",
+                                      "harnessId",
+                                      "agentId",
+                                      "displayName",
+                                      "reply"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
@@ -9388,7 +9617,8 @@ export const chatSchemaSurfaceBaseline = {
                           "queueItemId",
                           "messageId",
                           "content",
-                          "mode"
+                          "mode",
+                          "sender"
                         ],
                         "additionalProperties": false
                       },
