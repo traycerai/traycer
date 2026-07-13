@@ -5,6 +5,7 @@ import {
 } from "@traycer/protocol/framework/index";
 import {
   createAgentRequestSchema,
+  createAgentRequestSchemaV20,
   createAgentResponseSchema,
   agentSelectionGuideRequestSchema,
   agentSelectionGuideResponseSchema,
@@ -52,6 +53,100 @@ export const agentCreateV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: createAgentRequestSchema,
   responseSchema: createAgentResponseSchema,
+});
+
+export const agentCreateV20 = defineRpcContract({
+  method: "agent.create",
+  schemaVersion: { major: 2, minor: 0 } as const,
+  requestSchema: createAgentRequestSchemaV20,
+  responseSchema: createAgentResponseSchema,
+});
+
+/**
+ * A v1.0 caller's nullable `profileId` maps onto the new selection model at
+ * the boundary the multi-profile decision log calls compatibility-only:
+ * `null` is legacy sender inheritance (`inherit_sender`), a non-null string
+ * is an explicit managed-profile pin. The response shape is unchanged
+ * (same warnings list), so its upgrade is the identity.
+ */
+export const agentCreateUpgradeV10ToV20 = defineUpgradePath<
+  typeof agentCreateV10,
+  typeof agentCreateV20
+>({
+  from: { major: 1, minor: 0 },
+  to: { major: 2, minor: 0 },
+  upgradeRequest: (request) => {
+    const { profileId, ...rest } = request;
+    return {
+      ...rest,
+      profileSelection:
+        profileId === null
+          ? { kind: "inherit_sender" as const }
+          : { kind: "profile" as const, profileId },
+    };
+  },
+  upgradeResponse: (response) => response,
+});
+
+/**
+ * Projects a v2.0 request back onto the frozen v1.0 wire for an old host.
+ * Explicit managed and compatibility-only inherited selections have a
+ * v1.0-representable shape (a profile-id string, or `profileId: null`
+ * meaning sender inheritance); `ambient` and `last_used` do not, so both fail
+ * the downgrade with actionable upgrade guidance instead of silently
+ * projecting onto `profileId: null`.
+ *
+ * Batch-1 review correction: the original plan treated explicit `ambient` as
+ * downgrade-compatible (also projecting to `profileId: null`), but frozen
+ * v1.0 already gives `null` a fixed meaning - sender inheritance for a
+ * same-surface/same-harness child. Silently reusing `null` for an explicit
+ * ambient choice could route the new agent onto the sender's managed
+ * account instead of the ambient login the caller actually asked for. Nor
+ * does the legacy `"ambient"` sentinel string help: v1.0 may persist it as a
+ * literal profile id, violating the runtime/persistence normalization
+ * invariant (see the profile-awareness decision log's "Old-host creation
+ * downgrade" row).
+ */
+export const agentCreateDowngradeV20ToV10 = defineDowngradePath<
+  typeof agentCreateV20,
+  typeof agentCreateV10
+>({
+  from: { major: 2, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) => {
+    const { profileSelection, ...rest } = request;
+    if (profileSelection.kind === "last_used") {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Creating an agent with the last-used provider profile requires a newer Traycer host. Choose a specific profile, or upgrade the host.",
+        },
+      };
+    }
+    if (profileSelection.kind === "ambient") {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Creating an agent with the ambient provider login requires a newer Traycer host - the frozen v1.0 wire cannot distinguish an explicit ambient choice from inheriting the sender's profile. Choose a specific profile, or upgrade the host.",
+        },
+      };
+    }
+    return {
+      ok: true,
+      value: createAgentRequestSchema.parse({
+        ...rest,
+        profileId:
+          profileSelection.kind === "profile"
+            ? profileSelection.profileId
+            : null,
+      }),
+    };
+  },
+  downgradeResponse: (response) => ({ ok: true, value: response }),
 });
 
 export const agentSelectionGuideV10 = defineRpcContract({
@@ -250,7 +345,6 @@ export const agentListDowngradeV3ToV1 = defineDowngradePath<
     }),
   }),
 });
-
 
 export const agentListV40 = defineRpcContract({
   method: "agent.list",

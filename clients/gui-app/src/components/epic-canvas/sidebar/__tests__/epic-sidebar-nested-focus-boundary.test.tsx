@@ -140,6 +140,10 @@ vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
   useEpicNestedFocusNavigation: () => testState.navigateNested,
 }));
 
+vi.mock("@/hooks/epic/use-epic-export-artifacts-mutation", () => ({
+  useEpicExportArtifacts: () => ({ mutate: vi.fn(), isPending: false }),
+}));
+
 vi.mock("@/components/epic-canvas/dnd/epic-canvas-dnd-context-value", () => ({
   useEpicCanvasDnd: () => ({
     activeSource: null,
@@ -513,6 +517,7 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicNodeOwnerKind: () => "chat",
   useEpicNodeWorkspaceFolders: () => [],
   useEpicPermissionRole: () => testState.permissionRole,
+  useEpicSnapshotMeta: () => ({ epicLight: { title: "Test epic" } }),
   useEpicTreeIndex: () => testState.tree,
   useEpicTreeNode: (nodeId: string) => testState.tree.nodeById[nodeId] ?? null,
   useMaybeEpicTuiAgentHarnessId: () => null,

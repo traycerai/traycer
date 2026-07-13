@@ -1324,6 +1324,57 @@ describe("<ChatTile />", () => {
     expect(frame.settings).toEqual(SESSION_SETTINGS);
   });
 
+  it("updates composer settings when the host publishes a changed settings snapshot", async () => {
+    chatHarness.teardown();
+    chatHarness.installWithSettings("owner", [], QUEUED_SETTINGS);
+
+    renderChatTile();
+
+    await waitForChatTileLoaded();
+
+    act(() => {
+      emitChatSnapshot(chatHarness.callbacks(), "owner", [], SESSION_SETTINGS);
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    const frame = chatHarness.sent[0];
+    if (frame.kind !== "send") throw new Error("expected send frame");
+    expect(frame.settings).toEqual(SESSION_SETTINGS);
+  });
+
+  it("keeps local composer settings when a host snapshot leaves persisted settings unchanged", async () => {
+    chatHarness.teardown();
+    chatHarness.installWithSettings("owner", [], QUEUED_SETTINGS);
+
+    renderChatTile();
+
+    await waitForChatTileLoaded();
+
+    const focusedComposer = getFocusedComposerControls();
+    if (focusedComposer === null) {
+      throw new Error("expected focused composer controls");
+    }
+
+    act(() => {
+      focusedComposer.controls.selectModel(
+        SESSION_SETTINGS.harnessId,
+        SESSION_SETTINGS.model,
+      );
+      focusedComposer.controls.setPermission(SESSION_SETTINGS.permissionMode);
+      focusedComposer.controls.setReasoning(
+        SESSION_SETTINGS.reasoningEffort ?? "",
+      );
+      emitChatSnapshot(chatHarness.callbacks(), "owner", [], QUEUED_SETTINGS);
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    const frame = chatHarness.sent[0];
+    if (frame.kind !== "send") throw new Error("expected send frame");
+    expect(frame.settings).toEqual(SESSION_SETTINGS);
+  });
+
   it("keeps live toolbar settings over persisted chat settings after remount", async () => {
     chatHarness.teardown();
     chatHarness.installWithSettings("owner", [], SESSION_SETTINGS);
