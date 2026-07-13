@@ -176,6 +176,246 @@
       "payload": "serverFrame",
       "path": "**.accentColor",
       "reason": "Persistence-mirror profile field on a parsed stream (see the **.profileId entry for the full rationale): nullable/.default(null), null is the pre-profile semantic, the GUI additionally falls back to its own palette hash when null; scoped by field path."
+    },
+    {
+      "family": "stream",
+      "method": "chat.subscribe",
+      "version": "*",
+      "payload": "serverFrame",
+      "path": "**.coveredUntilMessageId",
+      "reason": "Session-anchor/chain seed-coverage field on a parsed stream (frames are live-schema-parsed, so the tolerance executes): nullable/.default(null), and null is the documented 'no seed context ever existed' semantic - literally true for a host that predates fake-context seeding (#187). No shipped client reads the field; only the host's own seeding consumes it."
+    },
+    {
+      "family": "stream",
+      "method": "chat.subscribe",
+      "version": "*",
+      "payload": "serverFrame",
+      "path": "**.claudePendingWakes",
+      "reason": "Parsed-stream field with .default([]): an empty wake list is exactly what a host that predates ScheduleWakeup (#196) has. No shipped client consumes the field outside tests."
+    },
+    {
+      "family": "stream",
+      "method": "chat.subscribe",
+      "version": "*",
+      "payload": "serverFrame",
+      "path": "**.wakeTriggers",
+      "reason": "Parsed-stream field with .default([]) whose decode codec merges entries into the block's pre-existing `triggers` list - an empty merge is a byte-for-byte no-op, so old-host autonomous_resume blocks render exactly as they did before #205."
+    },
+    {
+      "family": "stream",
+      "method": "chat.subscribe",
+      "version": "*",
+      "payload": "serverFrame",
+      "path": "**.workflowMeta",
+      "reason": "Parsed-stream field, nullable/.default(null): null renders the plain subagent card, which is the only card a pre-workflow (#235) host can produce - old hosts cannot run workflow fleets, so no data exists to lose."
+    },
+    {
+      "family": "stream",
+      "method": "chat.subscribe",
+      "version": "*",
+      "payload": "serverFrame",
+      "path": "**.providerNotice",
+      "reason": "Parsed-stream field, nullable/.default(null): the text block's `text` always carries the full plain rendering and the client falls back to it when the notice is null - the documented pre-#243 behavior."
+    },
+    {
+      "family": "stream",
+      "method": "chat.subscribe",
+      "version": "*",
+      "payload": "serverFrame",
+      "path": "**.blocks.items.anyOf[*].properties.stopped",
+      "reason": "Parsed-stream flag with .default(false) on tool_call/subagent blocks: false renders the plain error end-state badge, exactly the shipped pre-#152 treatment (a legacy error-string fallback for old blocks is retained in the tool segment)."
+    },
+    {
+      "family": "stream",
+      "method": "chat.subscribe",
+      "version": "*",
+      "payload": "serverFrame",
+      "path": "**.backgroundTask",
+      "reason": "Parsed-stream background-task marker (block: nullable/.default(false); events: .optional() with `?? null` in the shared accumulator): falsy means no background-card promotion, so old-host tool calls collapse into the generic activity group exactly as before #127."
+    },
+    {
+      "family": "stream",
+      "method": "chat.subscribe",
+      "version": "*",
+      "payload": "serverFrame",
+      "path": "**.backgroundOutput",
+      "reason": "Parsed-stream background output (block: nullable/.default(null); events: .optional() with merge-preserve in the accumulator): null renders no output section, the pre-#127 behavior."
+    },
+    {
+      "family": "stream",
+      "method": "chat.subscribe",
+      "version": "*",
+      "payload": "serverFrame",
+      "path": "**.backgroundStartedAt",
+      "reason": "Parsed-stream event timestamp, .optional(): the accumulator falls back to the foreground spawn time or renders no duration - the pre-#127 timer behavior."
+    },
+    {
+      "family": "stream",
+      "method": "chat.subscribe",
+      "version": "*",
+      "payload": "serverFrame",
+      "path": "**.blocks.items.anyOf[*].properties.startedAt",
+      "reason": "Parsed-stream block timestamp, nullable/.default(null): consumers anchor timing on the block's always-present `timestamp` when null and deliberately render no duration instead of a misleading 0s - the pre-#127 behavior."
+    },
+    {
+      "family": "stream",
+      "method": "chat.subscribe",
+      "version": "*",
+      "payload": "serverFrame",
+      "path": "**.event.anyOf[*].properties.startedAt",
+      "reason": "Parsed-stream event timestamp, .optional(): the accumulator substitutes `event.timestamp` (the pre-#127 anchor) when absent."
+    },
+    {
+      "family": "stream",
+      "method": "chat.subscribe",
+      "version": "*",
+      "payload": "serverFrame",
+      "path": "**.blocks.items.anyOf[*].properties.endedAt",
+      "reason": "Parsed-stream block timestamp, nullable/.default(null): null renders no duration, matching pre-#127 tool segments."
+    },
+    {
+      "family": "stream",
+      "method": "chat.subscribe",
+      "version": "*",
+      "payload": "serverFrame",
+      "path": "**.event.anyOf[*].properties.outcome",
+      "reason": "Parsed-stream subagent.completed classifier with .default(\"completed\"): the accumulator maps it to status completed/stopped false, which the code documents as reproducing the shipped pre-#152 behavior exactly."
+    },
+    {
+      "family": "stream",
+      "method": "chat.subscribe",
+      "version": "*",
+      "payload": "serverFrame",
+      "path": "**.event.anyOf[*].properties.terminationReason",
+      "reason": "Parsed-stream tool_call.errored classifier with .default(\"error\"): maps to stopped:false, the plain error render every pre-#152 host produced."
+    },
+    {
+      "family": "stream",
+      "method": "chat.subscribe",
+      "version": "*",
+      "payload": "serverFrame",
+      "path": "**.turnInProgress",
+      "reason": "Parsed-stream authoritative turn bit, deliberately .optional() with NO default: the store keeps it undefined across frames (`?? state.turnInProgress`) and the session-state resolver then falls back to the layer-2 local approximation - the exact shipped pre-#165 logic. A default would be wrong here; absence means 'capability missing, approximate'."
+    },
+    {
+      "family": "stream",
+      "method": "chat.subscribe",
+      "version": "*",
+      "payload": "serverFrame",
+      "path": "**.workspaceMode",
+      "reason": "Parsed-stream worktree-binding field, .optional() by design: the schema doc states absence distinguishes an old/empty binding that inherits the Epic's folders from an explicit folderless one (#227), and consumers only strict-compare against \"folderless\" - undefined takes the inherit branch, which is the only state a pre-folderless host can be in."
+    },
+    {
+      "family": "stream",
+      "method": "chat.subscribe",
+      "version": "*",
+      "payload": "serverFrame",
+      "path": "**.ownedSubmodules",
+      "reason": "Parsed-stream worktree-binding entry field, .optional() with an in-schema note that it must never become a required-field wire break (#228): no shipped client reads it (the merge rollup consumes worktree.listAllForHost facts instead), so absence is inert."
+    },
+    {
+      "family": "stream",
+      "method": "terminal.subscribe",
+      "version": "*",
+      "payload": "serverFrame",
+      "path": "**.ackCreditSupported",
+      "reason": "Parsed-stream capability sentinel, .optional() with fail-safe polarity: absent reads as not-supported, so the client never emits ack frames - byte-for-byte the pre-#179 wire behavior, and the safe direction (a pre-ack host cannot even parse an ack client frame). Re-evaluated on every snapshot, so it cannot go stale across reconnects."
+    },
+    {
+      "family": "stream",
+      "method": "terminal.subscribe",
+      "version": "*",
+      "payload": "serverFrame",
+      "path": "**.activeProcessName",
+      "reason": "Parsed-stream display metadata, nullable/.optional() (in-schema: 'Optional so clients remain compatible with already-shipped hosts', #217): every consumer normalizes to null = idle/unknown and falls back to the derived terminal title - the pre-feature UI."
+    },
+    {
+      "family": "stream",
+      "method": "terminal.subscribe",
+      "version": "*",
+      "payload": "serverFrame",
+      "path": "**.exitReason",
+      "reason": "Parsed-stream exit classifier, nullable/.optional() (in-schema: absent is equivalent to process-exit, the only pre-field behavior a client could assume, #192): consumers collapse null to exitCode-based classification, the exact pre-feature semantics."
+    },
+    {
+      "family": "stream",
+      "method": "resources.subscribe",
+      "version": "*",
+      "payload": "serverFrame",
+      "path": "**.epics",
+      "reason": "Parsed-stream aggregate list, .optional(): the stream client coerces `?? []` and the store falls back to the required singular `epic` aggregate - the pre-#247 per-epic projection. The global monitor is legitimately empty against a host that has no global scope."
+    },
+    {
+      "family": "unary",
+      "method": "terminal.*",
+      "version": "*",
+      "payload": "response",
+      "path": "**.activeProcessName",
+      "reason": "Shared terminal-session shape on create/list responses, nullable/.optional() (#217). Same-version unary responses are delivered by cast (the transport only schema-parses when an upgrade chain runs), so absence reaches the store raw - verified safe: the session store and title helper normalize undefined to null = idle/unknown, the pre-feature display."
+    },
+    {
+      "family": "unary",
+      "method": "terminal.*",
+      "version": "*",
+      "payload": "response",
+      "path": "**.exitReason",
+      "reason": "Shared terminal-session shape on create/list responses, nullable/.optional() (#192). Delivered by cast at same-version; verified safe: the store normalizes `?? null` and every consumer falls back to exitCode-based crash/exit classification - the documented 'absent equals process-exit' pre-field semantic."
+    },
+    {
+      "family": "unary",
+      "method": "worktree.*",
+      "version": "*",
+      "payload": "response",
+      "path": "**.workspaceMode",
+      "reason": "Worktree-binding field, .optional() by design (#227): the schema doc defines absence as 'inherit the Epic's folders', the only state a pre-folderless host can produce. Delivered by cast at same-version; verified safe: consumers only strict-compare against \"folderless\", so undefined takes the inherit branch."
+    },
+    {
+      "family": "unary",
+      "method": "worktree.*",
+      "version": "*",
+      "payload": "response",
+      "path": "**.ownedSubmodules",
+      "reason": "Worktree-binding entry field, .optional() with an in-schema no-wire-break note (#228). Delivered by cast at same-version; verified safe: no shipped client reads it (the merge rollup consumes worktree.listAllForHost facts instead)."
+    },
+    {
+      "family": "unary",
+      "method": "workspaceBinding.*",
+      "version": "*",
+      "payload": "response",
+      "path": "**.workspaceMode",
+      "reason": "Same worktree-binding shape as the worktree.* responses (see that **.workspaceMode entry): absence is the designed 'inherit' state and consumers strict-compare against \"folderless\"."
+    },
+    {
+      "family": "unary",
+      "method": "workspaceBinding.*",
+      "version": "*",
+      "payload": "response",
+      "path": "**.ownedSubmodules",
+      "reason": "Same worktree-binding shape as the worktree.* responses (see that **.ownedSubmodules entry): no shipped client reads the field."
+    },
+    {
+      "family": "unary",
+      "method": "agent.tui.listHarnesses",
+      "version": "*",
+      "payload": "response",
+      "path": "**.enabled",
+      "reason": "TUI harness row flag with .default(true) (#178): default matches the pre-feature reading that every row an old host lists is usable. The method has no caller in any shipped client (host-internal bootstrap only), so the tolerated key is inert on the wire today."
+    },
+    {
+      "family": "unary",
+      "method": "agent.tui.listHarnesses",
+      "version": "*",
+      "payload": "response",
+      "path": "**.availabilityPending",
+      "reason": "TUI harness row flag with .catch(false), added with an in-schema note that it tolerates old host builds that omit the field (#147): false = probe settled, the pre-feature state. No caller in any shipped client."
+    },
+    {
+      "family": "unary",
+      "method": "agent.gui.listModels",
+      "version": "*",
+      "payload": "response",
+      "path": "**.deprecationNotice",
+      "reason": "Model-row sunset copy, nullable/.optional() with an in-schema note that absent and null are treated identically downstream (#176). Delivered by cast at same-version; verified safe: consumers normalize `?? null` and render no deprecation badge - exactly 'not deprecated', the pre-feature state."
     }
   ]
 }
