@@ -60,13 +60,31 @@ const REGISTRY_WITH_UNSUPPORTED_OPTIONAL = defineFloorAwareVersionedRpcRegistry(
 );
 
 describe("capability manifest helpers", () => {
-  it("keeps today's host legacy manifest byte-identical to the full manifest", () => {
+  it("splits today's host manifest into the unchanged legacy floor plus the additive optional channel", () => {
     const fullManifest = buildConnectionManifest(hostRpcRegistry);
     const split = splitConnectionManifest(hostRpcRegistry, releasedMethodNames);
 
-    expect(split.manifest).toEqual(fullManifest);
-    expect(split.optionalManifest).toEqual({});
-    expect(JSON.stringify(split.manifest)).toBe(JSON.stringify(fullManifest));
+    // The floor (legacy) channel is still exactly the released method-name
+    // set, at each method's canonical version in the full manifest - no
+    // floor method dropped or reversioned.
+    expect(Object.keys(split.manifest).sort()).toEqual(
+      [...releasedMethodNames].sort(),
+    );
+    for (const method of releasedMethodNames) {
+      expect(split.manifest[method]).toEqual(fullManifest[method]);
+    }
+
+    // Everything else (today: the A2A profile-awareness additions -
+    // `agent.listProviderProfiles` / `agent.getProviderProfileRateLimits` /
+    // `agent.configure`) lands in the optional channel instead of the fatal
+    // legacy manifest.
+    const nonFloorMethods = Object.keys(fullManifest)
+      .filter((method) => !releasedMethodNames.includes(method))
+      .sort();
+    expect(Object.keys(split.optionalManifest).sort()).toEqual(nonFloorMethods);
+    for (const method of nonFloorMethods) {
+      expect(split.optionalManifest[method]).toEqual(fullManifest[method]);
+    }
   });
 
   it("splits non-floor methods into the optional channel", () => {

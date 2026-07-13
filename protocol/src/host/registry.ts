@@ -1,12 +1,16 @@
 import {
   defineDowngradePath,
+  defineFloorAwareVersionedRpcRegistry,
   defineUpgradePath,
-  defineVersionedRpcRegistry,
   type DowngradeResult,
 } from "@traycer/protocol/framework/index";
 import { defineVersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
+import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import {
   agentCreateV10,
+  agentCreateV20,
+  agentCreateUpgradeV10ToV20,
+  agentCreateDowngradeV20ToV10,
   agentGetTranscriptV10,
   agentListHarnessModelsDowngradeV2ToV1,
   agentListHarnessModelsV10,
@@ -37,6 +41,11 @@ import {
   agentInboxReadV10,
   agentInboxSubscribeV10,
 } from "@traycer/protocol/host/agent/inbox";
+import {
+  agentConfigureV10,
+  agentGetProviderProfileRateLimitsV10,
+  agentListProviderProfilesV10,
+} from "@traycer/protocol/host/agent/profiles";
 import {
   agentGuiGetPlanV10,
   agentGuiListCommandsV10,
@@ -1436,7 +1445,14 @@ export const worktreeListBindingsForEpicUpgradeV10ToV11 = defineUpgradePath<
 // Note: git contract definitions are imported from git-contracts.ts above
 // and registered inline in hostRpcRegistry and hostStreamRpcRegistry below.
 
-export const hostRpcRegistry = defineVersionedRpcRegistry({
+// Kept as an unexported literal (rather than inlined into
+// `defineFloorAwareVersionedRpcRegistry` below) so this ~3000-line object's
+// indentation stays stable regardless of which registry-builder wraps it.
+// The trailing `as const` is required once the literal is no longer a direct
+// call argument: without it, TS widens `latestMinor`/major/minor number
+// literals and loses the exact-version inference `defineFloorAwareVersionedRpcRegistry`'s
+// `const Registry` type parameter depends on.
+const hostRpcRegistryDefinition = {
   "host.status": {
     1: {
       latestMinor: 0,
@@ -1710,6 +1726,16 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
         },
       },
       downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentCreateV20,
+          upgradeFromPreviousVersion: agentCreateUpgradeV10ToV20,
+        },
+      },
+      downgradePathsFromLatest: { 1: agentCreateDowngradeV20ToV10 },
     },
   },
   "agent.selectionGuide": {
@@ -3085,7 +3111,57 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
       downgradePathsFromLatest: {},
     },
   },
-});
+  // ─── A2A profile-awareness: additive optional methods ───────────────────
+  //
+  // Registered outside `RELEASED_FLOOR_METHOD_NAMES` with an `unsupported`
+  // degrade: an old host simply lacks them (per-call upgrade guidance),
+  // never a fatal handshake mismatch. See the profile-awareness technical
+  // plan's "New optional RPC methods" section.
+  "agent.listProviderProfiles": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentListProviderProfilesV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "agent.getProviderProfileRateLimits": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentGetProviderProfileRateLimitsV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "agent.configure": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentConfigureV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+} as const;
+
+export const hostRpcRegistry = defineFloorAwareVersionedRpcRegistry(
+  RELEASED_FLOOR_METHOD_NAMES,
+  hostRpcRegistryDefinition,
+);
 
 export type HostRpcRegistry = typeof hostRpcRegistry;
 

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { agentCreateUpgradeV10ToV20 } from "@traycer/protocol/host/agent/contracts";
 import {
   createAgentRequestSchema,
   createAgentResponseSchema,
@@ -62,7 +63,17 @@ export function buildAgentCreateCommand(opts: {
         workspaceEntries: opts.workspaceEntries,
       }),
     });
-    const result = await toAgentCliError(callHostRpc("agent.create", request));
+    // The CLI has no `--profile` option yet (see the profile-aware CLI
+    // ticket), so it still builds a v1.0-shaped request and upgrades it
+    // through the same bridge a v1.0 caller's request takes on the wire -
+    // `profileId: null` becomes `inherit_sender`, preserving today's
+    // sender-inheritance behavior unchanged.
+    const result = await toAgentCliError(
+      callHostRpc(
+        "agent.create",
+        agentCreateUpgradeV10ToV20.upgradeRequest(request),
+      ),
+    );
     const { agentId, warnings } = parseHostResponse(
       createAgentResponseSchema,
       result,
