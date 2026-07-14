@@ -522,6 +522,19 @@ describe("traycer CLI entrypoint registration", () => {
     expect(thrown).not.toBeNull();
   });
 
+  it("host restart exposes a hidden --if-idle option, wired to the shared runner", () => {
+    const program = buildProgram();
+    const cmd = expectCommand(program, ["host", "restart"]);
+    const flags = cmd.options.map((o) => o.long);
+    expect(flags).toContain("--if-idle");
+    // `--if-idle` is the CLI-owned activation mode (desktop controller's
+    // idle-gated restart cycle), not a user-facing switch - hidden from
+    // help via `.hideHelp()`, but still reachable (expectCommand above
+    // already proves it).
+    expect(cmd.helpInformation()).not.toContain("--if-idle");
+    expectRunnerFlags(cmd, "host restart");
+  });
+
   it("host available exposes --include-pre-releases for RC registry inspection", () => {
     const program = buildProgram();
     const cmd = expectCommand(program, ["host", "available"]);

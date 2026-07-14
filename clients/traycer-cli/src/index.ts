@@ -56,7 +56,7 @@ import { buildHostEnsureCommand } from "./commands/host-ensure";
 import { buildHostFreePortAndRestartCommand } from "./commands/host-free-port-and-restart";
 import { buildHostInstallCommand } from "./commands/host-install";
 import { buildHostLogsCommand } from "./commands/host-logs";
-import { hostRestartCommand } from "./commands/host-restart";
+import { buildHostRestartCommand } from "./commands/host-restart";
 import { runHostStart } from "./commands/host-start";
 import { buildHostStampRuntimeCommand } from "./commands/host-stamp-runtime";
 import { hostStatusCommand } from "./commands/host-status";
@@ -377,8 +377,22 @@ function registerHostCommands(program: Command): void {
   );
 
   withRunner(
-    host.command("restart").description("Restart the host service"),
-    () => hostRestartCommand,
+    host
+      .command("restart")
+      .description("Restart the host service")
+      // Hidden: the CLI-owned activation mode (desktop controller's
+      // idle-gated restart cycle), not a user-facing switch - see
+      // commands/host-restart.ts.
+      .addOption(
+        new Option(
+          "--if-idle",
+          "Internal: refuse with E_HOST_BUSY if the host has work in progress, probed immediately before stop",
+        ).hideHelp(),
+      ),
+    (opts) =>
+      buildHostRestartCommand({
+        ifIdle: opts.ifIdle === true,
+      }),
   );
 
   withRunner(
