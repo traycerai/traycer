@@ -1,0 +1,416 @@
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+type Environment = "dev" | "production";
+
+let sandboxRoot = "";
+
+function hostHomeFor(environment: Environment): string {
+  return join(sandboxRoot, "host", environment);
+}
+function installDirFor(environment: Environment): string {
+  return join(hostHomeFor(environment), "install");
+}
+function stagingRootFor(environment: Environment): string {
+  return join(hostHomeFor(environment), "install-staging");
+}
+function stagedDirFor(environment: Environment): string {
+  return join(hostHomeFor(environment), "staged");
+}
+
+const mocks = vi.hoisted(() => ({
+  platformOverride: null as "win32" | null,
+  busyOverride: null as "busy" | null,
+  lifecycleCalls: [] as Array<{ bootstrap: unknown }>,
+  lifecycleBeforeSwapShouldThrow: false,
+  lifecyclePostSwapAction: "restart" as
+    "restart" | "start" | "install" | "none",
+  lifecyclePostSwapError: null as string | null,
+}));
+
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return {
+    ...actual,
+    platform: () => mocks.platformOverride ?? actual.platform(),
+  };
+});
+
+vi.mock("../../host/busy-check", () => ({
+  assertHostNotBusy: async () => {
+    if (mocks.busyOverride === "busy") {
+      throw Object.assign(new Error("host is busy"), { code: "E_HOST_BUSY" });
+    }
+  },
+}));
+
+vi.mock("../../service/install-lifecycle", () => ({
+  createServiceInstallLifecycle: (options: { bootstrap: unknown }) => {
+    mocks.lifecycleCalls.push({ bootstrap: options.bootstrap });
+    const state = {
+      priorState: "running" as const,
+      stoppedBeforeSwap: false,
+      postSwapAction: "none" as "restart" | "start" | "install" | "none",
+      postSwapError: null as string | null,
+    };
+    return {
+      state,
+      lifecycle: {
+        beforeSwap: async () => {
+          if (mocks.lifecycleBeforeSwapShouldThrow) {
+            throw new Error("simulated stop failure");
+          }
+          state.stoppedBeforeSwap = true;
+        },
+        afterSwap: async () => {
+          state.postSwapAction = mocks.lifecyclePostSwapAction;
+          state.postSwapError = mocks.lifecyclePostSwapError;
+        },
+      },
+    };
+  },
+}));
+
+vi.mock("../../store/paths", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../store/paths")>(
+      "../../store/paths",
+    );
+  return {
+    ...actual,
+    hostHomeDir: (environment: Environment) => hostHomeFor(environment),
+    hostInstallDir: (environment: Environment) => installDirFor(environment),
+    hostInstallRecordPath: (environment: Environment) =>
+      join(installDirFor(environment), "install.json"),
+    hostStagingRoot: (environment: Environment) => stagingRootFor(environment),
+    hostStagedDir: (environment: Environment) => stagedDirFor(environment),
+    ensureHostHomeDir: async (environment: Environment) => {
+      mkdirSync(hostHomeFor(environment), { recursive: true });
+    },
+    ensureHostInstallDir: async (environment: Environment) => {
+      mkdirSync(installDirFor(environment), { recursive: true });
+    },
+    ensureHostStagingRoot: async (environment: Environment) => {
+      mkdirSync(stagingRootFor(environment), { recursive: true });
+    },
+  };
+});
+
+import { applyHost } from "../apply";
+import { currentInstallArch, currentInstallPlatform } from "../install";
+import { readHostInstallRecord } from "../../manifest/host-install";
+import {
+  HOST_STAGED_RECORD_SCHEMA_VERSION,
+  writeHostStagedRecordAt,
+  type HostStagedRecord,
+} from "../../manifest/host-staged";
+import { writeHostInstallRecord } from "../../manifest/host-install";
+import type { HostInstallRecord } from "../../manifest/host-install";
+
+const ENV: Environment = "production";
+
+async function writeInstall(
+  version: string,
+  overrides: Partial<HostInstallRecord>,
+): Promise<HostInstallRecord> {
+  const installDir = installDirFor(ENV);
+  mkdirSync(installDir, { recursive: true });
+  const executablePath = join(installDir, "traycer-host");
+  writeFileSync(executablePath, "binary");
+  const record: HostInstallRecord = {
+    installId: null,
+    version,
+    runtimeVersion: null,
+    platform: currentInstallPlatform(),
+    arch: currentInstallArch(),
+    installedAt: new Date().toISOString(),
+    source: { kind: "registry", value: version },
+    archiveSha256: "a".repeat(64),
+    signatureVerifiedAt: new Date().toISOString(),
+    signatureKeyId: "test-key",
+    sizeBytes: 1,
+    executablePath,
+    ...overrides,
+  };
+  await writeHostInstallRecord(ENV, record);
+  return record;
+}
+
+async function writeStaged(
+  version: string,
+  overrides: Partial<HostStagedRecord>,
+): Promise<HostStagedRecord> {
+  const stagedDir = stagedDirFor(ENV);
+  mkdirSync(stagedDir, { recursive: true });
+  const executableRelPath = "traycer-host";
+  writeFileSync(join(stagedDir, executableRelPath), "binary");
+  const record: HostStagedRecord = {
+    schemaVersion: HOST_STAGED_RECORD_SCHEMA_VERSION,
+    version,
+    runtimeVersion: null,
+    archiveSha256: "b".repeat(64),
+    sizeBytes: 1,
+    source: { kind: "registry", value: version },
+    signatureKeyId: "test-key",
+    signatureVerifiedAt: new Date().toISOString(),
+    executablePath: executableRelPath,
+    platform: currentInstallPlatform(),
+    arch: currentInstallArch(),
+    ...overrides,
+  };
+  await writeHostStagedRecordAt(stagedDir, record);
+  return record;
+}
+
+describe("applyHost", () => {
+  beforeEach(() => {
+    sandboxRoot = mkdtempSync(join(tmpdir(), "traycer-apply-test-"));
+  });
+
+  afterEach(() => {
+    mocks.platformOverride = null;
+    mocks.busyOverride = null;
+    mocks.lifecycleCalls = [];
+    mocks.lifecycleBeforeSwapShouldThrow = false;
+    mocks.lifecyclePostSwapAction = "restart";
+    mocks.lifecyclePostSwapError = null;
+    rmSync(sandboxRoot, { recursive: true, force: true });
+  });
+
+  it("no-ops when nothing is staged", async () => {
+    await writeInstall("1.0.0", {});
+
+    const result = await applyHost({
+      environment: ENV,
+      force: false,
+      noService: false,
+      onProgress: () => {},
+    });
+
+    expect(result).toEqual({ outcome: "no-op", installedVersion: "1.0.0" });
+    expect(mocks.lifecycleCalls).toHaveLength(0);
+  });
+
+  it("no-ops when the only staged version is comparable and not newer than installed (swept by reconcile's own stale-or-equal-version rule)", async () => {
+    await writeInstall("2.0.0", {});
+    await writeStaged("2.0.0", {});
+
+    const result = await applyHost({
+      environment: ENV,
+      force: false,
+      noService: false,
+      onProgress: () => {},
+    });
+
+    expect(result).toEqual({ outcome: "no-op", installedVersion: "2.0.0" });
+    // Reconcile (applyHost's own first step) deletes a stale-or-equal
+    // stage BEFORE applyHost ever reads it - there is no separate "staged
+    // but not newer" outcome left to preserve a stage for.
+    expect(existsSync(stagedDirFor(ENV))).toBe(false);
+  });
+
+  it("proceeds (does not no-op) when the installed version is incomparable to a comparable stage", async () => {
+    await writeInstall("local-custom-build-2026", {});
+    await writeStaged("1.5.0", {});
+
+    const result = await applyHost({
+      environment: ENV,
+      force: false,
+      noService: false,
+      onProgress: () => {},
+    });
+
+    expect(result.outcome).toBe("applied");
+  });
+
+  it("throws E_HOST_NOT_INSTALLED with no install record at all", async () => {
+    await expect(
+      applyHost({
+        environment: ENV,
+        force: false,
+        noService: false,
+        onProgress: () => {},
+      }),
+    ).rejects.toMatchObject({ code: "E_HOST_NOT_INSTALLED" });
+  });
+
+  it("refuses a busy host with the stage left intact", async () => {
+    await writeInstall("1.0.0", {});
+    await writeStaged("2.0.0", {});
+    mocks.busyOverride = "busy";
+
+    await expect(
+      applyHost({
+        environment: ENV,
+        force: false,
+        noService: false,
+        onProgress: () => {},
+      }),
+    ).rejects.toMatchObject({ code: "E_HOST_BUSY" });
+
+    expect(existsSync(stagedDirFor(ENV))).toBe(true);
+    expect(existsSync(installDirFor(ENV))).toBe(true);
+  });
+
+  it("--force bypasses the busy check", async () => {
+    await writeInstall("1.0.0", {});
+    await writeStaged("2.0.0", {});
+    mocks.busyOverride = "busy";
+
+    const result = await applyHost({
+      environment: ENV,
+      force: true,
+      noService: false,
+      onProgress: () => {},
+    });
+
+    expect(result.outcome).toBe("applied");
+  });
+
+  it("--no-service skips the busy check and the service lifecycle entirely, reporting runningActivated: false", async () => {
+    await writeInstall("1.0.0", {});
+    await writeStaged("2.0.0", {});
+    mocks.busyOverride = "busy";
+
+    const result = await applyHost({
+      environment: ENV,
+      force: false,
+      noService: true,
+      onProgress: () => {},
+    });
+
+    expect(result.outcome).toBe("applied");
+    if (result.outcome === "applied") {
+      expect(result.runningActivated).toBe(false);
+      expect(result.postSwapError).toBeNull();
+    }
+    expect(mocks.lifecycleCalls).toHaveLength(0);
+  });
+
+  it("--no-service is rejected on Windows", async () => {
+    mocks.platformOverride = "win32";
+    await writeInstall("1.0.0", { platform: "win32" });
+    await writeStaged("2.0.0", { platform: "win32" });
+
+    await expect(
+      applyHost({
+        environment: ENV,
+        force: false,
+        noService: true,
+        onProgress: () => {},
+      }),
+    ).rejects.toMatchObject({ code: "E_INVALID_ARGUMENT" });
+  });
+
+  it("commits a null-runtime source normally, yielding a null-runtime record with a fresh installId", async () => {
+    const previous = await writeInstall("1.0.0", {
+      installId: "prior-install-id",
+    });
+    await writeStaged("2.0.0", { runtimeVersion: null });
+
+    const result = await applyHost({
+      environment: ENV,
+      force: false,
+      noService: false,
+      onProgress: () => {},
+    });
+
+    expect(result.outcome).toBe("applied");
+    if (result.outcome === "applied") {
+      expect(result.record.runtimeVersion).toBeNull();
+      expect(result.record.installId).not.toBeNull();
+      expect(result.record.installId).not.toBe(previous.installId);
+      expect(result.previous?.installId).toBe(previous.installId);
+    }
+  });
+
+  it("reports runningActivated: true and the committed installGeneration on a clean apply", async () => {
+    await writeInstall("1.0.0", {});
+    await writeStaged("2.0.0", {});
+    mocks.lifecyclePostSwapAction = "restart";
+    mocks.lifecyclePostSwapError = null;
+
+    const result = await applyHost({
+      environment: ENV,
+      force: false,
+      noService: false,
+      onProgress: () => {},
+    });
+
+    expect(result.outcome).toBe("applied");
+    if (result.outcome === "applied") {
+      expect(result.runningActivated).toBe(true);
+      expect(result.installGeneration).toContain(result.record.installId);
+      expect(result.postSwapError).toBeNull();
+    }
+  });
+
+  it("reports a postSwapError without throwing when the post-swap start fails (no rollback)", async () => {
+    await writeInstall("1.0.0", {});
+    await writeStaged("2.0.0", {});
+    mocks.lifecyclePostSwapAction = "restart";
+    mocks.lifecyclePostSwapError = "simulated start failure";
+
+    const result = await applyHost({
+      environment: ENV,
+      force: false,
+      noService: false,
+      onProgress: () => {},
+    });
+
+    expect(result.outcome).toBe("applied");
+    if (result.outcome === "applied") {
+      expect(result.postSwapError).toBe("simulated start failure");
+      expect(result.runningActivated).toBe(false);
+    }
+    // No rollback - the new bytes stay installed despite the start failure.
+    const stored = await readHostInstallRecord(ENV);
+    expect(stored?.version).toBe("2.0.0");
+  });
+
+  it("propagates a pre-commit stop failure (beforeSwap) rather than swallowing it, leaving the stage intact", async () => {
+    await writeInstall("1.0.0", {});
+    await writeStaged("2.0.0", {});
+    mocks.lifecycleBeforeSwapShouldThrow = true;
+
+    await expect(
+      applyHost({
+        environment: ENV,
+        force: false,
+        noService: false,
+        onProgress: () => {},
+      }),
+    ).rejects.toThrow("simulated stop failure");
+
+    // Pre-commit failure - stage intact, install intact (recovery table).
+    expect(existsSync(stagedDirFor(ENV))).toBe(true);
+    const stored = await readHostInstallRecord(ENV);
+    expect(stored?.version).toBe("1.0.0");
+  });
+
+  it("consumes the stage exactly at commit", async () => {
+    await writeInstall("1.0.0", {});
+    await writeStaged("2.0.0", {});
+
+    await applyHost({
+      environment: ENV,
+      force: false,
+      noService: false,
+      onProgress: () => {},
+    });
+
+    expect(existsSync(stagedDirFor(ENV))).toBe(false);
+    expect(readFileSync(join(installDirFor(ENV), "traycer-host"), "utf8")).toBe(
+      "binary",
+    );
+  });
+});
