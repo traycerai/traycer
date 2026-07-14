@@ -1,5 +1,5 @@
 import { constants as fsConstants } from "node:fs";
-import { access } from "node:fs/promises";
+import { access, stat } from "node:fs/promises";
 import { dialog } from "electron";
 import { RunnerHostInvoke } from "../../ipc-contracts/ipc-channels";
 import type { TraycerShellProbeResult } from "@traycer-clients/shared/platform/runner-host";
@@ -162,6 +162,18 @@ export function registerTraycerCliIpc(bridge: RunnerIpcBridge): void {
     },
   );
 
+  bridge.handleInvoke(
+    RunnerHostInvoke.traycerConfigShellRevertArgs,
+    async (_event, raw: unknown) => {
+      const path = requireString(raw, "path", "traycerConfigShellRevertArgs");
+      await runTraycerCli({
+        args: ["config", "shell", "revert-args", "--path", path],
+        maxBuffer: 64 * 1024,
+        timeoutMs: 10_000,
+      });
+    },
+  );
+
   // Native existence/executability probe for the "Add a shell" live validation.
   // Runs directly in main (fs access) so it can be debounced per keystroke
   // without paying a CLI subprocess spawn each time; mirrors the protocol's
@@ -170,17 +182,22 @@ export function registerTraycerCliIpc(bridge: RunnerIpcBridge): void {
     RunnerHostInvoke.traycerConfigShellProbe,
     async (_event, raw: unknown): Promise<TraycerShellProbeResult> => {
       const path = requireString(raw, "path", "traycerConfigShellProbe");
-      const [exists, executable] = await Promise.all([
-        access(path, fsConstants.F_OK).then(
-          () => true,
-          () => false,
+      const [fileStat, accessible] = await Promise.all([
+        stat(path).then(
+          (s) => s,
+          () => null,
         ),
         access(path, fsConstants.X_OK).then(
           () => true,
           () => false,
         ),
       ]);
-      return { exists, executable };
+      // A shell must be a regular file: directories pass X_OK too (it means
+      // searchable for them) but cannot be spawned. Mirrors probeShellPath.
+      return {
+        exists: fileStat !== null,
+        executable: accessible && fileStat !== null && fileStat.isFile(),
+      };
     },
   );
 

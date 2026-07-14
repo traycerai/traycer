@@ -57,6 +57,7 @@ function buildEntryList(
       path: value,
       isDefault: false,
       source: "detected",
+      missing: false,
     });
   }
   entries.sort(
@@ -73,12 +74,14 @@ function buildEntryList(
  * live-validated path input and a native Browse action.
  *
  * "System default" is the single place the auto state lives: it is checked when
- * `synthesised`, and picking it fully resets (path AND flags) via
- * `onUseSystemDefault`. A concrete row is checked only when a shell is
- * explicitly stored (`!synthesised`) and its path matches. Selecting a concrete
- * row auto-saves via `onSelect`; adding (Enter on a green path, or a Browse pick
- * that probes executable) auto-saves via `onAdd`; the hover ✕ on an added row
- * removes it via `onRemove` without closing the popover.
+ * `synthesised`, and picking it clears the selection (returns to the login shell)
+ * via `onUseSystemDefault` - remembered shells and their flags are kept, so it
+ * stays checked even when the login shell has its own flag entry. A concrete row
+ * is checked only when a shell is explicitly stored (`!synthesised`) and its path
+ * matches. Selecting a concrete row auto-saves via `onSelect`; adding (Enter on a
+ * green path, or a Browse pick that probes executable) auto-saves via `onAdd`;
+ * the hover ✕ on an added row removes it via `onRemove` without closing the
+ * popover.
  */
 export function ShellProgramCombobox(props: {
   readonly value: string;
@@ -232,6 +235,7 @@ export function ShellProgramCombobox(props: {
               label="System default"
               labelMono={false}
               detail={`${defaultEntry.name} · ${defaultEntry.path}`}
+              missing={false}
               testId="settings-shell-reset"
               onSelect={() => {
                 onUseSystemDefault();
@@ -249,6 +253,7 @@ export function ShellProgramCombobox(props: {
               label={entry.name}
               labelMono
               detail={entry.path}
+              missing={entry.missing}
               testId={null}
               onSelect={() => commitSelect(entry.path)}
               onRemove={
@@ -286,9 +291,15 @@ export function ShellProgramCombobox(props: {
               }}
               className="min-w-0 flex-1 bg-transparent font-mono text-code-sm outline-none placeholder:text-muted-foreground/60"
             />
-            <span className="shrink-0 rounded border border-border/60 px-1 text-ui-xs text-muted-foreground">
+            <button
+              type="button"
+              disabled={disabled || !canAdd}
+              aria-label="Add this shell"
+              onClick={() => commitAdd(trimmedInput)}
+              className="shrink-0 rounded border border-border/60 px-1 text-ui-xs text-muted-foreground transition-colors hover:enabled:border-border hover:enabled:text-foreground disabled:opacity-50"
+            >
               ⏎
-            </span>
+            </button>
           </div>
           <ProbeStatus
             input={trimmedInput}
@@ -351,6 +362,7 @@ function ShellOptionRow(props: {
   readonly label: string;
   readonly labelMono: boolean;
   readonly detail: string;
+  readonly missing: boolean;
   readonly testId: string | null;
   readonly onSelect: () => void;
   readonly onRemove: (() => void) | null;
@@ -362,6 +374,7 @@ function ShellOptionRow(props: {
     label,
     labelMono,
     detail,
+    missing,
     testId,
     onSelect,
     onRemove,
@@ -398,9 +411,21 @@ function ShellOptionRow(props: {
       <span className={cn("shrink-0 font-medium", labelMono && "font-mono")}>
         {label}
       </span>
-      <StartTruncatedText className="min-w-0 flex-1 font-mono text-code-xs text-muted-foreground">
+      {/* A vanished (uninstalled) shell keeps its removable row but takes the
+          amber validation tone, echoing the add-time probe's "not found". */}
+      <StartTruncatedText
+        className={cn(
+          "min-w-0 flex-1 font-mono text-code-xs",
+          missing ? "text-[var(--term-ansi-yellow)]" : "text-muted-foreground",
+        )}
+      >
         {detail}
       </StartTruncatedText>
+      {missing ? (
+        <span className="shrink-0 text-ui-xs text-[var(--term-ansi-yellow)]/80">
+          not found
+        </span>
+      ) : null}
       {onRemove !== null ? (
         <button
           type="button"

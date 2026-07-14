@@ -3,11 +3,11 @@ import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import { removeShell } from "../store/config-store";
 
-// Runner-aware `traycer config shell remove`. Drops a path from the
-// remembered `shell.added` list; if it was the selected shell, the selection
-// falls back to the synthesised OS default. Removing a path that was never
-// added is a successful no-op. JSON mode emits the resulting shape; human mode
-// prints a one-line confirmation.
+// Runner-aware `traycer config shell remove`. Forgets a `shell.entries` launch
+// spec; if it was the selected shell, the selection falls back to the
+// synthesised OS default. Removing a path that was never remembered is a
+// successful no-op. JSON mode emits the resulting shape; human mode prints a
+// one-line confirmation.
 export function buildConfigShellRemoveCommand(args: {
   readonly path: string;
 }): CommandFn {

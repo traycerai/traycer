@@ -385,6 +385,7 @@ export interface DesktopTraycerCliBridge {
   shellConfigReset(): Promise<void>;
   shellConfigAdd(input: { readonly path: string }): Promise<void>;
   shellConfigRemove(input: { readonly path: string }): Promise<void>;
+  shellRevertArgs(input: { readonly path: string }): Promise<void>;
   shellProbe(input: {
     readonly path: string;
   }): Promise<TraycerShellProbeResult>;
@@ -650,6 +651,7 @@ export class DesktopRunnerHost implements IRunnerHost {
       shellConfigAdd: (input) => this.bridge.traycerCli.shellConfigAdd(input),
       shellConfigRemove: (input) =>
         this.bridge.traycerCli.shellConfigRemove(input),
+      shellRevertArgs: (input) => this.bridge.traycerCli.shellRevertArgs(input),
       shellProbe: (input) => this.bridge.traycerCli.shellProbe(input),
       // Desktop always ships the native file dialog, so this capability is
       // present here (non-desktop hosts leave `traycerCli` null entirely).

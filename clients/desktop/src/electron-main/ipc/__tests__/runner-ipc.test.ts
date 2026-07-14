@@ -526,6 +526,7 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.traycerConfigShellRemove,
         RunnerHostInvoke.traycerConfigShellProbe,
         RunnerHostInvoke.traycerConfigShellPickProgramFile,
+        RunnerHostInvoke.traycerConfigShellRevertArgs,
         RunnerHostInvoke.traycerConfigEnvList,
         RunnerHostInvoke.traycerConfigEnvSet,
         RunnerHostInvoke.traycerConfigEnvDelete,

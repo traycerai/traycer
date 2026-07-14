@@ -11,6 +11,7 @@ export const runnerMutationKeys = {
   traycerShellConfigReset: () => ["runner.traycer.shellConfigReset"] as const,
   traycerShellConfigAdd: () => ["runner.traycer.shellConfigAdd"] as const,
   traycerShellConfigRemove: () => ["runner.traycer.shellConfigRemove"] as const,
+  traycerShellRevertArgs: () => ["runner.traycer.shellRevertArgs"] as const,
   traycerEnvOverrideSet: () => ["runner.traycer.envOverrideSet"] as const,
   traycerEnvOverrideDelete: () => ["runner.traycer.envOverrideDelete"] as const,
   traycerCliLogin: () => ["runner.traycer.cliLogin"] as const,

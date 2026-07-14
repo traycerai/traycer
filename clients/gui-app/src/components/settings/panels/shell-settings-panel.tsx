@@ -1,4 +1,8 @@
-import { Check } from "lucide-react";
+import { Check, RotateCcw } from "lucide-react";
+import {
+  defaultShellArgs,
+  isLoginShellFamily,
+} from "@traycer/protocol/config/shell-family";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { EffectiveCommandPreview } from "@/components/settings/panels/shell/effective-command-preview";
 import { EnvOverrideEditor } from "@/components/settings/panels/env-override-editor";
@@ -13,11 +17,34 @@ import { useRunnerTraycerShellConfigQuery } from "@/hooks/runner/use-runner-tray
 import { useRunnerTraycerShellConfigRemoveMutation } from "@/hooks/runner/use-runner-traycer-shell-remove-mutation";
 import { useRunnerTraycerShellConfigResetMutation } from "@/hooks/runner/use-runner-traycer-shell-config-reset-mutation";
 import { useRunnerTraycerShellConfigSetMutation } from "@/hooks/runner/use-runner-traycer-shell-config-set-mutation";
+import { useRunnerTraycerShellRevertArgsMutation } from "@/hooks/runner/use-runner-traycer-shell-revert-args-mutation";
 import { useRunnerTraycerShellListQuery } from "@/hooks/runner/use-runner-traycer-shell-list-query";
 import { useRunnerHost } from "@/providers/use-runner-host";
 
 const PANEL_DESCRIPTION =
   "How Traycer launches terminals, the host, and provider harnesses. New terminals pick up shell changes immediately; host env changes apply on restart.";
+
+/** Final path segment of the resolved shell, used to name its flags. */
+function programName(path: string): string {
+  const segments = path.split(/[\\/]/);
+  return segments[segments.length - 1] || path;
+}
+
+/**
+ * Whether the visible flags differ from the selected program's family default.
+ * Thanks to the store's canonicalisation, this is exactly "a stored deviation
+ * exists", and it drives the "Restore default flags" affordance.
+ */
+function flagsDeviateFromDefault(
+  path: string,
+  args: readonly string[],
+): boolean {
+  const familyDefault = defaultShellArgs(path);
+  return (
+    args.length !== familyDefault.length ||
+    args.some((flag, i) => flag !== familyDefault[i])
+  );
+}
 
 export function ShellSettingsPanel() {
   const runnerHost = useRunnerHost();
@@ -44,6 +71,7 @@ function ShellSettingsPanelInner() {
   const resetMutation = useRunnerTraycerShellConfigResetMutation();
   const addMutation = useRunnerTraycerShellConfigAddMutation();
   const removeMutation = useRunnerTraycerShellConfigRemoveMutation();
+  const revertMutation = useRunnerTraycerShellRevertArgsMutation();
   const envSetMutation = useRunnerTraycerEnvOverrideSetMutation();
   const envDeleteMutation = useRunnerTraycerEnvOverrideDeleteMutation();
 
@@ -55,7 +83,8 @@ function ShellSettingsPanelInner() {
     setMutation.isPending ||
     resetMutation.isPending ||
     addMutation.isPending ||
-    removeMutation.isPending;
+    removeMutation.isPending ||
+    revertMutation.isPending;
   const envPending = envSetMutation.isPending || envDeleteMutation.isPending;
 
   const onSavePath = (path: string): void => {
@@ -70,8 +99,9 @@ function ShellSettingsPanelInner() {
     if (shellPending) return;
     removeMutation.mutate({ path });
   };
-  // Picking "System default" clears the stored override entirely (path AND
-  // flags), the same full reset the old footer button performed.
+  // Picking "System default" clears only the selection, returning to the login
+  // shell; remembered shells and their flags are kept (the login shell's own
+  // flags are inherited).
   const onUseSystemDefault = (): void => {
     if (shellPending) return;
     resetMutation.mutate();
@@ -86,6 +116,12 @@ function ShellSettingsPanelInner() {
       path: null,
       args: config.args.filter((_, i) => i !== index),
     });
+  };
+  // Restore the SELECTED shell's flags to its family default, keeping the shell
+  // remembered. Works in the synthesised state too (reverting the login shell).
+  const onRevertFlags = (): void => {
+    if (config === undefined || shellPending) return;
+    revertMutation.mutate({ path: config.path });
   };
   const onEnvCommit = (
     oldKey: string,
@@ -160,10 +196,12 @@ function ShellSettingsPanelInner() {
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div className="max-w-xs space-y-1">
                   <div className="text-ui-sm font-medium text-foreground">
-                    Startup flags
+                    {`Startup flags for ${programName(config.path)}`}
                   </div>
                   <p className="text-ui-xs text-muted-foreground">
-                    “-i -l” loads your full shell profile (PATH, aliases).
+                    {isLoginShellFamily(config.path)
+                      ? "“-i -l” loads your full shell profile (PATH, aliases)."
+                      : `Passed to ${programName(config.path)} each time a terminal opens.`}
                   </p>
                 </div>
                 <ShellFlagChips
@@ -176,7 +214,20 @@ function ShellSettingsPanelInner() {
             </>
           )}
         </div>
-        <div className="flex items-center justify-end border-t border-border/40 px-5 py-3">
+        <div className="flex items-center justify-between gap-4 border-t border-border/40 px-5 py-3">
+          <button
+            type="button"
+            disabled={
+              shellPending ||
+              config === undefined ||
+              !flagsDeviateFromDefault(config.path, config.args)
+            }
+            onClick={onRevertFlags}
+            className="inline-flex items-center gap-1 text-ui-xs text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
+          >
+            <RotateCcw className="size-3" />
+            Restore default flags
+          </button>
           <SaveStatus pending={shellPending} />
         </div>
       </div>

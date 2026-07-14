@@ -84,6 +84,7 @@ export const RunnerHostInvoke = {
   traycerConfigShellList: "runnerHost:traycer:config:shell:list",
   traycerConfigShellAdd: "runnerHost:traycer:config:shell:add",
   traycerConfigShellRemove: "runnerHost:traycer:config:shell:remove",
+  traycerConfigShellRevertArgs: "runnerHost:traycer:config:shell:revert-args",
   // Native (non-CLI) helpers for the "Add a shell" picker section: a debounced
   // fs existence/executability probe and the native file dialog.
   traycerConfigShellProbe: "runnerHost:traycer:config:shell:probe",

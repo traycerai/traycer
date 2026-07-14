@@ -42,6 +42,7 @@ import { configShellGetCommand } from "./commands/config-shell-get";
 import { configShellListCommand } from "./commands/config-shell-list";
 import { buildConfigShellRemoveCommand } from "./commands/config-shell-remove";
 import { configShellResetCommand } from "./commands/config-shell-reset";
+import { buildConfigShellRevertArgsCommand } from "./commands/config-shell-revert-args";
 import { buildConfigShellSetCommand } from "./commands/config-shell-set";
 import { buildHostAvailableCommand } from "./commands/host-available";
 import { hostDoctorCommand } from "./commands/host-doctor";
@@ -755,10 +756,10 @@ function registerConfigCommands(program: Command): void {
     shell
       .command("set")
       .description(
-        "Set the shell path and/or args. Pass each arg as a separate token after `--`, e.g. `traycer config shell set --path /bin/zsh -- -i -l`. Use --clear-args to store an explicit empty list.",
+        "Select a shell and/or set its flags. Flags attach to a program, not the panel: `--path` alone picks a shell and materialises its default flags, while flags after `--` (e.g. `traycer config shell set --path /bin/zsh -- -i -l`) are remembered for that shell. Passing flags with no --path configures the currently-selected shell, or the login shell while still following the system default. Use --clear-args to store an explicit empty list.",
       )
       .option("--path <path>", "Absolute path to the shell binary")
-      .option("--clear-args", "Store an explicit empty args list")
+      .option("--clear-args", "Store an explicit empty args list for the shell")
       .argument(
         "[shellArgs...]",
         "Shell flags (recommended: pass after `--` so leading dashes aren't parsed as options)",
@@ -826,9 +827,25 @@ function registerConfigCommands(program: Command): void {
 
   withRunner(
     shell
+      .command("revert-args")
+      .description(
+        "Restore a remembered shell's flags to its family default; the shell stays remembered",
+      )
+      .requiredOption(
+        "--path <path>",
+        "Absolute path to the shell whose flags to restore",
+      ),
+    (opts) =>
+      buildConfigShellRevertArgsCommand({
+        path: typeof opts.path === "string" ? opts.path : "",
+      }),
+  );
+
+  withRunner(
+    shell
       .command("reset")
       .description(
-        "Clear the stored shell overrides; defaults are synthesised on next read",
+        "Clear the shell selection (return to the system default); remembered shells and their flags are kept",
       ),
     () => configShellResetCommand,
   );

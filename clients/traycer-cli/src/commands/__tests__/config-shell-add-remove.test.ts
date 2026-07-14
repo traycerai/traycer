@@ -71,10 +71,12 @@ describe("config shell add", () => {
   it("remembers and selects an executable path", async () => {
     const path = await makeExecutable("myshell");
     const result = await buildConfigShellAddCommand({ path })(makeCtx());
-    expect(result.data).toEqual({ path, added: [path] });
+    // A freshly-added program runs its factory flags, so its entry has no
+    // deviation (args canonicalised to null).
+    expect(result.data).toEqual({ path, entries: [{ path, args: null }] });
     const cfg = await readCliConfig();
     expect(cfg.shell.path).toBe(path);
-    expect(cfg.shell.added).toEqual([path]);
+    expect(cfg.shell.entries).toEqual([{ path, args: null }]);
   });
 });
 
@@ -85,7 +87,7 @@ describe("config shell remove", () => {
     const result = await buildConfigShellRemoveCommand({ path })(makeCtx());
     expect(result.data).toEqual({ removed: true, path: null });
     const cfg = await readCliConfig();
-    expect(cfg.shell.added).toEqual([]);
+    expect(cfg.shell.entries).toEqual([]);
     expect(cfg.shell.path).toBeNull();
   });
 

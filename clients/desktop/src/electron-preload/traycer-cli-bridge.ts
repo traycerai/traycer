@@ -24,6 +24,7 @@ export interface TraycerCliBridgeSurface {
   shellConfigReset(): Promise<void>;
   shellConfigAdd(input: { readonly path: string }): Promise<void>;
   shellConfigRemove(input: { readonly path: string }): Promise<void>;
+  shellRevertArgs(input: { readonly path: string }): Promise<void>;
   shellProbe(input: {
     readonly path: string;
   }): Promise<TraycerShellProbeResult>;
@@ -69,6 +70,11 @@ export function buildTraycerCliBridge(): TraycerCliBridgeSurface {
     shellConfigRemove: (input) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.traycerConfigShellRemove,
+        input,
+      ) as Promise<void>,
+    shellRevertArgs: (input) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.traycerConfigShellRevertArgs,
         input,
       ) as Promise<void>,
     shellProbe: (input) =>

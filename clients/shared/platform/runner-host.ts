@@ -392,13 +392,17 @@ export interface TraycerShellConfig {
  * user-added program. `path` is absolute (except an OS default that may be a
  * bare command name, e.g. Windows `powershell.exe`); `isDefault` marks the
  * OS-default shell; `source` tells the UI which rows the user may remove
- * (`"added"`) versus which are detected and permanent.
+ * (`"added"`) versus which are detected and permanent. `missing` is `true` only
+ * for an `"added"` row whose file is gone (a list-time probe, never persisted),
+ * so the UI can flag a customised-but-uninstalled shell while keeping its ✕;
+ * detected rows are always `false`.
  */
 export interface TraycerDetectedShell {
   readonly name: string;
   readonly path: string;
   readonly isDefault: boolean;
   readonly source: "detected" | "added";
+  readonly missing: boolean;
 }
 
 /**
@@ -438,7 +442,7 @@ export interface ITraycerCli {
   shellConfigSet(input: TraycerShellConfigSetInput): Promise<void>;
   shellConfigReset(): Promise<void>;
   /**
-   * Remembers a program in `shell.added` and selects it (`config shell add`).
+   * Remembers a program in `shell.entries` and selects it (`config shell add`).
    * The backend re-validates it is absolute + executable and rejects otherwise,
    * so callers should gate on {@link shellProbe} first for a clean UX.
    */
@@ -449,6 +453,12 @@ export interface ITraycerCli {
    * that was never added is a no-op success.
    */
   shellConfigRemove(input: { readonly path: string }): Promise<void>;
+  /**
+   * Restores a remembered shell's flags to its family default
+   * (`config shell revert-args`) by clearing its stored deviation while keeping
+   * the shell remembered. A no-op when the shell has no entry.
+   */
+  shellRevertArgs(input: { readonly path: string }): Promise<void>;
   /**
    * Native (non-subprocess) existence + executability probe backing the picker's
    * live "Add a shell" validation. Implemented with fs access in the shell's

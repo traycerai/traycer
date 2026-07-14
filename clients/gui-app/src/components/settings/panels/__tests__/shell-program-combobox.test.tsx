@@ -20,18 +20,28 @@ const ZSH: TraycerDetectedShell = {
   path: "/bin/zsh",
   isDefault: true,
   source: "detected",
+  missing: false,
 };
 const BASH: TraycerDetectedShell = {
   name: "bash",
   path: "/bin/bash",
   isDefault: false,
   source: "detected",
+  missing: false,
 };
 const NU_ADDED: TraycerDetectedShell = {
   name: "nu",
   path: "/usr/local/bin/nu",
   isDefault: false,
   source: "added",
+  missing: false,
+};
+const FISH_MISSING: TraycerDetectedShell = {
+  name: "fish",
+  path: "/usr/bin/fish",
+  isDefault: false,
+  source: "added",
+  missing: true,
 };
 
 function makeHost(configure: (cli: MockTraycerCli) => void): IRunnerHost {
@@ -207,6 +217,31 @@ describe("<ShellProgramCombobox />", () => {
     const transient = concreteRow("/opt/weird/mysh");
     expect(transient.getAttribute("aria-selected")).toBe("true");
     expect(screen.queryByRole("button", { name: "Remove mysh" })).toBeNull();
+  });
+
+  it("flags a missing added shell in amber, still selectable and removable", async () => {
+    const onSelect = vi.fn();
+    const onRemove = vi.fn();
+    renderCombobox({
+      value: "/bin/zsh",
+      synthesised: false,
+      shells: [ZSH, FISH_MISSING],
+      onSelect,
+      onRemove,
+    });
+    openPopover();
+    await screen.findByTestId("settings-shell-reset");
+
+    // The quiet "not found" hint marks the vanished shell, and its path takes
+    // the amber (--term-ansi-yellow) validation tone.
+    expect(screen.getByText("not found")).toBeTruthy();
+    const row = concreteRow("/usr/bin/fish");
+    expect(row.innerHTML).toContain("term-ansi-yellow");
+    // A missing row is still removable...
+    expect(screen.getByRole("button", { name: "Remove fish" })).toBeTruthy();
+    // ...and still selectable.
+    fireEvent.click(row);
+    expect(onSelect).toHaveBeenCalledWith("/usr/bin/fish");
   });
 
   it("removes an added shell via ✕ without invoking select", async () => {

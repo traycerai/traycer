@@ -321,6 +321,7 @@ function buildFakeBridge(
       shellConfigReset: async () => undefined,
       shellConfigAdd: async () => undefined,
       shellConfigRemove: async () => undefined,
+      shellRevertArgs: async () => undefined,
       shellProbe: async () => ({ exists: false, executable: false }),
       pickShellProgramFile: async () => null,
       shellListDetected: async () => [],

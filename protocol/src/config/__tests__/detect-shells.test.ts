@@ -3,8 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // Detection is pure filesystem + env inspection, so the tests drive it against
 // a virtual filesystem and a chosen platform rather than the host's real one.
 // `os.platform()` is mocked so win32 detection can be exercised from a POSIX
-// runner; `fs/promises` access/realpath/readFile are mocked to a controllable
-// world. Everything else in the module (real file writes, etc.) is untouched.
+// runner; `fs/promises` access/stat/realpath/readFile are mocked to a
+// controllable world. Everything else (real file writes, etc.) is untouched.
 const world = vi.hoisted(() => ({
   platform: "linux" as NodeJS.Platform,
   // path -> executable? A missing entry means "not found".
@@ -37,6 +37,13 @@ vi.mock("node:fs/promises", async (importActual) => {
   const actual = await importActual<typeof import("node:fs/promises")>();
   return {
     ...actual,
+    stat: async (path: string) => {
+      if (!world.files.has(path)) throw enoent();
+      // Everything in the world is a regular file; the directory-vs-file
+      // probe gate is exercised against the real filesystem in the CLI
+      // adversarial suite.
+      return { isFile: () => true };
+    },
     access: async (path: string, mode: number) => {
       const executable = world.files.get(path);
       if (executable === undefined) throw enoent();
@@ -176,16 +183,20 @@ describe("detectShells - Windows (simulated)", () => {
 });
 
 describe("listShells - merged list", () => {
-  function writeConfig(added: readonly string[]): void {
+  function writeConfig(entryPaths: readonly string[]): void {
     world.configJson = JSON.stringify({
       version: 1,
-      shell: { path: null, args: null, added },
+      shell: {
+        path: null,
+        args: null,
+        entries: entryPaths.map((path) => ({ path, args: [] })),
+      },
       envOverrides: {},
       logs: { cliLogLevel: "info", hostLogLevel: "info" },
     });
   }
 
-  it("unions detected with added, tagging each source", async () => {
+  it("unions detected with entries, tagging source and flagging a vanished file", async () => {
     process.env.SHELL = "/bin/zsh";
     process.env.PATH = "/usr/bin";
     world.files.set("/bin/zsh", true);
@@ -194,21 +205,51 @@ describe("listShells - merged list", () => {
 
     const list = await listShells();
     const added = list.find((shell) => shell.path === "/opt/custom/myshell");
+    // Its file is absent from the virtual fs, so the list-time F_OK probe flags
+    // it missing - yet it is still listed (its removable row is never dropped).
     expect(added).toEqual({
       name: "myshell",
       path: "/opt/custom/myshell",
       isDefault: false,
       source: "added",
+      missing: true,
     });
-    // Added entries are listed even though the file does not exist.
+    // Detected rows are never missing.
     expect(
-      list.filter((shell) => shell.source === "detected").length,
-    ).toBeGreaterThan(0);
+      list.every((shell) => shell.source !== "detected" || !shell.missing),
+    ).toBe(true);
     // Default still sorts first.
     expect(list[0]?.path).toBe("/bin/zsh");
   });
 
-  it("does not duplicate an added path that is also detected; it stays detected", async () => {
+  it("lists an on-disk entry that detection does not know about as present", async () => {
+    process.env.SHELL = "/bin/zsh";
+    process.env.PATH = "/usr/bin";
+    world.files.set("/bin/zsh", true);
+    world.files.set("/opt/custom/myshell", true); // exists, but not a known shell name
+    writeConfig(["/opt/custom/myshell"]);
+
+    const list = await listShells();
+    const added = list.find((shell) => shell.path === "/opt/custom/myshell");
+    expect(added?.source).toBe("added");
+    expect(added?.missing).toBe(false);
+  });
+
+  it("flips an uninstalled-but-customised detected shell to a missing added row", async () => {
+    // fish was detected and customised (an entry exists), then uninstalled.
+    process.env.SHELL = "/bin/zsh";
+    process.env.PATH = "/usr/bin";
+    world.files.set("/bin/zsh", true);
+    // /usr/bin/fish is NOT on disk any more, but its entry persists.
+    writeConfig(["/usr/bin/fish"]);
+
+    const list = await listShells();
+    const fish = list.find((shell) => shell.path === "/usr/bin/fish");
+    expect(fish?.source).toBe("added");
+    expect(fish?.missing).toBe(true);
+  });
+
+  it("does not duplicate an entry path that is also detected; it stays detected", async () => {
     process.env.SHELL = "/bin/zsh";
     process.env.PATH = "/usr/bin";
     world.files.set("/bin/zsh", true);
@@ -219,6 +260,7 @@ describe("listShells - merged list", () => {
     const bashEntries = list.filter((shell) => shell.path === "/usr/bin/bash");
     expect(bashEntries).toHaveLength(1);
     expect(bashEntries[0]?.source).toBe("detected");
+    expect(bashEntries[0]?.missing).toBe(false);
   });
 });
 

@@ -9,6 +9,7 @@ export type {
   EnvOverrideEntry,
   EnvOverrideValue,
   EffectiveShellConfig,
+  ShellEntry,
 } from "@traycer/protocol/config/schema";
 export {
   addShell,
@@ -23,6 +24,7 @@ export {
   readCliConfig,
   removeShell,
   resetShell,
+  revertShellArgs,
   setEnvOverride,
   setShell,
   writeCliConfig,
