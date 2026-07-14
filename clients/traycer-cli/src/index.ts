@@ -58,6 +58,7 @@ import { buildHostInstallCommand } from "./commands/host-install";
 import { buildHostLogsCommand } from "./commands/host-logs";
 import { hostRestartCommand } from "./commands/host-restart";
 import { runHostStart } from "./commands/host-start";
+import { buildHostStampRuntimeCommand } from "./commands/host-stamp-runtime";
 import { hostStatusCommand } from "./commands/host-status";
 import { hostStopCommand } from "./commands/host-stop";
 import { buildHostUninstallCommand } from "./commands/host-uninstall";
@@ -541,6 +542,61 @@ function registerHostCommands(program: Command): void {
         // commander materialises `--no-service` as `service: false`.
         noService: opts.service === false,
       }),
+  );
+
+  withRunner(
+    host
+      .command("stamp-runtime", { hidden: true })
+      .description(
+        "Internal: guarded compare-and-set that backfills a null-runtime install record's runtimeVersion after a controller-driven activation cycle observes readiness.",
+      )
+      .requiredOption(
+        "--expected-install-generation <fingerprint>",
+        "Attested install-generation fingerprint from the command that produced/started this generation",
+      )
+      .requiredOption(
+        "--observed-pid <pid>",
+        "PID of the fresh process observed ready",
+      )
+      .requiredOption(
+        "--observed-started-at <iso>",
+        "pid.json's startedAt for the observed fresh process",
+      )
+      .requiredOption(
+        "--observed-runtime-version <version>",
+        "pid.json's version (runtime stamp) for the observed fresh process",
+      ),
+    (opts) => {
+      return async (ctx) => {
+        const observedPid =
+          typeof opts.observedPid === "string"
+            ? Number.parseInt(opts.observedPid, 10)
+            : NaN;
+        if (!Number.isFinite(observedPid)) {
+          throw cliError({
+            code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+            message: "host stamp-runtime: --observed-pid must be an integer",
+            details: { observedPid: opts.observedPid },
+            exitCode: 1,
+          });
+        }
+        return buildHostStampRuntimeCommand({
+          expectedInstallGeneration:
+            typeof opts.expectedInstallGeneration === "string"
+              ? opts.expectedInstallGeneration
+              : "",
+          observedPid,
+          observedStartedAt:
+            typeof opts.observedStartedAt === "string"
+              ? opts.observedStartedAt
+              : "",
+          observedRuntimeVersion:
+            typeof opts.observedRuntimeVersion === "string"
+              ? opts.observedRuntimeVersion
+              : "",
+        })(ctx);
+      };
+    },
   );
 
   withRunner(

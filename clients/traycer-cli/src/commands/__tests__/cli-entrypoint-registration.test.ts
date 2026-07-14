@@ -22,6 +22,13 @@ const mocks = vi.hoisted(() => ({
     readonly force: boolean;
     readonly noService: boolean;
   }>,
+  stampRuntimeCalls: [] as Array<{
+    readonly environment: string;
+    readonly expectedInstallGeneration: string;
+    readonly observedPid: number;
+    readonly observedStartedAt: string;
+    readonly observedRuntimeVersion: string;
+  }>,
   progressEvents: [] as ProgressInfo[],
 }));
 
@@ -89,6 +96,29 @@ vi.mock("../../installer/apply", () => ({
       totalBytes: null,
     });
     return { outcome: "no-op", installedVersion: "1.0.0" };
+  },
+}));
+
+vi.mock("../../host/stamp-runtime", () => ({
+  stampRuntime: async (opts: {
+    readonly environment: string;
+    readonly expectedInstallGeneration: string;
+    readonly observedPid: number;
+    readonly observedStartedAt: string;
+    readonly observedRuntimeVersion: string;
+  }) => {
+    mocks.stampRuntimeCalls.push({
+      environment: opts.environment,
+      expectedInstallGeneration: opts.expectedInstallGeneration,
+      observedPid: opts.observedPid,
+      observedStartedAt: opts.observedStartedAt,
+      observedRuntimeVersion: opts.observedRuntimeVersion,
+    });
+    return {
+      outcome: "stamped",
+      runtimeVersion: "1.0.0",
+      installGeneration: "id:test",
+    };
   },
 }));
 
@@ -395,6 +425,101 @@ describe("traycer CLI entrypoint registration", () => {
     // `(info) => ctx.progress(info)` bridge - one event per invocation.
     expect(mocks.progressEvents).toHaveLength(3);
     expect(mocks.progressEvents[0]).toMatchObject({ stage: "swap" });
+  });
+
+  it("host stamp-runtime is a hidden command exposing its four required flags", () => {
+    const program = buildProgram();
+    const host = expectCommand(program, ["host"]);
+    const cmd = expectCommand(program, ["host", "stamp-runtime"]);
+    const flags = cmd.options.map((o) => o.long);
+    expect(flags).toContain("--expected-install-generation");
+    expect(flags).toContain("--observed-pid");
+    expect(flags).toContain("--observed-started-at");
+    expect(flags).toContain("--observed-runtime-version");
+    // Hidden from `host --help`'s command list entirely (not just a
+    // hidden option on a visible command, per `.command(name, {hidden:
+    // true})`) - `expectCommand` above already proves it's reachable.
+    expect(host.helpInformation()).not.toContain("stamp-runtime");
+  });
+
+  it("host stamp-runtime parses --observed-pid and forwards all four values", async () => {
+    mocks.stampRuntimeCalls.length = 0;
+
+    const program = buildProgram();
+    program.exitOverride();
+    await program.parseAsync(
+      [
+        "host",
+        "stamp-runtime",
+        "--expected-install-generation",
+        "id:abc123",
+        "--observed-pid",
+        "4242",
+        "--observed-started-at",
+        "2026-01-01T00:05:00.000Z",
+        "--observed-runtime-version",
+        "2.0.0",
+      ],
+      { from: "user" },
+    );
+
+    expect(mocks.stampRuntimeCalls).toEqual([
+      {
+        environment: "production",
+        expectedInstallGeneration: "id:abc123",
+        observedPid: 4242,
+        observedStartedAt: "2026-01-01T00:05:00.000Z",
+        observedRuntimeVersion: "2.0.0",
+      },
+    ]);
+  });
+
+  it("host stamp-runtime rejects a non-integer --observed-pid with E_INVALID_ARGUMENT", async () => {
+    mocks.stampRuntimeCalls.length = 0;
+
+    const program = buildProgram();
+    program.exitOverride();
+    let thrown: unknown = null;
+    try {
+      await program.parseAsync(
+        [
+          "host",
+          "stamp-runtime",
+          "--expected-install-generation",
+          "id:abc123",
+          "--observed-pid",
+          "not-a-pid",
+          "--observed-started-at",
+          "2026-01-01T00:05:00.000Z",
+          "--observed-runtime-version",
+          "2.0.0",
+        ],
+        { from: "user" },
+      );
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toMatchObject({ code: "E_INVALID_ARGUMENT" });
+    expect(mocks.stampRuntimeCalls).toHaveLength(0);
+  });
+
+  it("commander itself rejects host stamp-runtime when a required flag is missing", async () => {
+    const program = buildProgram();
+    program.exitOverride();
+    program.configureOutput({
+      writeErr: () => undefined,
+      writeOut: () => undefined,
+    });
+    let thrown: unknown = null;
+    try {
+      await program.parseAsync(
+        ["host", "stamp-runtime", "--observed-pid", "4242"],
+        { from: "user" },
+      );
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).not.toBeNull();
   });
 
   it("host available exposes --include-pre-releases for RC registry inspection", () => {
