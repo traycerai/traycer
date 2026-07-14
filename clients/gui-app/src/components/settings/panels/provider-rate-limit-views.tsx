@@ -641,16 +641,7 @@ function CodexResetCreditsRow({
   const hasDetail = visibleCredits.length > 0;
   const listed = variant === "settings" && hasDetail;
   const hoverable = !listed && hasDetail;
-  const count = (
-    <span
-      className={cn(
-        "font-mono text-ui-xs text-foreground",
-        hoverable && "cursor-help",
-      )}
-    >
-      {resetCredits.availableCount} available
-    </span>
-  );
+  const countText = `${resetCredits.availableCount} available`;
   return (
     <div className="flex flex-col gap-2 text-ui-sm">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -658,7 +649,21 @@ function CodexResetCreditsRow({
         <span className="flex items-center gap-2">
           {hoverable ? (
             <Tooltip>
-              <TooltipTrigger asChild>{count}</TooltipTrigger>
+              {/*
+               * A real `<button>`, not a `span` + `tabIndex`: a `tabIndex` on a
+               * non-interactive element without an ARIA role is invalid a11y
+               * (jsx-a11y/no-noninteractive-tabindex), and Radix's
+               * `TooltipTrigger` opens on focus as well as hover - but only if
+               * the trigger element can natively receive focus.
+               */}
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  className="appearance-none bg-transparent p-0 font-mono text-ui-xs text-foreground cursor-help"
+                >
+                  {countText}
+                </button>
+              </TooltipTrigger>
               {/*
                * `max-w-sm`, not the shadcn default `max-w-xs`: a title plus a
                * mono full-date expiry ("Full reset - Expires Sat, Aug 1, 2026,
@@ -679,7 +684,9 @@ function CodexResetCreditsRow({
               </TooltipContent>
             </Tooltip>
           ) : (
-            count
+            <span className="font-mono text-ui-xs text-foreground">
+              {countText}
+            </span>
           )}
           {action}
         </span>

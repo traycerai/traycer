@@ -210,6 +210,27 @@ describe("CodexRateLimitView (extended fields)", () => {
     expect(within(tooltip).getByText("+1 more not shown")).toBeTruthy();
   });
 
+  it("reveals the popover's tooltip on keyboard focus, not just hover", async () => {
+    render(
+      <TooltipProvider delayDuration={0}>
+        <CodexRateLimitView data={detailedCodex} variant="popover-detail" />
+      </TooltipProvider>,
+    );
+
+    // A native `<button>`, not a `span` + `tabIndex`: natively
+    // keyboard-focusable, and valid without an ARIA role.
+    const count = screen.getByRole("button", { name: "3 available" });
+    fireEvent.focus(count);
+
+    expect(await screen.findByRole("tooltip")).toBeTruthy();
+  });
+
+  it("leaves the popover count out of tab order when the host sends no credit detail", () => {
+    render(<CodexRateLimitView data={codex} variant="popover-detail" />);
+    expect(screen.queryByRole("button", { name: "3 available" })).toBeNull();
+    expect(screen.getByText("3 available").tagName).toBe("SPAN");
+  });
+
   it("leaves the popover count un-hoverable when the host sends no credit detail", () => {
     render(<CodexRateLimitView data={codex} variant="popover-detail" />);
     expect(screen.getByText("3 available").className).not.toContain(
