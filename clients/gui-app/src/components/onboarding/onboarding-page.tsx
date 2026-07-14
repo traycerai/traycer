@@ -442,12 +442,6 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
     !agentGuideQueryData.providersSettled;
   const agentGuideLoading =
     agentGuideQueryData === undefined || agentGuideWaitingForProviderSettlement;
-  // The guide editor keeps spinning while the read is pending or has failed (it
-  // never resolves to a usable guide on error). Navigation, however, must never
-  // be trapped by the optional guide: a failed read leaves Skip/Advance enabled
-  // so the user can always leave onboarding. Only an in-flight, non-errored read
-  // blocks progression.
-  const agentGuideBlocking = agentGuideLoading && !agentGuideQuery.isError;
 
   useLayoutEffect(() => {
     restart();
@@ -510,11 +504,19 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
   }, [agentGuideDefault, resetAgentGuideSetMutation]);
 
   const saveAgentGuideDraft = useCallback(async (): Promise<boolean> => {
-    if (agentGuideBlocking || agentGuideSaving) return false;
-    // The guide is optional. When it never loaded (read error) there is nothing
-    // to persist, so report success and let onboarding complete rather than
-    // trapping the user behind a failed read.
-    if (agentGuideQueryData === undefined) return true;
+    if (agentGuideSaving) return false;
+    // The guide is optional. When it has not loaded, or still reflects an
+    // in-flight generated default with no saved content yet, there is no
+    // stable draft to persist. Report success so Skip/Escape and the final
+    // action can always leave onboarding; the host can seed the fully
+    // resolved default later. An existing saved guide the user edited must
+    // still persist even while providers are still settling.
+    if (
+      agentGuideQueryData === undefined ||
+      agentGuideWaitingForProviderSettlement
+    ) {
+      return true;
+    }
     const content = agentGuideDraft ?? agentGuideDefault;
     return setAgentGuideGlobal({ content }).then(
       (result) => {
@@ -530,11 +532,11 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
       () => false,
     );
   }, [
-    agentGuideBlocking,
     agentGuideDefault,
     agentGuideDraft,
     agentGuideQueryData,
     agentGuideSaving,
+    agentGuideWaitingForProviderSettlement,
     setAgentGuideGlobal,
   ]);
 
@@ -547,8 +549,7 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
     onValueChange: updateAgentGuideDraft,
     onRevertToDefault: revertAgentGuideDraft,
   };
-  const advanceDisabled =
-    (isAgentGuideAct || isLastAct) && (agentGuideBlocking || agentGuideSaving);
+  const advanceDisabled = (isAgentGuideAct || isLastAct) && agentGuideSaving;
 
   // Finishing the tour must never leave the app on the tabless landing.
   // Replay-from-settings sets `?replay=true` (and pushed /onboarding onto the
@@ -630,7 +631,7 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
               type="button"
               data-testid="onboarding-skip"
               onClick={finish}
-              disabled={agentGuideBlocking || agentGuideSaving}
+              disabled={agentGuideSaving}
               className="absolute right-10 flex h-9 items-center justify-center gap-2 rounded px-2 font-heading text-[0.875rem] leading-[1.125rem] font-normal tracking-normal text-white transition-colors hover:bg-white/10 disabled:pointer-events-none disabled:opacity-55 [@media(min-height:920px)]:h-10 [@media(min-height:920px)]:text-[0.9375rem] max-sm:right-5"
             >
               <span>Skip intro</span>

@@ -17,6 +17,11 @@ import { PopoverContent } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { RefreshIconButton } from "@/components/refresh-icon-button";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import {
+  createReportIssueContext,
+  type ReportIssueContext,
+} from "@/lib/report-issue-context";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { AccentDot } from "@/components/providers/accent-dot";
 import { profileDisplayLabel } from "@/components/providers/provider-profile-model";
@@ -24,6 +29,7 @@ import {
   ProviderRateLimitDetail,
   type ProviderRateLimitQueryState,
 } from "@/components/settings/panels/provider-rate-limit-views";
+import { resolveCodexResetCreditAction } from "@/components/settings/panels/codex-reset-credit-availability";
 import { useHostProviderRateLimitsQuery } from "@/hooks/host/use-host-provider-rate-limits-query";
 import { useRefreshProviderRateLimitsOnMount } from "@/hooks/host/use-refresh-provider-rate-limits-on-mount";
 import {
@@ -234,6 +240,17 @@ export function RateLimitPopover({
       // focusable is its search input, so it wants and keeps the auto-focus), so
       // opting out of the initial focus is harmless and stops the stuck tooltip.
       onOpenAutoFocus={(event) => event.preventDefault()}
+      onInteractOutside={(event) => {
+        const target = event.target;
+        if (
+          target instanceof Element &&
+          (target.closest('[data-testid="confirm-destructive-dialog"]') !==
+            null ||
+            target.closest('[data-slot="dialog-overlay"]') !== null)
+        ) {
+          event.preventDefault();
+        }
+      }}
     >
       <RateLimitPopoverBody
         onClose={onClose}
@@ -595,6 +612,7 @@ function useTraycerRateLimitUsageState(
       method: "host.getRateLimitUsage",
       params: { accountContext, profileId: null },
     })),
+    cacheKeyIdentity: undefined,
     // Observe the exact shared query states without initiating a second fetch;
     // each rendered RateLimitView remains the enabled owner of its account pull.
     options: { enabled: false },
@@ -672,6 +690,7 @@ function RateLimitRefreshAllButton({
     ProviderRateLimitEnvelope
   >({
     client,
+    cacheKeyIdentity: undefined,
     requests: httpFetchRequests.map((target) => {
       const { method, params } = providerRateLimitQueryOptions(
         target.providerId,
@@ -894,7 +913,7 @@ function SingleProfileRateLimitProviderBlock({
           ) : null}
         </div>
       </div>
-      <RateLimitProviderBody state={state} variant={variant} />
+      <RateLimitProviderBody state={state} variant={variant} profileId={null} />
     </div>
   );
 }
@@ -940,6 +959,7 @@ function ProfileRateLimitProviderBlock({
       );
       return { method, params };
     }),
+    cacheKeyIdentity: undefined,
     options: queryOptions,
     mapResponse: mapResponseToProviderRateLimitEnvelope,
   });
@@ -988,7 +1008,10 @@ function ProfileRateLimitProviderBlock({
           refresh={refresh}
           isRefreshing={isRefreshing}
         />
-        <RateLimitErrorMessage message="No logged-in profiles." />
+        <RateLimitErrorMessage
+          message="No logged-in profiles."
+          reportContext={null}
+        />
       </div>
     );
   }
@@ -1134,7 +1157,11 @@ function RateLimitProviderProfileRow({
           />
         </div>
       </div>
-      <RateLimitProviderBody state={state} variant={variant} />
+      <RateLimitProviderBody
+        state={state}
+        variant={variant}
+        profileId={profileId}
+      />
     </div>
   );
 }
@@ -1244,21 +1271,37 @@ function UpdatedAgoText({
 function RateLimitProviderBody({
   state,
   variant,
+  profileId,
 }: {
   readonly state: PopoverProviderRateLimitState;
   readonly variant: PopoverBlockVariant;
+  readonly profileId: string | null;
 }): ReactNode {
   switch (state.kind) {
     case "cold":
       return <RateLimitDetailSkeleton />;
     case "error":
       return (
-        <RateLimitErrorMessage message="Couldn't load usage limits right now." />
+        <RateLimitErrorMessage
+          message="Couldn't load usage limits right now."
+          reportContext={createReportIssueContext({
+            title: "Couldn't load usage limits",
+            message: null,
+            code: null,
+            source: "Usage limits",
+          })}
+        />
       );
     case "unavailable":
       return (
         <RateLimitErrorMessage
           message={`Usage limits unavailable - ${formatUnavailableReason(state.reason)}`}
+          reportContext={createReportIssueContext({
+            title: "Usage limits unavailable",
+            message: null,
+            code: null,
+            source: "Usage limits",
+          })}
         />
       );
     case "ready":
@@ -1266,7 +1309,15 @@ function RateLimitProviderBody({
       // than replacing it with an error (Core Flows).
       return (
         <div className={cn(state.degraded && "opacity-60")}>
-          <ProviderRateLimitDetail data={state.data} variant={variant} />
+          <ProviderRateLimitDetail
+            data={state.data}
+            variant={variant}
+            codexResetAction={resolveCodexResetCreditAction(
+              state.data.provider,
+              profileId,
+              variant === "popover-detail",
+            )}
+          />
         </div>
       );
   }
@@ -1477,7 +1528,15 @@ function TraycerRateLimitBody({
       return <RateLimitDetailSkeleton />;
     case "error":
       return (
-        <RateLimitErrorMessage message="Couldn't load your Traycer subscription right now." />
+        <RateLimitErrorMessage
+          message="Couldn't load your Traycer subscription right now."
+          reportContext={createReportIssueContext({
+            title: "Couldn't load your Traycer subscription",
+            message: null,
+            code: null,
+            source: "Subscription",
+          })}
+        />
       );
     case "empty":
       return (
@@ -1503,10 +1562,24 @@ function TraycerRateLimitBody({
 // for the same action.
 function RateLimitErrorMessage({
   message,
+  reportContext,
 }: {
   readonly message: string;
+  readonly reportContext: ReportIssueContext | null;
 }): ReactNode {
-  return <p className="text-ui-xs text-muted-foreground">{message}</p>;
+  if (reportContext === null) {
+    return <p className="text-ui-xs text-muted-foreground">{message}</p>;
+  }
+  return (
+    <div className="flex items-center gap-2 text-ui-xs text-muted-foreground">
+      <span>{message}</span>
+      <ReportIssueAction
+        context={reportContext}
+        presentation="link"
+        className="h-auto p-0 text-current"
+      />
+    </div>
+  );
 }
 
 /**

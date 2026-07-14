@@ -5,6 +5,8 @@ import {
 } from "@traycer/protocol/framework/index";
 import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
 import {
+  providersConsumeRateLimitResetCreditRequestSchema,
+  providersConsumeRateLimitResetCreditResponseSchema,
   rateLimitUsageRequestSchemaV10,
   rateLimitUsageRequestSchemaV11,
   rateLimitUsageRequestSchemaV12,
@@ -12,6 +14,13 @@ import {
   rateLimitUsageResponseSchemaV12,
   rateLimitUsageResponseSchemaV20,
 } from "@traycer/protocol/host/rate-limit/schemas";
+
+export const providersConsumeRateLimitResetCreditV10 = defineRpcContract({
+  method: "providers.consumeRateLimitResetCredit",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersConsumeRateLimitResetCreditRequestSchema,
+  responseSchema: providersConsumeRateLimitResetCreditResponseSchema,
+});
 
 export const hostGetRateLimitUsageV10 = defineRpcContract({
   method: "host.getRateLimitUsage",

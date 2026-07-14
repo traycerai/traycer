@@ -3,7 +3,8 @@ import { cn } from "@/lib/utils";
 /**
  * A stable, one-line branch relationship. The branch being created is the
  * primary value; its source remains visible as lower-emphasis provenance.
- * Each side truncates independently so a long value cannot evict the other.
+ * A short target keeps its natural width so the source sits beside it; a long
+ * target caps at 60%, leaving the remaining width for source provenance.
  */
 export function WorkspaceBranchLabel(props: {
   readonly target: string;
@@ -24,16 +25,19 @@ export function WorkspaceBranchLabel(props: {
   return (
     <span
       className={cn(
-        "grid min-w-0 flex-1 grid-cols-[minmax(0,3fr)_minmax(3rem,2fr)] items-baseline gap-1.5 text-left",
+        "flex min-w-0 flex-1 items-baseline gap-1.5 text-left",
         props.className,
       )}
       data-testid="folder-branch-label"
     >
-      <span className="truncate" data-testid="folder-branch-target">
+      <span
+        className="max-w-[60%] shrink-0 truncate"
+        data-testid="folder-branch-target"
+      >
         {props.target}
       </span>
       <span
-        className="truncate text-ui-xs text-muted-foreground"
+        className="min-w-0 flex-1 truncate text-ui-xs text-muted-foreground"
         data-testid="folder-branch-source"
       >
         from {props.source}

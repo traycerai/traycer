@@ -258,6 +258,7 @@ export function useHeaderRateLimitBars(
     ProviderRateLimitEnvelope
   >({
     client,
+    cacheKeyIdentity: undefined,
     requests: glyphProviders.map((target) => {
       const { method, params } = providerRateLimitQueryOptions(
         target.providerId,

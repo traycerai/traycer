@@ -142,6 +142,24 @@ export function buildTaskMergeRollups(
 }
 
 /**
+ * Value equality for two rollups (the map they live in is rebuilt wholesale on
+ * every listing/enrichment pass, so object identity says nothing). Lets a
+ * memoized row compare just ITS Tasks' rollups instead of re-rendering on
+ * every rebuild of the whole map.
+ */
+export function taskMergeRollupEqual(
+  a: TaskMergeRollup | undefined,
+  b: TaskMergeRollup | undefined,
+): boolean {
+  if (a === b) return true;
+  if (a === undefined || b === undefined) return false;
+  if (a.status === "none" || b.status === "none") {
+    return a.status === b.status;
+  }
+  return a.status === b.status && a.merged === b.merged && a.total === b.total;
+}
+
+/**
  * Short chip label for a rollup: `Merged` when fully landed, `Merged N/M` when
  * partial, `null` when there's nothing honest to claim (the chip then renders
  * just the Task title).

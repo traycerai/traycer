@@ -7,7 +7,7 @@ import {
   TriangleAlertIcon,
   OctagonXIcon,
 } from "lucide-react";
-import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { ProgressToastIcon } from "@/components/ui/progress-toast-icon";
 import { cn } from "@/lib/utils";
 
 const TOAST_CLASS_NAME = cn("cn-toast", "group/toast");
@@ -20,6 +20,10 @@ const TOAST_CLOSE_BUTTON_CLASS_NAME = cn(
   "group-focus-within/toast:opacity-100",
   "focus-visible:pointer-events-auto",
   "focus-visible:opacity-100",
+);
+const TOAST_CANCEL_BUTTON_CLASS_NAME = cn(
+  "border border-border bg-background text-foreground",
+  "hover:bg-muted",
 );
 
 const Toaster = ({ ...props }: ToasterProps) => {
@@ -36,13 +40,7 @@ const Toaster = ({ ...props }: ToasterProps) => {
           info: <InfoIcon className="size-4" />,
           warning: <TriangleAlertIcon className="size-4" />,
           error: <OctagonXIcon className="size-4" />,
-          loading: (
-            <AgentSpinningDots
-              testId={undefined}
-              variant="orbit"
-              className="size-4 text-current"
-            />
-          ),
+          loading: <ProgressToastIcon />,
         }}
         style={
           {
@@ -56,6 +54,7 @@ const Toaster = ({ ...props }: ToasterProps) => {
           classNames: {
             toast: TOAST_CLASS_NAME,
             closeButton: TOAST_CLOSE_BUTTON_CLASS_NAME,
+            cancelButton: TOAST_CANCEL_BUTTON_CLASS_NAME,
           },
         }}
         {...props}

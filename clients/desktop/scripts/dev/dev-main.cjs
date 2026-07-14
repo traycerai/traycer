@@ -4,6 +4,10 @@ const { existsSync } = require("node:fs");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 const { prepareElectronBinary } = require("./electron-binary.cjs");
+const {
+  DEV_DESKTOP_DISPLAY_NAME_ENV,
+  resolveDevDesktopDisplayName,
+} = require("./dev-desktop-display-name.cjs");
 
 const workspaceRoot = path.resolve(__dirname, "..", "..");
 const bundledMainPath = path.resolve(workspaceRoot, "dist", "main", "index.js");
@@ -26,7 +30,12 @@ if (!existsSync(bundledPreloadPath)) {
   throw new Error(`Desktop preload bundle not found: ${bundledPreloadPath}`);
 }
 
-const electronBin = prepareElectronBinary(require("electron"), workspaceRoot);
+const devDesktopDisplayName = resolveDevDesktopDisplayName(process.env);
+const electronBin = prepareElectronBinary(
+  require("electron"),
+  workspaceRoot,
+  devDesktopDisplayName,
+);
 const childEnv = {
   ...process.env,
   TRAYCER_DESKTOP_DEV_APP_PATH: workspaceRoot,
@@ -39,6 +48,11 @@ const childEnv = {
   TRAYCER_DESKTOP_DEV_URL:
     process.env.TRAYCER_DESKTOP_DEV_URL ?? "http://localhost:5173",
 };
+if (devDesktopDisplayName === null) {
+  delete childEnv[DEV_DESKTOP_DISPLAY_NAME_ENV];
+} else {
+  childEnv[DEV_DESKTOP_DISPLAY_NAME_ENV] = devDesktopDisplayName;
+}
 
 delete childEnv.ELECTRON_RUN_AS_NODE;
 

@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { TaskLight } from "@traycer/protocol/host/epic/unary-schemas";
+import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/worktree-schemas";
 import {
   buildHistoryItemsFromTasks,
   collectHistoryRepos,
   filterHistoryItems,
   groupHistoryItems,
+  withHistoryItemPullRequestNumbers,
   type HistoryItem,
 } from "@/components/home/data/home-page.data";
 
@@ -22,6 +24,7 @@ function makeItem(
     updatedBucket: overrides.updatedBucket ?? "today",
     linkedRepos: overrides.linkedRepos ?? [],
     linkedWorkspaces: overrides.linkedWorkspaces ?? [],
+    pullRequestNumbers: overrides.pullRequestNumbers ?? [],
     ownership: overrides.ownership ?? "mine",
     permissionRole: overrides.permissionRole ?? "owner",
   };
@@ -71,6 +74,30 @@ describe("home-page history helpers", () => {
     ];
     const groups = groupHistoryItems(items);
     expect(groups.map((g) => g.bucket)).toEqual(["today", "earlier"]);
+  });
+
+  it("projects distinct superproject and submodule PR numbers for a task", () => {
+    const items = [makeItem({ id: "history-1", title: "History task" })];
+    const worktreesByEpicId = new Map([
+      [
+        "history-1",
+        [
+          worktreeWithPullRequests({
+            prNumber: 84,
+            submodulePrNumbers: [85, null],
+          }),
+          worktreeWithPullRequests({
+            prNumber: 84,
+            submodulePrNumbers: [85],
+          }),
+        ],
+      ],
+    ]);
+
+    expect(
+      withHistoryItemPullRequestNumbers(items, worktreesByEpicId)[0]
+        .pullRequestNumbers,
+    ).toEqual(["84", "#84", "PR #84", "85", "#85", "PR #85"]);
   });
 
   it("builds history items from cloud task lights and extracts real repo identifiers", () => {
@@ -171,3 +198,46 @@ describe("home-page history helpers", () => {
     });
   });
 });
+
+function worktreeWithPullRequests(args: {
+  readonly prNumber: number | null;
+  readonly submodulePrNumbers: ReadonlyArray<number | null>;
+}): WorktreeHostEntryV12 {
+  return {
+    worktreePath: `/worktrees/${args.prNumber ?? "none"}`,
+    repoLabel: "traycer/gui-app",
+    repoIdentifier: { owner: "traycer", repo: "gui-app" },
+    branch: "task-history",
+    inUse: false,
+    uncommittedCount: 0,
+    gitRemovable: true,
+    scripts: null,
+    lastActivityAt: null,
+    owners: [],
+    branchStatus: null,
+    createdAt: null,
+    prState: args.prNumber === null ? "none" : "open",
+    prNumber: args.prNumber,
+    prUrl:
+      args.prNumber === null
+        ? null
+        : `https://github.com/traycer/gui-app/pull/${args.prNumber}`,
+    mergedHeadShaMatches: false,
+    submodules: args.submodulePrNumbers.map((prNumber, index) => ({
+      repoIdentifier: { owner: "traycer", repo: `submodule-${index}` },
+      branch: `submodule-${index}`,
+      prState: prNumber === null ? "none" : "open",
+      prNumber,
+      prUrl:
+        prNumber === null
+          ? null
+          : `https://github.com/traycer/submodule-${index}/pull/${prNumber}`,
+      mergedHeadShaMatches: false,
+      mergedIntoDefault: false,
+      atPinnedCommit: false,
+      unmergedCommitCount: null,
+      unmergedCommitSubjects: null,
+    })),
+    atBaseCommit: false,
+  };
+}

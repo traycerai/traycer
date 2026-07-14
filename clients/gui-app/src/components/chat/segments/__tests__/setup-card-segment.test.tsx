@@ -1,4 +1,5 @@
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -7,6 +8,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import {
   SetupCardSegment,
   type SetupCardViewModel,
@@ -127,6 +129,12 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  useDesktopDialogStore.setState({
+    activeDialog: null,
+    reportIssueAvailable: false,
+    reportIssueContext: null,
+    reportIssueDraftId: 0,
+  });
 });
 
 describe("<SetupCardSegment /> worktree location", () => {
@@ -321,6 +329,39 @@ describe("<SetupCardSegment /> single-repo dropdown (two steps)", () => {
     expect(retryMutate).toHaveBeenCalledWith(
       expect.objectContaining({ workspacePath: "/repo" }),
     );
+  });
+
+  it("gates the failed-setup report action on capability and reports only fixed generic context", () => {
+    renderCard(
+      viewModel("failed", [workspace({ state: "failed", setupExitCode: 1 })]),
+    );
+
+    // Capability-gated off by default.
+    expect(screen.queryByRole("button", { name: "Report issue" })).toBeNull();
+
+    act(() => {
+      useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
+    expect(useDesktopDialogStore.getState()).toMatchObject({
+      activeDialog: "report-issue",
+      reportIssueContext: {
+        title: "Worktree setup failed",
+        message: null,
+        code: null,
+        source: "Setup",
+      },
+    });
+  });
+
+  it("omits the report action for a cancelled (non-failed) setup", () => {
+    renderCard(viewModel("cancelled", [workspace({ state: "cancelled" })]));
+    expand();
+
+    act(() => {
+      useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    });
+    expect(screen.queryByRole("button", { name: "Report issue" })).toBeNull();
   });
 });
 

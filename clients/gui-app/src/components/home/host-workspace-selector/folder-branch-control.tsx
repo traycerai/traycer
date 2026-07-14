@@ -20,8 +20,6 @@ import {
 import { preserveWhenNestedOverlay } from "./preserve-when-nested-overlay";
 import { WorkspaceBranchLabel } from "./workspace-branch-label";
 
-const BRANCH_CONTROL_WIDTH_CLASS = "w-[clamp(8rem,25vw,16rem)]";
-
 /**
  * The per-row Branch control. In Local / Existing-worktree mode the branch is
  * fixed, so this renders a read-only label (`item.branchLabel`). In New-worktree
@@ -78,11 +76,7 @@ export function FolderBranchControl(props: {
               type="button"
               aria-label="View existing worktree branch"
               data-testid="folder-branch-import-trigger"
-              className={cn(
-                FOLDER_CONTROL_TRIGGER_CLASS,
-                BRANCH_CONTROL_WIDTH_CLASS,
-                "text-foreground/75",
-              )}
+              className={cn(FOLDER_CONTROL_TRIGGER_CLASS, "text-foreground/75")}
             >
               <GitBranch
                 className="size-3.5 shrink-0 text-muted-foreground/65"
@@ -129,11 +123,7 @@ export function FolderBranchControl(props: {
       aria-disabled={props.readOnly ? true : undefined}
       aria-label="Choose worktree branch"
       data-testid="folder-branch-trigger"
-      className={cn(
-        FOLDER_CONTROL_TRIGGER_CLASS,
-        BRANCH_CONTROL_WIDTH_CLASS,
-        "text-foreground/75",
-      )}
+      className={cn(FOLDER_CONTROL_TRIGGER_CLASS, "text-foreground/75")}
     >
       <GitBranch
         className="size-3.5 shrink-0 text-muted-foreground/65"
@@ -251,11 +241,7 @@ function ReadonlyBranchTrigger(props: {
         aria-disabled
         aria-label={props.ariaLabel}
         data-testid={props.testId}
-        className={cn(
-          FOLDER_CONTROL_TRIGGER_CLASS,
-          BRANCH_CONTROL_WIDTH_CLASS,
-          "text-foreground/75",
-        )}
+        className={cn(FOLDER_CONTROL_TRIGGER_CLASS, "text-foreground/75")}
       >
         <GitBranch
           className="size-3.5 shrink-0 text-muted-foreground/65"
@@ -282,8 +268,7 @@ function ReadonlyBranchLabel(props: { readonly item: WorkspaceRunItem }) {
     >
       <span
         className={cn(
-          "inline-flex min-w-0 items-center gap-1.5 px-1.5 py-1 text-ui-sm text-foreground/75",
-          BRANCH_CONTROL_WIDTH_CLASS,
+          "inline-flex w-full max-w-full min-w-0 items-center gap-1.5 px-1.5 py-1 text-ui-sm text-foreground/75",
         )}
         data-testid="folder-branch-readonly"
       >
@@ -291,7 +276,7 @@ function ReadonlyBranchLabel(props: { readonly item: WorkspaceRunItem }) {
           className="size-3.5 shrink-0 text-muted-foreground/65"
           aria-hidden
         />
-        <span className="min-w-0 max-w-[min(40vw,12rem)] truncate">
+        <span className="min-w-0 flex-1 truncate">
           {props.item.branchLabel}
         </span>
       </span>

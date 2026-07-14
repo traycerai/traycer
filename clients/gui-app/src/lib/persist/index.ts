@@ -2,6 +2,7 @@ export {
   PERSIST_PREFIX,
   PERSIST_STORES,
   STORE_KEYS,
+  appLocalNotificationsKey,
   composerHarnessMemoryKey,
   composerRunSettingsKey,
   epicCanvasKey,
@@ -9,8 +10,10 @@ export {
   persistKey,
   scopeBucket,
   scopedPersistKey,
+  worktreeActivityCacheKey,
   worktreeIntentMemoryKey,
   worktreeIntentStagingKey,
+  worktreeListingCacheKey,
   type PersistStoreEntry,
   type PersistStoreKind,
 } from "@/lib/persist/keys";

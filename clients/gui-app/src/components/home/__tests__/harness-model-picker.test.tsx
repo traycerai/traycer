@@ -136,6 +136,12 @@ const queryMock = vi.hoisted(() => ({
       readonly enabled: boolean;
       readonly subscribed: boolean;
     }>,
+    commands: [] as Array<{
+      readonly harnessId: string;
+      readonly workingDirectories: ReadonlyArray<string>;
+      readonly enabled: boolean;
+      readonly subscribed: boolean;
+    }>,
   },
 }));
 
@@ -326,6 +332,19 @@ function catalogHarnessesForRender(): CatalogHarness[] {
 }
 
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
+  // The real hook resolves the app-wide default host's client via
+  // `useHostBinding()`; this suite renders the picker without a
+  // `<HostRuntimeProvider>`, so a real call would just resolve to `null`
+  // anyway (`useHostBinding` tolerates a missing provider) - stub it
+  // directly rather than exercising that context machinery.
+  useDefaultHostClient: () => null,
+  // The picker asks this at every intent edge before it refetches. This suite
+  // mocks the hook module wholesale, so its query stubs carry no
+  // `dataUpdatedAt` to judge freshness from - answer "due" so the edges under
+  // test here (which fire a no-op `refetch` below) still run. The real
+  // freshness policy, and the RPCs it gates, are covered against a mocked host
+  // transport in `harness-model-picker-intent-rpc.test.tsx`.
+  harnessCatalogEntryNeedsRefresh: () => true,
   useGuiHarnessesQuery: (activity: QueryActivity) => {
     queryMock.calls.harnesses.push({
       enabled: activity.enabled,
@@ -357,6 +376,32 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
         : undefined,
       isPending: false,
       error: null,
+      // The picker's intent-edge effects call `.refetch()` on both queries
+      // whenever the popover opens or the selection changes (real RPC
+      // behavior now covered by `harness-model-picker-intent-rpc.test.tsx`
+      // against a mocked host transport). This suite mocks the hook
+      // wholesale, so `.refetch()` must stay a harmless no-op here rather
+      // than throw.
+      refetch: () => Promise.resolve({ data: undefined }),
+    };
+  },
+  useGuiHarnessCommandsQuery: (
+    _client: unknown,
+    harnessId: string,
+    workingDirectories: ReadonlyArray<string>,
+    activity: QueryActivity,
+  ) => {
+    queryMock.calls.commands.push({
+      harnessId,
+      workingDirectories,
+      enabled: activity.enabled,
+      subscribed: activity.subscribed,
+    });
+    return {
+      data: activity.enabled ? { harnessId, commands: [] } : undefined,
+      isPending: false,
+      error: null,
+      refetch: () => Promise.resolve({ data: undefined }),
     };
   },
   useGuiHarnessCatalog: (
@@ -765,6 +810,7 @@ describe("<HarnessModelPicker />", () => {
     queryMock.calls.catalog = [];
     queryMock.calls.models = [];
     queryMock.calls.providers = [];
+    queryMock.calls.commands = [];
     openSettingsMock.mockClear();
     useProvidersFocusStore.getState().clearFocusHarnessId();
     useKeybindingStore.getState().resetAll();

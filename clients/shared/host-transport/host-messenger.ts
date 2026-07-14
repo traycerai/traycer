@@ -31,6 +31,22 @@ export interface IHostMessenger<Registry extends VersionedRpcRegistry> {
     method: Method,
     params: RequestOfMethod<Registry, Method>,
   ): Promise<ResponseOfMethod<Registry, Method>>;
+
+  /**
+   * Same as `request`, but waits up to `responseTimeoutMs` for the host's
+   * response frame instead of the transport's default frame timeout. For
+   * long-poll methods whose contract is to stay silent until a domain event
+   * fires (e.g. `providers.awaitLogin` blocks until the OAuth child
+   * terminates), the default frame timeout would misread that silence as a
+   * dead host and abandon a healthy in-flight call. Only the response wait
+   * is extended - dial and handshake (`openAck`) keep the transport's
+   * defaults, so a host that is actually unreachable still fails fast.
+   */
+  requestWithResponseTimeout<Method extends keyof Registry & string>(
+    method: Method,
+    params: RequestOfMethod<Registry, Method>,
+    responseTimeoutMs: number,
+  ): Promise<ResponseOfMethod<Registry, Method>>;
 }
 
 /**

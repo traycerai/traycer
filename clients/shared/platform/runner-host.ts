@@ -680,7 +680,12 @@ export interface ITokenStore {
 }
 
 export interface INotificationHost {
-  show(title: string, body: string, payload: unknown): Promise<void>;
+  show(
+    title: string,
+    body: string,
+    payload: unknown,
+    replaceKey: string | null,
+  ): Promise<void>;
   onClick(handler: (payload: unknown) => void): Disposable;
 }
 

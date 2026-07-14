@@ -6,6 +6,7 @@ import type {
 import {
   buildTaskMergeRollups,
   computeTaskMergeRollup,
+  taskMergeRollupEqual,
   taskMergeRollupLabel,
 } from "@/lib/worktree/task-merge-rollup";
 
@@ -306,5 +307,56 @@ describe("buildTaskMergeRollups - per-epic aggregation over a host listing", () 
 
   it("entries with no owners contribute no epic buckets", () => {
     expect(buildTaskMergeRollups([entry({})]).size).toBe(0);
+  });
+});
+
+describe("taskMergeRollupEqual", () => {
+  it("treats undefined as equal only to undefined", () => {
+    expect(taskMergeRollupEqual(undefined, undefined)).toBe(true);
+    expect(taskMergeRollupEqual(undefined, { status: "none" })).toBe(false);
+    expect(taskMergeRollupEqual({ status: "none" }, undefined)).toBe(false);
+  });
+
+  it("compares by value across rebuilt objects (identity says nothing)", () => {
+    expect(taskMergeRollupEqual({ status: "none" }, { status: "none" })).toBe(
+      true,
+    );
+    expect(
+      taskMergeRollupEqual(
+        { status: "merged", merged: 2, total: 2 },
+        { status: "merged", merged: 2, total: 2 },
+      ),
+    ).toBe(true);
+    expect(
+      taskMergeRollupEqual(
+        { status: "partial", merged: 1, total: 2 },
+        { status: "partial", merged: 1, total: 2 },
+      ),
+    ).toBe(true);
+  });
+
+  it("detects every real change", () => {
+    expect(
+      taskMergeRollupEqual(
+        { status: "none" },
+        {
+          status: "merged",
+          merged: 1,
+          total: 1,
+        },
+      ),
+    ).toBe(false);
+    expect(
+      taskMergeRollupEqual(
+        { status: "partial", merged: 1, total: 2 },
+        { status: "partial", merged: 2, total: 3 },
+      ),
+    ).toBe(false);
+    expect(
+      taskMergeRollupEqual(
+        { status: "partial", merged: 2, total: 2 },
+        { status: "merged", merged: 2, total: 2 },
+      ),
+    ).toBe(false);
   });
 });

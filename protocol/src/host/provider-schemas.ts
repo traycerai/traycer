@@ -481,10 +481,11 @@ const providerCliStateBaseShape = {
   // Per-profile rows for this provider: the ambient login plus any
   // Traycer-managed subscriptions. `[]` for providers that don't support the
   // multi-profile capability (gated per-adapter, see the decision log's
-  // rollout row) and for old host builds that predate profiles - `.catch([])`
-  // tolerates both the same way `availabilityPending` does above. UI
-  // affordances only appear once a provider has 2+ rows (progressive
-  // disclosure).
+  // rollout row). The field ships with the v4.0 line: hosts on older lines
+  // never send it and the v3→v4 upgrade bridge fills `profiles: []` ("old
+  // host never had this feature"), with `.catch([])` kept as parse-time
+  // hardening. UI affordances only appear once a provider has 2+ rows
+  // (progressive disclosure).
   profiles: z.array(providerProfileSchema).catch([]),
 };
 
@@ -568,14 +569,21 @@ export type ProvidersListResponseV20 = z.infer<
 
 // ── Frozen protocol-v3.0 provider state + list response (with Amp, before ──
 // Devin/Pi). `providers.list` always returns every provider; v3.0 shipped with
-// Amp (and profiles[]). The v4.0 line adds Devin/Pi and a v4→v3 (and v4→v2 /
-// v4→v1) downgrade bridge filters them for older callers. Do not add new
-// providers here - use the existing v4 bridge.
+// Amp and WITHOUT `profiles` - multi-profile landed mid-line but never reached
+// a released host on this line, so `profiles` belongs to the v4.0 cut and the
+// v3→v4 upgrade fills `profiles: []` for v3.0 hosts. The v4.0 line also adds
+// Devin/Pi, and the v4→v3 (and v4→v2 / v4→v1) downgrade bridges filter them
+// for older callers. Do not add new providers or fields here - use the
+// existing v4 bridge.
 //
-// Built as a snapshot of the live base shape as of the v3.0 freeze (includes
-// `profiles`) with the frozen v3.0 provider-id enum - NOT derived via
+// Built as a hand-frozen snapshot of the base shape as actually released on
+// the v3.0 line, with the frozen v3.0 provider-id enum - NOT derived via
 // `.extend()` from the live schema, so future live-only fields do not leak
-// into the v3.0 wire for already-shipped clients.
+// into the v3.0 wire for already-shipped clients. The plain (non-strict)
+// `z.object` built from this shape also silently DROPS an unmodeled
+// `profiles` key, so the v4.0->v3.0 downgrade strips profile identity
+// (email, label) off the wire for v3.0 callers that never negotiated profile
+// support - same mechanism as `providerCliStateBaseShapeV20`.
 const providerCliStateBaseShapeV30 = {
   enabled: z.boolean(),
   disabledBy: providerDisabledBySchema.nullable(),
@@ -588,7 +596,6 @@ const providerCliStateBaseShapeV30 = {
   envOverrides: z.array(providerEnvOverrideSchema).catch([]),
   loginCapability: providerLoginCapabilitySchema.nullable().catch(null),
   availabilityPending: z.boolean().catch(false),
-  profiles: z.array(providerProfileSchema).catch([]),
 };
 
 export const providerCliStateSchemaV30 = z.object({
@@ -620,6 +627,31 @@ export type ProvidersListResponseV10 = z.infer<
   typeof providersListResponseSchemaV10
 >;
 
+// ── Frozen major-2 mutation-response provider state (pre-profiles) ─────────
+// The provider.* state-echo mutations (setSelection, addCustomPath,
+// removeCustomPath, setEnabled, setApiKey, clearApiKey, setTerminalAgentArgs,
+// setEnvOverride, deleteEnvOverride, awaitLogin) shipped their major-2 lines
+// reusing the LIVE provider state, so - unlike `providers.list`, which froze
+// `providerCliStateSchemaV20` - their released 2.0 wire kept evolving with the
+// live shape and silently gained `profiles` (#258) that released hosts never
+// send. This shape pins what a released 2.0 response actually carries: the
+// pre-profiles base shape with the LIVE provider-id enum (a mutation response
+// echoes the id the caller just named, so enum growth stays request-gated -
+// see the `providers.set*` / `providers.add*` entries in
+// compat-exceptions.json). `profiles` ships with each method's 2.1 line; the
+// 2.0→2.1 upgrade fills `profiles: []` ("old host never had this feature").
+// The plain (non-strict) `z.object` also strips an unmodeled `profiles` key,
+// so host-side projection onto 2.0 keeps profile identity off the wire for
+// released 2.0 callers.
+export const providerMutationCliStateSchemaV20 = z.object({
+  providerId: providerIdSchema,
+  ...providerCliStateBaseShapeV20,
+  auth: PROVIDER_AUTH_SCHEMA_V20,
+});
+export type ProviderMutationCliStateV20 = z.infer<
+  typeof providerMutationCliStateSchemaV20
+>;
+
 export const providersSetSelectionRequestSchema = z.object({
   providerId: providerIdSchema,
   selection: providerSelectionSchema,
@@ -637,6 +669,9 @@ export const providersSetSelectionResponseSchema = z.object({
 });
 export const providersSetSelectionResponseSchemaV10 = z.object({
   state: providerCliStateSchemaV10,
+});
+export const providersSetSelectionResponseSchemaV20 = z.object({
+  state: providerMutationCliStateSchemaV20,
 });
 export type ProvidersSetSelectionResponse = z.infer<
   typeof providersSetSelectionResponseSchema
@@ -660,6 +695,9 @@ export const providersAddCustomPathResponseSchema = z.object({
 export const providersAddCustomPathResponseSchemaV10 = z.object({
   state: providerCliStateSchemaV10,
 });
+export const providersAddCustomPathResponseSchemaV20 = z.object({
+  state: providerMutationCliStateSchemaV20,
+});
 export type ProvidersAddCustomPathResponse = z.infer<
   typeof providersAddCustomPathResponseSchema
 >;
@@ -681,6 +719,9 @@ export const providersRemoveCustomPathResponseSchema = z.object({
 });
 export const providersRemoveCustomPathResponseSchemaV10 = z.object({
   state: providerCliStateSchemaV10,
+});
+export const providersRemoveCustomPathResponseSchemaV20 = z.object({
+  state: providerMutationCliStateSchemaV20,
 });
 export type ProvidersRemoveCustomPathResponse = z.infer<
   typeof providersRemoveCustomPathResponseSchema
@@ -704,6 +745,9 @@ export const providersSetEnabledResponseSchema = z.object({
 export const providersSetEnabledResponseSchemaV10 = z.object({
   state: providerCliStateSchemaV10,
 });
+export const providersSetEnabledResponseSchemaV20 = z.object({
+  state: providerMutationCliStateSchemaV20,
+});
 export type ProvidersSetEnabledResponse = z.infer<
   typeof providersSetEnabledResponseSchema
 >;
@@ -714,8 +758,11 @@ export type ProvidersSetEnabledResponse = z.infer<
  * `removeProfile` / `recolorProfile` methods (see that contract in `registry.ts` for the full
  * rationale). `profileAction: null` is today's plain enable/disable request,
  * byte-identical to `providersSetEnabledRequestSchema` - old clients are
- * unaffected. The response is unchanged (`providersSetEnabledResponseSchema`)
- * since the mutated `state.profiles[]` already reflects the rename/removal/recolor.
+ * unaffected. The 2.1 response is the live shape
+ * (`providersSetEnabledResponseSchema`, whose `state.profiles[]` reflects the
+ * rename/removal/recolor); the released 2.0 response is frozen pre-profiles
+ * (`providersSetEnabledResponseSchemaV20`) and the 2.0→2.1 upgrade fills
+ * `profiles: []`.
  */
 export const providersSetEnabledRequestSchemaV21 =
   providersSetEnabledRequestSchema.extend({
@@ -743,6 +790,9 @@ export const providersSetApiKeyResponseSchema = z.object({
 export const providersSetApiKeyResponseSchemaV10 = z.object({
   state: providerCliStateSchemaV10,
 });
+export const providersSetApiKeyResponseSchemaV20 = z.object({
+  state: providerMutationCliStateSchemaV20,
+});
 export type ProvidersSetApiKeyResponse = z.infer<
   typeof providersSetApiKeyResponseSchema
 >;
@@ -762,6 +812,9 @@ export const providersClearApiKeyResponseSchema = z.object({
 });
 export const providersClearApiKeyResponseSchemaV10 = z.object({
   state: providerCliStateSchemaV10,
+});
+export const providersClearApiKeyResponseSchemaV20 = z.object({
+  state: providerMutationCliStateSchemaV20,
 });
 export type ProvidersClearApiKeyResponse = z.infer<
   typeof providersClearApiKeyResponseSchema
@@ -785,6 +838,9 @@ export const providersSetTerminalAgentArgsResponseSchema = z.object({
 });
 export const providersSetTerminalAgentArgsResponseSchemaV10 = z.object({
   state: providerCliStateSchemaV10,
+});
+export const providersSetTerminalAgentArgsResponseSchemaV20 = z.object({
+  state: providerMutationCliStateSchemaV20,
 });
 export type ProvidersSetTerminalAgentArgsResponse = z.infer<
   typeof providersSetTerminalAgentArgsResponseSchema
@@ -811,6 +867,9 @@ export const providersSetEnvOverrideResponseSchema = z.object({
 export const providersSetEnvOverrideResponseSchemaV10 = z.object({
   state: providerCliStateSchemaV10,
 });
+export const providersSetEnvOverrideResponseSchemaV20 = z.object({
+  state: providerMutationCliStateSchemaV20,
+});
 export type ProvidersSetEnvOverrideResponse = z.infer<
   typeof providersSetEnvOverrideResponseSchema
 >;
@@ -832,6 +891,9 @@ export const providersDeleteEnvOverrideResponseSchema = z.object({
 });
 export const providersDeleteEnvOverrideResponseSchemaV10 = z.object({
   state: providerCliStateSchemaV10,
+});
+export const providersDeleteEnvOverrideResponseSchemaV20 = z.object({
+  state: providerMutationCliStateSchemaV20,
 });
 export type ProvidersDeleteEnvOverrideResponse = z.infer<
   typeof providersDeleteEnvOverrideResponseSchema
@@ -939,17 +1001,22 @@ export type ProvidersStartLoginResponseV11 = z.infer<
  * login child's exit, so the GUI awaits this instead of polling auth status.
  */
 // `profileId` mirrors `providers.startLogin@1.1`'s request field so the
-// caller awaits the same profile-scoped login child it started. Bare
-// additive/defaulted field (not a version bump) - safe in both directions
-// per the released-peer compat gate's "added optional properties" rule; the
-// v2->v1 downgrade bridge in registry.ts explicitly drops it before the
-// strict v1.0 parse (see `providersAwaitLoginDowngradeV2ToV1`).
+// caller awaits the same profile-scoped login child it started. Ships with
+// `providers.awaitLogin@2.1` (originally landed as a bare additive/defaulted
+// field on the released 2.0 line; the 2.0 shapes are frozen without it below
+// and the 2.0→2.1 upgrade fills `null`). The v2->v1 downgrade bridge in
+// registry.ts explicitly drops it before the strict v1.0 parse (see
+// `providersAwaitLoginDowngradeV2ToV1`).
 export const providersAwaitLoginRequestSchema = z.object({
   providerId: providerIdSchema,
   profileId: z.string().nullable().default(null),
 });
 export const providersAwaitLoginRequestSchemaV10 = z.strictObject({
   providerId: providerIdSchemaV10,
+});
+// Frozen `providers.awaitLogin@2.0` request as released: no `profileId`.
+export const providersAwaitLoginRequestSchemaV20 = z.object({
+  providerId: providerIdSchema,
 });
 export type ProvidersAwaitLoginRequest = z.infer<
   typeof providersAwaitLoginRequestSchema
@@ -961,15 +1028,38 @@ export const providersAwaitLoginResponseSchema = z.object({
   state: providerCliStateSchema.nullable(),
   // Create-profile only: when the authenticated account already belongs to
   // an active profile, the host discards the pending profile instead of
-  // activating a duplicate and identifies the existing profile here.
+  // activating a duplicate and identifies the existing profile here. Ships
+  // with `providers.awaitLogin@2.1`; the frozen 2.0 response below never
+  // carried it.
   existingProfileId: z.string().nullable().default(null),
 });
 export const providersAwaitLoginResponseSchemaV10 = z.object({
   state: providerCliStateSchemaV10.nullable(),
 });
+// Frozen `providers.awaitLogin@2.0` response as released: pre-profiles state,
+// no `existingProfileId`.
+export const providersAwaitLoginResponseSchemaV20 = z.object({
+  state: providerMutationCliStateSchemaV20.nullable(),
+});
 export type ProvidersAwaitLoginResponse = z.infer<
   typeof providersAwaitLoginResponseSchema
 >;
+
+/**
+ * Client-side response-frame budget for `providers.awaitLogin`, which is a
+ * long-poll: the host's response is contractually silent until the OAuth
+ * login child terminates. A transport-default frame timeout (~30 s) misreads
+ * that silence as a dead host and abandons a healthy in-flight sign-in as
+ * soon as the user takes longer than the timeout in the browser.
+ *
+ * Derivation: the host force-kills a login child after 3 minutes and its
+ * await path self-resolves at most 5 s later even when the child never
+ * confirms termination, followed by bounded auth re-probes before the
+ * response is framed. 4 minutes covers that worst case with slack. The host
+ * must keep its internal deadline strictly under this budget - clients wait
+ * exactly this long before declaring the call dead.
+ */
+export const PROVIDERS_AWAIT_LOGIN_RESPONSE_BUDGET_MS = 4 * 60_000;
 
 /** Kill an in-flight `providers.startLogin` child for this provider. */
 export const providersCancelLoginRequestSchema = z.object({
@@ -1060,7 +1150,10 @@ export function downgradeProviderCliStateListToV20(
 
 // Downgrades a latest-shaped (v4.0) provider-state list to the frozen v3.0
 // shape, dropping Devin/Pi (or any future post-v3.0 provider) so an already-
-// shipped v3.0 client's strict decode never sees it.
+// shipped v3.0 client's strict decode never sees it. The reparse also strips
+// `profiles` - the frozen v3.0 object doesn't model it - keeping profile
+// identity (email, label) off the wire for callers that never negotiated
+// profile support.
 export function downgradeProviderCliStateListToV30(
   states: readonly unknown[],
 ): ProviderCliStateV30[] {
@@ -1073,8 +1166,9 @@ export function downgradeProviderCliStateListToV30(
 // Upgrades a v1.0 state to the frozen v2.0 shape - used only by
 // `providers.list`'s v1.0 -> v2.0 bridge, whose response is pinned to
 // `providerCliStateSchemaV20` (narrower `providerId`, no `profiles`). Every
-// other provider.* mutation's v1.0 -> v2.0 bridge upgrades to the LIVE shape
-// instead - see `upgradeProviderCliStateV10ToLatest` below.
+// other provider.* mutation's v1.0 -> v2.0 bridge upgrades to the frozen
+// major-2 mutation shape instead - see
+// `upgradeProviderCliStateV10ToMutationV20` below.
 export function upgradeProviderCliStateV10ToV20(
   state: ProviderCliStateV10,
 ): ProviderCliStateV20 {
@@ -1084,19 +1178,16 @@ export function upgradeProviderCliStateV10ToV20(
   });
 }
 
-// Upgrades a v1.0 state straight to the live/latest shape - used by every
-// provider.* mutation (setSelection, addCustomPath, setEnabled, ...) whose
-// "v2.0" contract reuses `providerCliStateSchema` directly rather than the
-// frozen `providerCliStateSchemaV20` (only `providers.list` freezes v2.0).
-// `profiles: []` matches a v1.0 host, which predates profiles entirely - the
-// same "old host never had this feature" semantics `availabilityPending`
-// already uses here.
-export function upgradeProviderCliStateV10ToLatest(
+// Upgrades a v1.0 state to the frozen major-2 mutation-response shape - used
+// by every provider.* state-echo mutation's v1.0 -> v2.0 bridge
+// (setSelection, addCustomPath, setEnabled, ...). Like the v1.0 host itself,
+// the frozen 2.0 shape predates `profiles`; each method's 2.0 -> 2.1 upgrade
+// fills `profiles: []` for the caller's canonical.
+export function upgradeProviderCliStateV10ToMutationV20(
   state: ProviderCliStateV10,
-): ProviderCliState {
-  return providerCliStateSchema.parse({
+): ProviderMutationCliStateV20 {
+  return providerMutationCliStateSchemaV20.parse({
     ...state,
     availabilityPending: false,
-    profiles: [],
   });
 }

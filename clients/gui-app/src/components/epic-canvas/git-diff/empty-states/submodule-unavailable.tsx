@@ -1,7 +1,9 @@
 import { useCallback, type ReactNode } from "react";
 import { TriangleAlert, RotateCcw } from "lucide-react";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { Button } from "@/components/ui/button";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 import { cn } from "@/lib/utils";
 
 const GIT_SUBMODULE_REFRESH_TIMEOUT_MS = 10_000;
@@ -42,24 +44,35 @@ export function SubmoduleUnavailable(props: {
           </p>
         </div>
       </div>
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        onClick={refresh.trigger}
-        disabled={refresh.refreshing}
-        className="mt-2"
-        data-testid="git-submodule-unavailable-refresh"
-      >
-        <RotateCcw
-          className={cn(
-            "mr-1.5 size-3.5",
-            refresh.refreshing && "animate-spin",
-          )}
-          aria-hidden
+      <div className="mt-2 flex flex-wrap justify-center gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={refresh.trigger}
+          disabled={refresh.refreshing}
+          data-testid="git-submodule-unavailable-refresh"
+        >
+          <RotateCcw
+            className={cn(
+              "mr-1.5 size-3.5",
+              refresh.refreshing && "animate-spin",
+            )}
+            aria-hidden
+          />
+          Refresh
+        </Button>
+        <ReportIssueAction
+          context={createReportIssueContext({
+            title: "Submodule details unavailable",
+            message: "The host could not inspect the Git submodule.",
+            code: null,
+            source: "Git changes",
+          })}
+          presentation="text"
+          className={undefined}
         />
-        Refresh
-      </Button>
+      </div>
     </div>
   );
 }

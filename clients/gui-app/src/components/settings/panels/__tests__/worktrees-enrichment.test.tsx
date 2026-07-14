@@ -18,6 +18,18 @@ import {
   useCachedWorktreeEnrichment,
   useWorktreeActivityEnrichment,
 } from "@/components/settings/panels/worktrees-enrichment";
+import {
+  persistWorktreeActivitySnapshot,
+  readWorktreeActivitySnapshot,
+} from "@/components/settings/panels/worktrees-enrichment-persistence";
+import { worktreeActivityCacheKey } from "@/lib/persist";
+
+// The enrichment hook reads/writes the warm-open snapshot in localStorage on
+// every mount now - a snapshot leaked by one test would seed the next test's
+// cache fold and skew its exact-count assertions.
+afterEach(() => {
+  window.localStorage.clear();
+});
 
 const HOST_ID = mockLocalHostEntry.hostId;
 // Slightly over the hook's internal 80ms report debounce.
@@ -511,10 +523,15 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
     });
     expect(requests).toHaveLength(1);
 
+    // Exponential backoff (750ms, 1.5s, 3s, 6s, 12s, then 20s flat), budgeted
+    // at 10 retries - patient enough for a loaded host whose background gh
+    // probes take tens of seconds to warm, but still bounded.
     const retrySteps = [
       { advanceMs: 800, expectedCount: 2 },
       { advanceMs: 1_600, expectedCount: 3 },
-      { advanceMs: 2_300, expectedCount: 4 },
+      { advanceMs: 3_100, expectedCount: 4 },
+      { advanceMs: 6_100, expectedCount: 5 },
+      { advanceMs: 12_100, expectedCount: 6 },
     ];
     for (const step of retrySteps) {
       await act(async () => {
@@ -523,10 +540,15 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
       expect(requests).toHaveLength(step.expectedCount);
     }
 
+    // Retries 6-10 wait the 20s cap each; past the budget, silence.
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.advanceTimersByTimeAsync(110_000);
     });
-    expect(requests).toHaveLength(4);
+    expect(requests).toHaveLength(11);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(requests).toHaveLength(11);
   });
 
   describe("background sweep (no scrolling required)", () => {
@@ -644,7 +666,8 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
       });
       expect(requests).toHaveLength(1);
 
-      // Cold → the sweep's backoff (750ms × attempts) re-probes it.
+      // Cold → the sweep's exponential backoff re-probes it (first retry
+      // after 750ms).
       await act(async () => {
         await vi.advanceTimersByTimeAsync(1_000);
       });
@@ -684,12 +707,14 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
       });
       expect(requests).toHaveLength(1);
 
-      // The sweep budgets PROBES per path (3): initial at t=0, retries after
-      // 750ms and a further 1500ms; after that the path is left to the
-      // viewport machinery (scrolling to it still retries on its own budget).
+      // The sweep budgets PROBES per path (10): initial at t=0, then
+      // exponential-backoff retries (750ms, 1.5s, 3s, … capped at 20s); after
+      // the budget the path is left to the viewport machinery (scrolling to
+      // it still retries on its own budget).
       const retrySteps = [
         { advanceMs: 800, expectedCount: 2 },
         { advanceMs: 1_600, expectedCount: 3 },
+        { advanceMs: 3_100, expectedCount: 4 },
       ];
       for (const step of retrySteps) {
         await act(async () => {
@@ -698,10 +723,20 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
         expect(requests).toHaveLength(step.expectedCount);
       }
 
+      // The rest of the budget drains across the capped waits. Walk it in
+      // act-sized windows: each probe's settle schedules the next wake via a
+      // React state bump, and effects only flush at act() boundaries - one
+      // long advance would fire at most one more probe.
+      for (let window = 0; window < 12; window += 1) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(15_000);
+        });
+      }
+      expect(requests).toHaveLength(10);
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(30_000);
+        await vi.advanceTimersByTimeAsync(60_000);
       });
-      expect(requests).toHaveLength(3);
+      expect(requests).toHaveLength(10);
     });
 
     it("re-probes swept entries after a method-scope invalidation (refresh), still in bounded chunks", async () => {
@@ -788,27 +823,27 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
       // Refresh. A rejected refetch does NOT clear `isInvalidated` - only a
       // successful one does - so the sweep must consume its ONE granted
       // budget and then stop, instead of re-granting on every pass and
-      // probing forever. The budget allows 3 probes, each at most 2 handler
+      // probing forever. The budget allows 10 probes, each at most 2 handler
       // calls (the app QueryClient's single query-level retry): ceiling
-      // 1 + 3×2 = 7. Effect scheduling under fake timers flushes at act()
-      // boundaries, so walk several generous windows and assert the total
-      // STABILIZES under that ceiling - the regression (re-granting the
-      // budget on every pass) keeps probing in every window and blows far
-      // past it.
+      // 1 + 10×2 = 21. Effect scheduling under fake timers flushes at act()
+      // boundaries, so walk several generous windows (covering the full
+      // ~103s backoff schedule) and assert the total STABILIZES under that
+      // ceiling - the regression (re-granting the budget on every pass)
+      // keeps probing in every window and blows far past it.
       await act(async () => {
         await fixture.queryClient.invalidateQueries({
           queryKey: METHOD_SCOPE,
           refetchType: "active",
         });
       });
-      for (let window = 0; window < 8; window += 1) {
+      for (let window = 0; window < 16; window += 1) {
         await act(async () => {
           await vi.advanceTimersByTimeAsync(20_000);
         });
       }
       const settled = requests.length;
       expect(settled).toBeGreaterThan(1); // the grant did allow re-probing
-      expect(settled).toBeLessThanOrEqual(7);
+      expect(settled).toBeLessThanOrEqual(21);
 
       // No further probes, ever - the budget stays consumed while the
       // invalidation persists.
@@ -816,6 +851,398 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
         await vi.advanceTimersByTimeAsync(60_000);
       });
       expect(requests).toHaveLength(settled);
+    });
+  });
+
+  describe("overlay identity stability (render-churn regression)", () => {
+    // Every distinct overlay identity fans out through the panel: merged rows,
+    // task rollups, filters, and finally a re-render of EVERY worktree row
+    // (100-450ms long tasks on a 50-row fleet). So identity churn without a
+    // data change IS the bug these tests pin down.
+    function warmEntry(path: string, branch: string): WorktreeHostEntryV12 {
+      return { ...enrichedEntry(path, branch), prState: "none" };
+    }
+
+    it("keeps the overlay Map identity when a re-probe lands identical data", async () => {
+      const requests: string[] = [];
+      const fixture = createFixture(
+        new Map([["/wt/a", warmEntry("/wt/a", "feat-a")]]),
+        (path) => {
+          requests.push(path);
+        },
+        null,
+        createAppQueryClient(),
+      );
+      const { result } = renderHook(
+        () =>
+          useWorktreeActivityEnrichment(fixture.client, true, HOST_ID, [
+            "/wt/a",
+          ]),
+        { wrapper: fixture.Wrapper },
+      );
+      await waitFor(() => {
+        expect(result.current.enrichedByPath.size).toBe(1);
+      });
+      const before = result.current.enrichedByPath;
+
+      // Refresh → the swept entry re-probes and the host answers with the
+      // exact same data. Structural sharing keeps the entry identity, so the
+      // fold must keep the MAP identity too.
+      await act(async () => {
+        await fixture.queryClient.invalidateQueries({
+          queryKey: METHOD_SCOPE,
+          refetchType: "active",
+        });
+      });
+      await waitFor(() => {
+        expect(requests).toHaveLength(2);
+        expect(fixture.queryClient.isFetching()).toBe(0);
+      });
+      expect(result.current.enrichedByPath).toBe(before);
+    });
+
+    it("never churns the overlay identity on an invalidation mark alone", async () => {
+      const fixture = createFixture(
+        new Map([["/wt/a", warmEntry("/wt/a", "feat-a")]]),
+        null,
+        null,
+        createAppQueryClient(),
+      );
+      const { result } = renderHook(
+        () =>
+          useWorktreeActivityEnrichment(fixture.client, true, HOST_ID, [
+            "/wt/a",
+          ]),
+        { wrapper: fixture.Wrapper },
+      );
+      await waitFor(() => {
+        expect(result.current.enrichedByPath.size).toBe(1);
+      });
+      const before = result.current.enrichedByPath;
+
+      // A pure mark: no refetch (`refetchType: "none"`), no data change. The
+      // fold's subscription must not dirty (an `invalidate` action can't
+      // change folded data), so the overlay identity holds.
+      await act(async () => {
+        await fixture.queryClient.invalidateQueries({
+          queryKey: METHOD_SCOPE,
+          refetchType: "none",
+        });
+      });
+      expect(result.current.enrichedByPath).toBe(before);
+    });
+  });
+
+  describe("warm-open persistence (localStorage snapshot)", () => {
+    function warmEntry(path: string, branch: string): WorktreeHostEntryV12 {
+      return { ...enrichedEntry(path, branch), prState: "none" };
+    }
+
+    // Writes a last-run snapshot the way the production writer does, so the
+    // restore path exercises a genuine round-trip (schema validation and all).
+    function seedLastRunSnapshot(
+      entries: readonly WorktreeHostEntryV12[],
+      savedAt: number,
+    ): void {
+      persistWorktreeActivitySnapshot({
+        hostId: HOST_ID,
+        worktreePaths: entries.map((entry) => entry.worktreePath),
+        enrichedByPath: new Map(
+          entries.map((entry) => [entry.worktreePath, entry]),
+        ),
+        now: savedAt,
+      });
+    }
+
+    it("seeds the last run's snapshot before any probe resolves, then revalidates it in the background", async () => {
+      const restoredA = warmEntry("/wt/a", "feat-a");
+      const restoredB = warmEntry("/wt/b", "feat-b");
+      seedLastRunSnapshot([restoredA, restoredB], Date.now() - 60_000);
+      // Since the last run, /wt/a's PR merged - the host now serves fresher
+      // data than the snapshot. The restored tier must show instantly and the
+      // live truth must replace it.
+      const freshA: WorktreeHostEntryV12 = {
+        ...restoredA,
+        prState: "merged",
+        prNumber: 5,
+        prUrl: "https://github.com/acme/app/pull/5",
+        mergedHeadShaMatches: true,
+      };
+      const requests: string[] = [];
+      const fixture = createFixture(
+        new Map([
+          ["/wt/a", freshA],
+          ["/wt/b", warmEntry("/wt/b", "feat-b")],
+        ]),
+        (path) => {
+          requests.push(path);
+        },
+        null,
+        createAppQueryClient(),
+      );
+      const { result } = renderHook(
+        () =>
+          useWorktreeActivityEnrichment(fixture.client, true, HOST_ID, [
+            "/wt/a",
+            "/wt/b",
+          ]),
+        { wrapper: fixture.Wrapper },
+      );
+
+      // Warm open: restored tiers are in the overlay IMMEDIATELY - no probe
+      // has resolved yet (the handlers park on the microtask queue).
+      expect(result.current.enrichedByPath.get("/wt/a")?.prState).toBe("none");
+      expect(result.current.enrichedByPath.get("/wt/b")?.prState).toBe("none");
+      // Seeded entries are marked for revalidation, never treated as settled.
+      expect(
+        fixture.queryClient.getQueryState(perPathKey("/wt/a"))?.isInvalidated,
+      ).toBe(true);
+
+      // The sweep revalidates every restored row; live truth wins.
+      await waitFor(() => {
+        expect(result.current.enrichedByPath.get("/wt/a")?.prState).toBe(
+          "merged",
+        );
+      });
+      expect([...requests].sort()).toEqual(["/wt/a", "/wt/b"]);
+    });
+
+    it("reports restored paths as SEEDED until a live probe replaces them (delete-gate input)", async () => {
+      seedLastRunSnapshot([warmEntry("/wt/a", "feat-a")], Date.now() - 60_000);
+      const liveA: WorktreeHostEntryV12 = {
+        ...warmEntry("/wt/a", "feat-a"),
+        prState: "merged",
+        prNumber: 5,
+        prUrl: "https://github.com/acme/app/pull/5",
+        mergedHeadShaMatches: true,
+      };
+      const fixture = createFixture(
+        new Map([["/wt/a", liveA]]),
+        null,
+        null,
+        createAppQueryClient(),
+      );
+      const { result } = renderHook(
+        () =>
+          useWorktreeActivityEnrichment(fixture.client, true, HOST_ID, [
+            "/wt/a",
+          ]),
+        { wrapper: fixture.Wrapper },
+      );
+
+      // Restored data displays instantly, but is flagged as the seed - the
+      // panel's delete surfaces treat these paths as not-yet-verified.
+      expect(result.current.enrichedByPath.has("/wt/a")).toBe(true);
+      expect(result.current.seededPaths.has("/wt/a")).toBe(true);
+
+      // The live revalidation replaces the seed → the flag drops with it.
+      await waitFor(() => {
+        expect(result.current.enrichedByPath.get("/wt/a")?.prState).toBe(
+          "merged",
+        );
+        expect(result.current.seededPaths.has("/wt/a")).toBe(false);
+      });
+    });
+
+    it("drops the SEEDED flag even when revalidation lands identical data", async () => {
+      // The common warm-open case: nothing changed since last run, so the
+      // live probe answers with byte-identical data. Structural sharing then
+      // keeps the entry identity and the overlay identity holds - but the
+      // query's `dataUpdatedAt` is now this session's, so the path must still
+      // flip seeded → live (the delete gate must not stay locked).
+      seedLastRunSnapshot([warmEntry("/wt/a", "feat-a")], Date.now() - 60_000);
+      const requests: string[] = [];
+      const fixture = createFixture(
+        new Map([["/wt/a", warmEntry("/wt/a", "feat-a")]]),
+        (path) => {
+          requests.push(path);
+        },
+        null,
+        createAppQueryClient(),
+      );
+      const { result } = renderHook(
+        () =>
+          useWorktreeActivityEnrichment(fixture.client, true, HOST_ID, [
+            "/wt/a",
+          ]),
+        { wrapper: fixture.Wrapper },
+      );
+      expect(result.current.seededPaths.has("/wt/a")).toBe(true);
+
+      await waitFor(() => {
+        expect(requests).toHaveLength(1);
+        expect(fixture.queryClient.isFetching()).toBe(0);
+        expect(result.current.seededPaths.has("/wt/a")).toBe(false);
+      });
+    });
+
+    it("never overwrites live cache data with the snapshot", () => {
+      const liveA: WorktreeHostEntryV12 = {
+        ...warmEntry("/wt/a", "feat-a"),
+        prState: "open",
+        prNumber: 7,
+        prUrl: "https://github.com/acme/app/pull/7",
+      };
+      seedLastRunSnapshot([warmEntry("/wt/a", "feat-a")], Date.now());
+      const qc = createAppQueryClient();
+      qc.setQueryData<WorktreeListAllForHostResponseV12>(perPathKey("/wt/a"), {
+        worktrees: [liveA],
+        nextCursor: null,
+      });
+      const fixture = createFixture(
+        new Map([["/wt/a", liveA]]),
+        null,
+        null,
+        qc,
+      );
+      const { result } = renderHook(
+        () =>
+          useWorktreeActivityEnrichment(fixture.client, true, HOST_ID, [
+            "/wt/a",
+          ]),
+        { wrapper: fixture.Wrapper },
+      );
+
+      expect(result.current.enrichedByPath.get("/wt/a")?.prState).toBe("open");
+      // The cached response itself is untouched: a seed would have replaced
+      // it with the snapshot's `prState: "none"` entry. (`isInvalidated` is
+      // no probe here - `HostClient.bind` invalidates the whole host scope on
+      // its own.)
+      const cached =
+        fixture.queryClient.getQueryData<WorktreeListAllForHostResponseV12>(
+          perPathKey("/wt/a"),
+        );
+      expect(cached?.worktrees[0]?.prState).toBe("open");
+    });
+
+    it("discards an expired snapshot - cold open, storage cleaned up", () => {
+      seedLastRunSnapshot(
+        [warmEntry("/wt/a", "feat-a")],
+        Date.now() - 8 * 24 * 60 * 60_000,
+      );
+      const fixture = createFixture(
+        new Map(),
+        null,
+        null,
+        createAppQueryClient(),
+      );
+      const { result } = renderHook(
+        () =>
+          useWorktreeActivityEnrichment(
+            fixture.client,
+            true,
+            HOST_ID,
+            NO_SWEEP_PATHS,
+          ),
+        { wrapper: fixture.Wrapper },
+      );
+
+      expect(result.current.enrichedByPath.size).toBe(0);
+      expect(
+        window.localStorage.getItem(worktreeActivityCacheKey(HOST_ID)),
+      ).toBeNull();
+    });
+
+    it("survives a corrupt snapshot - cold open, storage cleaned up", () => {
+      window.localStorage.setItem(
+        worktreeActivityCacheKey(HOST_ID),
+        "{not json",
+      );
+      const fixture = createFixture(
+        new Map(),
+        null,
+        null,
+        createAppQueryClient(),
+      );
+      const { result } = renderHook(
+        () =>
+          useWorktreeActivityEnrichment(
+            fixture.client,
+            true,
+            HOST_ID,
+            NO_SWEEP_PATHS,
+          ),
+        { wrapper: fixture.Wrapper },
+      );
+
+      expect(result.current.enrichedByPath.size).toBe(0);
+      expect(
+        window.localStorage.getItem(worktreeActivityCacheKey(HOST_ID)),
+      ).toBeNull();
+    });
+
+    it("writes a debounced snapshot of the WARM entries once the fold settles", async () => {
+      vi.useFakeTimers();
+      const entriesByPath = new Map<string, WorktreeHostEntryV12>([
+        ["/wt/a", warmEntry("/wt/a", "feat-a")],
+        // Permanently cold - must never enter the snapshot (restoring it
+        // would just re-render "Checking…" and burn a probe).
+        ["/wt/b", enrichedEntry("/wt/b", "feat-b")],
+      ]);
+      const fixture = createFixture(
+        entriesByPath,
+        null,
+        null,
+        createAppQueryClient(),
+      );
+      renderHook(
+        () =>
+          useWorktreeActivityEnrichment(fixture.client, true, HOST_ID, [
+            "/wt/a",
+            "/wt/b",
+          ]),
+        { wrapper: fixture.Wrapper },
+      );
+
+      // Sweep probes both; /wt/b's cold retries and the persist debounce all
+      // land comfortably inside this window.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+
+      const snapshot = readWorktreeActivitySnapshot(HOST_ID, Date.now());
+      expect(snapshot?.entries.map((entry) => entry.worktreePath)).toEqual([
+        "/wt/a",
+      ]);
+    });
+
+    it("keeps only listed, warm entries in listing order - and an empty fold never clobbers the snapshot", () => {
+      const a = warmEntry("/wt/a", "feat-a");
+      const b = warmEntry("/wt/b", "feat-b");
+      persistWorktreeActivitySnapshot({
+        hostId: HOST_ID,
+        // /wt/gone enriched once but left the listing (deleted worktree):
+        // dropped. Listing order (b before a) is preserved.
+        worktreePaths: ["/wt/b", "/wt/a"],
+        enrichedByPath: new Map([
+          ["/wt/a", a],
+          ["/wt/b", b],
+          ["/wt/gone", warmEntry("/wt/gone", "feat-gone")],
+          ["/wt/cold", enrichedEntry("/wt/cold", "feat-cold")],
+        ]),
+        now: Date.now(),
+      });
+      const written = readWorktreeActivitySnapshot(HOST_ID, Date.now());
+      expect(written?.entries.map((entry) => entry.worktreePath)).toEqual([
+        "/wt/b",
+        "/wt/a",
+      ]);
+
+      // An early empty fold must not clobber the previous run's snapshot.
+      persistWorktreeActivitySnapshot({
+        hostId: HOST_ID,
+        worktreePaths: ["/wt/b", "/wt/a"],
+        enrichedByPath: new Map(),
+        now: Date.now(),
+      });
+      const after = readWorktreeActivitySnapshot(HOST_ID, Date.now());
+      expect(after?.entries.map((entry) => entry.worktreePath)).toEqual([
+        "/wt/b",
+        "/wt/a",
+      ]);
     });
   });
 });

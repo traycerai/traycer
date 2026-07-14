@@ -2,6 +2,8 @@ import { useCallback, type ReactNode } from "react";
 import { ExternalLink, RefreshCw } from "lucide-react";
 import type { TaskLight } from "@traycer/protocol/host/epic/unary-schemas";
 import { Button } from "@/components/ui/button";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 import {
   Dialog,
   DialogContent,
@@ -143,15 +145,26 @@ function OpenEpicPickerBody(props: OpenEpicPickerBodyProps): ReactNode {
     return (
       <div className="grid gap-2 rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-ui-sm">
         <p className="font-medium text-destructive">Couldn't load Epics.</p>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={props.onRetry}
-          className="justify-self-start"
-        >
-          Retry
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={props.onRetry}
+          >
+            Retry
+          </Button>
+          <ReportIssueAction
+            context={createReportIssueContext({
+              title: "Couldn't load Epics",
+              message: null,
+              code: null,
+              source: "Open Epic in new window",
+            })}
+            presentation="text"
+            className={undefined}
+          />
+        </div>
       </div>
     );
   }

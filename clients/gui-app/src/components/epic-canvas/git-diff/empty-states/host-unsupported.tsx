@@ -1,5 +1,7 @@
 import { AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 
 export function HostUnsupported(props: { readonly reason: string }) {
   return (
@@ -15,9 +17,21 @@ export function HostUnsupported(props: { readonly reason: string }) {
             <p className="mt-2 text-sm">{props.reason}</p>
           </div>
         </div>
-        <Button variant="outline" size="sm" className="w-fit" asChild>
-          <a href="#update-host">Update Traycer Host</a>
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" size="sm" className="w-fit" asChild>
+            <a href="#update-host">Update Traycer Host</a>
+          </Button>
+          <ReportIssueAction
+            context={createReportIssueContext({
+              title: "Git panel unavailable",
+              message: "The Git panel is not supported by the current host.",
+              code: null,
+              source: "Git changes",
+            })}
+            presentation="text"
+            className={undefined}
+          />
+        </div>
       </div>
     </div>
   );

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("sonner", () => ({
   toast: {
@@ -12,6 +12,10 @@ import {
   toastFromHostError,
   toastFromHostErrorWithDetail,
 } from "@/lib/host-error-toast";
+import {
+  __resetAppLocalNotificationsStoreForTests,
+  useAppLocalNotificationsStore,
+} from "@/stores/notifications/app-local-notifications-store";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 
 function makeError(code: HostRpcError["code"], message: string): HostRpcError {
@@ -25,6 +29,10 @@ function makeError(code: HostRpcError["code"], message: string): HostRpcError {
 }
 
 describe("toastFromHostError", () => {
+  afterEach(() => {
+    __resetAppLocalNotificationsStoreForTests();
+  });
+
   it("shows permission copy for FORBIDDEN", () => {
     toastFromHostError(makeError("FORBIDDEN", "test error"), "fallback");
     expect(toast.error).toHaveBeenCalledWith(
@@ -55,6 +63,37 @@ describe("toastFromHostError", () => {
   it("shows sign-in copy for UNAUTHORIZED", () => {
     toastFromHostError(makeError("UNAUTHORIZED", "test error"), "fallback");
     expect(toast.error).toHaveBeenCalledWith("Please sign in again.");
+  });
+
+  it("uses operation copy for retryable UNAUTHORIZED host failures", () => {
+    __resetAppLocalNotificationsStoreForTests();
+    useAppLocalNotificationsStore.getState().activateIdentity("user-1");
+    const reason = "Signing key unavailable: request timed out";
+    const error = new HostRpcError({
+      code: "UNAUTHORIZED",
+      message: reason,
+      requestId: "req-retryable-auth",
+      method: "providers.list",
+      fatalDetails: {
+        code: "UNAUTHORIZED",
+        reason,
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+        retryable: true,
+      },
+    });
+
+    toastFromHostError(error, "Couldn't refresh providers.");
+
+    expect(toast.error).toHaveBeenCalledWith("Couldn't refresh providers.");
+    expect(
+      useAppLocalNotificationsStore.getState().byId[
+        "host.error:providers.list:req-retryable-auth"
+      ],
+    ).toMatchObject({
+      message: "Couldn't refresh providers.",
+      detail: reason,
+    });
   });
 
   it("shows rebind-blocked copy for WORKTREE_REBIND_BLOCKED", () => {

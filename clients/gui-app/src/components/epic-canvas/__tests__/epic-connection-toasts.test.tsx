@@ -181,7 +181,7 @@ describe("<EpicConnectionToasts />", () => {
     await waitFor(() => {
       expect(sonner.info).toHaveBeenCalledWith(
         "Your role on this Epic is now Editor.",
-        { id: "epic-role:epic-role-toast" },
+        { id: "epic-role:epic-role-toast", cancel: null },
       );
     });
     expect(sonner.warning).not.toHaveBeenCalled();
@@ -213,7 +213,7 @@ describe("<EpicConnectionToasts />", () => {
     await waitFor(() => {
       expect(sonner.warning).toHaveBeenCalledWith(
         "Your role on this Epic is now Viewer. Pending edits were discarded.",
-        { id: "epic-role:epic-role-toast" },
+        { id: "epic-role:epic-role-toast", cancel: null },
       );
     });
     expect(handle.store.getState().unsyncedQueueSize).toBe(0);

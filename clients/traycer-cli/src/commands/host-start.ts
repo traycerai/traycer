@@ -9,6 +9,7 @@ import {
   openBootstrapLogFd,
   writeBootstrapMarker,
 } from "../host/bootstrap-log";
+import { rotateHostLogIfOversized } from "../host/host-log-rotation";
 import {
   readHostInstallRecord,
   type HostInstallRecord,
@@ -144,6 +145,9 @@ export type SpawnImpl = (
 export interface RunHostStartDeps extends ResolveHostStartTargetDeps {
   readonly spawn: SpawnImpl;
   readonly openLogFd: (environment: Environment) => Promise<number>;
+  readonly rotateLog: (
+    environment: Environment,
+  ) => Promise<"rotated" | "skipped">;
   readonly readEnvOverrides: () => Promise<Record<string, EnvOverrideValue>>;
   readonly writeMarker: typeof writeBootstrapMarker;
   // `process.exit` itself returns `never`, but the dependency is typed
@@ -159,6 +163,7 @@ const defaultRunDeps: RunHostStartDeps = {
   ...defaultDeps,
   spawn: (cmd, args, options) => nodeSpawn(cmd, args.slice(), options),
   openLogFd: openBootstrapLogFd,
+  rotateLog: rotateHostLogIfOversized,
   readEnvOverrides: async () => ({ ...(await listEnvOverrides()) }),
   writeMarker: writeBootstrapMarker,
   exit: (code) => {
@@ -251,6 +256,17 @@ export async function runHostStart(
   // computes its own CLI bin dir (`~/.traycer/cli[/<slot>]/bin`, where the
   // bundled `traycer` is symlinked) and puts it on PATH, so no `traycer` path
   // needs to be handed down here.
+
+  // Bound the log before anything appends to this run. Nothing truncates
+  // `host.log` - every writer appends - so a start is the only safe moment to
+  // roll it: the fd opened below lives for the child's whole lifetime and would
+  // follow the file across a rename, splitting one session across two files.
+  // Under the cap this is a no-op, so consecutive starts still share one log.
+  const rotation = await deps.rotateLog(opts.environment);
+  logger.debug("Host supervisor checked log rotation", {
+    environment: opts.environment,
+    rotation,
+  });
 
   await deps.writeMarker(opts.environment, "starting", {
     shell: undefined,

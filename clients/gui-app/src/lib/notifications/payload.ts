@@ -16,7 +16,7 @@ import {
 } from "@/lib/tab-navigation";
 
 export type NotificationPayloadKind =
-  "session" | "artifact" | "epic" | "approval" | "chat";
+  "session" | "artifact" | "epic" | "approval" | "interview" | "chat";
 
 export interface SessionNotificationPayload {
   readonly kind: "session";
@@ -37,16 +37,20 @@ export interface EpicNotificationPayload {
 
 export interface ApprovalNotificationPayload {
   readonly kind: "approval";
-  readonly sessionId: string;
+  readonly epicId: string | undefined;
+  readonly chatId: string | undefined;
   readonly approvalId: string | undefined;
+  readonly sessionId: string | undefined;
   readonly artifactId: string | undefined;
 }
 
-/**
- * Local "chat turn completed" toast (see `ChatTurnNotificationController`).
- * Routes to the chat's epic on click. `chatId` rides along for future
- * chat-tab targeting; routing currently focuses the owning epic.
- */
+export interface InterviewNotificationPayload {
+  readonly kind: "interview";
+  readonly epicId: string;
+  readonly chatId: string;
+  readonly interviewBlockId: string | undefined;
+}
+
 export interface ChatNotificationPayload {
   readonly kind: "chat";
   readonly epicId: string;
@@ -58,6 +62,7 @@ export type NotificationPayload =
   | ArtifactNotificationPayload
   | EpicNotificationPayload
   | ApprovalNotificationPayload
+  | InterviewNotificationPayload
   | ChatNotificationPayload;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -123,17 +128,38 @@ function parseChatPayload(
 function parseApprovalPayload(
   value: Record<string, unknown>,
 ): ApprovalNotificationPayload | null {
+  const epicId = readString(value.epicId);
+  const chatId = readString(value.chatId);
   const sessionId = readString(value.sessionId);
-  if (sessionId === null) {
+  if (epicId === null && sessionId === null) {
     return null;
   }
   const approvalId = readString(value.approvalId);
   const artifactId = readString(value.artifactId);
   return {
     kind: "approval",
-    sessionId,
+    epicId: epicId === null ? undefined : epicId,
+    chatId: chatId === null ? undefined : chatId,
     approvalId: approvalId === null ? undefined : approvalId,
+    sessionId: sessionId === null ? undefined : sessionId,
     artifactId: artifactId === null ? undefined : artifactId,
+  };
+}
+
+function parseInterviewPayload(
+  value: Record<string, unknown>,
+): InterviewNotificationPayload | null {
+  const epicId = readString(value.epicId);
+  const chatId = readString(value.chatId);
+  if (epicId === null || chatId === null) {
+    return null;
+  }
+  const interviewBlockId = readString(value.interviewBlockId);
+  return {
+    kind: "interview",
+    epicId,
+    chatId,
+    interviewBlockId: interviewBlockId === null ? undefined : interviewBlockId,
   };
 }
 
@@ -155,6 +181,8 @@ export function parseNotificationPayload(
       return parseChatPayload(value);
     case "approval":
       return parseApprovalPayload(value);
+    case "interview":
+      return parseInterviewPayload(value);
     default:
       return null;
   }
@@ -200,7 +228,6 @@ export function routeNotification(
 ): void {
   switch (payload.kind) {
     case "epic":
-    case "chat": {
       navigateToTabIntent(
         navigate,
         openOrFocusEpicIntent({
@@ -214,7 +241,34 @@ export function routeNotification(
         }),
       );
       return;
-    }
+    case "chat":
+      routeEpicChatNotification(navigate, payload, receivedAt);
+      return;
+    case "approval":
+      if (payload.epicId === undefined || payload.chatId === undefined) {
+        return;
+      }
+      routeEpicChatNotification(
+        navigate,
+        {
+          kind: "chat",
+          epicId: payload.epicId,
+          chatId: payload.chatId,
+        },
+        receivedAt,
+      );
+      return;
+    case "interview":
+      routeEpicChatNotification(
+        navigate,
+        {
+          kind: "chat",
+          epicId: payload.epicId,
+          chatId: payload.chatId,
+        },
+        receivedAt,
+      );
+      return;
     case "artifact": {
       if (payload.epicId === undefined) {
         return;
@@ -234,7 +288,25 @@ export function routeNotification(
       return;
     }
     case "session":
-    case "approval":
       return;
   }
+}
+
+function routeEpicChatNotification(
+  navigate: NavigateFn,
+  payload: ChatNotificationPayload,
+  receivedAt: number,
+): void {
+  navigateToTabIntent(
+    navigate,
+    openOrFocusEpicIntent({
+      epicId: payload.epicId,
+      focus: {
+        focusedAt: receivedAt,
+        focusArtifactId: payload.chatId,
+        focusThreadId: undefined,
+        migrationSource: undefined,
+      },
+    }),
+  );
 }

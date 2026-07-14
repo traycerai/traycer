@@ -5,6 +5,7 @@ export type NotificationShow = (
   title: string,
   body: string,
   payload: unknown,
+  replaceKey: string | null,
 ) => Promise<void>;
 
 /**
@@ -14,8 +15,8 @@ export type NotificationShow = (
 export function useNotificationShow(): NotificationShow {
   const runnerHost = useRunnerHost();
   return useCallback<NotificationShow>(
-    async (title, body, payload) => {
-      await runnerHost.notifications.show(title, body, payload);
+    async (title, body, payload, replaceKey) => {
+      await runnerHost.notifications.show(title, body, payload, replaceKey);
     },
     [runnerHost],
   );

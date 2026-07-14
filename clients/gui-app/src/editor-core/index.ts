@@ -51,3 +51,5 @@ export {
   type ArtifactFindPluginState,
   type ArtifactFindSearchParams,
 } from "./extensions/artifact-find-extension";
+
+export { artifactDocumentBundle } from "./artifact-document-bundle";

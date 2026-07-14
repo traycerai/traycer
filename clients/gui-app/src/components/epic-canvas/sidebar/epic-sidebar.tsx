@@ -120,6 +120,7 @@ import {
   useEpicArtifactRecords,
   useEpicConnectionStatus,
   useEpicPermissionRole,
+  useEpicSnapshotMeta,
   useEpicTreeIndex,
   useRootIds,
   type EpicArtifactProjection,
@@ -128,6 +129,7 @@ import {
   type EpicTreeRecord,
 } from "@/lib/epic-selectors";
 import { isEditableRole, mutationDisabledHint } from "@/lib/epic-permissions";
+import { useEpicExportArtifacts } from "@/hooks/epic/use-epic-export-artifacts-mutation";
 import {
   ARIA_DISABLED_TRIGGER_CLASS,
   resolveDisabledPresentation,
@@ -153,6 +155,7 @@ import { cn } from "@/lib/utils";
 import {
   CheckCheck,
   CopyMinus,
+  Download,
   FolderOpen,
   ListChecks,
   Plus,
@@ -164,7 +167,15 @@ import { GitDiffPanelBodyLive } from "@/components/epic-canvas/git-diff/git-diff
 import { GitDiffPanelActions } from "@/components/epic-canvas/git-diff/git-diff-panel-actions";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   InputGroup,
   InputGroupAddon,
@@ -1282,9 +1293,19 @@ function FileTreePanelBodyForWorkspace(props: {
           </output>
         ) : null}
         {query.error !== null && files.length === 0 ? (
-          <p className="p-1 text-ui-xs text-destructive">
-            Unable to load files.
-          </p>
+          <div className="flex items-center justify-between gap-2 p-1 text-ui-xs text-destructive">
+            <span>Unable to load files.</span>
+            <ReportIssueAction
+              context={createReportIssueContext({
+                title: "Unable to load files",
+                message: "The workspace file tree could not be loaded.",
+                code: null,
+                source: "File tree",
+              })}
+              presentation="icon"
+              className={undefined}
+            />
+          </div>
         ) : null}
       </div>
       {query.data?.truncated === true ? (
@@ -1952,16 +1973,17 @@ function SidebarStartSelectionButton(props: {
   const selection = useSidebarBulkSelection();
   const permissionRole = useEpicPermissionRole();
   const connectionStatus = useEpicConnectionStatus();
-  if (!isEditableRole(permissionRole)) return null;
+  const readOnlySelection = selection.panelId === "artifacts";
+  if (!readOnlySelection && !isEditableRole(permissionRole)) return null;
   if (!props.disabled && !selection.canSelect) return null;
-  const canMutate = connectionStatus !== "closed";
+  const canStartSelection = readOnlySelection || connectionStatus !== "closed";
   return (
     <Button
       type="button"
       variant="ghost"
       size="icon-sm"
       aria-label={props.label}
-      disabled={props.disabled || !selection.canSelect || !canMutate}
+      disabled={props.disabled || !selection.canSelect || !canStartSelection}
       onClick={selection.enterSelectionMode}
       className={cn(
         "text-muted-foreground hover:text-foreground",
@@ -1977,8 +1999,29 @@ function SidebarBulkSelectionActions() {
   const selection = useSidebarBulkSelection();
   const permissionRole = useEpicPermissionRole();
   const connectionStatus = useEpicConnectionStatus();
+  const exportArtifacts = useEpicExportArtifacts();
+  const records = useEpicArtifactRecords();
+  const meta = useEpicSnapshotMeta();
   const canMutate =
     isEditableRole(permissionRole) && connectionStatus !== "closed";
+  const recordById = useMemo(
+    () => new Map(records.map((record) => [record.id, record])),
+    [records],
+  );
+  const selectedArtifacts = selection.selectedVisibleIds.flatMap((id) => {
+    const record = recordById.get(id);
+    if (record === undefined || !isEpicArtifactKind(record.type)) return [];
+    return [{ id: record.id, title: record.name }];
+  });
+  const canExportSelected = selectedArtifacts.length >= 2;
+  const exportSelected = (format: "markdown" | "pdf"): void => {
+    exportArtifacts.mutate({
+      artifacts: selectedArtifacts,
+      format,
+      archive: true,
+      archiveTitle: meta?.epicLight?.title ?? "Traycer",
+    });
+  };
   return (
     <div className="flex items-center gap-0.5">
       <Button
@@ -2004,6 +2047,49 @@ function SidebarBulkSelectionActions() {
         <X className="size-3.5" />
         Cancel
       </Button>
+      {selection.panelId === "artifacts" ? (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Export selected artifacts"
+              disabled={!canExportSelected || exportArtifacts.isPending}
+            >
+              {exportArtifacts.isPending ? (
+                <AgentSpinningDots
+                  className={undefined}
+                  testId={undefined}
+                  variant={undefined}
+                />
+              ) : (
+                <Download className="size-4" />
+              )}
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem
+              data-testid="epic-sidebar-export-selected-markdown"
+              disabled={!canExportSelected || exportArtifacts.isPending}
+              onSelect={() => {
+                exportSelected("markdown");
+              }}
+            >
+              Export as Markdown ZIP
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              data-testid="epic-sidebar-export-selected-pdf"
+              disabled={!canExportSelected || exportArtifacts.isPending}
+              onSelect={() => {
+                exportSelected("pdf");
+              }}
+            >
+              Export as PDF ZIP
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ) : null}
       <Button
         type="button"
         variant="ghost"

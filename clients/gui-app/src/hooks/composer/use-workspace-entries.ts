@@ -26,6 +26,7 @@ export function useWorkspaceEntries(
 ): UseWorkspaceEntriesResult {
   const queries = useHostQueries<HostRpcRegistry, WorkspaceMentionMethod>({
     client: params.client,
+    cacheKeyIdentity: undefined,
     requests: params.requests,
     options: { staleTime: 30_000, placeholderData: keepPreviousData },
   });

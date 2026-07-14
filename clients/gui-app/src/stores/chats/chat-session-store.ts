@@ -549,6 +549,14 @@ function chatRunSettingsEqual(a: ChatRunSettings, b: ChatRunSettings): boolean {
   return Object.values(fieldsEqual).every((equal) => equal);
 }
 
+function nullableChatRunSettingsEqual(
+  a: ChatRunSettings | null,
+  b: ChatRunSettings | null,
+): boolean {
+  if (a === null || b === null) return a === b;
+  return chatRunSettingsEqual(a, b);
+}
+
 export const ACCEPTED_CHAT_ACTION_RETENTION_MS = 5 * 60 * 1_000;
 export const MAX_ACCEPTED_CHAT_ACTION_RECORDS = 64;
 /**
@@ -723,11 +731,24 @@ export function createChatSessionStore(
             failedSendRestoration: state.failedSendRestoration,
             nowMs: now,
           });
+          // A changed persisted tuple is an authoritative host-side update
+          // (for example `agent.configure`) and must replace the live picker.
+          // An unchanged tuple is ordinary stream traffic, so keep any local
+          // composer edits that have not been committed by a send yet.
+          const authoritativeSettingsChanged =
+            state.chat === null ||
+            !nullableChatRunSettingsEqual(
+              state.chat.settings,
+              frame.snapshot.chat.settings,
+            );
           return {
             chat: {
               ...frame.snapshot.chat,
               messages: [...messages],
             },
+            currentComposerSettings: authoritativeSettingsChanged
+              ? frame.snapshot.chat.settings
+              : state.currentComposerSettings,
             access: frame.snapshot.access,
             messages,
             events: frame.snapshot.chat.events,
@@ -2250,8 +2271,8 @@ function findRestorableSendByMessageId<
 /**
  * A chat session is "fully settled" when no turn is running, none is active,
  * and the queue is empty/idle. Single source of truth for the
- * render-send-as-pending check and the turn-completion notifier
- * (`lib/notifications/chat-turn-completion.ts`).
+ * render-send-as-pending check and the turn-completion refresh subscribers
+ * (`lib/chats/chat-turn-completions.ts`).
  */
 export function isChatSessionSettled(
   state: Pick<ChatSessionState, "runStatus" | "activeTurn" | "queue">,

@@ -13,7 +13,6 @@ import type {
 } from "@/stores/composer/chat-store";
 import { Check, Copy, GitBranch, Sparkles } from "lucide-react";
 import { use, useCallback, useMemo } from "react";
-import { toast } from "sonner";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { useElapsedSeconds } from "@/hooks/use-elapsed-seconds";
 import { formatClockDuration } from "@/lib/format-duration";
@@ -37,11 +36,17 @@ import { SubagentSegment } from "./segments/subagent-segment";
 import { TextSegment } from "./segments/text-segment";
 import { TodoSegment } from "./segments/todo-segment";
 import { ToolSegment } from "./segments/tool-segment";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
 const COPIED_RESET_MS = 1600;
 
 const handleCopyError = (): void => {
-  toast.error("Couldn't copy to clipboard.");
+  reportableErrorToast("Couldn't copy to clipboard.", undefined, {
+    title: "Could not copy to clipboard",
+    message: null,
+    code: null,
+    source: "Clipboard",
+  });
 };
 
 /**

@@ -148,7 +148,12 @@ export interface DesktopPreloadBridge {
     start(): Promise<DeviceFlowSession | null>;
   };
   notifications: {
-    show(title: string, body: string, payload: unknown): Promise<void>;
+    show(
+      title: string,
+      body: string,
+      payload: unknown,
+      replaceKey: string | null,
+    ): Promise<void>;
     onClick(handler: (payload: unknown) => void): { dispose: () => void };
   };
   onLocalHostChange(handler: (snapshot: LocalHostSnapshot | null) => void): {
@@ -614,8 +619,8 @@ export class DesktopRunnerHost implements IRunnerHost {
     };
 
     this.notifications = {
-      show: (title, body, payload) =>
-        this.bridge.notifications.show(title, body, payload),
+      show: (title, body, payload, replaceKey) =>
+        this.bridge.notifications.show(title, body, payload, replaceKey),
       onClick: (handler) =>
         toDisposable(this.bridge.notifications.onClick(handler)),
     };

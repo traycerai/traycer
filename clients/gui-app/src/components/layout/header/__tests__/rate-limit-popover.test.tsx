@@ -9,6 +9,7 @@ import {
   type Mock,
 } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -21,6 +22,7 @@ import {
   type AccountContext,
 } from "@traycer/protocol/common/schemas";
 import type { ProviderRateLimits } from "@traycer/protocol/host";
+import type { ProvidersConsumeRateLimitResetCreditRequest } from "@traycer/protocol/host/rate-limit";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import type {
@@ -30,6 +32,7 @@ import type {
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Popover, PopoverTrigger } from "@/components/ui/popover";
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
+import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import type {
   AvailableProviderRateLimits,
   ProviderRateLimitEnvelope,
@@ -67,6 +70,12 @@ type MockState = {
   traycerUsageUpdatedAt: Readonly<Record<string, number>>;
   openSettings: Mock<(...args: unknown[]) => void>;
   enqueue: Mock<(...args: unknown[]) => Promise<void>>;
+  consumeReset: Mock<
+    (
+      request: ProvidersConsumeRateLimitResetCreditRequest,
+      options: { readonly onSuccess: () => void },
+    ) => void
+  >;
   authUser: MockAuthUser;
   // Last `options` object `RateLimitRefreshAllButton` passed to
   // `useHostQueries`, so a test can assert it reused the real lane options
@@ -101,6 +110,7 @@ const mocks = vi.hoisted<MockState>(() => ({
   traycerUsageUpdatedAt: {},
   openSettings: vi.fn(),
   enqueue: vi.fn((..._args: unknown[]) => Promise.resolve()),
+  consumeReset: vi.fn(),
   lastUseHostQueriesOptions: null,
   lastUseHostQueriesProviderIds: null,
   profileSelection: {
@@ -202,6 +212,15 @@ vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
 vi.mock("@/hooks/rate-limits/use-rate-limit-queue-scope", () => ({
   useRateLimitQueueScope: () => queueScope,
 }));
+vi.mock(
+  "@/hooks/providers/use-consume-rate-limit-reset-credit-mutation",
+  () => ({
+    useConsumeRateLimitResetCreditMutation: () => ({
+      isPending: false,
+      mutate: mocks.consumeReset,
+    }),
+  }),
+);
 vi.mock("@/lib/rate-limits/ephemeral-fetch-queue", () => ({
   // Wrapper (not `mocks.enqueue` directly) so `beforeEach` can swap the spy -
   // an object-literal binding would freeze the original fn at module load.
@@ -310,10 +329,10 @@ function claudeReady(): AvailableProviderRateLimits {
   };
 }
 
-function codexReady(): AvailableProviderRateLimits {
+function codexReady() {
   return {
-    provider: "codex",
-    available: true,
+    provider: "codex" as const,
+    available: true as const,
     planType: "pro_5x",
     limitId: null,
     limitName: null,
@@ -497,6 +516,7 @@ beforeEach(() => {
   mocks.traycerUsageUpdatedAt = {};
   mocks.openSettings = vi.fn();
   mocks.enqueue = vi.fn((..._args: unknown[]) => Promise.resolve());
+  mocks.consumeReset = vi.fn();
   mocks.lastUseHostQueriesOptions = null;
   mocks.lastUseHostQueriesProviderIds = null;
   mocks.profileSelection = {
@@ -512,6 +532,11 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  useDesktopDialogStore.setState({
+    activeDialog: null,
+    reportIssueAvailable: false,
+    reportIssueContext: null,
+  });
 });
 
 describe("<RateLimitPopover /> zero-provider state", () => {
@@ -973,6 +998,31 @@ describe("<RateLimitPopover /> Overview progressive reveal", () => {
 });
 
 describe("<RateLimitPopover /> per-provider states", () => {
+  it("offers a confirmed Codex reset on the detail panel but keeps Overview read-only", () => {
+    mocks.configured = [
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+    ];
+    mocks.results = {
+      codex: readyResult({
+        ...codexReady(),
+        resetCredits: { availableCount: 2 },
+      }),
+    };
+
+    renderPopover();
+    expect(screen.queryByRole("button", { name: "Use reset" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
+    fireEvent.click(screen.getByRole("button", { name: "Use reset" }));
+    expect(screen.getByText("Use a Codex manual reset?")).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId("confirm-action"));
+    expect(mocks.consumeReset).toHaveBeenCalledOnce();
+    const request = mocks.consumeReset.mock.calls[0]?.[0];
+    expect(request).toMatchObject({ providerId: "codex", profileId: null });
+    expect(typeof request.idempotencyKey).toBe("string");
+  });
+
   it("shows skeleton bars (not a spinner) on cold load", () => {
     mocks.configured = [
       { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
@@ -1140,6 +1190,68 @@ describe("<RateLimitPopover /> per-provider states", () => {
     expect(
       screen.getByText("Usage limits unavailable - the CLI isn't installed"),
     ).toBeTruthy();
+  });
+
+  it("gates the hard-failure report action on capability and reports only fixed generic context", () => {
+    mocks.configured = [
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+    ];
+    mocks.results = {
+      codex: {
+        data: undefined,
+        isPending: false,
+        isFetching: false,
+        isError: true,
+        dataUpdatedAt: 0,
+        refetch: vi.fn(() => Promise.resolve({})),
+      },
+    };
+    renderPopover();
+
+    // Capability-gated off by default.
+    expect(screen.queryByRole("button", { name: "Report issue" })).toBeNull();
+
+    act(() => {
+      useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
+    expect(useDesktopDialogStore.getState()).toMatchObject({
+      activeDialog: "report-issue",
+      reportIssueContext: {
+        title: "Couldn't load usage limits",
+        message: null,
+        code: null,
+        source: "Usage limits",
+      },
+    });
+  });
+
+  it("gates the unavailable-reason report action on capability without leaking the reason into the report context beyond its fixed label", () => {
+    mocks.configured = [
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+    ];
+    mocks.results = {
+      codex: readyResult({
+        provider: "codex",
+        available: false,
+        reason: "cli_not_found",
+      }),
+    };
+    renderPopover();
+
+    act(() => {
+      useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
+    expect(useDesktopDialogStore.getState()).toMatchObject({
+      activeDialog: "report-issue",
+      reportIssueContext: {
+        title: "Usage limits unavailable",
+        message: null,
+        code: null,
+        source: "Usage limits",
+      },
+    });
   });
 });
 

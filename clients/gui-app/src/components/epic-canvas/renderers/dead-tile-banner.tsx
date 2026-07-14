@@ -1,5 +1,7 @@
 import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 import { cn } from "@/lib/utils";
 
 /**
@@ -38,9 +40,26 @@ export function TerminalDeadTileBanner(
         Host &quot;{props.hostLabel}&quot; is unreachable. This terminal is
         permanently closed.
       </p>
-      <Button type="button" variant="outline" size="sm" onClick={props.onClose}>
-        Close tab
-      </Button>
+      <div className="flex flex-wrap justify-center gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={props.onClose}
+        >
+          Close tab
+        </Button>
+        <ReportIssueAction
+          context={createReportIssueContext({
+            title: "Terminal host is unreachable",
+            message: "The terminal's bound host is unreachable.",
+            code: null,
+            source: "Terminal",
+          })}
+          presentation="text"
+          className={undefined}
+        />
+      </div>
     </div>
   );
 }
@@ -69,6 +88,16 @@ export function WorkspaceFileDeadTileBanner(
           ? `This file is on host "${props.hostLabel}", which is currently unreachable. The preview will load once that host is back.`
           : `This file is on host "${props.hostLabel}". Switch your active host to "${props.hostLabel}" to view it.`}
       </p>
+      <ReportIssueAction
+        context={createReportIssueContext({
+          title: "Workspace file is unavailable",
+          message: "The workspace file's bound host is unavailable.",
+          code: null,
+          source: "Workspace file",
+        })}
+        presentation="text"
+        className={undefined}
+      />
     </div>
   );
 }
@@ -92,6 +121,16 @@ export function GitDiffDeadTileBanner(
           ? `This diff is on host "${props.hostLabel}", which is currently unreachable. The diff will load once that host is back.`
           : `This diff is on host "${props.hostLabel}". Switch your active host to "${props.hostLabel}" to view it.`}
       </p>
+      <ReportIssueAction
+        context={createReportIssueContext({
+          title: "Git diff is unavailable",
+          message: "The Git diff's bound host is unavailable.",
+          code: null,
+          source: "Git changes",
+        })}
+        presentation="text"
+        className={undefined}
+      />
     </div>
   );
 }
@@ -120,6 +159,16 @@ export function SnapshotDiffSourceUnavailableBanner(
         This change is no longer available. The chat edit it came from was
         reverted, removed, or is no longer loaded.
       </p>
+      <ReportIssueAction
+        context={createReportIssueContext({
+          title: "Change is no longer available",
+          message: "The source chat edit could not be resolved.",
+          code: null,
+          source: "Snapshot diff",
+        })}
+        presentation="text"
+        className={undefined}
+      />
     </div>
   );
 }
@@ -154,6 +203,16 @@ export function ChatDeadTileBanner(props: ChatDeadTileBannerProps): ReactNode {
       >
         Clone chat
       </Button>
+      <ReportIssueAction
+        context={createReportIssueContext({
+          title: "Chat host is offline",
+          message: "The chat's bound host is offline.",
+          code: null,
+          source: "Chat",
+        })}
+        presentation="icon"
+        className="shrink-0 text-warning-foreground"
+      />
     </div>
   );
 }

@@ -691,6 +691,105 @@ describe("WsRpcClient", () => {
     );
   });
 
+  it("requestWithResponseTimeout waits past the default frame timeout for a long-poll response", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "t",
+      requestId: "req-longpoll",
+      dialTimeoutMs: 1000,
+      frameTimeoutMs: 25,
+    });
+
+    const pending = client.requestWithResponseTimeout(
+      "host.echo",
+      { message: "slow" },
+      5_000,
+    );
+    await flush();
+    sockets[0].socket.fireOpen();
+    await flush();
+    sockets[0].socket.fireMessage(
+      openAckWithOptionalHostEcho({ major: 1, minor: 0 }),
+    );
+    await flush();
+    expect(expectRequestFrame(sockets[0].sent[1])).toBeDefined();
+
+    // Stay silent well past the 25ms transport default - a long-poll
+    // response legitimately arrives later than the frame timeout.
+    await new Promise<void>((resolve) => setTimeout(resolve, 100));
+
+    sockets[0].socket.fireMessage({
+      kind: "response",
+      requestId: "req-longpoll",
+      method: "host.echo",
+      schemaVersion: { major: 1, minor: 0 },
+      result: { echoed: "SLOW" },
+      error: null,
+    });
+
+    await expect(pending).resolves.toEqual({ echoed: "SLOW" });
+  });
+
+  it("requestWithResponseTimeout keeps the default frame timeout for the handshake", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "t",
+      requestId: "req-longpoll-handshake",
+      dialTimeoutMs: 1000,
+      frameTimeoutMs: 25,
+    });
+
+    // The extended budget covers ONLY the response wait - a host that never
+    // answers `openAck` is unreachable and must still fail at the default.
+    const pending = client.requestWithResponseTimeout(
+      "host.echo",
+      { message: "x" },
+      60_000,
+    );
+    await flush();
+    sockets[0].socket.fireOpen();
+    await flush();
+
+    await expect(pending).rejects.toSatisfy(
+      (error: unknown) =>
+        error instanceof HostRpcError &&
+        error.message.includes("frame timed out after 25ms"),
+    );
+  });
+
+  it("requestWithResponseTimeout still times out once the extended budget elapses", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "t",
+      requestId: "req-longpoll-elapsed",
+      dialTimeoutMs: 1000,
+      frameTimeoutMs: 25,
+    });
+
+    const pending = client.requestWithResponseTimeout(
+      "host.echo",
+      { message: "x" },
+      50,
+    );
+    await flush();
+    sockets[0].socket.fireOpen();
+    await flush();
+    sockets[0].socket.fireMessage(
+      openAckWithOptionalHostEcho({ major: 1, minor: 0 }),
+    );
+    await flush();
+
+    await expect(pending).rejects.toSatisfy(
+      (error: unknown) =>
+        error instanceof HostRpcError &&
+        !(error instanceof RetryableTransportError) &&
+        error.message.includes("frame timed out after 50ms"),
+    );
+  });
+
   it("does NOT classify a malformed frame as retryable", async () => {
     const { factory, sockets } = makeFactory();
     const client = makeClient({
@@ -1442,6 +1541,150 @@ describe("WsRpcClient", () => {
       });
 
       await expect(pending).resolves.toEqual({ echoed: "HI", volume: 4 });
+    });
+
+    // Regression coverage for the pre-profiles `providers.list@3.0` crash:
+    // fields added mid-line to an old major carry `.catch(...)` tolerances in
+    // that line's frozen contract, but they only take effect if the client
+    // actually parses the old host's wire payload before upgrading it.
+    describe("old-host response parsing on the upgrade path", () => {
+      const echoWithTagsV10 = defineRpcContract({
+        method: "host.echo",
+        schemaVersion: { major: 1, minor: 0 } as const,
+        requestSchema: z.object({ message: z.string() }),
+        // `tags` was added mid-line: old 1.0 host builds omit it entirely and
+        // the frozen contract tolerates that with `.catch([])`.
+        responseSchema: z.object({
+          echoed: z.string(),
+          tags: z.array(z.string()).catch([]),
+        }),
+      });
+
+      const echoWithTagsV20 = defineRpcContract({
+        method: "host.echo",
+        schemaVersion: { major: 2, minor: 0 } as const,
+        requestSchema: z.object({ message: z.string() }),
+        responseSchema: z.object({
+          echoed: z.string(),
+          tags: z.array(z.string()),
+        }),
+      });
+
+      const upgradeEchoWithTagsV10ToV20 = defineUpgradePath<
+        typeof echoWithTagsV10,
+        typeof echoWithTagsV20
+      >({
+        from: echoWithTagsV10.schemaVersion,
+        to: echoWithTagsV20.schemaVersion,
+        upgradeRequest: (request) => request,
+        upgradeResponse: (response) => response,
+      });
+
+      const downgradeEchoWithTagsV20ToV10 = defineDowngradePath<
+        typeof echoWithTagsV20,
+        typeof echoWithTagsV10
+      >({
+        from: echoWithTagsV20.schemaVersion,
+        to: echoWithTagsV10.schemaVersion,
+        downgradeRequest: (request) => ({ ok: true, value: request }),
+        downgradeResponse: (response) => ({ ok: true, value: response }),
+      });
+
+      const registryWithTags = defineVersionedRpcRegistry({
+        "host.echo": {
+          1: {
+            latestMinor: 0,
+            versions: {
+              0: {
+                contract: echoWithTagsV10,
+                upgradeFromPreviousVersion: null,
+              },
+            },
+            downgradePathsFromLatest: {},
+          },
+          2: {
+            latestMinor: 0,
+            versions: {
+              0: {
+                contract: echoWithTagsV20,
+                upgradeFromPreviousVersion: upgradeEchoWithTagsV10ToV20,
+              },
+            },
+            downgradePathsFromLatest: { 1: downgradeEchoWithTagsV20ToV10 },
+          },
+        },
+      });
+
+      it("applies the older contract's catch-tolerances to an old host's response before upgrading", async () => {
+        const { factory, sockets } = makeFactory();
+        const client = buildClient(registryWithTags, {
+          factory,
+          requestId: "req-old-host-catch",
+        });
+
+        const pending = client.request("host.echo", { message: "hi" });
+        await flush();
+
+        sockets[0].socket.fireOpen();
+        await flush();
+
+        sockets[0].socket.fireMessage(
+          openAckWithOnlyOptionalHostEcho({ major: 1, minor: 0 }),
+        );
+        await flush();
+
+        sockets[0].socket.fireMessage({
+          kind: "response",
+          requestId: "req-old-host-catch",
+          method: "host.echo",
+          schemaVersion: { major: 1, minor: 0 },
+          // Old 1.0 host build from before `tags` existed - no `tags` key on
+          // the wire. The identity 1.0→2.0 upgrade must still hand the caller
+          // a response matching the 2.0 contract (`tags: []`).
+          result: { echoed: "HI" },
+          error: null,
+        });
+
+        await expect(pending).resolves.toEqual({ echoed: "HI", tags: [] });
+      });
+
+      it("rejects with RPC_ERROR when an old host's response fails its own contract", async () => {
+        const { factory, sockets } = makeFactory();
+        const client = buildClient(registryWithTags, {
+          factory,
+          requestId: "req-old-host-invalid",
+        });
+
+        const pending = client.request("host.echo", { message: "hi" });
+        await flush();
+
+        sockets[0].socket.fireOpen();
+        await flush();
+
+        sockets[0].socket.fireMessage(
+          openAckWithOnlyOptionalHostEcho({ major: 1, minor: 0 }),
+        );
+        await flush();
+
+        sockets[0].socket.fireMessage({
+          kind: "response",
+          requestId: "req-old-host-invalid",
+          method: "host.echo",
+          schemaVersion: { major: 1, minor: 0 },
+          result: { echoed: 42 },
+          error: null,
+        });
+
+        await expect(pending).rejects.toSatisfy((error: unknown) => {
+          return (
+            error instanceof HostRpcError &&
+            error.code === "RPC_ERROR" &&
+            error.method === "host.echo" &&
+            error.message ===
+              "Failed to upgrade response from 1.0 to 2.0: response does not match the 1.0 response schema"
+          );
+        });
+      });
     });
   });
 });

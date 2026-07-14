@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import type { AccountContext } from "@traycer/protocol/common/schemas";
-import { subscribeChatTurnCompletions } from "@/lib/notifications/chat-turn-completion";
+import { subscribeChatTurnCompletions } from "@/lib/chats/chat-turn-completions";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { queryKeys } from "@/lib/query-keys";
 

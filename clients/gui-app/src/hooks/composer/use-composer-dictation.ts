@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, type RefObject } from "react";
-import { toast } from "sonner";
 
 import type { ComposerDictationControl } from "@/components/home/toolbar/composer-mic-button";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
@@ -11,6 +10,7 @@ import { useDictationHotkey } from "@/hooks/composer/use-dictation-hotkey";
 import { useVoiceDictation } from "@/hooks/composer/use-voice-dictation";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
 interface UseComposerDictationArgs {
   readonly editorRef: RefObject<ComposerPromptEditorHandle | null>;
@@ -49,7 +49,7 @@ export function useComposerDictation(
   const runnerHost = useRunnerHost();
   useEffect(() => {
     if (dictationError === null) return;
-    toast.error(
+    reportableErrorToast(
       dictationError,
       dictationPermissionDenied
         ? {
@@ -63,6 +63,14 @@ export function useComposerDictation(
             },
           }
         : undefined,
+      {
+        title: "Dictation failed",
+        message: dictationPermissionDenied
+          ? "Microphone permission was unavailable."
+          : null,
+        code: null,
+        source: "Dictation",
+      },
     );
   }, [dictationError, dictationPermissionDenied, runnerHost]);
 
