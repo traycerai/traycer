@@ -427,6 +427,54 @@ describe("host notifications store", () => {
     close();
   });
 
+  it("uses the latest feed copy for renderer channel emissions", () => {
+    const client = new MockWsStreamClient();
+    const displayed: Array<ReadonlyArray<HostNotificationEntry>> = [];
+    const staleEmissionEntry = entry("live", 200, null);
+    if (staleEmissionEntry.kind !== "agent.stopped") {
+      throw new Error("Expected an agent-stopped notification fixture");
+    }
+    const richFeedEntry: HostNotificationEntry = {
+      ...staleEmissionEntry,
+      updatedAt: 201,
+      payload: {
+        ...staleEmissionEntry.payload,
+        agentName: "Investigate Harness Selection Issue",
+        taskTitle: "Fix Chat Error Notification",
+      },
+    };
+
+    const close = openHostNotificationsStream(client, null, {
+      windowId: "window-1",
+      now: () => 123,
+      displayChannelEmission: (entries) => {
+        displayed.push(entries);
+      },
+      onFeedFrame: () => undefined,
+      onPresenceChanged: () => undefined,
+      onStreamOpened: () => undefined,
+    });
+
+    client.session.emitServerFrame({
+      kind: "upserted",
+      hasBinaryPayload: false,
+      entry: richFeedEntry,
+    });
+    client.session.emitServerFrame({
+      kind: "channelEmission",
+      hasBinaryPayload: false,
+      emissionId: "emission-1",
+      channelId: "renderer",
+      severity: "done",
+      rows: [staleEmissionEntry],
+      reason: "new",
+    });
+
+    expect(displayed).toEqual([[richFeedEntry]]);
+
+    close();
+  });
+
   it("ignores non-renderer channelEmission frames for in-app display", () => {
     const client = new MockWsStreamClient();
     const displayed: Array<ReadonlyArray<HostNotificationEntry>> = [];
