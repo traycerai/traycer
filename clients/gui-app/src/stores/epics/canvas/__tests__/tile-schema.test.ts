@@ -156,6 +156,10 @@ describe("parseTileRef / serializeTileRef", () => {
       runningDir: "/repo",
       filePath: "src/a.ts",
       stage: "unstaged",
+      repositoryContext: {
+        workspaceLabel: "workspace",
+        repositoryLabel: "packages/traycer",
+      },
     });
     const bundle = makeGitBundleDiffTile({
       hostId: HOST,
@@ -176,6 +180,7 @@ describe("parseTileRef / serializeTileRef", () => {
       runningDir: "/repo",
       filePath: "src/a.ts",
       stage: "unstaged",
+      repositoryContext: null,
     });
     const parsed = parseTileRef({
       id: "legacy-random-uuid",
@@ -245,6 +250,7 @@ describe("isTileRefRecordBacked", () => {
       runningDir: "/repo",
       filePath: "src/a.ts",
       stage: "unstaged",
+      repositoryContext: null,
     });
     expect(isTileRefRecordBacked(chat)).toBe(true);
     expect(isTileRefRecordBacked(terminal)).toBe(false);

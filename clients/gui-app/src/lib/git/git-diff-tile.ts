@@ -58,6 +58,7 @@ export function makeGitFileDiffTile(args: {
   readonly runningDir: string;
   readonly filePath: string;
   readonly stage: GitStage;
+  readonly repositoryContext: GitDiffRepositoryContext | null;
 }): GitDiffTileRef {
   const diff: GitDiffTilePayload = {
     kind: "file",
@@ -71,7 +72,7 @@ export function makeGitFileDiffTile(args: {
     type: TILE_KIND_GIT_DIFF,
     name: `${getBasename(args.filePath)} · ${gitStageLabel(args.stage)}`,
     hostId: args.hostId,
-    repositoryContext: null,
+    repositoryContext: args.repositoryContext,
     diff,
     view: createDiffTileViewState(),
   };
@@ -81,12 +82,14 @@ export function makeGitFileDiffTileForFile(args: {
   readonly hostId: string;
   readonly runningDir: string;
   readonly file: GitChangedFile;
+  readonly repositoryContext: GitDiffRepositoryContext | null;
 }): GitDiffTileRef {
   return makeGitFileDiffTile({
     hostId: args.hostId,
     runningDir: args.runningDir,
     filePath: args.file.path,
     stage: args.file.stage,
+    repositoryContext: args.repositoryContext,
   });
 }
 

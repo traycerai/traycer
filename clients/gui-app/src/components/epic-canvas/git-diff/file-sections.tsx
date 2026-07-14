@@ -36,6 +36,7 @@ export function FileSections(props: FileSectionsProps): ReactNode {
         viewTabId={props.viewTabId}
         hostId={props.hostId}
         runningDir={props.runningDir}
+        repositoryContext={props.repositoryContext}
         files={section.visibleFiles}
         pathRangesByPath={props.pathRangesByPath}
         activeFilePath={section.activeFilePath}
@@ -47,6 +48,7 @@ export function FileSections(props: FileSectionsProps): ReactNode {
       props.epicId,
       props.hostId,
       props.pathRangesByPath,
+      props.repositoryContext,
       props.runningDir,
       props.viewTabId,
       props.virtualized,

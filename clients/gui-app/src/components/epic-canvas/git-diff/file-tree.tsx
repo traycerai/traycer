@@ -51,6 +51,7 @@ interface GitTreeSectionBodyProps {
   readonly viewTabId: string;
   readonly hostId: string;
   readonly runningDir: string;
+  readonly repositoryContext: GitDiffRepositoryContext | null;
   readonly group: GitDiffBundleGroup;
   readonly files: ReadonlyArray<GitChangedFile>;
   readonly activeFilePath: string | null;
@@ -69,6 +70,7 @@ export function FileTree(props: FileTreeProps): ReactNode {
         viewTabId={props.viewTabId}
         hostId={props.hostId}
         runningDir={props.runningDir}
+        repositoryContext={props.repositoryContext}
         group={section.group}
         files={section.visibleFiles}
         activeFilePath={section.activeFilePath}
@@ -78,6 +80,7 @@ export function FileTree(props: FileTreeProps): ReactNode {
     [
       props.epicId,
       props.hostId,
+      props.repositoryContext,
       props.runningDir,
       props.viewTabId,
       props.virtualized,
@@ -205,9 +208,10 @@ function GitTreeSectionBody(props: GitTreeSectionBodyProps): ReactNode {
         hostId: props.hostId,
         runningDir: props.runningDir,
         file,
+        repositoryContext: props.repositoryContext,
       });
     },
-    [fileByPath, props.hostId, props.runningDir],
+    [fileByPath, props.hostId, props.repositoryContext, props.runningDir],
   );
 
   const openFile = useCallback(

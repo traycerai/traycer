@@ -24,6 +24,7 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type {
   EpicCanvasTileRef,
   EpicNodeRef,
+  SplitDirection,
 } from "@/stores/epics/canvas/types";
 import { makeGitBundleDiffTile } from "@/lib/git/git-diff-tile";
 
@@ -121,10 +122,8 @@ function renderTabStrip(input: {
   readonly onClose: (groupId: string, tabId: string) => void;
   readonly onPromotePreview: (groupId: string) => void;
   readonly onOpenBlankTab: (groupId: string) => void;
-  readonly onSplit?: (
-    groupId: string,
-    direction: "horizontal" | "vertical",
-  ) => void;
+  readonly onSplit:
+    ((groupId: string, direction: SplitDirection) => void) | undefined;
 }) {
   renderTabStripForTab(TAB, input);
 }
@@ -135,14 +134,13 @@ function renderTabStripForTab(
     readonly onClose: (groupId: string, tabId: string) => void;
     readonly onPromotePreview: (groupId: string) => void;
     readonly onOpenBlankTab: (groupId: string) => void;
-    readonly onSplit?: (
-      groupId: string,
-      direction: "horizontal" | "vertical",
-    ) => void;
+    readonly onSplit:
+      ((groupId: string, direction: SplitDirection) => void) | undefined;
   },
 ) {
   seedActivePreviewTab(tab);
   const queryClient = createQueryClient();
+  const onSplit = input.onSplit === undefined ? () => undefined : input.onSplit;
   render(
     <QueryClientProvider client={queryClient}>
       <TooltipProvider delayDuration={0}>
@@ -155,7 +153,7 @@ function renderTabStripForTab(
           onSelectTab={() => undefined}
           onCloseTab={input.onClose}
           onPromotePreview={input.onPromotePreview}
-          onSplit={input.onSplit ?? (() => undefined)}
+          onSplit={onSplit}
           onCloseGroup={() => undefined}
           onOpenBlankTab={input.onOpenBlankTab}
           canRenameTabs
@@ -188,6 +186,7 @@ describe("<TabStrip />", () => {
       onClose,
       onPromotePreview: () => undefined,
       onOpenBlankTab: () => undefined,
+      onSplit: undefined,
     });
 
     const tab = screen.getByRole("tab", { name: /a\.md/ });
@@ -209,6 +208,7 @@ describe("<TabStrip />", () => {
       onClose: () => undefined,
       onPromotePreview,
       onOpenBlankTab: () => undefined,
+      onSplit: undefined,
     });
 
     fireEvent.doubleClick(screen.getByRole("tab", { name: /a\.md/ }));
@@ -222,6 +222,7 @@ describe("<TabStrip />", () => {
       onClose: () => undefined,
       onPromotePreview: () => undefined,
       onOpenBlankTab,
+      onSplit: undefined,
     });
 
     // Double-clicking the strip-end container itself (not a tab) opens a blank.
@@ -235,6 +236,7 @@ describe("<TabStrip />", () => {
       onClose: () => undefined,
       onPromotePreview: () => undefined,
       onOpenBlankTab: () => undefined,
+      onSplit: undefined,
     });
 
     const scroller = screen.getByTestId("tab-strip-end");
@@ -254,6 +256,7 @@ describe("<TabStrip />", () => {
       onClose: () => undefined,
       onPromotePreview: () => undefined,
       onOpenBlankTab,
+      onSplit: undefined,
     });
 
     // The guard (target === currentTarget) keeps tab double-clicks from
@@ -272,7 +275,9 @@ describe("<TabStrip />", () => {
       onSplit,
     });
 
-    const splitButton = screen.getByTestId("tab-strip-split-right");
+    const splitButton = screen.getByRole("button", {
+      name: "Split group right",
+    });
     fireEvent.click(splitButton);
     fireEvent.click(splitButton, { shiftKey: true });
 
@@ -280,14 +285,51 @@ describe("<TabStrip />", () => {
     expect(onSplit).toHaveBeenNthCalledWith(2, "group-1", "vertical");
   });
 
+  it("shows the down-split affordance when focus arrives with Shift held", () => {
+    renderTabStrip({
+      onClose: () => undefined,
+      onPromotePreview: () => undefined,
+      onOpenBlankTab: () => undefined,
+      onSplit: undefined,
+    });
+
+    fireEvent.keyDown(window, { key: "Shift", shiftKey: true });
+    const splitButton = screen.getByRole("button", {
+      name: "Split group right",
+    });
+    fireEvent.focus(splitButton);
+
+    expect(splitButton.getAttribute("aria-label")).toBe("Split group down");
+    expect(splitButton.getAttribute("data-split-direction")).toBe("vertical");
+  });
+
+  it("keeps the default affordance while neither hovered nor focused", () => {
+    renderTabStrip({
+      onClose: () => undefined,
+      onPromotePreview: () => undefined,
+      onOpenBlankTab: () => undefined,
+      onSplit: undefined,
+    });
+
+    fireEvent.keyDown(window, { key: "Shift", shiftKey: true });
+
+    const splitButton = screen.getByRole("button", {
+      name: "Split group right",
+    });
+    expect(splitButton.getAttribute("data-split-direction")).toBe("horizontal");
+  });
+
   it("updates the split affordance and tooltip while Shift is held", async () => {
     renderTabStrip({
       onClose: () => undefined,
       onPromotePreview: () => undefined,
       onOpenBlankTab: () => undefined,
+      onSplit: undefined,
     });
 
-    const splitButton = screen.getByTestId("tab-strip-split-right");
+    const splitButton = screen.getByRole("button", {
+      name: "Split group right",
+    });
     fireEvent.focus(splitButton);
 
     expect(splitButton.getAttribute("aria-label")).toBe("Split group right");
@@ -319,6 +361,7 @@ describe("<TabStrip />", () => {
       onClose: () => undefined,
       onPromotePreview: () => undefined,
       onOpenBlankTab: () => undefined,
+      onSplit: undefined,
     });
 
     const title = screen.getByTestId(`tab-title-${gitTab.instanceId}`);

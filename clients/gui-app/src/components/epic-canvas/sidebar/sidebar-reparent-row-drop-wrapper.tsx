@@ -50,10 +50,11 @@ export function SidebarReparentRowDropWrapper(props: {
       {children}
     </div>
   );
-  if (contextMenu === null) return row;
   return (
     <ContextMenu>
-      <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
+      <ContextMenuTrigger asChild disabled={contextMenu === null}>
+        {row}
+      </ContextMenuTrigger>
       {contextMenu}
     </ContextMenu>
   );

@@ -80,6 +80,10 @@ import {
 import { getBasename } from "@/lib/path/cross-platform-path";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
 import { useBindingForAction } from "@/stores/settings/keybinding-store";
+import {
+  reportShiftKeyHeld,
+  useShiftKeyHeld,
+} from "@/hooks/use-shift-key-held";
 
 const EPIC_TAB_LAYOUT_TRANSITION = {
   type: "spring",
@@ -305,30 +309,13 @@ interface SplitGroupButtonProps {
 function SplitGroupButton(props: SplitGroupButtonProps) {
   const [hovered, setHovered] = useState(false);
   const [focused, setFocused] = useState(false);
-  const [shiftHeld, setShiftHeld] = useState(false);
-  const splitRightBinding = useBindingForAction("group.split-right");
-  const splitDownBinding = useBindingForAction("group.split.vertical");
-  const direction = shiftHeld ? "vertical" : "horizontal";
-  const actionLabel = shiftHeld ? "Split group down" : "Split group right";
-  const shortcut = shiftHeld ? splitDownBinding : splitRightBinding;
-
-  useEffect(() => {
-    if (!hovered && !focused) return;
-
-    const handleModifierChange = (event: globalThis.KeyboardEvent) => {
-      setShiftHeld(event.shiftKey);
-    };
-    const handleWindowBlur = () => setShiftHeld(false);
-
-    window.addEventListener("keydown", handleModifierChange);
-    window.addEventListener("keyup", handleModifierChange);
-    window.addEventListener("blur", handleWindowBlur);
-    return () => {
-      window.removeEventListener("keydown", handleModifierChange);
-      window.removeEventListener("keyup", handleModifierChange);
-      window.removeEventListener("blur", handleWindowBlur);
-    };
-  }, [focused, hovered]);
+  const shiftHeld = useShiftKeyHeld();
+  const splitHorizontalBinding = useBindingForAction("group.split.horizontal");
+  const splitVerticalBinding = useBindingForAction("group.split.vertical");
+  const splitsDown = shiftHeld && (hovered || focused);
+  const direction = splitsDown ? "vertical" : "horizontal";
+  const actionLabel = splitsDown ? "Split group down" : "Split group right";
+  const shortcut = splitsDown ? splitVerticalBinding : splitHorizontalBinding;
 
   return (
     <Tooltip>
@@ -339,17 +326,11 @@ function SplitGroupButton(props: SplitGroupButtonProps) {
           size="icon-sm"
           onPointerEnter={(event) => {
             setHovered(true);
-            setShiftHeld(event.shiftKey);
+            reportShiftKeyHeld(event.shiftKey);
           }}
-          onPointerLeave={() => {
-            setHovered(false);
-            if (!focused) setShiftHeld(false);
-          }}
+          onPointerLeave={() => setHovered(false)}
           onFocus={() => setFocused(true)}
-          onBlur={() => {
-            setFocused(false);
-            if (!hovered) setShiftHeld(false);
-          }}
+          onBlur={() => setFocused(false)}
           onClick={(event) =>
             props.onSplit(
               props.groupId,
@@ -357,10 +338,10 @@ function SplitGroupButton(props: SplitGroupButtonProps) {
             )
           }
           aria-label={actionLabel}
-          data-testid="tab-strip-split-right"
+          data-testid="tab-strip-split"
           data-split-direction={direction}
         >
-          {shiftHeld ? (
+          {splitsDown ? (
             <SplitSquareVertical className="size-4" />
           ) : (
             <SplitSquareHorizontal className="size-4" />
@@ -379,7 +360,7 @@ function SplitGroupButton(props: SplitGroupButtonProps) {
           )}
         </span>
         <span className="text-background/70">
-          {shiftHeld
+          {splitsDown
             ? "Release Shift to split right"
             : "Shift+click to split down"}
         </span>

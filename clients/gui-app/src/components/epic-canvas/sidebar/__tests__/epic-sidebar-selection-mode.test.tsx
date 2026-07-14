@@ -720,11 +720,9 @@ describe("epic sidebar selection mode", () => {
     fireEvent.contextMenu(chatRow);
 
     expect(
-      await screen.findByTestId("epic-sidebar-context-rename-chat-root"),
+      await screen.findByRole("menuitem", { name: "Rename" }),
     ).not.toBeNull();
-    expect(
-      screen.getByTestId("epic-sidebar-context-delete-chat-root"),
-    ).not.toBeNull();
+    expect(screen.getByRole("menuitem", { name: "Delete" })).not.toBeNull();
   });
 
   it("keeps artifact add inline and exposes ellipsis actions on right-click", async () => {
@@ -737,16 +735,10 @@ describe("epic sidebar selection mode", () => {
     fireEvent.contextMenu(screen.getByTestId("epic-sidebar-item-spec-root"));
 
     expect(
-      await screen.findByTestId(
-        "epic-sidebar-context-export-markdown-spec-root",
-      ),
+      await screen.findByRole("menuitem", { name: "Export as Markdown" }),
     ).not.toBeNull();
-    expect(
-      screen.getByTestId("epic-sidebar-context-rename-spec-root"),
-    ).not.toBeNull();
-    expect(
-      screen.getByTestId("epic-sidebar-context-delete-spec-root"),
-    ).not.toBeNull();
+    expect(screen.getByRole("menuitem", { name: "Rename" })).not.toBeNull();
+    expect(screen.getByRole("menuitem", { name: "Delete" })).not.toBeNull();
   });
 
   it("enters chat selection mode from cmd-click on a row", () => {

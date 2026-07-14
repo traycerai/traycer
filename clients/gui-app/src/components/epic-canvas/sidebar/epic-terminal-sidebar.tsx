@@ -399,7 +399,7 @@ function TerminalRow(props: TerminalRowProps) {
   return (
     <li>
       <ContextMenu>
-        <ContextMenuTrigger asChild>
+        <ContextMenuTrigger asChild disabled={isRenaming}>
           <div className="group/term-row relative">
             {isRenaming ? (
               <div
