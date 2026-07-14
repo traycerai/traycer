@@ -12,7 +12,7 @@ import {
  * kilocode). A plain credential-based GET, so it just polls on its own timer -
  * it never enters the `ephemeralProcess` serial queue.
  */
-const HTTP_FETCH_RATE_LIMIT_REFETCH_INTERVAL_MS = 5 * 60 * 1000;
+const HTTP_FETCH_RATE_LIMIT_REFETCH_INTERVAL_MS = 15 * 60 * 1000;
 
 /**
  * The small, closed set of TanStack options every `host.getRateLimitUsage`

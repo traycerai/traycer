@@ -138,14 +138,14 @@ export function useResetCountdown(resetsAt: number | null): string | null {
 }
 
 /**
- * Whether a reset is far enough away that an absolute weekday/time reads
+ * Whether a reset is far enough away that an absolute calendar date/time reads
  * better than a relative countdown ("Resets in 3d" is too coarse to act on).
  * Based on the real time remaining rather than a window's nominal duration:
  * some windows (e.g. Claude's per-model `modelScoped` buckets) carry no
  * `durationMinutes` at all, so gating this decision on duration meant those
  * windows always fell back to the relative countdown even when their real
  * reset was days away (regression: Claude's "Fable" per-model window showed
- * "Resets in 3d" instead of "Resets Tue 5:29 PM"). Every window always has a
+ * "Resets in 3d" instead of a precise calendar date/time). Every window always has a
  * real `resetsAt`, so every caller now derives this the same way instead of
  * each threading through its own duration-based flag (or, worse, hardcoding
  * one).
@@ -156,9 +156,9 @@ export function isFarReset(resetsAt: number, now: number): boolean {
 
 /**
  * Subscribes to the shared 60s tick clock and returns whether `resetsAt` is
- * currently far enough away to warrant `formatResetDateTime` over
+ * currently far enough away to warrant an absolute calendar date/time over
  * `formatResetCountdown` - `false` for a `null` resetsAt (nothing to compare).
- * Reactive (unlike `formatResetDateTime` itself) so a window that crosses the
+ * Reactive so a window that crosses the
  * one-day threshold while the popover is open flips from absolute to relative
  * display without a remount.
  */
@@ -187,4 +187,20 @@ export function formatResetDateTime(resetsAt: number): string {
     hour12: true,
   });
   return `${weekday} ${time}`;
+}
+
+/**
+ * Full calendar form for roomy surfaces such as Settings, where the explicit
+ * date is more useful than the popover's compact weekday-only label.
+ */
+export function formatResetFullDateTime(resetsAt: number): string {
+  return new Date(resetsAt).toLocaleString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
 }

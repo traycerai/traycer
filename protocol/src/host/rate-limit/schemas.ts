@@ -89,7 +89,34 @@ export type RateLimitCapableProviderId = z.infer<
   typeof rateLimitCapableProviderIdSchema
 >;
 
-const codexRateLimitsSchema = z.object({
+const codexResetCreditsSchemaV20 = z.object({
+  availableCount: z.number(),
+});
+
+const codexResetCreditsSchema = codexResetCreditsSchemaV20.extend({
+  // Newer Codex app-server builds enrich the summary with individual
+  // credits. `null` is the backward-compatible count-only response; an empty
+  // array means the detail fetch completed with no rows. The backend may cap
+  // this list, so it can be shorter than `availableCount`.
+  credits: z
+    .array(
+      z.object({
+        id: z.string().min(1),
+        resetType: z.enum(["codexRateLimits", "unknown"]),
+        status: z.enum(["available", "redeeming", "redeemed", "unknown"]),
+        grantedAt: z.number(),
+        expiresAt: z.number().nullable(),
+        title: z.string().nullable(),
+        description: z.string().nullable(),
+      }),
+    )
+    .nullable()
+    .default(null),
+});
+
+// Frozen Codex arm used by released host.getRateLimitUsage v1/v2 schemas.
+// Per-credit details ship behind v3 so older clients never receive a new key.
+const codexRateLimitsSchemaV20 = z.object({
   provider: z.literal(rateLimitCapableProviderIdSchema.enum.codex),
   available: z.literal(true),
   planType: z.string().nullable(),
@@ -120,16 +147,12 @@ const codexRateLimitsSchema = z.object({
       resetsAt: z.number(),
     })
     .nullable(),
-  // Verified against a live `account/rateLimits/read` call: the real
-  // `RateLimitResetCreditsSummary` is just `{ availableCount }` - no nested
-  // `credits` array exists (the earlier sketch guessed one from partial
-  // information).
-  resetCredits: z
-    .object({
-      availableCount: z.number(),
-    })
-    .nullable(),
+  resetCredits: codexResetCreditsSchemaV20.nullable(),
   rateLimitReachedType: z.string().nullable(),
+});
+
+const codexRateLimitsSchema = codexRateLimitsSchemaV20.extend({
+  resetCredits: codexResetCreditsSchema.nullable(),
 });
 
 // OpenRouter arm - httpFetch-class provider (a plain GET against OpenRouter's
@@ -249,8 +272,7 @@ export type RateLimitUnavailableReason = z.infer<
 // is split: `unavailableProviderRateLimitsSchemaV1` tags `reason` with the
 // frozen v1 enum (feeds `providerRateLimitsSchemaV1`, which only the v1.2
 // response uses); `unavailableProviderRateLimitsSchemaV2` tags it with the
-// v2 enum (feeds the latest `providerRateLimitsSchema`, which the v2.0
-// response uses).
+// v2 enum (shared by the frozen v2 response and the latest v3 response).
 const unavailableProviderRateLimitsSchemaV1 = z.object({
   provider: providerIdSchema,
   available: z.literal(false),
@@ -267,7 +289,7 @@ const unavailableProviderRateLimitsSchemaV2 = z.object({
 // reason enum. Feeds `rateLimitUsageResponseSchemaV12` only, so the
 // still-installed v1.2 response schema keeps rejecting `usage_fetch_failed`.
 export const providerRateLimitsSchemaV1 = z.union([
-  codexRateLimitsSchema,
+  codexRateLimitsSchemaV20,
   claudeCodeRateLimitsSchema,
   openRouterRateLimitsSchema,
   kiloCodeRateLimitsSchema,
@@ -275,10 +297,18 @@ export const providerRateLimitsSchemaV1 = z.union([
 ]);
 export type ProviderRateLimitsV1 = z.infer<typeof providerRateLimitsSchemaV1>;
 
-// Latest provider-tagged union of account rate-limit snapshots (v2 reason
-// enum). Carries each provider's full native detail (not just what today's
-// UI renders) so the schema doesn't need another version bump when the UI
-// grows.
+// Frozen v2 provider union: v2 adds the usage-fetch reason but retains the
+// count-only Codex reset-credit shape released at this wire version.
+export const providerRateLimitsSchemaV2 = z.union([
+  codexRateLimitsSchemaV20,
+  claudeCodeRateLimitsSchema,
+  openRouterRateLimitsSchema,
+  kiloCodeRateLimitsSchema,
+  unavailableProviderRateLimitsSchemaV2,
+]);
+
+// Latest provider union (v3): identical to v2 except Codex reset credits may
+// include capped per-credit detail.
 export const providerRateLimitsSchema = z.union([
   codexRateLimitsSchema,
   claudeCodeRateLimitsSchema,
@@ -309,10 +339,22 @@ export type RateLimitUsageResponseV12 = z.infer<
 // schema here.
 export const rateLimitUsageResponseSchemaV20 =
   rateLimitUsageResponseSchema.extend({
-    providerRateLimits: providerRateLimitsSchema.nullable(),
+    providerRateLimits: providerRateLimitsSchemaV2.nullable(),
   });
 export type RateLimitUsageResponseV20 = z.infer<
   typeof rateLimitUsageResponseSchemaV20
+>;
+
+// v2.1 adds capped per-credit Codex reset detail. The request and unavailable
+// reason set remain unchanged from v2.0. Released v2.0 stays frozen; the RPC
+// handler projects a canonical v2.1 response through the v2.0 schema for an
+// older caller, stripping the additive detail.
+export const rateLimitUsageResponseSchemaV21 =
+  rateLimitUsageResponseSchema.extend({
+    providerRateLimits: providerRateLimitsSchema.nullable(),
+  });
+export type RateLimitUsageResponseV21 = z.infer<
+  typeof rateLimitUsageResponseSchemaV21
 >;
 
 /**
@@ -324,6 +366,10 @@ export const providersConsumeRateLimitResetCreditRequestSchema = z.object({
   providerId: z.literal("codex"),
   profileId: z.string().nullable(),
   idempotencyKey: z.string().min(1),
+  // `null` preserves the count-only/older-Codex fallback where the backend
+  // chooses a credit. A concrete id targets the earliest-expiring available
+  // credit selected by the GUI.
+  creditId: z.string().min(1).nullable().default(null),
 });
 export type ProvidersConsumeRateLimitResetCreditRequest = z.infer<
   typeof providersConsumeRateLimitResetCreditRequestSchema

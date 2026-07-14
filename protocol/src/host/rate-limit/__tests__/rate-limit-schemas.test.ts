@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
 import { downgradeResponseAcrossMajors } from "@traycer/protocol/framework/index";
-import { hostGetRateLimitUsageDowngradeV2ToV1 } from "@traycer/protocol/host/rate-limit/contracts";
+import {
+  hostGetRateLimitUsageDowngradeV2ToV1,
+  hostGetRateLimitUsageUpgradeV20ToV21,
+} from "@traycer/protocol/host/rate-limit/contracts";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import {
   providerRateLimitsSchema,
@@ -12,6 +15,7 @@ import {
   rateLimitUsageRequestSchemaV12,
   rateLimitUsageResponseSchemaV12,
   rateLimitUsageResponseSchemaV20,
+  rateLimitUsageResponseSchemaV21,
 } from "@traycer/protocol/host/rate-limit/schemas";
 
 describe("providers.consumeRateLimitResetCredit schemas", () => {
@@ -21,11 +25,13 @@ describe("providers.consumeRateLimitResetCredit schemas", () => {
         providerId: "codex",
         profileId: "personal",
         idempotencyKey: "reset-attempt-1",
+        creditId: "credit-1",
       }),
     ).toEqual({
       providerId: "codex",
       profileId: "personal",
       idempotencyKey: "reset-attempt-1",
+      creditId: "credit-1",
     });
 
     expect(
@@ -38,6 +44,7 @@ describe("providers.consumeRateLimitResetCredit schemas", () => {
       providerId: "codex",
       profileId: null,
       idempotencyKey: "reset-attempt-ambient",
+      creditId: null,
     });
 
     ["reset", "nothingToReset", "noCredit", "alreadyRedeemed"].forEach(
@@ -64,6 +71,98 @@ describe("providers.consumeRateLimitResetCredit schemas", () => {
         idempotencyKey: "",
       }).success,
     ).toBe(false);
+    expect(
+      providersConsumeRateLimitResetCreditRequestSchema.safeParse({
+        providerId: "codex",
+        profileId: null,
+        idempotencyKey: "attempt",
+        creditId: "",
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("host.getRateLimitUsage v2.1 reset-credit detail", () => {
+  const detailedResponse = {
+    totalTokens: 0,
+    remainingTokens: 0,
+    providerRateLimits: {
+      provider: "codex" as const,
+      available: true as const,
+      planType: "plus",
+      limitId: "codex",
+      limitName: "Codex",
+      primary: null,
+      secondary: null,
+      extraWindows: [],
+      credits: null,
+      individualLimit: null,
+      resetCredits: {
+        availableCount: 1,
+        credits: [
+          {
+            id: "credit-1",
+            resetType: "codexRateLimits" as const,
+            status: "available" as const,
+            grantedAt: 1735689600000,
+            expiresAt: 1735776000000,
+            title: "Manual reset",
+            description: null,
+          },
+        ],
+      },
+      rateLimitReachedType: null,
+    },
+  };
+
+  it("strips additive per-credit detail through the frozen v2.0 schema", () => {
+    const response = rateLimitUsageResponseSchemaV21.parse(detailedResponse);
+    expect(rateLimitUsageResponseSchemaV20.parse(response)).toEqual({
+      ...detailedResponse,
+      providerRateLimits: {
+        ...detailedResponse.providerRateLimits,
+        resetCredits: { availableCount: 1 },
+      },
+    });
+  });
+
+  it("fills a count-only v2 response with null detail when upgrading", () => {
+    const response = rateLimitUsageResponseSchemaV20.parse({
+      ...detailedResponse,
+      providerRateLimits: {
+        ...detailedResponse.providerRateLimits,
+        resetCredits: { availableCount: 1 },
+      },
+    });
+    expect(
+      hostGetRateLimitUsageUpgradeV20ToV21.upgradeResponse(response),
+    ).toEqual({
+      ...detailedResponse,
+      providerRateLimits: {
+        ...detailedResponse.providerRateLimits,
+        resetCredits: { availableCount: 1, credits: null },
+      },
+    });
+  });
+
+  it("downgrades v2.1 detail to v1.2 through the host registry", () => {
+    expect(
+      downgradeResponseAcrossMajors(
+        hostRpcRegistry["host.getRateLimitUsage"],
+        2,
+        1,
+        rateLimitUsageResponseSchemaV21.parse(detailedResponse),
+      ),
+    ).toEqual({
+      ok: true,
+      value: {
+        ...detailedResponse,
+        providerRateLimits: {
+          ...detailedResponse.providerRateLimits,
+          resetCredits: { availableCount: 1 },
+        },
+      },
+    });
   });
 });
 
@@ -105,6 +204,17 @@ describe("providerRateLimitsSchema", () => {
       individualLimit: null,
       resetCredits: {
         availableCount: 2,
+        credits: [
+          {
+            id: "credit-1",
+            resetType: "codexRateLimits",
+            status: "available",
+            grantedAt: 1735689600000,
+            expiresAt: 1735776000000,
+            title: "Manual reset",
+            description: null,
+          },
+        ],
       },
       rateLimitReachedType: null,
     };
@@ -408,7 +518,7 @@ describe("host.getRateLimitUsage v2.0 -> v1.2 downgrade bridge", () => {
   });
 
   it("downgrades usage_fetch_failed through the host registry", () => {
-    const response = rateLimitUsageResponseSchemaV20.parse({
+    const response = rateLimitUsageResponseSchemaV21.parse({
       totalTokens: 0,
       remainingTokens: 0,
       providerRateLimits: {

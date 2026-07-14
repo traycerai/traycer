@@ -2,6 +2,7 @@ import "../../../../../__tests__/test-browser-apis";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import type { ProviderRateLimits } from "@traycer/protocol/host";
+import { formatResetFullDateTime } from "@/lib/relative-time";
 import {
   ClaudeRateLimitView,
   CodexRateLimitView,
@@ -59,7 +60,7 @@ describe("CodexRateLimitView (extended fields)", () => {
     ],
     credits: null,
     individualLimit: null,
-    resetCredits: { availableCount: 3 },
+    resetCredits: { availableCount: 3, credits: null },
     rateLimitReachedType: null,
   };
 
@@ -89,6 +90,113 @@ describe("CodexRateLimitView (extended fields)", () => {
     render(<CodexRateLimitView data={codex} variant="settings" />);
     expect(screen.getByText("Manual resets")).toBeTruthy();
     expect(screen.getByText("3 available")).toBeTruthy();
+  });
+
+  it("lists reset expiries soonest first and discloses a capped remainder", () => {
+    const soonExpiry = NOW + 2 * 60 * 60 * 1000;
+    const laterExpiry = NOW + 3 * 24 * 60 * 60 * 1000;
+    const detailedCodex = {
+      ...codex,
+      resetCredits: {
+        availableCount: 3,
+        credits: [
+          {
+            id: "later",
+            resetType: "codexRateLimits" as const,
+            status: "available" as const,
+            grantedAt: NOW,
+            expiresAt: laterExpiry,
+            title: "Later reset",
+            description: null,
+          },
+          {
+            id: "soon",
+            resetType: "codexRateLimits" as const,
+            status: "available" as const,
+            grantedAt: NOW,
+            expiresAt: soonExpiry,
+            title: "Soon reset",
+            description: null,
+          },
+        ],
+      },
+    };
+    const { rerender } = render(
+      <CodexRateLimitView data={detailedCodex} variant="settings" />,
+    );
+    const resetLabels = screen.getAllByText(/reset$/);
+    expect(resetLabels.map((label) => label.textContent)).toEqual([
+      "Soon reset",
+      "Later reset",
+    ]);
+    expect(screen.getByText(/^Expires in /)).toBeTruthy();
+    expect(
+      screen.getByText(`Expires ${formatResetFullDateTime(laterExpiry)}`),
+    ).toBeTruthy();
+    expect(screen.getByText("+1 more not shown")).toBeTruthy();
+
+    rerender(
+      <CodexRateLimitView data={detailedCodex} variant="popover-detail" />,
+    );
+    expect(
+      screen.getByText(`Expires ${formatResetFullDateTime(laterExpiry)}`),
+    ).toBeTruthy();
+  });
+
+  it("folds a single credit's expiry into the summary row", () => {
+    render(
+      <CodexRateLimitView
+        data={{
+          ...codex,
+          resetCredits: {
+            availableCount: 1,
+            credits: [
+              {
+                id: "single",
+                resetType: "codexRateLimits",
+                status: "available",
+                grantedAt: NOW,
+                expiresAt: null,
+                title: "Single reset",
+                description: null,
+              },
+            ],
+          },
+        }}
+        variant="settings"
+      />,
+    );
+    expect(screen.getByText("1 available")).toBeTruthy();
+    expect(screen.getByText("No expiry")).toBeTruthy();
+    expect(screen.queryByText("Single reset")).toBeNull();
+  });
+
+  it("discloses capped credits when the only returned detail is inline", () => {
+    render(
+      <CodexRateLimitView
+        data={{
+          ...codex,
+          resetCredits: {
+            availableCount: 2,
+            credits: [
+              {
+                id: "single-capped",
+                resetType: "codexRateLimits",
+                status: "available",
+                grantedAt: NOW,
+                expiresAt: null,
+                title: null,
+                description: null,
+              },
+            ],
+          },
+        }}
+        variant="settings"
+      />,
+    );
+    expect(screen.getByText("2 available")).toBeTruthy();
+    expect(screen.getByText("No expiry")).toBeTruthy();
+    expect(screen.getByText("+1 more not shown")).toBeTruthy();
   });
 
   it("renders a generic day/hour duration for an off-standard window", () => {
@@ -182,9 +290,10 @@ describe("CodexRateLimitView (extended fields)", () => {
     expect(screen.queryByText(/^Resets [A-Za-z]{3} \d{1,2}:\d{2}/)).toBeNull();
   });
 
-  it("shows an absolute weekday-tagged time for a weekly popover window", () => {
+  it("shows an absolute calendar date and time for a weekly popover window", () => {
     // The weekly (10080-min) `secondary` window keeps the absolute reset line
-    // ("Resets Sat 3:35 AM"), since "Resets in 3d" is too coarse.
+    // with its full date, since "Resets in 3d" is too coarse and a weekday
+    // alone is ambiguous.
     render(
       <CodexRateLimitView
         data={{ ...codex, primary: null, extraWindows: [] }}
@@ -192,7 +301,9 @@ describe("CodexRateLimitView (extended fields)", () => {
       />,
     );
     expect(
-      screen.getByText(/^Resets [A-Za-z]{3} \d{1,2}:\d{2}\s?[AP]M$/i),
+      screen.getByText(
+        `Resets ${formatResetFullDateTime(NOW + 3 * 24 * 60 * 60 * 1000)}`,
+      ),
     ).toBeTruthy();
     expect(screen.queryByText(/^Resets in /)).toBeNull();
   });
@@ -225,13 +336,13 @@ describe("CodexRateLimitView (extended fields)", () => {
 });
 
 describe("ClaudeRateLimitView", () => {
-  it("shows an absolute weekday-tagged time for a far per-model reset, even though modelScoped carries no durationMinutes", () => {
+  it("shows an absolute calendar date and time for a far per-model reset, even though modelScoped carries no durationMinutes", () => {
     // Regression: `modelScoped` entries never carry a `durationMinutes` (the
     // SDK's per-model usage has no separate duration field), so a
     // duration-based "is this weekly-scale" check always fell back to the
     // relative countdown for these rows, no matter how far away the real
-    // reset was ("Fable" usage showed "Resets in 3d" instead of "Resets Tue
-    // 5:29 PM"). The reset-format decision is now based on the real
+    // reset was ("Fable" usage showed "Resets in 3d" instead of a precise
+    // date/time). The reset-format decision is now based on the real
     // `resetsAt` delta instead, so a 3-day-out per-model reset gets the same
     // absolute treatment a weekly window does.
     const claude: ClaudeRateLimits = {
@@ -255,7 +366,9 @@ describe("ClaudeRateLimitView", () => {
     render(<ClaudeRateLimitView data={claude} variant="settings" />);
     expect(screen.getByText("Fable")).toBeTruthy();
     expect(
-      screen.getByText(/^Resets [A-Za-z]{3} \d{1,2}:\d{2}\s?[AP]M$/i),
+      screen.getByText(
+        `Resets ${formatResetFullDateTime(NOW + 3 * 24 * 60 * 60 * 1000)}`,
+      ),
     ).toBeTruthy();
     expect(screen.queryByText(/^Resets in /)).toBeNull();
   });
@@ -518,14 +631,14 @@ describe("ProviderRateLimitBody (Codex reset action)", () => {
             extraWindows: [],
             credits: null,
             individualLimit: null,
-            resetCredits: { availableCount: 3 },
+            resetCredits: { availableCount: 3, credits: null },
             rateLimitReachedType: null,
           },
           lastGood: null,
           lastGoodAt: null,
           lastFailureAt: null,
         }}
-        codexResetAction={<button type="button">Use reset</button>}
+        codexResetAction={() => <button type="button">Use reset</button>}
       />,
     );
 

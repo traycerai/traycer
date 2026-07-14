@@ -39,6 +39,8 @@ import type {
 } from "@/lib/rate-limits/rate-limit-envelope";
 import { accountContextValue } from "@/lib/auth/traycer-subscription-content";
 import { queryKeys } from "@/lib/query-keys";
+import { PROVIDER_RATE_LIMITS_STALE_TIME_MS } from "@/lib/rate-limit-providers";
+import { formatResetFullDateTime } from "@/lib/relative-time";
 
 type QueryResult = {
   data: ProviderRateLimitEnvelope | undefined;
@@ -745,7 +747,7 @@ describe("<RateLimitPopover /> rail", () => {
             kind: "managed",
             label: "Work",
             tier: "Pro 5x",
-            usageUpdatedAt: NOW - 60_000,
+            usageUpdatedAt: NOW - PROVIDER_RATE_LIMITS_STALE_TIME_MS - 1_000,
           }),
         ],
       },
@@ -868,10 +870,12 @@ describe("<RateLimitPopover /> rail", () => {
     };
     renderPopover();
     // Fixup C #1: 5h primary -> relative countdown; weekly secondary -> absolute
-    // weekday-tagged time. Both split the same way as the Settings card.
+    // full calendar date/time. Both split the same way as the Settings card.
     expect(screen.getByText(/^Resets in /)).toBeTruthy();
     expect(
-      screen.getByText(/^Resets [A-Za-z]{3} \d{1,2}:\d{2}\s?[AP]M$/i),
+      screen.getByText(
+        `Resets ${formatResetFullDateTime(NOW + 3 * 24 * 60 * 60 * 1000)}`,
+      ),
     ).toBeTruthy();
   });
 
@@ -1005,7 +1009,29 @@ describe("<RateLimitPopover /> per-provider states", () => {
     mocks.results = {
       codex: readyResult({
         ...codexReady(),
-        resetCredits: { availableCount: 2 },
+        resetCredits: {
+          availableCount: 2,
+          credits: [
+            {
+              id: "credit-later",
+              resetType: "codexRateLimits",
+              status: "available",
+              grantedAt: NOW,
+              expiresAt: NOW + 3 * 60 * 60 * 1000,
+              title: "Later reset",
+              description: null,
+            },
+            {
+              id: "credit-soon",
+              resetType: "codexRateLimits",
+              status: "available",
+              grantedAt: NOW,
+              expiresAt: NOW + 60 * 60 * 1000,
+              title: "Soon reset",
+              description: null,
+            },
+          ],
+        },
       }),
     };
 
@@ -1019,7 +1045,11 @@ describe("<RateLimitPopover /> per-provider states", () => {
     fireEvent.click(screen.getByTestId("confirm-action"));
     expect(mocks.consumeReset).toHaveBeenCalledOnce();
     const request = mocks.consumeReset.mock.calls[0]?.[0];
-    expect(request).toMatchObject({ providerId: "codex", profileId: null });
+    expect(request).toMatchObject({
+      providerId: "codex",
+      profileId: null,
+      creditId: "credit-soon",
+    });
     expect(typeof request.idempotencyKey).toBe("string");
   });
 

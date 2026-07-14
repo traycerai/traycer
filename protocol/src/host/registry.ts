@@ -89,9 +89,11 @@ import {
   hostGetRateLimitUsageV11,
   hostGetRateLimitUsageV12,
   hostGetRateLimitUsageV20,
+  hostGetRateLimitUsageV21,
   hostGetRateLimitUsageUpgradeV10ToV11,
   hostGetRateLimitUsageUpgradeV11ToV12,
   hostGetRateLimitUsageUpgradeV12ToV20,
+  hostGetRateLimitUsageUpgradeV20ToV21,
   hostGetRateLimitUsageDowngradeV2ToV1,
   providersConsumeRateLimitResetCreditV10,
 } from "@traycer/protocol/host/rate-limit/contracts";
@@ -1757,11 +1759,15 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
     2: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: hostGetRateLimitUsageV20,
           upgradeFromPreviousVersion: hostGetRateLimitUsageUpgradeV12ToV20,
+        },
+        1: {
+          contract: hostGetRateLimitUsageV21,
+          upgradeFromPreviousVersion: hostGetRateLimitUsageUpgradeV20ToV21,
         },
       },
       downgradePathsFromLatest: { 1: hostGetRateLimitUsageDowngradeV2ToV1 },

@@ -11,7 +11,10 @@ import type {
 } from "@traycer/protocol/host";
 import type { ProviderRateLimitEnvelope } from "@/lib/rate-limits/rate-limit-envelope";
 import { Badge } from "@/components/ui/badge";
-import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
+import {
+  AgentSpinningDots,
+  MutedAgentSpinner,
+} from "@/components/ui/agent-spinning-dots";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { MeterRow } from "@/components/settings/panels/traycer-subscription-views";
@@ -22,12 +25,19 @@ import {
   titleCaseFromToken,
 } from "@/lib/provider-rate-limit-content";
 import {
-  formatResetDateTime,
+  formatResetFullDateTime,
   useIsFarReset,
   useResetCountdown,
   useSampledNow,
 } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
+import {
+  selectEarliestExpiringCodexResetCredit,
+  visibleCodexResetCredits,
+  type CodexResetCredit,
+  type CodexResetCreditActionRenderer,
+  type CodexResetCredits,
+} from "@/components/settings/panels/codex-reset-credit-model";
 
 /**
  * Which surface a provider's detail is rendered on. Every window/bar draws
@@ -88,6 +98,7 @@ type OpenRouterRateLimits = Extract<
 type KiloCodeRateLimits = Extract<ProviderRateLimits, { provider: "kilocode" }>;
 
 const MINUTES_PER_HOUR = 60;
+const RESET_CREDIT_WARNING_MS = 48 * 60 * 60 * 1000;
 const MINUTES_PER_DAY = MINUTES_PER_HOUR * 24;
 const MINUTES_PER_WEEK = MINUTES_PER_DAY * 7;
 const MINUTES_PER_SESSION = MINUTES_PER_HOUR * 5;
@@ -137,7 +148,7 @@ function RelativeResetLine({
 }
 
 /**
- * Exact weekday/time ("Resets Sat 3:35 AM") - for weekly-scale windows,
+ * Exact calendar date/time ("Resets Sat, Jul 18, 2026, 3:35 AM") - for weekly-scale windows,
  * where a relative countdown ("Resets in 3d") is too coarse to act on. Pure,
  * no clock subscription.
  */
@@ -150,7 +161,7 @@ function ExactResetLine({
 }): ReactNode {
   return (
     <span className={cn("text-ui-xs", tone)}>
-      Resets {formatResetDateTime(resetsAt)}
+      Resets {formatResetFullDateTime(resetsAt)}
     </span>
   );
 }
@@ -194,7 +205,7 @@ function plausibleResetTimestamp(resetsAt: number, now: number): boolean {
 /**
  * The right-hand `detail` slot for a window row: "{percent}% used" followed
  * by the reset line (a relative countdown for a near window - "Resets in 4h
- * 7m" - or an absolute weekday/time for a far one - "Resets Sat 3:35 AM",
+ * 7m" - or an absolute calendar date/time for a far one,
  * since "Resets in 3d" is too coarse to act on), separated by a middle dot -
  * dropped entirely when there's no reset to show. `tone` is left to
  * `MeterRow`'s own wrapping span (this slot never overrides it), unlike
@@ -383,7 +394,7 @@ function CodexRateLimitViewContent({
 }: {
   readonly data: CodexRateLimits;
   readonly variant: RateLimitViewVariant;
-  readonly resetAction: ReactNode;
+  readonly resetAction: CodexResetCreditActionRenderer | null;
 }): ReactNode {
   // Overview keeps only the primary/secondary (5h/Weekly) windows; the badge,
   // credits, per-model extraWindows, spend control, and reset credits are
@@ -472,28 +483,130 @@ function CodexRateLimitViewContent({
   );
 }
 
-/**
- * Codex's periodic allowance of manual limit resets (Core Flows: "a manual
- * reset-credits block ... with a count"). The live `account/rateLimits/read`
- * shape is just `{ availableCount }` (no per-credit expiry array), so this is a
- * single count row.
- */
+function CodexResetCreditExpiry({
+  credit,
+  prefix,
+}: {
+  readonly credit: CodexResetCredit;
+  readonly prefix: "Expires" | "expires";
+}): ReactNode {
+  const now = useSampledNow();
+  const countdown = useResetCountdown(credit.expiresAt);
+  const farExpiry = useIsFarReset(credit.expiresAt);
+  if (credit.expiresAt === null) return <span>No expiry</span>;
+  if (!plausibleResetTimestamp(credit.expiresAt, now)) {
+    return <span>Expiry unavailable</span>;
+  }
+  if (credit.expiresAt <= now) return <span>Expired</span>;
+  const warning = credit.expiresAt - now <= RESET_CREDIT_WARNING_MS;
+  return (
+    <span className={cn(warning && "text-destructive")}>
+      {farExpiry
+        ? `${prefix} ${formatResetFullDateTime(credit.expiresAt)}`
+        : `${prefix} in ${countdown ?? "less than a minute"}`}
+    </span>
+  );
+}
+
+function CodexResetCreditDetail({
+  credit,
+  compact,
+}: {
+  readonly credit: CodexResetCredit;
+  readonly compact: boolean;
+}): ReactNode {
+  if (credit.status === "redeeming") {
+    return (
+      <span className="flex items-center gap-1 text-muted-foreground">
+        <AgentSpinningDots
+          className={undefined}
+          testId={undefined}
+          variant={undefined}
+        />
+        Redeeming
+      </span>
+    );
+  }
+  return (
+    <CodexResetCreditExpiry
+      credit={credit}
+      prefix={compact ? "expires" : "Expires"}
+    />
+  );
+}
+
 function CodexResetCreditsRow({
   resetCredits,
   resetAction,
 }: {
-  readonly resetCredits: NonNullable<CodexRateLimits["resetCredits"]>;
-  readonly resetAction: ReactNode;
+  readonly resetCredits: CodexResetCredits;
+  readonly resetAction: CodexResetCreditActionRenderer | null;
 }): ReactNode {
+  const now = useSampledNow();
+  const credits = resetCredits.credits;
+  const visibleCredits =
+    credits === null ? [] : visibleCodexResetCredits(credits);
+  const selectedCredit =
+    credits === null
+      ? null
+      : selectEarliestExpiringCodexResetCredit(credits, now);
+  const singleCredit =
+    credits?.length === 1 && visibleCredits.length === 1
+      ? (visibleCredits[0] ?? null)
+      : null;
+  const omittedCount =
+    credits !== null && credits.length > 0
+      ? Math.max(0, resetCredits.availableCount - credits.length)
+      : 0;
+  const action =
+    resetCredits.availableCount > 0 && resetAction !== null
+      ? resetAction({
+          selectedCredit,
+          availableCount: resetCredits.availableCount,
+        })
+      : null;
   return (
-    <div className="flex flex-wrap items-center justify-between gap-2 text-ui-sm">
-      <span className="text-muted-foreground">Manual resets</span>
-      <span className="flex items-center gap-2">
-        <span className="font-mono text-ui-xs text-foreground">
-          {resetCredits.availableCount} available
+    <div className="flex flex-col gap-2 text-ui-sm">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="text-muted-foreground">Manual resets</span>
+        <span className="flex items-center gap-2">
+          <span className="flex items-center gap-1 font-mono text-ui-xs text-foreground">
+            <span>{resetCredits.availableCount} available</span>
+            {singleCredit !== null ? (
+              <>
+                <span aria-hidden="true">·</span>
+                <CodexResetCreditDetail credit={singleCredit} compact />
+              </>
+            ) : null}
+          </span>
+          {action}
         </span>
-        {resetCredits.availableCount > 0 ? resetAction : null}
-      </span>
+      </div>
+      {singleCredit === null && visibleCredits.length > 0 ? (
+        <div className="flex flex-col gap-2 pl-3 text-ui-xs">
+          {visibleCredits.map((credit) => (
+            <div
+              key={credit.id}
+              className="flex items-center justify-between gap-3"
+            >
+              <span
+                className="min-w-0 truncate text-muted-foreground"
+                title={credit.description ?? undefined}
+              >
+                {credit.title ?? "Manual reset"}
+              </span>
+              <span className="shrink-0 font-mono text-foreground">
+                <CodexResetCreditDetail credit={credit} compact={false} />
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {omittedCount > 0 ? (
+        <span className="pl-3 text-ui-xs text-muted-foreground">
+          +{omittedCount} more not shown
+        </span>
+      ) : null}
     </div>
   );
 }
@@ -771,7 +884,9 @@ export function KiloCodeRateLimitView({
 }
 
 export function ProviderRateLimitBody(
-  props: ProviderRateLimitQueryState & { readonly codexResetAction: ReactNode },
+  props: ProviderRateLimitQueryState & {
+    readonly codexResetAction: CodexResetCreditActionRenderer | null;
+  },
 ): ReactNode {
   const state = resolveProviderRateLimitViewState(props);
   // `isPending` alone stays `true` forever for a disabled query (e.g. a chat
@@ -836,7 +951,7 @@ export function ProviderRateLimitDetail({
 }: {
   readonly data: AvailableProviderRateLimits;
   readonly variant: RateLimitViewVariant;
-  readonly codexResetAction: ReactNode;
+  readonly codexResetAction: CodexResetCreditActionRenderer | null;
 }): ReactNode {
   switch (data.provider) {
     case "codex":

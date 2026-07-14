@@ -41,6 +41,45 @@ export function isTransientUnavailableReason(
 }
 
 /**
+ * Some Codex refreshes report the authoritative reset-credit count without
+ * repeating the optional per-credit detail list. Keep the last detailed list
+ * only while that count is unchanged: `credits: null` means "details omitted",
+ * whereas `credits: []` is an explicit detailed response. A changed count can
+ * mean a reset was granted, consumed, or expired, so retaining the old list in
+ * that case would be actively misleading.
+ */
+function retainCodexResetCreditDetails(
+  previous: ProviderRateLimitEnvelope | undefined,
+  latest: AvailableProviderRateLimits,
+): AvailableProviderRateLimits {
+  if (latest.provider !== "codex") return latest;
+  const latestResetCredits = latest.resetCredits;
+  if (latestResetCredits === null || latestResetCredits.credits !== null) {
+    return latest;
+  }
+
+  const previousCodex = previous?.lastGood;
+  if (previousCodex === undefined || previousCodex === null) return latest;
+  if (previousCodex.provider !== "codex") return latest;
+  const previousResetCredits = previousCodex.resetCredits;
+  if (
+    previousResetCredits === null ||
+    previousResetCredits.credits === null ||
+    previousResetCredits.availableCount !== latestResetCredits.availableCount
+  ) {
+    return latest;
+  }
+
+  return {
+    ...latest,
+    resetCredits: {
+      ...latestResetCredits,
+      credits: previousResetCredits.credits,
+    },
+  };
+}
+
+/**
  * Renderer-memory envelope the `host.getRateLimitUsage` provider-pull query
  * cache entry holds (replacing the raw wire response as the cached `data`),
  * so a transient fetch failure (Core Flows: "couldn't fetch usage - will
@@ -137,9 +176,10 @@ export function buildProviderRateLimitEnvelope(
   const latest = response.providerRateLimits;
 
   if (latest !== null && latest.available) {
+    const retainedLatest = retainCodexResetCreditDetails(previous, latest);
     return {
-      latest,
-      lastGood: latest,
+      latest: retainedLatest,
+      lastGood: retainedLatest,
       lastGoodAt: now,
       lastFailureAt: previous?.lastFailureAt ?? null,
     };

@@ -46,7 +46,7 @@ export type RateLimitFetchLane = "httpFetch" | "ephemeralProcess";
  * rather than in the turn-completion hook, so the queue module, the query
  * options, and that hook can all read it without an import cycle.
  */
-export const PROVIDER_RATE_LIMITS_STALE_TIME_MS = 30_000;
+export const PROVIDER_RATE_LIMITS_STALE_TIME_MS = 5 * 60 * 1000;
 
 export function isRateLimitCapableProvider(
   providerId: ProviderId,
