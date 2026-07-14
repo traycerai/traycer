@@ -132,6 +132,26 @@ describe("useEpicSetPinned", () => {
     ).toEqual([PAGE]);
   });
 
+  it("leaves the cache untouched when the mutation resolves with a null scope", async () => {
+    const queryClient = new QueryClient();
+    const removeQueries = vi.spyOn(queryClient, "removeQueries");
+    const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries");
+    renderHook(() => useEpicSetPinned(), {
+      wrapper: makeWrapper(queryClient),
+    });
+
+    // A host swap can leave `onMutate`'s captured scope null; the success
+    // handler must then no-op rather than reset/invalidate an unrelated scope.
+    await capturedOptions.onSuccess?.(
+      { pinned: true },
+      { epicId: "epic-1", pinned: true },
+      { hostId: null, userId: null },
+    );
+
+    expect(removeQueries).not.toHaveBeenCalled();
+    expect(invalidateQueries).not.toHaveBeenCalled();
+  });
+
   it("shows the host error fallback", () => {
     renderHook(() => useEpicSetPinned(), {
       wrapper: makeWrapper(new QueryClient()),

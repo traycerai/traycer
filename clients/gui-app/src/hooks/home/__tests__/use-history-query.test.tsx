@@ -185,6 +185,36 @@ describe("useHistoryQuery", () => {
     expect(screen.getByTestId("has-next-page").textContent).toBe("true");
   });
 
+  it("floats pinned rows above a higher-relevance unpinned match under relevance sort", () => {
+    // Relevance sort + a non-empty query is the only path that routes through
+    // prioritizePinnedHistoryItems (use-history-query.ts). That local
+    // projection only runs while the cloud query is unsettled, so mark it
+    // fetching. The unpinned row is the exact-title match, so Fuse ranks it
+    // first; the pin must still lift its (weaker-matching) row above it.
+    testState.isFetching = true;
+    testState.tasks = [
+      taskLight("epic-exact", "search", "traycer/gui-app"),
+      {
+        ...taskLight("epic-pinned", "Beta search flow", "traycer/server"),
+        pinned: true,
+      },
+    ];
+    testState.response = { tasks: testState.tasks, hasMore: false };
+
+    render(
+      <HistoryQueryHarness
+        search={patchHistorySearch(DEFAULT_HISTORY_SEARCH, {
+          query: "search",
+          sort: "relevance",
+        })}
+      />,
+    );
+
+    expect(screen.getByTestId("titles").textContent).toBe(
+      "Beta search flow|search",
+    );
+  });
+
   it("surfaces a worktree metadata failure for a PR-number search", () => {
     testState.worktreeMetadataError = new Error("Worktree metadata failed");
 
