@@ -1,4 +1,5 @@
 import type { NotificationShow } from "@/hooks/notifications/use-notifications";
+import { createElement } from "react";
 import { toast } from "sonner";
 import {
   rowFromAppLocalEntry,
@@ -34,18 +35,55 @@ export function displayNotificationRows(
   } catch {
     // The feed remains authoritative; a failed native toast is non-critical.
   }
-  const interaction =
-    content.row.payload === null
-      ? {}
-      : {
-          className: "cursor-pointer",
-          onClick: () => target.onToastClick(content.row),
-        };
-  toast(content.title, {
-    description: content.body,
-    id: content.replaceKey,
-    ...interaction,
-  });
+  if (content.row.payload === null) {
+    toast(content.title, {
+      description: content.body,
+      id: content.replaceKey,
+    });
+  } else {
+    toast.custom(
+      (id) =>
+        createElement(
+          "div",
+          {
+            className:
+              "flex w-[var(--width)] items-start gap-2 rounded-[var(--radius)] border border-border bg-popover p-4 text-popover-foreground shadow-md",
+          },
+          createElement(
+            "button",
+            {
+              type: "button",
+              className: "min-w-0 flex-1 text-left",
+              onClick: () => target.onToastClick(content.row),
+            },
+            createElement(
+              "div",
+              { className: "font-medium leading-normal" },
+              content.title,
+            ),
+            createElement(
+              "div",
+              {
+                className:
+                  "mt-0.5 text-sm leading-snug text-muted-foreground",
+              },
+              content.body,
+            ),
+          ),
+          createElement(
+            "button",
+            {
+              type: "button",
+              "aria-label": "Close toast",
+              className: "text-muted-foreground hover:text-foreground",
+              onClick: () => toast.dismiss(id),
+            },
+            "×",
+          ),
+        ),
+      { id: content.replaceKey },
+    );
+  }
   target.playChime();
 }
 

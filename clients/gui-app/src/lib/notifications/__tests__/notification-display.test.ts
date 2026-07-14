@@ -1,4 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import type { ReactElement } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   displayNotificationRows,
   notificationReplaceKey,
@@ -10,17 +12,37 @@ interface CapturedToast {
   readonly options: {
     readonly description: string;
     readonly id: string;
-    readonly className?: string;
-    readonly onClick?: () => void;
+  };
+}
+
+interface CapturedCustomToast {
+  readonly renderToast: (id: string | number) => ReactElement;
+  readonly options: {
+    readonly id: string;
   };
 }
 
 const toastCalls = vi.hoisted((): CapturedToast[] => []);
+const customToastCalls = vi.hoisted((): CapturedCustomToast[] => []);
+const dismiss = vi.hoisted(() => vi.fn());
 
 vi.mock("sonner", () => ({
-  toast: (title: string, options: CapturedToast["options"]): void => {
-    toastCalls.push({ title, options });
-  },
+  toast: Object.assign(
+    (title: string, options: CapturedToast["options"]): string => {
+      toastCalls.push({ title, options });
+      return options.id;
+    },
+    {
+      custom: (
+        renderToast: CapturedCustomToast["renderToast"],
+        options: CapturedCustomToast["options"],
+      ): string => {
+        customToastCalls.push({ renderToast, options });
+        return options.id;
+      },
+      dismiss,
+    },
+  ),
 }));
 
 function row(title: string): MergedNotificationRow {
@@ -44,6 +66,12 @@ function row(title: string): MergedNotificationRow {
 describe("notification display", () => {
   beforeEach(() => {
     toastCalls.length = 0;
+    customToastCalls.length = 0;
+    dismiss.mockReset();
+  });
+
+  afterEach(() => {
+    cleanup();
   });
 
   it("shows exactly one toast and one chime for one display emission", () => {
@@ -67,12 +95,8 @@ describe("notification display", () => {
       },
       "host:chat:chat-1",
     );
-    expect(toastCalls).toHaveLength(1);
-    expect(toastCalls[0]?.title).toBe("Checkout notifications");
-    expect(toastCalls[0]?.options.description).toBe("New chat • Done");
-    expect(toastCalls[0]?.options.id).toBe("host:chat:chat-1");
-    expect(toastCalls[0]?.options.className).toBe("cursor-pointer");
-    expect(toastCalls[0]?.options.onClick).toBeTypeOf("function");
+    expect(customToastCalls).toHaveLength(1);
+    expect(customToastCalls[0]?.options.id).toBe("host:chat:chat-1");
     expect(playChime).toHaveBeenCalledOnce();
   });
 
@@ -154,7 +178,10 @@ describe("notification display", () => {
       "notification-batch",
     );
 
-    toastCalls[0]?.options.onClick?.();
+    render(customToastCalls[0]?.renderToast("notification-batch"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Traycer 2 new notifications" }),
+    );
 
     expect(onToastClick).toHaveBeenCalledWith(first);
   });
@@ -186,7 +213,12 @@ describe("notification display", () => {
       onToastClick,
     });
 
-    toastCalls[0]?.options.onClick?.();
+    render(customToastCalls[0]?.renderToast("host:chat:chat-1"));
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Checkout notifications New chat • Done",
+      }),
+    );
 
     expect(onToastClick).toHaveBeenCalledWith(notification);
   });
@@ -199,8 +231,24 @@ describe("notification display", () => {
     });
 
     expect(toastCalls).toHaveLength(1);
-    const toastCall = toastCalls[0];
-    expect(toastCall.options.className).toBeUndefined();
-    expect(toastCall.options.onClick).toBeUndefined();
+    expect(customToastCalls).toHaveLength(0);
+    expect(toastCalls[0]?.title).toBe("Agent finished");
+    expect(toastCalls[0]?.options.description).toBe("New chat • Done");
+  });
+
+  it("closes an actionable toast without activating it", () => {
+    const onToastClick = vi.fn();
+
+    displayNotificationRows([row("Checkout notifications")], {
+      showNotification: vi.fn(() => Promise.resolve()),
+      playChime: vi.fn(),
+      onToastClick,
+    });
+
+    render(customToastCalls[0]?.renderToast("host:chat:chat-1"));
+    fireEvent.click(screen.getByRole("button", { name: "Close toast" }));
+
+    expect(onToastClick).not.toHaveBeenCalled();
+    expect(dismiss).toHaveBeenCalledWith("host:chat:chat-1");
   });
 });
