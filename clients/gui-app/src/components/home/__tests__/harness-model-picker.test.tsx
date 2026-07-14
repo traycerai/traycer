@@ -41,10 +41,14 @@ vi.mock("@/components/ui/dropdown-menu", () => {
     DropdownMenuContent: (props: {
       readonly children: ReactNode;
       readonly container: HTMLElement | null | undefined;
+      readonly onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void;
     }): ReactNode => (
       <div
+        role="menu"
+        tabIndex={-1}
         data-testid="profile-dropdown-content"
         data-has-container={props.container instanceof HTMLElement}
+        onKeyDown={props.onKeyDown}
       >
         {props.children}
       </div>
@@ -101,7 +105,7 @@ import {
   PROVIDER_PROFILE_ACCENT_COLORS,
   type ProviderCliState,
 } from "@traycer/protocol/host/provider-schemas";
-import type { Key, ReactNode } from "react";
+import type { Key, KeyboardEvent, ReactNode } from "react";
 
 interface CatalogHarness extends HarnessOption {
   readonly models: ReadonlyArray<ModelOption>;
@@ -2396,6 +2400,32 @@ describe("<HarnessModelPicker />", () => {
     expect(
       screen.getByRole("tablist", { name: "Model providers" }),
     ).not.toBeNull();
+  });
+
+  it("keeps profile-menu navigation out of the model list", async () => {
+    queryMock.providerStates = [
+      providerCliStateWithProfiles({
+        providerId: "claude-code",
+        profiles: claudeProfilesForDropdown(),
+      }),
+    ];
+    renderPicker(undefined);
+
+    await openPicker();
+    fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+    const opus = screen.getByRole("option", { name: /Claude Opus 4\.7/ });
+    const sonnet = screen.getByRole("option", {
+      name: /Claude Sonnet 4\.6/,
+    });
+    fireEvent.mouseEnter(opus);
+    expect(opus.dataset.active).toBe("true");
+    expect(sonnet.dataset.active).toBe("false");
+
+    fireEvent.keyDown(screen.getByTestId("profile-dropdown-content"), {
+      key: "ArrowDown",
+    });
+    expect(opus.dataset.active).toBe("true");
+    expect(sonnet.dataset.active).toBe("false");
   });
 
   it("commits a switch via the leader digit", async () => {

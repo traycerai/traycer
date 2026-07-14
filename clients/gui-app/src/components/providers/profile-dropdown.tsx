@@ -29,6 +29,15 @@ import { cn } from "@/lib/utils";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import { useState } from "react";
 
+const PROFILE_DROPDOWN_KEYS = new Set([
+  "ArrowDown",
+  "ArrowUp",
+  "Home",
+  "End",
+  "Enter",
+  "Escape",
+]);
+
 /** A row's ⌘⇧-digit shortcut hint - `digit` drives the row's test id,
  *  `label` is the displayed chord text. Keeping both explicit (rather than
  *  deriving the digit from `label`) keeps this component free of any
@@ -164,6 +173,11 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
           if (isProfileUsageSidecarTarget(event.target)) event.preventDefault();
         }}
         onKeyDown={(event) => {
+          // Item-level navigation/selection runs before the event bubbles to
+          // content. At content, Radix calls this handler before its own later
+          // composed callback; stopPropagation blocks enclosing React handlers
+          // without cancelling either same-target continuation.
+          if (PROFILE_DROPDOWN_KEYS.has(event.key)) event.stopPropagation();
           if (
             usagePresentation === null ||
             event.key.toLowerCase() !== "r" ||
