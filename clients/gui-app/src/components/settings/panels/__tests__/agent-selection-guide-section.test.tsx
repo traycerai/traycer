@@ -180,9 +180,9 @@ describe("AgentSelectionGuideSection", () => {
       </StrictMode>,
     );
 
-    const editor = screen.getByTestId<HTMLTextAreaElement>(
-      "agents-selection-guide-input",
-    );
+    const editor = screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: "Global agent selection instructions",
+    });
     const panelShell = editor.closest("[data-settings-panel-shell]");
     if (!(panelShell instanceof HTMLElement)) {
       throw new Error("Expected the editor to render inside a settings shell");
