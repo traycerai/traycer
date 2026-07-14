@@ -292,6 +292,9 @@ describe("applyHost", () => {
     if (result.outcome === "applied") {
       expect(result.runningActivated).toBe(false);
       expect(result.postSwapError).toBeNull();
+      // `--no-service` never constructs a lifecycle - no service facts
+      // to report, not a synthesized "not-installed" guess.
+      expect(result.serviceLifecycle).toBeNull();
     }
     expect(mocks.lifecycleCalls).toHaveLength(0);
   });
@@ -351,6 +354,11 @@ describe("applyHost", () => {
       expect(result.runningActivated).toBe(true);
       expect(result.installGeneration).toContain(result.record.installId);
       expect(result.postSwapError).toBeNull();
+      expect(result.serviceLifecycle).toEqual({
+        priorServiceState: "running",
+        stoppedBeforeSwap: true,
+        postSwapAction: "restart",
+      });
     }
   });
 

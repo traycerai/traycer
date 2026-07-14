@@ -11,6 +11,7 @@ import {
 import { readHostStagedRecord } from "../manifest/host-staged";
 import { hostStagedDir } from "../store/paths";
 import { assertHostNotBusy } from "../host/busy-check";
+import type { ServiceState } from "../service";
 import { createServiceInstallLifecycle } from "../service/install-lifecycle";
 import { reconcileHostStage } from "./stage-reconcile";
 import { commitInstallFromSource, currentInstallPlatform } from "./install";
@@ -42,6 +43,19 @@ export interface ApplyHostOptions {
   readonly onProgress: (info: ProgressInfo) => void;
 }
 
+// The facts `createServiceInstallLifecycle` observed around the swap -
+// mirrors the same family of facts `host ensure`'s `serviceLifecycle`
+// payload already reports (Tech Plan: "Attested generation in results"),
+// so a caller (the controller, or `host update`'s legacy-projection
+// compat boundary) can attribute readiness without re-deriving it.
+// `postSwapError` stays a sibling on `ApplyHostOutcome` itself, not
+// nested here, matching this function's existing no-rollback contract.
+export interface ApplyServiceLifecycleFacts {
+  readonly priorServiceState: ServiceState;
+  readonly stoppedBeforeSwap: boolean;
+  readonly postSwapAction: "restart" | "start" | "install" | "none";
+}
+
 export type ApplyHostOutcome =
   | {
       // The ONLY reachable no-op path: reconcile (this function's own
@@ -65,6 +79,10 @@ export type ApplyHostOutcome =
       // read from the record this call itself just wrote, never a later
       // disk re-read, so callers never race a subsequent mutation.
       readonly installGeneration: string;
+      // `null` iff `--no-service` skipped the lifecycle entirely - apply
+      // has no service facts to report, not a synthesized "not-installed"
+      // guess.
+      readonly serviceLifecycle: ApplyServiceLifecycleFacts | null;
       // Non-null iff the post-swap start/restart threw. Per the Tech
       // Plan's no-rollback contract, this is a WARNING alongside a
       // successful "applied" outcome, never a thrown error - "installed,
@@ -155,6 +173,14 @@ export async function applyHost(
     lifecycleHandle !== null &&
     postSwapError === null &&
     lifecycleHandle.state.postSwapAction !== "none";
+  const serviceLifecycle: ApplyServiceLifecycleFacts | null =
+    lifecycleHandle === null
+      ? null
+      : {
+          priorServiceState: lifecycleHandle.state.priorState,
+          stoppedBeforeSwap: lifecycleHandle.state.stoppedBeforeSwap,
+          postSwapAction: lifecycleHandle.state.postSwapAction,
+        };
 
   const installGeneration = encodeInstallGeneration({
     installId: record.installId,
@@ -177,6 +203,7 @@ export async function applyHost(
     previous,
     runningActivated,
     installGeneration,
+    serviceLifecycle,
     postSwapError,
   };
 }
