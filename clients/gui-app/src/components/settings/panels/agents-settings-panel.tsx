@@ -5,12 +5,11 @@
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { AgentSelectionGuideSection } from "./agent-selection-guide-section";
 
-// The global agent selection guide lives in its own settings section. The
-// editor itself is shared with no other surface, so the panel is just the
-// section wrapped in the standard settings shell.
+// The global agent selection guide lives in its own full-height settings
+// section so the Markdown source editor can use all remaining panel space.
 export function AgentsSettingsPanel() {
   return (
-    <SettingsPanelShell title="Agents">
+    <SettingsPanelShell title="Agents" fillHeight>
       <AgentSelectionGuideSection />
     </SettingsPanelShell>
   );
