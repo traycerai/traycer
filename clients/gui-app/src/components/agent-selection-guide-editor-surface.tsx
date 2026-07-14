@@ -16,6 +16,8 @@ type AgentSelectionGuideEditorSurfaceProps = {
   readonly placeholder: string | undefined;
   readonly ariaLabel: string;
   readonly testId: string;
+  readonly setTextareaElement:
+    ((element: HTMLTextAreaElement | null) => void) | null;
   readonly textareaClassName: string;
   readonly className: string;
   readonly revertDisabled: boolean;
@@ -24,19 +26,30 @@ type AgentSelectionGuideEditorSurfaceProps = {
   readonly status: ReactNode;
 };
 
-export function AgentSelectionGuideEditorSurface(
-  props: AgentSelectionGuideEditorSurfaceProps,
-) {
+export function AgentSelectionGuideEditorSurface({
+  titleId,
+  value,
+  onValueChange,
+  onBlur,
+  disabled,
+  placeholder,
+  ariaLabel,
+  testId,
+  setTextareaElement,
+  textareaClassName,
+  className,
+  revertDisabled,
+  onRevert,
+  revertTestId,
+  status,
+}: AgentSelectionGuideEditorSurfaceProps) {
   return (
     <section
-      aria-labelledby={props.titleId}
-      className={cn("flex min-h-0 flex-col gap-3", props.className)}
+      aria-labelledby={titleId}
+      className={cn("flex min-h-0 flex-col gap-3", className)}
     >
       <div className="min-w-0">
-        <h2
-          id={props.titleId}
-          className="text-ui-md font-semibold text-foreground"
-        >
+        <h2 id={titleId} className="text-ui-md font-semibold text-foreground">
           {AGENT_SELECTION_GUIDE_TITLE}
         </h2>
         <p className="mt-1 text-ui-xs text-muted-foreground">
@@ -45,17 +58,18 @@ export function AgentSelectionGuideEditorSurface(
       </div>
 
       <Textarea
-        value={props.value}
-        onChange={(event) => props.onValueChange(event.target.value)}
-        onBlur={props.onBlur ?? undefined}
+        ref={setTextareaElement}
+        value={value}
+        onChange={(event) => onValueChange(event.target.value)}
+        onBlur={onBlur ?? undefined}
         spellCheck={false}
-        disabled={props.disabled}
-        aria-label={props.ariaLabel}
-        data-testid={props.testId}
-        placeholder={props.placeholder}
+        disabled={disabled}
+        aria-label={ariaLabel}
+        data-testid={testId}
+        placeholder={placeholder}
         className={cn(
           "min-h-0 overflow-y-auto font-mono text-code-xs leading-relaxed",
-          props.textareaClassName,
+          textareaClassName,
         )}
       />
 
@@ -72,14 +86,14 @@ export function AgentSelectionGuideEditorSurface(
             type="button"
             variant="ghost"
             size="sm"
-            disabled={props.revertDisabled}
-            onClick={props.onRevert}
-            data-testid={props.revertTestId}
+            disabled={revertDisabled}
+            onClick={onRevert}
+            data-testid={revertTestId}
             className="h-7 px-2"
           >
             Revert to default
           </Button>
-          {props.status}
+          {status}
         </div>
       </div>
     </section>
