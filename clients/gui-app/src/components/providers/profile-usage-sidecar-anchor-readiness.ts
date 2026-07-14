@@ -1,11 +1,24 @@
 const POPPER_WRAPPER_SELECTOR = "[data-radix-popper-content-wrapper]";
+const UNPOSITIONED_POPPER_TRANSFORM =
+  /^translate\(\s*0(?:px)?\s*,\s*-200%\s*\)$/i;
 
-function isRectOnscreen(rect: DOMRect): boolean {
+function popperWrappersForAnchor(
+  anchor: HTMLElement,
+): ReadonlyArray<HTMLElement> {
+  const wrappers: HTMLElement[] = [];
+  let ancestor = anchor.parentElement;
+  while (ancestor !== null) {
+    if (ancestor.matches(POPPER_WRAPPER_SELECTOR)) wrappers.push(ancestor);
+    ancestor = ancestor.parentElement;
+  }
+  return wrappers;
+}
+
+function isPopperWrapperPlaced(wrapper: HTMLElement): boolean {
+  const transform = wrapper.style.transform;
   return (
-    rect.bottom > 0 &&
-    rect.right > 0 &&
-    rect.top < window.innerHeight &&
-    rect.left < window.innerWidth
+    transform.length > 0 &&
+    !UNPOSITIONED_POPPER_TRANSFORM.test(transform.trim())
   );
 }
 
@@ -13,23 +26,23 @@ function isRectOnscreen(rect: DOMRect): boolean {
  * Radix's Popper (the machinery behind DropdownMenuContent, PopoverContent,
  * etc. - see `@radix-ui/react-popper`'s `PopperContent`) renders its
  * `[data-radix-popper-content-wrapper]` at `transform: translate(0, -200%)`
- * - pushed off-screen "for measuring" - until Floating UI's first placement
- * pass completes, then snaps it to the real computed position. Content's
- * entrance animation is *also* explicitly suppressed (`animation: "none"`)
- * during this phase, so it doesn't race the pre-placement layout. Reading
- * the anchor's rect before that first placement lands captures the
- * off-screen sentinel position (hundreds of pixels off), not the real one -
- * and because the animation is suppressed, `document.getAnimations()` can
- * be genuinely empty at that moment, so waiting on animations alone cannot
- * catch this phase.
+ * until Floating UI's first placement pass completes, then replaces that
+ * sentinel with the real computed transform. Browsers may serialize its
+ * unitless zero as `0px`, so both CSSOM-equivalent forms are treated as the
+ * sentinel. Content's entrance animation is *also* explicitly suppressed
+ * (`animation: "none"`) during this phase, so it doesn't race the
+ * pre-placement layout. Because poppers can be nested, every wrapper in the
+ * anchor's ancestor chain must leave the sentinel before the anchor's rect is
+ * trustworthy.
  *
- * Waits for the anchor's own bounding rect to intersect the viewport,
- * observing the closest Radix popper wrapper's `style` attribute (the
- * attribute Floating UI mutates when it lands a placement) for the
- * transition. Resolves immediately when the anchor isn't inside a Radix
- * popper wrapper (a static anchor), or is already on-screen (an
- * already-placed, already-open menu - e.g. re-anchoring on hover to a
- * different row - needs no wait at all).
+ * Viewport intersection is not a placement signal. A transformed outer
+ * popper is the containing block for a nested wrapper's `position: fixed`, so
+ * the nested wrapper's pre-placement sentinel can land inside the viewport.
+ * Instead, inspect each wrapper's own inline transform and observe the style
+ * attributes of wrappers that still hold the sentinel. Resolves immediately
+ * when the anchor isn't inside a Radix popper wrapper (a static anchor), or
+ * every wrapper is already placed (e.g. re-anchoring on hover within an
+ * already-open menu).
  *
  * There is deliberately no fallback timeout. If placement never lands (the
  * anchor is detached, or Radix never resolves it), the correct behavior is
@@ -43,12 +56,11 @@ export function waitForAnchorPlacement(
   anchor: HTMLElement,
   signal: AbortSignal,
 ): Promise<void> {
-  const wrapper = anchor.closest(POPPER_WRAPPER_SELECTOR);
-  if (
-    wrapper === null ||
-    isRectOnscreen(anchor.getBoundingClientRect()) ||
-    signal.aborted
-  ) {
+  const wrappers = popperWrappersForAnchor(anchor);
+  const unplacedWrappers = wrappers.filter(
+    (wrapper) => !isPopperWrapperPlaced(wrapper),
+  );
+  if (unplacedWrappers.length === 0 || signal.aborted) {
     return Promise.resolve();
   }
   return new Promise((resolve) => {
@@ -58,12 +70,14 @@ export function waitForAnchorPlacement(
       resolve();
     };
     const observer = new MutationObserver(() => {
-      if (isRectOnscreen(anchor.getBoundingClientRect())) finish();
+      if (wrappers.every(isPopperWrapperPlaced)) finish();
     });
-    observer.observe(wrapper, {
-      attributes: true,
-      attributeFilter: ["style"],
-    });
+    unplacedWrappers.forEach((wrapper) =>
+      observer.observe(wrapper, {
+        attributes: true,
+        attributeFilter: ["style"],
+      }),
+    );
     signal.addEventListener("abort", finish);
   });
 }

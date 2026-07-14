@@ -6,6 +6,8 @@ import type { ProfileDropdownUsageEntry } from "../profile-dropdown-usage";
 import { ProfileUsageSidecar } from "../profile-usage-sidecar";
 
 const NOW = Date.now();
+const UNPOSITIONED_TRANSFORM = "translate(0px, -200%)";
+const POSITIONED_TRANSFORM = "translate(228px, 100px)";
 const PROFILE: ProviderProfile = {
   profileId: "work",
   kind: "managed",
@@ -290,17 +292,16 @@ describe("ProfileUsageSidecar entrance-animation readiness", () => {
 
 // Models the real Radix Popper sequence (see `@radix-ui/react-popper`'s
 // `PopperContent`, node_modules/.../@radix-ui/react-popper/dist/index.mjs):
-// `[data-radix-popper-content-wrapper]` sits at `transform: translate(0,
-// -200%)` - pushed off-screen "for measuring" - and content's entrance
-// animation is explicitly suppressed (`animation: "none"`) until Floating
-// UI's `isPositioned` flips true. During that window `document.getAnimations()`
-// is genuinely empty, so a fix that only waits on animations (2533e8a) can't
-// catch it: it finds nothing to wait for and measures the anchor while it's
-// still translated off-screen.
+// `[data-radix-popper-content-wrapper]` holds the unpositioned sentinel while
+// measuring, which CSSOM may serialize as `translate(0px, -200%)`. Content's
+// entrance animation is explicitly suppressed (`animation: "none"`) until
+// Floating UI's `isPositioned` flips true. In a nested transformed popper the
+// sentinel can produce an in-viewport phantom rect, while
+// `document.getAnimations()` is genuinely empty, so neither animation state
+// nor viewport intersection can prove placement.
 describe("ProfileUsageSidecar Radix placement readiness", () => {
   let wrapper: HTMLDivElement;
   let anchor: HTMLButtonElement;
-  let placed: boolean;
   let currentAnimations: ReadonlyArray<{
     readonly effect: {
       readonly target: Node | null;
@@ -312,11 +313,10 @@ describe("ProfileUsageSidecar Radix placement readiness", () => {
   beforeEach(() => {
     wrapper = document.createElement("div");
     wrapper.setAttribute("data-radix-popper-content-wrapper", "");
-    wrapper.style.transform = "translate(0, -200%)";
+    wrapper.style.transform = UNPOSITIONED_TRANSFORM;
     anchor = document.createElement("button");
     wrapper.append(anchor);
     document.body.append(wrapper);
-    placed = false;
     currentAnimations = [];
     Object.defineProperty(document, "getAnimations", {
       configurable: true,
@@ -326,9 +326,9 @@ describe("ProfileUsageSidecar Radix placement readiness", () => {
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
       function mockRect(this: HTMLElement) {
         if (this === anchor) {
-          return placed
-            ? new DOMRect(100, 100, 240, 32)
-            : new DOMRect(0, -9999, 240, 32);
+          return wrapper.style.transform === UNPOSITIONED_TRANSFORM
+            ? new DOMRect(0, 0, 240, 32)
+            : new DOMRect(100, 100, 240, 32);
         }
         if (this.hasAttribute("data-profile-usage-sidecar")) {
           return new DOMRect(0, 0, 300, 220);
@@ -345,7 +345,7 @@ describe("ProfileUsageSidecar Radix placement readiness", () => {
     Reflect.deleteProperty(document, "getAnimations");
   });
 
-  it("stays hidden through the unpositioned (off-screen, no animation) phase, then through the entrance animation, then positions correctly", async () => {
+  it("stays hidden through the unpositioned phantom-rect phase, then through the entrance animation, then positions correctly", async () => {
     render(
       <ProfileUsageSidecar
         anchor={anchor}
@@ -360,12 +360,13 @@ describe("ProfileUsageSidecar Radix placement readiness", () => {
     });
 
     // Phase 1: Radix's genuine unpositioned window. No animation exists
-    // (Radix suppresses it), and the anchor is still translated off-screen.
+    // (Radix suppresses it), and the nested-popover failure mode can report
+    // an on-screen phantom rect even though the sentinel is still present.
     // This is exactly the condition an animation-only wait cannot detect -
     // it would find `getAnimations()` empty and show immediately using the
-    // off-screen rect. Flushed via `act` + a real macrotask tick (not just
-    // microtasks) so any React work a premature `setPosition` schedules is
-    // fully applied before asserting - a bare microtask flush can race a
+    // invalid phantom rect. Flushed via `act` + a real macrotask tick (not
+    // just microtasks) so any React work a premature `setPosition` schedules
+    // is fully applied before asserting - a bare microtask flush can race a
     // real bug into passing vacuously if React defers the commit.
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
@@ -380,7 +381,6 @@ describe("ProfileUsageSidecar Radix placement readiness", () => {
     const finished = new Promise<undefined>((resolve) => {
       releaseAnimation = resolve;
     });
-    placed = true;
     currentAnimations = [
       {
         effect: { target: wrapper, getTiming: () => ({ iterations: 1 }) },
@@ -388,7 +388,7 @@ describe("ProfileUsageSidecar Radix placement readiness", () => {
       },
     ];
     await act(async () => {
-      wrapper.style.transform = "translate(228px, 100px)";
+      wrapper.style.transform = POSITIONED_TRANSFORM;
       // Still hidden - the entrance animation itself hasn't settled yet.
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
@@ -397,16 +397,16 @@ describe("ProfileUsageSidecar Radix placement readiness", () => {
     releaseAnimation(undefined);
     await waitFor(() => expect(sidecar.dataset.visible).toBe("true"));
     expect(sidecar.dataset.side).toBe("right");
-    // Discriminates a stale off-screen measurement (anchor.right=240,
-    // top=-9999 clamped to the 12px padding floor) from the real on-screen
-    // one (anchor at x=100,y=100,width=240 -> right=340) - `data-side`
-    // alone is "right" either way and can't tell them apart.
+    // Discriminates the stale phantom measurement (anchor at x=0,y=0,
+    // width=240 -> left=248 and top clamped to the 12px viewport padding)
+    // from the real one (anchor at x=100,y=100,width=240 -> left=348,
+    // top=100). `data-side` alone is "right" either way.
     expect(sidecar.getAttribute("style")).toContain("left: 348px");
     expect(sidecar.getAttribute("style")).toContain("top: 100px");
   });
 
   it("re-anchors instantly to a different row within an already-placed menu (no placement wait)", async () => {
-    placed = true;
+    wrapper.style.transform = POSITIONED_TRANSFORM;
     const { rerender } = render(
       <ProfileUsageSidecar
         anchor={anchor}

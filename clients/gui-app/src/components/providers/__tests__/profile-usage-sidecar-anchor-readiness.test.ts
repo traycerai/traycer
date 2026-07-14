@@ -6,8 +6,9 @@ import {
   waitForAnchorReady,
 } from "../profile-usage-sidecar-anchor-readiness";
 
-const OFFSCREEN_RECT = new DOMRect(0, -9999, 240, 32);
 const ONSCREEN_RECT = new DOMRect(120, 160, 240, 32);
+const UNPOSITIONED_TRANSFORM = "translate(0, -200%)";
+const POSITIONED_TRANSFORM = "translate(100px, 200px)";
 
 interface FakeAnimation {
   readonly effect: {
@@ -165,29 +166,18 @@ describe("waitForAnchorEntranceAnimations", () => {
 });
 
 describe("waitForAnchorPlacement", () => {
-  let placed: boolean;
-
-  function mountWrapperAndAnchor(): { wrapper: HTMLElement; anchor: HTMLElement } {
+  function mountWrapperAndAnchor(): {
+    wrapper: HTMLElement;
+    anchor: HTMLElement;
+  } {
     const wrapper = document.createElement("div");
     wrapper.setAttribute("data-radix-popper-content-wrapper", "");
-    wrapper.style.transform = "translate(0, -200%)";
+    wrapper.style.transform = UNPOSITIONED_TRANSFORM;
     const anchor = document.createElement("button");
     wrapper.append(anchor);
     document.body.append(wrapper);
     return { wrapper, anchor };
   }
-
-  beforeEach(() => {
-    placed = false;
-    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
-      function mockRect(this: HTMLElement) {
-        if (this.tagName === "BUTTON") {
-          return placed ? ONSCREEN_RECT : OFFSCREEN_RECT;
-        }
-        return new DOMRect(0, 0, 0, 0);
-      },
-    );
-  });
 
   afterEach(() => {
     vi.restoreAllMocks();
@@ -197,16 +187,14 @@ describe("waitForAnchorPlacement", () => {
   it("resolves immediately for a static anchor with no Radix popper wrapper", async () => {
     const anchor = document.createElement("button");
     document.body.append(anchor);
-    // Off-screen per the mock above, and never placed - a non-Radix anchor
-    // must never be gated on placement at all.
     await expect(
       waitForAnchorPlacement(anchor, new AbortController().signal),
     ).resolves.toBeUndefined();
   });
 
-  it("resolves immediately when the anchor is already on-screen (re-anchoring in an already-placed menu)", async () => {
-    const { anchor } = mountWrapperAndAnchor();
-    placed = true;
+  it("resolves immediately when every wrapper is already placed", async () => {
+    const { wrapper, anchor } = mountWrapperAndAnchor();
+    wrapper.style.transform = POSITIONED_TRANSFORM;
     await expect(
       waitForAnchorPlacement(anchor, new AbortController().signal),
     ).resolves.toBeUndefined();
@@ -216,44 +204,121 @@ describe("waitForAnchorPlacement", () => {
     const { wrapper, anchor } = mountWrapperAndAnchor();
 
     let resolved = false;
-    const wait = waitForAnchorPlacement(anchor, new AbortController().signal).then(
-      () => {
-        resolved = true;
-      },
-    );
+    const wait = waitForAnchorPlacement(
+      anchor,
+      new AbortController().signal,
+    ).then(() => {
+      resolved = true;
+    });
 
     await Promise.resolve();
     await Promise.resolve();
     expect(resolved).toBe(false);
 
-    // Simulate Floating UI landing its first real placement: the wrapper's
-    // inline style changes, and the anchor's rect - measured live, exactly
-    // like the production `update()` - now reports on-screen.
-    placed = true;
-    wrapper.style.transform = "translate(228px, 100px)";
+    wrapper.style.transform = POSITIONED_TRANSFORM;
 
     await wait;
     expect(resolved).toBe(true);
   });
 
-  it("ignores a style mutation that doesn't yet bring the anchor on-screen", async () => {
+  it.each([
+    "translate(0px, -200%)",
+    "translate(0,-200%)",
+    "  TrAnSlAtE(  0px ,  -200%  )  ",
+  ])(
+    "keeps waiting for the CSSOM-equivalent sentinel %s",
+    async (transform) => {
+      const { wrapper, anchor } = mountWrapperAndAnchor();
+      wrapper.style.transform = transform;
+
+      let resolved = false;
+      const wait = waitForAnchorPlacement(
+        anchor,
+        new AbortController().signal,
+      ).then(() => {
+        resolved = true;
+      });
+
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(resolved).toBe(false);
+
+      wrapper.style.transform = POSITIONED_TRANSFORM;
+      await wait;
+      expect(resolved).toBe(true);
+    },
+  );
+
+  it("ignores unrelated style mutations while the wrapper keeps the sentinel", async () => {
     const { wrapper, anchor } = mountWrapperAndAnchor();
 
     let resolved = false;
-    const wait = waitForAnchorPlacement(anchor, new AbortController().signal).then(
-      () => {
-        resolved = true;
-      },
-    );
+    const wait = waitForAnchorPlacement(
+      anchor,
+      new AbortController().signal,
+    ).then(() => {
+      resolved = true;
+    });
 
-    // A mutation that isn't the real placement yet (still off-screen).
-    wrapper.style.transform = "translate(0, -180%)";
+    wrapper.style.setProperty("--radix-popper-available-width", "640px");
     await Promise.resolve();
     await Promise.resolve();
     expect(resolved).toBe(false);
 
-    placed = true;
-    wrapper.style.transform = "translate(228px, 100px)";
+    wrapper.style.transform = POSITIONED_TRANSFORM;
+    await wait;
+    expect(resolved).toBe(true);
+  });
+
+  it("waits for an unplaced inner wrapper nested inside a placed outer wrapper", async () => {
+    const outerWrapper = document.createElement("div");
+    outerWrapper.setAttribute("data-radix-popper-content-wrapper", "");
+    outerWrapper.style.transform = "translate(40px, 80px)";
+    const { wrapper: innerWrapper, anchor } = mountWrapperAndAnchor();
+    outerWrapper.append(innerWrapper);
+    document.body.append(outerWrapper);
+
+    let resolved = false;
+    const wait = waitForAnchorPlacement(
+      anchor,
+      new AbortController().signal,
+    ).then(() => {
+      resolved = true;
+    });
+
+    innerWrapper.style.setProperty("--radix-popper-available-height", "480px");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+
+    innerWrapper.style.transform = POSITIONED_TRANSFORM;
+    await wait;
+    expect(resolved).toBe(true);
+  });
+
+  it("waits for an unplaced outer wrapper around a placed inner wrapper", async () => {
+    const outerWrapper = document.createElement("div");
+    outerWrapper.setAttribute("data-radix-popper-content-wrapper", "");
+    outerWrapper.style.transform = UNPOSITIONED_TRANSFORM;
+    const { wrapper: innerWrapper, anchor } = mountWrapperAndAnchor();
+    innerWrapper.style.transform = POSITIONED_TRANSFORM;
+    outerWrapper.append(innerWrapper);
+    document.body.append(outerWrapper);
+
+    let resolved = false;
+    const wait = waitForAnchorPlacement(
+      anchor,
+      new AbortController().signal,
+    ).then(() => {
+      resolved = true;
+    });
+
+    innerWrapper.style.setProperty("--radix-popper-available-width", "640px");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+
+    outerWrapper.style.transform = "translate(40px, 80px)";
     await wait;
     expect(resolved).toBe(true);
   });
@@ -272,9 +337,8 @@ describe("waitForAnchorPlacement", () => {
     expect(resolved).toBe(true);
 
     // A later mutation must not throw or double-resolve after abort.
-    placed = true;
     expect(() => {
-      wrapper.style.transform = "translate(228px, 100px)";
+      wrapper.style.transform = POSITIONED_TRANSFORM;
     }).not.toThrow();
   });
 
@@ -334,9 +398,8 @@ describe("waitForAnchorPlacement", () => {
       expect(resolved).toBe(true);
 
       // A mutation arriving after unmount/abort must be inert.
-      placed = true;
       expect(() => {
-        wrapper.style.transform = "translate(228px, 100px)";
+        wrapper.style.transform = POSITIONED_TRANSFORM;
       }).not.toThrow();
     });
   });
