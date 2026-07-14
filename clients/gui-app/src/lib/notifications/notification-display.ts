@@ -64,8 +64,7 @@ export function displayNotificationRows(
             createElement(
               "div",
               {
-                className:
-                  "mt-0.5 text-sm leading-snug text-muted-foreground",
+                className: "mt-0.5 text-sm leading-snug text-muted-foreground",
               },
               content.body,
             ),
