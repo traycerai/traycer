@@ -166,6 +166,6 @@ describe("NotificationEmissionController", () => {
     });
 
     expect(runnerHost.notificationsSent).toHaveLength(1);
-    expect(runnerHost.notificationsSent[0]?.body).toBe("Host error Details");
+    expect(runnerHost.notificationsSent[0]?.body).toBe("Details");
   });
 });

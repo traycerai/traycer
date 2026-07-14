@@ -27,6 +27,7 @@ describe("released floor production module", () => {
       "host.notifications.list": { major: 1, minor: 0 },
       "host.notifications.markRead": { major: 1, minor: 0 },
       "host.notifications.markAllRead": { major: 1, minor: 0 },
+      "host.notifications.clearAll": { major: 1, minor: 0 },
       "host.notifications.getConfig": { major: 1, minor: 0 },
       "host.notifications.setConfig": { major: 1, minor: 0 },
       "host.notifications.indicatorState": { major: 1, minor: 0 },

@@ -2,7 +2,6 @@
 
 const { spawn } = require("node:child_process");
 const path = require("node:path");
-const { resolveDevDesktopIdentity } = require("./dev-desktop-display-name.cjs");
 
 const workspaceRoot = path.resolve(__dirname, "..", "..");
 const DEFAULT_RENDERER_PORT = 5173;
@@ -33,7 +32,6 @@ function readRendererPort(env) {
 // it so both sides always derive from the same source.
 function buildChildEnv(env) {
   const rendererPort = readRendererPort(env);
-  const devDesktopIdentity = resolveDevDesktopIdentity(env);
   const rendererUrl =
     env.TRAYCER_DESKTOP_DEV_URL ?? `http://localhost:${rendererPort}`;
   const childEnv = {
@@ -48,12 +46,9 @@ function buildChildEnv(env) {
   } else {
     delete childEnv.VITE_DEV_DESKTOP_SLOT;
   }
+  // Worktree display identity belongs to native app chrome, never the renderer.
   delete childEnv.VITE_DEV_DESKTOP_DISPLAY_NAME;
-  if (devDesktopIdentity === null) {
-    delete childEnv.VITE_DEV_DESKTOP_WORKTREE_LABEL;
-  } else {
-    childEnv.VITE_DEV_DESKTOP_WORKTREE_LABEL = devDesktopIdentity.worktreeLabel;
-  }
+  delete childEnv.VITE_DEV_DESKTOP_WORKTREE_LABEL;
   if (typeof env.TRAYCER_DEV_CLOUD_UI_BASE_URL === "string") {
     childEnv.VITE_DEV_CLOUD_UI_BASE_URL = env.TRAYCER_DEV_CLOUD_UI_BASE_URL;
   } else {

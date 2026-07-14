@@ -39,34 +39,10 @@ function titleBarSpacerStyle(
   return dragSuppressed ? NO_DRAG_STYLE : DRAG_STYLE;
 }
 
-function rightDragSpacerClassName(
-  showTabStrip: boolean,
-  worktreeLabel: string | null,
-): string {
-  const baseClassName = "relative z-10 h-full items-center justify-end";
-  if (!showTabStrip) {
-    return cn(baseClassName, "flex min-w-0 flex-1");
-  }
-  if (worktreeLabel === null) {
-    return cn(
-      baseClassName,
-      "hidden shrink-0 basis-[clamp(2rem,6vw,6rem)] md:flex",
-    );
-  }
-  return cn(
-    baseClassName,
-    "hidden shrink-0 basis-[clamp(4rem,10vw,10rem)] md:flex",
-  );
-}
-
 export type AppHeaderVariant = "app" | "host-loading";
 
 export interface AppHeaderProps {
   readonly variant: AppHeaderVariant;
-}
-
-interface DevDesktopWorktreeLabelProps {
-  readonly worktreeLabel: string | null;
 }
 
 /**
@@ -92,8 +68,6 @@ export function AppHeader(props: AppHeaderProps): ReactNode {
   const dragSuppressed = useTitleBarDraggingSuppressed();
   const draggable = framelessDesktop && !dragSuppressed;
   const spacerDragStyle = titleBarSpacerStyle(framelessDesktop, dragSuppressed);
-  const devDesktopWorktreeLabel =
-    devDesktopWorktreeLabelForRenderer(framelessDesktop);
 
   return (
     <header
@@ -139,16 +113,15 @@ export function AppHeader(props: AppHeaderProps): ReactNode {
         {showTabStrip ? <TabStrip /> : null}
       </div>
       <div
-        aria-hidden={devDesktopWorktreeLabel === null}
-        data-testid="app-header-right-drag-spacer"
-        className={rightDragSpacerClassName(
-          showTabStrip,
-          devDesktopWorktreeLabel,
+        aria-hidden
+        className={cn(
+          "relative z-10 h-full",
+          showTabStrip
+            ? "hidden shrink-0 basis-[clamp(2rem,6vw,6rem)] md:block"
+            : "min-w-0 flex-1",
         )}
         style={spacerDragStyle}
-      >
-        <DevDesktopWorktreeLabel worktreeLabel={devDesktopWorktreeLabel} />
-      </div>
+      />
       <div
         className="relative z-10 flex shrink-0 items-center gap-2"
         style={framelessDesktop ? NO_DRAG_STYLE : undefined}
@@ -163,40 +136,6 @@ export function AppHeader(props: AppHeaderProps): ReactNode {
         <HeaderIdentity showAppSettings={!navDisabled} />
       </div>
     </header>
-  );
-}
-
-export function DevDesktopWorktreeLabel(
-  props: DevDesktopWorktreeLabelProps,
-): ReactNode {
-  if (props.worktreeLabel === null) {
-    return null;
-  }
-
-  return (
-    <span
-      data-testid="dev-desktop-display-name"
-      className={cn(
-        "pointer-events-none block max-w-full truncate text-right text-xs font-medium tracking-wide text-muted-foreground/70",
-      )}
-    >
-      {props.worktreeLabel}
-    </span>
-  );
-}
-
-function readDevDesktopWorktreeLabel(value: string | undefined): string | null {
-  return typeof value === "string" && value.length > 0 ? value : null;
-}
-
-function devDesktopWorktreeLabelForRenderer(
-  framelessDesktop: boolean,
-): string | null {
-  if (!framelessDesktop || !import.meta.env.DEV) {
-    return null;
-  }
-  return readDevDesktopWorktreeLabel(
-    import.meta.env.VITE_DEV_DESKTOP_WORKTREE_LABEL,
   );
 }
 

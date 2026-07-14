@@ -78,6 +78,8 @@ import {
   useEpicActiveAgentIds,
   useEpicArtifactRecords,
   useEpicConnectionStatus,
+  useEpicNodeHostId,
+  useEpicNodeOwnerKind,
   useEpicPermissionRole,
   useEpicTreeIndex,
   useEpicTreeNode,
@@ -135,6 +137,7 @@ import { SidebarReparentRowDropWrapper } from "@/components/epic-canvas/sidebar/
 import { NewConversationModalAction } from "@/components/epic-canvas/sidebar/new-conversation-modal";
 import { SidebarPanelEmptyState } from "@/components/epic-canvas/sidebar/sidebar-panel-empty-state";
 import { useHostNotificationIndicators } from "@/hooks/notifications/use-host-notification-indicators-query";
+import { WorktreeOwnerMetadataHoverCard } from "@/components/worktree/worktree-owner-metadata";
 
 interface ChatTreePanelBodyProps {
   readonly epicId: string;
@@ -1218,6 +1221,8 @@ function ChatRowButton(props: ChatRowButtonProps) {
   const showNavigatorResourceStats = useSettingsStore(
     (state) => state.showNavigatorResourceStats,
   );
+  const ownerHostId = useEpicNodeHostId(nodeId);
+  const ownerKind = useEpicNodeOwnerKind(nodeId);
 
   // A chat row's "+" (add child) and "⋯" (more menu) are both gated by canEdit
   // and hidden in selection mode, so both pad-right zones share one flag. The
@@ -1275,7 +1280,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
     );
   }
 
-  return (
+  const button = (
     <button
       ref={dragRef}
       {...attributes}
@@ -1315,6 +1320,16 @@ function ChatRowButton(props: ChatRowButtonProps) {
         )}
       </span>
     </button>
+  );
+  if (ownerHostId === null || ownerKind === null) return button;
+  return (
+    <WorktreeOwnerMetadataHoverCard
+      trigger={button}
+      hostId={ownerHostId}
+      epicId={epicId}
+      ownerId={nodeId}
+      ownerKind={ownerKind}
+    />
   );
 }
 

@@ -28,6 +28,7 @@ export type HostNotificationsFeedFrame = Extract<
   | { readonly kind: "snapshot" }
   | { readonly kind: "upserted" }
   | { readonly kind: "readStateChanged" }
+  | { readonly kind: "cleared" }
 >;
 
 interface HostNotificationsProjection {
@@ -62,6 +63,10 @@ interface HostNotificationsState {
   markAllReadLocally: (
     beforeUpdatedAt: number,
     readAt: number,
+    expectedSnapshotEpoch: number,
+  ) => void;
+  clearBeforeLocally: (
+    beforeUpdatedAt: number,
     expectedSnapshotEpoch: number,
   ) => void;
   reset: () => void;
@@ -250,6 +255,26 @@ export const useHostNotificationsStore = create<HostNotificationsState>()(
       });
     },
 
+    clearBeforeLocally: (beforeUpdatedAt, expectedSnapshotEpoch) => {
+      set((state) => {
+        if (state.snapshotEpoch !== expectedSnapshotEpoch) return state;
+        const retainedEntries = Object.values(state.byId).filter(
+          (entry) => entry.updatedAt > beforeUpdatedAt,
+        );
+        if (retainedEntries.length === state.orderedIds.length) return state;
+        const byId = Object.fromEntries(
+          retainedEntries.map((entry) => [entry.id, entry]),
+        );
+        const projection = projectHostNotifications(byId);
+        return {
+          byId,
+          orderedIds: projection.orderedIds,
+          unreadCount: projection.unreadCount,
+          nextCursor: null,
+        };
+      });
+    },
+
     reset: () => set(initialState()),
   }),
 );
@@ -321,9 +346,27 @@ export function openHostNotificationsStream(
           );
         options.onFeedFrame(frame);
         return;
+      case "cleared":
+        useHostNotificationsStore
+          .getState()
+          .clearBeforeLocally(
+            frame.beforeUpdatedAt,
+            useHostNotificationsStore.getState().snapshotEpoch,
+          );
+        options.onFeedFrame(frame);
+        return;
       case "channelEmission":
         if (frame.channelId === "renderer") {
-          options.displayChannelEmission(frame.rows);
+          const currentById = useHostNotificationsStore.getState().byId;
+          options.displayChannelEmission(
+            frame.rows.map((entry) => {
+              const current = currentById[entry.id];
+              return Object.hasOwn(currentById, entry.id) &&
+                current.updatedAt >= entry.updatedAt
+                ? current
+                : entry;
+            }),
+          );
         }
         return;
       case "pong":

@@ -153,6 +153,12 @@ interface Recorded {
   readonly errors: string[];
   exited: number | null;
   readonly exitWaiters: Array<() => void>;
+  // Log rotations attempted, in order. Stubbed (not left to the real helper) so
+  // a test run can never rotate the developer's actual ~/.traycer host log.
+  readonly rotations: string[];
+  // Ordered trace of the start lifecycle: rotate -> marker -> open fd -> spawn.
+  // The ORDER is the invariant (see the ordering test), not just the calls.
+  readonly sequence: string[];
   readonly spawnCalls: Array<{
     command: string;
     args: readonly string[];
@@ -180,6 +186,8 @@ function makeRunStubs(
     exited: null,
     exitWaiters: [],
     spawnCalls: [],
+    rotations: [],
+    sequence: [],
   };
   // The stub implements only the surface `runHostStart` touches; route it
   // to `ChildProcess` through an explicit `unknown` intermediate rather than a
@@ -193,6 +201,7 @@ function makeRunStubs(
         p,
       ),
     spawn: (command, args, options) => {
+      recorded.sequence.push("spawn");
       recorded.spawnCalls.push({
         command,
         args,
@@ -203,12 +212,21 @@ function makeRunStubs(
       });
       return childAsProcess;
     },
-    openLogFd: async () => 42,
+    openLogFd: async () => {
+      recorded.sequence.push("open-fd");
+      return 42;
+    },
+    rotateLog: async (environment) => {
+      recorded.rotations.push(environment);
+      recorded.sequence.push("rotate");
+      return "skipped";
+    },
     readEnvOverrides: async () => ({
       EXTRA_FROM_OVERRIDE: "1",
       TRAYCER_TEST_UNSET: null,
     }),
     writeMarker: async (environment, phase, fields) => {
+      recorded.sequence.push(`marker:${phase}`);
       recorded.markers.push({
         environment,
         phase,
@@ -309,6 +327,30 @@ describe("runHostStart - installed-record launch path", () => {
       hostHomeDir("dev"),
     ]);
     expect(recorded.spawnCalls[0]?.env.TRAYCER_CHANNEL).toBeUndefined();
+  });
+
+  it("rotates the log for this environment before anything appends to the run", async () => {
+    const exec = "/opt/traycer/host/dev/install/traycer-host";
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const invoke = () => runHostStart({ environment: "dev", cwd: null }, deps);
+    setTimeout(() => child.emit("exit", 0, null));
+    await runUntilExit(invoke, recorded);
+
+    expect(recorded.rotations).toEqual(["dev"]);
+    // Ordering is load-bearing, not incidental, so assert the actual SEQUENCE
+    // rather than just that each step ran. The `starting` marker must land in
+    // the POST-rotation file, and the stdio fd opened after it lives for the
+    // child's whole lifetime - an fd follows the inode across a rename, so
+    // rotating any later would divert the host's own stdout into the
+    // rotated-away file and split one session across two inodes.
+    // Prefix, not the whole trace: the child's own exit appends `marker:exited`
+    // afterwards, which is not part of the start sequence under test.
+    expect(recorded.sequence.slice(0, 4)).toEqual([
+      "rotate",
+      "marker:starting",
+      "open-fd",
+      "spawn",
+    ]);
   });
 
   it("passes the dev-desktop run host root to the host when a slot is set", async () => {

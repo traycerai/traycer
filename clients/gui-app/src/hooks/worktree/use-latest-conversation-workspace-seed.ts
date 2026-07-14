@@ -49,6 +49,7 @@ export function useLatestConversationWorkspaceSeed(
     enabled: canReadBinding,
     staleTime: 0,
     refetchOnWindowFocus: false,
+    refetchInterval: false,
   });
 
   const stagingKey = useMemo<WorktreeStagingKey | null>(() => {

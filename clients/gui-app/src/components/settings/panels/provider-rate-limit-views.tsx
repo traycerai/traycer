@@ -367,6 +367,24 @@ export function CodexRateLimitView({
   readonly data: CodexRateLimits;
   readonly variant: RateLimitViewVariant;
 }): ReactNode {
+  return (
+    <CodexRateLimitViewContent
+      data={data}
+      variant={variant}
+      resetAction={null}
+    />
+  );
+}
+
+function CodexRateLimitViewContent({
+  data,
+  variant,
+  resetAction,
+}: {
+  readonly data: CodexRateLimits;
+  readonly variant: RateLimitViewVariant;
+  readonly resetAction: ReactNode;
+}): ReactNode {
   // Overview keeps only the primary/secondary (5h/Weekly) windows; the badge,
   // credits, per-model extraWindows, spend control, and reset credits are
   // single-provider-tab detail (`!isOverviewVariant`). The plan/tier label
@@ -425,7 +443,10 @@ export function CodexRateLimitView({
 
   const manualResets: ReactNode =
     !overview && data.resetCredits !== null ? (
-      <CodexResetCreditsRow resetCredits={data.resetCredits} />
+      <CodexResetCreditsRow
+        resetCredits={data.resetCredits}
+        resetAction={resetAction}
+      />
     ) : null;
 
   // Overview never gets here with more than `globalLimits`; the divider
@@ -459,14 +480,19 @@ export function CodexRateLimitView({
  */
 function CodexResetCreditsRow({
   resetCredits,
+  resetAction,
 }: {
   readonly resetCredits: NonNullable<CodexRateLimits["resetCredits"]>;
+  readonly resetAction: ReactNode;
 }): ReactNode {
   return (
-    <div className="flex items-center justify-between text-ui-sm">
+    <div className="flex flex-wrap items-center justify-between gap-2 text-ui-sm">
       <span className="text-muted-foreground">Manual resets</span>
-      <span className="font-mono text-ui-xs text-foreground">
-        {resetCredits.availableCount} available
+      <span className="flex items-center gap-2">
+        <span className="font-mono text-ui-xs text-foreground">
+          {resetCredits.availableCount} available
+        </span>
+        {resetCredits.availableCount > 0 ? resetAction : null}
       </span>
     </div>
   );
@@ -745,7 +771,7 @@ export function KiloCodeRateLimitView({
 }
 
 export function ProviderRateLimitBody(
-  props: ProviderRateLimitQueryState,
+  props: ProviderRateLimitQueryState & { readonly codexResetAction: ReactNode },
 ): ReactNode {
   const state = resolveProviderRateLimitViewState(props);
   // `isPending` alone stays `true` forever for a disabled query (e.g. a chat
@@ -786,7 +812,13 @@ export function ProviderRateLimitBody(
       </p>
     );
   }
-  return <ProviderRateLimitDetail data={data} variant="settings" />;
+  return (
+    <ProviderRateLimitDetail
+      data={data}
+      variant="settings"
+      codexResetAction={props.codexResetAction}
+    />
+  );
 }
 
 /**
@@ -800,13 +832,21 @@ export function ProviderRateLimitBody(
 export function ProviderRateLimitDetail({
   data,
   variant,
+  codexResetAction,
 }: {
   readonly data: AvailableProviderRateLimits;
   readonly variant: RateLimitViewVariant;
+  readonly codexResetAction: ReactNode;
 }): ReactNode {
   switch (data.provider) {
     case "codex":
-      return <CodexRateLimitView data={data} variant={variant} />;
+      return (
+        <CodexRateLimitViewContent
+          data={data}
+          variant={variant}
+          resetAction={codexResetAction}
+        />
+      );
     case "claude-code":
       return <ClaudeRateLimitView data={data} variant={variant} />;
     // OpenRouter/Kilo Code report no usage *windows* (only credit/spend bars and

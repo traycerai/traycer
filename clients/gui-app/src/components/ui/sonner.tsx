@@ -7,7 +7,7 @@ import {
   TriangleAlertIcon,
   OctagonXIcon,
 } from "lucide-react";
-import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { ProgressToastIcon } from "@/components/ui/progress-toast-icon";
 import { cn } from "@/lib/utils";
 
 const TOAST_CLASS_NAME = cn("cn-toast", "group/toast");
@@ -40,13 +40,7 @@ const Toaster = ({ ...props }: ToasterProps) => {
           info: <InfoIcon className="size-4" />,
           warning: <TriangleAlertIcon className="size-4" />,
           error: <OctagonXIcon className="size-4" />,
-          loading: (
-            <AgentSpinningDots
-              testId={undefined}
-              variant="orbit"
-              className="size-4 text-current"
-            />
-          ),
+          loading: <ProgressToastIcon />,
         }}
         style={
           {
