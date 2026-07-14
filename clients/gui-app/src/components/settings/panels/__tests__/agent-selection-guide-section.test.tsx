@@ -90,6 +90,14 @@ function replaceMarkdown(element: HTMLElement, markdown: string): void {
   });
 }
 
+function blurCodeMirror(element: HTMLElement): void {
+  const content = element.querySelector(".cm-content");
+  if (!(content instanceof HTMLElement)) {
+    throw new Error("Expected CodeMirror content to render");
+  }
+  fireEvent.blur(content);
+}
+
 describe("AgentSelectionGuideSection", () => {
   beforeEach(() => {
     guideMocks.queryData = {
@@ -221,7 +229,7 @@ describe("AgentSelectionGuideSection", () => {
     const editor = screen.getByTestId("agents-selection-guide-input");
 
     replaceMarkdown(editor, "first edit");
-    fireEvent.blur(editor);
+    blurCodeMirror(editor);
 
     expect(guideMocks.setGlobalMutateAsync).toHaveBeenCalledTimes(1);
     expect(guideMocks.setGlobalMutateAsync).toHaveBeenLastCalledWith({
@@ -229,7 +237,7 @@ describe("AgentSelectionGuideSection", () => {
     });
 
     replaceMarkdown(editor, "second edit");
-    fireEvent.blur(editor);
+    blurCodeMirror(editor);
 
     expect(guideMocks.setGlobalMutateAsync).toHaveBeenCalledTimes(1);
 

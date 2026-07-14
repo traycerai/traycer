@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import { markdown } from "@codemirror/lang-markdown";
 import CodeMirror, { EditorView } from "@uiw/react-codemirror";
 import { Button } from "@/components/ui/button";
@@ -65,20 +65,6 @@ export function AgentSelectionGuideEditorSurface({
   status,
 }: AgentSelectionGuideEditorSurfaceProps) {
   const theme = useCodeMirrorTheme();
-  const onValueChangeRef = useRef(onValueChange);
-  const onBlurRef = useRef(onBlur);
-  useEffect(() => {
-    onValueChangeRef.current = onValueChange;
-    onBlurRef.current = onBlur;
-  }, [onBlur, onValueChange]);
-
-  const handleValueChange = useCallback((nextValue: string): void => {
-    onValueChangeRef.current(nextValue);
-  }, []);
-  const handleBlur = useCallback((): void => {
-    onBlurRef.current?.();
-  }, []);
-
   const extensions = useMemo(
     () => [
       ...MARKDOWN_EDITOR_EXTENSIONS,
@@ -118,8 +104,8 @@ export function AgentSelectionGuideEditorSurface({
       >
         <CodeMirror
           value={value}
-          onChange={handleValueChange}
-          onBlur={handleBlur}
+          onChange={onValueChange}
+          onBlur={onBlur ?? undefined}
           editable={!disabled}
           readOnly={disabled}
           height="100%"
