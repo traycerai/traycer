@@ -308,7 +308,10 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
       expect(script).toContain("$ParentPid = 4242");
       expect(script).toContain(liveBinaryPath);
       expect(script).toContain(stagedBinaryPath);
-      expect(script).toContain("ai.traycer.host.production");
+      // Binary swap + service start hand off to the staged binary's own
+      // hidden `cli finalize-upgrade` command (see finalize-helper.ts's
+      // module doc comment) rather than this script doing them inline.
+      expect(script).toContain("$StagedBinary cli finalize-upgrade");
     } finally {
       chmodSync(lockedDir, 0o755);
     }

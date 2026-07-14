@@ -9,6 +9,7 @@ import {
 } from "commander";
 import { AGENT_FACING_HARNESS_ID_LIST } from "@traycer/protocol/host/agent/shared";
 import { config } from "./config";
+import { cliFinalizeUpgradeCommand } from "./commands/cli-finalize-upgrade";
 import { buildCliMarkSourceCommand } from "./commands/cli-mark-source";
 import { buildCliReAnchorCommand } from "./commands/cli-re-anchor";
 import { buildCliUpgradeCommand } from "./commands/cli-upgrade";
@@ -855,6 +856,15 @@ function registerCliCommands(program: Command): void {
             ? opts.installedVersion
             : "",
       }),
+  );
+
+  withRunner(
+    cli
+      .command("finalize-upgrade", { hidden: true })
+      .description(
+        "Internal: complete a pending self-upgrade (binary swap + service start) under cli-lock. Invoked by the detached Windows/POSIX finalize-helper script via the staged CLI binary, never by a human.",
+      ),
+    () => cliFinalizeUpgradeCommand,
   );
 
   withRunner(

@@ -162,7 +162,6 @@ export async function restartWithPendingCliUpgradeFinalize(
       environment: args.environment,
       stagedBinaryPath: finalize.stagedBinaryPath,
       livePath: finalize.livePath,
-      serviceLabel: args.label,
       parentPid: args.parentPid,
       parentExitTimeoutSeconds: 60,
       platform: args.platform,

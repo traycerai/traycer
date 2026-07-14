@@ -701,6 +701,21 @@ describe("traycer CLI entrypoint registration", () => {
     expect(thrown).not.toBeNull();
   });
 
+  it("cli finalize-upgrade is a hidden, internal-only command reachable from the CLI namespace", () => {
+    // Structural check only - unlike the other hidden commands in this
+    // file, `cli finalize-upgrade` genuinely touches the manifest/lock
+    // on invocation (via `commands/cli-upgrade.ts`'s real
+    // `finalizePendingCliUpgrade`, unmocked here), so it isn't invoked
+    // via parseAsync in this file. Its behavior is covered by
+    // commands/__tests__/cli-finalize-upgrade.test.ts (mocked) and
+    // cli-finalize-upgrade-lock.test.ts (genuine two-process lock
+    // contention).
+    const program = buildProgram();
+    const cli = expectCommand(program, ["cli"]);
+    expectCommand(program, ["cli", "finalize-upgrade"]);
+    expect(cli.helpInformation()).not.toContain("finalize-upgrade");
+  });
+
   // Service manifests render argv as `traycer host start` - the slot is
   // `config.environment` (baked per build), so there is no --environment. These
   // tests pin that `host start` declares only --cwd and rejects the retired
