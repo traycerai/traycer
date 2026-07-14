@@ -200,7 +200,6 @@ describe("notification display", () => {
 
     expect(toastCalls).toHaveLength(1);
     const toastCall = toastCalls[0];
-    if (toastCall === undefined) throw new Error("Expected one toast call");
     expect(toastCall.options.className).toBeUndefined();
     expect(toastCall.options.onClick).toBeUndefined();
   });

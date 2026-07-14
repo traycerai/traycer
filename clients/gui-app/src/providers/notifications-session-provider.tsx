@@ -91,7 +91,9 @@ export function NotificationsSessionProvider(
     [activate],
   );
   const onToastClickRef = useRef(onToastClick);
-  onToastClickRef.current = onToastClick;
+  useEffect(() => {
+    onToastClickRef.current = onToastClick;
+  }, [onToastClick]);
   const consumeEntity = useCallback(
     (entity: HostNotificationsEntityRef): void => {
       useAppLocalNotificationsStore
