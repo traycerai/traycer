@@ -53,10 +53,41 @@ export type LogsConfig = z.infer<typeof logsConfigSchema>;
  * Validates the CURRENT version only; older shapes are brought up to it by
  * `migrateCliConfig` (in `./store`) before they reach this schema.
  *
- * `shell.path === null` and `shell.args === null` both mean "fall back to
- * OS defaults" - tracked separately so a user who customised args but not
- * path (or vice versa) keeps the partial override.
+ * `shell.path` + `shell.args` are the CURRENTLY SELECTED command, always
+ * MATERIALISED: after every write `shell.args` equals the resolved args for
+ * `shell.path` (the mirror invariant in `./store`), so an old host binary that
+ * reads this file per PTY spawn never applies its own platform default to the
+ * wrong program. The one exception is pure system default - `shell.path === null`
+ * AND `shell.args === null` - which means "follow the OS login shell and its
+ * family default".
+ *
+ * `shell.entries` is the set of self-contained `{ path, args }` launch specs the
+ * user has added and/or customised through the Settings picker. An entry is
+ * created by adding a program or by the first flag edit on the selected shell,
+ * and persists until removed - so it is both the "remembered" half of the
+ * picker's list (detection finds the rest) and where a shell's custom flags
+ * live. Additive and `.default([])`-ed, so config files written before the
+ * feature keep validating without a version bump.
+ *
+ * `args` stores DEVIATIONS ONLY: `null` means "no flag deviation - resolution
+ * uses `defaultShellArgs(path)`". Presence (an entry exists) and flag-deviation
+ * (`args !== null`) are independent halves, so an added program running its
+ * factory flags is `{ path, args: null }`. The store's write path canonicalises
+ * any args deeply equal to the family default down to `null`, which is what
+ * makes "the visible flags differ from the family default" equivalent to
+ * "a non-null deviation is on disk".
  */
+const shellEntrySchema = z.object({
+  path: z.string(),
+  args: z.array(z.string()).nullable(),
+});
+
+/** A single remembered/customised launch spec: one added program and its flags. */
+export interface ShellEntry {
+  readonly path: string;
+  readonly args: readonly string[] | null;
+}
+
 export const cliConfigSchema = z.object({
   version: z.literal(CLI_CONFIG_VERSION),
   // Each section defaults so a partial file (e.g. only `shell.path` set, or
@@ -68,8 +99,9 @@ export const cliConfigSchema = z.object({
     .object({
       path: z.string().nullable().default(null),
       args: z.array(z.string()).nullable().default(null),
+      entries: z.array(shellEntrySchema).default([]),
     })
-    .default({ path: null, args: null }),
+    .default({ path: null, args: null, entries: [] }),
   envOverrides: envOverrideMapSchema.default({}),
   logs: logsConfigSchema,
 });
@@ -89,16 +121,23 @@ export interface EffectiveShellConfig {
 }
 
 /**
- * A shell binary detected on the machine, surfaced as a quick-pick in the
- * Settings → Shell combobox. `path` is absolute and was verified executable
- * at detection time, except an OS default that may be a bare command name
- * (e.g. Windows `powershell.exe`). `isDefault` marks the OS-default shell so
- * the UI can sort/annotate it.
+ * An entry in the Settings → Shell picker list. `path` is absolute; a
+ * `"detected"` entry was verified executable at detection time (except an OS
+ * default that may be a bare command name, e.g. Windows `powershell.exe`),
+ * while an `"added"` entry is listed straight from `shell.entries` and stays
+ * even if the file no longer exists. `isDefault` marks the OS-default shell so
+ * the UI can sort/annotate it. `source` tells the UI which rows are
+ * user-removable. `missing` is a list-time `F_OK` probe (never persisted):
+ * `true` only for an `"added"` row whose file is gone - detected rows are always
+ * `false` - so the UI can flag a customised shell that has since been
+ * uninstalled while keeping its removable row.
  */
 export interface DetectedShell {
   readonly name: string;
   readonly path: string;
   readonly isDefault: boolean;
+  readonly source: "detected" | "added";
+  readonly missing: boolean;
 }
 
 /**
@@ -107,7 +146,7 @@ export interface DetectedShell {
  */
 export const EMPTY_CLI_CONFIG: CliConfig = {
   version: CLI_CONFIG_VERSION,
-  shell: { path: null, args: null },
+  shell: { path: null, args: null, entries: [] },
   envOverrides: {},
   logs: { cliLogLevel: DEFAULT_LOG_LEVEL, hostLogLevel: DEFAULT_LOG_LEVEL },
 };

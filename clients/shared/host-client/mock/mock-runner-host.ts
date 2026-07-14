@@ -22,9 +22,11 @@ import type {
   TraycerEnvOverride,
   TraycerShellConfig,
   TraycerShellConfigSetInput,
+  TraycerShellProbeResult,
   TrayEpic,
   TrayIndicatorState,
 } from "../../platform/runner-host";
+import { defaultShellArgs } from "@traycer/protocol/config/shell-family";
 import {
   refreshAuthTokenViaHttp,
   validateAuthTokenIdentityViaHttp,
@@ -57,6 +59,11 @@ export interface MockRunnerHostOptions {
 }
 
 const MOCK_TOKEN_STORE_KEY = "traycer.token";
+
+/** Ordered flag-list equality, for the mock's family-default canonicalisation. */
+function sameFlags(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((value, i) => value === b[i]);
+}
 
 /**
  * In-memory `IRunnerHost` used by `gui-app` dev/preview and shared tests.
@@ -380,10 +387,40 @@ export class MockTraycerCli implements ITraycerCli {
     synthesised: true,
   };
   envOverrides: TraycerEnvOverride[] = [];
+  /**
+   * Remembered/customised launch specs, mirroring the store's `shell.entries`.
+   * Mutated by `shellConfigAdd`/`Remove`/`Set`; drives the "added" rows and the
+   * per-shell flags a pick materialises.
+   */
+  shellEntries: { path: string; args: readonly string[] | null }[] = [];
   detectedShells: readonly TraycerDetectedShell[] = [
-    { name: "zsh", path: "/bin/zsh", isDefault: true },
-    { name: "bash", path: "/bin/bash", isDefault: false },
+    {
+      name: "zsh",
+      path: "/bin/zsh",
+      isDefault: true,
+      source: "detected",
+      missing: false,
+    },
+    {
+      name: "bash",
+      path: "/bin/bash",
+      isDefault: false,
+      source: "detected",
+      missing: false,
+    },
   ];
+  /**
+   * Filesystem the mock probe answers against - absolute paths mapped to
+   * whether they're executable. A missing entry probes as "not found".
+   */
+  probeFs: ReadonlyMap<string, boolean> = new Map([
+    ["/bin/zsh", true],
+    ["/bin/bash", true],
+    ["/usr/local/bin/nu", true],
+    ["/etc/hosts", false],
+  ]);
+  /** Path the next `pickShellProgramFile` resolves with, or null to cancel. */
+  pickedProgramFile: string | null = null;
   /** Last bearer seeded via `cliLogin`, so tests can assert it was forwarded. */
   lastLoginToken: string | null = null;
   /** Last refresh token seeded via `cliLogin`, so tests can assert it too. */
@@ -397,24 +434,128 @@ export class MockTraycerCli implements ITraycerCli {
     return this.shellConfig;
   }
 
+  /** The resolved (materialised) args for `path`: its deviation, else default. */
+  private resolvedArgsFor(path: string): string[] {
+    const deviation = this.shellEntries.find((e) => e.path === path)?.args;
+    return deviation != null ? [...deviation] : [...defaultShellArgs(path)];
+  }
+
+  /** Upsert an entry, canonicalising family-default args to a null deviation. */
+  private upsertEntry(path: string, args: readonly string[] | null): void {
+    const canonical =
+      args !== null && !sameFlags(args, defaultShellArgs(path))
+        ? [...args]
+        : null;
+    this.shellEntries = [
+      ...this.shellEntries.filter((entry) => entry.path !== path),
+      { path, args: canonical },
+    ];
+  }
+
   async shellConfigSet(input: TraycerShellConfigSetInput): Promise<void> {
-    this.shellConfig = {
-      path: input.path ?? this.shellConfig.path,
-      args: input.args !== null ? input.args : this.shellConfig.args,
-      synthesised: false,
-    };
+    if (input.args !== null) {
+      // Flag customisation: upsert the entry for the effective shell. While on
+      // the system default (no explicit selection), keep `synthesised` so the
+      // System default row stays checked and the login shell inherits the entry.
+      const inAutoState = input.path === null && this.shellConfig.synthesised;
+      const effectivePath = input.path ?? this.shellConfig.path;
+      this.upsertEntry(effectivePath, input.args);
+      this.shellConfig = {
+        path: effectivePath,
+        args: input.args,
+        synthesised: inAutoState,
+      };
+      return;
+    }
+    if (input.path !== null) {
+      // Picking a shell: materialise its args (entry's, else family default),
+      // remember nothing new.
+      this.shellConfig = {
+        path: input.path,
+        args: this.resolvedArgsFor(input.path),
+        synthesised: false,
+      };
+    }
   }
 
   async shellConfigReset(): Promise<void> {
+    // Reset only clears the selection - it returns to the login shell and
+    // inherits that shell's entry flags. Entries are untouched.
+    const loginShell = "/bin/zsh";
     this.shellConfig = {
-      path: "/bin/zsh",
-      args: ["-i", "-l"],
+      path: loginShell,
+      args: this.resolvedArgsFor(loginShell),
       synthesised: true,
     };
   }
 
+  async shellConfigAdd(input: { readonly path: string }): Promise<void> {
+    // A freshly-added program runs factory flags: canonicalises to a null
+    // deviation, while the mirror materialises the resolved default args.
+    this.upsertEntry(input.path, defaultShellArgs(input.path));
+    this.shellConfig = {
+      path: input.path,
+      args: [...defaultShellArgs(input.path)],
+      synthesised: false,
+    };
+  }
+
+  async shellConfigRemove(input: { readonly path: string }): Promise<void> {
+    const wasAdded = this.shellEntries.some(
+      (entry) => entry.path === input.path,
+    );
+    if (!wasAdded) return;
+    const wasSelected = this.shellConfig.path === input.path;
+    this.shellEntries = this.shellEntries.filter(
+      (entry) => entry.path !== input.path,
+    );
+    if (wasSelected) await this.shellConfigReset();
+  }
+
+  async shellRevertArgs(input: { readonly path: string }): Promise<void> {
+    const entry = this.shellEntries.find((e) => e.path === input.path);
+    if (entry === undefined) return; // no entry: no-op, remember nothing new
+    this.shellEntries = this.shellEntries.map((e) =>
+      e.path === input.path ? { path: e.path, args: null } : e,
+    );
+    // Re-materialise the mirror when the reverted shell is the selected one
+    // (preserving `synthesised` so the System default row stays checked).
+    if (this.shellConfig.path === input.path) {
+      this.shellConfig = {
+        ...this.shellConfig,
+        args: [...defaultShellArgs(input.path)],
+      };
+    }
+  }
+
+  async shellProbe(input: {
+    readonly path: string;
+  }): Promise<TraycerShellProbeResult> {
+    const executable = this.probeFs.get(input.path);
+    return {
+      exists: executable !== undefined,
+      executable: executable === true,
+    };
+  }
+
+  pickShellProgramFile: (() => Promise<string | null>) | null = () =>
+    Promise.resolve(this.pickedProgramFile);
+
   async shellListDetected(): Promise<readonly TraycerDetectedShell[]> {
-    return this.detectedShells;
+    const added: TraycerDetectedShell[] = this.shellEntries
+      .filter(
+        (entry) => !this.detectedShells.some((d) => d.path === entry.path),
+      )
+      .map((entry) => ({
+        name: entry.path.split(/[\\/]/).pop() ?? entry.path,
+        path: entry.path,
+        isDefault: false,
+        source: "added" as const,
+        // A remembered path whose file is absent from `probeFs` lists as
+        // missing, mirroring the protocol store's list-time `F_OK` probe.
+        missing: !this.probeFs.has(entry.path),
+      }));
+    return [...this.detectedShells, ...added];
   }
 
   async envOverrideList(): Promise<readonly TraycerEnvOverride[]> {
