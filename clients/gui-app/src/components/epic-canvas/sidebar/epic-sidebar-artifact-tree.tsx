@@ -29,6 +29,7 @@ import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { requestArtifactEditorFocus } from "@/lib/artifacts/pending-editor-focus";
 import { openProjectedSidebarNodeInTabWhenAvailable } from "@/components/epic-canvas/sidebar/open-projected-sidebar-node";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
+import { useEpicExportArtifacts } from "@/hooks/epic/use-epic-export-artifacts-mutation";
 import { cn } from "@/lib/utils";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -98,6 +99,7 @@ import { isEditableRole } from "@/lib/epic-permissions";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import {
   Check,
+  FileDown,
   FileText,
   MoreHorizontal,
   Pencil,
@@ -1256,7 +1258,7 @@ function ArtifactNodeShell(props: ArtifactNodeShellProps) {
           />
         ) : null}
 
-        {canEdit && !isRenaming && !selectionMode ? (
+        {!isRenaming && !selectionMode ? (
           <ArtifactMoreMenu
             nodeId={nodeId}
             nodeName={nodeName}
@@ -1827,6 +1829,15 @@ interface ArtifactMoreMenuProps {
 
 function ArtifactMoreMenu(props: ArtifactMoreMenuProps) {
   const { nodeId, nodeName, canMutate, onStartRename, onPerformDelete } = props;
+  const exportArtifacts = useEpicExportArtifacts();
+  const exportOne = (format: "markdown" | "pdf"): void => {
+    exportArtifacts.mutate({
+      artifacts: [{ id: nodeId, title: nodeName }],
+      format,
+      archive: false,
+      archiveTitle: null,
+    });
+  };
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -1845,6 +1856,43 @@ function ArtifactMoreMenu(props: ArtifactMoreMenuProps) {
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
+        <DropdownMenuItem
+          data-testid={`epic-sidebar-export-markdown-${nodeId}`}
+          disabled={exportArtifacts.isPending}
+          onSelect={() => {
+            exportOne("markdown");
+          }}
+        >
+          {exportArtifacts.isPending ? (
+            <AgentSpinningDots
+              className={undefined}
+              testId={undefined}
+              variant={undefined}
+            />
+          ) : (
+            <FileDown className="size-3.5" />
+          )}
+          Export as Markdown
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          data-testid={`epic-sidebar-export-pdf-${nodeId}`}
+          disabled={exportArtifacts.isPending}
+          onSelect={() => {
+            exportOne("pdf");
+          }}
+        >
+          {exportArtifacts.isPending ? (
+            <AgentSpinningDots
+              className={undefined}
+              testId={undefined}
+              variant={undefined}
+            />
+          ) : (
+            <FileDown className="size-3.5" />
+          )}
+          Export as PDF
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
         <DropdownMenuItem
           data-testid={`epic-sidebar-rename-${nodeId}`}
           disabled={!canMutate}

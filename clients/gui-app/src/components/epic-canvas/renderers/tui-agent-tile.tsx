@@ -348,6 +348,7 @@ function TuiAgentTileLive(
 
   const bootstrap = useTerminalTileBootstrap({
     hostId,
+    scope: { kind: "epic", epicId },
     sessionId,
     instanceId,
     sessionKind: "terminal-agent",
@@ -1182,6 +1183,7 @@ function TerminalAgentLive(props: TerminalAgentLiveProps) {
         <TerminalXtermHost
           sessionId={handle.sessionId}
           tileKind="terminal-agent"
+          chrome="padded"
           instanceId={props.instanceId}
           effectiveCols={effectiveCols}
           effectiveRows={effectiveRows}

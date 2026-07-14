@@ -2,9 +2,11 @@ import { create, type StoreApi, type UseBoundStore } from "zustand";
 import { v4 as uuidv4 } from "uuid";
 import type { TerminalSubscribeClientFrame } from "@traycer/protocol/host/terminal/subscribe";
 import type {
+  CanonicalTerminalSessionInfo,
   TerminalSessionExitReason,
   TerminalSessionInfo,
   TerminalSessionKind,
+  TerminalScope,
 } from "@traycer/protocol/host/terminal/unary-schemas";
 import type {
   TerminalStreamCallbacks,
@@ -87,7 +89,7 @@ export interface PendingTerminalAction {
 
 export interface TerminalSessionState {
   readonly sessionId: string;
-  readonly epicId: string;
+  readonly scope: TerminalScope;
   readonly connectionStatus: StreamConnectionStatus;
   readonly snapshotLoaded: boolean;
   readonly status: TerminalLifecycleStatus;
@@ -126,7 +128,7 @@ export interface TerminalSessionState {
 }
 
 export interface TerminalSessionStoreOptions {
-  readonly epicId: string;
+  readonly scope: TerminalScope;
   readonly sessionId: string;
   readonly cols: number;
   readonly rows: number;
@@ -136,7 +138,7 @@ export interface TerminalSessionStoreOptions {
 }
 
 export interface TerminalSessionStoreHandle {
-  readonly epicId: string;
+  readonly scope: TerminalScope;
   readonly sessionId: string;
   readonly store: UseBoundStore<StoreApi<TerminalSessionState>>;
   readonly dispose: () => void;
@@ -225,7 +227,9 @@ function terminalOutputPreview(content: string | Uint8Array): string | null {
 }
 
 function activeProcessNameFromSession(
-  session: TerminalSessionInfo,
+  session:
+    | Pick<CanonicalTerminalSessionInfo, "activeProcessName">
+    | Pick<TerminalSessionInfo, "activeProcessName">,
 ): string | null {
   const name = session.activeProcessName;
   if (name === undefined || name === null) return null;
@@ -546,7 +550,7 @@ export function createTerminalSessionStore(
 
     return {
       sessionId: options.sessionId,
-      epicId: options.epicId,
+      scope: options.scope,
       connectionStatus: "connecting",
       snapshotLoaded: false,
       status: "creating",
@@ -638,7 +642,7 @@ export function createTerminalSessionStore(
   });
 
   return {
-    epicId: options.epicId,
+    scope: options.scope,
     sessionId: options.sessionId,
     store,
     dispose: () => {

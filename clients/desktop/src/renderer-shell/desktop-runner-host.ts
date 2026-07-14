@@ -44,6 +44,7 @@ import type {
   TraycerEnvOverride,
   TraycerShellConfig,
   TraycerShellConfigSetInput,
+  TraycerShellProbeResult,
 } from "@traycer-clients/shared/platform/runner-host";
 import type {
   AccessibilityThemeSnapshot,
@@ -387,6 +388,13 @@ export interface DesktopTraycerCliBridge {
   shellConfigGet(): Promise<TraycerShellConfig>;
   shellConfigSet(input: TraycerShellConfigSetInput): Promise<void>;
   shellConfigReset(): Promise<void>;
+  shellConfigAdd(input: { readonly path: string }): Promise<void>;
+  shellConfigRemove(input: { readonly path: string }): Promise<void>;
+  shellRevertArgs(input: { readonly path: string }): Promise<void>;
+  shellProbe(input: {
+    readonly path: string;
+  }): Promise<TraycerShellProbeResult>;
+  pickShellProgramFile(): Promise<string | null>;
   shellListDetected(): Promise<readonly TraycerDetectedShell[]>;
   envOverrideList(): Promise<readonly TraycerEnvOverride[]>;
   envOverrideSet(input: {
@@ -645,6 +653,14 @@ export class DesktopRunnerHost implements IRunnerHost {
       shellConfigGet: () => this.bridge.traycerCli.shellConfigGet(),
       shellConfigSet: (input) => this.bridge.traycerCli.shellConfigSet(input),
       shellConfigReset: () => this.bridge.traycerCli.shellConfigReset(),
+      shellConfigAdd: (input) => this.bridge.traycerCli.shellConfigAdd(input),
+      shellConfigRemove: (input) =>
+        this.bridge.traycerCli.shellConfigRemove(input),
+      shellRevertArgs: (input) => this.bridge.traycerCli.shellRevertArgs(input),
+      shellProbe: (input) => this.bridge.traycerCli.shellProbe(input),
+      // Desktop always ships the native file dialog, so this capability is
+      // present here (non-desktop hosts leave `traycerCli` null entirely).
+      pickShellProgramFile: () => this.bridge.traycerCli.pickShellProgramFile(),
       shellListDetected: () => this.bridge.traycerCli.shellListDetected(),
       envOverrideList: () => this.bridge.traycerCli.envOverrideList(),
       envOverrideSet: (input) => this.bridge.traycerCli.envOverrideSet(input),

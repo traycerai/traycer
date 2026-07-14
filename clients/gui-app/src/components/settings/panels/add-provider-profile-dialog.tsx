@@ -1,8 +1,10 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import {
   AlertTriangle,
+  Check,
   CheckCircle2,
   ChevronRight,
+  Copy,
   Eye,
   EyeOff,
   ExternalLink,
@@ -37,12 +39,25 @@ import { useProvidersAwaitLoginForClient } from "@/hooks/providers/use-providers
 import { useProvidersCancelLoginForClient } from "@/hooks/providers/use-providers-cancel-login-mutation";
 import { useRecolorProviderProfileForClient } from "@/hooks/providers/use-recolor-provider-profile-mutation";
 import { useRemoveProviderProfileForClient } from "@/hooks/providers/use-remove-provider-profile-mutation";
+import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { redactEmail } from "@/lib/providers/redact-email";
 import {
   useProviderProfileLoginFlow,
   type ProviderProfileLoginFlowState,
 } from "./use-provider-profile-login-flow";
+
+const COPY_CONFIRMATION_RESET_MS = 1600;
+
+const handleSignInLinkCopyError = (): void => {
+  reportableErrorToast("Couldn't copy the sign-in link.", undefined, {
+    title: "Could not copy sign-in link",
+    message: null,
+    code: null,
+    source: "Provider sign-in",
+  });
+};
 
 export interface FailedProviderProfileAttempt {
   readonly providerId: ProviderCliState["providerId"];
@@ -61,7 +76,12 @@ export function AddProviderProfileDialog({
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
-  readonly onFailedAttempt: (attempt: FailedProviderProfileAttempt) => void;
+  /** `null` retracts a previously reported failure: fired when a new attempt
+   *  starts and when an attempt completes, so a stale "sign-in did not
+   *  finish" banner never sits next to a profile that DID sign in. */
+  readonly onFailedAttempt: (
+    attempt: FailedProviderProfileAttempt | null,
+  ) => void;
   readonly onProfileCreated: (profileId: string) => void;
 }): ReactNode {
   const runnerHost = useRunnerHost();
@@ -104,6 +124,7 @@ export function AddProviderProfileDialog({
 
   const complete = (profileId: string): void => {
     savedRef.current = true;
+    onFailedAttempt(null);
     onProfileCreated(profileId);
     onOpenChange(false);
   };
@@ -163,6 +184,9 @@ export function AddProviderProfileDialog({
 
   const linkAccount = (): void => {
     if (trimmedLabel.length === 0) return;
+    // A fresh attempt supersedes any previously reported failure - covers
+    // both the initial "Link account" and the failed-state Retry.
+    onFailedAttempt(null);
     flow.start({
       label: trimmedLabel,
       shareSkillsAndPlugins:
@@ -431,6 +455,11 @@ export function AddProfileWaitingStep({
   readonly onOpenExternalLink: (url: string) => void;
   readonly onCancel: () => void;
 }): ReactNode {
+  const { copied, copy } = useClipboardCopy({
+    resetMs: COPY_CONFIRMATION_RESET_MS,
+    onSuccess: null,
+    onError: handleSignInLinkCopyError,
+  });
   let guidance =
     "Complete the provider sign-in in your browser. You can reopen the link if needed.";
   if (queuePending) {
@@ -456,24 +485,41 @@ export function AddProfileWaitingStep({
       </div>
       <div className="flex flex-wrap items-center gap-2">
         {loginUrl !== null ? (
-          <Button
-            type="button"
-            size="sm"
-            variant="secondary"
-            onClick={() => onOpenExternalLink(loginUrl)}
-          >
-            <ExternalLink className="size-3.5" />
-            Open sign-in page
-          </Button>
+          <>
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              onClick={() => onOpenExternalLink(loginUrl)}
+            >
+              <ExternalLink className="size-3.5" />
+              Open sign-in page
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              aria-label={copied ? "Copied sign-in link" : "Copy sign-in link"}
+              onClick={() => copy(loginUrl)}
+            >
+              {copied ? (
+                <Check className="size-3.5" />
+              ) : (
+                <Copy className="size-3.5" />
+              )}
+              {copied ? "Copied" : "Copy link"}
+            </Button>
+          </>
         ) : null}
         <Button
           type="button"
           size="sm"
-          variant="ghost"
+          variant="destructive"
+          aria-label="Cancel sign-in"
           disabled={cancelRequested}
           onClick={onCancel}
         >
-          Cancel sign-in
+          Cancel
         </Button>
       </div>
     </div>

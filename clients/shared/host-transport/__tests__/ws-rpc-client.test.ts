@@ -691,6 +691,105 @@ describe("WsRpcClient", () => {
     );
   });
 
+  it("requestWithResponseTimeout waits past the default frame timeout for a long-poll response", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "t",
+      requestId: "req-longpoll",
+      dialTimeoutMs: 1000,
+      frameTimeoutMs: 25,
+    });
+
+    const pending = client.requestWithResponseTimeout(
+      "host.echo",
+      { message: "slow" },
+      5_000,
+    );
+    await flush();
+    sockets[0].socket.fireOpen();
+    await flush();
+    sockets[0].socket.fireMessage(
+      openAckWithOptionalHostEcho({ major: 1, minor: 0 }),
+    );
+    await flush();
+    expect(expectRequestFrame(sockets[0].sent[1])).toBeDefined();
+
+    // Stay silent well past the 25ms transport default - a long-poll
+    // response legitimately arrives later than the frame timeout.
+    await new Promise<void>((resolve) => setTimeout(resolve, 100));
+
+    sockets[0].socket.fireMessage({
+      kind: "response",
+      requestId: "req-longpoll",
+      method: "host.echo",
+      schemaVersion: { major: 1, minor: 0 },
+      result: { echoed: "SLOW" },
+      error: null,
+    });
+
+    await expect(pending).resolves.toEqual({ echoed: "SLOW" });
+  });
+
+  it("requestWithResponseTimeout keeps the default frame timeout for the handshake", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "t",
+      requestId: "req-longpoll-handshake",
+      dialTimeoutMs: 1000,
+      frameTimeoutMs: 25,
+    });
+
+    // The extended budget covers ONLY the response wait - a host that never
+    // answers `openAck` is unreachable and must still fail at the default.
+    const pending = client.requestWithResponseTimeout(
+      "host.echo",
+      { message: "x" },
+      60_000,
+    );
+    await flush();
+    sockets[0].socket.fireOpen();
+    await flush();
+
+    await expect(pending).rejects.toSatisfy(
+      (error: unknown) =>
+        error instanceof HostRpcError &&
+        error.message.includes("frame timed out after 25ms"),
+    );
+  });
+
+  it("requestWithResponseTimeout still times out once the extended budget elapses", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "t",
+      requestId: "req-longpoll-elapsed",
+      dialTimeoutMs: 1000,
+      frameTimeoutMs: 25,
+    });
+
+    const pending = client.requestWithResponseTimeout(
+      "host.echo",
+      { message: "x" },
+      50,
+    );
+    await flush();
+    sockets[0].socket.fireOpen();
+    await flush();
+    sockets[0].socket.fireMessage(
+      openAckWithOptionalHostEcho({ major: 1, minor: 0 }),
+    );
+    await flush();
+
+    await expect(pending).rejects.toSatisfy(
+      (error: unknown) =>
+        error instanceof HostRpcError &&
+        !(error instanceof RetryableTransportError) &&
+        error.message.includes("frame timed out after 50ms"),
+    );
+  });
+
   it("does NOT classify a malformed frame as retryable", async () => {
     const { factory, sockets } = makeFactory();
     const client = makeClient({

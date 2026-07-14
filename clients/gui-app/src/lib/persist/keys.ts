@@ -45,6 +45,9 @@ export const worktreeIntentStagingKey = (email: string | null): string =>
 export const epicCanvasKey = (identity: string | null): string =>
   scopedPersistKey("epic-canvas", scopeBucket(identity));
 
+export const landingTerminalsKey = (identity: string | null): string =>
+  scopedPersistKey("landing-terminals", scopeBucket(identity));
+
 // Arg order is `(identity, epicId)` but the emitted string keeps today's
 // `…:open-epic:{identityBucket}:{epicId}` order (the current store's local
 // `persistKey(epicId, userId)` emitted exactly this).
@@ -86,7 +89,7 @@ export interface PersistStoreEntry {
 }
 
 export const PERSIST_STORES = [
-  // ── Scoped zustand stores (7) ────────────────────────────────────────────
+  // ── Scoped zustand stores (8) ────────────────────────────────────────────
   {
     camelName: "composerRunSettings",
     leaf: "composer-run-settings",
@@ -108,6 +111,11 @@ export const PERSIST_STORES = [
     kind: "scoped",
   },
   { camelName: "epicCanvas", leaf: "epic-canvas", kind: "scoped" },
+  {
+    camelName: "landingTerminals",
+    leaf: "landing-terminals",
+    kind: "scoped",
+  },
   { camelName: "openEpic", leaf: "open-epic", kind: "scoped" },
   {
     camelName: "appLocalNotifications",

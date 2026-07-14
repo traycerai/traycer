@@ -1,6 +1,7 @@
 import { useStore } from "zustand";
 import { Suspense, useCallback, useEffect, useMemo, useRef } from "react";
 import type { EpicTerminalRef } from "@/stores/epics/canvas/types";
+import { useOpenEpicId } from "@/lib/epic-selectors";
 import { beginTerminalLoad } from "@/lib/perf/terminal-load-perf";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import {
@@ -155,6 +156,7 @@ function TerminalTileLive(
   },
 ) {
   const hostId = useTabHostId();
+  const epicId = useOpenEpicId();
   const sessionId = props.node.id;
   const instanceId = props.node.instanceId;
   const cwd = props.node.cwd;
@@ -171,11 +173,34 @@ function TerminalTileLive(
   );
   const bootstrap = useTerminalTileBootstrap({
     hostId,
+    scope: { kind: "epic", epicId },
     sessionId,
     instanceId,
     sessionKind: "terminal",
     preparePayload,
   });
+  const closeExitedTile = useCloseCanvasTileWithNestedFocus(
+    props.viewTabId,
+    props.tileId,
+    instanceId,
+  );
+
+  // The host keeps listing a PTY it saw exit for its ~60s grace window, and the
+  // bootstrap refuses to respawn under that id. A tile opened onto such a
+  // session therefore has nothing to attach to and no create in flight: left
+  // alone it sits on "Starting terminal session…" until the grace lapses, and
+  // then - the session now absent rather than exited - quietly spawns a fresh
+  // shell in its place. Close it instead, as the landing panel drops the tab.
+  //
+  // Gated on a null handle so this only ever fires for a tile that never
+  // attached. A tile that DID attach owns its own exit down in `TerminalLive`,
+  // which deliberately keeps a *crashed* terminal on screen.
+  const exitedBeforeAttach =
+    bootstrap.hostSessionExited && bootstrap.handle === null;
+  useEffect(() => {
+    if (!exitedBeforeAttach) return;
+    closeExitedTile();
+  }, [exitedBeforeAttach, closeExitedTile]);
 
   if (bootstrap.createIsError) {
     return (
@@ -337,6 +362,7 @@ function TerminalLive(props: TerminalLiveProps) {
           <TerminalXtermHost
             sessionId={handle.sessionId}
             tileKind="terminal"
+            chrome="padded"
             instanceId={props.instanceId}
             effectiveCols={effectiveCols}
             effectiveRows={effectiveRows}

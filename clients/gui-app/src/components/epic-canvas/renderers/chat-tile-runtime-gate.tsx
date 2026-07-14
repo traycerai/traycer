@@ -13,9 +13,13 @@ export function ChatTileLoading(): ReactNode {
   return (
     <div
       data-testid="chat-tile-loading"
+      role="status"
+      aria-label="Loading chat"
+      aria-live="polite"
       className="flex w-full flex-1 items-center justify-center px-6 py-8"
     >
       <MutedAgentSpinner />
+      <span className="sr-only">Loading chat</span>
     </div>
   );
 }

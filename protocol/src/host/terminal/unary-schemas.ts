@@ -32,6 +32,29 @@ export type TerminalSessionExitReason = z.infer<
   typeof terminalSessionExitReasonSchema
 >;
 
+// Session scope: `{ kind: "epic" }` sessions belong to an epic; `{ kind:
+// "independent" }` sessions are landing-scope (epic-less). A discriminated
+// union rather than `epicId: string | null` - self-describing on the wire,
+// and extensible to future scopes without another schema change. Used by the
+// major-2 unary lines and `terminal.subscribe@1.4` (see
+// `canonicalTerminalSessionInfoSchema` below); the frozen
+// `terminalSessionInfoSchema` predates scoping and stays
+// `epicId`. `scope` replacing `epicId` is a breaking change to the request
+// shape - the unary framework's minor-additivity checker
+// (`assertSchemaCompatibility` in `versioned-rpc.ts`) rejects a field rename
+// within a minor line, so this rides a new major (`@2.0`), not a minor.
+export const terminalScopeSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("epic"), epicId: z.string() }),
+  z.object({ kind: z.literal("independent") }),
+]);
+export type TerminalScope = z.infer<typeof terminalScopeSchema>;
+
+// Frozen `epicId: string` session-info shape, shared by every RELEASED
+// terminal contract (`create@1.0`/`list@1.0` responses; `subscribe@1.0`-
+// `1.3` frames). Never mutate in place - replacing `epicId` with a scope
+// union would change an already-shipped host->client slot, which the compat
+// checker blocks. The major-2 unary lines (`create@2.0`, `list@2.0`) and
+// `subscribe@1.4` use `canonicalTerminalSessionInfoSchema` below instead.
 export const terminalSessionInfoSchema = z.object({
   sessionId: z.string(),
   epicId: z.string(),
@@ -59,6 +82,32 @@ export const terminalSessionInfoSchema = z.object({
   activeProcessName: z.string().nullable().optional(),
 });
 export type TerminalSessionInfo = z.infer<typeof terminalSessionInfoSchema>;
+
+// Canonical session-info shape for the scope-bearing terminal lines: `scope`
+// replaces `epicId` - `{ kind: "independent" }` denotes a landing-scope
+// (epic-less) session. Every other field is identical to the frozen
+// `terminalSessionInfoSchema` above - this is a parallel export, not a
+// replacement, so released contracts keep parsing the frozen shape
+// untouched.
+export const canonicalTerminalSessionInfoSchema = z.object({
+  sessionId: z.string(),
+  scope: terminalScopeSchema,
+  sessionKind: terminalSessionKindSchema,
+  cwd: z.string(),
+  shellCommand: z.string(),
+  shellArgs: z.array(z.string()),
+  cols: z.number().int().positive(),
+  rows: z.number().int().positive(),
+  status: terminalSessionStatusSchema,
+  exitCode: z.number().int().nullable(),
+  exitReason: terminalSessionExitReasonSchema.nullable().optional(),
+  createdAt: z.number(),
+  title: z.string().nullable(),
+  activeProcessName: z.string().nullable().optional(),
+});
+export type CanonicalTerminalSessionInfo = z.infer<
+  typeof canonicalTerminalSessionInfoSchema
+>;
 
 // `terminal.create@1.0` - spawns a new PTY-backed session for the given epic.
 // `sessionKind` distinguishes user terminal tabs from terminal-agent backing
@@ -96,6 +145,33 @@ export type CreateTerminalResponse = z.infer<
   typeof createTerminalResponseSchema
 >;
 
+// `terminal.create@2.0` - `scope: { kind: "independent" }` requests a
+// landing-scope (epic-less) session; every other field is unchanged from
+// `@1.0`. The response's `session` carries the canonical (scope-bearing)
+// session info instead of the frozen `@1.0` shape.
+export const createTerminalRequestSchemaV20 = z.object({
+  scope: terminalScopeSchema,
+  sessionKind: terminalSessionKindSchema,
+  tuiHarnessId: tuiHarnessIdSchema.nullable().default(null),
+  cwd: z.string().min(1),
+  shellCommand: z.string().nullable(),
+  shellArgs: z.array(z.string()).nullable(),
+  cols: z.number().int().positive(),
+  rows: z.number().int().positive(),
+  desiredSessionId: z.string(),
+  worktreeBusyPaths: z.array(z.string()),
+});
+export type CreateTerminalRequestV20 = z.infer<
+  typeof createTerminalRequestSchemaV20
+>;
+
+export const createTerminalResponseSchemaV20 = z.object({
+  session: canonicalTerminalSessionInfoSchema,
+});
+export type CreateTerminalResponseV20 = z.infer<
+  typeof createTerminalResponseSchemaV20
+>;
+
 // `terminal.kill@1.0` - terminates a session and evicts it from the host's
 // in-memory map. Returns `killed: false` only if the session was already
 // missing or had completed its grace period.
@@ -122,6 +198,23 @@ export const listTerminalsResponseSchema = z.object({
   sessions: z.array(terminalSessionInfoSchema),
 });
 export type ListTerminalsResponse = z.infer<typeof listTerminalsResponseSchema>;
+
+// `terminal.list@2.0` - `scope: { kind: "independent" }` lists landing-scope
+// (epic-less) sessions instead of an epic's. Sessions carry the canonical
+// (scope-bearing) session info instead of the frozen `@1.0` shape.
+export const listTerminalsRequestSchemaV20 = z.object({
+  scope: terminalScopeSchema,
+});
+export type ListTerminalsRequestV20 = z.infer<
+  typeof listTerminalsRequestSchemaV20
+>;
+
+export const listTerminalsResponseSchemaV20 = z.object({
+  sessions: z.array(canonicalTerminalSessionInfoSchema),
+});
+export type ListTerminalsResponseV20 = z.infer<
+  typeof listTerminalsResponseSchemaV20
+>;
 
 // `terminal.rename@1.0` - overrides the session's display title. Title
 // lives on the in-memory session record only; it does not persist across

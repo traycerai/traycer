@@ -11,6 +11,10 @@ import {
 } from "@testing-library/react";
 import * as Y from "yjs";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import {
   createMemoryHistory,
   createRootRoute,
@@ -43,6 +47,21 @@ import {
   createNotificationRoomEntryMap,
 } from "@traycer/protocol/notifications/notification-room";
 import type { HostNotificationEntry } from "@traycer/protocol/host/notifications/contracts";
+import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
+
+const hostBindingState = vi.hoisted<{
+  current: { readonly hostClient: HostClient<HostRpcRegistry> } | null;
+}>(() => ({ current: null }));
+
+vi.mock("@/lib/host", async (importActual) => {
+  const actual = await importActual<typeof import("@/lib/host")>();
+  return {
+    ...actual,
+    useHostBinding: () => hostBindingState.current,
+  };
+});
+
+const TASK_TITLE = "Checkout notification title and hover behavior";
 
 function seedEntries(
   callbacks: NotificationsStreamCallbacks,
@@ -132,6 +151,33 @@ function renderRouter(router: AnyRouter): void {
   );
 }
 
+function createHostClient(
+  clearAllRequests: Array<{ readonly beforeUpdatedAt: number }>,
+): HostClient<HostRpcRegistry> {
+  const client = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: { invalidateHostScope: () => undefined },
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "clear-all-request",
+      handlers: {
+        "host.notifications.clearAll": (request) => {
+          clearAllRequests.push(request);
+          return {};
+        },
+      },
+    }),
+  });
+  client.bind(mockLocalHostEntry);
+  client.setRequestContext(
+    createRequestContextFixture({
+      origin: "renderer",
+      bearerToken: "test-token",
+    }),
+  );
+  return client;
+}
+
 function hostAgentEntry(input: {
   readonly id: string;
   readonly kind: "agent.stopped" | "agent.stalled";
@@ -151,6 +197,7 @@ function hostAgentEntry(input: {
         epicId: "epic-1",
         chatId: "chat-1",
         agentName: "Agent",
+        taskTitle: TASK_TITLE,
         outcome: input.outcome ?? "completed",
       },
     };
@@ -167,6 +214,7 @@ function hostAgentEntry(input: {
       epicId: "epic-1",
       chatId: "chat-1",
       agentName: "Agent",
+      taskTitle: TASK_TITLE,
     },
   };
 }
@@ -226,6 +274,7 @@ async function selectTab(testId: string) {
 
 describe("NotificationsPopover click routing", () => {
   beforeEach(() => {
+    hostBindingState.current = null;
     __resetNotificationsStoreForTests();
     __resetHostNotificationsStoreForTests();
     useEpicCanvasStore.setState({
@@ -238,6 +287,7 @@ describe("NotificationsPopover click routing", () => {
 
   afterEach(() => {
     cleanup();
+    hostBindingState.current = null;
     __resetHostNotificationsStoreForTests();
   });
 
@@ -323,7 +373,7 @@ describe("NotificationsPopover click routing", () => {
       "notification-unread-marker",
     );
     expect(unreadMarker.className).toContain("absolute");
-    expect(unreadMarker.className).toContain("inset-y-0");
+    expect(unreadMarker.className).toContain("inset-y-2");
     expect(unreadMarker.className).toContain("left-0");
     expect(unreadMarker.className).toContain("rounded-r-full");
 
@@ -393,11 +443,22 @@ describe("NotificationsPopover click routing", () => {
 
     expect(failed?.dataset.notificationSeverity).toBe("failure");
     expect(failed?.dataset.notificationOutcome).toBe("errored");
-    expect(failed?.textContent).toContain("Agent failed");
+    expect(failed?.textContent).toContain(TASK_TITLE);
+    expect(failed?.textContent).toContain("Agent • Failed");
     expect(completed?.dataset.notificationSeverity).toBe("done");
-    expect(completed?.textContent).toContain("Agent finished");
+    expect(completed?.textContent).toContain(TASK_TITLE);
+    expect(completed?.textContent).toContain("Agent • Done");
     expect(stalled?.dataset.notificationSeverity).toBe("failure");
-    expect(stalled?.textContent).toContain("Agent stalled");
+    expect(stalled?.textContent).toContain(TASK_TITLE);
+    expect(stalled?.textContent).toContain("Agent • Stalled");
+
+    if (completed === undefined) throw new Error("missing completed row");
+    const notificationTitle =
+      within(completed).getByTestId("notification-title");
+    expect(notificationTitle.className).toContain("truncate");
+    expect(notificationTitle.className).toContain("font-semibold");
+    fireEvent.pointerMove(notificationTitle, { pointerType: "mouse" });
+    expect((await screen.findByRole("tooltip")).textContent).toBe(TASK_TITLE);
   });
 
   it("keeps the Unread tab visible when every notification is read", async () => {
@@ -526,6 +587,21 @@ describe("NotificationsPopover click routing", () => {
   });
 
   it("clears every notification when Clear all is clicked", async () => {
+    const clearAllRequests: Array<{ readonly beforeUpdatedAt: number }> = [];
+    hostBindingState.current = {
+      hostClient: createHostClient(clearAllRequests),
+    };
+    useHostNotificationsStore.getState().replaceFromSnapshot(
+      [
+        hostAgentEntry({
+          id: "clear-host",
+          kind: "agent.stopped",
+          severity: "done",
+          outcome: "completed",
+        }),
+      ],
+      50,
+    );
     const captured: TargetCapture = {
       epicId: null,
       tabId: null,
@@ -549,6 +625,11 @@ describe("NotificationsPopover click routing", () => {
     fireEvent.click(await screen.findByTestId("notifications-clear-all"));
 
     expect(useNotificationsStore.getState().entries.length).toBe(0);
+    await waitFor(() => {
+      expect(clearAllRequests).toHaveLength(1);
+      expect(clearAllRequests.at(0)?.beforeUpdatedAt).toBe(10);
+      expect(useHostNotificationsStore.getState().orderedIds).toEqual([]);
+    });
     expect(await screen.findByTestId("notifications-empty")).not.toBeNull();
   });
 });

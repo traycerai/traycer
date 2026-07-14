@@ -1,18 +1,24 @@
 import { describe, expect, it, vi } from "vitest";
+import { toast } from "sonner";
 import {
   displayNotificationRows,
   notificationReplaceKey,
 } from "@/lib/notifications/notification-display";
 import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
 
-function row(text: string): MergedNotificationRow {
+vi.mock("sonner", () => ({
+  toast: vi.fn(),
+}));
+
+function row(title: string): MergedNotificationRow {
   return {
     feedId: "host:n-1",
     source: "host",
     sourceId: "n-1",
     createdAt: 10,
     readAt: null,
-    text,
+    title,
+    body: "New chat • Done",
     payload: { kind: "chat", epicId: "epic-1", chatId: "chat-1" },
     hostKind: "agent.stopped",
     appLocalKind: null,
@@ -27,15 +33,15 @@ describe("notification display", () => {
     const showNotification = vi.fn(() => Promise.resolve());
     const playChime = vi.fn();
 
-    displayNotificationRows([row("Agent finished")], {
+    displayNotificationRows([row("Checkout notifications")], {
       showNotification,
       playChime,
     });
 
     expect(showNotification).toHaveBeenCalledOnce();
     expect(showNotification).toHaveBeenCalledWith(
-      "Traycer",
-      "Agent finished",
+      "Checkout notifications",
+      "New chat • Done",
       {
         kind: "chat",
         epicId: "epic-1",
@@ -43,6 +49,10 @@ describe("notification display", () => {
       },
       "host:chat:chat-1",
     );
+    expect(toast).toHaveBeenCalledWith("Checkout notifications", {
+      description: "New chat • Done",
+      id: "host:chat:chat-1",
+    });
     expect(playChime).toHaveBeenCalledOnce();
   });
 
@@ -129,7 +139,7 @@ describe("notification display", () => {
     const playChime = vi.fn();
 
     expect(() => {
-      displayNotificationRows([row("Agent finished")], {
+      displayNotificationRows([row("Checkout notifications")], {
         showNotification,
         playChime,
       });

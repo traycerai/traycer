@@ -1,22 +1,50 @@
-import { Check } from "lucide-react";
+import { Check, RotateCcw } from "lucide-react";
+import {
+  defaultShellArgs,
+  isLoginShellFamily,
+} from "@traycer/protocol/config/shell-family";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { EffectiveCommandPreview } from "@/components/settings/panels/shell/effective-command-preview";
 import { EnvOverrideEditor } from "@/components/settings/panels/env-override-editor";
 import { ShellFlagChips } from "@/components/settings/panels/shell/shell-flag-chips";
 import { ShellProgramCombobox } from "@/components/settings/panels/shell/shell-program-combobox";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import { Button } from "@/components/ui/button";
 import { useRunnerTraycerEnvOverrideDeleteMutation } from "@/hooks/runner/use-runner-traycer-env-override-delete-mutation";
 import { useRunnerTraycerEnvOverrideListQuery } from "@/hooks/runner/use-runner-traycer-env-override-list-query";
 import { useRunnerTraycerEnvOverrideSetMutation } from "@/hooks/runner/use-runner-traycer-env-override-set-mutation";
+import { useRunnerTraycerShellConfigAddMutation } from "@/hooks/runner/use-runner-traycer-shell-add-mutation";
 import { useRunnerTraycerShellConfigQuery } from "@/hooks/runner/use-runner-traycer-shell-config-query";
+import { useRunnerTraycerShellConfigRemoveMutation } from "@/hooks/runner/use-runner-traycer-shell-remove-mutation";
 import { useRunnerTraycerShellConfigResetMutation } from "@/hooks/runner/use-runner-traycer-shell-config-reset-mutation";
 import { useRunnerTraycerShellConfigSetMutation } from "@/hooks/runner/use-runner-traycer-shell-config-set-mutation";
+import { useRunnerTraycerShellRevertArgsMutation } from "@/hooks/runner/use-runner-traycer-shell-revert-args-mutation";
 import { useRunnerTraycerShellListQuery } from "@/hooks/runner/use-runner-traycer-shell-list-query";
 import { useRunnerHost } from "@/providers/use-runner-host";
 
 const PANEL_DESCRIPTION =
   "How Traycer launches terminals, the host, and provider harnesses. New terminals pick up shell changes immediately; host env changes apply on restart.";
+
+/** Final path segment of the resolved shell, used to name its flags. */
+function programName(path: string): string {
+  const segments = path.split(/[\\/]/);
+  return segments[segments.length - 1] || path;
+}
+
+/**
+ * Whether the visible flags differ from the selected program's family default.
+ * Thanks to the store's canonicalisation, this is exactly "a stored deviation
+ * exists", and it drives the "Restore default flags" affordance.
+ */
+function flagsDeviateFromDefault(
+  path: string,
+  args: readonly string[],
+): boolean {
+  const familyDefault = defaultShellArgs(path);
+  return (
+    args.length !== familyDefault.length ||
+    args.some((flag, i) => flag !== familyDefault[i])
+  );
+}
 
 export function ShellSettingsPanel() {
   const runnerHost = useRunnerHost();
@@ -41,19 +69,42 @@ function ShellSettingsPanelInner() {
   const envListQuery = useRunnerTraycerEnvOverrideListQuery();
   const setMutation = useRunnerTraycerShellConfigSetMutation();
   const resetMutation = useRunnerTraycerShellConfigResetMutation();
+  const addMutation = useRunnerTraycerShellConfigAddMutation();
+  const removeMutation = useRunnerTraycerShellConfigRemoveMutation();
+  const revertMutation = useRunnerTraycerShellRevertArgsMutation();
   const envSetMutation = useRunnerTraycerEnvOverrideSetMutation();
   const envDeleteMutation = useRunnerTraycerEnvOverrideDeleteMutation();
 
   const config = configQuery.data;
-  const detected = shellListQuery.data ?? [];
+  const shells = shellListQuery.data ?? [];
   const overrides = envListQuery.data ?? [];
 
-  const shellPending = setMutation.isPending || resetMutation.isPending;
+  const shellPending =
+    setMutation.isPending ||
+    resetMutation.isPending ||
+    addMutation.isPending ||
+    removeMutation.isPending ||
+    revertMutation.isPending;
   const envPending = envSetMutation.isPending || envDeleteMutation.isPending;
 
   const onSavePath = (path: string): void => {
     if (shellPending) return;
     setMutation.mutate({ path, args: null });
+  };
+  const onAddShell = (path: string): void => {
+    if (shellPending) return;
+    addMutation.mutate({ path });
+  };
+  const onRemoveShell = (path: string): void => {
+    if (shellPending) return;
+    removeMutation.mutate({ path });
+  };
+  // Picking "System default" clears only the selection, returning to the login
+  // shell; remembered shells and their flags are kept (the login shell's own
+  // flags are inherited).
+  const onUseSystemDefault = (): void => {
+    if (shellPending) return;
+    resetMutation.mutate();
   };
   const onAddFlag = (flag: string): void => {
     if (config === undefined || shellPending) return;
@@ -65,6 +116,12 @@ function ShellSettingsPanelInner() {
       path: null,
       args: config.args.filter((_, i) => i !== index),
     });
+  };
+  // Restore the SELECTED shell's flags to its family default, keeping the shell
+  // remembered. Works in the synthesised state too (reverting the login shell).
+  const onRevertFlags = (): void => {
+    if (config === undefined || shellPending) return;
+    revertMutation.mutate({ path: config.path });
   };
   const onEnvCommit = (
     oldKey: string,
@@ -115,34 +172,36 @@ function ShellSettingsPanelInner() {
             <ShellCardSkeleton />
           ) : (
             <>
-              <EffectiveCommandPreview
-                path={config.path}
-                args={config.args}
-                synthesised={config.synthesised}
-              />
+              <EffectiveCommandPreview path={config.path} args={config.args} />
               <div className="flex flex-wrap items-center justify-between gap-4">
                 <div className="space-y-1">
                   <div className="text-ui-sm font-medium text-foreground">
                     Shell program
                   </div>
                   <p className="text-ui-xs text-muted-foreground">
-                    Detected on your machine — or type a custom path.
+                    Pick a shell, or add any program on this machine.
                   </p>
                 </div>
                 <ShellProgramCombobox
                   value={config.path}
-                  detected={detected}
+                  synthesised={config.synthesised}
+                  shells={shells}
                   disabled={shellPending}
-                  onSave={onSavePath}
+                  onSelect={onSavePath}
+                  onAdd={onAddShell}
+                  onRemove={onRemoveShell}
+                  onUseSystemDefault={onUseSystemDefault}
                 />
               </div>
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div className="max-w-xs space-y-1">
                   <div className="text-ui-sm font-medium text-foreground">
-                    Startup flags
+                    {`Startup flags for ${programName(config.path)}`}
                   </div>
                   <p className="text-ui-xs text-muted-foreground">
-                    “-i -l” loads your full shell profile (PATH, aliases).
+                    {isLoginShellFamily(config.path)
+                      ? "“-i -l” loads your full shell profile (PATH, aliases)."
+                      : `Passed to ${programName(config.path)} each time a terminal opens.`}
                   </p>
                 </div>
                 <ShellFlagChips
@@ -155,26 +214,20 @@ function ShellSettingsPanelInner() {
             </>
           )}
         </div>
-        <div className="flex items-center justify-between border-t border-border/40 px-5 py-3">
-          <Button
+        <div className="flex items-center justify-between gap-4 border-t border-border/40 px-5 py-3">
+          <button
             type="button"
-            variant="ghost"
-            size="sm"
             disabled={
-              shellPending || config === undefined || config.synthesised
+              shellPending ||
+              config === undefined ||
+              !flagsDeviateFromDefault(config.path, config.args)
             }
-            onClick={() => resetMutation.mutate()}
-            data-testid="settings-shell-reset"
+            onClick={onRevertFlags}
+            className="inline-flex items-center gap-1 text-ui-xs text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
           >
-            {resetMutation.isPending ? (
-              <AgentSpinningDots
-                className="text-muted-foreground"
-                testId="settings-shell-reset-spinner"
-                variant={undefined}
-              />
-            ) : null}
-            Reset to defaults
-          </Button>
+            <RotateCcw className="size-3" />
+            Restore default flags
+          </button>
           <SaveStatus pending={shellPending} />
         </div>
       </div>

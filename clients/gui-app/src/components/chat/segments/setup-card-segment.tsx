@@ -138,7 +138,10 @@ export function SetupCardSegment(props: {
   const focusTerminal = useFocusEpicTerminalSession(viewTabId);
   const tabClient = useTabHostClient();
   const retrySetup = useWorktreeRetrySetupFor(tabClient);
-  const terminalList = useTerminalListFor(tabClient, aggregate.epicId);
+  const terminalList = useTerminalListFor(tabClient, {
+    kind: "epic",
+    epicId: aggregate.epicId,
+  });
 
   const liveSessionIds = useMemo(() => {
     const ids = new Set<string>();

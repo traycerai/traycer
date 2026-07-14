@@ -27,6 +27,7 @@ export const RPC_ERROR_CODES = [
   "WORKTREE_REMOVE_LAST_ENTRY",
   "PROVIDER_DISABLED",
   "SENDER_TUI_UNSUPPORTED",
+  "TERMINAL_ID_TAKEN",
 ] as const;
 
 export type RpcErrorCode = (typeof RPC_ERROR_CODES)[number];

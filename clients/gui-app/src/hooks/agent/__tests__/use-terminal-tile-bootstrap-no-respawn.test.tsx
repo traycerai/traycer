@@ -88,6 +88,7 @@ function runBootstrap(sessionKind: "terminal" | "terminal-agent") {
     () =>
       useTerminalTileBootstrap({
         hostId: "host-1",
+        scope: { kind: "epic", epicId: "epic-1" },
         sessionId: "term-1",
         instanceId: "inst-1",
         sessionKind,
@@ -138,12 +139,13 @@ describe("useTerminalTileBootstrap create gate", () => {
       ],
     };
 
-    runBootstrap("terminal");
+    const { result } = runBootstrap("terminal");
 
     // Give effects a couple of ticks to settle; assert no create fired.
     await Promise.resolve();
     await Promise.resolve();
     expect(mockCreate.mutate).not.toHaveBeenCalled();
+    expect(result.current.hostSessionExited).toBe(true);
   });
 
   it("creates a session that is absent from the host list", async () => {

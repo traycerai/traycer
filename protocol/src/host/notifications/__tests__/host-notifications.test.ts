@@ -5,6 +5,7 @@ import {
 } from "@traycer/protocol/host/registry";
 import {
   HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP,
+  hostNotificationsClearAll,
   hostNotificationEntrySchema,
   hostNotificationsGetConfig,
   hostNotificationsIndicatorState,
@@ -139,6 +140,16 @@ describe("host.notifications.markRead@1.0", () => {
   });
 });
 
+describe("host.notifications.clearAll@1.0", () => {
+  it("uses a timestamp boundary so newer notifications survive", () => {
+    expect(
+      hostNotificationsClearAll.requestSchema.parse({
+        beforeUpdatedAt: 1_700_000_000_000,
+      }),
+    ).toEqual({ beforeUpdatedAt: 1_700_000_000_000 });
+  });
+});
+
 describe("host.notifications.indicatorState@1.0", () => {
   it("accepts bounded separate epic and chat batches", () => {
     expect(
@@ -201,6 +212,13 @@ describe("host.notifications.subscribe@1.0", () => {
       throw new Error("expected read-state frame");
     }
     expect(legacyReadState.entityRefs).toEqual([]);
+    expect(
+      hostNotificationsSubscribeServerFrameSchema.parse({
+        kind: "cleared",
+        hasBinaryPayload: false,
+        beforeUpdatedAt: 1_700_000_000_000,
+      }).kind,
+    ).toBe("cleared");
     expect(
       hostNotificationsSubscribeServerFrameSchema.parse({
         kind: "channelEmission",
