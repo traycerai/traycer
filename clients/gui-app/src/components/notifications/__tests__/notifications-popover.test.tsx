@@ -193,7 +193,10 @@ function hostAgentEntry(input: {
       sourceRef: input.id,
       severity: input.severity,
       outcome: input.outcome ?? "completed",
+      epicId: "epic-1",
+      chatId: "chat-1",
       payload: {
+        kind: "chat",
         epicId: "epic-1",
         chatId: "chat-1",
         agentName: "Agent",
@@ -210,11 +213,18 @@ function hostAgentEntry(input: {
     sourceRef: input.id,
     severity: input.severity,
     outcome: "errored",
+    epicId: "epic-1",
+    chatId: "chat-1",
     payload: {
+      kind: "agent_stalled",
       epicId: "epic-1",
       chatId: "chat-1",
+      agentId: "chat-1",
       agentName: "Agent",
       taskTitle: TASK_TITLE,
+      reason: "provider_buffering",
+      title: "Provider is buffering",
+      outcome: "errored",
     },
   };
 }

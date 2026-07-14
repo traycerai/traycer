@@ -79,6 +79,15 @@ const hostNotificationEntryBaseFields = {
   readAt: z.number().int().nonnegative().nullable(),
   sourceRef: z.string().nullable(),
   severity: hostNotificationSeveritySchema,
+  /**
+   * The entity this notification addresses, sourced from the row's durable
+   * columns - NOT from the payload. This is the single contract for
+   * presence matching, indicator invalidation, and focus consumption: a row
+   * whose payload fails the semantic parse still addresses its entity, and
+   * a payload cannot claim an entity its row does not have.
+   */
+  epicId: z.string().min(1).nullable(),
+  chatId: z.string().min(1).nullable(),
 } as const;
 
 export const hostNotificationEntrySchema = z.discriminatedUnion("kind", [
