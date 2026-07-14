@@ -8,7 +8,7 @@ import {
   deriveProfileUsageSidecarPosition,
   type ProfileUsageSidecarPosition,
 } from "@/components/providers/profile-usage-sidecar-position";
-import { waitForAnchorEntranceAnimations } from "@/components/providers/profile-usage-sidecar-anchor-readiness";
+import { waitForAnchorReady } from "@/components/providers/profile-usage-sidecar-anchor-readiness";
 import { MeterRow } from "@/components/settings/panels/traycer-subscription-views";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -60,9 +60,10 @@ export function ProfileUsageSidecar(
 
   useLayoutEffect(() => {
     if (anchor === null || sidecarNode === null) return;
-    // Gates `update()` until the anchor's entrance animation (if any) has
-    // settled, so a measurement is never taken - and never painted - mid
-    // transform. See `waitForAnchorEntranceAnimations` for why.
+    // Gates `update()` until the anchor has a real Radix placement (not the
+    // off-screen measuring position) and its entrance animation, if any, has
+    // settled - so a measurement is never taken, and nothing ever painted,
+    // mid placement or mid transform. See `waitForAnchorReady` for why.
     let ready = false;
     const update = () => {
       if (!ready) return;
@@ -79,9 +80,9 @@ export function ProfileUsageSidecar(
       });
       setPosition((current) => (samePosition(current, next) ? current : next));
     };
-    let cancelled = false;
-    void waitForAnchorEntranceAnimations(anchor).then(() => {
-      if (cancelled) return;
+    const controller = new AbortController();
+    void waitForAnchorReady(anchor, controller.signal).then(() => {
+      if (controller.signal.aborted) return;
       ready = true;
       update();
     });
@@ -91,7 +92,7 @@ export function ProfileUsageSidecar(
     observer.observe(anchor);
     observer.observe(sidecarNode);
     return () => {
-      cancelled = true;
+      controller.abort();
       observer.disconnect();
       window.removeEventListener("resize", update);
       window.removeEventListener("scroll", update, true);

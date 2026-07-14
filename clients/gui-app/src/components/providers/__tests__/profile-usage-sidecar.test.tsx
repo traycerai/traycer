@@ -1,5 +1,5 @@
 import "../../../../__tests__/test-browser-apis";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import type { ProfileDropdownUsageEntry } from "../profile-dropdown-usage";
@@ -285,5 +285,164 @@ describe("ProfileUsageSidecar entrance-animation readiness", () => {
     releaseAnimation();
     await waitFor(() => expect(sidecar.dataset.visible).toBe("true"));
     expect(sidecar.dataset.side).toBe("right");
+  });
+});
+
+// Models the real Radix Popper sequence (see `@radix-ui/react-popper`'s
+// `PopperContent`, node_modules/.../@radix-ui/react-popper/dist/index.mjs):
+// `[data-radix-popper-content-wrapper]` sits at `transform: translate(0,
+// -200%)` - pushed off-screen "for measuring" - and content's entrance
+// animation is explicitly suppressed (`animation: "none"`) until Floating
+// UI's `isPositioned` flips true. During that window `document.getAnimations()`
+// is genuinely empty, so a fix that only waits on animations (2533e8a) can't
+// catch it: it finds nothing to wait for and measures the anchor while it's
+// still translated off-screen.
+describe("ProfileUsageSidecar Radix placement readiness", () => {
+  let wrapper: HTMLDivElement;
+  let anchor: HTMLButtonElement;
+  let placed: boolean;
+  let currentAnimations: ReadonlyArray<{
+    readonly effect: {
+      readonly target: Node | null;
+      getTiming(): { readonly iterations?: number };
+    } | null;
+    readonly finished: Promise<unknown>;
+  }>;
+
+  beforeEach(() => {
+    wrapper = document.createElement("div");
+    wrapper.setAttribute("data-radix-popper-content-wrapper", "");
+    wrapper.style.transform = "translate(0, -200%)";
+    anchor = document.createElement("button");
+    wrapper.append(anchor);
+    document.body.append(wrapper);
+    placed = false;
+    currentAnimations = [];
+    Object.defineProperty(document, "getAnimations", {
+      configurable: true,
+      writable: true,
+      value: () => currentAnimations,
+    });
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+      function mockRect(this: HTMLElement) {
+        if (this === anchor) {
+          return placed
+            ? new DOMRect(100, 100, 240, 32)
+            : new DOMRect(0, -9999, 240, 32);
+        }
+        if (this.hasAttribute("data-profile-usage-sidecar")) {
+          return new DOMRect(0, 0, 300, 220);
+        }
+        return new DOMRect(0, 0, 0, 0);
+      },
+    );
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    cleanup();
+    wrapper.remove();
+    Reflect.deleteProperty(document, "getAnimations");
+  });
+
+  it("stays hidden through the unpositioned (off-screen, no animation) phase, then through the entrance animation, then positions correctly", async () => {
+    render(
+      <ProfileUsageSidecar
+        anchor={anchor}
+        profile={PROFILE}
+        entry={staleEntry()}
+        isHostReady
+      />,
+    );
+
+    const sidecar = screen.getByRole("complementary", {
+      name: "Usage details for Work",
+    });
+
+    // Phase 1: Radix's genuine unpositioned window. No animation exists
+    // (Radix suppresses it), and the anchor is still translated off-screen.
+    // This is exactly the condition an animation-only wait cannot detect -
+    // it would find `getAnimations()` empty and show immediately using the
+    // off-screen rect. Flushed via `act` + a real macrotask tick (not just
+    // microtasks) so any React work a premature `setPosition` schedules is
+    // fully applied before asserting - a bare microtask flush can race a
+    // real bug into passing vacuously if React defers the commit.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(sidecar.dataset.visible).toBe("false");
+    expect(sidecar.dataset.side).toBeUndefined();
+
+    // Phase 2: Floating UI lands its first real placement - the wrapper's
+    // style mutates, the anchor's rect is now on-screen, and Radix's
+    // suppression lifts so the entrance animation begins.
+    let releaseAnimation: (value: undefined) => void = () => undefined;
+    const finished = new Promise<undefined>((resolve) => {
+      releaseAnimation = resolve;
+    });
+    placed = true;
+    currentAnimations = [
+      {
+        effect: { target: wrapper, getTiming: () => ({ iterations: 1 }) },
+        finished,
+      },
+    ];
+    await act(async () => {
+      wrapper.style.transform = "translate(228px, 100px)";
+      // Still hidden - the entrance animation itself hasn't settled yet.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(sidecar.dataset.visible).toBe("false");
+
+    releaseAnimation(undefined);
+    await waitFor(() => expect(sidecar.dataset.visible).toBe("true"));
+    expect(sidecar.dataset.side).toBe("right");
+    // Discriminates a stale off-screen measurement (anchor.right=240,
+    // top=-9999 clamped to the 12px padding floor) from the real on-screen
+    // one (anchor at x=100,y=100,width=240 -> right=340) - `data-side`
+    // alone is "right" either way and can't tell them apart.
+    expect(sidecar.getAttribute("style")).toContain("left: 348px");
+    expect(sidecar.getAttribute("style")).toContain("top: 100px");
+  });
+
+  it("re-anchors instantly to a different row within an already-placed menu (no placement wait)", async () => {
+    placed = true;
+    const { rerender } = render(
+      <ProfileUsageSidecar
+        anchor={anchor}
+        profile={PROFILE}
+        entry={staleEntry()}
+        isHostReady
+      />,
+    );
+    const sidecar = screen.getByRole("complementary", {
+      name: "Usage details for Work",
+    });
+    await waitFor(() => expect(sidecar.dataset.visible).toBe("true"));
+
+    const otherRow = document.createElement("button");
+    wrapper.append(otherRow);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+      function mockRect(this: HTMLElement) {
+        if (this === otherRow) return new DOMRect(100, 160, 240, 32);
+        if (this.hasAttribute("data-profile-usage-sidecar")) {
+          return new DOMRect(0, 0, 300, 220);
+        }
+        return new DOMRect(0, 0, 0, 0);
+      },
+    );
+
+    rerender(
+      <ProfileUsageSidecar
+        anchor={otherRow}
+        profile={PROFILE}
+        entry={staleEntry()}
+        isHostReady
+      />,
+    );
+    // Already-placed menu, already on-screen row - no artificial wait.
+    await waitFor(() =>
+      expect(sidecar.getAttribute("style")).toContain("top: 160px"),
+    );
   });
 });
