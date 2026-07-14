@@ -13,12 +13,14 @@ import { FileSections } from "./file-sections";
 import { FileTree } from "./file-tree";
 import { NoMatchingFiles } from "./empty-states/no-matching-files";
 import type { GitDiffSectionCollapseController } from "./git-diff-section";
+import type { GitDiffRepositoryContext } from "@/stores/epics/canvas/types";
 
 export interface FileListProps {
   readonly epicId: string;
   readonly viewTabId: string;
   readonly hostId: string;
   readonly runningDir: string;
+  readonly repositoryContext: GitDiffRepositoryContext | null;
   readonly files: ReadonlyArray<GitChangedFile>;
   readonly query: string;
   readonly onClearQuery: () => void;
@@ -71,6 +73,7 @@ export function FileList(props: FileListProps): ReactNode {
         viewTabId={props.viewTabId}
         hostId={props.hostId}
         runningDir={props.runningDir}
+        repositoryContext={props.repositoryContext}
         allFiles={props.files}
         visibleFiles={visibleFiles}
         forceExpanded={queryActive}
@@ -87,6 +90,7 @@ export function FileList(props: FileListProps): ReactNode {
       viewTabId={props.viewTabId}
       hostId={props.hostId}
       runningDir={props.runningDir}
+      repositoryContext={props.repositoryContext}
       allFiles={props.files}
       visibleFiles={visibleFiles}
       pathRangesByPath={pathRangesByPath}

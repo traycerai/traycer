@@ -1,7 +1,14 @@
 import "../../../../../__tests__/test-browser-apis";
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import type { ProviderRateLimits } from "@traycer/protocol/host";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { formatResetFullDateTime } from "@/lib/relative-time";
 import {
   ClaudeRateLimitView,
@@ -92,38 +99,38 @@ describe("CodexRateLimitView (extended fields)", () => {
     expect(screen.getByText("3 available")).toBeTruthy();
   });
 
-  it("lists reset expiries soonest first and discloses a capped remainder", () => {
-    const soonExpiry = NOW + 2 * 60 * 60 * 1000;
-    const laterExpiry = NOW + 3 * 24 * 60 * 60 * 1000;
-    const detailedCodex = {
-      ...codex,
-      resetCredits: {
-        availableCount: 3,
-        credits: [
-          {
-            id: "later",
-            resetType: "codexRateLimits" as const,
-            status: "available" as const,
-            grantedAt: NOW,
-            expiresAt: laterExpiry,
-            title: "Later reset",
-            description: null,
-          },
-          {
-            id: "soon",
-            resetType: "codexRateLimits" as const,
-            status: "available" as const,
-            grantedAt: NOW,
-            expiresAt: soonExpiry,
-            title: "Soon reset",
-            description: null,
-          },
-        ],
-      },
-    };
-    const { rerender } = render(
-      <CodexRateLimitView data={detailedCodex} variant="settings" />,
-    );
+  const soonExpiry = NOW + 2 * 60 * 60 * 1000;
+  const laterExpiry = NOW + 3 * 24 * 60 * 60 * 1000;
+  const detailedCodex: CodexRateLimits = {
+    ...codex,
+    resetCredits: {
+      availableCount: 3,
+      credits: [
+        {
+          id: "later",
+          resetType: "codexRateLimits",
+          status: "available",
+          grantedAt: NOW,
+          expiresAt: laterExpiry,
+          title: "Later reset",
+          description: null,
+        },
+        {
+          id: "soon",
+          resetType: "codexRateLimits",
+          status: "available",
+          grantedAt: NOW,
+          expiresAt: soonExpiry,
+          title: "Soon reset",
+          description: null,
+        },
+      ],
+    },
+  };
+
+  it("lists reset expiries soonest first in Settings, and discloses a capped remainder", () => {
+    render(<CodexRateLimitView data={detailedCodex} variant="settings" />);
+
     const resetLabels = screen.getAllByText(/reset$/);
     expect(resetLabels.map((label) => label.textContent)).toEqual([
       "Soon reset",
@@ -134,69 +141,101 @@ describe("CodexRateLimitView (extended fields)", () => {
       screen.getByText(`Expires ${formatResetFullDateTime(laterExpiry)}`),
     ).toBeTruthy();
     expect(screen.getByText("+1 more not shown")).toBeTruthy();
+    // Nothing to hover in Settings - the list is already on screen.
+    expect(screen.getByText("3 available").className).not.toContain(
+      "cursor-help",
+    );
+  });
 
-    rerender(
-      <CodexRateLimitView data={detailedCodex} variant="popover-detail" />,
+  it("tints a reset expiring inside 48h in the Settings list, but not the far one", () => {
+    render(<CodexRateLimitView data={detailedCodex} variant="settings" />);
+    // `soonExpiry` is 2h out (inside the warning window); `laterExpiry` is 3d out.
+    expect(screen.getByText(/^Expires in /).className).toContain(
+      "text-destructive",
     );
     expect(
-      screen.getByText(`Expires ${formatResetFullDateTime(laterExpiry)}`),
+      screen.getByText(`Expires ${formatResetFullDateTime(laterExpiry)}`)
+        .className,
+    ).not.toContain("text-destructive");
+  });
+
+  it("drops the warning tint in the tooltip, whose inverted surface can't carry it", async () => {
+    render(
+      <TooltipProvider delayDuration={0}>
+        <CodexRateLimitView data={detailedCodex} variant="popover-detail" />
+      </TooltipProvider>,
+    );
+
+    fireEvent.pointerMove(screen.getByText("3 available"));
+
+    const tooltip = await screen.findByRole("tooltip");
+    expect(within(tooltip).getByText(/^Expires in /).className).not.toContain(
+      "text-destructive",
+    );
+  });
+
+  it("collapses the popover to a bare count - no expiries, no per-credit rows", () => {
+    render(
+      <TooltipProvider delayDuration={0}>
+        <CodexRateLimitView data={detailedCodex} variant="popover-detail" />
+      </TooltipProvider>,
+    );
+    expect(screen.getByText("3 available")).toBeTruthy();
+    expect(screen.queryByText("Soon reset")).toBeNull();
+    expect(screen.queryByText(/^Expires/)).toBeNull();
+    expect(screen.queryByText("+1 more not shown")).toBeNull();
+  });
+
+  it("reveals the popover's expiries soonest first, plus the capped remainder, on hovering the count", async () => {
+    render(
+      <TooltipProvider delayDuration={0}>
+        <CodexRateLimitView data={detailedCodex} variant="popover-detail" />
+      </TooltipProvider>,
+    );
+
+    fireEvent.pointerMove(screen.getByText("3 available"));
+
+    const tooltip = await screen.findByRole("tooltip");
+    const resetLabels = within(tooltip).getAllByText(/reset$/);
+    expect(resetLabels.map((label) => label.textContent)).toEqual([
+      "Soon reset",
+      "Later reset",
+    ]);
+    expect(within(tooltip).getByText(/^Expires in /)).toBeTruthy();
+    expect(
+      within(tooltip).getByText(
+        `Expires ${formatResetFullDateTime(laterExpiry)}`,
+      ),
     ).toBeTruthy();
+    expect(within(tooltip).getByText("+1 more not shown")).toBeTruthy();
   });
 
-  it("folds a single credit's expiry into the summary row", () => {
+  it("reveals the popover's tooltip on keyboard focus, not just hover", async () => {
     render(
-      <CodexRateLimitView
-        data={{
-          ...codex,
-          resetCredits: {
-            availableCount: 1,
-            credits: [
-              {
-                id: "single",
-                resetType: "codexRateLimits",
-                status: "available",
-                grantedAt: NOW,
-                expiresAt: null,
-                title: "Single reset",
-                description: null,
-              },
-            ],
-          },
-        }}
-        variant="settings"
-      />,
+      <TooltipProvider delayDuration={0}>
+        <CodexRateLimitView data={detailedCodex} variant="popover-detail" />
+      </TooltipProvider>,
     );
-    expect(screen.getByText("1 available")).toBeTruthy();
-    expect(screen.getByText("No expiry")).toBeTruthy();
-    expect(screen.queryByText("Single reset")).toBeNull();
+
+    // A native `<button>`, not a `span` + `tabIndex`: natively
+    // keyboard-focusable, and valid without an ARIA role.
+    const count = screen.getByRole("button", { name: "3 available" });
+    fireEvent.focus(count);
+
+    expect(await screen.findByRole("tooltip")).toBeTruthy();
   });
 
-  it("discloses capped credits when the only returned detail is inline", () => {
-    render(
-      <CodexRateLimitView
-        data={{
-          ...codex,
-          resetCredits: {
-            availableCount: 2,
-            credits: [
-              {
-                id: "single-capped",
-                resetType: "codexRateLimits",
-                status: "available",
-                grantedAt: NOW,
-                expiresAt: null,
-                title: null,
-                description: null,
-              },
-            ],
-          },
-        }}
-        variant="settings"
-      />,
+  it("leaves the popover count out of tab order when the host sends no credit detail", () => {
+    render(<CodexRateLimitView data={codex} variant="popover-detail" />);
+    expect(screen.queryByRole("button", { name: "3 available" })).toBeNull();
+    expect(screen.getByText("3 available").tagName).toBe("SPAN");
+  });
+
+  it("leaves the popover count un-hoverable when the host sends no credit detail", () => {
+    render(<CodexRateLimitView data={codex} variant="popover-detail" />);
+    expect(screen.getByText("3 available").className).not.toContain(
+      "cursor-help",
     );
-    expect(screen.getByText("2 available")).toBeTruthy();
-    expect(screen.getByText("No expiry")).toBeTruthy();
-    expect(screen.getByText("+1 more not shown")).toBeTruthy();
   });
 
   it("renders a generic day/hour duration for an off-standard window", () => {

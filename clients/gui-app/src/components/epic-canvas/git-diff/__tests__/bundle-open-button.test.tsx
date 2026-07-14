@@ -35,6 +35,10 @@ describe("<BundleOpenButton />", () => {
         hostId="host-1"
         runningDir="/repo"
         group="changes"
+        repositoryContext={{
+          workspaceLabel: "traycer-internal",
+          repositoryLabel: "traycer",
+        }}
         disabled={false}
       />,
     );
@@ -59,6 +63,11 @@ describe("<BundleOpenButton />", () => {
       bundleGroup: "changes",
     });
     expect(tile.hostId).toBe("host-1");
+    expect(tile.name).toBe("traycer-internal › traycer · Changes");
+    expect(tile.repositoryContext).toEqual({
+      workspaceLabel: "traycer-internal",
+      repositoryLabel: "traycer",
+    });
   });
 
   it("opens a pinned merge bundle diff tile", () => {
@@ -71,6 +80,7 @@ describe("<BundleOpenButton />", () => {
         hostId="host-1"
         runningDir="/repo"
         group="merge"
+        repositoryContext={null}
         disabled={false}
       />,
     );
@@ -100,6 +110,7 @@ describe("<BundleOpenButton />", () => {
         hostId="host-1"
         runningDir="/repo"
         group="staged"
+        repositoryContext={null}
         disabled
       />,
     );

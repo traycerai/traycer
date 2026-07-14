@@ -9,13 +9,24 @@ vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
     refetch: () => Promise.resolve(),
   }),
 }));
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TabStrip } from "@/components/epic-canvas/canvas/tab-strip";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import type { EpicNodeRef } from "@/stores/epics/canvas/types";
+import type {
+  EpicCanvasTileRef,
+  EpicNodeRef,
+  SplitDirection,
+} from "@/stores/epics/canvas/types";
+import { makeGitBundleDiffTile } from "@/lib/git/git-diff-tile";
 
 interface CapturedDraggableInput {
   readonly id: string;
@@ -80,7 +91,7 @@ function createQueryClient(): QueryClient {
 // TabItem reads its active/preview/globally-active state from the canvas store
 // (via `useTabActivation`), not from props, so seed a tab whose lone group has
 // `TAB` as the active + preview tab.
-function seedActivePreviewTab(): void {
+function seedActivePreviewTab(tab: EpicCanvasTileRef): void {
   useEpicCanvasStore.setState({
     tabsById: {
       [VIEW_TAB_ID]: {
@@ -95,12 +106,12 @@ function seedActivePreviewTab(): void {
         root: {
           kind: "pane",
           id: "group-1",
-          tabInstanceIds: [TAB.instanceId],
-          activeTabId: TAB.instanceId,
-          previewTabId: TAB.instanceId,
-          activationHistory: [TAB.instanceId],
+          tabInstanceIds: [tab.instanceId],
+          activeTabId: tab.instanceId,
+          previewTabId: tab.instanceId,
+          activationHistory: [tab.instanceId],
         },
-        tilesByInstanceId: { [TAB.instanceId]: TAB },
+        tilesByInstanceId: { [tab.instanceId]: tab },
         sizesByGroupId: {},
       },
     },
@@ -111,22 +122,38 @@ function renderTabStrip(input: {
   readonly onClose: (groupId: string, tabId: string) => void;
   readonly onPromotePreview: (groupId: string) => void;
   readonly onOpenBlankTab: (groupId: string) => void;
+  readonly onSplit:
+    ((groupId: string, direction: SplitDirection) => void) | undefined;
 }) {
-  seedActivePreviewTab();
+  renderTabStripForTab(TAB, input);
+}
+
+function renderTabStripForTab(
+  tab: EpicCanvasTileRef,
+  input: {
+    readonly onClose: (groupId: string, tabId: string) => void;
+    readonly onPromotePreview: (groupId: string) => void;
+    readonly onOpenBlankTab: (groupId: string) => void;
+    readonly onSplit:
+      ((groupId: string, direction: SplitDirection) => void) | undefined;
+  },
+) {
+  seedActivePreviewTab(tab);
   const queryClient = createQueryClient();
+  const onSplit = input.onSplit === undefined ? () => undefined : input.onSplit;
   render(
     <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
+      <TooltipProvider delayDuration={0}>
         <TabStrip
           epicId="epic-1"
           tabId={VIEW_TAB_ID}
           groupId="group-1"
-          tabs={[TAB]}
-          activeTabId={TAB.instanceId}
+          tabs={[tab]}
+          activeTabId={tab.instanceId}
           onSelectTab={() => undefined}
           onCloseTab={input.onClose}
           onPromotePreview={input.onPromotePreview}
-          onSplitRight={() => undefined}
+          onSplit={onSplit}
           onCloseGroup={() => undefined}
           onOpenBlankTab={input.onOpenBlankTab}
           canRenameTabs
@@ -159,6 +186,7 @@ describe("<TabStrip />", () => {
       onClose,
       onPromotePreview: () => undefined,
       onOpenBlankTab: () => undefined,
+      onSplit: undefined,
     });
 
     const tab = screen.getByRole("tab", { name: /a\.md/ });
@@ -180,6 +208,7 @@ describe("<TabStrip />", () => {
       onClose: () => undefined,
       onPromotePreview,
       onOpenBlankTab: () => undefined,
+      onSplit: undefined,
     });
 
     fireEvent.doubleClick(screen.getByRole("tab", { name: /a\.md/ }));
@@ -193,6 +222,7 @@ describe("<TabStrip />", () => {
       onClose: () => undefined,
       onPromotePreview: () => undefined,
       onOpenBlankTab,
+      onSplit: undefined,
     });
 
     // Double-clicking the strip-end container itself (not a tab) opens a blank.
@@ -206,6 +236,7 @@ describe("<TabStrip />", () => {
       onClose: () => undefined,
       onPromotePreview: () => undefined,
       onOpenBlankTab: () => undefined,
+      onSplit: undefined,
     });
 
     const scroller = screen.getByTestId("tab-strip-end");
@@ -225,6 +256,7 @@ describe("<TabStrip />", () => {
       onClose: () => undefined,
       onPromotePreview: () => undefined,
       onOpenBlankTab,
+      onSplit: undefined,
     });
 
     // The guard (target === currentTarget) keeps tab double-clicks from
@@ -232,5 +264,126 @@ describe("<TabStrip />", () => {
     fireEvent.doubleClick(screen.getByRole("tab", { name: /a\.md/ }));
 
     expect(onOpenBlankTab).not.toHaveBeenCalled();
+  });
+
+  it("splits right by default and down when Shift is held for the click", () => {
+    const onSplit = vi.fn();
+    renderTabStrip({
+      onClose: () => undefined,
+      onPromotePreview: () => undefined,
+      onOpenBlankTab: () => undefined,
+      onSplit,
+    });
+
+    const splitButton = screen.getByRole("button", {
+      name: "Split group right",
+    });
+    fireEvent.click(splitButton);
+    fireEvent.click(splitButton, { shiftKey: true });
+
+    expect(onSplit).toHaveBeenNthCalledWith(1, "group-1", "horizontal");
+    expect(onSplit).toHaveBeenNthCalledWith(2, "group-1", "vertical");
+  });
+
+  it("shows the down-split affordance when focus arrives with Shift held", () => {
+    renderTabStrip({
+      onClose: () => undefined,
+      onPromotePreview: () => undefined,
+      onOpenBlankTab: () => undefined,
+      onSplit: undefined,
+    });
+
+    fireEvent.keyDown(window, { key: "Shift", shiftKey: true });
+    const splitButton = screen.getByRole("button", {
+      name: "Split group right",
+    });
+    fireEvent.focus(splitButton);
+
+    expect(splitButton.getAttribute("aria-label")).toBe("Split group down");
+    expect(splitButton.getAttribute("data-split-direction")).toBe("vertical");
+  });
+
+  it("keeps the default affordance while neither hovered nor focused", () => {
+    renderTabStrip({
+      onClose: () => undefined,
+      onPromotePreview: () => undefined,
+      onOpenBlankTab: () => undefined,
+      onSplit: undefined,
+    });
+
+    fireEvent.keyDown(window, { key: "Shift", shiftKey: true });
+
+    const splitButton = screen.getByRole("button", {
+      name: "Split group right",
+    });
+    expect(splitButton.getAttribute("data-split-direction")).toBe("horizontal");
+  });
+
+  it("updates the split affordance and tooltip while Shift is held", async () => {
+    renderTabStrip({
+      onClose: () => undefined,
+      onPromotePreview: () => undefined,
+      onOpenBlankTab: () => undefined,
+      onSplit: undefined,
+    });
+
+    const splitButton = screen.getByRole("button", {
+      name: "Split group right",
+    });
+    fireEvent.focus(splitButton);
+
+    expect(splitButton.getAttribute("aria-label")).toBe("Split group right");
+    expect(splitButton.getAttribute("data-split-direction")).toBe("horizontal");
+    const tooltip = await screen.findByRole("tooltip");
+    expect(tooltip.textContent).toContain("Shift+click to split down");
+    expect(tooltip.querySelector('[data-slot="kbd"]')).not.toBeNull();
+
+    fireEvent.keyDown(window, { key: "Shift", shiftKey: true });
+
+    expect(splitButton.getAttribute("aria-label")).toBe("Split group down");
+    expect(splitButton.getAttribute("data-split-direction")).toBe("vertical");
+    expect(screen.getByRole("tooltip").textContent).toContain(
+      "Release Shift to split right",
+    );
+  });
+
+  it("shows repository hierarchy in Git bundle titles and structured tooltips", async () => {
+    const gitTab = makeGitBundleDiffTile({
+      hostId: "host-A",
+      runningDir: "/worktrees/right-click-context-menu/traycer",
+      bundleGroup: "changes",
+      repositoryContext: {
+        workspaceLabel: "traycer-internal",
+        repositoryLabel: "traycer",
+      },
+    });
+    renderTabStripForTab(gitTab, {
+      onClose: () => undefined,
+      onPromotePreview: () => undefined,
+      onOpenBlankTab: () => undefined,
+      onSplit: undefined,
+    });
+
+    const title = screen.getByTestId(`tab-title-${gitTab.instanceId}`);
+    expect(title.textContent).toBe("traycer-internal › traycer · Changes");
+
+    fireEvent.focus(title);
+
+    const tooltips = await screen.findAllByTestId(
+      `git-diff-tab-tooltip-${gitTab.instanceId}`,
+    );
+    const tooltip = within(tooltips[0]);
+    expect(tooltip.getByTestId("git-diff-tooltip-workspace").textContent).toBe(
+      "Workspacetraycer-internal",
+    );
+    expect(tooltip.getByTestId("git-diff-tooltip-repository").textContent).toBe(
+      "Repositorytraycer",
+    );
+    expect(tooltip.getByTestId("git-diff-tooltip-scope").textContent).toBe(
+      "DiffChanges",
+    );
+    expect(tooltip.getByTestId("git-diff-tooltip-path").textContent).toBe(
+      "Path/worktrees/right-click-context-menu/traycer",
+    );
   });
 });

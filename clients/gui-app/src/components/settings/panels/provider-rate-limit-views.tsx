@@ -16,6 +16,11 @@ import {
   MutedAgentSpinner,
 } from "@/components/ui/agent-spinning-dots";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { MeterRow } from "@/components/settings/panels/traycer-subscription-views";
 import { contextUsageTone } from "@/components/chat/context-usage";
@@ -43,11 +48,14 @@ import {
  * Which surface a provider's detail is rendered on. Every window/bar draws
  * identically across all three - the Settings › Providers card and both
  * popover surfaces share one row renderer (`RateLimitWindowRow`), so they can
- * never visually drift (feedback: "different UX looks weird"). The only thing
- * this enum still drives is how much detail is shown:
+ * never visually drift (feedback: "different UX looks weird"). What this enum
+ * drives is how much detail is shown, and how densely:
  *
  * - `"settings"` / `"popover-detail"`: the provider's full detail (every
- *   window, credits, spend, reset credits, badges).
+ *   window, credits, spend, reset credits, badges). They differ in one place:
+ *   Settings lists the manual-reset credits under the count, while the popover
+ *   - a narrow column where those lines dwarfed the usage bars - collapses them
+ *   behind a hover on the count (`CodexResetCreditsRow`).
  * - `"popover-overview"`: the header popover's Overview tab - condensed to
  *   only the primary/secondary (5h/Weekly) windows plus credit/balance
  *   figures, dropping per-model `extraWindows`, reset credits, the
@@ -98,6 +106,8 @@ type OpenRouterRateLimits = Extract<
 type KiloCodeRateLimits = Extract<ProviderRateLimits, { provider: "kilocode" }>;
 
 const MINUTES_PER_HOUR = 60;
+// A manual reset expiring inside this window is tinted `text-destructive` in the
+// Settings list - use it or lose it.
 const RESET_CREDIT_WARNING_MS = 48 * 60 * 60 * 1000;
 const MINUTES_PER_DAY = MINUTES_PER_HOUR * 24;
 const MINUTES_PER_WEEK = MINUTES_PER_DAY * 7;
@@ -457,6 +467,7 @@ function CodexRateLimitViewContent({
       <CodexResetCreditsRow
         resetCredits={data.resetCredits}
         resetAction={resetAction}
+        variant={variant}
       />
     ) : null;
 
@@ -483,12 +494,21 @@ function CodexRateLimitViewContent({
   );
 }
 
+/**
+ * Which surface a credit line paints on. The tooltip inverts the palette
+ * (`bg-foreground` / `text-background`), so the panel's semantic tokens -
+ * `text-muted-foreground`, `text-foreground`, and the near-expiry
+ * `text-destructive` tint - are all unreadable there and are dropped in favour
+ * of the tooltip's own inherited colour.
+ */
+type CodexResetCreditTone = "panel" | "tooltip";
+
 function CodexResetCreditExpiry({
   credit,
-  prefix,
+  tone,
 }: {
   readonly credit: CodexResetCredit;
-  readonly prefix: "Expires" | "expires";
+  readonly tone: CodexResetCreditTone;
 }): ReactNode {
   const now = useSampledNow();
   const countdown = useResetCountdown(credit.expiresAt);
@@ -498,26 +518,32 @@ function CodexResetCreditExpiry({
     return <span>Expiry unavailable</span>;
   }
   if (credit.expiresAt <= now) return <span>Expired</span>;
-  const warning = credit.expiresAt - now <= RESET_CREDIT_WARNING_MS;
+  const warning =
+    tone === "panel" && credit.expiresAt - now <= RESET_CREDIT_WARNING_MS;
   return (
     <span className={cn(warning && "text-destructive")}>
       {farExpiry
-        ? `${prefix} ${formatResetFullDateTime(credit.expiresAt)}`
-        : `${prefix} in ${countdown ?? "less than a minute"}`}
+        ? `Expires ${formatResetFullDateTime(credit.expiresAt)}`
+        : `Expires in ${countdown ?? "less than a minute"}`}
     </span>
   );
 }
 
 function CodexResetCreditDetail({
   credit,
-  compact,
+  tone,
 }: {
   readonly credit: CodexResetCredit;
-  readonly compact: boolean;
+  readonly tone: CodexResetCreditTone;
 }): ReactNode {
   if (credit.status === "redeeming") {
     return (
-      <span className="flex items-center gap-1 text-muted-foreground">
+      <span
+        className={cn(
+          "flex items-center gap-1",
+          tone === "panel" && "text-muted-foreground",
+        )}
+      >
         <AgentSpinningDots
           className={undefined}
           testId={undefined}
@@ -527,20 +553,69 @@ function CodexResetCreditDetail({
       </span>
     );
   }
+  return <CodexResetCreditExpiry credit={credit} tone={tone} />;
+}
+
+/**
+ * One "Full reset - Expires Sat, Aug 1, 2026, 1:17 AM" line per credit, plus the
+ * capped-remainder disclosure. Shared by both surfaces so their wording and
+ * ordering can't drift; only the palette differs, since the tooltip paints on an
+ * inverted surface (`bg-foreground`) where the panel's muted/foreground tokens
+ * would be unreadable.
+ */
+function CodexResetCreditLines({
+  credits,
+  omittedCount,
+  tone,
+}: {
+  readonly credits: ReadonlyArray<CodexResetCredit>;
+  readonly omittedCount: number;
+  readonly tone: CodexResetCreditTone;
+}): ReactNode {
+  const panel = tone === "panel";
   return (
-    <CodexResetCreditExpiry
-      credit={credit}
-      prefix={compact ? "expires" : "Expires"}
-    />
+    <div className={cn("flex flex-col text-ui-xs", panel ? "gap-2" : "gap-1")}>
+      {credits.map((credit) => (
+        <div
+          key={credit.id}
+          className="flex items-center justify-between gap-3"
+        >
+          <span
+            className={cn("min-w-0 truncate", panel && "text-muted-foreground")}
+          >
+            {credit.title ?? "Manual reset"}
+          </span>
+          <span
+            className={cn("shrink-0 font-mono", panel && "text-foreground")}
+          >
+            <CodexResetCreditDetail credit={credit} tone={tone} />
+          </span>
+        </div>
+      ))}
+      {omittedCount > 0 ? (
+        <span className={cn(panel && "text-muted-foreground")}>
+          +{omittedCount} more not shown
+        </span>
+      ) : null}
+    </div>
   );
 }
 
+/**
+ * Settings lays the credits out as a list under the count; the header popover
+ * collapses them behind a hover on the count. Same data, different budgets: the
+ * popover is a narrow, glanceable column where a stack of full-date expiry lines
+ * dwarfed the usage bars above it, while the Settings card has the room to show
+ * them outright and no reason to hide them behind a hover.
+ */
 function CodexResetCreditsRow({
   resetCredits,
   resetAction,
+  variant,
 }: {
   readonly resetCredits: CodexResetCredits;
   readonly resetAction: CodexResetCreditActionRenderer | null;
+  readonly variant: RateLimitViewVariant;
 }): ReactNode {
   const now = useSampledNow();
   const credits = resetCredits.credits;
@@ -550,10 +625,6 @@ function CodexResetCreditsRow({
     credits === null
       ? null
       : selectEarliestExpiringCodexResetCredit(credits, now);
-  const singleCredit =
-    credits?.length === 1 && visibleCredits.length === 1
-      ? (visibleCredits[0] ?? null)
-      : null;
   const omittedCount =
     credits !== null && credits.length > 0
       ? Math.max(0, resetCredits.availableCount - credits.length)
@@ -565,47 +636,69 @@ function CodexResetCreditsRow({
           availableCount: resetCredits.availableCount,
         })
       : null;
+  // A count-only response (older hosts send no `credits` array) has nothing to
+  // list or reveal, so neither surface offers an affordance for it.
+  const hasDetail = visibleCredits.length > 0;
+  const listed = variant === "settings" && hasDetail;
+  const hoverable = !listed && hasDetail;
+  const countText = `${resetCredits.availableCount} available`;
   return (
     <div className="flex flex-col gap-2 text-ui-sm">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="text-muted-foreground">Manual resets</span>
         <span className="flex items-center gap-2">
-          <span className="flex items-center gap-1 font-mono text-ui-xs text-foreground">
-            <span>{resetCredits.availableCount} available</span>
-            {singleCredit !== null ? (
-              <>
-                <span aria-hidden="true">·</span>
-                <CodexResetCreditDetail credit={singleCredit} compact />
-              </>
-            ) : null}
-          </span>
+          {hoverable ? (
+            <Tooltip>
+              {/*
+               * A real `<button>`, not a `span` + `tabIndex`: a `tabIndex` on a
+               * non-interactive element without an ARIA role is invalid a11y
+               * (jsx-a11y/no-noninteractive-tabindex), and Radix's
+               * `TooltipTrigger` opens on focus as well as hover - but only if
+               * the trigger element can natively receive focus.
+               */}
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  className="appearance-none bg-transparent p-0 font-mono text-ui-xs text-foreground cursor-help"
+                >
+                  {countText}
+                </button>
+              </TooltipTrigger>
+              {/*
+               * `max-w-sm`, not the shadcn default `max-w-xs`: a title plus a
+               * mono full-date expiry ("Full reset - Expires Sat, Aug 1, 2026,
+               * 1:17 AM") overruns 20rem, and the title's `truncate` would eat
+               * the overflow rather than the tooltip growing to fit.
+               */}
+              <TooltipContent
+                side="top"
+                align="end"
+                sideOffset={6}
+                className="max-w-sm"
+              >
+                <CodexResetCreditLines
+                  credits={visibleCredits}
+                  omittedCount={omittedCount}
+                  tone="tooltip"
+                />
+              </TooltipContent>
+            </Tooltip>
+          ) : (
+            <span className="font-mono text-ui-xs text-foreground">
+              {countText}
+            </span>
+          )}
           {action}
         </span>
       </div>
-      {singleCredit === null && visibleCredits.length > 0 ? (
-        <div className="flex flex-col gap-2 pl-3 text-ui-xs">
-          {visibleCredits.map((credit) => (
-            <div
-              key={credit.id}
-              className="flex items-center justify-between gap-3"
-            >
-              <span
-                className="min-w-0 truncate text-muted-foreground"
-                title={credit.description ?? undefined}
-              >
-                {credit.title ?? "Manual reset"}
-              </span>
-              <span className="shrink-0 font-mono text-foreground">
-                <CodexResetCreditDetail credit={credit} compact={false} />
-              </span>
-            </div>
-          ))}
+      {listed ? (
+        <div className="pl-3">
+          <CodexResetCreditLines
+            credits={visibleCredits}
+            omittedCount={omittedCount}
+            tone="panel"
+          />
         </div>
-      ) : null}
-      {omittedCount > 0 ? (
-        <span className="pl-3 text-ui-xs text-muted-foreground">
-          +{omittedCount} more not shown
-        </span>
       ) : null}
     </div>
   );

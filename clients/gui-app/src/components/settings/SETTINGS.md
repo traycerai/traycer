@@ -255,11 +255,11 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
 - `Agents` Editor for the **global** agent selection guide
   (`~/.traycer/agent-selection-guide.md`) - the instructions Traycer agents read
   to decide which child agents to spawn (harness / model / reasoning effort) for
-  a task. A monospace `Textarea` debounce-auto-saves (and flushes on blur) via
+  a task. A full-height CodeMirror Markdown source editor provides syntax
+  highlighting and line numbers, including for Mermaid and wireframe fences.
+  It debounce-auto-saves (and flushes on blur) via
   `agent.selectionGuide.setGlobal`; a quiet "Saving… / Saved" status sits in the
-  footer, no Save button. The textarea opens at a stable, viewport-aware height
-  and can be resized vertically until the panel reaches the settings viewport's
-  bottom spacing. A **Revert to default** button (disabled while the
+  footer, no Save button. A **Revert to default** button (disabled while the
   content already equals the provider-based default) calls
   `agent.selectionGuide.resetGlobalToDefault` behind a `ConfirmDestructiveDialog`.
   Default-host scope: the editor remounts (keyed on the active host id) so a host

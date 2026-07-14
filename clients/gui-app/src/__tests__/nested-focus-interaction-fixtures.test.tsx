@@ -147,6 +147,7 @@ const ROWS: ReadonlyArray<OpenerFixtureRow> = [
           viewTabId={tabId}
           hostId="host-1"
           runningDir="/repo"
+          repositoryContext={null}
           file={changedFile("src/app.ts")}
           active={false}
           pathRanges={[]}
