@@ -1,6 +1,21 @@
-import { readdir, rm, writeFile } from "node:fs/promises";
+import { readdir, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { __acquireCliLockAtPathForTest } from "../../cli-lock";
+
+const BARRIER_POLL_MS = 20;
+const BARRIER_MAX_WAIT_MS = 15_000;
+
+async function waitForFile(path: string): Promise<void> {
+  const deadline = Date.now() + BARRIER_MAX_WAIT_MS;
+  while (Date.now() < deadline) {
+    const exists = await stat(path)
+      .then(() => true)
+      .catch(() => false);
+    if (exists) return;
+    await new Promise((resolve) => setTimeout(resolve, BARRIER_POLL_MS));
+  }
+  throw new Error(`cli-lock-worker: timed out waiting for ${path}`);
+}
 
 // Worker process for the genuine multiprocess break-arbitration regression
 // test in `cli-lock.test.ts`. Spawned as a real, separate OS process (via
@@ -16,6 +31,13 @@ async function main(): Promise<void> {
   const lockPath = process.env.WORKER_LOCK_PATH;
   const markerDir = process.env.WORKER_MARKER_DIR;
   const label = process.env.WORKER_LABEL;
+  // Optional: when set, this worker signals `<dir>/held` once it is holding
+  // the lock and has written its marker, then blocks until `<dir>/release`
+  // appears before releasing - letting a test resume a DIFFERENT, paused
+  // contender while this worker's fresh lock is still genuinely on disk
+  // and it is still inside its critical section, rather than only after it
+  // has fully exited.
+  const holdBarrierDir = process.env.WORKER_HOLD_BARRIER_DIR;
   if (
     lockPath === undefined ||
     markerDir === undefined ||
@@ -43,9 +65,14 @@ async function main(): Promise<void> {
         JSON.stringify({ label, otherHeld }),
       );
     }
-    // Hold long enough that a concurrent, badly-behaved holder would have
-    // time to also write its own marker and be caught by the check above.
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    if (holdBarrierDir !== undefined) {
+      await writeFile(join(holdBarrierDir, "held"), "");
+      await waitForFile(join(holdBarrierDir, "release"));
+    } else {
+      // Hold long enough that a concurrent, badly-behaved holder would
+      // have time to also write its own marker and be caught above.
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    }
     await rm(ownMarker, { force: true });
   } finally {
     await handle.release();

@@ -409,6 +409,28 @@ describe("reconcileHostStage", () => {
     expect(existsSync(stagedDirFor(ENV))).toBe(false);
   });
 
+  it("sweeps a .dead-* aside sibling even when there are no .old-* candidates at all", async () => {
+    // `.dead-*` is what `invalidateStagedAsideDir`'s layer-1 rename
+    // leaves behind - a structurally different prefix `.old-*` scanning
+    // never matches, so it can only be cleaned up by the unconditional
+    // sweep in `reconcileHostStage`, never by a call site nested inside
+    // `reconcileStagedAside`'s own pure-litter branch. No `.old-*`
+    // candidates at all is the ORDINARY case once a prior pass has
+    // already invalidated them - the call site this replaces was
+    // unreachable on exactly this path, so `.dead-*` trees accumulated
+    // forever across every completed replacement.
+    await writeInstall("1.0.0", {});
+    await writeStagedAt(stagedDirFor(ENV), "1.5.0", {});
+    const deadDir = `${stagedDirFor(ENV)}.dead-${Date.now()}`;
+    mkdirSync(deadDir, { recursive: true });
+    writeFileSync(join(deadDir, "leftover.txt"), "litter");
+
+    const result = await reconcileHostStage(ENV);
+    expect(result.stagedAsideOutcome).toBe("none");
+    expect(existsSync(deadDir)).toBe(false);
+    expect(existsSync(stagedDirFor(ENV))).toBe(true);
+  });
+
   it("reports the installed record is still readable after reconcile", async () => {
     const written = await writeInstall("1.0.0", {});
     await reconcileHostStage(ENV);

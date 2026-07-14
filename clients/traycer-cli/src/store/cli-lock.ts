@@ -178,18 +178,6 @@ function parseLockMetadata(raw: string): CliLockMetadata | null {
   };
 }
 
-// Convenience wrapper for callers (`release()`'s compare-and-delete) that
-// only need the parsed result, not the raw bytes. Folds `absent` and
-// `read-error` together into `null`, same as before this module
-// distinguished the two - release()'s compare-and-delete already treats a
-// `null` current read as "nothing to compare, fall back to unconditional
-// unlink", which remains the right call at release time (this handle's own
-// lock, not a break decision).
-async function readLockMetadata(path: string): Promise<CliLockMetadata | null> {
-  const read = await readLockRaw(path);
-  return read.kind === "present" ? parseLockMetadata(read.raw) : null;
-}
-
 // Age of the lock file in milliseconds, or null if it can no longer be
 // stat'd (already swept by another process). Used only to decide whether
 // an empty/corrupt lock file is a crashed holder vs. one mid-creation.
@@ -290,18 +278,29 @@ async function createBreakLockFile(
 // yet) is never mistaken for a crash. Returns whether the break-lock was
 // removed (safe for the caller to retry creating it).
 //
-// Accepted residual: two contenders can both observe the same crashed
-// breaker and both unlink+retry within the same millisecond-wide window,
-// briefly letting two break-lock holders exist (an epsilon-squared race:
-// it requires BOTH a crashed breaker AND two contenders racing the
-// recovery of that same crash in the same instant). This is strictly
-// narrower than the race this whole mechanism replaces (rename-to-claim's
-// unbounded TOCTOU window) - it's bounded by the break-lock's own tiny,
-// non-blocking critical section (read + compare + unlink of the CANONICAL
-// lock, nothing else, while the break-lock itself is held), and a second
-// breaker that shows up after the first genuinely wins its own break-lock
-// simply loses the atomic unlink race on the canonical lock (see
-// `breakStaleLock` below) - it never observes two canonical-lock holders.
+// Accepted residual: the `unlink(breakLockPath)` call below is
+// UNCONDITIONAL - it verifies the crashed holder's identity and age from
+// the read a few lines up, but never re-verifies the file still holds
+// those exact bytes immediately before deleting it by path. If this
+// recoverer is descheduled between that read and this unlink - a real gap
+// between two separate syscalls, with NO time bound, not the
+// "millisecond-wide" window this comment previously (incorrectly)
+// claimed - an entirely different, unrelated break-lock cycle can
+// complete underneath it: another contender recovers the same crashed
+// breaker, wins the O_CREAT|O_EXCL retry, runs its own critical section,
+// releases, and a THIRD, genuinely fresh contender acquires the break-lock
+// anew, all before this recoverer's stale unlink finally fires. That
+// unlink targets a PATH, not a file identity, so it deletes whatever is
+// CURRENTLY there - the fresh contender's live break-lock - out from under
+// it. Both processes then believe they exclusively hold the break-lock and
+// can run their own `breakStaleLock` critical sections concurrently: this
+// CAN violate canonical-lock exclusion, contrary to what this comment used
+// to claim. It is accepted because it requires a breaker crash AND a
+// second contender's own recovery attempt to be descheduled across these
+// two syscalls at essentially the exact moment a full, unrelated
+// break-then-reacquire cycle completes underneath it - vastly narrower
+// than the race this whole mechanism replaces (rename-to-claim's
+// routinely-hit, unbounded TOCTOU window).
 async function tryRecoverCrashedBreakLock(
   breakLockPath: string,
 ): Promise<boolean> {
@@ -487,15 +486,35 @@ async function tryAcquireOnce(
       // *their* lock out from under them. A file with no token at all is a
       // pre-token-version lock (never written by this code) - fall back to
       // the old unconditional unlink, since there is nothing to compare.
+      //
+      // This is a raw read, not the old read+fold-to-null shortcut: a
+      // transient read ERROR (EIO/EACCES) must never be treated the same
+      // as "absent" here. Release sits downstream of the accepted
+      // break-arbitration residual documented above
+      // `tryRecoverCrashedBreakLock` - if a crashed breaker was double-
+      // recovered, this handle's canonical path may now belong to a fresh
+      // holder B. Folding a read error into "nothing to compare, unlink
+      // anyway" would let this release blow away B's live lock on nothing
+      // but a flaky read - the exact only-positive-evidence rule this
+      // module applies to every break decision must hold here too.
+      const read = await readLockRaw(path);
+      if (read.kind === "read-error") {
+        return;
+      }
+      if (read.kind === "absent") {
+        // Already gone - released normally already, or broken by another
+        // contender. Nothing to unlink.
+        return;
+      }
+      const current = parseLockMetadata(read.raw);
+      if (
+        current !== null &&
+        current.token !== null &&
+        current.token !== meta.token
+      ) {
+        return;
+      }
       try {
-        const current = await readLockMetadata(path);
-        if (
-          current !== null &&
-          current.token !== null &&
-          current.token !== meta.token
-        ) {
-          return;
-        }
         await unlink(path);
       } catch {
         // If the file already vanished (e.g. swept by another tool), that's fine.

@@ -10,18 +10,39 @@ import {
   utimesSync,
   writeFileSync,
 } from "node:fs";
+import type { PathLike } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// Lets one test force the raw `readFile` release() performs to fail with a
+// transient, non-ENOENT error (EIO-shaped) for the exact lock path, while
+// every other read proxies straight through to the real implementation -
+// see the "aborts release ... transient error" test below.
 const mocks = vi.hoisted(() => ({
   lockPath: "",
+  forceReadFileErrorForPath: null as string | null,
 }));
 
 vi.mock("../paths", () => ({
   cliLockPath: () => mocks.lockPath,
   ensureCliInstallHomeDir: async () => {},
 }));
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    readFile: async (path: PathLike, encoding: "utf8") => {
+      if (path === mocks.forceReadFileErrorForPath) {
+        throw Object.assign(new Error("simulated read failure"), {
+          code: "EIO",
+        });
+      }
+      return actual.readFile(path, encoding);
+    },
+  };
+});
 
 import {
   acquireCliLock,
@@ -400,12 +421,14 @@ describe("acquireCliLock", () => {
   // it. `cli-lock-worker.ts` is spawned as a real `bun run` child process
   // so this exercises actual OS-level file contention, not a simulation.
   it.skipIf(process.platform === "win32")(
-    "a contender paused between its stale read and its break attempt aborts once a different process has already broken, acquired, and released the lock",
+    "a contender paused between its stale read and its break attempt aborts even while a different process is still actively holding the lock it broke",
     async () => {
       const markerDir = join(workDir, "markers");
       const hookDir = join(workDir, "hook");
+      const holdBarrierDir = join(workDir, "hold-barrier");
       mkdirSync(markerDir);
       mkdirSync(hookDir);
+      mkdirSync(holdBarrierDir);
 
       // A genuinely dead pid, established the same way the rest of this
       // file's real-process tests do: spawn, wait for exit, then use that
@@ -475,32 +498,46 @@ describe("acquireCliLock", () => {
       await waitForFile(join(hookDir, "ready"));
 
       // Contender B: unpaused. Reads the SAME stale lock, breaks it,
-      // acquires, writes its held-marker, holds briefly, releases -
-      // entirely before A is allowed to resume.
-      const childB = spawnWorker("B", {});
-      const codeB = await waitForExit(childB);
-      expect(codeB).toBe(0);
+      // acquires, writes its held-marker - then blocks behind an explicit
+      // release barrier instead of releasing immediately. Resuming A only
+      // after B has fully exited (and released) would make A's abort
+      // vacuous - it would just find the path absent, which even the old,
+      // unsafe direct-unlink protocol would also no-op on. Resuming A
+      // while B's fresh lock is still genuinely on disk, mid-critical-
+      // section, is what actually exercises the byte-equality re-read.
+      const childB = spawnWorker("B", {
+        WORKER_HOLD_BARRIER_DIR: holdBarrierDir,
+      });
+      await waitForFile(join(holdBarrierDir, "held"));
 
-      // Only now let A resume its paused break attempt.
+      // B is confirmed actively holding. Only now let A resume its paused
+      // break attempt against that live, changed content.
       writeFileSync(join(hookDir, "go"), "");
-      const codeA = await waitForExit(childA);
-      expect(codeA).toBe(0);
 
-      // A's break attempt must have found the canonical lock changed out
-      // from under its stale decision (B already broke + released it) and
-      // aborted - never treating a second, unrelated unlink as its own
-      // successful break.
+      // A's own process won't exit until it eventually acquires the lock
+      // itself (which can't happen until B releases below) - so wait for
+      // the break OUTCOME it records via the hook seam, not for A's exit.
+      await waitForFile(join(hookDir, "outcome"));
       const outcome = readFileSync(join(hookDir, "outcome"), "utf8");
       expect(outcome).toBe("aborted");
 
       // Held-marker protocol: neither worker ever observed the other's
       // marker still present when it wrote its own - i.e. at no point did
-      // both processes believe they held the lock simultaneously.
+      // both processes believe they held the lock simultaneously. Checked
+      // while B is still holding, before its marker is removed.
       const markerEntries = readdirSync(markerDir);
       const violations = markerEntries.filter((name) =>
         name.startsWith("violation-"),
       );
       expect(violations).toEqual([]);
+
+      // Release B, then confirm both processes exit cleanly - A must have
+      // gone on to retry and legitimately acquire the now-free lock.
+      writeFileSync(join(holdBarrierDir, "release"), "");
+      const codeB = await waitForExit(childB);
+      expect(codeB).toBe(0);
+      const codeA = await waitForExit(childA);
+      expect(codeA).toBe(0);
     },
     30_000,
   );
@@ -582,6 +619,7 @@ describe("release() compare-and-delete", () => {
   });
 
   afterEach(() => {
+    mocks.forceReadFileErrorForPath = null;
     rmSync(workDir, { recursive: true, force: true });
   });
 
@@ -640,5 +678,26 @@ describe("release() compare-and-delete", () => {
     );
     await handle.release();
     expect(readLockRaw()).toBeNull();
+  });
+
+  it("aborts release without unlinking when the raw read hits a transient error", async () => {
+    const handle = await acquireCliLock({
+      environment: "production",
+      reason: "r",
+      waitMs: 1000,
+      pollIntervalMs: 50,
+    });
+    // Simulate a transient I/O error (not ENOENT) on the exact read
+    // release() performs to confirm it still owns the file. A prior
+    // version of this code folded any read failure into "nothing to
+    // compare against, unlink anyway" - which would delete a live
+    // holder's lock (e.g. a fresh holder's under the accepted
+    // break-arbitration double-recovery residual) on nothing but a flaky
+    // read. Only a successful read that confirms ownership may unlink.
+    mocks.forceReadFileErrorForPath = mocks.lockPath;
+    await handle.release();
+    mocks.forceReadFileErrorForPath = null;
+    expect(existsSync(mocks.lockPath)).toBe(true);
+    expect(readLockRaw()).toMatchObject({ token: handle.metadata.token });
   });
 });

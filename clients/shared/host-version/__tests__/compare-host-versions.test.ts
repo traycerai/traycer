@@ -147,10 +147,11 @@ describe("compareHostVersions", () => {
   });
 
   it("compares numeric pre-release identifiers with arbitrary precision, not double-precision float", () => {
-    // Both exceed Number.MAX_SAFE_INTEGER (2^53 - 1); a Number.parseInt-based
-    // comparator would round them to the same double and misreport equal.
-    const huge = "9007199254740993";
-    const huger = "9007199254740994";
+    // 2^53 and 2^53+1 - a genuine `Number`/`Number.parseInt` collision (see
+    // the core-triplet test below for why this exact pair, not an
+    // arbitrary huge/huger pair, is what actually pins the invariant).
+    const huge = "9007199254740992";
+    const huger = "9007199254740993";
     expect(compareHostVersions(`1.0.0-${huge}`, `1.0.0-${huger}`)).toEqual({
       comparable: true,
       ordering: "less",
@@ -168,10 +169,14 @@ describe("compareHostVersions", () => {
   });
 
   it("compares core-triplet components with arbitrary precision too, not just pre-release", () => {
-    // A Number.parseInt-based core comparator rounds both of these to the
-    // same double past 2^53 and misreports equal.
-    const huge = "9007199254740993";
-    const huger = "9007199254740994";
+    // 2^53 and 2^53+1 - a genuine `Number`/`Number.parseInt` collision
+    // (IEEE-754 doubles can't represent odd integers past 2^53, so
+    // `Number("9007199254740993")` rounds DOWN to the same value as
+    // `Number("9007199254740992")`). A prior version of this test used a
+    // non-colliding pair (…993/…994, which round to distinct doubles) -
+    // a flawed Number-based comparator would have passed it anyway.
+    const huge = "9007199254740992";
+    const huger = "9007199254740993";
     expect(compareHostVersions(`${huge}.0.0`, `${huger}.0.0`)).toEqual({
       comparable: true,
       ordering: "less",

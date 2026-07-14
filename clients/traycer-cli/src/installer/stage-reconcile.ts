@@ -249,7 +249,6 @@ async function reconcileStagedAside(
       invalidateStagedAsideDir(stagedDir, candidate, logger),
     ),
   );
-  await sweepDeadStagedAsideDirs(stagedDir);
   return "deleted";
 }
 
@@ -351,6 +350,14 @@ export async function reconcileHostStage(
     });
   }
   const stagedAsideOutcome = await reconcileStagedAside(environment, logger);
+  // Unconditional and independent of `stagedAsideOutcome` above -
+  // `.dead-*` siblings are litter `invalidateStagedAsideDir`'s layer-1
+  // rename leaves behind regardless of whether THIS pass found any
+  // `.old-*` candidates to invalidate (the common case after a completed
+  // replacement has none) or restored one instead. A call site nested
+  // inside `reconcileStagedAside`'s pure-litter branch was unreachable on
+  // both of those paths, so `.dead-*` trees accumulated forever.
+  await sweepDeadStagedAsideDirs(hostStagedDir(environment));
   if (stagedAsideOutcome === "restored") {
     // Step 4's own validation (parseable sidecar + platform/arch match +
     // executable present) is a lighter "good enough to try" check than
