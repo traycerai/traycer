@@ -491,6 +491,71 @@ function streamingInterviewAssistantMessage(): Message {
   };
 }
 
+function answeredInterviewAssistantMessage(): Message {
+  const message = streamingInterviewAssistantMessage();
+  if (message.role !== "assistant") {
+    throw new Error("expected assistant interview fixture");
+  }
+  return {
+    ...message,
+    blocks: [
+      {
+        type: "interview",
+        blockId: "question-1",
+        status: "completed",
+        timestamp: 4,
+        toolName: "AskUserQuestion",
+        title: "Need input",
+        description: "One decision is required.",
+        questions: [
+          {
+            questionId: null,
+            question: "Which path should we take?",
+            header: null,
+            options: [
+              { label: "Option A", description: null, preview: null },
+              { label: "Option B", description: null, preview: null },
+            ],
+            multiSelect: false,
+          },
+        ],
+        answers: [
+          {
+            questionId: null,
+            question: "Which path should we take?",
+            values: ["Option A"],
+            notes: null,
+          },
+        ],
+        error: null,
+        metadata: null,
+      },
+    ],
+    timestamp: 4,
+    turnId: "turn-active",
+  };
+}
+
+function skippedInterviewAssistantMessage(): Message {
+  const message = answeredInterviewAssistantMessage();
+  if (message.role !== "assistant") {
+    throw new Error("expected assistant interview fixture");
+  }
+  return {
+    ...message,
+    blocks: message.blocks.map((block) =>
+      block.type === "interview"
+        ? {
+            ...block,
+            status: "errored" as const,
+            answers: [],
+            error: "Skipped by user",
+          }
+        : block,
+    ),
+  };
+}
+
 function runningActiveTurn(): ChatActiveTurn {
   return {
     turnId: "turn-active",
@@ -1216,6 +1281,58 @@ describe("<ChatTile />", () => {
       expect(screen.queryByText("Which path should we take?")).toBeNull();
       expect(screen.getByRole("button", { name: "Send" })).not.toBeNull();
     });
+  });
+
+  it("shows resolved Q&A fork actions while the assistant turn continues", async () => {
+    renderChatTile();
+
+    await waitForChatTileLoaded();
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage(), answeredInterviewAssistantMessage()],
+        activeTurn: runningActiveTurn(),
+      });
+    });
+
+    expect(
+      await screen.findByRole("button", { name: "Cross Question" }),
+    ).not.toBeNull();
+    expect(screen.getByRole("button", { name: "A/B Fork" })).not.toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cross Question" }));
+
+    const titleInput = await screen.findByLabelText("Fork chat title");
+    if (!(titleInput instanceof HTMLInputElement)) {
+      throw new Error("expected fork title input");
+    }
+    expect(titleInput.value).toBe("Cross Question - Chat 1");
+  });
+
+  it("shows Q&A fork actions after the question is skipped", async () => {
+    renderChatTile();
+
+    await waitForChatTileLoaded();
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage(), skippedInterviewAssistantMessage()],
+        activeTurn: runningActiveTurn(),
+      });
+    });
+
+    expect(
+      await screen.findByRole("button", { name: "Cross Question" }),
+    ).not.toBeNull();
+    expect(screen.getByRole("button", { name: "A/B Fork" })).not.toBeNull();
   });
 
   it("falls back to client-local last-used settings when the chat has no session settings", async () => {

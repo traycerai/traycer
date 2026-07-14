@@ -831,6 +831,11 @@ export type ReparentArtifactResponse = z.infer<
 export const createChatForkSourceSchema = z.object({
   sourceChatId: z.string(),
   assistantMessageId: z.string(),
+  // Optional content-block boundary within the selected assistant message.
+  // Q&A actions pass the interview block id so a completed assistant turn can
+  // be forked at the question checkpoint instead of at the end of the row.
+  // Message-level forks leave this null/absent and retain the whole message.
+  interviewBlockId: z.string().nullish(),
   // Disposition for interview (AskUserQuestion) blocks still pending at the
   // fork boundary when forking mid-Q&A:
   //  - "pending" - re-open each carried question in the fork as an answerable
