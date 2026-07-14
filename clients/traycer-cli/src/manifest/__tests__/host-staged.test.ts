@@ -110,6 +110,45 @@ describe("host-staged sidecar (readHostStagedRecordAt / writeHostStagedRecordAt)
     await writeHostStagedRecordAt(dir, record);
     expect(await readHostStagedRecordAt(dir)).toEqual(record);
   });
+
+  it("returns null when version is not valid SemVer", async () => {
+    const bad = { ...sampleRecord("1.5.0"), version: "v1.5.0" };
+    writeFileSync(join(dir, "staged.json"), JSON.stringify(bad));
+    expect(await readHostStagedRecordAt(dir)).toBeNull();
+  });
+
+  it("returns null when executablePath is absolute", async () => {
+    const bad = {
+      ...sampleRecord("1.5.0"),
+      executablePath: "/etc/passwd",
+    };
+    writeFileSync(join(dir, "staged.json"), JSON.stringify(bad));
+    expect(await readHostStagedRecordAt(dir)).toBeNull();
+  });
+
+  it("returns null when executablePath escapes the staged directory", async () => {
+    const bad = {
+      ...sampleRecord("1.5.0"),
+      executablePath: "../../outside/traycer-host",
+    };
+    writeFileSync(join(dir, "staged.json"), JSON.stringify(bad));
+    expect(await readHostStagedRecordAt(dir)).toBeNull();
+  });
+
+  it("returns null when executablePath is empty", async () => {
+    const bad = { ...sampleRecord("1.5.0"), executablePath: "" };
+    writeFileSync(join(dir, "staged.json"), JSON.stringify(bad));
+    expect(await readHostStagedRecordAt(dir)).toBeNull();
+  });
+
+  it("accepts a nested relative executablePath that stays within the staged directory", async () => {
+    const record: HostStagedRecord = {
+      ...sampleRecord("1.5.0"),
+      executablePath: "bin/traycer-host",
+    };
+    await writeHostStagedRecordAt(dir, record);
+    expect(await readHostStagedRecordAt(dir)).toEqual(record);
+  });
 });
 
 describe("readHostStagedRecord (environment-scoped)", () => {

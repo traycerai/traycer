@@ -549,8 +549,13 @@ function registerHostCommands(program: Command): void {
       ),
     (opts, args) => {
       const versionArg = typeof args[0] === "string" ? args[0] : null;
+      // "latest" is not a registry version - it's the same request as
+      // omitting the positional entirely. Normalizing it here (rather
+      // than downstream) keeps `versionRequest === null` the CLI-wide
+      // contract for "resolve the manifest's latest pointer".
+      const requestedLatest = versionArg === "latest";
       return buildHostDownloadCommand({
-        versionRequest: versionArg,
+        versionRequest: requestedLatest ? null : versionArg,
         automatic: opts.automatic === true,
       });
     },

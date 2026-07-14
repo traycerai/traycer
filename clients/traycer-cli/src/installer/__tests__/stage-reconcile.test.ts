@@ -234,6 +234,17 @@ describe("reconcileHostStage", () => {
     expect(result.stageDeletedReason).toBe("stale-or-equal-version");
   });
 
+  it("deletes a stage whose version is not valid SemVer as invalid-sidecar", async () => {
+    // The staged (registry) side of the version domain must always be
+    // valid SemVer - a non-parseable staged version is corrupt/foreign
+    // data, not a legitimate incomparable case (that policy applies only
+    // to the installed side - see the incomparable-INSTALLED test above).
+    await writeInstall("1.0.0", {});
+    await writeStagedAt(stagedDirFor(ENV), "not-a-version", {});
+    const result = await reconcileHostStage(ENV);
+    expect(result.stageDeletedReason).toBe("invalid-sidecar");
+  });
+
   it("deletes an orphan stage with no install record at all", async () => {
     await writeStagedAt(stagedDirFor(ENV), "2.0.0", {});
     const result = await reconcileHostStage(ENV);
@@ -248,9 +259,14 @@ describe("reconcileHostStage", () => {
     expect(existsSync(stagedDirFor(ENV))).toBe(true);
   });
 
-  it("does not delete an incomparable-version stage on the version rule alone", async () => {
-    await writeInstall("1.0.0", {});
-    await writeStagedAt(stagedDirFor(ENV), "local-custom-build-2026", {});
+  it("does not delete a valid stage on the version rule alone when the INSTALLED version is incomparable", async () => {
+    // Incomparability is a policy reserved for the installed side only -
+    // the staged (registry) side must always be valid SemVer (see the
+    // "invalid-sidecar" tests below), so this exercises the legitimate
+    // incomparable case: a local-file install with a genuinely
+    // SemVer-valid stage sitting alongside it.
+    await writeInstall("local-custom-build-2026", {});
+    await writeStagedAt(stagedDirFor(ENV), "1.5.0", {});
     const result = await reconcileHostStage(ENV);
     expect(result.stageDeletedReason).toBeNull();
   });
@@ -288,6 +304,41 @@ describe("reconcileHostStage", () => {
     expect(result.stagedAsideOutcome).toBe("deleted");
     expect(existsSync(stagedDirFor(ENV))).toBe(false);
     expect(existsSync(asideDir)).toBe(false);
+  });
+
+  it("re-evaluates a step-4-restored aside against step 3 and deletes it again within the same pass if it fails", async () => {
+    // The aside is structurally VALID (step 4's own lighter check would
+    // happily restore it: parseable sidecar, matching platform/arch,
+    // executable present) but its version is stale against the CURRENT
+    // installed version - a rule step 4 doesn't itself apply. One
+    // reconcile pass must not end with a restored stage that violates
+    // step 3.
+    await writeInstall("2.0.0", {});
+    const asideDir = `${stagedDirFor(ENV)}.old-${Date.now()}`;
+    await writeStagedAt(asideDir, "2.0.0", {});
+
+    const result = await reconcileHostStage(ENV);
+    expect(result.stagedAsideOutcome).toBe("restored");
+    expect(result.stageDeletedReason).toBe("stale-or-equal-version");
+    expect(existsSync(stagedDirFor(ENV))).toBe(false);
+  });
+
+  it("never restores an aside whose sidecar was removed but the rest of the directory is intact (partial-delete litter)", async () => {
+    // Simulates the exact failure mode the sidecar-first deletion order
+    // guards against: the sidecar unlink succeeded, but the subsequent
+    // best-effort recursive removal did not (a lock, a transient error),
+    // leaving the rest of the aside - including the "executable" -
+    // fully intact. Without a sidecar, this candidate must never be
+    // mistaken for a valid stage and restored.
+    await writeInstall("1.0.0", {});
+    const asideDir = `${stagedDirFor(ENV)}.old-${Date.now()}`;
+    const record = await writeStagedAt(asideDir, "1.5.0", {});
+    rmSync(join(asideDir, "staged.json"));
+    expect(existsSync(join(asideDir, record.executablePath))).toBe(true);
+
+    const result = await reconcileHostStage(ENV);
+    expect(result.stagedAsideOutcome).not.toBe("restored");
+    expect(existsSync(stagedDirFor(ENV))).toBe(false);
   });
 
   it("reports the installed record is still readable after reconcile", async () => {

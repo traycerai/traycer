@@ -11,11 +11,20 @@ import { isErrnoException } from "../runner/errors";
 
 // ---- Liveness -----------------------------------------------------------
 
+// Tri-state result of a single liveness probe. Distinct from a plain
+// boolean so a probe FAILURE (permission denied on an unrelated errno,
+// `tasklist` missing/refused, a timeout) is never conflated with either
+// "alive" or "dead" - a probe failure must never itself become break
+// evidence (Tech Plan's "only positive evidence" rule). Only `"alive"`
+// and `"dead"` are positive evidence; `"indeterminate"` means the probe
+// established neither.
+export type ProcessLivenessVerdict = "alive" | "dead" | "indeterminate";
+
 // Cross-platform process-liveness probe. POSIX uses `process.kill(pid, 0)`;
 // Windows uses `tasklist /FI "PID eq <pid>" /NH /FO CSV` and asserts the
 // CSV body is non-empty.
-export function isProcessAlive(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
+function probeProcessLiveness(pid: number): ProcessLivenessVerdict {
+  if (!Number.isInteger(pid) || pid <= 0) return "dead";
   if (process.platform === "win32") {
     let stdout: string;
     try {
@@ -25,27 +34,47 @@ export function isProcessAlive(pid: number): boolean {
         { encoding: "utf8", windowsHide: true, timeout: 3000 },
       );
     } catch {
-      // tasklist missing or refused - be conservative and treat the
-      // PID as still held so we never break a lock we can't probe.
-      return true;
+      // tasklist missing or refused - the probe itself failed, so we
+      // learned nothing positive either way.
+      return "indeterminate";
     }
     // tasklist prints an `INFO: No tasks are running which match...`
     // line on stderr when nothing matches; stdout is empty. When a
     // match exists, stdout contains a CSV row with the binary name
     // and the same PID we asked about.
     const trimmed = stdout.trim();
-    if (trimmed.length === 0) return false;
-    return trimmed.includes(`"${pid}"`);
+    if (trimmed.length === 0) return "dead";
+    return trimmed.includes(`"${pid}"`) ? "alive" : "dead";
   }
   try {
     process.kill(pid, 0);
-    return true;
+    return "alive";
   } catch (err) {
     const code = isErrnoException(err) ? err.code : null;
-    if (code === "EPERM") return true;
-    if (code === "ESRCH") return false;
-    return false;
+    // EPERM: the pid positively exists (the kernel found it to check
+    // permissions against) - we just can't signal it. Positive evidence
+    // of life, not a probe failure.
+    if (code === "EPERM") return "alive";
+    // ESRCH: the kernel positively has no process at this pid.
+    if (code === "ESRCH") return "dead";
+    // Any other errno (EIO, an unexpected platform error, ...) is a
+    // probe failure, not evidence the process is dead - collapsing it
+    // to "dead" (the pre-hardening behavior) let a transient probe
+    // glitch break a live holder's lock.
+    return "indeterminate";
   }
+}
+
+// Public boolean liveness check for legacy callers (`host/busy-check.ts`,
+// service controllers, doctor) that only need "is *something* running
+// here" with no identity-verdict fallback to route a probe failure to.
+// Conservatively collapses "indeterminate" to `true` (never tell a
+// legacy caller a possibly-live process is dead) - `verifyProcessIdentity`
+// below does NOT go through this collapse; it consumes
+// `probeProcessLiveness`'s tri-state result directly so a probe failure
+// can never masquerade as break evidence.
+export function isProcessAlive(pid: number): boolean {
+  return probeProcessLiveness(pid) !== "dead";
 }
 
 // ---- Identity (pid + process-start-time) ---------------------------------
@@ -95,13 +124,17 @@ export type ProcessIdentityVerdict =
 // Pure decision function, kept separate from the OS-querying wrapper below
 // so the branch logic is exhaustively unit-testable without shelling out -
 // recycled-pid and probe-failure scenarios are impractical to reproduce
-// with real OS processes in a test.
+// with real OS processes in a test. Takes the tri-state liveness verdict
+// directly (never the collapsed `isProcessAlive` boolean) so a probe
+// failure can only ever produce "indeterminate", never masquerade as
+// "dead" break evidence.
 export function computeProcessIdentityVerdict(
-  aliveNow: boolean,
+  liveness: ProcessLivenessVerdict,
   recordedStartedAtMs: number | null,
   currentStartedAtMs: number | null,
 ): ProcessIdentityVerdict {
-  if (!aliveNow) return "dead";
+  if (liveness === "dead") return "dead";
+  if (liveness === "indeterminate") return "indeterminate";
   if (recordedStartedAtMs === null || currentStartedAtMs === null) {
     return "indeterminate";
   }
@@ -111,20 +144,53 @@ export function computeProcessIdentityVerdict(
     : "alive-different";
 }
 
+// This process's own start time, read once and cached for the life of
+// the process (a process's own start time never changes). Backs the
+// own-pid identity check below - unlike the general cross-pid path,
+// there is nothing to gain from re-probing on every call.
+let cachedOwnStartTimeMs: number | null | "unread" = "unread";
+function ownProcessStartTimeMs(): number | null {
+  if (cachedOwnStartTimeMs === "unread") {
+    cachedOwnStartTimeMs = readProcessStartTimeMs(process.pid);
+  }
+  return cachedOwnStartTimeMs;
+}
+
+// A token recorded under our own pid still needs an identity check, not
+// an unconditional "alive-same": if the OS recycled this pid onto us
+// since the token was written (the token's process is a dead
+// predecessor, not this process), returning "alive-same" would wedge a
+// lock/temp forever under a holder that no longer exists. Positive
+// evidence either way is drawn from comparing the recorded start time
+// against our own, positively-known start time - never from re-probing
+// our own liveness, which is trivially always "alive" and therefore
+// uninformative here.
+function verifyOwnProcessIdentity(
+  token: ProcessIdentityToken,
+): ProcessIdentityVerdict {
+  if (token.startedAtMs === null) {
+    // Could be our own write after a failed start-time probe - no
+    // identity claim was ever recorded to check against.
+    return "indeterminate";
+  }
+  const ownStartedAtMs = ownProcessStartTimeMs();
+  if (ownStartedAtMs === null) return "indeterminate";
+  const driftMs = Math.abs(ownStartedAtMs - token.startedAtMs);
+  if (driftMs <= START_TIME_MATCH_TOLERANCE_MS) return "alive-same";
+  // The recorded identity doesn't match ours - the pid was recycled onto
+  // us since that token was written, so its writer is positively gone.
+  return "dead";
+}
+
 export function verifyProcessIdentity(
   token: ProcessIdentityToken,
 ): ProcessIdentityVerdict {
-  // The current process is always alive and always itself - short-circuit
-  // without shelling out. This also makes a command's own in-flight
-  // owner-tokened temp (e.g. `host download`'s not-yet-promoted stage
-  // temp) correctly read as "alive-same" during its own reconcile pass.
-  if (token.pid === process.pid) return "alive-same";
-  const aliveNow = isProcessAlive(token.pid);
-  const currentStartedAtMs = aliveNow
-    ? readProcessStartTimeMs(token.pid)
-    : null;
+  if (token.pid === process.pid) return verifyOwnProcessIdentity(token);
+  const liveness = probeProcessLiveness(token.pid);
+  const currentStartedAtMs =
+    liveness === "alive" ? readProcessStartTimeMs(token.pid) : null;
   return computeProcessIdentityVerdict(
-    aliveNow,
+    liveness,
     token.startedAtMs,
     currentStartedAtMs,
   );

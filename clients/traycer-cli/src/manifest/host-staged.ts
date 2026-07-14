@@ -1,5 +1,6 @@
 import { readFile, rename, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { isAbsolute, join, relative } from "node:path";
+import { isValidHostVersion } from "@traycer-clients/shared/host-version/compare-host-versions";
 import type { Environment } from "../runner/environment";
 import { createCliLogger } from "../logger";
 import { hostStagedDir } from "../store/paths";
@@ -51,6 +52,27 @@ function isSourceKind(value: unknown): value is HostInstallSource["kind"] {
   return value === "registry" || value === "local-file";
 }
 
+// Structural validation only (no filesystem access) - non-empty, relative,
+// and resolves to somewhere inside `stagedDirPath` (no `..` escape). This
+// catches a malformed or hostile `executablePath` (absolute, path
+// traversal) at parse time, producing "invalid-sidecar" upstream.
+// Deliberately does NOT check the path actually exists on disk - that is
+// a separate, re-verified-at-use concern (see `stage-reconcile.ts`'s
+// "executable-missing" check, which stays meaningful precisely because
+// it can observe a state change - e.g. the file deleted - after this
+// structural check already passed).
+export function isStructurallyValidStagedExecutablePath(
+  stagedDirPath: string,
+  executablePath: string,
+): boolean {
+  if (executablePath.length === 0 || isAbsolute(executablePath)) return false;
+  const resolvedRelative = relative(
+    stagedDirPath,
+    join(stagedDirPath, executablePath),
+  );
+  return !resolvedRelative.startsWith("..") && !isAbsolute(resolvedRelative);
+}
+
 function parseSource(value: unknown): HostInstallSource | null {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     return null;
@@ -84,7 +106,14 @@ export async function readHostStagedRecordAt(
   }
   const obj = parsed as Record<string, unknown>;
   if (obj.schemaVersion !== HOST_STAGED_RECORD_SCHEMA_VERSION) return null;
-  if (typeof obj.version !== "string") return null;
+  // The registry side of the version domain must always be valid SemVer
+  // (see the Tech Plan's "Version identity" section) - a sidecar whose
+  // `version` doesn't parse is corrupt/foreign data, not a legitimate
+  // incomparable-installed case, and must never wedge stage-reconcile's
+  // convergence by being treated as an otherwise-valid record.
+  if (typeof obj.version !== "string" || !isValidHostVersion(obj.version)) {
+    return null;
+  }
   let runtimeVersion: string | null;
   if (obj.runtimeVersion === null) {
     runtimeVersion = null;
@@ -108,7 +137,12 @@ export async function readHostStagedRecordAt(
   if (source === null) return null;
   if (typeof obj.signatureKeyId !== "string") return null;
   if (typeof obj.signatureVerifiedAt !== "string") return null;
-  if (typeof obj.executablePath !== "string") return null;
+  if (
+    typeof obj.executablePath !== "string" ||
+    !isStructurallyValidStagedExecutablePath(stagedDirPath, obj.executablePath)
+  ) {
+    return null;
+  }
   if (!isPlatform(obj.platform)) return null;
   if (!isArch(obj.arch)) return null;
   return {

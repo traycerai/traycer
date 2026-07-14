@@ -1,9 +1,10 @@
-import { access, rm } from "node:fs/promises";
-import { dirname, relative } from "node:path";
+import { access, rm, unlink } from "node:fs/promises";
+import { dirname, join, relative } from "node:path";
 import { platform as osPlatform } from "node:os";
 import {
   compareHostVersions,
   isStrictlyNewerHostVersion,
+  isValidHostVersion,
 } from "@traycer-clients/shared/host-version/compare-host-versions";
 import type { Environment } from "../runner/environment";
 import { createCliLogger, type ILogger } from "../logger";
@@ -63,7 +64,20 @@ export type HostDownloadShortCircuitReason =
   | "automatic-refused-incomparable-installed";
 
 export type HostDownloadDiscardReason =
-  "install-record-vanished" | "not-strictly-newer";
+  | "install-record-vanished"
+  // A slower "latest" download lost a reverse-completion race: a newer
+  // (or equal) stage was already promoted by the time this one reached
+  // phase 3.
+  | "not-strictly-newer"
+  // An explicit version request's target is not newer than the fresh,
+  // locked-read installed version (comparable case only - see
+  // "automatic-refused-incomparable-installed" for the incomparable case).
+  | "not-newer-than-installed"
+  // `--automatic` re-refuses an incomparable installed version at promote
+  // time too, not just in phase 1 - the installed version can change
+  // during the unlocked transfer window. Mirrors the phase-1 short-circuit
+  // reason of the same name; the two are distinguished by `outcome`.
+  | "automatic-refused-incomparable-installed";
 
 export type HostDownloadOutcome =
   | {
@@ -135,6 +149,14 @@ async function replaceStagedDir(
   }
   await renameWithRetry(tempDir, target);
   if (targetExists) {
+    // Unlink the aside's sidecar FIRST, before the best-effort recursive
+    // removal below: without a valid `staged.json`, stage-reconcile's
+    // aside-recovery step rejects this candidate outright, so even if
+    // the removal then fails partway (a lock, a transient error) and
+    // leaves the aside directory lingering, it can never be mistaken for
+    // a valid stage and wrongly restored - resurrecting the exact
+    // version this explicit replace just discarded.
+    await unlink(join(aside, "staged.json")).catch(() => undefined);
     await rm(aside, { recursive: true, force: true }).catch(() => undefined);
   }
 }
@@ -144,16 +166,6 @@ export async function downloadAndStageHost(
 ): Promise<HostDownloadOutcome> {
   const logger = createCliLogger(opts.environment);
 
-  const installed = await readHostInstallRecord(opts.environment);
-  if (installed === null) {
-    throw cliError({
-      code: CLI_ERROR_CODES.HOST_NOT_INSTALLED,
-      message: `host download: no host installed for environment=${opts.environment}; run 'traycer host install latest' first`,
-      details: { environment: opts.environment },
-      exitCode: 1,
-    });
-  }
-
   const client =
     opts.registryClient ??
     (await createDefaultRegistryClient(opts.environment));
@@ -161,9 +173,31 @@ export async function downloadAndStageHost(
   const manifest = await client.fetchManifest();
   const requestedLatest = opts.versionRequest === null;
   const targetVersion = requestedLatest ? manifest.latest : opts.versionRequest;
+  // The registry side of the version domain must always be valid SemVer
+  // (incomparability is a policy reserved for the INSTALLED side only -
+  // see the Tech Plan's "Version identity" section). A malformed
+  // manifest.latest or a garbled explicit request would otherwise read as
+  // "incomparable" everywhere it's compared against `installed.version`,
+  // silently defeating short-circuiting and, worse, letting a bad version
+  // get staged and wedge stage-reconcile's convergence. Fail closed here,
+  // before any lock or network transfer.
+  if (!isValidHostVersion(targetVersion)) {
+    throw cliError({
+      code: CLI_ERROR_CODES.REGISTRY_UNAVAILABLE,
+      message: `host download: registry target version '${targetVersion}' is not valid SemVer`,
+      details: { environment: opts.environment, targetVersion },
+      exitCode: 1,
+    });
+  }
 
-  // Phase 1 - brief lock: yank-heal + short-circuit evaluation. Runs even
-  // when no download follows.
+  // Phase 1 - brief lock: locked install re-read + yank-heal + short-
+  // circuit evaluation. Runs even when no download follows. The install
+  // record is read HERE, under the lock, rather than before it - a
+  // pre-lock read can be stale by the time the short-circuit decision
+  // actually runs (another command could install/uninstall/update in the
+  // gap), and every phase-1 decision (missing-record, short-circuits,
+  // automatic incomparable refusal) must be judged against the same
+  // consistent snapshot.
   const preDownload = await withCliLock(
     {
       environment: opts.environment,
@@ -173,6 +207,15 @@ export async function downloadAndStageHost(
     },
     async () => {
       await reconcileHostStage(opts.environment);
+      const installed = await readHostInstallRecord(opts.environment);
+      if (installed === null) {
+        throw cliError({
+          code: CLI_ERROR_CODES.HOST_NOT_INSTALLED,
+          message: `host download: no host installed for environment=${opts.environment}; run 'traycer host install latest' first`,
+          details: { environment: opts.environment },
+          exitCode: 1,
+        });
+      }
       await discardIneligibleStagedVersion(opts.environment, manifest, logger);
       const stagedAfterYankHeal = await readHostStagedRecord(opts.environment);
       const installedVsTarget = compareHostVersions(
@@ -184,21 +227,34 @@ export async function downloadAndStageHost(
       const alreadyStagedAtTarget =
         stagedAfterYankHeal !== null &&
         stagedAfterYankHeal.version === targetVersion;
+      // Snapshot both taken under this same lock acquisition - the
+      // short-circuit return below must report exactly what was true at
+      // decision time, not a second, unlocked re-read after the lock has
+      // already been released (which could observe a different state).
+      const installedVersion = installed.version;
+      const stagedVersion = stagedAfterYankHeal?.version ?? null;
       if (installedAtOrAboveTarget) {
-        return { shortCircuit: "installed-up-to-date" as const };
+        return {
+          shortCircuit: "installed-up-to-date" as const,
+          installedVersion,
+          stagedVersion,
+        };
       }
       if (alreadyStagedAtTarget) {
-        return { shortCircuit: "already-staged" as const };
+        return {
+          shortCircuit: "already-staged" as const,
+          installedVersion,
+          stagedVersion,
+        };
       }
       if (opts.automatic && !installedVsTarget.comparable) {
         return {
           shortCircuit: "automatic-refused-incomparable-installed" as const,
+          installedVersion,
+          stagedVersion,
         };
       }
-      return {
-        shortCircuit: null,
-        stagedVersion: stagedAfterYankHeal?.version ?? null,
-      };
+      return { shortCircuit: null, installedVersion, stagedVersion };
     },
   );
   if (preDownload.shortCircuit !== null) {
@@ -211,9 +267,8 @@ export async function downloadAndStageHost(
       outcome: "short-circuit",
       reason: preDownload.shortCircuit,
       targetVersion,
-      installedVersion: installed.version,
-      stagedVersion:
-        (await readHostStagedRecord(opts.environment))?.version ?? null,
+      installedVersion: preDownload.installedVersion,
+      stagedVersion: preDownload.stagedVersion,
     };
   }
 
@@ -309,39 +364,37 @@ export async function downloadAndStageHost(
             targetVersion,
           } satisfies HostDownloadOutcome;
         }
+
         const explicitVersionRequested = !requestedLatest;
-        if (explicitVersionRequested) {
-          progressStage(
-            opts.onProgress,
-            "promote",
-            `staging host ${stagedRecord.version}`,
-          );
-          await replaceStagedDir(opts.environment, tempPath);
-          ownedConsumed = true;
-          return {
-            outcome: "promoted",
-            stagedVersion: stagedRecord.version,
-            installedVersion: freshInstalled.version,
-          } satisfies HostDownloadOutcome;
-        }
-        const freshStaged = await readHostStagedRecord(opts.environment);
-        // An incomparable installed version never blocks a non-automatic
-        // download - moving a local build onto the registry track is the
-        // user's stated intent (D6 parity; `--automatic` already refused
-        // this back in phase 1, so reaching here with an incomparable
-        // installed version only happens for a non-automatic call).
-        // Monotonicity vs the staged version - always registry SemVer -
-        // still holds regardless.
         const installedComparison = compareHostVersions(
           stagedRecord.version,
           freshInstalled.version,
         );
+        // Installed-monotonicity, re-evaluated against this fresh locked
+        // read (the installed version can change during the unlocked
+        // transfer window - phase 1's decision is not enough on its own).
+        // `--automatic` refuses an incomparable installed version here
+        // too, not just in phase 1: a comparable install at phase-1 time
+        // could have been replaced by an incomparable (local-*) one by
+        // now. Non-automatic (explicit OR latest) waives the incomparable
+        // case - moving a local build onto the registry track is the
+        // user's stated intent (D6 parity).
         const passesInstalledMonotonicity = installedComparison.comparable
           ? installedComparison.ordering === "greater"
-          : true;
+          : !opts.automatic;
+        // An explicit version request always replaces any existing stage
+        // (the settled exception is replace-any-STAGE, not
+        // ignore-installed) - the staged-monotonicity check below only
+        // applies to the latest/automatic path, where a slower "latest"
+        // download must not regress a faster one that already promoted.
+        const freshStaged = explicitVersionRequested
+          ? null
+          : await readHostStagedRecord(opts.environment);
         const strictlyNewerThanStaged =
+          explicitVersionRequested ||
           freshStaged === null ||
           isStrictlyNewerHostVersion(stagedRecord.version, freshStaged.version);
+
         if (passesInstalledMonotonicity && strictlyNewerThanStaged) {
           progressStage(
             opts.onProgress,
@@ -356,17 +409,25 @@ export async function downloadAndStageHost(
             installedVersion: freshInstalled.version,
           } satisfies HostDownloadOutcome;
         }
-        // Reverse-completion: an older download finishing after a newer
-        // promote (or an equally/more current stage) discards itself.
+
         await rm(tempPath, { recursive: true, force: true });
         ownedConsumed = true;
+        const reason: HostDownloadDiscardReason = !passesInstalledMonotonicity
+          ? installedComparison.comparable
+            ? "not-newer-than-installed"
+            : "automatic-refused-incomparable-installed"
+          : "not-strictly-newer";
         logger.info(
-          "Host download discarded a completed download that is no longer strictly newer",
-          { environment: opts.environment, version: stagedRecord.version },
+          "Host download discarded a completed download at promote time",
+          {
+            environment: opts.environment,
+            version: stagedRecord.version,
+            reason,
+          },
         );
         return {
           outcome: "discarded",
-          reason: "not-strictly-newer",
+          reason,
           targetVersion,
         } satisfies HostDownloadOutcome;
       },
@@ -378,10 +439,14 @@ export async function downloadAndStageHost(
       );
     }
     // The registry client's own temp archive dir is not auto-cleaned on
-    // success (by contract - see registry/client.ts); the archive FILE
-    // itself is removed here, matching `installHost`'s existing cleanup
-    // of `staging.archiveIsTemporary`. The now-empty OS-tmpdir directory
-    // it lived in is left behind, same as the existing install flow.
-    await rm(verified.archivePath, { force: true }).catch(() => undefined);
+    // success (by contract - see registry/client.ts's `downloadAndVerify`)
+    // - the caller owns removing it. Remove the WHOLE directory
+    // (`dirname(archivePath)`), not just the archive file: the directory
+    // itself (an `mkdtemp`-created `traycer-host-dl-*` dir under the OS
+    // tmpdir) is otherwise leaked on every successful download.
+    await rm(dirname(verified.archivePath), {
+      recursive: true,
+      force: true,
+    }).catch(() => undefined);
   }
 }

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { open, readFile, stat, unlink } from "node:fs/promises";
+import { open, readFile, rename, stat, unlink } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { hostname as osHostname } from "node:os";
 import type { Environment } from "../runner/environment";
@@ -95,13 +95,22 @@ function errorCode(err: unknown): string | null {
   return null;
 }
 
-async function readLockMetadata(path: string): Promise<CliLockMetadata | null> {
-  let raw: string;
+// Raw file bytes, or `null` if the file can't be read (absent, or a
+// transient read error). Split out from `parseLockMetadata` below so the
+// poll loop can capture the EXACT bytes a break decision was based on
+// and later hand them to `tryClaimStaleLock` for its post-rename
+// equality check - re-reading at claim time would defeat the point,
+// since the whole race this guards against is content changing between
+// read and claim.
+async function readLockFileRaw(path: string): Promise<string | null> {
   try {
-    raw = await readFile(path, "utf8");
+    return await readFile(path, "utf8");
   } catch {
     return null;
   }
+}
+
+function parseLockMetadata(raw: string): CliLockMetadata | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -142,6 +151,13 @@ async function readLockMetadata(path: string): Promise<CliLockMetadata | null> {
   };
 }
 
+// Convenience wrapper for callers (`release()`'s compare-and-delete) that
+// only need the parsed result, not the raw bytes.
+async function readLockMetadata(path: string): Promise<CliLockMetadata | null> {
+  const raw = await readLockFileRaw(path);
+  return raw === null ? null : parseLockMetadata(raw);
+}
+
 // Age of the lock file in milliseconds, or null if it can no longer be
 // stat'd (already swept by another process). Used only to decide whether
 // an empty/corrupt lock file is a crashed holder vs. one mid-creation.
@@ -154,13 +170,60 @@ async function lockFileAgeMs(path: string): Promise<number | null> {
   }
 }
 
-async function breakStaleLock(path: string): Promise<boolean> {
+type ClaimStaleLockOutcome =
+  // We atomically claimed the file, confirmed it was still the stale
+  // holder we intended to break, and deleted it. Safe to retry
+  // acquisition immediately.
+  | "broke"
+  // The rename lost the race (ENOENT/other): another contender already
+  // claimed or removed the file, or the real holder released normally
+  // in between. Not our job to act further this iteration.
+  | "lost-race"
+  // We won the rename, but the content we grabbed no longer matches the
+  // stale holder the break decision was based on - a genuinely new, live
+  // holder wrote fresh content to `path` between our read and our
+  // rename. Restored in place; must not be broken.
+  | "no-longer-stale";
+
+// Serialized conditional claim, replacing a plain unlink. A bare
+// `unlink(path)` races: two contenders can independently decide (from
+// the same stale read) to break the same lock, and whichever one calls
+// unlink LAST deletes whatever is at `path` at that moment - which may
+// by then be a fresh, genuinely live lock the other contender (or a
+// third party) just wrote. `rename` is atomic at the filesystem level,
+// so only one contender can ever win a rename off a given source path;
+// everyone else gets ENOENT. The winner then re-reads the claimed
+// file's content and confirms it is STILL the exact stale metadata the
+// break decision was made on before destroying it - guarding against
+// having claimed a fresh holder's file instead of the stale one.
+//
+// `expectedRaw` is the raw file content (or `null` for "no file / empty
+// / corrupt") the break decision was based on, compared byte-for-byte
+// against the claimed file's content so this works uniformly for both
+// the parsed-holder path (dead / identity-mismatched) and the
+// empty-or-corrupt path (no parseable holder at all).
+async function tryClaimStaleLock(
+  path: string,
+  expectedRaw: string | null,
+): Promise<ClaimStaleLockOutcome> {
+  const claimPath = `${path}.break-${randomUUID()}`;
   try {
-    await unlink(path);
-    return true;
-  } catch (err) {
-    return errorCode(err) === "ENOENT";
+    await rename(path, claimPath);
+  } catch {
+    return "lost-race";
   }
+  let claimedRaw: string | null;
+  try {
+    claimedRaw = await readFile(claimPath, "utf8");
+  } catch {
+    claimedRaw = null;
+  }
+  if (claimedRaw !== expectedRaw) {
+    await rename(claimPath, path).catch(() => undefined);
+    return "no-longer-stale";
+  }
+  await unlink(claimPath).catch(() => undefined);
+  return "broke";
 }
 
 async function tryAcquireOnce(
@@ -247,7 +310,9 @@ export async function acquireCliLock(
   while (true) {
     const attempt = await tryAcquireOnce(path, meta);
     if (attempt !== "held") return attempt;
-    const holder = await readLockMetadata(path);
+    const holderRaw = await readLockFileRaw(path);
+    const holder = holderRaw === null ? null : parseLockMetadata(holderRaw);
+    let shouldBreak = false;
     if (holder !== null) {
       // Only positive evidence permits breaking a lock with a parsed
       // holder record: the holder's pid is positively dead, or a fresh
@@ -264,10 +329,7 @@ export async function acquireCliLock(
         pid: holder.pid,
         startedAtMs: holder.processStartedAtMs,
       });
-      if (identity === "dead" || identity === "alive-different") {
-        await breakStaleLock(path);
-        continue;
-      }
+      shouldBreak = identity === "dead" || identity === "alive-different";
     } else {
       // Empty or corrupt lock file - no PID to probe. A crashed holder
       // that died between open() and writeFile() leaves exactly this, and
@@ -275,10 +337,22 @@ export async function acquireCliLock(
       // has aged past the grace window, so we don't steal a lock from a
       // live holder still in the open()->writeFile() gap.
       const ageMs = await lockFileAgeMs(path);
-      if (ageMs === null || ageMs >= EMPTY_LOCK_GRACE_MS) {
-        await breakStaleLock(path);
-        continue;
-      }
+      shouldBreak = ageMs === null || ageMs >= EMPTY_LOCK_GRACE_MS;
+    }
+    if (shouldBreak) {
+      // `holderRaw` is the exact bytes the break decision above was based
+      // on - `tryClaimStaleLock` re-verifies the claimed file still
+      // matches this before destroying it, closing the race where a
+      // second contender's unlink could otherwise delete a fresh, live
+      // holder that appeared between our read and our break.
+      const outcome = await tryClaimStaleLock(path, holderRaw);
+      if (outcome === "broke") continue;
+      // "lost-race" (another contender already claimed/removed it) or
+      // "no-longer-stale" (what we grabbed wasn't the stale holder we
+      // thought it was, and has been restored). Either way the break
+      // failed - fall through to the normal deadline check + poll sleep
+      // rather than spinning; the busy-wait contract must hold even when
+      // a break attempt doesn't pan out.
     }
     if (Date.now() >= deadline) {
       throw cliError({

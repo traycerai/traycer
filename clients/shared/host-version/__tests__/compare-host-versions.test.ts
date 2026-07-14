@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   compareHostVersions,
   isStrictlyNewerHostVersion,
+  isValidHostVersion,
 } from "../compare-host-versions";
 
 describe("compareHostVersions", () => {
@@ -113,6 +114,74 @@ describe("compareHostVersions", () => {
         "1.5.0",
       ),
     ).toEqual({ comparable: false });
+  });
+
+  it("rejects a leading zero in a core version component", () => {
+    expect(compareHostVersions("01.2.3", "1.2.3")).toEqual({
+      comparable: false,
+    });
+    expect(compareHostVersions("1.02.3", "1.2.3")).toEqual({
+      comparable: false,
+    });
+    expect(compareHostVersions("1.2.03", "1.2.3")).toEqual({
+      comparable: false,
+    });
+    // "0" alone is a valid numeric identifier - only a leading zero
+    // BEFORE another digit is rejected.
+    expect(compareHostVersions("0.0.0", "0.0.1")).toEqual({
+      comparable: true,
+      ordering: "less",
+    });
+  });
+
+  it("rejects a leading zero in a numeric pre-release identifier", () => {
+    expect(compareHostVersions("1.0.0-01", "1.0.0-1")).toEqual({
+      comparable: false,
+    });
+    // An alphanumeric identifier that merely starts with a digit is a
+    // different grammar production and is not subject to this rule.
+    expect(compareHostVersions("1.0.0-01a", "1.0.0-02a")).toEqual({
+      comparable: true,
+      ordering: "less",
+    });
+  });
+
+  it("compares numeric pre-release identifiers with arbitrary precision, not double-precision float", () => {
+    // Both exceed Number.MAX_SAFE_INTEGER (2^53 - 1); a Number.parseInt-based
+    // comparator would round them to the same double and misreport equal.
+    const huge = "9007199254740993";
+    const huger = "9007199254740994";
+    expect(compareHostVersions(`1.0.0-${huge}`, `1.0.0-${huger}`)).toEqual({
+      comparable: true,
+      ordering: "less",
+    });
+    expect(compareHostVersions(`1.0.0-${huge}`, `1.0.0-${huge}`)).toEqual({
+      comparable: true,
+      ordering: "equal",
+    });
+    // A longer digit string (no leading zero) is always numerically
+    // larger - exercises the digit-length branch directly.
+    expect(compareHostVersions("1.0.0-9", "1.0.0-10")).toEqual({
+      comparable: true,
+      ordering: "less",
+    });
+  });
+});
+
+describe("isValidHostVersion", () => {
+  it("is true for well-formed SemVer, including pre-release and build metadata", () => {
+    expect(isValidHostVersion("1.5.0")).toBe(true);
+    expect(isValidHostVersion("1.0.0-rc.1")).toBe(true);
+    expect(isValidHostVersion("1.0.0-rc.1+build")).toBe(true);
+    expect(isValidHostVersion("0.0.0")).toBe(true);
+  });
+
+  it("is false for malformed or non-SemVer input", () => {
+    expect(isValidHostVersion("v1.0.0")).toBe(false);
+    expect(isValidHostVersion("1.0")).toBe(false);
+    expect(isValidHostVersion("01.0.0")).toBe(false);
+    expect(isValidHostVersion("local-abc-2026")).toBe(false);
+    expect(isValidHostVersion("")).toBe(false);
   });
 });
 

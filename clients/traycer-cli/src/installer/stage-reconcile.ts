@@ -1,4 +1,4 @@
-import { access, readFile, readdir, rm } from "node:fs/promises";
+import { access, readFile, readdir, rm, stat, unlink } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { compareHostVersions } from "@traycer-clients/shared/host-version/compare-host-versions";
 import type { Environment } from "../runner/environment";
@@ -61,6 +61,25 @@ async function pathExists(path: string): Promise<boolean> {
   try {
     await access(path);
     return true;
+  } catch {
+    return false;
+  }
+}
+
+// Re-verified at USE time (not just at sidecar-parse time) - this stays
+// meaningful even though `readHostStagedRecordAt` already structurally
+// validates `executablePath`, because disk state can change in the gap
+// between reading the sidecar and reconcile deciding what to do with it
+// (e.g. the executable removed out from under a stage). `stat().isFile()`
+// rather than a bare existence check so a directory left at that path
+// (e.g. a partial extraction) is correctly treated as missing.
+async function stagedExecutableIsFile(
+  stagedDirLikePath: string,
+  executablePath: string,
+): Promise<boolean> {
+  try {
+    const st = await stat(join(stagedDirLikePath, executablePath));
+    return st.isFile();
   } catch {
     return false;
   }
@@ -169,7 +188,7 @@ async function evaluateStageForDeletion(
   ) {
     return "platform-arch-mismatch";
   }
-  if (!(await pathExists(join(stagedDir, record.executablePath)))) {
+  if (!(await stagedExecutableIsFile(stagedDir, record.executablePath))) {
     return "executable-missing";
   }
   // Version comparison is only meaningful once we know there IS an
@@ -207,7 +226,9 @@ async function reconcileStagedAside(
       ) {
         continue;
       }
-      if (!(await pathExists(join(candidate, record.executablePath)))) continue;
+      if (!(await stagedExecutableIsFile(candidate, record.executablePath))) {
+        continue;
+      }
       await renameWithRetry(candidate, stagedDir);
       logger.info("Stage reconcile restored staged/ from an aside copy", {
         environment,
@@ -216,12 +237,23 @@ async function reconcileStagedAside(
       return "restored";
     }
   }
-  await Promise.all(
-    candidates.map((candidate) =>
-      rm(candidate, { recursive: true, force: true }).catch(() => undefined),
-    ),
-  );
+  await Promise.all(candidates.map((candidate) => deleteAsideDir(candidate)));
   return "deleted";
+}
+
+// Deletes an aside that is being discarded outright (pure litter) - never
+// for the crash-recovery restore path above, which needs the sidecar
+// intact to validate a candidate. Unlinks the sidecar FIRST, before the
+// best-effort recursive removal: if that removal then fails partway
+// (a lock, a transient error) and leaves the aside directory lingering,
+// a candidate with no `staged.json` can never be mistaken for a valid
+// stage and wrongly restored on a later reconcile pass - see the
+// identical ordering in `download-stage.ts`'s `replaceStagedDir`, which
+// creates asides via the same explicit-replace path this cleans up
+// after.
+async function deleteAsideDir(candidate: string): Promise<void> {
+  await unlink(join(candidate, "staged.json")).catch(() => undefined);
+  await rm(candidate, { recursive: true, force: true }).catch(() => undefined);
 }
 
 export async function reconcileHostStage(
@@ -234,7 +266,7 @@ export async function reconcileHostStage(
   );
   const installTrashSwept = await sweepInstallTrashIfTargetExists(environment);
   const installRecord = await readHostInstallRecord(environment);
-  const stageDeletedReason = await evaluateStageForDeletion(
+  let stageDeletedReason = await evaluateStageForDeletion(
     environment,
     installRecord,
   );
@@ -246,6 +278,29 @@ export async function reconcileHostStage(
     });
   }
   const stagedAsideOutcome = await reconcileStagedAside(environment, logger);
+  if (stagedAsideOutcome === "restored") {
+    // Step 4's own validation (parseable sidecar + platform/arch match +
+    // executable present) is a lighter "good enough to try" check than
+    // step 3's full eligibility rules (it doesn't compare against the
+    // install record at all) - a restored aside can still be stale,
+    // orphaned, or otherwise fail step 3. Re-run step 3 against what is
+    // now at `staged/` so one reconcile pass never ends with a stage
+    // that violates its own rules; the next pass would just delete it
+    // anyway, but leaving it in place until then is observable state
+    // ticket 2's apply/install/ensure flows shouldn't have to tolerate.
+    const restoredDeletionReason = await evaluateStageForDeletion(
+      environment,
+      installRecord,
+    );
+    if (restoredDeletionReason !== null) {
+      await rm(hostStagedDir(environment), { recursive: true, force: true });
+      logger.info(
+        "Stage reconcile deleted a just-restored staged aside that failed re-evaluation",
+        { environment, reason: restoredDeletionReason },
+      );
+      stageDeletedReason = restoredDeletionReason;
+    }
+  }
   const tempsSwept = await sweepOwnedTempDirs(environment);
   logger.debug("Stage reconcile completed", {
     environment,

@@ -289,6 +289,55 @@ describe("downloadAndStageHost", () => {
     ).rejects.toMatchObject({ code: CLI_ERROR_CODES.HOST_NOT_INSTALLED });
   });
 
+  it("throws before any lock or transfer when the manifest's latest is not valid SemVer", async () => {
+    await writeInstall("1.0.0", {});
+    let downloadStarted = false;
+    const client = fakeRegistryClient({
+      // Malformed - the "v" prefix is not valid SemVer. A real registry
+      // publisher bug, not user input.
+      latest: "v2.0.0",
+      versions: [{ version: "v2.0.0", yanked: false }],
+      downloadGate: null,
+      onDownloadStart: () => {
+        downloadStarted = true;
+      },
+    });
+    await expect(
+      downloadAndStageHost({
+        environment: ENV,
+        versionRequest: null,
+        automatic: false,
+        onProgress: noopProgress,
+        registryClient: client,
+      }),
+    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.REGISTRY_UNAVAILABLE });
+    expect(downloadStarted).toBe(false);
+    expect(await readHostStagedRecord(ENV)).toBeNull();
+  });
+
+  it("throws before any lock or transfer when an explicit version request is not valid SemVer", async () => {
+    await writeInstall("1.0.0", {});
+    let downloadStarted = false;
+    const client = fakeRegistryClient({
+      latest: "1.5.0",
+      versions: [{ version: "1.5.0", yanked: false }],
+      downloadGate: null,
+      onDownloadStart: () => {
+        downloadStarted = true;
+      },
+    });
+    await expect(
+      downloadAndStageHost({
+        environment: ENV,
+        versionRequest: "not-a-version",
+        automatic: false,
+        onProgress: noopProgress,
+        registryClient: client,
+      }),
+    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.REGISTRY_UNAVAILABLE });
+    expect(downloadStarted).toBe(false);
+  });
+
   it("short-circuits when the installed version is already at or above the target", async () => {
     await writeInstall("1.5.0", {});
     let downloadStarted = false;
@@ -385,6 +434,32 @@ describe("downloadAndStageHost", () => {
     expect(staged?.platform).toBe(currentInstallPlatform());
     expect(staged?.arch).toBe(currentInstallArch());
     expect(staged?.source).toEqual({ kind: "registry", value: "1.5.0" });
+  });
+
+  it("removes the whole download temp directory, not just the archive file, on a successful promote", async () => {
+    await writeInstall("1.0.0", {});
+    const client = fakeRegistryClient({
+      latest: "1.5.0",
+      versions: [
+        { version: "1.0.0", yanked: false },
+        { version: "1.5.0", yanked: false },
+      ],
+      downloadGate: null,
+      onDownloadStart: null,
+    });
+    await downloadAndStageHost({
+      environment: ENV,
+      versionRequest: null,
+      automatic: false,
+      onProgress: noopProgress,
+      registryClient: client,
+    });
+    // The fake client's `downloadAndVerify` creates its archive inside a
+    // fresh `arc-*` subdirectory of `archiveTmpDir` (mirroring the real
+    // registry client's `mkdtemp(tmpdir(), "traycer-host-dl-")` shape) -
+    // removing only the archive FILE would leave that directory behind
+    // on every successful download.
+    expect(readdirSync(archiveTmpDir)).toEqual([]);
   });
 
   it("yank-heal: discards a now-yanked stage with no download when the target resolves back to installed", async () => {
@@ -502,7 +577,7 @@ describe("downloadAndStageHost", () => {
     expect(downloadStarted).toBe(false);
   });
 
-  it("an explicit (non-automatic) download proceeds over the same incomparable installed version", async () => {
+  it("a non-automatic latest download proceeds over the same incomparable installed version", async () => {
     await writeInstall("local-custom-build-2026", {});
     const outcome = await downloadAndStageHost({
       environment: ENV,
@@ -520,6 +595,97 @@ describe("downloadAndStageHost", () => {
       outcome: "promoted",
       stagedVersion: "1.5.0",
     });
+  });
+
+  it("an explicit version request proceeds over an incomparable (local-*) installed version", async () => {
+    await writeInstall("local-custom-build-2026", {});
+    const outcome = await downloadAndStageHost({
+      environment: ENV,
+      versionRequest: "1.5.0",
+      automatic: false,
+      onProgress: noopProgress,
+      registryClient: fakeRegistryClient({
+        latest: "1.5.0",
+        versions: [{ version: "1.5.0", yanked: false }],
+        downloadGate: null,
+        onDownloadStart: null,
+      }),
+    });
+    expect(outcome).toMatchObject({
+      outcome: "promoted",
+      stagedVersion: "1.5.0",
+    });
+  });
+
+  it("an explicit download discards when the installed version overtakes it during the unlocked transfer", async () => {
+    await writeInstall("1.0.0", {});
+    const gate = makeGate();
+    const started = makeGate();
+    const client = fakeRegistryClient({
+      latest: "1.5.0",
+      versions: [
+        { version: "1.0.0", yanked: false },
+        { version: "1.5.0", yanked: false },
+        { version: "2.0.0", yanked: false },
+      ],
+      downloadGate: gate.promise,
+      onDownloadStart: () => started.release(),
+    });
+    const downloadPromise = downloadAndStageHost({
+      environment: ENV,
+      versionRequest: "1.5.0",
+      automatic: false,
+      onProgress: noopProgress,
+      registryClient: client,
+    });
+    await started.promise;
+    // Simulate a concurrent, faster `host install 2.0.0` completing while
+    // this explicit download for 1.5.0 is still in flight - the fresh
+    // locked read at promote time must catch that 1.5.0 is no longer
+    // newer than what's now installed.
+    await writeInstall("2.0.0", {});
+    gate.release();
+    const outcome = await downloadPromise;
+    expect(outcome).toMatchObject({
+      outcome: "discarded",
+      reason: "not-newer-than-installed",
+    });
+    expect(await readHostStagedRecord(ENV)).toBeNull();
+  });
+
+  it("--automatic discards when the installed version becomes incomparable during the unlocked transfer", async () => {
+    await writeInstall("1.0.0", {});
+    const gate = makeGate();
+    const started = makeGate();
+    const client = fakeRegistryClient({
+      latest: "1.5.0",
+      versions: [
+        { version: "1.0.0", yanked: false },
+        { version: "1.5.0", yanked: false },
+      ],
+      downloadGate: gate.promise,
+      onDownloadStart: () => started.release(),
+    });
+    const downloadPromise = downloadAndStageHost({
+      environment: ENV,
+      versionRequest: null,
+      automatic: true,
+      onProgress: noopProgress,
+      registryClient: client,
+    });
+    await started.promise;
+    // Simulate a concurrent local-file install swapping in an
+    // incomparable build while this automatic download is still in
+    // flight - phase 1 saw a comparable installed version and let the
+    // download proceed, but phase 3's fresh locked read must re-refuse.
+    await writeInstall("local-swapped-build-2026", {});
+    gate.release();
+    const outcome = await downloadPromise;
+    expect(outcome).toMatchObject({
+      outcome: "discarded",
+      reason: "automatic-refused-incomparable-installed",
+    });
+    expect(await readHostStagedRecord(ENV)).toBeNull();
   });
 
   it("an explicit version request replaces any existing stage, even a newer one", async () => {
@@ -615,6 +781,14 @@ describe("downloadAndStageHost", () => {
   it("promote-after-uninstall does not resurrect a stage", async () => {
     await writeInstall("1.0.0", {});
     const gate = makeGate();
+    // Handshake so the simulated uninstall only fires once the download
+    // has genuinely reached phase 2 (past phase 1's own install-record
+    // read) - without it, the synchronous `rmSync` below can race ahead
+    // of `downloadAndStageHost`'s first `await` and delete the install
+    // dir before phase 1 even runs, making the whole call throw
+    // E_HOST_NOT_INSTALLED instead of exercising the promote-time
+    // "install-record-vanished" discard path this test targets.
+    const started = makeGate();
     const client = fakeRegistryClient({
       latest: "1.5.0",
       versions: [
@@ -622,7 +796,7 @@ describe("downloadAndStageHost", () => {
         { version: "1.5.0", yanked: false },
       ],
       downloadGate: gate.promise,
-      onDownloadStart: null,
+      onDownloadStart: () => started.release(),
     });
     const downloadPromise = downloadAndStageHost({
       environment: ENV,
@@ -631,6 +805,7 @@ describe("downloadAndStageHost", () => {
       onProgress: noopProgress,
       registryClient: client,
     });
+    await started.promise;
     // Simulate a concurrent `host uninstall` completing while the download
     // is still in flight (no lock is held during transfer, so this is a
     // legitimate interleaving).

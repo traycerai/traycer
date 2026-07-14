@@ -35,40 +35,49 @@ describe("parseElapsedSeconds (ps -o etime= format)", () => {
 });
 
 describe("computeProcessIdentityVerdict (pure decision logic)", () => {
-  it("returns dead when the pid is not alive, regardless of start times", () => {
-    expect(computeProcessIdentityVerdict(false, 1000, 1000)).toBe("dead");
-    expect(computeProcessIdentityVerdict(false, null, null)).toBe("dead");
+  it("returns dead when liveness is dead, regardless of start times", () => {
+    expect(computeProcessIdentityVerdict("dead", 1000, 1000)).toBe("dead");
+    expect(computeProcessIdentityVerdict("dead", null, null)).toBe("dead");
+  });
+
+  it("returns indeterminate when liveness itself is indeterminate, regardless of start times", () => {
+    expect(computeProcessIdentityVerdict("indeterminate", 1000, 1000)).toBe(
+      "indeterminate",
+    );
+    expect(computeProcessIdentityVerdict("indeterminate", null, null)).toBe(
+      "indeterminate",
+    );
   });
 
   it("returns indeterminate when alive but either start time is unknown", () => {
-    expect(computeProcessIdentityVerdict(true, null, 1000)).toBe(
+    expect(computeProcessIdentityVerdict("alive", null, 1000)).toBe(
       "indeterminate",
     );
-    expect(computeProcessIdentityVerdict(true, 1000, null)).toBe(
+    expect(computeProcessIdentityVerdict("alive", 1000, null)).toBe(
       "indeterminate",
     );
-    expect(computeProcessIdentityVerdict(true, null, null)).toBe(
+    expect(computeProcessIdentityVerdict("alive", null, null)).toBe(
       "indeterminate",
     );
   });
 
   it("returns alive-same when alive and start times match within tolerance", () => {
-    expect(computeProcessIdentityVerdict(true, 10_000, 10_000)).toBe(
+    expect(computeProcessIdentityVerdict("alive", 10_000, 10_000)).toBe(
       "alive-same",
     );
-    expect(computeProcessIdentityVerdict(true, 10_000, 13_000)).toBe(
+    expect(computeProcessIdentityVerdict("alive", 10_000, 13_000)).toBe(
       "alive-same",
     );
-    expect(computeProcessIdentityVerdict(true, 13_000, 10_000)).toBe(
+    expect(computeProcessIdentityVerdict("alive", 13_000, 10_000)).toBe(
       "alive-same",
     );
   });
 
   it("returns alive-different when alive but start times diverge beyond tolerance (recycled pid)", () => {
-    expect(computeProcessIdentityVerdict(true, 10_000, 100_000)).toBe(
+    expect(computeProcessIdentityVerdict("alive", 10_000, 100_000)).toBe(
       "alive-different",
     );
-    expect(computeProcessIdentityVerdict(true, 100_000, 10_000)).toBe(
+    expect(computeProcessIdentityVerdict("alive", 100_000, 10_000)).toBe(
       "alive-different",
     );
   });
@@ -87,14 +96,35 @@ describe("isProcessAlive", () => {
 });
 
 describe("verifyProcessIdentity", () => {
-  it("returns alive-same for the current process without shelling out", () => {
+  it("returns alive-same when the recorded identity matches our own start time", () => {
+    const ownStartedAtMs = readProcessStartTimeMs(process.pid);
+    // Best-effort: if this machine's `ps` probe can't read our own start
+    // time, there's nothing to construct a matching token from.
+    if (ownStartedAtMs === null) return;
     const token: ProcessIdentityToken = {
       pid: process.pid,
-      // Deliberately wrong - proves the self-pid shortcut doesn't even
-      // look at the recorded start time.
-      startedAtMs: 1,
+      startedAtMs: ownStartedAtMs,
     };
     expect(verifyProcessIdentity(token)).toBe("alive-same");
+  });
+
+  it("returns dead when a recorded identity under our own pid mismatches (pid recycled onto us)", () => {
+    const token: ProcessIdentityToken = {
+      pid: process.pid,
+      // Deliberately far from our actual start time - simulates a dead
+      // predecessor's token surviving under a pid the OS has since
+      // recycled onto this process.
+      startedAtMs: Date.now() - 10 * 60 * 1000,
+    };
+    expect(verifyProcessIdentity(token)).toBe("dead");
+  });
+
+  it("returns indeterminate when the recorded identity has no start time to compare", () => {
+    const token: ProcessIdentityToken = {
+      pid: process.pid,
+      startedAtMs: null,
+    };
+    expect(verifyProcessIdentity(token)).toBe("indeterminate");
   });
 
   it("returns dead for a pid that is provably not running", () => {

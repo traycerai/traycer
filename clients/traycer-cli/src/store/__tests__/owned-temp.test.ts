@@ -8,11 +8,35 @@ import {
   utimesSync,
   writeFileSync,
 } from "node:fs";
+import type { PathLike } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 let sandboxRoot = "";
+
+// Lets one test force `stat` to fail for a specific path (simulating an
+// unreadable/unverifiable age - the directory vanished, a transient
+// stat error) without needing a flaky real-world reproduction. Every
+// other path proxies straight through to the real implementation.
+const mocks = vi.hoisted(() => ({
+  forceStatFailureForPath: null as string | null,
+}));
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    stat: async (path: PathLike) => {
+      if (path === mocks.forceStatFailureForPath) {
+        throw Object.assign(new Error("simulated stat failure"), {
+          code: "EIO",
+        });
+      }
+      return actual.stat(path);
+    },
+  };
+});
 
 vi.mock("../paths", async () => {
   const actual = await vi.importActual<typeof import("../paths")>("../paths");
@@ -74,6 +98,25 @@ describe("createOwnedTempDir / sweepOwnedTempDirs", () => {
     ageDir(legacyDir, TWENTY_FIVE_HOURS_MS);
     const swept = await sweepOwnedTempDirs("production");
     expect(swept).toContain(legacyDir);
+  });
+
+  it("spares a token-less temp dir with an unreadable age, never deletes on an unverifiable stat", async () => {
+    const stagingRoot = join(
+      sandboxRoot,
+      "host",
+      "production",
+      "install-staging",
+    );
+    mkdirSync(stagingRoot, { recursive: true });
+    const unverifiableDir = join(stagingRoot, "stage-unverifiable");
+    mkdirSync(unverifiableDir);
+    mocks.forceStatFailureForPath = unverifiableDir;
+    try {
+      const swept = await sweepOwnedTempDirs("production");
+      expect(swept).not.toContain(unverifiableDir);
+    } finally {
+      mocks.forceStatFailureForPath = null;
+    }
   });
 
   it("spares a token-less temp dir younger than the 24h fallback", async () => {

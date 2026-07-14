@@ -122,7 +122,12 @@ async function removeTempDir(dirPath: string, logger: ILogger): Promise<void> {
 //     is gone or the pid was recycled) -> swept immediately, regardless
 //     of age.
 //   - token unreadable, or the identity probe itself was "indeterminate"
-//     -> the 24h-mtime fallback decides.
+//     -> the 24h-mtime fallback decides, but ONLY on a successful,
+//        readable mtime. An unreadable age (the directory vanished, a
+//        stat error) is itself just another form of "can't verify" and
+//        must spare, not delete - "only positive evidence" applies to
+//        age-based sweeping exactly as it does to identity-based
+//        sweeping; there is no positive evidence in an unreadable stat.
 export async function sweepOwnedTempDirs(
   environment: Environment,
 ): Promise<readonly string[]> {
@@ -150,7 +155,7 @@ export async function sweepOwnedTempDirs(
       // "indeterminate" falls through to the age fallback below.
     }
     const ageMs = await dirAgeMs(dirPath);
-    if (ageMs === null || ageMs >= UNVERIFIABLE_TEMP_AGE_FALLBACK_MS) {
+    if (ageMs !== null && ageMs >= UNVERIFIABLE_TEMP_AGE_FALLBACK_MS) {
       await removeTempDir(dirPath, logger);
       swept.push(dirPath);
     }

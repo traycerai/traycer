@@ -65,6 +65,7 @@ describe("traycer CLI entrypoint registration", () => {
       ["host", "install"],
       ["host", "ensure"],
       ["host", "update"],
+      ["host", "download"],
       ["host", "uninstall"],
       ["host", "available"],
       ["host", "logs"],
@@ -91,6 +92,7 @@ describe("traycer CLI entrypoint registration", () => {
       ["host", "install"],
       ["host", "ensure"],
       ["host", "update"],
+      ["host", "download"],
       ["host", "uninstall"],
       ["host", "available"],
       ["host", "logs"],
@@ -162,6 +164,24 @@ describe("traycer CLI entrypoint registration", () => {
     expectCommand(program, ["host", "service", "status"]);
     expectCommand(program, ["host", "service", "uninstall"]);
     expect(findSubcommand(program, "service")).toBeNull();
+  });
+
+  it("host download exposes the [version] positional and a hidden --automatic option, wired to the shared runner", () => {
+    const program = buildProgram();
+    const cmd = expectCommand(program, ["host", "download"]);
+    const flags = cmd.options.map((o) => o.long);
+    expect(flags).toContain("--automatic");
+    const help = cmd.helpInformation();
+    // `--automatic` is the controller's internal contract (desktop
+    // main's `stageLatest`), not a user-facing switch - hidden from
+    // help via `.hideHelp()`, but still a real, reachable option (not a
+    // hidden COMMAND, which `expectCommand` above already proves is
+    // reachable regardless of help visibility).
+    expect(help).not.toContain("--automatic");
+    // The `[version]` positional stays visible - this is a user-facing
+    // command with one internal-only flag, not a hidden command.
+    expect(help).toContain("[version]");
+    expectRunnerFlags(cmd, "host download");
   });
 
   it("host available exposes --include-pre-releases for RC registry inspection", () => {

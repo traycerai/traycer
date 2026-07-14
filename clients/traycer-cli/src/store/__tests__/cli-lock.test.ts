@@ -11,28 +11,37 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ lockPath: "", forceIndeterminate: false }));
+const mocks = vi.hoisted(() => ({
+  lockPath: "",
+  // When non-null, `readProcessStartTimeMs` reports a probe failure
+  // (returns null) for exactly this pid, simulating the underlying `ps`
+  // read failing while liveness itself still succeeds - the genuine
+  // "probe failure" shape `computeProcessIdentityVerdict` must resolve
+  // to "indeterminate", never "dead". Every other pid (including our own,
+  // needed when `acquireCliLock` stamps its own lock metadata) proxies
+  // straight through to the real implementation.
+  forceStartTimeProbeFailureForPid: null as number | null,
+}));
 
 vi.mock("../paths", () => ({
   cliLockPath: () => mocks.lockPath,
   ensureCliInstallHomeDir: async () => {},
 }));
 
-// Lets one test force `verifyProcessIdentity` to report "indeterminate"
-// (simulating a probe failure) without needing a flaky real-world
-// reproduction. Every other test proxies straight through to the real
-// implementation, so the two-process tests below still exercise the
-// genuine `ps`/liveness probing.
+// Mocks at the `readProcessStartTimeMs` probe boundary, not
+// `verifyProcessIdentity` wholesale - the real verdict logic
+// (`computeProcessIdentityVerdict`/`verifyProcessIdentity`) still runs
+// and derives "indeterminate" from a genuinely failed underlying probe,
+// so this test double proves the actual decision logic handles a probe
+// failure correctly rather than asserting a hand-picked verdict.
 vi.mock("../process-identity", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../process-identity")>();
   return {
     ...actual,
-    verifyProcessIdentity: (
-      token: Parameters<typeof actual.verifyProcessIdentity>[0],
-    ) =>
-      mocks.forceIndeterminate
-        ? ("indeterminate" as const)
-        : actual.verifyProcessIdentity(token),
+    readProcessStartTimeMs: (pid: number) =>
+      pid === mocks.forceStartTimeProbeFailureForPid
+        ? null
+        : actual.readProcessStartTimeMs(pid),
   };
 });
 
@@ -190,23 +199,35 @@ describe("acquireCliLock", () => {
   // past MAX_LOCK_AGE_MS regardless of liveness. The hardened rule removes
   // that ceiling entirely - only positive identity evidence (dead /
   // mismatched) breaks a lock now, so a genuinely live, identity-verified
-  // holder survives no matter its age.
-  it("new-format live holder survives past the old age ceiling (only positive evidence breaks a lock)", async () => {
-    writeLock({
-      pid: process.pid,
-      reason: "host-update",
-      startedAt: new Date(Date.now() - VERY_OLD_MS).toISOString(),
-      processStartedAtMs: readProcessStartTimeMs(process.pid),
-    });
-    await expect(
-      acquireCliLock({
-        environment: "production",
-        reason: "contender",
-        waitMs: 200,
-        pollIntervalMs: 50,
-      }),
-    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.CLI_LOCK_BUSY });
-  });
+  // holder survives no matter its age. Spawns a real, separate OS process
+  // (not the `pid === process.pid` self shortcut) so this exercises the
+  // genuine cross-process liveness/start-time probing, not the own-pid
+  // identity path.
+  it.skipIf(process.platform === "win32")(
+    "new-format live holder (genuine two-process) survives past the old age ceiling",
+    async () => {
+      const { child, ready } = spawnSleeper(5);
+      try {
+        const pid = await ready;
+        writeLock({
+          pid,
+          reason: "host-update",
+          startedAt: new Date(Date.now() - VERY_OLD_MS).toISOString(),
+          processStartedAtMs: readProcessStartTimeMs(pid),
+        });
+        await expect(
+          acquireCliLock({
+            environment: "production",
+            reason: "contender",
+            waitMs: 200,
+            pollIntervalMs: 50,
+          }),
+        ).rejects.toMatchObject({ code: CLI_ERROR_CODES.CLI_LOCK_BUSY });
+      } finally {
+        child.kill();
+      }
+    },
+  );
 
   it("startedAt corruption/future values no longer affect the breaking decision", async () => {
     writeLock({
@@ -227,27 +248,40 @@ describe("acquireCliLock", () => {
     ).rejects.toMatchObject({ code: CLI_ERROR_CODES.CLI_LOCK_BUSY });
   });
 
-  it("liveness/start-identity-indeterminate holder survives past the ceiling (probe forced to fail -> contender gets E_CLI_LOCK_BUSY, no break)", async () => {
-    mocks.forceIndeterminate = true;
-    try {
-      writeLock({
-        pid: process.pid,
-        reason: "host-update",
-        startedAt: new Date(Date.now() - VERY_OLD_MS).toISOString(),
-        processStartedAtMs: readProcessStartTimeMs(process.pid),
-      });
-      await expect(
-        acquireCliLock({
-          environment: "production",
-          reason: "contender",
-          waitMs: 200,
-          pollIntervalMs: 50,
-        }),
-      ).rejects.toMatchObject({ code: CLI_ERROR_CODES.CLI_LOCK_BUSY });
-    } finally {
-      mocks.forceIndeterminate = false;
-    }
-  });
+  // Forces the failure at the underlying `readProcessStartTimeMs` probe
+  // boundary (not `verifyProcessIdentity` wholesale) against a genuinely
+  // live, separate spawned process: liveness itself succeeds (the child
+  // really is running), only the start-time read fails, so the real
+  // verdict logic must independently derive "indeterminate" from that
+  // combination rather than have the verdict handed to it.
+  it.skipIf(process.platform === "win32")(
+    "liveness-alive/start-time-probe-failure holder (genuine two-process) survives past the ceiling",
+    async () => {
+      const { child, ready } = spawnSleeper(5);
+      try {
+        const pid = await ready;
+        const genuineStartedAtMs = readProcessStartTimeMs(pid);
+        mocks.forceStartTimeProbeFailureForPid = pid;
+        writeLock({
+          pid,
+          reason: "host-update",
+          startedAt: new Date(Date.now() - VERY_OLD_MS).toISOString(),
+          processStartedAtMs: genuineStartedAtMs,
+        });
+        await expect(
+          acquireCliLock({
+            environment: "production",
+            reason: "contender",
+            waitMs: 200,
+            pollIntervalMs: 50,
+          }),
+        ).rejects.toMatchObject({ code: CLI_ERROR_CODES.CLI_LOCK_BUSY });
+      } finally {
+        mocks.forceStartTimeProbeFailureForPid = null;
+        child.kill();
+      }
+    },
+  );
 
   // Two-process tests: a genuinely separate OS process (not the
   // `pid === process.pid` shortcut) proves the identity check works
@@ -305,6 +339,64 @@ describe("acquireCliLock", () => {
       }
     });
   });
+
+  // Regression for the break-race: a plain `unlink` let a second
+  // contender delete a FIRST contender's freshly-acquired, genuinely
+  // live lock, because the break decision was based on a stale read with
+  // no re-check against what was actually still on disk at unlink time.
+  // The reviewer reproduced 3 simultaneous holders out of 40 racing
+  // contenders against a single dead lock. This drives the same shape:
+  // many concurrent contenders, one initially-dead holder, and a
+  // held-marker counter asserting no two contenders are ever inside
+  // their acquired section at the same time.
+  it("many concurrent contenders racing a dead lock never see more than one holder at a time", async () => {
+    const DEAD_PID = 555555;
+    const killSpy = vi
+      .spyOn(process, "kill")
+      .mockImplementation((pid: number) => {
+        if (pid === DEAD_PID) {
+          throw Object.assign(new Error("no such process"), {
+            code: "ESRCH",
+          });
+        }
+        return true;
+      });
+    writeLock({
+      pid: DEAD_PID,
+      reason: "dead-holder",
+      startedAt: new Date().toISOString(),
+      processStartedAtMs: null,
+    });
+
+    const CONTENDER_COUNT = 40;
+    let concurrentHolders = 0;
+    let maxConcurrentHolders = 0;
+
+    const tasks = Array.from({ length: CONTENDER_COUNT }, (_, i) =>
+      acquireCliLock({
+        environment: "production",
+        reason: `contender-${i}`,
+        waitMs: 10_000,
+        pollIntervalMs: 25,
+      }).then(async (handle) => {
+        concurrentHolders += 1;
+        maxConcurrentHolders = Math.max(
+          maxConcurrentHolders,
+          concurrentHolders,
+        );
+        // Hold briefly so two overlapping holders would actually
+        // overlap in wall-clock time if mutual exclusion were broken.
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        concurrentHolders -= 1;
+        await handle.release();
+      }),
+    );
+    const results = await Promise.allSettled(tasks);
+    killSpy.mockRestore();
+
+    expect(results.every((r) => r.status === "fulfilled")).toBe(true);
+    expect(maxConcurrentHolders).toBe(1);
+  }, 20_000);
 
   it("does not break an empty/corrupt lock file younger than the grace window", async () => {
     writeFileSync(mocks.lockPath, "");
