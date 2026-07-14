@@ -1,6 +1,9 @@
 import { useCallback, useMemo, type ReactNode } from "react";
 import type { GitChangedFile } from "@traycer/protocol/host";
-import type { GitDiffBundleGroup } from "@/stores/epics/canvas/types";
+import type {
+  GitDiffBundleGroup,
+  GitDiffRepositoryContext,
+} from "@/stores/epics/canvas/types";
 import { gitBundleGroupLabel } from "@/lib/git/git-diff-tile";
 import { sumGitFileStats } from "@/lib/git/file-stats";
 import {
@@ -22,6 +25,7 @@ export interface GitDiffSectionProps {
   readonly hostId: string;
   readonly runningDir: string;
   readonly group: GitDiffBundleGroup;
+  readonly repositoryContext: GitDiffRepositoryContext | null;
   readonly visibleFiles: ReadonlyArray<GitChangedFile>;
   readonly bundleFileCount: number;
   /**
@@ -88,6 +92,7 @@ export function GitDiffSection(props: GitDiffSectionProps): ReactNode {
           hostId={props.hostId}
           runningDir={props.runningDir}
           group={props.group}
+          repositoryContext={props.repositoryContext}
           disabled={props.bundleFileCount === 0}
         />
       }
