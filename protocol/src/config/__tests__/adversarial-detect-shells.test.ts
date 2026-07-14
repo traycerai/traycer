@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Virtual filesystem + platform, mirroring the sibling detect-shells.test.ts,
 // with two extra hostile seams: realpath can be made to throw a chosen errno
-// (symlink loops / dangling links), and access can be made to throw on a
-// specific path (permission errors mid-scan).
+// (symlink loops / files disappearing after a successful probe), and access
+// can be made to throw on a specific path (permission errors mid-scan).
 const world = vi.hoisted(() => ({
   platform: "linux" as NodeJS.Platform,
   files: new Map<string, boolean>(),
@@ -33,6 +33,10 @@ vi.mock("node:fs/promises", async (importActual) => {
   const actual = await importActual<typeof import("node:fs/promises")>();
   return {
     ...actual,
+    stat: async (path: string) => {
+      if (!world.files.has(path)) throw errno("ENOENT");
+      return { isFile: () => true };
+    },
     access: async (path: string, mode: number) => {
       const hard = world.accessThrowsHard.get(path);
       if (hard !== undefined) throw hard;
@@ -93,7 +97,7 @@ describe("adversarial: detectShells never throws under hostile filesystems", () 
     expect(detected[0]?.isDefault).toBe(true);
   });
 
-  it("survives a dangling symlink (X_OK ok, realpath ENOENT)", async () => {
+  it("survives realpath ENOENT after a successful regular-file probe", async () => {
     process.env.SHELL = "/bin/zsh";
     process.env.PATH = "/usr/bin";
     world.files.set("/bin/zsh", true);
@@ -142,7 +146,9 @@ describe("adversarial: detectShells never throws under hostile filesystems", () 
 });
 
 describe("adversarial: listShells dedupe against hostile config entries", () => {
-  function writeConfig(entries: { path: string; args: string[] | null }[]): void {
+  function writeConfig(
+    entries: { path: string; args: string[] | null }[],
+  ): void {
     world.configJson = JSON.stringify({
       version: 1,
       shell: { path: null, args: null, entries },
