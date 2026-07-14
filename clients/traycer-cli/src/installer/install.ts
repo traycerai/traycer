@@ -538,7 +538,10 @@ async function stageRegistry(opts: StageRegistryOptions): Promise<StageResult> {
 // a short backoff (~2.5s total). POSIX renames don't raise these codes, so
 // this is a no-op there.
 const RENAME_RETRY_CODES = new Set(["EBUSY", "EPERM", "EACCES", "ENOTEMPTY"]);
-async function renameWithRetry(from: string, to: string): Promise<void> {
+// Exported so the stage reconcile helper (`installer/stage-reconcile.ts`)
+// can reuse the same Windows-safe rename for restoring an `install.old-*`
+// / `staged.old-*` aside copy back into place.
+export async function renameWithRetry(from: string, to: string): Promise<void> {
   const delaysMs = [50, 100, 200, 400, 800, 1000];
   for (let attempt = 0; ; attempt++) {
     try {
@@ -661,7 +664,10 @@ function deriveLocalVersion(sourcePath: string): string {
   return `local-${base}-${stamp}`;
 }
 
-function currentInstallPlatform(): HostInstallPlatform {
+// Exported so the stage reconcile helper can validate a staged/aside
+// candidate's `platform`/`arch` against the CURRENT machine without
+// duplicating this resolution.
+export function currentInstallPlatform(): HostInstallPlatform {
   const platform = osPlatform();
   if (platform === "darwin" || platform === "linux" || platform === "win32") {
     return platform;
@@ -674,7 +680,7 @@ function currentInstallPlatform(): HostInstallPlatform {
   });
 }
 
-function currentInstallArch(): HostInstallArch {
+export function currentInstallArch(): HostInstallArch {
   const arch = osArch();
   if (arch === "arm64" || arch === "x64") return arch;
   throw cliError({

@@ -4,6 +4,7 @@ import * as Sentry from "@sentry/node";
 import {
   Command,
   CommanderError,
+  Option,
   type Command as CommanderCommand,
 } from "commander";
 import { AGENT_FACING_HARNESS_ID_LIST } from "@traycer/protocol/host/agent/shared";
@@ -48,6 +49,7 @@ import { configShellResetCommand } from "./commands/config-shell-reset";
 import { buildConfigShellRevertArgsCommand } from "./commands/config-shell-revert-args";
 import { buildConfigShellSetCommand } from "./commands/config-shell-set";
 import { buildHostAvailableCommand } from "./commands/host-available";
+import { buildHostDownloadCommand } from "./commands/host-download";
 import { hostDoctorCommand } from "./commands/host-doctor";
 import { buildHostEnsureCommand } from "./commands/host-ensure";
 import { buildHostFreePortAndRestartCommand } from "./commands/host-free-port-and-restart";
@@ -527,6 +529,31 @@ function registerHostCommands(program: Command): void {
       buildHostUpdateCommand({
         force: opts.force === true,
       }),
+  );
+
+  withRunner(
+    host
+      .command("download")
+      .description(
+        "Stage a host version without touching the running host (defaults to latest); promotes only when strictly newer, or replaces any stage for an explicit version",
+      )
+      .argument("[version]", "Registry version to stage (defaults to 'latest')")
+      // Hidden: this is the controller's contract (desktop main's
+      // `stageLatest`), not a user-facing switch - see
+      // `commands/host-download.ts`.
+      .addOption(
+        new Option(
+          "--automatic",
+          "Internal: the controller's contract",
+        ).hideHelp(),
+      ),
+    (opts, args) => {
+      const versionArg = typeof args[0] === "string" ? args[0] : null;
+      return buildHostDownloadCommand({
+        versionRequest: versionArg,
+        automatic: opts.automatic === true,
+      });
+    },
   );
 
   withRunner(

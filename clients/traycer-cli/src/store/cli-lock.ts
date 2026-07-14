@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { open, readFile, stat, unlink } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
@@ -6,44 +5,17 @@ import { hostname as osHostname } from "node:os";
 import type { Environment } from "../runner/environment";
 import { CLI_ERROR_CODES, cliError, isErrnoException } from "../runner/errors";
 import { cliLockPath, ensureCliInstallHomeDir } from "./paths";
+import {
+  readProcessStartTimeMs,
+  verifyProcessIdentity,
+} from "./process-identity";
 
-// Cross-platform process-liveness probe. POSIX uses `process.kill(pid, 0)`;
-// Windows uses `tasklist /FI "PID eq <pid>" /NH /FO CSV` and asserts the
-// CSV body is non-empty. Exported so service controllers + doctor +
-// installer all share one implementation.
-export function isProcessAlive(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  if (process.platform === "win32") {
-    let stdout: string;
-    try {
-      stdout = execFileSync(
-        "tasklist",
-        ["/FI", `PID eq ${pid}`, "/NH", "/FO", "CSV"],
-        { encoding: "utf8", windowsHide: true, timeout: 3000 },
-      );
-    } catch {
-      // tasklist missing or refused - be conservative and treat the
-      // PID as still held so we never break a lock we can't probe.
-      return true;
-    }
-    // tasklist prints an `INFO: No tasks are running which match...`
-    // line on stderr when nothing matches; stdout is empty. When a
-    // match exists, stdout contains a CSV row with the binary name
-    // and the same PID we asked about.
-    const trimmed = stdout.trim();
-    if (trimmed.length === 0) return false;
-    return trimmed.includes(`"${pid}"`);
-  }
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    const code = isErrnoException(err) ? err.code : null;
-    if (code === "EPERM") return true;
-    if (code === "ESRCH") return false;
-    return false;
-  }
-}
+// Re-exported for existing callers (`host/busy-check.ts`, service
+// controllers, doctor) - the liveness probe now lives in
+// `process-identity.ts` alongside the start-time/identity logic it shares
+// with the owner-tokened temp sweep, but this stays the canonical import
+// path for plain liveness checks.
+export { isProcessAlive } from "./process-identity";
 
 // Cross-process lock for CLI mutations (host install/update/uninstall
 // in NP-2+, CLI self-upgrade promotion, manifest mutations).
@@ -66,6 +38,14 @@ export interface CliLockMetadata {
   // before unlinking (see `tryAcquireOnce`). `null` only for a lock written
   // by a pre-token CLI version - never written by this code.
   readonly token: string | null;
+  // The holder process's OS start time (milliseconds since epoch,
+  // best-effort) - distinct from `startedAt` above, which is when the
+  // *lock* was acquired. Lets a contender positively confirm "still the
+  // same process" rather than "some process is alive at this pid" (the OS
+  // is free to recycle a pid onto an unrelated process). `null` when the
+  // platform probe failed at write time, or for a lock written by a
+  // pre-hardening CLI version - never written by this code otherwise.
+  readonly processStartedAtMs: number | null;
 }
 
 export interface CliLockHandle {
@@ -95,17 +75,6 @@ const MIN_POLL_MS = 25;
 // land within milliseconds of the open(), so any empty lock file older
 // than this grace window has no live owner and is safe to break.
 const EMPTY_LOCK_GRACE_MS = 5000;
-
-// `isProcessAlive` only proves *some* process currently owns the recorded
-// PID, not that it's the same process that wrote the lock - the OS is free
-// to recycle a PID onto an unrelated process once the original holder
-// exits, and that impostor would otherwise be read as "alive" forever
-// (silently for a same-user reuse, or via the EPERM conservative branch for
-// a different-user reuse). This ceiling is the backstop: no matter how the
-// PID check reads, a lock older than this is force-broken. Generous enough
-// to cover a slow host install (no download timeout today) while still
-// bounding a truly stuck lock to a tolerable wait.
-const MAX_LOCK_AGE_MS = 10 * 60 * 1000;
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -161,16 +130,16 @@ async function readLockMetadata(path: string): Promise<CliLockMetadata | null> {
     // live-checkable holder rather than be swept as "corrupt" on the
     // 5-second empty-lock grace window.
     token: typeof obj.token === "string" ? obj.token : null,
+    // Same tolerance as `token` above: a lock written by a pre-hardening
+    // CLI version has no identity field at all - it must still parse as a
+    // live-checkable holder, just with an unverifiable identity (handled
+    // by `verifyProcessIdentity` returning "indeterminate", never treated
+    // as corrupt).
+    processStartedAtMs:
+      typeof obj.processStartedAtMs === "number"
+        ? obj.processStartedAtMs
+        : null,
   };
-}
-
-// Returns true if the holder process is alive. Delegates to the shared
-// `isProcessAlive` helper so the POSIX `process.kill(pid, 0)` path and
-// the Windows `tasklist` path stay in lock-step with the service
-// controllers + doctor checks.
-function holderAlive(pid: number): boolean {
-  if (pid === process.pid) return true;
-  return isProcessAlive(pid);
 }
 
 // Age of the lock file in milliseconds, or null if it can no longer be
@@ -271,6 +240,7 @@ export async function acquireCliLock(
     startedAt: nowIso(),
     hostname: hostnameSafe(),
     token: randomUUID(),
+    processStartedAtMs: readProcessStartTimeMs(process.pid),
   };
   const pollMs = Math.max(MIN_POLL_MS, opts.pollIntervalMs);
   const deadline = Date.now() + Math.max(0, opts.waitMs);
@@ -279,26 +249,22 @@ export async function acquireCliLock(
     if (attempt !== "held") return attempt;
     const holder = await readLockMetadata(path);
     if (holder !== null) {
-      // Age is checked regardless of what the PID check concludes - a
-      // recycled-PID impostor would otherwise be read as "alive" forever
-      // (see MAX_LOCK_AGE_MS above), so no amount of PID-liveness confidence
-      // exempts a lock from this ceiling. `startedAt` is holder-supplied,
-      // not a trusted clock - an unparseable or future value (corruption,
-      // clock skew) would otherwise make ageMs NaN or negative, which never
-      // satisfies `>=` and silently defeats the ceiling. Fall back to the
-      // lock file's own mtime in that case, since the filesystem - not the
-      // holder - controls that timestamp.
-      const now = Date.now();
-      const startedAtMs = new Date(holder.startedAt).getTime();
-      const ageMs =
-        Number.isFinite(startedAtMs) && startedAtMs <= now
-          ? now - startedAtMs
-          : await lockFileAgeMs(path);
-      if (
-        !holderAlive(holder.pid) ||
-        ageMs === null ||
-        ageMs >= MAX_LOCK_AGE_MS
-      ) {
+      // Only positive evidence permits breaking a lock with a parsed
+      // holder record: the holder's pid is positively dead, or a fresh
+      // start-time read positively mismatches the recorded identity (a
+      // recycled pid). Indeterminate cases - a liveness-probe failure, or
+      // a legacy lock with no recorded process-start-time - wait
+      // regardless of age; a wedge is strictly safer than concurrent
+      // mutation of the install/staged tree. There is deliberately no age
+      // ceiling here any more (see the Host Update Layer Redesign Tech
+      // Plan's "cli-lock" section) - a genuinely alive, genuinely
+      // identity-verified holder is never broken out from under itself no
+      // matter how long its operation takes.
+      const identity = verifyProcessIdentity({
+        pid: holder.pid,
+        startedAtMs: holder.processStartedAtMs,
+      });
+      if (identity === "dead" || identity === "alive-different") {
         await breakStaleLock(path);
         continue;
       }

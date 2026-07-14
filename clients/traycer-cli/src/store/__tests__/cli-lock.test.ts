@@ -1,3 +1,5 @@
+import { spawn } from "node:child_process";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import {
   mkdtempSync,
   readFileSync,
@@ -9,12 +11,30 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ lockPath: "" }));
+const mocks = vi.hoisted(() => ({ lockPath: "", forceIndeterminate: false }));
 
 vi.mock("../paths", () => ({
   cliLockPath: () => mocks.lockPath,
   ensureCliInstallHomeDir: async () => {},
 }));
+
+// Lets one test force `verifyProcessIdentity` to report "indeterminate"
+// (simulating a probe failure) without needing a flaky real-world
+// reproduction. Every other test proxies straight through to the real
+// implementation, so the two-process tests below still exercise the
+// genuine `ps`/liveness probing.
+vi.mock("../process-identity", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../process-identity")>();
+  return {
+    ...actual,
+    verifyProcessIdentity: (
+      token: Parameters<typeof actual.verifyProcessIdentity>[0],
+    ) =>
+      mocks.forceIndeterminate
+        ? ("indeterminate" as const)
+        : actual.verifyProcessIdentity(token),
+  };
+});
 
 import {
   acquireCliLock,
@@ -22,12 +42,38 @@ import {
   withCliLock,
   type CliLockMetadata,
 } from "../cli-lock";
+import { readProcessStartTimeMs } from "../process-identity";
 import { CLI_ERROR_CODES } from "../../runner/errors";
 
-// Ten minutes - kept in sync with MAX_LOCK_AGE_MS in cli-lock.ts (not
-// exported; the regression test below re-derives it from behavior, not
-// from importing the private constant).
-const MAX_LOCK_AGE_MS = 10 * 60 * 1000;
+// Spawns a real, separate OS process so the "two-process" lock tests probe
+// genuine cross-process liveness/identity instead of the `pid ===
+// process.pid` self shortcut. Not available on win32 (no `sleep`) - those
+// tests are skipped there, matching this file's existing platform-specific
+// skip convention.
+function spawnSleeper(seconds: number): {
+  readonly child: ChildProcessWithoutNullStreams;
+  readonly ready: Promise<number>;
+} {
+  const child = spawn("sleep", [String(seconds)]);
+  const ready = new Promise<number>((resolve, reject) => {
+    child.once("spawn", () => {
+      if (child.pid === undefined) {
+        reject(new Error("spawned sleep process has no pid"));
+        return;
+      }
+      resolve(child.pid);
+    });
+    child.once("error", reject);
+  });
+  return { child, ready };
+}
+
+// Retained only as an "old enough that the removed age ceiling would have
+// broken this lock under the pre-hardening rule" marker for the regression
+// tests below - the cli-lock breaking decision no longer consults age at
+// all once a holder record parses (see cli-lock.ts's "only positive
+// evidence" comment).
+const VERY_OLD_MS = 10 * 60 * 1000 + 1000;
 const EMPTY_LOCK_GRACE_MS = 5000;
 
 function writeLock(overrides: Partial<CliLockMetadata>): void {
@@ -37,6 +83,7 @@ function writeLock(overrides: Partial<CliLockMetadata>): void {
     startedAt: new Date().toISOString(),
     hostname: null,
     token: "original-token",
+    processStartedAtMs: null,
     ...overrides,
   };
   writeFileSync(mocks.lockPath, JSON.stringify(meta, null, 2));
@@ -139,24 +186,124 @@ describe("acquireCliLock", () => {
     });
   });
 
-  it("regression: breaks a lock past the age ceiling even though the pid is alive", async () => {
-    // Same live pid as the previous test (guaranteed alive via the
-    // pid === process.pid shortcut - no ESRCH/EPERM involved), but old
-    // enough to exceed MAX_LOCK_AGE_MS. Before the fix this hung until
-    // waitMs regardless of age; this is the exact bug from the report.
+  // Superseded regression: the pre-hardening rule force-broke any lock
+  // past MAX_LOCK_AGE_MS regardless of liveness. The hardened rule removes
+  // that ceiling entirely - only positive identity evidence (dead /
+  // mismatched) breaks a lock now, so a genuinely live, identity-verified
+  // holder survives no matter its age.
+  it("new-format live holder survives past the old age ceiling (only positive evidence breaks a lock)", async () => {
     writeLock({
       pid: process.pid,
       reason: "host-update",
-      startedAt: new Date(Date.now() - MAX_LOCK_AGE_MS - 1000).toISOString(),
+      startedAt: new Date(Date.now() - VERY_OLD_MS).toISOString(),
+      processStartedAtMs: readProcessStartTimeMs(process.pid),
     });
-    const handle = await acquireCliLock({
-      environment: "production",
-      reason: "contender",
-      waitMs: 1000,
-      pollIntervalMs: 50,
+    await expect(
+      acquireCliLock({
+        environment: "production",
+        reason: "contender",
+        waitMs: 200,
+        pollIntervalMs: 50,
+      }),
+    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.CLI_LOCK_BUSY });
+  });
+
+  it("startedAt corruption/future values no longer affect the breaking decision", async () => {
+    writeLock({
+      pid: process.pid,
+      reason: "host-update",
+      startedAt: "not-a-real-timestamp",
+      processStartedAtMs: readProcessStartTimeMs(process.pid),
     });
-    expect(handle.metadata.reason).toBe("contender");
-    await handle.release();
+    const old = new Date(Date.now() - VERY_OLD_MS);
+    utimesSync(mocks.lockPath, old, old);
+    await expect(
+      acquireCliLock({
+        environment: "production",
+        reason: "contender",
+        waitMs: 200,
+        pollIntervalMs: 50,
+      }),
+    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.CLI_LOCK_BUSY });
+  });
+
+  it("liveness/start-identity-indeterminate holder survives past the ceiling (probe forced to fail -> contender gets E_CLI_LOCK_BUSY, no break)", async () => {
+    mocks.forceIndeterminate = true;
+    try {
+      writeLock({
+        pid: process.pid,
+        reason: "host-update",
+        startedAt: new Date(Date.now() - VERY_OLD_MS).toISOString(),
+        processStartedAtMs: readProcessStartTimeMs(process.pid),
+      });
+      await expect(
+        acquireCliLock({
+          environment: "production",
+          reason: "contender",
+          waitMs: 200,
+          pollIntervalMs: 50,
+        }),
+      ).rejects.toMatchObject({ code: CLI_ERROR_CODES.CLI_LOCK_BUSY });
+    } finally {
+      mocks.forceIndeterminate = false;
+    }
+  });
+
+  // Two-process tests: a genuinely separate OS process (not the
+  // `pid === process.pid` shortcut) proves the identity check works
+  // against real cross-process liveness/start-time probing.
+  describe.skipIf(process.platform === "win32")("two-process holders", () => {
+    it("identity-less (legacy-format) live holder survives past the ceiling", async () => {
+      const { child, ready } = spawnSleeper(5);
+      try {
+        const pid = await ready;
+        writeLock({
+          pid,
+          reason: "host-update",
+          startedAt: new Date(Date.now() - VERY_OLD_MS).toISOString(),
+          // No recorded process-start-time at all - the shape a
+          // pre-hardening CLI would have written.
+          processStartedAtMs: null,
+        });
+        await expect(
+          acquireCliLock({
+            environment: "production",
+            reason: "contender",
+            waitMs: 200,
+            pollIntervalMs: 50,
+          }),
+        ).rejects.toMatchObject({ code: CLI_ERROR_CODES.CLI_LOCK_BUSY });
+      } finally {
+        child.kill();
+      }
+    });
+
+    it("positively-mismatched start identity (recycled pid) still breaks", async () => {
+      const { child, ready } = spawnSleeper(5);
+      try {
+        const pid = await ready;
+        writeLock({
+          pid,
+          reason: "old-holder",
+          startedAt: new Date().toISOString(),
+          // Deliberately wrong - far enough from the real process's
+          // actual start time to exceed the identity-match tolerance,
+          // simulating the OS having recycled this pid onto an unrelated
+          // process since the lock was written.
+          processStartedAtMs: Date.now() - 10 * 60 * 1000,
+        });
+        const handle = await acquireCliLock({
+          environment: "production",
+          reason: "contender",
+          waitMs: 1000,
+          pollIntervalMs: 50,
+        });
+        expect(handle.metadata.reason).toBe("contender");
+        await handle.release();
+      } finally {
+        child.kill();
+      }
+    });
   });
 
   it("does not break an empty/corrupt lock file younger than the grace window", async () => {
@@ -207,40 +354,23 @@ describe("acquireCliLock", () => {
     });
   });
 
-  it("falls back to the lock file's mtime when startedAt is unparseable, and still breaks past the ceiling", async () => {
-    writeLock({
-      pid: process.pid,
-      reason: "host-update",
-      startedAt: "not-a-real-timestamp",
-    });
-    const old = new Date(Date.now() - MAX_LOCK_AGE_MS - 1000);
-    utimesSync(mocks.lockPath, old, old);
-    const handle = await acquireCliLock({
-      environment: "production",
-      reason: "contender",
-      waitMs: 1000,
-      pollIntervalMs: 50,
-    });
-    expect(handle.metadata.reason).toBe("contender");
-    await handle.release();
-  });
-
-  it("falls back to the lock file's mtime when startedAt is in the future, and still breaks past the ceiling", async () => {
+  it("a future startedAt (lock-acquisition time, not process identity) no longer affects the breaking decision", async () => {
     writeLock({
       pid: process.pid,
       reason: "host-update",
       startedAt: new Date(Date.now() + 60_000).toISOString(),
+      processStartedAtMs: readProcessStartTimeMs(process.pid),
     });
-    const old = new Date(Date.now() - MAX_LOCK_AGE_MS - 1000);
+    const old = new Date(Date.now() - VERY_OLD_MS);
     utimesSync(mocks.lockPath, old, old);
-    const handle = await acquireCliLock({
-      environment: "production",
-      reason: "contender",
-      waitMs: 1000,
-      pollIntervalMs: 50,
-    });
-    expect(handle.metadata.reason).toBe("contender");
-    await handle.release();
+    await expect(
+      acquireCliLock({
+        environment: "production",
+        reason: "contender",
+        waitMs: 200,
+        pollIntervalMs: 50,
+      }),
+    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.CLI_LOCK_BUSY });
   });
 });
 
@@ -286,6 +416,7 @@ describe("release() compare-and-delete", () => {
       startedAt: new Date().toISOString(),
       hostname: null,
       token: "impostor-token",
+      processStartedAtMs: null,
     };
     writeFileSync(mocks.lockPath, JSON.stringify(impostor));
     await handle.release();
