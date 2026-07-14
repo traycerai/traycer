@@ -36,6 +36,7 @@ describe("notification display", () => {
     displayNotificationRows([row("Checkout notifications")], {
       showNotification,
       playChime,
+      onToastClick: vi.fn(),
     });
 
     expect(showNotification).toHaveBeenCalledOnce();
@@ -50,8 +51,10 @@ describe("notification display", () => {
       "host:chat:chat-1",
     );
     expect(toast).toHaveBeenCalledWith("Checkout notifications", {
+      className: "cursor-pointer",
       description: "New chat • Done",
       id: "host:chat:chat-1",
+      onClick: expect.any(Function),
     });
     expect(playChime).toHaveBeenCalledOnce();
   });
@@ -122,6 +125,7 @@ describe("notification display", () => {
     displayNotificationRows([row("One"), row("Two")], {
       showNotification,
       playChime,
+      onToastClick: vi.fn(),
     });
 
     expect(showNotification).toHaveBeenCalledWith(
@@ -142,9 +146,28 @@ describe("notification display", () => {
       displayNotificationRows([row("Checkout notifications")], {
         showNotification,
         playChime,
+        onToastClick: vi.fn(),
       });
     }).not.toThrow();
 
     expect(playChime).toHaveBeenCalledOnce();
+  });
+
+  it("activates the notification represented by the toast when clicked", () => {
+    const onToastClick = vi.fn();
+    const notification = row("Checkout notifications");
+
+    displayNotificationRows([notification], {
+      showNotification: vi.fn(() => Promise.resolve()),
+      playChime: vi.fn(),
+      onToastClick,
+    });
+
+    const options = vi.mocked(toast).mock.calls.at(-1)?.[1];
+    if (options?.onClick !== undefined) {
+      Reflect.apply(options.onClick, null, []);
+    }
+
+    expect(onToastClick).toHaveBeenCalledWith(notification);
   });
 });

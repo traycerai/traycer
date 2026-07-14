@@ -11,6 +11,7 @@ import type { HostNotificationEntry } from "@traycer/protocol/host/notifications
 export interface NotificationDisplayTarget {
   readonly showNotification: NotificationShow;
   readonly playChime: () => void;
+  readonly onToastClick: (row: MergedNotificationRow) => void;
 }
 
 export function displayNotificationRows(
@@ -36,6 +37,8 @@ export function displayNotificationRows(
   toast(content.title, {
     description: content.body,
     id: content.replaceKey,
+    className: "cursor-pointer",
+    onClick: () => target.onToastClick(content.row),
   });
   target.playChime();
 }
@@ -83,6 +86,7 @@ function buildNotificationToastContent(
 ): {
   readonly title: string;
   readonly body: string;
+  readonly row: MergedNotificationRow;
   readonly payload: unknown;
   readonly replaceKey: string;
 } {
@@ -91,6 +95,7 @@ function buildNotificationToastContent(
     return {
       title: first.title,
       body: first.body,
+      row: first,
       payload: first.payload,
       replaceKey: notificationReplaceKey(first),
     };
@@ -98,6 +103,7 @@ function buildNotificationToastContent(
   return {
     title: "Traycer",
     body: `${rows.length} new notifications`,
+    row: first,
     payload: first.payload,
     replaceKey: "notification-batch",
   };
