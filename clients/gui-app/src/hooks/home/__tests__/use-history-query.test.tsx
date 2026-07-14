@@ -26,6 +26,7 @@ const testState = vi.hoisted(() => {
     isPlaceholderData: false,
     hasNextPage: false,
     worktreesByEpicId: new Map<string, readonly WorktreeHostEntryV12[]>(),
+    worktreeMetadataError: null as Error | null,
     refetch: vi.fn(),
     fetchNextPage: vi.fn(),
   };
@@ -54,6 +55,7 @@ vi.mock("@/hooks/worktree/use-task-worktree-metadata-query", () => ({
   useTaskWorktreeMetadata: () => ({
     worktreesByEpicId: testState.worktreesByEpicId,
     isFetching: false,
+    error: testState.worktreeMetadataError,
   }),
 }));
 
@@ -71,6 +73,7 @@ describe("useHistoryQuery", () => {
     testState.isPlaceholderData = false;
     testState.hasNextPage = false;
     testState.worktreesByEpicId = new Map();
+    testState.worktreeMetadataError = null;
     testState.refetch.mockReset();
     testState.fetchNextPage.mockReset();
   });
@@ -181,6 +184,22 @@ describe("useHistoryQuery", () => {
 
     expect(screen.getByTestId("has-next-page").textContent).toBe("true");
   });
+
+  it("surfaces a worktree metadata failure for a PR-number search", () => {
+    testState.worktreeMetadataError = new Error("Worktree metadata failed");
+
+    render(
+      <HistoryQueryHarness
+        search={patchHistorySearch(DEFAULT_HISTORY_SEARCH, {
+          query: "#84",
+        })}
+      />,
+    );
+
+    expect(screen.getByTestId("error").textContent).toBe(
+      "Worktree metadata failed",
+    );
+  });
 });
 
 function HistoryQueryHarness(props: {
@@ -191,6 +210,7 @@ function HistoryQueryHarness(props: {
     <div>
       <div data-testid="pending">{String(result.isPending)}</div>
       <div data-testid="fetching">{String(result.isFetching)}</div>
+      <div data-testid="error">{result.error?.message ?? ""}</div>
       <div data-testid="has-next-page">{String(result.hasNextPage)}</div>
       <div data-testid="titles">
         {result.data?.items.map((item) => item.title).join("|") ?? ""}

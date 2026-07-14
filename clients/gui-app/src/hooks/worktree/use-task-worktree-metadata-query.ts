@@ -13,6 +13,7 @@ export interface TaskWorktreeMetadata {
     readonly WorktreeHostEntryV12[]
   >;
   readonly isFetching: boolean;
+  readonly error: Error | null;
 }
 
 /**
@@ -79,5 +80,8 @@ export function useTaskWorktreeMetadata(
   return {
     worktreesByEpicId,
     isFetching: baseQuery.isFetching || enrichedQuery.isFetching,
+    error:
+      (baseQuery.error instanceof Error ? baseQuery.error : null) ??
+      (enrichedQuery.error instanceof Error ? enrichedQuery.error : null),
   };
 }

@@ -153,7 +153,9 @@ export function useHistoryQuery(
       tasksQuery.isFetching ||
       isQueryDebouncing ||
       (isPullRequestNumberQuery && worktreeMetadata.isFetching),
-    error: tasksQuery.error instanceof Error ? tasksQuery.error : null,
+    error:
+      (tasksQuery.error instanceof Error ? tasksQuery.error : null) ??
+      (isPullRequestNumberQuery ? worktreeMetadata.error : null),
     hostId,
     refetch,
     fetchNextPage,
