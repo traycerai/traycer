@@ -29,6 +29,11 @@ const mocks = vi.hoisted(() => ({
     readonly observedStartedAt: string;
     readonly observedRuntimeVersion: string;
   }>,
+  freePortKillCalls: [] as Array<{
+    readonly pid: number;
+    readonly port: number;
+    readonly commandName: string;
+  }>,
   progressEvents: [] as ProgressInfo[],
 }));
 
@@ -96,6 +101,21 @@ vi.mock("../../installer/apply", () => ({
       totalBytes: null,
     });
     return { outcome: "no-op", installedVersion: "1.0.0" };
+  },
+}));
+
+vi.mock("../../host/free-port-kill", () => ({
+  killConflictingPortOwner: async (opts: {
+    readonly pid: number;
+    readonly port: number;
+    readonly commandName: string;
+  }) => {
+    mocks.freePortKillCalls.push({
+      pid: opts.pid,
+      port: opts.port,
+      commandName: opts.commandName,
+    });
+    return { killed: true, killError: null };
   },
 }));
 
@@ -615,6 +635,70 @@ describe("traycer CLI entrypoint registration", () => {
     const flags = cmd.options.map((o) => o.long);
     expect(flags).toContain("--pid");
     expect(flags).toContain("--port");
+  });
+
+  it("host free-port is a hidden command exposing required --pid and --port", () => {
+    const program = buildProgram();
+    const host = expectCommand(program, ["host"]);
+    const cmd = expectCommand(program, ["host", "free-port"]);
+    const flags = cmd.options.map((o) => o.long);
+    expect(flags).toContain("--pid");
+    expect(flags).toContain("--port");
+    // Hidden from `host --help`'s command list entirely (not just a
+    // hidden option on a visible command, per `.command(name, {hidden:
+    // true})`) - `expectCommand` above already proves it's reachable.
+    expect(host.helpInformation()).not.toContain("free-port ");
+  });
+
+  it("host free-port parses --pid/--port and forwards both as integers, kill-only (no restart)", async () => {
+    mocks.freePortKillCalls.length = 0;
+
+    const program = buildProgram();
+    program.exitOverride();
+    await program.parseAsync(
+      ["host", "free-port", "--pid", "4242", "--port", "51820"],
+      { from: "user" },
+    );
+
+    expect(mocks.freePortKillCalls).toEqual([
+      { pid: 4242, port: 51820, commandName: "host free-port" },
+    ]);
+  });
+
+  it("host free-port rejects a non-integer --pid/--port with E_INVALID_ARGUMENT", async () => {
+    mocks.freePortKillCalls.length = 0;
+
+    const program = buildProgram();
+    program.exitOverride();
+    let thrown: unknown = null;
+    try {
+      await program.parseAsync(
+        ["host", "free-port", "--pid", "not-a-pid", "--port", "51820"],
+        { from: "user" },
+      );
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toMatchObject({ code: "E_INVALID_ARGUMENT" });
+    expect(mocks.freePortKillCalls).toHaveLength(0);
+  });
+
+  it("commander itself rejects host free-port when --port is missing", async () => {
+    const program = buildProgram();
+    program.exitOverride();
+    program.configureOutput({
+      writeErr: () => undefined,
+      writeOut: () => undefined,
+    });
+    let thrown: unknown = null;
+    try {
+      await program.parseAsync(["host", "free-port", "--pid", "4242"], {
+        from: "user",
+      });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).not.toBeNull();
   });
 
   // Service manifests render argv as `traycer host start` - the slot is

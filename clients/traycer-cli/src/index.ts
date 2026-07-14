@@ -53,6 +53,7 @@ import { buildHostAvailableCommand } from "./commands/host-available";
 import { buildHostDownloadCommand } from "./commands/host-download";
 import { hostDoctorCommand } from "./commands/host-doctor";
 import { buildHostEnsureCommand } from "./commands/host-ensure";
+import { buildHostFreePortCommand } from "./commands/host-free-port";
 import { buildHostFreePortAndRestartCommand } from "./commands/host-free-port-and-restart";
 import { buildHostInstallCommand } from "./commands/host-install";
 import { buildHostLogsCommand } from "./commands/host-logs";
@@ -721,6 +722,36 @@ function registerHostCommands(program: Command): void {
         pid: pidRaw !== null && Number.isFinite(pidRaw) ? pidRaw : null,
         port: portRaw !== null && Number.isFinite(portRaw) ? portRaw : null,
       });
+    },
+  );
+
+  withRunner(
+    host
+      .command("free-port", { hidden: true })
+      .description(
+        "Terminate a foreign PID holding the host port, without restarting the service (internal - invoked by Doctor)",
+      )
+      .requiredOption(
+        "--pid <pid>",
+        "PID of the conflicting process to terminate",
+      )
+      .requiredOption("--port <port>", "Port the foreign process is bound to"),
+    (opts) => {
+      return async (ctx) => {
+        const pid =
+          typeof opts.pid === "string" ? Number.parseInt(opts.pid, 10) : NaN;
+        const port =
+          typeof opts.port === "string" ? Number.parseInt(opts.port, 10) : NaN;
+        if (!Number.isFinite(pid) || !Number.isFinite(port)) {
+          throw cliError({
+            code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+            message: "host free-port: --pid and --port must be integers",
+            details: { pid: opts.pid, port: opts.port },
+            exitCode: 1,
+          });
+        }
+        return buildHostFreePortCommand({ pid, port })(ctx);
+      };
     },
   );
 }
