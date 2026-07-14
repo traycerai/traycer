@@ -1,25 +1,17 @@
-/**
- * Fixed severity scale for a single rate-limit window's used percentage,
- * shared by the header glyph and every `MeterRow` bar. Usage stays blue
- * through 85%, then turns red; 0% used renders as an empty blue bar.
- */
-export type RateLimitWindowSeverity = "blue" | "red";
+import type { LiveProviderRateLimitSeverity } from "@traycer/protocol/host/rate-limit";
 
-export function rateLimitWindowSeverity(
-  usedPercent: number,
-): RateLimitWindowSeverity {
-  if (usedPercent > 85) return "red";
-  return "blue";
-}
+export type RateLimitWindowSeverity = LiveProviderRateLimitSeverity;
 
 /** Tailwind fill color for a severity tier, matching the Core Flows wireframe's bar colors. */
 export function rateLimitWindowSeverityBarClassName(
   severity: RateLimitWindowSeverity,
 ): string {
   switch (severity) {
-    case "red":
+    case "limited":
       return "bg-red-500 dark:bg-red-400";
-    case "blue":
+    case "running_low":
+      return "bg-amber-500 dark:bg-amber-400";
+    case "healthy":
       return "bg-blue-500 dark:bg-blue-400";
   }
 }

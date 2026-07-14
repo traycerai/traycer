@@ -9,6 +9,7 @@ import type {
   ProviderRateLimits,
   ProviderRateLimitWindow,
 } from "@traycer/protocol/host";
+import { classifyProviderRateLimitWindow } from "@traycer/protocol/host/rate-limit";
 import type { ProviderRateLimitEnvelope } from "@/lib/rate-limits/rate-limit-envelope";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -262,6 +263,7 @@ function RateLimitWindowRow({
     <MeterRow
       label={label}
       usedPercent={window.usedPercent}
+      severity={classifyProviderRateLimitWindow(window)}
       detail={
         <WindowMeterDetail
           resetsAt={window.resetsAt}
@@ -841,6 +843,7 @@ function ClaudeExtraUsageRow({
       <MeterRow
         label="Extra usage"
         usedPercent={usedPercent}
+        severity={usedPercent > 85 ? "limited" : "healthy"}
         detail={`${formatClaudeExtraUsageCents(extraUsage.usedCredits)} / ${formatClaudeExtraUsageCents(extraUsage.monthlyLimit)}`}
       />
     );
@@ -937,6 +940,7 @@ function OpenRouterCreditBar({
     <MeterRow
       label="Credits"
       usedPercent={usedPercent}
+      severity={usedPercent > 85 ? "limited" : "healthy"}
       detail={`${formatProviderCurrency(consumed)} / ${formatProviderCurrency(limit)}`}
     />
   );
