@@ -22,6 +22,7 @@ function makeItem(
     updatedBucket: overrides.updatedBucket ?? "today",
     linkedRepos: overrides.linkedRepos ?? [],
     linkedWorkspaces: overrides.linkedWorkspaces ?? [],
+    pullRequestNumbers: overrides.pullRequestNumbers ?? [],
     ownership: overrides.ownership ?? "mine",
     permissionRole: overrides.permissionRole ?? "owner",
   };
