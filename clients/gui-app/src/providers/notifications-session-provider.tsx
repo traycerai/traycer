@@ -90,6 +90,8 @@ export function NotificationsSessionProvider(
     },
     [activate],
   );
+  const onToastClickRef = useRef(onToastClick);
+  onToastClickRef.current = onToastClick;
   const consumeEntity = useCallback(
     (entity: HostNotificationsEntityRef): void => {
       useAppLocalNotificationsStore
@@ -238,7 +240,7 @@ export function NotificationsSessionProvider(
             displayHostChannelEmission(entries, {
               showNotification,
               playChime: playNotificationChime,
-              onToastClick,
+              onToastClick: onToastClickRef.current,
             });
           },
           onFeedFrame: (frame) => onFeedFrame(frame, streamHostId),
@@ -253,7 +255,6 @@ export function NotificationsSessionProvider(
     activeHostId,
     windowId,
     showNotification,
-    onToastClick,
     onFeedFrame,
     onPresenceChanged,
     onHostStreamOpened,
