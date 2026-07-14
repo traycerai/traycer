@@ -60,7 +60,7 @@ import { useTerminalList } from "@/hooks/terminal/use-terminal-list-query";
 import { useTerminalRename } from "@/hooks/terminal/use-terminal-rename-mutation";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useHostClient } from "@/lib/host";
-import { isVisibleRawTerminalSession } from "@/lib/terminals/terminal-session-filters";
+import { isVisibleEpicTerminalSession } from "@/lib/terminals/terminal-session-filters";
 import {
   deriveTitleSourceFromSessionTitle,
   terminalSessionTitle,
@@ -140,11 +140,8 @@ function TerminalsPanelBodyLive(props: {
 
   // Host keeps exited sessions for a 60s grace window; filter so a
   // single kill click feels like "remove" instead of "mark dead".
-  const sessions = (list.data?.sessions ?? []).filter(
-    (session) =>
-      session.scope.kind === "epic" &&
-      session.scope.epicId === epicId &&
-      isVisibleRawTerminalSession(session),
+  const sessions = (list.data?.sessions ?? []).filter((session) =>
+    isVisibleEpicTerminalSession(session, epicId),
   );
 
   return (

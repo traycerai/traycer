@@ -3,6 +3,7 @@ import {
   defineRpcContract,
   defineUpgradePath,
   type DowngradeResult,
+  type RpcErrorDetails,
 } from "@traycer/protocol/framework/index";
 import {
   type CanonicalTerminalSessionInfo,
@@ -178,13 +179,22 @@ export const terminalListDowngradeV20ToV10 = defineDowngradePath<
     return { ok: true, value: { epicId: epicId.value } };
   },
   downgradeResponse: (response) => {
-    const sessions: TerminalSessionInfo[] = [];
-    for (const session of response.sessions) {
-      const downgraded = downgradeTerminalSessionInfoForV10(session);
-      if (!downgraded.ok) return downgraded;
-      sessions.push(downgraded.value);
-    }
-    return { ok: true, value: { sessions } };
+    const downgraded = response.sessions.map(downgradeTerminalSessionInfoForV10);
+    // A single un-representable session fails the whole response: a v1.0 peer's
+    // session shape has no field that can carry an independent-scope terminal,
+    // so there is no partial list worth sending.
+    const failure = downgraded.find(
+      (result): result is { ok: false; error: RpcErrorDetails } => !result.ok,
+    );
+    if (failure !== undefined) return failure;
+    return {
+      ok: true,
+      value: {
+        sessions: downgraded.flatMap((result) =>
+          result.ok ? [result.value] : [],
+        ),
+      },
+    };
   },
 });
 
