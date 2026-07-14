@@ -51,6 +51,7 @@ vi.mock(
 );
 
 import { AgentSelectionGuideSection } from "@/components/settings/panels/agent-selection-guide-section";
+import { AgentsSettingsPanel } from "@/components/settings/panels/agents-settings-panel";
 
 function renderPanel() {
   return render(
@@ -88,6 +89,8 @@ describe("AgentSelectionGuideSection", () => {
 
   afterEach(() => {
     cleanup();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("updates generated defaults without clobbering the active editor draft", async () => {
@@ -127,6 +130,78 @@ describe("AgentSelectionGuideSection", () => {
     expect(editor.className).toContain("h-[min(32vh,16rem)]");
     expect(editor.className).toContain("resize-y");
     expect(editor.className).not.toContain("max-h-[min(32vh,16rem)]");
+  });
+
+  it("caps resizing at the settings viewport without shrinking below the opening height", () => {
+    let scrollBottom = 800;
+    const bodyBottom = 500;
+    const openingHeight = 256;
+    let resizeCallback: ResizeObserverCallback | null = null;
+    const resizeObserver: ResizeObserver = {
+      observe(): void {},
+      unobserve(): void {},
+      disconnect(): void {},
+    };
+
+    class BoundaryResizeObserver implements ResizeObserver {
+      constructor(callback: ResizeObserverCallback) {
+        resizeCallback = callback;
+      }
+
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+    }
+
+    vi.stubGlobal("ResizeObserver", BoundaryResizeObserver);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+      function (this: HTMLElement) {
+        if (this.getAttribute("data-testid") === "settings-scroll-viewport") {
+          return new DOMRect(0, 0, 100, scrollBottom);
+        }
+        if (this.hasAttribute("data-settings-panel-body")) {
+          return new DOMRect(0, 0, 100, bodyBottom);
+        }
+        if (this instanceof HTMLTextAreaElement) {
+          return new DOMRect(0, 0, 100, openingHeight);
+        }
+        return new DOMRect();
+      },
+    );
+
+    render(
+      <StrictMode>
+        <div
+          data-testid="settings-scroll-viewport"
+          style={{ overflowY: "auto" }}
+        >
+          <AgentsSettingsPanel />
+        </div>
+      </StrictMode>,
+    );
+
+    const editor = screen.getByTestId<HTMLTextAreaElement>(
+      "agents-selection-guide-input",
+    );
+    const panelShell = editor.closest("[data-settings-panel-shell]");
+    if (!(panelShell instanceof HTMLElement)) {
+      throw new Error("Expected the editor to render inside a settings shell");
+    }
+    panelShell.style.paddingBottom = "40px";
+
+    const emitResize = (): void => {
+      if (resizeCallback === null) {
+        throw new Error("Expected the resize observer to be active");
+      }
+      resizeCallback([], resizeObserver);
+    };
+
+    act(emitResize);
+    expect(editor.style.maxHeight).toBe("516px");
+
+    scrollBottom = 300;
+    act(emitResize);
+    expect(editor.style.maxHeight).toBe("256px");
   });
 
   it("reverts through the host reset API instead of sending generated content back", async () => {
