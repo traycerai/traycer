@@ -79,7 +79,7 @@ export async function uninstallHost(
   });
   // Sweep any stale `<installDir>.old-*` siblings the atomic swap left
   // behind after a crash. Best-effort; never blocks the uninstall.
-  await sweepOldTrash(hostInstallDir(opts.environment));
+  await sweepOldTrash(hostInstallDir(opts.environment), logger);
 
   let purgedRuntime = false;
   if (opts.purgeChannelRuntime) {

@@ -1,16 +1,8 @@
-import {
-  access,
-  mkdir,
-  mkdtemp,
-  readdir,
-  readFile,
-  rename,
-  rm,
-  stat,
-} from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { access, mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import type { Stats } from "node:fs";
 import { arch as osArch, platform as osPlatform } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   type HostInstallArch,
   type HostInstallPlatform,
@@ -26,7 +18,7 @@ import {
 import type { ProgressInfo } from "../runner/output";
 import type { Environment } from "../runner/environment";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
-import { createCliLogger, errorFromUnknown } from "../logger";
+import { createCliLogger, errorFromUnknown, type ILogger } from "../logger";
 import {
   hostHomeDir,
   hostInstallDir,
@@ -36,6 +28,12 @@ import {
 } from "../store/paths";
 import { extractHostSource, resolveHostExecutable } from "./extract";
 import { hashFileSha256 } from "./sha256";
+import {
+  invalidateAsideDir,
+  listAsideDirsNewestFirst,
+  sweepDeadAsideDirs,
+} from "./aside-dirs";
+import { renameWithRetry } from "./rename-retry";
 
 // Host installer - verify-before-replace per the Tech Plan.
 //
@@ -232,6 +230,7 @@ export async function installHost(
     );
 
     const record: HostInstallRecord = {
+      installId: randomUUID(),
       version: staging.version,
       runtimeVersion,
       platform,
@@ -313,26 +312,26 @@ export async function installHost(
 
 // Sweep `<target>.old-*` siblings left behind by atomicSwap if the CLI
 // crashed between a successful rename-aside and the fire-and-forget
-// `rm(trash)`. Called from `atomicSwap` on entry (so a repeated
-// install/update keeps the floor clean) and from the uninstaller. Best
-// effort - a failed sweep never aborts the surrounding operation.
-export async function sweepOldTrash(target: string): Promise<void> {
-  const parent = dirname(target);
-  const prefix = `${basename(target)}.old-`;
-  let names: string[];
-  try {
-    names = await readdir(parent);
-  } catch {
-    return;
-  }
-  const matches = names
-    .filter((name) => name.startsWith(prefix))
-    .map((name) => join(parent, name));
+// invalidation. Called from `atomicSwap` on entry (so a repeated
+// install/update keeps the floor clean) and from the uninstaller. Layered
+// invalidation (rename-to-`.dead-*` sibling -> sidecar-unlink -> recursive
+// removal -> accept-and-log residual) shared with `stage-reconcile.ts`'s
+// identical `staged.old-*` handling via `aside-dirs.ts` - see that module's
+// doc comment for the failure-mode rationale (a single "unlink sidecar, then
+// best-effort rm" pass could leave a fully intact, restorable aside behind
+// if both steps failed on the same directory). Best effort - a failed sweep
+// never aborts the surrounding operation.
+export async function sweepOldTrash(
+  target: string,
+  logger: ILogger,
+): Promise<void> {
+  const matches = await listAsideDirsNewestFirst(target, "old-");
   await Promise.all(
-    matches.map((path) =>
-      rm(path, { recursive: true, force: true }).catch(() => undefined),
+    matches.map((match) =>
+      invalidateAsideDir(target, match, "install.json", logger),
     ),
   );
+  await sweepDeadAsideDirs(target);
 }
 
 interface StageResult {
@@ -531,35 +530,6 @@ async function stageRegistry(opts: StageRegistryOptions): Promise<StageResult> {
   };
 }
 
-// Windows releases a terminated process's directory/file handles
-// asynchronously, so a rename issued right after the OS service stop
-// (which force-kills the host tree) can still observe EBUSY/EPERM for a
-// brief window even though the host is already dead. Retry a few times with
-// a short backoff (~2.5s total). POSIX renames don't raise these codes, so
-// this is a no-op there.
-const RENAME_RETRY_CODES = new Set(["EBUSY", "EPERM", "EACCES", "ENOTEMPTY"]);
-// Exported so the stage reconcile helper (`installer/stage-reconcile.ts`)
-// can reuse the same Windows-safe rename for restoring an `install.old-*`
-// / `staged.old-*` aside copy back into place.
-export async function renameWithRetry(from: string, to: string): Promise<void> {
-  const delaysMs = [50, 100, 200, 400, 800, 1000];
-  for (let attempt = 0; ; attempt++) {
-    try {
-      await rename(from, to);
-      return;
-    } catch (cause) {
-      const code =
-        cause && typeof cause === "object" && "code" in cause
-          ? String((cause as { code?: unknown }).code)
-          : "";
-      if (attempt >= delaysMs.length || !RENAME_RETRY_CODES.has(code)) {
-        throw cause;
-      }
-      await new Promise((resolve) => setTimeout(resolve, delaysMs[attempt]));
-    }
-  }
-}
-
 interface AtomicSwapOptions {
   readonly environment: Environment;
   readonly stagingDir: string;
@@ -575,7 +545,7 @@ async function atomicSwap(opts: AtomicSwapOptions): Promise<void> {
   // create another one. Doesn't block the swap on sweep success - if
   // the sweep fails we log via the surrounding flow's progress and
   // continue.
-  await sweepOldTrash(target);
+  await sweepOldTrash(target, logger);
 
   const targetExists = await access(target).then(
     () => true,
@@ -625,7 +595,16 @@ async function atomicSwap(opts: AtomicSwapOptions): Promise<void> {
     });
   }
   if (targetExists) {
-    await rm(trash, { recursive: true, force: true });
+    // Layered invalidation (rename-to-`.dead-*` -> sidecar-unlink ->
+    // recursive-rm -> accept-and-log), not a plain `rm`: mirrors
+    // `download-stage.ts`'s `replaceStagedDir`, which creates and discards
+    // asides via this identical explicit-replace shape. A bare `rm` that
+    // failed on every retry (e.g. a lingering Windows handle) would leave
+    // `trash` as a fully intact, restorable `install.old-*` copy -
+    // exactly the residual `sweepOldTrash` above exists to heal, so a
+    // failed deletion here must not be more recoverable than one caught by
+    // the next sweep.
+    await invalidateAsideDir(target, trash, "install.json", logger);
   }
 }
 

@@ -110,6 +110,7 @@ async function writeInstall(
   const executablePath = join(installDir, "traycer-host");
   writeFileSync(executablePath, "binary");
   const record: HostInstallRecord = {
+    installId: null,
     version,
     runtimeVersion: null,
     platform: currentInstallPlatform(),

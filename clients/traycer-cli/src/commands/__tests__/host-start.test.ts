@@ -26,6 +26,7 @@ import { withDevDesktopSlotAsync as withDevDesktopSlot } from "@traycer-clients/
 
 function sampleRecord(executablePath: string): HostInstallRecord {
   return {
+    installId: null,
     version: "1.0.0",
     runtimeVersion: null,
     platform: "darwin",

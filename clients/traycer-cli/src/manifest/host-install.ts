@@ -27,6 +27,14 @@ export interface HostInstallSource {
 }
 
 export interface HostInstallRecord {
+  // Minted (`randomUUID()`) at every record materialization - staged apply
+  // and direct install alike (Host Update Layer Redesign Tech Plan,
+  // "Unknown runtime identity"). The canonical install-generation
+  // fingerprint (`encodeInstallGeneration` in clients/shared) uses this
+  // when present; `null` only for a record written before this field
+  // existed, which falls back to the legacy `installedAt` +
+  // `archiveSha256` + `version` tuple as its fingerprint instead.
+  readonly installId: string | null;
   readonly version: string;
   // The archive's own baked build stamp, read from its `version.json` after
   // extraction - the same value the running host later publishes in
@@ -224,6 +232,10 @@ export async function readHostInstallRecord(
     });
   }
   const record = {
+    // Tolerant read: records written before this field existed carry no
+    // `installId` key; treat anything but a string as absent (the legacy
+    // fingerprint fallback then takes over - see `encodeInstallGeneration`).
+    installId: typeof obj.installId === "string" ? obj.installId : null,
     version: obj.version,
     // Tolerant read: records written before the field existed carry no
     // `runtimeVersion` key; treat anything but a string as absent.

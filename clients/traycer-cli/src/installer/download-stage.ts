@@ -30,13 +30,11 @@ import {
   currentInstallArch,
   currentInstallPlatform,
   readExtractedRuntimeVersion,
-  renameWithRetry,
 } from "./install";
 import { extractHostSource, resolveHostExecutable } from "./extract";
-import {
-  invalidateStagedAsideDir,
-  reconcileHostStage,
-} from "./stage-reconcile";
+import { invalidateAsideDir } from "./aside-dirs";
+import { renameWithRetry } from "./rename-retry";
+import { reconcileHostStage } from "./stage-reconcile";
 
 // `host download` - the CLI's half of the two-phase split (Host Update
 // Layer Redesign Tech Plan, "CLI: two-phase split with a staged store").
@@ -159,7 +157,7 @@ async function replaceStagedDir(
     // shared with `stage-reconcile.ts`'s own pure-litter cleanup, which
     // creates and discards asides via the identical explicit-replace
     // shape.
-    await invalidateStagedAsideDir(target, aside, logger);
+    await invalidateAsideDir(target, aside, "staged.json", logger);
   }
 }
 

@@ -61,6 +61,7 @@ import type { HostInstallRecord } from "../../manifest/host-install";
 
 function sampleRecord(version: string): HostInstallRecord {
   return {
+    installId: null,
     version,
     runtimeVersion: null,
     platform: "darwin",

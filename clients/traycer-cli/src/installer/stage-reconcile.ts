@@ -1,5 +1,5 @@
-import { access, readFile, readdir, rm, stat, unlink } from "node:fs/promises";
-import { basename, dirname, isAbsolute, join, relative } from "node:path";
+import { access, readFile, rm, stat } from "node:fs/promises";
+import { isAbsolute, join, relative } from "node:path";
 import { compareHostVersions } from "@traycer-clients/shared/host-version/compare-host-versions";
 import type { Environment } from "../runner/environment";
 import { createCliLogger, type ILogger } from "../logger";
@@ -11,11 +11,16 @@ import { readHostStagedRecordAt } from "../manifest/host-staged";
 import { hostInstallDir, hostStagedDir } from "../store/paths";
 import { sweepOwnedTempDirs } from "../store/owned-temp";
 import {
+  invalidateAsideDir,
+  listAsideDirsNewestFirst,
+  sweepDeadAsideDirs,
+} from "./aside-dirs";
+import {
   currentInstallArch,
   currentInstallPlatform,
-  renameWithRetry,
   sweepOldTrash,
 } from "./install";
+import { renameWithRetry } from "./rename-retry";
 
 // CLI-owned stage reconciliation - Host Update Layer Redesign Tech Plan,
 // "Stage lifecycle - CLI-owned reconciliation". Every locked mutating
@@ -85,28 +90,6 @@ async function stagedExecutableIsFile(
   }
 }
 
-// `<target>.<infix>*` siblings, newest first. The suffix is a
-// `Date.now()` millisecond timestamp (see `atomicSwap`/aside-replace call
-// sites) - lexicographic sort on same-length numeric strings is a numeric
-// sort, and will remain so until the year 2286 (13-digit epoch ms).
-async function listAsideDirsNewestFirst(
-  target: string,
-  infix: string,
-): Promise<string[]> {
-  const parent = dirname(target);
-  const prefix = `${basename(target)}.${infix}`;
-  let names: string[];
-  try {
-    names = await readdir(parent);
-  } catch {
-    return [];
-  }
-  return names
-    .filter((name) => name.startsWith(prefix))
-    .map((name) => join(parent, name))
-    .sort((a, b) => (a < b ? 1 : a > b ? -1 : 0));
-}
-
 function listOldAsideDirsNewestFirst(target: string): Promise<string[]> {
   return listAsideDirsNewestFirst(target, "old-");
 }
@@ -171,10 +154,11 @@ async function recoverMissingInstallTarget(
 // Step 2.
 async function sweepInstallTrashIfTargetExists(
   environment: Environment,
+  logger: ILogger,
 ): Promise<boolean> {
   const installDir = hostInstallDir(environment);
   if (!(await pathExists(installDir))) return false;
-  await sweepOldTrash(installDir);
+  await sweepOldTrash(installDir, logger);
   return true;
 }
 
@@ -246,86 +230,10 @@ async function reconcileStagedAside(
   }
   await Promise.all(
     candidates.map((candidate) =>
-      invalidateStagedAsideDir(stagedDir, candidate, logger),
+      invalidateAsideDir(stagedDir, candidate, "staged.json", logger),
     ),
   );
   return "deleted";
-}
-
-// Invalidates an aside that is being discarded outright (pure litter) -
-// never for the crash-recovery restore path above, which needs the
-// sidecar intact to validate a candidate. Shared between here (step 4's
-// pure-litter branch) and `download-stage.ts`'s `replaceStagedDir`, which
-// creates asides via the same explicit-replace path this cleans up after.
-//
-// Layered so a partial failure at any one layer can never leave a fully
-// intact, step-4-restorable aside behind (the vulnerability a single
-// "unlink sidecar, then best-effort rm" pass still had: if BOTH steps
-// failed - e.g. a Windows open-file handle blocking both - the aside
-// stayed completely valid and could resurrect an explicitly-replaced
-// stage on a later reconcile pass):
-//   1. Rename to a `.dead-*` sibling - a structurally different name
-//      `listOldAsideDirsNewestFirst` never matches, so step 4 can never
-//      again consider it a restore candidate regardless of what happens
-//      to its contents afterward. `sweepDeadStagedAsideDirs` deletes
-//      `.dead-*` siblings best-effort on a later pass. Tried first (and
-//      via `renameWithRetry`) because a directory rename has the best
-//      chance of succeeding even when a file inside is open.
-//   2. If the rename fails, unlink just the sidecar - without
-//      `staged.json`, `readHostStagedRecordAt` returns null and step 3/4
-//      both treat the directory as invalid, so it's unrecoverable even
-//      though it lingers (and will still be listed as `.old-*` litter,
-//      swept by a subsequent reconcile pass's own retry of this same
-//      function).
-//   3. If that also fails, attempt a full recursive removal.
-//   4. If every layer fails, log and accept the residual - the aside
-//      remains a fully valid, in principle restorable candidate. Narrow:
-//      it requires rename, unlink, AND rm to all independently fail on
-//      the same directory.
-export async function invalidateStagedAsideDir(
-  target: string,
-  aside: string,
-  logger: ILogger,
-): Promise<void> {
-  const deadAside = `${target}.dead-${Date.now()}`;
-  try {
-    await renameWithRetry(aside, deadAside);
-    return;
-  } catch {
-    // Fall through to layer 2.
-  }
-  try {
-    await unlink(join(aside, "staged.json"));
-    return;
-  } catch {
-    // Fall through to layer 3.
-  }
-  try {
-    await rm(aside, { recursive: true, force: true });
-  } catch {
-    logger.warn(
-      "Stage reconcile could not invalidate a replaced stage aside on any layer - it remains restorable",
-      { aside },
-    );
-  }
-}
-
-function listDeadStagedAsideDirsNewestFirst(target: string): Promise<string[]> {
-  return listAsideDirsNewestFirst(target, "dead-");
-}
-
-// Best-effort cleanup of `.dead-*` siblings `invalidateStagedAsideDir`
-// leaves behind on its (common) layer-1 success path - deliberately not
-// deleted synchronously there, since the whole point of layer 1 is to
-// succeed via a cheap rename even when the directory's contents can't yet
-// be removed (e.g. a Windows file handle still closing).
-async function sweepDeadStagedAsideDirs(target: string): Promise<void> {
-  const dead = await listDeadStagedAsideDirsNewestFirst(target);
-  await Promise.all(
-    dead.map((dir) =>
-      rm(dir, { recursive: true, force: true }).catch(() => undefined),
-    ),
-  );
 }
 
 export async function reconcileHostStage(
@@ -336,7 +244,10 @@ export async function reconcileHostStage(
     environment,
     logger,
   );
-  const installTrashSwept = await sweepInstallTrashIfTargetExists(environment);
+  const installTrashSwept = await sweepInstallTrashIfTargetExists(
+    environment,
+    logger,
+  );
   const installRecord = await readHostInstallRecord(environment);
   let stageDeletedReason = await evaluateStageForDeletion(
     environment,
@@ -351,13 +262,13 @@ export async function reconcileHostStage(
   }
   const stagedAsideOutcome = await reconcileStagedAside(environment, logger);
   // Unconditional and independent of `stagedAsideOutcome` above -
-  // `.dead-*` siblings are litter `invalidateStagedAsideDir`'s layer-1
+  // `.dead-*` siblings are litter `invalidateAsideDir`'s layer-1
   // rename leaves behind regardless of whether THIS pass found any
   // `.old-*` candidates to invalidate (the common case after a completed
   // replacement has none) or restored one instead. A call site nested
   // inside `reconcileStagedAside`'s pure-litter branch was unreachable on
   // both of those paths, so `.dead-*` trees accumulated forever.
-  await sweepDeadStagedAsideDirs(hostStagedDir(environment));
+  await sweepDeadAsideDirs(hostStagedDir(environment));
   if (stagedAsideOutcome === "restored") {
     // Step 4's own validation (parseable sidecar + platform/arch match +
     // executable present) is a lighter "good enough to try" check than

@@ -55,6 +55,7 @@ import {
 
 function sampleRecord(version: string): HostInstallRecord {
   return {
+    installId: null,
     version,
     runtimeVersion: null,
     platform: "darwin",
@@ -132,6 +133,31 @@ describe("manifest/host-install - install record I/O", () => {
     const read = await readHostInstallRecord("production");
     expect(read?.version).toBe("1.2.3");
     expect(read?.runtimeVersion).toBeNull();
+  });
+
+  it("round-trips a populated installId", async () => {
+    const record = {
+      ...sampleRecord("1.2.3"),
+      installId: "3f5b6c1a-1111-4c9a-9999-abcdefabcdef",
+    };
+    await writeHostInstallRecord("production", record);
+    expect((await readHostInstallRecord("production"))?.installId).toBe(
+      "3f5b6c1a-1111-4c9a-9999-abcdefabcdef",
+    );
+  });
+
+  it("reads legacy records without installId as null (tolerant read)", async () => {
+    const legacy: Record<string, unknown> = { ...sampleRecord("1.2.3") };
+    delete legacy.installId;
+    mkdirSync(paths.hostInstallDir("production"), { recursive: true });
+    writeFileSync(
+      paths.hostInstallRecordPath("production"),
+      JSON.stringify(legacy),
+      "utf8",
+    );
+    const read = await readHostInstallRecord("production");
+    expect(read?.version).toBe("1.2.3");
+    expect(read?.installId).toBeNull();
   });
 
   it("returns null when no record exists for the environment", async () => {
