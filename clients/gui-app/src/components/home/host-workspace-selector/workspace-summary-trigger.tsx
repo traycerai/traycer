@@ -1,11 +1,6 @@
 import { useState, type ButtonHTMLAttributes, type Ref } from "react";
 import { ChevronDown, TriangleAlert } from "lucide-react";
 import {
-  HoverCard,
-  HoverCardContent,
-  HoverCardTrigger,
-} from "@/components/ui/hover-card";
-import {
   Popover,
   PopoverContent,
   PopoverTrigger,
@@ -135,26 +130,20 @@ export function WorkspaceSummaryTrigger(
           if (nextOpen) setReadOnlyHoverOpen(false);
         }}
       >
-        <HoverCard
+        <TooltipWrapper
+          label={<WorkspaceFolderHoverList items={items} />}
+          side="bottom"
+          sideOffset={4}
+          align="start"
+          richContent
           open={!readOnlyPopoverOpen && readOnlyHoverOpen}
           onOpenChange={(nextOpen) => {
             if (readOnlyPopoverOpen) return;
             setReadOnlyHoverOpen(nextOpen);
           }}
-          openDelay={350}
-          closeDelay={120}
         >
-          <HoverCardTrigger asChild>
-            <PopoverTrigger asChild>{trigger}</PopoverTrigger>
-          </HoverCardTrigger>
-          <HoverCardContent
-            side="bottom"
-            align="start"
-            className="w-[min(92vw,24rem)] rounded-md bg-foreground p-0 text-ui-xs text-background"
-          >
-            <WorkspaceFolderHoverList items={items} />
-          </HoverCardContent>
-        </HoverCard>
+          <PopoverTrigger asChild>{trigger}</PopoverTrigger>
+        </TooltipWrapper>
         <PopoverContent
           side="bottom"
           align="start"

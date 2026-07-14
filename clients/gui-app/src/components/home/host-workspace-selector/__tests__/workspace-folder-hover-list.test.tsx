@@ -1,7 +1,13 @@
 import "../../../../../__tests__/test-browser-apis";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import type { WorktreeFolderIntent } from "@traycer/protocol/host/worktree-schemas";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { WorkspaceFolderHoverList } from "../workspace-folder-hover-list";
 
 const NOOP = (): void => undefined;
@@ -49,7 +55,7 @@ function folder(over: {
 afterEach(cleanup);
 
 describe("WorkspaceFolderHoverList", () => {
-  it("shows the folder path for local and the worktree path for an adopted worktree", () => {
+  it("shows the folder path for local and the worktree path for an adopted worktree, with no interactive descendants", () => {
     render(
       <WorkspaceFolderHoverList
         items={[
@@ -85,10 +91,59 @@ describe("WorkspaceFolderHoverList", () => {
       screen.getByText("/Users/me/.traycer/worktrees/infra/feat-login"),
     ).toBeTruthy();
     expect(screen.queryByText("/Users/me/Work/infra")).toBeNull();
-    expect(screen.getAllByLabelText("Copy folder path")).toHaveLength(2);
+    // This renders as Radix Tooltip content, which mounts an always-present
+    // visually-hidden accessible clone of its children — any focusable
+    // descendant here would exist twice in the a11y/tab order. The copy
+    // action lives on the click-open folder row instead.
+    const list = screen.getByTestId("workspace-folder-hover-list");
+    expect(within(list).queryAllByRole("button")).toHaveLength(0);
+    expect(within(list).queryAllByRole("link")).toHaveLength(0);
+    // jsdom only enumerates explicit tabIndex/buttons/links for focus order,
+    // so it can't reproduce Chromium making an overflowing scroll container
+    // an implicit tab stop - assert the explicit opt-out is present instead
+    // (verified against real Chromium separately; see the ticket notes).
+    // `HTMLElement.tabIndex` (the IDL property) already reads -1 for a plain
+    // div with NO tabindex attribute at all, so asserting on it would pass
+    // before the fix too - read the content attribute explicitly instead.
+    expect(list.getAttribute("tabindex")).toBe("-1");
   });
 
-  it("shows 'New worktree' with no path/copy for a to-be-created worktree", () => {
+  it("keeps every rendered copy of the scroll root - including Radix's hidden accessible clone - out of sequential focus", () => {
+    render(
+      <TooltipProvider delayDuration={0}>
+        <Tooltip open>
+          <TooltipTrigger asChild>
+            <button type="button">Hover-list trigger</button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" richContent>
+            <WorkspaceFolderHoverList
+              items={[
+                folder({
+                  key: "/a",
+                  displayName: "traycer",
+                  branchLabel: "main",
+                  displayPath: "/Users/me/Work/traycer",
+                  mode: "local",
+                  currentIntent: null,
+                }),
+              ]}
+            />
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>,
+    );
+    const copies = screen.getAllByTestId("workspace-folder-hover-list");
+    // Radix mounts the visible popper content AND an always-present
+    // visually-hidden accessible clone - both must carry the explicit
+    // opt-out, since Chromium doesn't respect visual hiding for implicit
+    // scroll-container focusability.
+    expect(copies.length).toBeGreaterThanOrEqual(2);
+    for (const copy of copies) {
+      expect(copy.getAttribute("tabindex")).toBe("-1");
+    }
+  });
+
+  it("shows 'New worktree' with no path for a to-be-created worktree", () => {
     render(
       <WorkspaceFolderHoverList
         items={[
@@ -104,9 +159,32 @@ describe("WorkspaceFolderHoverList", () => {
       />,
     );
     expect(screen.getByText(/New worktree/)).toBeTruthy();
-    // The source folder path and a copy button are not shown — there's no path yet.
+    // The source folder path is not shown — there's no path yet.
     expect(screen.queryByText("/Users/me/Work/traycer")).toBeNull();
-    expect(screen.queryByLabelText("Copy folder path")).toBeNull();
+  });
+
+  it("claims a viewport-aware width so a long path cannot drive unpredictable w-fit sizing", () => {
+    render(
+      <WorkspaceFolderHoverList
+        items={[
+          folder({
+            key: "/a",
+            displayName: "traycer",
+            branchLabel: "main",
+            displayPath:
+              "/Users/me/Work/a-very-long-path-that-would-otherwise-drive-unpredictable-sizing",
+            mode: "local",
+            currentIntent: null,
+          }),
+        ]}
+      />,
+    );
+    // The rich Tooltip variant drops the default `max-w-xs`, so this root must
+    // claim its own viewport-aware width - matching the owner preview's
+    // `w-[min(92vw,24rem)]` intent - instead of falling back to an unbounded
+    // `w-fit` that a long path could stretch arbitrarily wide.
+    const list = screen.getByTestId("workspace-folder-hover-list");
+    expect(list.className).toContain("w-[min(92vw,24rem)]");
   });
 
   it("wraps full folder, target, and source names instead of truncating the hover details", () => {
@@ -154,29 +232,5 @@ describe("WorkspaceFolderHoverList", () => {
         "From release/a-very-long-base-branch-name · created on send",
       ),
     ).toBeTruthy();
-  });
-
-  it("copies the run path when the copy button is clicked", () => {
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    Object.defineProperty(navigator, "clipboard", {
-      value: { writeText },
-      configurable: true,
-    });
-    render(
-      <WorkspaceFolderHoverList
-        items={[
-          folder({
-            key: "/a",
-            displayName: "traycer",
-            branchLabel: "main",
-            displayPath: "/Users/me/Work/traycer",
-            mode: "local",
-            currentIntent: null,
-          }),
-        ]}
-      />,
-    );
-    fireEvent.click(screen.getByLabelText("Copy folder path"));
-    expect(writeText).toHaveBeenCalledWith("/Users/me/Work/traycer");
   });
 });

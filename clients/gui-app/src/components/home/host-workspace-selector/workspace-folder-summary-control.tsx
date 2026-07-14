@@ -1,14 +1,10 @@
 import { useRef, useState } from "react";
 import {
-  HoverCard,
-  HoverCardContent,
-  HoverCardTrigger,
-} from "@/components/ui/hover-card";
-import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { preserveWhenNestedOverlay } from "./preserve-when-nested-overlay";
 import { useDialogOverlayBoundaryEl } from "@/providers/dialog-overlay-boundary-context";
 import {
@@ -127,7 +123,12 @@ export function WorkspaceFolderSummaryControl(props: {
     />
   );
   const popoverTrigger = props.hoverPreviewEnabled ? (
-    <HoverCard
+    <TooltipWrapper
+      label={<WorkspaceFolderHoverList items={props.items} />}
+      side={props.popoverSide}
+      sideOffset={4}
+      align="start"
+      richContent
       open={!overlayState.workspacePopoverOpen && overlayState.summaryHoverOpen}
       onOpenChange={(open) => {
         setOverlayState((current) => {
@@ -135,20 +136,9 @@ export function WorkspaceFolderSummaryControl(props: {
           return { ...current, summaryHoverOpen: open };
         });
       }}
-      openDelay={350}
-      closeDelay={120}
     >
-      <HoverCardTrigger asChild>
-        <PopoverTrigger asChild>{trigger}</PopoverTrigger>
-      </HoverCardTrigger>
-      <HoverCardContent
-        side={props.popoverSide}
-        align="start"
-        className="w-[min(92vw,24rem)] rounded-md bg-foreground p-0 text-ui-xs text-background"
-      >
-        <WorkspaceFolderHoverList items={props.items} />
-      </HoverCardContent>
-    </HoverCard>
+      <PopoverTrigger asChild>{trigger}</PopoverTrigger>
+    </TooltipWrapper>
   ) : (
     <PopoverTrigger asChild>{trigger}</PopoverTrigger>
   );

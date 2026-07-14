@@ -57,6 +57,19 @@ export interface WorkspaceRunItem {
   readonly onRemove: (() => void) | null;
 }
 
+/**
+ * The path where the chat/terminal actually runs: the adopted worktree path
+ * for an imported worktree, the folder's own path for local, or `null` for a
+ * new worktree that has not been created yet (no path exists on disk).
+ */
+export function workspaceRunPath(item: WorkspaceRunItem): string | null {
+  if (item.mode === "local") return item.displayPath;
+  if (item.currentIntent?.kind === "import") {
+    return item.currentIntent.worktreePath;
+  }
+  return null;
+}
+
 export type FolderLocationValue = "local" | "worktree" | "import";
 
 /**

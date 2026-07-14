@@ -25,9 +25,37 @@ const PR_PILL_CLASS: Record<WorktreeDisplayedPrState, string> = {
     "border-purple-600/30 bg-purple-500/10 text-purple-700 dark:border-purple-400/30 dark:text-purple-300",
 };
 
+/**
+ * Noninteractive pill palette for the owner-preview hover list, rendered
+ * inside a Tooltip's inverted `bg-foreground` surface
+ * (`components/ui/tooltip.tsx`) instead of the page's normal
+ * background/foreground pair. Several presets give `--foreground` a
+ * mid-lightness, tinted value rather than a near-black/near-white extreme
+ * (e.g. Ayu, Everforest), so no fixed Tailwind text shade clears 4.5:1 in
+ * every preset. `text-background` is the tooltip's own default text token -
+ * guaranteed high contrast against `bg-foreground` in every preset, since
+ * that pairing is the app's foundational readable-text contract - so state
+ * lives entirely in the tint/border hue (and the state label itself), not
+ * the text color. The 6% tint keeps every preset/state/mode combination
+ * >=4.5:1 with the tint composited in (a 10% tint pushed Everforest/green
+ * light to 4.49:1); see the ticket's contrast-matrix notes for the computed
+ * ratios.
+ */
+const PR_PILL_INVERSE_CLASS: Record<WorktreeDisplayedPrState, string> = {
+  open: "border-green-500/30 bg-green-500/6 text-background",
+  closed: "border-red-500/25 bg-red-500/6 text-background",
+  merged: "border-purple-500/30 bg-purple-500/6 text-background",
+};
+
 export function WorktreePrPills(props: {
   readonly worktrees: readonly WorktreeHostEntryV12[];
   readonly detailOnHover: boolean;
+  // False inside another Tooltip's content (e.g. the owner-workspace hover
+  // preview): Radix duplicates Tooltip content into an always-mounted
+  // visually-hidden a11y clone, so a real `<a>` there would exist twice in
+  // the focus order. Renders the same pill visually as a plain, non-focusable
+  // badge instead.
+  readonly interactive: boolean;
   readonly className: string | undefined;
   readonly testId: string;
 }): ReactNode {
@@ -46,6 +74,7 @@ export function WorktreePrPills(props: {
           key={reference.key}
           reference={reference}
           detailOnHover={props.detailOnHover}
+          interactive={props.interactive}
         />
       ))}
     </span>
@@ -55,17 +84,29 @@ export function WorktreePrPills(props: {
 function WorktreePrPill(props: {
   readonly reference: WorktreePrReference;
   readonly detailOnHover: boolean;
+  readonly interactive: boolean;
 }): ReactNode {
-  const pill = (
-    <Badge
-      asChild
-      variant="outline"
-      className={cn("gap-1 font-medium", PR_PILL_CLASS[props.reference.state])}
-    >
+  const badgeClassName = cn(
+    "gap-1 font-medium",
+    props.interactive
+      ? PR_PILL_CLASS[props.reference.state]
+      : PR_PILL_INVERSE_CLASS[props.reference.state],
+  );
+  const pill = props.interactive ? (
+    <Badge asChild variant="outline" className={badgeClassName}>
       <WorktreePrAnchor
         reference={props.reference}
         className="max-w-[min(60vw,16rem)]"
       />
+    </Badge>
+  ) : (
+    <Badge
+      variant="outline"
+      className={cn(badgeClassName, "max-w-[min(60vw,16rem)]")}
+      data-testid="worktree-context-pr-pill"
+      data-pr-state={props.reference.state}
+    >
+      <WorktreePrPillContent label={props.reference.label} />
     </Badge>
   );
   if (!props.detailOnHover) return pill;
@@ -78,6 +119,15 @@ function WorktreePrPill(props: {
     >
       {pill}
     </TooltipWrapper>
+  );
+}
+
+function WorktreePrPillContent(props: { readonly label: string }): ReactNode {
+  return (
+    <>
+      <span className="truncate">{props.label}</span>
+      <ExternalLink className="size-3" aria-hidden />
+    </>
   );
 }
 
@@ -107,8 +157,7 @@ function WorktreePrAnchor(props: {
       data-pr-state={props.reference.state}
       onClick={openExternal}
     >
-      <span className="truncate">{props.reference.label}</span>
-      <ExternalLink className="size-3" aria-hidden />
+      <WorktreePrPillContent label={props.reference.label} />
     </a>
   );
 }
@@ -166,7 +215,14 @@ export function OwnerWorkspaceMetadataContent(props: {
     );
   }
   return (
-    <span className="flex max-h-[min(60vh,20rem)] w-full flex-col gap-2 overflow-y-auto px-2.5 py-2 text-ui-xs">
+    <span
+      className="flex max-h-[min(60vh,20rem)] w-full flex-col gap-2 overflow-y-auto px-2.5 py-2 text-ui-xs"
+      data-testid="owner-workspace-metadata-content"
+      // See workspace-folder-hover-list.tsx: Chromium makes an overflowing
+      // scroll container a sequential tab stop regardless of DOM tabIndex;
+      // this keeps it out of the Tab order while pointer/wheel scroll works.
+      tabIndex={-1}
+    >
       {items.map((item) => (
         <span key={item.key} className="flex min-w-0 flex-col gap-0.5">
           <span className="font-medium">{item.name}</span>
@@ -182,6 +238,7 @@ export function OwnerWorkspaceMetadataContent(props: {
             <WorktreePrPills
               worktrees={[item.worktree]}
               detailOnHover={false}
+              interactive={false}
               className="mt-0.5 flex-wrap overflow-visible"
               testId={`owner-workspace-prs-${item.key}`}
             />

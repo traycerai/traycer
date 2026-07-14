@@ -11,6 +11,13 @@ import {
 import type { ReactNode } from "react";
 import type { WorktreeWorkspaceSummary } from "@traycer/protocol/host/worktree-schemas";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import {
+  contrastRatio,
+  DARK_THEME_SURFACES,
+  LIGHT_THEME_SURFACES,
+  MUTED_FOREGROUND_DARK,
+  MUTED_FOREGROUND_LIGHT,
+} from "../../../../../__tests__/contrast";
 
 // The host-wide uncommitted query (used only for the import-row annotation).
 vi.mock("@/hooks/host/use-host-query", () => ({
@@ -322,6 +329,75 @@ describe("FolderRow", () => {
       screen.getByRole("button", { name: "Edit setup and teardown scripts" }),
     );
     expect(edited).toBe("/repo");
+  });
+
+  it("copies the run path from the click-open row - the surface the copy action moved to", () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    renderRow(
+      { mode: "local", displayPath: "/repo", currentIntent: null },
+      NOOP,
+    );
+    fireEvent.click(screen.getByLabelText("Copy folder path"));
+    expect(writeText).toHaveBeenCalledWith("/repo");
+  });
+
+  it("copies the adopted worktree path, not the source folder, for an imported worktree", () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    renderRow(
+      {
+        mode: "worktree",
+        currentIntent: {
+          kind: "import",
+          workspacePath: "/repo",
+          repoIdentifier: { owner: "acme", repo: "app" },
+          isPrimary: true,
+          worktreePath: "/wt/feat-login",
+        },
+      },
+      NOOP,
+    );
+    fireEvent.click(screen.getByLabelText("Copy folder path"));
+    expect(writeText).toHaveBeenCalledWith("/wt/feat-login");
+  });
+
+  it("hides the copy-path action for a new worktree that has no path yet", () => {
+    renderRow({ mode: "worktree", currentIntent: null }, NOOP);
+    expect(screen.queryByLabelText("Copy folder path")).toBeNull();
+  });
+
+  it("keeps the copy-path icon's default state free of stacked opacity attenuation and >=3:1 against the popover in every theme preset", () => {
+    renderRow(
+      { mode: "local", displayPath: "/repo", currentIntent: null },
+      NOOP,
+    );
+    const copyButton = screen.getByLabelText("Copy folder path");
+    // The bug was `text-muted-foreground/70` (a fractional text color) MULTIPLIED
+    // by an outer `opacity-[var(--fc-opacity,0.7)]` - ~49% effective opacity.
+    // Both must be gone from the default (non-hover) state.
+    expect(copyButton.className).not.toMatch(/text-muted-foreground\/\d/);
+    expect(copyButton.className).not.toMatch(/opacity-\[var\(--fc-opacity/);
+    expect(copyButton.className).toContain("text-muted-foreground");
+
+    for (const [preset, foreground] of Object.entries(MUTED_FOREGROUND_LIGHT)) {
+      const surfaces = LIGHT_THEME_SURFACES[preset];
+      expect(
+        contrastRatio(foreground, surfaces.popover),
+      ).toBeGreaterThanOrEqual(3);
+    }
+    for (const [preset, foreground] of Object.entries(MUTED_FOREGROUND_DARK)) {
+      const surfaces = DARK_THEME_SURFACES[preset];
+      expect(
+        contrastRatio(foreground, surfaces.popover),
+      ).toBeGreaterThanOrEqual(3);
+    }
   });
 
   it("keeps pin, identity, controls, and actions on one aligned row", () => {
@@ -1073,6 +1149,76 @@ describe("WorkspaceFolderSummaryControl", () => {
     expect(
       screen.getByTestId("workspace-summary-trigger").getAttribute("title"),
     ).toBeNull();
+  });
+
+  it("renders the rich hover preview through the mention tooltip surface with no focusable descendants", async () => {
+    render(
+      <TooltipProvider delayDuration={0}>
+        <WorkspaceFolderSummaryControl
+          items={[
+            item({ mode: "local", displayPath: "/repo", currentIntent: null }),
+          ]}
+          readOnly={false}
+          bindingResolved
+          addFolderPending={false}
+          addFolderDisabled={false}
+          addFolderDisabledReason={null}
+          onAddFolder={NOOP_ADD}
+          onUpdate={null}
+          updateEnabled={false}
+          updatePending={false}
+          onDiscardStaged={null}
+          onEditEnvironment={NOOP}
+          hoverPreviewEnabled
+          popoverTestId="workspace-rows-popover"
+          popoverSide="top"
+        />
+      </TooltipProvider>,
+    );
+
+    const trigger = screen.getByTestId("workspace-summary-trigger");
+    fireEvent.focus(trigger);
+
+    await screen.findByRole("tooltip");
+    const tooltipContent = document.querySelector(
+      '[data-slot="tooltip-content"]',
+    );
+    if (!(tooltipContent instanceof HTMLElement)) {
+      throw new Error("Expected tooltip content element");
+    }
+    // Rich content owns its own width/padding instead of the default
+    // mention-tooltip card sizing (P3: no more double-padded/re-clipped
+    // preview).
+    expect(tooltipContent.className).not.toContain("max-w-xs");
+    expect(tooltipContent.className).not.toContain("px-3");
+
+    // Radix mounts an always-present visually-hidden accessible clone of
+    // Tooltip content alongside the visible one, so the hover list
+    // legitimately appears twice here - scope to the tooltip content rather
+    // than asserting global uniqueness.
+    const hoverLists = within(tooltipContent).getAllByTestId(
+      "workspace-folder-hover-list",
+    );
+    expect(hoverLists.length).toBeGreaterThan(0);
+    for (const hoverList of hoverLists) {
+      expect(
+        within(hoverList).getByTestId("workspace-hover-run-path").textContent,
+      ).toBe("/repo");
+      // With the outer `max-w-xs` gone, the hover-list root must claim its
+      // own viewport-aware width instead of an unbounded `w-fit`.
+      expect(hoverList.className).toContain("w-[min(92vw,24rem)]");
+    }
+
+    // No focusable descendant in either copy: a duplicated interactive
+    // element (like a copy button) would double up the a11y/tab order - the
+    // fix that closes the P1 finding.
+    expect(within(tooltipContent).queryAllByRole("button")).toHaveLength(0);
+    expect(within(tooltipContent).queryAllByRole("link")).toHaveLength(0);
+
+    // Tabbing forward from the trigger must not land inside the tooltip
+    // content at all (there is nothing focusable there to land on).
+    tabForward();
+    expect(tooltipContent.contains(document.activeElement)).toBe(false);
   });
 
   it("shows full landing-page folder and branch provenance in an app tooltip", async () => {

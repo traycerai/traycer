@@ -857,27 +857,31 @@ function TabIcon(props: {
   readonly tab: EpicCanvasTileRef;
   readonly titleGenerationPending: boolean;
 }): ReactNode {
-  if (props.titleGenerationPending) {
-    return (
-      <AgentSpinningDots
-        className="size-3.5 text-muted-foreground"
-        testId={`tab-title-generating-${props.tab.instanceId}`}
-        variant="dots2"
-      />
-    );
-  }
   if (isDiffTileRef(props.tab)) {
     return <FileDiff className="size-3.5 shrink-0 text-muted-foreground" />;
   }
   if (isBlankTileRef(props.tab)) {
     return <FilePlus className="size-3.5 shrink-0 text-muted-foreground" />;
   }
+  // Title generation is the idle default for chat tabs only - threaded into
+  // ChatProgressIcon so running / notification / read-only semantics win
+  // (mirrors global TabLeadingIcon). Non-chat tabs never subscribe to the
+  // indicator store from this component.
+  const defaultIcon =
+    props.tab.type === "chat" && props.titleGenerationPending ? (
+      <AgentSpinningDots
+        className="size-3.5 text-muted-foreground"
+        testId={`tab-title-generating-${props.tab.instanceId}`}
+        variant="dots2"
+      />
+    ) : undefined;
   return (
     <EpicNodeTabIcon
       node={props.tab}
       epicId={props.epicId}
       variant="live"
       className="size-3.5 shrink-0"
+      defaultIcon={defaultIcon}
     />
   );
 }

@@ -1,15 +1,11 @@
 import { useState, type ReactElement, type ReactNode } from "react";
 import type { WorktreeBindingOwnerKind } from "@traycer/protocol/host/worktree-schemas";
-import {
-  HoverCard,
-  HoverCardContent,
-  HoverCardTrigger,
-} from "@/components/ui/hover-card";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { OwnerWorkspaceMetadataContent } from "@/components/worktree/worktree-pr-metadata";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useWorktreeOwnerMetadata } from "@/hooks/worktree/use-worktree-owner-metadata-query";
 
-export function WorktreeOwnerMetadataHoverCard(props: {
+export function WorktreeOwnerMetadataTooltip(props: {
   readonly trigger: ReactElement;
   readonly hostId: string;
   readonly epicId: string;
@@ -27,26 +23,28 @@ export function WorktreeOwnerMetadataHoverCard(props: {
     enabled: open,
   });
   return (
-    <HoverCard
+    <TooltipWrapper
+      label={
+        <span
+          className="block w-[min(92vw,24rem)]"
+          data-testid={`chat-navigator-worktree-hover-${props.ownerId}`}
+        >
+          <OwnerWorkspaceMetadataContent
+            binding={metadata.binding}
+            worktrees={metadata.worktrees}
+            pending={metadata.isPending}
+            error={metadata.error !== null}
+          />
+        </span>
+      }
+      side="right"
+      sideOffset={4}
+      align="start"
+      richContent
       open={open}
       onOpenChange={setOpen}
-      openDelay={350}
-      closeDelay={120}
     >
-      <HoverCardTrigger asChild>{props.trigger}</HoverCardTrigger>
-      <HoverCardContent
-        side="right"
-        align="start"
-        className="w-[min(92vw,24rem)] rounded-md bg-foreground p-0 text-background"
-        data-testid={`chat-navigator-worktree-hover-${props.ownerId}`}
-      >
-        <OwnerWorkspaceMetadataContent
-          binding={metadata.binding}
-          worktrees={metadata.worktrees}
-          pending={metadata.isPending}
-          error={metadata.error !== null}
-        />
-      </HoverCardContent>
-    </HoverCard>
+      {props.trigger}
+    </TooltipWrapper>
   );
 }

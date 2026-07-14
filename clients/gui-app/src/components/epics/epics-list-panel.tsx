@@ -930,6 +930,7 @@ function HistoryRowTrailingMetadata(props: {
         <WorktreePrPills
           worktrees={props.worktrees}
           detailOnHover
+          interactive
           className="pointer-events-none col-start-1 row-start-1 max-w-[min(36vw,22rem)] opacity-0 transition-opacity group-hover/list-row:pointer-events-auto group-hover/list-row:opacity-100 group-focus-within/list-row:pointer-events-auto group-focus-within/list-row:opacity-100"
           testId={`task-history-prs-${props.epicId}`}
         />
@@ -1242,6 +1243,7 @@ function HistoryRowLeadingIcon(props: { readonly item: HistoryItem }) {
       defaultIcon={
         <Layers className="size-4 shrink-0 text-muted-foreground group-hover/list-row:text-foreground" />
       }
+      statusPresentation="message"
     />
   );
 }

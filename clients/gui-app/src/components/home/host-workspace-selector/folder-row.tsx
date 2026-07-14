@@ -1,11 +1,20 @@
-import { FileSliders, Folder, Pin, Trash2, TriangleAlert } from "lucide-react";
+import {
+  Check,
+  Copy,
+  FileSliders,
+  Folder,
+  Pin,
+  Trash2,
+  TriangleAlert,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { cn } from "@/lib/utils";
 import { FolderLocationControl } from "./folder-location-control";
 import { FolderBranchControl } from "./folder-branch-control";
-import type { WorkspaceRunItem } from "./workspace-run-item";
+import { workspaceRunPath, type WorkspaceRunItem } from "./workspace-run-item";
 
 /**
  * One compact single-line folder row using the parent grid's shared columns:
@@ -23,6 +32,7 @@ export function FolderRow(props: {
   readonly readOnly: boolean;
 }) {
   const { item } = props;
+  const runPath = workspaceRunPath(item);
 
   return (
     <div
@@ -57,6 +67,7 @@ export function FolderRow(props: {
             />
           </TooltipWrapper>
         ) : null}
+        {runPath === null ? null : <CopyFolderPathButton path={runPath} />}
       </span>
       <FolderRowBody
         item={item}
@@ -157,6 +168,39 @@ function FolderRowBody(props: {
         onEditEnvironment={props.onEditEnvironment}
       />
     </>
+  );
+}
+
+/**
+ * Copies the path the chat/terminal actually runs from (the adopted worktree
+ * path, or the folder itself for local). Non-mutating, so it stays visible
+ * even on read-only rows - this is the click-open home for the copy action
+ * that used to live inside the (noninteractive) hover-preview tooltip.
+ */
+function CopyFolderPathButton(props: { readonly path: string }) {
+  const { copied, copy } = useClipboardCopy({
+    resetMs: 1500,
+    onSuccess: null,
+    onError: null,
+  });
+  return (
+    <button
+      type="button"
+      aria-label="Copy folder path"
+      title="Copy path"
+      data-testid="folder-copy-path"
+      onClick={(event) => {
+        event.stopPropagation();
+        copy(props.path);
+      }}
+      // Icon-only control: unlike its sibling row actions, this needs a
+      // >=3:1 default-state cue (WCAG 2.2 non-text contrast), not just on
+      // hover/focus - no opacity attenuation, stacked or otherwise, on top
+      // of `text-muted-foreground`.
+      className="inline-flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-accent/50 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
+    >
+      {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+    </button>
   );
 }
 

@@ -162,7 +162,8 @@ describe("host.notifications.indicatorState@1.0", () => {
       hostNotificationsIndicatorState.responseSchema.parse({
         epics: {
           "epic-1": {
-            pendingPrompt: true,
+            pendingApproval: true,
+            pendingInterview: false,
             unreadFailure: false,
             unreadDone: false,
           },
@@ -179,6 +180,21 @@ describe("host.notifications.indicatorState@1.0", () => {
         chatIds: [],
       }),
     ).toThrow();
+  });
+
+  it("rejects the unreleased pendingPrompt response shape", () => {
+    expect(
+      hostNotificationsIndicatorState.responseSchema.safeParse({
+        epics: {
+          "epic-1": {
+            pendingPrompt: true,
+            unreadFailure: false,
+            unreadDone: false,
+          },
+        },
+        chats: {},
+      }).success,
+    ).toBe(false);
   });
 });
 
