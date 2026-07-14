@@ -12,8 +12,17 @@ import {
 } from "@testing-library/react";
 import { VirtuosoMessageListTestingContext } from "@virtuoso.dev/message-list";
 
+interface ForkCreateRequest {
+  readonly forkSource: {
+    readonly interviewBlockId: string | null;
+  };
+}
+
 const loadingSurfaceTestState = vi.hoisted(() => ({
   unresolvedWorkspaceRenderCount: 0,
+}));
+const forkCreateTestState = vi.hoisted(() => ({
+  mutate: vi.fn<(input: ForkCreateRequest, options: object) => void>(),
 }));
 
 vi.mock(
@@ -70,6 +79,16 @@ vi.mock("@/lib/host", () => ({
 // having to replicate the full @/lib/host/runtime export surface.
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => MOCK_HOST_CLIENT,
+}));
+
+vi.mock("@/hooks/epic/use-epic-chat-mutations", async (importActual) => ({
+  ...(await importActual<
+    typeof import("@/hooks/epic/use-epic-chat-mutations")
+  >()),
+  useEpicCreateChatForHost: () => ({
+    mutate: forkCreateTestState.mutate,
+    isPending: false,
+  }),
 }));
 
 // HarnessModelPickerImpl (mounted inside the tile tree via the composer
@@ -778,6 +797,7 @@ describe("<ChatTile />", () => {
     useComposerRunSettingsStore.getState().resetForTests();
     useComposerHarnessMemoryStore.getState().resetForTests();
     loadingSurfaceTestState.unresolvedWorkspaceRenderCount = 0;
+    forkCreateTestState.mutate.mockReset();
     // The composer gates Send on a resolved (non-empty) model slug. Without a
     // host binding the catalog never resolves the empty default, so seed a
     // concrete default model so the composer reaches a sendable state.
@@ -1421,6 +1441,11 @@ describe("<ChatTile />", () => {
       throw new Error("expected fork title input");
     }
     expect(titleInput.value).toBe("Cross Question - Chat 1");
+
+    fireEvent.click(screen.getByRole("button", { name: "Fork" }));
+
+    const [forkCall] = forkCreateTestState.mutate.mock.calls;
+    expect(forkCall[0].forkSource.interviewBlockId).toBe("question-1");
   });
 
   it("shows Q&A fork actions after the question is skipped", async () => {
