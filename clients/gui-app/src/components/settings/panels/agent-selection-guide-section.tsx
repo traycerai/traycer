@@ -3,13 +3,7 @@
  * Update that file whenever this settings surface changes.
  */
 import type { ReactNode } from "react";
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useReducer,
-  useRef,
-} from "react";
+import { useEffect, useReducer, useRef } from "react";
 import { Check, TriangleAlert } from "lucide-react";
 import {
   AGENT_SELECTION_GUIDE_DESCRIPTION,
@@ -26,70 +20,6 @@ import { useAgentSelectionGuideSetGlobalMutation } from "@/hooks/agent/use-agent
 import { useAgentSelectionGuideResetGlobalMutation } from "@/hooks/agent/use-agent-selection-guide-reset-global-mutation";
 
 const SAVE_DEBOUNCE_MS = 600;
-
-function findVerticalScrollContainer(element: HTMLElement): HTMLElement | null {
-  let current = element.parentElement;
-  while (current !== null) {
-    const overflowY = window.getComputedStyle(current).overflowY;
-    if (overflowY === "auto" || overflowY === "scroll") return current;
-    current = current.parentElement;
-  }
-  return null;
-}
-
-function useTextareaResizeBoundary() {
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const setTextareaElement = useCallback(
-    (element: HTMLTextAreaElement | null): void => {
-      textareaRef.current = element;
-    },
-    [],
-  );
-
-  useLayoutEffect(() => {
-    const textarea = textareaRef.current;
-    if (textarea === null) return;
-
-    const panelBody = textarea.closest("[data-settings-panel-body]");
-    const panelShell = textarea.closest("[data-settings-panel-shell]");
-    if (!(panelBody instanceof HTMLElement)) return;
-    if (!(panelShell instanceof HTMLElement)) return;
-
-    const scrollContainer = findVerticalScrollContainer(panelShell);
-    if (scrollContainer === null) return;
-
-    const defaultHeight = textarea.getBoundingClientRect().height;
-    if (defaultHeight <= 0) return;
-
-    const updateMaxHeight = (): void => {
-      const scrollRect = scrollContainer.getBoundingClientRect();
-      const bodyRect = panelBody.getBoundingClientRect();
-      const textareaHeight = textarea.getBoundingClientRect().height;
-      const shellBottomPadding = Number.parseFloat(
-        window.getComputedStyle(panelShell).paddingBottom,
-      );
-      // The card grows one-for-one with the textarea. Add only the free space
-      // below the current card so the shell's normal bottom padding remains.
-      const availableGrowth =
-        scrollRect.bottom -
-        bodyRect.bottom -
-        (Number.isFinite(shellBottomPadding) ? shellBottomPadding : 0);
-      const maxHeight = Math.max(
-        defaultHeight,
-        textareaHeight + availableGrowth,
-      );
-      textarea.style.maxHeight = `${Math.floor(maxHeight)}px`;
-    };
-
-    updateMaxHeight();
-    const observer = new ResizeObserver(updateMaxHeight);
-    observer.observe(scrollContainer);
-    observer.observe(panelBody);
-    return () => observer.disconnect();
-  }, []);
-
-  return setTextareaElement;
-}
 
 type AgentsGuideEditorState = {
   readonly value: string;
@@ -207,14 +137,14 @@ export function AgentSelectionGuideSection() {
     );
   }
 
-  return <div className="shrink-0 px-5 py-5">{panelContent}</div>;
+  return <div className="h-full min-h-0 p-5">{panelContent}</div>;
 }
 
 function AgentSelectionGuideMessage(props: { readonly children: ReactNode }) {
   return (
     <section
       aria-labelledby="agent-selection-guide-heading"
-      className="flex flex-col gap-3"
+      className="flex h-full min-h-0 flex-col gap-3"
     >
       <div className="min-w-0">
         <h2
@@ -251,7 +181,6 @@ function AgentsGuideEditor(props: {
   const queuedSaveRef = useRef<string | null>(null);
   const queuedResetRef = useRef(false);
   const mountedRef = useRef(true);
-  const setTextareaElement = useTextareaResizeBoundary();
 
   // Drop a pending debounced save when unmounting (blur already flushes the
   // common close paths) so the timer can't fire into an unmounted component.
@@ -383,9 +312,8 @@ function AgentsGuideEditor(props: {
         placeholder={undefined}
         ariaLabel="Global agent selection instructions"
         testId="agents-selection-guide-input"
-        setTextareaElement={setTextareaElement}
-        textareaClassName="field-sizing-fixed h-[min(32vh,16rem)] min-h-[min(20vh,10rem)] resize-y"
-        className=""
+        editorClassName="flex-1"
+        className="h-full"
         revertDisabled={
           isAtDefault || state.saveInFlight || state.resetInFlight
         }
@@ -443,8 +371,8 @@ function SaveStatus(props: {
 
 function EditorSkeleton() {
   return (
-    <div className="space-y-3">
-      <div className="h-[min(22vh,11rem)] animate-pulse rounded-md bg-muted/40" />
+    <div className="flex min-h-0 flex-1 flex-col gap-3">
+      <div className="min-h-[min(22vh,11rem)] flex-1 animate-pulse rounded-md bg-muted/40" />
       <div className="h-4 w-2/3 animate-pulse rounded bg-muted/30" />
     </div>
   );

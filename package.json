@@ -22,6 +22,7 @@
     "clients/*"
   ],
   "catalog": {
+    "@codemirror/lang-markdown": "^6.5.0",
     "@codemirror/language": "^6.12.4",
     "@codemirror/state": "^6.7.0",
     "@dnd-kit/core": "^6.3.1",

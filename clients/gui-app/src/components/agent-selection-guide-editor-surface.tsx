@@ -1,11 +1,35 @@
-import type { ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
+import { markdown } from "@codemirror/lang-markdown";
+import CodeMirror, { EditorView } from "@uiw/react-codemirror";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
+import { useCodeMirrorTheme } from "@/editor-core/use-code-mirror-theme";
 import { cn } from "@/lib/utils";
 
 export const AGENT_SELECTION_GUIDE_TITLE = "Agent selection guide";
 export const AGENT_SELECTION_GUIDE_DESCRIPTION =
   "Instructions for how Traycer agents choose child-agent harnesses, models, and reasoning effort.";
+
+const MARKDOWN_EDITOR_EXTENSIONS = [
+  markdown(),
+  EditorView.lineWrapping,
+  EditorView.theme({
+    "&": { height: "100%" },
+    ".cm-scroller": {
+      height: "100%",
+      fontFamily: "var(--font-mono)",
+      fontSize: "var(--code-font-size, 0.8rem)",
+    },
+    ".cm-content": { minHeight: "100%" },
+  }),
+];
+
+const MARKDOWN_EDITOR_BASIC_SETUP = {
+  lineNumbers: true,
+  foldGutter: false,
+  highlightActiveLine: true,
+  highlightActiveLineGutter: true,
+  autocompletion: false,
+};
 
 type AgentSelectionGuideEditorSurfaceProps = {
   readonly titleId: string;
@@ -16,9 +40,7 @@ type AgentSelectionGuideEditorSurfaceProps = {
   readonly placeholder: string | undefined;
   readonly ariaLabel: string;
   readonly testId: string;
-  readonly setTextareaElement:
-    ((element: HTMLTextAreaElement | null) => void) | null;
-  readonly textareaClassName: string;
+  readonly editorClassName: string;
   readonly className: string;
   readonly revertDisabled: boolean;
   readonly onRevert: () => void;
@@ -35,14 +57,27 @@ export function AgentSelectionGuideEditorSurface({
   placeholder,
   ariaLabel,
   testId,
-  setTextareaElement,
-  textareaClassName,
+  editorClassName,
   className,
   revertDisabled,
   onRevert,
   revertTestId,
   status,
 }: AgentSelectionGuideEditorSurfaceProps) {
+  const theme = useCodeMirrorTheme();
+  const extensions = useMemo(
+    () => [
+      ...MARKDOWN_EDITOR_EXTENSIONS,
+      EditorView.contentAttributes.of({
+        "aria-label": ariaLabel,
+        "aria-multiline": "true",
+        role: "textbox",
+        spellcheck: "false",
+      }),
+    ],
+    [ariaLabel],
+  );
+
   return (
     <section
       aria-labelledby={titleId}
@@ -57,21 +92,31 @@ export function AgentSelectionGuideEditorSurface({
         </p>
       </div>
 
-      <Textarea
-        ref={setTextareaElement}
-        value={value}
-        onChange={(event) => onValueChange(event.target.value)}
-        onBlur={onBlur ?? undefined}
-        spellCheck={false}
-        disabled={disabled}
-        aria-label={ariaLabel}
-        data-testid={testId}
-        placeholder={placeholder}
+      <div
+        data-agent-selection-guide-editor-shell=""
+        aria-disabled={disabled}
         className={cn(
-          "min-h-0 overflow-y-auto font-mono text-code-xs leading-relaxed",
-          textareaClassName,
+          "relative min-h-0 overflow-hidden rounded-md border border-input bg-background shadow-xs transition-[color,box-shadow]",
+          "focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50",
+          disabled && "cursor-not-allowed opacity-50",
+          editorClassName,
         )}
-      />
+      >
+        <CodeMirror
+          value={value}
+          onChange={onValueChange}
+          onBlur={onBlur ?? undefined}
+          editable={!disabled}
+          readOnly={disabled}
+          height="100%"
+          theme={theme}
+          placeholder={placeholder}
+          basicSetup={MARKDOWN_EDITOR_BASIC_SETUP}
+          extensions={extensions}
+          data-testid={testId}
+          className="h-full"
+        />
+      </div>
 
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
         <p className="min-w-[min(100%,18rem)] flex-1 text-ui-xs text-muted-foreground">
