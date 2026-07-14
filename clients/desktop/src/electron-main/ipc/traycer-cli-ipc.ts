@@ -1,8 +1,9 @@
 import { constants as fsConstants } from "node:fs";
 import { access, stat } from "node:fs/promises";
 import { dialog } from "electron";
+import { isShellExecutablePathSupported } from "@traycer/protocol/config/shell-executable";
 import { RunnerHostInvoke } from "../../ipc-contracts/ipc-channels";
-import type { TraycerShellProbeResult } from "@traycer-clients/shared/platform/runner-host";
+import type { TraycerShellProbeResult } from "../../ipc-contracts/traycer-cli-types";
 import {
   runTraycerCli,
   runTraycerCliJson,
@@ -182,21 +183,26 @@ export function registerTraycerCliIpc(bridge: RunnerIpcBridge): void {
     RunnerHostInvoke.traycerConfigShellProbe,
     async (_event, raw: unknown): Promise<TraycerShellProbeResult> => {
       const path = requireString(raw, "path", "traycerConfigShellProbe");
-      const [fileStat, accessible] = await Promise.all([
-        stat(path).then(
-          (s) => s,
-          () => null,
-        ),
-        access(path, fsConstants.X_OK).then(
-          () => true,
-          () => false,
-        ),
-      ]);
-      // A shell must be a regular file: directories pass X_OK too (it means
-      // searchable for them) but cannot be spawned. Mirrors probeShellPath.
+      const fileStat = await stat(path).then(
+        (value) => value,
+        () => null,
+      );
+      if (fileStat === null) {
+        return { exists: false, executable: false };
+      }
+      if (
+        !fileStat.isFile() ||
+        !isShellExecutablePathSupported(path, process.platform)
+      ) {
+        return { exists: true, executable: false };
+      }
+      const executable = await access(path, fsConstants.X_OK).then(
+        () => true,
+        () => false,
+      );
       return {
-        exists: fileStat !== null,
-        executable: accessible && fileStat !== null && fileStat.isFile(),
+        exists: true,
+        executable,
       };
     },
   );

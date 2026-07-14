@@ -41,9 +41,11 @@ const ZSH: TraycerDetectedShell = {
   missing: false,
 };
 
-function makeHost(configure: (cli: MockTraycerCli) => void): IRunnerHost {
+function makeHost(
+  configure: ((cli: MockTraycerCli) => void) | undefined,
+): IRunnerHost {
   const cli = new MockTraycerCli();
-  configure(cli);
+  configure?.(cli);
   return new MockRunnerHost({
     signInUrl: "https://example.invalid/signin",
     authnBaseUrl: "https://example.invalid",
@@ -56,10 +58,10 @@ function makeHost(configure: (cli: MockTraycerCli) => void): IRunnerHost {
 }
 
 function renderCombobox(props: {
-  readonly onAdd?: (path: string) => void;
-  readonly configure?: (cli: MockTraycerCli) => void;
+  readonly onAdd: ((path: string) => void) | undefined;
+  readonly configure: ((cli: MockTraycerCli) => void) | undefined;
 }) {
-  const host = makeHost(props.configure ?? (() => undefined));
+  const host = makeHost(props.configure);
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });

@@ -1,13 +1,13 @@
 import { ipcRenderer } from "electron";
 import { RunnerHostInvoke } from "../ipc-contracts/ipc-channels";
 import type {
-  TraycerHostStatusSnapshot,
   TraycerDetectedShell,
   TraycerEnvOverride,
+  TraycerHostStatusSnapshot,
   TraycerShellConfig,
   TraycerShellConfigSetInput,
   TraycerShellProbeResult,
-} from "@traycer-clients/shared/platform/runner-host";
+} from "../ipc-contracts/traycer-cli-types";
 
 /**
  * Surface exposed under `runnerHost.traycerCli` in the preload bridge.

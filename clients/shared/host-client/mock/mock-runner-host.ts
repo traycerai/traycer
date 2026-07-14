@@ -501,6 +501,10 @@ export class MockTraycerCli implements ITraycerCli {
   }
 
   async shellConfigRemove(input: { readonly path: string }): Promise<void> {
+    const wasAdded = this.shellEntries.some(
+      (entry) => entry.path === input.path,
+    );
+    if (!wasAdded) return;
     const wasSelected = this.shellConfig.path === input.path;
     this.shellEntries = this.shellEntries.filter(
       (entry) => entry.path !== input.path,

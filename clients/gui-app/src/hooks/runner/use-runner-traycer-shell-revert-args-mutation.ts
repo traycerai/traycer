@@ -3,6 +3,7 @@ import {
   useQueryClient,
   type UseMutationResult,
 } from "@tanstack/react-query";
+import type { ITraycerCli } from "@traycer-clients/shared/platform/runner-host";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { runnerMutationKeys, runnerQueryKeys } from "@/lib/query-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
@@ -17,12 +18,18 @@ import { toastFromRunnerError } from "@/lib/runner-error-toast";
 export function useRunnerTraycerShellRevertArgsMutation(): UseMutationResult<
   void,
   Error,
-  { readonly path: string }
+  { readonly path: string },
+  { readonly traycerCli: ITraycerCli | null }
 > {
   const runnerHost = useRunnerHost();
   const queryClient = useQueryClient();
   const traycerCli = runnerHost.traycerCli;
-  return useMutation<void, Error, { readonly path: string }>({
+  return useMutation<
+    void,
+    Error,
+    { readonly path: string },
+    { readonly traycerCli: ITraycerCli | null }
+  >({
     mutationKey: runnerMutationKeys.traycerShellRevertArgs(),
     mutationFn: (input) => {
       if (traycerCli === null) {
@@ -32,13 +39,15 @@ export function useRunnerTraycerShellRevertArgsMutation(): UseMutationResult<
       }
       return traycerCli.shellRevertArgs(input);
     },
-    onSuccess: () => {
-      if (traycerCli === null) return;
+    onMutate: () => ({ traycerCli }),
+    onSuccess: (_data, _variables, mutationContext) => {
+      const mutationClient = mutationContext.traycerCli;
+      if (mutationClient === null) return;
       void queryClient.invalidateQueries({
-        queryKey: runnerQueryKeys.traycerShellConfig(traycerCli),
+        queryKey: runnerQueryKeys.traycerShellConfig(mutationClient),
       });
       void queryClient.invalidateQueries({
-        queryKey: runnerQueryKeys.traycerShellList(traycerCli),
+        queryKey: runnerQueryKeys.traycerShellList(mutationClient),
       });
     },
     onError: (error) => {

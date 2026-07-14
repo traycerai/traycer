@@ -287,4 +287,24 @@ describe("probeShellPath", () => {
       executable: false,
     });
   });
+
+  it("accepts standard Windows executable extensions and rejects other files", async () => {
+    world.platform = "win32";
+    world.files.set("C:\\Tools\\custom-shell.EXE", true);
+    world.files.set("C:\\Tools\\custom-shell.cmd", true);
+    world.files.set("C:\\Tools\\notes.txt", true);
+
+    expect(await probeShellPath("C:\\Tools\\custom-shell.EXE")).toEqual({
+      exists: true,
+      executable: true,
+    });
+    expect(await probeShellPath("C:\\Tools\\custom-shell.cmd")).toEqual({
+      exists: true,
+      executable: true,
+    });
+    expect(await probeShellPath("C:\\Tools\\notes.txt")).toEqual({
+      exists: true,
+      executable: false,
+    });
+  });
 });

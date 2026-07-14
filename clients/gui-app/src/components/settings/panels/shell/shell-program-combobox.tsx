@@ -435,6 +435,11 @@ function ShellOptionRow(props: {
             event.stopPropagation();
             if (!disabled) onRemove();
           }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.stopPropagation();
+            }
+          }}
           className="shrink-0 rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:text-[var(--term-ansi-red)] focus-visible:opacity-100 group-hover:opacity-100"
         >
           <X className="size-3.5" />

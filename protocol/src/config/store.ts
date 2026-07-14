@@ -25,6 +25,7 @@ import {
   type ShellEntry,
 } from "./schema";
 import { defaultShellArgs } from "./shell-family";
+import { isShellExecutablePathSupported } from "./shell-executable";
 import { DEFAULT_LOG_LEVEL, type LogLevel } from "./log-level";
 
 const WINDOWS_RENAME_RETRY_DELAYS_MS = [10, 25, 50, 100, 200] as const;
@@ -145,12 +146,21 @@ export interface ShellProbeResult {
 }
 
 async function isExecutableFile(path: string): Promise<boolean> {
-  try {
-    await access(path, fsConstants.X_OK);
-    return true;
-  } catch {
+  const fileStat = await stat(path).then(
+    (value) => value,
+    () => null,
+  );
+  if (
+    fileStat === null ||
+    !fileStat.isFile() ||
+    !isShellExecutablePathSupported(path, osPlatform())
+  ) {
     return false;
   }
+  return access(path, fsConstants.X_OK).then(
+    () => true,
+    () => false,
+  );
 }
 
 /**
@@ -167,11 +177,9 @@ export async function probeShellPath(path: string): Promise<ShellProbeResult> {
     ),
     isExecutableFile(path),
   ]);
-  // A shell must be a regular file: directories pass the X_OK check too
-  // (executable means searchable for them), but cannot be spawned.
   return {
     exists: fileStat !== null,
-    executable: accessible && fileStat !== null && fileStat.isFile(),
+    executable: accessible,
   };
 }
 
@@ -204,9 +212,16 @@ function windowsWellKnownShellPaths(): string[] {
   const env = process.env;
   const paths: string[] = [];
   const add = (base: string | undefined, ...segments: string[]): void => {
-    if (base !== undefined && base.length > 0) paths.push(join(base, ...segments));
+    if (base !== undefined && base.length > 0)
+      paths.push(join(base, ...segments));
   };
-  add(env.SystemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  add(
+    env.SystemRoot,
+    "System32",
+    "WindowsPowerShell",
+    "v1.0",
+    "powershell.exe",
+  );
   add(env.SystemRoot, "System32", "cmd.exe");
   add(env.SystemRoot, "System32", "wsl.exe");
   add(env.ProgramFiles, "PowerShell", "7", "pwsh.exe");
@@ -533,7 +548,8 @@ function normalizedShellEntries(
     .map((entry) => ({
       path: entry.path,
       args:
-        entry.args !== null && !argsEqual(entry.args, defaultShellArgs(entry.path))
+        entry.args !== null &&
+        !argsEqual(entry.args, defaultShellArgs(entry.path))
           ? entry.args
           : null,
     }));
@@ -624,7 +640,9 @@ function upsertShellEntry(
     (entry) => !shellPathsEqual(entry.path, path, isWindows),
   );
   const canonicalArgs =
-    args !== null && !argsEqual(args, defaultShellArgs(path)) ? [...args] : null;
+    args !== null && !argsEqual(args, defaultShellArgs(path))
+      ? [...args]
+      : null;
   return [...others, { path, args: canonicalArgs }];
 }
 
@@ -750,7 +768,12 @@ export async function addShell(
   const current = await readConfigWithSeededEntries();
   const isWindows = osPlatform() === "win32";
   const args = [...defaultShellArgs(path)];
-  const entries = upsertShellEntry(current.shell.entries, path, args, isWindows);
+  const entries = upsertShellEntry(
+    current.shell.entries,
+    path,
+    args,
+    isWindows,
+  );
   await writeCliConfig({
     version: CLI_CONFIG_VERSION,
     shell: { path, args, entries },

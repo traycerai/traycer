@@ -37,6 +37,24 @@ async function makeExecutable(name: string): Promise<string> {
   return path;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function assertRecord(
+  value: unknown,
+): asserts value is Record<string, unknown> {
+  if (!isRecord(value)) throw new Error("expected command data to be a record");
+}
+
+function assertRecordArray(
+  value: unknown,
+): asserts value is readonly Record<string, unknown>[] {
+  if (!Array.isArray(value) || !value.every(isRecord)) {
+    throw new Error("expected command data to be an array of records");
+  }
+}
+
 describe("adversarial: config shell add gate", () => {
   it.skipIf(skipOnWindows)(
     "accepts a symlink that points at an executable",
@@ -55,12 +73,10 @@ describe("adversarial: config shell add gate", () => {
   );
 
   it.skipIf(skipOnWindows)(
-    "FINDING: a directory passes the executable gate and is added as a shell",
+    "rejects a directory as a shell program",
     async () => {
-      // access(dir, X_OK) succeeds for a searchable directory on POSIX, so the
-      // add gate (exists && executable) admits a directory even though it is not
-      // a program - launching it as a PTY shell would fail. The gate never checks
-      // that the target is a regular file.
+      // access(dir, X_OK) succeeds for a searchable directory on POSIX, but a
+      // directory is not a launchable shell program and must still be rejected.
       const dir = join(workdir, "a-directory");
       await mkdir(dir);
       await expect(
@@ -114,11 +130,13 @@ describe("adversarial: JSON envelope shape stability across all seven commands",
       path: shPath,
       args: ["-i"],
     })(makeCtx());
-    expect(Object.keys(setRes.data as object).sort()).toEqual(["args", "path"]);
+    assertRecord(setRes.data);
+    expect(Object.keys(setRes.data).sort()).toEqual(["args", "path"]);
 
     // get
     const getRes = await configShellGetCommand(makeCtx());
-    expect(Object.keys(getRes.data as object).sort()).toEqual([
+    assertRecord(getRes.data);
+    expect(Object.keys(getRes.data).sort()).toEqual([
       "args",
       "path",
       "synthesised",
@@ -129,37 +147,32 @@ describe("adversarial: JSON envelope shape stability across all seven commands",
     const addRes = await buildConfigShellAddCommand({ path: addPath })(
       makeCtx(),
     );
-    expect(Object.keys(addRes.data as object).sort()).toEqual([
-      "entries",
-      "path",
-    ]);
+    assertRecord(addRes.data);
+    expect(Object.keys(addRes.data).sort()).toEqual(["entries", "path"]);
 
     // revert-args
     const revRes = await buildConfigShellRevertArgsCommand({ path: addPath })(
       makeCtx(),
     );
-    expect(Object.keys(revRes.data as object).sort()).toEqual([
-      "path",
-      "reverted",
-    ]);
+    assertRecord(revRes.data);
+    expect(Object.keys(revRes.data).sort()).toEqual(["path", "reverted"]);
 
     // remove
     const rmRes = await buildConfigShellRemoveCommand({ path: addPath })(
       makeCtx(),
     );
-    expect(Object.keys(rmRes.data as object).sort()).toEqual([
-      "path",
-      "removed",
-    ]);
+    assertRecord(rmRes.data);
+    expect(Object.keys(rmRes.data).sort()).toEqual(["path", "removed"]);
 
     // reset
     const resetRes = await configShellResetCommand(makeCtx());
-    expect(Object.keys(resetRes.data as object).sort()).toEqual(["reset"]);
+    assertRecord(resetRes.data);
+    expect(Object.keys(resetRes.data).sort()).toEqual(["reset"]);
 
     // list
     const listRes = await configShellListCommand(makeCtx());
-    expect(Array.isArray(listRes.data)).toBe(true);
-    for (const row of listRes.data as ReadonlyArray<Record<string, unknown>>) {
+    assertRecordArray(listRes.data);
+    for (const row of listRes.data) {
       expect(Object.keys(row).sort()).toEqual([
         "isDefault",
         "missing",

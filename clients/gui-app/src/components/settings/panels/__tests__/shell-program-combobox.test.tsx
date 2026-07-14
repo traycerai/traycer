@@ -104,7 +104,9 @@ function concreteRow(pathText: string): HTMLElement {
     .filter(
       (row) => row.getAttribute("data-testid") !== "settings-shell-reset",
     );
-  const match = rows.find((row) => row.textContent.includes(pathText));
+  const match = rows.find((row: Node) =>
+    (row.textContent ?? "").includes(pathText),
+  );
   if (match === undefined) {
     throw new Error(`no concrete row rendering "${pathText}"`);
   }
@@ -260,6 +262,31 @@ describe("<ShellProgramCombobox />", () => {
     expect(onRemove).toHaveBeenCalledWith("/usr/local/bin/nu");
     expect(onSelect).not.toHaveBeenCalled();
   });
+
+  it.each(["Enter", " "])(
+    "keeps %j activation of the nested remove button from selecting its row",
+    async (key) => {
+      const onRemove = vi.fn();
+      const onSelect = vi.fn();
+      renderCombobox({
+        value: "/bin/zsh",
+        synthesised: false,
+        shells: [ZSH, NU_ADDED],
+        onRemove,
+        onSelect,
+      });
+      openPopover();
+
+      const removeButton = await screen.findByRole("button", {
+        name: "Remove nu",
+      });
+      fireEvent.keyDown(removeButton, { key });
+      fireEvent.click(removeButton);
+
+      expect(onRemove).toHaveBeenCalledWith("/usr/local/bin/nu");
+      expect(onSelect).not.toHaveBeenCalled();
+    },
+  );
 
   it("hides the Browse row when the file-dialog capability is absent", async () => {
     renderCombobox({
