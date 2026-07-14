@@ -26,13 +26,16 @@ function stagingRootFor(environment: Environment): string {
   return join(hostHomeFor(environment), "install-staging");
 }
 
-// Mirrors stage-reconcile.test.ts's seam: forces `unlink`/`rm` to fail for
-// one specific path while every other path proxies through to the real
-// implementation - the exact two operations layered invalidation's layer 2
-// and layer 3 depend on.
+// Mirrors stage-reconcile.test.ts's seam: forces `unlink`/`rm`/`rename` to
+// fail for one specific path while every other path proxies through to the
+// real implementation - the exact operations layered invalidation and the
+// commit rename depend on. `forceRenameFailureForDestination` matches on
+// the rename's destination (`to`) argument, since the source is a
+// dynamically-generated staging dir the test can't hardcode.
 const mocks = vi.hoisted(() => ({
   forceUnlinkFailureForPath: null as string | null,
   forceRmFailureForPath: null as string | null,
+  forceRenameFailureForDestination: null as string | null,
 }));
 
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -54,6 +57,16 @@ vi.mock("node:fs/promises", async (importOriginal) => {
         });
       }
       return actual.rm(path, options);
+    },
+    rename: async (from: PathLike, to: PathLike) => {
+      if (to === mocks.forceRenameFailureForDestination) {
+        // A non-retryable code so `renameWithRetry` fails on the first
+        // attempt instead of spending ~2.5s retrying EBUSY/EPERM/etc.
+        throw Object.assign(new Error("simulated rename failure"), {
+          code: "EIO",
+        });
+      }
+      return actual.rename(from, to);
     },
   };
 });
@@ -82,7 +95,11 @@ vi.mock("../../store/paths", async () => {
   };
 });
 
-import { installHost, sweepOldTrash } from "../install";
+import {
+  commitInstallFromSource,
+  installHost,
+  sweepOldTrash,
+} from "../install";
 import { readHostInstallRecord } from "../../manifest/host-install";
 import { createCliLogger } from "../../logger";
 
@@ -101,6 +118,7 @@ describe("sweepOldTrash", () => {
   afterEach(() => {
     mocks.forceUnlinkFailureForPath = null;
     mocks.forceRmFailureForPath = null;
+    mocks.forceRenameFailureForDestination = null;
     rmSync(sandboxRoot, { recursive: true, force: true });
   });
 
@@ -140,6 +158,7 @@ describe("installHost", () => {
   afterEach(() => {
     mocks.forceUnlinkFailureForPath = null;
     mocks.forceRmFailureForPath = null;
+    mocks.forceRenameFailureForDestination = null;
     rmSync(sandboxRoot, { recursive: true, force: true });
   });
 
@@ -195,5 +214,90 @@ describe("installHost", () => {
       name.includes(".old-"),
     );
     expect(leftoverTrash).toEqual([]);
+  });
+});
+
+describe("commitInstallFromSource", () => {
+  beforeEach(() => {
+    sandboxRoot = mkdtempSync(join(tmpdir(), "traycer-install-test-"));
+  });
+
+  afterEach(() => {
+    mocks.forceUnlinkFailureForPath = null;
+    mocks.forceRmFailureForPath = null;
+    mocks.forceRenameFailureForDestination = null;
+    rmSync(sandboxRoot, { recursive: true, force: true });
+  });
+
+  it("materializes install.json inside the source tree BEFORE the commit rename, so it survives a failed swap", async () => {
+    // Proves the crash-safety property the commit tail exists for: the
+    // record and the bytes travel in ONE rename, not a rename followed by
+    // a separate post-swap write (which could land bytes with no record on
+    // a crash in between). Forcing the commit rename itself to fail here
+    // means the source dir is never consumed - if the write happened
+    // AFTER the rename (the pre-refactor ordering), it would never have
+    // been attempted at all.
+    const sourceDir = join(sandboxRoot, "pre-staged");
+    writeLocalHostSource(sourceDir, "v1");
+    const executablePath = join(sourceDir, "traycer-host");
+    mocks.forceRenameFailureForDestination = installDirFor(ENV);
+
+    await expect(
+      commitInstallFromSource({
+        environment: ENV,
+        sourceDir,
+        executablePath,
+        version: "1.0.0",
+        runtimeVersion: null,
+        source: { kind: "local-file", value: sourceDir },
+        archiveSha256: null,
+        signatureVerifiedAt: new Date().toISOString(),
+        signatureKeyId: "local-file:unsigned",
+        sizeBytes: 0,
+        onProgress: () => {},
+        lifecycle: null,
+        onCommitted: () => {},
+      }),
+    ).rejects.toThrow();
+
+    expect(existsSync(installDirFor(ENV))).toBe(false);
+    const recordPath = join(sourceDir, "install.json");
+    expect(existsSync(recordPath)).toBe(true);
+    const parsed = JSON.parse(readFileSync(recordPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    expect(parsed.version).toBe("1.0.0");
+    expect(typeof parsed.installId).toBe("string");
+  });
+
+  it("invokes onCommitted only after the rename succeeds, never on a failed swap", async () => {
+    const sourceDir = join(sandboxRoot, "pre-staged");
+    writeLocalHostSource(sourceDir, "v1");
+    const executablePath = join(sourceDir, "traycer-host");
+    mocks.forceRenameFailureForDestination = installDirFor(ENV);
+    let committed = false;
+
+    await expect(
+      commitInstallFromSource({
+        environment: ENV,
+        sourceDir,
+        executablePath,
+        version: "1.0.0",
+        runtimeVersion: null,
+        source: { kind: "local-file", value: sourceDir },
+        archiveSha256: null,
+        signatureVerifiedAt: new Date().toISOString(),
+        signatureKeyId: "local-file:unsigned",
+        sizeBytes: 0,
+        onProgress: () => {},
+        lifecycle: null,
+        onCommitted: () => {
+          committed = true;
+        },
+      }),
+    ).rejects.toThrow();
+
+    expect(committed).toBe(false);
   });
 });

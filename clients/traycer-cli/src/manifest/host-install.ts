@@ -1,4 +1,5 @@
 import { readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import type { Environment } from "../runner/environment";
 import { createCliLogger, errorFromUnknown } from "../logger";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
@@ -268,6 +269,35 @@ function readErrorCode(error: unknown): string | null {
   return typeof code === "string" ? code : null;
 }
 
+async function writeHostInstallRecordAtPath(
+  targetPath: string,
+  record: HostInstallRecord,
+): Promise<void> {
+  const tmp = `${targetPath}.tmp`;
+  await writeFile(tmp, `${JSON.stringify(record, null, 2)}\n`, {
+    encoding: "utf8",
+    mode: 0o600,
+  });
+  await rename(tmp, targetPath);
+}
+
+// Writes the record atomically at an explicit install directory (rather
+// than always the canonical `hostInstallRecordPath(environment)`) - used to
+// materialize `install.json` INSIDE a not-yet-promoted source tree before
+// the commit rename (`installer/install.ts`'s `commitInstallFromSource`),
+// so the record moves atomically WITH the bytes in one rename instead of a
+// separate post-swap write that could land bytes with no record on a crash
+// in between. Mirrors `host-staged.ts`'s `writeHostStagedRecordAt`.
+export async function writeHostInstallRecordAt(
+  installDirPath: string,
+  record: HostInstallRecord,
+): Promise<void> {
+  await writeHostInstallRecordAtPath(
+    join(installDirPath, "install.json"),
+    record,
+  );
+}
+
 export async function writeHostInstallRecord(
   environment: Environment,
   record: HostInstallRecord,
@@ -281,13 +311,10 @@ export async function writeHostInstallRecord(
     sourceKind: record.source.kind,
   });
   await ensureHostInstallDir(environment);
-  const target = hostInstallRecordPath(environment);
-  const tmp = `${target}.tmp`;
-  await writeFile(tmp, `${JSON.stringify(record, null, 2)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
-  await rename(tmp, target);
+  await writeHostInstallRecordAtPath(
+    hostInstallRecordPath(environment),
+    record,
+  );
   logger.info("Host install record write completed", {
     environment,
     version: record.version,

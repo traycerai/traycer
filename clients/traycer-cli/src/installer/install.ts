@@ -9,7 +9,7 @@ import {
   type HostInstallRecord,
   type HostInstallSource,
   readHostInstallRecord,
-  writeHostInstallRecord,
+  writeHostInstallRecordAt,
 } from "../manifest/host-install";
 import {
   createDefaultRegistryClient,
@@ -111,19 +111,15 @@ export async function installHost(
   opts: InstallHostOptions,
 ): Promise<InstallHostResult> {
   const logger = createCliLogger(opts.environment);
-  const platform = currentInstallPlatform();
-  const arch = currentInstallArch();
-  const previous = await readHostInstallRecord(opts.environment);
   logger.info("Host install started", {
     environment: opts.environment,
-    platform,
-    arch,
+    platform: currentInstallPlatform(),
+    arch: currentInstallArch(),
     sourceKind: opts.source.kind,
     versionRequest:
       opts.source.kind === "registry"
         ? opts.source.versionRequest
         : "local-file",
-    hasPreviousInstall: previous !== null,
     lifecycleEnabled: opts.lifecycle !== null,
     recordVersionOverride: opts.recordVersionOverride !== null,
   });
@@ -188,89 +184,23 @@ export async function installHost(
       version: staging.version,
     });
 
-    // Stop the OS service immediately before the swap, never earlier:
-    // verify-before-replace means we must not disturb the running
-    // host if staging or verification would have failed.
-    if (opts.lifecycle !== null) {
-      opts.onProgress({
-        stage: "service-stop",
-        message: "stopping service before replacing install directory",
-        percent: null,
-        bytes: null,
-        totalBytes: null,
-      });
-      logger.info("Host install running lifecycle before swap", {
-        environment: opts.environment,
-        version: staging.version,
-      });
-      await opts.lifecycle.beforeSwap();
-    }
-
-    opts.onProgress({
-      stage: "swap",
-      message: "atomically replacing install directory",
-      percent: null,
-      bytes: null,
-      totalBytes: null,
-    });
-    await atomicSwap({
+    const { record, previous } = await commitInstallFromSource({
       environment: opts.environment,
-      stagingDir: staging.stagingDir,
-    });
-    swapped = true;
-    logger.info("Host install atomic swap completed", {
-      environment: opts.environment,
-      version: staging.version,
-      replacedPreviousInstall: previous !== null,
-    });
-
-    const finalExecutablePath = executablePath.replace(
-      staging.stagingDir,
-      hostInstallDir(opts.environment),
-    );
-
-    const record: HostInstallRecord = {
-      installId: randomUUID(),
+      sourceDir: staging.stagingDir,
+      executablePath,
       version: staging.version,
       runtimeVersion,
-      platform,
-      arch,
-      installedAt: new Date().toISOString(),
       source: staging.recordSource,
       archiveSha256: staging.archiveSha256,
       signatureVerifiedAt: staging.signatureVerifiedAt,
       signatureKeyId: staging.signatureKeyId,
       sizeBytes: staging.sizeBytes,
-      executablePath: finalExecutablePath,
-    };
-    await writeHostInstallRecord(opts.environment, record);
-    logger.info("Host install record written", {
-      environment: opts.environment,
-      version: record.version,
-      sourceKind: record.source.kind,
-      hasArchiveSha256: record.archiveSha256 !== null,
-      sizeBytes: record.sizeBytes,
+      onProgress: opts.onProgress,
+      lifecycle: opts.lifecycle,
+      onCommitted: () => {
+        swapped = true;
+      },
     });
-
-    // Post-swap start/restart. Per the Tech Plan, failures here do
-    // not roll back the install: the new host stays in place and
-    // Doctor surfaces the non-readiness. The hook is responsible for
-    // swallowing start errors if it wants `installHost` to report
-    // success.
-    if (opts.lifecycle !== null) {
-      opts.onProgress({
-        stage: "service-start",
-        message: "starting service after replacing install directory",
-        percent: null,
-        bytes: null,
-        totalBytes: null,
-      });
-      logger.info("Host install running lifecycle after swap", {
-        environment: opts.environment,
-        version: record.version,
-      });
-      await opts.lifecycle.afterSwap();
-    }
 
     logger.info("Host install completed", {
       environment: opts.environment,
@@ -308,6 +238,140 @@ export async function installHost(
       });
     }
   }
+}
+
+export interface CommitInstallFromSourceOptions {
+  readonly environment: Environment;
+  // A pre-staged tree ready to become `install/` wholesale - either a
+  // freshly extracted+verified staging dir (`installHost`'s own flow) or a
+  // promoted `staged/` tree (`host apply`, ticket 2's B1). Consumed by the
+  // commit rename; the caller owns pre/post cleanup around this call, not
+  // this function.
+  readonly sourceDir: string;
+  // Absolute path, INSIDE `sourceDir`, to the resolved host executable.
+  readonly executablePath: string;
+  readonly version: string;
+  readonly runtimeVersion: string | null;
+  readonly source: HostInstallSource;
+  readonly archiveSha256: string | null;
+  readonly signatureVerifiedAt: string;
+  readonly signatureKeyId: string;
+  readonly sizeBytes: number;
+  readonly onProgress: (info: ProgressInfo) => void;
+  readonly lifecycle: InstallHostLifecycle | null;
+  // Invoked the instant the atomic rename into `install/` completes, before
+  // `lifecycle.afterSwap()` runs - lets a caller that owns its own
+  // source-dir cleanup (`installHost`'s finally block) distinguish "bytes
+  // are committed, a later step failed" from "never swapped, the source dir
+  // still needs cleanup", without re-deriving that boundary itself.
+  readonly onCommitted: () => void;
+}
+
+export interface CommitInstallFromSourceResult {
+  readonly record: HostInstallRecord;
+  readonly previous: HostInstallRecord | null;
+}
+
+// The reusable stop -> swap -> start tail: everything from "a verified,
+// pre-staged source tree exists" through "the new install is committed and
+// the service is running again". Shared between `installHost` (which stages
+// and extracts its own source first) and `host apply`'s core (ticket 2's
+// B1, which promotes the already-extracted `staged/` tree with no
+// extraction step of its own).
+//
+// `install.json` is materialized INSIDE `sourceDir` before the commit
+// rename below - the record then moves atomically WITH the bytes in one
+// rename, instead of a separate post-swap write that could land bytes with
+// no record on a crash in between (the on-disk state the reconcile
+// "orphan"/target-missing rules are built to heal either side of, never a
+// bytes-with-no-record gap).
+export async function commitInstallFromSource(
+  opts: CommitInstallFromSourceOptions,
+): Promise<CommitInstallFromSourceResult> {
+  const logger = createCliLogger(opts.environment);
+  const previous = await readHostInstallRecord(opts.environment);
+
+  const finalExecutablePath = opts.executablePath.replace(
+    opts.sourceDir,
+    hostInstallDir(opts.environment),
+  );
+  const record: HostInstallRecord = {
+    installId: randomUUID(),
+    version: opts.version,
+    runtimeVersion: opts.runtimeVersion,
+    platform: currentInstallPlatform(),
+    arch: currentInstallArch(),
+    installedAt: new Date().toISOString(),
+    source: opts.source,
+    archiveSha256: opts.archiveSha256,
+    signatureVerifiedAt: opts.signatureVerifiedAt,
+    signatureKeyId: opts.signatureKeyId,
+    sizeBytes: opts.sizeBytes,
+    executablePath: finalExecutablePath,
+  };
+  await writeHostInstallRecordAt(opts.sourceDir, record);
+  logger.info("Host install record materialized in source tree", {
+    environment: opts.environment,
+    version: record.version,
+    installId: record.installId,
+  });
+
+  // Stop the OS service immediately before the swap, never earlier:
+  // verify-before-replace means we must not disturb the running host if
+  // staging or verification would have failed.
+  if (opts.lifecycle !== null) {
+    opts.onProgress({
+      stage: "service-stop",
+      message: "stopping service before replacing install directory",
+      percent: null,
+      bytes: null,
+      totalBytes: null,
+    });
+    logger.info("Host install running lifecycle before swap", {
+      environment: opts.environment,
+      version: record.version,
+    });
+    await opts.lifecycle.beforeSwap();
+  }
+
+  opts.onProgress({
+    stage: "swap",
+    message: "atomically replacing install directory",
+    percent: null,
+    bytes: null,
+    totalBytes: null,
+  });
+  await atomicSwap({
+    environment: opts.environment,
+    stagingDir: opts.sourceDir,
+  });
+  opts.onCommitted();
+  logger.info("Host install atomic swap completed", {
+    environment: opts.environment,
+    version: record.version,
+    replacedPreviousInstall: previous !== null,
+  });
+
+  // Post-swap start/restart. Per the Tech Plan, failures here do not roll
+  // back the install: the new host stays in place and Doctor surfaces the
+  // non-readiness. The hook is responsible for swallowing start errors if
+  // it wants the caller to report success.
+  if (opts.lifecycle !== null) {
+    opts.onProgress({
+      stage: "service-start",
+      message: "starting service after replacing install directory",
+      percent: null,
+      bytes: null,
+      totalBytes: null,
+    });
+    logger.info("Host install running lifecycle after swap", {
+      environment: opts.environment,
+      version: record.version,
+    });
+    await opts.lifecycle.afterSwap();
+  }
+
+  return { record, previous };
 }
 
 // Sweep `<target>.old-*` siblings left behind by atomicSwap if the CLI
