@@ -1,6 +1,6 @@
 import { useState, type ReactElement, type ReactNode } from "react";
 import type { WorktreeBindingOwnerKind } from "@traycer/protocol/host/worktree-schemas";
-import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { HoverPreviewCard } from "@/components/ui/hover-preview-card";
 import { OwnerWorkspaceMetadataContent } from "@/components/worktree/worktree-pr-metadata";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useWorktreeOwnerMetadata } from "@/hooks/worktree/use-worktree-owner-metadata-query";
@@ -23,8 +23,8 @@ export function WorktreeOwnerMetadataTooltip(props: {
     enabled: open,
   });
   return (
-    <TooltipWrapper
-      label={
+    <HoverPreviewCard
+      content={
         <span
           className="block w-[min(92vw,24rem)]"
           data-testid={`chat-navigator-worktree-hover-${props.ownerId}`}
@@ -40,11 +40,10 @@ export function WorktreeOwnerMetadataTooltip(props: {
       side="right"
       sideOffset={4}
       align="start"
-      richContent
       open={open}
       onOpenChange={setOpen}
     >
       {props.trigger}
-    </TooltipWrapper>
+    </HoverPreviewCard>
   );
 }

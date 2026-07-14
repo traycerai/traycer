@@ -3,11 +3,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import type { WorktreeFolderIntent } from "@traycer/protocol/host/worktree-schemas";
 import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+  HoverCard,
+  HoverCardContent,
+  HoverCardTrigger,
+} from "@/components/ui/hover-card";
 import { WorkspaceFolderHoverList } from "../workspace-folder-hover-list";
 
 const NOOP = (): void => undefined;
@@ -55,7 +54,7 @@ function folder(over: {
 afterEach(cleanup);
 
 describe("WorkspaceFolderHoverList", () => {
-  it("shows the folder path for local and the worktree path for an adopted worktree, with no interactive descendants", () => {
+  it("shows the folder path for local and the worktree path for an adopted worktree, with a copy-path action per folder", () => {
     render(
       <WorkspaceFolderHoverList
         items={[
@@ -91,56 +90,48 @@ describe("WorkspaceFolderHoverList", () => {
       screen.getByText("/Users/me/.traycer/worktrees/infra/feat-login"),
     ).toBeTruthy();
     expect(screen.queryByText("/Users/me/Work/infra")).toBeNull();
-    // This renders as Radix Tooltip content, which mounts an always-present
-    // visually-hidden accessible clone of its children — any focusable
-    // descendant here would exist twice in the a11y/tab order. The copy
-    // action lives on the click-open folder row instead.
+    // This renders inside a HoverCard (not a Tooltip), which mounts a single
+    // copy of its content with no visually-hidden accessible clone - so the
+    // per-folder copy-path button is safe here. One per folder with a path.
     const list = screen.getByTestId("workspace-folder-hover-list");
-    expect(within(list).queryAllByRole("button")).toHaveLength(0);
-    expect(within(list).queryAllByRole("link")).toHaveLength(0);
-    // jsdom only enumerates explicit tabIndex/buttons/links for focus order,
-    // so it can't reproduce Chromium making an overflowing scroll container
-    // an implicit tab stop - assert the explicit opt-out is present instead
+    expect(
+      within(list).getAllByTestId("workspace-hover-copy-path"),
+    ).toHaveLength(2);
+    // jsdom can't reproduce Chromium making an overflowing scroll container an
+    // implicit tab stop - assert the explicit opt-out is present instead
     // (verified against real Chromium separately; see the ticket notes).
-    // `HTMLElement.tabIndex` (the IDL property) already reads -1 for a plain
-    // div with NO tabindex attribute at all, so asserting on it would pass
-    // before the fix too - read the content attribute explicitly instead.
+    // `HTMLElement.tabIndex` reads -1 for a plain div with NO tabindex
+    // attribute, so read the content attribute explicitly.
     expect(list.getAttribute("tabindex")).toBe("-1");
   });
 
-  it("keeps every rendered copy of the scroll root - including Radix's hidden accessible clone - out of sequential focus", () => {
+  it("keeps the scroll root out of sequential focus inside a HoverCard", () => {
     render(
-      <TooltipProvider delayDuration={0}>
-        <Tooltip open>
-          <TooltipTrigger asChild>
-            <button type="button">Hover-list trigger</button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom" richContent>
-            <WorkspaceFolderHoverList
-              items={[
-                folder({
-                  key: "/a",
-                  displayName: "traycer",
-                  branchLabel: "main",
-                  displayPath: "/Users/me/Work/traycer",
-                  mode: "local",
-                  currentIntent: null,
-                }),
-              ]}
-            />
-          </TooltipContent>
-        </Tooltip>
-      </TooltipProvider>,
+      <HoverCard open>
+        <HoverCardTrigger asChild>
+          <button type="button">Hover-list trigger</button>
+        </HoverCardTrigger>
+        <HoverCardContent side="bottom">
+          <WorkspaceFolderHoverList
+            items={[
+              folder({
+                key: "/a",
+                displayName: "traycer",
+                branchLabel: "main",
+                displayPath: "/Users/me/Work/traycer",
+                mode: "local",
+                currentIntent: null,
+              }),
+            ]}
+          />
+        </HoverCardContent>
+      </HoverCard>,
     );
+    // HoverCard renders a single copy (no hidden a11y clone), and its scroll
+    // root carries the explicit tab-stop opt-out.
     const copies = screen.getAllByTestId("workspace-folder-hover-list");
-    // Radix mounts the visible popper content AND an always-present
-    // visually-hidden accessible clone - both must carry the explicit
-    // opt-out, since Chromium doesn't respect visual hiding for implicit
-    // scroll-container focusability.
-    expect(copies.length).toBeGreaterThanOrEqual(2);
-    for (const copy of copies) {
-      expect(copy.getAttribute("tabindex")).toBe("-1");
-    }
+    expect(copies).toHaveLength(1);
+    expect(copies[0].getAttribute("tabindex")).toBe("-1");
   });
 
   it("shows 'New worktree' with no path for a to-be-created worktree", () => {
@@ -179,10 +170,10 @@ describe("WorkspaceFolderHoverList", () => {
         ]}
       />,
     );
-    // The rich Tooltip variant drops the default `max-w-xs`, so this root must
-    // claim its own viewport-aware width - matching the owner preview's
-    // `w-[min(92vw,24rem)]` intent - instead of falling back to an unbounded
-    // `w-fit` that a long path could stretch arbitrarily wide.
+    // The hover-preview card has no `max-w-xs`, so this root must claim its own
+    // viewport-aware width - matching the owner preview's `w-[min(92vw,24rem)]`
+    // intent - instead of falling back to an unbounded `w-fit` that a long path
+    // could stretch arbitrarily wide.
     const list = screen.getByTestId("workspace-folder-hover-list");
     expect(list.className).toContain("w-[min(92vw,24rem)]");
   });

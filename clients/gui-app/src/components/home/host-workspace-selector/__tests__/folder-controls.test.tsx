@@ -1016,7 +1016,6 @@ describe("WorkspaceSummaryTrigger", () => {
           items={[item({}), item({ key: "/repo2", displayName: "repo2" })]}
           readOnly={false}
           bindingResolved
-          tooltipEnabled={false}
         />
       </TooltipProvider>,
     );
@@ -1050,7 +1049,6 @@ describe("WorkspaceSummaryTrigger", () => {
           ]}
           readOnly={false}
           bindingResolved
-          tooltipEnabled={false}
         />
       </TooltipProvider>,
     );
@@ -1078,7 +1076,6 @@ describe("WorkspaceSummaryTrigger", () => {
           ]}
           readOnly={false}
           bindingResolved
-          tooltipEnabled={false}
         />
       </TooltipProvider>,
     );
@@ -1090,12 +1087,7 @@ describe("WorkspaceSummaryTrigger", () => {
   it("expands to a read-only folder list when read-only", async () => {
     render(
       <TooltipProvider>
-        <WorkspaceSummaryTrigger
-          items={[item({})]}
-          readOnly
-          bindingResolved
-          tooltipEnabled={false}
-        />
+        <WorkspaceSummaryTrigger items={[item({})]} readOnly bindingResolved />
       </TooltipProvider>,
     );
     const trigger = screen.getByTestId("workspace-summary-trigger");
@@ -1120,6 +1112,36 @@ describe("WorkspaceSummaryTrigger", () => {
     expect(screen.queryByTestId("folder-scripts-trigger")).toBeNull();
     expect(screen.queryByTestId("folder-remove")).toBeNull();
   });
+
+  it("hides the read-only hover preview while its inspect popover is open", async () => {
+    render(
+      <TooltipProvider delayDuration={0}>
+        <WorkspaceSummaryTrigger
+          items={[item({ mode: "local", displayPath: "/repo" })]}
+          readOnly
+          bindingResolved
+        />
+      </TooltipProvider>,
+    );
+    const trigger = screen.getByTestId("workspace-summary-trigger");
+    // Hover opens the read-only preview card...
+    fireEvent.focus(trigger);
+    await waitFor(() => {
+      expect(
+        document.querySelector('[data-slot="hover-card-content"]'),
+      ).not.toBeNull();
+    });
+    // ...and clicking to open the inspect popover must dismiss it. This is the
+    // read-only sibling of the interactive coordination gate - the same
+    // HoverCard-doesn't-close-on-trigger-click gap, guarded here too.
+    fireEvent.click(trigger);
+    await screen.findByTestId("workspace-readonly-folders-popover");
+    await waitFor(() => {
+      expect(
+        document.querySelector('[data-slot="hover-card-content"]'),
+      ).toBeNull();
+    });
+  });
 });
 
 describe("WorkspaceFolderSummaryControl", () => {
@@ -1139,7 +1161,6 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
-          hoverPreviewEnabled
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />
@@ -1151,7 +1172,7 @@ describe("WorkspaceFolderSummaryControl", () => {
     ).toBeNull();
   });
 
-  it("renders the rich hover preview through the mention tooltip surface with no focusable descendants", async () => {
+  it("renders the rich hover preview as a single HoverCard card carrying a reachable copy-path action", async () => {
     render(
       <TooltipProvider delayDuration={0}>
         <WorkspaceFolderSummaryControl
@@ -1169,7 +1190,6 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
-          hoverPreviewEnabled
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />
@@ -1179,49 +1199,43 @@ describe("WorkspaceFolderSummaryControl", () => {
     const trigger = screen.getByTestId("workspace-summary-trigger");
     fireEvent.focus(trigger);
 
-    await screen.findByRole("tooltip");
-    const tooltipContent = document.querySelector(
-      '[data-slot="tooltip-content"]',
-    );
-    if (!(tooltipContent instanceof HTMLElement)) {
-      throw new Error("Expected tooltip content element");
-    }
-    // Rich content owns its own width/padding instead of the default
-    // mention-tooltip card sizing (P3: no more double-padded/re-clipped
-    // preview).
-    expect(tooltipContent.className).not.toContain("max-w-xs");
-    expect(tooltipContent.className).not.toContain("px-3");
+    const hoverContent = await waitFor(() => {
+      const node = document.querySelector('[data-slot="hover-card-content"]');
+      if (!(node instanceof HTMLElement)) {
+        throw new Error("Expected hover card content element");
+      }
+      return node;
+    });
+    // The preview is a popover card, not the inverted tooltip chip: it drops
+    // the chip's `max-w-xs` and owns its own width/padding.
+    expect(hoverContent.className).not.toContain("max-w-xs");
+    expect(hoverContent.className).toContain("bg-popover");
 
-    // Radix mounts an always-present visually-hidden accessible clone of
-    // Tooltip content alongside the visible one, so the hover list
-    // legitimately appears twice here - scope to the tooltip content rather
-    // than asserting global uniqueness.
-    const hoverLists = within(tooltipContent).getAllByTestId(
+    // A HoverCard renders exactly one copy of its content - no visually-hidden
+    // accessible clone - so the copy-path button exists once, not twice.
+    const hoverLists = within(hoverContent).getAllByTestId(
       "workspace-folder-hover-list",
     );
-    expect(hoverLists.length).toBeGreaterThan(0);
-    for (const hoverList of hoverLists) {
-      expect(
-        within(hoverList).getByTestId("workspace-hover-run-path").textContent,
-      ).toBe("/repo");
-      // With the outer `max-w-xs` gone, the hover-list root must claim its
-      // own viewport-aware width instead of an unbounded `w-fit`.
-      expect(hoverList.className).toContain("w-[min(92vw,24rem)]");
-    }
+    expect(hoverLists).toHaveLength(1);
+    expect(
+      within(hoverLists[0]).getByTestId("workspace-hover-run-path").textContent,
+    ).toBe("/repo");
+    expect(hoverLists[0].className).toContain("w-[min(92vw,24rem)]");
 
-    // No focusable descendant in either copy: a duplicated interactive
-    // element (like a copy button) would double up the a11y/tab order - the
-    // fix that closes the P1 finding.
-    expect(within(tooltipContent).queryAllByRole("button")).toHaveLength(0);
-    expect(within(tooltipContent).queryAllByRole("link")).toHaveLength(0);
-
-    // Tabbing forward from the trigger must not land inside the tooltip
-    // content at all (there is nothing focusable there to land on).
-    tabForward();
-    expect(tooltipContent.contains(document.activeElement)).toBe(false);
+    const copyButtons = within(hoverContent).getAllByTestId(
+      "workspace-hover-copy-path",
+    );
+    expect(copyButtons).toHaveLength(1);
+    // The copy action is a real (non-inert) focusable control - it exists once
+    // on the card, not duplicated into an a11y clone. NB: this asserts it is
+    // focusable, not that it is in the sequential Tab order: hover-card content
+    // is pointer-operable only (see hover-card.tsx), and copy-path's
+    // keyboard-reachable home is the click-open folder rows.
+    copyButtons[0].focus();
+    expect(document.activeElement).toBe(copyButtons[0]);
   });
 
-  it("shows full landing-page folder and branch provenance in an app tooltip", async () => {
+  it("shows full landing-page folder and branch provenance in the hover preview", async () => {
     render(
       <TooltipProvider delayDuration={0}>
         <WorkspaceFolderSummaryControl
@@ -1255,7 +1269,6 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
-          hoverPreviewEnabled={false}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />
@@ -1265,12 +1278,14 @@ describe("WorkspaceFolderSummaryControl", () => {
     const trigger = screen.getByTestId("workspace-summary-trigger");
     expect(trigger.getAttribute("title")).toBeNull();
     fireEvent.focus(trigger);
-    const tooltip = await screen.findByRole("tooltip");
-    expect(tooltip.textContent).toContain(
+    const hoverList = await screen.findByTestId("workspace-folder-hover-list");
+    expect(hoverList.textContent).toContain(
       "a-very-long-repository-name-that-is-truncated",
     );
-    expect(tooltip.textContent).toContain("traycer/a-very-long-target-branch");
-    expect(tooltip.textContent).toContain(
+    expect(hoverList.textContent).toContain(
+      "traycer/a-very-long-target-branch",
+    );
+    expect(hoverList.textContent).toContain(
       "From release/a-very-long-base-branch",
     );
   });
@@ -1291,7 +1306,6 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
-          hoverPreviewEnabled={false}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />
@@ -1305,6 +1319,49 @@ describe("WorkspaceFolderSummaryControl", () => {
     await screen.findByTestId("workspace-rows-popover");
     expect(document.activeElement).toBe(trigger);
     expect(screen.queryByRole("tooltip")).toBeNull();
+  });
+
+  it("hides the hover preview while the click-open picker is open", async () => {
+    render(
+      <TooltipProvider delayDuration={0}>
+        <WorkspaceFolderSummaryControl
+          items={[item({ mode: "local", displayPath: "/repo" })]}
+          readOnly={false}
+          bindingResolved
+          addFolderPending={false}
+          addFolderDisabled={false}
+          addFolderDisabledReason={null}
+          onAddFolder={NOOP_ADD}
+          onUpdate={null}
+          updateEnabled={false}
+          updatePending={false}
+          onDiscardStaged={null}
+          onEditEnvironment={NOOP}
+          popoverTestId="workspace-rows-popover"
+          popoverSide="top"
+        />
+      </TooltipProvider>,
+    );
+
+    const trigger = screen.getByTestId("workspace-summary-trigger");
+    // Hover opens the preview card...
+    fireEvent.focus(trigger);
+    await waitFor(() => {
+      expect(
+        document.querySelector('[data-slot="hover-card-content"]'),
+      ).not.toBeNull();
+    });
+
+    // ...but clicking to open the picker must dismiss it. A HoverCard, unlike a
+    // Tooltip, does not close on the trigger's own click, so the control gates
+    // the preview closed while the popover is open (regression guard).
+    fireEvent.click(trigger);
+    await screen.findByTestId("workspace-rows-popover");
+    await waitFor(() => {
+      expect(
+        document.querySelector('[data-slot="hover-card-content"]'),
+      ).toBeNull();
+    });
   });
 
   it("renders Add folder directly when the folder list is empty and resolved", () => {
@@ -1327,7 +1384,6 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
-          hoverPreviewEnabled={false}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />
@@ -1355,7 +1411,6 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
-          hoverPreviewEnabled={false}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />
@@ -1385,7 +1440,6 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
-          hoverPreviewEnabled={false}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />
@@ -1410,7 +1464,6 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
-          hoverPreviewEnabled={false}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />
@@ -1443,7 +1496,6 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
-          hoverPreviewEnabled={false}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />
@@ -1468,7 +1520,6 @@ describe("WorkspaceFolderSummaryControl", () => {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={NOOP}
-          hoverPreviewEnabled={false}
           popoverTestId="workspace-rows-popover"
           popoverSide="top"
         />

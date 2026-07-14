@@ -4,7 +4,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { HoverPreviewCard } from "@/components/ui/hover-preview-card";
 import { preserveWhenNestedOverlay } from "./preserve-when-nested-overlay";
 import { useDialogOverlayBoundaryEl } from "@/providers/dialog-overlay-boundary-context";
 import {
@@ -39,7 +39,6 @@ export function WorkspaceFolderSummaryControl(props: {
   readonly updatePending: boolean;
   readonly onDiscardStaged: (() => void) | null;
   readonly onEditEnvironment: (workspacePath: string) => void;
-  readonly hoverPreviewEnabled: boolean;
   readonly popoverTestId: string;
   readonly popoverSide: "top" | "bottom";
 }) {
@@ -96,7 +95,6 @@ export function WorkspaceFolderSummaryControl(props: {
         items={props.items}
         readOnly
         bindingResolved={props.bindingResolved}
-        tooltipEnabled={false}
         className="max-w-full"
       />
     );
@@ -118,17 +116,18 @@ export function WorkspaceFolderSummaryControl(props: {
       items={props.items}
       readOnly={false}
       bindingResolved={props.bindingResolved}
-      tooltipEnabled={!props.hoverPreviewEnabled}
       className="justify-start overflow-hidden"
     />
   );
-  const popoverTrigger = props.hoverPreviewEnabled ? (
-    <TooltipWrapper
-      label={<WorkspaceFolderHoverList items={props.items} />}
+  // Controlled hover, gated on the click-open popover: a HoverCard is purely
+  // hover-driven and (unlike a Tooltip) does not dismiss when the trigger is
+  // clicked, so the preview must be forced closed while the picker is open.
+  const popoverTrigger = (
+    <HoverPreviewCard
+      content={<WorkspaceFolderHoverList items={props.items} />}
       side={props.popoverSide}
       sideOffset={4}
       align="start"
-      richContent
       open={!overlayState.workspacePopoverOpen && overlayState.summaryHoverOpen}
       onOpenChange={(open) => {
         setOverlayState((current) => {
@@ -138,9 +137,7 @@ export function WorkspaceFolderSummaryControl(props: {
       }}
     >
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>
-    </TooltipWrapper>
-  ) : (
-    <PopoverTrigger asChild>{trigger}</PopoverTrigger>
+    </HoverPreviewCard>
   );
 
   return (

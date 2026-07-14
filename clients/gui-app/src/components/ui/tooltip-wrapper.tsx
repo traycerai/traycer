@@ -14,10 +14,6 @@ interface TooltipWrapperProps {
   readonly align: "start" | "center" | "end" | undefined;
   readonly open?: boolean;
   readonly onOpenChange?: (open: boolean) => void;
-  // See `TooltipContent`'s `richContent` — opt in for wide, self-padded
-  // preview content (workspace/owner hover previews) instead of the default
-  // mention-tooltip card sizing.
-  readonly richContent?: boolean;
 }
 
 // Transparent wrapper: when `label` is empty/null, behaves as a Radix Slot so
@@ -40,7 +36,6 @@ export function TooltipWrapper(props: TooltipWrapperProps) {
     align,
     open,
     onOpenChange,
-    richContent,
     ...rest
   } = props;
   if (label === null || (typeof label === "string" && label.length === 0)) {
@@ -51,12 +46,7 @@ export function TooltipWrapper(props: TooltipWrapperProps) {
       <TooltipTrigger asChild {...rest}>
         {children}
       </TooltipTrigger>
-      <TooltipContent
-        side={side}
-        sideOffset={sideOffset}
-        align={align}
-        richContent={richContent}
-      >
+      <TooltipContent side={side} sideOffset={sideOffset} align={align}>
         {label}
       </TooltipContent>
     </Tooltip>

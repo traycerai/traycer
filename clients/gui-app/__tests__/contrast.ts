@@ -115,39 +115,6 @@ export const MUTED_FOREGROUND_DARK: Readonly<Record<string, string>> = {
   everforest: "#a4afa7",
 };
 
-// `--foreground` per preset - this is what the Tooltip's inverted
-// `bg-foreground` surface (components/ui/tooltip.tsx) actually resolves to.
-// Several presets give it a mid-lightness, tinted value rather than a
-// near-black/near-white extreme (Ayu, Everforest, Tokyo Night), so it must
-// be read per preset rather than assumed to be the default theme's value.
-export const FOREGROUND_LIGHT: Readonly<Record<string, string>> = {
-  default: "oklch(0.145 0 0)",
-  amoled: "#171717",
-  "traycer-green": "#0f0f0f",
-  dracula: "#282a36",
-  catppuccin: "#4c4f69",
-  github: "#24292f",
-  gruvbox: "#3c3836",
-  "tokyo-night": "#233f8e",
-  nord: "#2e3440",
-  ayu: "#5c6166",
-  everforest: "#5c6a72",
-};
-
-export const FOREGROUND_DARK: Readonly<Record<string, string>> = {
-  default: "oklch(0.985 0 0)",
-  amoled: "#ededed",
-  "traycer-green": "#ffffff",
-  dracula: "#f8f8f2",
-  catppuccin: "#cdd6f4",
-  github: "#c9d1d9",
-  gruvbox: "#ebdbb2",
-  "tokyo-night": "#c0caf5",
-  nord: "#eceff4",
-  ayu: "#bfbdb6",
-  everforest: "#d3c6aa",
-};
-
 // `--destructive` and `--success-foreground` are intentionally NOT
 // preset-overridden (see index.css) - one value each for light/dark.
 export const DESTRUCTIVE_FOREGROUND = {
