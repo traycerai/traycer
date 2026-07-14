@@ -96,12 +96,15 @@ import type {
 import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/worktree-schemas";
 import { WorktreePrPills } from "@/components/worktree/worktree-pr-metadata";
 import { worktreePrReferences } from "@/components/worktree/worktree-pr-metadata-model";
-import { useTaskWorktreeMetadata } from "@/hooks/worktree/use-task-worktree-metadata-query";
 
 const EMPTY_REPOS: ReadonlyArray<string> = [];
 const EMPTY_WORKSPACES: ReadonlyArray<HistoryWorkspaceRef> = [];
 const EMPTY_ITEMS: ReadonlyArray<HistoryItem> = [];
 const EMPTY_WORKTREES: readonly WorktreeHostEntryV12[] = [];
+const EMPTY_WORKTREES_BY_EPIC: ReadonlyMap<
+  string,
+  readonly WorktreeHostEntryV12[]
+> = new Map();
 const VIEWER_DELETE_TOOLTIP = "Viewers cannot select task for deletion.";
 const NO_DELETE_PERMISSION_TOOLTIP =
   "You don't have permission to delete this task.";
@@ -251,11 +254,11 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   });
 
   const items = data?.items ?? EMPTY_ITEMS;
+  const worktreesByEpicId = data?.worktreesByEpicId ?? EMPTY_WORKTREES_BY_EPIC;
   const indicatorEpicIds = useMemo(
     () => items.map((item) => item.epicId),
     [items],
   );
-  const worktreesByEpicId = useTaskWorktreeMetadata(indicatorEpicIds);
   const notificationIndicators = useHostNotificationIndicators({
     epicIds: indicatorEpicIds,
     chatIds: [],
@@ -566,7 +569,7 @@ function PanelSearchInput(props: PanelSearchInputProps): ReactNode {
           onChange={(event) => {
             props.onChange(event.target.value);
           }}
-          placeholder="Search by title or repo"
+          placeholder="Search by title, repo, or PR"
           aria-label="Search tasks"
         />
         {props.value.length > 0 ? (

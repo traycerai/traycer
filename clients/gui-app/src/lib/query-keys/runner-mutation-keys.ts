@@ -9,6 +9,9 @@ export const runnerMutationKeys = {
   serviceEnableLinger: () => ["runner.serviceEnableLinger"] as const,
   traycerShellConfigSet: () => ["runner.traycer.shellConfigSet"] as const,
   traycerShellConfigReset: () => ["runner.traycer.shellConfigReset"] as const,
+  traycerShellConfigAdd: () => ["runner.traycer.shellConfigAdd"] as const,
+  traycerShellConfigRemove: () => ["runner.traycer.shellConfigRemove"] as const,
+  traycerShellRevertArgs: () => ["runner.traycer.shellRevertArgs"] as const,
   traycerEnvOverrideSet: () => ["runner.traycer.envOverrideSet"] as const,
   traycerEnvOverrideDelete: () => ["runner.traycer.envOverrideDelete"] as const,
   traycerCliLogin: () => ["runner.traycer.cliLogin"] as const,
@@ -66,6 +69,11 @@ export const runnerQueryKeys = {
     ["runner.traycer.shellConfig", traycerCli] as const,
   traycerShellList: (traycerCli: object) =>
     ["runner.traycer.shellList", traycerCli] as const,
+  // Live "Add a shell" validation probe, keyed by the candidate path so each
+  // debounced value caches independently. Scoped to the runner-host instance
+  // like the other traycer queries.
+  traycerShellProbe: (traycerCli: object, path: string) =>
+    ["runner.traycer.shellProbe", traycerCli, path] as const,
   traycerEnvOverrideList: (traycerCli: object) =>
     ["runner.traycer.envOverrideList", traycerCli] as const,
   // Host-management queries are scoped by the `IHostManagement`

@@ -126,7 +126,7 @@ function createHarness() {
   const sendAction = vi.fn((_frame: TerminalSubscribeClientFrame) => undefined);
   const close = vi.fn();
   const handle = createTerminalSessionStore({
-    epicId: "epic-1",
+    scope: { kind: "epic", epicId: "epic-1" },
     sessionId: "terminal-1",
     cols: 80,
     rows: 24,

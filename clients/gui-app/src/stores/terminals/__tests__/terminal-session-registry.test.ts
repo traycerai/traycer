@@ -15,7 +15,7 @@ function createHandle(kind: TerminalSessionKind): {
   let closeCount = 0;
   let callbacks: TerminalStreamCallbacks | null = null;
   const handle = createTerminalSessionStore({
-    epicId: "epic-1",
+    scope: { kind: "epic", epicId: "epic-1" },
     sessionId: "terminal-1",
     cols: 80,
     rows: 24,

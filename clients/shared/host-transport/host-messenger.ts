@@ -118,6 +118,23 @@ export class HostRpcError extends Error {
 }
 
 /**
+ * The major-version downgrade path can reject a request before a request frame
+ * is sent. Keep that capability result distinct from ordinary transport and
+ * host failures so UI feature gates can hide unavailable functionality without
+ * mistaking a temporary disconnect for an old host.
+ */
+export type HostRequestFailure =
+  | { readonly kind: "downgrade-unsupported"; readonly error: HostRpcError }
+  | { readonly kind: "other"; readonly error: unknown };
+
+export function classifyHostRequestFailure(error: unknown): HostRequestFailure {
+  if (error instanceof HostRpcError && error.code === "DOWNGRADE_UNSUPPORTED") {
+    return { kind: "downgrade-unsupported", error };
+  }
+  return { kind: "other", error };
+}
+
+/**
  * A `HostRpcError` raised by a transient transport failure that occurred
  * *before* the request frame was put on the wire - a dial timeout, an
  * `onerror`/`onclose` during the dial-or-handshake phase, or a handshake

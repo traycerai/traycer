@@ -174,6 +174,7 @@ vi.mock("@/hooks/home/use-history-query", () => ({
       availableWorkspaces: testState.availableWorkspaces,
       totalCount: testState.items.length,
       facets: testState.facets,
+      worktreesByEpicId: testState.worktreesByEpicId,
     },
     isPending: false,
     isFetching: testState.isFetching,
@@ -198,10 +199,6 @@ vi.mock("@/hooks/epic/use-task-delete-worktree-candidates-query", () => ({
     candidates: testState.worktreeCandidates,
     isError: false,
   }),
-}));
-
-vi.mock("@/hooks/worktree/use-task-worktree-metadata-query", () => ({
-  useTaskWorktreeMetadata: () => testState.worktreesByEpicId,
 }));
 
 vi.mock("@/hooks/epic/use-epic-title-mutation", () => ({
@@ -230,6 +227,7 @@ function historyItem(overrides: Partial<HistoryItem>): HistoryItem {
     updatedBucket: "today",
     linkedRepos: [],
     linkedWorkspaces: [],
+    pullRequestNumbers: [],
     ownership: "mine",
     permissionRole: "owner",
     ...overrides,

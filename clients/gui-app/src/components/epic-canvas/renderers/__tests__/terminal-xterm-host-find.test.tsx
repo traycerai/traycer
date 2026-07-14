@@ -262,6 +262,7 @@ function ScopedTerminalHost(props: ScopedTerminalHostProps) {
         shouldFocusOnActivePane={props.isActive}
         findTargetId={findTargetId}
         keepAlive={props.keepAlive}
+        chrome="padded"
       />
     </TileFindScope>
   );
@@ -345,6 +346,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
           shouldFocusOnActivePane={false}
           findTargetId="terminal:test"
           keepAlive={false}
+          chrome="padded"
         />
       </StrictMode>,
     );
@@ -379,6 +381,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
       shouldFocusOnActivePane: false,
       findTargetId: "terminal:test",
       keepAlive: false,
+      chrome: "padded",
     } as const;
 
     const rendered = render(
@@ -423,6 +426,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
         shouldFocusOnActivePane
         findTargetId="terminal:test"
         keepAlive={false}
+        chrome="padded"
       />,
     );
 
@@ -459,6 +463,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
         shouldFocusOnActivePane
         findTargetId="terminal:test"
         keepAlive={false}
+        chrome="padded"
       />,
     );
 
@@ -878,6 +883,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
         shouldFocusOnActivePane
         findTargetId="terminal:test"
         keepAlive={false}
+        chrome="padded"
       />,
     );
 
@@ -905,6 +911,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
         shouldFocusOnActivePane={false}
         findTargetId={null}
         keepAlive={false}
+        chrome="padded"
       />,
     );
 
@@ -960,6 +967,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
         shouldFocusOnActivePane={false}
         findTargetId={null}
         keepAlive={false}
+        chrome="padded"
       />,
     );
 
@@ -1026,6 +1034,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
         shouldFocusOnActivePane={false}
         findTargetId={null}
         keepAlive={false}
+        chrome="padded"
       />,
     );
 
@@ -1083,6 +1092,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
           shouldFocusOnActivePane
           findTargetId="terminal:test"
           keepAlive={false}
+          chrome="padded"
         />
       </PaneVisibilityContext.Provider>,
     );
@@ -1106,6 +1116,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
           shouldFocusOnActivePane
           findTargetId="terminal:test"
           keepAlive={false}
+          chrome="padded"
         />
       </PaneVisibilityContext.Provider>,
     );
@@ -1129,6 +1140,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
         shouldFocusOnActivePane={false}
         findTargetId={null}
         keepAlive={false}
+        chrome="padded"
       />,
     );
 
@@ -1152,6 +1164,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
         shouldFocusOnActivePane={false}
         findTargetId={null}
         keepAlive={false}
+        chrome="padded"
       />,
     );
 
@@ -1173,6 +1186,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
         shouldFocusOnActivePane
         findTargetId="terminal:test"
         keepAlive={false}
+        chrome="padded"
       />,
     );
 
@@ -1212,6 +1226,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
             shouldFocusOnActivePane={active}
             findTargetId={active ? "terminal:test" : null}
             keepAlive={false}
+            chrome="padded"
           />
         </>
       );
@@ -1256,6 +1271,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
         shouldFocusOnActivePane={false}
         findTargetId={null}
         keepAlive={false}
+        chrome="padded"
       />,
     );
 
@@ -1304,6 +1320,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
         shouldFocusOnActivePane={false}
         findTargetId={null}
         keepAlive={false}
+        chrome="padded"
       />,
     );
 
