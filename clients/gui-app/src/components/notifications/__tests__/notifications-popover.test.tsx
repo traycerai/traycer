@@ -649,7 +649,11 @@ describe("NotificationsPopover click routing", () => {
 
     renderRouter(router);
 
-    fireEvent.click(await screen.findByTestId("notifications-open-settings"));
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Open notification settings",
+      }),
+    );
 
     expect(navigated).toBe(true);
     expect(useSettingsSectionStore.getState().section).toBe("notifications");
