@@ -357,7 +357,16 @@ export function openHostNotificationsStream(
         return;
       case "channelEmission":
         if (frame.channelId === "renderer") {
-          options.displayChannelEmission(frame.rows);
+          const currentById = useHostNotificationsStore.getState().byId;
+          options.displayChannelEmission(
+            frame.rows.map((entry) => {
+              const current = currentById[entry.id];
+              return Object.hasOwn(currentById, entry.id) &&
+                current.updatedAt >= entry.updatedAt
+                ? current
+                : entry;
+            }),
+          );
         }
         return;
       case "pong":
