@@ -24,6 +24,13 @@ import {
 } from "./schema";
 import { DEFAULT_LOG_LEVEL, type LogLevel } from "./log-level";
 
+const WINDOWS_RENAME_RETRY_DELAYS_MS = [10, 25, 50, 100, 200] as const;
+const TRANSIENT_WINDOWS_RENAME_ERROR_CODES: ReadonlySet<string> = new Set([
+  "EACCES",
+  "EBUSY",
+  "EPERM",
+]);
+
 /**
  * Filesystem-backed config store for `~/.traycer/cli/config.json`, shared
  * by the CLI (`traycer config …` CRUD) and the host (per-spawn shell
@@ -432,6 +439,44 @@ export async function readCliConfig(): Promise<CliConfig> {
 }
 
 /**
+ * Atomically replaces the config, tolerating the short-lived access-denied
+ * windows that Windows filesystem filters (for example antivirus/indexers) can
+ * create around a newly-written file. Node's `rename` has no retry option, so a
+ * bounded retry belongs at this persistence boundary rather than in every UI or
+ * CLI caller. POSIX and non-transient failures still surface immediately.
+ */
+async function renameCliConfig(
+  source: string,
+  target: string,
+  retryIndex: number,
+): Promise<void> {
+  try {
+    await rename(source, target);
+  } catch (err) {
+    const code =
+      typeof err === "object" &&
+      err !== null &&
+      "code" in err &&
+      typeof err.code === "string"
+        ? err.code
+        : null;
+    const retryDelay = WINDOWS_RENAME_RETRY_DELAYS_MS[retryIndex];
+    if (
+      osPlatform() !== "win32" ||
+      code === null ||
+      !TRANSIENT_WINDOWS_RENAME_ERROR_CODES.has(code) ||
+      retryDelay === undefined
+    ) {
+      throw err;
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, retryDelay);
+    });
+    await renameCliConfig(source, target, retryIndex + 1);
+  }
+}
+
+/**
  * Validates `next` against the schema, then writes it atomically (tmp +
  * rename) with owner-only permissions. Validating before the write is what
  * stops a buggy modifier from persisting a broken file.
@@ -451,7 +496,7 @@ export async function writeCliConfig(next: CliConfig): Promise<void> {
       encoding: "utf8",
       mode: 0o600,
     });
-    await rename(tmp, target);
+    await renameCliConfig(tmp, target, 0);
   } catch (err) {
     // Don't leave an orphaned temp file behind if the write/rename failed.
     await rm(tmp, { force: true });
