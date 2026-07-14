@@ -441,7 +441,9 @@ export class MockTraycerCli implements ITraycerCli {
   /** Upsert an entry, canonicalising family-default args to a null deviation. */
   private upsertEntry(path: string, args: readonly string[] | null): void {
     const canonical =
-      args !== null && !sameFlags(args, defaultShellArgs(path)) ? [...args] : null;
+      args !== null && !sameFlags(args, defaultShellArgs(path))
+        ? [...args]
+        : null;
     this.shellEntries = [
       ...this.shellEntries.filter((entry) => entry.path !== path),
       { path, args: canonical },
@@ -535,7 +537,9 @@ export class MockTraycerCli implements ITraycerCli {
 
   async shellListDetected(): Promise<readonly TraycerDetectedShell[]> {
     const added: TraycerDetectedShell[] = this.shellEntries
-      .filter((entry) => !this.detectedShells.some((d) => d.path === entry.path))
+      .filter(
+        (entry) => !this.detectedShells.some((d) => d.path === entry.path),
+      )
       .map((entry) => ({
         name: entry.path.split(/[\\/]/).pop() ?? entry.path,
         path: entry.path,
