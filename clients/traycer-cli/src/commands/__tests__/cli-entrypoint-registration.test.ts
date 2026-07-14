@@ -17,6 +17,11 @@ const mocks = vi.hoisted(() => ({
     readonly versionRequest: string | null;
     readonly automatic: boolean;
   }>,
+  applyCalls: [] as Array<{
+    readonly environment: string;
+    readonly force: boolean;
+    readonly noService: boolean;
+  }>,
   progressEvents: [] as ProgressInfo[],
 }));
 
@@ -46,6 +51,44 @@ vi.mock("../../installer/download-stage", () => ({
       installedVersion: "1.0.0",
       stagedVersion: null,
     };
+  },
+}));
+
+// `host apply`'s registration also goes through `withCliLock` - mocking it
+// alongside the installer core (rather than only `commands/host-apply.ts`)
+// keeps the --force/--no-service forwarding and `ctx.progress` wiring
+// genuinely exercised through the real lock-wrapping call site in
+// `commands/host-apply.ts`, the same depth as the `host download` mock
+// above.
+vi.mock("../../store/cli-lock", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../store/cli-lock")>();
+  return {
+    ...actual,
+    withCliLock: async <T>(_opts: unknown, fn: () => Promise<T>): Promise<T> =>
+      fn(),
+  };
+});
+
+vi.mock("../../installer/apply", () => ({
+  applyHost: async (opts: {
+    readonly environment: string;
+    readonly force: boolean;
+    readonly noService: boolean;
+    readonly onProgress: (info: ProgressInfo) => void;
+  }) => {
+    mocks.applyCalls.push({
+      environment: opts.environment,
+      force: opts.force,
+      noService: opts.noService,
+    });
+    opts.onProgress({
+      stage: "swap",
+      message: "test-progress",
+      percent: null,
+      bytes: null,
+      totalBytes: null,
+    });
+    return { outcome: "no-op", installedVersion: "1.0.0" };
   },
 }));
 
@@ -151,6 +194,7 @@ describe("traycer CLI entrypoint registration", () => {
       ["host", "restart"],
       ["host", "install"],
       ["host", "ensure"],
+      ["host", "apply"],
       ["host", "update"],
       ["host", "download"],
       ["host", "uninstall"],
@@ -178,6 +222,7 @@ describe("traycer CLI entrypoint registration", () => {
       ["host", "stop"],
       ["host", "install"],
       ["host", "ensure"],
+      ["host", "apply"],
       ["host", "update"],
       ["host", "download"],
       ["host", "uninstall"],
@@ -306,6 +351,50 @@ describe("traycer CLI entrypoint registration", () => {
     // event per invocation above.
     expect(mocks.progressEvents).toHaveLength(3);
     expect(mocks.progressEvents[0]).toMatchObject({ stage: "resolve" });
+  });
+
+  it("host apply exposes --force and a hidden --no-service option, wired to the shared runner", () => {
+    const program = buildProgram();
+    const cmd = expectCommand(program, ["host", "apply"]);
+    const flags = cmd.options.map((o) => o.long);
+    expect(flags).toContain("--force");
+    expect(flags).toContain("--no-service");
+    const help = cmd.helpInformation();
+    // `--no-service` is the desktop-owned packaged-macOS contract, not a
+    // user-facing switch - hidden from help via `.hideHelp()`, but still a
+    // real, reachable option (expectCommand above already proves the
+    // command itself is reachable regardless of help visibility).
+    expect(help).not.toContain("--no-service");
+    expectRunnerFlags(cmd, "host apply");
+  });
+
+  it("host apply forwards --force and --no-service, and bridges ctx.progress", async () => {
+    mocks.applyCalls.length = 0;
+    mocks.progressEvents.length = 0;
+
+    const plain = buildProgram();
+    plain.exitOverride();
+    await plain.parseAsync(["host", "apply"], { from: "user" });
+
+    const forced = buildProgram();
+    forced.exitOverride();
+    await forced.parseAsync(["host", "apply", "--force"], { from: "user" });
+
+    const noService = buildProgram();
+    noService.exitOverride();
+    await noService.parseAsync(["host", "apply", "--no-service"], {
+      from: "user",
+    });
+
+    expect(mocks.applyCalls).toEqual([
+      { environment: "production", force: false, noService: false },
+      { environment: "production", force: true, noService: false },
+      { environment: "production", force: false, noService: true },
+    ]);
+    // `ctx.progress` forwarding through `host-apply.ts`'s
+    // `(info) => ctx.progress(info)` bridge - one event per invocation.
+    expect(mocks.progressEvents).toHaveLength(3);
+    expect(mocks.progressEvents[0]).toMatchObject({ stage: "swap" });
   });
 
   it("host available exposes --include-pre-releases for RC registry inspection", () => {

@@ -48,6 +48,7 @@ import { buildConfigShellRemoveCommand } from "./commands/config-shell-remove";
 import { configShellResetCommand } from "./commands/config-shell-reset";
 import { buildConfigShellRevertArgsCommand } from "./commands/config-shell-revert-args";
 import { buildConfigShellSetCommand } from "./commands/config-shell-set";
+import { buildHostApplyCommand } from "./commands/host-apply";
 import { buildHostAvailableCommand } from "./commands/host-available";
 import { buildHostDownloadCommand } from "./commands/host-download";
 import { hostDoctorCommand } from "./commands/host-doctor";
@@ -515,6 +516,31 @@ function registerHostCommands(program: Command): void {
         })(ctx);
       };
     },
+  );
+
+  withRunner(
+    host
+      .command("apply")
+      .description("Apply the staged host update over the current install")
+      .option(
+        "--force",
+        "Apply even if the host has work in progress (skips the busy check).",
+      )
+      // Hidden: the desktop-owned packaged-macOS path, which drives its own
+      // locked SMAppService activation cycle after this non-disruptive
+      // bytes-only apply - see commands/host-apply.ts.
+      .addOption(
+        new Option(
+          "--no-service",
+          "Internal: skip the busy check and service stop/start; rejected on Windows",
+        ).hideHelp(),
+      ),
+    (opts) =>
+      buildHostApplyCommand({
+        force: opts.force === true,
+        // commander materialises `--no-service` as `service: false`.
+        noService: opts.service === false,
+      }),
   );
 
   withRunner(
