@@ -1,5 +1,4 @@
 const POPPER_WRAPPER_SELECTOR = "[data-radix-popper-content-wrapper]";
-const PLACEMENT_FALLBACK_MS = 2000;
 
 function isRectOnscreen(rect: DOMRect): boolean {
   return (
@@ -32,23 +31,29 @@ function isRectOnscreen(rect: DOMRect): boolean {
  * already-placed, already-open menu - e.g. re-anchoring on hover to a
  * different row - needs no wait at all).
  *
- * `signal` cancels the wait (component unmount / anchor change) without
- * leaking the observer. The fallback timer is a backstop only, not the
- * primary signal - it exists so an unforeseen missed mutation degrades to
- * "show it anyway" instead of hiding the sidecar forever.
+ * There is deliberately no fallback timeout. If placement never lands (the
+ * anchor is detached, or Radix never resolves it), the correct behavior is
+ * to stay hidden indefinitely, not to eventually paint at a coordinate
+ * clamped from an invalid off-screen rect - that would just be this bug
+ * again, delayed. `signal` is the only way out: aborting (component
+ * unmount / anchor change) resolves the wait and disconnects the observer
+ * without ever calling `update()`.
  */
 export function waitForAnchorPlacement(
   anchor: HTMLElement,
   signal: AbortSignal,
 ): Promise<void> {
   const wrapper = anchor.closest(POPPER_WRAPPER_SELECTOR);
-  if (wrapper === null || isRectOnscreen(anchor.getBoundingClientRect())) {
+  if (
+    wrapper === null ||
+    isRectOnscreen(anchor.getBoundingClientRect()) ||
+    signal.aborted
+  ) {
     return Promise.resolve();
   }
   return new Promise((resolve) => {
     const finish = () => {
       observer.disconnect();
-      clearTimeout(fallback);
       signal.removeEventListener("abort", finish);
       resolve();
     };
@@ -59,7 +64,6 @@ export function waitForAnchorPlacement(
       attributes: true,
       attributeFilter: ["style"],
     });
-    const fallback = setTimeout(finish, PLACEMENT_FALLBACK_MS);
     signal.addEventListener("abort", finish);
   });
 }

@@ -277,6 +277,69 @@ describe("waitForAnchorPlacement", () => {
       wrapper.style.transform = "translate(228px, 100px)";
     }).not.toThrow();
   });
+
+  it("resolves immediately for an anchor whose signal is already aborted", async () => {
+    const { anchor } = mountWrapperAndAnchor();
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      waitForAnchorPlacement(anchor, controller.signal),
+    ).resolves.toBeUndefined();
+  });
+
+  describe("with no fallback timeout", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("stays unresolved indefinitely when placement never lands - no timer ever fires to show a stale rect", async () => {
+      const { anchor } = mountWrapperAndAnchor();
+      const controller = new AbortController();
+
+      let resolved = false;
+      void waitForAnchorPlacement(anchor, controller.signal).then(() => {
+        resolved = true;
+      });
+
+      // Well past the old 2000ms fallback - and past it again, several
+      // times over. Nothing internal should ever fire; only an explicit
+      // placement mutation or an abort may resolve this.
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(resolved).toBe(false);
+
+      // Abort is still the only way out, and it still works after a long
+      // pending period - proves cleanup isn't tied to a timer that no
+      // longer exists.
+      controller.abort();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(resolved).toBe(true);
+    });
+
+    it("unmount (abort) after a long pending period still disconnects the observer without throwing", async () => {
+      const { wrapper, anchor } = mountWrapperAndAnchor();
+      const controller = new AbortController();
+
+      let resolved = false;
+      void waitForAnchorPlacement(anchor, controller.signal).then(() => {
+        resolved = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      controller.abort();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(resolved).toBe(true);
+
+      // A mutation arriving after unmount/abort must be inert.
+      placed = true;
+      expect(() => {
+        wrapper.style.transform = "translate(228px, 100px)";
+      }).not.toThrow();
+    });
+  });
 });
 
 describe("waitForAnchorReady", () => {
