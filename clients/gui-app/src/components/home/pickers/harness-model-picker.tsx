@@ -15,6 +15,7 @@ import { useSurfaceActivity } from "@/components/home/composer/surface-activity-
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 import { commitSelection } from "@/stores/composer/commit-selection";
 import {
+  harnessCatalogEntryNeedsRefresh,
   useDefaultHostClient,
   useGuiHarnessCatalog,
   useGuiHarnessCommandsQuery,
@@ -326,43 +327,52 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       subscribed: false,
     },
   );
-  // Latest-ref indirection: `.refetch` identity is a TanStack implementation
-  // detail, and `selectedHarnessRefetchGate` must be read at the moment the
-  // intent effects below actually fire rather than captured as a stale
-  // closure from whenever `visibleOpen` / `selection.harnessId` last changed
-  // - so neither ref is a dependency of those effects. Adding the gate as a
-  // dependency would re-run them (double-fetching on top of TanStack's own
-  // enabled-transition fetch) every time the gate itself flips, not just on
-  // an actual open/selection edge.
-  const selectedModelsRefetchRef = useRef(selectedModelsQuery.refetch);
-  const selectedCommandsRefetchRef = useRef(selectedCommandsQuery.refetch);
+  // Latest-ref indirection: a `UseQueryResult` is a fresh object every render,
+  // and `selectedHarnessRefetchGate` must be read at the moment the intent
+  // effects below actually fire rather than captured as a stale closure from
+  // whenever `visibleOpen` / `selection.harnessId` last changed - so none of
+  // these is a dependency of those effects. Adding the gate as a dependency
+  // would re-run them on every gate flip, not just on an actual open/selection
+  // edge. This effect has no dependency array, so it re-syncs after every
+  // render and is declared BEFORE the intent effects: React runs effects in
+  // declaration order, so on the render where the user picks a new harness the
+  // refs already point at that harness's query by the time the selection edge
+  // fires.
+  const selectedModelsQueryRef = useRef(selectedModelsQuery);
+  const selectedCommandsQueryRef = useRef(selectedCommandsQuery);
   const selectedHarnessRefetchGateRef = useRef(selectedHarnessRefetchGate);
   useEffect(() => {
-    selectedModelsRefetchRef.current = selectedModelsQuery.refetch;
-    selectedCommandsRefetchRef.current = selectedCommandsQuery.refetch;
+    selectedModelsQueryRef.current = selectedModelsQuery;
+    selectedCommandsQueryRef.current = selectedCommandsQuery;
     selectedHarnessRefetchGateRef.current = selectedHarnessRefetchGate;
   });
   // Shared by both intent effects below - a stable identity (empty deps) so
   // listing it as an effect dependency never itself retriggers them. Kept as
-  // its own function (rather than inlined) so the disabled/unavailable guard
-  // is a single source of truth and doesn't duplicate the branch into both
-  // effect bodies.
+  // its own function (rather than inlined) so the guards are a single source of
+  // truth and don't duplicate into both effect bodies.
+  //
+  // Each query is asked separately whether it is due, rather than sharing one
+  // verdict: models are seeded by the app-load prefetch while the commands
+  // prewarm is only ever fired from here, so a shared verdict keyed on models
+  // would leave a Traycer/OpenRouter server un-prewarmed for the whole first
+  // window (their models come from remote HTTP and never touch it - only
+  // `listCommands` does).
   const runSelectedHarnessIntentRefetch = useCallback(() => {
     if (!selectedHarnessRefetchGateRef.current) return;
-    void selectedModelsRefetchRef.current();
-    void selectedCommandsRefetchRef.current();
+    const models = selectedModelsQueryRef.current;
+    if (harnessCatalogEntryNeedsRefresh(models)) void models.refetch();
+    const commands = selectedCommandsQueryRef.current;
+    if (harnessCatalogEntryNeedsRefresh(commands)) void commands.refetch();
   }, []);
-  // Explicit intent edges. Model and command queries no longer poll on an
-  // interval (see `use-gui-harness-catalog.ts`), and `selectedModelsQuery`'s
-  // `enabled` stays continuously true across an open/close cycle (gated on
-  // surface activity, not popover visibility) - so TanStack's own
-  // enabled-transition refetch never fires for it, however stale the cached
-  // data gets. These two edges are not the only place these queries refresh -
-  // app-load prefetch, the batched catalog's own mount/enabled edges, the
-  // command palette, and the picker's manual refresh button all still refresh
-  // independently - but they are what double as intent-driven prewarm for a
-  // reaped OpenCode-backed server, and are the error-recovery path now that a
-  // failed fetch no longer self-heals on a background timer.
+  // Explicit intent edges, and the ONLY thing that refreshes a model catalog
+  // outside the app-load fill and the manual refresh button - every model query
+  // is cache-only now (see `use-gui-harness-catalog.ts`). They refresh just the
+  // selected harness, so opening the picker no longer fans out across every
+  // provider, and only once its cached entry has aged past the window, so an
+  // open on warm cache costs nothing. That also makes them the intent-driven
+  // prewarm for a reaped OpenCode-backed server (the age threshold is the
+  // host's idle timeout) and the error-recovery path, now that a failed fetch
+  // no longer self-heals on a background timer.
   useEffect(() => {
     if (!visibleOpen) return;
     runSelectedHarnessIntentRefetch();

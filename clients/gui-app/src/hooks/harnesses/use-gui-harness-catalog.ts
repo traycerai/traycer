@@ -19,22 +19,70 @@ import {
 } from "@/hooks/host/use-host-query";
 import { useHostQueries } from "@/hooks/host/use-host-queries";
 
-// Catalog data (harness availability + model lists) changes rarely, and a cold
-// model fetch can spawn the OpenCode server + resolve the shell env. Cache for
-// 15 min and stop background polling; users force an update via the picker's
-// refresh button (`useRefreshHarnessCatalog`) when they change provider config.
+// Model catalogs are CACHE-ONLY: `staleTime: Infinity` on every model query -
+// the batched fan-out in `useGuiHarnessCatalog` and the standalone
+// `useGuiHarnessModelsQuery` alike - so no observer ever refetches one on its
+// own. Not on a timer, not when a surface mounts, and not when an `enabled`
+// gate flips as the user moves between composers, chat tiles and palette
+// subpages.
 //
-// Model queries (success AND error paths) intentionally have NO
-// `refetchInterval` at all - unlike availability below. The host's OpenCode
-// adapter keeps a long-lived `opencode serve` process alive only while
-// something keeps touching it; an app-lifetime interval (even an error
-// backoff, since `harness-runtime.ts` deliberately does not cache failed
-// model calls) would hit `OpenCodeAdapter.listModels` forever and reset that
-// idle clock on every tick, making a spawned server permanently unreapable.
-// Recovery instead happens at explicit user-intent edges (picker open,
-// harness selection, manual refresh) - see `harness-model-picker.tsx`.
-const HARNESS_CATALOG_STALE_TIME_MS = 15 * 60 * 1000;
+// A finite `staleTime` is not enough here, and that is the subtle part. It
+// stops nothing by itself: it only decides whether the *next* mount or
+// enabled-transition refetches. Four surfaces mount this catalog (the app-load
+// prefetcher, the picker popover, `chat-tile`, the palette's model/provider
+// subpages), so once the cache aged past a finite window, the next surface the
+// user touched silently re-pulled every harness - which reads as a background
+// refresh nobody asked for, and pulled all providers on a picker open when only
+// the selected one was wanted.
+//
+// That matters because a cold `listModels` can spawn the OpenCode server and
+// resolve the shell env, and the host reaps that server after
+// `OPENCODE_SERVER_IDLE_TIMEOUT_MS` without traffic. An unasked-for fetch both
+// pays a respawn and resets the host's idle clock, which is what kept a spawned
+// server effectively unreapable.
+//
+// Models therefore refresh in exactly three places:
+//   - the app-load fill (`HarnessCatalogPrefetcher`), which populates the cache
+//     once per app session; every surface renders from that cache, including
+//     while a refresh is in flight (a background refetch keeps the previous
+//     data, so `isPending` stays false and no surface blanks);
+//   - the picker's intent edges - popover open, harness selection - which
+//     refresh ONLY the selected harness, and only once its cached entry is
+//     older than `HARNESS_CATALOG_REFRESH_AFTER_MS`
+//     (`harnessCatalogEntryNeedsRefresh`);
+//   - the picker's manual refresh button (`useRefreshHarnessCatalog`), whose
+//     `invalidateQueries` beats `staleTime: Infinity` and re-fetches everything.
+//
+// Matching that refresh threshold to the host's 15-min idle timeout is what
+// keeps the two clocks from fighting: a picker opened inside the window reuses
+// cache and leaves a live server alone, and one opened after it refetches -
+// respawning a reaped server exactly when the user is about to pick a model.
+export const HARNESS_CATALOG_REFRESH_AFTER_MS = 15 * 60 * 1000;
 const HARNESS_AVAILABILITY_REFRESH_MS = 15 * 60 * 1000;
+
+export interface HarnessCatalogEntryFreshness {
+  readonly dataUpdatedAt: number;
+  readonly isError: boolean;
+}
+
+/**
+ * Whether an intent edge should refresh a cached catalog entry. Model queries
+ * never refetch on their own (see above), so the picker asks this at its open /
+ * harness-selection edges rather than refetching unconditionally: `.refetch()`
+ * ignores `staleTime` as well as `enabled`, so an unguarded call would re-hit
+ * `listModels` - and respawn a reaped OpenCode server - on every popover open,
+ * however fresh the cache was.
+ *
+ * An entry that never loaded (`dataUpdatedAt === 0`) or whose last fetch failed
+ * is always due: with no background retry left, the intent edges are also the
+ * error-recovery path.
+ */
+export function harnessCatalogEntryNeedsRefresh(
+  entry: HarnessCatalogEntryFreshness,
+): boolean {
+  if (entry.isError || entry.dataUpdatedAt === 0) return true;
+  return Date.now() - entry.dataUpdatedAt >= HARNESS_CATALOG_REFRESH_AFTER_MS;
+}
 
 // An availability probe can transiently fail - most often a cold-start SDK
 // timeout for Claude (loading its ~200MB native CLI) when the host probes all
@@ -194,7 +242,11 @@ export function useGuiHarnessModelsQuery(
     options: {
       enabled: activity.enabled,
       subscribed: activity.subscribed,
-      staleTime: HARNESS_CATALOG_STALE_TIME_MS,
+      // Cache-only (see the module header). This observer's `enabled` tracks
+      // surface activity, so a finite staleTime would refetch - and respawn a
+      // reaped server - every time the user merely switched back to a composer
+      // with an aged cache.
+      staleTime: Infinity,
     },
   });
 }
@@ -217,7 +269,12 @@ export function useGuiHarnessCommandsQuery(
     options: {
       enabled: activity.enabled,
       subscribed: activity.subscribed,
-      staleTime: HARNESS_CATALOG_STALE_TIME_MS,
+      // Commands keep a finite staleTime, unlike models: this hook's only
+      // steady consumer is the composer's slash popup, whose `enabled` flips
+      // when the user types "/" - an intent edge in its own right, and the one
+      // that already prewarms an OpenCode-backed server. Refreshing it at most
+      // once per window on that edge is the behavior we want.
+      staleTime: HARNESS_CATALOG_REFRESH_AFTER_MS,
     },
   } satisfies UseHostQueryOptions<HostRpcRegistry, "agent.gui.listCommands">);
 }
@@ -253,7 +310,14 @@ export function useGuiHarnessCatalog(
     requests,
     options: {
       enabled: activity.enabled,
-      staleTime: HARNESS_CATALOG_STALE_TIME_MS,
+      // Cache-only (see the module header). These observers are created and
+      // destroyed as each surface activates, so a finite staleTime turned every
+      // picker open / chat-tile reveal / palette subpage mount past the window
+      // into a fan-out across EVERY harness. A harness with no cached entry yet
+      // (newly available, or the app-load fill still in flight) still fetches -
+      // TanStack's no-data path ignores staleTime - so this only suppresses
+      // re-pulling harnesses we already hold.
+      staleTime: Infinity,
     },
   });
 
