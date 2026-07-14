@@ -109,7 +109,7 @@ function renderTabStrip(tab: typeof TAB, canRenameTabs: boolean): void {
   const onSelectTab = vi.fn<(groupId: string, tabId: string) => void>();
   const onCloseTab = vi.fn<(groupId: string, tabId: string) => void>();
   const onPromotePreview = vi.fn<(groupId: string) => void>();
-  const onSplitRight = vi.fn<(groupId: string) => void>();
+  const onSplit = vi.fn<(groupId: string, direction: SplitDirection) => void>();
   const onCloseGroup = vi.fn<(groupId: string) => void>();
   const onOpenBlankTab = vi.fn<(groupId: string) => void>();
   const onMenuTab = vi.fn<(groupId: string, tabId: string) => void>();
@@ -137,7 +137,7 @@ function renderTabStrip(tab: typeof TAB, canRenameTabs: boolean): void {
           onSelectTab={onSelectTab}
           onCloseTab={onCloseTab}
           onPromotePreview={onPromotePreview}
-          onSplitRight={onSplitRight}
+          onSplit={onSplit}
           onCloseGroup={onCloseGroup}
           onOpenBlankTab={onOpenBlankTab}
           canRenameTabs={canRenameTabs}

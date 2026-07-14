@@ -23,6 +23,7 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { makeGitFileDiffTileForFile } from "@/lib/git/git-diff-tile";
 import type {
   GitDiffBundleGroup,
+  GitDiffRepositoryContext,
   GitDiffTileRef,
 } from "@/stores/epics/canvas/types";
 import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
@@ -36,6 +37,7 @@ export interface FileTreeProps {
   readonly viewTabId: string;
   readonly hostId: string;
   readonly runningDir: string;
+  readonly repositoryContext: GitDiffRepositoryContext | null;
   readonly allFiles: ReadonlyArray<GitChangedFile>;
   readonly visibleFiles: ReadonlyArray<GitChangedFile>;
   readonly forceExpanded: boolean;
@@ -88,6 +90,7 @@ export function FileTree(props: FileTreeProps): ReactNode {
       viewTabId={props.viewTabId}
       hostId={props.hostId}
       runningDir={props.runningDir}
+      repositoryContext={props.repositoryContext}
       allFiles={props.allFiles}
       visibleFiles={props.visibleFiles}
       forceExpanded={props.forceExpanded}

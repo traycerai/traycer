@@ -4,6 +4,7 @@ import { getBasename } from "@/lib/path/cross-platform-path";
 import { TILE_KIND_GIT_DIFF } from "@/stores/epics/canvas/tile-kinds";
 import type {
   GitDiffBundleGroup,
+  GitDiffRepositoryContext,
   GitDiffTilePayload,
   GitDiffTileRef,
 } from "@/stores/epics/canvas/types";
@@ -43,6 +44,15 @@ export function gitBundleGroupLabel(group: GitDiffBundleGroup): string {
   return "Changes";
 }
 
+export function gitDiffRepositoryContextLabel(
+  context: GitDiffRepositoryContext,
+): string {
+  if (context.workspaceLabel === context.repositoryLabel) {
+    return context.workspaceLabel;
+  }
+  return `${context.workspaceLabel} › ${context.repositoryLabel}`;
+}
+
 export function makeGitFileDiffTile(args: {
   readonly hostId: string;
   readonly runningDir: string;
@@ -61,6 +71,7 @@ export function makeGitFileDiffTile(args: {
     type: TILE_KIND_GIT_DIFF,
     name: `${getBasename(args.filePath)} · ${gitStageLabel(args.stage)}`,
     hostId: args.hostId,
+    repositoryContext: null,
     diff,
     view: createDiffTileViewState(),
   };
@@ -83,6 +94,7 @@ export function makeGitBundleDiffTile(args: {
   readonly hostId: string;
   readonly runningDir: string;
   readonly bundleGroup: GitDiffBundleGroup;
+  readonly repositoryContext: GitDiffRepositoryContext | null;
 }): GitDiffTileRef {
   const diff: GitDiffTilePayload = {
     kind: "bundle",
@@ -93,8 +105,12 @@ export function makeGitBundleDiffTile(args: {
     id: gitDiffTileId(args.hostId, diff),
     instanceId: uuidv4(),
     type: TILE_KIND_GIT_DIFF,
-    name: gitBundleGroupLabel(args.bundleGroup),
+    name:
+      args.repositoryContext === null
+        ? `${getBasename(args.runningDir)} · ${gitBundleGroupLabel(args.bundleGroup)}`
+        : `${gitDiffRepositoryContextLabel(args.repositoryContext)} · ${gitBundleGroupLabel(args.bundleGroup)}`,
     hostId: args.hostId,
+    repositoryContext: args.repositoryContext,
     diff,
     view: createDiffTileViewState(),
   };

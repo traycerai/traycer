@@ -143,6 +143,12 @@ describe("terminal sidebar Close", () => {
     expect(
       getByTestId(`epic-terminal-sidebar-item-${SESSION_ID}`).textContent,
     ).toBe("New Terminal");
+    expect(
+      getByTestId(`epic-terminal-sidebar-item-${SESSION_ID}`).className,
+    ).toContain("h-7");
+    expect(
+      getByTestId(`epic-terminal-sidebar-item-${SESSION_ID}`).className,
+    ).not.toContain("h-9");
     expect(queryByText("/tmp/work")).toBeNull();
     expect(
       getByTestId(`epic-terminal-sidebar-more-${SESSION_ID}`),
@@ -161,6 +167,26 @@ describe("terminal sidebar Close", () => {
     // The open tab is closed...
     expect(findOpenArtifactInTab(TAB_ID, SESSION_ID)).toBeNull();
     // ...and the PTY is terminated.
+    expect(killMutate).toHaveBeenCalledWith({ sessionId: SESSION_ID });
+  });
+
+  it("offers the ellipsis actions from the row context menu", async () => {
+    const { getByTestId, findByTestId } = render(
+      wrapper(<TerminalsPanelBody epicId="epic-1" tabId={TAB_ID} />),
+    );
+
+    fireEvent.contextMenu(
+      getByTestId(`epic-terminal-sidebar-item-${SESSION_ID}`),
+    );
+
+    expect(
+      await findByTestId(`epic-terminal-sidebar-context-rename-${SESSION_ID}`),
+    ).not.toBeNull();
+    fireEvent.click(
+      await findByTestId(`epic-terminal-sidebar-context-kill-${SESSION_ID}`),
+    );
+
+    expect(findOpenArtifactInTab(TAB_ID, SESSION_ID)).toBeNull();
     expect(killMutate).toHaveBeenCalledWith({ sessionId: SESSION_ID });
   });
 

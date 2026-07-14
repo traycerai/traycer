@@ -706,6 +706,49 @@ describe("epic sidebar selection mode", () => {
     expect(screen.getByTestId("epic-sidebar-more-chat-root")).not.toBeNull();
   });
 
+  it("keeps chat add inline and exposes ellipsis actions on right-click", async () => {
+    seedChatTree();
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    const chatRow = screen.getByTestId("epic-sidebar-item-chat-root");
+    expect(
+      chatRow.parentElement?.querySelector(
+        '[aria-label="Add child chat or agent"]',
+      ),
+    ).not.toBeNull();
+    fireEvent.contextMenu(chatRow);
+
+    expect(
+      await screen.findByTestId("epic-sidebar-context-rename-chat-root"),
+    ).not.toBeNull();
+    expect(
+      screen.getByTestId("epic-sidebar-context-delete-chat-root"),
+    ).not.toBeNull();
+  });
+
+  it("keeps artifact add inline and exposes ellipsis actions on right-click", async () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    expect(screen.getByTestId("epic-sidebar-add-spec-root")).not.toBeNull();
+    fireEvent.contextMenu(screen.getByTestId("epic-sidebar-item-spec-root"));
+
+    expect(
+      await screen.findByTestId(
+        "epic-sidebar-context-export-markdown-spec-root",
+      ),
+    ).not.toBeNull();
+    expect(
+      screen.getByTestId("epic-sidebar-context-rename-spec-root"),
+    ).not.toBeNull();
+    expect(
+      screen.getByTestId("epic-sidebar-context-delete-spec-root"),
+    ).not.toBeNull();
+  });
+
   it("enters chat selection mode from cmd-click on a row", () => {
     seedChatTree();
 

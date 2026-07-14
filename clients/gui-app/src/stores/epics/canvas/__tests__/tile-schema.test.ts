@@ -161,6 +161,10 @@ describe("parseTileRef / serializeTileRef", () => {
       hostId: HOST,
       runningDir: "/repo",
       bundleGroup: "changes",
+      repositoryContext: {
+        workspaceLabel: "workspace",
+        repositoryLabel: "packages/traycer",
+      },
     });
     expect(parseTileRef(serializeTileRef(file))).toEqual(file);
     expect(parseTileRef(serializeTileRef(bundle))).toEqual(bundle);
@@ -190,6 +194,26 @@ describe("parseTileRef / serializeTileRef", () => {
     });
     expect(parsed).not.toBeNull();
     expect(parsed?.id).toBe(tile.id);
+  });
+
+  it("upgrades legacy Git bundle titles with the repository directory", () => {
+    const parsed = parseTileRef({
+      id: "legacy-random-uuid",
+      type: "git-diff",
+      name: "Changes",
+      hostId: HOST,
+      diff: {
+        kind: "bundle",
+        runningDir: "/worktrees/right-click-context-menu/traycer",
+        bundleGroup: "changes",
+      },
+      view: {
+        collapsedFilePaths: [],
+      },
+    });
+
+    expect(parsed).not.toBeNull();
+    expect(parsed?.name).toBe("traycer · Changes");
   });
 
   it("rejects unknown tile kinds", () => {

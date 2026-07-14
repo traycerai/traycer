@@ -10,7 +10,10 @@ import {
 } from "@/lib/git/git-diff-tile";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import type { GitDiffBundleGroup } from "@/stores/epics/canvas/types";
+import type {
+  GitDiffBundleGroup,
+  GitDiffRepositoryContext,
+} from "@/stores/epics/canvas/types";
 import { useDraggable } from "@dnd-kit/core";
 import { FileDiff } from "lucide-react";
 import type { ReactNode } from "react";
@@ -22,6 +25,7 @@ export interface BundleOpenButtonProps {
   readonly hostId: string;
   readonly runningDir: string;
   readonly group: GitDiffBundleGroup;
+  readonly repositoryContext: GitDiffRepositoryContext | null;
   readonly disabled: boolean;
 }
 
@@ -36,8 +40,9 @@ export function BundleOpenButton(props: BundleOpenButtonProps): ReactNode {
         hostId: props.hostId,
         runningDir: props.runningDir,
         bundleGroup: props.group,
+        repositoryContext: props.repositoryContext,
       }),
-    [props.hostId, props.group, props.runningDir],
+    [props.hostId, props.group, props.repositoryContext, props.runningDir],
   );
   const dragData = useMemo<EpicCanvasGitDiffTileDragData>(
     () => ({

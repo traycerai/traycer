@@ -90,6 +90,7 @@ export const GIT_BUNDLE_CHANGES: GitDiffTileRef = makeGitBundleDiffTile({
   hostId: TEST_HOST_ID,
   runningDir: "/repo",
   bundleGroup: "changes",
+  repositoryContext: null,
 });
 export const SNAPSHOT_BUNDLE_CHANGES: SnapshotDiffTileRef =
   makeSnapshotCumulativeBundleDiffTile({
