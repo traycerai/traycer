@@ -24,7 +24,14 @@ export type VersionComparisonResult =
   | { readonly comparable: false };
 
 interface ParsedSemver {
-  readonly core: readonly [number, number, number];
+  // Kept as digit strings, not `number` - the core triplet has no upper
+  // bound in the SemVer grammar (`\d+`), and `Number.parseInt` silently
+  // loses precision past 2^53 (two distinct huge core versions could
+  // compare equal) or overflows to `Infinity` for very long digit strings
+  // (a validly-formed 400-digit component would be wrongly rejected as
+  // non-finite). `compareNumericIdentifiers` below compares these with
+  // arbitrary precision instead, the same way pre-release identifiers are.
+  readonly core: readonly [string, string, string];
   readonly pre: readonly string[];
 }
 
@@ -53,8 +60,6 @@ function parseSemver(value: string): ParsedSemver | null {
   if (coreTextParts.length !== 3 || !coreTextParts.every(isLeadingZeroFree)) {
     return null;
   }
-  const coreParts = coreTextParts.map((part) => Number.parseInt(part, 10));
-  if (coreParts.some((n) => !Number.isFinite(n))) return null;
   const preText = dashIndex === -1 ? "" : withoutBuild.slice(dashIndex + 1);
   const pre = preText === "" ? [] : preText.split(".");
   // A purely-numeric pre-release identifier is subject to the same
@@ -65,7 +70,7 @@ function parseSemver(value: string): ParsedSemver | null {
     return null;
   }
   return {
-    core: [coreParts[0], coreParts[1], coreParts[2]],
+    core: [coreTextParts[0], coreTextParts[1], coreTextParts[2]],
     pre,
   };
 }
@@ -120,12 +125,10 @@ export function compareHostVersions(
   const bp = parseSemver(b);
   if (ap === null || bp === null) return { comparable: false };
   for (let i = 0; i < 3; i++) {
-    if (ap.core[i] !== bp.core[i]) {
-      return {
-        comparable: true,
-        ordering: ap.core[i] > bp.core[i] ? "greater" : "less",
-      };
-    }
+    // Arbitrary-precision comparison, same as pre-release identifiers -
+    // `parseSemver` already rejected leading zeros, so this is safe.
+    const cmp = compareNumericIdentifiers(ap.core[i], bp.core[i]);
+    if (cmp !== "equal") return { comparable: true, ordering: cmp };
   }
   // Equal core triplet: a version carrying a pre-release ranks below the
   // same version without one (1.0.0-rc.1 < 1.0.0).

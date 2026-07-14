@@ -289,6 +289,36 @@ describe("downloadAndStageHost", () => {
     ).rejects.toMatchObject({ code: CLI_ERROR_CODES.HOST_NOT_INSTALLED });
   });
 
+  it("reports E_HOST_NOT_INSTALLED without ever calling the registry when no host is installed and the registry is unreachable", async () => {
+    // Regression: the phase-0 precondition must run BEFORE the manifest
+    // fetch. A prior version fetched the manifest first, so an
+    // uninstalled host + unreachable registry surfaced a misleading
+    // REGISTRY_UNAVAILABLE instead of the correct HOST_NOT_INSTALLED.
+    let fetchManifestCalled = false;
+    const client: RegistryClient = {
+      async fetchManifest() {
+        fetchManifestCalled = true;
+        throw new Error("simulated registry unreachable");
+      },
+      async resolveAsset() {
+        throw new Error("unreachable in this test");
+      },
+      async downloadAndVerify() {
+        throw new Error("unreachable in this test");
+      },
+    };
+    await expect(
+      downloadAndStageHost({
+        environment: ENV,
+        versionRequest: null,
+        automatic: false,
+        onProgress: noopProgress,
+        registryClient: client,
+      }),
+    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.HOST_NOT_INSTALLED });
+    expect(fetchManifestCalled).toBe(false);
+  });
+
   it("throws before any lock or transfer when the manifest's latest is not valid SemVer", async () => {
     await writeInstall("1.0.0", {});
     let downloadStarted = false;

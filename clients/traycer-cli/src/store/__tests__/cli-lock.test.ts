@@ -1,8 +1,11 @@
 import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import {
+  existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   utimesSync,
   writeFileSync,
@@ -13,14 +16,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   lockPath: "",
-  // When non-null, `readProcessStartTimeMs` reports a probe failure
-  // (returns null) for exactly this pid, simulating the underlying `ps`
-  // read failing while liveness itself still succeeds - the genuine
-  // "probe failure" shape `computeProcessIdentityVerdict` must resolve
-  // to "indeterminate", never "dead". Every other pid (including our own,
-  // needed when `acquireCliLock` stamps its own lock metadata) proxies
-  // straight through to the real implementation.
-  forceStartTimeProbeFailureForPid: null as number | null,
 }));
 
 vi.mock("../paths", () => ({
@@ -28,30 +23,16 @@ vi.mock("../paths", () => ({
   ensureCliInstallHomeDir: async () => {},
 }));
 
-// Mocks at the `readProcessStartTimeMs` probe boundary, not
-// `verifyProcessIdentity` wholesale - the real verdict logic
-// (`computeProcessIdentityVerdict`/`verifyProcessIdentity`) still runs
-// and derives "indeterminate" from a genuinely failed underlying probe,
-// so this test double proves the actual decision logic handles a probe
-// failure correctly rather than asserting a hand-picked verdict.
-vi.mock("../process-identity", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../process-identity")>();
-  return {
-    ...actual,
-    readProcessStartTimeMs: (pid: number) =>
-      pid === mocks.forceStartTimeProbeFailureForPid
-        ? null
-        : actual.readProcessStartTimeMs(pid),
-  };
-});
-
 import {
   acquireCliLock,
   isProcessAlive,
   withCliLock,
   type CliLockMetadata,
 } from "../cli-lock";
-import { readProcessStartTimeMs } from "../process-identity";
+import {
+  __setProcessStartTimeReaderForTest,
+  readProcessStartTimeMs,
+} from "../process-identity";
 import { CLI_ERROR_CODES } from "../../runner/errors";
 
 // Spawns a real, separate OS process so the "two-process" lock tests probe
@@ -249,11 +230,19 @@ describe("acquireCliLock", () => {
   });
 
   // Forces the failure at the underlying `readProcessStartTimeMs` probe
-  // boundary (not `verifyProcessIdentity` wholesale) against a genuinely
-  // live, separate spawned process: liveness itself succeeds (the child
-  // really is running), only the start-time read fails, so the real
-  // verdict logic must independently derive "indeterminate" from that
-  // combination rather than have the verdict handed to it.
+  // boundary via the real test-only injection seam
+  // (`__setProcessStartTimeReaderForTest`), not by mocking the
+  // `../process-identity` module wholesale: a `vi.mock` replacing the
+  // module's EXPORTED `readProcessStartTimeMs` does not rebind
+  // `verifyProcessIdentity`'s own same-module call to it (ES module
+  // same-file references aren't routed through the mocked export object),
+  // so that approach silently passed via ordinary alive-same instead of
+  // genuinely exercising the probe-failure path - see the Fixup round-2
+  // ticket's item F. Against a genuinely live, separate spawned process:
+  // liveness itself succeeds (the child really is running), only the
+  // start-time read fails, so the real verdict logic must independently
+  // derive "indeterminate" from that combination rather than have the
+  // verdict handed to it.
   it.skipIf(process.platform === "win32")(
     "liveness-alive/start-time-probe-failure holder (genuine two-process) survives past the ceiling",
     async () => {
@@ -261,7 +250,9 @@ describe("acquireCliLock", () => {
       try {
         const pid = await ready;
         const genuineStartedAtMs = readProcessStartTimeMs(pid);
-        mocks.forceStartTimeProbeFailureForPid = pid;
+        __setProcessStartTimeReaderForTest((probePid) =>
+          probePid === pid ? null : readProcessStartTimeMs(probePid),
+        );
         writeLock({
           pid,
           reason: "host-update",
@@ -277,7 +268,7 @@ describe("acquireCliLock", () => {
           }),
         ).rejects.toMatchObject({ code: CLI_ERROR_CODES.CLI_LOCK_BUSY });
       } finally {
-        mocks.forceStartTimeProbeFailureForPid = null;
+        __setProcessStartTimeReaderForTest(null);
         child.kill();
       }
     },
@@ -397,6 +388,122 @@ describe("acquireCliLock", () => {
     expect(results.every((r) => r.status === "fulfilled")).toBe(true);
     expect(maxConcurrentHolders).toBe(1);
   }, 20_000);
+
+  // TRUE multiprocess regression for the residual break-race the reviewer
+  // found in the round-1 rename-to-claim protocol: a contender delayed
+  // between its stale read and its break attempt could rename away a
+  // DIFFERENT, genuinely fresh holder's lock. Reproducing that shape needs
+  // two genuinely separate OS processes and a deterministic way to pause
+  // one of them mid-decision - an in-process `Promise.allSettled` (as the
+  // stress test above uses) can't reproduce a cross-process TOCTOU window,
+  // only the arbitration-lock serialization itself can be trusted to close
+  // it. `cli-lock-worker.ts` is spawned as a real `bun run` child process
+  // so this exercises actual OS-level file contention, not a simulation.
+  it.skipIf(process.platform === "win32")(
+    "a contender paused between its stale read and its break attempt aborts once a different process has already broken, acquired, and released the lock",
+    async () => {
+      const markerDir = join(workDir, "markers");
+      const hookDir = join(workDir, "hook");
+      mkdirSync(markerDir);
+      mkdirSync(hookDir);
+
+      // A genuinely dead pid, established the same way the rest of this
+      // file's real-process tests do: spawn, wait for exit, then use that
+      // now-dead pid - never a magic number that might collide with an
+      // unrelated live process on the test machine.
+      const shortLived = spawn("sleep", ["0.1"]);
+      const deadPid = await new Promise<number>((resolve, reject) => {
+        shortLived.once("spawn", () => {
+          if (shortLived.pid === undefined) {
+            reject(new Error("spawned short-lived process has no pid"));
+            return;
+          }
+          resolve(shortLived.pid);
+        });
+        shortLived.once("error", reject);
+      });
+      await new Promise<void>((resolve) =>
+        shortLived.once("exit", () => resolve()),
+      );
+
+      const workerLockPath = join(workDir, "worker.lock");
+      writeFileSync(
+        workerLockPath,
+        JSON.stringify({
+          pid: deadPid,
+          reason: "dead-holder",
+          startedAt: new Date().toISOString(),
+          hostname: null,
+          token: "original-token",
+          processStartedAtMs: null,
+        }),
+      );
+
+      const workerScript = join(__dirname, "fixtures", "cli-lock-worker.ts");
+      const spawnWorker = (
+        label: string,
+        extraEnv: Record<string, string>,
+      ): ChildProcessWithoutNullStreams =>
+        spawn("bun", ["run", workerScript], {
+          env: {
+            ...process.env,
+            WORKER_LOCK_PATH: workerLockPath,
+            WORKER_MARKER_DIR: markerDir,
+            WORKER_LABEL: label,
+            ...extraEnv,
+          },
+        });
+      const waitForExit = (child: ChildProcessWithoutNullStreams) =>
+        new Promise<number | null>((resolve) => {
+          child.once("exit", (code) => resolve(code));
+        });
+      const waitForFile = async (path: string): Promise<void> => {
+        const deadline = Date.now() + 15_000;
+        while (Date.now() < deadline) {
+          if (existsSync(path)) return;
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        throw new Error(`timed out waiting for ${path}`);
+      };
+
+      // Contender A: paused (via the env-gated break-hook seam) right
+      // after it decides to break the stale lock, but before it attempts
+      // the break.
+      const childA = spawnWorker("A", {
+        TRAYCER_CLI_LOCK_TEST_BREAK_HOOK_DIR: hookDir,
+      });
+      await waitForFile(join(hookDir, "ready"));
+
+      // Contender B: unpaused. Reads the SAME stale lock, breaks it,
+      // acquires, writes its held-marker, holds briefly, releases -
+      // entirely before A is allowed to resume.
+      const childB = spawnWorker("B", {});
+      const codeB = await waitForExit(childB);
+      expect(codeB).toBe(0);
+
+      // Only now let A resume its paused break attempt.
+      writeFileSync(join(hookDir, "go"), "");
+      const codeA = await waitForExit(childA);
+      expect(codeA).toBe(0);
+
+      // A's break attempt must have found the canonical lock changed out
+      // from under its stale decision (B already broke + released it) and
+      // aborted - never treating a second, unrelated unlink as its own
+      // successful break.
+      const outcome = readFileSync(join(hookDir, "outcome"), "utf8");
+      expect(outcome).toBe("aborted");
+
+      // Held-marker protocol: neither worker ever observed the other's
+      // marker still present when it wrote its own - i.e. at no point did
+      // both processes believe they held the lock simultaneously.
+      const markerEntries = readdirSync(markerDir);
+      const violations = markerEntries.filter((name) =>
+        name.startsWith("violation-"),
+      );
+      expect(violations).toEqual([]);
+    },
+    30_000,
+  );
 
   it("does not break an empty/corrupt lock file younger than the grace window", async () => {
     writeFileSync(mocks.lockPath, "");

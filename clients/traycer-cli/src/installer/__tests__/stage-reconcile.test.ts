@@ -7,6 +7,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import type { PathLike, RmOptions } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -27,6 +28,38 @@ function stagingRootFor(environment: Environment): string {
 function stagedDirFor(environment: Environment): string {
   return join(hostHomeFor(environment), "staged");
 }
+
+// Lets one test force `unlink`/`rm` to fail for a specific path (the exact
+// two operations round-1's aside-invalidation depended on entirely), while
+// every other path proxies straight through to the real implementation -
+// see the "forced double failure" test below.
+const mocks = vi.hoisted(() => ({
+  forceUnlinkFailureForPath: null as string | null,
+  forceRmFailureForPath: null as string | null,
+}));
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    unlink: async (path: PathLike) => {
+      if (path === mocks.forceUnlinkFailureForPath) {
+        throw Object.assign(new Error("simulated unlink failure"), {
+          code: "EPERM",
+        });
+      }
+      return actual.unlink(path);
+    },
+    rm: async (path: PathLike, options: RmOptions) => {
+      if (path === mocks.forceRmFailureForPath) {
+        throw Object.assign(new Error("simulated rm failure"), {
+          code: "EPERM",
+        });
+      }
+      return actual.rm(path, options);
+    },
+  };
+});
 
 vi.mock("../../store/paths", async () => {
   const actual =
@@ -126,6 +159,8 @@ describe("reconcileHostStage", () => {
   });
 
   afterEach(() => {
+    mocks.forceUnlinkFailureForPath = null;
+    mocks.forceRmFailureForPath = null;
     rmSync(sandboxRoot, { recursive: true, force: true });
   });
 
@@ -338,6 +373,39 @@ describe("reconcileHostStage", () => {
 
     const result = await reconcileHostStage(ENV);
     expect(result.stagedAsideOutcome).not.toBe("restored");
+    expect(existsSync(stagedDirFor(ENV))).toBe(false);
+  });
+
+  it("invalidates a pure-litter aside even when the sidecar unlink AND the recursive removal both fail", async () => {
+    // Round-1's aside cleanup depended entirely on unlink+rm succeeding -
+    // if BOTH failed (e.g. a Windows open-file handle blocking both), a
+    // fully valid, restorable aside was left behind. Round-2's fix makes
+    // the rename-to-`.dead-*` the PRIMARY defense: it runs first and, on
+    // success, the candidate is already structurally invisible to step
+    // 4's restore path before unlink/rm are ever reached - so forcing
+    // exactly the two operations that were round-1's whole defense to
+    // fail no longer matters. `rename` itself is deliberately left real
+    // (not forced to fail) so this proves the NEW primary layer's success
+    // path, not the deepest accepted-residual fallback.
+    await writeInstall("1.0.0", {});
+    await writeStagedAt(stagedDirFor(ENV), "1.5.0", {});
+    const asideDir = `${stagedDirFor(ENV)}.old-${Date.now()}`;
+    mkdirSync(asideDir, { recursive: true });
+    writeFileSync(join(asideDir, "staged.json"), '{"version":"1.0.0"}');
+    mocks.forceUnlinkFailureForPath = join(asideDir, "staged.json");
+    mocks.forceRmFailureForPath = asideDir;
+
+    const result = await reconcileHostStage(ENV);
+    expect(result.stagedAsideOutcome).toBe("deleted");
+    expect(existsSync(asideDir)).toBe(false);
+
+    // Not restorable by a SUBSEQUENT reconcile either: the candidate no
+    // longer exists under the `.old-*` prefix `reconcileStagedAside`
+    // scans for, so even if `staged/` were removed and reconcile ran
+    // again, there is nothing left to find.
+    rmSync(stagedDirFor(ENV), { recursive: true, force: true });
+    const second = await reconcileHostStage(ENV);
+    expect(second.stagedAsideOutcome).toBe("none");
     expect(existsSync(stagedDirFor(ENV))).toBe(false);
   });
 

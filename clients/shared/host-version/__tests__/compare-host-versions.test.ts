@@ -166,6 +166,39 @@ describe("compareHostVersions", () => {
       ordering: "less",
     });
   });
+
+  it("compares core-triplet components with arbitrary precision too, not just pre-release", () => {
+    // A Number.parseInt-based core comparator rounds both of these to the
+    // same double past 2^53 and misreports equal.
+    const huge = "9007199254740993";
+    const huger = "9007199254740994";
+    expect(compareHostVersions(`${huge}.0.0`, `${huger}.0.0`)).toEqual({
+      comparable: true,
+      ordering: "less",
+    });
+    expect(compareHostVersions(`${huge}.0.0`, `${huge}.0.0`)).toEqual({
+      comparable: true,
+      ordering: "equal",
+    });
+    // A 400-digit core component overflows `Number.parseInt` to `Infinity`
+    // and would be wrongly rejected as unparseable; it's still a valid,
+    // comparable SemVer core per the grammar's unbounded `\d+`.
+    const longDigits = "1".repeat(400);
+    expect(
+      compareHostVersions(`${longDigits}.0.0`, `${longDigits}.0.0`),
+    ).toEqual({ comparable: true, ordering: "equal" });
+    expect(compareHostVersions(`${longDigits}.0.0`, "1.0.0")).toEqual({
+      comparable: true,
+      ordering: "greater",
+    });
+    // A longer digit string (no leading zero) is always numerically larger
+    // - exercises the digit-length branch directly on the core, not just
+    // pre-release.
+    expect(compareHostVersions("9.0.0", "10.0.0")).toEqual({
+      comparable: true,
+      ordering: "less",
+    });
+  });
 });
 
 describe("isValidHostVersion", () => {

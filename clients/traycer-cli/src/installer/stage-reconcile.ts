@@ -85,13 +85,16 @@ async function stagedExecutableIsFile(
   }
 }
 
-// `<target>.old-*` siblings, newest first. The suffix is a `Date.now()`
-// millisecond timestamp (see `atomicSwap`/aside-replace call sites) -
-// lexicographic sort on same-length numeric strings is a numeric sort,
-// and will remain so until the year 2286 (13-digit epoch ms).
-async function listOldAsideDirsNewestFirst(target: string): Promise<string[]> {
+// `<target>.<infix>*` siblings, newest first. The suffix is a
+// `Date.now()` millisecond timestamp (see `atomicSwap`/aside-replace call
+// sites) - lexicographic sort on same-length numeric strings is a numeric
+// sort, and will remain so until the year 2286 (13-digit epoch ms).
+async function listAsideDirsNewestFirst(
+  target: string,
+  infix: string,
+): Promise<string[]> {
   const parent = dirname(target);
-  const prefix = `${basename(target)}.old-`;
+  const prefix = `${basename(target)}.${infix}`;
   let names: string[];
   try {
     names = await readdir(parent);
@@ -102,6 +105,10 @@ async function listOldAsideDirsNewestFirst(target: string): Promise<string[]> {
     .filter((name) => name.startsWith(prefix))
     .map((name) => join(parent, name))
     .sort((a, b) => (a < b ? 1 : a > b ? -1 : 0));
+}
+
+function listOldAsideDirsNewestFirst(target: string): Promise<string[]> {
+  return listAsideDirsNewestFirst(target, "old-");
 }
 
 // "Valid" here means good enough to safely restore in place of a missing
@@ -237,23 +244,89 @@ async function reconcileStagedAside(
       return "restored";
     }
   }
-  await Promise.all(candidates.map((candidate) => deleteAsideDir(candidate)));
+  await Promise.all(
+    candidates.map((candidate) =>
+      invalidateStagedAsideDir(stagedDir, candidate, logger),
+    ),
+  );
+  await sweepDeadStagedAsideDirs(stagedDir);
   return "deleted";
 }
 
-// Deletes an aside that is being discarded outright (pure litter) - never
-// for the crash-recovery restore path above, which needs the sidecar
-// intact to validate a candidate. Unlinks the sidecar FIRST, before the
-// best-effort recursive removal: if that removal then fails partway
-// (a lock, a transient error) and leaves the aside directory lingering,
-// a candidate with no `staged.json` can never be mistaken for a valid
-// stage and wrongly restored on a later reconcile pass - see the
-// identical ordering in `download-stage.ts`'s `replaceStagedDir`, which
-// creates asides via the same explicit-replace path this cleans up
-// after.
-async function deleteAsideDir(candidate: string): Promise<void> {
-  await unlink(join(candidate, "staged.json")).catch(() => undefined);
-  await rm(candidate, { recursive: true, force: true }).catch(() => undefined);
+// Invalidates an aside that is being discarded outright (pure litter) -
+// never for the crash-recovery restore path above, which needs the
+// sidecar intact to validate a candidate. Shared between here (step 4's
+// pure-litter branch) and `download-stage.ts`'s `replaceStagedDir`, which
+// creates asides via the same explicit-replace path this cleans up after.
+//
+// Layered so a partial failure at any one layer can never leave a fully
+// intact, step-4-restorable aside behind (the vulnerability a single
+// "unlink sidecar, then best-effort rm" pass still had: if BOTH steps
+// failed - e.g. a Windows open-file handle blocking both - the aside
+// stayed completely valid and could resurrect an explicitly-replaced
+// stage on a later reconcile pass):
+//   1. Rename to a `.dead-*` sibling - a structurally different name
+//      `listOldAsideDirsNewestFirst` never matches, so step 4 can never
+//      again consider it a restore candidate regardless of what happens
+//      to its contents afterward. `sweepDeadStagedAsideDirs` deletes
+//      `.dead-*` siblings best-effort on a later pass. Tried first (and
+//      via `renameWithRetry`) because a directory rename has the best
+//      chance of succeeding even when a file inside is open.
+//   2. If the rename fails, unlink just the sidecar - without
+//      `staged.json`, `readHostStagedRecordAt` returns null and step 3/4
+//      both treat the directory as invalid, so it's unrecoverable even
+//      though it lingers (and will still be listed as `.old-*` litter,
+//      swept by a subsequent reconcile pass's own retry of this same
+//      function).
+//   3. If that also fails, attempt a full recursive removal.
+//   4. If every layer fails, log and accept the residual - the aside
+//      remains a fully valid, in principle restorable candidate. Narrow:
+//      it requires rename, unlink, AND rm to all independently fail on
+//      the same directory.
+export async function invalidateStagedAsideDir(
+  target: string,
+  aside: string,
+  logger: ILogger,
+): Promise<void> {
+  const deadAside = `${target}.dead-${Date.now()}`;
+  try {
+    await renameWithRetry(aside, deadAside);
+    return;
+  } catch {
+    // Fall through to layer 2.
+  }
+  try {
+    await unlink(join(aside, "staged.json"));
+    return;
+  } catch {
+    // Fall through to layer 3.
+  }
+  try {
+    await rm(aside, { recursive: true, force: true });
+  } catch {
+    logger.warn(
+      "Stage reconcile could not invalidate a replaced stage aside on any layer - it remains restorable",
+      { aside },
+    );
+  }
+}
+
+function listDeadStagedAsideDirsNewestFirst(target: string): Promise<string[]> {
+  return listAsideDirsNewestFirst(target, "dead-");
+}
+
+// Best-effort cleanup of `.dead-*` siblings `invalidateStagedAsideDir`
+// leaves behind on its (common) layer-1 success path - deliberately not
+// deleted synchronously there, since the whole point of layer 1 is to
+// succeed via a cheap rename even when the directory's contents can't yet
+// be removed (e.g. a Windows file handle still closing).
+async function sweepDeadStagedAsideDirs(target: string): Promise<void> {
+  const dead = await listDeadStagedAsideDirsNewestFirst(target);
+  await Promise.all(
+    dead.map((dir) =>
+      rm(dir, { recursive: true, force: true }).catch(() => undefined),
+    ),
+  );
 }
 
 export async function reconcileHostStage(

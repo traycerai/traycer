@@ -40,8 +40,28 @@ describe("computeProcessIdentityVerdict (pure decision logic)", () => {
     expect(computeProcessIdentityVerdict("dead", null, null)).toBe("dead");
   });
 
-  it("returns indeterminate when liveness itself is indeterminate, regardless of start times", () => {
+  // Deliberately does NOT short-circuit on indeterminate liveness: the
+  // liveness probe (kill/tasklist) and the start-time probe (ps/
+  // Get-Process) are independent OS queries, so a start-time read can
+  // still succeed and carry positive evidence even when liveness itself
+  // couldn't be established (item B, Fixup round-2 ticket).
+  it("still derives a verdict from the start-time comparison when liveness itself is indeterminate", () => {
+    // A successful, matching start-time read is positive evidence of
+    // "still there", even without independent liveness confirmation.
     expect(computeProcessIdentityVerdict("indeterminate", 1000, 1000)).toBe(
+      "alive-same",
+    );
+    // A successful, mismatching read is positive evidence the recorded
+    // holder is gone (dead/recycled) - breakable.
+    expect(computeProcessIdentityVerdict("indeterminate", 1000, 100_000)).toBe(
+      "alive-different",
+    );
+    // No recorded identity to compare against, or a failed start-time
+    // read (`null`), stays indeterminate - nothing positive either way.
+    expect(computeProcessIdentityVerdict("indeterminate", null, 1000)).toBe(
+      "indeterminate",
+    );
+    expect(computeProcessIdentityVerdict("indeterminate", 1000, null)).toBe(
       "indeterminate",
     );
     expect(computeProcessIdentityVerdict("indeterminate", null, null)).toBe(

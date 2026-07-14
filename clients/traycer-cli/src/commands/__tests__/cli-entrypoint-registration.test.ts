@@ -1,5 +1,92 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Command } from "commander";
+import type { ProgressInfo } from "../../runner/output";
+import type { CommandContext, CommandFn } from "../../runner/runner";
+
+// Captures what `host download`'s wiring actually forwards down the real
+// chain (index.ts's positional/`latest` normalization -> host-download.ts's
+// `buildHostDownloadCommand` -> the installer) - a pure structural check on
+// `buildProgram()`'s command tree (the rest of this file) can't catch a
+// regression in that forwarding logic itself. `downloadAndStageHost` is the
+// deepest real dependency in that chain, so mocking only it (not
+// `host-download.ts`) keeps the normalization and `ctx.progress` wiring
+// genuinely exercised.
+const mocks = vi.hoisted(() => ({
+  downloadCalls: [] as Array<{
+    readonly environment: string;
+    readonly versionRequest: string | null;
+    readonly automatic: boolean;
+  }>,
+  progressEvents: [] as ProgressInfo[],
+}));
+
+vi.mock("../../installer/download-stage", () => ({
+  downloadAndStageHost: async (opts: {
+    readonly environment: string;
+    readonly versionRequest: string | null;
+    readonly automatic: boolean;
+    readonly onProgress: (info: ProgressInfo) => void;
+  }) => {
+    mocks.downloadCalls.push({
+      environment: opts.environment,
+      versionRequest: opts.versionRequest,
+      automatic: opts.automatic,
+    });
+    opts.onProgress({
+      stage: "resolve",
+      message: "test-progress",
+      percent: null,
+      bytes: null,
+      totalBytes: null,
+    });
+    return {
+      outcome: "short-circuit",
+      reason: "installed-up-to-date",
+      targetVersion: "1.0.0",
+      installedVersion: "1.0.0",
+      stagedVersion: null,
+    };
+  },
+}));
+
+// Replaces only `runCommand` (which owns `process.exit` - see
+// `runner/runner.ts`) with a version that invokes the real `CommandFn` with
+// a synthetic context and never exits, so `program.parseAsync(...)` can run
+// the real command wiring to completion inside the test process.
+vi.mock("../../runner/runner", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../runner/runner")>();
+  return {
+    ...actual,
+    runCommand: async (fn: CommandFn) => {
+      const ctx: CommandContext = {
+        runtime: {
+          json: false,
+          quiet: false,
+          noProgress: false,
+          noBootstrap: false,
+          nonInteractive: true,
+          environment: "production",
+          logger: {
+            debug: () => undefined,
+            info: () => undefined,
+            warn: () => undefined,
+            error: () => undefined,
+          },
+        },
+        output: {
+          progress: () => undefined,
+          human: () => undefined,
+          humanRequired: () => undefined,
+          emitResult: () => undefined,
+          emitError: () => undefined,
+        },
+        progress: (info) => mocks.progressEvents.push(info),
+      };
+      await fn(ctx);
+    },
+  };
+});
+
 import { buildProgram } from "../../index";
 
 // Native-packaging follow-up bug: previously `traycer-cli/src/index.ts`
@@ -182,6 +269,43 @@ describe("traycer CLI entrypoint registration", () => {
     // command with one internal-only flag, not a hidden command.
     expect(help).toContain("[version]");
     expectRunnerFlags(cmd, "host download");
+  });
+
+  it("host download parses and forwards a concrete positional, the literal 'latest' normalization, --automatic, and ctx.progress", async () => {
+    mocks.downloadCalls.length = 0;
+    mocks.progressEvents.length = 0;
+
+    const explicit = buildProgram();
+    explicit.exitOverride();
+    await explicit.parseAsync(["host", "download", "1.5.0"], { from: "user" });
+
+    const normalizedLatest = buildProgram();
+    normalizedLatest.exitOverride();
+    await normalizedLatest.parseAsync(["host", "download", "latest"], {
+      from: "user",
+    });
+
+    const automatic = buildProgram();
+    automatic.exitOverride();
+    await automatic.parseAsync(["host", "download", "2.0.0", "--automatic"], {
+      from: "user",
+    });
+
+    expect(mocks.downloadCalls).toEqual([
+      { environment: "production", versionRequest: "1.5.0", automatic: false },
+      // The literal "latest" positional collapses to `null` - the
+      // CLI-wide contract for "resolve the manifest's latest pointer" -
+      // rather than being forwarded to the installer as the literal
+      // string "latest".
+      { environment: "production", versionRequest: null, automatic: false },
+      { environment: "production", versionRequest: "2.0.0", automatic: true },
+    ]);
+    // `ctx.progress` forwarding: the installer's `onProgress` call must
+    // reach the runner's synthetic `ctx.progress` sink through
+    // `host-download.ts`'s `(info) => ctx.progress(info)` bridge - one
+    // event per invocation above.
+    expect(mocks.progressEvents).toHaveLength(3);
+    expect(mocks.progressEvents[0]).toMatchObject({ stage: "resolve" });
   });
 
   it("host available exposes --include-pre-releases for RC registry inspection", () => {

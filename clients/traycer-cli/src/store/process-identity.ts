@@ -128,13 +128,22 @@ export type ProcessIdentityVerdict =
 // directly (never the collapsed `isProcessAlive` boolean) so a probe
 // failure can only ever produce "indeterminate", never masquerade as
 // "dead" break evidence.
+//
+// Deliberately does NOT short-circuit on `liveness === "indeterminate"`:
+// the liveness probe (`kill`/`tasklist`) and the start-time probe (`ps`/
+// `Get-Process`) are independent OS queries, and one can fail while the
+// other succeeds. A start-time read that positively SUCCEEDS despite an
+// indeterminate liveness result is still real evidence - a mismatch means
+// whatever now occupies that pid is not the recorded holder (breakable),
+// and a match means it plausibly still is. Only when the start-time
+// comparison itself has nothing to go on (a failed read, or no recorded
+// identity) does the result fall back to "indeterminate".
 export function computeProcessIdentityVerdict(
   liveness: ProcessLivenessVerdict,
   recordedStartedAtMs: number | null,
   currentStartedAtMs: number | null,
 ): ProcessIdentityVerdict {
   if (liveness === "dead") return "dead";
-  if (liveness === "indeterminate") return "indeterminate";
   if (recordedStartedAtMs === null || currentStartedAtMs === null) {
     return "indeterminate";
   }
@@ -187,8 +196,12 @@ export function verifyProcessIdentity(
 ): ProcessIdentityVerdict {
   if (token.pid === process.pid) return verifyOwnProcessIdentity(token);
   const liveness = probeProcessLiveness(token.pid);
+  // Attempt the start-time read whenever liveness didn't already prove the
+  // pid dead - including "indeterminate" liveness, since a successful
+  // start-time read is independent positive evidence (see
+  // `computeProcessIdentityVerdict`'s comment).
   const currentStartedAtMs =
-    liveness === "alive" ? readProcessStartTimeMs(token.pid) : null;
+    liveness === "dead" ? null : processStartTimeReader(token.pid);
   return computeProcessIdentityVerdict(
     liveness,
     token.startedAtMs,
@@ -196,7 +209,32 @@ export function verifyProcessIdentity(
   );
 }
 
+// Mutable indirection for the start-time probe `verifyProcessIdentity`
+// consults, defaulting to the real `readProcessStartTimeMs` below. Exists
+// solely so tests can force a probe failure for a specific pid at the
+// exact boundary the decision logic reads from: `vi.mock`'s module-export
+// replacement only intercepts calls made by OTHER modules importing this
+// one, not `verifyProcessIdentity`'s own same-module call to
+// `readProcessStartTimeMs` - see the Fixup round-2 ticket's item F.
+// Production code never calls `__setProcessStartTimeReaderForTest`.
+let processStartTimeReader: (pid: number) => number | null =
+  readProcessStartTimeMsImpl;
+
+// Test-only seam - pass `null` to restore the default reader. Returns the
+// previous reader so tests can save/restore symmetrically.
+export function __setProcessStartTimeReaderForTest(
+  next: ((pid: number) => number | null) | null,
+): (pid: number) => number | null {
+  const previous = processStartTimeReader;
+  processStartTimeReader = next === null ? readProcessStartTimeMsImpl : next;
+  return previous;
+}
+
 export function readProcessStartTimeMs(pid: number): number | null {
+  return readProcessStartTimeMsImpl(pid);
+}
+
+function readProcessStartTimeMsImpl(pid: number): number | null {
   if (!Number.isInteger(pid) || pid <= 0) return null;
   return process.platform === "win32"
     ? readWindowsProcessStartTimeMs(pid)

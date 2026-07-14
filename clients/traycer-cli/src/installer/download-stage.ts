@@ -1,5 +1,5 @@
-import { access, rm, unlink } from "node:fs/promises";
-import { dirname, join, relative } from "node:path";
+import { access, rm } from "node:fs/promises";
+import { dirname, relative } from "node:path";
 import { platform as osPlatform } from "node:os";
 import {
   compareHostVersions,
@@ -33,7 +33,10 @@ import {
   renameWithRetry,
 } from "./install";
 import { extractHostSource, resolveHostExecutable } from "./extract";
-import { reconcileHostStage } from "./stage-reconcile";
+import {
+  invalidateStagedAsideDir,
+  reconcileHostStage,
+} from "./stage-reconcile";
 
 // `host download` - the CLI's half of the two-phase split (Host Update
 // Layer Redesign Tech Plan, "CLI: two-phase split with a staged store").
@@ -139,6 +142,7 @@ async function discardIneligibleStagedVersion(
 async function replaceStagedDir(
   environment: Environment,
   tempDir: string,
+  logger: ILogger,
 ): Promise<void> {
   await ensureHostHomeDirForStaged(environment);
   const target = hostStagedDir(environment);
@@ -149,22 +153,54 @@ async function replaceStagedDir(
   }
   await renameWithRetry(tempDir, target);
   if (targetExists) {
-    // Unlink the aside's sidecar FIRST, before the best-effort recursive
-    // removal below: without a valid `staged.json`, stage-reconcile's
-    // aside-recovery step rejects this candidate outright, so even if
-    // the removal then fails partway (a lock, a transient error) and
-    // leaves the aside directory lingering, it can never be mistaken for
-    // a valid stage and wrongly restored - resurrecting the exact
-    // version this explicit replace just discarded.
-    await unlink(join(aside, "staged.json")).catch(() => undefined);
-    await rm(aside, { recursive: true, force: true }).catch(() => undefined);
+    // Layered invalidation (rename to a `.dead-*` sibling, else unlink
+    // just the sidecar, else a full recursive removal) so a partial
+    // failure can never leave a fully intact, restorable aside behind -
+    // shared with `stage-reconcile.ts`'s own pure-litter cleanup, which
+    // creates and discards asides via the identical explicit-replace
+    // shape.
+    await invalidateStagedAsideDir(target, aside, logger);
   }
+}
+
+// Phase 0 - brief lock, zero network: fail fast with HOST_NOT_INSTALLED
+// before any WAN call, so an uninstalled host + an unreachable registry
+// reports the correct, actionable error instead of a misleading
+// REGISTRY_UNAVAILABLE. Superseded by phase 1's own locked re-read
+// immediately below - state can still change in the gap before the
+// manifest fetch completes, so phase 1's read remains the authoritative
+// decision snapshot; this is purely a fast-fail precondition.
+async function ensureHostInstalledPrecondition(
+  environment: Environment,
+): Promise<void> {
+  await withCliLock(
+    {
+      environment,
+      reason: "host-download-precondition",
+      waitMs: 30_000,
+      pollIntervalMs: 100,
+    },
+    async () => {
+      await reconcileHostStage(environment);
+      const installed = await readHostInstallRecord(environment);
+      if (installed === null) {
+        throw cliError({
+          code: CLI_ERROR_CODES.HOST_NOT_INSTALLED,
+          message: `host download: no host installed for environment=${environment}; run 'traycer host install latest' first`,
+          details: { environment },
+          exitCode: 1,
+        });
+      }
+    },
+  );
 }
 
 export async function downloadAndStageHost(
   opts: DownloadAndStageHostOptions,
 ): Promise<HostDownloadOutcome> {
   const logger = createCliLogger(opts.environment);
+
+  await ensureHostInstalledPrecondition(opts.environment);
 
   const client =
     opts.registryClient ??
@@ -401,7 +437,7 @@ export async function downloadAndStageHost(
             "promote",
             `staging host ${stagedRecord.version}`,
           );
-          await replaceStagedDir(opts.environment, tempPath);
+          await replaceStagedDir(opts.environment, tempPath, logger);
           ownedConsumed = true;
           return {
             outcome: "promoted",

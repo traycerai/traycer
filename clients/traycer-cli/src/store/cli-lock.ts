@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { open, readFile, rename, stat, unlink } from "node:fs/promises";
+import { open, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { hostname as osHostname } from "node:os";
+import { join } from "node:path";
 import type { Environment } from "../runner/environment";
 import { CLI_ERROR_CODES, cliError, isErrnoException } from "../runner/errors";
 import { cliLockPath, ensureCliInstallHomeDir } from "./paths";
@@ -76,6 +77,13 @@ const MIN_POLL_MS = 25;
 // than this grace window has no live owner and is safe to break.
 const EMPTY_LOCK_GRACE_MS = 5000;
 
+// Mirrors `EMPTY_LOCK_GRACE_MS` for the break-arbitration sub-lock itself
+// (see `acquireBreakLock`/`tryRecoverCrashedBreakLock` below): its own
+// metadata write lands within milliseconds of its `open()`, so a break-lock
+// file younger than this grace window might just be a breaker still
+// mid-creation, not a crashed one.
+const BREAK_LOCK_AGE_GRACE_MS = 2000;
+
 function nowIso(): string {
   return new Date().toISOString();
 }
@@ -95,18 +103,37 @@ function errorCode(err: unknown): string | null {
   return null;
 }
 
-// Raw file bytes, or `null` if the file can't be read (absent, or a
-// transient read error). Split out from `parseLockMetadata` below so the
-// poll loop can capture the EXACT bytes a break decision was based on
-// and later hand them to `tryClaimStaleLock` for its post-rename
-// equality check - re-reading at claim time would defeat the point,
-// since the whole race this guards against is content changing between
-// read and claim.
-async function readLockFileRaw(path: string): Promise<string | null> {
+// Result of a raw read of a lock-shaped file. Distinguishes "genuinely not
+// there" (`absent`, ENOENT) from "we don't know" (`read-error` - a
+// transient EIO/EACCES/etc.) from "successfully read N bytes" (`present`,
+// which may still fail to *parse* as valid metadata - that's a successful
+// read of empty/corrupt content, not a read failure).
+//
+// This distinction matters because only `present` can ever contribute
+// positive evidence toward breaking a lock: a prior version of this module
+// collapsed every read failure to the same `null` a genuinely-absent file
+// produced, which fed straight into the empty/corrupt age-based break AND
+// the stale-claim equality check - a transient read error could earn the
+// same "safe to break" treatment as a holder that actually crashed
+// mid-write. `read-error` must be treated as busy/indeterminate everywhere
+// a break decision is made.
+type LockRead =
+  | { readonly kind: "present"; readonly raw: string }
+  | { readonly kind: "absent" }
+  | { readonly kind: "read-error" };
+
+// Split out from `parseLockMetadata` below so the poll loop can capture the
+// EXACT bytes a break decision was based on and later hand them to
+// `breakStaleLock` for its arbitrated equality check - re-reading at break
+// time would defeat the point, since the whole race this guards against is
+// content changing between read and break.
+async function readLockRaw(path: string): Promise<LockRead> {
   try {
-    return await readFile(path, "utf8");
-  } catch {
-    return null;
+    return { kind: "present", raw: await readFile(path, "utf8") };
+  } catch (err) {
+    return errorCode(err) === "ENOENT"
+      ? { kind: "absent" }
+      : { kind: "read-error" };
   }
 }
 
@@ -152,10 +179,15 @@ function parseLockMetadata(raw: string): CliLockMetadata | null {
 }
 
 // Convenience wrapper for callers (`release()`'s compare-and-delete) that
-// only need the parsed result, not the raw bytes.
+// only need the parsed result, not the raw bytes. Folds `absent` and
+// `read-error` together into `null`, same as before this module
+// distinguished the two - release()'s compare-and-delete already treats a
+// `null` current read as "nothing to compare, fall back to unconditional
+// unlink", which remains the right call at release time (this handle's own
+// lock, not a break decision).
 async function readLockMetadata(path: string): Promise<CliLockMetadata | null> {
-  const raw = await readLockFileRaw(path);
-  return raw === null ? null : parseLockMetadata(raw);
+  const read = await readLockRaw(path);
+  return read.kind === "present" ? parseLockMetadata(read.raw) : null;
 }
 
 // Age of the lock file in milliseconds, or null if it can no longer be
@@ -170,60 +202,244 @@ async function lockFileAgeMs(path: string): Promise<number | null> {
   }
 }
 
-type ClaimStaleLockOutcome =
-  // We atomically claimed the file, confirmed it was still the stale
-  // holder we intended to break, and deleted it. Safe to retry
-  // acquisition immediately.
-  | "broke"
-  // The rename lost the race (ENOENT/other): another contender already
-  // claimed or removed the file, or the real holder released normally
-  // in between. Not our job to act further this iteration.
-  | "lost-race"
-  // We won the rename, but the content we grabbed no longer matches the
-  // stale holder the break decision was based on - a genuinely new, live
-  // holder wrote fresh content to `path` between our read and our
-  // rename. Restored in place; must not be broken.
-  | "no-longer-stale";
-
-// Serialized conditional claim, replacing a plain unlink. A bare
-// `unlink(path)` races: two contenders can independently decide (from
-// the same stale read) to break the same lock, and whichever one calls
-// unlink LAST deletes whatever is at `path` at that moment - which may
-// by then be a fresh, genuinely live lock the other contender (or a
-// third party) just wrote. `rename` is atomic at the filesystem level,
-// so only one contender can ever win a rename off a given source path;
-// everyone else gets ENOENT. The winner then re-reads the claimed
-// file's content and confirms it is STILL the exact stale metadata the
-// break decision was made on before destroying it - guarding against
-// having claimed a fresh holder's file instead of the stale one.
+// ---- Break-arbitration sub-lock ------------------------------------------
 //
-// `expectedRaw` is the raw file content (or `null` for "no file / empty
-// / corrupt") the break decision was based on, compared byte-for-byte
-// against the claimed file's content so this works uniformly for both
-// the parsed-holder path (dead / identity-mismatched) and the
-// empty-or-corrupt path (no parseable holder at all).
-async function tryClaimStaleLock(
+// Lock-breaking is serialized through a second, short-lived lock
+// (`<lockPath>.break`) rather than a direct unlink of the canonical lock.
+// An earlier version of this module used a rename-to-claim protocol
+// instead (atomically rename the canonical lock aside, then verify its
+// content before deleting it) - that is unsound: a bare `rename` cannot be
+// made CONDITIONAL on the destination's content, so a contender delayed
+// just long enough after its own stale read could rename away a lock a
+// different, genuinely fresh holder had since written, and the
+// content-mismatch "restore" path could then clobber a THIRD holder that
+// had meanwhile written to the now-vacated path. Simultaneous holders
+// remained possible.
+//
+// Serializing the unlink itself behind an exclusively-held second lock
+// closes this: while the break-lock is held, no other contender can
+// unlink the canonical file, and a fresh holder can only ever appear
+// AFTER an unlink completes - so a raw-byte equality check taken under the
+// break-lock is conclusive proof the file is still the exact stale
+// content the break decision was made on. Empty/corrupt-lock breaking goes
+// through the identical arbitration - it has the identical unlink race.
+
+interface BreakLockPayload {
+  readonly pid: number;
+  readonly startedAt: string;
+  readonly processStartedAtMs: number | null;
+  readonly token: string;
+}
+
+function breakLockPathFor(path: string): string {
+  return `${path}.break`;
+}
+
+function parseBreakLockPayload(raw: string): BreakLockPayload | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return null;
+  }
+  const obj = parsed as Record<string, unknown>;
+  if (
+    typeof obj.pid !== "number" ||
+    typeof obj.startedAt !== "string" ||
+    typeof obj.token !== "string"
+  ) {
+    return null;
+  }
+  return {
+    pid: obj.pid,
+    startedAt: obj.startedAt,
+    processStartedAtMs:
+      typeof obj.processStartedAtMs === "number"
+        ? obj.processStartedAtMs
+        : null,
+    token: obj.token,
+  };
+}
+
+async function createBreakLockFile(
+  breakLockPath: string,
+  payload: BreakLockPayload,
+): Promise<"created" | "exists"> {
+  let handle: FileHandle;
+  try {
+    handle = await open(breakLockPath, "wx", 0o600);
+  } catch (err) {
+    if (errorCode(err) === "EEXIST") return "exists";
+    throw err;
+  }
+  try {
+    await handle.writeFile(JSON.stringify(payload, null, 2));
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
+  return "created";
+}
+
+// Best-effort recovery of a break-lock abandoned by a breaker that crashed
+// mid-critical-section. Uses the same only-positive-evidence identity
+// rules as the canonical lock, plus `BREAK_LOCK_AGE_GRACE_MS` so a breaker
+// that has only just called `open()` (file exists, payload not written
+// yet) is never mistaken for a crash. Returns whether the break-lock was
+// removed (safe for the caller to retry creating it).
+//
+// Accepted residual: two contenders can both observe the same crashed
+// breaker and both unlink+retry within the same millisecond-wide window,
+// briefly letting two break-lock holders exist (an epsilon-squared race:
+// it requires BOTH a crashed breaker AND two contenders racing the
+// recovery of that same crash in the same instant). This is strictly
+// narrower than the race this whole mechanism replaces (rename-to-claim's
+// unbounded TOCTOU window) - it's bounded by the break-lock's own tiny,
+// non-blocking critical section (read + compare + unlink of the CANONICAL
+// lock, nothing else, while the break-lock itself is held), and a second
+// breaker that shows up after the first genuinely wins its own break-lock
+// simply loses the atomic unlink race on the canonical lock (see
+// `breakStaleLock` below) - it never observes two canonical-lock holders.
+async function tryRecoverCrashedBreakLock(
+  breakLockPath: string,
+): Promise<boolean> {
+  const read = await readLockRaw(breakLockPath);
+  if (read.kind !== "present") return false;
+  const payload = parseBreakLockPayload(read.raw);
+  if (payload !== null) {
+    const identity = verifyProcessIdentity({
+      pid: payload.pid,
+      startedAtMs: payload.processStartedAtMs,
+    });
+    if (identity !== "dead" && identity !== "alive-different") return false;
+  }
+  const ageMs = await lockFileAgeMs(breakLockPath);
+  if (ageMs === null || ageMs < BREAK_LOCK_AGE_GRACE_MS) return false;
+  await unlink(breakLockPath).catch(() => undefined);
+  return true;
+}
+
+type AcquireBreakLockOutcome =
+  | { readonly kind: "acquired"; readonly token: string }
+  | { readonly kind: "busy" };
+
+async function acquireBreakLock(
   path: string,
-  expectedRaw: string | null,
-): Promise<ClaimStaleLockOutcome> {
-  const claimPath = `${path}.break-${randomUUID()}`;
+): Promise<AcquireBreakLockOutcome> {
+  const breakLockPath = breakLockPathFor(path);
+  const token = randomUUID();
+  const payload: BreakLockPayload = {
+    pid: process.pid,
+    startedAt: nowIso(),
+    processStartedAtMs: readProcessStartTimeMs(process.pid),
+    token,
+  };
+  if ((await createBreakLockFile(breakLockPath, payload)) === "created") {
+    return { kind: "acquired", token };
+  }
+  // EEXIST - another breaker may be genuinely active, or may have crashed
+  // mid-critical-section. Attempt recovery once; if that doesn't free the
+  // path, this contender simply falls back to the normal deadline/poll
+  // path rather than spinning on arbitration.
+  if (!(await tryRecoverCrashedBreakLock(breakLockPath))) {
+    return { kind: "busy" };
+  }
+  const retry = await createBreakLockFile(breakLockPath, payload);
+  return retry === "created" ? { kind: "acquired", token } : { kind: "busy" };
+}
+
+// Compare-and-delete release, mirroring the canonical lock's own
+// `release()` - only unlink the break-lock if it still carries the token
+// we wrote, so a recovery agent that (correctly) stole this break-lock out
+// from under a presumed-crashed breaker never has its ownership silently
+// clobbered by that breaker's own, now-late release.
+async function releaseBreakLock(path: string, token: string): Promise<void> {
+  const breakLockPath = breakLockPathFor(path);
+  const read = await readLockRaw(breakLockPath);
+  if (read.kind !== "present") return;
+  const payload = parseBreakLockPayload(read.raw);
+  if (payload !== null && payload.token !== token) return;
+  await unlink(breakLockPath).catch(() => undefined);
+}
+
+type BreakStaleLockOutcome =
+  // The canonical lock was confirmed still stale (under arbitration) and
+  // unlinked. Safe to retry acquisition immediately.
+  | "broke"
+  // Another contender is already breaking this lock (or recovering a
+  // crashed breaker). Not our job to act further this iteration.
+  | "arbitration-busy"
+  // We won the break-lock, but the canonical lock's content no longer
+  // matches the stale bytes the break decision was based on (a fresh
+  // holder wrote in the meantime) - or the canonical lock is simply gone
+  // already (released normally, or broken by a contender that raced us to
+  // the decision but not the arbitration). Nothing to restore either way;
+  // must not treat this as a break.
+  | "aborted"
+  // We won the break-lock and confirmed the content was still stale, but
+  // the unlink itself failed (e.g. a transient filesystem error).
+  | "unlink-failed";
+
+async function breakStaleLock(
+  path: string,
+  decisionRaw: string,
+): Promise<BreakStaleLockOutcome> {
+  const acquired = await acquireBreakLock(path);
+  if (acquired.kind === "busy") return "arbitration-busy";
   try {
-    await rename(path, claimPath);
-  } catch {
-    return "lost-race";
+    // A read error here is never evidence (the same rule as the outer
+    // break decision) - abort rather than risk unlinking a file we can't
+    // actually verify.
+    const read = await readLockRaw(path);
+    if (read.kind !== "present" || read.raw !== decisionRaw) {
+      return "aborted";
+    }
+    try {
+      await unlink(path);
+    } catch {
+      return "unlink-failed";
+    }
+    return "broke";
+  } finally {
+    await releaseBreakLock(path, acquired.token);
   }
-  let claimedRaw: string | null;
-  try {
-    claimedRaw = await readFile(claimPath, "utf8");
-  } catch {
-    claimedRaw = null;
+}
+
+// ---- Test-only break-decision pause/observability seam -------------------
+//
+// Gated on an env var, unset in production (a single lookup, near-zero
+// cost). Lets the genuine multiprocess break-arbitration regression test
+// deterministically interleave "this contender decided to break a stale
+// lock, but hasn't yet attempted it" with actions taken by a DIFFERENT OS
+// process, and records the eventual outcome so the test can assert the
+// arbitrated "aborted" path was actually exercised rather than inferring it
+// from timing. Never read or written by production code paths.
+const BREAK_HOOK_DIR_ENV = "TRAYCER_CLI_LOCK_TEST_BREAK_HOOK_DIR";
+const BREAK_HOOK_POLL_MS = 20;
+const BREAK_HOOK_MAX_WAIT_MS = 15_000;
+
+async function pauseBeforeBreakForTest(): Promise<void> {
+  const dir = process.env[BREAK_HOOK_DIR_ENV];
+  if (dir === undefined) return;
+  await writeFile(join(dir, "ready"), "").catch(() => undefined);
+  const deadline = Date.now() + BREAK_HOOK_MAX_WAIT_MS;
+  while (Date.now() < deadline) {
+    const exists = await stat(join(dir, "go"))
+      .then(() => true)
+      .catch(() => false);
+    if (exists) return;
+    await sleep(BREAK_HOOK_POLL_MS);
   }
-  if (claimedRaw !== expectedRaw) {
-    await rename(claimPath, path).catch(() => undefined);
-    return "no-longer-stale";
-  }
-  await unlink(claimPath).catch(() => undefined);
-  return "broke";
+}
+
+async function recordBreakOutcomeForTest(
+  outcome: BreakStaleLockOutcome,
+): Promise<void> {
+  const dir = process.env[BREAK_HOOK_DIR_ENV];
+  if (dir === undefined) return;
+  await writeFile(join(dir, "outcome"), outcome).catch(() => undefined);
 }
 
 async function tryAcquireOnce(
@@ -292,67 +508,89 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export async function acquireCliLock(
-  opts: AcquireCliLockOptions,
+// Core acquisition loop, factored out of `acquireCliLock` so the genuine
+// multiprocess break-arbitration regression test can drive it against an
+// arbitrary tmp-dir path via `__acquireCliLockAtPathForTest` below, without
+// touching the real `~/.traycer` tree - there is no environment-variable
+// override for the CLI home directory, and (notably on this codebase's
+// past experience) Bun's `homedir()` does not honor a spawned child
+// process's overridden `$HOME`.
+async function acquireLockAtPath(
+  path: string,
+  meta: CliLockMetadata,
+  waitMs: number,
+  pollIntervalMs: number,
 ): Promise<CliLockHandle> {
-  await ensureCliInstallHomeDir(opts.environment);
-  const path = cliLockPath(opts.environment);
-  const meta: CliLockMetadata = {
-    pid: process.pid,
-    reason: opts.reason,
-    startedAt: nowIso(),
-    hostname: hostnameSafe(),
-    token: randomUUID(),
-    processStartedAtMs: readProcessStartTimeMs(process.pid),
-  };
-  const pollMs = Math.max(MIN_POLL_MS, opts.pollIntervalMs);
-  const deadline = Date.now() + Math.max(0, opts.waitMs);
+  const pollMs = Math.max(MIN_POLL_MS, pollIntervalMs);
+  const deadline = Date.now() + Math.max(0, waitMs);
   while (true) {
     const attempt = await tryAcquireOnce(path, meta);
     if (attempt !== "held") return attempt;
-    const holderRaw = await readLockFileRaw(path);
-    const holder = holderRaw === null ? null : parseLockMetadata(holderRaw);
-    let shouldBreak = false;
-    if (holder !== null) {
-      // Only positive evidence permits breaking a lock with a parsed
-      // holder record: the holder's pid is positively dead, or a fresh
-      // start-time read positively mismatches the recorded identity (a
-      // recycled pid). Indeterminate cases - a liveness-probe failure, or
-      // a legacy lock with no recorded process-start-time - wait
-      // regardless of age; a wedge is strictly safer than concurrent
-      // mutation of the install/staged tree. There is deliberately no age
-      // ceiling here any more (see the Host Update Layer Redesign Tech
-      // Plan's "cli-lock" section) - a genuinely alive, genuinely
-      // identity-verified holder is never broken out from under itself no
-      // matter how long its operation takes.
-      const identity = verifyProcessIdentity({
-        pid: holder.pid,
-        startedAtMs: holder.processStartedAtMs,
-      });
-      shouldBreak = identity === "dead" || identity === "alive-different";
-    } else {
-      // Empty or corrupt lock file - no PID to probe. A crashed holder
-      // that died between open() and writeFile() leaves exactly this, and
-      // it can never self-recover via the PID path above. Break it once it
-      // has aged past the grace window, so we don't steal a lock from a
-      // live holder still in the open()->writeFile() gap.
-      const ageMs = await lockFileAgeMs(path);
-      shouldBreak = ageMs === null || ageMs >= EMPTY_LOCK_GRACE_MS;
+    const read = await readLockRaw(path);
+    if (read.kind === "absent") {
+      // Whatever was here a moment ago is already gone (released
+      // normally, or broken by another contender) - retry acquisition
+      // immediately rather than falling through to a break decision with
+      // nothing to break.
+      continue;
     }
-    if (shouldBreak) {
-      // `holderRaw` is the exact bytes the break decision above was based
-      // on - `tryClaimStaleLock` re-verifies the claimed file still
-      // matches this before destroying it, closing the race where a
-      // second contender's unlink could otherwise delete a fresh, live
-      // holder that appeared between our read and our break.
-      const outcome = await tryClaimStaleLock(path, holderRaw);
+    let holder: CliLockMetadata | null = null;
+    let shouldBreak = false;
+    if (read.kind === "present") {
+      holder = parseLockMetadata(read.raw);
+      if (holder !== null) {
+        // Only positive evidence permits breaking a lock with a parsed
+        // holder record: the holder's pid is positively dead, or a fresh
+        // start-time read positively mismatches the recorded identity (a
+        // recycled pid). Indeterminate cases - a liveness-probe failure,
+        // or a legacy lock with no recorded process-start-time - wait
+        // regardless of age; a wedge is strictly safer than concurrent
+        // mutation of the install/staged tree. There is deliberately no
+        // age ceiling here any more (see the Host Update Layer Redesign
+        // Tech Plan's "cli-lock" section) - a genuinely alive, genuinely
+        // identity-verified holder is never broken out from under itself
+        // no matter how long its operation takes.
+        const identity = verifyProcessIdentity({
+          pid: holder.pid,
+          startedAtMs: holder.processStartedAtMs,
+        });
+        shouldBreak = identity === "dead" || identity === "alive-different";
+      } else {
+        // Empty or corrupt lock file - no PID to probe. A crashed holder
+        // that died between open() and writeFile() leaves exactly this,
+        // and it can never self-recover via the PID path above. Break it
+        // once it has aged past the grace window, so we don't steal a
+        // lock from a live holder still in the open()->writeFile() gap.
+        // `ageMs === null` (the file vanished between our read and this
+        // stat) is NOT positive evidence of anything - only a successful,
+        // aged-out stat counts.
+        const ageMs = await lockFileAgeMs(path);
+        shouldBreak = ageMs !== null && ageMs >= EMPTY_LOCK_GRACE_MS;
+      }
+    }
+    // `read.kind === "read-error"` falls through with `shouldBreak` still
+    // false - a read failure is never evidence, so this iteration behaves
+    // exactly like any other indeterminate case: no break attempt, just
+    // the deadline check + poll sleep below.
+    if (shouldBreak && read.kind === "present") {
+      // Test-only no-op in production (see `pauseBeforeBreakForTest`'s
+      // doc comment).
+      await pauseBeforeBreakForTest();
+      // `read.raw` is the exact bytes the break decision above was based
+      // on - `breakStaleLock` re-verifies (under its own arbitration lock)
+      // that the canonical lock still matches this before unlinking it,
+      // closing the race where a delayed contender could otherwise unlink
+      // a fresh, live holder that appeared between our read and our
+      // break.
+      const outcome = await breakStaleLock(path, read.raw);
+      await recordBreakOutcomeForTest(outcome);
       if (outcome === "broke") continue;
-      // "lost-race" (another contender already claimed/removed it) or
-      // "no-longer-stale" (what we grabbed wasn't the stale holder we
-      // thought it was, and has been restored). Either way the break
-      // failed - fall through to the normal deadline check + poll sleep
-      // rather than spinning; the busy-wait contract must hold even when
-      // a break attempt doesn't pan out.
+      // "arbitration-busy" (another contender is already breaking this
+      // lock), "aborted" (what we read wasn't - or is no longer - the
+      // stale holder we decided to break), or "unlink-failed": either way
+      // the break failed - fall through to the normal deadline check +
+      // poll sleep rather than spinning; the busy-wait contract must hold
+      // even when a break attempt doesn't pan out.
     }
     if (Date.now() >= deadline) {
       throw cliError({
@@ -370,6 +608,54 @@ export async function acquireCliLock(
     }
     await sleep(pollMs);
   }
+}
+
+function newAcquisitionMetadata(reason: string): CliLockMetadata {
+  return {
+    pid: process.pid,
+    reason,
+    startedAt: nowIso(),
+    hostname: hostnameSafe(),
+    token: randomUUID(),
+    processStartedAtMs: readProcessStartTimeMs(process.pid),
+  };
+}
+
+export async function acquireCliLock(
+  opts: AcquireCliLockOptions,
+): Promise<CliLockHandle> {
+  await ensureCliInstallHomeDir(opts.environment);
+  const path = cliLockPath(opts.environment);
+  return acquireLockAtPath(
+    path,
+    newAcquisitionMetadata(opts.reason),
+    opts.waitMs,
+    opts.pollIntervalMs,
+  );
+}
+
+export interface AcquireCliLockAtPathTestOptions {
+  readonly reason: string;
+  readonly waitMs: number;
+  readonly pollIntervalMs: number;
+}
+
+// Test-only entry point that contends for a lock at an ARBITRARY path,
+// bypassing `cliLockPath`'s real `~/.traycer` resolution entirely - see
+// `acquireLockAtPath`'s doc comment. The caller is responsible for
+// ensuring the parent directory already exists (a real `acquireCliLock`
+// call does this via `ensureCliInstallHomeDir`; a test sandbox typically
+// already has one from `mkdtemp`). Production code never calls this.
+export async function __acquireCliLockAtPathForTest(
+  path: string,
+  opts: AcquireCliLockAtPathTestOptions,
+): Promise<CliLockHandle> {
+  return acquireLockAtPath(
+    path,
+    newAcquisitionMetadata(opts.reason),
+    opts.waitMs,
+    opts.pollIntervalMs,
+  );
 }
 
 // `withCliLock(opts, fn)` - acquire, run fn, release in finally. Catches
