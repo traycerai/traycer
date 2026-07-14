@@ -3,7 +3,7 @@ import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ListTasksResponse,
-  TaskLight,
+  ListTaskLight,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/worktree-schemas";
 import {
@@ -14,7 +14,7 @@ import type { HistorySearchState } from "@/lib/history-search";
 import { useHistoryQuery } from "@/hooks/home/use-history-query";
 
 const testState = vi.hoisted(() => {
-  const tasks: TaskLight[] = [];
+  const tasks: ListTaskLight[] = [];
   const response: ListTasksResponse = {
     tasks,
     hasMore: false,
@@ -237,7 +237,7 @@ function HistoryQueryHarness(props: {
   );
 }
 
-function taskLight(id: string, title: string, repo: string): TaskLight {
+function taskLight(id: string, title: string, repo: string): ListTaskLight {
   const [owner, repoName] = repo.split("/");
   return {
     epic: {
@@ -270,6 +270,7 @@ function taskLight(id: string, title: string, repo: string): TaskLight {
       workspaces: [],
       roomInfo: null,
     },
+    pinned: false,
   };
 }
 

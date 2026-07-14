@@ -25,12 +25,22 @@ import type { ListTasksResponse } from "@traycer/protocol/host/epic/unary-schema
  * re-create `pagesByIdentity[identity]` with stale rows on top of the refreshed
  * first page. The next-page fetch (a TanStack `useHostMutation`) captures the
  * generation when it starts and hands it back here on success.
+ *
+ * `registerIdentity` must run before that first fetch is dispatched, even
+ * though no page or reset has touched the identity yet. Without an explicit
+ * `generationByIdentity` entry, `resetCloudEpicTasksPagesForScope` only
+ * iterates identities already present in `pagesByIdentity` /
+ * `generationByIdentity` - a pin/unpin reset that lands while the *first*
+ * "Show more" request for an identity is still in flight would find no entry
+ * to bump, so the stale response's captured generation `0` would still equal
+ * the (never-advanced) current generation `0` and get accepted.
  */
 interface CloudEpicTasksPagesStoreState {
   readonly pagesByIdentity: Readonly<
     Record<string, readonly ListTasksResponse[]>
   >;
   readonly generationByIdentity: Readonly<Record<string, number>>;
+  readonly registerIdentity: (identity: string) => void;
   readonly appendPage: (
     identity: string,
     generation: number,
@@ -43,6 +53,17 @@ export const useCloudEpicTasksPagesStore =
   create<CloudEpicTasksPagesStoreState>()((set) => ({
     pagesByIdentity: {},
     generationByIdentity: {},
+    registerIdentity: (identity) => {
+      set((state) => {
+        if (identity in state.generationByIdentity) return state;
+        return {
+          generationByIdentity: {
+            ...state.generationByIdentity,
+            [identity]: 0,
+          },
+        };
+      });
+    },
     appendPage: (identity, generation, page) => {
       set((state) => {
         // A response tagged with a superseded generation belongs to a list
@@ -88,4 +109,34 @@ function currentGeneration(
  */
 export function cloudEpicTasksPageGeneration(identity: string): number {
   return currentGeneration(useCloudEpicTasksPagesStore.getState(), identity);
+}
+
+/**
+ * Registers an identity's generation entry imperatively, before the fetch
+ * that will read it via `cloudEpicTasksPageGeneration` is dispatched. Must be
+ * called first so a scope reset landing during that very first in-flight
+ * request has an entry to advance - see the store-level doc comment.
+ */
+export function registerCloudEpicTasksPageIdentity(identity: string): void {
+  useCloudEpicTasksPagesStore.getState().registerIdentity(identity);
+}
+
+/**
+ * Drops every accumulated pagination tail for one host/user. A personal pin can
+ * move an item across page boundaries, so retaining any old tail risks a
+ * duplicate row after the first page refetches in pinned-first order.
+ */
+export function resetCloudEpicTasksPagesForScope(
+  hostId: string,
+  userId: string,
+): void {
+  const state = useCloudEpicTasksPagesStore.getState();
+  const prefix = `${hostId}|${userId}|`;
+  const identities = new Set([
+    ...Object.keys(state.pagesByIdentity),
+    ...Object.keys(state.generationByIdentity),
+  ]);
+  identities.forEach((identity) => {
+    if (identity.startsWith(prefix)) state.resetIdentity(identity);
+  });
 }

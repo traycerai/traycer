@@ -9,6 +9,7 @@ import {
   collectHistoryRepos,
   dedupSortWorkspaces,
   filterHistoryItems,
+  prioritizePinnedHistoryItems,
   sortHistoryItems,
   withHistoryItemPullRequestNumbers,
 } from "@/components/home/data/home-page.data";
@@ -261,7 +262,9 @@ function sortProjectedHistoryItems(
   sort: HistorySortOption,
   query: string,
 ): ReadonlyArray<HistoryItem> {
-  if (sort === "relevance" && query.length > 0) return items;
+  if (sort === "relevance" && query.length > 0) {
+    return prioritizePinnedHistoryItems(items);
+  }
   return sortHistoryItems(items, sort);
 }
 

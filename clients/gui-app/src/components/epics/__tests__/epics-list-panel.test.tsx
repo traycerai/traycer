@@ -23,6 +23,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -110,6 +111,11 @@ interface RenameEpicTitleVariables {
   };
 }
 
+interface SetEpicPinnedVariables {
+  readonly epicId: string;
+  readonly pinned: boolean;
+}
+
 interface WorktreeCleanupCandidateStub {
   readonly worktreePath: string;
   readonly repoLabel: string;
@@ -162,6 +168,8 @@ const testState = vi.hoisted(() => ({
       ) => void
     >(),
   renameMutate: vi.fn<(variables: RenameEpicTitleVariables) => void>(),
+  setPinnedMutate: vi.fn<(variables: SetEpicPinnedVariables) => void>(),
+  pendingSetPinnedEpicIds: new Set<string>(),
   refetch: vi.fn(),
   fetchNextPage: vi.fn(),
 }));
@@ -208,6 +216,13 @@ vi.mock("@/hooks/epic/use-epic-title-mutation", () => ({
   }),
 }));
 
+vi.mock("@/hooks/epic/use-epic-set-pinned-mutation", () => ({
+  useEpicSetPinned: () => ({
+    mutate: testState.setPinnedMutate,
+  }),
+  usePendingSetPinnedEpicIds: () => testState.pendingSetPinnedEpicIds,
+}));
+
 vi.mock("@/hooks/epic/use-epic-activity-status", () => ({
   useEpicActivityStatus: (epicId: string | null) =>
     epicId === null
@@ -230,6 +245,7 @@ function historyItem(overrides: Partial<HistoryItem>): HistoryItem {
     pullRequestNumbers: [],
     ownership: "mine",
     permissionRole: "owner",
+    isPinned: false,
     ...overrides,
   };
 }
@@ -335,6 +351,8 @@ describe("<EpicsListPanel />", () => {
     setDesktopEpicOwnershipBridge(null);
     testState.mutate.mockReset();
     testState.renameMutate.mockReset();
+    testState.setPinnedMutate.mockReset();
+    testState.pendingSetPinnedEpicIds = new Set();
     testState.refetch.mockReset();
     testState.fetchNextPage.mockReset();
     testState.activityByEpicId.clear();
@@ -367,6 +385,123 @@ describe("<EpicsListPanel />", () => {
       );
     });
     expect(screen.queryByTestId("old-epic-route")).toBeNull();
+  });
+
+  it("unpins a pinned app history epic from the row control", async () => {
+    testState.items = [historyItem({ isPinned: true })];
+    renderPanel("embedded", "/");
+
+    const unpin = await screen.findByRole("button", {
+      name: "Unpin Open from landing from top",
+    });
+    expect(unpin.getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByTestId("epics-list-row").dataset.pinned).toBe("true");
+    fireEvent.click(unpin);
+    expect(testState.setPinnedMutate).toHaveBeenCalledWith({
+      epicId: "epic-from-history",
+      pinned: false,
+    });
+  });
+
+  it("pins an unpinned app history epic", async () => {
+    renderPanel("embedded", "/");
+
+    const pin = await screen.findByRole("button", {
+      name: "Pin Open from landing to top",
+    });
+    expect(pin.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(pin);
+    expect(testState.setPinnedMutate).toHaveBeenCalledWith({
+      epicId: "epic-from-history",
+      pinned: true,
+    });
+  });
+
+  it("clicks the pin control without triggering the row navigation layer", async () => {
+    const router = renderPanel("embedded", "/");
+
+    const pin = await screen.findByRole("button", {
+      name: "Pin Open from landing to top",
+    });
+    fireEvent.click(pin);
+
+    expect(testState.setPinnedMutate).toHaveBeenCalledWith({
+      epicId: "epic-from-history",
+      pinned: true,
+    });
+    // The pin control sits alongside - not inside - the row's absolute <Link>
+    // overlay. A regression that nested it inside the link, or dropped the
+    // sibling stacking, would fire navigation on the same click.
+    expect(router.state.location.pathname).toBe("/");
+    expect(screen.queryByTestId("epic-tab-route")).toBeNull();
+  });
+
+  it("keeps two independently pending pin rows disabled and spinning at the same time", async () => {
+    testState.items = [
+      historyItem({}),
+      historyItem({
+        id: "history-epic-2",
+        epicId: "epic-two",
+        title: "Second history item",
+      }),
+      historyItem({
+        id: "history-epic-3",
+        epicId: "epic-three",
+        title: "Third history item",
+      }),
+    ];
+    // Simulates two rows having each fired their own `epic.setPinned` call
+    // concurrently: both must read as pending off the shared mutation
+    // cache, independent of which one was clicked most recently.
+    testState.pendingSetPinnedEpicIds = new Set([
+      "epic-from-history",
+      "epic-two",
+    ]);
+    renderPanel("embedded", "/");
+
+    const pendingPinOne = await screen.findByRole("button", {
+      name: "Pin Open from landing to top",
+    });
+    const pendingPinTwo = screen.getByRole("button", {
+      name: "Pin Second history item to top",
+    });
+    const idlePin = screen.getByRole("button", {
+      name: "Pin Third history item to top",
+    });
+
+    expect(pendingPinOne.hasAttribute("disabled")).toBe(true);
+    expect(pendingPinTwo.hasAttribute("disabled")).toBe(true);
+    expect(idlePin.hasAttribute("disabled")).toBe(false);
+
+    expect(
+      within(pendingPinOne).queryByTestId("epics-list-row-pin-spinner"),
+    ).not.toBeNull();
+    expect(
+      within(pendingPinTwo).queryByTestId("epics-list-row-pin-spinner"),
+    ).not.toBeNull();
+    expect(
+      within(idlePin).queryByTestId("epics-list-row-pin-spinner"),
+    ).toBeNull();
+  });
+
+  it("shows no pin control for a phase row even when the raw task carries isPinned true", async () => {
+    testState.items = [
+      historyItem({
+        id: "history-phase-pinned",
+        epicId: "phase-pinned",
+        taskType: "phase",
+        title: "Phase somehow pinned",
+        // A phase can never legitimately be pinned - the data layer always
+        // projects `isPinned: false` for phases - but the row control must
+        // stay defensive even if a stale/bad projection carried `true`
+        // through.
+        isPinned: true,
+      }),
+    ];
+    renderPanel("embedded", "/");
+
+    expect(await screen.findByText("Phase somehow pinned")).not.toBeNull();
+    expect(screen.queryByTestId("epics-list-row-pin")).toBeNull();
   });
 
   it("shows task PR pills without replacing the row navigation layer", async () => {
@@ -426,6 +561,8 @@ describe("<EpicsListPanel />", () => {
       }),
     ];
     renderPanel("embedded", "/");
+
+    expect(screen.queryByTestId("epics-list-row-pin")).toBeNull();
 
     fireEvent.contextMenu(await screen.findByTestId("epics-list-row-card"));
 

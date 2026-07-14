@@ -3,6 +3,8 @@ import type { ListTasksResponse } from "@traycer/protocol/host/epic/unary-schema
 import {
   useCloudEpicTasksPagesStore,
   cloudEpicTasksPageGeneration,
+  registerCloudEpicTasksPageIdentity,
+  resetCloudEpicTasksPagesForScope,
 } from "@/stores/epics/cloud-epic-tasks-pages-store";
 
 const IDENTITY = "host-a|user-a|{}";
@@ -71,5 +73,57 @@ describe("useCloudEpicTasksPagesStore", () => {
     expect(cloudEpicTasksPageGeneration("other-identity")).toBe(
       otherGeneration,
     );
+  });
+
+  it("rejects a stale first-tail response when a pin/unpin reset lands while it is still in flight", () => {
+    const hostId = "host-a";
+    const userId = "user-a";
+    const identity = `${hostId}|${userId}|recent`;
+
+    // `fetchNextPage` starting the FIRST "Show more" request for an identity
+    // that has never appended a page or been reset before: it must register
+    // the identity before capturing the generation it hands to the request,
+    // or a reset landing during this exact window has nothing to advance.
+    // This is the precise gap the review reproduced as
+    // `{"captured":0,"afterReset":0,"accepted":1}`.
+    registerCloudEpicTasksPageIdentity(identity);
+    const capturedGeneration = cloudEpicTasksPageGeneration(identity);
+    expect(capturedGeneration).toBe(0);
+
+    // A pin/unpin mutation succeeds and resets the host/user scope while
+    // that first tail request is still in flight.
+    resetCloudEpicTasksPagesForScope(hostId, userId);
+    expect(cloudEpicTasksPageGeneration(identity)).toBe(1);
+
+    // The stale tail finally resolves after the refreshed first page has
+    // already landed.
+    useCloudEpicTasksPagesStore
+      .getState()
+      .appendPage(identity, capturedGeneration, page("stale-tail"));
+
+    expect(pagesFor(identity)).toBeUndefined();
+  });
+
+  it("resets every pagination identity for one host and user", () => {
+    const matchingFirst = "host-a|user-a|recent";
+    const matchingSecond = "host-a|user-a|title";
+    const otherUser = "host-a|user-b|recent";
+    const state = useCloudEpicTasksPagesStore.getState();
+    [matchingFirst, matchingSecond, otherUser].forEach((identity) => {
+      state.appendPage(
+        identity,
+        cloudEpicTasksPageGeneration(identity),
+        page(identity),
+      );
+    });
+
+    resetCloudEpicTasksPagesForScope("host-a", "user-a");
+
+    expect(pagesFor(matchingFirst)).toBeUndefined();
+    expect(pagesFor(matchingSecond)).toBeUndefined();
+    expect(pagesFor(otherUser)).toHaveLength(1);
+    expect(cloudEpicTasksPageGeneration(matchingFirst)).toBe(1);
+    expect(cloudEpicTasksPageGeneration(matchingSecond)).toBe(1);
+    expect(cloudEpicTasksPageGeneration(otherUser)).toBe(0);
   });
 });
