@@ -152,6 +152,7 @@ export function AssistantMessageBody({
           return (
             <InterviewSegment
               key={item.id}
+              blockId={item.segment.id}
               findUnitId={chatFindSegmentUnitId(item.segment.id)}
               status={item.segment.status}
               toolName={item.segment.toolName}
@@ -161,6 +162,7 @@ export function AssistantMessageBody({
               answers={item.segment.answers}
               error={item.segment.error}
               forkedWithoutAnswer={item.segment.forkedWithoutAnswer}
+              forkAction={forkAction}
             />
           );
         }
@@ -192,6 +194,7 @@ export function AssistantMessageBody({
             segment={item.segment}
             backgroundToolBlockIds={backgroundToolBlockIds}
             nextStepActions={nextStepActions}
+            forkAction={forkAction}
           />
         );
       })}
@@ -361,7 +364,7 @@ function AssistantForkButton({
         aria-label={label}
         data-testid="assistant-fork-chat"
         disabled={!action.enabled || action.pending}
-        onClick={action.onFork}
+        onClick={() => action.onFork("plain", null)}
         className={cn(
           "inline-flex size-6 shrink-0 items-center justify-center rounded-md",
           "text-muted-foreground/60 transition-colors",
@@ -606,6 +609,7 @@ interface AssistantSegmentProps {
   segment: MessageSegment;
   backgroundToolBlockIds: ReadonlySet<string>;
   nextStepActions: NextStepActionHandler | null;
+  forkAction: ChatMessageForkAction | null;
 }
 
 function ApprovalSegmentCard({
@@ -639,6 +643,7 @@ function AssistantSegment({
   segment,
   backgroundToolBlockIds,
   nextStepActions,
+  forkAction,
 }: AssistantSegmentProps) {
   const findUnitId = chatFindSegmentUnitId(id);
   switch (segment.kind) {
@@ -790,6 +795,7 @@ function AssistantSegment({
     case "interview":
       return (
         <InterviewSegment
+          blockId={segment.id}
           findUnitId={findUnitId}
           status={segment.status}
           toolName={segment.toolName}
@@ -799,6 +805,7 @@ function AssistantSegment({
           answers={segment.answers}
           error={segment.error}
           forkedWithoutAnswer={segment.forkedWithoutAnswer}
+          forkAction={forkAction}
         />
       );
     case "setup-card":

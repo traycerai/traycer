@@ -1502,8 +1502,13 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
             forkAtAssistantMessage(
               forkPendingInterviewAssistantMessageId,
               mode,
+              pendingInterview?.blockId ?? null,
             ),
-    [forkPendingInterviewAssistantMessageId, forkAtAssistantMessage],
+    [
+      forkPendingInterviewAssistantMessageId,
+      forkAtAssistantMessage,
+      pendingInterview?.blockId,
+    ],
   );
   const lowerInterview = useMemo(
     () => ({

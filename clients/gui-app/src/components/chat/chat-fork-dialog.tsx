@@ -51,6 +51,9 @@ export interface ChatForkDialogTarget {
   readonly sourceChatId: string;
   readonly sourceChatTitle: string;
   readonly assistantMessageId: string;
+  // Q&A forks identify the exact interview block within an assistant row;
+  // ordinary message-level forks leave this null and retain the whole row.
+  readonly interviewBlockId: string | null;
   readonly parentId: string | null;
   readonly settingsSeed: ChatRunSettings;
   // The full seed (intent + folder snapshot) projected from the source chat's
@@ -256,6 +259,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
         forkSource: {
           sourceChatId: target.sourceChatId,
           assistantMessageId: target.assistantMessageId,
+          interviewBlockId: target.interviewBlockId,
           carriedInterviews: target.carriedInterviews,
         },
       },

@@ -12,8 +12,17 @@ import {
 } from "@testing-library/react";
 import { VirtuosoMessageListTestingContext } from "@virtuoso.dev/message-list";
 
+interface ForkCreateRequest {
+  readonly forkSource: {
+    readonly interviewBlockId: string | null;
+  };
+}
+
 const loadingSurfaceTestState = vi.hoisted(() => ({
   unresolvedWorkspaceRenderCount: 0,
+}));
+const forkCreateTestState = vi.hoisted(() => ({
+  mutate: vi.fn<(input: ForkCreateRequest, options: object) => void>(),
 }));
 
 vi.mock(
@@ -70,6 +79,16 @@ vi.mock("@/lib/host", () => ({
 // having to replicate the full @/lib/host/runtime export surface.
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => MOCK_HOST_CLIENT,
+}));
+
+vi.mock("@/hooks/epic/use-epic-chat-mutations", async (importActual) => ({
+  ...(await importActual<
+    typeof import("@/hooks/epic/use-epic-chat-mutations")
+  >()),
+  useEpicCreateChatForHost: () => ({
+    mutate: forkCreateTestState.mutate,
+    isPending: false,
+  }),
 }));
 
 // HarnessModelPickerImpl (mounted inside the tile tree via the composer
@@ -534,6 +553,71 @@ function streamingInterviewAssistantMessage(): Message {
   };
 }
 
+function answeredInterviewAssistantMessage(): Message {
+  const message = streamingInterviewAssistantMessage();
+  if (message.role !== "assistant") {
+    throw new Error("expected assistant interview fixture");
+  }
+  return {
+    ...message,
+    blocks: [
+      {
+        type: "interview",
+        blockId: "question-1",
+        status: "completed",
+        timestamp: 4,
+        toolName: "AskUserQuestion",
+        title: "Need input",
+        description: "One decision is required.",
+        questions: [
+          {
+            questionId: null,
+            question: "Which path should we take?",
+            header: null,
+            options: [
+              { label: "Option A", description: null, preview: null },
+              { label: "Option B", description: null, preview: null },
+            ],
+            multiSelect: false,
+          },
+        ],
+        answers: [
+          {
+            questionId: null,
+            question: "Which path should we take?",
+            values: ["Option A"],
+            notes: null,
+          },
+        ],
+        error: null,
+        metadata: null,
+      },
+    ],
+    timestamp: 4,
+    turnId: "turn-active",
+  };
+}
+
+function skippedInterviewAssistantMessage(): Message {
+  const message = answeredInterviewAssistantMessage();
+  if (message.role !== "assistant") {
+    throw new Error("expected assistant interview fixture");
+  }
+  return {
+    ...message,
+    blocks: message.blocks.map((block) =>
+      block.type === "interview"
+        ? {
+            ...block,
+            status: "errored" as const,
+            answers: [],
+            error: "Skipped by user",
+          }
+        : block,
+    ),
+  };
+}
+
 function runningActiveTurn(): ChatActiveTurn {
   return {
     turnId: "turn-active",
@@ -713,6 +797,7 @@ describe("<ChatTile />", () => {
     useComposerRunSettingsStore.getState().resetForTests();
     useComposerHarnessMemoryStore.getState().resetForTests();
     loadingSurfaceTestState.unresolvedWorkspaceRenderCount = 0;
+    forkCreateTestState.mutate.mockReset();
     // The composer gates Send on a resolved (non-empty) model slug. Without a
     // host binding the catalog never resolves the empty default, so seed a
     // concrete default model so the composer reaches a sendable state.
@@ -1326,6 +1411,63 @@ describe("<ChatTile />", () => {
       expect(screen.queryByText("Which path should we take?")).toBeNull();
       expect(screen.getByRole("button", { name: "Send" })).not.toBeNull();
     });
+  });
+
+  it("shows resolved Q&A fork actions while the assistant turn continues", async () => {
+    renderChatTile();
+
+    await waitForChatTileLoaded();
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage(), answeredInterviewAssistantMessage()],
+        activeTurn: runningActiveTurn(),
+      });
+    });
+
+    expect(
+      await screen.findByRole("button", { name: "Cross Question" }),
+    ).not.toBeNull();
+    expect(screen.getByRole("button", { name: "A/B Fork" })).not.toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cross Question" }));
+
+    const titleInput = await screen.findByLabelText("Fork chat title");
+    if (!(titleInput instanceof HTMLInputElement)) {
+      throw new Error("expected fork title input");
+    }
+    expect(titleInput.value).toBe("Cross Question - Chat 1");
+
+    fireEvent.click(screen.getByRole("button", { name: "Fork" }));
+
+    const [forkCall] = forkCreateTestState.mutate.mock.calls;
+    expect(forkCall[0].forkSource.interviewBlockId).toBe("question-1");
+  });
+
+  it("shows Q&A fork actions after the question is skipped", async () => {
+    renderChatTile();
+
+    await waitForChatTileLoaded();
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage(), skippedInterviewAssistantMessage()],
+        activeTurn: runningActiveTurn(),
+      });
+    });
+
+    expect(
+      await screen.findByRole("button", { name: "Cross Question" }),
+    ).not.toBeNull();
+    expect(screen.getByRole("button", { name: "A/B Fork" })).not.toBeNull();
   });
 
   it("falls back to client-local last-used settings when the chat has no session settings", async () => {
