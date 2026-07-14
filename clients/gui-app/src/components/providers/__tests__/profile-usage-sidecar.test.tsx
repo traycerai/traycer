@@ -89,6 +89,7 @@ describe("ProfileUsageSidecar states", () => {
     vi.restoreAllMocks();
     cleanup();
     anchor.remove();
+    Reflect.deleteProperty(document, "getAnimations");
   });
 
   it.each([
@@ -211,5 +212,78 @@ describe("ProfileUsageSidecar states", () => {
           .dataset.visible,
       ).toBe("true"),
     );
+  });
+});
+
+describe("ProfileUsageSidecar entrance-animation readiness", () => {
+  let wrapper: HTMLDivElement;
+  let anchor: HTMLButtonElement;
+
+  beforeEach(() => {
+    wrapper = document.createElement("div");
+    anchor = document.createElement("button");
+    wrapper.append(anchor);
+    document.body.append(wrapper);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+      function mockRect(this: HTMLElement) {
+        if (this === anchor) return new DOMRect(100, 100, 240, 32);
+        if (this.hasAttribute("data-profile-usage-sidecar")) {
+          return new DOMRect(0, 0, 300, 220);
+        }
+        return new DOMRect(0, 0, 0, 0);
+      },
+    );
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    cleanup();
+    wrapper.remove();
+    Reflect.deleteProperty(document, "getAnimations");
+  });
+
+  it("stays hidden while the containing menu is still animating in, then positions correctly once it settles", async () => {
+    let releaseAnimation: () => void = () => undefined;
+    const finished = new Promise<void>((resolve) => {
+      releaseAnimation = resolve;
+    });
+    Object.defineProperty(document, "getAnimations", {
+      configurable: true,
+      writable: true,
+      value: () => [
+        {
+          effect: {
+            target: wrapper,
+            getTiming: () => ({ iterations: 1 }),
+          },
+          finished,
+        },
+      ],
+    });
+
+    render(
+      <ProfileUsageSidecar
+        anchor={anchor}
+        profile={PROFILE}
+        entry={staleEntry()}
+        isHostReady
+      />,
+    );
+
+    const sidecar = screen.getByRole("complementary", {
+      name: "Usage details for Work",
+    });
+    // Flush pending microtasks (but not the animation's `finished` promise,
+    // which stays pending) - the sidecar must remain hidden throughout, with
+    // no interim position ever committed.
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(sidecar.dataset.visible).toBe("false");
+    expect(sidecar.dataset.side).toBeUndefined();
+
+    releaseAnimation();
+    await waitFor(() => expect(sidecar.dataset.visible).toBe("true"));
+    expect(sidecar.dataset.side).toBe("right");
   });
 });

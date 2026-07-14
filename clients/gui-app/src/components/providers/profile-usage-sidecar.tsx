@@ -8,6 +8,7 @@ import {
   deriveProfileUsageSidecarPosition,
   type ProfileUsageSidecarPosition,
 } from "@/components/providers/profile-usage-sidecar-position";
+import { waitForAnchorEntranceAnimations } from "@/components/providers/profile-usage-sidecar-anchor-readiness";
 import { MeterRow } from "@/components/settings/panels/traycer-subscription-views";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -59,7 +60,12 @@ export function ProfileUsageSidecar(
 
   useLayoutEffect(() => {
     if (anchor === null || sidecarNode === null) return;
+    // Gates `update()` until the anchor's entrance animation (if any) has
+    // settled, so a measurement is never taken - and never painted - mid
+    // transform. See `waitForAnchorEntranceAnimations` for why.
+    let ready = false;
     const update = () => {
+      if (!ready) return;
       const anchorRect = anchor.getBoundingClientRect();
       const sidecarRect = sidecarNode.getBoundingClientRect();
       const next = deriveProfileUsageSidecarPosition({
@@ -73,13 +79,19 @@ export function ProfileUsageSidecar(
       });
       setPosition((current) => (samePosition(current, next) ? current : next));
     };
-    update();
+    let cancelled = false;
+    void waitForAnchorEntranceAnimations(anchor).then(() => {
+      if (cancelled) return;
+      ready = true;
+      update();
+    });
     window.addEventListener("resize", update);
     window.addEventListener("scroll", update, true);
     const observer = new ResizeObserver(update);
     observer.observe(anchor);
     observer.observe(sidecarNode);
     return () => {
+      cancelled = true;
       observer.disconnect();
       window.removeEventListener("resize", update);
       window.removeEventListener("scroll", update, true);
