@@ -34,11 +34,17 @@ export function displayNotificationRows(
   } catch {
     // The feed remains authoritative; a failed native toast is non-critical.
   }
+  const interaction =
+    content.row.payload === null
+      ? {}
+      : {
+          className: "cursor-pointer",
+          onClick: () => target.onToastClick(content.row),
+        };
   toast(content.title, {
     description: content.body,
     id: content.replaceKey,
-    className: "cursor-pointer",
-    onClick: () => target.onToastClick(content.row),
+    ...interaction,
   });
   target.playChime();
 }

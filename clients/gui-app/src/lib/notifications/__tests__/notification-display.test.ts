@@ -1,13 +1,26 @@
-import { describe, expect, it, vi } from "vitest";
-import { toast } from "sonner";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   displayNotificationRows,
   notificationReplaceKey,
 } from "@/lib/notifications/notification-display";
 import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
 
+interface CapturedToast {
+  readonly title: string;
+  readonly options: {
+    readonly description: string;
+    readonly id: string;
+    readonly className?: string;
+    readonly onClick?: () => void;
+  };
+}
+
+const toastCalls = vi.hoisted((): CapturedToast[] => []);
+
 vi.mock("sonner", () => ({
-  toast: vi.fn(),
+  toast: (title: string, options: CapturedToast["options"]): void => {
+    toastCalls.push({ title, options });
+  },
 }));
 
 function row(title: string): MergedNotificationRow {
@@ -29,6 +42,10 @@ function row(title: string): MergedNotificationRow {
 }
 
 describe("notification display", () => {
+  beforeEach(() => {
+    toastCalls.length = 0;
+  });
+
   it("shows exactly one toast and one chime for one display emission", () => {
     const showNotification = vi.fn(() => Promise.resolve());
     const playChime = vi.fn();
@@ -50,12 +67,12 @@ describe("notification display", () => {
       },
       "host:chat:chat-1",
     );
-    expect(toast).toHaveBeenCalledWith("Checkout notifications", {
-      className: "cursor-pointer",
-      description: "New chat • Done",
-      id: "host:chat:chat-1",
-      onClick: expect.any(Function),
-    });
+    expect(toastCalls).toHaveLength(1);
+    expect(toastCalls[0]?.title).toBe("Checkout notifications");
+    expect(toastCalls[0]?.options.description).toBe("New chat • Done");
+    expect(toastCalls[0]?.options.id).toBe("host:chat:chat-1");
+    expect(toastCalls[0]?.options.className).toBe("cursor-pointer");
+    expect(toastCalls[0]?.options.onClick).toBeTypeOf("function");
     expect(playChime).toHaveBeenCalledOnce();
   });
 
@@ -121,11 +138,13 @@ describe("notification display", () => {
   it("uses one key for batched notifications", () => {
     const showNotification = vi.fn(() => Promise.resolve());
     const playChime = vi.fn();
+    const onToastClick = vi.fn();
+    const first = row("One");
 
-    displayNotificationRows([row("One"), row("Two")], {
+    displayNotificationRows([first, row("Two")], {
       showNotification,
       playChime,
-      onToastClick: vi.fn(),
+      onToastClick,
     });
 
     expect(showNotification).toHaveBeenCalledWith(
@@ -134,6 +153,10 @@ describe("notification display", () => {
       expect.anything(),
       "notification-batch",
     );
+
+    toastCalls[0]?.options.onClick?.();
+
+    expect(onToastClick).toHaveBeenCalledWith(first);
   });
 
   it("still plays the chime when native notification setup throws", () => {
@@ -163,11 +186,19 @@ describe("notification display", () => {
       onToastClick,
     });
 
-    const options = vi.mocked(toast).mock.calls.at(-1)?.[1];
-    if (options?.onClick !== undefined) {
-      Reflect.apply(options.onClick, null, []);
-    }
+    toastCalls[0]?.options.onClick?.();
 
     expect(onToastClick).toHaveBeenCalledWith(notification);
+  });
+
+  it("does not make notifications without a destination clickable", () => {
+    displayNotificationRows([{ ...row("Agent finished"), payload: null }], {
+      showNotification: vi.fn(() => Promise.resolve()),
+      playChime: vi.fn(),
+      onToastClick: vi.fn(),
+    });
+
+    expect(toastCalls[0]?.options.className).toBeUndefined();
+    expect(toastCalls[0]?.options.onClick).toBeUndefined();
   });
 });

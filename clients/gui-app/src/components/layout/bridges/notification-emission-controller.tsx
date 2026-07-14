@@ -16,7 +16,7 @@ export function NotificationEmissionController(): null {
       if (row.payload === null) return;
       activate({
         payload: row.payload,
-        receivedAt: Date.now(),
+        receivedAt: row.createdAt,
         onActivated: null,
       });
     },
