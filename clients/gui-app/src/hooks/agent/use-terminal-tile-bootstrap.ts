@@ -18,7 +18,6 @@
  * loading state, error-classification copy).
  */
 import { lazy, useCallback, useEffect, useRef } from "react";
-import { useOpenEpicId } from "@/lib/epic-selectors";
 import {
   markTerminalLoad,
   markXtermChunkLoad,
@@ -33,6 +32,7 @@ import type {
   TerminalSessionStoreHandle,
 } from "@/stores/terminals/terminal-session-store";
 import type { TuiHarnessId } from "@traycer/protocol/host/agent/shared";
+import type { TerminalScope } from "@traycer/protocol/host/terminal/unary-schemas";
 const TERMINAL_DEFAULT_COLS = 80;
 const TERMINAL_DEFAULT_ROWS = 24;
 
@@ -59,6 +59,8 @@ export interface TerminalCreatePayload {
 
 export interface UseTerminalTileBootstrapInput {
   readonly hostId: string;
+  /** Scope used for the list predicate and any terminal create request. */
+  readonly scope: TerminalScope;
   readonly sessionId: string;
   /**
    * Per-tab instance id. The session handle is registered under this so two
@@ -91,6 +93,8 @@ export interface UseTerminalTileBootstrapInput {
 
 export interface TerminalTileBootstrapResult {
   readonly hostHasSession: boolean | null;
+  /** A host-grace-window exit; callers must not treat it as a missing session. */
+  readonly hostSessionExited: boolean;
   readonly handle: TerminalSessionStoreHandle | null;
   readonly createIsError: boolean;
   readonly createIsSuccess: boolean;
@@ -104,10 +108,9 @@ export interface TerminalTileBootstrapResult {
 export function useTerminalTileBootstrap(
   input: UseTerminalTileBootstrapInput,
 ): TerminalTileBootstrapResult {
-  const epicId = useOpenEpicId();
   const hostEntry = useHostDirectoryEntry(input.hostId);
   const hostClient = useHostClientFor(hostEntry);
-  const list = useTerminalList(epicId, hostClient);
+  const list = useTerminalList(input.scope, hostClient);
   const create = useTerminalCreate(hostClient);
 
   // The last SETTLED list's verdict on the session, kept stable across
@@ -210,7 +213,7 @@ export function useTerminalTileBootstrap(
         // `prepareLaunch` RPC; for plain terminals it is effectively instant.
         markTerminalLoad(input.sessionId, "prepare-done");
         createMutateRef.current({
-          epicId,
+          scope: input.scope,
           sessionKind: input.sessionKind,
           tuiHarnessId: payload.tuiHarnessId,
           desiredSessionId: input.sessionId,
@@ -232,7 +235,7 @@ export function useTerminalTileBootstrap(
     hostSessionExited,
     hostClient,
     createIsIdle,
-    epicId,
+    input.scope,
     input.sessionId,
     input.sessionKind,
     preparePayload,
@@ -248,7 +251,7 @@ export function useTerminalTileBootstrap(
 
   const handle = useTerminalSessionHandle({
     hostId: input.hostId,
-    epicId,
+    scope: input.scope,
     sessionId: input.sessionId,
     instanceId: input.instanceId,
     cols: TERMINAL_DEFAULT_COLS,
@@ -276,6 +279,7 @@ export function useTerminalTileBootstrap(
 
   return {
     hostHasSession,
+    hostSessionExited,
     handle,
     createIsError: create.isError,
     createIsSuccess: create.isSuccess,

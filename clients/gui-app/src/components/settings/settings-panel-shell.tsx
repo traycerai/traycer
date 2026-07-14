@@ -29,6 +29,7 @@ export function SettingsPanelShell(props: SettingsPanelShellProps) {
   } = props;
   return (
     <section
+      data-settings-panel-shell
       className={cn(
         "mx-auto w-full max-w-5xl px-8 py-10",
         fillHeight && "flex h-full flex-col",
@@ -50,6 +51,7 @@ export function SettingsPanelShell(props: SettingsPanelShellProps) {
         )}
       </header>
       <div
+        data-settings-panel-body
         className={cn(
           "overflow-hidden rounded-xl border border-border/60 bg-card/40",
           fillHeight && "min-h-0 flex-1",

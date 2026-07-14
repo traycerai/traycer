@@ -11,6 +11,7 @@ import {
   mergeNotificationFeedIds,
   mergedUnreadCount,
   rowFromAppLocalEntry,
+  rowFromGlobalEntry,
   rowFromHostEntry,
 } from "@/stores/notifications/merged-notifications";
 import type { AppLocalNotificationEntry } from "@/stores/notifications/app-local-notifications-store";
@@ -29,9 +30,14 @@ function hostEntry(
     severity: "needs_action",
     outcome: null,
     resolvedAt: null,
+    epicId: "epic-1",
+    chatId: "chat-1",
     payload: {
+      kind: "approval",
       epicId: "epic-1",
       chatId: "chat-1",
+      chatTitle: "Deploy checkout fix",
+      taskTitle: "Checkout notifications",
       approvalId: "approval-1",
     },
   };
@@ -108,6 +114,204 @@ describe("merged notifications feed", () => {
     });
   });
 
+  it("splits global notification titles from their collaboration context", () => {
+    expect(rowFromGlobalEntry(globalEntry("global", 10, null))).toMatchObject({
+      title: "Alice invited you to an epic",
+      body: "Collaboration",
+    });
+  });
+
+  it("uses the task title in host notification copy", () => {
+    const base = {
+      id: "notification-1",
+      updatedAt: 10,
+      readAt: null,
+      sourceRef: "agent-1",
+      epicId: "epic-1",
+      chatId: "chat-1",
+    } as const;
+    const stopped: HostNotificationEntry = {
+      ...base,
+      kind: "agent.stopped",
+      severity: "done",
+      outcome: "completed",
+      payload: {
+        kind: "chat",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        agentName: "Deploy checkout fix",
+        taskTitle: "Checkout notifications",
+        outcome: "completed",
+      },
+    };
+    const rateLimited: HostNotificationEntry = {
+      ...base,
+      kind: "agent.stopped",
+      severity: "failure",
+      outcome: "errored",
+      payload: {
+        kind: "chat",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        agentName: "Deploy checkout fix",
+        taskTitle: "Checkout notifications",
+        outcome: "errored",
+        code: "RATE_LIMIT",
+      },
+    };
+    const stalled: HostNotificationEntry = {
+      ...base,
+      kind: "agent.stalled",
+      severity: "failure",
+      outcome: "errored",
+      payload: {
+        kind: "agent_stalled",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        agentId: "chat-1",
+        agentName: "Deploy checkout fix",
+        taskTitle: "Checkout notifications",
+        reason: "provider_buffering",
+        title: "Provider is buffering",
+        outcome: "errored",
+      },
+    };
+    const interview: HostNotificationEntry = {
+      ...base,
+      kind: "interview.requested",
+      severity: "needs_action",
+      outcome: null,
+      resolvedAt: null,
+      payload: {
+        kind: "interview",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        chatTitle: "Deploy checkout fix",
+        taskTitle: "Checkout notifications",
+        interviewBlockId: "block-1",
+      },
+    };
+
+    expect(rowFromHostEntry(stopped)).toMatchObject({
+      title: "Checkout notifications",
+      body: "Deploy checkout fix • Done",
+    });
+    expect(rowFromHostEntry(rateLimited)).toMatchObject({
+      title: "Checkout notifications",
+      body: "Deploy checkout fix • Rate limit reached",
+    });
+    expect(rowFromHostEntry(stalled)).toMatchObject({
+      title: "Checkout notifications",
+      body: "Deploy checkout fix • Stalled",
+    });
+    expect(rowFromHostEntry(interview)).toMatchObject({
+      title: "Checkout notifications",
+      body: "Deploy checkout fix • Question waiting",
+    });
+  });
+
+  it("presents known typed payloads and degrades unknown ones generically", () => {
+    const base = {
+      id: "notification-typed",
+      updatedAt: 10,
+      readAt: null,
+      sourceRef: "chat-1",
+      epicId: "epic-1",
+      chatId: "chat-1",
+    } as const;
+    // A fully typed payload from a current host: presentation and the
+    // navigation deep-link both come from the second-stage semantic parse.
+    const typed: HostNotificationEntry = {
+      ...base,
+      kind: "agent.stopped",
+      severity: "done",
+      outcome: "completed",
+      payload: {
+        kind: "chat",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        agentName: "Deploy checkout fix",
+        taskTitle: "Checkout notifications",
+        outcome: "completed",
+      },
+    };
+    expect(rowFromHostEntry(typed)).toMatchObject({
+      title: "Checkout notifications",
+      body: "Deploy checkout fix • Done",
+      payload: { kind: "chat", epicId: "epic-1", chatId: "chat-1" },
+    });
+
+    // A payload kind from a NEWER host: unknown here, so the row renders
+    // generically with no deep-link - it must never vanish or crash
+    // presentation.
+    const futureShape: HostNotificationEntry = {
+      ...base,
+      id: "notification-future",
+      kind: "agent.stopped",
+      severity: "done",
+      outcome: "completed",
+      payload: {
+        kind: "future_shape",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        taskTitle: "Checkout notifications",
+        outcome: "completed",
+      },
+    };
+    expect(rowFromHostEntry(futureShape)).toMatchObject({
+      title: "Task",
+      body: "Chat • Done",
+      payload: null,
+    });
+
+    // Cross-kind corruption: a well-formed payload under the WRONG row kind
+    // must not mint contradictory copy or a deep-link.
+    const crossKind: HostNotificationEntry = {
+      ...base,
+      id: "notification-cross-kind",
+      kind: "approval.requested",
+      severity: "needs_action",
+      outcome: null,
+      resolvedAt: null,
+      payload: {
+        kind: "chat",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        agentName: "Deploy checkout fix",
+        taskTitle: "Checkout notifications",
+        outcome: "completed",
+      },
+    };
+    expect(rowFromHostEntry(crossKind)).toMatchObject({
+      title: "Task",
+      body: "Chat • Approval requested",
+      payload: null,
+    });
+
+    // Wrongly-typed display fields fail the semantic parse and degrade the
+    // same way.
+    const malformed: HostNotificationEntry = {
+      ...base,
+      id: "notification-malformed",
+      kind: "agent.stopped",
+      severity: "done",
+      outcome: "completed",
+      payload: {
+        kind: "chat",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        agentName: 42,
+        taskTitle: null,
+        outcome: "completed",
+      },
+    };
+    expect(rowFromHostEntry(malformed)).toMatchObject({
+      title: "Task",
+      body: "Chat • Done",
+      payload: null,
+    });
+  });
+
   it("formats app-local rows with their own payload and kind", () => {
     expect(rowFromAppLocalEntry(appLocalEntry("setup", 10, null))).toEqual({
       feedId: appLocalFeedId("setup"),
@@ -115,7 +319,8 @@ describe("merged notifications feed", () => {
       sourceId: "setup",
       createdAt: 10,
       readAt: null,
-      text: "Worktree setup failed",
+      title: "Worktree setup failed",
+      body: "Traycer notification",
       payload: { kind: "chat", epicId: "epic-1", chatId: "chat-1" },
       hostKind: null,
       appLocalKind: "worktree.setup.failed",

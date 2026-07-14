@@ -83,14 +83,14 @@ type WorktreeCreateMutateAsync = (
  *      record),
  *   2. opens a canvas tab placeholder for the client-minted id BEFORE
  *      worktree creation and `agent.tui.prepareLaunch` for normal launches so
- *      the user has a visible tui-agent surface inside the Epic while the
- *      resolver awaits orchestrator setup. Fork launches intentionally wait
- *      until `agent.tui.prepareLaunch` returns the new forked session so the
- *      tab opens on the forked session rather than a pre-fork placeholder.
- *      The tile renders "Loading terminal agent…" until the persisted record
- *      lands (or the user closes the tab), so a long-running / failed /
- *      cancelled setup cannot strand the user without a placeholder/recovery
- *      surface in the Epic context.
+ *      the user has a visible tui-agent surface inside the Epic while
+ *      worktree creation and launch preparation run. Fork launches
+ *      intentionally wait until `agent.tui.prepareLaunch` returns the new
+ *      forked session so the tab opens on the forked session rather than a
+ *      pre-fork placeholder. The tile renders "Loading terminal agent…" until
+ *      the persisted record lands (or the user closes the tab), so a slow
+ *      worktree creation or launch preparation cannot strand the user without
+ *      a placeholder/recovery surface in the Epic context.
  *   3. for Worktree-mode launches, dispatches the matching `worktree.*`
  *      RPC so the host SQLite binding row exists before the harness
  *      preparation reads it,
@@ -98,29 +98,32 @@ type WorktreeCreateMutateAsync = (
  *      which seeds a default owner-scoped binding from the epic's folders
  *      when none was dispatched in step 3 (the always-non-empty seam),
  *      rejects with `WORKTREE_MISSING` if a bound folder is gone on disk
- *      (no silent demote), and awaits orchestrator setup,
+ *      (no silent demote); the worktree setup script keeps running in its
+ *      background terminal and never gates the launch,
  *   5. inserts a tui-agent record via `epic.createTuiAgent`
  *      with the client-minted id (the Y.Doc projection swaps the
  *      placeholder out for the real record).
  *
  * Errors from any step propagate; the underlying TanStack Query mutations'
- * default toasts surface user-facing messaging. Setup failure / cancellation
- * (`WORKTREE_SETUP_FAILED` / `WORKTREE_SETUP_CANCELLED`) and a missing bound
- * folder (`WORKTREE_MISSING`) surface as typed errors from
- * `agent.tui.prepareLaunch`; when any fires the harness never starts and the
- * persisted record is never written. Normal launches keep the placeholder
- * canvas tab visible as the durable recovery surface alongside the setup
- * terminal tab plus the typed error (and, for `WORKTREE_MISSING`, the
- * tui-agent tile's own restore/retry body). Fork launches do not open the
- * placeholder until the forked session is ready.
+ * default toasts surface user-facing messaging. A missing bound folder
+ * (`WORKTREE_MISSING`) surfaces as a typed error from
+ * `agent.tui.prepareLaunch`; when it fires the harness never starts and the
+ * persisted record is never written. Setup-script failure / cancellation is
+ * NOT a launch error - the launch is non-blocking and the tile's setup card
+ * owns that UX (progress, Open terminal, Retry). Normal launches keep the
+ * placeholder canvas tab visible as the durable recovery surface alongside
+ * the typed error (and, for `WORKTREE_MISSING`, the tui-agent tile's own
+ * restore/retry body). Fork launches do not open the placeholder until the
+ * forked session is ready.
  *
  * Orphan-binding boundary (be precise — these two paths differ):
  *   - DEFAULT (null intent): no binding is written until prepareLaunch's seam
  *     runs, and the resolver preflights the missing-check BEFORE that seam write,
  *     so a rejected default-seed launch persists NO binding row. Orphan-safe.
  *   - EXPLICIT intent: step 3's `worktree.create` persists the binding BEFORE
- *     prepareLaunch, so a setup failure / cancel after that write leaves a
- *     binding row for an owner id that never gets a record. This orphan window is
+ *     prepareLaunch, so a prepareLaunch rejection (e.g. `WORKTREE_MISSING`)
+ *     after that write leaves a binding row for an owner id that never gets
+ *     a record. This orphan window is
  *     inherent to this deliberately non-atomic 3-step flow (kept for the
  *     placeholder-during-setup UX; a single atomic create RPC would close it) and
  *     is PRE-EXISTING, not introduced by the missing-worktree work. The retained

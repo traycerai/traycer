@@ -93,10 +93,18 @@ import type {
   HistorySearchPatch,
   HistorySearchState,
 } from "@/lib/history-search";
+import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/worktree-schemas";
+import { WorktreePrPills } from "@/components/worktree/worktree-pr-metadata";
+import { worktreePrReferences } from "@/components/worktree/worktree-pr-metadata-model";
 
 const EMPTY_REPOS: ReadonlyArray<string> = [];
 const EMPTY_WORKSPACES: ReadonlyArray<HistoryWorkspaceRef> = [];
 const EMPTY_ITEMS: ReadonlyArray<HistoryItem> = [];
+const EMPTY_WORKTREES: readonly WorktreeHostEntryV12[] = [];
+const EMPTY_WORKTREES_BY_EPIC: ReadonlyMap<
+  string,
+  readonly WorktreeHostEntryV12[]
+> = new Map();
 const VIEWER_DELETE_TOOLTIP = "Viewers cannot select task for deletion.";
 const NO_DELETE_PERMISSION_TOOLTIP =
   "You don't have permission to delete this task.";
@@ -246,6 +254,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   });
 
   const items = data?.items ?? EMPTY_ITEMS;
+  const worktreesByEpicId = data?.worktreesByEpicId ?? EMPTY_WORKTREES_BY_EPIC;
   const indicatorEpicIds = useMemo(
     () => items.map((item) => item.epicId),
     [items],
@@ -482,6 +491,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
               onSelectEpic={onSelectEpic}
               onOpenInNewWindow={openInNewWindowFlow.requestOpen}
               openInNewWindowAvailable={openInNewWindowFlow.isAvailable}
+              worktreesByEpicId={worktreesByEpicId}
             />
           </div>
         </NotificationIndicatorsProvider>
@@ -559,7 +569,7 @@ function PanelSearchInput(props: PanelSearchInputProps): ReactNode {
           onChange={(event) => {
             props.onChange(event.target.value);
           }}
-          placeholder="Search by title or repo"
+          placeholder="Search by title, repo, or PR"
           aria-label="Search tasks"
         />
         {props.value.length > 0 ? (
@@ -767,6 +777,10 @@ interface EpicsListBodyProps {
   readonly onSelectEpic: ((epicId: string) => void) | null;
   readonly onOpenInNewWindow: HistoryNewWindowFlow["requestOpen"];
   readonly openInNewWindowAvailable: boolean;
+  readonly worktreesByEpicId: ReadonlyMap<
+    string,
+    readonly WorktreeHostEntryV12[]
+  >;
 }
 
 function EpicsListBody(props: EpicsListBodyProps): ReactNode {
@@ -787,6 +801,7 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
     onSelectEpic,
     onOpenInNewWindow,
     openInNewWindowAvailable,
+    worktreesByEpicId,
   } = props;
 
   if (error !== null) {
@@ -823,6 +838,7 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
               onSelectEpic={onSelectEpic}
               onOpenInNewWindow={onOpenInNewWindow}
               openInNewWindowAvailable={openInNewWindowAvailable}
+              worktrees={worktreesByEpicId.get(item.epicId) ?? EMPTY_WORKTREES}
             />
           ))}
         </ul>
@@ -888,6 +904,38 @@ interface EpicsListRowProps {
   readonly onSelectEpic: ((epicId: string) => void) | null;
   readonly onOpenInNewWindow: HistoryNewWindowFlow["requestOpen"];
   readonly openInNewWindowAvailable: boolean;
+  readonly worktrees: readonly WorktreeHostEntryV12[];
+}
+
+function HistoryRowTrailingMetadata(props: {
+  readonly epicId: string;
+  readonly selectionMode: boolean;
+  readonly updatedLabel: string;
+  readonly worktrees: readonly WorktreeHostEntryV12[];
+}): ReactNode {
+  const hasPrPills =
+    !props.selectionMode && worktreePrReferences(props.worktrees).length > 0;
+  return (
+    <span className="grid shrink-0 items-center justify-items-end text-ui-xs">
+      <span
+        className={cn(
+          "col-start-1 row-start-1 text-muted-foreground",
+          hasPrPills &&
+            "transition-opacity group-hover/list-row:opacity-0 group-focus-within/list-row:opacity-0",
+        )}
+      >
+        updated {props.updatedLabel}
+      </span>
+      {hasPrPills ? (
+        <WorktreePrPills
+          worktrees={props.worktrees}
+          detailOnHover
+          className="pointer-events-none col-start-1 row-start-1 max-w-[min(36vw,22rem)] opacity-0 transition-opacity group-hover/list-row:pointer-events-auto group-hover/list-row:opacity-100 group-focus-within/list-row:pointer-events-auto group-focus-within/list-row:opacity-100"
+          testId={`task-history-prs-${props.epicId}`}
+        />
+      ) : null}
+    </span>
+  );
 }
 
 const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
@@ -900,6 +948,7 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
     onSelectEpic,
     onOpenInNewWindow,
     openInNewWindowAvailable,
+    worktrees,
   } = props;
   const isPhase = item.taskType === "phase";
   const displayTitle = historyItemDisplayTitle(item);
@@ -1114,9 +1163,12 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
             </span>
           )}
         </span>
-        <span className="shrink-0 text-ui-xs text-muted-foreground">
-          updated {item.updatedLabel}
-        </span>
+        <HistoryRowTrailingMetadata
+          epicId={item.epicId}
+          selectionMode={selectionMode}
+          updatedLabel={item.updatedLabel}
+          worktrees={worktrees}
+        />
       </div>
       {deleteControl}
     </div>

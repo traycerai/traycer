@@ -5,11 +5,14 @@ import {
   composerHarnessMemoryKey,
   composerRunSettingsKey,
   epicCanvasKey,
+  landingTerminalsKey,
   openEpicKey,
   persistKey,
   scopeBucket,
+  worktreeActivityCacheKey,
   worktreeIntentMemoryKey,
   worktreeIntentStagingKey,
+  worktreeListingCacheKey,
 } from "@/lib/persist/keys";
 
 // CRITICAL: every literal below is HAND-TRANSCRIBED from the current store
@@ -77,7 +80,7 @@ describe("persist key builders — output-preserving against current source", ()
     );
   });
 
-  it("emits the current localStorage key for each of the 7 scoped stores", () => {
+  it("emits the current localStorage key for each of the 8 scoped stores", () => {
     // Source: src/stores/composer/composer-run-settings-store.ts
     // (`composerRunSettingsPersistKey`).
     expect(composerRunSettingsKey(null)).toBe(
@@ -114,6 +117,13 @@ describe("persist key builders — output-preserving against current source", ()
     // by userId).
     expect(epicCanvasKey(null)).toBe("traycer-gui-app:epic-canvas:anon");
     expect(epicCanvasKey("u1")).toBe("traycer-gui-app:epic-canvas:u1");
+    // Source: src/stores/home/landing-terminal-store.ts.
+    expect(landingTerminalsKey(null)).toBe(
+      "traycer-gui-app:landing-terminals:anon",
+    );
+    expect(landingTerminalsKey("u1")).toBe(
+      "traycer-gui-app:landing-terminals:u1",
+    );
     // Source: src/stores/epics/open-epic/store.ts (local
     // `persistKey(epicId, userId)` emits `…:open-epic:{userBucket}:{epicId}`).
     expect(openEpicKey(null, "e1")).toBe("traycer-gui-app:open-epic:anon:e1");
@@ -124,6 +134,17 @@ describe("persist key builders — output-preserving against current source", ()
     );
     expect(appLocalNotificationsKey("u1")).toBe(
       "traycer-gui-app:app-local-notifications:u1",
+    );
+  });
+
+  it("emits the current localStorage keys for the host-scoped worktree caches (non-zustand)", () => {
+    // Source: src/components/settings/panels/worktrees-enrichment-persistence.ts
+    // (host-scoped - a host id is always non-empty, so no `anon` bucket).
+    expect(worktreeActivityCacheKey("host-1")).toBe(
+      "traycer-gui-app:worktree-activity-cache:host-1",
+    );
+    expect(worktreeListingCacheKey("host-1")).toBe(
+      "traycer-gui-app:worktree-listing-cache:host-1",
     );
   });
 

@@ -1,6 +1,9 @@
 import { useMemo, type ReactNode } from "react";
 import type { GitChangedFile } from "@traycer/protocol/host";
-import type { GitDiffBundleGroup } from "@/stores/epics/canvas/types";
+import type {
+  GitDiffBundleGroup,
+  GitDiffRepositoryContext,
+} from "@/stores/epics/canvas/types";
 import { buildGitPanelFileSections } from "@/lib/git/panel-file-rendering";
 import { cn } from "@/lib/utils";
 import { GitDiffSection } from "./git-diff-section";
@@ -22,6 +25,7 @@ export interface GitFileSectionStackProps {
   readonly viewTabId: string;
   readonly hostId: string;
   readonly runningDir: string;
+  readonly repositoryContext: GitDiffRepositoryContext | null;
   readonly allFiles: ReadonlyArray<GitChangedFile>;
   readonly visibleFiles: ReadonlyArray<GitChangedFile>;
   readonly forceExpanded: boolean;
@@ -73,6 +77,7 @@ export function GitFileSectionStack(
             hostId={props.hostId}
             runningDir={props.runningDir}
             group={group}
+            repositoryContext={props.repositoryContext}
             visibleFiles={visibleFiles}
             bundleFileCount={bundleFileCount}
             forceExpanded={props.forceExpanded}

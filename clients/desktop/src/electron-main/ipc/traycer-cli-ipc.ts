@@ -1,4 +1,9 @@
+import { constants as fsConstants } from "node:fs";
+import { access, stat } from "node:fs/promises";
+import { dialog } from "electron";
+import { isShellExecutablePathSupported } from "@traycer/protocol/config/shell-executable";
 import { RunnerHostInvoke } from "../../ipc-contracts/ipc-channels";
+import type { TraycerShellProbeResult } from "../../ipc-contracts/traycer-cli-types";
 import {
   runTraycerCli,
   runTraycerCliJson,
@@ -133,6 +138,88 @@ export function registerTraycerCliIpc(bridge: RunnerIpcBridge): void {
     // DetectedShell[] array) for the renderer.
     return runTraycerCliJson(["config", "shell", "list"]);
   });
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.traycerConfigShellAdd,
+    async (_event, raw: unknown) => {
+      const path = requireString(raw, "path", "traycerConfigShellAdd");
+      await runTraycerCli({
+        args: ["config", "shell", "add", "--path", path],
+        maxBuffer: 64 * 1024,
+        timeoutMs: 10_000,
+      });
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.traycerConfigShellRemove,
+    async (_event, raw: unknown) => {
+      const path = requireString(raw, "path", "traycerConfigShellRemove");
+      await runTraycerCli({
+        args: ["config", "shell", "remove", "--path", path],
+        maxBuffer: 64 * 1024,
+        timeoutMs: 10_000,
+      });
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.traycerConfigShellRevertArgs,
+    async (_event, raw: unknown) => {
+      const path = requireString(raw, "path", "traycerConfigShellRevertArgs");
+      await runTraycerCli({
+        args: ["config", "shell", "revert-args", "--path", path],
+        maxBuffer: 64 * 1024,
+        timeoutMs: 10_000,
+      });
+    },
+  );
+
+  // Native existence/executability probe for the "Add a shell" live validation.
+  // Runs directly in main (fs access) so it can be debounced per keystroke
+  // without paying a CLI subprocess spawn each time; mirrors the protocol's
+  // `X_OK` detection check.
+  bridge.handleInvoke(
+    RunnerHostInvoke.traycerConfigShellProbe,
+    async (_event, raw: unknown): Promise<TraycerShellProbeResult> => {
+      const path = requireString(raw, "path", "traycerConfigShellProbe");
+      const fileStat = await stat(path).then(
+        (value) => value,
+        () => null,
+      );
+      if (fileStat === null) {
+        return { exists: false, executable: false };
+      }
+      if (
+        !fileStat.isFile() ||
+        !isShellExecutablePathSupported(path, process.platform)
+      ) {
+        return { exists: true, executable: false };
+      }
+      const executable = await access(path, fsConstants.X_OK).then(
+        () => true,
+        () => false,
+      );
+      return {
+        exists: true,
+        executable,
+      };
+    },
+  );
+
+  // Native "choose a program file" dialog for the picker's Browse affordance.
+  // Returns the chosen absolute path, or null on cancel.
+  bridge.handleInvoke(
+    RunnerHostInvoke.traycerConfigShellPickProgramFile,
+    async (): Promise<string | null> => {
+      const result = await dialog.showOpenDialog({
+        properties: ["openFile"],
+      });
+      return result.canceled || result.filePaths.length === 0
+        ? null
+        : result.filePaths[0];
+    },
+  );
 
   bridge.handleInvoke(RunnerHostInvoke.traycerConfigEnvList, async () => {
     // `config env list` is now a runner-aware command (Native Packaging

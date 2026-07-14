@@ -1836,6 +1836,19 @@ function assistantTurnTimelineEntries(
   }));
 }
 
+/**
+ * Renders a `steer` block's message row. The steered USER row (`block.messageId`)
+ * is the preferred source - it carries the full message, its sender, and its
+ * session anchor.
+ *
+ * The fallback below runs when that row is absent: the block and the row have
+ * asymmetric durability (the block is rewritten on every checkpoint, the row is
+ * written once), so a mid-turn reload can leave the block orphaned. It renders
+ * from the block alone, and `block.sender` is what keeps provenance intact - an
+ * orphaned agent-to-agent steer must still render as an agent card, never as a
+ * plain user-authored bubble. Blocks persisted before that field carry `null`
+ * and render as a "you" row exactly as before.
+ */
 function renderSteerBlockUserMessage(
   block: Extract<ContentBlock, { type: "steer" }>,
   ctx: RenderedMessagesDisplayContext,
@@ -1849,8 +1862,9 @@ function renderSteerBlockUserMessage(
     content: block.content,
     timestamp: block.timestamp,
     persistentMessageId: null,
-    sender: null,
-    senderLabel: null,
+    sender: block.sender,
+    senderLabel:
+      block.sender === null ? null : ctx.resolveUserSenderLabel(block.sender),
     settings: null,
     steerBadge: {
       status: "steered",

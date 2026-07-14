@@ -86,6 +86,7 @@ const NODE = makeGitBundleDiffTile({
   hostId: "host-A",
   runningDir: "/work/repo",
   bundleGroup: "changes",
+  repositoryContext: null,
 });
 
 function changedFile(path: string): GitChangedFile {

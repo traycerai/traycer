@@ -44,6 +44,7 @@ export const RPC_ERROR_CODES = [
   // error with role-specific copy, distinct from the generic epic-access
   // FORBIDDEN whose "check Task access" guidance would mislead here.
   "E_ROLE_FORBIDDEN",
+  "TERMINAL_ID_TAKEN",
 ] as const;
 
 export type RpcErrorCode = (typeof RPC_ERROR_CODES)[number];

@@ -804,7 +804,7 @@ class StreamSession<
     this.config.onMethodSupport(
       this.config.method,
       "supported",
-      ackParse.data.manifest[this.config.method],
+      prepared.onWireVersion,
     );
     this.phase = "subscribed";
     this.reconnectAttempt = 0;

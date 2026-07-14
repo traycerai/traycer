@@ -22,6 +22,7 @@ import {
   type AccountContext,
 } from "@traycer/protocol/common/schemas";
 import type { ProviderRateLimits } from "@traycer/protocol/host";
+import type { ProvidersConsumeRateLimitResetCreditRequest } from "@traycer/protocol/host/rate-limit";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import type {
@@ -38,6 +39,8 @@ import type {
 } from "@/lib/rate-limits/rate-limit-envelope";
 import { accountContextValue } from "@/lib/auth/traycer-subscription-content";
 import { queryKeys } from "@/lib/query-keys";
+import { PROVIDER_RATE_LIMITS_STALE_TIME_MS } from "@/lib/rate-limit-providers";
+import { formatResetFullDateTime } from "@/lib/relative-time";
 
 type QueryResult = {
   data: ProviderRateLimitEnvelope | undefined;
@@ -69,6 +72,12 @@ type MockState = {
   traycerUsageUpdatedAt: Readonly<Record<string, number>>;
   openSettings: Mock<(...args: unknown[]) => void>;
   enqueue: Mock<(...args: unknown[]) => Promise<void>>;
+  consumeReset: Mock<
+    (
+      request: ProvidersConsumeRateLimitResetCreditRequest,
+      options: { readonly onSuccess: () => void },
+    ) => void
+  >;
   authUser: MockAuthUser;
   // Last `options` object `RateLimitRefreshAllButton` passed to
   // `useHostQueries`, so a test can assert it reused the real lane options
@@ -103,6 +112,7 @@ const mocks = vi.hoisted<MockState>(() => ({
   traycerUsageUpdatedAt: {},
   openSettings: vi.fn(),
   enqueue: vi.fn((..._args: unknown[]) => Promise.resolve()),
+  consumeReset: vi.fn(),
   lastUseHostQueriesOptions: null,
   lastUseHostQueriesProviderIds: null,
   profileSelection: {
@@ -204,6 +214,15 @@ vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
 vi.mock("@/hooks/rate-limits/use-rate-limit-queue-scope", () => ({
   useRateLimitQueueScope: () => queueScope,
 }));
+vi.mock(
+  "@/hooks/providers/use-consume-rate-limit-reset-credit-mutation",
+  () => ({
+    useConsumeRateLimitResetCreditMutation: () => ({
+      isPending: false,
+      mutate: mocks.consumeReset,
+    }),
+  }),
+);
 vi.mock("@/lib/rate-limits/ephemeral-fetch-queue", () => ({
   // Wrapper (not `mocks.enqueue` directly) so `beforeEach` can swap the spy -
   // an object-literal binding would freeze the original fn at module load.
@@ -312,10 +331,10 @@ function claudeReady(): AvailableProviderRateLimits {
   };
 }
 
-function codexReady(): AvailableProviderRateLimits {
+function codexReady() {
   return {
-    provider: "codex",
-    available: true,
+    provider: "codex" as const,
+    available: true as const,
     planType: "pro_5x",
     limitId: null,
     limitName: null,
@@ -499,6 +518,7 @@ beforeEach(() => {
   mocks.traycerUsageUpdatedAt = {};
   mocks.openSettings = vi.fn();
   mocks.enqueue = vi.fn((..._args: unknown[]) => Promise.resolve());
+  mocks.consumeReset = vi.fn();
   mocks.lastUseHostQueriesOptions = null;
   mocks.lastUseHostQueriesProviderIds = null;
   mocks.profileSelection = {
@@ -727,7 +747,7 @@ describe("<RateLimitPopover /> rail", () => {
             kind: "managed",
             label: "Work",
             tier: "Pro 5x",
-            usageUpdatedAt: NOW - 60_000,
+            usageUpdatedAt: NOW - PROVIDER_RATE_LIMITS_STALE_TIME_MS - 1_000,
           }),
         ],
       },
@@ -850,10 +870,12 @@ describe("<RateLimitPopover /> rail", () => {
     };
     renderPopover();
     // Fixup C #1: 5h primary -> relative countdown; weekly secondary -> absolute
-    // weekday-tagged time. Both split the same way as the Settings card.
+    // full calendar date/time. Both split the same way as the Settings card.
     expect(screen.getByText(/^Resets in /)).toBeTruthy();
     expect(
-      screen.getByText(/^Resets [A-Za-z]{3} \d{1,2}:\d{2}\s?[AP]M$/i),
+      screen.getByText(
+        `Resets ${formatResetFullDateTime(NOW + 3 * 24 * 60 * 60 * 1000)}`,
+      ),
     ).toBeTruthy();
   });
 
@@ -980,6 +1002,57 @@ describe("<RateLimitPopover /> Overview progressive reveal", () => {
 });
 
 describe("<RateLimitPopover /> per-provider states", () => {
+  it("offers a confirmed Codex reset on the detail panel but keeps Overview read-only", () => {
+    mocks.configured = [
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+    ];
+    mocks.results = {
+      codex: readyResult({
+        ...codexReady(),
+        resetCredits: {
+          availableCount: 2,
+          credits: [
+            {
+              id: "credit-later",
+              resetType: "codexRateLimits",
+              status: "available",
+              grantedAt: NOW,
+              expiresAt: NOW + 3 * 60 * 60 * 1000,
+              title: "Later reset",
+              description: null,
+            },
+            {
+              id: "credit-soon",
+              resetType: "codexRateLimits",
+              status: "available",
+              grantedAt: NOW,
+              expiresAt: NOW + 60 * 60 * 1000,
+              title: "Soon reset",
+              description: null,
+            },
+          ],
+        },
+      }),
+    };
+
+    renderPopover();
+    expect(screen.queryByRole("button", { name: "Use reset" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
+    fireEvent.click(screen.getByRole("button", { name: "Use reset" }));
+    expect(screen.getByText("Use a Codex manual reset?")).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId("confirm-action"));
+    expect(mocks.consumeReset).toHaveBeenCalledOnce();
+    const request = mocks.consumeReset.mock.calls[0]?.[0];
+    expect(request).toMatchObject({
+      providerId: "codex",
+      profileId: null,
+      creditId: "credit-soon",
+    });
+    expect(typeof request.idempotencyKey).toBe("string");
+  });
+
   it("shows skeleton bars (not a spinner) on cold load", () => {
     mocks.configured = [
       { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },

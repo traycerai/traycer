@@ -45,6 +45,8 @@ export const ACTION_IDS = [
   "app.settings.open",
   "app.settings.section.byDigit",
   "app.palette.open",
+  "app.terminal.toggle",
+  "app.terminal.new",
   "app.zoom.in",
   "app.zoom.out",
   "app.zoom.reset",
@@ -331,6 +333,24 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     category: "app",
     kind: "chord",
     defaultChord: "mod+k",
+  },
+  "app.terminal.toggle": {
+    id: "app.terminal.toggle",
+    label: "Toggle terminal panel",
+    description:
+      "Show or hide the terminal panel on the start page. Opening it with no terminals starts one in the pinned workspace folder.",
+    category: "app",
+    kind: "chord",
+    defaultChord: "mod+j",
+  },
+  "app.terminal.new": {
+    id: "app.terminal.new",
+    label: "New terminal",
+    description:
+      "Open a new terminal tab in the start page's terminal panel, revealing the panel if it is collapsed.",
+    category: "app",
+    kind: "chord",
+    defaultChord: "mod+shift+j",
   },
   "app.zoom.in": {
     id: "app.zoom.in",

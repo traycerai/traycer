@@ -414,13 +414,13 @@ export function forkableAssistantMessageId(
   return message.persistentMessageId;
 }
 
-// Fork boundary for a message that is CURRENTLY asking a question. Unlike
-// `forkableAssistantMessageId` it does NOT require the turn to be finished
-// (`completedAt`/`runState`) — forking during Q&A is the whole point. The host
-// copies history through this in-flight message and settles the carried
-// interview. Still requires a stable, non-transient persistent id, since a
-// transient live id is not a durable fork boundary.
-function forkableInterviewAssistantMessageId(
+// Fork boundary for a message containing a pending or resolved interview.
+// Unlike `forkableAssistantMessageId` it does NOT require the turn to be
+// finished (`completedAt`/`runState`) — question-level fork actions remain
+// available while the assistant resumes after an answer. Still requires a
+// stable, non-transient persistent id, since a transient live id is not a
+// durable fork boundary.
+export function forkableInterviewAssistantMessageId(
   message: ChatMessageModel,
 ): string | null {
   if (message.role !== "assistant") return null;

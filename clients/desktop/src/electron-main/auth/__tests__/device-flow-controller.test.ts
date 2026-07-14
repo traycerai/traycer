@@ -12,6 +12,9 @@ import {
  * delivers nothing, and an authorize failure is reported as `ok: false`.
  */
 const AUTHN = "http://authn.test";
+// A slot-suffixed dev scheme, the shape that most needs to round-trip: the
+// /device page must deep-link back to THIS run, not an installed sibling.
+const RETURN_SCHEME = "traycer-dev-spry-panda-a2acaa5e";
 
 type FetchHandler = (url: string) => Response;
 
@@ -87,7 +90,7 @@ describe("DeviceFlowController", () => {
       attemptId: string;
       result: DeviceFlowResultPayload;
     }> = [];
-    const controller = new DeviceFlowController(AUTHN);
+    const controller = new DeviceFlowController(AUTHN, RETURN_SCHEME);
     const outcome = await controller.start({
       onResult: (attemptId, result) => results.push({ attemptId, result }),
     });
@@ -132,7 +135,7 @@ describe("DeviceFlowController", () => {
       attemptId: string;
       result: DeviceFlowResultPayload;
     }> = [];
-    const controller = new DeviceFlowController(AUTHN);
+    const controller = new DeviceFlowController(AUTHN, RETURN_SCHEME);
     const outcome = await controller.start({
       onResult: (attemptId, result) => results.push({ attemptId, result }),
     });
@@ -172,7 +175,7 @@ describe("DeviceFlowController", () => {
       return new Response(null, { status: 428 });
     });
 
-    const controller = new DeviceFlowController(AUTHN);
+    const controller = new DeviceFlowController(AUTHN, RETURN_SCHEME);
     const outcome = await controller.start({ onResult: () => undefined });
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) {
@@ -195,7 +198,7 @@ describe("DeviceFlowController", () => {
     });
 
     const results: DeviceFlowResultPayload[] = [];
-    const controller = new DeviceFlowController(AUTHN);
+    const controller = new DeviceFlowController(AUTHN, RETURN_SCHEME);
     const outcome = await controller.start({
       onResult: (_attemptId, result) => results.push(result),
     });
@@ -213,10 +216,34 @@ describe("DeviceFlowController", () => {
     expect(results).toEqual([]);
   });
 
+  it("threads the return scheme into the verification URL it hands the shell (display URI stays clean)", async () => {
+    restoreFetch = installFetch((url) => {
+      if (url.endsWith("/device/authorize")) {
+        return authorizeOk();
+      }
+      return tokenAuthorized();
+    });
+    const controller = new DeviceFlowController(AUTHN, RETURN_SCHEME);
+    const outcome = await controller.start({ onResult: () => undefined });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) {
+      return;
+    }
+    const opened = new URL(outcome.authorization.verificationUriComplete);
+    expect(opened.searchParams.get("return_scheme")).toBe(RETURN_SCHEME);
+    // The pre-filled code survives alongside the scheme.
+    expect(opened.searchParams.get("user_code")).toBe("ABCDE-FGHIJ");
+    // The short display URI stays clean for manual entry.
+    expect(outcome.authorization.verificationUri).toBe(
+      "https://app.test/device",
+    );
+    controller.disposeAll();
+  });
+
   it("reports ok:false when /device/authorize fails (renderer surfaces a launch failure)", async () => {
     restoreFetch = installFetch(() => new Response(null, { status: 500 }));
 
-    const controller = new DeviceFlowController(AUTHN);
+    const controller = new DeviceFlowController(AUTHN, RETURN_SCHEME);
     const outcome = await controller.start({ onResult: () => undefined });
 
     expect(outcome.ok).toBe(false);
@@ -234,7 +261,7 @@ describe("DeviceFlowController", () => {
     });
 
     const results: DeviceFlowResultPayload[] = [];
-    const controller = new DeviceFlowController(AUTHN);
+    const controller = new DeviceFlowController(AUTHN, RETURN_SCHEME);
     const outcome = await controller.start({
       onResult: (_attemptId, result) => results.push(result),
     });

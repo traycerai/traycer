@@ -230,6 +230,22 @@
       "method": "chat.subscribe",
       "version": "*",
       "payload": "serverFrame",
+      "path": "**.blocks.items.anyOf[*].properties.sender",
+      "reason": "Steer-block provenance, nullable/.default(null). The steered USER row remains the primary record of who sent a steered message and is unchanged; this only mirrors its sender onto the block so the renderer's ORPHAN fallback (block present, user row missing) can tell an agent-to-agent steer from a human one instead of rendering it as user-authored text. null is exactly what a pre-field host produces, and the fallback then renders the plain user row it always did - so an old host's frames degrade to the shipped behavior, and an old client strips the key and is unaffected. Scoped by field path."
+    },
+    {
+      "family": "stream",
+      "method": "chat.subscribe",
+      "version": "*",
+      "payload": "serverFrame",
+      "path": "**.event.anyOf[*].properties.sender",
+      "reason": "The steer.submitted counterpart of the **.blocks.items.anyOf[*].properties.sender entry (nullable/.default(null)): the shared accumulator copies it onto the steer block it builds, so host and client derive an identical block. Absent from a pre-field host's events, which yields the same null the block schema defaults to."
+    },
+    {
+      "family": "stream",
+      "method": "chat.subscribe",
+      "version": "*",
+      "payload": "serverFrame",
       "path": "**.backgroundTask",
       "reason": "Parsed-stream background-task marker (block: nullable/.default(false); events: .optional() with `?? null` in the shared accumulator): falsy means no background-card promotion, so old-host tool calls collapse into the generic activity group exactly as before #127."
     },

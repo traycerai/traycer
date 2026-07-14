@@ -105,6 +105,7 @@ describe("createChatRequestSchema", () => {
       forkSource: {
         sourceChatId: "source-chat-1",
         assistantMessageId: "assistant-message-1",
+        interviewBlockId: "question-tool:interview",
       },
     });
     expect(result.success).toBe(true);

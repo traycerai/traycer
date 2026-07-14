@@ -4,6 +4,7 @@ import type {
   TaskOwnershipScope,
   TaskWorkspaceIdentifier,
 } from "@traycer/protocol/host/epic/unary-schemas";
+import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/worktree-schemas";
 import { formatDistanceToNow } from "date-fns";
 import { displayTitle } from "@/lib/display-title";
 import { isEditableRole } from "@/lib/epic-permissions";
@@ -37,6 +38,7 @@ export interface HistoryItem {
   updatedBucket: HistoryRecencyBucket;
   linkedRepos: ReadonlyArray<string>;
   linkedWorkspaces: ReadonlyArray<HistoryWorkspaceRef>;
+  pullRequestNumbers: ReadonlyArray<string>;
   ownership: HistoryOwnershipScope;
   permissionRole: PermissionRole | null;
 }
@@ -142,9 +144,47 @@ function buildHistoryItem(args: {
     updatedBucket: toHistoryRecencyBucket(light.updatedAt, nowMs),
     linkedRepos: readTaskRepos(task),
     linkedWorkspaces: readTaskWorkspaces(task),
+    pullRequestNumbers: [],
     ownership,
     permissionRole: historyPermissionRole(ownership, role),
   };
+}
+
+/**
+ * Adds the PR numbers discovered from the task's local worktrees to history
+ * items. Worktree activity is deliberately fetched separately from cloud task
+ * history, so this stays a pure projection that can update as probes finish.
+ */
+export function withHistoryItemPullRequestNumbers(
+  items: ReadonlyArray<HistoryItem>,
+  worktreesByEpicId: ReadonlyMap<string, readonly WorktreeHostEntryV12[]>,
+): ReadonlyArray<HistoryItem> {
+  return items.map((item) => ({
+    ...item,
+    pullRequestNumbers: historyPullRequestNumbers(
+      worktreesByEpicId.get(item.epicId) ?? [],
+    ),
+  }));
+}
+
+function historyPullRequestNumbers(
+  worktrees: readonly WorktreeHostEntryV12[],
+): ReadonlyArray<string> {
+  return Array.from(
+    new Set(
+      worktrees
+        .flatMap((worktree) => [
+          worktree.prNumber,
+          ...worktree.submodules.map((submodule) => submodule.prNumber),
+        ])
+        .filter((prNumber): prNumber is number => prNumber !== null)
+        .flatMap((prNumber) => [
+          String(prNumber),
+          `#${prNumber}`,
+          `PR #${prNumber}`,
+        ]),
+    ),
+  );
 }
 
 export function canEditHistoryItemTitle(item: HistoryItem): boolean {

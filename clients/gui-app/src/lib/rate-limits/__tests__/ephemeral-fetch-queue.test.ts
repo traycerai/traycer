@@ -10,6 +10,7 @@ import { queryKeys } from "@/lib/query-keys";
 import { createAppQueryClient } from "@/lib/query-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import { PROVIDER_RATE_LIMITS_STALE_TIME_MS } from "@/lib/rate-limit-providers";
+import { EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS } from "@/lib/rate-limits/rate-limit-timing";
 import {
   __resetRateLimitQueueForTests,
   configureRateLimitQueue,
@@ -461,10 +462,10 @@ describe("ephemeral-fetch-queue", () => {
 // 429 on Anthropic's usage endpoint with a multi-minute penalty window - the
 // point of this cool-down is to stop automatic polling from re-tripping it).
 // Uses fake timers (and `vi.setSystemTime`) so the tests can cross both the
-// `PROVIDER_RATE_LIMITS_STALE_TIME_MS` freshness floor (30s) AND the 5-minute
+// `PROVIDER_RATE_LIMITS_STALE_TIME_MS` freshness floor (5m) AND the 15-minute
 // cool-down window deterministically, without a real 5-minute wait - and to
 // prove the cool-down is a DISTINCT gate from the freshness floor (an
-// automatic enqueue past 30s but still inside the cool-down must stay
+// automatic enqueue past 5m but still inside the cool-down must stay
 // suppressed).
 describe("post-usage_fetch_failed cool-down", () => {
   beforeEach(() => {
@@ -483,8 +484,9 @@ describe("post-usage_fetch_failed cool-down", () => {
   // Fake-timer analogue of `flush()`: advances virtual time (default 0, just
   // enough to drain already-pending microtasks/timers) without a real wait.
   async function flushFake(ms: number): Promise<void> {
-    for (let i = 0; i < 5; i++) {
-      await vi.advanceTimersByTimeAsync(ms);
+    await vi.advanceTimersByTimeAsync(ms);
+    for (let i = 0; i < 4; i++) {
+      await vi.advanceTimersByTimeAsync(0);
     }
   }
 
@@ -502,7 +504,7 @@ describe("post-usage_fetch_failed cool-down", () => {
     await flushFake(0);
     expect(request).toHaveBeenCalledTimes(1);
 
-    // Past the 30s freshness floor, but still well inside the 5-minute
+    // Past the 5-minute freshness floor, but still well inside the 15-minute
     // cool-down - an automatic trigger (interval tick / turn completion) must
     // still be suppressed here, proving the cool-down is a separate gate from
     // freshness (freshness alone would already allow a re-fetch by now).
@@ -537,8 +539,8 @@ describe("post-usage_fetch_failed cool-down", () => {
     await flushFake(0);
     expect(request).toHaveBeenCalledTimes(1);
 
-    // Advance past the full 5-minute cool-down window.
-    await flushFake(5 * 60 * 1000 + 1_000);
+    // Advance past the full automatic-poll cool-down window.
+    await flushFake(EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS + 1_000);
     void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
       force: false,
       profileId: null,

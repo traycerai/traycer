@@ -37,11 +37,15 @@ export interface PrimaryRemovalTransition {
 export interface HomeWorkspaceSource {
   readonly source: LandingDraftWorkspaceSnapshot | null;
   readonly capturedIntent: WorktreeIntent | null;
+  /** Current folders from the active draft/modal/seed/global representation. */
+  readonly folders: ReadonlyArray<string>;
   // Raw stored value for the active workspace representation (draft / modal
   // / seeded / global) - membership-unvalidated. Callers resolve the
   // EFFECTIVE primary via `resolvePrimaryPath(folders, primaryPath)`, the
   // single resolver every consumer (rows, chip, launch) shares.
   readonly primaryPath: string | null;
+  /** Membership-validated primary folder for launch consumers. */
+  readonly primaryWorkspacePath: string | null;
   readonly addResolvedFolders: (
     folders: ReadonlyArray<WorkspaceFolderInfo>,
   ) => void;
@@ -155,6 +159,8 @@ export function useHomeWorkspaceSource(
   // `source === null` fallback) - so the raw primary must fall back the same
   // way, or the two would disagree about which folder is primary.
   const primaryPath = source !== null ? source.primaryPath : globalPrimaryPath;
+  const folders = source !== null ? source.folders : globalFolders;
+  const primaryWorkspacePath = resolvePrimaryPath(folders, primaryPath);
   const sourceFolderInfoByPath =
     source !== null ? source.folderInfoByPath : globalFolderInfoByPath;
   // Mirror the seeded workspace into an externally-readable slot so a
@@ -175,7 +181,9 @@ export function useHomeWorkspaceSource(
     () => ({
       source,
       capturedIntent,
+      folders,
       primaryPath,
+      primaryWorkspacePath,
       addResolvedFolders: (folders) => {
         // The 50-folder cap can evict a SECONDARY folder as a side effect of
         // an add; an evicted folder disappears from rows/persistence but its
@@ -312,10 +320,12 @@ export function useHomeWorkspaceSource(
       addGlobalResolvedFolders,
       addModalResolvedFolders,
       capturedIntent,
+      folders,
       globalFolders,
       modalEpicId,
       modalSeedWorkspace,
       primaryPath,
+      primaryWorkspacePath,
       removeDraftFolder,
       removeGlobalFolder,
       removeModalFolder,

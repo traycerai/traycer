@@ -388,15 +388,32 @@ export interface TraycerShellConfig {
 }
 
 /**
- * A shell binary detected on the machine, offered as a quick-pick in the
- * Settings → Shell combobox. `path` is absolute (except an OS default that may
- * be a bare command name, e.g. Windows `powershell.exe`); `isDefault` marks
- * the OS-default shell.
+ * An entry in the Settings → Shell picker list: a detected shell binary or a
+ * user-added program. `path` is absolute (except an OS default that may be a
+ * bare command name, e.g. Windows `powershell.exe`); `isDefault` marks the
+ * OS-default shell; `source` tells the UI which rows the user may remove
+ * (`"added"`) versus which are detected and permanent. `missing` is `true` only
+ * for an `"added"` row whose file is gone (a list-time probe, never persisted),
+ * so the UI can flag a customised-but-uninstalled shell while keeping its ✕;
+ * detected rows are always `false`.
  */
 export interface TraycerDetectedShell {
   readonly name: string;
   readonly path: string;
   readonly isDefault: boolean;
+  readonly source: "detected" | "added";
+  readonly missing: boolean;
+}
+
+/**
+ * Result of probing a candidate shell path (Settings → Shell "Add a shell"
+ * live validation). `exists` is `F_OK`; `executable` is `X_OK`. The desktop
+ * shell answers this natively (fs access in Electron main), mirroring the
+ * protocol's detection check rather than spawning the CLI per keystroke.
+ */
+export interface TraycerShellProbeResult {
+  readonly exists: boolean;
+  readonly executable: boolean;
 }
 
 // Host-process env overrides (Settings → Shell), applied to the local host
@@ -424,6 +441,38 @@ export interface ITraycerCli {
   shellConfigGet(): Promise<TraycerShellConfig>;
   shellConfigSet(input: TraycerShellConfigSetInput): Promise<void>;
   shellConfigReset(): Promise<void>;
+  /**
+   * Remembers a program in `shell.entries` and selects it (`config shell add`).
+   * The backend re-validates it is absolute + executable and rejects otherwise,
+   * so callers should gate on {@link shellProbe} first for a clean UX.
+   */
+  shellConfigAdd(input: { readonly path: string }): Promise<void>;
+  /**
+   * Forgets a previously-added program (`config shell remove`). If it was the
+   * selected shell, the selection falls back to the OS default. Removing a path
+   * that was never added is a no-op success.
+   */
+  shellConfigRemove(input: { readonly path: string }): Promise<void>;
+  /**
+   * Restores a remembered shell's flags to its family default
+   * (`config shell revert-args`) by clearing its stored deviation while keeping
+   * the shell remembered. A no-op when the shell has no entry.
+   */
+  shellRevertArgs(input: { readonly path: string }): Promise<void>;
+  /**
+   * Native (non-subprocess) existence + executability probe backing the picker's
+   * live "Add a shell" validation. Implemented with fs access in the shell's
+   * privileged process so it can run debounced per keystroke.
+   */
+  shellProbe(input: {
+    readonly path: string;
+  }): Promise<TraycerShellProbeResult>;
+  /**
+   * Opens the shell's native "choose a program file" dialog, resolving the
+   * chosen absolute path or `null` on cancel. `null` (not a method) on shells
+   * with no native file dialog - the picker hides its Browse affordance then.
+   */
+  readonly pickShellProgramFile: (() => Promise<string | null>) | null;
   shellListDetected(): Promise<readonly TraycerDetectedShell[]>;
   envOverrideList(): Promise<readonly TraycerEnvOverride[]>;
   envOverrideSet(input: {

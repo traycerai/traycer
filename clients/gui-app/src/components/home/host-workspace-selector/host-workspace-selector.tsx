@@ -44,12 +44,10 @@ import { useEpicCreateChat } from "@/hooks/epic/use-epic-chat-mutations";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useResolvedWorkspaceFolders } from "@/hooks/workspace/use-resolved-workspace-folders-query";
 import type { ResolvedFolder } from "@/lib/workspace/resolved-folder";
-import {
-  preparedWorkspaceFolderToWorkspaceFolderInfo,
-  useWorkspaceFolderActionsForClient,
-} from "@/hooks/workspace/use-workspace-folder-actions";
+import { useWorkspaceFolderActionsForClient } from "@/hooks/workspace/use-workspace-folder-actions";
 import type { LandingDraftWorkspaceSnapshot } from "@/stores/home/landing-draft-store";
 import { resolvePrimaryPath } from "@/lib/worktree/resolve-primary-path";
+import { usePickAndAddWorkspaceFolders } from "./use-pick-and-add-folders";
 import {
   readStagedWorktreeIntent,
   useWorktreeIntentStagingStore,
@@ -343,7 +341,7 @@ export function ActiveHostWorkspaceControls(
     // `--fc-text` brightens location labels to match the panel's other sections;
     // identity, branch values, icons, and actions retain their semantic hierarchy.
     return (
-      <div className="flex min-w-0 flex-col gap-3 [--fc-opacity:1] [--fc-text:var(--color-foreground)]">
+      <div className="flex w-full max-w-full min-w-0 flex-col gap-3 [--fc-opacity:1] [--fc-text:var(--color-foreground)]">
         <HostSection
           entries={visibleHostEntries}
           activeHostId={activeHostId}
@@ -352,6 +350,7 @@ export function ActiveHostWorkspaceControls(
         <section
           aria-label="Workspaces"
           data-testid="host-workspace-selector-folders-section"
+          className="w-full max-w-full min-w-0"
         >
           <DropdownMenuLabel className="px-1 text-ui-xs font-medium uppercase tracking-wide text-muted-foreground/70">
             Workspaces
@@ -437,7 +436,6 @@ function HomeWorkspaceRows(props: {
     seedIntent,
     seedIntentOverride,
   } = props;
-  const folderActions = useWorkspaceFolderActionsForClient(activeHostClient);
   const setFolderIntent = useWorktreeIntentMemoryStore(
     (state) => state.setFolderIntent,
   );
@@ -464,15 +462,10 @@ function HomeWorkspaceRows(props: {
     usePrimaryChangeAnnouncement();
   const addFolderPending =
     useIsMutating({ mutationKey: workspaceMutationKeys.prepareFolders() }) > 0;
-  const pickAndAddFolders = useCallback(async (): Promise<boolean> => {
-    const result = await folderActions.pickAndPrepareFolders();
-    if (result === null) return false;
-    const folders = result.folders.map(
-      preparedWorkspaceFolderToWorkspaceFolderInfo,
-    );
-    workspaceSource.addResolvedFolders(folders);
-    return folders.length > 0;
-  }, [folderActions, workspaceSource]);
+  const pickAndAddFolders = usePickAndAddWorkspaceFolders(
+    activeHostClient,
+    workspaceSource,
+  );
   const queryableFolderPaths = useMemo<ReadonlyArray<string>>(
     () => [...new Set(resolvedFolders.map((entry) => entry.path))],
     [resolvedFolders],

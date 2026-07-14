@@ -11,7 +11,7 @@ import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
 import type { ProviderRateLimits } from "@traycer/protocol/host";
 import type { ProviderRateLimitEnvelope } from "@/lib/rate-limits/rate-limit-envelope";
 import { envelopeFromRateLimits } from "@/lib/rate-limits/__tests__/rate-limit-envelope-fixtures";
-import { formatResetDateTime } from "@/lib/relative-time";
+import { formatResetFullDateTime } from "@/lib/relative-time";
 
 const mocks = vi.hoisted(() => ({
   data: undefined as ProviderRateLimitEnvelope | undefined,
@@ -255,7 +255,7 @@ describe("ProviderRateLimitForProvider", () => {
 
     expect(
       screen.getByText(
-        `Resets ${formatResetDateTime(CLAUDE_SEVEN_DAY_RESETS_AT)}`,
+        `Resets ${formatResetFullDateTime(CLAUDE_SEVEN_DAY_RESETS_AT)}`,
       ),
     ).toBeTruthy();
     expect(screen.getByText(/^Resets in /)).toBeTruthy();
@@ -385,9 +385,11 @@ describe("ProviderRateLimitForProvider", () => {
     // Regression: `CodexSpendControlRow` used to hardcode `weekly={false}`,
     // always forcing a relative countdown regardless of the real reset time.
     // `CODEX_SPEND_LIMIT_RESETS_AT` is 5 days out, so the reset line now
-    // correctly reads as an absolute weekday/time, not "Resets in ...".
+    // correctly reads as an absolute calendar date/time, not "Resets in ...".
     expect(
-      spendLimitScope.getByText(/^Resets [A-Za-z]{3} \d{1,2}:\d{2}\s?[AP]M$/i),
+      spendLimitScope.getByText(
+        `Resets ${formatResetFullDateTime(CODEX_SPEND_LIMIT_RESETS_AT)}`,
+      ),
     ).toBeTruthy();
     expect(spendLimitScope.queryByText(/^Resets in /)).toBeNull();
   });

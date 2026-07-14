@@ -32,8 +32,8 @@ interface ChatMessageProps {
  *    down an alternate path in parallel, with the question re-opened as an
  *    answerable card. Titled "A/B Fork".
  *
- * `cross-question` / `ab-worktree` are offered ONLY on the pending-interview
- * card; the per-message footer button is always `plain`.
+ * `cross-question` / `ab-worktree` are offered on pending-question cards and
+ * resolved Q&A rows; the per-message footer button is always `plain`.
  */
 export type ChatForkMode = "plain" | "cross-question" | "ab-worktree";
 
@@ -56,8 +56,11 @@ export interface ChatMessageEditing {
 export interface ChatMessageForkAction {
   readonly enabled: boolean;
   readonly pending: boolean;
-  /** Opens the fork dialog for a plain per-message fork. */
-  readonly onFork: () => void;
+  /** Opens the fork dialog with the selected message-level or Q&A mode. */
+  readonly onFork: (
+    mode: ChatForkMode,
+    interviewBlockId: string | null,
+  ) => void;
 }
 
 export interface ChatMessageUserActions {

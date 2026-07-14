@@ -267,6 +267,28 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
     return this.messenger.request(method, params);
   }
 
+  /**
+   * `request` with an extended response-frame budget for long-poll methods
+   * whose contract is to stay silent until a domain event fires (see
+   * `IHostMessenger.requestWithResponseTimeout`). Dial and handshake keep
+   * the transport defaults so an unreachable host still fails fast.
+   */
+  requestWithResponseTimeout<Method extends keyof Registry & string>(
+    method: Method,
+    params: RequestOfMethod<Registry, Method>,
+    responseTimeoutMs: number,
+  ): Promise<ResponseOfMethod<Registry, Method>> {
+    const preflightError = this.readRequestPreflightError(method);
+    if (preflightError !== null) {
+      return Promise.reject(preflightError);
+    }
+    return this.messenger.requestWithResponseTimeout(
+      method,
+      params,
+      responseTimeoutMs,
+    );
+  }
+
   private readRequestPreflightError(method: string): HostRpcError | null {
     if (this.activeHost === null) {
       return new HostRpcErrorCtor({

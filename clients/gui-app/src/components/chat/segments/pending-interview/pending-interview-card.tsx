@@ -1,11 +1,4 @@
-import {
-  Check,
-  ChevronLeft,
-  ChevronRight,
-  MessageSquareQuote,
-  Split,
-} from "lucide-react";
-import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { Check, ChevronLeft, ChevronRight } from "lucide-react";
 import type { ChatForkMode } from "@/components/chat/chat-message";
 import { AnimatePresence, useReducedMotion } from "motion/react";
 import * as m from "motion/react-m";
@@ -16,6 +9,7 @@ import type {
 import { Button } from "@/components/ui/button";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { modLabel } from "@/lib/keybindings/platform";
+import { InterviewForkActions } from "@/components/chat/segments/interview-fork-actions";
 import { QuestionPage } from "./question-page";
 import { QUESTION_TRANSITION, useInterviewCard } from "./use-interview-card";
 
@@ -137,7 +131,11 @@ export function PendingInterviewCard(props: PendingInterviewCardProps) {
           />
           <InterviewProgress answeredCount={answeredCount} total={total} />
           {props.onFork !== null ? (
-            <InterviewForkActions onFork={props.onFork} disabled={dispatched} />
+            <InterviewForkActions
+              onFork={props.onFork}
+              disabled={dispatched}
+              display="labels"
+            />
           ) : null}
         </div>
         <div className="ml-auto flex items-center gap-2">
@@ -184,57 +182,6 @@ export function PendingInterviewCard(props: PendingInterviewCardProps) {
         </div>
       </div>
     </section>
-  );
-}
-
-/**
- * The two fork-at-this-question entry points. Both open the fork dialog with
- * the workspace disposition pre-selected; the question stays pending in this
- * chat while the fork carries its own answerable copy.
- */
-function InterviewForkActions(props: {
-  readonly onFork: (mode: ChatForkMode) => void;
-  readonly disabled: boolean;
-}) {
-  return (
-    <>
-      <TooltipWrapper
-        label="Fork on this chat's workspace to interrogate the assistant before answering"
-        side="top"
-        sideOffset={undefined}
-        align={undefined}
-      >
-        <Button
-          type="button"
-          size="sm"
-          variant="ghost"
-          className="text-muted-foreground"
-          disabled={props.disabled}
-          onClick={() => props.onFork("cross-question")}
-        >
-          <MessageSquareQuote className="size-3.5" aria-hidden />
-          Cross Question
-        </Button>
-      </TooltipWrapper>
-      <TooltipWrapper
-        label="Fork into new worktrees carrying your working tree to proceed with different answers in parallel"
-        side="top"
-        sideOffset={undefined}
-        align={undefined}
-      >
-        <Button
-          type="button"
-          size="sm"
-          variant="ghost"
-          className="text-muted-foreground"
-          disabled={props.disabled}
-          onClick={() => props.onFork("ab-worktree")}
-        >
-          <Split className="size-3.5 rotate-90" aria-hidden />
-          A/B Fork
-        </Button>
-      </TooltipWrapper>
-    </>
   );
 }
 

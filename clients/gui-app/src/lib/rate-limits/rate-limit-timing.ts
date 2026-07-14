@@ -7,4 +7,4 @@
  * both sides import the same constant without a cross-import cycle between
  * them.
  */
-export const EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS = 5 * 60 * 1000;
+export const EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS = 15 * 60 * 1000;

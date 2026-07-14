@@ -57,10 +57,17 @@
  * `sessionUpdated` (`@1.3`): a lightweight metadata push for fields that can
  * change while the PTY keeps running, currently the host-observed foreground
  * process name and user title. Byte streams remain on `data`/`binaryData`.
+ *
+ * `terminal.subscribe@1.4` (bottom of this file, alongside its own frame
+ * schema): scope-bearing session info for the terminal major-2 unary
+ * contracts. See the explicit compatibility deviation at that schema.
  */
 import { z } from "zod";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
-import { terminalSessionInfoSchema } from "@traycer/protocol/host/terminal/unary-schemas";
+import {
+  canonicalTerminalSessionInfoSchema,
+  terminalSessionInfoSchema,
+} from "@traycer/protocol/host/terminal/unary-schemas";
 
 const textFrameFields = {
   hasBinaryPayload: z.literal(false),
@@ -182,6 +189,8 @@ const terminalSubscribeServerFrameSchemaV12 = z.discriminatedUnion("kind", [
   }),
 ]);
 
+// `terminal.subscribe@1.3` (current major-1 latest) - extends V12 with
+// `sessionUpdated`.
 export const terminalSubscribeServerFrameSchema = z.discriminatedUnion("kind", [
   ...terminalSubscribeServerFrameSchemaV12.def.options,
   z.object({
@@ -225,6 +234,89 @@ export const terminalSubscribeClientFrameSchema = z.discriminatedUnion("kind", [
 export type TerminalSubscribeClientFrame = z.infer<
   typeof terminalSubscribeClientFrameSchema
 >;
+
+// `terminal.subscribe@1.4` deliberately replaces the nested `session` shape
+// from `epicId` to `scope`, even though the general minor-version rule is
+// additive. This is wire-safe because TerminalSessionManager emits frames for
+// the negotiated version: <=1.3 subscribers receive the frozen epicId shape,
+// and only 1.4 subscribers can receive independent-scope sessions. The
+// versioned-stream checker does not recurse into nested object schemas, so it
+// cannot enforce this exception. Do not use this as a general minor-bump
+// precedent.
+export const terminalSubscribeServerFrameSchemaV14 = z.discriminatedUnion(
+  "kind",
+  [
+    z.object({
+      kind: z.literal("snapshot"),
+      ...textFrameFields,
+      ...sessionReferenceFields,
+      session: canonicalTerminalSessionInfoSchema,
+      scrollback: z.string(),
+      ackCreditSupported: z.boolean().optional(),
+    }),
+    z.object({
+      kind: z.literal("data"),
+      ...textFrameFields,
+      ...sessionReferenceFields,
+      chunk: z.string(),
+    }),
+    z.object({
+      kind: z.literal("resized"),
+      ...textFrameFields,
+      ...sessionReferenceFields,
+      cols: z.number().int().positive(),
+      rows: z.number().int().positive(),
+    }),
+    z.object({
+      kind: z.literal("exit"),
+      ...textFrameFields,
+      ...sessionReferenceFields,
+      exitCode: z.number().int(),
+    }),
+    z.object({
+      kind: z.literal("actionAck"),
+      ...textFrameFields,
+      ...sessionReferenceFields,
+      clientActionId: z.string(),
+      action: terminalActionSchema,
+      status: terminalActionAckStatusSchema,
+      reason: z.string().nullable(),
+      code: z.string().nullable(),
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      ...textFrameFields,
+    }),
+    z.object({
+      kind: z.literal("binarySnapshot"),
+      ...binaryFrameFields,
+      ...sessionReferenceFields,
+      session: canonicalTerminalSessionInfoSchema,
+    }),
+    z.object({
+      kind: z.literal("binaryData"),
+      ...binaryFrameFields,
+      ...sessionReferenceFields,
+    }),
+    z.object({
+      kind: z.literal("sessionUpdated"),
+      ...textFrameFields,
+      ...sessionReferenceFields,
+      session: canonicalTerminalSessionInfoSchema,
+    }),
+  ],
+);
+export type TerminalSubscribeServerFrameV14 = z.infer<
+  typeof terminalSubscribeServerFrameSchemaV14
+>;
+
+export const terminalSubscribeV14 = defineStreamRpcContract({
+  method: "terminal.subscribe",
+  schemaVersion: { major: 1, minor: 4 } as const,
+  openRequestSchema: terminalSubscribeOpenRequestSchema,
+  serverFrameSchema: terminalSubscribeServerFrameSchemaV14,
+  clientFrameSchema: terminalSubscribeClientFrameSchema,
+});
 
 export const terminalSubscribeV13 = defineStreamRpcContract({
   method: "terminal.subscribe",

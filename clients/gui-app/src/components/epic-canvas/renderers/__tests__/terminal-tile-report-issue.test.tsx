@@ -35,6 +35,10 @@ vi.mock("@/hooks/agent/use-host-reachability", () => ({
   useHostReachability: () => testState.reachability,
 }));
 
+vi.mock("@/lib/epic-selectors", () => ({
+  useOpenEpicId: () => "epic-1",
+}));
+
 vi.mock("@/hooks/terminal/use-terminal-session-recovery", () => ({
   useTerminalSessionRecovery: () => ({
     recoverNonce: 0,
@@ -53,6 +57,7 @@ vi.mock("@/hooks/agent/use-terminal-tile-bootstrap", () => ({
     createError: testState.createError,
     retry: () => undefined,
     hostHasSession: false,
+    hostSessionExited: false,
   }),
 }));
 

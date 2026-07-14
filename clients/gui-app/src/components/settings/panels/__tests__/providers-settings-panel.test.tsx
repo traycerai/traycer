@@ -1641,6 +1641,131 @@ describe("<ProvidersSettingsPanel />", () => {
     });
   });
 
+  it("clears the sign-in failure banner when a new attempt starts and stays clear through its success", async () => {
+    providerMocks.listResult.data = {
+      providers: [
+        {
+          ...providerState({
+            providerId: "codex",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+            profiles: [
+              profile({
+                profileId: "ambient",
+                kind: "ambient",
+                label: "Terminal account",
+                email: "ambient@example.test",
+                tier: null,
+                authStatus: "authenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+            ],
+          }),
+          loginCapability: { oauthArgs: ["auth", "login"], token: null },
+        },
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    // First attempt fails after the await phase - the section banner appears.
+    fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    const [, startOptions] = firstStartLoginCall();
+    act(() => {
+      startOptions.onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "managed-1",
+      });
+    });
+    const [, awaitOptions] = firstAwaitLoginCall();
+    act(() => awaitOptions.onError());
+    screen.getByText("Sign-in did not finish. Retry when you are ready.");
+
+    // Close the failed dialog - the banner persists behind it.
+    fireEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: "Cancel",
+      }),
+    );
+    screen.getByText(/Sign-in did not finish for/);
+
+    // The banner's Retry reopens the dialog; STARTING the next attempt must
+    // clear the banner instead of letting it sit next to a sign-in that
+    // then succeeds.
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    expect(screen.queryByText(/Sign-in did not finish for/)).toBeNull();
+
+    const retryStart = providerMocks.startLoginMutate.mock.calls.at(1);
+    if (retryStart === undefined) {
+      throw new Error("Expected a second start login call.");
+    }
+    act(() => {
+      retryStart[1].onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "managed-2",
+      });
+    });
+    const retryAwait = providerMocks.awaitLoginMutate.mock.calls.at(1);
+    if (retryAwait === undefined) {
+      throw new Error("Expected a second await login call.");
+    }
+    // The real awaitLogin success merges the fresh provider state into the
+    // providers.list cache - mirror that so the completed profile resolves
+    // once the panel re-renders.
+    const createdProfile = profile({
+      profileId: "managed-2",
+      kind: "managed",
+      label: "New profile",
+      email: "fresh@example.test",
+      tier: "Pro",
+      authStatus: "authenticated",
+      duplicateOfProfileId: null,
+      ambientDriftNotice: null,
+    });
+    providerMocks.listResult.data = {
+      providers: [
+        {
+          ...providerState({
+            providerId: "codex",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+            profiles: [createdProfile],
+          }),
+          loginCapability: { oauthArgs: ["auth", "login"], token: null },
+        },
+      ],
+    };
+    act(() => {
+      retryAwait[1].onSuccess({
+        state: { profiles: [createdProfile] },
+      });
+    });
+
+    // The unique-identity path finalizes by recoloring; completing it closes
+    // the dialog with the banner still clear.
+    const recolor = providerMocks.recolorProfileMutate.mock.calls.at(0);
+    if (recolor === undefined) {
+      throw new Error("Expected a recolor call for the created profile.");
+    }
+    act(() => recolor[1].onSuccess());
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+    expect(screen.queryByText(/Sign-in did not finish for/)).toBeNull();
+  });
+
   it("keeps a cancelled profile creation mounted until its minted id is cleaned up", () => {
     providerMocks.listResult.data = {
       providers: [

@@ -42,7 +42,7 @@ import { enqueueRateLimitFetchForScope } from "@/lib/rate-limits/ephemeral-fetch
  * Both paths are throttled by an outer cooldown ref to at most once per
  * `PROVIDER_RATE_LIMITS_STALE_TIME_MS` (a persistent, always-mounted surface
  * would otherwise refresh on every single matching turn completion); for the
- * queue path the queue's own 30s freshness floor is a second, independent layer
+ * queue path the queue's own five-minute freshness floor is a second, independent layer
  * under this ref.
  *
  * No-ops while `providerId` is `null` (surface isn't gated to a rate-limit
@@ -77,7 +77,7 @@ export function useRefreshProviderRateLimitsOnTurn(
       lastInvalidatedAtRef.current = now;
       // ephemeralProcess providers (codex, claude-code) route through the shared
       // serial queue so this turn-completion refresh can't spawn a subprocess
-      // that overlaps a scheduled interval tick. The queue's own 30s floor is a
+      // that overlaps a scheduled interval tick. The queue's own five-minute floor is a
       // second, independent layer under this hook's outer cooldown ref. Crucially
       // this fires regardless of window visibility - only the interval timer
       // pauses when hidden, so a background turn finishing while the user is away

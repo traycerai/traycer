@@ -307,7 +307,12 @@ export default tseslint.config(
     // Registers a server-created terminal as a saved background tab without
     // activating it - prepareOpenTileInBackgroundTabFocusTarget always
     // returns a null focus delta, so this call never needs a route write.
-    files: ["src/hooks/chats/use-setup-terminal-tab-register-driver.ts"],
+    // Both the chat and terminal-agent tab-register drivers delegate their
+    // registration effect to this single shared hook, so the exemption lives
+    // here, at the one site that actually calls openTileInBackgroundTab.
+    files: [
+      "src/hooks/worktree/use-register-setup-terminal-tabs-from-binding.ts",
+    ],
     rules: {
       "no-restricted-syntax": [
         "error",
