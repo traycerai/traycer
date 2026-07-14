@@ -31,6 +31,7 @@ import {
   buildFontFamilyValue,
 } from "@/lib/default-font-stacks";
 import { useRunnerHost } from "@/providers/use-runner-host";
+import { cn } from "@/lib/utils";
 import { useTerminalTheme } from "@/lib/terminal-theme";
 import { scheduleAtlasClear } from "@/lib/terminal-theme-scheduler";
 import type { TerminalDataWriter } from "@/stores/terminals/terminal-session-store";
@@ -152,6 +153,14 @@ export interface TerminalXtermHostProps {
    * xterm's rendered DOM.
    */
   readonly findTargetId: string | null;
+  /**
+   * How the xterm viewport meets its container. `"padded"` insets the grid
+   * from the tile's edges - the canvas tiles sit on a card, so the gutter reads
+   * as tile chrome. `"flush"` gives the grid the full box; the landing panel
+   * IS the terminal's frame, so an inset there just leaks panel background
+   * around a rectangle of terminal background.
+   */
+  readonly chrome: "padded" | "flush";
 }
 
 export function TerminalXtermHost(props: TerminalXtermHostProps) {
@@ -474,7 +483,10 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
     <div className="absolute inset-0 bg-canvas">
       <div
         ref={mountRef}
-        className="h-full w-full p-2"
+        className={cn(
+          "h-full w-full",
+          props.chrome === "padded" ? "p-2" : "p-0",
+        )}
         onDragEnter={handleDragEnter}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
@@ -483,7 +495,10 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
       {isDraggingFiles ? (
         <div
           aria-hidden
-          className="pointer-events-none absolute inset-2 z-10 flex items-center justify-center border-2 border-dashed border-primary bg-canvas/85 text-ui-sm font-medium text-foreground"
+          className={cn(
+            "pointer-events-none absolute z-10 flex items-center justify-center border-2 border-dashed border-primary bg-canvas/85 text-ui-sm font-medium text-foreground",
+            props.chrome === "padded" ? "inset-2" : "inset-0",
+          )}
         >
           Drop files to paste paths
         </div>

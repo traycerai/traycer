@@ -147,14 +147,21 @@ import {
   workspaceResolvePathsByRepoIdentifiersV10,
 } from "@traycer/protocol/host/workspace/contracts";
 import {
+  terminalCreateDowngradeV20ToV10,
   terminalCreateV10,
+  terminalCreateV20,
+  terminalCreateUpgradeV10ToV20,
   terminalKillV10,
+  terminalListDowngradeV20ToV10,
   terminalListV10,
+  terminalListV20,
+  terminalListUpgradeV10ToV20,
   terminalRenameV10,
   terminalSubscribeV10,
   terminalSubscribeV11,
   terminalSubscribeV12,
   terminalSubscribeV13,
+  terminalSubscribeV14,
 } from "@traycer/protocol/host/terminal/contracts";
 import {
   hostNotificationsClearAll,
@@ -2934,6 +2941,16 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       },
       downgradePathsFromLatest: {},
     },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: terminalCreateV20,
+          upgradeFromPreviousVersion: terminalCreateUpgradeV10ToV20,
+        },
+      },
+      downgradePathsFromLatest: { 1: terminalCreateDowngradeV20ToV10 },
+    },
   },
   "terminal.kill": {
     1: {
@@ -2957,6 +2974,16 @@ const HOST_RPC_REGISTRY_DEFINITION = {
         },
       },
       downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: terminalListV20,
+          upgradeFromPreviousVersion: terminalListUpgradeV10ToV20,
+        },
+      },
+      downgradePathsFromLatest: { 1: terminalListDowngradeV20ToV10 },
     },
   },
   "terminal.rename": {
@@ -3657,7 +3684,7 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
   },
   "terminal.subscribe": {
     1: {
-      latestMinor: 3,
+      latestMinor: 4,
       versions: {
         0: {
           contract: terminalSubscribeV10,
@@ -3670,6 +3697,9 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
         },
         3: {
           contract: terminalSubscribeV13,
+        },
+        4: {
+          contract: terminalSubscribeV14,
         },
       },
     },

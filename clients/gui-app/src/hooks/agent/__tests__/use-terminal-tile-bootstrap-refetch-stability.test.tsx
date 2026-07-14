@@ -97,6 +97,7 @@ function runBootstrap() {
     () =>
       useTerminalTileBootstrap({
         hostId: "host-1",
+        scope: { kind: "epic", epicId: "epic-1" },
         sessionId: "term-1",
         instanceId: "inst-1",
         sessionKind: "terminal",

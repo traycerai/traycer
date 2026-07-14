@@ -25,7 +25,7 @@ import {
   Terminal as TerminalIcon,
   Trash2,
 } from "lucide-react";
-import type { TerminalSessionInfo } from "@traycer/protocol/host/terminal/unary-schemas";
+import type { CanonicalTerminalSessionInfo } from "@traycer/protocol/host/terminal/unary-schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
@@ -60,7 +60,7 @@ import { useTerminalList } from "@/hooks/terminal/use-terminal-list-query";
 import { useTerminalRename } from "@/hooks/terminal/use-terminal-rename-mutation";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useHostClient } from "@/lib/host";
-import { isVisibleRawTerminalSession } from "@/lib/terminals/terminal-session-filters";
+import { isVisibleEpicTerminalSession } from "@/lib/terminals/terminal-session-filters";
 import {
   deriveTitleSourceFromSessionTitle,
   terminalSessionTitle,
@@ -98,7 +98,7 @@ function TerminalsPanelBodyLive(props: {
 }) {
   const { epicId, tabId } = props;
   const hostClient = useHostClient();
-  const list = useTerminalList(epicId, hostClient);
+  const list = useTerminalList({ kind: "epic", epicId }, hostClient);
   const navigateNested = useEpicNestedFocusNavigation();
   const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
     (s) => s.prepareOpenTileInTabFocusTarget,
@@ -109,7 +109,7 @@ function TerminalsPanelBodyLive(props: {
   const activeHostId = useReactiveActiveHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
 
   const openExisting = useCallback(
-    (session: TerminalSessionInfo) => {
+    (session: CanonicalTerminalSessionInfo) => {
       const found = findOpenArtifactInTab(tabId, session.sessionId);
       if (found !== null) {
         navigateNested(epicId, tabId, () =>
@@ -140,8 +140,8 @@ function TerminalsPanelBodyLive(props: {
 
   // Host keeps exited sessions for a 60s grace window; filter so a
   // single kill click feels like "remove" instead of "mark dead".
-  const sessions = (list.data?.sessions ?? []).filter(
-    isVisibleRawTerminalSession,
+  const sessions = (list.data?.sessions ?? []).filter((session) =>
+    isVisibleEpicTerminalSession(session, epicId),
   );
 
   return (
@@ -179,11 +179,11 @@ interface TerminalSidebarBodyProps {
   readonly isLoading: boolean;
   readonly isError: boolean;
   readonly errorMessage: string | null;
-  readonly sessions: ReadonlyArray<TerminalSessionInfo>;
+  readonly sessions: ReadonlyArray<CanonicalTerminalSessionInfo>;
   readonly epicId: string;
   readonly tabId: string;
   readonly hostId: string;
-  readonly onOpen: (session: TerminalSessionInfo) => void;
+  readonly onOpen: (session: CanonicalTerminalSessionInfo) => void;
 }
 
 function TerminalSidebarBody(props: TerminalSidebarBodyProps) {
@@ -255,8 +255,8 @@ interface TerminalRowProps {
   readonly epicId: string;
   readonly tabId: string;
   readonly hostId: string;
-  readonly session: TerminalSessionInfo;
-  readonly onOpen: (session: TerminalSessionInfo) => void;
+  readonly session: CanonicalTerminalSessionInfo;
+  readonly onOpen: (session: CanonicalTerminalSessionInfo) => void;
 }
 
 function TerminalRow(props: TerminalRowProps) {
@@ -479,7 +479,7 @@ function TerminalRow(props: TerminalRowProps) {
   );
 }
 
-function deriveTerminalLabel(session: TerminalSessionInfo): string {
+function deriveTerminalLabel(session: CanonicalTerminalSessionInfo): string {
   return terminalSessionTitle({
     title: session.title,
     activeProcessName: session.activeProcessName,
@@ -487,7 +487,7 @@ function deriveTerminalLabel(session: TerminalSessionInfo): string {
 }
 
 function makeTerminalRef(
-  session: TerminalSessionInfo,
+  session: CanonicalTerminalSessionInfo,
   hostId: string,
   instanceId: string,
 ): EpicTerminalRef {
