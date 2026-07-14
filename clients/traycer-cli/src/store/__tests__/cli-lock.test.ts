@@ -660,7 +660,7 @@ describe("release() compare-and-delete", () => {
     expect(readLockRaw()).toEqual(impostor);
   });
 
-  it("falls back to unconditional unlink for a legacy no-token file", async () => {
+  it("does not unlink a legacy no-token file - it can never prove ownership of it", async () => {
     const handle = await acquireCliLock({
       environment: "production",
       reason: "r",
@@ -668,16 +668,36 @@ describe("release() compare-and-delete", () => {
       pollIntervalMs: 50,
     });
     // Simulate the file having been rewritten by pre-token-version code.
-    writeFileSync(
-      mocks.lockPath,
-      JSON.stringify({
-        pid: process.pid,
-        reason: "r",
-        startedAt: new Date().toISOString(),
-      }),
-    );
+    // Every lock THIS code writes always carries a `randomUUID()` token,
+    // so a tokenless record at this path can never be the one this handle
+    // itself wrote - unlinking it would risk deleting a different,
+    // legitimate holder's lock on nothing but "there was nothing to
+    // compare against."
+    const legacy = {
+      pid: process.pid,
+      reason: "r",
+      startedAt: new Date().toISOString(),
+    };
+    writeFileSync(mocks.lockPath, JSON.stringify(legacy));
     await handle.release();
-    expect(readLockRaw()).toBeNull();
+    expect(readLockRaw()).toEqual(legacy);
+  });
+
+  it("does not unlink present content that fails to parse (empty/corrupt bytes, or a holder mid-write)", async () => {
+    const handle = await acquireCliLock({
+      environment: "production",
+      reason: "r",
+      waitMs: 1000,
+      pollIntervalMs: 50,
+    });
+    // Same positive-evidence rule as the read-error and legacy-file cases
+    // above: a successful read of content that doesn't even parse as
+    // lock metadata is not evidence of ownership either - it could be a
+    // fresh holder that has `open()`ed but not yet finished
+    // `writeFile()`ing its own metadata.
+    writeFileSync(mocks.lockPath, "not valid json");
+    await handle.release();
+    expect(readFileSync(mocks.lockPath, "utf8")).toBe("not valid json");
   });
 
   it("aborts release without unlinking when the raw read hits a transient error", async () => {

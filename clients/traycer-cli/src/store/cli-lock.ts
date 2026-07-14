@@ -281,26 +281,37 @@ async function createBreakLockFile(
 // Accepted residual: the `unlink(breakLockPath)` call below is
 // UNCONDITIONAL - it verifies the crashed holder's identity and age from
 // the read a few lines up, but never re-verifies the file still holds
-// those exact bytes immediately before deleting it by path. If this
-// recoverer is descheduled between that read and this unlink - a real gap
-// between two separate syscalls, with NO time bound, not the
-// "millisecond-wide" window this comment previously (incorrectly)
-// claimed - an entirely different, unrelated break-lock cycle can
-// complete underneath it: another contender recovers the same crashed
-// breaker, wins the O_CREAT|O_EXCL retry, runs its own critical section,
-// releases, and a THIRD, genuinely fresh contender acquires the break-lock
-// anew, all before this recoverer's stale unlink finally fires. That
-// unlink targets a PATH, not a file identity, so it deletes whatever is
-// CURRENTLY there - the fresh contender's live break-lock - out from under
-// it. Both processes then believe they exclusively hold the break-lock and
-// can run their own `breakStaleLock` critical sections concurrently: this
-// CAN violate canonical-lock exclusion, contrary to what this comment used
-// to claim. It is accepted because it requires a breaker crash AND a
-// second contender's own recovery attempt to be descheduled across these
-// two syscalls at essentially the exact moment a full, unrelated
-// break-then-reacquire cycle completes underneath it - vastly narrower
-// than the race this whole mechanism replaces (rename-to-claim's
-// routinely-hit, unbounded TOCTOU window).
+// those exact bytes immediately before deleting it by path. TWO
+// recoverers already suffice to exploit this (no third contender or
+// completed unrelated cycle required):
+//   - R1 and R2 both see the same crashed break-lock B0 and both validate
+//     it (dead pid, aged past the grace window) - both are now AUTHORIZED
+//     to unlink whatever they find at this path, per the checks above.
+//   - R1 acts on its authorization first: unlinks B0, then wins the
+//     O_CREAT|O_EXCL retry and creates its own break-lock B1. R1 is now
+//     genuinely, exclusively holding the break-lock and enters its
+//     `breakStaleLock` critical section.
+//   - R2 was descheduled between ITS OWN read/validate (above) and ITS
+//     OWN unlink call - a real gap between two syscalls, with NO time
+//     bound, not the "millisecond-wide" window this comment previously
+//     (incorrectly) claimed. When R2 finally resumes, its unlink targets
+//     a PATH, not a file identity, and fires unconditionally on its
+//     stale authorization: it deletes whatever is CURRENTLY there - B1,
+//     R1's live break-lock - out from under R1. R2 then wins its own
+//     O_CREAT|O_EXCL retry and creates B2.
+// R1 (still mid-critical-section, unaware B1 was ever touched) and R2
+// (now also mid-critical-section on B2) both believe they exclusively
+// hold the break-lock and can run their own `breakStaleLock` critical
+// sections concurrently: this CAN violate canonical-lock exclusion,
+// contrary to what this comment used to claim. (A three-or-more-contender
+// variant - an entire extra break-then-reacquire cycle completing inside
+// the gap - is also possible, but is not the minimum.) It is accepted
+// because it requires a breaker crash AND a second contender's own
+// recovery attempt to be descheduled between its validation and its
+// unlink at essentially the exact moment a first recoverer completes its
+// own unlink-then-create step underneath it - vastly narrower than the
+// race this whole mechanism replaces (rename-to-claim's routinely-hit,
+// unbounded TOCTOU window).
 async function tryRecoverCrashedBreakLock(
   breakLockPath: string,
 ): Promise<boolean> {
@@ -479,17 +490,19 @@ async function tryAcquireOnce(
       } catch {
         // Closing twice is a no-op for callers; ignore.
       }
-      // Compare-and-delete: only unlink if the file still carries the token
-      // this handle wrote. If a staleness check (this bug, or a future
-      // false positive) ever broke this lock and someone else re-acquired
-      // it while we were still alive, blindly unlinking here would delete
-      // *their* lock out from under them. A file with no token at all is a
-      // pre-token-version lock (never written by this code) - fall back to
-      // the old unconditional unlink, since there is nothing to compare.
+      // Compare-and-delete: unlink ONLY on positive proof this handle
+      // still owns the file - a successful, parseable read whose token
+      // matches the one this handle wrote. Every lock this code writes
+      // carries a non-null `randomUUID()` token, so tokenless or
+      // unparseable present content (empty/corrupt bytes, or a fresh
+      // holder still mid-`writeFile()`) is by definition not ours - the
+      // old fallback of unlinking whenever there was "nothing to compare
+      // against" got this backwards: an inability to prove ownership must
+      // refuse to delete, not default to deleting.
       //
-      // This is a raw read, not the old read+fold-to-null shortcut: a
-      // transient read ERROR (EIO/EACCES) must never be treated the same
-      // as "absent" here. Release sits downstream of the accepted
+      // This is a raw read, not a read+fold-to-null shortcut: a transient
+      // read ERROR (EIO/EACCES) must never be treated the same as
+      // "absent" here either. Release sits downstream of the accepted
       // break-arbitration residual documented above
       // `tryRecoverCrashedBreakLock` - if a crashed breaker was double-
       // recovered, this handle's canonical path may now belong to a fresh
@@ -508,8 +521,8 @@ async function tryAcquireOnce(
       }
       const current = parseLockMetadata(read.raw);
       if (
-        current !== null &&
-        current.token !== null &&
+        current === null ||
+        current.token === null ||
         current.token !== meta.token
       ) {
         return;
