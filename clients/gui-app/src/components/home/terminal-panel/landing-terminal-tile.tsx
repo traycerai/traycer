@@ -168,6 +168,7 @@ function LandingTerminalTileLive(props: {
           <TerminalXtermHost
             sessionId={handle.sessionId}
             tileKind="terminal"
+            chrome="flush"
             instanceId={tab.instanceId}
             effectiveCols={effectiveCols}
             effectiveRows={effectiveRows}

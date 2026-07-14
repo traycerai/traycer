@@ -141,6 +141,7 @@ function renderHost(): void {
       shouldFocusOnActivePane={false}
       findTargetId={null}
       keepAlive={false}
+      chrome="padded"
     />,
   );
 }

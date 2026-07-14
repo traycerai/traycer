@@ -1,5 +1,14 @@
-import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import { useIsMutating } from "@tanstack/react-query";
+import {
+  FolderOpen,
   Maximize2,
   Minimize2,
   PanelRightClose,
@@ -9,15 +18,19 @@ import {
 import { v4 as uuidv4 } from "uuid";
 import type { TerminalScope } from "@traycer/protocol/host/terminal/unary-schemas";
 import { Button } from "@/components/ui/button";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { useTerminalListFor } from "@/hooks/terminal/use-terminal-list-for-query";
 import { useHostClient } from "@/lib/host";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { registerDynamicActionHandler } from "@/lib/keybindings/dispatch";
 import {
   pointerDragHandleAxisClassName,
   usePointerDragCommit,
 } from "@/components/epic-canvas/canvas/use-pointer-drag-commit";
 import { useHomeWorkspaceSource } from "@/components/home/host-workspace-selector/use-home-workspace-source";
+import { usePickAndAddWorkspaceFolders } from "@/components/home/host-workspace-selector/use-pick-and-add-folders";
 import type { WorktreeStagingKey } from "@/stores/worktree/worktree-intent-staging-store";
+import { workspaceMutationKeys } from "@/lib/query-keys";
 import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
 import { cn } from "@/lib/utils";
 import {
@@ -91,6 +104,7 @@ export function LandingTerminalPanel(
   const activateTab = useLandingTerminalStore((state) => state.activateTab);
   const renameTab = useLandingTerminalStore((state) => state.renameTab);
   const closeTab = useLandingTerminalStore((state) => state.closeTab);
+  const closeAllTabs = useLandingTerminalStore((state) => state.closeAllTabs);
   const kill = useLandingTerminalKill();
   const killTerminal = kill.mutate;
   const killTerminalAsync = kill.mutateAsync;
@@ -132,6 +146,14 @@ export function LandingTerminalPanel(
     [closeTab, killTerminal],
   );
 
+  const closeAllTerminalTabs = useCallback(() => {
+    // Same tombstone-first ordering as a single close, batched: every ref is
+    // durably tombstoned in one write before the first kill is dispatched.
+    closeAllTabs().forEach((closed) => {
+      killTerminal({ hostId: closed.hostId, sessionId: closed.sessionId });
+    });
+  }, [closeAllTabs, killTerminal]);
+
   const togglePanel = useCallback(() => {
     if (panelOpen) {
       setMaximized(false);
@@ -140,6 +162,20 @@ export function LandingTerminalPanel(
     }
     setPanelOpen(true);
   }, [panelOpen, setPanelOpen]);
+
+  const openPanel = useCallback(() => {
+    setPanelOpen(true);
+  }, [setPanelOpen]);
+
+  const pickAndAddFolders = usePickAndAddWorkspaceFolders(
+    defaultClient,
+    workspace,
+  );
+  const pickFolder = useCallback(() => {
+    void pickAndAddFolders();
+  }, [pickAndAddFolders]);
+  const folderPickPending =
+    useIsMutating({ mutationKey: workspaceMutationKeys.prepareFolders() }) > 0;
 
   // Several remote hosts can exist without a default selection. This is a
   // real page state, not an unsupported/unknown verdict: leave persistence
@@ -159,13 +195,17 @@ export function LandingTerminalPanel(
       activeHostId={activeHostId}
       reconciledHostId={reconciledHostId}
       maximized={maximized}
+      folderPickPending={folderPickPending}
       onTogglePanel={togglePanel}
+      onOpenPanel={openPanel}
       onToggleMaximized={() => setMaximized((value) => !value)}
       onSetPanelWidthFraction={setPanelWidthFraction}
       onCreateTerminal={createTerminalTab}
       onActivateTab={activateTab}
       onCloseTab={closeTerminalTab}
+      onCloseAllTabs={closeAllTerminalTabs}
       onRenameTab={renameTab}
+      onPickFolder={pickFolder}
     />
   );
 }
@@ -180,13 +220,17 @@ interface LandingTerminalPanelContentsProps {
   readonly activeHostId: string | null;
   readonly reconciledHostId: string | null;
   readonly maximized: boolean;
+  readonly folderPickPending: boolean;
   readonly onTogglePanel: () => void;
+  readonly onOpenPanel: () => void;
   readonly onToggleMaximized: () => void;
   readonly onSetPanelWidthFraction: (fraction: number) => void;
   readonly onCreateTerminal: () => void;
   readonly onActivateTab: (instanceId: string) => void;
   readonly onCloseTab: (tab: LandingTerminalTabRef) => void;
+  readonly onCloseAllTabs: () => void;
   readonly onRenameTab: (instanceId: string, name: string) => void;
+  readonly onPickFolder: () => void;
 }
 
 function LandingTerminalPanelContents(
@@ -203,16 +247,22 @@ function LandingTerminalPanelContents(
     props.availability === "supported" &&
     props.activeHostId !== null &&
     props.reconciledHostId === props.activeHostId;
+  useLandingTerminalShortcuts({
+    onTogglePanel: props.onTogglePanel,
+    onOpenPanel: props.onOpenPanel,
+    onCreateTerminal: props.onCreateTerminal,
+  });
   const panelStyle = props.maximized
     ? undefined
     : { width: props.panelOpen ? `${props.panelWidthFraction * 100}%` : "0%" };
 
   return (
     <>
-      <LandingTerminalPanelToggle
-        panelOpen={props.panelOpen}
-        onTogglePanel={props.onTogglePanel}
-      />
+      {/* Reveal-only affordance. Once open, the panel header owns collapse -
+          rendering both would stack two controls in the same corner. */}
+      {props.panelOpen ? null : (
+        <LandingTerminalPanelToggle onOpenPanel={props.onOpenPanel} />
+      )}
       <div
         {...sliderProps}
         aria-valuenow={Math.round(props.panelWidthFraction * 100)}
@@ -236,7 +286,7 @@ function LandingTerminalPanelContents(
         data-testid="landing-terminal-panel"
         data-open={props.panelOpen ? "true" : "false"}
         className={cn(
-          "flex h-full min-h-0 shrink-0 flex-col overflow-hidden border-l border-canvas-border/70 bg-canvas transition-[width,visibility]",
+          "flex h-full min-h-0 shrink-0 flex-col overflow-hidden border-t border-l border-canvas-border/70 bg-canvas transition-[width,visibility]",
           !props.panelOpen && "invisible pointer-events-none",
           props.maximized && "absolute inset-0 z-20 w-full",
         )}
@@ -254,6 +304,7 @@ function LandingTerminalPanelContents(
           onAdd={props.onCreateTerminal}
           onActivate={props.onActivateTab}
           onClose={props.onCloseTab}
+          onCloseAll={props.onCloseAllTabs}
           onRename={props.onRenameTab}
         />
         <LandingTerminalPanelBody
@@ -264,33 +315,59 @@ function LandingTerminalPanelContents(
           activeHostId={props.activeHostId}
           createEnabled={createEnabled}
           primaryWorkspacePath={props.primaryWorkspacePath}
+          folderPickPending={props.folderPickPending}
+          onPickFolder={props.onPickFolder}
         />
       </aside>
     </>
   );
 }
 
-function LandingTerminalPanelToggle(props: {
-  readonly panelOpen: boolean;
+/**
+ * Binds the panel's chords. Registered here (not in `LandingTerminalPanel`)
+ * so they exist exactly while the panel is a real affordance: an unsupported
+ * host or no selected host renders nothing, and the chords must not silently
+ * flip persisted panel state behind an invisible surface.
+ */
+function useLandingTerminalShortcuts(args: {
   readonly onTogglePanel: () => void;
+  readonly onOpenPanel: () => void;
+  readonly onCreateTerminal: () => void;
+}): void {
+  const { onTogglePanel, onOpenPanel, onCreateTerminal } = args;
+  useEffect(
+    () => registerDynamicActionHandler("app.terminal.toggle", onTogglePanel),
+    [onTogglePanel],
+  );
+  useEffect(
+    () =>
+      registerDynamicActionHandler("app.terminal.new", () => {
+        // Reveal first: a collapsed panel with no tabs would otherwise let
+        // reconciliation's auto-spawn race this create and open two shells.
+        // Creating the tab up-front leaves a non-empty set, which suppresses
+        // the auto-spawn. Both calls self-gate, so this is safe while the
+        // host is still connecting.
+        onOpenPanel();
+        onCreateTerminal();
+      }),
+    [onCreateTerminal, onOpenPanel],
+  );
+}
+
+function LandingTerminalPanelToggle(props: {
+  readonly onOpenPanel: () => void;
 }): ReactNode {
   return (
     <Button
       type="button"
       variant="ghost"
       size="icon-sm"
-      aria-label={
-        props.panelOpen ? "Collapse terminal panel" : "Open terminal panel"
-      }
+      aria-label="Open terminal panel"
       data-testid="landing-terminal-toggle"
       className="absolute top-3 right-4 z-10"
-      onClick={props.onTogglePanel}
+      onClick={props.onOpenPanel}
     >
-      {props.panelOpen ? (
-        <PanelRightClose className="size-4" />
-      ) : (
-        <PanelRightOpen className="size-4" />
-      )}
+      <PanelRightOpen className="size-4" />
     </Button>
   );
 }
@@ -329,6 +406,7 @@ function LandingTerminalPanelHeader(props: {
           variant="ghost"
           size="icon-sm"
           aria-label="Collapse terminal panel"
+          data-testid="landing-terminal-collapse"
           onClick={props.onTogglePanel}
         >
           <PanelRightClose className="size-4" />
@@ -346,6 +424,8 @@ function LandingTerminalPanelBody(props: {
   readonly activeHostId: string | null;
   readonly createEnabled: boolean;
   readonly primaryWorkspacePath: string | null;
+  readonly folderPickPending: boolean;
+  readonly onPickFolder: () => void;
 }): ReactNode {
   return (
     <div className="relative min-h-0 flex-1">
@@ -353,6 +433,8 @@ function LandingTerminalPanelBody(props: {
         <LandingTerminalEmptyState
           availability={props.availability}
           primaryWorkspacePath={props.primaryWorkspacePath}
+          folderPickPending={props.folderPickPending}
+          onPickFolder={props.onPickFolder}
         />
       ) : (
         props.tabs.map((tab) => (
@@ -388,26 +470,52 @@ function LandingTerminalPanelBody(props: {
 function LandingTerminalEmptyState(props: {
   readonly availability: LandingTerminalAvailability;
   readonly primaryWorkspacePath: string | null;
+  readonly folderPickPending: boolean;
+  readonly onPickFolder: () => void;
 }): ReactNode {
-  const message = landingTerminalEmptyStateMessage(props);
+  if (props.availability === "unknown") {
+    return (
+      <div className="flex h-full min-h-0 items-center justify-center p-6 text-center text-ui-sm text-muted-foreground">
+        Connecting to the selected host…
+      </div>
+    );
+  }
+  // No folder means no cwd to spawn in. Offer the picker here rather than
+  // telling the user to go find it: it writes through the same workspace
+  // source as the composer's picker, so the folder they choose becomes the
+  // primary and reconciliation's auto-spawn opens the terminal.
+  if (props.primaryWorkspacePath === null) {
+    return (
+      <div className="flex h-full min-h-0 flex-col items-center justify-center gap-3 p-6 text-center">
+        <p className="text-ui-sm text-muted-foreground">
+          Pick a folder to open a terminal in.
+        </p>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          data-testid="landing-terminal-select-folder"
+          disabled={props.folderPickPending}
+          onClick={props.onPickFolder}
+        >
+          <FolderOpen className="size-4" />
+          Select folder
+          {props.folderPickPending ? (
+            <AgentSpinningDots
+              className={undefined}
+              testId={undefined}
+              variant={undefined}
+            />
+          ) : null}
+        </Button>
+      </div>
+    );
+  }
   return (
     <div className="flex h-full min-h-0 items-center justify-center p-6 text-center text-ui-sm text-muted-foreground">
-      {message}
+      Starting terminal…
     </div>
   );
-}
-
-function landingTerminalEmptyStateMessage(props: {
-  readonly availability: LandingTerminalAvailability;
-  readonly primaryWorkspacePath: string | null;
-}): string {
-  if (props.availability === "unknown") {
-    return "Connecting to the selected host…";
-  }
-  if (props.primaryWorkspacePath === null) {
-    return "Select a workspace to open a terminal";
-  }
-  return "Starting terminal…";
 }
 
 function isLandingTerminalPanelElement(

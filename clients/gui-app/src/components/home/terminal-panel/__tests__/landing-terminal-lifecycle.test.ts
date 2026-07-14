@@ -200,3 +200,38 @@ describe("landing terminal lifecycle", () => {
     expect(result.activeInstanceId).toBe("dead-host");
   });
 });
+
+describe("closeAllTabs", () => {
+  beforeEach(() => {
+    useLandingTerminalStore.getState().resetForTests();
+  });
+
+  it("tombstones every tab in one write and returns them for killing", () => {
+    const store = useLandingTerminalStore.getState();
+    store.addTab(tab({ instanceId: "a", sessionId: "s-a", hostId: HOST_A }));
+    store.addTab(tab({ instanceId: "b", sessionId: "s-b", hostId: HOST_B }));
+
+    const closed = useLandingTerminalStore.getState().closeAllTabs();
+
+    // Tombstone-first durability: the refs are gone AND every session is
+    // tombstoned by the time the caller gets them back to kill, so a reload
+    // racing the kills can never re-adopt a closed shell as an orphan.
+    expect(closed.map((entry) => entry.instanceId)).toEqual(["a", "b"]);
+    const state = useLandingTerminalStore.getState();
+    expect(state.tabs).toEqual([]);
+    expect(state.activeInstanceId).toBeNull();
+    expect(state.panelOpen).toBe(false);
+    expect(state.pendingKills).toEqual([
+      { hostId: HOST_A, sessionId: "s-a" },
+      { hostId: HOST_B, sessionId: "s-b" },
+    ]);
+  });
+
+  it("is a no-op with no tabs open", () => {
+    useLandingTerminalStore.getState().setPanelOpen(true);
+
+    expect(useLandingTerminalStore.getState().closeAllTabs()).toEqual([]);
+    expect(useLandingTerminalStore.getState().pendingKills).toEqual([]);
+    expect(useLandingTerminalStore.getState().panelOpen).toBe(true);
+  });
+});

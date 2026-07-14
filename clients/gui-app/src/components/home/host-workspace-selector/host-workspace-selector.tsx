@@ -44,12 +44,10 @@ import { useEpicCreateChat } from "@/hooks/epic/use-epic-chat-mutations";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useResolvedWorkspaceFolders } from "@/hooks/workspace/use-resolved-workspace-folders-query";
 import type { ResolvedFolder } from "@/lib/workspace/resolved-folder";
-import {
-  preparedWorkspaceFolderToWorkspaceFolderInfo,
-  useWorkspaceFolderActionsForClient,
-} from "@/hooks/workspace/use-workspace-folder-actions";
+import { useWorkspaceFolderActionsForClient } from "@/hooks/workspace/use-workspace-folder-actions";
 import type { LandingDraftWorkspaceSnapshot } from "@/stores/home/landing-draft-store";
 import { resolvePrimaryPath } from "@/lib/worktree/resolve-primary-path";
+import { usePickAndAddWorkspaceFolders } from "./use-pick-and-add-folders";
 import {
   readStagedWorktreeIntent,
   useWorktreeIntentStagingStore,
@@ -438,7 +436,6 @@ function HomeWorkspaceRows(props: {
     seedIntent,
     seedIntentOverride,
   } = props;
-  const folderActions = useWorkspaceFolderActionsForClient(activeHostClient);
   const setFolderIntent = useWorktreeIntentMemoryStore(
     (state) => state.setFolderIntent,
   );
@@ -465,15 +462,10 @@ function HomeWorkspaceRows(props: {
     usePrimaryChangeAnnouncement();
   const addFolderPending =
     useIsMutating({ mutationKey: workspaceMutationKeys.prepareFolders() }) > 0;
-  const pickAndAddFolders = useCallback(async (): Promise<boolean> => {
-    const result = await folderActions.pickAndPrepareFolders();
-    if (result === null) return false;
-    const folders = result.folders.map(
-      preparedWorkspaceFolderToWorkspaceFolderInfo,
-    );
-    workspaceSource.addResolvedFolders(folders);
-    return folders.length > 0;
-  }, [folderActions, workspaceSource]);
+  const pickAndAddFolders = usePickAndAddWorkspaceFolders(
+    activeHostClient,
+    workspaceSource,
+  );
   const queryableFolderPaths = useMemo<ReadonlyArray<string>>(
     () => [...new Set(resolvedFolders.map((entry) => entry.path))],
     [resolvedFolders],

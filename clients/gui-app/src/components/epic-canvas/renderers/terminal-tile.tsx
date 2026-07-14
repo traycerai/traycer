@@ -340,6 +340,7 @@ function TerminalLive(props: TerminalLiveProps) {
           <TerminalXtermHost
             sessionId={handle.sessionId}
             tileKind="terminal"
+            chrome="padded"
             instanceId={props.instanceId}
             effectiveCols={effectiveCols}
             effectiveRows={effectiveRows}

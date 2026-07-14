@@ -1188,6 +1188,7 @@ function TerminalAgentLive(props: TerminalAgentLiveProps) {
         <TerminalXtermHost
           sessionId={handle.sessionId}
           tileKind="terminal-agent"
+          chrome="padded"
           instanceId={props.instanceId}
           effectiveCols={effectiveCols}
           effectiveRows={effectiveRows}
