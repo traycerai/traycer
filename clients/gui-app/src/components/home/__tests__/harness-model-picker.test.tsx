@@ -5,6 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // actions. This unit test renders the picker bare (no RouterProvider), so stub
 // the action hook.
 const openSettingsMock = vi.fn();
+const profileUsageHookMock = vi.hoisted(() => ({
+  runTargetHostIds: [] as Array<string | null>,
+}));
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
   useSystemTabModalActions: () => ({
     openSettings: openSettingsMock,
@@ -12,6 +15,17 @@ vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
     close: vi.fn(),
     setSection: vi.fn(),
   }),
+}));
+// Profile comparison has its own focused picker integration suite. Keep this
+// broad legacy picker suite on its existing identity-row contract so its host
+// sentinels do not need to impersonate a full HostClient.
+vi.mock("@/hooks/rate-limits/use-profile-usage-comparison", () => ({
+  useProfileUsageComparison: (args: {
+    readonly runTargetHostId: string | null;
+  }) => {
+    profileUsageHookMock.runTargetHostIds.push(args.runTargetHostId);
+    return { hostId: args.runTargetHostId, isReady: true, entries: new Map() };
+  },
 }));
 // The profile dropdown (ProfileDropdown) renders through Radix's real
 // DropdownMenu, which opens on pointerdown rather than click - render it
@@ -770,6 +784,7 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
           disabled={disabled}
           registerActivation={false}
           createProfileHostId={resolvedInput.createProfileHostId ?? null}
+          runTargetHostId={resolvedInput.createProfileHostId ?? null}
         />
       </TooltipProvider>
     </SurfaceActivityProvider>
@@ -811,6 +826,7 @@ describe("<HarnessModelPicker />", () => {
     queryMock.calls.models = [];
     queryMock.calls.providers = [];
     queryMock.calls.commands = [];
+    profileUsageHookMock.runTargetHostIds = [];
     openSettingsMock.mockClear();
     useProvidersFocusStore.getState().clearFocusHarnessId();
     useKeybindingStore.getState().resetAll();
@@ -1202,6 +1218,7 @@ describe("<HarnessModelPicker />", () => {
 
     expect(selections.at(-1)?.harnessId).toBe("claude");
     expect(selections.at(-1)?.profileId).toBe("work-profile");
+    expect(screen.getByRole("textbox", { name: /^Search/ })).not.toBeNull();
   });
 
   it("keeps the rail and searches within the active harness when typing", async () => {
@@ -1667,6 +1684,7 @@ describe("<HarnessModelPicker />", () => {
 
     await openPicker();
     fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+    expect(profileUsageHookMock.runTargetHostIds).toContain(null);
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Create new profile" }),
     );
@@ -1734,6 +1752,7 @@ describe("<HarnessModelPicker />", () => {
 
     await openPicker();
     fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+    expect(profileUsageHookMock.runTargetHostIds).toContain("tab-host-1");
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Create new profile" }),
     );

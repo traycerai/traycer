@@ -146,6 +146,7 @@ export function ComposerBody({
                 // The landing composer has no tab yet - the app-wide default
                 // host applies.
                 createProfileHostId={null}
+                runTargetHostId={null}
               />
             </SurfaceActivityProvider>
           </div>

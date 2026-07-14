@@ -138,6 +138,7 @@ function renderDropdown(input: RenderDropdownInput) {
       shortcutHintForIndex={input.shortcutHintForIndex}
       contentContainer={null}
       onCloseAutoFocus={input.onCloseAutoFocus}
+      usagePresentation={null}
     />,
   );
 }
