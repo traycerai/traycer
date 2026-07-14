@@ -36,6 +36,7 @@ import {
   useHostNotificationsStore,
 } from "@/stores/notifications/host-notifications-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useSettingsSectionStore } from "@/stores/tabs/settings-section-store";
 import type { NotificationsStreamCallbacks } from "@traycer-clients/shared/host-transport/notifications-stream-client";
 import {
   type NotificationEntry,
@@ -193,7 +194,10 @@ function hostAgentEntry(input: {
       sourceRef: input.id,
       severity: input.severity,
       outcome: input.outcome ?? "completed",
+      epicId: "epic-1",
+      chatId: "chat-1",
       payload: {
+        kind: "chat",
         epicId: "epic-1",
         chatId: "chat-1",
         agentName: "Agent",
@@ -210,11 +214,18 @@ function hostAgentEntry(input: {
     sourceRef: input.id,
     severity: input.severity,
     outcome: "errored",
+    epicId: "epic-1",
+    chatId: "chat-1",
     payload: {
+      kind: "agent_stalled",
       epicId: "epic-1",
       chatId: "chat-1",
+      agentId: "chat-1",
       agentName: "Agent",
       taskTitle: TASK_TITLE,
+      reason: "provider_buffering",
+      title: "Provider is buffering",
+      outcome: "errored",
     },
   };
 }
@@ -631,5 +642,35 @@ describe("NotificationsPopover click routing", () => {
       expect(useHostNotificationsStore.getState().orderedIds).toEqual([]);
     });
     expect(await screen.findByTestId("notifications-empty")).not.toBeNull();
+  });
+
+  it("opens the Notifications settings section when the gear button is clicked", async () => {
+    useSettingsSectionStore.getState().setSection(null);
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    let navigated = false;
+    const { router } = buildRouterWithCapture(captured, () => {
+      navigated = true;
+    });
+
+    renderRouter(router);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Open notification settings",
+      }),
+    );
+
+    expect(navigated).toBe(true);
+    expect(useSettingsSectionStore.getState().section).toBe("notifications");
+    await waitFor(() => {
+      expect(router.state.location.search).toMatchObject({
+        settingsOverlay: true,
+      });
+    });
   });
 });

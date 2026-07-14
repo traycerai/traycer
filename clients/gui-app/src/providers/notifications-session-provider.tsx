@@ -40,7 +40,7 @@ import {
 } from "@/lib/notifications/notification-indicator-cache";
 import {
   notificationEntitiesMatch,
-  notificationEntityFromPayload,
+  notificationEntityFromHostEntry,
   notificationPayloadBelongsToEntity,
 } from "@/lib/notifications";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
@@ -117,7 +117,7 @@ export function NotificationsSessionProvider(
         );
         return;
       }
-      const entity = notificationEntityFromPayload(frame.entry.payload);
+      const entity = notificationEntityFromHostEntry(frame.entry);
       if (entity === null) return;
       invalidateNotificationIndicatorsForEntities(queryClient, hostId, [
         entity,
