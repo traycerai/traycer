@@ -7,6 +7,15 @@ const EMPTY_WORKTREES: readonly WorktreeHostEntryV12[] = [];
 const EMPTY_BY_EPIC: ReadonlyMap<string, readonly WorktreeHostEntryV12[]> =
   new Map();
 
+export interface TaskWorktreeMetadata {
+  readonly worktreesByEpicId: ReadonlyMap<
+    string,
+    readonly WorktreeHostEntryV12[]
+  >;
+  readonly isFetching: boolean;
+  readonly error: Error | null;
+}
+
 /**
  * Batches task-history worktree metadata into two host calls: one cheap
  * owner/path index, then one bounded enrichment request for only paths owned by
@@ -14,7 +23,7 @@ const EMPTY_BY_EPIC: ReadonlyMap<string, readonly WorktreeHostEntryV12[]> =
  */
 export function useTaskWorktreeMetadata(
   epicIds: readonly string[],
-): ReadonlyMap<string, readonly WorktreeHostEntryV12[]> {
+): TaskWorktreeMetadata {
   const client = useHostClient();
   const baseQuery = useHostQuery<HostRpcRegistry, "worktree.listAllForHost">({
     cacheKeyIdentity: undefined,
@@ -54,7 +63,7 @@ export function useTaskWorktreeMetadata(
     options: { enabled: ownedPaths.length > 0 },
   });
 
-  return useMemo(() => {
+  const worktreesByEpicId = useMemo(() => {
     const worktrees = enrichedQuery.data?.worktrees;
     if (worktrees === undefined || worktrees.length === 0) return EMPTY_BY_EPIC;
     const byEpic = new Map<string, WorktreeHostEntryV12[]>();
@@ -68,4 +77,11 @@ export function useTaskWorktreeMetadata(
     }
     return byEpic;
   }, [enrichedQuery.data, visibleEpicIds]);
+  return {
+    worktreesByEpicId,
+    isFetching: baseQuery.isFetching || enrichedQuery.isFetching,
+    error:
+      (baseQuery.error instanceof Error ? baseQuery.error : null) ??
+      (enrichedQuery.error instanceof Error ? enrichedQuery.error : null),
+  };
 }
