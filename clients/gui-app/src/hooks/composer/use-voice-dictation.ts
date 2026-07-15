@@ -95,6 +95,12 @@ export function useVoiceDictation(
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const speechClientRef = useRef<SpeechStreamClient | null>(null);
   const readyRef = useRef(false);
+  // True once the capture graph is wired and pulling (mic stream + running
+  // context + connected processor). "recording" requires this AND the speech
+  // session's `ready` - either alone would show a live-recording UI that is
+  // not actually capturing (speech ready while the permission prompt is still
+  // up) or not actually transcribing (graph pulling with no session).
+  const audioGraphReadyRef = useRef(false);
   const pendingChunksRef = useRef<Uint8Array[]>([]);
   // Browser `setTimeout` returns a numeric handle.
   const finalizeTimerRef = useRef<number | null>(null);
@@ -113,8 +119,16 @@ export function useVoiceDictation(
   }, []);
 
   const teardownAudio = useCallback(() => {
-    processorRef.current?.disconnect();
+    const processor = processorRef.current;
+    if (processor !== null) {
+      // Detach the capture callback before disconnecting: an audio task the
+      // browser already queued must find a dead handler, not a closure that
+      // could still route this session's PCM into a successor session.
+      processor.onaudioprocess = null;
+      processor.disconnect();
+    }
     processorRef.current = null;
+    audioGraphReadyRef.current = false;
     sourceNodeRef.current?.disconnect();
     sourceNodeRef.current = null;
     const stream = mediaStreamRef.current;
@@ -176,6 +190,27 @@ export function useVoiceDictation(
     speechClientRef.current = null;
     readyRef.current = false;
     setState("idle");
+  }, []);
+
+  // The "recording" transition: taken only once BOTH readiness signals are in
+  // for the same live session - the speech session's `ready` (readyRef) and
+  // the wired capture graph (audioGraphReadyRef). Whichever signal lands
+  // second takes the transition; queued pre-ready audio is flushed here so
+  // nothing is sent before the session can accept it.
+  const tryBeginRecording = useCallback((client: SpeechStreamClient) => {
+    if (closingRef.current || speechClientRef.current !== client) return;
+    if (!readyRef.current || !audioGraphReadyRef.current) return;
+    // Same-tick latch (stateRef only updates post-render): a non-null start
+    // timestamp means this session already took the transition.
+    if (recordingStartedAtRef.current !== null) return;
+    recordingStartedAtRef.current = Date.now();
+    Analytics.getInstance().track(AnalyticsEvent.VoiceDictationStarted, {
+      source: "direct_ui",
+    });
+    setState("recording");
+    const pending = pendingChunksRef.current;
+    pendingChunksRef.current = [];
+    for (const chunk of pending) client.sendAudio(chunk);
   }, []);
 
   // Run the permission prompt + getUserMedia. Returns null (and surfaces an
@@ -321,6 +356,11 @@ export function useVoiceDictation(
       const processor = ctx.createScriptProcessor(PROCESSOR_BUFFER_SIZE, 1, 1);
       processorRef.current = processor;
       processor.onaudioprocess = (event: AudioProcessingEvent) => {
+        // Generation-pinned: teardown nulls `onaudioprocess`, but an audio
+        // task the browser queued before that can still run this closure - it
+        // must not route this session's PCM into a successor session's client
+        // (the refs below are live, not session-scoped).
+        if (generation !== startGenerationRef.current) return;
         const input = event.inputBuffer.getChannelData(0);
         const pcm = floatToPcm16(input);
         const client = speechClientRef.current;
@@ -335,8 +375,16 @@ export function useVoiceDictation(
       // ScriptProcessorNode only fires `onaudioprocess` while wired into the
       // graph; connecting its (silent) output to `destination` keeps it pulled.
       processor.connect(ctx.destination);
+      // The graph is wired and pulling; if the speech session's `ready`
+      // already landed this takes the "recording" transition, otherwise
+      // `onReady` will.
+      audioGraphReadyRef.current = true;
+      const client = speechClientRef.current;
+      if (client !== null) {
+        tryBeginRecording(client);
+      }
     },
-    [acquireMicStream, fail],
+    [acquireMicStream, fail, tryBeginRecording],
   );
 
   const start = useCallback(() => {
@@ -358,6 +406,7 @@ export function useVoiceDictation(
     setPermissionDenied(false);
     setState("requesting");
     readyRef.current = false;
+    audioGraphReadyRef.current = false;
     // Cleared at start so a stop during "requesting" can't report a stopped
     // event stamped with the PREVIOUS recording's start time.
     recordingStartedAtRef.current = null;
@@ -406,14 +455,10 @@ export function useVoiceDictation(
           // UI back to "recording" with no live capture.
           if (closingRef.current || speechClientRef.current !== client) return;
           readyRef.current = true;
-          recordingStartedAtRef.current = Date.now();
-          Analytics.getInstance().track(AnalyticsEvent.VoiceDictationStarted, {
-            source: "direct_ui",
-          });
-          setState("recording");
-          const pending = pendingChunksRef.current;
-          pendingChunksRef.current = [];
-          for (const chunk of pending) client.sendAudio(chunk);
+          // "recording" additionally needs the wired capture graph - a `ready`
+          // that beats the permission prompt must not show a recording UI
+          // that captures nothing (the prompt may still fail).
+          tryBeginRecording(client);
         },
         onTranscript: (frame) => {
           // Insert only while THIS client is still the active session - guards
@@ -469,7 +514,15 @@ export function useVoiceDictation(
     });
     speechClientRef.current = client;
     void startAudioGraph(generation);
-  }, [state, wsStreamClient, fail, finalize, markClosing, startAudioGraph]);
+  }, [
+    state,
+    wsStreamClient,
+    fail,
+    finalize,
+    markClosing,
+    startAudioGraph,
+    tryBeginRecording,
+  ]);
 
   const stop = useCallback(() => {
     const client = speechClientRef.current;
