@@ -325,6 +325,21 @@ describe("traycer CLI entrypoint registration", () => {
     expect(flags).toContain("--allow-self-invocation");
     // commander stores --no-linger as the `--no-linger` long form.
     expect(flags).toContain("--no-linger");
+    // Mirrors `host ensure`'s flag (Host Update Layer Redesign Tech
+    // Plan) - the packaged-macOS pin path, where Desktop owns
+    // registration via SMAppService.
+    expect(flags).toContain("--no-service-register");
+  });
+
+  it("host install exposes a hidden --if-idle option, wired to the shared runner", () => {
+    const program = buildProgram();
+    const cmd = expectCommand(program, ["host", "install"]);
+    const flags = cmd.options.map((o) => o.long);
+    expect(flags).toContain("--if-idle");
+    // `--if-idle` is the CLI-owned pin gate, not a user-facing switch -
+    // hidden from help via `.hideHelp()`, but still reachable
+    // (expectCommand above already proves it).
+    expect(cmd.helpInformation()).not.toContain("--if-idle");
   });
 
   it("host ensure exposes --release, --from, and the bootstrap-flow options", () => {

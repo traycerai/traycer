@@ -432,6 +432,18 @@ function registerHostCommands(program: Command): void {
       .option(
         "--allow-self-invocation",
         "Dev only: register the current (non-packaged) CLI as the service command.",
+      )
+      .option(
+        "--no-service-register",
+        "Install the host without registering it as an OS service (the caller registers the service).",
+      )
+      // Hidden: the CLI-owned pin gate (Doctor's controller-driven install
+      // path), not a user-facing switch - see commands/host-install.ts.
+      .addOption(
+        new Option(
+          "--if-idle",
+          "Internal: refuse with E_HOST_BUSY if the host has work in progress, probed immediately before the service stop",
+        ).hideHelp(),
       ),
     (opts) => {
       const explicitVersion =
@@ -464,6 +476,10 @@ function registerHostCommands(program: Command): void {
           // commander's `--no-linger` materialises as `linger: false`.
           enableLinger: opts.linger !== false,
           allowSelfInvocation: opts.allowSelfInvocation === true,
+          // commander's `--no-service-register` materialises as
+          // `serviceRegister: false`.
+          noServiceRegister: opts.serviceRegister === false,
+          ifIdle: opts.ifIdle === true,
         })(ctx);
       };
     },
