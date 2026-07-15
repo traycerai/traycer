@@ -97,14 +97,14 @@ describe("<RateLimitIconButton />", () => {
         providerId: "codex",
         windowLabel: "5h",
         usedPercent: 0,
-        severity: "blue",
+        severity: "healthy",
         degraded: false,
       },
       {
         providerId: "codex",
         windowLabel: "Weekly",
         usedPercent: 0,
-        severity: "blue",
+        severity: "healthy",
         degraded: false,
       },
     ];
@@ -127,14 +127,14 @@ describe("<RateLimitIconButton />", () => {
         providerId: "codex",
         windowLabel: "5h",
         usedPercent: 70,
-        severity: "blue",
+        severity: "healthy",
         degraded: false,
       },
       {
         providerId: "claude-code",
         windowLabel: "5h",
         usedPercent: 40,
-        severity: "blue",
+        severity: "healthy",
         degraded: false,
       },
     ];
@@ -156,14 +156,14 @@ describe("<RateLimitIconButton />", () => {
         providerId: "codex",
         windowLabel: "5h",
         usedPercent: 92,
-        severity: "red",
+        severity: "running_low",
         degraded: false,
       },
       {
         providerId: "codex",
         windowLabel: "Weekly",
         usedPercent: 20,
-        severity: "blue",
+        severity: "healthy",
         degraded: false,
       },
     ];
@@ -171,10 +171,35 @@ describe("<RateLimitIconButton />", () => {
     const button = screen.getByTestId("rate-limit-header-button");
     const fills = within(button).getAllByTestId("rate-limit-bar-fill");
     expect(fills).toHaveLength(2);
-    expect(fills[0].className).toContain("red-500");
+    expect(fills[0].className).toContain("amber-500");
     expect(fills[0].style.width).toBe("92%");
     expect(fills[1].className).toContain("blue-500");
     expect(fills[1].style.width).toBe("20%");
+  });
+
+  it("renders Running low and Limited as distinct amber and red tones", () => {
+    bars = [
+      {
+        providerId: "codex",
+        windowLabel: "5h",
+        usedPercent: 80,
+        severity: "running_low",
+        degraded: false,
+      },
+      {
+        providerId: "codex",
+        windowLabel: "Weekly",
+        usedPercent: 100,
+        severity: "limited",
+        degraded: false,
+      },
+    ];
+    renderIcon();
+    const fills = within(
+      screen.getByTestId("rate-limit-header-button"),
+    ).getAllByTestId("rate-limit-bar-fill");
+    expect(fills[0].className).toContain("amber-500");
+    expect(fills[1].className).toContain("red-500");
   });
 
   it("marks the gauge without dimming the whole button when data is degraded", () => {
@@ -183,14 +208,14 @@ describe("<RateLimitIconButton />", () => {
         providerId: "claude-code",
         windowLabel: "5h",
         usedPercent: 65,
-        severity: "blue",
+        severity: "healthy",
         degraded: true,
       },
       {
         providerId: "codex",
         windowLabel: "5h",
         usedPercent: 30,
-        severity: "blue",
+        severity: "healthy",
         degraded: false,
       },
     ];

@@ -163,7 +163,7 @@ vi.mock("@/components/chat/chat-progress-icon", () => ({
 }));
 
 vi.mock("@/components/worktree/worktree-owner-metadata", () => ({
-  WorktreeOwnerMetadataHoverCard: (props: { readonly trigger: ReactNode }) =>
+  WorktreeOwnerMetadataTooltip: (props: { readonly trigger: ReactNode }) =>
     props.trigger,
 }));
 

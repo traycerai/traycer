@@ -70,6 +70,16 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicLiveArtifactTitleGenerating: () => false,
 }));
 
+// TabItem resolves the tab's bound-host client for terminal renames; these
+// tests render outside a <HostRuntimeProvider>, so stub the host seam.
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => null,
+}));
+
+vi.mock("@/hooks/terminal/use-terminal-rename-for-mutation", () => ({
+  useTerminalRenameFor: () => ({ mutate: () => undefined }),
+}));
+
 const VIEW_TAB_ID = "view-tab-1";
 
 const TAB: EpicNodeRef = {

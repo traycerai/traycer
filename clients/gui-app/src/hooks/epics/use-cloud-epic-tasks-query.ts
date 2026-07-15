@@ -2,7 +2,7 @@ import { useCallback, useMemo } from "react";
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 import type {
   ListTasksResponse,
-  TaskLight,
+  ListTaskLight,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useAuthStore, type AuthStatus } from "@/stores/auth/auth-store";
@@ -12,6 +12,7 @@ import { toastFromHostError } from "@/lib/host-error-toast";
 import {
   useCloudEpicTasksPagesStore,
   cloudEpicTasksPageGeneration,
+  registerCloudEpicTasksPageIdentity,
 } from "@/stores/epics/cloud-epic-tasks-pages-store";
 import {
   LIST_CLOUD_TASKS_REQUEST,
@@ -34,14 +35,14 @@ interface NextPageVariables {
   readonly cursor: string;
 }
 
-const EMPTY_TASKS: readonly TaskLight[] = [];
+const EMPTY_TASKS: readonly ListTaskLight[] = [];
 const EMPTY_PAGES: readonly ListTasksResponse[] = [];
 const EMPTY_FIRST_PAGE: ListTasksResponse = { tasks: [], hasMore: false };
 
 export interface CloudEpicTasksQueryResult {
   readonly hostId: string | null;
   readonly currentUserId: string | null;
-  readonly tasks: readonly TaskLight[];
+  readonly tasks: readonly ListTaskLight[];
   readonly query: CloudEpicTasksFirstPageQuery;
   readonly fetchNextPage: () => void;
   readonly hasNextPage: boolean;
@@ -145,13 +146,23 @@ export function useCloudEpicTasksQuery(
     nextPageMutation.variables.identity === identity;
   const mutateNextPage = nextPageMutation.mutate;
 
-  const tasks = useMemo<readonly TaskLight[]>(() => {
+  const tasks = useMemo<readonly ListTaskLight[]>(() => {
     if (queryData === undefined) return EMPTY_TASKS;
-    const acc: TaskLight[] = [...queryData.tasks];
-    for (const page of extraPages) {
-      acc.push(...page.tasks);
-    }
-    return acc;
+    // Dedupe by task id, first occurrence wins (the first page outranks the
+    // tails): a personal pin moves a row across server page boundaries, so
+    // after a pin lands, a refetched first page or a still-in-flight tail
+    // can both carry a row the other already has. A task with no id (neither
+    // epic nor phase) is always retained.
+    const seenTaskIds = new Set<string>();
+    return [queryData, ...extraPages]
+      .flatMap((page) => page.tasks)
+      .filter((task) => {
+        const taskId = task.epic?.light?.id ?? task.phase?.light?.id;
+        if (taskId === undefined) return true;
+        if (seenTaskIds.has(taskId)) return false;
+        seenTaskIds.add(taskId);
+        return true;
+      });
   }, [queryData, extraPages]);
 
   const lastPage: ListTasksResponse | undefined =
@@ -167,6 +178,11 @@ export function useCloudEpicTasksQuery(
 
   const fetchNextPage = useCallback(() => {
     if (lastNextCursor === null || isFetchingNextPage) return;
+    // Register the identity before capturing its generation: a scope reset
+    // landing while this very first tail request for the identity is still
+    // in flight must have an entry to advance, or the stale response's
+    // captured generation would still match on arrival.
+    registerCloudEpicTasksPageIdentity(identity);
     mutateNextPage({
       identity,
       generation: cloudEpicTasksPageGeneration(identity),

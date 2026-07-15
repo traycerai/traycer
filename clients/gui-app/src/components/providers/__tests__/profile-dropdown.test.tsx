@@ -1,5 +1,5 @@
 import "../../../../__tests__/test-browser-apis";
-import type { ReactNode } from "react";
+import type { KeyboardEvent, ReactNode } from "react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
@@ -21,7 +21,19 @@ vi.mock("@/components/ui/dropdown-menu", () => {
       </div>
     ),
     DropdownMenuTrigger: passthrough,
-    DropdownMenuContent: passthrough,
+    DropdownMenuContent: (props: {
+      readonly children: ReactNode;
+      readonly onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void;
+    }): ReactNode => (
+      <div
+        role="menu"
+        tabIndex={-1}
+        data-testid="profile-dropdown-content"
+        onKeyDown={props.onKeyDown}
+      >
+        {props.children}
+      </div>
+    ),
     DropdownMenuItem: (props: {
       readonly children: ReactNode;
       readonly onSelect: (() => void) | undefined;
@@ -138,6 +150,7 @@ function renderDropdown(input: RenderDropdownInput) {
       shortcutHintForIndex={input.shortcutHintForIndex}
       contentContainer={null}
       onCloseAutoFocus={input.onCloseAutoFocus}
+      usagePresentation={null}
     />,
   );
 }
@@ -178,6 +191,31 @@ describe("<ProfileDropdown />", () => {
     expect(screen.getByTestId("profile-dropdown-root").dataset.modal).toBe(
       "false",
     );
+  });
+
+  it("stops only menu-owned keys from bubbling beyond the dropdown", () => {
+    const onDocumentKeyDown = vi.fn();
+    document.addEventListener("keydown", onDocumentKeyDown);
+    renderDropdown({
+      profiles: [AMBIENT, WORK],
+      activeProfileId: "work-profile",
+      onSelectProfile: vi.fn(),
+      onCreateProfile: vi.fn(),
+      createProfileDisabled: false,
+      createProfileDisabledReason: undefined,
+      shortcutHintForIndex: stubShortcutHintForIndex,
+      onCloseAutoFocus: null,
+    });
+    const content = screen.getByTestId("profile-dropdown-content");
+
+    ["ArrowDown", "ArrowUp", "Home", "End", "Enter", "Escape"].forEach((key) =>
+      fireEvent.keyDown(content, { key }),
+    );
+    expect(onDocumentKeyDown).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(content, { key: "1", metaKey: true, shiftKey: true });
+    expect(onDocumentKeyDown).toHaveBeenCalledTimes(1);
+    document.removeEventListener("keydown", onDocumentKeyDown);
   });
 
   it("lists every profile as a row, dimming a signed-out row with a status suffix", () => {

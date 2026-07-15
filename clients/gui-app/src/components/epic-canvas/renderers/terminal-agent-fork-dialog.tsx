@@ -304,6 +304,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
                 disabled={busy}
                 registerActivation={false}
                 createProfileHostId={hostId}
+                runTargetHostId={hostId}
               />
               <div className="shrink-0">
                 <AgentModeToggle

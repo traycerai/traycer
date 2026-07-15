@@ -33,6 +33,11 @@ export function EpicNodeTabIcon(props: {
   readonly epicId: string;
   readonly variant: "live" | "static";
   readonly className: string;
+  /**
+   * Idle-slot override for live chat icons (e.g. title-generation spinner).
+   * Ignored for non-chat / static paths. Semantic chat status still wins.
+   */
+  readonly defaultIcon: ReactNode | undefined;
 }) {
   if (props.node.type === "chat" && props.variant === "live") {
     return (
@@ -42,6 +47,7 @@ export function EpicNodeTabIcon(props: {
         className={props.className}
         mutedClassName="text-muted-foreground"
         testId="chat-tab-spinner"
+        defaultIcon={props.defaultIcon}
       />
     );
   }
@@ -112,6 +118,7 @@ function TerminalNodeTabIcon(props: {
       style={undefined}
       runningTitle=""
       defaultIcon={props.defaultIcon}
+      statusPresentation="spinner"
     />
   );
 }
