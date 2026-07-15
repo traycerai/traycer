@@ -46,8 +46,20 @@ function buildHeightMeasurementScript(documentGeneration: number): string {
 (() => {
   const documentGeneration = ${documentGeneration};
   const reportHeight = (requestId) => {
-    const bodyHeight = document.body?.scrollHeight ?? 0;
-    const documentHeight = document.documentElement.scrollHeight;
+    const body = document.body;
+    const bodyRect = body?.getBoundingClientRect();
+    const bodyStyle = body === null ? null : window.getComputedStyle(body);
+    const bodyMarginHeight =
+      Number.parseFloat(bodyStyle?.marginTop ?? "0") +
+      Number.parseFloat(bodyStyle?.marginBottom ?? "0");
+    const bodyHeight =
+      Math.max(body?.offsetHeight ?? 0, bodyRect?.height ?? 0) + bodyMarginHeight;
+    const documentElement = document.documentElement;
+    const viewportHeight = documentElement.clientHeight;
+    const documentHeight =
+      documentElement.scrollHeight > viewportHeight
+        ? documentElement.scrollHeight
+        : 0;
     window.parent.postMessage(
       {
         marker: "${HEIGHT_MESSAGE_MARKER}",

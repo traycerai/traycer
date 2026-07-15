@@ -148,6 +148,8 @@ describe("WireframeIframe", () => {
     );
     expect(srcDoc).toContain("<script>");
     expect(srcDoc).toContain("ResizeObserver");
+    expect(srcDoc).toContain("getBoundingClientRect");
+    expect(srcDoc).toContain("documentElement.scrollHeight > viewportHeight");
     expect(srcDoc).toContain(HEIGHT_MESSAGE_MARKER);
     expect(srcDoc).toContain(MEASURE_REQUEST_MARKER);
     expect(srcDoc).toContain("event.source !== window.parent");
@@ -220,6 +222,24 @@ describe("WireframeIframe", () => {
       height: Number.MAX_SAFE_INTEGER,
     });
     expect(iframe.style.height).toBe(`${window.innerHeight * 3}px`);
+  });
+
+  it("shrinks an automatically sized preview when content contracts", () => {
+    const iframe = renderWireframeIframe("auto");
+    const source = iframe.contentWindow;
+    if (source === null) throw new Error("Expected iframe contentWindow");
+
+    dispatchHeightMessage(source, {
+      marker: HEIGHT_MESSAGE_MARKER,
+      height: 900,
+    });
+    expect(iframe.style.height).toBe("900px");
+
+    dispatchHeightMessage(source, {
+      marker: HEIGHT_MESSAGE_MARKER,
+      height: 500,
+    });
+    expect(iframe.style.height).toBe("500px");
   });
 
   it("requests a measurement on load only while the current document has no baseline", () => {
