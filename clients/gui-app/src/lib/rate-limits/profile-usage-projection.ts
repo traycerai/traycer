@@ -15,6 +15,7 @@ import {
   resolveRetainedProviderRateLimits,
   type ProviderRateLimitEnvelope,
 } from "@/lib/rate-limits/rate-limit-envelope";
+import { creditUsageSeverity } from "@/lib/rate-limits/window-severity";
 
 export type ProfileUsageWindowRole = "primary" | "secondary" | "extra";
 export type ProfileUsageFailureReason =
@@ -158,6 +159,35 @@ function windowProjection(
   };
 }
 
+function openRouterCreditProjection(
+  rateLimits: Extract<
+    ProviderRateLimits,
+    { provider: "openrouter"; available: true }
+  >,
+): ProfileUsageWindow | null {
+  if (
+    rateLimits.limit === null ||
+    rateLimits.limitRemaining === null ||
+    rateLimits.limit <= 0
+  ) {
+    return null;
+  }
+  const consumed = Math.max(0, rateLimits.limit - rateLimits.limitRemaining);
+  const usedPercent = (consumed / rateLimits.limit) * 100;
+  const window = {
+    usedPercent,
+    durationMinutes: null,
+    resetsAt: null,
+  };
+  return {
+    id: "credits",
+    role: "primary",
+    name: "Credits",
+    window,
+    severity: creditUsageSeverity(usedPercent),
+  };
+}
+
 function projectedLiveWindows(
   rateLimits: ProviderRateLimits,
   now: number,
@@ -237,7 +267,10 @@ function projectedLiveWindows(
           }),
         ),
       ].filter((window): window is ProfileUsageWindow => window !== null);
-    case "openrouter":
+    case "openrouter": {
+      const credits = openRouterCreditProjection(rateLimits);
+      return credits === null ? [] : [credits];
+    }
     case "kilocode":
       return [];
   }
@@ -334,7 +367,10 @@ export function projectProfileUsage(
     return emptyDetailProjection(retained, envelope, input);
   }
 
-  const severity = classifyProviderRateLimits(retained, input.now);
+  const severity =
+    retained.provider === "openrouter"
+      ? compactWindow.severity
+      : classifyProviderRateLimits(retained, input.now);
   if (severity === "unknown") {
     return {
       kind: "unavailable",

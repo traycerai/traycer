@@ -42,6 +42,24 @@ function codex(overrides: {
   };
 }
 
+function openRouter(
+  limit: number | null,
+  limitRemaining: number | null,
+): Extract<ProviderRateLimits, { provider: "openrouter"; available: true }> {
+  return {
+    provider: "openrouter",
+    available: true,
+    limit,
+    limitRemaining,
+    dailySpend: null,
+    weeklySpend: null,
+    monthlySpend: null,
+    totalCredits: null,
+    totalUsage: null,
+    balance: null,
+  };
+}
+
 function envelope(
   data: Extract<ProviderRateLimits, { available: true }>,
   lastGoodAt: number,
@@ -71,6 +89,41 @@ function project(
 }
 
 describe("projectProfileUsage", () => {
+  it("projects OpenRouter hard limits as an equivalent Credits meter", () => {
+    const projection = project(
+      "ok",
+      NOW,
+      envelope(openRouter(100, 10), NOW),
+      false,
+    );
+    expect(projection).toMatchObject({
+      kind: "detail",
+      severity: "limited",
+      compactWindow: {
+        id: "credits",
+        name: "Credits",
+        severity: "limited",
+        window: {
+          usedPercent: 90,
+          durationMinutes: null,
+          resetsAt: null,
+        },
+      },
+    });
+    expect(projection.windows).toHaveLength(1);
+  });
+
+  it("keeps OpenRouter percentage-free when no hard limit is available", () => {
+    expect(
+      project("ok", NOW, envelope(openRouter(null, null), NOW), false),
+    ).toMatchObject({
+      kind: "unavailable",
+      reason: "missing_windows",
+      compactWindow: null,
+      windows: [],
+    });
+  });
+
   it("selects the most consumed live window and ignores expired windows", () => {
     const projection = project(
       "ok",
