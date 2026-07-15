@@ -12,12 +12,16 @@ import Collaboration from "@tiptap/extension-collaboration";
 import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { prosemirrorJSONToYXmlFragment } from "@tiptap/y-tiptap";
+import { createMemoryHistory } from "@tanstack/react-router";
 import * as floatingUi from "@floating-ui/dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import { useLayoutEffect, useState } from "react";
 import { artifactDocumentBundle } from "@/editor-core";
 import { artifactLinkExtension } from "@/editor-core/artifact-document-bundle";
+import { registerDynamicActionHandler } from "@/lib/keybindings/dispatch";
+import type { KeybindingRouterSource } from "@/lib/keybindings/router-adapter";
+import { KeybindingProvider } from "@/providers/keybinding-provider";
 import {
   ArtifactLinkPopover,
   type OpenableArtifactLink,
@@ -105,6 +109,18 @@ function renderPopover(editor: Editor, editable: boolean) {
 function setCaretAndRender(editor: Editor, editable: boolean) {
   editor.commands.setTextSelection(2);
   return renderPopover(editor, editable);
+}
+
+function makeKeybindingRouter(): KeybindingRouterSource {
+  const history = createMemoryHistory({ initialEntries: ["/"] });
+  const navigate: KeybindingRouterSource["navigate"] = () => Promise.resolve();
+  return {
+    get state() {
+      return { location: { pathname: history.location.pathname } };
+    },
+    history,
+    navigate,
+  };
 }
 
 function transformY(element: HTMLElement): number {
@@ -715,6 +731,53 @@ describe("ArtifactLinkPopover", () => {
 
     expect(screen.queryByRole("dialog", { name: "Edit link" })).toBeNull();
     expect(editor.getHTML()).toBe(before);
+  });
+
+  it("rejects link creation when an inline mark excludes links", () => {
+    const editor = makeEditor("<p><code>inline</code></p>");
+    editor.commands.setTextSelection({ from: 1, to: 7 });
+    renderPopover(editor, true);
+    const before = editor.getHTML();
+
+    fireEvent.keyDown(editor.view.dom, { key: "k", ctrlKey: true });
+
+    expect(screen.queryByRole("dialog", { name: "Edit link" })).toBeNull();
+    expect(editor.getHTML()).toBe(before);
+  });
+
+  it("gives the artifact link shortcut priority over the global palette binding", async () => {
+    const editor = makeEditor("<p>Create me</p>");
+    editor.view.dom.setAttribute("data-artifact-editor", "");
+    editor.commands.setTextSelection({ from: 1, to: 7 });
+    const openPalette = vi.fn();
+    const unregisterPalette = registerDynamicActionHandler(
+      "app.palette.open",
+      openPalette,
+    );
+    try {
+      render(
+        <KeybindingProvider router={makeKeybindingRouter()}>
+          <EditorContent editor={editor} />
+          <ArtifactLinkPopover
+            editor={editor}
+            editable
+            scrollContainer={null}
+            openLink={() => undefined}
+            openLinkPending={false}
+            onOpenChange={() => undefined}
+          />
+        </KeybindingProvider>,
+      );
+
+      fireEvent.keyDown(editor.view.dom, { key: "k", ctrlKey: true });
+
+      expect(openPalette).not.toHaveBeenCalled();
+      expect(
+        await screen.findByRole("dialog", { name: "Edit link" }),
+      ).not.toBeNull();
+    } finally {
+      unregisterPalette();
+    }
   });
 
   it("preserves title metadata and emits no transaction for a no-op blur", async () => {
