@@ -1795,7 +1795,11 @@ function withTurnCompletion(
         };
   return rows.map((row, index) =>
     index === lastAssistantIndex
-      ? { ...row, completedAt: input.acc.timestamp, stopped }
+      ? {
+          ...row,
+          completedAt: stopped?.stoppedAt ?? input.acc.timestamp,
+          stopped,
+        }
       : row,
   );
 }

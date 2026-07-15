@@ -4907,11 +4907,11 @@ describe("useRenderedMessages turn.stopped", () => {
     };
   }
 
-  it("stamps the stopped marker on a turn whose turn.stopped event landed", () => {
+  it("stamps the stopped marker and uses its event time for turn completion", () => {
     const assistant = {
       ...assistantMessage("turn-1", 10_000),
-      timestamp: 15_000,
-      blocks: [textBlock("block-1", 15_000, "Partial answer")],
+      timestamp: 14_000,
+      blocks: [textBlock("block-1", 14_000, "Partial answer")],
     };
 
     const { result } = renderHook(() =>

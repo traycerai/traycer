@@ -113,6 +113,7 @@
     "@tanstack/eslint-plugin-query": "catalog:",
     "@tanstack/eslint-plugin-router": "catalog:",
     "@testing-library/react": "catalog:",
+    "@testing-library/user-event": "catalog:",
     "@types/culori": "catalog:",
     "@types/hast": "catalog:",
     "@types/node": "catalog:",

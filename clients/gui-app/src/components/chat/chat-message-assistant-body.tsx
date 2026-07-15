@@ -338,14 +338,8 @@ function AssistantElapsedFooter({
   // `completedAt - createdAt - pausedDurationMs` rule as a natural finish.
   const elapsedMs = completedAt - createdAt - pausedDurationMs;
   const verb = pickElapsedVerb(messageId);
-  // Hovering the whole footer reveals the agent run details (provider, model,
-  // reasoning effort, fast mode) - no separate info icon, so the row stays
-  // clean. `w-fit` keeps the hover target tight to the text.
-  const elapsed = (
-    <div
-      data-testid="assistant-elapsed-footer"
-      className="flex w-fit cursor-default items-center gap-1.5 py-0.5 text-ui-sm text-muted-foreground/70"
-    >
+  const elapsedContent = (
+    <>
       <AssistantElapsedFooterIcon stopped={stopped} meta={meta} />
       {stopped !== null ? (
         <span className="text-ui-sm leading-5">
@@ -355,8 +349,28 @@ function AssistantElapsedFooter({
       ) : (
         <span className="text-ui-sm leading-5">{`${verb} for ${formatWorkedFor(elapsedMs)}`}</span>
       )}
-    </div>
+    </>
   );
+  // Hovering the whole footer reveals the agent run details (provider, model,
+  // reasoning effort, fast mode) - no separate info icon, so the row stays
+  // clean. `w-fit` keeps the hover target tight to the text.
+  const elapsed =
+    meta === null && stopped === null ? (
+      <div
+        data-testid="assistant-elapsed-footer"
+        className="flex w-fit cursor-default items-center gap-1.5 py-0.5 text-ui-sm text-muted-foreground/70"
+      >
+        {elapsedContent}
+      </div>
+    ) : (
+      <button
+        type="button"
+        data-testid="assistant-elapsed-footer"
+        className="flex w-fit cursor-default items-center gap-1.5 py-0.5 text-ui-sm text-muted-foreground/70"
+      >
+        {elapsedContent}
+      </button>
+    );
   // The meta tooltip wraps only the elapsed text, not the copy button, so the
   // copy hit-target stays its own affordance rather than re-triggering the
   // agent-details popover. Shown whenever there's either agent metadata or
@@ -527,7 +541,6 @@ function formatStoppedAt(timestampMs: number): string {
   return new Date(timestampMs).toLocaleTimeString(undefined, {
     hour: "numeric",
     minute: "2-digit",
-    hour12: true,
   });
 }
 

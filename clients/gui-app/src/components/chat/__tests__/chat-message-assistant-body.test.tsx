@@ -6,6 +6,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Mock } from "vitest";
 import type { ReactNode } from "react";
@@ -28,13 +29,16 @@ function render(ui: ReactNode) {
   );
 }
 
+let restoreClipboardMock = () => undefined;
+
 afterEach(() => {
+  restoreClipboardMock();
+  restoreClipboardMock = () => undefined;
   cleanup();
 });
 
 interface ClipboardMock {
   readonly writeText: Mock<(value: string) => Promise<void>>;
-  readonly restore: () => void;
 }
 
 function installClipboardMock(): ClipboardMock {
@@ -45,16 +49,14 @@ function installClipboardMock(): ClipboardMock {
     writable: true,
     value: { writeText },
   });
-  return {
-    writeText,
-    restore: () => {
-      if (descriptor === undefined) {
-        Reflect.deleteProperty(navigator, "clipboard");
-        return;
-      }
-      Object.defineProperty(navigator, "clipboard", descriptor);
-    },
+  restoreClipboardMock = () => {
+    if (descriptor === undefined) {
+      Reflect.deleteProperty(navigator, "clipboard");
+      return;
+    }
+    Object.defineProperty(navigator, "clipboard", descriptor);
   };
+  return { writeText };
 }
 
 const TEXT_SEGMENT: MessageSegment = {
@@ -229,7 +231,6 @@ describe("AssistantMessageBody stopped turn rendering", () => {
     const copyButton = screen.getByTestId("assistant-reply-copy");
     fireEvent.click(copyButton);
     expect(clipboard.writeText).toHaveBeenCalledWith(STOPPED.turnReplyText);
-    clipboard.restore();
   });
 
   it("renders nothing for an empty, non-stopped, ended turn (unchanged baseline)", () => {
@@ -278,6 +279,7 @@ describe("AssistantMessageBody stopped turn rendering", () => {
   });
 
   it("surfaces the stop reason and time in the elapsed footer's tooltip", async () => {
+    const user = userEvent.setup();
     render(
       <AssistantMessageBody
         {...bodyProps({
@@ -290,7 +292,8 @@ describe("AssistantMessageBody stopped turn rendering", () => {
     );
 
     const footer = screen.getByTestId("assistant-elapsed-footer");
-    fireEvent.focus(footer);
+    await user.tab();
+    expect(document.activeElement).toBe(footer);
 
     // Radix renders the open tooltip's content twice - once positioned via
     // the popper portal, once as a visually-hidden accessibility clone - so

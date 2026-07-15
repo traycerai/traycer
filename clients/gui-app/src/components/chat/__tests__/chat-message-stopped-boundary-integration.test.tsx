@@ -47,13 +47,16 @@ function render(ui: ReactNode) {
   );
 }
 
+let restoreClipboardMock = () => undefined;
+
 afterEach(() => {
+  restoreClipboardMock();
+  restoreClipboardMock = () => undefined;
   cleanup();
 });
 
 interface ClipboardMock {
   readonly writeText: Mock<(value: string) => Promise<void>>;
-  readonly restore: () => void;
 }
 
 function installClipboardMock(): ClipboardMock {
@@ -64,16 +67,14 @@ function installClipboardMock(): ClipboardMock {
     writable: true,
     value: { writeText },
   });
-  return {
-    writeText,
-    restore: () => {
-      if (descriptor === undefined) {
-        Reflect.deleteProperty(navigator, "clipboard");
-        return;
-      }
-      Object.defineProperty(navigator, "clipboard", descriptor);
-    },
+  restoreClipboardMock = () => {
+    if (descriptor === undefined) {
+      Reflect.deleteProperty(navigator, "clipboard");
+      return;
+    }
+    Object.defineProperty(navigator, "clipboard", descriptor);
   };
+  return { writeText };
 }
 
 const CONTENT: JsonContent = {
@@ -265,7 +266,6 @@ describe("Stopped-turn boundary row: hook -> ChatMessage -> AssistantMessageBody
     const copyButton = screen.getByTestId("assistant-reply-copy");
     fireEvent.click(copyButton);
     expect(clipboard.writeText).toHaveBeenCalledWith("Working on it");
-    clipboard.restore();
   });
 
   it('renders "Stopped before responding" for a [steer]-only stopped turn with no output anywhere', () => {
