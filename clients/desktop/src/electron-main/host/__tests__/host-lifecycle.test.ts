@@ -50,6 +50,7 @@ import {
   isCurrentHostWebsocketUrl,
   PRODUCTION_LABEL,
   readPidMetadata,
+  readPidMetadataState,
 } from "../host-lifecycle";
 import { DEV_LABEL } from "../host-paths";
 import { config } from "../../../config";
@@ -98,6 +99,69 @@ describe("readPidMetadata", () => {
         pid: 12345,
       });
       expect(result?.displayName).toBe(result?.systemHostName);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// Review finding 4: the retry ladder must distinguish a CONFIRMED-absent file
+// (deliberate stop → clear the ladder) from a present-but-indeterminate read (a
+// partial write / transient error → keep retrying). Collapsing both to `null`
+// let a coalesced watcher edge that landed mid-write silently clear the ladder.
+describe("readPidMetadataState", () => {
+  it("reports `absent` only for a missing file (ENOENT)", async () => {
+    const state = await readPidMetadataState(
+      join(tmpdir(), "definitely-not-here.json"),
+    );
+    expect(state.kind).toBe("absent");
+  });
+
+  it("reports `indeterminate` for a partially-written (invalid JSON) file", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lifecycle-pidstate-"));
+    const path = join(dir, "pid.json");
+    // A torn write: the host had only flushed the opening bytes.
+    await writeFile(path, '{"hostId":"test-host","websocket', "utf8");
+    try {
+      const state = await readPidMetadataState(path);
+      expect(state.kind).toBe("indeterminate");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports `indeterminate` for valid JSON of the wrong shape", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lifecycle-pidstate-"));
+    const path = join(dir, "pid.json");
+    await writeFile(path, JSON.stringify({ hostId: "x" }), "utf8");
+    try {
+      const state = await readPidMetadataState(path);
+      expect(state.kind).toBe("indeterminate");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports `parsed` with the snapshot for a complete file", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lifecycle-pidstate-"));
+    const path = join(dir, "pid.json");
+    await writeFile(
+      path,
+      JSON.stringify({
+        hostId: "test-host",
+        websocketUrl: "ws://127.0.0.1:55555/rpc",
+        version: "0.0.0",
+        pid: 12345,
+      }),
+      "utf8",
+    );
+    try {
+      const state = await readPidMetadataState(path);
+      expect(state.kind).toBe("parsed");
+      if (state.kind === "parsed") {
+        expect(state.snapshot.hostId).toBe("test-host");
+        expect(state.snapshot.pid).toBe(12345);
+      }
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
