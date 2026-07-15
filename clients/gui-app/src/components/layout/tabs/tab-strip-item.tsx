@@ -475,6 +475,7 @@ function TabLeadingIcon(props: {
       style={undefined}
       runningTitle="Task activity in progress"
       defaultIcon={defaultIcon}
+      statusPresentation="message"
     />
   );
 }

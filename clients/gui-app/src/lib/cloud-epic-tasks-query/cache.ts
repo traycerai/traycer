@@ -91,6 +91,46 @@ export function updateEpicTitleInCloudTaskCaches(
   }
 }
 
+export function setEpicPinnedInCloudTaskCaches(
+  queryClient: QueryClient,
+  scope: CloudEpicTasksCacheScope,
+  epicId: string,
+  pinned: boolean,
+): void {
+  for (const [
+    queryKey,
+    response,
+  ] of queryClient.getQueriesData<ListTasksResponse>({
+    predicate: (query) =>
+      cloudEpicTasksQueryKeyMatchesScope(query.queryKey, scope),
+  })) {
+    if (response === undefined) continue;
+    const next = setEpicPinnedInCloudTasksResponse(response, epicId, pinned);
+    if (next === response) continue;
+    queryClient.setQueryData<ListTasksResponse>(queryKey, next);
+  }
+}
+
+/**
+ * Identity-preserving per-row pin patch: returns the same response reference
+ * when the epic is absent or already carries the requested pin state. Shared
+ * with the pages store so the cached first page and the accumulated "Show
+ * more" tails patch identically.
+ */
+export function setEpicPinnedInCloudTasksResponse(
+  response: ListTasksResponse,
+  epicId: string,
+  pinned: boolean,
+): ListTasksResponse {
+  const tasks = response.tasks.map((task) => {
+    if (task.epic?.light?.id !== epicId) return task;
+    if ((task.pinned ?? false) === pinned) return task;
+    return { ...task, pinned };
+  });
+  const changed = tasks.some((task, index) => task !== response.tasks[index]);
+  return changed ? { ...response, tasks } : response;
+}
+
 export function cloudEpicTasksQueryKeyMatchesScope(
   queryKey: readonly unknown[],
   scope: CloudEpicTasksCacheScope,

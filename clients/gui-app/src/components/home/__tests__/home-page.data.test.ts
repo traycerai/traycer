@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
-import type { TaskLight } from "@traycer/protocol/host/epic/unary-schemas";
+import type { ListTaskLight } from "@traycer/protocol/host/epic/unary-schemas";
 import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/worktree-schemas";
 import {
   buildHistoryItemsFromTasks,
   collectHistoryRepos,
   filterHistoryItems,
   groupHistoryItems,
+  prioritizePinnedHistoryItems,
+  sortHistoryItems,
   withHistoryItemPullRequestNumbers,
   type HistoryItem,
 } from "@/components/home/data/home-page.data";
@@ -27,6 +29,7 @@ function makeItem(
     pullRequestNumbers: overrides.pullRequestNumbers ?? [],
     ownership: overrides.ownership ?? "mine",
     permissionRole: overrides.permissionRole ?? "owner",
+    isPinned: overrides.isPinned ?? false,
   };
 }
 
@@ -76,6 +79,35 @@ describe("home-page history helpers", () => {
     expect(groups.map((g) => g.bucket)).toEqual(["today", "earlier"]);
   });
 
+  it("keeps pinned items first while preserving the active sort within each block", () => {
+    const items = [
+      makeItem({ id: "a", title: "Alpha", isPinned: false }),
+      makeItem({ id: "z", title: "Zulu", isPinned: true }),
+      makeItem({ id: "b", title: "Bravo", isPinned: true }),
+      makeItem({ id: "c", title: "Charlie", isPinned: false }),
+    ];
+
+    expect(sortHistoryItems(items, "title-asc").map((item) => item.id)).toEqual(
+      ["b", "z", "a", "c"],
+    );
+  });
+
+  it("stably promotes pinned items in relevance-ranked results", () => {
+    const items = [
+      makeItem({ id: "best", title: "Best match", isPinned: false }),
+      makeItem({ id: "pinned-1", title: "Pinned one", isPinned: true }),
+      makeItem({ id: "next", title: "Next match", isPinned: false }),
+      makeItem({ id: "pinned-2", title: "Pinned two", isPinned: true }),
+    ];
+
+    expect(prioritizePinnedHistoryItems(items).map((item) => item.id)).toEqual([
+      "pinned-1",
+      "pinned-2",
+      "best",
+      "next",
+    ]);
+  });
+
   it("projects distinct superproject and submodule PR numbers for a task", () => {
     const items = [makeItem({ id: "history-1", title: "History task" })];
     const worktreesByEpicId = new Map([
@@ -101,7 +133,7 @@ describe("home-page history helpers", () => {
   });
 
   it("builds history items from cloud task lights and extracts real repo identifiers", () => {
-    const tasks: ReadonlyArray<TaskLight> = [
+    const tasks: ReadonlyArray<ListTaskLight> = [
       {
         epic: {
           light: {
@@ -137,6 +169,7 @@ describe("home-page history helpers", () => {
           roomInfo: null,
         },
         phase: null,
+        pinned: true,
       },
       {
         epic: null,
@@ -164,6 +197,10 @@ describe("home-page history helpers", () => {
           workspaces: [],
           roomInfo: null,
         },
+        // A phase can never legitimately be pinned - the raw task carries
+        // `pinned: true` here to prove the projection ignores it rather
+        // than merely happening to see `false`.
+        pinned: true,
       },
     ];
 
@@ -185,6 +222,7 @@ describe("home-page history helpers", () => {
       linkedRepos: ["traycerai/gui-app", "traycerai/host"],
       ownership: "mine",
       permissionRole: "owner",
+      isPinned: true,
     });
     expect(items[1]).toMatchObject({
       id: "phase-phase-real",
@@ -195,6 +233,7 @@ describe("home-page history helpers", () => {
       initialUserPrompt: "",
       updatedBucket: "today",
       linkedRepos: ["traycerai/gui-app"],
+      isPinned: false,
     });
   });
 });

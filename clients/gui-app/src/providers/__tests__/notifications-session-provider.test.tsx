@@ -589,7 +589,8 @@ describe("<NotificationsSessionProvider />", () => {
           chats: {
             "chat-a": {
               unreadFailure: false,
-              pendingPrompt: false,
+              pendingApproval: false,
+              pendingInterview: false,
               unreadDone: false,
             },
           },
@@ -597,7 +598,8 @@ describe("<NotificationsSessionProvider />", () => {
       ),
     ).toEqual({
       unreadFailure: false,
-      pendingPrompt: false,
+      pendingApproval: false,
+      pendingInterview: false,
       unreadDone: false,
     });
   });
