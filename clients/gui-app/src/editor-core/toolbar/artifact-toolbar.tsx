@@ -16,6 +16,7 @@ import {
   Quote,
   Strikethrough,
 } from "lucide-react";
+import { useCallback, useMemo } from "react";
 import { ToolbarButton } from "./toolbar-button";
 
 export interface ArtifactCommentAction {
@@ -27,6 +28,11 @@ export interface ArtifactCommentAction {
 export interface ArtifactToolbarProps {
   readonly editor: Editor;
   readonly className: string | undefined;
+  /**
+   * Tile-owned scroll container. The bubble-menu plugin listens to this
+   * element so the toolbar stays anchored while the tile body scrolls.
+   */
+  readonly scrollTarget: HTMLElement | null;
   /**
    * Pass `null` for tiles whose artifact type doesn't support comments
    * (chat). When non-null, the bubble bar shows the 💬 button on every
@@ -92,7 +98,8 @@ function selectToolbarState({ editor }: { editor: Editor }): ToolbarState {
  * keyboard (⌘Z / ⌘⇧Z); it is intentionally not exposed in the bubble bar.
  */
 export function ArtifactToolbar(props: ArtifactToolbarProps) {
-  const { editor, className, commentAction, suppressBubbleMenu } = props;
+  const { editor, className, scrollTarget, commentAction, suppressBubbleMenu } =
+    props;
 
   const state = useEditorState<ToolbarState>({
     editor,
@@ -100,6 +107,37 @@ export function ArtifactToolbar(props: ArtifactToolbarProps) {
   });
 
   const editable = editor.isEditable;
+  const bubbleMenuOptions = useMemo(
+    () => ({ scrollTarget: scrollTarget ?? undefined }),
+    [scrollTarget],
+  );
+  const shouldShow = useCallback(
+    ({
+      editor: currentEditor,
+      from,
+      to,
+    }: {
+      readonly editor: Editor;
+      readonly from: number;
+      readonly to: number;
+    }): boolean => {
+      // Viewers (non-editable) still see the bar when commenting is
+      // available - the bar will only render the 💬 button via the
+      // `commentAction !== null` branch below; formatting buttons stay
+      // disabled regardless.
+      if (!currentEditor.isEditable && commentAction === null) return false;
+      // Hide inside code blocks - inline formatting would be rejected
+      // by the schema and the bar would flash against an empty selection.
+      if (currentEditor.isActive("codeBlock")) return false;
+      // Hide over atom blocks (mermaid diagrams / wireframes) - each
+      // ships its own floating toolbar and the global formatting bar
+      // would fight with it visually and semantically.
+      if (currentEditor.isActive("mermaidBlock")) return false;
+      if (currentEditor.isActive("uiPreviewBlock")) return false;
+      return from !== to;
+    },
+    [commentAction],
+  );
 
   if (suppressBubbleMenu) return null;
 
@@ -117,22 +155,8 @@ export function ArtifactToolbar(props: ArtifactToolbarProps) {
   return (
     <BubbleMenu
       editor={editor}
-      shouldShow={({ editor: ed, from, to }) => {
-        // Viewers (non-editable) still see the bar when commenting is
-        // available - the bar will only render the 💬 button via the
-        // `commentAction !== null` branch below; formatting buttons stay
-        // disabled regardless.
-        if (!ed.isEditable && commentAction === null) return false;
-        // Hide inside code blocks - inline formatting would be rejected
-        // by the schema and the bar would flash against an empty selection.
-        if (ed.isActive("codeBlock")) return false;
-        // Hide over atom blocks (mermaid diagrams / wireframes) - each
-        // ships its own floating toolbar and the global formatting bar
-        // would fight with it visually and semantically.
-        if (ed.isActive("mermaidBlock")) return false;
-        if (ed.isActive("uiPreviewBlock")) return false;
-        return from !== to;
-      }}
+      options={bubbleMenuOptions}
+      shouldShow={shouldShow}
     >
       <div
         role="toolbar"

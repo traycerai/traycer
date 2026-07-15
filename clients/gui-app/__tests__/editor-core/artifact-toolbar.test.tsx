@@ -1,7 +1,14 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { render, screen, cleanup, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { Editor } from "@tiptap/core";
-import { EditorContent, EditorContext } from "@tiptap/react";
+import { EditorContent, EditorContext, useEditor } from "@tiptap/react";
+import { useCallback, useState } from "react";
 import * as Y from "yjs";
 import { Awareness } from "y-protocols/awareness";
 import {
@@ -10,22 +17,58 @@ import {
   deriveCollabUser,
 } from "@/editor-core";
 
-function mountToolbarEditor(): Editor {
+function buildToolbarExtensions() {
   const doc = new Y.Doc();
   const fragment = doc.getXmlFragment("default");
   const awareness = new Awareness(doc);
   const user = deriveCollabUser({ userName: "T", email: "t@x.io" });
-  return new Editor({
-    extensions: buildArtifactExtensions({
-      doc,
-      fragment,
-      awareness,
-      user,
-      onCommentShortcut: null,
-      placeholderText: "Start writing…",
-      titlePlaceholderText: "Untitled",
-    }),
+  return buildArtifactExtensions({
+    doc,
+    fragment,
+    awareness,
+    user,
+    onCommentShortcut: null,
+    placeholderText: "Start writing…",
+    titlePlaceholderText: "Untitled",
   });
+}
+
+function mountToolbarEditor(): Editor {
+  return new Editor({ extensions: buildToolbarExtensions() });
+}
+
+function RefOwnedToolbarHarness({
+  onScrollTarget,
+}: {
+  readonly onScrollTarget: (element: HTMLDivElement) => void;
+}) {
+  const [extensions] = useState(buildToolbarExtensions);
+  const editor = useEditor({ extensions, immediatelyRender: false });
+  const [scrollTarget, setScrollTarget] = useState<HTMLDivElement | null>(null);
+  const setScrollContainerRef = useCallback(
+    (element: HTMLDivElement | null): void => {
+      if (element !== null) onScrollTarget(element);
+      setScrollTarget(element);
+    },
+    [onScrollTarget],
+  );
+
+  return (
+    <div ref={setScrollContainerRef} className="overflow-y-auto">
+      {editor !== null ? (
+        <>
+          <EditorContent editor={editor} />
+          <ArtifactToolbar
+            editor={editor}
+            className={undefined}
+            scrollTarget={scrollTarget}
+            commentAction={null}
+            suppressBubbleMenu={false}
+          />
+        </>
+      ) : null}
+    </div>
+  );
 }
 
 /**
@@ -50,6 +93,7 @@ async function revealBubbleMenu(editor: Editor): Promise<void> {
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
 });
 
 describe("ArtifactToolbar", () => {
@@ -61,6 +105,7 @@ describe("ArtifactToolbar", () => {
         <ArtifactToolbar
           editor={editor}
           className={undefined}
+          scrollTarget={null}
           commentAction={null}
           suppressBubbleMenu={false}
         />
@@ -85,6 +130,7 @@ describe("ArtifactToolbar", () => {
         <ArtifactToolbar
           editor={editor}
           className={undefined}
+          scrollTarget={null}
           commentAction={null}
           suppressBubbleMenu={false}
         />
@@ -108,6 +154,7 @@ describe("ArtifactToolbar", () => {
         <ArtifactToolbar
           editor={editor}
           className={undefined}
+          scrollTarget={null}
           commentAction={{ onStart: () => {} }}
           suppressBubbleMenu
         />
@@ -118,5 +165,195 @@ describe("ArtifactToolbar", () => {
       screen.queryByRole("toolbar", { name: /editor formatting/i }),
     ).toBeNull();
     editor.destroy();
+  });
+
+  it("repositions from scroll events on the tile scroll container", async () => {
+    const editor = mountToolbarEditor();
+    const scrollContainer = document.createElement("div");
+    scrollContainer.className = "overflow-y-auto";
+    document.body.append(scrollContainer);
+    const containerAddEventListener = vi.spyOn(
+      scrollContainer,
+      "addEventListener",
+    );
+    const windowAddEventListener = vi.spyOn(window, "addEventListener");
+    const coordsAtPos = vi.spyOn(editor.view, "coordsAtPos");
+
+    render(
+      <EditorContext.Provider value={{ editor }}>
+        <EditorContent editor={editor} />
+        <ArtifactToolbar
+          editor={editor}
+          className={undefined}
+          scrollTarget={scrollContainer}
+          commentAction={null}
+          suppressBubbleMenu={false}
+        />
+      </EditorContext.Provider>,
+      { container: scrollContainer },
+    );
+    await revealBubbleMenu(editor);
+
+    expect(containerAddEventListener).toHaveBeenCalledWith(
+      "scroll",
+      expect.any(Function),
+    );
+    expect(windowAddEventListener).not.toHaveBeenCalledWith(
+      "scroll",
+      expect.any(Function),
+    );
+
+    coordsAtPos.mockClear();
+    fireEvent.scroll(scrollContainer);
+    await waitFor(() => expect(coordsAtPos).toHaveBeenCalled(), {
+      timeout: 500,
+    });
+
+    editor.destroy();
+    scrollContainer.remove();
+  });
+
+  it("attaches to the ref-owned target when the editor arrives after mount", async () => {
+    const scrollTargetListenerAssertions: Array<() => void> = [];
+    const windowAddEventListener = vi.spyOn(window, "addEventListener");
+
+    render(
+      <RefOwnedToolbarHarness
+        onScrollTarget={(element) => {
+          const addEventListener = vi.spyOn(element, "addEventListener");
+          scrollTargetListenerAssertions.push(() => {
+            expect(addEventListener).toHaveBeenCalledWith(
+              "scroll",
+              expect.any(Function),
+            );
+          });
+        }}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(scrollTargetListenerAssertions).toHaveLength(1);
+      scrollTargetListenerAssertions[0]();
+    });
+    expect(windowAddEventListener).not.toHaveBeenCalledWith(
+      "scroll",
+      expect.any(Function),
+    );
+  });
+
+  it("moves the listener across target identities and removes it on unmount", async () => {
+    const editor = mountToolbarEditor();
+    const scrollContainer = document.createElement("div");
+    scrollContainer.className = "overflow-y-auto";
+    document.body.append(scrollContainer);
+    const replacementScrollContainer = document.createElement("div");
+    replacementScrollContainer.className = "overflow-y-auto";
+    document.body.append(replacementScrollContainer);
+    const containerAddEventListener = vi.spyOn(
+      scrollContainer,
+      "addEventListener",
+    );
+    const containerRemoveEventListener = vi.spyOn(
+      scrollContainer,
+      "removeEventListener",
+    );
+    const replacementAddEventListener = vi.spyOn(
+      replacementScrollContainer,
+      "addEventListener",
+    );
+    const replacementRemoveEventListener = vi.spyOn(
+      replacementScrollContainer,
+      "removeEventListener",
+    );
+    const windowAddEventListener = vi.spyOn(window, "addEventListener");
+    const windowRemoveEventListener = vi.spyOn(window, "removeEventListener");
+    const coordsAtPos = vi.spyOn(editor.view, "coordsAtPos");
+
+    const view = render(
+      <EditorContext.Provider value={{ editor }}>
+        <EditorContent editor={editor} />
+        <ArtifactToolbar
+          editor={editor}
+          className={undefined}
+          scrollTarget={null}
+          commentAction={null}
+          suppressBubbleMenu={false}
+        />
+      </EditorContext.Provider>,
+      { container: scrollContainer },
+    );
+    await revealBubbleMenu(editor);
+    expect(windowAddEventListener).toHaveBeenCalledWith(
+      "scroll",
+      expect.any(Function),
+    );
+
+    view.rerender(
+      <EditorContext.Provider value={{ editor }}>
+        <EditorContent editor={editor} />
+        <ArtifactToolbar
+          editor={editor}
+          className={undefined}
+          scrollTarget={scrollContainer}
+          commentAction={null}
+          suppressBubbleMenu={false}
+        />
+      </EditorContext.Provider>,
+    );
+
+    await waitFor(() => {
+      expect(windowRemoveEventListener).toHaveBeenCalledWith(
+        "scroll",
+        expect.any(Function),
+      );
+      expect(containerAddEventListener).toHaveBeenCalledWith(
+        "scroll",
+        expect.any(Function),
+      );
+    });
+
+    view.rerender(
+      <EditorContext.Provider value={{ editor }}>
+        <EditorContent editor={editor} />
+        <ArtifactToolbar
+          editor={editor}
+          className={undefined}
+          scrollTarget={replacementScrollContainer}
+          commentAction={null}
+          suppressBubbleMenu={false}
+        />
+      </EditorContext.Provider>,
+    );
+
+    await waitFor(() => {
+      expect(containerRemoveEventListener).toHaveBeenCalledWith(
+        "scroll",
+        expect.any(Function),
+      );
+      expect(replacementAddEventListener).toHaveBeenCalledWith(
+        "scroll",
+        expect.any(Function),
+      );
+    });
+
+    coordsAtPos.mockClear();
+    fireEvent.scroll(replacementScrollContainer);
+    await waitFor(() => expect(coordsAtPos).toHaveBeenCalled(), {
+      timeout: 500,
+    });
+
+    const activeScrollHandler = replacementAddEventListener.mock.calls.find(
+      ([eventName]) => eventName === "scroll",
+    )?.[1];
+    expect(activeScrollHandler).toEqual(expect.any(Function));
+    view.unmount();
+    expect(replacementRemoveEventListener).toHaveBeenCalledWith(
+      "scroll",
+      activeScrollHandler,
+    );
+
+    editor.destroy();
+    scrollContainer.remove();
+    replacementScrollContainer.remove();
   });
 });

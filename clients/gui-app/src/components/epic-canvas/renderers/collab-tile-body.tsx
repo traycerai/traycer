@@ -47,7 +47,7 @@ import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
 import type { EpicArtifactRoomAvailability } from "@/stores/epics/open-epic/types";
 import type { Editor } from "@tiptap/core";
 import { EditorContent } from "@tiptap/react";
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Awareness } from "y-protocols/awareness";
 import type * as Y from "yjs";
 import { ArtifactChildIndex } from "./artifact-child-index";
@@ -159,6 +159,7 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
   const profile = useAuthStore((s) => s.profile);
   const editable = role === "owner" || role === "editor";
   const editorRootRef = useRef<HTMLDivElement>(null);
+  const [scrollTarget, setScrollTarget] = useState<HTMLDivElement | null>(null);
   const epicId = useOpenEpicId();
   const commentArtifactKind =
     node.type === WORKSPACE_FILE_TAB_KIND
@@ -421,6 +422,7 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
   const setScrollContainerRef = useCallback(
     (element: HTMLDivElement | null): void => {
       editorRootRef.current = element;
+      setScrollTarget(element);
       scrollRestorationRef(element);
     },
     [scrollRestorationRef],
@@ -446,6 +448,7 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
             <ArtifactToolbar
               editor={editor}
               className={undefined}
+              scrollTarget={scrollTarget}
               commentAction={commentAction}
               suppressBubbleMenu={ownedDraftRange !== null}
             />
