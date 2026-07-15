@@ -509,4 +509,38 @@ describe("useProfileUsageComparison", () => {
     }
     expect(detail.usage.provider).toBe("claude-code");
   });
+
+  it("surfaces a rejected host refresh while retaining the last-good reading", async () => {
+    const queryClient = new QueryClient();
+    let rejectRequest = false;
+    const { scope } = buildHostScope("default-host", queryClient, () => {
+      if (rejectRequest) throw new Error("host transport failed");
+      return goodResponse();
+    });
+    scopesRef.byHostId.set(null, scope);
+
+    const managed = profile("p-a", "managed", "A", {});
+    const { result } = renderHook(
+      () =>
+        useProfileUsageComparison({
+          runTargetHostId: null,
+          providerId: "claude-code",
+          profiles: [managed],
+        }),
+      { wrapper: wrapperFor(queryClient) },
+    );
+
+    await result.current.entries.get("p-a")?.refresh();
+    await waitFor(() =>
+      expect(result.current.entries.get("p-a")?.detail.kind).toBe("fresh"),
+    );
+
+    rejectRequest = true;
+    await result.current.entries.get("p-a")?.refresh();
+    await waitFor(() =>
+      expect(result.current.entries.get("p-a")?.detail.kind).toBe(
+        "failed-with-last-good",
+      ),
+    );
+  });
 });

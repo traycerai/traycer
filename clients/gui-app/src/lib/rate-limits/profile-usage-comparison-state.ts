@@ -89,8 +89,20 @@ function isSemanticWarning(
 export function deriveProfileUsageDetailState(
   envelope: ProviderRateLimitEnvelope | undefined,
   hostSummary: ProfileUsageHostSummary,
+  queryFailureAt: number | null,
   now: number,
 ): ProfileUsageDetailState {
+  if (queryFailureAt !== null) {
+    if (envelope?.lastGood !== null && envelope?.lastGood !== undefined) {
+      return {
+        kind: "failed-with-last-good",
+        usage: envelope.lastGood,
+        asOf: envelope.lastGoodAt ?? now,
+        failedAt: queryFailureAt,
+      };
+    }
+    return { kind: "failed-no-last-good", failedAt: queryFailureAt };
+  }
   if (envelope !== undefined && envelope.latest !== null) {
     if (envelope.lastGood !== null) {
       if (!envelope.latest.available) {

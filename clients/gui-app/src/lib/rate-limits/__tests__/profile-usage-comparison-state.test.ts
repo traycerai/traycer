@@ -38,6 +38,7 @@ describe("deriveProfileUsageDetailState", () => {
     const state = deriveProfileUsageDetailState(
       undefined,
       { rateLimitStatus: "ok", usageUpdatedAt: null },
+      null,
       NOW,
     );
     expect(state).toEqual({ kind: "never-checked" });
@@ -47,6 +48,7 @@ describe("deriveProfileUsageDetailState", () => {
     const state = deriveProfileUsageDetailState(
       undefined,
       { rateLimitStatus: "unknown", usageUpdatedAt: NOW - 1 },
+      null,
       NOW,
     );
     expect(state).toEqual({ kind: "never-checked" });
@@ -56,6 +58,7 @@ describe("deriveProfileUsageDetailState", () => {
     const state = deriveProfileUsageDetailState(
       undefined,
       { rateLimitStatus: "near_limit", usageUpdatedAt: NOW - 1 },
+      null,
       NOW,
     );
     expect(state).toEqual({ kind: "semantic-only", status: "near_limit" });
@@ -65,6 +68,7 @@ describe("deriveProfileUsageDetailState", () => {
     const state = deriveProfileUsageDetailState(
       undefined,
       { rateLimitStatus: "hard_limit", usageUpdatedAt: NOW - 1 },
+      null,
       NOW,
     );
     expect(state).toEqual({ kind: "semantic-only", status: "hard_limit" });
@@ -74,6 +78,7 @@ describe("deriveProfileUsageDetailState", () => {
     const state = deriveProfileUsageDetailState(
       envelope({ latest: GOOD, lastGood: GOOD, lastGoodAt: NOW - 1000 }),
       { rateLimitStatus: "ok", usageUpdatedAt: NOW - 1000 },
+      null,
       NOW,
     );
     expect(state).toEqual({ kind: "fresh", usage: GOOD, asOf: NOW - 1000 });
@@ -84,6 +89,7 @@ describe("deriveProfileUsageDetailState", () => {
     const state = deriveProfileUsageDetailState(
       envelope({ latest: GOOD, lastGood: GOOD, lastGoodAt: asOf }),
       { rateLimitStatus: "ok", usageUpdatedAt: asOf },
+      null,
       NOW,
     );
     expect(state).toEqual({ kind: "stale", usage: GOOD, asOf });
@@ -104,6 +110,7 @@ describe("deriveProfileUsageDetailState", () => {
         lastFailureAt: failedAt,
       }),
       { rateLimitStatus: "ok", usageUpdatedAt: asOf },
+      null,
       NOW,
     );
     expect(state).toEqual({
@@ -128,6 +135,7 @@ describe("deriveProfileUsageDetailState", () => {
         lastFailureAt: failedAt,
       }),
       { rateLimitStatus: "ok", usageUpdatedAt: null },
+      null,
       NOW,
     );
     expect(state).toEqual({ kind: "failed-no-last-good", failedAt });
@@ -146,9 +154,35 @@ describe("deriveProfileUsageDetailState", () => {
         lastFailureAt: NOW,
       }),
       { rateLimitStatus: "ok", usageUpdatedAt: null },
+      null,
       NOW,
     );
     expect(state).toEqual({ kind: "failed-no-last-good", failedAt: NOW });
+  });
+
+  it("surfaces query failures with and without retained last-good data", () => {
+    const asOf = NOW - 5000;
+    expect(
+      deriveProfileUsageDetailState(
+        envelope({ latest: GOOD, lastGood: GOOD, lastGoodAt: asOf }),
+        { rateLimitStatus: "ok", usageUpdatedAt: asOf },
+        NOW - 100,
+        NOW,
+      ),
+    ).toEqual({
+      kind: "failed-with-last-good",
+      usage: GOOD,
+      asOf,
+      failedAt: NOW - 100,
+    });
+    expect(
+      deriveProfileUsageDetailState(
+        undefined,
+        { rateLimitStatus: "unknown", usageUpdatedAt: null },
+        NOW - 100,
+        NOW,
+      ),
+    ).toEqual({ kind: "failed-no-last-good", failedAt: NOW - 100 });
   });
 });
 

@@ -25,6 +25,12 @@ type AvailableProviderRateLimits = Extract<
   { available: true }
 >;
 
+const PROFILE_USAGE_SEVERITY_RANK = {
+  healthy: 0,
+  running_low: 1,
+  limited: 2,
+} as const;
+
 export interface ProfileUsageWindow {
   readonly id: string;
   readonly role: ProfileUsageWindowRole;
@@ -281,6 +287,15 @@ function mostConstrainedWindow(
 ): ProfileUsageWindow | null {
   return windows.reduce<ProfileUsageWindow | null>((selected, candidate) => {
     if (selected === null) return candidate;
+    if (
+      PROFILE_USAGE_SEVERITY_RANK[candidate.severity] !==
+      PROFILE_USAGE_SEVERITY_RANK[selected.severity]
+    ) {
+      return PROFILE_USAGE_SEVERITY_RANK[candidate.severity] >
+        PROFILE_USAGE_SEVERITY_RANK[selected.severity]
+        ? candidate
+        : selected;
+    }
     return candidate.window.usedPercent > selected.window.usedPercent
       ? candidate
       : selected;

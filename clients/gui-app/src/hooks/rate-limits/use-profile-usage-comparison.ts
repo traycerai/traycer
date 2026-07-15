@@ -138,6 +138,7 @@ export function useProfileUsageComparison({
           rateLimitStatus: profile.rateLimitStatus,
           usageUpdatedAt: profile.usageUpdatedAt,
         },
+        query?.isError === true ? query.errorUpdatedAt : null,
         now,
       );
       const refreshStatus = deriveProfileUsageRefreshStatus({

@@ -60,6 +60,23 @@ function openRouter(
   };
 }
 
+function claude(
+  fiveHour: ProviderRateLimitWindow | null,
+  sevenDay: ProviderRateLimitWindow | null,
+): Extract<ProviderRateLimits, { provider: "claude-code"; available: true }> {
+  return {
+    provider: "claude-code",
+    available: true,
+    subscriptionType: null,
+    fiveHour,
+    sevenDay,
+    sevenDayOpus: null,
+    sevenDaySonnet: null,
+    modelScoped: [],
+    extraUsage: null,
+  };
+}
+
 function envelope(
   data: Extract<ProviderRateLimits, { available: true }>,
   lastGoodAt: number,
@@ -89,6 +106,22 @@ function project(
 }
 
 describe("projectProfileUsage", () => {
+  it("selects the most severe compact window before comparing percentages", () => {
+    const projection = project(
+      "near_limit",
+      NOW,
+      envelope(
+        claude(window(85, 300, NOW + 1), window(90, 10_080, NOW + 1)),
+        NOW,
+      ),
+      false,
+    );
+    expect(projection.kind).toBe("detail");
+    expect(projection.severity).toBe("running_low");
+    expect(projection.compactWindow?.id).toBe("five-hour");
+    expect(projection.compactWindow?.severity).toBe("running_low");
+  });
+
   it("projects OpenRouter hard limits as an equivalent Credits meter", () => {
     const projection = project(
       "ok",
