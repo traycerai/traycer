@@ -135,23 +135,44 @@ export function classifyHostRequestFailure(error: unknown): HostRequestFailure {
 }
 
 /**
- * A `HostRpcError` raised by a transient transport failure that occurred
- * *before* the request frame was put on the wire - a dial timeout, an
- * `onerror`/`onclose` during the dial-or-handshake phase, or a handshake
- * (`openAck`) frame timeout.
+ * A `HostRpcError` whose cause is the transport itself - no host bound, a
+ * dropped or unopenable WebSocket, a dial or frame timeout - rather than the
+ * host rejecting the operation. The host either never saw the request or
+ * never answered it, so the failure says nothing about the method that
+ * happened to be in flight.
+ *
+ * It is a `HostRpcError` (`code` stays `"RPC_ERROR"`) so existing
+ * `instanceof HostRpcError` / `code`-based handling - the auth-aware wrapper,
+ * error toasts - keeps treating it exactly as it did before, while UI layers
+ * can branch on the class to describe the connection ("host unreachable")
+ * instead of the operation.
+ */
+export class HostTransportFailureError extends HostRpcError {
+  constructor(details: {
+    code: RpcErrorCode;
+    message: string;
+    requestId: string;
+    method: string;
+    fatalDetails: FatalErrorDetails | null;
+  }) {
+    super(details);
+    this.name = "HostTransportFailureError";
+  }
+}
+
+/**
+ * A `HostTransportFailureError` that occurred *before* the request frame was
+ * put on the wire - a dial timeout, an `onerror`/`onclose` during the
+ * dial-or-handshake phase, or a handshake (`openAck`) frame timeout.
  *
  * The "before the request was sent" guarantee is what makes it safe to retry
  * even non-idempotent methods: the host never observed the call, so a fresh
  * dial cannot double-apply a side effect. `createRetryingMessenger` keys its
- * bounded retry off this subclass; every other failure (a post-send drop, a
- * malformed frame, or any host-originated error) stays a plain `HostRpcError`
- * and propagates on the first attempt.
- *
- * It is a `HostRpcError` (`code` stays `"RPC_ERROR"`) so existing
- * `instanceof HostRpcError` / `code`-based handling - the auth-aware wrapper,
- * error toasts - keeps treating it exactly as it did before.
+ * bounded retry off this subclass; a post-send drop stays a
+ * `HostTransportFailureError`, and a malformed frame or any host-originated
+ * error stays a plain `HostRpcError` - both propagate on the first attempt.
  */
-export class RetryableTransportError extends HostRpcError {
+export class RetryableTransportError extends HostTransportFailureError {
   constructor(details: {
     code: RpcErrorCode;
     message: string;
@@ -162,4 +183,19 @@ export class RetryableTransportError extends HostRpcError {
     super(details);
     this.name = "RetryableTransportError";
   }
+}
+
+/**
+ * True when the failure is expected to clear on its own: the transport never
+ * got an answer from the host (restart, dropped socket, dial/frame timeout),
+ * or the host answered with a fatal frame it explicitly marked `retryable`
+ * (e.g. a transient credential-verification outage). Background best-effort
+ * callers use this to fail silently; user-gesture surfaces can still toast,
+ * describing the connection rather than the operation.
+ */
+export function isTransientHostRpcFailure(error: HostRpcError): boolean {
+  return (
+    error instanceof HostTransportFailureError ||
+    error.fatalDetails?.retryable === true
+  );
 }

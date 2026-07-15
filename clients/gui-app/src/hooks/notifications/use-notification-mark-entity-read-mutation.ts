@@ -4,7 +4,7 @@ import type { HostNotificationsEntityRef } from "@traycer/protocol/host/notifica
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useHostMutation } from "@/hooks/host/use-host-query";
-import { toastFromHostError } from "@/lib/host-error-toast";
+import { toastFromBackgroundHostError } from "@/lib/host-error-toast";
 import { invalidateNotificationIndicatorsForEntities } from "@/lib/notifications/notification-indicator-cache";
 import { notificationsMutationKeys } from "@/lib/query-keys";
 
@@ -42,8 +42,7 @@ export function useNotificationMarkEntityRead(): UseMutationResult<
         );
       },
       onError: (error) => {
-        if (error.code === "E_HOST_UNSUPPORTED") return;
-        toastFromHostError(
+        toastFromBackgroundHostError(
           error,
           "Couldn't mark viewed notifications as read.",
         );
