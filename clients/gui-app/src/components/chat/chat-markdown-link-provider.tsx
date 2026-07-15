@@ -12,6 +12,7 @@ import {
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { buildChatLinkPolicy } from "@/components/chat/build-chat-link-policy";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
+import { toast } from "sonner";
 
 interface ChatMarkdownLinkProviderProps {
   /** The chat tab whose group a file link opens its new tab into. */
@@ -73,6 +74,13 @@ export function ChatMarkdownLinkProvider({
     };
   }, []);
 
+  const supersedePendingFileLink = useCallback((): number => {
+    clickTokenRef.current += 1;
+    pendingProjectedOpenCancelRef.current?.();
+    pendingProjectedOpenCancelRef.current = null;
+    return clickTokenRef.current;
+  }, []);
+
   const runChatLink = useMemo(
     () =>
       buildChatLinkPolicy({
@@ -103,6 +111,7 @@ export function ChatMarkdownLinkProvider({
 
   const linkPolicy = useMemo<MarkdownLinkPolicy>(
     () => ({
+      supersedePendingFileLink,
       // The lifecycle accessors are built HERE, inside the click handler, so
       // reading the refs' `.current` happens at click / wait-settle time (an
       // event context) — never during render. That keeps `buildChatLinkPolicy`
@@ -116,14 +125,12 @@ export function ChatMarkdownLinkProvider({
           setPendingProjectedOpenCancel: (cancel) => {
             pendingProjectedOpenCancelRef.current = cancel;
           },
-          beginClick: () => {
-            clickTokenRef.current += 1;
-            return clickTokenRef.current;
-          },
+          beginClick: supersedePendingFileLink,
           isCurrent: (token) => token === clickTokenRef.current,
+          onAsyncFailure: () => toast("Couldn't open link"),
         }),
     }),
-    [runChatLink],
+    [runChatLink, supersedePendingFileLink],
   );
 
   return (

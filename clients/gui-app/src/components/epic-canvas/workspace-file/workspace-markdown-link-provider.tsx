@@ -25,6 +25,7 @@ export function WorkspaceMarkdownLinkProvider(
   const tileNavigation = useEpicTileNavigation();
   const linkPolicy = useMemo<MarkdownLinkPolicy>(
     () => ({
+      supersedePendingFileLink: () => undefined,
       openFileLink: (link) => {
         // Intentional asymmetry: this workspace-file preview surface ignores
         // the link's `:line`/`:col` target, unlike chat (which records a reveal

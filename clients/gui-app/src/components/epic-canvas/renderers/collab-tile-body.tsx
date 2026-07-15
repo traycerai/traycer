@@ -4,6 +4,7 @@ import {
 } from "@/components/comments";
 import {
   applyCommentDecorationSnapshot,
+  ArtifactLinkPopover,
   ArtifactToolbar,
   deriveCollabUser,
   type ArtifactCommentAction,
@@ -47,7 +48,7 @@ import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
 import type { EpicArtifactRoomAvailability } from "@/stores/epics/open-epic/types";
 import type { Editor } from "@tiptap/core";
 import { EditorContent } from "@tiptap/react";
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Awareness } from "y-protocols/awareness";
 import type * as Y from "yjs";
 import { ArtifactChildIndex } from "./artifact-child-index";
@@ -59,6 +60,7 @@ import { createArtifactEditorFindAdapter } from "../tile-find/artifact-editor-fi
 import { seedArtifactTitleHeading } from "./artifact-editor-seed";
 import { useArtifactDocTitleFollow } from "./use-artifact-doc-title-follow";
 import { useCollabTileEditor } from "./use-collab-tile-editor";
+import { useArtifactLinkOpener } from "./use-artifact-link-opener";
 
 /**
  * Hint shown inside the empty leading title heading of a freshly seeded
@@ -158,8 +160,12 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
   const role = useEpicPermissionRole();
   const profile = useAuthStore((s) => s.profile);
   const editable = role === "owner" || role === "editor";
+  const [linkPopoverOpen, setLinkPopoverOpen] = useState(false);
+  const [scrollContainer, setScrollContainer] =
+    useState<HTMLDivElement | null>(null);
   const editorRootRef = useRef<HTMLDivElement>(null);
   const epicId = useOpenEpicId();
+  const artifactLinkOpener = useArtifactLinkOpener({ epicId, viewTabId });
   const commentArtifactKind =
     node.type === WORKSPACE_FILE_TAB_KIND
       ? null
@@ -421,6 +427,7 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
   const setScrollContainerRef = useCallback(
     (element: HTMLDivElement | null): void => {
       editorRootRef.current = element;
+      setScrollContainer(element);
       scrollRestorationRef(element);
     },
     [scrollRestorationRef],
@@ -447,7 +454,7 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
               editor={editor}
               className={undefined}
               commentAction={commentAction}
-              suppressBubbleMenu={ownedDraftRange !== null}
+              suppressBubbleMenu={ownedDraftRange !== null || linkPopoverOpen}
             />
           ) : null}
         </div>
@@ -479,6 +486,16 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
             onActivateThread={onActivateThread}
           />
         </>
+      ) : null}
+      {editor !== null ? (
+        <ArtifactLinkPopover
+          editor={editor}
+          editable={editable}
+          scrollContainer={scrollContainer}
+          openLink={artifactLinkOpener.openLink}
+          openLinkPending={artifactLinkOpener.isExternalPending}
+          onOpenChange={setLinkPopoverOpen}
+        />
       ) : null}
     </div>
   );
