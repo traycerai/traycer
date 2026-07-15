@@ -14,6 +14,7 @@ function makeMessage(
     settings: null,
     createdAt: 0,
     completedAt: null,
+    stopped: null,
     persistentMessageId: null,
     senderLabel: null,
     assistantMeta: null,
