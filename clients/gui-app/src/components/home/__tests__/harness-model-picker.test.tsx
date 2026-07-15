@@ -1574,6 +1574,69 @@ describe("<HarnessModelPicker />", () => {
     expect(selections.at(-1)?.profileId).toBeNull();
   });
 
+  it("keeps a degraded provider's profile paired with that provider when profile selection commits the browse", async () => {
+    const codex = codexModels();
+    const signedOutClaude: HarnessOption = {
+      ...CLAUDE_HARNESS,
+      available: false,
+      error: "Claude is signed out",
+    };
+    queryMock.harnesses = [CODEX_HARNESS, signedOutClaude];
+    queryMock.catalogHarnesses = [
+      catalogHarness(CODEX_HARNESS, codex),
+      catalogHarness(signedOutClaude, []),
+    ];
+    queryMock.selectedModelsByHarness = new Map([
+      ["codex", codex],
+      ["claude", []],
+    ]);
+    const degradedClaude = providerCliStateWithProfiles({
+      providerId: "claude-code",
+      profiles: claudeProfilesForDropdown(),
+    });
+    queryMock.providerStates = [
+      {
+        ...degradedClaude,
+        auth: { ...degradedClaude.auth, status: "unauthenticated" },
+      },
+    ];
+    useComposerHarnessMemoryStore.getState().record({
+      harnessId: "claude",
+      model: "claude-opus-4-7",
+      permissionMode: "supervised",
+      reasoningEffort: "high",
+      serviceTier: null,
+      agentMode: "regular",
+      profileId: "work-profile",
+    });
+    const { store, selections } = renderPicker(undefined);
+
+    await openPicker();
+    const claudeTab = screen.getByRole("tab", { name: "Claude" });
+    expect(claudeTab.getAttribute("data-degraded")).toBe("true");
+    fireEvent.click(claudeTab);
+
+    // A degraded rail entry is browse-only, so Codex remains selected until
+    // the user explicitly picks one of Claude's profiles.
+    expect(store.getState().selection.harnessId).toBe("codex");
+    expect(selections).toEqual([]);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
+
+    expect(store.getState().selection).toEqual({
+      harnessId: "claude",
+      modelSlug: "claude-opus-4-7",
+      profileId: "work-profile",
+    });
+    expect(store.getState().reasoning).toBe("high");
+    expect(
+      useComposerHarnessMemoryStore.getState().resolveLastProfile("claude"),
+    ).toBe("work-profile");
+    expect(
+      useComposerHarnessMemoryStore.getState().lastProfileByHarness.codex,
+    ).not.toBe("work-profile");
+  });
+
   it("reflects provider profile rename and recolor in the trigger and dropdown", async () => {
     const initialColor = PROVIDER_PROFILE_ACCENT_COLORS[0];
     const nextColor = PROVIDER_PROFILE_ACCENT_COLORS[4];
@@ -1718,6 +1781,65 @@ describe("<HarnessModelPicker />", () => {
     await waitFor(() => {
       expect(screen.queryByRole("textbox", { name: /^Search/ })).toBeNull();
     });
+  });
+
+  it("keeps a delayed created profile paired with its provider after the current selection changes", async () => {
+    queryMock.providerStates = [
+      providerCliStateWithProfiles({
+        providerId: "claude-code",
+        profiles: claudeProfilesForDropdown(),
+      }),
+    ];
+    useComposerHarnessMemoryStore.getState().record({
+      harnessId: "claude",
+      model: "claude-opus-4-7",
+      permissionMode: "supervised",
+      reasoningEffort: "high",
+      serviceTier: null,
+      agentMode: "regular",
+      profileId: "new-profile",
+    });
+    const { store } = renderPicker(undefined);
+
+    await openPicker();
+    fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Create new profile" }),
+    );
+
+    const onProfileCreated =
+      useProviderProfileAddFlowStore.getState().onProfileCreated;
+    if (onProfileCreated === null) {
+      throw new Error("Expected the add-profile flow to retain its callback.");
+    }
+
+    // The flow is global and can resolve after another picker/control changes
+    // this composer's provider. The retained callback must still target Claude.
+    act(() => {
+      store.getState().setSelection({
+        harnessId: "codex",
+        modelSlug: "gpt-5.5",
+        profileId: null,
+      });
+    });
+    expect(store.getState().selection.harnessId).toBe("codex");
+
+    act(() => {
+      onProfileCreated("new-profile");
+    });
+
+    expect(store.getState().selection).toEqual({
+      harnessId: "claude",
+      modelSlug: "claude-opus-4-7",
+      profileId: "new-profile",
+    });
+    expect(store.getState().reasoning).toBe("high");
+    expect(
+      useComposerHarnessMemoryStore.getState().resolveLastProfile("claude"),
+    ).toBe("new-profile");
+    expect(
+      useComposerHarnessMemoryStore.getState().lastProfileByHarness.codex,
+    ).not.toBe("new-profile");
   });
 
   it("targets the tab's host scope, not the default, when creating a profile from a tab-scoped picker (S8)", async () => {
@@ -2207,7 +2329,7 @@ describe("<HarnessModelPicker />", () => {
     );
   });
 
-  it("restores the remembered (harness, profile, model) record on a dropdown commit", async () => {
+  it("preserves the configured model and reasoning on a profile dropdown commit", async () => {
     queryMock.providerStates = [
       providerCliStateWithProfiles({
         providerId: "claude-code",
@@ -2251,9 +2373,9 @@ describe("<HarnessModelPicker />", () => {
         ],
       }),
     ];
-    // Seed memory for the SPECIFIC (harness, profile) pair the dropdown
-    // commits, to prove `commitSelection`'s funnel is keyed by profile - not
-    // just harness.
+    // The destination profile remembers a different model and effort. A
+    // profile-only switch must ignore that memory and preserve the current
+    // composer configuration.
     useComposerHarnessMemoryStore.getState().record({
       harnessId: "claude",
       model: "claude-opus-4-7",
@@ -2263,18 +2385,25 @@ describe("<HarnessModelPicker />", () => {
       agentMode: "regular",
       profileId: "work-profile",
     });
-    const { selections, reasoningChanges } = renderPicker(undefined);
+    const { store, selections, reasoningChanges } = renderPicker({
+      selection: {
+        harnessId: "claude",
+        modelSlug: "claude-sonnet-4-6",
+        profileId: null,
+      },
+      reasoning: "low",
+    });
 
-    await openPicker();
-    fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+    await openPickerByTriggerName(/^Claude Sonnet 4\.6/);
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
 
     expect(selections.at(-1)).toEqual({
       harnessId: "claude",
-      modelSlug: "claude-opus-4-7",
+      modelSlug: "claude-sonnet-4-6",
       profileId: "work-profile",
     });
-    expect(reasoningChanges.at(-1)).toBe("high");
+    expect(store.getState().reasoning).toBe("low");
+    expect(reasoningChanges).toEqual([]);
   });
 
   it("commits a profile switch via the ⌘⇧ leader digit", async () => {
