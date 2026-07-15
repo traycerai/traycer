@@ -180,7 +180,22 @@ function hasSameVisibleProfileIdentity(
     left.auth.badgeText === right.auth.badgeText &&
     left.auth.label === right.auth.label &&
     left.auth.detail === right.auth.detail &&
+    hasSameAccountIdentity(left, right) &&
     left.accentColor === right.accentColor
+  );
+}
+
+function hasSameAccountIdentity(
+  left: ProviderProfile,
+  right: ProviderProfile,
+): boolean {
+  if (left.identity === null || right.identity === null) {
+    return left.identity === right.identity;
+  }
+  return (
+    left.identity.email === right.identity.email &&
+    left.identity.tier === right.identity.tier &&
+    left.identity.accountUuid === right.identity.accountUuid
   );
 }
 
