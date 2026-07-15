@@ -36,6 +36,7 @@ import {
   type WorktreeStagingKey,
 } from "@/stores/worktree/worktree-intent-staging-store";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 // `pendingForkTerminalAgentStagingKey` is per-EPIC, so every terminal-agent
 // tile in an epic shares one staging slot. Two dialog bodies can therefore be
@@ -247,6 +248,10 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
       })
       .then((createdAgentId) => {
         if (createdAgentId !== null) {
+          Analytics.getInstance().track(AnalyticsEvent.TerminalAgentForked, {
+            source: "direct_ui",
+            harness: target.sourceAgent.harnessId,
+          });
           clearTerminalForkWorkspace(stagingKey);
           onOpenChange(false);
         }

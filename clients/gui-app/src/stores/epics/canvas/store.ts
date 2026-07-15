@@ -27,6 +27,13 @@ import {
 } from "@/lib/epic-nested-focus-route";
 import { UNTITLED_EPIC_TITLE } from "@/lib/display-title";
 import { createEpicName } from "@/lib/epic-name";
+import {
+  Analytics,
+  AnalyticsEvent,
+  analyticsArtifactKindForCanvasTileType,
+  analyticsTargetForCanvasTileType,
+  type AnalyticsSource,
+} from "@/lib/analytics";
 import type {
   DesktopJsonValue,
   DesktopPerWindowSnapshot,
@@ -95,6 +102,69 @@ import {
   type PendingTitleEntry,
 } from "@/stores/epics/canvas/canvas-title-timers";
 export { parseEpicNodeRef as parseArtifactRef } from "@/stores/epics/canvas/tile-schema/artifact-tile";
+
+function trackOpenedCanvasTile(
+  node: EpicCanvasTileRef,
+  source: AnalyticsSource,
+): void {
+  if (node.type === "chat") {
+    Analytics.getInstance().track(AnalyticsEvent.ChatOpened, {
+      source,
+    });
+    return;
+  }
+  if (node.type === "terminal" || node.type === "terminal-agent") {
+    Analytics.getInstance().track(AnalyticsEvent.TerminalOpened, {
+      source,
+      kind: node.type === "terminal" ? "shell" : "agent",
+    });
+    return;
+  }
+  if (node.type === "workspace-file") {
+    Analytics.getInstance().track(AnalyticsEvent.WorkspaceFileOpened, {
+      source,
+    });
+    return;
+  }
+  if (node.type === "git-diff" || node.type === "snapshot-diff") {
+    const bundle =
+      node.diff.kind === "bundle" ||
+      node.diff.kind === "snapshot-cumulative-bundle";
+    Analytics.getInstance().track(AnalyticsEvent.DiffOpened, {
+      source,
+      scope: bundle ? "all" : "file",
+    });
+    return;
+  }
+  const artifactKind = analyticsArtifactKindForCanvasTileType(node.type);
+  if (artifactKind !== null) {
+    Analytics.getInstance().track(AnalyticsEvent.ArtifactOpened, {
+      source,
+      kind: artifactKind,
+    });
+  }
+}
+
+/**
+ * Emits `tab_closed` for every tile a close GESTURE actually removed, by
+ * diffing the tab canvas' tile registry around the update (every close path
+ * prunes `tilesByInstanceId`, including last-tab pane collapse). Only the
+ * user-facing close actions call this, so programmatic tile removal - e.g. a
+ * cross-tab move, which routes through different actions - never counts.
+ */
+function trackClosedCanvasTiles(
+  before: EpicCanvasState | undefined,
+  after: EpicCanvasState | undefined,
+): void {
+  if (before === undefined) return;
+  Object.entries(before.tilesByInstanceId).forEach(([instanceId, tile]) => {
+    if (tile === undefined) return;
+    if (after !== undefined && instanceId in after.tilesByInstanceId) return;
+    const target = analyticsTargetForCanvasTileType(tile.type);
+    if (target === null) return;
+    Analytics.getInstance().track(AnalyticsEvent.TabClosed, { target });
+  });
+}
 
 export interface TabMoveArgs {
   readonly sourcePaneId: string;
@@ -234,6 +304,11 @@ export interface EpicCanvasStore {
     tabId: string,
     node: EpicCanvasTileRef,
   ) => NestedFocusTarget | null;
+  prepareOpenTileInTabFocusTargetFromSource: (
+    tabId: string,
+    node: EpicCanvasTileRef,
+    source: AnalyticsSource,
+  ) => NestedFocusTarget | null;
   /**
    * Open a tile in preview mode (italic tab), replacing the destination
    * pane's existing preview. Same dedup as `openTileInTab`.
@@ -242,6 +317,11 @@ export interface EpicCanvasStore {
   prepareOpenTilePreviewInTabFocusTarget: (
     tabId: string,
     node: EpicCanvasTileRef,
+  ) => NestedFocusTarget | null;
+  prepareOpenTilePreviewInTabFocusTargetFromSource: (
+    tabId: string,
+    node: EpicCanvasTileRef,
+    source: AnalyticsSource,
   ) => NestedFocusTarget | null;
   /**
    * Add `node` as a tab in the active pane without changing the active
@@ -252,6 +332,11 @@ export interface EpicCanvasStore {
   prepareOpenTileInBackgroundTabFocusTarget: (
     tabId: string,
     node: EpicCanvasTileRef,
+  ) => NestedFocusTarget | null;
+  prepareOpenTileInBackgroundTabFocusTargetFromSource: (
+    tabId: string,
+    node: EpicCanvasTileRef,
+    source: AnalyticsSource,
   ) => NestedFocusTarget | null;
   /**
    * Opener-only path: open `ref` into the explicit `paneId` as a fresh tab
@@ -267,6 +352,12 @@ export interface EpicCanvasStore {
     tabId: string,
     paneId: string,
     ref: EpicCanvasTileRef,
+  ) => NestedFocusTarget | null;
+  prepareOpenTileInPaneFocusTargetFromSource: (
+    tabId: string,
+    paneId: string,
+    ref: EpicCanvasTileRef,
+    source: AnalyticsSource,
   ) => NestedFocusTarget | null;
   /**
    * Open a blank "New tab" in `paneId`, made active. Reuse-if-active-is-blank:
@@ -1037,6 +1128,12 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
             },
           };
         });
+        const analyticsTarget = analyticsTargetForCanvasTileType(node.type);
+        if (analyticsTarget !== null) {
+          Analytics.getInstance().track(AnalyticsEvent.TabCreated, {
+            target: analyticsTarget,
+          });
+        }
         return tabId;
       },
 
@@ -1094,6 +1191,12 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
             },
           };
         });
+        const analyticsTarget = analyticsTargetForCanvasTileType(node.type);
+        if (analyticsTarget !== null) {
+          Analytics.getInstance().track(AnalyticsEvent.TabMoved, {
+            target: analyticsTarget,
+          });
+        }
         return newId;
       },
 
@@ -1191,6 +1294,14 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
         return after;
       },
 
+      prepareOpenTileInTabFocusTargetFromSource: (tabId, node, source) => {
+        const before = canvasForExistingTab(get(), tabId);
+        get().openTileInTab(tabId, node);
+        const canvas = canvasForExistingTab(get(), tabId);
+        if (before !== canvas) trackOpenedCanvasTile(node, source);
+        return currentNestedFocusTargetForTab(get(), tabId);
+      },
+
       openTilePreviewInTab: (tabId, node) => {
         set((state) =>
           updateTabCanvas(state, tabId, (canvas) =>
@@ -1205,6 +1316,18 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
         return after;
       },
 
+      prepareOpenTilePreviewInTabFocusTargetFromSource: (
+        tabId,
+        node,
+        source,
+      ) => {
+        const before = canvasForExistingTab(get(), tabId);
+        get().openTilePreviewInTab(tabId, node);
+        const canvas = canvasForExistingTab(get(), tabId);
+        if (before !== canvas) trackOpenedCanvasTile(node, source);
+        return currentNestedFocusTargetForTab(get(), tabId);
+      },
+
       openTileInBackgroundTab: (tabId, node) => {
         set((state) =>
           updateTabCanvas(state, tabId, (canvas) =>
@@ -1215,6 +1338,18 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
 
       prepareOpenTileInBackgroundTabFocusTarget: (tabId, node) => {
         get().openTileInBackgroundTab(tabId, node);
+        return null;
+      },
+
+      prepareOpenTileInBackgroundTabFocusTargetFromSource: (
+        tabId,
+        node,
+        source,
+      ) => {
+        const before = canvasForExistingTab(get(), tabId);
+        get().openTileInBackgroundTab(tabId, node);
+        const after = canvasForExistingTab(get(), tabId);
+        if (before !== after) trackOpenedCanvasTile(node, source);
         return null;
       },
 
@@ -1231,6 +1366,23 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
         const targetPane =
           before === null ? null : findPaneById(before.root, paneId);
         get().openTileInPane(tabId, paneId, ref);
+        const after = currentNestedFocusTargetForTab(get(), tabId);
+        const target = targetPane === null ? null : after;
+        return target;
+      },
+
+      prepareOpenTileInPaneFocusTargetFromSource: (
+        tabId,
+        paneId,
+        ref,
+        source,
+      ) => {
+        const before = canvasForExistingTab(get(), tabId);
+        const targetPane =
+          before === null ? null : findPaneById(before.root, paneId);
+        get().openTileInPane(tabId, paneId, ref);
+        const canvas = canvasForExistingTab(get(), tabId);
+        if (before !== canvas) trackOpenedCanvasTile(ref, source);
         const after = currentNestedFocusTargetForTab(get(), tabId);
         const target = targetPane === null ? null : after;
         return target;
@@ -1369,6 +1521,8 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
       },
 
       moveTabOnTabStrip: (tabId, args) => {
+        const before = canvasForExistingTab(get(), tabId);
+        const node = before?.tilesByInstanceId[args.tabId];
         set((state) =>
           updateTabCanvas(state, tabId, (canvas) => {
             const sourcePane = findPaneById(canvas.root, args.sourcePaneId);
@@ -1387,6 +1541,16 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
             );
           }),
         );
+        const after = canvasForExistingTab(get(), tabId);
+        const analyticsTarget =
+          node === undefined
+            ? null
+            : analyticsTargetForCanvasTileType(node.type);
+        if (before !== after && analyticsTarget !== null) {
+          Analytics.getInstance().track(AnalyticsEvent.TabMoved, {
+            target: analyticsTarget,
+          });
+        }
       },
 
       prepareMoveActiveTabOnTabStripFocusTarget: (tabId, args) => {
@@ -1406,6 +1570,7 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
       },
 
       splitPaneWithNode: (tabId, targetPaneId, position, node) => {
+        const before = canvasForExistingTab(get(), tabId);
         set((state) =>
           updateTabCanvas(state, tabId, (canvas) =>
             splitPaneAtEdge(canvas, targetPaneId, position, {
@@ -1414,6 +1579,13 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
             }),
           ),
         );
+        const after = canvasForExistingTab(get(), tabId);
+        const analyticsTarget = analyticsTargetForCanvasTileType(node.type);
+        if (before !== after && analyticsTarget !== null) {
+          Analytics.getInstance().track(AnalyticsEvent.TabSplit, {
+            target: analyticsTarget,
+          });
+        }
       },
 
       prepareSplitPaneWithNodeFocusTarget: (
@@ -1430,6 +1602,8 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
       },
 
       splitPaneWithTab: (tabId, args) => {
+        const before = canvasForExistingTab(get(), tabId);
+        const node = before?.tilesByInstanceId[args.tabId];
         set((state) =>
           updateTabCanvas(state, tabId, (canvas) => {
             const sourcePane = findPaneById(canvas.root, args.sourcePaneId);
@@ -1443,6 +1617,16 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
             });
           }),
         );
+        const after = canvasForExistingTab(get(), tabId);
+        const analyticsTarget =
+          node === undefined
+            ? null
+            : analyticsTargetForCanvasTileType(node.type);
+        if (before !== after && analyticsTarget !== null) {
+          Analytics.getInstance().track(AnalyticsEvent.TabSplit, {
+            target: analyticsTarget,
+          });
+        }
       },
 
       prepareSplitPaneWithTabFocusTarget: (tabId, args) => {
@@ -1487,6 +1671,7 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
         get().splitPaneEmptyInTab(tabId, targetPaneId, "horizontal"),
 
       closeCanvasTab: (tabId, paneId, tileTabId) => {
+        const beforeCanvas = get().canvasByTabId[tabId];
         // `tileTabId` is a tab instanceId; pendingCreate tracking is keyed by
         // content id, so resolve the closed tab's content id before clearing.
         set((state) => {
@@ -1507,6 +1692,7 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
             ? updated
             : { ...updated, pendingCreateArtifactIds: pendingNext };
         });
+        trackClosedCanvasTiles(beforeCanvas, get().canvasByTabId[tabId]);
       },
 
       prepareCloseCanvasTabFocusTarget: (tabId, paneId, tileTabId) => {
@@ -1526,19 +1712,23 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
       },
 
       closeOtherCanvasTabs: (tabId, paneId, tileTabId) => {
+        const beforeCanvas = get().canvasByTabId[tabId];
         set((state) =>
           updateTabCanvas(state, tabId, (canvas) =>
             closeOtherTileTabs(canvas, paneId, tileTabId),
           ),
         );
+        trackClosedCanvasTiles(beforeCanvas, get().canvasByTabId[tabId]);
       },
 
       closeRightCanvasTabs: (tabId, paneId, tileTabId) => {
+        const beforeCanvas = get().canvasByTabId[tabId];
         set((state) =>
           updateTabCanvas(state, tabId, (canvas) =>
             closeRightTabs(canvas, paneId, tileTabId),
           ),
         );
+        trackClosedCanvasTiles(beforeCanvas, get().canvasByTabId[tabId]);
       },
 
       prepareCloseRightCanvasTabsFocusTarget: (tabId, paneId, tileTabId) => {
@@ -1550,11 +1740,13 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
       },
 
       closeAllCanvasTabs: (tabId, paneId) => {
+        const beforeCanvas = get().canvasByTabId[tabId];
         set((state) =>
           updateTabCanvas(state, tabId, (canvas) =>
             closeAllTabs(canvas, paneId),
           ),
         );
+        trackClosedCanvasTiles(beforeCanvas, get().canvasByTabId[tabId]);
       },
 
       prepareCloseAllCanvasTabsFocusTarget: (tabId, paneId) => {
@@ -1566,9 +1758,11 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
       },
 
       closeCanvasPane: (tabId, paneId) => {
+        const beforeCanvas = get().canvasByTabId[tabId];
         set((state) =>
           updateTabCanvas(state, tabId, (canvas) => closePane(canvas, paneId)),
         );
+        trackClosedCanvasTiles(beforeCanvas, get().canvasByTabId[tabId]);
       },
 
       prepareCloseCanvasPaneFocusTarget: (tabId, paneId) => {

@@ -5,6 +5,8 @@ import { useDesktopAppUpdates } from "@/hooks/runner/use-desktop-app-updates";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { cn } from "@/lib/utils";
 import type { DesktopAppUpdateGuidance } from "@/lib/windows/types";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import { trackUpdateDownloadStarted } from "@/lib/app-update-analytics";
 
 /**
  * Compact circular update control in the header's right-side cluster. It cycles
@@ -48,6 +50,7 @@ export function AppUpdateHeaderButton() {
               blockedReason !== null && "disabled:opacity-60",
             )}
             onClick={() => {
+              trackUpdateDownloadStarted("direct_ui");
               void bridge.downloadUpdate();
             }}
           >
@@ -147,9 +150,19 @@ function AppUpdateReadyButton(props: {
               : "bg-emerald-500 hover:bg-emerald-600 hover:text-white",
             installBlockedReason !== null && "disabled:opacity-60",
           )}
-          onClick={
-            needsManualInstall ? openInstallGuidance : openConfirmRestartUpdate
-          }
+          onClick={() => {
+            if (needsManualInstall) {
+              // Same gesture as the toast's "View instructions" - both
+              // guidance affordances report through the one event.
+              Analytics.getInstance().track(
+                AnalyticsEvent.UpdateInstallGuidanceOpened,
+                { source: "direct_ui" },
+              );
+              openInstallGuidance();
+              return;
+            }
+            openConfirmRestartUpdate();
+          }}
         >
           {needsManualInstall ? (
             <Terminal className="size-4" aria-hidden />

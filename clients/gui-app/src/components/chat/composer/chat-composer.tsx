@@ -62,6 +62,7 @@ import {
 import { useComposerPickerItems } from "./picker/use-composer-picker-items";
 import { commitSelection } from "@/stores/composer/commit-selection";
 import { useTaskProfileRateLimitSwitch } from "./use-task-profile-rate-limit-switch";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 interface ChatComposerProps {
   readonly taskId: string;
@@ -313,6 +314,10 @@ function ChatComposerImpl(props: ChatComposerProps) {
   } = useComposerPaste(editorRef);
 
   const removeImage = useCallback((id: string) => {
+    Analytics.getInstance().track(AnalyticsEvent.AttachmentRemoved, {
+      kind: "image",
+      surface: "chat",
+    });
     editorRef.current?.removeImageAttachmentById(id);
   }, []);
 

@@ -14,6 +14,11 @@ import {
   scheduleLandingImageReconcile,
 } from "@/lib/composer/landing-image-gc";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import {
+  Analytics,
+  AnalyticsEvent,
+  analyticsBlockerFromError,
+} from "@/lib/analytics";
 
 /**
  * Landing-composer paste/drop ingest. Unlike the shared base64 adapter
@@ -30,7 +35,13 @@ import { reportableErrorToast } from "@/lib/reportable-error-toast";
 async function landingImageAttrsFromFiles(
   files: ReadonlyArray<File>,
 ): Promise<ImageAttachmentAttrs[]> {
-  const accepted = collectImages(files);
+  const accepted = collectImages(files, () => {
+    Analytics.getInstance().track(AnalyticsEvent.AttachmentRejected, {
+      kind: "image",
+      surface: "draft",
+      blocker: "invalid_input",
+    });
+  });
   if (accepted.length === 0) return [];
   // Make room (evict oldest inactive drafts) before storing bytes; a paste that
   // can't fit even after eviction is blocked here (toast shown by the budget).
@@ -38,7 +49,14 @@ async function landingImageAttrsFromFiles(
     (sum, file) => sum + (file.size > 0 ? file.size : 0),
     0,
   );
-  if (!reserveLandingImageBudget(incomingBytes)) return [];
+  if (!reserveLandingImageBudget(incomingBytes)) {
+    Analytics.getInstance().track(AnalyticsEvent.AttachmentRejected, {
+      kind: "image",
+      surface: "draft",
+      blocker: "rate_limit",
+    });
+    return [];
+  }
   return Promise.all(
     accepted.map(async (file) => {
       const bytes = new Uint8Array(await file.arrayBuffer());
@@ -63,11 +81,28 @@ export function useLandingComposerPaste(editorRef: {
         .then((attrs) => {
           if (attrs.length === 0) return;
           const handle = editorRef.current;
-          if (handle === null) return;
+          if (handle === null || !handle.isReady()) {
+            // Stored bytes for these images are now orphaned - the same
+            // situation as a failed ingest below - so reclaim them the same
+            // way (their session entries keep the bytes safe until it runs).
+            scheduleLandingImageReconcile();
+            return;
+          }
           handle.insertImageAttachments(attrs);
           handle.focus();
+          attrs.forEach(() => {
+            Analytics.getInstance().track(AnalyticsEvent.AttachmentAdded, {
+              kind: "image",
+              surface: "draft",
+            });
+          });
         })
-        .catch(() => {
+        .catch((error: unknown) => {
+          Analytics.getInstance().track(AnalyticsEvent.AttachmentRejected, {
+            kind: "image",
+            surface: "draft",
+            blocker: analyticsBlockerFromError(error),
+          });
           // A failed ingest (e.g. one image of a multi-image paste failed to hash
           // or store) inserts nothing, but earlier images may already be stored —
           // now orphaned. Surface the failure and schedule a reconcile to reclaim

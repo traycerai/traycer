@@ -1,3 +1,5 @@
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+
 /**
  * Feature-detected access to the desktop-only `appLifecycle` namespace the
  * Electron preload installs on `window.runnerHost`. gui-app must stay
@@ -25,6 +27,9 @@ function readAppLifecycleQuit(): (() => Promise<void>) | null {
  * current window outside the desktop shell.
  */
 export function requestAppQuit(): void {
+  Analytics.getInstance().track(AnalyticsEvent.AppQuitRequested, {
+    source: "direct_ui",
+  });
   const quit = readAppLifecycleQuit();
   if (quit !== null) {
     void quit();

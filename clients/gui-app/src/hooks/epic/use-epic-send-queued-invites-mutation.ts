@@ -16,6 +16,7 @@ import {
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { appLogger } from "@/lib/logger";
 import { hostQueryKeys, epicMutationKeys } from "@/lib/query-keys";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 export interface SendQueuedInvitesArgs {
   readonly epicId: string;
@@ -171,7 +172,19 @@ export function useEpicSendQueuedInvites(): UseMutationResult<
         failedInvites,
       };
     },
-    onSuccess: (_result, _variables, ctx) => {
+    onSuccess: (result, _variables, ctx) => {
+      result.succeededNewInvites.forEach((invite) => {
+        Analytics.getInstance().track(AnalyticsEvent.ShareInviteSent, {
+          target: "person",
+          role: invite.role,
+        });
+      });
+      result.succeededReInvites.forEach((invite) => {
+        Analytics.getInstance().track(AnalyticsEvent.ShareRoleChanged, {
+          target: "person",
+          role: invite.role,
+        });
+      });
       if (ctx.hostId === null) return;
       void queryClient.invalidateQueries({
         queryKey: hostQueryKeys.methodScope<keyof HostRpcRegistry & string>(
