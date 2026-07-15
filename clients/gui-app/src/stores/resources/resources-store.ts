@@ -48,9 +48,6 @@ export interface TaskResourceSummary {
   readonly cpuPercent: number;
   readonly rssBytes: number;
   readonly trackedProcessCount: number;
-  readonly openTerminalCount: number;
-  readonly tuiAgentCount: number;
-  readonly guiAgentCount: number;
 }
 
 /** Stable map key for one owner within an epic's projection. */
@@ -89,11 +86,6 @@ export interface ResourcesState {
   /** `null` when the epic has no tracked owner roots (a valid quiet state). */
   readonly epic: EpicResourceSnapshotWire | null;
   readonly epics: ReadonlyMap<string, EpicResourceSnapshotWire>;
-  /**
-   * Renderer-derived task-level summary for the live owner projection. `null`
-   * means no tracked owner snapshots are present, not zero usage.
-   */
-  readonly taskSummary: TaskResourceSummary | null;
   readonly dispose: () => void;
 }
 
@@ -165,20 +157,6 @@ function epicUsageEqual(
   );
 }
 
-function taskSummaryEqual(
-  a: TaskResourceSummary,
-  b: TaskResourceSummary,
-): boolean {
-  return (
-    a.cpuPercent === b.cpuPercent &&
-    a.rssBytes === b.rssBytes &&
-    a.trackedProcessCount === b.trackedProcessCount &&
-    a.openTerminalCount === b.openTerminalCount &&
-    a.tuiAgentCount === b.tuiAgentCount &&
-    a.guiAgentCount === b.guiAgentCount
-  );
-}
-
 function appUsageEqual(
   a: AppResourceSnapshotWire,
   b: AppResourceSnapshotWire,
@@ -245,47 +223,6 @@ function mergeOwners(
   return next;
 }
 
-export function deriveTaskResourceSummary(
-  app: AppResourceSnapshotWire | null,
-  owners: readonly OwnerResourceSnapshotWire[],
-): TaskResourceSummary | null {
-  if (app === null && owners.length === 0) return null;
-
-  let cpuPercent = app?.cpuPercent ?? 0;
-  let rssBytes = app?.rssBytes ?? 0;
-  let trackedProcessCount = app?.processCount ?? 0;
-  let openTerminalCount = 0;
-  let tuiAgentCount = 0;
-  let guiAgentCount = 0;
-
-  for (const snapshot of owners) {
-    cpuPercent += snapshot.cpuPercent;
-    rssBytes += snapshot.rssBytes;
-    trackedProcessCount += snapshot.processCount;
-
-    switch (snapshot.owner.kind) {
-      case "terminal":
-        openTerminalCount += 1;
-        break;
-      case "terminal-agent":
-        tuiAgentCount += 1;
-        break;
-      case "chat":
-        guiAgentCount += 1;
-        break;
-    }
-  }
-
-  return {
-    cpuPercent,
-    rssBytes,
-    trackedProcessCount,
-    openTerminalCount,
-    tuiAgentCount,
-    guiAgentCount,
-  };
-}
-
 function mergeEpic(
   previous: EpicResourceSnapshotWire | null,
   next: EpicResourceSnapshotWire | null,
@@ -343,16 +280,6 @@ function mergeOther(
   return next;
 }
 
-function mergeTaskSummary(
-  previous: TaskResourceSummary | null,
-  payload: ResourcesProjectionPayload,
-): TaskResourceSummary | null {
-  const next = deriveTaskResourceSummary(payload.app, payload.owners);
-  if (next === null) return null;
-  if (previous !== null && taskSummaryEqual(previous, next)) return previous;
-  return next;
-}
-
 export function createResourcesStore(
   options: ResourcesStoreOptions,
 ): ResourcesStoreHandle {
@@ -372,7 +299,6 @@ export function createResourcesStore(
         other: mergeOther(state.other, payload.other),
         epic: mergeEpic(state.epic, payload.epic),
         epics: mergeEpics(state.epics, payload),
-        taskSummary: mergeTaskSummary(state.taskSummary, payload),
       }));
     };
 
@@ -400,7 +326,6 @@ export function createResourcesStore(
       other: null,
       epic: null,
       epics: EMPTY_EPICS,
-      taskSummary: null,
       dispose: () => {
         if (disposed) return;
         disposed = true;
