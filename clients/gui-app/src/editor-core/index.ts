@@ -18,6 +18,7 @@ export {
   type ArtifactToolbarProps,
   type ArtifactCommentAction,
 } from "./toolbar/artifact-toolbar";
+export { updateArtifactToolbarPosition } from "./toolbar/artifact-toolbar-position";
 
 export { MermaidNode } from "./nodes/mermaid";
 export type { MermaidAttrs } from "./nodes/mermaid";

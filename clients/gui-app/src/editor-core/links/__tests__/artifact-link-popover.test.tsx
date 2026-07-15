@@ -122,6 +122,7 @@ function ToolbarPopoverHarness(props: { readonly editor: Editor }) {
       <ArtifactToolbar
         editor={props.editor}
         className={undefined}
+        scrollTarget={null}
         commentAction={null}
         suppressBubbleMenu={linkOpen}
       />
@@ -667,6 +668,7 @@ describe("ArtifactLinkPopover", () => {
         <ArtifactToolbar
           editor={editor}
           className={undefined}
+          scrollTarget={null}
           commentAction={null}
           suppressBubbleMenu={false}
         />
@@ -711,6 +713,7 @@ describe("ArtifactLinkPopover", () => {
         <ArtifactToolbar
           editor={editor}
           className={undefined}
+          scrollTarget={null}
           commentAction={null}
           suppressBubbleMenu={false}
         />
