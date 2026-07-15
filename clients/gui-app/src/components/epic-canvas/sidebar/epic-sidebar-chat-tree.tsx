@@ -136,7 +136,7 @@ import { SidebarReparentRowDropWrapper } from "@/components/epic-canvas/sidebar/
 import { NewConversationModalAction } from "@/components/epic-canvas/sidebar/new-conversation-modal";
 import { SidebarPanelEmptyState } from "@/components/epic-canvas/sidebar/sidebar-panel-empty-state";
 import { useHostNotificationIndicators } from "@/hooks/notifications/use-host-notification-indicators-query";
-import { WorktreeOwnerMetadataHoverCard } from "@/components/worktree/worktree-owner-metadata";
+import { WorktreeOwnerMetadataTooltip } from "@/components/worktree/worktree-owner-metadata";
 import {
   SidebarContextMenuItems,
   SidebarDropdownMenuItems,
@@ -1338,7 +1338,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
   );
   if (ownerHostId === null || ownerKind === null) return button;
   return (
-    <WorktreeOwnerMetadataHoverCard
+    <WorktreeOwnerMetadataTooltip
       trigger={button}
       hostId={ownerHostId}
       epicId={epicId}
@@ -1366,6 +1366,7 @@ function ChatSidebarNodeIcon(props: ChatSidebarNodeIconProps) {
         className={undefined}
         mutedClassName="text-muted-foreground/70"
         testId="chat-sidebar-spinner"
+        defaultIcon={undefined}
       />
     );
   }
