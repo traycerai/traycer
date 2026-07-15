@@ -17,6 +17,7 @@ import {
   Strikethrough,
 } from "lucide-react";
 import { useCallback, useMemo } from "react";
+import { artifactToolbarPluginKey } from "./artifact-toolbar-position";
 import { ToolbarButton } from "./toolbar-button";
 
 export interface ArtifactCommentAction {
@@ -155,6 +156,7 @@ export function ArtifactToolbar(props: ArtifactToolbarProps) {
   return (
     <BubbleMenu
       editor={editor}
+      pluginKey={artifactToolbarPluginKey}
       options={bubbleMenuOptions}
       shouldShow={shouldShow}
     >

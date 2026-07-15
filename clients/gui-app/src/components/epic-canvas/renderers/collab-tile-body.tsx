@@ -6,6 +6,7 @@ import {
   applyCommentDecorationSnapshot,
   ArtifactToolbar,
   deriveCollabUser,
+  updateArtifactToolbarPosition,
   type ArtifactCommentAction,
   type CollabUser,
 } from "@/editor-core";
@@ -47,7 +48,14 @@ import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
 import type { EpicArtifactRoomAvailability } from "@/stores/epics/open-epic/types";
 import type { Editor } from "@tiptap/core";
 import { EditorContent } from "@tiptap/react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type UIEvent,
+} from "react";
 import type { Awareness } from "y-protocols/awareness";
 import type * as Y from "yjs";
 import { ArtifactChildIndex } from "./artifact-child-index";
@@ -417,8 +425,10 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
 
   // Preserve the document's reading position across epic switches and remount.
   // Gated on the editor existing so restore waits for real content to lay out.
-  const { scrollContainerRef: scrollRestorationRef, onScroll } =
-    useNativeDivScrollRestoration(node.instanceId, editor !== null);
+  const {
+    scrollContainerRef: scrollRestorationRef,
+    onScroll: onScrollRestoration,
+  } = useNativeDivScrollRestoration(node.instanceId, editor !== null);
   const setScrollContainerRef = useCallback(
     (element: HTMLDivElement | null): void => {
       editorRootRef.current = element;
@@ -426,6 +436,17 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
       scrollRestorationRef(element);
     },
     [scrollRestorationRef],
+  );
+  const onScroll = useCallback(
+    (event: UIEvent<HTMLDivElement>): void => {
+      onScrollRestoration(event);
+      if (editor === null || ownedDraftRange !== null) return;
+      // TipTap's native BubbleMenu scroll listener is trailing-debounced.
+      // Drive its documented escape hatch from this existing handler so the
+      // selection toolbar tracks every native tile scroll event immediately.
+      updateArtifactToolbarPosition(editor);
+    },
+    [editor, onScrollRestoration, ownedDraftRange],
   );
 
   return (
