@@ -71,8 +71,14 @@ function ProfileUsagePickerProfileDropdown({
     return resolveHostConsistentUsageProfiles(
       props.profiles,
       provider.profiles,
+      props.runTargetHostId !== null,
     );
-  }, [props.profiles, providerId, runTargetProvidersQuery.data]);
+  }, [
+    props.profiles,
+    props.runTargetHostId,
+    providerId,
+    runTargetProvidersQuery.data,
+  ]);
   const comparison = useProfileUsageComparison({
     runTargetHostId: props.runTargetHostId,
     providerId,
@@ -138,11 +144,16 @@ function ProfileUsagePickerProfileDropdown({
  * rendering; return the target host's objects so every summary field consumed
  * by `useProfileUsageComparison` comes from that same host. A missing, partial,
  * renamed, recolored, or differently-authenticated target set stays
- * identity-only until the picker receives a coherent snapshot.
+ * identity-only until the picker receives a coherent snapshot. An explicit
+ * target host also requires a concrete account identity: two unresolved null
+ * identities are not evidence that independently queried hosts use the same
+ * account. The null/default target is already the visible profiles' host, so
+ * it may use that host's unresolved snapshot without a cross-host join.
  */
 function resolveHostConsistentUsageProfiles(
   visibleProfiles: ReadonlyArray<ProviderProfile>,
   runTargetProfiles: ReadonlyArray<ProviderProfile>,
+  requireResolvedAccountIdentity: boolean,
 ): ReadonlyArray<ProviderProfile> {
   if (visibleProfiles.length !== runTargetProfiles.length) {
     return EMPTY_PROFILES;
@@ -156,7 +167,11 @@ function resolveHostConsistentUsageProfiles(
     );
     if (
       runTargetProfile === undefined ||
-      !hasSameVisibleProfileIdentity(visibleProfile, runTargetProfile)
+      !hasSameVisibleProfileIdentity(
+        visibleProfile,
+        runTargetProfile,
+        requireResolvedAccountIdentity,
+      )
     ) {
       return null;
     }
@@ -172,6 +187,7 @@ function resolveHostConsistentUsageProfiles(
 function hasSameVisibleProfileIdentity(
   left: ProviderProfile,
   right: ProviderProfile,
+  requireResolvedAccountIdentity: boolean,
 ): boolean {
   return (
     left.kind === right.kind &&
@@ -180,7 +196,7 @@ function hasSameVisibleProfileIdentity(
     left.auth.badgeText === right.auth.badgeText &&
     left.auth.label === right.auth.label &&
     left.auth.detail === right.auth.detail &&
-    hasSameAccountIdentity(left, right) &&
+    hasSameAccountIdentity(left, right, requireResolvedAccountIdentity) &&
     left.accentColor === right.accentColor
   );
 }
@@ -188,9 +204,18 @@ function hasSameVisibleProfileIdentity(
 function hasSameAccountIdentity(
   left: ProviderProfile,
   right: ProviderProfile,
+  requireResolvedAccountIdentity: boolean,
 ): boolean {
   if (left.identity === null || right.identity === null) {
-    return left.identity === right.identity;
+    return !requireResolvedAccountIdentity && left.identity === right.identity;
+  }
+  const leftKey = left.identity.accountUuid ?? left.identity.email;
+  const rightKey = right.identity.accountUuid ?? right.identity.email;
+  if (
+    requireResolvedAccountIdentity &&
+    (leftKey === null || rightKey === null)
+  ) {
+    return false;
   }
   return (
     left.identity.email === right.identity.email &&

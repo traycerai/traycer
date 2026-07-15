@@ -1806,7 +1806,14 @@ describe("<HarnessModelPicker />", () => {
   });
 
   it("keeps usage identity-only for matching labels backed by different target accounts", async () => {
-    const visibleProfiles = claudeProfilesForDropdown();
+    const visibleProfiles = claudeProfilesForDropdown().map((profile) => ({
+      ...profile,
+      identity: {
+        email: `${profile.profileId}@example.com`,
+        tier: "pro",
+        accountUuid: `${profile.profileId}-local-account`,
+      },
+    }));
     queryMock.providerStates = [
       providerCliStateWithProfiles({
         providerId: "claude-code",
@@ -1842,8 +1849,61 @@ describe("<HarnessModelPicker />", () => {
     expect(comparisonCall?.profiles).toEqual([]);
   });
 
-  it("feeds usage comparison the run target's summaries when profile identities match", async () => {
+  it("keeps cross-host usage identity-only while both account identities are unresolved", async () => {
     const visibleProfiles = claudeProfilesForDropdown();
+    queryMock.providerStates = [
+      providerCliStateWithProfiles({
+        providerId: "claude-code",
+        profiles: visibleProfiles,
+      }),
+    ];
+    queryMock.providerStatesByClient.set("tab-host-1", [
+      providerCliStateWithProfiles({
+        providerId: "claude-code",
+        profiles: visibleProfiles.map((profile) => ({ ...profile })),
+      }),
+    ]);
+
+    renderPicker({ createProfileHostId: "tab-host-1" });
+    await openPicker();
+    fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+
+    const comparisonCall = profileUsageHookMock.calls.find(
+      (call) => call.providerId === "claude-code",
+    );
+    expect(comparisonCall?.runTargetHostId).toBe("tab-host-1");
+    expect(comparisonCall?.profiles).toEqual([]);
+  });
+
+  it("keeps unresolved usage available when the picker and run target share the default host", async () => {
+    const visibleProfiles = claudeProfilesForDropdown();
+    queryMock.providerStates = [
+      providerCliStateWithProfiles({
+        providerId: "claude-code",
+        profiles: visibleProfiles,
+      }),
+    ];
+
+    renderPicker(undefined);
+    await openPicker();
+    fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+
+    const comparisonCall = profileUsageHookMock.calls.find(
+      (call) => call.providerId === "claude-code",
+    );
+    expect(comparisonCall?.runTargetHostId).toBeNull();
+    expect(comparisonCall?.profiles).toEqual(visibleProfiles);
+  });
+
+  it("feeds usage comparison the run target's summaries when profile identities match", async () => {
+    const visibleProfiles = claudeProfilesForDropdown().map((profile) => ({
+      ...profile,
+      identity: {
+        email: `${profile.profileId}@example.com`,
+        tier: "pro",
+        accountUuid: `${profile.profileId}-account`,
+      },
+    }));
     queryMock.providerStates = [
       providerCliStateWithProfiles({
         providerId: "claude-code",
