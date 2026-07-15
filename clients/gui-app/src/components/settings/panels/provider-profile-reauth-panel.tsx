@@ -17,7 +17,9 @@ import { createReportIssueContext } from "@/lib/report-issue-context";
 import { useProvidersStartLogin } from "@/hooks/providers/use-providers-start-login-mutation";
 import { useHostScopedProvidersAwaitLogin } from "@/hooks/providers/use-providers-await-login-mutation";
 import { useProvidersCancelLogin } from "@/hooks/providers/use-providers-cancel-login-mutation";
-import { useRunnerHost } from "@/providers/use-runner-host";
+import { useProvidersSubmitLoginCode } from "@/hooks/providers/use-providers-submit-login-code-mutation";
+import { useProvidersTouchLogin } from "@/hooks/providers/use-providers-touch-login-mutation";
+import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
 import { redactEmail } from "@/lib/providers/redact-email";
 import {
   AddProfileIdentityStep,
@@ -43,17 +45,22 @@ export function ProviderProfileReauthPanel({
   onCancel,
   onDone,
 }: ProviderProfileReauthPanelProps): ReactNode {
-  const runnerHost = useRunnerHost();
+  const openExternalLink = useRunnerOpenExternalLink();
   const startLogin = useProvidersStartLogin();
   const awaitLogin = useHostScopedProvidersAwaitLogin();
   const cancelLogin = useProvidersCancelLogin();
+  const submitLoginCode = useProvidersSubmitLoginCode();
+  const touchLogin = useProvidersTouchLogin();
   const flow = useProviderProfileLoginFlow({
     mode: "reauth",
     providerId: state.providerId,
     existingProfileId: profile.profileId,
+    loginCapability: state.loginCapability,
     startLogin,
     awaitLogin,
     cancelLogin,
+    submitLoginCode,
+    touchLogin,
     failureMessages: {
       notStarted: "Sign-in did not start. Try again when ready.",
       notFinished: "Sign-in did not finish. Try again.",
@@ -100,8 +107,7 @@ export function ProviderProfileReauthPanel({
           Switching account
         </div>
         <p className="mt-0.5 text-ui-xs text-muted-foreground">
-          Complete sign-in in your browser. The profile name and color will not
-          change.
+          The profile name and color will not change.
         </p>
       </div>
 
@@ -113,7 +119,7 @@ export function ProviderProfileReauthPanel({
         identityChanged={identityChanged}
         emailRevealed={emailRevealed}
         setEmailRevealed={setEmailRevealed}
-        onOpenExternalLink={(url) => void runnerHost.openExternalLink(url)}
+        onOpenExternalLink={(url) => openExternalLink.mutate(url)}
         onCancel={cancel}
         onRetry={start}
         onSignInAgain={signInAgain}
@@ -159,6 +165,10 @@ function ProviderProfileReauthState({
           cancelRequested={
             flow.state.kind === "starting" && flow.state.cancelRequested
           }
+          cancelPending={flow.cancelPending}
+          cancelDisabled={flow.commitPending}
+          waiting={flow.state.kind === "waiting"}
+          codePaste={flow.codePaste}
           onOpenExternalLink={onOpenExternalLink}
           onCancel={onCancel}
         />

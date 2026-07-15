@@ -39,6 +39,7 @@ const NODE: EpicCanvasTileRef = {
   instanceId: "bundle-instance",
   name: "Bundle",
   hostId: "host-1",
+  repositoryContext: null,
   type: "git-diff",
   diff: {
     kind: "bundle",

@@ -135,6 +135,9 @@ interface HarnessModelPickerProps {
    * runs turns on a different one (the tab-host-binding rule).
    */
   createProfileHostId: string | null;
+  /** The exact host where the next run executes. This is explicit so usage
+   *  comparison can never silently fall back to the renderer-default host. */
+  runTargetHostId: string | null;
 }
 
 function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
@@ -146,6 +149,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     disabled,
     registerActivation,
     createProfileHostId,
+    runTargetHostId,
   } = props;
   const activityEnabled = useSurfaceActivity();
   const selection = useStore(store, (s) => s.selection);
@@ -808,6 +812,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         reasoningFooter={reasoningFooter}
         serviceTierFooter={serviceTierFooter}
         createProfileHostId={createProfileHostId}
+        runTargetHostId={runTargetHostId}
         createProfileDisabled={createProfileGate.disabled}
         createProfileDisabledReason={createProfileGate.reason}
       />

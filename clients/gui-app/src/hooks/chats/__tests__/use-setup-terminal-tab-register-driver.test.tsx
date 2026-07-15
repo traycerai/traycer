@@ -94,15 +94,54 @@ describe("useSetupTerminalTabRegisterDriver", () => {
     const tiles = collectPanes(canvas.root).flatMap((pane) =>
       paneTabRefs(canvas, pane),
     );
-    expect(tiles).toContainEqual({
+    const setupTile = tiles.find(
+      (tile) => tile.id === WORKTREE_ENTRY.setupTerminalSessionId,
+    );
+    expect(setupTile).toMatchObject({
       id: WORKTREE_ENTRY.setupTerminalSessionId,
-      instanceId: WORKTREE_ENTRY.setupTerminalSessionId,
       type: "terminal",
       name: "Setup: traycer feature/setup-title",
       titleSource: "manual",
       hostId: HOST_ID,
       cwd: WORKTREE_ENTRY.worktreePath,
     });
+    // `instanceId` is a freshly minted per-tab-instance id (NOT the session
+    // id - reusing it would alias stream handles across views).
+    expect(typeof setupTile?.instanceId).toBe("string");
+    expect(setupTile?.instanceId).not.toBe(
+      WORKTREE_ENTRY.setupTerminalSessionId,
+    );
+
+    // Cross-view uniqueness: the SAME session registered in a second view
+    // must mint its own instance id, or the two views alias one
+    // session-registry stream handle.
+    const secondViewTabId = useEpicCanvasStore
+      .getState()
+      .openEpicTab(EPIC_ID, "Epic 2");
+    useEpicCanvasStore.getState().openTileInTab(secondViewTabId, {
+      id: CHAT_ID,
+      instanceId: "chat-instance-2",
+      type: "chat",
+      name: "Chat",
+      hostId: HOST_ID,
+    });
+    renderHook(
+      () =>
+        useSetupTerminalTabRegisterDriver({
+          handle,
+          viewTabId: secondViewTabId,
+        }),
+      { wrapper: Wrapper },
+    );
+    const secondCanvas =
+      useEpicCanvasStore.getState().canvasByTabId[secondViewTabId];
+    expect(secondCanvas?.root).not.toBeNull();
+    if (secondCanvas === undefined || secondCanvas.root === null) return;
+    const secondSetupTile = collectPanes(secondCanvas.root)
+      .flatMap((pane) => paneTabRefs(secondCanvas, pane))
+      .find((tile) => tile.id === WORKTREE_ENTRY.setupTerminalSessionId);
+    expect(typeof secondSetupTile?.instanceId).toBe("string");
+    expect(secondSetupTile?.instanceId).not.toBe(setupTile?.instanceId);
   });
 
   it("registers a background terminal tab for every running setup entry", () => {

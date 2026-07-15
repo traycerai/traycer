@@ -1,17 +1,12 @@
 import { useState, type ButtonHTMLAttributes, type Ref } from "react";
 import { ChevronDown, TriangleAlert } from "lucide-react";
 import {
-  HoverCard,
-  HoverCardContent,
-  HoverCardTrigger,
-} from "@/components/ui/hover-card";
-import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { HoverPreviewCard } from "@/components/ui/hover-preview-card";
 import { cn } from "@/lib/utils";
 import { WorkspaceFolderHoverList } from "./workspace-folder-hover-list";
 import { WorkspaceFolderRows } from "./workspace-folder-rows";
@@ -36,7 +31,6 @@ export function WorkspaceSummaryTrigger(
     readonly items: ReadonlyArray<WorkspaceRunItem>;
     readonly readOnly: boolean;
     readonly bindingResolved: boolean;
-    readonly tooltipEnabled: boolean;
     readonly ref?: Ref<HTMLButtonElement>;
   },
 ) {
@@ -104,24 +98,11 @@ export function WorkspaceSummaryTrigger(
       <ChevronDown className="size-3.5 shrink-0 text-current" />
     </button>
   );
-  const trigger = props.tooltipEnabled ? (
-    <TooltipWrapper
-      label={
-        <WorkspaceSummaryTooltip
-          items={items}
-          anyMissing={anyMissing}
-          bindingResolved={bindingResolved}
-        />
-      }
-      side="top"
-      sideOffset={6}
-      align="start"
-    >
-      {triggerButton}
-    </TooltipWrapper>
-  ) : (
-    triggerButton
-  );
+  // The interactive (non-read-only) summary is wrapped by the parent's
+  // controlled hover card (`WorkspaceFolderSummaryControl`), which gates the
+  // preview on the click-open picker; the read-only branch below owns its own
+  // coordinated hover+popover pair.
+  const trigger = triggerButton;
 
   // Read-only (terminal-agent): hover keeps the compact preview; click expands
   // the normal folder rows with every binding control suppressed.
@@ -135,26 +116,19 @@ export function WorkspaceSummaryTrigger(
           if (nextOpen) setReadOnlyHoverOpen(false);
         }}
       >
-        <HoverCard
+        <HoverPreviewCard
+          content={<WorkspaceFolderHoverList items={items} />}
+          side="bottom"
+          sideOffset={4}
+          align="start"
           open={!readOnlyPopoverOpen && readOnlyHoverOpen}
           onOpenChange={(nextOpen) => {
             if (readOnlyPopoverOpen) return;
             setReadOnlyHoverOpen(nextOpen);
           }}
-          openDelay={350}
-          closeDelay={120}
         >
-          <HoverCardTrigger asChild>
-            <PopoverTrigger asChild>{trigger}</PopoverTrigger>
-          </HoverCardTrigger>
-          <HoverCardContent
-            side="bottom"
-            align="start"
-            className="w-[min(92vw,24rem)] rounded-md bg-foreground p-0 text-ui-xs text-background"
-          >
-            <WorkspaceFolderHoverList items={items} />
-          </HoverCardContent>
-        </HoverCard>
+          <PopoverTrigger asChild>{trigger}</PopoverTrigger>
+        </HoverPreviewCard>
         <PopoverContent
           side="bottom"
           align="start"
@@ -184,46 +158,6 @@ export function WorkspaceSummaryTrigger(
   }
 
   return trigger;
-}
-
-function WorkspaceSummaryTooltip(props: {
-  readonly items: ReadonlyArray<WorkspaceRunItem>;
-  readonly anyMissing: boolean;
-  readonly bindingResolved: boolean;
-}) {
-  if (props.items.length === 0) {
-    return props.bindingResolved ? "No workspace linked" : "Linking workspace…";
-  }
-  return (
-    <span
-      className="flex max-w-[min(80vw,20rem)] flex-col gap-2 py-0.5"
-      data-testid="workspace-summary-tooltip"
-    >
-      {props.anyMissing ? (
-        <span className="text-background">
-          A bound folder is missing on disk.
-        </span>
-      ) : null}
-      {props.items.map((item) => {
-        const source = workspaceRunBranchSourceLabel(item.currentIntent);
-        return (
-          <span key={item.key} className="flex min-w-0 flex-col gap-0.5">
-            <span className="break-words font-medium text-background">
-              {item.displayName}
-            </span>
-            <span className="break-words text-background/75">
-              {item.branchLabel}
-            </span>
-            {source === null ? null : (
-              <span className="break-words text-background/55">
-                From {source}
-              </span>
-            )}
-          </span>
-        );
-      })}
-    </span>
-  );
 }
 
 function SummaryEmptyState(props: { readonly bindingResolved: boolean }) {

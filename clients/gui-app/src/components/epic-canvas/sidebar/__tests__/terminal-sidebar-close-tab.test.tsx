@@ -1,6 +1,11 @@
 import "../../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render } from "@testing-library/react";
+import {
+  cleanup,
+  createEvent,
+  fireEvent,
+  render,
+} from "@testing-library/react";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { CanonicalTerminalSessionInfo } from "@traycer/protocol/host/terminal/unary-schemas";
@@ -143,6 +148,12 @@ describe("terminal sidebar Close", () => {
     expect(
       getByTestId(`epic-terminal-sidebar-item-${SESSION_ID}`).textContent,
     ).toBe("New Terminal");
+    expect(
+      getByTestId(`epic-terminal-sidebar-item-${SESSION_ID}`).className,
+    ).toContain("h-7");
+    expect(
+      getByTestId(`epic-terminal-sidebar-item-${SESSION_ID}`).className,
+    ).not.toContain("h-9");
     expect(queryByText("/tmp/work")).toBeNull();
     expect(
       getByTestId(`epic-terminal-sidebar-more-${SESSION_ID}`),
@@ -162,6 +173,40 @@ describe("terminal sidebar Close", () => {
     expect(findOpenArtifactInTab(TAB_ID, SESSION_ID)).toBeNull();
     // ...and the PTY is terminated.
     expect(killMutate).toHaveBeenCalledWith({ sessionId: SESSION_ID });
+  });
+
+  it("offers the ellipsis actions from the row context menu", async () => {
+    const { getByTestId, findByRole } = render(
+      wrapper(<TerminalsPanelBody epicId="epic-1" tabId={TAB_ID} />),
+    );
+
+    fireEvent.contextMenu(
+      getByTestId(`epic-terminal-sidebar-item-${SESSION_ID}`),
+    );
+
+    expect(await findByRole("menuitem", { name: "Rename" })).not.toBeNull();
+    fireEvent.click(await findByRole("menuitem", { name: "Close" }));
+
+    expect(findOpenArtifactInTab(TAB_ID, SESSION_ID)).toBeNull();
+    expect(killMutate).toHaveBeenCalledWith({ sessionId: SESSION_ID });
+  });
+
+  it("does not suppress the native context menu while renaming", async () => {
+    const { getByTestId, findByTestId, queryByRole } = render(
+      wrapper(<TerminalsPanelBody epicId="epic-1" tabId={TAB_ID} />),
+    );
+
+    fireEvent.click(getByTestId(`epic-terminal-sidebar-rename-${SESSION_ID}`));
+
+    const renameInput = await findByTestId(
+      `epic-terminal-sidebar-rename-input-${SESSION_ID}`,
+    );
+    const contextMenuEvent = createEvent.contextMenu(renameInput);
+    fireEvent(renameInput, contextMenuEvent);
+
+    expect(contextMenuEvent.defaultPrevented).toBe(false);
+    expect(queryByRole("menuitem", { name: "Rename" })).toBeNull();
+    expect(queryByRole("menuitem", { name: "Close" })).toBeNull();
   });
 
   it("uses the active process name for an unnamed terminal", () => {

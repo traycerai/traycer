@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { Profiler, type ProfilerOnRenderCallback } from "react";
 import { act, cleanup, render } from "@testing-library/react";
 import * as Y from "yjs";
+import { createArtifactInDocForTests } from "./projection-helpers-test-shims";
 import {
   createOpenEpicStore,
   type EpicStreamClientFactory,
@@ -97,8 +98,8 @@ afterEach(() => {
 describe("epic projector render-count regressions", () => {
   it("editing artifact A does NOT re-render a component subscribed to artifact B", () => {
     const handle = newSession();
-    const idA = handle.store.getState().createArtifact("spec", null);
-    const idB = handle.store.getState().createArtifact("spec", null);
+    const idA = createArtifactInDocForTests(handle.doc, "spec", null);
+    const idB = createArtifactInDocForTests(handle.doc, "spec", null);
 
     const spy = makeSpy();
 
@@ -130,7 +131,7 @@ describe("epic projector render-count regressions", () => {
 
   it("editing artifact title does NOT re-render the connection-status subscriber", () => {
     const handle = newSession();
-    const idA = handle.store.getState().createArtifact("spec", null);
+    const idA = createArtifactInDocForTests(handle.doc, "spec", null);
 
     const spy = makeSpy();
 
@@ -158,7 +159,7 @@ describe("epic projector render-count regressions", () => {
 
   it("tree slice stays referentially stable when only a title changes", () => {
     const handle = newSession();
-    const id = handle.store.getState().createArtifact("spec", null);
+    const id = createArtifactInDocForTests(handle.doc, "spec", null);
 
     const spy = makeSpy();
 
@@ -201,7 +202,7 @@ describe("epic projector render-count regressions", () => {
     const initial = spy.counts.get("root") ?? 0;
 
     act(() => {
-      handle.store.getState().createArtifact("spec", null);
+      createArtifactInDocForTests(handle.doc, "spec", null);
     });
 
     // Adding a root invalidates rootIds → at least one extra render.

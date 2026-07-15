@@ -73,6 +73,7 @@ export const GIT_FILE_A: GitDiffTileRef = makeGitFileDiffTile({
   runningDir: "/repo",
   filePath: "src/a.ts",
   stage: "unstaged",
+  repositoryContext: null,
 });
 // Same diff as GIT_FILE_A - same deterministic id - but distinct
 // tile-local view state, exercising "dedupe focuses the existing tab".
@@ -85,11 +86,13 @@ export const GIT_FILE_B: GitDiffTileRef = makeGitFileDiffTile({
   runningDir: "/repo",
   filePath: "src/b.ts",
   stage: "unstaged",
+  repositoryContext: null,
 });
 export const GIT_BUNDLE_CHANGES: GitDiffTileRef = makeGitBundleDiffTile({
   hostId: TEST_HOST_ID,
   runningDir: "/repo",
   bundleGroup: "changes",
+  repositoryContext: null,
 });
 export const SNAPSHOT_BUNDLE_CHANGES: SnapshotDiffTileRef =
   makeSnapshotCumulativeBundleDiffTile({

@@ -107,6 +107,7 @@ export function GitChangedFilesView(
         viewTabId={props.viewTabId}
         hostId={props.hostId}
         runningDir={props.runningDir}
+        repositoryContext={null}
         files={props.files}
         query={appliedQuery}
         onClearQuery={handleClear}

@@ -28,6 +28,7 @@ interface ComposerToolbarRightProps {
   /** The host "Create new profile" creates on - see `HarnessModelPicker`'s
    *  prop of the same name. */
   createProfileHostId: string | null;
+  readonly runTargetHostId: string | null;
 }
 
 function ComposerToolbarRightImpl(props: ComposerToolbarRightProps) {
@@ -43,6 +44,7 @@ function ComposerToolbarRightImpl(props: ComposerToolbarRightProps) {
     dictation,
     dictationPreparing,
     createProfileHostId,
+    runTargetHostId,
   } = props;
   // Block sending until the model slug resolves to a concrete value - an
   // empty slug is the transient "catalog still loading" marker and must never
@@ -65,6 +67,7 @@ function ComposerToolbarRightImpl(props: ComposerToolbarRightProps) {
         disabled={settingsLocked}
         registerActivation
         createProfileHostId={createProfileHostId}
+        runTargetHostId={runTargetHostId}
       />
       {dictation !== null ? <ComposerMicButton control={dictation} /> : null}
       {dictation === null && dictationPreparing !== null ? (

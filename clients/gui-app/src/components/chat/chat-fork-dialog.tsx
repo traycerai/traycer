@@ -336,6 +336,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
                 disabled={createChat.isPending}
                 registerActivation={false}
                 createProfileHostId={tabHostId}
+                runTargetHostId={tabHostId}
               />
               <div className="shrink-0">
                 <AgentModeToggle

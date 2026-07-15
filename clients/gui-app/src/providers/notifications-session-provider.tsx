@@ -23,6 +23,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { useAuthService } from "@/lib/host";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useNotificationShow } from "@/hooks/notifications/use-notifications";
+import { useNotificationActivation } from "@/hooks/notifications/use-notification-activation";
 import { useNotificationMarkEntityRead } from "@/hooks/notifications/use-notification-mark-entity-read-mutation";
 import { useWindowsBridge } from "@/providers/windows-bridge-context";
 import {
@@ -40,11 +41,12 @@ import {
 } from "@/lib/notifications/notification-indicator-cache";
 import {
   notificationEntitiesMatch,
-  notificationEntityFromPayload,
+  notificationEntityFromHostEntry,
   notificationPayloadBelongsToEntity,
 } from "@/lib/notifications";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
 import type { HostNotificationsEntityRef } from "@traycer/protocol/host/notifications/contracts";
+import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
 
 export interface NotificationsSessionProviderProps {
   readonly children: ReactNode;
@@ -65,6 +67,7 @@ export function NotificationsSessionProvider(
   const activeHostId = useReactiveActiveHostId();
   const authService = useAuthService();
   const showNotification = useNotificationShow();
+  const { activate } = useNotificationActivation();
   const windowsBridge = useWindowsBridge();
   const status = useAuthStore((state) => state.status);
   const email = useAuthStore((state) => state.profile?.email ?? null);
@@ -76,6 +79,21 @@ export function NotificationsSessionProvider(
   const markEntityReadMutation = useNotificationMarkEntityRead();
   const markEntityRead = markEntityReadMutation.mutate;
   const activeEntityRef = useRef<HostNotificationsEntityRef | null>(null);
+  const onToastClick = useCallback(
+    (row: MergedNotificationRow): void => {
+      if (row.payload === null) return;
+      activate({
+        payload: row.payload,
+        receivedAt: row.createdAt,
+        onActivated: null,
+      });
+    },
+    [activate],
+  );
+  const onToastClickRef = useRef(onToastClick);
+  useEffect(() => {
+    onToastClickRef.current = onToastClick;
+  }, [onToastClick]);
   const consumeEntity = useCallback(
     (entity: HostNotificationsEntityRef): void => {
       useAppLocalNotificationsStore
@@ -117,7 +135,7 @@ export function NotificationsSessionProvider(
         );
         return;
       }
-      const entity = notificationEntityFromPayload(frame.entry.payload);
+      const entity = notificationEntityFromHostEntry(frame.entry);
       if (entity === null) return;
       invalidateNotificationIndicatorsForEntities(queryClient, hostId, [
         entity,
@@ -224,6 +242,7 @@ export function NotificationsSessionProvider(
             displayHostChannelEmission(entries, {
               showNotification,
               playChime: playNotificationChime,
+              onToastClick: (row) => onToastClickRef.current(row),
             });
           },
           onFeedFrame: (frame) => onFeedFrame(frame, streamHostId),
