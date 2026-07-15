@@ -7,7 +7,10 @@ import {
 } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { toast } from "sonner";
-import type { ListTasksResponse } from "@traycer/protocol/host/epic/unary-schemas";
+import type {
+  ListTaskLight,
+  ListTasksResponse,
+} from "@traycer/protocol/host/epic/unary-schemas";
 import {
   LIST_CLOUD_TASKS_REQUEST,
   cloudEpicTasksQueryKey,
@@ -21,10 +24,13 @@ vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn() },
 }));
 
-const testState = vi.hoisted(() => ({
-  activeHostId: "host-1",
-  userId: "user-1",
-}));
+const testState = vi.hoisted(() => {
+  const state: { activeHostId: string | null; userId: string | null } = {
+    activeHostId: "host-1",
+    userId: "user-1",
+  };
+  return state;
+});
 
 vi.mock("@/lib/host/runtime", () => ({
   useHostClient: () => ({
@@ -39,13 +45,16 @@ interface MutationContext {
 }
 
 let capturedOptions: {
-  onMutate?: () => MutationContext;
-  onSuccess?: (
-    response: { pinned: boolean },
+  onMutate?: (variables: {
+    epicId: string;
+    pinned: boolean;
+  }) => MutationContext;
+  onSuccess?: unknown;
+  onError?: (
+    error: unknown,
     variables: { epicId: string; pinned: boolean },
-    context: MutationContext,
-  ) => Promise<void>;
-  onError?: (error: unknown) => void;
+    context: MutationContext | undefined,
+  ) => void;
 } = {};
 
 vi.mock("@/hooks/host/use-host-query", () => ({
@@ -61,7 +70,48 @@ import {
 } from "@/hooks/epic/use-epic-set-pinned-mutation";
 import { epicMutationKeys } from "@/lib/query-keys";
 
-const PAGE: ListTasksResponse = { tasks: [], hasMore: false };
+function epicTask(epicId: string, pinned: boolean): ListTaskLight {
+  return {
+    epic: {
+      light: {
+        id: epicId,
+        title: `Epic ${epicId}`,
+        initialUserPrompt: "",
+        ticketCount: 0,
+        specCount: 0,
+        storyCount: 0,
+        reviewCount: 0,
+        status: "in_progress",
+        createdAt: 0,
+        updatedAt: 0,
+        createdBy: "user-1",
+        version: "1",
+      },
+      permission: null,
+      repos: [],
+      workspaces: [],
+      roomInfo: null,
+    },
+    phase: null,
+    pinned,
+  };
+}
+
+function pageWith(tasks: readonly ListTaskLight[]): ListTasksResponse {
+  return { tasks: [...tasks], hasMore: false };
+}
+
+function pinnedById(
+  response: ListTasksResponse | undefined,
+): Record<string, boolean | undefined> {
+  return Object.fromEntries(
+    (response?.tasks ?? []).flatMap((task) =>
+      task.epic?.light?.id === undefined
+        ? []
+        : [[task.epic.light.id, task.pinned]],
+    ),
+  );
+}
 
 interface SetPinnedVariables {
   readonly epicId: string;
@@ -79,13 +129,15 @@ describe("useEpicSetPinned", () => {
   beforeEach(() => {
     capturedOptions = {};
     vi.clearAllMocks();
+    testState.activeHostId = "host-1";
+    testState.userId = "user-1";
     useCloudEpicTasksPagesStore.setState({
       pagesByIdentity: {},
       generationByIdentity: {},
     });
   });
 
-  it("drops stale scoped pages and inactive history queries after success", async () => {
+  it("optimistically flips the row in the scoped first page and tails on mutate, leaving other scopes alone", () => {
     const queryClient = new QueryClient();
     const scopedQueryKey = cloudEpicTasksQueryKey(
       "host-1",
@@ -97,59 +149,150 @@ describe("useEpicSetPinned", () => {
       "user-1",
       LIST_CLOUD_TASKS_REQUEST,
     );
-    queryClient.setQueryData(scopedQueryKey, PAGE);
-    queryClient.setQueryData(otherQueryKey, PAGE);
+    queryClient.setQueryData(
+      scopedQueryKey,
+      pageWith([epicTask("epic-1", false), epicTask("epic-other", true)]),
+    );
+    queryClient.setQueryData(
+      otherQueryKey,
+      pageWith([epicTask("epic-1", false)]),
+    );
     const scopedIdentity = "host-1|user-1|recent";
     const otherIdentity = "host-2|user-1|recent";
     const pagesStore = useCloudEpicTasksPagesStore.getState();
     pagesStore.appendPage(
       scopedIdentity,
       cloudEpicTasksPageGeneration(scopedIdentity),
-      PAGE,
+      pageWith([epicTask("epic-1", false)]),
     );
     pagesStore.appendPage(
       otherIdentity,
       cloudEpicTasksPageGeneration(otherIdentity),
-      PAGE,
+      pageWith([epicTask("epic-1", false)]),
     );
     renderHook(() => useEpicSetPinned(), {
       wrapper: makeWrapper(queryClient),
     });
 
-    await capturedOptions.onSuccess?.(
-      { pinned: true },
-      { epicId: "epic-1", pinned: true },
-      capturedOptions.onMutate?.() ?? { hostId: null, userId: null },
-    );
+    const context = capturedOptions.onMutate?.({
+      epicId: "epic-1",
+      pinned: true,
+    });
 
-    expect(queryClient.getQueryData(scopedQueryKey)).toBeUndefined();
-    expect(queryClient.getQueryData(otherQueryKey)).toEqual(PAGE);
-    expect(
-      useCloudEpicTasksPagesStore.getState().pagesByIdentity[scopedIdentity],
-    ).toBeUndefined();
-    expect(
-      useCloudEpicTasksPagesStore.getState().pagesByIdentity[otherIdentity],
-    ).toEqual([PAGE]);
+    expect(context).toEqual({ hostId: "host-1", userId: "user-1" });
+    expect(pinnedById(queryClient.getQueryData(scopedQueryKey))).toEqual({
+      "epic-1": true,
+      "epic-other": true,
+    });
+    expect(pinnedById(queryClient.getQueryData(otherQueryKey))).toEqual({
+      "epic-1": false,
+    });
+    const pages = useCloudEpicTasksPagesStore.getState().pagesByIdentity;
+    expect(pinnedById(pages[scopedIdentity][0])).toEqual({ "epic-1": true });
+    expect(pinnedById(pages[otherIdentity][0])).toEqual({ "epic-1": false });
+    // No reset: the tails stay retained and their generations untouched.
+    expect(useCloudEpicTasksPagesStore.getState().generationByIdentity).toEqual(
+      {},
+    );
   });
 
-  it("leaves the cache untouched when the mutation resolves with a null scope", async () => {
+  it("reverts the optimistic patch and toasts when the RPC fails", () => {
     const queryClient = new QueryClient();
-    const removeQueries = vi.spyOn(queryClient, "removeQueries");
-    const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries");
+    const scopedQueryKey = cloudEpicTasksQueryKey(
+      "host-1",
+      "user-1",
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    queryClient.setQueryData(
+      scopedQueryKey,
+      pageWith([epicTask("epic-1", false)]),
+    );
+    const scopedIdentity = "host-1|user-1|recent";
+    useCloudEpicTasksPagesStore
+      .getState()
+      .appendPage(
+        scopedIdentity,
+        cloudEpicTasksPageGeneration(scopedIdentity),
+        pageWith([epicTask("epic-1", false)]),
+      );
     renderHook(() => useEpicSetPinned(), {
       wrapper: makeWrapper(queryClient),
     });
 
-    // A host swap can leave `onMutate`'s captured scope null; the success
-    // handler must then no-op rather than reset/invalidate an unrelated scope.
-    await capturedOptions.onSuccess?.(
-      { pinned: true },
+    const context = capturedOptions.onMutate?.({
+      epicId: "epic-1",
+      pinned: true,
+    });
+    expect(pinnedById(queryClient.getQueryData(scopedQueryKey))).toEqual({
+      "epic-1": true,
+    });
+
+    capturedOptions.onError?.(
+      { code: "RPC_ERROR", message: "test", fatalDetails: null },
       { epicId: "epic-1", pinned: true },
-      { hostId: null, userId: null },
+      context,
     );
 
-    expect(removeQueries).not.toHaveBeenCalled();
-    expect(invalidateQueries).not.toHaveBeenCalled();
+    expect(pinnedById(queryClient.getQueryData(scopedQueryKey))).toEqual({
+      "epic-1": false,
+    });
+    expect(
+      pinnedById(
+        useCloudEpicTasksPagesStore.getState().pagesByIdentity[
+          scopedIdentity
+        ][0],
+      ),
+    ).toEqual({ "epic-1": false });
+    expect(toast.error).toHaveBeenCalledWith("Couldn't update pinned task.");
+  });
+
+  it("leaves every cache untouched when the mutation scope is null", () => {
+    // A signed-out or host-swapping window can leave onMutate's captured
+    // scope null; the optimistic patch and the error revert must both no-op
+    // rather than touch an unrelated scope.
+    testState.activeHostId = null;
+    const queryClient = new QueryClient();
+    const scopedQueryKey = cloudEpicTasksQueryKey(
+      "host-1",
+      "user-1",
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    queryClient.setQueryData(
+      scopedQueryKey,
+      pageWith([epicTask("epic-1", false)]),
+    );
+    renderHook(() => useEpicSetPinned(), {
+      wrapper: makeWrapper(queryClient),
+    });
+
+    const context = capturedOptions.onMutate?.({
+      epicId: "epic-1",
+      pinned: true,
+    });
+    expect(context).toEqual({ hostId: null, userId: "user-1" });
+    expect(pinnedById(queryClient.getQueryData(scopedQueryKey))).toEqual({
+      "epic-1": false,
+    });
+
+    capturedOptions.onError?.(
+      { code: "RPC_ERROR", message: "test", fatalDetails: null },
+      { epicId: "epic-1", pinned: true },
+      context,
+    );
+    expect(pinnedById(queryClient.getQueryData(scopedQueryKey))).toEqual({
+      "epic-1": false,
+    });
+    expect(toast.error).toHaveBeenCalledWith("Couldn't update pinned task.");
+  });
+
+  it("registers no success handler - the optimistic patch is the final state", () => {
+    renderHook(() => useEpicSetPinned(), {
+      wrapper: makeWrapper(new QueryClient()),
+    });
+
+    // The response carries exactly the bit the request wrote, so success
+    // needs no invalidation, refetch, or pagination reset.
+    expect(capturedOptions.onSuccess).toBeUndefined();
   });
 
   it("shows the host error fallback", () => {
@@ -157,11 +300,11 @@ describe("useEpicSetPinned", () => {
       wrapper: makeWrapper(new QueryClient()),
     });
 
-    capturedOptions.onError?.({
-      code: "RPC_ERROR",
-      message: "test",
-      fatalDetails: null,
-    });
+    capturedOptions.onError?.(
+      { code: "RPC_ERROR", message: "test", fatalDetails: null },
+      { epicId: "epic-1", pinned: true },
+      undefined,
+    );
 
     expect(toast.error).toHaveBeenCalledWith("Couldn't update pinned task.");
   });

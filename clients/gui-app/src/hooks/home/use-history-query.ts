@@ -112,9 +112,13 @@ export function useHistoryQuery(
     if (tasksQuery.data === undefined) {
       return undefined;
     }
+    // The settled server order is pinned-first, but an optimistic pin patch
+    // flips a cached row's bit without moving it - the stable pinned-first
+    // partition lifts it into (or drops it out of) the pinned block
+    // instantly, and is an order-preserving no-op on untouched server data.
     const items = shouldProjectLocally
       ? projectHistoryItems(serverItems, params.search)
-      : serverItems;
+      : prioritizePinnedHistoryItems(serverItems);
     const canUseServerFacets =
       !isQueryDebouncing && !tasksQuery.isPlaceholderData;
     const facets = canUseServerFacets

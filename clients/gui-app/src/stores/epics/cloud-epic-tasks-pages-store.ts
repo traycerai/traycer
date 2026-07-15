@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { ListTasksResponse } from "@traycer/protocol/host/epic/unary-schemas";
+import { setEpicPinnedInCloudTasksResponse } from "@/lib/cloud-epic-tasks-query/cache";
 
 /**
  * Accumulated "Show more" pages for the cloud epic-tasks list, keyed by the
@@ -30,7 +31,7 @@ import type { ListTasksResponse } from "@traycer/protocol/host/epic/unary-schema
  * though no page or reset has touched the identity yet. Without an explicit
  * `generationByIdentity` entry, `resetCloudEpicTasksPagesForScope` only
  * iterates identities already present in `pagesByIdentity` /
- * `generationByIdentity` - a pin/unpin reset that lands while the *first*
+ * `generationByIdentity` - a scope reset that lands while the *first*
  * "Show more" request for an identity is still in flight would find no entry
  * to bump, so the stale response's captured generation `0` would still equal
  * the (never-advanced) current generation `0` and get accepted.
@@ -47,6 +48,11 @@ interface CloudEpicTasksPagesStoreState {
     page: ListTasksResponse,
   ) => void;
   readonly resetIdentity: (identity: string) => void;
+  readonly setTaskPinned: (
+    identityPrefix: string,
+    epicId: string,
+    pinned: boolean,
+  ) => void;
 }
 
 export const useCloudEpicTasksPagesStore =
@@ -93,6 +99,36 @@ export const useCloudEpicTasksPagesStore =
         return { pagesByIdentity, generationByIdentity };
       });
     },
+    setTaskPinned: (identityPrefix, epicId, pinned) => {
+      set((state) => {
+        // In-place optimistic pin patch across every retained tail in the
+        // scope. Identity-preserving on both levels (page and identity
+        // bucket) so untouched scopes never re-render, and deliberately
+        // generation-neutral: patched tails stay valid, and any tail still
+        // in flight reconciles through the assembly-time dedupe instead of
+        // being dropped.
+        const entries = Object.entries(state.pagesByIdentity).map(
+          ([identity, pages]): [string, readonly ListTasksResponse[]] => {
+            if (!identity.startsWith(identityPrefix)) {
+              return [identity, pages];
+            }
+            const nextPages = pages.map((page) =>
+              setEpicPinnedInCloudTasksResponse(page, epicId, pinned),
+            );
+            const identityChanged = nextPages.some(
+              (page, index) => page !== pages[index],
+            );
+            return [identity, identityChanged ? nextPages : pages];
+          },
+        );
+        const scopeChanged = entries.some(
+          ([identity, pages]) => pages !== state.pagesByIdentity[identity],
+        );
+        return scopeChanged
+          ? { pagesByIdentity: Object.fromEntries(entries) }
+          : state;
+      });
+    },
   }));
 
 function currentGeneration(
@@ -122,9 +158,11 @@ export function registerCloudEpicTasksPageIdentity(identity: string): void {
 }
 
 /**
- * Drops every accumulated pagination tail for one host/user. A personal pin can
- * move an item across page boundaries, so retaining any old tail risks a
- * duplicate row after the first page refetches in pinned-first order.
+ * Drops every accumulated pagination tail for one host/user and advances
+ * their generations so in-flight tails are rejected on arrival. Scope-level
+ * invalidation for flows that must discard a host/user's tails wholesale -
+ * the optimistic pin path patches rows in place via
+ * `setCloudEpicTasksPagePinned` instead of resetting.
  */
 export function resetCloudEpicTasksPagesForScope(
   hostId: string,
@@ -139,4 +177,21 @@ export function resetCloudEpicTasksPagesForScope(
   identities.forEach((identity) => {
     if (identity.startsWith(prefix)) state.resetIdentity(identity);
   });
+}
+
+/**
+ * Flips one epic's `pinned` bit inside every retained "Show more" tail for
+ * one host/user - the pages-store half of the optimistic pin patch (the
+ * cached first page lives in TanStack Query and is patched by
+ * `setEpicPinnedInCloudTaskCaches`).
+ */
+export function setCloudEpicTasksPagePinned(
+  hostId: string,
+  userId: string,
+  epicId: string,
+  pinned: boolean,
+): void {
+  useCloudEpicTasksPagesStore
+    .getState()
+    .setTaskPinned(`${hostId}|${userId}|`, epicId, pinned);
 }

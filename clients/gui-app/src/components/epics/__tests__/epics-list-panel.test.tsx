@@ -23,7 +23,6 @@ import {
   render,
   screen,
   waitFor,
-  within,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -436,7 +435,7 @@ describe("<EpicsListPanel />", () => {
     expect(screen.queryByTestId("epic-tab-route")).toBeNull();
   });
 
-  it("keeps two independently pending pin rows disabled and spinning at the same time", async () => {
+  it("keeps two independently pending pin rows disabled, without swapping their icons for a spinner", async () => {
     testState.items = [
       historyItem({}),
       historyItem({
@@ -452,7 +451,9 @@ describe("<EpicsListPanel />", () => {
     ];
     // Simulates two rows having each fired their own `epic.setPinned` call
     // concurrently: both must read as pending off the shared mutation
-    // cache, independent of which one was clicked most recently.
+    // cache, independent of which one was clicked most recently. The pin
+    // state itself is optimistic, so the icon keeps showing each row's
+    // current state - pending only disables re-toggling, with no spinner.
     testState.pendingSetPinnedEpicIds = new Set([
       "epic-from-history",
       "epic-two",
@@ -473,15 +474,9 @@ describe("<EpicsListPanel />", () => {
     expect(pendingPinTwo.hasAttribute("disabled")).toBe(true);
     expect(idlePin.hasAttribute("disabled")).toBe(false);
 
-    expect(
-      within(pendingPinOne).queryByTestId("epics-list-row-pin-spinner"),
-    ).not.toBeNull();
-    expect(
-      within(pendingPinTwo).queryByTestId("epics-list-row-pin-spinner"),
-    ).not.toBeNull();
-    expect(
-      within(idlePin).queryByTestId("epics-list-row-pin-spinner"),
-    ).toBeNull();
+    expect(pendingPinOne.querySelector("svg")).not.toBeNull();
+    expect(pendingPinTwo.querySelector("svg")).not.toBeNull();
+    expect(screen.queryByTestId("epics-list-row-pin-spinner")).toBeNull();
   });
 
   it("shows no pin control for a phase row even when the raw task carries isPinned true", async () => {

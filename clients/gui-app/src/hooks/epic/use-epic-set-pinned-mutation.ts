@@ -1,11 +1,15 @@
 import { useMemo } from "react";
-import { useMutationState, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutationState,
+  useQueryClient,
+  type QueryClient,
+} from "@tanstack/react-query";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { useHostClient } from "@/lib/host";
 import { toastFromHostError } from "@/lib/host-error-toast";
-import { cloudEpicTasksQueryKeyMatchesScope } from "@/lib/cloud-epic-tasks-query/cache";
+import { setEpicPinnedInCloudTaskCaches } from "@/lib/cloud-epic-tasks-query/cache";
 import { epicMutationKeys } from "@/lib/query-keys";
-import { resetCloudEpicTasksPagesForScope } from "@/stores/epics/cloud-epic-tasks-pages-store";
+import { setCloudEpicTasksPagePinned } from "@/stores/epics/cloud-epic-tasks-pages-store";
 
 interface SetEpicPinnedMutationContext {
   readonly hostId: string | null;
@@ -17,7 +21,18 @@ interface SetEpicPinnedVariables {
   readonly pinned: boolean;
 }
 
-/** Personal, default-host-scoped history pin mutation. */
+/**
+ * Personal, default-host-scoped history pin mutation.
+ *
+ * Optimistic by design (the justified response-equals-state case: the RPC's
+ * `{ pinned }` response is exactly the bit the request wrote, so a patched
+ * cache already equals the server outcome on success): `onMutate` flips the
+ * row in the scoped first-page query cache and in every retained "Show more"
+ * tail, the RPC settles in the background with no success-path invalidation
+ * or refetch, and `onError` restores the previous state with the inverse
+ * patch (each row's control is disabled while its own mutation is pending,
+ * so the pre-mutate state is exactly the opposite bit) plus the error toast.
+ */
 export function useEpicSetPinned() {
   const client = useHostClient();
   const queryClient = useQueryClient();
@@ -27,34 +42,48 @@ export function useEpicSetPinned() {
     mapVariables: (variables) => variables,
     options: {
       mutationKey: epicMutationKeys.setPinned(),
-      onMutate: () => ({
-        hostId: client.getActiveHostId(),
-        userId: client.getRequestContextUserId(),
-      }),
-      onSuccess: async (
-        _response,
-        _variables,
-        ctx: SetEpicPinnedMutationContext,
-      ) => {
-        if (ctx.hostId === null || ctx.userId === null) return;
-        const scope = { hostId: ctx.hostId, userId: ctx.userId };
-        resetCloudEpicTasksPagesForScope(ctx.hostId, ctx.userId);
-        queryClient.removeQueries({
-          type: "inactive",
-          predicate: (query) =>
-            cloudEpicTasksQueryKeyMatchesScope(query.queryKey, scope),
-        });
-        await queryClient.invalidateQueries({
-          type: "active",
-          predicate: (query) =>
-            cloudEpicTasksQueryKeyMatchesScope(query.queryKey, scope),
-        });
+      onMutate: (
+        variables: SetEpicPinnedVariables,
+      ): SetEpicPinnedMutationContext => {
+        const hostId = client.getActiveHostId();
+        const userId = client.getRequestContextUserId();
+        if (hostId !== null && userId !== null) {
+          applyPinnedPatch(
+            queryClient,
+            { hostId, userId },
+            variables.epicId,
+            variables.pinned,
+          );
+        }
+        return { hostId, userId };
       },
-      onError: (error) => {
+      onError: (
+        error,
+        variables: SetEpicPinnedVariables,
+        ctx: SetEpicPinnedMutationContext | undefined,
+      ) => {
+        if (ctx !== undefined && ctx.hostId !== null && ctx.userId !== null) {
+          applyPinnedPatch(
+            queryClient,
+            { hostId: ctx.hostId, userId: ctx.userId },
+            variables.epicId,
+            !variables.pinned,
+          );
+        }
         toastFromHostError(error, "Couldn't update pinned task.");
       },
     },
   });
+}
+
+function applyPinnedPatch(
+  queryClient: QueryClient,
+  scope: { readonly hostId: string; readonly userId: string },
+  epicId: string,
+  pinned: boolean,
+): void {
+  setEpicPinnedInCloudTaskCaches(queryClient, scope, epicId, pinned);
+  setCloudEpicTasksPagePinned(scope.hostId, scope.userId, epicId, pinned);
 }
 
 /**

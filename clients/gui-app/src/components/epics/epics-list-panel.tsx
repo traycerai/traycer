@@ -1289,17 +1289,12 @@ function HistoryPinControl(props: {
             props.onSetPinned(props.item.epicId, !props.item.isPinned);
           }}
         >
-          {props.isPending ? (
-            <AgentSpinningDots
-              variant="orbit"
-              className="text-current"
-              testId="epics-list-row-pin-spinner"
-            />
-          ) : (
-            <Pin
-              className={cn("size-3.5", props.item.isPinned && "fill-current")}
-            />
-          )}
+          {/* The pin state is optimistic - it flips at click time - so the
+              icon always shows the row's current state; the brief disabled
+              window only serializes rapid re-toggles, with no spinner. */}
+          <Pin
+            className={cn("size-3.5", props.item.isPinned && "fill-current")}
+          />
         </button>
       </TooltipTrigger>
       <TooltipContent>{label}</TooltipContent>

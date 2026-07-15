@@ -1,16 +1,47 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import type { ListTasksResponse } from "@traycer/protocol/host/epic/unary-schemas";
+import type {
+  ListTaskLight,
+  ListTasksResponse,
+} from "@traycer/protocol/host/epic/unary-schemas";
 import {
   useCloudEpicTasksPagesStore,
   cloudEpicTasksPageGeneration,
   registerCloudEpicTasksPageIdentity,
   resetCloudEpicTasksPagesForScope,
+  setCloudEpicTasksPagePinned,
 } from "@/stores/epics/cloud-epic-tasks-pages-store";
 
 const IDENTITY = "host-a|user-a|{}";
 
 function page(marker: string): ListTasksResponse {
   return { tasks: [], hasMore: true, nextCursor: marker };
+}
+
+function epicTask(epicId: string, pinned: boolean): ListTaskLight {
+  return {
+    epic: {
+      light: {
+        id: epicId,
+        title: `Epic ${epicId}`,
+        initialUserPrompt: "",
+        ticketCount: 0,
+        specCount: 0,
+        storyCount: 0,
+        reviewCount: 0,
+        status: "in_progress",
+        createdAt: 0,
+        updatedAt: 0,
+        createdBy: "user-a",
+        version: "1",
+      },
+      permission: null,
+      repos: [],
+      workspaces: [],
+      roomInfo: null,
+    },
+    phase: null,
+    pinned,
+  };
 }
 
 function pagesFor(identity: string): readonly ListTasksResponse[] | undefined {
@@ -75,7 +106,7 @@ describe("useCloudEpicTasksPagesStore", () => {
     );
   });
 
-  it("rejects a stale first-tail response when a pin/unpin reset lands while it is still in flight", () => {
+  it("rejects a stale first-tail response when a scope reset lands while it is still in flight", () => {
     const hostId = "host-a";
     const userId = "user-a";
     const identity = `${hostId}|${userId}|recent`;
@@ -90,8 +121,8 @@ describe("useCloudEpicTasksPagesStore", () => {
     const capturedGeneration = cloudEpicTasksPageGeneration(identity);
     expect(capturedGeneration).toBe(0);
 
-    // A pin/unpin mutation succeeds and resets the host/user scope while
-    // that first tail request is still in flight.
+    // A scope-level reset lands while that first tail request is still in
+    // flight.
     resetCloudEpicTasksPagesForScope(hostId, userId);
     expect(cloudEpicTasksPageGeneration(identity)).toBe(1);
 
@@ -125,5 +156,46 @@ describe("useCloudEpicTasksPagesStore", () => {
     expect(cloudEpicTasksPageGeneration(matchingFirst)).toBe(1);
     expect(cloudEpicTasksPageGeneration(matchingSecond)).toBe(1);
     expect(cloudEpicTasksPageGeneration(otherUser)).toBe(0);
+  });
+
+  it("patches one epic's pin bit across a scope's tails without resetting them", () => {
+    const scopedIdentity = "host-a|user-a|recent";
+    const otherUserIdentity = "host-a|user-b|recent";
+    const state = useCloudEpicTasksPagesStore.getState();
+    state.appendPage(scopedIdentity, 0, {
+      tasks: [epicTask("epic-1", false), epicTask("epic-2", true)],
+      hasMore: true,
+      nextCursor: "next",
+    });
+    state.appendPage(otherUserIdentity, 0, {
+      tasks: [epicTask("epic-1", false)],
+      hasMore: false,
+    });
+    const untouchedBefore = pagesFor(otherUserIdentity);
+
+    setCloudEpicTasksPagePinned("host-a", "user-a", "epic-1", true);
+
+    const scopedPage = pagesFor(scopedIdentity)?.[0];
+    expect(scopedPage?.tasks.map((task) => task.pinned)).toEqual([true, true]);
+    // The page's non-task fields and the untouched scope keep their
+    // identities - and, crucially, no generation advanced: the tails stay
+    // retained rather than being dropped by a reset.
+    expect(scopedPage?.nextCursor).toBe("next");
+    expect(pagesFor(otherUserIdentity)).toBe(untouchedBefore);
+    expect(cloudEpicTasksPageGeneration(scopedIdentity)).toBe(0);
+  });
+
+  it("is an identity-preserving no-op when the epic is absent or already in the requested state", () => {
+    const scopedIdentity = "host-a|user-a|recent";
+    useCloudEpicTasksPagesStore.getState().appendPage(scopedIdentity, 0, {
+      tasks: [epicTask("epic-1", true)],
+      hasMore: false,
+    });
+    const before = pagesFor(scopedIdentity);
+
+    setCloudEpicTasksPagePinned("host-a", "user-a", "epic-1", true);
+    setCloudEpicTasksPagePinned("host-a", "user-a", "epic-missing", true);
+
+    expect(pagesFor(scopedIdentity)).toBe(before);
   });
 });

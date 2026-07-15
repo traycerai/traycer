@@ -185,6 +185,27 @@ describe("useHistoryQuery", () => {
     expect(screen.getByTestId("has-next-page").textContent).toBe("true");
   });
 
+  it("lifts an optimistically pinned row above unpinned rows in the settled server order", () => {
+    // An optimistic pin patch flips the cached row's bit in place, so the
+    // settled (non-projecting) path must partition pinned-first itself
+    // instead of trusting the raw cached order, which still reflects the
+    // pre-pin state.
+    testState.tasks = [
+      taskLight("epic-alpha", "Alpha workbench", "traycer/gui-app"),
+      {
+        ...taskLight("epic-beta", "Beta search flow", "traycer/server"),
+        pinned: true,
+      },
+    ];
+    testState.response = { tasks: testState.tasks, hasMore: false };
+
+    render(<HistoryQueryHarness search={DEFAULT_HISTORY_SEARCH} />);
+
+    expect(screen.getByTestId("titles").textContent).toBe(
+      "Beta search flow|Alpha workbench",
+    );
+  });
+
   it("floats pinned rows above a higher-relevance unpinned match under relevance sort", () => {
     // Relevance sort + a non-empty query is the only path that routes through
     // prioritizePinnedHistoryItems (use-history-query.ts). That local

@@ -89,7 +89,7 @@ describe("useCloudEpicTasksQuery", () => {
     });
   });
 
-  it("rejects a stale first-tail response that resolves after a pin/unpin scope reset lands mid-flight", async () => {
+  it("rejects a stale first-tail response that resolves after a scope reset lands mid-flight", async () => {
     const firstPage: ListTasksResponse = {
       tasks: [taskLight("epic-first", "First page task")],
       hasMore: true,
@@ -133,9 +133,8 @@ describe("useCloudEpicTasksQuery", () => {
       expect(result.current.isFetchingNextPage).toBe(true);
     });
 
-    // A pin/unpin mutation succeeds and resets the host/user scope while
-    // that tail request is still unresolved - mirrors `useEpicSetPinned`'s
-    // `onSuccess` calling `resetCloudEpicTasksPagesForScope`.
+    // A scope-level reset lands while that tail request is still
+    // unresolved.
     act(() => {
       resetCloudEpicTasksPagesForScope(HOST_ID, USER_ID);
     });
@@ -156,5 +155,57 @@ describe("useCloudEpicTasksQuery", () => {
 
     // The stale tail must not be appended to - or rendered in - the task list.
     expect(taskLightIds(result.current.tasks)).toEqual(["epic-first"]);
+  });
+
+  it("dedupes a row that appears in both the first page and a loaded tail, first page winning", async () => {
+    // An optimistic pin moves a row across server page boundaries: after the
+    // pin, a refetched first page carries the pinned row at the top while a
+    // previously loaded tail still carries it at its old position. The
+    // assembled list must render it once, from the first page.
+    const firstPage: ListTasksResponse = {
+      tasks: [taskLight("epic-first", "First page task")],
+      hasMore: true,
+      nextCursor: "cursor-a",
+    };
+    const tailPage: ListTasksResponse = {
+      tasks: [
+        taskLight("epic-first", "Duplicate of the first-page task"),
+        taskLight("epic-second", "Tail-only task"),
+      ],
+      hasMore: false,
+    };
+    mockHostClient.request.mockImplementation(
+      (_method: string, params: { readonly cursor: string | undefined }) =>
+        Promise.resolve(params.cursor === undefined ? firstPage : tailPage),
+    );
+
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const { result } = renderHook(
+      () => useCloudEpicTasksQuery(LIST_CLOUD_TASKS_REQUEST, { enabled: true }),
+      { wrapper: makeWrapper(queryClient) },
+    );
+
+    await waitFor(() => {
+      expect(taskLightIds(result.current.tasks)).toEqual(["epic-first"]);
+    });
+    act(() => {
+      result.current.fetchNextPage();
+    });
+
+    await waitFor(() => {
+      expect(taskLightIds(result.current.tasks)).toEqual([
+        "epic-first",
+        "epic-second",
+      ]);
+    });
+    expect(
+      result.current.tasks.find((task) => task.epic?.light?.id === "epic-first")
+        ?.epic?.light?.title,
+    ).toBe("First page task");
   });
 });
