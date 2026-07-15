@@ -2314,6 +2314,7 @@ describe("createChatSessionStore", () => {
       agentId: "claude-sonnet",
       displayName: "claude-sonnet",
       reply: { expectsReply: false },
+      inReplyTo: null,
     };
     callbacks.onSnapshot({
       kind: "snapshot",
