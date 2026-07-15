@@ -598,7 +598,7 @@ function providerCliStateWithProfiles(input: {
     // this to exercise the capability gate.
     loginCapability:
       input.loginCapability === undefined
-        ? { oauthArgs: ["auth", "login"], token: null }
+        ? { oauthArgs: ["auth", "login"], token: null, codePaste: null }
         : input.loginCapability,
     availabilityPending: false,
     profiles: input.profiles,
@@ -1924,7 +1924,11 @@ describe("<HarnessModelPicker />", () => {
     queryMock.providerStatesByClient.set("tab-host-1", [
       providerCliStateWithProfiles({
         providerId: "claude-code",
-        loginCapability: { oauthArgs: ["auth", "login"], token: null },
+        loginCapability: {
+          oauthArgs: ["auth", "login"],
+          token: null,
+          codePaste: null,
+        },
         profiles: [],
       }),
     ]);
@@ -1946,7 +1950,11 @@ describe("<HarnessModelPicker />", () => {
     queryMock.providerStates = [
       providerCliStateWithProfiles({
         providerId: "claude-code",
-        loginCapability: { oauthArgs: ["auth", "login"], token: null },
+        loginCapability: {
+          oauthArgs: ["auth", "login"],
+          token: null,
+          codePaste: null,
+        },
         profiles: claudeProfilesForDropdown(),
       }),
     ];
