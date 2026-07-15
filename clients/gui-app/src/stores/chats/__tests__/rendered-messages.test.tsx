@@ -4829,3 +4829,842 @@ describe("useRenderedMessages head/tail partition", () => {
     expect(row?.segments ?? []).toHaveLength(0);
   });
 });
+
+describe("useRenderedMessages turn.stopped", () => {
+  function terminalEvent(input: {
+    readonly type: Extract<
+      ChatEvent["type"],
+      "turn.stopped" | "turn.interrupted" | "turn.completed"
+    >;
+    readonly timestamp: number;
+    readonly turnId: string | null;
+    readonly message: string | null;
+    readonly severity: ChatEvent["severity"];
+    readonly metadata: ChatEvent["metadata"];
+  }): ChatEvent {
+    return {
+      eventId: `event:${input.type}:${input.turnId ?? "none"}:${input.timestamp}`,
+      type: input.type,
+      timestamp: input.timestamp,
+      clientActionId: null,
+      actor: null,
+      message: input.message,
+      turnId: input.turnId,
+      messageId: "m1",
+      queueItemId: null,
+      approvalId: null,
+      blockId: null,
+      severity: input.severity,
+      metadata: input.metadata,
+    };
+  }
+
+  function textBlock(
+    blockId: string,
+    timestamp: number,
+    text: string,
+  ): Extract<Message, { role: "assistant" }>["blocks"][number] {
+    return {
+      type: "text",
+      blockId,
+      status: "completed",
+      timestamp,
+      text,
+      providerNotice: null,
+    };
+  }
+
+  function errorBlock(
+    blockId: string,
+    timestamp: number,
+  ): Extract<Message, { role: "assistant" }>["blocks"][number] {
+    return {
+      type: "error",
+      blockId,
+      status: "completed",
+      timestamp,
+      message: "The provider stream ended unexpectedly.",
+      recoverable: true,
+      code: "PROVIDER_STREAM_ERROR",
+    };
+  }
+
+  function steerBlock(
+    blockId: string,
+    messageId: string,
+    timestamp: number,
+  ): Extract<Message, { role: "assistant" }>["blocks"][number] {
+    return {
+      blockId,
+      status: "completed",
+      timestamp,
+      type: "steer",
+      queueItemId: `queue:${blockId}`,
+      messageId,
+      content: CONTENT,
+      mode: "safe_point",
+      sender: null,
+    };
+  }
+
+  it("stamps the stopped marker and uses its event time for turn completion", () => {
+    const assistant = {
+      ...assistantMessage("turn-1", 10_000),
+      timestamp: 14_000,
+      blocks: [textBlock("block-1", 14_000, "Partial answer")],
+    };
+
+    const { result } = renderHook(() =>
+      useRenderedMessages(
+        {
+          messages: [userMessage("m1"), assistant],
+          events: [
+            terminalEvent({
+              type: "turn.stopped",
+              timestamp: 15_000,
+              turnId: "turn-1",
+              message: "Stop requested by owner.",
+              severity: "warning",
+              metadata: { reason: "Stop requested by owner." },
+            }),
+          ],
+          pendingUserMessages: [],
+          liveAssistantMessage: null,
+          activeTurn: null,
+          runStatus: "idle",
+          ...BINDING,
+        },
+        displayContext,
+      ),
+    );
+
+    const row = result.current.find((message) => message.role === "assistant");
+    expect(row?.completedAt).toBe(15_000);
+    expect(row?.stopped).toEqual({
+      stoppedAt: 15_000,
+      reason: "Stop requested by owner.",
+      turnHadOutput: true,
+      turnReplyText: "Partial answer",
+    });
+  });
+
+  it("leaves the stopped marker null for a turn that completed naturally", () => {
+    const assistant = {
+      ...assistantMessage("turn-1", 10_000),
+      timestamp: 15_000,
+      blocks: [textBlock("block-1", 15_000, "Done")],
+    };
+
+    const { result } = renderHook(() =>
+      useRenderedMessages(
+        {
+          messages: [userMessage("m1"), assistant],
+          events: [
+            terminalEvent({
+              type: "turn.completed",
+              timestamp: 15_000,
+              turnId: "turn-1",
+              message: "Turn completed.",
+              severity: "info",
+              metadata: null,
+            }),
+          ],
+          pendingUserMessages: [],
+          liveAssistantMessage: null,
+          activeTurn: null,
+          runStatus: "idle",
+          ...BINDING,
+        },
+        displayContext,
+      ),
+    );
+
+    const row = result.current.find((message) => message.role === "assistant");
+    expect(row?.completedAt).toBe(15_000);
+    expect(row?.stopped).toBeNull();
+  });
+
+  it("does not produce a stopped marker for a steer-restart turn.interrupted event", () => {
+    const assistant = {
+      ...assistantMessage("turn-1", 10_000),
+      timestamp: 15_000,
+      blocks: [textBlock("block-1", 15_000, "Partial answer")],
+    };
+
+    const { result } = renderHook(() =>
+      useRenderedMessages(
+        {
+          messages: [userMessage("m1"), assistant],
+          events: [
+            terminalEvent({
+              type: "turn.interrupted",
+              timestamp: 15_000,
+              turnId: "turn-1",
+              message: "Restarted by a same-turn steer.",
+              severity: "info",
+              metadata: {
+                reason: "Restarted by a same-turn steer.",
+                code: "STEER_RESTART",
+              },
+            }),
+          ],
+          pendingUserMessages: [],
+          liveAssistantMessage: null,
+          activeTurn: null,
+          runStatus: "idle",
+          ...BINDING,
+        },
+        displayContext,
+      ),
+    );
+
+    const row = result.current.find((message) => message.role === "assistant");
+    expect(row?.completedAt).toBe(15_000);
+    expect(row?.stopped).toBeNull();
+  });
+
+  it("does not produce a stopped marker for an autonomous-resume-lost turn.interrupted event", () => {
+    const assistant = {
+      ...assistantMessage("turn-1", 10_000),
+      timestamp: 15_000,
+      blocks: [textBlock("block-1", 15_000, "Partial answer")],
+    };
+
+    const { result } = renderHook(() =>
+      useRenderedMessages(
+        {
+          messages: [userMessage("m1"), assistant],
+          events: [
+            terminalEvent({
+              type: "turn.interrupted",
+              timestamp: 15_000,
+              turnId: "turn-1",
+              message:
+                "The background continuation ended before producing output.",
+              severity: "info",
+              metadata: {
+                reason:
+                  "The background continuation ended before producing output.",
+                code: "AUTONOMOUS_RESUME_LOST",
+                recoverable: true,
+              },
+            }),
+          ],
+          pendingUserMessages: [],
+          liveAssistantMessage: null,
+          activeTurn: null,
+          runStatus: "idle",
+          ...BINDING,
+        },
+        displayContext,
+      ),
+    );
+
+    const row = result.current.find((message) => message.role === "assistant");
+    expect(row?.completedAt).toBe(15_000);
+    expect(row?.stopped).toBeNull();
+  });
+
+  it("stamps the stopped marker even when the turn's last segment is an error", () => {
+    // A turn can carry an in-flight failure (e.g. a tool error) and still end
+    // via a user Stop rather than the error itself terminating the turn - the
+    // host resolves to `turn.stopped` whenever a stop was requested, even from
+    // its catch-block path. The derivation must not let error content suppress
+    // the marker; the error-vs-stopped precedence is a UI-layer decision
+    // (`shouldShowElapsedFooter`), not a derivation-layer one.
+    const assistant = {
+      ...assistantMessage("turn-1", 10_000),
+      timestamp: 15_000,
+      blocks: [
+        textBlock("block-1", 14_000, "Working on it"),
+        errorBlock("block-2", 15_000),
+      ],
+    };
+
+    const { result } = renderHook(() =>
+      useRenderedMessages(
+        {
+          messages: [userMessage("m1"), assistant],
+          events: [
+            terminalEvent({
+              type: "turn.stopped",
+              timestamp: 15_000,
+              turnId: "turn-1",
+              message: "Stop requested by owner.",
+              severity: "warning",
+              metadata: { reason: "Stop requested by owner." },
+            }),
+          ],
+          pendingUserMessages: [],
+          liveAssistantMessage: null,
+          activeTurn: null,
+          runStatus: "idle",
+          ...BINDING,
+        },
+        displayContext,
+      ),
+    );
+
+    const row = result.current.find((message) => message.role === "assistant");
+    expect(row?.segments.at(-1)?.kind).toBe("error");
+    expect(row?.stopped).toEqual({
+      stoppedAt: 15_000,
+      reason: "Stop requested by owner.",
+      turnHadOutput: true,
+      turnReplyText: "Working on it",
+    });
+  });
+
+  it("renders an empty completed turn with the stopped marker (stopped before responding)", () => {
+    const assistant = {
+      ...assistantMessage("turn-1", 10_000),
+      timestamp: 11_000,
+      blocks: [],
+    };
+
+    const { result } = renderHook(() =>
+      useRenderedMessages(
+        {
+          messages: [userMessage("m1"), assistant],
+          events: [
+            terminalEvent({
+              type: "turn.stopped",
+              timestamp: 11_000,
+              turnId: "turn-1",
+              message: "Stop requested by owner.",
+              severity: "warning",
+              metadata: { reason: "Stop requested by owner." },
+            }),
+          ],
+          pendingUserMessages: [],
+          liveAssistantMessage: null,
+          activeTurn: null,
+          runStatus: "idle",
+          ...BINDING,
+        },
+        displayContext,
+      ),
+    );
+
+    const row = result.current.find((message) => message.role === "assistant");
+    expect(row?.segments ?? []).toHaveLength(0);
+    expect(row?.completedAt).toBe(11_000);
+    expect(row?.stopped).toEqual({
+      stoppedAt: 11_000,
+      reason: "Stop requested by owner.",
+      turnHadOutput: false,
+      turnReplyText: "",
+    });
+  });
+
+  it("synthesizes a stopped boundary when no assistant record ever materialized", () => {
+    const { result } = renderHook(() =>
+      useRenderedMessages(
+        {
+          messages: [userMessage("m1")],
+          events: [
+            terminalEvent({
+              type: "turn.stopped",
+              timestamp: 11_000,
+              turnId: "turn-pre-setup",
+              message: "Stop requested by owner.",
+              severity: "warning",
+              metadata: { reason: "Stop requested by owner." },
+            }),
+          ],
+          pendingUserMessages: [],
+          liveAssistantMessage: null,
+          activeTurn: null,
+          runStatus: "idle",
+          ...BINDING,
+        },
+        displayContext,
+      ),
+    );
+
+    const row = result.current.find((message) => message.role === "assistant");
+    expect(row).toMatchObject({
+      id: "assistant:turn-pre-setup",
+      segments: [],
+      createdAt: 11_000,
+      completedAt: 11_000,
+      persistentMessageId: null,
+      runState: null,
+      stopped: {
+        stoppedAt: 11_000,
+        reason: "Stop requested by owner.",
+        turnHadOutput: false,
+        turnReplyText: "",
+      },
+    });
+  });
+
+  it("does not resurrect an event-only stopped turn whose user message was removed", () => {
+    const { result } = renderHook(() =>
+      useRenderedMessages(
+        {
+          messages: [],
+          events: [
+            terminalEvent({
+              type: "turn.stopped",
+              timestamp: 11_000,
+              turnId: "turn-removed",
+              message: "Stop requested by owner.",
+              severity: "warning",
+              metadata: { reason: "Stop requested by owner." },
+            }),
+          ],
+          pendingUserMessages: [],
+          liveAssistantMessage: null,
+          activeTurn: null,
+          runStatus: "idle",
+          ...BINDING,
+        },
+        displayContext,
+      ),
+    );
+
+    expect(result.current).toHaveLength(0);
+  });
+
+  it("keeps an event-only stopped boundary behind the active-turn snapshot gate", () => {
+    const activeTurn: ChatActiveTurn = {
+      turnId: "turn-pre-setup",
+      status: "running",
+      harnessId: "claude",
+      model: "claude-sonnet-4-5",
+      agentMode: "regular",
+      profileId: null,
+      userMessageId: "m1",
+      startedAt: 10_000,
+      updatedAt: 11_000,
+      reasoningEffort: null,
+      serviceTier: null,
+    };
+    const baseInput: RenderedMessagesInput = {
+      messages: [userMessage("m1")],
+      events: [
+        terminalEvent({
+          type: "turn.stopped",
+          timestamp: 11_000,
+          turnId: "turn-pre-setup",
+          message: "Stop requested by owner.",
+          severity: "warning",
+          metadata: { reason: "Stop requested by owner." },
+        }),
+      ],
+      pendingUserMessages: [],
+      liveAssistantMessage: null,
+      activeTurn,
+      runStatus: "stopping",
+      ...BINDING,
+    };
+
+    const { result, rerender } = renderHook(
+      ({ value }: { value: RenderedMessagesInput }) =>
+        useRenderedMessages(value, displayContext),
+      { initialProps: { value: baseInput } },
+    );
+
+    const stopping = result.current.find(
+      (message) => message.role === "assistant",
+    );
+    expect(stopping?.runState).toBe("stopping");
+    expect(stopping?.stopped).toBeNull();
+
+    rerender({
+      value: {
+        ...baseInput,
+        activeTurn: null,
+        runStatus: "idle",
+      },
+    });
+
+    const settled = result.current.find(
+      (message) => message.role === "assistant",
+    );
+    expect(settled?.runState).toBeNull();
+    expect(settled?.stopped).toMatchObject({
+      stoppedAt: 11_000,
+      turnHadOutput: false,
+    });
+  });
+
+  it("scopes the stopped marker to its own turnId, not a sibling turn", () => {
+    const stoppedAssistant = {
+      ...assistantMessage("turn-1", 10_000),
+      timestamp: 12_000,
+      blocks: [textBlock("block-1", 12_000, "Partial")],
+    };
+    const completedAssistant = {
+      ...assistantMessage("turn-2", 20_000),
+      timestamp: 22_000,
+      blocks: [textBlock("block-2", 22_000, "Done")],
+    };
+
+    const { result } = renderHook(() =>
+      useRenderedMessages(
+        {
+          messages: [
+            userMessage("m1"),
+            stoppedAssistant,
+            userMessageAt("m2", 15_000),
+            completedAssistant,
+          ],
+          events: [
+            terminalEvent({
+              type: "turn.stopped",
+              timestamp: 12_000,
+              turnId: "turn-1",
+              message: "Stop requested by owner.",
+              severity: "warning",
+              metadata: { reason: "Stop requested by owner." },
+            }),
+          ],
+          pendingUserMessages: [],
+          liveAssistantMessage: null,
+          activeTurn: null,
+          runStatus: "idle",
+          ...BINDING,
+        },
+        displayContext,
+      ),
+    );
+
+    const assistantRows = result.current.filter(
+      (message) => message.role === "assistant",
+    );
+    const stoppedRow = assistantRows.find(
+      (row) => row.id === "assistant:turn-1",
+    );
+    const completedRow = assistantRows.find(
+      (row) => row.id === "assistant:turn-2",
+    );
+    expect(stoppedRow?.stopped).not.toBeNull();
+    expect(completedRow?.stopped).toBeNull();
+  });
+
+  it("places the stopped marker at the turn boundary after a trailing steer, not on the row above it", () => {
+    const assistant = {
+      ...assistantMessage("turn-1", 10_000),
+      timestamp: 13_000,
+      blocks: [
+        textBlock("block-1", 11_000, "Working on it"),
+        steerBlock("block-2", "steer-msg-1", 13_000),
+      ],
+    };
+
+    const { result } = renderHook(() =>
+      useRenderedMessages(
+        {
+          messages: [userMessage("m1"), assistant],
+          events: [
+            terminalEvent({
+              type: "turn.stopped",
+              timestamp: 13_000,
+              turnId: "turn-1",
+              message: "Stop requested by owner.",
+              severity: "warning",
+              metadata: { reason: "Stop requested by owner." },
+            }),
+          ],
+          pendingUserMessages: [],
+          liveAssistantMessage: null,
+          activeTurn: null,
+          runStatus: "idle",
+          ...BINDING,
+        },
+        displayContext,
+      ),
+    );
+
+    const rows = result.current;
+    const assistantRows = rows.filter((row) => row.role === "assistant");
+    expect(assistantRows).toHaveLength(2);
+    // The chunk holding the actual text must NOT carry the marker - it isn't
+    // the turn's true end, the steer bubble comes after it.
+    const textRow = assistantRows.find((row) =>
+      row.segments.some((segment) => segment.kind === "text"),
+    );
+    expect(textRow?.stopped).toBeNull();
+    expect(textRow?.completedAt).toBeNull();
+    // A trailing empty chunk, synthesized after the steer bubble, carries it.
+    const trailingRow = assistantRows.find((row) => row !== textRow);
+    expect(trailingRow?.segments ?? []).toHaveLength(0);
+    expect(trailingRow?.completedAt).toBe(13_000);
+    // createdAt anchors to the turn's true startedAt (not an ordering-only
+    // bumped timestamp), so completedAt - createdAt measures the whole turn.
+    expect(trailingRow?.createdAt).toBe(10_000);
+    expect(trailingRow?.stopped).toEqual({
+      stoppedAt: 13_000,
+      reason: "Stop requested by owner.",
+      // The turn DID produce output (the text chunk above the steer) even
+      // though this specific boundary row's own segments are empty.
+      turnHadOutput: true,
+      // The turn's copyable reply text, aggregated from the text chunk
+      // above the steer even though this boundary row's own segments are
+      // empty - the copy control needs somewhere to source it from.
+      turnReplyText: "Working on it",
+    });
+    // The trailing row sorts after the nested steer bubble, not before it.
+    const steerIndex = rows.findIndex(
+      (row) => row.id === "steer:queue:block-2",
+    );
+    const trailingIndex = rows.findIndex((row) => row.id === trailingRow?.id);
+    expect(steerIndex).toBeGreaterThanOrEqual(0);
+    expect(trailingIndex).toBeGreaterThan(steerIndex);
+  });
+
+  it("still renders a stopped marker when the turn ends immediately after a steer with no further assistant content", () => {
+    const assistant = {
+      ...assistantMessage("turn-1", 10_000),
+      timestamp: 10_500,
+      blocks: [steerBlock("block-1", "steer-msg-1", 10_500)],
+    };
+
+    const { result } = renderHook(() =>
+      useRenderedMessages(
+        {
+          messages: [userMessage("m1"), assistant],
+          events: [
+            terminalEvent({
+              type: "turn.stopped",
+              timestamp: 10_500,
+              turnId: "turn-1",
+              message: "Stop requested by owner.",
+              severity: "warning",
+              metadata: { reason: "Stop requested by owner." },
+            }),
+          ],
+          pendingUserMessages: [],
+          liveAssistantMessage: null,
+          activeTurn: null,
+          runStatus: "idle",
+          ...BINDING,
+        },
+        displayContext,
+      ),
+    );
+
+    // Before the fix, a steer-only turn produced no assistant row at all, so
+    // neither "Stopped · …" nor "Stopped before responding" had anywhere to
+    // render.
+    const assistantRows = result.current.filter(
+      (row) => row.role === "assistant",
+    );
+    expect(assistantRows).toHaveLength(1);
+    const trailingRow = assistantRows[0];
+    expect(trailingRow.segments).toHaveLength(0);
+    expect(trailingRow.completedAt).toBe(10_500);
+    // createdAt anchors to startedAt here too - there's no earlier chunk.
+    expect(trailingRow.createdAt).toBe(10_000);
+    expect(trailingRow.stopped).toEqual({
+      stoppedAt: 10_500,
+      reason: "Stop requested by owner.",
+      turnHadOutput: false,
+      turnReplyText: "",
+    });
+  });
+
+  it("shows the stopped marker only once the turn.stopped event actually lands, across a rerender", () => {
+    const assistant = {
+      ...assistantMessage("turn-1", 10_000),
+      timestamp: 15_000,
+      blocks: [textBlock("block-1", 15_000, "Partial answer")],
+    };
+    const baseInput: RenderedMessagesInput = {
+      messages: [userMessage("m1"), assistant],
+      events: [],
+      pendingUserMessages: [],
+      liveAssistantMessage: null,
+      activeTurn: null,
+      runStatus: "idle",
+      ...BINDING,
+    };
+
+    const { result, rerender } = renderHook(
+      ({ value }: { value: RenderedMessagesInput }) =>
+        useRenderedMessages(value, displayContext),
+      { initialProps: { value: baseInput } },
+    );
+
+    const before = result.current.find((row) => row.role === "assistant");
+    expect(before?.completedAt).toBe(15_000);
+    expect(before?.stopped).toBeNull();
+
+    rerender({
+      value: {
+        ...baseInput,
+        events: [
+          terminalEvent({
+            type: "turn.stopped",
+            timestamp: 15_000,
+            turnId: "turn-1",
+            message: "Stop requested by owner.",
+            severity: "warning",
+            metadata: { reason: "Stop requested by owner." },
+          }),
+        ],
+      },
+    });
+
+    const after = result.current.find((row) => row.role === "assistant");
+    expect(after?.stopped).toEqual({
+      stoppedAt: 15_000,
+      reason: "Stop requested by owner.",
+      turnHadOutput: true,
+      turnReplyText: "Partial answer",
+    });
+  });
+
+  it("suppresses the stopped marker while the turn is still active, even once its event has landed, then shows it once the snapshot catches up", () => {
+    const assistant = {
+      ...assistantMessage("turn-1", 10_000),
+      timestamp: 15_000,
+      blocks: [textBlock("block-1", 15_000, "Partial answer")],
+    };
+    const activeTurn: ChatActiveTurn = {
+      turnId: "turn-1",
+      status: "running",
+      harnessId: "claude",
+      model: "claude-sonnet-4-5",
+      agentMode: "regular",
+      profileId: null,
+      userMessageId: "m1",
+      startedAt: 10_000,
+      updatedAt: 15_000,
+      reasoningEffort: null,
+      serviceTier: null,
+    };
+    const stoppedEvent = terminalEvent({
+      type: "turn.stopped",
+      timestamp: 15_000,
+      turnId: "turn-1",
+      message: "Stop requested by owner.",
+      severity: "warning",
+      metadata: { reason: "Stop requested by owner." },
+    });
+    const messages = [userMessage("m1"), assistant];
+
+    const { result, rerender } = renderHook(
+      ({ value }: { value: RenderedMessagesInput }) =>
+        useRenderedMessages(value, displayContext),
+      {
+        initialProps: {
+          value: {
+            messages,
+            events: [],
+            pendingUserMessages: [],
+            liveAssistantMessage: null,
+            activeTurn,
+            runStatus: "stopping",
+            ...BINDING,
+          },
+        },
+      },
+    );
+
+    const active = result.current.find((row) => row.role === "assistant");
+    expect(active?.completedAt).toBeNull();
+    expect(active?.stopped).toBeNull();
+
+    // Race: the event lands in the log before a snapshot clears the active turn.
+    rerender({
+      value: {
+        messages,
+        events: [stoppedEvent],
+        pendingUserMessages: [],
+        liveAssistantMessage: null,
+        activeTurn,
+        runStatus: "stopping",
+        ...BINDING,
+      },
+    });
+    const stillActive = result.current.find((row) => row.role === "assistant");
+    expect(stillActive?.completedAt).toBeNull();
+    expect(stillActive?.stopped).toBeNull();
+
+    // The snapshot catches up: the turn is no longer active.
+    rerender({
+      value: {
+        messages,
+        events: [stoppedEvent],
+        pendingUserMessages: [],
+        liveAssistantMessage: null,
+        activeTurn: null,
+        runStatus: "idle",
+        ...BINDING,
+      },
+    });
+    const settled = result.current.find((row) => row.role === "assistant");
+    expect(settled?.completedAt).toBe(15_000);
+    expect(settled?.stopped).toEqual({
+      stoppedAt: 15_000,
+      reason: "Stop requested by owner.",
+      turnHadOutput: true,
+      turnReplyText: "Partial answer",
+    });
+  });
+
+  it("keeps an unrelated turn's row reference stable when a sibling turn's turn.stopped event is appended", () => {
+    const untouchedAssistant = {
+      ...assistantMessage("turn-1", 2000),
+      timestamp: 2000,
+      blocks: [textBlock("block-1", 2000, "Untouched")],
+    };
+    const stoppedAssistant = {
+      ...assistantMessage("turn-2", 5000),
+      timestamp: 6000,
+      blocks: [textBlock("block-2", 6000, "Partial")],
+    };
+    const baseInput: RenderedMessagesInput = {
+      messages: [
+        userMessage("m1"),
+        untouchedAssistant,
+        userMessageAt("m2", 4000),
+        stoppedAssistant,
+      ],
+      events: [],
+      pendingUserMessages: [],
+      liveAssistantMessage: null,
+      activeTurn: null,
+      runStatus: "idle",
+      ...BINDING,
+    };
+
+    const { result, rerender } = renderHook(
+      ({ value }: { value: RenderedMessagesInput }) =>
+        useRenderedMessages(value, displayContext),
+      { initialProps: { value: baseInput } },
+    );
+
+    const untouchedBefore = result.current.find(
+      (row) => row.id === "assistant:turn-1",
+    );
+
+    rerender({
+      value: {
+        ...baseInput,
+        events: [
+          terminalEvent({
+            type: "turn.stopped",
+            timestamp: 6000,
+            turnId: "turn-2",
+            message: "Stop requested by owner.",
+            severity: "warning",
+            metadata: { reason: "Stop requested by owner." },
+          }),
+        ],
+      },
+    });
+
+    const untouchedAfter = result.current.find(
+      (row) => row.id === "assistant:turn-1",
+    );
+    const stoppedAfter = result.current.find(
+      (row) => row.id === "assistant:turn-2",
+    );
+    expect(untouchedAfter).toBe(untouchedBefore);
+    expect(stoppedAfter?.stopped).not.toBeNull();
+  });
+});

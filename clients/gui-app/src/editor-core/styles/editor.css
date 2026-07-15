@@ -51,7 +51,6 @@
   box-shadow:
     0 10px 24px -12px rgba(0, 0, 0, 0.35),
     0 4px 8px -4px rgba(0, 0, 0, 0.2);
-  z-index: 40;
 }
 
 .tc-editor-toolbar-group {
