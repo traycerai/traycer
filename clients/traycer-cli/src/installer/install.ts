@@ -105,11 +105,11 @@ export interface InstallHostResult {
 }
 
 // Convenience wrapper for callers that don't need the lock-scope split
-// below (tests, `host/provision.ts` prior to ticket 2's F2) - stages and
-// commits back-to-back with no gap between the two phases. `commands/
-// host-install.ts` calls `stageHostInstallSource` / `commitHostInstallSource`
-// directly instead, so only the commit phase runs under `cli-lock`
-// (Tech Plan, "Lock-scope restructure").
+// below (tests only) - stages and commits back-to-back with no gap
+// between the two phases. `commands/host-install.ts` and `host/
+// provision.ts` (ensure's install branch) call `stageHostInstallSource` /
+// `commitHostInstallSource` directly instead, so only the commit phase
+// runs under `cli-lock` (Tech Plan, "Lock-scope restructure").
 export async function installHost(
   opts: InstallHostOptions,
 ): Promise<InstallHostResult> {

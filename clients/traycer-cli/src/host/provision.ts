@@ -1,9 +1,14 @@
+import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/install-generation";
 import {
-  installHost,
+  commitHostInstallSource,
+  discardStagedHostInstallSource,
+  stageHostInstallSource,
   type InstallHostLifecycle,
   type InstallSourceArg,
+  type StagedHostInstallSource,
 } from "../installer";
 import { readHostInstallRecord } from "../manifest/host-install";
+import type { Environment } from "../runner/environment";
 import type { ProgressInfo } from "../runner/output";
 import type { RuntimeContext } from "../runner/runtime";
 import { errorFromUnknown } from "../logger";
@@ -49,10 +54,19 @@ export interface HostProvisionResult {
   // truth only; `version` remains the idempotency identity.
   readonly runtimeVersion: string | null;
   readonly action: HostProvisionAction;
-  // Present only for the full-install branch; null for noop / start /
-  // service-only so the caller can tell which path ran.
+  // Present on every branch that starts or cycles the service (install,
+  // service-register, start) so the caller can attribute a subsequent
+  // readiness observation to THIS command's cycle; `null` only on noop,
+  // where nothing was touched (Tech Plan, "Attested generation in
+  // results": ensure's cycle/start outcome extends this payload beyond
+  // the install branch it was previously scoped to).
   readonly serviceLifecycle: HostProvisionServiceLifecycle | null;
   readonly postSwapError: string | null;
+  // The canonical install-generation fingerprint, read/minted under the
+  // lock on every branch that starts or cycles the service - never a
+  // later disk re-read, so the controller can't race a subsequent
+  // mutation. `null` on noop: nothing was attested because nothing ran.
+  readonly installGeneration: string | null;
 }
 
 export interface ProvisionHostOptions {
@@ -134,131 +148,168 @@ export async function provisionHost(
     });
     return noopResult(fast);
   }
+  // Lock-scope restructure (Tech Plan): when the fast read already predicts
+  // the install branch will run, resolve + stage (download/verify/extract)
+  // OUTSIDE cli-lock, into an owner-tokened temp - the same split `host
+  // install` uses - so a long download never blocks a concurrent CLI/
+  // Desktop operation. The prediction is re-verified against a locked
+  // re-read below. A lost prediction (state changes between the fast read
+  // and lock acquisition - only possible via a genuinely concurrent
+  // provisioning actor) falls back to staging inside the lock rather than
+  // adding retry machinery for what is, on a single-machine CLI, a
+  // vanishingly rare race; the far more common "predicted no-install, stays
+  // no-install" and "predicted install, stays install" paths never do
+  // network work while holding the lock.
+  const predictedInstall =
+    opts.force ||
+    !fast.installed ||
+    !versionSatisfied(fast, opts.targetVersion);
+  const preStaged = predictedInstall
+    ? await prepareInstallStage(opts, progress)
+    : null;
+  let stagedConsumed = false;
+
   opts.runtime.logger.debug("Host provisioning entering CLI lock", {
     environment: opts.runtime.environment,
     lockReason: opts.lockReason,
     force: opts.force,
+    preStaged: preStaged !== null,
   });
 
-  return withCliLock(
-    {
-      environment: opts.runtime.environment,
-      reason: opts.lockReason,
-      waitMs: 30_000,
-      pollIntervalMs: 100,
-    },
-    async () => {
-      // Re-read inside the lock so a caller that lost the race observes the
-      // now-provisioned state and short-circuits instead of redundantly
-      // downloading.
-      const state = await readProvisionState(controller, label, opts.runtime);
-      opts.runtime.logger.debug("Host provisioning locked state read", {
+  try {
+    return await withCliLock(
+      {
         environment: opts.runtime.environment,
-        installed: state.installed,
-        registered: state.registered,
-        running: state.running,
-        hasVersion: state.version !== null,
-      });
-      if (
-        !opts.force &&
-        isSatisfied(state, opts.targetVersion, opts.registerService)
-      ) {
-        opts.runtime.logger.debug(
-          "Host provisioning satisfied after lock recheck",
-          {
-            environment: opts.runtime.environment,
-            installed: state.installed,
-            registered: state.registered,
-            running: state.running,
-          },
-        );
-        return noopResult(state);
-      }
-      // Bytes present + at target with host-owned registration: there is
-      // nothing to cycle, so no teardown and no busy check are needed.
-      if (
-        !opts.force &&
-        state.installed &&
-        versionSatisfied(state, opts.targetVersion) &&
-        !opts.registerService
-      ) {
-        opts.runtime.logger.debug(
-          "Host provisioning no-op for host-owned service registration",
-          {
-            environment: opts.runtime.environment,
-            installed: state.installed,
-            hasVersion: state.version !== null,
-          },
-        );
-        return noopResult(state);
-      }
-      // Every remaining path replaces or cycles a LIVE host - reinstall
-      // (forced, or bytes absent/stale), (re)register, or (re)start - so the
-      // busy guard must cover ALL of them, not just `runInstall`. Unless forced,
-      // refuse if a live host reports busy (or can't be confirmed idle - fail
-      // safe). `assertHostNotBusy` returns when there is no live host to
-      // protect, judging liveness from pid.json + the process rather than the OS
-      // service-controller `running` flag (unreliable on the macOS host-owned
-      // path where the CLI does not own the service registration, and on a
-      // status drift where the controller reports stopped while a process is
-      // still live and busy).
-      if (!opts.force) {
-        opts.runtime.logger.debug("Host provisioning running busy guard", {
+        reason: opts.lockReason,
+        waitMs: 30_000,
+        pollIntervalMs: 100,
+      },
+      async () => {
+        // Re-read inside the lock so a caller that lost the race observes the
+        // now-provisioned state and short-circuits instead of redundantly
+        // downloading.
+        const state = await readProvisionState(controller, label, opts.runtime);
+        opts.runtime.logger.debug("Host provisioning locked state read", {
           environment: opts.runtime.environment,
-          reason: opts.lockReason,
+          installed: state.installed,
+          registered: state.registered,
+          running: state.running,
+          hasVersion: state.version !== null,
         });
-        await assertHostNotBusy(opts.runtime.environment);
-      } else {
-        opts.runtime.logger.warn(
-          "Host provisioning skipped busy guard because force=true",
-          {
+        if (
+          !opts.force &&
+          isSatisfied(state, opts.targetVersion, opts.registerService)
+        ) {
+          opts.runtime.logger.debug(
+            "Host provisioning satisfied after lock recheck",
+            {
+              environment: opts.runtime.environment,
+              installed: state.installed,
+              registered: state.registered,
+              running: state.running,
+            },
+          );
+          return noopResult(state);
+        }
+        // Bytes present + at target with host-owned registration: there is
+        // nothing to cycle, so no teardown and no busy check are needed.
+        if (
+          !opts.force &&
+          state.installed &&
+          versionSatisfied(state, opts.targetVersion) &&
+          !opts.registerService
+        ) {
+          opts.runtime.logger.debug(
+            "Host provisioning no-op for host-owned service registration",
+            {
+              environment: opts.runtime.environment,
+              installed: state.installed,
+              hasVersion: state.version !== null,
+            },
+          );
+          return noopResult(state);
+        }
+        // Every remaining path replaces or cycles a LIVE host - reinstall
+        // (forced, or bytes absent/stale), (re)register, or (re)start - so the
+        // busy guard must cover ALL of them, not just the install branch.
+        // Unless forced, refuse if a live host reports busy (or can't be
+        // confirmed idle - fail safe). `assertHostNotBusy` returns when there
+        // is no live host to protect, judging liveness from pid.json + the
+        // process rather than the OS service-controller `running` flag
+        // (unreliable on the macOS host-owned path where the CLI does not own
+        // the service registration, and on a status drift where the
+        // controller reports stopped while a process is still live and busy).
+        if (!opts.force) {
+          opts.runtime.logger.debug("Host provisioning running busy guard", {
             environment: opts.runtime.environment,
             reason: opts.lockReason,
-          },
-        );
-      }
-      // Reinstall when the bytes are absent/stale, OR when forced (D5: Force =
-      // reinstall + restart onto this build even if the install record matches).
-      if (
-        opts.force ||
-        !state.installed ||
-        !versionSatisfied(state, opts.targetVersion)
-      ) {
-        opts.runtime.logger.debug("Host provisioning selected install branch", {
-          environment: opts.runtime.environment,
-          force: opts.force,
-          installed: state.installed,
-          versionSatisfied: versionSatisfied(state, opts.targetVersion),
-        });
-        return runInstall(opts, controller, label, progress);
-      }
-      if (!state.registered) {
+          });
+          await assertHostNotBusy(opts.runtime.environment);
+        } else {
+          opts.runtime.logger.warn(
+            "Host provisioning skipped busy guard because force=true",
+            {
+              environment: opts.runtime.environment,
+              reason: opts.lockReason,
+            },
+          );
+        }
+        // Reinstall when the bytes are absent/stale, OR when forced (D5: Force =
+        // reinstall + restart onto this build even if the install record matches).
+        if (
+          opts.force ||
+          !state.installed ||
+          !versionSatisfied(state, opts.targetVersion)
+        ) {
+          opts.runtime.logger.debug(
+            "Host provisioning selected install branch",
+            {
+              environment: opts.runtime.environment,
+              force: opts.force,
+              installed: state.installed,
+              versionSatisfied: versionSatisfied(state, opts.targetVersion),
+            },
+          );
+          const staged =
+            preStaged ?? (await prepareInstallStage(opts, progress));
+          stagedConsumed = true;
+          return commitInstall(opts, controller, label, progress, staged);
+        }
+        if (!state.registered) {
+          opts.runtime.logger.debug(
+            "Host provisioning selected service-register branch",
+            {
+              environment: opts.runtime.environment,
+            },
+          );
+          return runServiceRegister(opts, controller, label, progress);
+        }
+        // installed + registered + stopped → start.
         opts.runtime.logger.debug(
-          "Host provisioning selected service-register branch",
+          "Host provisioning selected service-start branch",
           {
             environment: opts.runtime.environment,
           },
         );
-        return runServiceRegister(opts, controller, label, progress);
-      }
-      // installed + registered + stopped → start.
-      opts.runtime.logger.debug(
-        "Host provisioning selected service-start branch",
-        {
-          environment: opts.runtime.environment,
-        },
-      );
-      return runStart(opts, controller, label, state, progress);
-    },
-  );
+        return runStart(opts, controller, label, state, progress);
+      },
+    );
+  } finally {
+    // Anything staged in anticipation of the install branch that the lock
+    // callback never consumed (raced to noop/register/start, or an earlier
+    // step inside the callback threw before reaching `commitInstall`) must
+    // be scrubbed here. Once `commitInstall` runs, `commitHostInstallSource`
+    // owns cleanup itself - never double-discard.
+    if (preStaged !== null && !stagedConsumed) {
+      await discardStagedHostInstallSource(opts.runtime.environment, preStaged);
+    }
+  }
 }
 
-async function runInstall(
+async function prepareInstallStage(
   opts: ProvisionHostOptions,
-  controller: ServiceController,
-  label: ServiceLabel,
   progress: (info: ProgressInfo) => void,
-): Promise<HostProvisionResult> {
+): Promise<StagedHostInstallSource> {
   const source = await opts.resolveInstallSource();
   opts.runtime.logger.debug("Host provisioning install source resolved", {
     environment: opts.runtime.environment,
@@ -277,6 +328,21 @@ async function runInstall(
     bytes: null,
     totalBytes: null,
   });
+  return stageHostInstallSource({
+    environment: opts.runtime.environment,
+    source,
+    onProgress: progress,
+    recordVersionOverride: opts.recordVersionOverride,
+  });
+}
+
+async function commitInstall(
+  opts: ProvisionHostOptions,
+  controller: ServiceController,
+  label: ServiceLabel,
+  progress: (info: ProgressInfo) => void,
+  staged: StagedHostInstallSource,
+): Promise<HostProvisionResult> {
   // When the host owns service registration, install the bytes without service
   // bootstrap. On Windows, still stop the slot first so stale processes do not
   // keep the install directory open during the swap.
@@ -298,14 +364,15 @@ async function runInstall(
     lifecycleEnabled: handle !== null,
     preSwapCleanupEnabled: handle === null && process.platform === "win32",
   });
-  // Already inside the per-environment CLI lock - call installHost directly
-  // (it expects the caller to hold the lock).
-  const result = await installHost({
+  // Already inside the per-environment CLI lock - commit the pre-staged
+  // source directly (it expects the caller to hold the lock). Reconcile
+  // wiring (Tech Plan: "Install/ensure re-run reconcile after a successful
+  // commit") comes from `commitHostInstallSource` itself.
+  const result = await commitHostInstallSource({
     environment: opts.runtime.environment,
-    source,
+    staged,
     onProgress: progress,
     lifecycle,
-    recordVersionOverride: opts.recordVersionOverride,
   });
   const post = await readProvisionState(controller, label, opts.runtime);
   opts.runtime.logger.info("Host provisioning install branch completed", {
@@ -334,6 +401,7 @@ async function runInstall(
           }
         : null,
     postSwapError: handle !== null ? handle.state.postSwapError : null,
+    installGeneration: result.installGeneration,
   };
 }
 
@@ -377,6 +445,9 @@ async function runServiceRegister(
   );
   await controller.install({ label, cli, enableLinger: opts.enableLinger });
   const post = await readProvisionState(controller, label, opts.runtime);
+  const installGeneration = await attestedGenerationFromCurrentRecord(
+    opts.runtime.environment,
+  );
   opts.runtime.logger.info(
     "Host provisioning service-register branch completed",
     {
@@ -392,8 +463,18 @@ async function runServiceRegister(
     version: post.version,
     runtimeVersion: post.runtimeVersion,
     action: "service-registered",
-    serviceLifecycle: null,
+    // `controller.install` both registers and starts the service -
+    // `postSwapAction: "install"` mirrors the install branch's own
+    // bootstrap-registration facts (`service/install-lifecycle.ts`'s
+    // `afterSwap`) for the same first-registration case.
+    serviceLifecycle: {
+      priorServiceState: "not-installed",
+      stoppedBeforeSwap: false,
+      postSwapAction: "install",
+      postSwapError: null,
+    },
     postSwapError: null,
+    installGeneration,
   };
 }
 
@@ -413,6 +494,9 @@ async function runStart(
   });
   await controller.start(label);
   const post = await readProvisionState(controller, label, opts.runtime);
+  const installGeneration = await attestedGenerationFromCurrentRecord(
+    opts.runtime.environment,
+  );
   opts.runtime.logger.info("Host provisioning service-start branch completed", {
     environment: opts.runtime.environment,
     registered: post.registered,
@@ -425,9 +509,36 @@ async function runStart(
     version: state.version,
     runtimeVersion: state.runtimeVersion,
     action: "started",
-    serviceLifecycle: null,
+    // Reached only when installed + registered + stopped (see the branch
+    // selection above) - the service was registered but not running before
+    // this call.
+    serviceLifecycle: {
+      priorServiceState: "stopped",
+      stoppedBeforeSwap: false,
+      postSwapAction: "start",
+      postSwapError: null,
+    },
     postSwapError: null,
+    installGeneration,
   };
+}
+
+// Reads the current install record under the caller's already-held
+// cli-lock and encodes its canonical generation - used by the
+// service-register/start branches, which don't touch install bytes but
+// still owe the caller an attested generation for the record that is
+// about to start/cycle (Tech Plan: "Attested generation in results").
+async function attestedGenerationFromCurrentRecord(
+  environment: Environment,
+): Promise<string | null> {
+  const record = await readHostInstallRecord(environment);
+  if (record === null) return null;
+  return encodeInstallGeneration({
+    installId: record.installId,
+    installedAt: record.installedAt,
+    archiveSha256: record.archiveSha256,
+    version: record.version,
+  });
 }
 
 async function readProvisionState(
@@ -517,6 +628,7 @@ function noopResult(state: ProvisionState): HostProvisionResult {
     action: "noop",
     serviceLifecycle: null,
     postSwapError: null,
+    installGeneration: null,
   };
 }
 
