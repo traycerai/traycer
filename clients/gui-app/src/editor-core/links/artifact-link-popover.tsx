@@ -741,7 +741,8 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
     if (targetRef.current === null) return;
     const next = event.relatedTarget;
     if (next instanceof Node && cardRef.current?.contains(next)) return;
-    if (linkAnchor(next) !== null) return;
+    const nextAnchor = linkAnchor(next);
+    if (nextAnchor !== null && editor.view.dom.contains(nextAnchor)) return;
     if (editable && editor.state.selection.empty) {
       const nextTarget = linkTargetAtPosition(
         editor,

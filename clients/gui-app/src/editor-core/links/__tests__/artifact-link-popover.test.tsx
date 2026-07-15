@@ -1287,6 +1287,32 @@ describe("ArtifactLinkPopover", () => {
     );
   });
 
+  it("closes a viewer popover when focus moves to a link outside its editor", async () => {
+    const openLink = vi.fn<(link: OpenableArtifactLink) => void>();
+    const onEditor = vi.fn<(editor: Editor) => void>();
+    render(
+      <>
+        <KeyboardPopoverHarness
+          content='<p><a href="https://example.com">Example</a></p>'
+          editable={false}
+          openLink={openLink}
+          onEditor={onEditor}
+          selection={null}
+        />
+        <a href="https://outside.example">Outside link</a>
+      </>,
+    );
+    const editorLink = screen.getByRole("link", { name: "Example" });
+    act(() => editorLink.focus());
+    await screen.findByRole("dialog", { name: "Link preview" });
+
+    act(() => screen.getByRole("link", { name: "Outside link" }).focus());
+
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Link preview" })).toBeNull(),
+    );
+  });
+
   it("classifies raw rendered marks for hashes, file URLs, and javascript", () => {
     const makeLinkedEditor = (href: string) =>
       makeEditor({
