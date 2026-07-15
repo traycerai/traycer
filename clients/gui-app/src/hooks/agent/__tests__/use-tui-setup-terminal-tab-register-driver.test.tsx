@@ -72,15 +72,23 @@ describe("useTuiSetupTerminalTabRegisterDriver", () => {
     const tiles = collectPanes(canvas.root).flatMap((pane) =>
       paneTabRefs(canvas, pane),
     );
-    expect(tiles).toContainEqual({
+    const setupTile = tiles.find(
+      (tile) => tile.id === WORKTREE_ENTRY.setupTerminalSessionId,
+    );
+    expect(setupTile).toMatchObject({
       id: WORKTREE_ENTRY.setupTerminalSessionId,
-      instanceId: WORKTREE_ENTRY.setupTerminalSessionId,
       type: "terminal",
       name: "Setup: traycer feature/setup-title",
       titleSource: "manual",
       hostId: HOST_ID,
       cwd: WORKTREE_ENTRY.worktreePath,
     });
+    // `instanceId` is a freshly minted per-tab-instance id (NOT the session
+    // id - reusing it would alias stream handles across views).
+    expect(typeof setupTile?.instanceId).toBe("string");
+    expect(setupTile?.instanceId).not.toBe(
+      WORKTREE_ENTRY.setupTerminalSessionId,
+    );
   });
 
   it("registers a background terminal tab for every running setup entry", () => {
