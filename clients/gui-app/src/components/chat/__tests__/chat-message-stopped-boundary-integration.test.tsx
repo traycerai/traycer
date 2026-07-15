@@ -230,9 +230,9 @@ describe("Stopped-turn boundary row: hook -> ChatMessage -> AssistantMessageBody
     );
 
     expect(
-      screen.getByTestId("assistant-stopped-before-responding").textContent,
-    ).toBe("Stopped before responding");
-    expect(screen.queryByTestId("assistant-elapsed-footer")).toBeNull();
+      screen.getByRole("status", { name: "Stopped before responding" }),
+    ).not.toBeNull();
+    expect(screen.queryByRole("button", { name: /^Stopped ·/ })).toBeNull();
   });
 
   it('renders "Stopped · {whole-turn elapsed}" plus unchanged copy/fork controls for a [text, steer] stopped turn that DID produce output', () => {

@@ -158,6 +158,8 @@ export function AssistantMessageBody({
     if (stopped === null || !stopped.turnHadOutput) {
       return stopped === null ? null : (
         <div
+          role="status"
+          aria-label="Stopped before responding"
           data-testid="assistant-stopped-before-responding"
           className="flex w-fit items-center gap-1.5 py-1 text-ui-sm text-destructive"
         >
