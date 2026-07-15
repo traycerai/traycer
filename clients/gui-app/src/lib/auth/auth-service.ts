@@ -254,6 +254,16 @@ export class AuthService {
   // finalizer (device poll result / expiry timeout) can detect that a newer
   // `signIn()` has superseded the attempt it captured and drop its stale result.
   private nextEpoch: number = 0;
+  // Monotonic identity-transition generation, bumped by every transition this
+  // service initiates (`signIn` / `signOut` / `dispose`) and re-checked after
+  // each await of the sign-in finalization tail (token save, local
+  // provisioning) and of `start()`'s rehydration. Complements the attempt
+  // epoch rather than replacing it: the epoch fences replayed/superseded
+  // results of the SAME interactive flow, but it is consumed before the
+  // save/provision awaits, so only this generation can see a `signOut()` or
+  // newer `signIn()` that lands inside that window - the newer transition
+  // always wins over the already-started finalization.
+  private identityGeneration: number = 0;
   // The single in-flight sign-in attempt, or null when no attempt is live. Holds
   // the main-process device poll handle so superseding the attempt cancels it.
   // Set before the shell is asked to start the device poll; cleared by a
@@ -410,6 +420,11 @@ export class AuthService {
     if (this.disposed) {
       return;
     }
+    // Rehydration defers to any identity transition that starts while it is
+    // in flight: an interactive `signIn()` (its outcome supersedes the stored
+    // token either way) or a `signOut()` both bump the generation and stop
+    // this flow at the next gate.
+    const startGeneration = this.identityGeneration;
     this.starting = true;
     this.authResolvedDuringStart = false;
     // Subscribe to the browser-return signal BEFORE awaiting the token load so a
@@ -423,7 +438,7 @@ export class AuthService {
 
     try {
       const stored = await this.tokenStore.load();
-      if (this.shouldStopStartFlow()) {
+      if (this.shouldStopStartFlow(startGeneration)) {
         return;
       }
       if (stored === null || stored.token.length === 0) {
@@ -434,14 +449,14 @@ export class AuthService {
         stored.token,
         stored.refreshToken,
       );
-      if (this.shouldStopStartFlow()) {
+      if (this.shouldStopStartFlow(startGeneration)) {
         return;
       }
       if (outcome.kind === "valid") {
         const accepted = this.acceptedToken(outcome, stored);
         if (accepted.token !== stored.token) {
           await this.tokenStore.save(accepted);
-          if (this.shouldStopStartFlow()) {
+          if (this.shouldStopStartFlow(startGeneration)) {
             return;
           }
         }
@@ -451,8 +466,8 @@ export class AuthService {
       appLogger.warn("[auth] stored session validation failed during startup", {
         outcome: outcome.kind,
       });
-      await this.clearStoredAuthForStart();
-      if (this.shouldStopStartFlow()) {
+      await this.clearStoredAuthForStart(startGeneration);
+      if (this.shouldStopStartFlow(startGeneration)) {
         return;
       }
       this.setLastError(AUTH_ERROR_SESSION_EXPIRED);
@@ -462,8 +477,12 @@ export class AuthService {
     }
   }
 
-  private shouldStopStartFlow(): boolean {
-    return this.disposed || this.authResolvedDuringStart;
+  private shouldStopStartFlow(startGeneration: number): boolean {
+    return (
+      this.disposed ||
+      this.authResolvedDuringStart ||
+      startGeneration !== this.identityGeneration
+    );
   }
 
   private isDisposed(): boolean {
@@ -486,6 +505,7 @@ export class AuthService {
     if (this.disposed) {
       return;
     }
+    this.identityGeneration += 1;
     this.setLastError(null);
     const attempt = this.beginAttempt();
     useAuthStore.getState().setSigningIn();
@@ -557,6 +577,9 @@ export class AuthService {
     if (this.disposed) {
       return;
     }
+    // Invalidate any sign-in finalization that already passed its epoch fence
+    // and is now awaiting its token save / provisioning - the sign-out wins.
+    this.identityGeneration += 1;
     // Stop the proactive refresh timer up front: `clearStoredAuth()` below is
     // awaited (storage clear + CLI deprovision), and a timer firing during that
     // window would race a `forceRefresh` against the credential removal.
@@ -1078,6 +1101,11 @@ export class AuthService {
     if (this.disposed) {
       return false;
     }
+    // Captured before the first await. The attempt epoch is consumed before
+    // the save/provision awaits below, so this generation is the only fence
+    // that can drop the finalization once a `signOut()` / newer `signIn()`
+    // interleaves with them.
+    const generation = this.identityGeneration;
     if (token.length === 0) {
       if (!this.isAttemptCurrent(expectedOAuthEpoch)) {
         appLogger.debug(
@@ -1120,8 +1148,32 @@ export class AuthService {
       // re-apply the same token.
       this.clearActiveAttempt();
       const accepted = this.acceptedToken(outcome, { token, refreshToken });
-      await this.tokenStore.save(accepted);
+      const saveError: unknown = await this.tokenStore.save(accepted).then(
+        () => null,
+        (error: unknown) => error ?? new Error("token save rejected"),
+      );
       if (this.isDisposed()) {
+        return false;
+      }
+      // Checked before acting on the save outcome: a transition that landed
+      // during the save owns the state now, so neither the signed-in
+      // projection nor the failure projection below may run for this stale
+      // finalization.
+      if (generation !== this.identityGeneration) {
+        appLogger.debug(
+          "[auth] dropped sign-in finalization superseded during token save",
+          {},
+        );
+        return false;
+      }
+      if (saveError !== null) {
+        // Without the persisted pair the "signed-in" projection would be a
+        // lie the next launch cannot rehydrate and the proactive refresh
+        // cannot rotate. Fail the sign-in as a product failure instead.
+        appLogger.warn("[auth] failed to persist accepted sign-in token", {
+          error: describeLogError(saveError),
+        });
+        await this.applyFailure(AUTH_ERROR_SIGN_IN_FAILED);
         return false;
       }
 
@@ -1135,9 +1187,16 @@ export class AuthService {
       await this.ensureLocalProvisioning(
         accepted.token,
         accepted.refreshToken,
-        () => this.isDisposed(),
+        () => this.isDisposed() || generation !== this.identityGeneration,
       );
       if (this.isDisposed()) {
+        return false;
+      }
+      if (generation !== this.identityGeneration) {
+        appLogger.debug(
+          "[auth] dropped sign-in finalization superseded during provisioning",
+          {},
+        );
         return false;
       }
 
@@ -1238,12 +1297,14 @@ export class AuthService {
     await this.ensureLocalDeprovisioning();
   }
 
-  private async clearStoredAuthForStart(): Promise<void> {
-    if (this.shouldStopStartFlow()) {
+  private async clearStoredAuthForStart(
+    startGeneration: number,
+  ): Promise<void> {
+    if (this.shouldStopStartFlow(startGeneration)) {
       return;
     }
     await this.tokenStore.clear();
-    if (this.shouldStopStartFlow()) {
+    if (this.shouldStopStartFlow(startGeneration)) {
       return;
     }
     await this.ensureLocalDeprovisioning();
@@ -1405,6 +1466,7 @@ export class AuthService {
       return;
     }
     this.disposed = true;
+    this.identityGeneration += 1;
     this.refreshScheduler.stop();
     for (const disposeWake of this.wakeDisposers) {
       disposeWake();
