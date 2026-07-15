@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { hostRpcRegistry } from "@traycer/protocol/host/registry";
+import { epicListTasksUpgradeV10ToV11 } from "@traycer/protocol/host/epic/contracts";
 import {
   listTasksRequestSchema,
   listTasksResponseSchema,
@@ -8,7 +9,7 @@ import {
 /**
  * Hard invariant for the partial CloudData → protocol migration:
  *
- *   hostRpcRegistry["epic.listTasks"]
+ *   latest hostRpcRegistry["epic.listTasks"] contract
  *
  * must wire the canonical `listTasks*` schema instances exported from
  * `unary-schemas` - not merely equal shapes. Referential equality
@@ -24,7 +25,7 @@ import {
  */
 describe("epic.listTasks instance identity", () => {
   const hostContract =
-    hostRpcRegistry["epic.listTasks"][1].versions[0].contract;
+    hostRpcRegistry["epic.listTasks"][1].versions[1].contract;
 
   it("host request schema is the canonical listTasksRequestSchema instance", () => {
     expect(hostContract.requestSchema).toBe(listTasksRequestSchema);
@@ -96,6 +97,32 @@ describe("epic.listTasks instance identity", () => {
         ],
         ownershipScopes: [{ value: "mine", count: 1 }],
       },
+    });
+  });
+
+  it("carries personal pin state on canonical list rows", () => {
+    const parsed = listTasksResponseSchema.parse({
+      tasks: [
+        {
+          epic: null,
+          phase: null,
+          pinned: true,
+        },
+      ],
+      hasMore: false,
+    });
+    expect(parsed.tasks[0]?.pinned).toBe(true);
+  });
+
+  it("defaults rows from a v1.0 host to unpinned", () => {
+    expect(
+      epicListTasksUpgradeV10ToV11.upgradeResponse({
+        tasks: [{ epic: null, phase: null }],
+        hasMore: false,
+      }),
+    ).toEqual({
+      tasks: [{ epic: null, phase: null, pinned: false }],
+      hasMore: false,
     });
   });
 });

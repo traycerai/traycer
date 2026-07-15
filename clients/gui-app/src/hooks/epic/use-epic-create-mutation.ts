@@ -11,6 +11,7 @@ import type {
 import type {
   ListTasksFacets,
   ListTasksResponse,
+  ListTaskLight,
   ListTasksSort,
   TaskLight,
   TaskRepoIdentifier,
@@ -134,14 +135,18 @@ function mergeTaskIntoCloudTasksResponse(
     (existing) => taskProjection(existing)?.id === incomingProjection.id,
   );
   const taskToMerge = taskWithPreferredEpicTitle(task, existingTask);
-  const projection = taskProjection(taskToMerge);
+  const listTaskToMerge: ListTaskLight = {
+    ...taskToMerge,
+    pinned: existingTask?.pinned ?? false,
+  };
+  const projection = taskProjection(listTaskToMerge);
   if (projection === null) return response;
   if (!taskProjectionMatchesRequest(projection, request, userId)) {
     return response;
   }
   const tasks = response.tasks
     .filter((existing) => taskProjection(existing)?.id !== projection.id)
-    .concat(taskToMerge)
+    .concat(listTaskToMerge)
     .sort((left, right) =>
       compareTaskLights(
         left,
@@ -492,11 +497,14 @@ function taskWorkspaces(task: TaskLight): readonly TaskWorkspaceIdentifier[] {
 }
 
 function compareTaskLights(
-  left: TaskLight,
-  right: TaskLight,
+  left: ListTaskLight,
+  right: ListTaskLight,
   sort: ListTasksSort,
   query: string | null,
 ): number {
+  const leftPinned = left.pinned ?? false;
+  const rightPinned = right.pinned ?? false;
+  if (leftPinned !== rightPinned) return leftPinned ? -1 : 1;
   const leftProjection = taskProjection(left);
   const rightProjection = taskProjection(right);
   if (leftProjection === null || rightProjection === null) return 0;

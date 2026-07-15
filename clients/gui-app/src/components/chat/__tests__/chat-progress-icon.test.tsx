@@ -8,6 +8,7 @@ import {
   type ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
+import type { ChatAccess } from "@traycer/protocol/host/agent/gui/subscribe";
 
 const EPIC_ID = "epic-1";
 const CHAT_ID = "chat-1";
@@ -17,13 +18,16 @@ const RUNNING_TEST_ID = `${TEST_ID}-activity-${CHAT_ID}`;
 const mockSessionState = vi.hoisted<{
   readonly activeAgentIds: Set<string>;
   existingHandle: ChatSessionStoreHandle | null;
+  epicPermissionRole: "owner" | "editor" | "viewer" | null;
 }>(() => ({
   activeAgentIds: new Set<string>(),
   existingHandle: null,
+  epicPermissionRole: "owner",
 }));
 
 vi.mock("@/lib/epic-selectors", () => ({
   useEpicActiveAgentIds: () => mockSessionState.activeAgentIds,
+  useEpicPermissionRole: () => mockSessionState.epicPermissionRole,
 }));
 
 vi.mock("@/lib/registries/chat-session-registry", () => ({
@@ -38,6 +42,7 @@ afterEach(() => {
   cleanup();
   mockSessionState.activeAgentIds.clear();
   mockSessionState.existingHandle = null;
+  mockSessionState.epicPermissionRole = "owner";
   for (const handle of createdHandles.splice(0)) {
     handle.dispose();
   }
@@ -59,6 +64,57 @@ describe("<ChatProgressIcon />", () => {
     expect(screen.queryByTestId(RUNNING_TEST_ID)).toBeNull();
     expect(screen.queryByTitle("Chat in progress")).toBeNull();
     expect(screen.queryByTitle("Waiting for your approval")).toBeNull();
+  });
+
+  it("uses resolved chat access for an Epic editor who is a chat viewer", () => {
+    const handle = createHandle();
+    setChatAccess(handle, "viewer");
+    mockSessionState.existingHandle = handle;
+    mockSessionState.epicPermissionRole = "editor";
+
+    const { container } = renderIcon();
+
+    expect(
+      screen.getByRole("status", { name: "Read-only chat" }),
+    ).toBeDefined();
+    const icon = container.querySelector(".lucide-message-square-lock");
+    expect(icon).not.toBeNull();
+    expect(icon?.getAttribute("class")).not.toContain("text-red-");
+    expect(icon?.getAttribute("class")).not.toContain("text-orange-");
+    expect(icon?.getAttribute("class")).not.toContain("text-green-");
+  });
+
+  it("does not show the unopened-chat fallback lock until session access is known", () => {
+    const handle = createHandle();
+    mockSessionState.existingHandle = handle;
+    mockSessionState.epicPermissionRole = "viewer";
+
+    const { container } = renderIcon();
+
+    expect(screen.queryByRole("status", { name: "Read-only chat" })).toBeNull();
+    expect(container.querySelector(".lucide-message-square-lock")).toBeNull();
+  });
+
+  it("does not lock a known chat owner even when the Epic fallback is viewer", () => {
+    const handle = createHandle();
+    setChatAccess(handle, "owner");
+    mockSessionState.existingHandle = handle;
+    mockSessionState.epicPermissionRole = "viewer";
+
+    const { container } = renderIcon();
+
+    expect(screen.queryByRole("status", { name: "Read-only chat" })).toBeNull();
+    expect(container.querySelector(".lucide-message-square-lock")).toBeNull();
+  });
+
+  it("uses an accessible viewer fallback for unopened chats", () => {
+    mockSessionState.epicPermissionRole = "viewer";
+
+    renderIcon();
+
+    expect(
+      screen.getByRole("status", { name: "Read-only chat" }),
+    ).toBeDefined();
   });
 
   it("keeps the spinner visible from runStatus when awareness is missing", () => {
@@ -88,14 +144,15 @@ describe("<ChatProgressIcon />", () => {
   });
 });
 
-function renderIcon(): void {
-  render(
+function renderIcon() {
+  return render(
     <ChatProgressIcon
       chatId={CHAT_ID}
       className={undefined}
       epicId={EPIC_ID}
       mutedClassName="text-muted-foreground"
       testId={TEST_ID}
+      defaultIcon={undefined}
     />,
   );
 }
@@ -115,4 +172,17 @@ function createHandle(): ChatSessionStoreHandle {
   });
   createdHandles.push(handle);
   return handle;
+}
+
+function setChatAccess(
+  handle: ChatSessionStoreHandle,
+  role: ChatAccess["role"],
+): void {
+  handle.store.setState({
+    access: {
+      role,
+      ownerUserId: "chat-owner",
+      canAct: role === "owner",
+    },
+  });
 }

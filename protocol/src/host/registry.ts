@@ -115,6 +115,8 @@ import {
   epicListCollaboratorsV10,
   epicListCommentThreadsV10,
   epicListTasksV10,
+  epicListTasksV11,
+  epicListTasksUpgradeV10ToV11,
   epicMentionEpicsV10,
   epicMentionReviewsV10,
   epicMentionSpecsV10,
@@ -131,6 +133,7 @@ import {
   epicResolveArtifactByPathV10,
   epicRevokeCollaboratorV10,
   epicSetCommentThreadResolvedV10,
+  epicSetPinnedV10,
   epicSubscribeV10,
   epicUpdateArtifactStatusV10,
   epicUpdateTitleV10,
@@ -2314,15 +2317,32 @@ const HOST_RPC_REGISTRY_DEFINITION = {
   },
   "epic.listTasks": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicListTasksV10,
           upgradeFromPreviousVersion: null,
         },
+        1: {
+          contract: epicListTasksV11,
+          upgradeFromPreviousVersion: epicListTasksUpgradeV10ToV11,
+        },
       },
       downgradePathsFromLatest: {},
     },
+  },
+  "epic.setPinned": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicSetPinnedV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
   },
   "epic.create": {
     1: {

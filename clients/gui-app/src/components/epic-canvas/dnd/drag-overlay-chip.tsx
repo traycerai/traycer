@@ -157,6 +157,7 @@ function ArtifactNodeDragOverlay(props: {
         epicId={props.epicId}
         variant="static"
         className="size-3.5 shrink-0"
+        defaultIcon={undefined}
       />
       <span className="min-w-0 truncate font-medium">{props.node.name}</span>
     </m.div>
