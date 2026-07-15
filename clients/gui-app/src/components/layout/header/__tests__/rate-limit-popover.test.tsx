@@ -72,6 +72,7 @@ type MockState = {
   traycerUsageUpdatedAt: Readonly<Record<string, number>>;
   openSettings: Mock<(...args: unknown[]) => void>;
   enqueue: Mock<(...args: unknown[]) => Promise<void>>;
+  enqueueBatch: Mock<(...args: unknown[]) => Promise<void>>;
   consumeReset: Mock<
     (
       request: ProvidersConsumeRateLimitResetCreditRequest,
@@ -112,6 +113,7 @@ const mocks = vi.hoisted<MockState>(() => ({
   traycerUsageUpdatedAt: {},
   openSettings: vi.fn(),
   enqueue: vi.fn((..._args: unknown[]) => Promise.resolve()),
+  enqueueBatch: vi.fn((..._args: unknown[]) => Promise.resolve()),
   consumeReset: vi.fn(),
   lastUseHostQueriesOptions: null,
   lastUseHostQueriesProviderIds: null,
@@ -227,6 +229,8 @@ vi.mock("@/lib/rate-limits/ephemeral-fetch-queue", () => ({
   // Wrapper (not `mocks.enqueue` directly) so `beforeEach` can swap the spy -
   // an object-literal binding would freeze the original fn at module load.
   enqueueRateLimitFetch: (...args: unknown[]) => mocks.enqueue(...args),
+  enqueueRateLimitFetchBatch: (...args: unknown[]) =>
+    mocks.enqueueBatch(...args),
   enqueueRateLimitFetchForScope: (...args: unknown[]) =>
     mocks.enqueue(...args.slice(1)),
 }));
@@ -518,6 +522,7 @@ beforeEach(() => {
   mocks.traycerUsageUpdatedAt = {};
   mocks.openSettings = vi.fn();
   mocks.enqueue = vi.fn((..._args: unknown[]) => Promise.resolve());
+  mocks.enqueueBatch = vi.fn((..._args: unknown[]) => Promise.resolve());
   mocks.consumeReset = vi.fn();
   mocks.lastUseHostQueriesOptions = null;
   mocks.lastUseHostQueriesProviderIds = null;
@@ -1377,9 +1382,28 @@ describe("<RateLimitPopover /> Refresh all", () => {
     expect((refreshCodex as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it("enqueues each ephemeralProcess provider with force:true", () => {
+  it("enqueues every ephemeralProcess profile in one parallel refresh batch", () => {
     mocks.configured = [
-      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [
+          providerProfile({
+            profileId: "ambient",
+            kind: "ambient",
+            label: "Terminal",
+            tier: "Pro",
+            usageUpdatedAt: NOW - 10_000,
+          }),
+          providerProfile({
+            profileId: "work-profile",
+            kind: "managed",
+            label: "Work",
+            tier: "Pro 5x",
+            usageUpdatedAt: NOW - 10_000,
+          }),
+        ],
+      },
       {
         providerId: "claude-code",
         lane: "ephemeralProcess",
@@ -1391,17 +1415,67 @@ describe("<RateLimitPopover /> Refresh all", () => {
       "claude-code": readyResult(claudeReady()),
     };
     renderPopover();
+    mocks.enqueue.mockClear();
     fireEvent.click(screen.getByRole("button", { name: "Refresh all" }));
-    expect(mocks.enqueue).toHaveBeenCalledWith(
-      "codex",
-      { type: "PERSONAL" },
-      { force: true, profileId: null },
+    expect(mocks.enqueueBatch).toHaveBeenCalledWith(
+      [
+        {
+          providerId: "codex",
+          accountContext: { type: "PERSONAL" },
+          profileId: null,
+        },
+        {
+          providerId: "codex",
+          accountContext: { type: "PERSONAL" },
+          profileId: "work-profile",
+        },
+        {
+          providerId: "claude-code",
+          accountContext: { type: "PERSONAL" },
+          profileId: null,
+        },
+      ],
+      { force: true },
     );
-    expect(mocks.enqueue).toHaveBeenCalledWith(
-      "claude-code",
-      { type: "PERSONAL" },
-      { force: true, profileId: null },
+    expect(mocks.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("targets the managed profile id, not null, when refreshing a provider with exactly one managed profile", () => {
+    // Regression: refreshTargetsForProvider used to short-circuit to [null]
+    // whenever profiles.length <= 1, so a lone managed profile's card
+    // (keyed by work-profile) never received the Refresh-all invalidation.
+    mocks.configured = [
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [
+          providerProfile({
+            profileId: "work-profile",
+            kind: "managed",
+            label: "Work",
+            tier: "Pro 5x",
+            usageUpdatedAt: NOW - 10_000,
+          }),
+        ],
+      },
+    ];
+    mocks.results = {
+      [resultKey("codex", "work-profile")]: readyResult(codexReady()),
+    };
+    renderPopover();
+    mocks.enqueue.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "Refresh all" }));
+    expect(mocks.enqueueBatch).toHaveBeenCalledWith(
+      [
+        {
+          providerId: "codex",
+          accountContext: { type: "PERSONAL" },
+          profileId: "work-profile",
+        },
+      ],
+      { force: true },
     );
+    expect(mocks.enqueue).not.toHaveBeenCalled();
   });
 
   it("refetches Traycer when the synthetic Traycer entry is eligible", () => {
