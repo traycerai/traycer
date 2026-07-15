@@ -100,6 +100,7 @@ import {
   locationSelectionChanges,
   workspaceRunBranchLabel,
 } from "./workspace-run-item";
+import { applyWorktreeCreateResult } from "@/lib/worktree/apply-worktree-create-result";
 import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
 import { useChatById } from "@/lib/epic-selectors";
 import { toast } from "sonner";
@@ -1498,9 +1499,25 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       },
       {
         onSuccess: (result) => {
-          finishAndResume();
+          // The RPC resolves per-entry: on a mixed outcome the failed
+          // folders keep their staged intent (popover stays open, no PTY
+          // resume) so Update can re-apply just the failed subset, while the
+          // succeeded folders commit + unstage normally.
+          applyWorktreeCreateResult({
+            stagedEntries,
+            changedWorkspacePaths,
+            perEntry: result.perEntry,
+            actions: {
+              finishAndResume,
+              unstageEntry: (workspacePath) =>
+                unstageWorktreeEntry(stagedKey, workspacePath),
+              commitPaths: handleBindingCommitted,
+              showPartialFailure: (message) => toast.error(message),
+            },
+          });
           // Telemetry runs strictly after the product work; it is an
-          // observer and never part of the mutation chain.
+          // observer and never part of the mutation chain (and it already
+          // gates each event on per-entry success).
           trackUserInitiatedWorktreeWrite(stagedEntries, result);
         },
       },
@@ -1513,6 +1530,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     ownerKind,
     stagedKey,
     clearStagedWorktreeIntent,
+    unstageWorktreeEntry,
     handleBindingCommitted,
   ]);
   // Terminal-agent add/remove commit to the binding but deliberately do NOT
