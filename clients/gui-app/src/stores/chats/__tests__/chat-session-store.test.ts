@@ -2469,6 +2469,9 @@ describe("createChatSessionStore", () => {
         content: "The grep search is pulling in false positives.",
       },
     ]);
+    // The frozen row's own timestamp is untouched by carryover routing - only
+    // its blocks/blocksVersion change (mirrors the host's carryover writer).
+    expect(frozen?.timestamp).toBe(4);
     // The continuation row holds the steer marker and the NEW block only -
     // no duplicate reasoning block below the steer bubble.
     expect(
@@ -2478,6 +2481,44 @@ describe("createChatSessionStore", () => {
       { type: "steer", blockId: "steer:queue-split-steered" },
       { type: "text", blockId: "text-after-steer" },
     ]);
+
+    // A CHILD of the frozen block (parentBlockId) also follows its parent
+    // into the frozen row, not the continuation row.
+    callbacks.onBlockDelta({
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      event: {
+        type: "tool_call.started",
+        blockId: "child-of-think-split",
+        parentBlockId: "think-split",
+        timestamp: 9,
+        toolName: "read_file",
+        agentMessageSend: null,
+      },
+    });
+
+    const stateAfterChild = harness.handle.store.getState();
+    const frozenAfterChild = stateAfterChild.messages.find(
+      (message): message is Extract<Message, { role: "assistant" }> =>
+        message.role === "assistant" &&
+        message.messageId === "assistant-frozen",
+    );
+    const continuationAfterChild = stateAfterChild.messages.find(
+      (message): message is Extract<Message, { role: "assistant" }> =>
+        message.role === "assistant" &&
+        message.messageId === "assistant-continuation",
+    );
+    expect(frozenAfterChild?.blocks).toMatchObject([
+      { blockId: "think-split" },
+      { blockId: "child-of-think-split", parentBlockId: "think-split" },
+    ]);
+    expect(
+      continuationAfterChild?.blocks.some(
+        (block) => block.blockId === "child-of-think-split",
+      ),
+    ).toBe(false);
   });
 
   it("tracks live in-flight usage from usage.updated and carries the final value forward through turn.completed", () => {
