@@ -49,6 +49,7 @@ import {
   openTileInPane as openTileInPaneCanvas,
   promotePreview,
   renameArtifact,
+  renameTerminalTiles,
   resizeSplit,
   setActivePane,
   setActiveTab as setActiveTileTabCanvas,
@@ -414,6 +415,17 @@ export interface EpicCanvasStore {
   renameArtifactInTab: (
     tabId: string,
     artifactId: string,
+    name: string,
+  ) => void;
+  /**
+   * Refresh the persisted fallback `name` of every terminal tile bound to
+   * (hostId, sessionId) across ALL view tabs after a successful host rename.
+   * Durable-snapshot fan-out only - live titles render from the host's
+   * `terminal.list` rows.
+   */
+  updateTerminalNameSnapshots: (
+    hostId: string,
+    sessionId: string,
     name: string,
   ) => void;
 
@@ -1603,6 +1615,30 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
               ),
             },
           };
+        });
+      },
+
+      updateTerminalNameSnapshots: (hostId, sessionId, name) => {
+        const trimmed = name.trim();
+        if (trimmed.length === 0) return;
+        set((state) => {
+          const entries = Object.entries(state.canvasByTabId).map(
+            ([tabId, canvas]) =>
+              [
+                tabId,
+                canvas === undefined
+                  ? canvas
+                  : renameTerminalTiles(canvas, hostId, sessionId, trimmed),
+              ] as const,
+          );
+          if (
+            entries.every(
+              ([tabId, canvas]) => canvas === state.canvasByTabId[tabId],
+            )
+          ) {
+            return state;
+          }
+          return { canvasByTabId: Object.fromEntries(entries) };
         });
       },
 

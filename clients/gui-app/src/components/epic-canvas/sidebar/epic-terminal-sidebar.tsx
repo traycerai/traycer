@@ -274,7 +274,6 @@ function TerminalRow(props: TerminalRowProps) {
   const isActive = useIsActiveEpicArtifact(tabId, session.sessionId);
   const kill = useTerminalKill();
   const rename = useTerminalRename();
-  const renameArtifactInTab = useEpicCanvasStore((s) => s.renameArtifactInTab);
   const navigateNested = useEpicNestedFocusNavigation();
   const prepareCloseCanvasTabFocusTarget = useEpicCanvasStore(
     (s) => s.prepareCloseCanvasTabFocusTarget,
@@ -329,23 +328,16 @@ function TerminalRow(props: TerminalRowProps) {
       setIsRenaming(false);
       return;
     }
-    // Optimistic local update so any open canvas tab for this session
-    // reflects the new name before the host round-trip.
-    renameArtifactInTab(tabId, session.sessionId, trimmed);
+    // The mutation optimistically patches the cached `terminal.list` rows,
+    // so this row AND any open canvas tab for the session update before the
+    // host round-trip (with rollback on error).
     rename.mutate(
       { sessionId: session.sessionId, title: trimmed },
       {
         onSuccess: () => setIsRenaming(false),
       },
     );
-  }, [
-    label,
-    rename,
-    renameArtifactInTab,
-    renameValue,
-    session.sessionId,
-    tabId,
-  ]);
+  }, [label, rename, renameValue, session.sessionId]);
 
   const handleRenameKeyDown = useCallback(
     (event: KeyboardEvent<HTMLInputElement>) => {
