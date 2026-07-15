@@ -3,6 +3,7 @@ import {
   pruneAcceptedActions,
   reconcileQueueChange,
   reconcileSnapshotChange,
+  sweepStaleNonMessagePendingActions,
   withoutPendingAction,
 } from "@/stores/chats/chat-queue-reconciler";
 import {
@@ -96,7 +97,7 @@ type SendActionInput = {
   readonly set: ChatSessionSetState;
   readonly get: ChatSessionGetState;
   readonly frame: ChatOwnerActionFrame;
-  readonly pending: PendingChatAction;
+  readonly pending: PendingChatActionSeed;
   readonly pendingUserMessage: PendingUserMessage | null;
 };
 
@@ -117,7 +118,23 @@ export interface PendingChatAction {
   readonly sender: UserMessageSender | null;
   readonly settings: ChatRunSettings | null;
   readonly createdAt: number;
+  /**
+   * The connection epoch the action's frame was dispatched on (stamped by
+   * `sendAction`). An epoch older than the one that produced the current
+   * authoritative snapshot means the frame's ack can never arrive (frames
+   * and acks are fire-and-forget per connection), so snapshot reconciliation
+   * drops such non-message pendings instead of leaving their controls
+   * disabled forever. Message sends/edits are excluded - they reconcile by
+   * messageId with composer restoration.
+   */
+  readonly connectionEpoch: number;
 }
+
+/**
+ * A pending action as its creator builds it - `sendAction` stamps the
+ * `connectionEpoch` centrally at dispatch time.
+ */
+export type PendingChatActionSeed = Omit<PendingChatAction, "connectionEpoch">;
 
 export interface FailedSendRestorationState {
   readonly clientActionId: string;
@@ -203,6 +220,15 @@ export type ChatRestoreSlot =
       readonly restoringUserId: string;
       readonly restoringHostId: string;
       readonly startedAt: number;
+      /**
+       * Connection epoch the `restoreStarted` frame arrived on. The slot is
+       * frame-driven with no snapshot representation, so an in-flight slot
+       * whose `restoreCompleted` was lost to a drop would spin forever; the
+       * first authoritative snapshot of a NEWER connection clears such a
+       * stale slot instead (a still-running restore re-announces itself via
+       * the live progress/completed frames of the new subscription).
+       */
+      readonly connectionEpoch: number;
     }
   | {
       readonly kind: "progressing";
@@ -212,6 +238,8 @@ export type ChatRestoreSlot =
       readonly startedAt: number;
       readonly processedCount: number;
       readonly totalCount: number;
+      /** See the `in-flight` variant. */
+      readonly connectionEpoch: number;
     }
   | {
       readonly kind: "completed";
@@ -602,6 +630,13 @@ export function createChatSessionStore(
   // delta buffer lives; read by the handle's surface-visibility rollup.
   let flushLease: StreamFlushLease | null = null;
   let activeStreamGeneration = 0;
+  // Bumped whenever the connection the pendings were dispatched on is gone: a
+  // transport `reconnecting`/`closed` status, or a stream-client replacement
+  // (`retry`). Pending actions are stamped with this at dispatch, and the
+  // next authoritative snapshot drops non-message pendings from an older
+  // epoch - their ack can never arrive. Never acted on at the connection
+  // event itself: a wobble that reconnects cancels nothing by itself.
+  let connectionEpoch = 0;
   const surfaceVisibility = new Map<string, boolean>();
 
   const pushSurfaceVisibility = (): void => {
@@ -624,10 +659,11 @@ export function createChatSessionStore(
     const client = streamClient;
     if (client === null) return null;
     const nextPendingUser = input.pendingUserMessage;
+    const pending: PendingChatAction = { ...input.pending, connectionEpoch };
     input.set((state) => ({
       pendingActions: {
         ...state.pendingActions,
-        [input.pending.clientActionId]: input.pending,
+        [pending.clientActionId]: pending,
       },
       // Dedupe by `messageId` so a real send for an already-seeded optimistic
       // message replaces the seed in place instead of rendering it twice.
@@ -650,6 +686,9 @@ export function createChatSessionStore(
     const client = streamClient;
     streamClient = null;
     activeStreamGeneration += 1;
+    // A replaced client is a new connection - the old one's `closed` status
+    // event is suppressed by the generation guard, so bump here too.
+    connectionEpoch += 1;
     client.close();
   };
 
@@ -723,8 +762,23 @@ export function createChatSessionStore(
             },
           );
           const now = Date.now();
+          // This snapshot is the authority for everything a lost connection
+          // left in limbo: non-message pendings dispatched on an earlier
+          // connection will never see their ack, so drop them here (controls
+          // re-enable; the user can re-issue against the state the snapshot
+          // shows). Message sends/edits stay - `reconcileSnapshotChange`
+          // settles those by messageId with composer restoration.
+          const sweptPendingActions = sweepStaleNonMessagePendingActions(
+            state.pendingActions,
+            connectionEpoch,
+          );
+          const sweptActionIds = new Set(
+            Object.keys(state.pendingActions).filter(
+              (clientActionId) => !(clientActionId in sweptPendingActions),
+            ),
+          );
           const pending = reconcileSnapshotChange({
-            pendingActions: state.pendingActions,
+            pendingActions: sweptPendingActions,
             pendingUserMessages: state.pendingUserMessages,
             messages,
             queue: frame.snapshot.queue,
@@ -767,15 +821,26 @@ export function createChatSessionStore(
             backgroundItems: frame.snapshot.backgroundItems,
             // Drop per-item stops whose task has left the running-only list
             // (its terminal landed) and clear the stop-all flag once nothing
-            // is left running, so settled rows never stay disabled.
+            // is left running, so settled rows never stay disabled. A stop
+            // whose FRAME died with a dropped connection never terminates its
+            // task, so also drop entries whose generic pending was just swept
+            // (same clientActionId) - an ack-ACCEPTED stop has no generic
+            // pending left and correctly stays disabled until its terminal.
             pendingBackgroundStops: reconcileBackgroundStops(
-              state.pendingBackgroundStops,
+              withoutBackgroundStopsForActions(
+                state.pendingBackgroundStops,
+                sweptActionIds,
+              ),
               frame.snapshot.backgroundItems,
             ),
-            pendingBackgroundStopAll: reconcileBackgroundStopAll(
-              state.pendingBackgroundStopAll,
-              frame.snapshot.backgroundItems,
-            ),
+            pendingBackgroundStopAll:
+              state.pendingBackgroundStopAll !== null &&
+              sweptActionIds.has(state.pendingBackgroundStopAll.clientActionId)
+                ? null
+                : reconcileBackgroundStopAll(
+                    state.pendingBackgroundStopAll,
+                    frame.snapshot.backgroundItems,
+                  ),
             pendingActions: pending.pendingActions,
             acceptedActions: pruneAcceptedActions(
               {
@@ -786,6 +851,7 @@ export function createChatSessionStore(
             ),
             pendingUserMessages: pending.pendingUserMessages,
             failedSendRestoration: pending.failedSendRestoration,
+            restore: sweepStaleRestoreSlot(state.restore, connectionEpoch),
             snapshotLoaded: true,
             worktreeBinding: frame.snapshot.worktreeBinding,
             missingWorktreePaths: frame.snapshot.missingWorktreePaths,
@@ -1114,6 +1180,7 @@ export function createChatSessionStore(
             restoringUserId: frame.restoringUserId,
             restoringHostId: frame.restoringHostId,
             startedAt: frame.startedAt,
+            connectionEpoch,
           },
         });
       },
@@ -1142,6 +1209,10 @@ export function createChatSessionStore(
               startedAt: prev.startedAt,
               processedCount: frame.processedCount,
               totalCount: frame.totalCount,
+              // A progress frame is live proof the restore is still running
+              // on THIS connection - refresh the stamp so the next snapshot
+              // does not clear an actively-progressing slot.
+              connectionEpoch,
             },
           };
         });
@@ -1169,6 +1240,12 @@ export function createChatSessionStore(
       },
       onConnectionStatus: (status, reason) => {
         if (disposed) return;
+        if (status === "reconnecting" || status === "closed") {
+          // Frames dispatched on the lost connection can no longer be
+          // answered. Only stamps get older here - nothing is cancelled
+          // until an authoritative post-reconnect snapshot arrives.
+          connectionEpoch += 1;
+        }
         set((state) => {
           // Capture a fatal close so the tile can show the host's reason
           // (e.g. CHAT_INVALID) instead of spinning forever. A non-fatal close
@@ -2103,7 +2180,7 @@ function isUnauthorizedClose(
 function basicPending(
   clientActionId: string,
   action: ChatOwnerActionFrame["kind"],
-): PendingChatAction {
+): PendingChatActionSeed {
   return {
     clientActionId,
     action,
@@ -2113,6 +2190,42 @@ function basicPending(
     settings: null,
     createdAt: Date.now(),
   };
+}
+
+/**
+ * Drops per-task background-stop entries whose stop frame's generic pending
+ * was swept as stale (the frame/ack died with a dropped connection, so the
+ * task will never terminate on its account). Keyed by the shared
+ * `clientActionId` both records carry.
+ */
+function withoutBackgroundStopsForActions(
+  pendingStops: Readonly<Record<string, string>>,
+  sweptActionIds: ReadonlySet<string>,
+): Readonly<Record<string, string>> {
+  if (sweptActionIds.size === 0) return pendingStops;
+  const entries = Object.entries(pendingStops).filter(
+    ([, clientActionId]) => !sweptActionIds.has(clientActionId),
+  );
+  if (entries.length === Object.keys(pendingStops).length) {
+    return pendingStops;
+  }
+  return Object.fromEntries(entries);
+}
+
+/**
+ * Clears a frame-driven restore slot that a lost connection stranded: an
+ * in-flight/progressing slot stamped on an older connection than the
+ * authoritative snapshot would otherwise show "restoring" forever, because
+ * its `restoreCompleted` died with the dropped stream. A restore that is
+ * genuinely still running keeps announcing itself through the new
+ * subscription's progress/completed frames, which re-populate the slot.
+ */
+function sweepStaleRestoreSlot(
+  slot: ChatRestoreSlot | null,
+  connectionEpoch: number,
+): ChatRestoreSlot | null {
+  if (slot === null || slot.kind === "completed") return slot;
+  return slot.connectionEpoch < connectionEpoch ? null : slot;
 }
 
 function pendingActionForId(

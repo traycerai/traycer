@@ -5,6 +5,7 @@ import type { ChatQueueState } from "@traycer/protocol/host/agent/gui/subscribe"
 import {
   reconcileQueueChange,
   reconcileSnapshotChange,
+  sweepStaleNonMessagePendingActions,
   type ReconcileQueueInput,
   type ReconcileSnapshotInput,
 } from "@/stores/chats/chat-queue-reconciler";
@@ -49,6 +50,7 @@ function createPendingAction(
     sender: isSendOrEdit ? SENDER : null,
     settings: isSendOrEdit ? SETTINGS : null,
     createdAt: 1000,
+    connectionEpoch: 0,
   };
 }
 
@@ -141,6 +143,7 @@ describe("chat-queue-reconciler", () => {
         sender: SENDER,
         settings: SETTINGS,
         createdAt: 1000,
+        connectionEpoch: 0,
       };
       const user1 = createPendingUserMessage("action-1", "msg-1");
       const user2: PendingUserMessage = {
@@ -195,6 +198,7 @@ describe("chat-queue-reconciler", () => {
         sender: SENDER,
         settings: SETTINGS,
         createdAt: 1000,
+        connectionEpoch: 0,
       };
       const action3 = createPendingAction("action-3", null, "stop");
       const input: ReconcileQueueInput = {
@@ -348,6 +352,7 @@ describe("chat-queue-reconciler", () => {
         sender: SENDER,
         settings: SETTINGS,
         createdAt: 1000,
+        connectionEpoch: 0,
       };
       const confirmedMessage: Message = {
         role: "user",
@@ -429,6 +434,7 @@ describe("chat-queue-reconciler", () => {
         sender: SENDER,
         settings: SETTINGS,
         createdAt: 1000,
+        connectionEpoch: 0,
       };
       const input: ReconcileSnapshotInput = {
         pendingActions: { "action-1": pendingAction },
@@ -525,6 +531,47 @@ describe("chat-queue-reconciler", () => {
       // After pruning through the store's merge, should not exceed 64
       expect(Object.keys(result.acceptedActions).length).toBeLessThanOrEqual(
         70,
+      );
+    });
+  });
+
+  describe("sweepStaleNonMessagePendingActions", () => {
+    it("drops only non-message pendings from an older connection epoch", () => {
+      const staleStop: PendingChatAction = {
+        ...createPendingAction("action-stop", null, "stop"),
+        connectionEpoch: 0,
+      };
+      const currentStop: PendingChatAction = {
+        ...createPendingAction("action-stop-live", null, "stop"),
+        connectionEpoch: 1,
+      };
+      // A stale SEND is never swept - it reconciles by messageId with
+      // composer restoration instead.
+      const staleSend: PendingChatAction = {
+        ...createPendingAction("action-send", "msg-1", "send"),
+        connectionEpoch: 0,
+      };
+      const result = sweepStaleNonMessagePendingActions(
+        {
+          "action-stop": staleStop,
+          "action-stop-live": currentStop,
+          "action-send": staleSend,
+        },
+        1,
+      );
+
+      expect(Object.keys(result).sort()).toEqual([
+        "action-send",
+        "action-stop-live",
+      ]);
+    });
+
+    it("returns the same reference when nothing is stale", () => {
+      const pendingActions = {
+        "action-1": createPendingAction("action-1", null, "stop"),
+      };
+      expect(sweepStaleNonMessagePendingActions(pendingActions, 0)).toBe(
+        pendingActions,
       );
     });
   });

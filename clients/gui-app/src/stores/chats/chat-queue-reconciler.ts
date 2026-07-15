@@ -176,6 +176,37 @@ export function reconcileSnapshotChange(
 }
 
 /**
+ * Drop non-message pending actions dispatched on an earlier connection than
+ * the snapshot's. Their `actionAck` died with the dropped stream (frames and
+ * acks are fire-and-forget per connection), so keeping them would leave their
+ * controls (Stop, restore/revert, plan approval, queue edits) disabled
+ * forever. The arriving snapshot is the authority on what actually happened;
+ * dropping the pending re-enables the control so the user can re-issue
+ * against that state. Message sends/edits are excluded - `
+ * reconcileSnapshotChange` settles those by messageId, with composer
+ * restoration for unconfirmed sends.
+ *
+ * Pure function; only ever driven by an authoritative snapshot, never by a
+ * connection-status event (a transient wobble must not cancel anything).
+ */
+export function sweepStaleNonMessagePendingActions(
+  pendingActions: Readonly<Record<string, PendingChatAction>>,
+  connectionEpoch: number,
+): Readonly<Record<string, PendingChatAction>> {
+  const stale = Object.values(pendingActions).filter(
+    (pending) =>
+      pending.action !== "send" &&
+      pending.action !== "editUserMessage" &&
+      pending.connectionEpoch < connectionEpoch,
+  );
+  if (stale.length === 0) return pendingActions;
+  return stale.reduce(
+    (next, pending) => withoutPendingAction(next, pending.clientActionId),
+    pendingActions,
+  );
+}
+
+/**
  * Find all pending action ids that correspond to messages already in the queue.
  * Used during queue reconciliation to identify which pending actions to promote
  * to accepted.
