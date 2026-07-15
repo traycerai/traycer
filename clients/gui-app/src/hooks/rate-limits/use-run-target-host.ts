@@ -39,7 +39,9 @@ export interface RunTargetHost {
  * resolves to a `null` client (and therefore a `null` queueScope and
  * `isReady: false`) rather than silently falling back.
  */
-export function useRunTargetHost(runTargetHostId: string | null): RunTargetHost {
+export function useRunTargetHost(
+  runTargetHostId: string | null,
+): RunTargetHost {
   const client = useHostClientForHostId(runTargetHostId);
   const readiness = useReactiveHostReadiness(client);
   const queryClient = useQueryClient();

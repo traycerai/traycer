@@ -88,7 +88,10 @@ export function useProfileUsageComparison({
   const draining = useIsRateLimitQueueDraining();
   const rateLimitProviderId: RateLimitProviderId | null =
     isRateLimitCapableProvider(providerId) ? providerId : null;
-  const lane = rateLimitProviderId === null ? null : rateLimitFetchLane(rateLimitProviderId);
+  const lane =
+    rateLimitProviderId === null
+      ? null
+      : rateLimitFetchLane(rateLimitProviderId);
 
   // Re-derived on a coarse interval (not read via `Date.now()` inline during
   // render, which the render-purity rule forbids) so a long-open picker's
@@ -127,7 +130,8 @@ export function useProfileUsageComparison({
     const map = new Map<string | null, ProfileUsageComparisonEntry>();
     profiles.forEach((profile, index) => {
       const profileId = profileCommitId(profile);
-      const query = rateLimitProviderId === null ? undefined : cacheQueries[index];
+      const query =
+        rateLimitProviderId === null ? undefined : cacheQueries[index];
       const detail = deriveProfileUsageDetailState(
         query?.data,
         {

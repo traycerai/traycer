@@ -7,7 +7,10 @@ import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
-import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host/index";
+import {
+  hostRpcRegistry,
+  type HostRpcRegistry,
+} from "@traycer/protocol/host/index";
 import type { ReactNode } from "react";
 import type { RateLimitUsageResponse } from "@/lib/rate-limits/rate-limit-envelope";
 
@@ -81,11 +84,15 @@ describe("useRunTargetHost", () => {
   });
 
   it("resolves the app-wide default host's client when runTargetHostId is null", () => {
-    globalClientRef.value = buildClient("default-host", mockLocalHostEntry.websocketUrl ?? "ws://default", () => ({
-      totalTokens: 0,
-      remainingTokens: 0,
-      providerRateLimits: null,
-    }));
+    globalClientRef.value = buildClient(
+      "default-host",
+      mockLocalHostEntry.websocketUrl ?? "ws://default",
+      () => ({
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: null,
+      }),
+    );
 
     const { result } = renderHook(() => useRunTargetHost(null), {
       wrapper: wrapperFor(new QueryClient()),
@@ -125,15 +132,21 @@ describe("useRunTargetHost", () => {
     // OWN client instance, not silently execute against the default host.
     const client = result.current.client;
     if (client === null) throw new Error("Expected a resolved tab-host client");
-    const tabHostRequest = vi
-      .spyOn(client, "request")
-      .mockResolvedValue({ totalTokens: 0, remainingTokens: 0, providerRateLimits: null });
-
-    await result.current.queueScope?.request("tab-host", "host.getRateLimitUsage", {
-      accountContext: DEFAULT_ACCOUNT_CONTEXT,
-      providerId: "codex",
-      profileId: null,
+    const tabHostRequest = vi.spyOn(client, "request").mockResolvedValue({
+      totalTokens: 0,
+      remainingTokens: 0,
+      providerRateLimits: null,
     });
+
+    await result.current.queueScope?.request(
+      "tab-host",
+      "host.getRateLimitUsage",
+      {
+        accountContext: DEFAULT_ACCOUNT_CONTEXT,
+        providerId: "codex",
+        profileId: null,
+      },
+    );
     expect(tabHostRequest).toHaveBeenCalledTimes(1);
     expect(defaultRequest).not.toHaveBeenCalled();
   });

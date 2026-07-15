@@ -39,7 +39,10 @@ export type ProfileUsageRefreshStatus = "idle" | "queued" | "refreshing";
  */
 export type ProfileUsageDetailState =
   | { readonly kind: "never-checked" }
-  | { readonly kind: "semantic-only"; readonly status: ProfileUsageSemanticWarning }
+  | {
+      readonly kind: "semantic-only";
+      readonly status: ProfileUsageSemanticWarning;
+    }
   | {
       readonly kind: "fresh" | "stale";
       readonly usage: AvailableProviderRateLimits;
@@ -104,7 +107,11 @@ export function deriveProfileUsageDetailState(
       }
       const asOf = envelope.lastGoodAt ?? now;
       const isStale = now - asOf >= PROVIDER_RATE_LIMITS_STALE_TIME_MS;
-      return { kind: isStale ? "stale" : "fresh", usage: envelope.lastGood, asOf };
+      return {
+        kind: isStale ? "stale" : "fresh",
+        usage: envelope.lastGood,
+        asOf,
+      };
     }
     return { kind: "failed-no-last-good", failedAt: envelope.lastFailureAt };
   }

@@ -94,7 +94,11 @@ describe("deriveProfileUsageDetailState", () => {
     const failedAt = NOW - 100;
     const state = deriveProfileUsageDetailState(
       envelope({
-        latest: { provider: "claude-code", available: false, reason: "usage_fetch_failed" },
+        latest: {
+          provider: "claude-code",
+          available: false,
+          reason: "usage_fetch_failed",
+        },
         lastGood: GOOD,
         lastGoodAt: asOf,
         lastFailureAt: failedAt,
@@ -114,7 +118,11 @@ describe("deriveProfileUsageDetailState", () => {
     const failedAt = NOW - 100;
     const state = deriveProfileUsageDetailState(
       envelope({
-        latest: { provider: "claude-code", available: false, reason: "cli_not_found" },
+        latest: {
+          provider: "claude-code",
+          available: false,
+          reason: "cli_not_found",
+        },
         lastGood: null,
         lastGoodAt: null,
         lastFailureAt: failedAt,
@@ -128,7 +136,11 @@ describe("deriveProfileUsageDetailState", () => {
   it("returns failed-no-last-good when a transient failure has never once succeeded", () => {
     const state = deriveProfileUsageDetailState(
       envelope({
-        latest: { provider: "claude-code", available: false, reason: "timeout" },
+        latest: {
+          provider: "claude-code",
+          available: false,
+          reason: "timeout",
+        },
         lastGood: null,
         lastGoodAt: null,
         lastFailureAt: NOW,

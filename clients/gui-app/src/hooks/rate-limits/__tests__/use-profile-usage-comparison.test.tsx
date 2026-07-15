@@ -7,7 +7,10 @@ import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
-import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host/index";
+import {
+  hostRpcRegistry,
+  type HostRpcRegistry,
+} from "@traycer/protocol/host/index";
 import type { ReactNode } from "react";
 import { queryKeys } from "@/lib/query-keys";
 import type { RunTargetHost } from "@/hooks/rate-limits/use-run-target-host";
@@ -28,7 +31,9 @@ vi.mock("@/hooks/rate-limits/use-run-target-host", () => ({
   useRunTargetHost: (runTargetHostId: string | null) => {
     const scope = scopesRef.byHostId.get(runTargetHostId);
     if (scope === undefined) {
-      throw new Error(`no test scope configured for ${String(runTargetHostId)}`);
+      throw new Error(
+        `no test scope configured for ${String(runTargetHostId)}`,
+      );
     }
     return scope;
   },
@@ -47,7 +52,12 @@ function profile(
     kind,
     authType: "oauth",
     label,
-    auth: { status: "authenticated", badgeText: null, label: null, detail: null },
+    auth: {
+      status: "authenticated",
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
     identity: null,
     usageUpdatedAt: null,
     rateLimitStatus: "unknown",
@@ -66,7 +76,10 @@ function buildHostScope(
   hostId: string,
   queryClient: QueryClient,
   handler: RateLimitUsageHandler,
-): { readonly scope: RunTargetHost; readonly requestSpy: RateLimitUsageHandler } {
+): {
+  readonly scope: RunTargetHost;
+  readonly requestSpy: RateLimitUsageHandler;
+} {
   const client = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: { invalidateHostScope: () => {} },
@@ -135,7 +148,11 @@ describe("useProfileUsageComparison", () => {
   it("issues zero host.getRateLimitUsage calls purely from mounting (cache-only observation)", () => {
     const queryClient = new QueryClient();
     const defaultRequest = vi.fn(goodResponse);
-    const { scope } = buildHostScope("default-host", queryClient, defaultRequest);
+    const { scope } = buildHostScope(
+      "default-host",
+      queryClient,
+      defaultRequest,
+    );
     scopesRef.byHostId.set(null, scope);
 
     const ambient = profile("ambient-1", "ambient", "Terminal account", {});
@@ -175,11 +192,14 @@ describe("useProfileUsageComparison", () => {
     // Seed the fresh profile's exact cache key as if a prior observer/refresh
     // already wrote it - the passive observer must reflect it without itself
     // fetching.
-    const freshKey = queryKeys.hostMethod<HostRpcRegistry, "host.getRateLimitUsage">(
-      "default-host",
-      "host.getRateLimitUsage",
-      { accountContext: DEFAULT_ACCOUNT_CONTEXT, providerId: "claude-code", profileId: "p-fresh" },
-    );
+    const freshKey = queryKeys.hostMethod<
+      HostRpcRegistry,
+      "host.getRateLimitUsage"
+    >("default-host", "host.getRateLimitUsage", {
+      accountContext: DEFAULT_ACCOUNT_CONTEXT,
+      providerId: "claude-code",
+      profileId: "p-fresh",
+    });
     queryClient.setQueryData(freshKey, {
       latest: goodResponse().providerRateLimits,
       lastGood: goodResponse().providerRateLimits,
@@ -197,7 +217,9 @@ describe("useProfileUsageComparison", () => {
       { wrapper: wrapperFor(queryClient) },
     );
 
-    expect(result.current.entries.get("p-never")?.detail.kind).toBe("never-checked");
+    expect(result.current.entries.get("p-never")?.detail.kind).toBe(
+      "never-checked",
+    );
     expect(result.current.entries.get("p-semantic")?.detail).toEqual({
       kind: "semantic-only",
       status: "near_limit",
@@ -210,11 +232,14 @@ describe("useProfileUsageComparison", () => {
     const { scope } = buildHostScope("default-host", queryClient, goodResponse);
     scopesRef.byHostId.set(null, scope);
 
-    const ambientKey = queryKeys.hostMethod<HostRpcRegistry, "host.getRateLimitUsage">(
-      "default-host",
-      "host.getRateLimitUsage",
-      { accountContext: DEFAULT_ACCOUNT_CONTEXT, providerId: "claude-code", profileId: null },
-    );
+    const ambientKey = queryKeys.hostMethod<
+      HostRpcRegistry,
+      "host.getRateLimitUsage"
+    >("default-host", "host.getRateLimitUsage", {
+      accountContext: DEFAULT_ACCOUNT_CONTEXT,
+      providerId: "claude-code",
+      profileId: null,
+    });
     queryClient.setQueryData(ambientKey, {
       latest: goodResponse().providerRateLimits,
       lastGood: goodResponse().providerRateLimits,
@@ -222,7 +247,12 @@ describe("useProfileUsageComparison", () => {
       lastFailureAt: null,
     });
 
-    const ambient = profile("ambient-sentinel-id", "ambient", "Terminal account", {});
+    const ambient = profile(
+      "ambient-sentinel-id",
+      "ambient",
+      "Terminal account",
+      {},
+    );
 
     const { result } = renderHook(
       () =>
@@ -265,7 +295,11 @@ describe("useProfileUsageComparison", () => {
     await result.current.entries.get("p-a")?.refresh();
 
     expect(calls).toEqual([
-      { accountContext: DEFAULT_ACCOUNT_CONTEXT, providerId: "claude-code", profileId: "p-a" },
+      {
+        accountContext: DEFAULT_ACCOUNT_CONTEXT,
+        providerId: "claude-code",
+        profileId: "p-a",
+      },
     ]);
   });
 
@@ -294,7 +328,11 @@ describe("useProfileUsageComparison", () => {
     await result.current.entries.get("p-a")?.refresh();
 
     expect(calls).toEqual([
-      { accountContext: DEFAULT_ACCOUNT_CONTEXT, providerId: "openrouter", profileId: "p-a" },
+      {
+        accountContext: DEFAULT_ACCOUNT_CONTEXT,
+        providerId: "openrouter",
+        profileId: "p-a",
+      },
     ]);
   });
 
@@ -302,11 +340,19 @@ describe("useProfileUsageComparison", () => {
     const queryClient = new QueryClient();
     const defaultRequest = vi.fn(goodResponse);
     const tabCalls: Array<unknown> = [];
-    const { scope: defaultScope } = buildHostScope("default-host", queryClient, defaultRequest);
-    const { scope: tabScope } = buildHostScope("tab-host", queryClient, (params) => {
-      tabCalls.push(params);
-      return goodResponse();
-    });
+    const { scope: defaultScope } = buildHostScope(
+      "default-host",
+      queryClient,
+      defaultRequest,
+    );
+    const { scope: tabScope } = buildHostScope(
+      "tab-host",
+      queryClient,
+      (params) => {
+        tabCalls.push(params);
+        return goodResponse();
+      },
+    );
     scopesRef.byHostId.set(null, defaultScope);
     scopesRef.byHostId.set("tab-host", tabScope);
 
@@ -327,14 +373,22 @@ describe("useProfileUsageComparison", () => {
 
     expect(defaultRequest).not.toHaveBeenCalled();
     expect(tabCalls).toEqual([
-      { accountContext: DEFAULT_ACCOUNT_CONTEXT, providerId: "claude-code", profileId: "p-tab" },
+      {
+        accountContext: DEFAULT_ACCOUNT_CONTEXT,
+        providerId: "claude-code",
+        profileId: "p-tab",
+      },
     ]);
     expect(
       queryClient.getQueryData(
         queryKeys.hostMethod<HostRpcRegistry, "host.getRateLimitUsage">(
           "tab-host",
           "host.getRateLimitUsage",
-          { accountContext: DEFAULT_ACCOUNT_CONTEXT, providerId: "claude-code", profileId: "p-tab" },
+          {
+            accountContext: DEFAULT_ACCOUNT_CONTEXT,
+            providerId: "claude-code",
+            profileId: "p-tab",
+          },
         ),
       ),
     ).toBeDefined();
@@ -343,7 +397,11 @@ describe("useProfileUsageComparison", () => {
         queryKeys.hostMethod<HostRpcRegistry, "host.getRateLimitUsage">(
           "default-host",
           "host.getRateLimitUsage",
-          { accountContext: DEFAULT_ACCOUNT_CONTEXT, providerId: "claude-code", profileId: "p-tab" },
+          {
+            accountContext: DEFAULT_ACCOUNT_CONTEXT,
+            providerId: "claude-code",
+            profileId: "p-tab",
+          },
         ),
       ),
     ).toBeUndefined();
