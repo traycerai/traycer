@@ -1,6 +1,6 @@
 import "../../../../__tests__/test-browser-apis";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import type { ReactElement } from "react";
+import { isValidElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostNotificationEntry } from "@traycer/protocol/host/notifications/contracts";
 import {
@@ -13,41 +13,20 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { makeOpenableNodeRef } from "@/stores/epics/canvas/types";
 
 interface CapturedToast {
-  readonly title: string;
+  readonly title: ReactNode;
   readonly options: {
-    readonly description: string;
-    readonly id: string;
-  };
-}
-
-interface CapturedCustomToast {
-  readonly renderToast: (id: string | number) => ReactElement;
-  readonly options: {
+    readonly description: string | undefined;
     readonly id: string;
   };
 }
 
 const toastCalls = vi.hoisted((): CapturedToast[] => []);
-const customToastCalls = vi.hoisted((): CapturedCustomToast[] => []);
-const dismiss = vi.hoisted(() => vi.fn());
 
 vi.mock("sonner", () => ({
-  toast: Object.assign(
-    (title: string, options: CapturedToast["options"]): string => {
-      toastCalls.push({ title, options });
-      return options.id;
-    },
-    {
-      custom: (
-        renderToast: CapturedCustomToast["renderToast"],
-        options: CapturedCustomToast["options"],
-      ): string => {
-        customToastCalls.push({ renderToast, options });
-        return options.id;
-      },
-      dismiss,
-    },
-  ),
+  toast: (title: ReactNode, options: CapturedToast["options"]): string => {
+    toastCalls.push({ title, options });
+    return options.id;
+  },
 }));
 
 function row(title: string): MergedNotificationRow {
@@ -71,8 +50,6 @@ function row(title: string): MergedNotificationRow {
 describe("notification display", () => {
   beforeEach(() => {
     toastCalls.length = 0;
-    customToastCalls.length = 0;
-    dismiss.mockReset();
   });
 
   afterEach(() => {
@@ -100,8 +77,9 @@ describe("notification display", () => {
       },
       "host:chat:chat-1",
     );
-    expect(customToastCalls).toHaveLength(1);
-    expect(customToastCalls[0]?.options.id).toBe("host:chat:chat-1");
+    expect(toastCalls).toHaveLength(1);
+    expect(toastCalls[0]?.options.id).toBe("host:chat:chat-1");
+    expect(toastCalls[0]?.options.description).toBeUndefined();
     expect(playChime).toHaveBeenCalledOnce();
   });
 
@@ -183,7 +161,7 @@ describe("notification display", () => {
       "notification-batch",
     );
 
-    render(customToastCalls[0]?.renderToast("notification-batch"));
+    renderActionableToast();
     fireEvent.click(
       screen.getByRole("button", { name: "Traycer 2 new notifications" }),
     );
@@ -218,7 +196,7 @@ describe("notification display", () => {
       onToastClick,
     });
 
-    render(customToastCalls[0]?.renderToast("host:chat:chat-1"));
+    renderActionableToast();
     fireEvent.click(
       screen.getByRole("button", {
         name: "Checkout notifications New chat • Done",
@@ -236,25 +214,20 @@ describe("notification display", () => {
     });
 
     expect(toastCalls).toHaveLength(1);
-    expect(customToastCalls).toHaveLength(0);
     expect(toastCalls[0]?.title).toBe("Agent finished");
     expect(toastCalls[0]?.options.description).toBe("New chat • Done");
   });
 
-  it("closes an actionable toast without activating it", () => {
-    const onToastClick = vi.fn();
-
+  it("uses the standard toast renderer for actionable notifications", () => {
     displayNotificationRows([row("Checkout notifications")], {
       showNotification: vi.fn(() => Promise.resolve()),
       playChime: vi.fn(),
-      onToastClick,
+      onToastClick: vi.fn(),
     });
 
-    render(customToastCalls[0]?.renderToast("host:chat:chat-1"));
-    fireEvent.click(screen.getByRole("button", { name: "Close toast" }));
-
-    expect(onToastClick).not.toHaveBeenCalled();
-    expect(dismiss).toHaveBeenCalledWith("host:chat:chat-1");
+    expect(toastCalls).toHaveLength(1);
+    expect(isValidElement(toastCalls[0]?.title)).toBe(true);
+    expect(toastCalls[0]?.options.description).toBeUndefined();
   });
 });
 
@@ -293,7 +266,6 @@ function hostEntry(id: string, chatId: string | null): HostNotificationEntry {
 describe("host channel emission focus gate", () => {
   beforeEach(() => {
     toastCalls.length = 0;
-    customToastCalls.length = 0;
   });
 
   afterEach(() => {
@@ -343,7 +315,6 @@ describe("host channel emission focus gate", () => {
     expect(target.showNotification).not.toHaveBeenCalled();
     expect(target.playChime).not.toHaveBeenCalled();
     expect(toastCalls).toHaveLength(0);
-    expect(customToastCalls).toHaveLength(0);
   });
 
   it("still displays rows for a sibling chat in the same epic", () => {
@@ -357,7 +328,7 @@ describe("host channel emission focus gate", () => {
 
     expect(target.showNotification).toHaveBeenCalledOnce();
     expect(target.playChime).toHaveBeenCalledOnce();
-    expect(customToastCalls).toHaveLength(1);
+    expect(toastCalls).toHaveLength(1);
   });
 
   it("displays rows for the active entity when the window is blurred", () => {
@@ -371,3 +342,11 @@ describe("host channel emission focus gate", () => {
     expect(target.playChime).toHaveBeenCalledOnce();
   });
 });
+
+function renderActionableToast(): void {
+  const title = toastCalls.at(-1)?.title;
+  if (!isValidElement(title)) {
+    throw new Error("Expected an actionable standard toast.");
+  }
+  render(title);
+}
