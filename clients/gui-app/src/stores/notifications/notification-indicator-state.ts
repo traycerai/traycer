@@ -13,13 +13,15 @@ import {
 
 export interface NotificationIndicatorState {
   readonly unreadFailure: boolean;
-  readonly pendingPrompt: boolean;
+  readonly pendingApproval: boolean;
+  readonly pendingInterview: boolean;
   readonly unreadDone: boolean;
 }
 
 export const EMPTY_NOTIFICATION_INDICATOR_STATE: NotificationIndicatorState = {
   unreadFailure: false,
-  pendingPrompt: false,
+  pendingApproval: false,
+  pendingInterview: false,
   unreadDone: false,
 };
 
@@ -46,7 +48,8 @@ export function selectNotificationIndicatorState(
   }
   return {
     unreadFailure: unreadLocalFailure || hostState.unreadFailure,
-    pendingPrompt: hostState.pendingPrompt,
+    pendingApproval: hostState.pendingApproval,
+    pendingInterview: hostState.pendingInterview,
     unreadDone: hostState.unreadDone,
   };
 }

@@ -5,6 +5,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // actions. This unit test renders the picker bare (no RouterProvider), so stub
 // the action hook.
 const openSettingsMock = vi.fn();
+const profileUsageHookMock = vi.hoisted(() => ({
+  runTargetHostIds: [] as Array<string | null>,
+  calls: [] as Array<{
+    readonly runTargetHostId: string | null;
+    readonly providerId: string;
+    readonly profiles: ReadonlyArray<ProviderProfile>;
+  }>,
+}));
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
   useSystemTabModalActions: () => ({
     openSettings: openSettingsMock,
@@ -12,6 +20,20 @@ vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
     close: vi.fn(),
     setSection: vi.fn(),
   }),
+}));
+// Profile comparison has its own focused picker integration suite. Keep this
+// broad legacy picker suite on its existing identity-row contract so its host
+// sentinels do not need to impersonate a full HostClient.
+vi.mock("@/hooks/rate-limits/use-profile-usage-comparison", () => ({
+  useProfileUsageComparison: (args: {
+    readonly runTargetHostId: string | null;
+    readonly providerId: string;
+    readonly profiles: ReadonlyArray<ProviderProfile>;
+  }) => {
+    profileUsageHookMock.runTargetHostIds.push(args.runTargetHostId);
+    profileUsageHookMock.calls.push(args);
+    return { hostId: args.runTargetHostId, isReady: true, entries: new Map() };
+  },
 }));
 // The profile dropdown (ProfileDropdown) renders through Radix's real
 // DropdownMenu, which opens on pointerdown rather than click - render it
@@ -27,10 +49,14 @@ vi.mock("@/components/ui/dropdown-menu", () => {
     DropdownMenuContent: (props: {
       readonly children: ReactNode;
       readonly container: HTMLElement | null | undefined;
+      readonly onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void;
     }): ReactNode => (
       <div
+        role="menu"
+        tabIndex={-1}
         data-testid="profile-dropdown-content"
         data-has-container={props.container instanceof HTMLElement}
+        onKeyDown={props.onKeyDown}
       >
         {props.children}
       </div>
@@ -86,8 +112,9 @@ import type {
 import {
   PROVIDER_PROFILE_ACCENT_COLORS,
   type ProviderCliState,
+  type ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
-import type { Key, ReactNode } from "react";
+import type { Key, KeyboardEvent, ReactNode } from "react";
 
 interface CatalogHarness extends HarnessOption {
   readonly models: ReadonlyArray<ModelOption>;
@@ -115,6 +142,7 @@ const queryMock = vi.hoisted(() => ({
   // `providerStates` for every target host, matching the pre-fix behavior
   // where the gate always read the default host's list.
   providerStatesByClient: new Map<string, ProviderCliState[]>(),
+  unresolvedHostIds: new Set<string>(),
   cloneCatalogOnRead: false,
   calls: {
     harnesses: [] as Array<{
@@ -171,7 +199,7 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   ) => {
     const providers =
       client === null
-        ? []
+        ? queryMock.providerStates
         : (queryMock.providerStatesByClient.get(client) ??
           queryMock.providerStates);
     return {
@@ -188,7 +216,10 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
 // the raw host id - lets `useProvidersListForClient` above key its
 // per-target-host response without constructing a real client.
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
-  useHostClientForHostId: (hostId: string | null) => hostId ?? "default",
+  useHostClientForHostId: (hostId: string | null) =>
+    hostId !== null && queryMock.unresolvedHostIds.has(hostId)
+      ? null
+      : (hostId ?? "default"),
 }));
 
 // The capability gate resolves the "Create new profile" row's target host
@@ -770,6 +801,7 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
           disabled={disabled}
           registerActivation={false}
           createProfileHostId={resolvedInput.createProfileHostId ?? null}
+          runTargetHostId={resolvedInput.createProfileHostId ?? null}
         />
       </TooltipProvider>
     </SurfaceActivityProvider>
@@ -805,12 +837,15 @@ describe("<HarnessModelPicker />", () => {
     queryMock.modelsLoading = false;
     queryMock.providerStates = [];
     queryMock.providerStatesByClient = new Map();
+    queryMock.unresolvedHostIds = new Set();
     queryMock.cloneCatalogOnRead = false;
     queryMock.calls.harnesses = [];
     queryMock.calls.catalog = [];
     queryMock.calls.models = [];
     queryMock.calls.providers = [];
     queryMock.calls.commands = [];
+    profileUsageHookMock.runTargetHostIds = [];
+    profileUsageHookMock.calls = [];
     openSettingsMock.mockClear();
     useProvidersFocusStore.getState().clearFocusHarnessId();
     useKeybindingStore.getState().resetAll();
@@ -1202,6 +1237,7 @@ describe("<HarnessModelPicker />", () => {
 
     expect(selections.at(-1)?.harnessId).toBe("claude");
     expect(selections.at(-1)?.profileId).toBe("work-profile");
+    expect(screen.getByRole("textbox", { name: /^Search/ })).not.toBeNull();
   });
 
   it("keeps the rail and searches within the active harness when typing", async () => {
@@ -1667,6 +1703,7 @@ describe("<HarnessModelPicker />", () => {
 
     await openPicker();
     fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+    expect(profileUsageHookMock.runTargetHostIds).toContain(null);
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Create new profile" }),
     );
@@ -1734,12 +1771,201 @@ describe("<HarnessModelPicker />", () => {
 
     await openPicker();
     fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+    expect(profileUsageHookMock.runTargetHostIds).toContain("tab-host-1");
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Create new profile" }),
     );
 
     expect(useProviderProfileAddFlowStore.getState().harnessId).toBe("claude");
     expect(useProviderProfileAddFlowStore.getState().hostId).toBe("tab-host-1");
+  });
+
+  it("keeps usage identity-only when the run target's profile identities differ from the visible default-host rows", async () => {
+    const visibleProfiles = claudeProfilesForDropdown();
+    queryMock.providerStates = [
+      providerCliStateWithProfiles({
+        providerId: "claude-code",
+        profiles: visibleProfiles,
+      }),
+    ];
+    queryMock.providerStatesByClient.set("tab-host-1", [
+      providerCliStateWithProfiles({
+        providerId: "claude-code",
+        profiles: visibleProfiles.map((profile) =>
+          profile.kind === "managed"
+            ? { ...profile, label: "Remote Work" }
+            : profile,
+        ),
+      }),
+    ]);
+
+    renderPicker({ createProfileHostId: "tab-host-1" });
+    await openPicker();
+    fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+
+    const comparisonCall = profileUsageHookMock.calls.find(
+      (call) => call.providerId === "claude-code",
+    );
+    expect(comparisonCall?.runTargetHostId).toBe("tab-host-1");
+    expect(comparisonCall?.profiles).toEqual([]);
+  });
+
+  it("keeps usage identity-only for matching labels backed by different target accounts", async () => {
+    const visibleProfiles = claudeProfilesForDropdown().map((profile) => ({
+      ...profile,
+      identity: {
+        email: `${profile.profileId}@example.com`,
+        tier: "pro",
+        accountUuid: `${profile.profileId}-local-account`,
+      },
+    }));
+    queryMock.providerStates = [
+      providerCliStateWithProfiles({
+        providerId: "claude-code",
+        profiles: visibleProfiles,
+      }),
+    ];
+    queryMock.providerStatesByClient.set("tab-host-1", [
+      providerCliStateWithProfiles({
+        providerId: "claude-code",
+        profiles: visibleProfiles.map((profile) =>
+          profile.kind === "managed"
+            ? {
+                ...profile,
+                identity: {
+                  email: "remote@example.com",
+                  tier: "pro",
+                  accountUuid: "remote-account",
+                },
+              }
+            : profile,
+        ),
+      }),
+    ]);
+
+    renderPicker({ createProfileHostId: "tab-host-1" });
+    await openPicker();
+    fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+
+    const comparisonCall = profileUsageHookMock.calls.find(
+      (call) => call.providerId === "claude-code",
+    );
+    expect(comparisonCall?.runTargetHostId).toBe("tab-host-1");
+    expect(comparisonCall?.profiles).toEqual([]);
+  });
+
+  it("keeps cross-host usage identity-only while both account identities are unresolved", async () => {
+    const visibleProfiles = claudeProfilesForDropdown();
+    queryMock.providerStates = [
+      providerCliStateWithProfiles({
+        providerId: "claude-code",
+        profiles: visibleProfiles,
+      }),
+    ];
+    queryMock.providerStatesByClient.set("tab-host-1", [
+      providerCliStateWithProfiles({
+        providerId: "claude-code",
+        profiles: visibleProfiles.map((profile) => ({ ...profile })),
+      }),
+    ]);
+
+    renderPicker({ createProfileHostId: "tab-host-1" });
+    await openPicker();
+    fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+
+    const comparisonCall = profileUsageHookMock.calls.find(
+      (call) => call.providerId === "claude-code",
+    );
+    expect(comparisonCall?.runTargetHostId).toBe("tab-host-1");
+    expect(comparisonCall?.profiles).toEqual([]);
+  });
+
+  it("keeps unresolved usage available when the picker and run target share the default host", async () => {
+    const visibleProfiles = claudeProfilesForDropdown();
+    queryMock.providerStates = [
+      providerCliStateWithProfiles({
+        providerId: "claude-code",
+        profiles: visibleProfiles,
+      }),
+    ];
+
+    renderPicker(undefined);
+    await openPicker();
+    fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+
+    const comparisonCall = profileUsageHookMock.calls.find(
+      (call) => call.providerId === "claude-code",
+    );
+    expect(comparisonCall?.runTargetHostId).toBeNull();
+    expect(comparisonCall?.profiles).toEqual(visibleProfiles);
+  });
+
+  it("ignores default-host cached profiles when an explicit target host client is unresolved", async () => {
+    const visibleProfiles = claudeProfilesForDropdown().map((profile) => ({
+      ...profile,
+      identity: {
+        email: `${profile.profileId}@example.com`,
+        tier: "pro",
+        accountUuid: `${profile.profileId}-account`,
+      },
+    }));
+    queryMock.providerStates = [
+      providerCliStateWithProfiles({
+        providerId: "claude-code",
+        profiles: visibleProfiles,
+      }),
+    ];
+    queryMock.unresolvedHostIds.add("unreachable-host");
+
+    renderPicker({ createProfileHostId: "unreachable-host" });
+    await openPicker();
+    fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+
+    const comparisonCall = profileUsageHookMock.calls.find(
+      (call) => call.providerId === "claude-code",
+    );
+    expect(comparisonCall?.runTargetHostId).toBe("unreachable-host");
+    expect(comparisonCall?.profiles).toEqual([]);
+  });
+
+  it("feeds usage comparison the run target's summaries when profile identities match", async () => {
+    const visibleProfiles = claudeProfilesForDropdown().map((profile) => ({
+      ...profile,
+      identity: {
+        email: `${profile.profileId}@example.com`,
+        tier: "pro",
+        accountUuid: `${profile.profileId}-account`,
+      },
+    }));
+    queryMock.providerStates = [
+      providerCliStateWithProfiles({
+        providerId: "claude-code",
+        profiles: visibleProfiles,
+      }),
+    ];
+    const targetProfiles = visibleProfiles.map((profile) => ({
+      ...profile,
+      rateLimitStatus:
+        profile.kind === "managed" ? ("near_limit" as const) : ("ok" as const),
+      usageUpdatedAt: 42,
+    }));
+    queryMock.providerStatesByClient.set("tab-host-1", [
+      providerCliStateWithProfiles({
+        providerId: "claude-code",
+        profiles: targetProfiles,
+      }),
+    ]);
+
+    renderPicker({ createProfileHostId: "tab-host-1" });
+    await openPicker();
+    fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+
+    const comparisonCall = profileUsageHookMock.calls.find(
+      (call) => call.providerId === "claude-code",
+    );
+    expect(comparisonCall?.runTargetHostId).toBe("tab-host-1");
+    expect(comparisonCall?.profiles).toEqual(targetProfiles);
+    expect(comparisonCall?.profiles).not.toBe(visibleProfiles);
   });
 
   it("disables the create-new-profile row when the target host has no OAuth login capability (S8)", async () => {
@@ -2377,6 +2603,32 @@ describe("<HarnessModelPicker />", () => {
     expect(
       screen.getByRole("tablist", { name: "Model providers" }),
     ).not.toBeNull();
+  });
+
+  it("keeps profile-menu navigation out of the model list", async () => {
+    queryMock.providerStates = [
+      providerCliStateWithProfiles({
+        providerId: "claude-code",
+        profiles: claudeProfilesForDropdown(),
+      }),
+    ];
+    renderPicker(undefined);
+
+    await openPicker();
+    fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+    const opus = screen.getByRole("option", { name: /Claude Opus 4\.7/ });
+    const sonnet = screen.getByRole("option", {
+      name: /Claude Sonnet 4\.6/,
+    });
+    fireEvent.mouseEnter(opus);
+    expect(opus.dataset.active).toBe("true");
+    expect(sonnet.dataset.active).toBe("false");
+
+    fireEvent.keyDown(screen.getByTestId("profile-dropdown-content"), {
+      key: "ArrowDown",
+    });
+    expect(opus.dataset.active).toBe("true");
+    expect(sonnet.dataset.active).toBe("false");
   });
 
   it("commits a switch via the leader digit", async () => {

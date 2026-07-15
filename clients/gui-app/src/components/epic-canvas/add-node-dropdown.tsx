@@ -402,6 +402,7 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
             // the app-wide default host is the correct scope, same as this
             // dropdown's own `useProvidersList()` read below.
             createProfileHostId={null}
+            runTargetHostId={null}
           />
           <div className="shrink-0">
             <AgentModeToggle

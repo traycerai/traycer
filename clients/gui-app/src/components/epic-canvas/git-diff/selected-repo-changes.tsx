@@ -433,6 +433,7 @@ export function SelectedRepoChanges(
       epicId={props.epicId}
       viewTabId={props.viewTabId}
       hostId={props.selected.hostId}
+      workspaceLabel={props.rootLabel}
       modules={moduleModel.modules}
       hiddenCleanModuleCount={moduleModel.hiddenCleanModuleCount}
       lastUpdatedAtMs={source.lastUpdatedAtMs}
@@ -447,6 +448,7 @@ function GitModuleGroupsView(props: {
   readonly epicId: string;
   readonly viewTabId: string;
   readonly hostId: string;
+  readonly workspaceLabel: string;
   readonly modules: ReadonlyArray<GitModuleGroup>;
   readonly hiddenCleanModuleCount: number;
   readonly lastUpdatedAtMs: number | null;
@@ -679,6 +681,7 @@ function GitModuleGroupsView(props: {
           epicId={props.epicId}
           viewTabId={props.viewTabId}
           hostId={props.hostId}
+          workspaceLabel={props.workspaceLabel}
           module={singleRepo}
           query={appliedQuery}
           lastUpdatedAtMs={props.lastUpdatedAtMs}
@@ -708,6 +711,7 @@ function GitModuleGroupsView(props: {
                 epicId={props.epicId}
                 viewTabId={props.viewTabId}
                 hostId={props.hostId}
+                workspaceLabel={props.workspaceLabel}
                 module={module}
                 expanded={expanded}
                 query={moduleMatchesHeader ? "" : appliedQuery}
@@ -819,6 +823,7 @@ function SingleRepoChangesView(props: {
   readonly epicId: string;
   readonly viewTabId: string;
   readonly hostId: string;
+  readonly workspaceLabel: string;
   readonly module: GitModuleGroup;
   readonly query: string;
   readonly lastUpdatedAtMs: number | null;
@@ -840,6 +845,7 @@ function SingleRepoChangesView(props: {
         epicId={props.epicId}
         viewTabId={props.viewTabId}
         hostId={props.hostId}
+        workspaceLabel={props.workspaceLabel}
         module={props.module}
         query={props.query}
         lastUpdatedAtMs={props.lastUpdatedAtMs}
@@ -857,6 +863,7 @@ function GitModuleGroupView(props: {
   readonly epicId: string;
   readonly viewTabId: string;
   readonly hostId: string;
+  readonly workspaceLabel: string;
   readonly module: GitModuleGroup;
   readonly expanded: boolean;
   readonly query: string;
@@ -939,6 +946,7 @@ function GitModuleGroupView(props: {
             epicId={props.epicId}
             viewTabId={props.viewTabId}
             hostId={props.hostId}
+            workspaceLabel={props.workspaceLabel}
             module={module}
             query={props.query}
             lastUpdatedAtMs={props.lastUpdatedAtMs}
@@ -1083,6 +1091,7 @@ function GitModuleBody(props: {
   readonly epicId: string;
   readonly viewTabId: string;
   readonly hostId: string;
+  readonly workspaceLabel: string;
   readonly module: GitModuleGroup;
   readonly query: string;
   readonly lastUpdatedAtMs: number | null;
@@ -1147,6 +1156,10 @@ function GitModuleBody(props: {
         viewTabId={props.viewTabId}
         hostId={props.hostId}
         runningDir={module.repoRoot}
+        repositoryContext={{
+          workspaceLabel: props.workspaceLabel,
+          repositoryLabel: module.label,
+        }}
         files={module.files}
         query={props.query}
         onClearQuery={props.onClearQuery}

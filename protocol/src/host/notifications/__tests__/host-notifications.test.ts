@@ -24,6 +24,8 @@ const APPROVAL_ENTRY = {
   updatedAt: 1_700_000_000_000,
   readAt: null,
   resolvedAt: null,
+  epicId: "epic-1",
+  chatId: "chat-1",
   kind: "approval.requested" as const,
   sourceRef: "approval-1",
   severity: "needs_action" as const,
@@ -39,6 +41,8 @@ const STOPPED_ENTRY = {
   id: "notification-2",
   updatedAt: 1_700_000_000_010,
   readAt: null,
+  epicId: "epic-1",
+  chatId: "chat-1",
   kind: "agent.stopped" as const,
   sourceRef: "agent-1",
   severity: "failure" as const,
@@ -162,7 +166,8 @@ describe("host.notifications.indicatorState@1.0", () => {
       hostNotificationsIndicatorState.responseSchema.parse({
         epics: {
           "epic-1": {
-            pendingPrompt: true,
+            pendingApproval: true,
+            pendingInterview: false,
             unreadFailure: false,
             unreadDone: false,
           },
@@ -179,6 +184,21 @@ describe("host.notifications.indicatorState@1.0", () => {
         chatIds: [],
       }),
     ).toThrow();
+  });
+
+  it("rejects the unreleased pendingPrompt response shape", () => {
+    expect(
+      hostNotificationsIndicatorState.responseSchema.safeParse({
+        epics: {
+          "epic-1": {
+            pendingPrompt: true,
+            unreadFailure: false,
+            unreadDone: false,
+          },
+        },
+        chats: {},
+      }).success,
+    ).toBe(false);
   });
 });
 

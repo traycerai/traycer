@@ -1,16 +1,11 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useSyncExternalStore,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import CodeMirror, {
   type ReactCodeMirrorRef,
   EditorView,
   keymap,
 } from "@uiw/react-codemirror";
 import { Prec } from "@codemirror/state";
+import { useCodeMirrorTheme } from "@/editor-core/use-code-mirror-theme";
 import { mermaidStreamLanguage } from "./mermaid-simple-mode";
 
 export interface MermaidCodeEditorProps {
@@ -58,11 +53,7 @@ export function MermaidCodeEditor(props: MermaidCodeEditorProps) {
     latestValueRef.current = value;
   }, [value]);
 
-  const cmTheme = useSyncExternalStore(
-    subscribeToDocumentTheme,
-    readDocumentTheme,
-    readServerDocumentTheme,
-  );
+  const cmTheme = useCodeMirrorTheme();
 
   // Imperative focus on mount. Tied to a `ref` - the CodeMirror view is
   // attached in the first render pass but `.view` is only populated after
@@ -140,23 +131,4 @@ export function MermaidCodeEditor(props: MermaidCodeEditorProps) {
       />
     </div>
   );
-}
-
-function readDocumentTheme(): "light" | "dark" {
-  if (typeof document === "undefined") return "light";
-  return document.documentElement.classList.contains("dark") ? "dark" : "light";
-}
-
-function readServerDocumentTheme(): "light" | "dark" {
-  return "light";
-}
-
-function subscribeToDocumentTheme(onStoreChange: () => void): () => void {
-  if (typeof document === "undefined") return () => undefined;
-  const observer = new MutationObserver(onStoreChange);
-  observer.observe(document.documentElement, {
-    attributes: true,
-    attributeFilter: ["class"],
-  });
-  return () => observer.disconnect();
 }

@@ -216,6 +216,8 @@ function hostEntry(input: {
       severity: input.severity,
       outcome: null,
       resolvedAt: null,
+      epicId: input.epicId,
+      chatId: input.chatId,
       payload: { epicId: input.epicId, chatId: input.chatId },
     };
   }
@@ -227,6 +229,8 @@ function hostEntry(input: {
     sourceRef: input.id,
     severity: input.severity,
     outcome: "completed",
+    epicId: input.epicId,
+    chatId: input.chatId,
     payload: {
       epicId: input.epicId,
       chatId: input.chatId,
@@ -585,7 +589,8 @@ describe("<NotificationsSessionProvider />", () => {
           chats: {
             "chat-a": {
               unreadFailure: false,
-              pendingPrompt: false,
+              pendingApproval: false,
+              pendingInterview: false,
               unreadDone: false,
             },
           },
@@ -593,7 +598,8 @@ describe("<NotificationsSessionProvider />", () => {
       ),
     ).toEqual({
       unreadFailure: false,
-      pendingPrompt: false,
+      pendingApproval: false,
+      pendingInterview: false,
       unreadDone: false,
     });
   });

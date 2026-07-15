@@ -1,4 +1,7 @@
-import { defineRpcContract } from "@traycer/protocol/framework/index";
+import {
+  defineRpcContract,
+  defineUpgradePath,
+} from "@traycer/protocol/framework/index";
 import {
   batchDeleteRequestSchema,
   batchDeleteResponseSchema,
@@ -41,6 +44,7 @@ import {
   listEpicCollaboratorsResponseSchema,
   listTasksRequestSchema,
   listTasksResponseSchema,
+  listTasksResponseSchemaV10,
   removeEpicRepoRequestSchema,
   removeEpicRepoResponseSchema,
   resolveArtifactByPathRequestSchema,
@@ -61,6 +65,8 @@ import {
   revokeEpicCollaboratorResponseSchema,
   setCommentThreadResolvedRequestSchema,
   setCommentThreadResolvedResponseSchema,
+  setEpicPinnedRequestSchema,
+  setEpicPinnedResponseSchema,
   updateArtifactStatusRequestSchema,
   updateArtifactStatusResponseSchema,
   updateChatRunSettingsRequestSchema,
@@ -70,15 +76,47 @@ import {
 } from "@traycer/protocol/host/epic/unary-schemas";
 import { epicSubscribeV10 } from "@traycer/protocol/host/epic/subscribe";
 
-// `epic.listTasks@1.0` - host-side entry point for the CloudData
-// task-list query. Schemas are imported from `./unary-schemas` and are
-// the same zod instances CloudDataClient's `task.list` contract resolves
-// (enforced by epic-list-tasks-instance-identity.test.ts).
+// `epic.listTasks@1.0` - frozen pre-pinning host entry point for the CloudData
+// task-list query. The request remains shared with the latest contract while
+// the response preserves the released row shape.
 export const epicListTasksV10 = defineRpcContract({
   method: "epic.listTasks",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: listTasksRequestSchema,
+  responseSchema: listTasksResponseSchemaV10,
+});
+
+// `epic.listTasks@1.1` adds the signed-in user's personal `pinned` bit to each
+// row and reuses CloudData's canonical current list response schema. The
+// request is unchanged; an older host's rows upgrade as unpinned.
+export const epicListTasksV11 = defineRpcContract({
+  method: "epic.listTasks",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: listTasksRequestSchema,
   responseSchema: listTasksResponseSchema,
+});
+
+export const epicListTasksUpgradeV10ToV11 = defineUpgradePath<
+  typeof epicListTasksV10,
+  typeof epicListTasksV11
+>({
+  from: epicListTasksV10.schemaVersion,
+  to: epicListTasksV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    ...response,
+    tasks: response.tasks.map((task) => ({ ...task, pinned: false })),
+  }),
+});
+
+// Personal cloud preference. Optional/non-floor so clients retain the released
+// unary handshake against older hosts and receive E_HOST_UNSUPPORTED only when
+// they try to change a pin.
+export const epicSetPinnedV10 = defineRpcContract({
+  method: "epic.setPinned",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: setEpicPinnedRequestSchema,
+  responseSchema: setEpicPinnedResponseSchema,
 });
 
 // `epic.create@1.0` - host-side entry point for the CloudData epic create

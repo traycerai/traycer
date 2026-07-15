@@ -5,6 +5,7 @@ import type { GitChangedFile } from "@traycer/protocol/host";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { makeGitFileDiffTileForFile } from "@/lib/git/git-diff-tile";
+import type { GitDiffRepositoryContext } from "@/stores/epics/canvas/types";
 import { gitChangedFileTooltipContent } from "@/lib/git/panel-file-rendering";
 import type { HighlightRanges } from "@/lib/git/path-highlight";
 import { FilePathTooltip } from "@/components/file-path-tooltip";
@@ -20,6 +21,7 @@ export interface FileRowProps {
   readonly viewTabId: string;
   readonly hostId: string;
   readonly runningDir: string;
+  readonly repositoryContext: GitDiffRepositoryContext | null;
   readonly file: GitChangedFile;
   readonly active: boolean;
   /** Filter match ranges into `file.path`; empty when no filter is active. */
@@ -41,8 +43,9 @@ export function FileRow(props: FileRowProps): ReactNode {
         hostId: props.hostId,
         runningDir: props.runningDir,
         file: props.file,
+        repositoryContext: props.repositoryContext,
       }),
-    [props.hostId, props.file, props.runningDir],
+    [props.hostId, props.file, props.repositoryContext, props.runningDir],
   );
 
   const onClick = useCallback(() => {
