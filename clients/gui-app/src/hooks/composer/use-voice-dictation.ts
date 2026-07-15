@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { SPEECH_INPUT_SAMPLE_RATE } from "@traycer/protocol/host/speech/schemas";
 import { SpeechStreamClient } from "@traycer-clients/shared/host-transport/speech-stream-client";
+import type { MicrophoneAccessStatus } from "@traycer-clients/shared/platform/runner-host";
 import { useWsStreamClient } from "@/lib/host/stream-runtime-context";
 import { appLogger, describeLogError } from "@/lib/logger";
 import { useRunnerHost } from "@/providers/use-runner-host";
@@ -196,7 +197,19 @@ export function useVoiceDictation(
       // Trigger the native OS permission prompt (macOS) before opening the
       // stream. Returns the existing decision when already set; a denied app is
       // never re-prompted, so route those to the "Open Settings" affordance.
-      const access = await runnerHost.requestMicrophoneAccess();
+      let access: MicrophoneAccessStatus;
+      try {
+        access = await runnerHost.requestMicrophoneAccess();
+      } catch (error) {
+        if (generation !== startGenerationRef.current) return null;
+        fail(
+          `Could not request microphone access: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+          error,
+        );
+        return null;
+      }
       if (generation !== startGenerationRef.current) return null;
       if (access === "denied") {
         Analytics.getInstance().track(AnalyticsEvent.VoicePermissionResolved, {
@@ -233,6 +246,10 @@ export function useVoiceDictation(
         });
         return stream;
       } catch (error) {
+        // The session may have been stopped/cancelled while getUserMedia was
+        // pending - a late rejection must not resurrect it into "error" or
+        // emit analytics for an attempt the user already abandoned.
+        if (generation !== startGenerationRef.current) return null;
         const denied =
           error instanceof Error && error.name === "NotAllowedError";
         appLogger.warn(
@@ -428,9 +445,11 @@ export function useVoiceDictation(
           finalize();
         },
         onError: (frame) => {
+          if (speechClientRef.current !== client) return;
           fail(frame.message, frame);
         },
         onConnectionStatus: (status) => {
+          if (speechClientRef.current !== client) return;
           if (status !== "closed") return;
           if (closingRef.current) {
             // Expected close (we flushed / tore down). Settle the UI if it's
