@@ -22,11 +22,7 @@ import {
   type OpenableArtifactLink,
 } from "../artifact-link-popover";
 import { ArtifactToolbar } from "../../toolbar/artifact-toolbar";
-import {
-  Dialog,
-  DialogContent,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 
 vi.mock("@floating-ui/dom", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@floating-ui/dom")>();
@@ -998,10 +994,7 @@ describe("ArtifactLinkPopover", () => {
 
   it("only rescans link interaction attributes while editability is transitioning", () => {
     const alignedEditor = makeEditor(LINK_CONTENT);
-    const alignedQuery = vi.spyOn(
-      alignedEditor.view.dom,
-      "querySelectorAll",
-    );
+    const alignedQuery = vi.spyOn(alignedEditor.view.dom, "querySelectorAll");
     renderPopover(alignedEditor, true);
     const alignedLayoutCalls = alignedQuery.mock.calls.length;
 
@@ -1060,9 +1053,7 @@ describe("ArtifactLinkPopover", () => {
 
     act(() => screen.getByRole("button", { name: "Outside" }).focus());
     await waitFor(() =>
-      expect(
-        screen.queryByRole("dialog", { name: "Link details" }),
-      ).toBeNull(),
+      expect(screen.queryByRole("dialog", { name: "Link details" })).toBeNull(),
     );
   });
 

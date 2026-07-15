@@ -161,8 +161,9 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
   const profile = useAuthStore((s) => s.profile);
   const editable = role === "owner" || role === "editor";
   const [linkPopoverOpen, setLinkPopoverOpen] = useState(false);
-  const [scrollContainer, setScrollContainer] =
-    useState<HTMLDivElement | null>(null);
+  const [scrollContainer, setScrollContainer] = useState<HTMLDivElement | null>(
+    null,
+  );
   const editorRootRef = useRef<HTMLDivElement>(null);
   const epicId = useOpenEpicId();
   const artifactLinkOpener = useArtifactLinkOpener({ epicId, viewTabId });

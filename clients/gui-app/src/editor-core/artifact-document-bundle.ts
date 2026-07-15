@@ -38,8 +38,7 @@ export const artifactLinkExtension = Link.extend({
         // auxclick time. The mark remains the URL source of truth. Viewer hash
         // links retain native navigation; editable links use caret ownership
         // and have no focusable descendant inside the contentEditable root.
-        href:
-          viewer && normalizedHref.startsWith("#") ? normalizedHref : null,
+        href: viewer && normalizedHref.startsWith("#") ? normalizedHref : null,
         "data-link-href": rawHref,
         role: "link",
         tabindex: viewer ? "0" : null,
