@@ -73,7 +73,7 @@ describe("WireframeNodeView", () => {
     });
     expect(el.getAttribute("sandbox")).toBe("allow-scripts");
     expect(el.getAttribute("sandbox")).not.toContain("allow-same-origin");
-    expect(el.getAttribute("srcdoc")?.startsWith(HTML)).toBe(true);
+    expect(el.getAttribute("srcdoc")?.endsWith(HTML)).toBe(true);
     expect(el.getAttribute("srcdoc")).toContain("traycer:wireframe:height:v1");
     expect(el.getAttribute("title")).toBe("Demo");
     editor.destroy();

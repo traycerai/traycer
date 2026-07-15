@@ -134,23 +134,25 @@ describe("WireframeIframe", () => {
     expect(iframe.getAttribute("sandbox")).not.toContain("allow-same-origin");
   });
 
-  it("appends the reporter only to auto-sized previews", () => {
+  it("injects the reporter before artifact markup only in auto mode", () => {
     const iframe = renderWireframeIframe("auto");
     const srcDoc = iframe.getAttribute("srcdoc");
     if (srcDoc === null) throw new Error("Expected iframe srcdoc content");
 
-    expect(srcDoc.startsWith(ARTIFACT_HTML)).toBe(true);
-    expect(srcDoc.slice(ARTIFACT_HTML.length)).toContain("<script>");
-    expect(srcDoc.slice(ARTIFACT_HTML.length)).toContain("ResizeObserver");
-    expect(srcDoc.slice(ARTIFACT_HTML.length)).toContain(HEIGHT_MESSAGE_MARKER);
-    expect(srcDoc.slice(ARTIFACT_HTML.length)).toContain(
-      MEASURE_REQUEST_MARKER,
+    expect(srcDoc.startsWith("<!doctype html>")).toBe(true);
+    expect(srcDoc.endsWith(ARTIFACT_HTML.slice("<!doctype html>".length))).toBe(
+      true,
     );
-    expect(srcDoc.slice(ARTIFACT_HTML.length)).toContain(
-      "event.source !== window.parent",
+    expect(srcDoc.indexOf(HEIGHT_MESSAGE_MARKER)).toBeLessThan(
+      srcDoc.indexOf('<html><body><button id="demo">'),
     );
-    expect(srcDoc.slice(ARTIFACT_HTML.length)).toContain("documentGeneration");
-    expect(srcDoc.slice(ARTIFACT_HTML.length)).toContain("requestId");
+    expect(srcDoc).toContain("<script>");
+    expect(srcDoc).toContain("ResizeObserver");
+    expect(srcDoc).toContain(HEIGHT_MESSAGE_MARKER);
+    expect(srcDoc).toContain(MEASURE_REQUEST_MARKER);
+    expect(srcDoc).toContain("event.source !== window.parent");
+    expect(srcDoc).toContain("documentGeneration");
+    expect(srcDoc).toContain("requestId");
     fireEvent.keyDown(screen.getByRole("slider", { name: "Resize preview" }), {
       key: "ArrowDown",
     });
@@ -159,6 +161,32 @@ describe("WireframeIframe", () => {
     cleanup();
     const fillIframe = renderWireframeIframe("fill");
     expect(fillIframe.getAttribute("srcdoc")).toBe(ARTIFACT_HTML);
+  });
+
+  it("places the reporter before malformed raw-text artifact content", () => {
+    const malformedHtml =
+      "<html><body><textarea>unterminated<script>artifact text";
+    render(
+      <WireframeIframe
+        htmlContent={malformedHtml}
+        title="Malformed wireframe preview"
+        className="test-wireframe"
+        mode="auto"
+      />,
+    );
+    const iframe = screen.getByTitle("Malformed wireframe preview");
+    if (!(iframe instanceof HTMLIFrameElement)) {
+      throw new Error(
+        "Malformed wireframe preview did not render as an iframe",
+      );
+    }
+    const srcDoc = iframe.getAttribute("srcdoc");
+    if (srcDoc === null) throw new Error("Expected iframe srcdoc content");
+
+    expect(srcDoc.endsWith(malformedHtml)).toBe(true);
+    expect(srcDoc.indexOf(HEIGHT_MESSAGE_MARKER)).toBeLessThan(
+      srcDoc.indexOf(malformedHtml),
+    );
   });
 
   it("renders the accessible resize handle only for auto mode", () => {
@@ -593,9 +621,7 @@ describe("WireframeIframe", () => {
 
     fireEvent.doubleClick(handle);
     expect(iframe.style.height).toBe("240px");
-    expect(iframe.getAttribute("srcdoc")?.startsWith(replacementHtml)).toBe(
-      true,
-    );
+    expect(iframe.getAttribute("srcdoc")?.endsWith(replacementHtml)).toBe(true);
   });
 
   it("recovers from a manual-floor document replacement through the measurement handshake", () => {

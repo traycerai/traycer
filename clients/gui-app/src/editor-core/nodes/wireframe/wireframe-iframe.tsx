@@ -39,6 +39,7 @@ const POINTER_DRAG_THRESHOLD_PX = 4;
 const MEASURE_REQUEST_TIMEOUT_MS = 1_000;
 const HEIGHT_MESSAGE_MARKER = "traycer:wireframe:height:v1";
 const MEASURE_REQUEST_MARKER = "traycer:wireframe:measure-request:v1";
+const INITIAL_DOCTYPE_PATTERN = /^\s*<!doctype(?:\s+[^>]*)?>/i;
 function buildHeightMeasurementScript(documentGeneration: number): string {
   return `
 <script>
@@ -82,6 +83,15 @@ function buildHeightMeasurementScript(documentGeneration: number): string {
   }
 })();
 </script>`;
+}
+
+function buildAutoDocument(
+  htmlContent: string,
+  documentGeneration: number,
+): string {
+  const reporter = buildHeightMeasurementScript(documentGeneration);
+  const doctype = INITIAL_DOCTYPE_PATTERN.exec(htmlContent)?.[0] ?? "";
+  return `${doctype}${reporter}${htmlContent.slice(doctype.length)}`;
 }
 
 interface ActiveResizeDrag {
@@ -152,10 +162,12 @@ function clampManualHeight(height: number, maxHeight: number): number {
  * restrictions also block top-level navigation, form submission, and popups.
  *
  * The opaque origin makes `contentDocument` inaccessible from the parent.
- * Auto-sized previews therefore append a trusted script to the unmodified
- * artifact HTML and receive its ResizeObserver measurements via postMessage.
- * Document generations reject reports queued by an earlier srcdoc, while
- * request IDs correlate explicit reset/load measurements with their replies.
+ * Auto-sized previews therefore inject a trusted script before artifact
+ * markup (but after an initial doctype) and receive its ResizeObserver
+ * measurements via postMessage. Putting the reporter first prevents malformed
+ * trailing raw-text/comment contexts from swallowing it. Document generations
+ * reject reports queued by an earlier srcdoc, while request IDs correlate
+ * explicit reset/load measurements with their replies.
  */
 export function WireframeIframe(props: WireframeIframeProps) {
   const { htmlContent, title, className, mode, ref: forwardedRef } = props;
@@ -462,7 +474,7 @@ export function WireframeIframe(props: WireframeIframeProps) {
         sandbox="allow-scripts"
         srcDoc={
           mode === "auto"
-            ? htmlContent + buildHeightMeasurementScript(documentGeneration)
+            ? buildAutoDocument(htmlContent, documentGeneration)
             : htmlContent
         }
         className={cn("tc-node-wireframe__iframe", className)}
