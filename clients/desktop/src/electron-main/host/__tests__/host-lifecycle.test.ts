@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -115,6 +115,24 @@ describe("readPidMetadataState", () => {
       join(tmpdir(), "definitely-not-here.json"),
     );
     expect(state.kind).toBe("absent");
+  });
+
+  // A non-ENOENT read failure (EISDIR here - deterministic regardless of
+  // root/CI, unlike a chmod-based EACCES) must classify as `indeterminate`,
+  // never `absent`. If every read error collapsed to `absent`, a transient
+  // EACCES/EIO on a present file would clear the retry ladder exactly like a
+  // deliberate stop - the bug this discrimination exists to prevent.
+  it("reports `indeterminate` for a non-ENOENT read failure", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lifecycle-pidstate-"));
+    const path = join(dir, "pid.json");
+    // A directory at the pid.json path: readFile throws EISDIR, not ENOENT.
+    await mkdir(path);
+    try {
+      const state = await readPidMetadataState(path);
+      expect(state.kind).toBe("indeterminate");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("reports `indeterminate` for a partially-written (invalid JSON) file", async () => {

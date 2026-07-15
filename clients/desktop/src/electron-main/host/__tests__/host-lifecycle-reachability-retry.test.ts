@@ -180,3 +180,91 @@ describe("HostLifecycle reachability retry ladder", () => {
     }
   }, 20_000);
 });
+
+/**
+ * The tests above drive the ladder through real `fs.watch` edges. These
+ * exercise the retry PREDICATE directly - no `bootstrap()`, no watcher - by
+ * calling `reloadSnapshotFromDisk()` ourselves and advancing fake timers, so a
+ * regression that made the predicate arm/clear on the wrong condition fails
+ * here even if a stray watcher edge would otherwise have masked it.
+ */
+describe("HostLifecycle reachability retry ladder (predicate, no bootstrap)", () => {
+  it("converges via the retry timer when malformed metadata becomes valid", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lifecycle-retry-direct-"));
+    const layout = layoutIn(dir);
+    let probeCalls = 0;
+    const lifecycle = new HostLifecycle({
+      layout,
+      bundledBinaryPath: null,
+      label: PRODUCTION_LABEL,
+      readyTimeoutMs: 300,
+      reachabilityProbe: async () => {
+        probeCalls += 1;
+        return true;
+      },
+    });
+    try {
+      // Malformed: present but INDETERMINATE, not absent - the ladder must
+      // arm without ever reaching the probe (there is no URL to probe yet).
+      await writeFile(layout.pidMetadataFile, '{"hostId":"partial', "utf8");
+      const first = await lifecycle.reloadSnapshotFromDisk();
+      expect(first).toBeNull();
+      expect(probeCalls).toBe(0);
+
+      // The file becomes valid before the armed timer fires. Only the
+      // ladder's own scheduled reload can pick this up - bootstrap()/the
+      // watcher were never installed in this test.
+      await writeFile(layout.pidMetadataFile, PID_METADATA, "utf8");
+      await waitUntil(() => lifecycle.getSnapshot() !== null, 8_000);
+      expect(lifecycle.getSnapshot()?.hostId).toBe(
+        "3be7933d-bcaa-478b-b914-e625b5d2a777",
+      );
+      expect(probeCalls).toBeGreaterThanOrEqual(1);
+    } finally {
+      lifecycle.dispose();
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it("clears on absence and does not resurface a later valid file without a new reload", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lifecycle-retry-direct-"));
+    const layout = layoutIn(dir);
+    let reachable = false;
+    let probeCalls = 0;
+    const lifecycle = new HostLifecycle({
+      layout,
+      bundledBinaryPath: null,
+      label: PRODUCTION_LABEL,
+      readyTimeoutMs: 300,
+      reachabilityProbe: async () => {
+        probeCalls += 1;
+        return reachable;
+      },
+    });
+    try {
+      // Parsed but unreachable: arms the ladder.
+      await writeFile(layout.pidMetadataFile, PID_METADATA, "utf8");
+      const first = await lifecycle.reloadSnapshotFromDisk();
+      expect(first).toBeNull();
+      await waitUntil(() => probeCalls >= 1, 5_000);
+
+      // Deliberate stop before the next armed reload: it must observe an
+      // absent file and clear, not reschedule.
+      await unlink(layout.pidMetadataFile);
+      await sleep(1_000);
+      expect(lifecycle.getSnapshot()).toBeNull();
+
+      // A later valid, reachable file appears - but with the ladder cleared
+      // and no watcher installed (bootstrap() was never called), nothing
+      // re-reads it. The snapshot must stay null; only an explicit reload (a
+      // real watcher event in production) would surface it.
+      reachable = true;
+      await writeFile(layout.pidMetadataFile, PID_METADATA, "utf8");
+      await sleep(1_500);
+      expect(lifecycle.getSnapshot()).toBeNull();
+    } finally {
+      lifecycle.dispose();
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 20_000);
+});

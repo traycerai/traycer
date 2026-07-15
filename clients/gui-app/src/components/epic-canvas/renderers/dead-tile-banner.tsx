@@ -193,6 +193,7 @@ export function ChatHostStartingBanner(
 ): ReactNode {
   return (
     <div
+      role="status"
       data-testid={props.testId}
       className={cn(
         "flex items-center gap-2 border-b border-border bg-muted/40 px-4 py-2 text-ui-sm text-muted-foreground",
