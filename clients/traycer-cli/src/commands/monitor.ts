@@ -1,12 +1,17 @@
 import { formatAgentMessage } from "@traycer/protocol/agent/a2a-message-format";
+import { formatAgentDeliveryMarker } from "@traycer/protocol/agent/a2a-delivery-marker";
 import {
   hostStreamRpcRegistry,
   type HostStreamRpcRegistry,
 } from "@traycer/protocol/host/registry";
 import {
   agentInboxSubscribeServerFrameSchema,
+  agentInboxSubscribeServerFrameSchemaV11,
+  type AgentDeliveryOutcome,
   type AgentInboxMessage,
+  type AgentInboxMessageV11,
   type AgentInboxNotice,
+  type AgentInboxNoticeV11,
 } from "@traycer/protocol/host/agent/inbox";
 import { CredentialLeaseReleasedError } from "@traycer/protocol/auth/request-context";
 import { MutableBearerLease } from "../../../shared/auth/bearer-source";
@@ -465,6 +470,38 @@ function handleServerFrame(
   target: InboxTarget,
   logger: ILogger,
 ): void {
+  // Prefer @1.1 parse so delivery identity + outcome are available when the
+  // host negotiated tracked frames. Fall back to frozen @1.0.
+  const parsedV11 = agentInboxSubscribeServerFrameSchemaV11.safeParse(envelope);
+  if (parsedV11.success) {
+    if (parsedV11.data.kind === "message") {
+      logger.debug("Monitor received inbox message frame", {
+        environment: config.environment,
+        agentId: target.agentId,
+        epicId: target.epicId,
+        fromAgentId: parsedV11.data.item.fromAgentId,
+        hasReply: parsedV11.data.item.reply !== null,
+      });
+      printInboxMessageV11(parsedV11.data.item);
+      return;
+    }
+    if (parsedV11.data.kind === "notice") {
+      logger.debug("Monitor received inbox notice frame", {
+        environment: config.environment,
+        agentId: target.agentId,
+        epicId: target.epicId,
+        receiverAgentId: parsedV11.data.notice.receiverAgentId,
+        reason: parsedV11.data.notice.reason,
+        outcome: parsedV11.data.notice.outcome,
+        droppedReceiverCount:
+          parsedV11.data.notice.droppedReceivers?.length ?? 0,
+      });
+      printInboxNoticeV11(parsedV11.data.notice);
+      return;
+    }
+    return;
+  }
+
   const parsed = agentInboxSubscribeServerFrameSchema.safeParse(envelope);
   if (!parsed.success) {
     diag(`dropping unrecognized frame kind=${String(envelope.kind)}`);
@@ -567,6 +604,29 @@ function printInboxMessage(item: AgentInboxMessage): void {
 }
 
 /**
+ * @1.1 message: print the delivery marker at the FRONT of the task output
+ * for tracked deliveries so the host's causal proof can admit the marker
+ * from the structured `<task-notification>` body.
+ */
+function printInboxMessageV11(item: AgentInboxMessageV11): void {
+  const body =
+    item.deliveryId !== null
+      ? `${formatAgentDeliveryMarker({ deliveryId: item.deliveryId })}\n${item.prompt}`
+      : item.prompt;
+  const output = formatAgentMessage({
+    receiverChannel: "cli",
+    sender: {
+      agentId: item.fromAgentId,
+      title: item.senderTitle,
+      harnessId: item.senderHarnessId,
+    },
+    reply: item.reply,
+    body,
+  });
+  process.stdout.write(`${output}\n`);
+}
+
+/**
  * Reason-specific lead line for an inactivity notice. The wording tells
  * the sender how much to trust the signal - `quiet` is advisory (the
  * receiver may still be working), the others are definitive for this run.
@@ -618,6 +678,124 @@ function printInboxNotice(notice: AgentInboxNotice): void {
     "",
   ];
   process.stdout.write(`${lines.join("\n")}\n`);
+}
+
+/**
+ * @1.1 notice rendering. When `outcome` is present, use the v2 vocabulary
+ * (R25): service-unconfirmed = accepted + processing unconfirmed + status
+ * unknown — never "failed" / "not responding". Say "remains queued" only
+ * when the durable queue actually retains it (service-failed provisional).
+ */
+function printInboxNoticeV11(notice: AgentInboxNoticeV11): void {
+  if (notice.outcome !== null) {
+    printDeliveryOutcomeNotice(notice);
+    return;
+  }
+  // Legacy heuristic notice with no v2 product mapping (e.g. advisory quiet).
+  printInboxNotice(notice);
+}
+
+function printDeliveryOutcomeNotice(notice: AgentInboxNoticeV11): void {
+  const outcome = notice.outcome;
+  if (outcome === null) return;
+  const receiverLabel =
+    notice.receiverTitle !== null
+      ? `${notice.receiverTitle} (agent ${notice.receiverAgentId})`
+      : `agent ${notice.receiverAgentId}`;
+  const corrective = notice.isCorrective ? " (corrective)" : "";
+  const deliverySuffix =
+    notice.deliveryId !== null ? ` deliveryId=${notice.deliveryId}` : "";
+  const headline = deliveryOutcomeHeadline(outcome, receiverLabel);
+  const lines = [
+    "",
+    `[traycer inbox] delivery notice — ${headline}${corrective}${deliverySuffix}`,
+    ...deliveryOutcomeGuidance(outcome, notice),
+    "",
+  ];
+  process.stdout.write(`${lines.join("\n")}\n`);
+}
+
+function deliveryOutcomeHeadline(
+  outcome: AgentDeliveryOutcome,
+  receiverLabel: string,
+): string {
+  switch (outcome) {
+    case "replied":
+      return `${receiverLabel} replied`;
+    case "turn-ended-without-reply":
+      return `${receiverLabel} completed that proven turn without replying`;
+    case "delivery-failed":
+      return `message to ${receiverLabel} was not delivered`;
+    case "service-failed":
+      return `message to ${receiverLabel} was accepted, but the service route failed`;
+    case "service-unconfirmed":
+      // R25: never "failed" / "not responding".
+      return `message to ${receiverLabel} was accepted, processing unconfirmed, status unknown`;
+    case "cancelled":
+      return `message to ${receiverLabel} was cancelled`;
+    case "purged":
+      return `message to ${receiverLabel} was purged`;
+    case "deleted":
+      return `message to ${receiverLabel} was deleted`;
+    case "exited":
+      return `${receiverLabel} exited`;
+    case "stopped":
+      return `${receiverLabel} was stopped`;
+    default: {
+      const _exhaustive: never = outcome;
+      return _exhaustive;
+    }
+  }
+}
+
+function deliveryOutcomeGuidance(
+  outcome: AgentDeliveryOutcome,
+  notice: AgentInboxNoticeV11,
+): readonly string[] {
+  switch (outcome) {
+    case "service-unconfirmed":
+      return [
+        `[traycer inbox] status is unknown — do not treat this as failure or "not responding"`,
+        `[traycer inbox] check what it is doing: traycer agent transcript --agent-id ${notice.receiverAgentId}`,
+      ];
+    case "service-failed":
+      return [
+        ...durableQueueGuidance(notice),
+        `[traycer inbox] check what it is doing: traycer agent transcript --agent-id ${notice.receiverAgentId}`,
+      ];
+    case "exited":
+    case "stopped":
+      // R25: state whether durable queued work remains (detail may carry
+      // "queued" when the host knows durable work survives the terminal).
+      return durableQueueGuidance(notice);
+    case "replied":
+    case "turn-ended-without-reply":
+    case "delivery-failed":
+    case "cancelled":
+    case "purged":
+    case "deleted":
+      return [];
+    default: {
+      const _exhaustive: never = outcome;
+      return _exhaustive;
+    }
+  }
+}
+
+/**
+ * R25: wording derives only from the host's structural queue-state field.
+ * A null value is an older/unknown upstream and must remain silent.
+ */
+function durableQueueGuidance(notice: AgentInboxNoticeV11): readonly string[] {
+  if (notice.durableQueuedWorkRemains === true) {
+    return [
+      `[traycer inbox] durable queued work remains and may run if the agent returns`,
+    ];
+  }
+  if (notice.durableQueuedWorkRemains === false) {
+    return [`[traycer inbox] no queued work remains`];
+  }
+  return [];
 }
 
 /**

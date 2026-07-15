@@ -228,6 +228,8 @@ export const agentInboxNoticeSchemaV11 = agentInboxNoticeSchema.extend({
   ...agentDeliveryIdentityFields,
   outcome: agentDeliveryOutcomeSchema.nullable(),
   isCorrective: z.boolean(),
+  /** Host-proven durable queue state; null when the host cannot determine it. */
+  durableQueuedWorkRemains: z.boolean().nullable(),
 });
 export type AgentInboxNoticeV11 = z.infer<typeof agentInboxNoticeSchemaV11>;
 

@@ -421,6 +421,7 @@ describe("R23 — old client + new host projects frozen v1 frames", () => {
       consumedResponseId: "resp-consumed",
       outcome: "turn-ended-without-reply",
       isCorrective: false,
+      durableQueuedWorkRemains: null,
     });
 
     const projected = agentInboxNoticeSchema.parse(v11Notice);
@@ -428,6 +429,7 @@ describe("R23 — old client + new host projects frozen v1 frames", () => {
     expect("deliveryId" in projected).toBe(false);
     expect("outcome" in projected).toBe(false);
     expect("isCorrective" in projected).toBe(false);
+    expect("durableQueuedWorkRemains" in projected).toBe(false);
 
     // Frozen @1.0 reason enum still rejects every v2-only product outcome
     // (shared spellings like "exited" are intentionally allowed on both).
