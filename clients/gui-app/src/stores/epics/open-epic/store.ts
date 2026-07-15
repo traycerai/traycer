@@ -40,7 +40,6 @@ import type {
 } from "./types";
 import { EMPTY_ARTIFACT_ROOMS_SLICE, EMPTY_PROJECTED_SLICES } from "./types";
 import {
-  ensureMap,
   getArtifactEntry,
   getArtifactsMap,
   getChatEntry,
@@ -49,12 +48,9 @@ import {
   getEpicMap,
   getTerminalAgentEntry,
   getTerminalAgentsMap,
-  NEW_ARTIFACT_TITLES,
   readArtifactKind,
   readMaybeString,
-  type AddableArtifactType,
 } from "./projection-helpers";
-import { v4 as uuidv4 } from "uuid";
 import { createEpicProjector, type EpicProjector } from "./epic-projector";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { appLogger } from "@/lib/logger";
@@ -341,11 +337,10 @@ export interface OpenEpicState {
   dispose: () => void;
 
   // ── Actions: artifact + chat mutations (own `doc.transact`) ──────────
-  /** Returns the new artifact id; no-op (returns generated id) if viewer/null. */
-  createArtifact: (
-    type: AddableArtifactType,
-    parentId: string | null,
-  ) => string;
+  // Creation is deliberately NOT a local doc write: `epic.createArtifact` /
+  // `epic.createChat` host RPCs own it, because creation needs host-side
+  // setup the renderer cannot fake. The actions below are the optimistic
+  // fast path layered under those same host RPCs.
   /** Returns true when the title actually changed in the Y.Doc. */
   renameArtifact: (artifactId: string, nextTitle: string) => boolean;
   /** Returns true when a delete actually happened. Reparents children. */
@@ -424,7 +419,12 @@ export interface OpenEpicStoreHandle {
 }
 
 const STREAM_ORIGIN = "stream";
-const LOCAL_ORIGIN = "local";
+/**
+ * Origin tag for renderer-local Y.Doc mutations. Exported for test seeding
+ * helpers that must route through `handleDocUpdate` exactly like a local
+ * user mutation.
+ */
+export const LOCAL_ORIGIN = "local";
 const EMPTY_Y_UPDATE_BYTES = 2;
 
 function encodeBase64(bytes: Uint8Array): string {
@@ -1519,43 +1519,6 @@ export function createOpenEpicStore(
         //    fires once per logical mutation and `handleDocUpdate` routes
         //    the resulting update bytes through `applyLocalUpdate`.
 
-        const createArtifactAction = (
-          type: AddableArtifactType,
-          parentId: string | null,
-        ): string => {
-          const id = uuidv4();
-          if (disposed) return id;
-          const role = currentRole ?? get().permissionRole;
-          if (role === "viewer" || role === null) return id;
-          const now = Date.now();
-          const title = NEW_ARTIFACT_TITLES[type];
-          doc.transact(() => {
-            const epic = getEpicMap(doc);
-            if (type === "chat") {
-              const chats = ensureMap(epic, "chats");
-              const entry = new Y.Map<unknown>();
-              entry.set("id", id);
-              entry.set("title", title);
-              entry.set("parentId", parentId);
-              entry.set("createdAt", now);
-              entry.set("updatedAt", now);
-              entry.set("messages", new Y.Array());
-              chats.set(id, entry);
-              return;
-            }
-            const artifacts = ensureMap(epic, "artifacts");
-            const entry = new Y.Map<unknown>();
-            entry.set("id", id);
-            entry.set("kind", type);
-            entry.set("title", title);
-            entry.set("parentId", parentId);
-            entry.set("createdAt", now);
-            entry.set("updatedAt", now);
-            artifacts.set(id, entry);
-          }, LOCAL_ORIGIN);
-          return id;
-        };
-
         const renameArtifactAction = (
           artifactId: string,
           nextTitle: string,
@@ -1894,7 +1857,6 @@ export function createOpenEpicStore(
             destroyAllArtifactRoomReplicas();
           },
 
-          createArtifact: createArtifactAction,
           renameArtifact: renameArtifactAction,
           deleteArtifact: deleteArtifactAction,
           reparentArtifact: reparentArtifactAction,

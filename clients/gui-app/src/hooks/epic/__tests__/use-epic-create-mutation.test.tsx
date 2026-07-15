@@ -222,6 +222,48 @@ describe("useEpicCreate", () => {
     ).toEqual(["old"]);
   });
 
+  it("keeps pinned cached tasks ahead of a newly created task", () => {
+    const queryClient = new QueryClient();
+    const pinnedTask = {
+      ...makeTask({
+        id: "pinned",
+        title: "Pinned epic",
+        createdBy: "user-1",
+        updatedAt: 1,
+        repos: [],
+        workspaces: [],
+      }),
+      pinned: true,
+    };
+    const createdTask = makeTask({
+      id: "new",
+      title: "New epic",
+      createdBy: "user-1",
+      updatedAt: 2,
+      repos: [],
+      workspaces: [],
+    });
+    const queryKey = cloudEpicTasksQueryKey(
+      "host-1",
+      "user-1",
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    queryClient.setQueryData<ListTasksResponse>(queryKey, {
+      tasks: [pinnedTask],
+      hasMore: false,
+    });
+    renderHook(() => useEpicCreate(), { wrapper: makeWrapper(queryClient) });
+    const options = testState.capturedOptions;
+    if (options === null) throw new Error("expected mutation options");
+
+    options.onSuccess({ task: createdTask }, {}, options.onMutate());
+
+    expect(taskIds(queryClient.getQueryData(queryKey))).toEqual([
+      "pinned",
+      "new",
+    ]);
+  });
+
   it("patches cached facets only when the created task matches the cache request", () => {
     const queryClient = new QueryClient({
       defaultOptions: {

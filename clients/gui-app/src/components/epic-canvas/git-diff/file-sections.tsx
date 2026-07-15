@@ -6,6 +6,7 @@ import { GitFlatFileList } from "./git-flat-file-list";
 import { GitFileSectionStack } from "./git-file-section-stack";
 import type { GitFileSectionBodyRenderProps } from "./git-file-section-stack";
 import type { GitDiffSectionCollapseController } from "./git-diff-section";
+import type { GitDiffRepositoryContext } from "@/stores/epics/canvas/types";
 
 // Deliberate hover dwell for the per-row path tooltips: long enough that
 // sweeping the cursor across the list never pops them, and skipDelay 0 so
@@ -17,6 +18,7 @@ export interface FileSectionsProps {
   readonly viewTabId: string;
   readonly hostId: string;
   readonly runningDir: string;
+  readonly repositoryContext: GitDiffRepositoryContext | null;
   readonly allFiles: ReadonlyArray<GitChangedFile>;
   readonly visibleFiles: ReadonlyArray<GitChangedFile>;
   readonly pathRangesByPath: ReadonlyMap<string, HighlightRanges>;
@@ -34,6 +36,7 @@ export function FileSections(props: FileSectionsProps): ReactNode {
         viewTabId={props.viewTabId}
         hostId={props.hostId}
         runningDir={props.runningDir}
+        repositoryContext={props.repositoryContext}
         files={section.visibleFiles}
         pathRangesByPath={props.pathRangesByPath}
         activeFilePath={section.activeFilePath}
@@ -45,6 +48,7 @@ export function FileSections(props: FileSectionsProps): ReactNode {
       props.epicId,
       props.hostId,
       props.pathRangesByPath,
+      props.repositoryContext,
       props.runningDir,
       props.viewTabId,
       props.virtualized,
@@ -61,6 +65,7 @@ export function FileSections(props: FileSectionsProps): ReactNode {
         viewTabId={props.viewTabId}
         hostId={props.hostId}
         runningDir={props.runningDir}
+        repositoryContext={props.repositoryContext}
         allFiles={props.allFiles}
         visibleFiles={props.visibleFiles}
         forceExpanded={props.forceExpanded}

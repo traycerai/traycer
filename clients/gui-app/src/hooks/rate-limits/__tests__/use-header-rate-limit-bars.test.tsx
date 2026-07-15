@@ -88,8 +88,11 @@ function renderHeaderRateLimitBars() {
   return renderHook(() => useHeaderRateLimitBars(PROFILE_SELECTION));
 }
 
-function rlWindow(usedPercent: number): ProviderRateLimitWindow {
-  return { usedPercent, resetsAt: null, durationMinutes: null };
+function rlWindow(
+  usedPercent: number,
+  durationMinutes: number | null,
+): ProviderRateLimitWindow {
+  return { usedPercent, resetsAt: null, durationMinutes };
 }
 
 // A fresh, cold-start envelope wrapping a single available reading - matches
@@ -226,13 +229,19 @@ describe("useHeaderRateLimitBars", () => {
     // GLYPH_PROVIDER_IDS / PROVIDER_ID_ORDER), not just insertion order.
     setProvider("claude-code", "ephemeralProcess", {
       data: response(
-        claudeCodeFixture({ fiveHour: rlWindow(70), sevenDay: rlWindow(10) }),
+        claudeCodeFixture({
+          fiveHour: rlWindow(70, 300),
+          sevenDay: rlWindow(10, 10_080),
+        }),
       ),
       isError: false,
     });
     setProvider("codex", "ephemeralProcess", {
       data: response(
-        codexFixture({ primary: rlWindow(40), secondary: rlWindow(20) }),
+        codexFixture({
+          primary: rlWindow(40, 300),
+          secondary: rlWindow(20, 10_080),
+        }),
       ),
       isError: false,
     });
@@ -242,14 +251,14 @@ describe("useHeaderRateLimitBars", () => {
         providerId: "codex",
         windowLabel: "5h",
         usedPercent: 40,
-        severity: "blue",
+        severity: "healthy",
         degraded: false,
       },
       {
         providerId: "claude-code",
         windowLabel: "5h",
         usedPercent: 70,
-        severity: "blue",
+        severity: "healthy",
         degraded: false,
       },
     ]);
@@ -262,13 +271,19 @@ describe("useHeaderRateLimitBars", () => {
     ]);
     setProvider("codex", "ephemeralProcess", {
       data: response(
-        codexFixture({ primary: rlWindow(40), secondary: rlWindow(20) }),
+        codexFixture({
+          primary: rlWindow(40, 300),
+          secondary: rlWindow(20, 10_080),
+        }),
       ),
       isError: false,
     });
     setProvider("claude-code", "ephemeralProcess", {
       data: response(
-        claudeCodeFixture({ fiveHour: rlWindow(70), sevenDay: rlWindow(10) }),
+        claudeCodeFixture({
+          fiveHour: rlWindow(70, 300),
+          sevenDay: rlWindow(10, 10_080),
+        }),
       ),
       isError: false,
     });
@@ -284,7 +299,10 @@ describe("useHeaderRateLimitBars", () => {
   it("fills both bars from Codex's 5h + Weekly windows when only Codex is configured", () => {
     setProvider("codex", "ephemeralProcess", {
       data: response(
-        codexFixture({ primary: rlWindow(88), secondary: rlWindow(30) }),
+        codexFixture({
+          primary: rlWindow(88, 300),
+          secondary: rlWindow(30, 10_080),
+        }),
       ),
       isError: false,
     });
@@ -294,23 +312,41 @@ describe("useHeaderRateLimitBars", () => {
         providerId: "codex",
         windowLabel: "5h",
         usedPercent: 88,
-        severity: "red",
+        severity: "running_low",
         degraded: false,
       },
       {
         providerId: "codex",
         windowLabel: "Weekly",
         usedPercent: 30,
-        severity: "blue",
+        severity: "healthy",
         degraded: false,
       },
     ]);
   });
 
+  it("classifies a fully consumed glyph window as Limited", () => {
+    setProvider("codex", "ephemeralProcess", {
+      data: response(
+        codexFixture({
+          primary: rlWindow(100, 300),
+          secondary: rlWindow(40, 10_080),
+        }),
+      ),
+      isError: false,
+    });
+    const { result } = renderHeaderRateLimitBars();
+    expect(result.current[0]?.severity).toBe("limited");
+    expect(result.current[1]?.severity).toBe("healthy");
+  });
+
   it("fills both bars from Claude Code's 5h + Weekly windows when only Claude Code is configured", () => {
     setProvider("claude-code", "ephemeralProcess", {
       data: response(
-        claudeCodeFixture({ fiveHour: rlWindow(12), sevenDay: rlWindow(64) }),
+        claudeCodeFixture({
+          fiveHour: rlWindow(12, 300),
+          sevenDay: rlWindow(64, 10_080),
+        }),
       ),
       isError: false,
     });
@@ -320,14 +356,14 @@ describe("useHeaderRateLimitBars", () => {
         providerId: "claude-code",
         windowLabel: "5h",
         usedPercent: 12,
-        severity: "blue",
+        severity: "healthy",
         degraded: false,
       },
       {
         providerId: "claude-code",
         windowLabel: "Weekly",
         usedPercent: 64,
-        severity: "blue",
+        severity: "healthy",
         degraded: false,
       },
     ]);
@@ -339,7 +375,7 @@ describe("useHeaderRateLimitBars", () => {
     // not a lone real bar.
     setProvider("claude-code", "ephemeralProcess", {
       data: response(
-        claudeCodeFixture({ fiveHour: rlWindow(20), sevenDay: null }),
+        claudeCodeFixture({ fiveHour: rlWindow(20, 300), sevenDay: null }),
       ),
       isError: false,
     });
@@ -351,7 +387,10 @@ describe("useHeaderRateLimitBars", () => {
     // Codex loaded, Claude Code still cold -> can't fill both slots -> [].
     setProvider("codex", "ephemeralProcess", {
       data: response(
-        codexFixture({ primary: rlWindow(50), secondary: rlWindow(10) }),
+        codexFixture({
+          primary: rlWindow(50, 300),
+          secondary: rlWindow(10, 10_080),
+        }),
       ),
       isError: false,
     });
@@ -388,7 +427,10 @@ describe("useHeaderRateLimitBars", () => {
   it("marks both of a single provider's bars degraded when the latest poll errored", () => {
     setProvider("codex", "ephemeralProcess", {
       data: response(
-        codexFixture({ primary: rlWindow(65), secondary: rlWindow(15) }),
+        codexFixture({
+          primary: rlWindow(65, 300),
+          secondary: rlWindow(15, 10_080),
+        }),
       ),
       isError: true,
     });
@@ -398,14 +440,14 @@ describe("useHeaderRateLimitBars", () => {
         providerId: "codex",
         windowLabel: "5h",
         usedPercent: 65,
-        severity: "blue",
+        severity: "healthy",
         degraded: true,
       },
       {
         providerId: "codex",
         windowLabel: "Weekly",
         usedPercent: 15,
-        severity: "blue",
+        severity: "healthy",
         degraded: true,
       },
     ]);
@@ -424,8 +466,8 @@ describe("useHeaderRateLimitBars", () => {
           reason: "usage_fetch_failed",
         },
         lastGood: codexFixture({
-          primary: rlWindow(65),
-          secondary: rlWindow(15),
+          primary: rlWindow(65, 300),
+          secondary: rlWindow(15, 10_080),
         }),
         lastGoodAt: Date.now() - 90_000,
         lastFailureAt: Date.now() - 1_000,
@@ -438,14 +480,14 @@ describe("useHeaderRateLimitBars", () => {
         providerId: "codex",
         windowLabel: "5h",
         usedPercent: 65,
-        severity: "blue",
+        severity: "healthy",
         degraded: true,
       },
       {
         providerId: "codex",
         windowLabel: "Weekly",
         usedPercent: 15,
-        severity: "blue",
+        severity: "healthy",
         degraded: true,
       },
     ]);

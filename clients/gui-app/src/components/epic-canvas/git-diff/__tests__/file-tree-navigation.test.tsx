@@ -105,6 +105,7 @@ function renderTree(tabId: string): void {
       viewTabId={tabId}
       hostId="host-1"
       runningDir="/repo"
+      repositoryContext={null}
       allFiles={[file]}
       visibleFiles={[file]}
       forceExpanded={false}

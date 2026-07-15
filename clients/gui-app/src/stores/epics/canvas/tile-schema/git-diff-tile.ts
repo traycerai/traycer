@@ -6,10 +6,12 @@
  */
 import type { GitStage } from "@traycer/protocol/host";
 import type { DesktopJsonValue } from "@/lib/windows/types";
-import { gitDiffTileId } from "@/lib/git/git-diff-tile";
+import { gitBundleGroupLabel, gitDiffTileId } from "@/lib/git/git-diff-tile";
+import { getBasename } from "@/lib/path/cross-platform-path";
 import { TILE_KIND_GIT_DIFF } from "../tile-kinds";
 import type {
   GitDiffBundleGroup,
+  GitDiffRepositoryContext,
   GitDiffTilePayload,
   GitDiffTileRef,
 } from "../types";
@@ -35,6 +37,22 @@ function isGitStage(value: unknown): value is GitStage {
 
 function isGitDiffBundleGroup(value: unknown): value is GitDiffBundleGroup {
   return value === "merge" || value === "staged" || value === "changes";
+}
+
+function parseGitDiffRepositoryContext(
+  value: unknown,
+): GitDiffRepositoryContext | null {
+  if (!isRecord(value)) return null;
+  if (
+    typeof value.workspaceLabel !== "string" ||
+    typeof value.repositoryLabel !== "string"
+  ) {
+    return null;
+  }
+  return {
+    workspaceLabel: value.workspaceLabel,
+    repositoryLabel: value.repositoryLabel,
+  };
 }
 
 function parseGitDiffPayload(value: unknown): GitDiffTilePayload | null {
@@ -82,12 +100,20 @@ function parseGitDiffTileRef(value: unknown): GitDiffTileRef | null {
   const diff = parseGitDiffPayload(value.diff);
   const view = parseDiffTileViewState(value.view);
   if (diff === null || view === null) return null;
+  const repositoryContext = parseGitDiffRepositoryContext(
+    value.repositoryContext,
+  );
+  const name =
+    diff.kind === "bundle" && repositoryContext === null
+      ? `${getBasename(diff.runningDir)} · ${gitBundleGroupLabel(diff.bundleGroup)}`
+      : value.name;
   return {
     id: gitDiffTileId(value.hostId, diff),
     instanceId: readTileInstanceId(value.instanceId),
     type: TILE_KIND_GIT_DIFF,
-    name: value.name,
+    name,
     hostId: value.hostId,
+    repositoryContext,
     diff,
     view,
   };
@@ -121,6 +147,13 @@ function serializeGitDiffTileRef(ref: GitDiffTileRef): DesktopJsonValue {
     type: ref.type,
     name: ref.name,
     hostId: ref.hostId,
+    repositoryContext:
+      ref.repositoryContext === null
+        ? null
+        : {
+            workspaceLabel: ref.repositoryContext.workspaceLabel,
+            repositoryLabel: ref.repositoryContext.repositoryLabel,
+          },
     diff,
     view: serializeDiffTileViewState(ref.view),
   };

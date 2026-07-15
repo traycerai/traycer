@@ -801,7 +801,6 @@ function HomeWorkspaceSummaryControl(props: {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={props.onEditEnvironment}
-          hoverPreviewEnabled={false}
           popoverTestId="home-workspace-rows-popover"
           popoverSide="top"
         />
@@ -1961,7 +1960,6 @@ function InEpicSurface(props: InEpicSurfaceProps) {
                 : null
             }
             onEditEnvironment={handleEditEnvironment}
-            hoverPreviewEnabled
             popoverTestId="workspace-rows-popover"
             // The terminal-agent toolbar is anchored at the TOP of its tile, so the
             // editor must open DOWNWARD into the terminal body (plenty of room).

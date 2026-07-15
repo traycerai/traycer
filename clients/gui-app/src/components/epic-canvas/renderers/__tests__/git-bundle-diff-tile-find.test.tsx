@@ -158,6 +158,7 @@ const NODE = makeGitBundleDiffTile({
   hostId: "host-1",
   runningDir: "/repo",
   bundleGroup: "changes",
+  repositoryContext: null,
 });
 
 const EPIC_ID = "epic-1";

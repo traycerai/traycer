@@ -12,6 +12,7 @@ export {
 } from "./payload";
 export {
   notificationEntitiesMatch,
+  notificationEntityFromHostEntry,
   notificationEntityFromPayload,
   notificationPayloadBelongsToEpic,
   notificationPayloadBelongsToEntity,

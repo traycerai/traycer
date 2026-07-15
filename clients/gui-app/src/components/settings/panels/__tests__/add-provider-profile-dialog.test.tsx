@@ -8,6 +8,17 @@ import {
 } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { AddProfileWaitingStep } from "@/components/settings/panels/add-provider-profile-dialog";
+import type { ProviderProfileLoginFlowCodePaste } from "@/components/settings/panels/use-provider-profile-login-flow";
+
+const DISABLED_CODE_PASTE: ProviderProfileLoginFlowCodePaste = {
+  enabled: false,
+  attemptId: 0,
+  restartNotice: null,
+  phase: "idle",
+  submitError: null,
+  submit: () => {},
+  touch: () => {},
+};
 
 describe("<AddProfileWaitingStep />", () => {
   it("opens and copies the external sign-in URL with the requested action variants", async () => {
@@ -29,13 +40,17 @@ describe("<AddProfileWaitingStep />", () => {
           loginUrl="https://auth.openai.com/oauth/authorize?state=test"
           queuePending={false}
           cancelRequested={false}
+          cancelPending={false}
+          cancelDisabled={false}
+          waiting
+          codePaste={DISABLED_CODE_PASTE}
           onOpenExternalLink={onOpenExternalLink}
           onCancel={onCancel}
         />,
       );
 
       const openButton = screen.getByRole("button", {
-        name: "Open sign-in page",
+        name: "Open browser again",
       });
       const copyButton = screen.getByRole("button", {
         name: "Copy sign-in link",
@@ -44,8 +59,8 @@ describe("<AddProfileWaitingStep />", () => {
         name: "Cancel sign-in",
       });
 
-      expect(openButton.getAttribute("data-variant")).toBe("secondary");
-      expect(copyButton.getAttribute("data-variant")).toBe("secondary");
+      expect(openButton.getAttribute("data-variant")).toBe("outline");
+      expect(copyButton.getAttribute("data-variant")).toBe("outline");
       expect(cancelButton.getAttribute("data-variant")).toBe("destructive");
       expect(cancelButton.textContent).toBe("Cancel");
 
@@ -63,7 +78,7 @@ describe("<AddProfileWaitingStep />", () => {
       );
       expect(
         screen.getByRole("button", { name: "Copied sign-in link" }),
-      ).toHaveProperty("textContent", "Copied");
+      ).toBeDefined();
 
       fireEvent.click(cancelButton);
       expect(onCancel).toHaveBeenCalledTimes(1);

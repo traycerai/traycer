@@ -1,4 +1,4 @@
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, Check, Copy, ExternalLink } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { type ReactNode, useId, useMemo, useState } from "react";
 import {
@@ -24,6 +24,15 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
+import {
+  CodePasteField,
+  CodePasteRestartNotice,
+} from "@/components/settings/panels/code-paste-field";
+import {
+  useProviderProfileLoginFlow,
+  type ProviderProfileLoginFlow,
+} from "@/components/settings/panels/use-provider-profile-login-flow";
+import { waitingStepCopy } from "@/components/settings/panels/waiting-step-copy";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useProvidersCancelLogin } from "@/hooks/providers/use-providers-cancel-login-mutation";
@@ -31,12 +40,18 @@ import { useProvidersSetEnvOverride } from "@/hooks/providers/use-providers-set-
 import { useProvidersSetApiKey } from "@/hooks/providers/use-providers-set-api-key-mutation";
 import { useProvidersStartLogin } from "@/hooks/providers/use-providers-start-login-mutation";
 import { useProvidersAwaitLogin } from "@/hooks/providers/use-providers-await-login-mutation";
+import { useProvidersSubmitLoginCode } from "@/hooks/providers/use-providers-submit-login-code-mutation";
+import { useProvidersTouchLogin } from "@/hooks/providers/use-providers-touch-login-mutation";
 import { useTabRefreshProviders } from "@/hooks/providers/use-tab-refresh-providers";
+import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
+import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { HostRuntimeContext, useHostBinding } from "@/lib/host/runtime";
-import { useRunnerHost } from "@/providers/use-runner-host";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
+import { handleSignInLinkCopyError } from "@/components/settings/panels/provider-sign-in-link";
+
+function noop(): void {}
 
 // Static destructive icon shared by every banner state. Hoisted to module scope
 // so it isn't rebuilt on each render.
@@ -334,6 +349,7 @@ function ReauthBannerInner({
         <OAuthReauthForm
           providerId={providerId}
           providerLabel={providerLabel}
+          loginCapability={state?.loginCapability ?? null}
         />
       ) : null}
       {envVars.length > 0 || apiKeySupported ? (
@@ -348,82 +364,88 @@ function ReauthBannerInner({
   );
 }
 
+/**
+ * Drives the ambient (no-profile-picker) OAuth reconnect through the same
+ * `useProviderProfileLoginFlow` state machine the add-profile dialog and
+ * Settings reauth panel use (`mode: "reauth"`, `existingProfileId: null` -
+ * see that hook's doc comment for how it resolves this without a profile).
+ * This gets keepalive, code-paste validation, and bounded auto-restart for
+ * free; on success there is still no distinct "reconnected" state here -
+ * the flow returns to `start` and the reauth gate's own live subscription
+ * unmounts this banner, exactly like before code paste existed.
+ */
 function OAuthReauthForm({
   providerId,
   providerLabel,
+  loginCapability,
 }: {
   readonly providerId: ProviderId;
   readonly providerLabel: string;
+  readonly loginCapability: ProviderLoginCapability | null;
 }) {
   const startLogin = useProvidersStartLogin();
   const awaitLogin = useProvidersAwaitLogin();
   const cancelLogin = useProvidersCancelLogin();
-  const runnerHost = useRunnerHost();
-  const [awaiting, setAwaiting] = useState(false);
-  const [loginUrl, setLoginUrl] = useState<string | null>(null);
+  const submitLoginCode = useProvidersSubmitLoginCode();
+  const touchLogin = useProvidersTouchLogin();
 
-  // No polling: the host blocks `awaitLogin` until the login child closes,
-  // then re-probes and writes the fresh state into the gate's cache. So a
-  // successful sign-in flips the gate (unmounting this banner) the moment the
-  // browser flow finishes; a still-signed-out result drops `awaiting` back to
-  // the Authenticate button. The login child outlives a banner remount on its
-  // own (the loopback lives inside it); only explicit Cancel kills it.
-  const { mutate: cancelLoginMutate } = cancelLogin;
-  const { mutate: awaitLoginMutate } = awaitLogin;
-
-  const onCancel = (): void => {
-    // No profile picker yet - re-auth always targets the ambient login.
-    cancelLoginMutate({ providerId, profileId: null });
-    setAwaiting(false);
-  };
+  const flow = useProviderProfileLoginFlow({
+    mode: "reauth",
+    providerId,
+    // No profile picker yet - re-auth always targets the ambient login, not
+    // a Traycer-managed profile.
+    existingProfileId: null,
+    loginCapability,
+    startLogin,
+    awaitLogin,
+    cancelLogin,
+    submitLoginCode,
+    touchLogin,
+    failureMessages: {
+      notStarted: "Sign-in did not start. Try again.",
+      notFinished: "Sign-in did not finish. Try again.",
+    },
+    // No section banner here (unlike the add-profile dialog) - a landed
+    // `failed` state renders inline below instead.
+    onFailed: noop,
+  });
 
   const onAuthenticate = (): void => {
-    if (startLogin.isPending || awaiting) return;
-    startLogin.mutate(
-      // No profile picker yet - re-auth always targets the ambient login,
-      // not a Traycer-managed profile.
-      { providerId, profileId: null, createProfile: null },
-      {
-        onSuccess: (data) => {
-          setLoginUrl(data.url);
-          setAwaiting(true);
-          // Wait on the honest completion edge instead of polling. `onSettled`
-          // drops the spinner whether it resolved authenticated (gate unmounts
-          // us) or still signed-out (back to the Authenticate button).
-          awaitLoginMutate(
-            { providerId, profileId: null },
-            { onSettled: () => setAwaiting(false) },
-          );
-        },
-      },
-    );
+    flow.start({ label: null, shareSkillsAndPlugins: false });
   };
 
-  if (awaiting) {
+  if (flow.state.kind === "waiting") {
+    return (
+      <OAuthWaitingRow
+        loginUrl={flow.state.url}
+        codePaste={flow.codePaste}
+        cancelPending={flow.cancelPending}
+        cancelDisabled={flow.commitPending}
+        onCancel={flow.cancel}
+      />
+    );
+  }
+
+  if (flow.state.kind === "failed") {
     return (
       <div className="flex flex-col gap-2">
-        <div className="flex items-center gap-2 text-ui-sm text-foreground">
-          <MutedAgentSpinner />
-          <span>Waiting for browser sign-in…</span>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {loginUrl !== null ? (
-            <Button
-              size="sm"
-              variant="secondary"
-              onClick={() => void runnerHost.openExternalLink(loginUrl)}
-            >
-              Open sign-in page
-            </Button>
-          ) : null}
-          <Button size="sm" variant="ghost" onClick={onCancel}>
-            Cancel
+        <span className="text-ui-xs text-destructive">
+          {flow.state.message}
+        </span>
+        <div>
+          <Button size="sm" variant="secondary" onClick={onAuthenticate}>
+            Try again
           </Button>
         </div>
       </div>
     );
   }
 
+  // "start" and "cancelled" both fall back to the Authenticate button - a
+  // cancelled ambient reconnect reverts straight to it, same as before code
+  // paste existed. "starting" keeps showing it too, pending/disabled, the
+  // same way the original single-mutation form did (no separate
+  // intermediate row).
   return (
     <div className="flex flex-col gap-2">
       <div>
@@ -431,15 +453,118 @@ function OAuthReauthForm({
           size="sm"
           variant="secondary"
           onClick={onAuthenticate}
-          disabled={startLogin.isPending}
+          disabled={flow.startPending}
         >
-          {startLogin.isPending ? <MutedAgentSpinner /> : null}
+          {flow.startPending ? <MutedAgentSpinner /> : null}
           Authenticate {providerLabel}
         </Button>
       </div>
       <p className="text-ui-xs text-muted-foreground">
         Opens your browser to sign in to {providerLabel}.
       </p>
+    </div>
+  );
+}
+
+// Compact counterpart of `AddProfileWaitingStep`: one browser-approval status
+// with code paste available as a conditional fallback. The same field, copy,
+// restart notice, and mutation-derived status are shared across all surfaces.
+function OAuthWaitingRow({
+  loginUrl,
+  codePaste,
+  cancelPending,
+  cancelDisabled,
+  onCancel,
+}: {
+  readonly loginUrl: string | null;
+  readonly codePaste: ProviderProfileLoginFlow["codePaste"];
+  readonly cancelPending: boolean;
+  readonly cancelDisabled: boolean;
+  readonly onCancel: () => void;
+}) {
+  const openExternalLink = useRunnerOpenExternalLink();
+  const { copied, copy } = useClipboardCopy({
+    resetMs: 1600,
+    onSuccess: null,
+    onError: handleSignInLinkCopyError,
+  });
+  const processingCode = codePaste.phase !== "idle";
+  const { title, guidance } = waitingStepCopy({
+    phase: codePaste.phase,
+    queuePending: false,
+    cancelRequested: false,
+  });
+  return (
+    <div className="flex flex-col gap-2.5" aria-live="polite">
+      {codePaste.restartNotice !== null ? (
+        <CodePasteRestartNotice message={codePaste.restartNotice} />
+      ) : null}
+      <div className="flex items-start gap-2 text-ui-sm text-foreground">
+        <MutedAgentSpinner />
+        <div className="min-w-0">
+          <div className="font-medium">{title}</div>
+          {guidance !== null ? (
+            <p className="mt-0.5 text-ui-xs leading-relaxed text-muted-foreground">
+              {guidance}
+            </p>
+          ) : null}
+        </div>
+      </div>
+      {!processingCode && loginUrl !== null ? (
+        <div className="flex items-center gap-1.5 pl-5">
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => openExternalLink.mutate(loginUrl)}
+          >
+            <ExternalLink className="size-3.5" />
+            Open browser again
+          </Button>
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            aria-label={copied ? "Copied sign-in link" : "Copy sign-in link"}
+            onClick={() => copy(loginUrl)}
+          >
+            {copied ? (
+              <Check className="size-3.5" />
+            ) : (
+              <Copy className="size-3.5" />
+            )}
+          </Button>
+        </div>
+      ) : null}
+      {codePaste.enabled ? (
+        <div className="border-t border-border/50 pt-2.5">
+          {!processingCode ? (
+            <div className="mb-2">
+              <p className="text-ui-xs font-medium text-foreground">
+                Didn&apos;t return automatically?
+              </p>
+              <p className="mt-0.5 text-ui-xs text-muted-foreground">
+                If the browser shows a code, paste it here.
+              </p>
+            </div>
+          ) : null}
+          <CodePasteField
+            key={codePaste.attemptId}
+            codePaste={codePaste}
+            disabled={false}
+            visibleLabel={false}
+          />
+        </div>
+      ) : null}
+      <div className="flex justify-end">
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={cancelPending || cancelDisabled}
+          onClick={onCancel}
+        >
+          {cancelPending ? <MutedAgentSpinner /> : null}
+          Cancel
+        </Button>
+      </div>
     </div>
   );
 }

@@ -2,6 +2,7 @@ import type {
   ProviderRateLimits,
   ProviderRateLimitWindow,
 } from "@traycer/protocol/host";
+import { classifyProviderRateLimitWindow } from "@traycer/protocol/host/rate-limit";
 import { useHostQueriesWithResponseMap } from "@/hooks/host/use-host-queries";
 import {
   providerRateLimitQueryOptions,
@@ -20,10 +21,7 @@ import {
   resolveRetainedProviderRateLimits,
   type ProviderRateLimitEnvelope,
 } from "@/lib/rate-limits/rate-limit-envelope";
-import {
-  rateLimitWindowSeverity,
-  type RateLimitWindowSeverity,
-} from "@/lib/rate-limits/window-severity";
+import { type RateLimitWindowSeverity } from "@/lib/rate-limits/window-severity";
 
 /**
  * The two windows a glyph bar can stand for, in fixed draw order: a provider's
@@ -109,7 +107,7 @@ function toBar(
     providerId,
     windowLabel,
     usedPercent: window.usedPercent,
-    severity: rateLimitWindowSeverity(window.usedPercent),
+    severity: classifyProviderRateLimitWindow(window),
     degraded,
   };
 }
