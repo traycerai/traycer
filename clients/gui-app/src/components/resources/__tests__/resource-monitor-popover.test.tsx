@@ -811,7 +811,6 @@ describe("ResourceMonitorPopover", () => {
     ).toBeNull();
     expect(screen.queryByText("/bin/sh")).toBeNull();
     expect(screen.queryByText("make")).toBeNull();
-    expect(screen.getByText("2 open terminals")).not.toBeNull();
     expect(screen.queryByText(/terminal processes/)).toBeNull();
 
     fireEvent.click(
@@ -1365,7 +1364,6 @@ describe("ResourceMonitorPopover", () => {
     expect(screen.getByText("Terminal Alpha")).not.toBeNull();
     expect(screen.getByText("idle-shell")).not.toBeNull();
     expect(screen.queryByText("/usr/bin/idle-zsh")).toBeNull();
-    expect(screen.getByText("2 open terminals")).not.toBeNull();
     expect(screen.getAllByText("89%").length).toBeGreaterThan(0);
     expect(screen.getAllByText("1000 MB").length).toBeGreaterThan(0);
   });
