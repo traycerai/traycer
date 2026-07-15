@@ -104,9 +104,10 @@ export const useCloudEpicTasksPagesStore =
         // In-place optimistic pin patch across every retained tail in the
         // scope. Identity-preserving on both levels (page and identity
         // bucket) so untouched scopes never re-render, and deliberately
-        // generation-neutral: patched tails stay valid, and any tail still
-        // in flight reconciles through the assembly-time dedupe instead of
-        // being dropped.
+        // generation-neutral: the patch only updates what is displayed. The
+        // pin mutation's success handler resets the scope's pagination
+        // afterwards - a pin reorders rows across server page boundaries,
+        // so every retained cursor goes stale on commit.
         const entries = Object.entries(state.pagesByIdentity).map(
           ([identity, pages]): [string, readonly ListTasksResponse[]] => {
             if (!identity.startsWith(identityPrefix)) {
@@ -159,10 +160,11 @@ export function registerCloudEpicTasksPageIdentity(identity: string): void {
 
 /**
  * Drops every accumulated pagination tail for one host/user and advances
- * their generations so in-flight tails are rejected on arrival. Scope-level
- * invalidation for flows that must discard a host/user's tails wholesale -
- * the optimistic pin path patches rows in place via
- * `setCloudEpicTasksPagePinned` instead of resetting.
+ * their generations so in-flight tails are rejected on arrival. The pin
+ * mutation patches rows in place at mutate time (`setCloudEpicTasksPagePinned`)
+ * and calls this on success: the committed reorder crosses server page
+ * boundaries, so every retained cursor is stale and a later "Show more"
+ * against one could silently skip rows.
  */
 export function resetCloudEpicTasksPagesForScope(
   hostId: string,

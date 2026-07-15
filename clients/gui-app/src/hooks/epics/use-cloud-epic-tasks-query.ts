@@ -151,20 +151,18 @@ export function useCloudEpicTasksQuery(
     // Dedupe by task id, first occurrence wins (the first page outranks the
     // tails): a personal pin moves a row across server page boundaries, so
     // after a pin lands, a refetched first page or a still-in-flight tail
-    // can both carry a row the other already has.
+    // can both carry a row the other already has. A task with no id (neither
+    // epic nor phase) is always retained.
     const seenTaskIds = new Set<string>();
-    const acc: ListTaskLight[] = [];
-    for (const page of [queryData, ...extraPages]) {
-      for (const task of page.tasks) {
+    return [queryData, ...extraPages]
+      .flatMap((page) => page.tasks)
+      .filter((task) => {
         const taskId = task.epic?.light?.id ?? task.phase?.light?.id;
-        if (taskId !== undefined) {
-          if (seenTaskIds.has(taskId)) continue;
-          seenTaskIds.add(taskId);
-        }
-        acc.push(task);
-      }
-    }
-    return acc;
+        if (taskId === undefined) return true;
+        if (seenTaskIds.has(taskId)) return false;
+        seenTaskIds.add(taskId);
+        return true;
+      });
   }, [queryData, extraPages]);
 
   const lastPage: ListTasksResponse | undefined =

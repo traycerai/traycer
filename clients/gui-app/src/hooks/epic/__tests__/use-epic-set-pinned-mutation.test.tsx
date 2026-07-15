@@ -49,7 +49,11 @@ let capturedOptions: {
     epicId: string;
     pinned: boolean;
   }) => MutationContext;
-  onSuccess?: unknown;
+  onSuccess?: (
+    response: { pinned: boolean },
+    variables: { epicId: string; pinned: boolean },
+    context: MutationContext,
+  ) => Promise<void>;
   onError?: (
     error: unknown,
     variables: { epicId: string; pinned: boolean },
@@ -190,7 +194,8 @@ describe("useEpicSetPinned", () => {
     const pages = useCloudEpicTasksPagesStore.getState().pagesByIdentity;
     expect(pinnedById(pages[scopedIdentity][0])).toEqual({ "epic-1": true });
     expect(pinnedById(pages[otherIdentity][0])).toEqual({ "epic-1": false });
-    // No reset: the tails stay retained and their generations untouched.
+    // Mutate time only patches - the tails stay retained (and generations
+    // untouched) until the success handler resets the scope's pagination.
     expect(useCloudEpicTasksPagesStore.getState().generationByIdentity).toEqual(
       {},
     );
@@ -246,12 +251,14 @@ describe("useEpicSetPinned", () => {
     expect(toast.error).toHaveBeenCalledWith("Couldn't update pinned task.");
   });
 
-  it("leaves every cache untouched when the mutation scope is null", () => {
+  it("leaves every cache untouched when the mutation scope is null", async () => {
     // A signed-out or host-swapping window can leave onMutate's captured
-    // scope null; the optimistic patch and the error revert must both no-op
-    // rather than touch an unrelated scope.
+    // scope null; the optimistic patch, the success reconciliation, and the
+    // error revert must all no-op rather than touch an unrelated scope.
     testState.activeHostId = null;
     const queryClient = new QueryClient();
+    const removeQueries = vi.spyOn(queryClient, "removeQueries");
+    const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries");
     const scopedQueryKey = cloudEpicTasksQueryKey(
       "host-1",
       "user-1",
@@ -274,6 +281,14 @@ describe("useEpicSetPinned", () => {
       "epic-1": false,
     });
 
+    await capturedOptions.onSuccess?.(
+      { pinned: true },
+      { epicId: "epic-1", pinned: true },
+      { hostId: null, userId: null },
+    );
+    expect(removeQueries).not.toHaveBeenCalled();
+    expect(invalidateQueries).not.toHaveBeenCalled();
+
     capturedOptions.onError?.(
       { code: "RPC_ERROR", message: "test", fatalDetails: null },
       { epicId: "epic-1", pinned: true },
@@ -285,14 +300,67 @@ describe("useEpicSetPinned", () => {
     expect(toast.error).toHaveBeenCalledWith("Couldn't update pinned task.");
   });
 
-  it("registers no success handler - the optimistic patch is the final state", () => {
+  it("resets the scope's pagination and refreshes the first page on success", async () => {
+    // The committed reorder crosses server page boundaries, so retained
+    // cursors are stale: success must drop the scope's tails (advancing
+    // their generations so in-flight ones are rejected), remove the scope's
+    // inactive first pages, and refetch the active ones - all without
+    // disturbing other scopes or the already-correct optimistic display.
+    const queryClient = new QueryClient();
+    const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries");
+    const scopedQueryKey = cloudEpicTasksQueryKey(
+      "host-1",
+      "user-1",
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    const otherQueryKey = cloudEpicTasksQueryKey(
+      "host-2",
+      "user-1",
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    queryClient.setQueryData(
+      scopedQueryKey,
+      pageWith([epicTask("epic-1", true)]),
+    );
+    queryClient.setQueryData(
+      otherQueryKey,
+      pageWith([epicTask("epic-1", false)]),
+    );
+    const scopedIdentity = "host-1|user-1|recent";
+    const otherIdentity = "host-2|user-1|recent";
+    const pagesStore = useCloudEpicTasksPagesStore.getState();
+    pagesStore.appendPage(
+      scopedIdentity,
+      cloudEpicTasksPageGeneration(scopedIdentity),
+      pageWith([epicTask("epic-1", true)]),
+    );
+    pagesStore.appendPage(
+      otherIdentity,
+      cloudEpicTasksPageGeneration(otherIdentity),
+      pageWith([epicTask("epic-1", false)]),
+    );
     renderHook(() => useEpicSetPinned(), {
-      wrapper: makeWrapper(new QueryClient()),
+      wrapper: makeWrapper(queryClient),
     });
 
-    // The response carries exactly the bit the request wrote, so success
-    // needs no invalidation, refetch, or pagination reset.
-    expect(capturedOptions.onSuccess).toBeUndefined();
+    await capturedOptions.onSuccess?.(
+      { pinned: true },
+      { epicId: "epic-1", pinned: true },
+      { hostId: "host-1", userId: "user-1" },
+    );
+
+    const state = useCloudEpicTasksPagesStore.getState();
+    expect(state.pagesByIdentity[scopedIdentity]).toBeUndefined();
+    expect(cloudEpicTasksPageGeneration(scopedIdentity)).toBe(1);
+    expect(state.pagesByIdentity[otherIdentity]).toBeDefined();
+    expect(cloudEpicTasksPageGeneration(otherIdentity)).toBe(0);
+    // These seeded queries have no observers, so they are inactive - the
+    // scoped one is removed outright while the other scope is retained.
+    expect(queryClient.getQueryData(scopedQueryKey)).toBeUndefined();
+    expect(queryClient.getQueryData(otherQueryKey)).toBeDefined();
+    expect(invalidateQueries).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "active" }),
+    );
   });
 
   it("shows the host error fallback", () => {

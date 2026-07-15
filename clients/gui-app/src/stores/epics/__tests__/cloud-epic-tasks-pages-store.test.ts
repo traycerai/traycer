@@ -178,8 +178,10 @@ describe("useCloudEpicTasksPagesStore", () => {
     const scopedPage = pagesFor(scopedIdentity)?.[0];
     expect(scopedPage?.tasks.map((task) => task.pinned)).toEqual([true, true]);
     // The page's non-task fields and the untouched scope keep their
-    // identities - and, crucially, no generation advanced: the tails stay
-    // retained rather than being dropped by a reset.
+    // identities, and the patch action itself is generation-neutral -
+    // discarding the scope's tails after the pin commits is the mutation's
+    // success handler's job (via resetCloudEpicTasksPagesForScope), not
+    // this action's.
     expect(scopedPage?.nextCursor).toBe("next");
     expect(pagesFor(otherUserIdentity)).toBe(untouchedBefore);
     expect(cloudEpicTasksPageGeneration(scopedIdentity)).toBe(0);

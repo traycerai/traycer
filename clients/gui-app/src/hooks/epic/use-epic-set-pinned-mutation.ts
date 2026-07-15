@@ -7,9 +7,15 @@ import {
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { useHostClient } from "@/lib/host";
 import { toastFromHostError } from "@/lib/host-error-toast";
-import { setEpicPinnedInCloudTaskCaches } from "@/lib/cloud-epic-tasks-query/cache";
+import {
+  cloudEpicTasksQueryKeyMatchesScope,
+  setEpicPinnedInCloudTaskCaches,
+} from "@/lib/cloud-epic-tasks-query/cache";
 import { epicMutationKeys } from "@/lib/query-keys";
-import { setCloudEpicTasksPagePinned } from "@/stores/epics/cloud-epic-tasks-pages-store";
+import {
+  resetCloudEpicTasksPagesForScope,
+  setCloudEpicTasksPagePinned,
+} from "@/stores/epics/cloud-epic-tasks-pages-store";
 
 interface SetEpicPinnedMutationContext {
   readonly hostId: string | null;
@@ -25,13 +31,19 @@ interface SetEpicPinnedVariables {
  * Personal, default-host-scoped history pin mutation.
  *
  * Optimistic by design (the justified response-equals-state case: the RPC's
- * `{ pinned }` response is exactly the bit the request wrote, so a patched
- * cache already equals the server outcome on success): `onMutate` flips the
- * row in the scoped first-page query cache and in every retained "Show more"
- * tail, the RPC settles in the background with no success-path invalidation
- * or refetch, and `onError` restores the previous state with the inverse
- * patch (each row's control is disabled while its own mutation is pending,
- * so the pre-mutate state is exactly the opposite bit) plus the error toast.
+ * `{ pinned }` response is exactly the bit the request wrote): `onMutate`
+ * flips the row in the scoped first-page query cache and in every retained
+ * "Show more" tail so the toggle renders instantly, and `onError` restores
+ * the previous state with the inverse patch (each row's control is disabled
+ * while its own mutation is pending, so the pre-mutate state is exactly the
+ * opposite bit) plus the error toast.
+ *
+ * `onSuccess` then reconciles in the background: a pin reorders rows across
+ * server page boundaries, which makes every retained pagination cursor
+ * stale (a later "Show more" against an old cursor could silently skip
+ * rows), so the scope's tails are reset - rejecting in-flight ones via the
+ * generation guard - and the active first page refetches with no pending UI
+ * while the optimistic state keeps rendering.
  */
 export function useEpicSetPinned() {
   const client = useHostClient();
@@ -56,6 +68,25 @@ export function useEpicSetPinned() {
           );
         }
         return { hostId, userId };
+      },
+      onSuccess: async (
+        _response,
+        _variables,
+        ctx: SetEpicPinnedMutationContext,
+      ) => {
+        if (ctx.hostId === null || ctx.userId === null) return;
+        const scope = { hostId: ctx.hostId, userId: ctx.userId };
+        resetCloudEpicTasksPagesForScope(ctx.hostId, ctx.userId);
+        queryClient.removeQueries({
+          type: "inactive",
+          predicate: (query) =>
+            cloudEpicTasksQueryKeyMatchesScope(query.queryKey, scope),
+        });
+        await queryClient.invalidateQueries({
+          type: "active",
+          predicate: (query) =>
+            cloudEpicTasksQueryKeyMatchesScope(query.queryKey, scope),
+        });
       },
       onError: (
         error,
