@@ -1,6 +1,6 @@
 {
   "name": "@traycer-clients/gui-app",
-  "license": "Apache-2.0",
+  "license": "MIT",
   "version": "0.0.0",
   "type": "module",
   "private": true,
