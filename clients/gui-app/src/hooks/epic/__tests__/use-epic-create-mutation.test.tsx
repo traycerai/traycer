@@ -282,7 +282,12 @@ describe("useEpicCreate", () => {
     const options = testState.capturedOptions;
     if (options === null) throw new Error("expected mutation options");
 
-    options.onSuccess({ task: createdTask }, {}, options.onMutate());
+    const stagedVariables = { chat: null, workspaces: [] };
+    options.onSuccess(
+      { task: createdTask },
+      stagedVariables,
+      options.onMutate(stagedVariables),
+    );
 
     expect(taskIds(queryClient.getQueryData(queryKey))).toEqual([
       "pinned",
