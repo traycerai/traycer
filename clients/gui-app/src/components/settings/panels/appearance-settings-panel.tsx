@@ -35,8 +35,8 @@ import {
 import { cn } from "@/lib/utils";
 import { useRunnerInstalledFontsQuery } from "@/hooks/runner/use-runner-installed-fonts-query";
 import {
-  Analytics,
-  AnalyticsEvent,
+  trackedSettingSetter,
+  trackSettingChanged,
   type AnalyticsSetting,
 } from "@/lib/analytics";
 
@@ -44,22 +44,11 @@ function trackedAppearanceSetter<Value>(
   setting: AnalyticsSetting,
   setter: (value: Value) => void,
 ): (value: Value) => void {
-  return (value) => {
-    Analytics.getInstance().track(AnalyticsEvent.SettingChanged, {
-      source: "direct_ui",
-      section: "appearance",
-      setting,
-    });
-    setter(value);
-  };
+  return trackedSettingSetter("appearance", setting, setter);
 }
 
 function trackAppearanceSetting(setting: AnalyticsSetting): void {
-  Analytics.getInstance().track(AnalyticsEvent.SettingChanged, {
-    source: "direct_ui",
-    section: "appearance",
-    setting,
-  });
+  trackSettingChanged("appearance", setting);
 }
 
 export function AppearanceSettingsPanel() {

@@ -30,7 +30,7 @@ import {
 import {
   Analytics,
   AnalyticsEvent,
-  analyticsBlockerFromError,
+  hostUpdateAnalyticsCallbacks,
 } from "@/lib/analytics";
 
 interface HostUpdateBannerProps {
@@ -112,6 +112,7 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
       ? operationStatus.percent
       : null;
 
+  const hostUpdateAnalytics = hostUpdateAnalyticsCallbacks("direct_ui");
   const updateMutation = useMutation<HostInstallResult>({
     mutationKey: runnerMutationKeys.hostUpdate(),
     // Progress is read from the shared `operationStatus` query above (it
@@ -119,12 +120,10 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
     // this mutation doesn't need its own progress callback.
     mutationFn: () => management.updateHost({ onProgress: null }),
     onMutate: () => {
-      Analytics.getInstance().track(AnalyticsEvent.HostUpdateStarted, {
-        source: "direct_ui",
-      });
+      hostUpdateAnalytics.onStarted();
     },
     onSuccess: (data) => {
-      Analytics.getInstance().track(AnalyticsEvent.HostUpdateSucceeded, null);
+      hostUpdateAnalytics.onSucceeded();
       toast.success(`Updated host to v${data.version}`);
       // Drop any snooze entry recorded against the version the user just
       // installed. We pull `clearSnooze` from the store via `getState()`
@@ -140,9 +139,7 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
       });
     },
     onError: (err) => {
-      Analytics.getInstance().track(AnalyticsEvent.HostUpdateFailed, {
-        blocker: analyticsBlockerFromError(err),
-      });
+      hostUpdateAnalytics.onFailed(err);
       toastFromRunnerError(err, "Couldn't update host");
     },
   });

@@ -8,6 +8,7 @@ import {
   expect,
   it,
   vi,
+  type MockInstance,
 } from "vitest";
 import type { CreateChatMutationInput } from "@/hooks/epic/use-epic-chat-mutations";
 import {
@@ -182,14 +183,18 @@ function nestedFocusRecorder(): {
 }
 
 describe("new chat command actions", () => {
+  let track: MockInstance<Analytics["track"]>;
+
   beforeEach(() => {
     resetCanvasStore();
     registryMock.reset();
+    track = vi.spyOn(Analytics.getInstance(), "track");
   });
 
   afterEach(() => {
     resetCanvasStore();
     registryMock.reset();
+    vi.restoreAllMocks();
   });
 
   it("creates active-tile chats through epic.createChat and queues the host chat id", () => {
@@ -428,7 +433,6 @@ describe("new chat command actions", () => {
   });
 
   it("opens the host-created chat into the explicit target group (opener path)", () => {
-    const track = vi.spyOn(Analytics.getInstance(), "track");
     const sourceGroupId = seedActiveGroup();
     const targetGroupId = useEpicCanvasStore
       .getState()
@@ -460,10 +464,6 @@ describe("new chat command actions", () => {
   });
 
   it("abandons the open (and emits nothing) when the projected target disappears", () => {
-    // vi.spyOn returns the SAME accumulated spy across tests in this file, so
-    // clear it - the absence assertion below must only see THIS test's calls.
-    const track = vi.spyOn(Analytics.getInstance(), "track");
-    track.mockClear();
     const sourceGroupId = seedActiveGroup();
     const targetGroupId = useEpicCanvasStore
       .getState()

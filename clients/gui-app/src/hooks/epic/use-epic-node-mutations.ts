@@ -64,7 +64,7 @@ export function useEpicUpdateArtifactStatus() {
       onSuccess: (_data, variables) => {
         Analytics.getInstance().track(AnalyticsEvent.ArtifactStatusChanged, {
           kind: variables.artifactType,
-          status: variables.status,
+          status: analyticsTicketStatus(variables.status),
         });
       },
       onError: (error) => {
@@ -72,6 +72,12 @@ export function useEpicUpdateArtifactStatus() {
       },
     },
   });
+}
+
+function analyticsTicketStatus(status: number): 0 | 1 | 2 {
+  if (status === 1) return 1;
+  if (status === 2) return 2;
+  return 0;
 }
 
 /**

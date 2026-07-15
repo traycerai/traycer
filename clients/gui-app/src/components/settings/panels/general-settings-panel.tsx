@@ -39,11 +39,7 @@ import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useLocalSnapshotClearStore } from "@/stores/settings/local-snapshot-clear-store";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
-import {
-  Analytics,
-  AnalyticsEvent,
-  type AnalyticsSetting,
-} from "@/lib/analytics";
+import { trackSettingChanged, type AnalyticsSetting } from "@/lib/analytics";
 
 const MIGRATION_PROGRESS_LABEL = "Migrating tasks";
 const SNAPSHOTS_LOCAL_STORAGE_PARAMS = {};
@@ -63,11 +59,7 @@ function formatMigrationProgress(state: MigrationRunState): string | null {
 }
 
 function trackGeneralSetting(setting: AnalyticsSetting): void {
-  Analytics.getInstance().track(AnalyticsEvent.SettingChanged, {
-    source: "direct_ui",
-    section: "general",
-    setting,
-  });
+  trackSettingChanged("general", setting);
 }
 
 export function GeneralSettingsPanel() {

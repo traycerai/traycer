@@ -39,3 +39,8 @@ export function settleUpdateDownloadOutcome(
     blocker: analyticsBlockerFromError(errorMessage),
   });
 }
+
+/** Test-only: resets the window-local in-flight flag between tests. */
+export function __resetAppUpdateAnalyticsForTests(): void {
+  userDownloadInFlight = false;
+}

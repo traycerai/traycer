@@ -1758,9 +1758,11 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
       },
 
       closeCanvasPane: (tabId, paneId) => {
+        const beforeCanvas = get().canvasByTabId[tabId];
         set((state) =>
           updateTabCanvas(state, tabId, (canvas) => closePane(canvas, paneId)),
         );
+        trackClosedCanvasTiles(beforeCanvas, get().canvasByTabId[tabId]);
       },
 
       prepareCloseCanvasPaneFocusTarget: (tabId, paneId) => {

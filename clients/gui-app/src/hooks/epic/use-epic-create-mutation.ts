@@ -39,6 +39,12 @@ interface CreateEpicMutationContext {
   readonly userId: string | null;
 }
 
+function taskCreationMode(
+  chat: RequestOfMethod<HostRpcRegistry, "epic.create">["chat"],
+): "chat" | "terminal_agent" {
+  return chat === null ? "terminal_agent" : "chat";
+}
+
 export function useEpicCreate(): UseMutationResult<
   ResponseOfMethod<HostRpcRegistry, "epic.create">,
   HostRpcError,
@@ -57,10 +63,9 @@ export function useEpicCreate(): UseMutationResult<
     mapVariables: (variables) => variables,
     options: {
       onMutate: (variables) => {
-        const mode = variables.chat === null ? "terminal_agent" : "chat";
         Analytics.getInstance().track(AnalyticsEvent.TaskCreationStarted, {
           source: "direct_ui",
-          mode,
+          mode: taskCreationMode(variables.chat),
           workspace_count: variables.workspaces.length,
         });
         return {
@@ -70,7 +75,7 @@ export function useEpicCreate(): UseMutationResult<
       },
       onSuccess: (response, variables, ctx) => {
         Analytics.getInstance().track(AnalyticsEvent.TaskCreated, {
-          mode: variables.chat === null ? "terminal_agent" : "chat",
+          mode: taskCreationMode(variables.chat),
         });
         if (ctx.hostId === null) return;
         // The new epic's workspace folders are seeded into the host's
@@ -97,7 +102,7 @@ export function useEpicCreate(): UseMutationResult<
       onError: (error, variables) => {
         Analytics.getInstance().track(AnalyticsEvent.TaskCreationFailed, {
           source: "direct_ui",
-          mode: variables.chat === null ? "terminal_agent" : "chat",
+          mode: taskCreationMode(variables.chat),
           blocker: analyticsBlockerFromError(error),
         });
         toastFromHostError(error, "Couldn't create epic.");

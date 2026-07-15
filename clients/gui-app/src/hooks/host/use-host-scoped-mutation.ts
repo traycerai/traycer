@@ -7,7 +7,12 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useHostMutation } from "@/hooks/host/use-host-query";
-import { hostQueryKeys } from "@/lib/query-keys";
+import {
+  agentMutationKeys,
+  hostQueryKeys,
+  providersMutationKeys,
+  workspaceMutationKeys,
+} from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import {
   Analytics,
@@ -91,19 +96,19 @@ export function useHostScopedMutationForClient<
 const PROVIDER_MUTATION_OPERATIONS: Readonly<
   Record<string, AnalyticsProviderOperation | undefined>
 > = {
-  "providers.setSelection": "selection",
-  "providers.addCustomPath": "custom_path",
-  "providers.removeCustomPath": "custom_path",
-  "providers.setEnabled": "enabled",
-  "providers.setApiKey": "api_key",
-  "providers.clearApiKey": "api_key",
-  "providers.setTerminalAgentArgs": "terminal_args",
-  "providers.setEnvOverride": "env_override",
-  "providers.deleteEnvOverride": "env_override",
-  "providers.renameProfile": "profile",
-  "providers.recolorProfile": "profile",
-  "providers.removeProfile": "profile",
-  "providers.acknowledgeAmbientDrift": "ambient_drift",
+  [providersMutationKeys.setSelection()[0]]: "selection",
+  [providersMutationKeys.addCustomPath()[0]]: "custom_path",
+  [providersMutationKeys.removeCustomPath()[0]]: "custom_path",
+  [providersMutationKeys.setEnabled()[0]]: "enabled",
+  [providersMutationKeys.setApiKey()[0]]: "api_key",
+  [providersMutationKeys.clearApiKey()[0]]: "api_key",
+  [providersMutationKeys.setTerminalAgentArgs()[0]]: "terminal_args",
+  [providersMutationKeys.setEnvOverride()[0]]: "env_override",
+  [providersMutationKeys.deleteEnvOverride()[0]]: "env_override",
+  [providersMutationKeys.renameProfile()[0]]: "profile",
+  [providersMutationKeys.recolorProfile()[0]]: "profile",
+  [providersMutationKeys.removeProfile()[0]]: "profile",
+  [providersMutationKeys.acknowledgeAmbientDrift()[0]]: "ambient_drift",
 };
 
 function trackScopedMutationSuccess(
@@ -119,21 +124,21 @@ function trackScopedMutationSuccess(
     });
     return;
   }
-  if (action === "workspaceBinding.addFolder") {
+  if (action === workspaceMutationKeys.addBindingFolder()[0]) {
     Analytics.getInstance().track(AnalyticsEvent.WorkspaceFolderAdded, {
       source: "direct_ui",
       workspace_kind: "local",
     });
     return;
   }
-  if (action === "workspaceBinding.removeEntry") {
+  if (action === workspaceMutationKeys.removeBindingEntry()[0]) {
     Analytics.getInstance().track(AnalyticsEvent.WorkspaceFolderRemoved, {
       source: "direct_ui",
       workspace_kind: "unknown",
     });
     return;
   }
-  if (action === "agent.stop") {
+  if (action === agentMutationKeys.stop()[0]) {
     const cascade =
       variables !== null &&
       typeof variables === "object" &&

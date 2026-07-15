@@ -561,7 +561,7 @@ export interface AnalyticsEventProperties {
   readonly [AnalyticsEvent.ArtifactRenamed]: null;
   readonly [AnalyticsEvent.ArtifactStatusChanged]: {
     readonly kind: AnalyticsArtifactKind;
-    readonly status: number;
+    readonly status: 0 | 1 | 2;
   };
   readonly [AnalyticsEvent.ArtifactDeleted]: null;
   readonly [AnalyticsEvent.ArtifactExported]: {
@@ -1691,6 +1691,62 @@ export function analyticsBlockerFromError(error: unknown): AnalyticsBlocker {
     ANALYTICS_BLOCKER_PATTERNS.find(({ pattern }) => pattern.test(text))
       ?.blocker ?? "unknown"
   );
+}
+
+/**
+ * Host-update analytics trio shared by every install/update surface
+ * (the in-app banner and the system-tray listener): `host_update_started`
+ * on mutate, `host_update_succeeded` on success, `host_update_failed` on
+ * error - differing only by `source`.
+ */
+export function hostUpdateAnalyticsCallbacks(source: AnalyticsSource): {
+  readonly onStarted: () => void;
+  readonly onSucceeded: () => void;
+  readonly onFailed: (error: unknown) => void;
+} {
+  return {
+    onStarted: () => {
+      Analytics.getInstance().track(AnalyticsEvent.HostUpdateStarted, {
+        source,
+      });
+    },
+    onSucceeded: () => {
+      Analytics.getInstance().track(AnalyticsEvent.HostUpdateSucceeded, null);
+    },
+    onFailed: (error) => {
+      Analytics.getInstance().track(AnalyticsEvent.HostUpdateFailed, {
+        blocker: analyticsBlockerFromError(error),
+      });
+    },
+  };
+}
+
+/** Fires `setting_changed` for the given Settings section/setting pair. */
+export function trackSettingChanged(
+  section: AnalyticsSettingsSection,
+  setting: AnalyticsSetting,
+): void {
+  Analytics.getInstance().track(AnalyticsEvent.SettingChanged, {
+    source: "direct_ui",
+    section,
+    setting,
+  });
+}
+
+/**
+ * Wraps a settings-store setter so every call tracks `setting_changed` for
+ * the given section before writing through. Shared by the Appearance and
+ * General settings panels so both stay on one tracking contract.
+ */
+export function trackedSettingSetter<Value>(
+  section: AnalyticsSettingsSection,
+  setting: AnalyticsSetting,
+  setter: (value: Value) => void,
+): (value: Value) => void {
+  return (value) => {
+    trackSettingChanged(section, setting);
+    setter(value);
+  };
 }
 
 function analyticsPlatform(): "linux" | "macos" | "other" | "windows" {

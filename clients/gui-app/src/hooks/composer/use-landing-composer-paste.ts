@@ -81,7 +81,13 @@ export function useLandingComposerPaste(editorRef: {
         .then((attrs) => {
           if (attrs.length === 0) return;
           const handle = editorRef.current;
-          if (handle === null || !handle.isReady()) return;
+          if (handle === null || !handle.isReady()) {
+            // Stored bytes for these images are now orphaned - the same
+            // situation as a failed ingest below - so reclaim them the same
+            // way (their session entries keep the bytes safe until it runs).
+            scheduleLandingImageReconcile();
+            return;
+          }
           handle.insertImageAttachments(attrs);
           handle.focus();
           attrs.forEach(() => {

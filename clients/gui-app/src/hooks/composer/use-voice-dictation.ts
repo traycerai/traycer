@@ -145,15 +145,15 @@ export function useVoiceDictation(
   }, [teardownAudio]);
 
   const fail = useCallback(
-    (message: string) => {
+    (message: string, error: unknown) => {
       if (stateRef.current === "transcribing") {
         Analytics.getInstance().track(AnalyticsEvent.VoiceTranscriptionFailed, {
-          blocker: analyticsBlockerFromError(message),
+          blocker: analyticsBlockerFromError(error),
         });
       } else {
         Analytics.getInstance().track(AnalyticsEvent.VoiceCaptureFailed, {
           source: "direct_ui",
-          blocker: analyticsBlockerFromError(message),
+          blocker: analyticsBlockerFromError(error),
         });
       }
       markClosing();
@@ -187,7 +187,10 @@ export function useVoiceDictation(
         Analytics.getInstance().track(AnalyticsEvent.VoicePermissionResolved, {
           permission: "unavailable",
         });
-        fail("Microphone capture is not available in this environment.");
+        fail(
+          "Microphone capture is not available in this environment.",
+          "Microphone capture is not available in this environment.",
+        );
         return null;
       }
       // Trigger the native OS permission prompt (macOS) before opening the
@@ -200,7 +203,10 @@ export function useVoiceDictation(
           permission: "denied",
         });
         setPermissionDenied(true);
-        fail("Microphone access is blocked for Traycer.");
+        fail(
+          "Microphone access is blocked for Traycer.",
+          "Microphone access is blocked for Traycer.",
+        );
         return null;
       }
       Analytics.getInstance().track(AnalyticsEvent.VoicePermissionResolved, {
@@ -251,6 +257,7 @@ export function useVoiceDictation(
             : `Could not access the microphone: ${
                 error instanceof Error ? error.message : String(error)
               }`,
+          error,
         );
         return null;
       }
@@ -282,6 +289,7 @@ export function useVoiceDictation(
       }
       if (ctx.state !== "running") {
         fail(
+          "Could not start audio capture (the audio context did not start).",
           "Could not start audio capture (the audio context did not start).",
         );
         return;
@@ -317,7 +325,10 @@ export function useVoiceDictation(
   const start = useCallback(() => {
     if (state === "recording" || state === "requesting") return;
     if (wsStreamClient === null) {
-      fail("Not connected to the local host.");
+      fail(
+        "Not connected to the local host.",
+        "Not connected to the local host.",
+      );
       return;
     }
     // Cancel any fallback timer left armed by a previous stop() so it can't
@@ -360,6 +371,7 @@ export function useVoiceDictation(
           `Could not start audio capture: ${
             error instanceof Error ? error.message : String(error)
           }`,
+          error,
         );
         return;
       }
@@ -411,7 +423,7 @@ export function useVoiceDictation(
           finalize();
         },
         onError: (frame) => {
-          fail(frame.message);
+          fail(frame.message, frame);
         },
         onConnectionStatus: (status) => {
           if (status !== "closed") return;
@@ -424,7 +436,10 @@ export function useVoiceDictation(
           // Unexpected drop mid-recording: surface it and stop capturing,
           // otherwise the audio graph keeps buffering with nowhere to send.
           markClosing();
-          fail("Lost connection to the local host.");
+          fail(
+            "Lost connection to the local host.",
+            "Lost connection to the local host.",
+          );
         },
       },
     });

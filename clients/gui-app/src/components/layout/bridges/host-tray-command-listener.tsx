@@ -15,7 +15,7 @@ import { RestartHostConfirmDialog } from "@/components/host/restart-host-confirm
 import {
   Analytics,
   AnalyticsEvent,
-  analyticsBlockerFromError,
+  hostUpdateAnalyticsCallbacks,
 } from "@/lib/analytics";
 
 /**
@@ -47,6 +47,7 @@ export function HostTrayCommandListener() {
   const [pendingInstallVersion, setPendingInstallVersion] = useState<
     string | null
   >(null);
+  const hostUpdateAnalytics = hostUpdateAnalyticsCallbacks("system_tray");
 
   const invalidate = (): void => {
     if (management === null) return;
@@ -99,12 +100,10 @@ export function HostTrayCommandListener() {
       return management.installHost({ version, onProgress: null });
     },
     onMutate: () => {
-      Analytics.getInstance().track(AnalyticsEvent.HostUpdateStarted, {
-        source: "system_tray",
-      });
+      hostUpdateAnalytics.onStarted();
     },
     onSuccess: (data) => {
-      Analytics.getInstance().track(AnalyticsEvent.HostUpdateSucceeded, null);
+      hostUpdateAnalytics.onSucceeded();
       toast.success(`Installed host v${data.version}`);
       setPendingInstallVersion(null);
       if (management !== null) {
@@ -115,9 +114,7 @@ export function HostTrayCommandListener() {
       invalidate();
     },
     onError: (err) => {
-      Analytics.getInstance().track(AnalyticsEvent.HostUpdateFailed, {
-        blocker: analyticsBlockerFromError(err),
-      });
+      hostUpdateAnalytics.onFailed(err);
       setPendingInstallVersion(null);
       toastFromRunnerError(err, "Couldn't install host update");
     },

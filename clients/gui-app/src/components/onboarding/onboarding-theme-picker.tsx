@@ -39,6 +39,7 @@ export function OnboardingThemePicker() {
             type="button"
             aria-pressed={theme === mode.id}
             onClick={() => {
+              if (mode.id === theme) return;
               Analytics.getInstance().track(
                 AnalyticsEvent.OnboardingThemeChanged,
                 { theme: `mode:${mode.id}` },
@@ -70,6 +71,7 @@ export function OnboardingThemePicker() {
             aria-label={preset.label}
             title={preset.label}
             onClick={() => {
+              if (preset.id === themePreset) return;
               Analytics.getInstance().track(
                 AnalyticsEvent.OnboardingThemeChanged,
                 { theme: `preset:${preset.id}` },
