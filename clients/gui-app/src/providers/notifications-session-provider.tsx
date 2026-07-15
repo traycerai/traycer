@@ -242,7 +242,7 @@ export function NotificationsSessionProvider(
             displayHostChannelEmission(entries, {
               showNotification,
               playChime: playNotificationChime,
-              onToastClick: onToastClickRef.current,
+              onToastClick: (row) => onToastClickRef.current(row),
             });
           },
           onFeedFrame: (frame) => onFeedFrame(frame, streamHostId),
