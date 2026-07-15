@@ -11,8 +11,8 @@ interface HoverPreviewCardProps {
   readonly side: "top" | "right" | "bottom" | "left";
   readonly sideOffset: number | undefined;
   readonly align: "start" | "center" | "end" | undefined;
-  readonly open?: boolean;
-  readonly onOpenChange?: (open: boolean) => void;
+  readonly open: boolean | undefined;
+  readonly onOpenChange: ((open: boolean) => void) | undefined;
 }
 
 /**

@@ -36,9 +36,9 @@ describe("hover-preview surface", () => {
     // The workspace and chat/owner hover previews must read as the same card
     // as the composer's @mention preview panel - one shared surface, so the
     // hover-card styles cannot drift apart from it again.
-    for (const expected of HOVER_PREVIEW_SURFACE_CLASS.split(/\s+/)) {
+    HOVER_PREVIEW_SURFACE_CLASS.split(/\s+/).forEach((expected) => {
       expect(tokens).toContain(expected);
-    }
+    });
     expect(tokens).not.toContain("bg-foreground");
     expect(tokens).not.toContain("text-background");
     expect(screen.getByTestId("hover-body")).toBeTruthy();
