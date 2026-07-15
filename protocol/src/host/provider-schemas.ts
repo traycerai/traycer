@@ -269,9 +269,43 @@ export const providerLoginCapabilitySchema = z.object({
    * `providers.setEnvOverride`. Null when paste-to-reconnect is unsupported.
    */
   token: z.object({ vars: z.array(z.string()) }).nullable(),
+  /**
+   * Non-null when the provider's `providers.startLogin` child accepts a
+   * pasted authorization code on stdin (e.g. Claude's manual-code redirect
+   * page - see the code-paste decision log). The GUI shows the paste-code
+   * waiting step only for providers with this slot set; the code itself
+   * goes over `providers.submitLoginCode`, kept alive via
+   * `providers.touchLogin`. Shape carries no fields today - existence alone
+   * is the capability signal - but stays an object rather than a boolean so
+   * a future paste-flow variant can grow it without a shape change.
+   * `.catch(null)` tolerates old host builds that predate this field; old
+   * peers degrade to no paste UI.
+   */
+  codePaste: z.object({}).nullable().catch(null),
 });
 export type ProviderLoginCapability = z.infer<
   typeof providerLoginCapabilitySchema
+>;
+
+/**
+ * Frozen pre-code-paste snapshot of `providerLoginCapabilitySchema`, as it
+ * shipped in host-v1.0.0 (`oauthArgs` + `token` only) - a hand-copy, NOT
+ * derived via `.omit()` from the live schema, same invariant as
+ * `providerCliStateBaseShapeV20`'s own comment below. Referenced by the
+ * frozen `providerCliStateBaseShapeV10` / `V20` / `V30` base shapes in place
+ * of the live schema, so those already-released wire shapes don't silently
+ * inherit `codePaste` (or any future capability field) the moment the live
+ * schema grows one - `loginCapability` predates per-field freezing
+ * discipline (it was part of the original v1.0 base shape, not added and
+ * frozen alongside a version bump like `profiles` was), so this snapshot
+ * retrofits that guarantee.
+ */
+export const providerLoginCapabilitySchemaV10 = z.object({
+  oauthArgs: z.array(z.string()).nullable(),
+  token: z.object({ vars: z.array(z.string()) }).nullable(),
+});
+export type ProviderLoginCapabilityV10 = z.infer<
+  typeof providerLoginCapabilitySchemaV10
 >;
 
 /**
@@ -499,7 +533,7 @@ const providerCliStateBaseShapeV10 = {
   apiKey: providerApiKeyStateSchema,
   terminalAgentArgs: z.string().catch(""),
   envOverrides: z.array(providerEnvOverrideSchema).catch([]),
-  loginCapability: providerLoginCapabilitySchema.nullable().catch(null),
+  loginCapability: providerLoginCapabilitySchemaV10.nullable().catch(null),
 };
 
 // Frozen protocol-v2.0 base shape (before `profiles`) - a hand-copy of
@@ -523,7 +557,7 @@ const providerCliStateBaseShapeV20 = {
   apiKey: providerApiKeyStateSchema,
   terminalAgentArgs: z.string().catch(""),
   envOverrides: z.array(providerEnvOverrideSchema).catch([]),
-  loginCapability: providerLoginCapabilitySchema.nullable().catch(null),
+  loginCapability: providerLoginCapabilitySchemaV10.nullable().catch(null),
   availabilityPending: z.boolean().catch(false),
 };
 
@@ -594,7 +628,7 @@ const providerCliStateBaseShapeV30 = {
   apiKey: providerApiKeyStateSchema,
   terminalAgentArgs: z.string().catch(""),
   envOverrides: z.array(providerEnvOverrideSchema).catch([]),
-  loginCapability: providerLoginCapabilitySchema.nullable().catch(null),
+  loginCapability: providerLoginCapabilitySchemaV10.nullable().catch(null),
   availabilityPending: z.boolean().catch(false),
 };
 
@@ -1032,6 +1066,18 @@ export const providersAwaitLoginResponseSchema = z.object({
   // with `providers.awaitLogin@2.1`; the frozen 2.0 response below never
   // carried it.
   existingProfileId: z.string().nullable().default(null),
+  // Code-paste only: true when this call resolved because a previously
+  // submitted `providers.submitLoginCode` was rejected by the exchange (the
+  // login child exited nonzero without auth success on re-probe - see the
+  // code-paste decision log's "Failure classification" row), distinct from
+  // the default outcome (a successful re-probe, or nothing was in flight).
+  // The GUI uses this to drive its bounded auto-restart (decision log's
+  // "Bad-code recovery" row) instead of surfacing a generic failed state.
+  // Bare additive field on the still-unreleased 2.1 line (same precedent as
+  // `providers.startLogin@1.1`'s `createProfile.shareSkillsAndPlugins`):
+  // old hosts never emit it and `.default(false)` keeps old-client parses
+  // byte-identical to today.
+  codeRejected: z.boolean().default(false),
 });
 export const providersAwaitLoginResponseSchemaV10 = z.object({
   state: providerCliStateSchemaV10.nullable(),
@@ -1052,14 +1098,17 @@ export type ProvidersAwaitLoginResponse = z.infer<
  * that silence as a dead host and abandons a healthy in-flight sign-in as
  * soon as the user takes longer than the timeout in the browser.
  *
- * Derivation: the host force-kills a login child after 3 minutes and its
- * await path self-resolves at most 5 s later even when the child never
- * confirms termination, followed by bounded auth re-probes before the
- * response is framed. 4 minutes covers that worst case with slack. The host
+ * Derivation: the host's login timeout is now a rolling deadline (see the
+ * code-paste decision log's "Timeouts" row) - each `providers.touchLogin`
+ * keepalive or `providers.submitLoginCode` submit resets the kill timer to
+ * 3 minutes out, hard-capped at 15 minutes from spawn - so a child can
+ * legitimately stay alive up to 15 minutes even while the long-poll caller
+ * sees no traffic. 16 minutes covers that hard cap plus slack for the await
+ * path's own bounded auth re-probe before the response is framed. The host
  * must keep its internal deadline strictly under this budget - clients wait
  * exactly this long before declaring the call dead.
  */
-export const PROVIDERS_AWAIT_LOGIN_RESPONSE_BUDGET_MS = 4 * 60_000;
+export const PROVIDERS_AWAIT_LOGIN_RESPONSE_BUDGET_MS = 16 * 60_000;
 
 /** Kill an in-flight `providers.startLogin` child for this provider. */
 export const providersCancelLoginRequestSchema = z.object({
@@ -1089,6 +1138,72 @@ export type ProvidersCancelLoginResponse = z.infer<
   typeof providersCancelLoginResponseSchema
 >;
 
+/**
+ * Relay a pasted authorization code to an in-flight `providers.startLogin`
+ * child's stdin (see the code-paste decision log's "Mechanism" row).
+ * `profileId` mirrors `providers.startLogin@1.1`'s convention - the same
+ * profile-scoped login child the caller started - and defaults to `null`
+ * for the legacy (no-profile-override) login. The exchange outcome itself
+ * (accepted vs rejected by claude.ai) is NOT carried here: submitting only
+ * confirms the code reached a live child; the real outcome surfaces later
+ * via the existing `providers.awaitLogin` long-poll (see that response's
+ * `codeRejected` flag) or, after an auto-restart, a fresh login.
+ */
+export const providersSubmitLoginCodeRequestSchema = z.object({
+  providerId: providerIdSchema,
+  profileId: z.string().nullable().default(null),
+  code: z.string(),
+});
+export type ProvidersSubmitLoginCodeRequest = z.infer<
+  typeof providersSubmitLoginCodeRequestSchema
+>;
+
+/**
+ * `accepted`: the code reached a live login child (a real exchange attempt
+ * is now underway, or the child re-armed after a malformed paste - see the
+ * decision log's "Malformed paste" row); await the result via
+ * `providers.awaitLogin`. `noActiveLogin`: no login child is running for
+ * this provider/profile (already finished, cancelled, or timed out) - the
+ * caller should start a fresh login instead of waiting.
+ */
+export const providersSubmitLoginCodeResponseSchema = z.object({
+  outcome: z.enum(["accepted", "noActiveLogin"]),
+});
+export type ProvidersSubmitLoginCodeResponse = z.infer<
+  typeof providersSubmitLoginCodeResponseSchema
+>;
+
+/**
+ * Keepalive for an in-flight `providers.startLogin` child: resets the
+ * host's rolling kill timer without submitting a code (see the code-paste
+ * decision log's "Timeouts" row - each keepalive or submit resets the timer
+ * to 3 minutes out, hard-capped at 15 minutes from spawn). The GUI fires
+ * this while the user is still away in the browser so a slow copy-paste
+ * doesn't race the kill timer. `profileId` mirrors the same profile-scoped
+ * convention as `providers.submitLoginCode`; unlike that request this
+ * method has no pre-profile legacy shape to stay compatible with, so the
+ * field is required rather than defaulted.
+ */
+export const providersTouchLoginRequestSchema = z.object({
+  providerId: providerIdSchema,
+  profileId: z.string().nullable(),
+});
+export type ProvidersTouchLoginRequest = z.infer<
+  typeof providersTouchLoginRequestSchema
+>;
+
+/**
+ * `extended: false` when no live login child exists for this
+ * provider/profile (already finished, cancelled, or timed out) - the
+ * caller should stop touching and re-probe instead of retrying.
+ */
+export const providersTouchLoginResponseSchema = z.object({
+  extended: z.boolean(),
+});
+export type ProvidersTouchLoginResponse = z.infer<
+  typeof providersTouchLoginResponseSchema
+>;
+
 export function downgradeProviderAuthV20ToV10(
   auth: ProviderAuthV20,
 ): ProviderAuthV10 {
@@ -1114,9 +1229,16 @@ export function downgradeProviderAuthV20ToV10(
 // `profiles` is typed optional here rather than requiring callers to conjure
 // one. Both `providersListDowngradeV2ToV1` (v2.0 source) and the v3.0/latest
 // downgrade paths (live source) share this one stripping function.
+// `loginCapability` is typed as either the live or frozen-v10 capability
+// shape for the same reason: the v2.0/v3.0 frozen states carry the
+// pre-`codePaste` shape (`providerLoginCapabilitySchemaV10`), not the live
+// one - either is fine here since the strict v1.0 parse below only keeps
+// `oauthArgs`/`token` regardless.
 export function downgradeProviderCliStateToV10(
-  state: Omit<ProviderCliState, "profiles"> & {
+  state: Omit<ProviderCliState, "profiles" | "loginCapability"> & {
     profiles?: ProviderCliState["profiles"];
+    loginCapability:
+      ProviderLoginCapability | ProviderLoginCapabilityV10 | null;
   },
 ): ProviderCliStateV10 | null {
   // `providerCliStateSchemaV10` is a `z.strictObject`, so it REJECTS any key it
