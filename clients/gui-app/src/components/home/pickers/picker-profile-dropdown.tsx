@@ -64,6 +64,7 @@ function ProfileUsagePickerProfileDropdown({
     subscribed: true,
   });
   const usageProfiles = useMemo(() => {
+    if (runTargetClient === null) return EMPTY_PROFILES;
     const provider = runTargetProvidersQuery.data?.providers.find(
       (candidate) => candidate.providerId === providerId,
     );
@@ -77,6 +78,7 @@ function ProfileUsagePickerProfileDropdown({
     props.profiles,
     props.runTargetHostId,
     providerId,
+    runTargetClient,
     runTargetProvidersQuery.data,
   ]);
   const comparison = useProfileUsageComparison({

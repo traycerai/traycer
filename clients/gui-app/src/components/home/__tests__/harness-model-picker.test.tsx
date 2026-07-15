@@ -142,6 +142,7 @@ const queryMock = vi.hoisted(() => ({
   // `providerStates` for every target host, matching the pre-fix behavior
   // where the gate always read the default host's list.
   providerStatesByClient: new Map<string, ProviderCliState[]>(),
+  unresolvedHostIds: new Set<string>(),
   cloneCatalogOnRead: false,
   calls: {
     harnesses: [] as Array<{
@@ -198,7 +199,7 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   ) => {
     const providers =
       client === null
-        ? []
+        ? queryMock.providerStates
         : (queryMock.providerStatesByClient.get(client) ??
           queryMock.providerStates);
     return {
@@ -215,7 +216,10 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
 // the raw host id - lets `useProvidersListForClient` above key its
 // per-target-host response without constructing a real client.
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
-  useHostClientForHostId: (hostId: string | null) => hostId ?? "default",
+  useHostClientForHostId: (hostId: string | null) =>
+    hostId !== null && queryMock.unresolvedHostIds.has(hostId)
+      ? null
+      : (hostId ?? "default"),
 }));
 
 // The capability gate resolves the "Create new profile" row's target host
@@ -833,6 +837,7 @@ describe("<HarnessModelPicker />", () => {
     queryMock.modelsLoading = false;
     queryMock.providerStates = [];
     queryMock.providerStatesByClient = new Map();
+    queryMock.unresolvedHostIds = new Set();
     queryMock.cloneCatalogOnRead = false;
     queryMock.calls.harnesses = [];
     queryMock.calls.catalog = [];
@@ -1893,6 +1898,34 @@ describe("<HarnessModelPicker />", () => {
     );
     expect(comparisonCall?.runTargetHostId).toBeNull();
     expect(comparisonCall?.profiles).toEqual(visibleProfiles);
+  });
+
+  it("ignores default-host cached profiles when an explicit target host client is unresolved", async () => {
+    const visibleProfiles = claudeProfilesForDropdown().map((profile) => ({
+      ...profile,
+      identity: {
+        email: `${profile.profileId}@example.com`,
+        tier: "pro",
+        accountUuid: `${profile.profileId}-account`,
+      },
+    }));
+    queryMock.providerStates = [
+      providerCliStateWithProfiles({
+        providerId: "claude-code",
+        profiles: visibleProfiles,
+      }),
+    ];
+    queryMock.unresolvedHostIds.add("unreachable-host");
+
+    renderPicker({ createProfileHostId: "unreachable-host" });
+    await openPicker();
+    fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+
+    const comparisonCall = profileUsageHookMock.calls.find(
+      (call) => call.providerId === "claude-code",
+    );
+    expect(comparisonCall?.runTargetHostId).toBe("unreachable-host");
+    expect(comparisonCall?.profiles).toEqual([]);
   });
 
   it("feeds usage comparison the run target's summaries when profile identities match", async () => {
