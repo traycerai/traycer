@@ -3,7 +3,6 @@ import { Suspense, useCallback, useEffect, useMemo, useRef } from "react";
 import type { EpicTerminalRef } from "@/stores/epics/canvas/types";
 import { useOpenEpicId } from "@/lib/epic-selectors";
 import { beginTerminalLoad } from "@/lib/perf/terminal-load-perf";
-import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import {
   TerminalXtermHost,
   useTerminalTileBootstrap,
@@ -98,9 +97,6 @@ export function TerminalTile(props: TerminalTileProps) {
   const sessionId = props.node.id;
   useEffect(() => {
     beginTerminalLoad(sessionId, "terminal");
-    Analytics.getInstance().track(AnalyticsEvent.TerminalOpened, {
-      kind: "shell",
-    });
   }, [sessionId]);
   useEffect(() => {
     if (reachability.status !== "unreachable") return;

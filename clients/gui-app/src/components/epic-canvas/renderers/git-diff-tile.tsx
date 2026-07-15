@@ -210,7 +210,7 @@ function GitDiffTileToolbar(props: GitDiffTileToolbarProps): ReactNode {
   const patchDiffViewerPreferences = useSettingsStore(
     (s) => s.patchDiffViewerPreferences,
   );
-  const editorOpen = useEditorOpen();
+  const editorOpen = useEditorOpen("file");
   const { mutateAsync: refreshWorktreeStatus } = useGitRefreshWorktreeStatus();
   const updateView = useEpicCanvasStore((s) => s.updateGitDiffTileViewInTab);
   const { active: openFileFeedbackActive, trigger: triggerOpenFileFeedback } =
@@ -408,7 +408,7 @@ interface GitFileDiffPanelProps {
 
 function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
   const defaultEditor = useSettingsStore((s) => s.defaultEditor);
-  const editorOpen = useEditorOpen();
+  const editorOpen = useEditorOpen("file");
   const {
     active: openExternallyFeedbackActive,
     trigger: triggerOpenExternallyFeedback,

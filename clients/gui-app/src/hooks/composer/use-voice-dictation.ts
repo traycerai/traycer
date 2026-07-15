@@ -5,9 +5,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { SPEECH_INPUT_SAMPLE_RATE } from "@traycer/protocol/host/speech/schemas";
 import { SpeechStreamClient } from "@traycer-clients/shared/host-transport/speech-stream-client";
+import type { MicrophoneAccessStatus } from "@traycer-clients/shared/platform/runner-host";
 import { useWsStreamClient } from "@/lib/host/stream-runtime-context";
 import { appLogger, describeLogError } from "@/lib/logger";
 import { useRunnerHost } from "@/providers/use-runner-host";
+import {
+  Analytics,
+  AnalyticsEvent,
+  analyticsBlockerFromError,
+} from "@/lib/analytics";
 
 export type VoiceDictationState =
   "idle" | "requesting" | "recording" | "transcribing" | "error";
@@ -46,6 +52,15 @@ const PROCESSOR_BUFFER_SIZE = 2048;
 // arrives (e.g., an unusually long decode) so the UI never hangs in
 // "transcribing".
 const FINALIZE_FALLBACK_MS = 15000;
+
+function dictationDurationBucket(
+  startedAtMs: number | null,
+): "under_10s" | "10_to_30s" | "over_30s" {
+  const elapsed = startedAtMs === null ? 0 : Date.now() - startedAtMs;
+  if (elapsed < 10_000) return "under_10s";
+  if (elapsed <= 30_000) return "10_to_30s";
+  return "over_30s";
+}
 
 /**
  * Drives on-device dictation: captures the mic as PCM16 mono, streams it to the
@@ -90,6 +105,8 @@ export function useVoiceDictation(
   // value at launch and bails if it changed, so a stop/cancel during the
   // permission prompt can't re-arm a now-abandoned session.
   const startGenerationRef = useRef(0);
+  // When the live recording actually began (onReady), for duration buckets.
+  const recordingStartedAtRef = useRef<number | null>(null);
 
   const markClosing = useCallback(() => {
     closingRef.current = true;
@@ -129,7 +146,17 @@ export function useVoiceDictation(
   }, [teardownAudio]);
 
   const fail = useCallback(
-    (message: string) => {
+    (message: string, error: unknown) => {
+      if (stateRef.current === "transcribing") {
+        Analytics.getInstance().track(AnalyticsEvent.VoiceTranscriptionFailed, {
+          blocker: analyticsBlockerFromError(error),
+        });
+      } else {
+        Analytics.getInstance().track(AnalyticsEvent.VoiceCaptureFailed, {
+          source: "direct_ui",
+          blocker: analyticsBlockerFromError(error),
+        });
+      }
       markClosing();
       teardownAll();
       setState("error");
@@ -158,17 +185,41 @@ export function useVoiceDictation(
     async (generation: number): Promise<MediaStream | null> => {
       if (generation !== startGenerationRef.current) return null;
       if (typeof navigator === "undefined") {
-        fail("Microphone capture is not available in this environment.");
+        Analytics.getInstance().track(AnalyticsEvent.VoicePermissionResolved, {
+          permission: "unavailable",
+        });
+        fail(
+          "Microphone capture is not available in this environment.",
+          "Microphone capture is not available in this environment.",
+        );
         return null;
       }
       // Trigger the native OS permission prompt (macOS) before opening the
       // stream. Returns the existing decision when already set; a denied app is
       // never re-prompted, so route those to the "Open Settings" affordance.
-      const access = await runnerHost.requestMicrophoneAccess();
+      let access: MicrophoneAccessStatus;
+      try {
+        access = await runnerHost.requestMicrophoneAccess();
+      } catch (error) {
+        if (generation !== startGenerationRef.current) return null;
+        fail(
+          `Could not request microphone access: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+          error,
+        );
+        return null;
+      }
       if (generation !== startGenerationRef.current) return null;
       if (access === "denied") {
+        Analytics.getInstance().track(AnalyticsEvent.VoicePermissionResolved, {
+          permission: "denied",
+        });
         setPermissionDenied(true);
-        fail("Microphone access is blocked for Traycer.");
+        fail(
+          "Microphone access is blocked for Traycer.",
+          "Microphone access is blocked for Traycer.",
+        );
         return null;
       }
       try {
@@ -190,8 +241,15 @@ export function useVoiceDictation(
           for (const track of stream.getTracks()) track.stop();
           return null;
         }
+        Analytics.getInstance().track(AnalyticsEvent.VoicePermissionResolved, {
+          permission: "granted",
+        });
         return stream;
       } catch (error) {
+        // The session may have been stopped/cancelled while getUserMedia was
+        // pending - a late rejection must not resurrect it into "error" or
+        // emit analytics for an attempt the user already abandoned.
+        if (generation !== startGenerationRef.current) return null;
         const denied =
           error instanceof Error && error.name === "NotAllowedError";
         appLogger.warn(
@@ -201,13 +259,22 @@ export function useVoiceDictation(
             error: describeLogError(error),
           },
         );
-        if (denied) setPermissionDenied(true);
+        if (denied) {
+          // The OS said yes but the browser-level prompt was refused - still a
+          // user-visible permission denial for the funnel.
+          Analytics.getInstance().track(
+            AnalyticsEvent.VoicePermissionResolved,
+            { permission: "denied" },
+          );
+          setPermissionDenied(true);
+        }
         fail(
           denied
             ? "Microphone access is blocked for Traycer."
             : `Could not access the microphone: ${
                 error instanceof Error ? error.message : String(error)
               }`,
+          error,
         );
         return null;
       }
@@ -239,6 +306,7 @@ export function useVoiceDictation(
       }
       if (ctx.state !== "running") {
         fail(
+          "Could not start audio capture (the audio context did not start).",
           "Could not start audio capture (the audio context did not start).",
         );
         return;
@@ -274,7 +342,10 @@ export function useVoiceDictation(
   const start = useCallback(() => {
     if (state === "recording" || state === "requesting") return;
     if (wsStreamClient === null) {
-      fail("Not connected to the local host.");
+      fail(
+        "Not connected to the local host.",
+        "Not connected to the local host.",
+      );
       return;
     }
     // Cancel any fallback timer left armed by a previous stop() so it can't
@@ -287,6 +358,9 @@ export function useVoiceDictation(
     setPermissionDenied(false);
     setState("requesting");
     readyRef.current = false;
+    // Cleared at start so a stop during "requesting" can't report a stopped
+    // event stamped with the PREVIOUS recording's start time.
+    recordingStartedAtRef.current = null;
     pendingChunksRef.current = [];
     closingRef.current = false;
     const generation = startGenerationRef.current + 1;
@@ -314,6 +388,7 @@ export function useVoiceDictation(
           `Could not start audio capture: ${
             error instanceof Error ? error.message : String(error)
           }`,
+          error,
         );
         return;
       }
@@ -331,6 +406,10 @@ export function useVoiceDictation(
           // UI back to "recording" with no live capture.
           if (closingRef.current || speechClientRef.current !== client) return;
           readyRef.current = true;
+          recordingStartedAtRef.current = Date.now();
+          Analytics.getInstance().track(AnalyticsEvent.VoiceDictationStarted, {
+            source: "direct_ui",
+          });
           setState("recording");
           const pending = pendingChunksRef.current;
           pendingChunksRef.current = [];
@@ -346,12 +425,31 @@ export function useVoiceDictation(
           }
         },
         onFlushed: () => {
+          // A later attempt (auto-restart, or a stop/start racing this flush)
+          // already superseded this session - ignore its stale resolution,
+          // matching onTranscript's guard. Otherwise this would finalize()
+          // the ACTIVE session out from under it.
+          if (speechClientRef.current !== client) return;
+          // Same gate as the stopped event: a flush of a session that never
+          // reached "recording" transcribed nothing worth counting.
+          if (recordingStartedAtRef.current !== null) {
+            Analytics.getInstance().track(
+              AnalyticsEvent.VoiceTranscriptionSucceeded,
+              {
+                duration_bucket: dictationDurationBucket(
+                  recordingStartedAtRef.current,
+                ),
+              },
+            );
+          }
           finalize();
         },
         onError: (frame) => {
-          fail(frame.message);
+          if (speechClientRef.current !== client) return;
+          fail(frame.message, frame);
         },
         onConnectionStatus: (status) => {
+          if (speechClientRef.current !== client) return;
           if (status !== "closed") return;
           if (closingRef.current) {
             // Expected close (we flushed / tore down). Settle the UI if it's
@@ -362,7 +460,10 @@ export function useVoiceDictation(
           // Unexpected drop mid-recording: surface it and stop capturing,
           // otherwise the audio graph keeps buffering with nowhere to send.
           markClosing();
-          fail("Lost connection to the local host.");
+          fail(
+            "Lost connection to the local host.",
+            "Lost connection to the local host.",
+          );
         },
       },
     });
@@ -379,6 +480,13 @@ export function useVoiceDictation(
     // Invalidate any startAudioGraph still waiting on the permission prompt so
     // it can't re-arm capture into this now-flushing session.
     startGenerationRef.current += 1;
+    // Only a session that actually reached "recording" reports a stop - a
+    // stop while still requesting has no matching started event.
+    if (recordingStartedAtRef.current !== null) {
+      Analytics.getInstance().track(AnalyticsEvent.VoiceDictationStopped, {
+        duration_bucket: dictationDurationBucket(recordingStartedAtRef.current),
+      });
+    }
     markClosing();
     // Stop capturing immediately and ask the host to transcribe the buffered
     // utterance. Stay connected until it replies `flushed` (→ `finalize`); the
@@ -409,6 +517,12 @@ export function useVoiceDictation(
   // Abort: tear down without flushing so the in-progress utterance is dropped.
   const cancel = useCallback(() => {
     startGenerationRef.current += 1;
+    if (stateRef.current === "recording" || stateRef.current === "requesting") {
+      Analytics.getInstance().track(
+        AnalyticsEvent.VoiceDictationCancelled,
+        null,
+      );
+    }
     markClosing();
     teardownAll();
     setState("idle");

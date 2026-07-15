@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { tabRequiresCloseConfirm, tabEpicId } from "@/stores/tabs/registry";
 import { UnsyncedCloseDialog } from "@/components/layout/dialogs/unsynced-close-dialog";
 import type { HeaderTab } from "@/stores/tabs/types";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 interface PendingClose {
   readonly tab: HeaderTab;
@@ -35,12 +36,20 @@ export function useUnsyncedCloseDialog(): UnsyncedCloseDialogController {
     const p = pending;
     setPending(null);
     if (p === null) return;
+    Analytics.getInstance().track(AnalyticsEvent.TabCloseBlocked, {
+      decision: "discard",
+    });
     p.onConfirm();
   }, [pending]);
 
   const handleWait = useCallback(() => {
+    if (pending !== null) {
+      Analytics.getInstance().track(AnalyticsEvent.TabCloseBlocked, {
+        decision: "cancel",
+      });
+    }
     setPending(null);
-  }, []);
+  }, [pending]);
 
   const dialog = useMemo<ReactNode>(
     () => (

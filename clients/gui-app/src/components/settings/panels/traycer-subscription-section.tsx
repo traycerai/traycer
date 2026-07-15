@@ -23,6 +23,7 @@ import {
   TraycerSubscriptionView,
 } from "@/components/settings/panels/traycer-subscription-views";
 import { resolveManageSubscriptionUrl } from "@/lib/auth/manage-subscription-url";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import {
   accountContextValue,
   parseAccountContextValue,
@@ -65,6 +66,10 @@ export function TraycerSubscriptionSection() {
             type="button"
             onClick={() => {
               void runnerHost.openExternalLink(manageUrl);
+              Analytics.getInstance().track(
+                AnalyticsEvent.SubscriptionManagementOpened,
+                { source: "direct_ui" },
+              );
             }}
             className="inline-flex w-fit items-center gap-1.5 rounded px-1 text-ui-xs font-medium text-primary transition-colors hover:text-primary/80 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
           >
@@ -73,7 +78,13 @@ export function TraycerSubscriptionSection() {
           </button>
           <RefreshIconButton
             onRefresh={async () => {
-              await query.refetch();
+              const result = await query.refetch();
+              if (result.status === "success") {
+                Analytics.getInstance().track(
+                  AnalyticsEvent.SubscriptionRefreshed,
+                  { source: "direct_ui" },
+                );
+              }
             }}
             label="Refresh subscription"
             refreshing={query.isFetching}

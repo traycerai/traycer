@@ -12,6 +12,11 @@ import { runnerMutationKeys, runnerQueryKeys } from "@/lib/query-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { RestartHostConfirmDialog } from "@/components/host/restart-host-confirm-dialog";
+import {
+  Analytics,
+  AnalyticsEvent,
+  hostUpdateAnalyticsCallbacks,
+} from "@/lib/analytics";
 
 /**
  * NP-6: listens for host-scoped tray commands forwarded from the
@@ -42,6 +47,7 @@ export function HostTrayCommandListener() {
   const [pendingInstallVersion, setPendingInstallVersion] = useState<
     string | null
   >(null);
+  const hostUpdateAnalytics = hostUpdateAnalyticsCallbacks("system_tray");
 
   const invalidate = (): void => {
     if (management === null) return;
@@ -93,7 +99,11 @@ export function HostTrayCommandListener() {
       }
       return management.installHost({ version, onProgress: null });
     },
+    onMutate: () => {
+      hostUpdateAnalytics.onStarted();
+    },
     onSuccess: (data) => {
+      hostUpdateAnalytics.onSucceeded();
       toast.success(`Installed host v${data.version}`);
       setPendingInstallVersion(null);
       if (management !== null) {
@@ -104,6 +114,7 @@ export function HostTrayCommandListener() {
       invalidate();
     },
     onError: (err) => {
+      hostUpdateAnalytics.onFailed(err);
       setPendingInstallVersion(null);
       toastFromRunnerError(err, "Couldn't install host update");
     },
@@ -117,14 +128,26 @@ export function HostTrayCommandListener() {
     const subscription = tray.onCommand((command: HostTrayCommand) => {
       switch (command.kind) {
         case "openSettingsHost":
+          Analytics.getInstance().track(AnalyticsEvent.CommandExecuted, {
+            source: "system_tray",
+            command: "open_settings",
+          });
           void navigate({ to: "/settings/host" });
           return;
         case "restartHost":
+          Analytics.getInstance().track(AnalyticsEvent.CommandExecuted, {
+            source: "system_tray",
+            command: "restart_host",
+          });
           // Destructive: restart kills PTYs and in-flight RPC sessions.
           // Surface the confirmation modal before executing.
           setPendingRestart(true);
           return;
         case "openLogs":
+          Analytics.getInstance().track(AnalyticsEvent.CommandExecuted, {
+            source: "system_tray",
+            command: "open_logs",
+          });
           // Logs surface lives inside Settings → Host; navigate there and
           // also open the legacy logs dialog so the user gets the fastest
           // path to the tail regardless of which surface they prefer.
@@ -132,6 +155,10 @@ export function HostTrayCommandListener() {
           openLogs();
           return;
         case "installUpdate":
+          Analytics.getInstance().track(AnalyticsEvent.CommandExecuted, {
+            source: "system_tray",
+            command: "install_host_update",
+          });
           // Destructive: installing an update restarts the host and kills
           // PTYs / in-flight RPC sessions. Preview the version that will be
           // installed before executing.

@@ -7,7 +7,11 @@ import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-j
 import { containsImageAtoms } from "@/lib/composer/image-atoms";
 import { useTabsStore } from "@/stores/tabs/store";
 import type { TabRef } from "@/stores/tabs/types";
-import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import {
+  Analytics,
+  AnalyticsEvent,
+  type AnalyticsSource,
+} from "@/lib/analytics";
 
 type NavigateFn = UseNavigateResult<string>;
 
@@ -28,13 +32,18 @@ export function openEpicFromList(
   navigate: NavigateFn,
   epicId: string,
   currentPathname: string,
-  title: string | undefined,
+  options: {
+    readonly title: string | undefined;
+    readonly source: AnalyticsSource;
+  },
 ): void {
-  Analytics.getInstance().track(AnalyticsEvent.TaskOpened, null);
+  Analytics.getInstance().track(AnalyticsEvent.TaskOpened, {
+    source: options.source,
+  });
   const replacedDraft = replaceEmptyDraftWithEpicInStrip(
     epicId,
     currentPathname,
-    title,
+    options.title,
   );
   navigateToTabIntent(
     navigate,

@@ -32,11 +32,15 @@ export function useRenameCanvasTab(
   const renameArtifactInTab = useEpicCanvasStore((s) => s.renameArtifactInTab);
   const renameChat = useEpicRenameChat();
   const renameTerminalAgent = useEpicRenameTuiAgent();
-  const renameArtifact = useEpicRenameArtifact();
+  const renameArtifact = useEpicRenameArtifact(true);
 
   return useCallback(
     (tab, rawTitle) => {
       const trimmed = rawTitle.trim();
+      // No same-title suppression: the optimistic local update can already be
+      // ahead of a failed RPC, and resubmitting the visible title is the
+      // user's retry path. A duplicate rename RPC is harmless (HEAD behavior);
+      // the event only fires on authoritative mutation success.
       if (trimmed.length === 0) return;
       if (tab.type === "terminal") return;
       const id = tab.id;
