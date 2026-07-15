@@ -128,4 +128,4 @@ traycer host restart
 
 ## License
 
-Apache-2.0. See the repository [LICENSE](https://github.com/traycerai/traycer/blob/main/LICENSE).
+MIT. See the repository [LICENSE](https://github.com/traycerai/traycer/blob/main/LICENSE).
