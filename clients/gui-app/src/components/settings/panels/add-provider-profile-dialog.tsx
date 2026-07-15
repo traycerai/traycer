@@ -40,11 +40,11 @@ import { useProvidersCancelLoginForClient } from "@/hooks/providers/use-provider
 import { useProvidersSubmitLoginCodeForClient } from "@/hooks/providers/use-providers-submit-login-code-mutation";
 import { useProvidersTouchLoginForClient } from "@/hooks/providers/use-providers-touch-login-mutation";
 import { useRecolorProviderProfileForClient } from "@/hooks/providers/use-recolor-provider-profile-mutation";
+import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
-import { reportableErrorToast } from "@/lib/reportable-error-toast";
-import { useRunnerHost } from "@/providers/use-runner-host";
 import { redactEmail } from "@/lib/providers/redact-email";
 import { CodePasteField, CodePasteRestartNotice } from "./code-paste-field";
+import { handleSignInLinkCopyError } from "./provider-sign-in-link";
 import { waitingStepCopy } from "./waiting-step-copy";
 import {
   useProviderProfileLoginFlow,
@@ -53,15 +53,6 @@ import {
 } from "./use-provider-profile-login-flow";
 
 const COPY_CONFIRMATION_RESET_MS = 1600;
-
-const handleSignInLinkCopyError = (): void => {
-  reportableErrorToast("Couldn't copy the sign-in link.", undefined, {
-    title: "Could not copy sign-in link",
-    message: null,
-    code: null,
-    source: "Provider sign-in",
-  });
-};
 
 export interface FailedProviderProfileAttempt {
   readonly providerId: ProviderCliState["providerId"];
@@ -88,7 +79,7 @@ export function AddProviderProfileDialog({
   ) => void;
   readonly onProfileCreated: (profileId: string) => void;
 }): ReactNode {
-  const runnerHost = useRunnerHost();
+  const openExternalLink = useRunnerOpenExternalLink();
   const supportsShareSkillsAndPlugins = state.providerId === "claude-code";
   const [shareSkillsAndPlugins, setShareSkillsAndPlugins] = useState(
     supportsShareSkillsAndPlugins,
@@ -258,7 +249,7 @@ export function AddProviderProfileDialog({
             duplicateProfile={duplicateProfile}
             linkDisabled={trimmedLabel.length === 0 || flow.busy}
             onLink={linkAccount}
-            onOpenExternalLink={(url) => void runnerHost.openExternalLink(url)}
+            onOpenExternalLink={(url) => openExternalLink.mutate(url)}
             onCancel={() => close(false)}
             onRetryLogin={linkAccount}
             onRetryFinalize={retryFinalize}

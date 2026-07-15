@@ -341,6 +341,12 @@ vi.mock("@/hooks/providers/use-refresh-providers", () => ({
   useRefreshProviders: () => providerMocks.refreshProviders,
 }));
 
+vi.mock("@/hooks/runner/use-open-external-link-mutation", () => ({
+  useRunnerOpenExternalLink: () => ({
+    mutate: providerMocks.openExternalLink,
+  }),
+}));
+
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({
     openExternalLink: providerMocks.openExternalLink,
@@ -754,6 +760,7 @@ describe("<ProvidersSettingsPanel />", () => {
     });
     providerMocks.touchLoginMutate.mockReset();
     providerMocks.touchLoginReset.mockClear();
+    providerMocks.openExternalLink.mockClear();
     providerMocks.renameProfileMutate.mockReset();
     providerMocks.recolorProfileMutate.mockReset();
     providerMocks.removeProfileMutate.mockReset();
@@ -1870,6 +1877,10 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(
       screen.getByRole("button", { name: "Open browser again" }),
     ).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: "Open browser again" }));
+    expect(providerMocks.openExternalLink).toHaveBeenCalledWith(
+      "https://login.example.test",
+    );
 
     fireEvent.paste(input, {
       clipboardData: { getData: () => "abc123#xyz789" },

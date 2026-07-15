@@ -43,12 +43,13 @@ import { useProvidersAwaitLogin } from "@/hooks/providers/use-providers-await-lo
 import { useProvidersSubmitLoginCode } from "@/hooks/providers/use-providers-submit-login-code-mutation";
 import { useProvidersTouchLogin } from "@/hooks/providers/use-providers-touch-login-mutation";
 import { useTabRefreshProviders } from "@/hooks/providers/use-tab-refresh-providers";
+import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { HostRuntimeContext, useHostBinding } from "@/lib/host/runtime";
-import { useRunnerHost } from "@/providers/use-runner-host";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
+import { handleSignInLinkCopyError } from "@/components/settings/panels/provider-sign-in-link";
 
 function noop(): void {}
 
@@ -481,11 +482,11 @@ function OAuthWaitingRow({
   readonly cancelDisabled: boolean;
   readonly onCancel: () => void;
 }) {
-  const runnerHost = useRunnerHost();
+  const openExternalLink = useRunnerOpenExternalLink();
   const { copied, copy } = useClipboardCopy({
     resetMs: 1600,
     onSuccess: null,
-    onError: null,
+    onError: handleSignInLinkCopyError,
   });
   const processingCode = codePaste.phase !== "idle";
   const { title, guidance } = waitingStepCopy({
@@ -514,7 +515,7 @@ function OAuthWaitingRow({
           <Button
             size="sm"
             variant="secondary"
-            onClick={() => void runnerHost.openExternalLink(loginUrl)}
+            onClick={() => openExternalLink.mutate(loginUrl)}
           >
             <ExternalLink className="size-3.5" />
             Open browser again

@@ -74,6 +74,7 @@ const mocks = vi.hoisted(() => ({
   setApiKeyMutate: vi.fn(),
   refreshProviders: vi.fn(() => Promise.resolve()),
   openExternalLink: vi.fn(),
+  reportableErrorToast: vi.fn(),
   openSettings: vi.fn(),
   hostKind: "local",
 }));
@@ -148,8 +149,14 @@ vi.mock("@/hooks/providers/use-providers-set-api-key-mutation", () => ({
 vi.mock("@/hooks/providers/use-tab-refresh-providers", () => ({
   useTabRefreshProviders: () => mocks.refreshProviders,
 }));
+vi.mock("@/hooks/runner/use-open-external-link-mutation", () => ({
+  useRunnerOpenExternalLink: () => ({ mutate: mocks.openExternalLink }),
+}));
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({ openExternalLink: mocks.openExternalLink }),
+}));
+vi.mock("@/lib/reportable-error-toast", () => ({
+  reportableErrorToast: mocks.reportableErrorToast,
 }));
 
 import { ProviderReauthBanner } from "../provider-reauth-banner";
@@ -336,6 +343,8 @@ describe("<ProviderReauthBanner />", () => {
     mocks.setEnvOverrideMutate.mockClear();
     mocks.setApiKeyMutate.mockClear();
     mocks.refreshProviders.mockClear();
+    mocks.openExternalLink.mockClear();
+    mocks.reportableErrorToast.mockClear();
     mocks.hostKind = "local";
   });
 
@@ -492,6 +501,11 @@ describe("<ProviderReauthBanner />", () => {
     fireEvent.click(screen.getByRole("button", { name: /Authenticate/ }));
     expect(screen.getByText(/Approve sign-in in your browser/)).toBeDefined();
 
+    fireEvent.click(screen.getByRole("button", { name: "Open browser again" }));
+    expect(mocks.openExternalLink).toHaveBeenCalledWith(
+      "http://localhost:56988/callback",
+    );
+
     const input = screen.getByLabelText("Paste the code");
     fireEvent.paste(input, {
       clipboardData: { getData: () => "abc123#xyz789" },
@@ -522,6 +536,121 @@ describe("<ProviderReauthBanner />", () => {
       providerId: "claude-code",
       profileId: null,
     });
+  });
+
+  it("keeps an untouched browser-approval leg alive beyond three minutes and stops after settlement", async () => {
+    vi.useFakeTimers();
+    try {
+      mockStartLoginAlwaysSucceeds();
+      render(
+        <ProviderReauthBanner
+          providerId="claude-code"
+          state={claudeState(CODE_PASTE_CLAUDE_CAP)}
+          reason="provider_unauthenticated"
+          profileLabel={null}
+          onContinueOnAmbient={null}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: /Authenticate/ }));
+      await act(() => vi.advanceTimersByTimeAsync(181_000));
+
+      expect(mocks.touchLoginMutate).toHaveBeenCalledTimes(3);
+      expect(mocks.touchLoginMutate).toHaveBeenLastCalledWith({
+        providerId: "claude-code",
+        profileId: null,
+      });
+
+      const [, awaitOptions] = latestAwaitLoginCall();
+      act(() => {
+        awaitOptions.onSuccess({
+          codeRejected: false,
+          state: { auth: { status: "authenticated" } },
+        });
+      });
+      await act(() => vi.advanceTimersByTimeAsync(120_000));
+      expect(mocks.touchLoginMutate).toHaveBeenCalledTimes(3);
+    } finally {
+      cleanup();
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops the waiting-state keepalive after cancellation", async () => {
+    vi.useFakeTimers();
+    try {
+      mockStartLoginAlwaysSucceeds();
+      render(
+        <ProviderReauthBanner
+          providerId="claude-code"
+          state={claudeState(CODE_PASTE_CLAUDE_CAP)}
+          reason="provider_unauthenticated"
+          profileLabel={null}
+          onContinueOnAmbient={null}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: /Authenticate/ }));
+      await act(() => vi.advanceTimersByTimeAsync(61_000));
+      expect(mocks.touchLoginMutate).toHaveBeenCalledTimes(1);
+
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      await act(() => vi.advanceTimersByTimeAsync(120_000));
+      expect(mocks.touchLoginMutate).toHaveBeenCalledTimes(1);
+    } finally {
+      cleanup();
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports a clipboard failure from the banner copy action", async () => {
+    const clipboardDescriptor = Object.getOwnPropertyDescriptor(
+      navigator,
+      "clipboard",
+    );
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: vi.fn(() => Promise.reject(new Error("denied"))) },
+    });
+
+    try {
+      mockStartLoginAlwaysSucceeds();
+      render(
+        <ProviderReauthBanner
+          providerId="claude-code"
+          state={claudeState(CODE_PASTE_CLAUDE_CAP)}
+          reason="provider_unauthenticated"
+          profileLabel={null}
+          onContinueOnAmbient={null}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: /Authenticate/ }));
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", { name: "Copy sign-in link" }),
+        );
+        await Promise.resolve();
+      });
+
+      expect(mocks.reportableErrorToast).toHaveBeenCalledWith(
+        "Couldn't copy the sign-in link.",
+        undefined,
+        {
+          title: "Could not copy sign-in link",
+          message: null,
+          code: null,
+          source: "Provider sign-in",
+        },
+      );
+    } finally {
+      cleanup();
+      if (clipboardDescriptor === undefined) {
+        Reflect.deleteProperty(navigator, "clipboard");
+      } else {
+        Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+      }
+    }
   });
 
   it("allows the fresh child's first keepalive immediately after an auto-restart", () => {

@@ -87,6 +87,7 @@ const CODE_PASTE_RESTART_LIMIT_MESSAGES: Record<CodePasteRestartCause, string> =
  *  rolling kill timer while still bounding call frequency during sustained
  *  typing (code-paste decision log's "Timeouts" row). */
 const CODE_PASTE_TOUCH_THROTTLE_MS = 45_000;
+const CODE_PASTE_KEEPALIVE_INTERVAL_MS = 60_000;
 
 /**
  * The paste field's real-world phases, derived from the mutation lifecycle:
@@ -658,13 +659,31 @@ export function useProviderProfileLoginFlow(
     [providerId, settleAttempt, state, submitLoginCode],
   );
 
+  const touchLoginMutate = touchLogin.mutate;
   const touch = useCallback((): void => {
     if (state.kind !== "waiting") return;
     const now = Date.now();
     if (now - lastTouchAtRef.current < CODE_PASTE_TOUCH_THROTTLE_MS) return;
     lastTouchAtRef.current = now;
-    touchLogin.mutate({ providerId, profileId: state.profileId });
-  }, [providerId, state, touchLogin]);
+    touchLoginMutate({ providerId, profileId: state.profileId });
+  }, [providerId, state, touchLoginMutate]);
+
+  const codePasteEnabled =
+    loginCapability !== null && loginCapability.codePaste !== null;
+
+  // Keep the provider child alive throughout the browser-approval leg. Users
+  // may spend several minutes in account pickers or 2FA before interacting
+  // with the fallback field; field-only touches would let the host's rolling
+  // deadline expire first. The host's hard cap still bounds an abandoned but
+  // open flow, while leaving `waiting` synchronously clears this interval.
+  useEffect(() => {
+    if (state.kind !== "waiting" || !codePasteEnabled) return;
+    const intervalId = window.setInterval(
+      touch,
+      CODE_PASTE_KEEPALIVE_INTERVAL_MS,
+    );
+    return () => window.clearInterval(intervalId);
+  }, [codePasteEnabled, state.kind, touch]);
 
   // Render-facing status comes directly from the submit mutation. A successful
   // relay remains in the checking phase while this top-level flow is still in
@@ -685,7 +704,7 @@ export function useProviderProfileLoginFlow(
     cancelPending: cancelLogin.isPending,
     commitPending,
     codePaste: {
-      enabled: loginCapability !== null && loginCapability.codePaste !== null,
+      enabled: codePasteEnabled,
       attemptId,
       restartNotice,
       phase: codePastePhase,
