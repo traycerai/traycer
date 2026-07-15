@@ -796,9 +796,10 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
       window.clearTimeout(initialSyncTimer);
       cancelShow();
       cancelHide();
+      setLiveTarget(null);
       onOpenChange(false);
     };
-  }, [cancelHide, cancelShow, editor, onOpenChange]);
+  }, [cancelHide, cancelShow, editor, onOpenChange, setLiveTarget]);
 
   useLayoutEffect(() => {
     const card = cardRef.current;

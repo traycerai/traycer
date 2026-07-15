@@ -5,6 +5,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { Editor, type Content } from "@tiptap/core";
 import Collaboration from "@tiptap/extension-collaboration";
@@ -186,19 +187,48 @@ afterEach(() => {
 });
 
 describe("ArtifactLinkPopover", () => {
-  it("survives opening while the mounted BubbleMenu is suppressed under Yjs wiring", async () => {
+  it("hides the visible mounted BubbleMenu while the link card owns the selection", async () => {
     const { first } = makeCollaborativeEditors(
       "[Example](https://example.com)",
     );
-    first.commands.setTextSelection(2);
     const before = first.getHTML();
     render(<ToolbarPopoverHarness editor={first} />);
+    act(() => {
+      first.view.focus();
+      first.commands.setTextSelection({ from: 1, to: 8 });
+    });
+    const toolbar = await screen.findByRole("toolbar", {
+      name: "Editor formatting",
+      hidden: true,
+    });
+    const toolbarWrapper = toolbar.parentElement;
+    if (toolbarWrapper === null) throw new Error("Expected toolbar wrapper");
+    // JSDOM gives the selected text a zero rect, so Floating UI's hide
+    // middleware marks the otherwise-live wrapper hidden. Restore the browser
+    // state this regression exercises: a positioned, currently visible menu.
+    toolbarWrapper.style.visibility = "visible";
+    const linkButton = within(toolbar).getByRole("button", {
+      name: /^Link \((?:⌘K|Ctrl\+K)\)$/,
+    });
+
+    fireEvent.mouseDown(linkButton);
+    fireEvent.click(linkButton);
 
     await screen.findByRole("dialog", { name: "Edit link" });
-    await new Promise((resolve) => window.setTimeout(resolve, 20));
-
-    expect(screen.getByRole("dialog", { name: "Edit link" })).not.toBeNull();
+    await waitFor(() => expect(toolbar.isConnected).toBe(false));
     expect(first.getHTML()).toBe(before);
+
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Link URL" }), {
+      key: "Escape",
+    });
+    await waitFor(() =>
+      expect(
+        screen.getByRole("toolbar", {
+          name: "Editor formatting",
+          hidden: true,
+        }),
+      ).not.toBeNull(),
+    );
   });
 
   it("opens at a collapsed caret and prefills both fields", async () => {
@@ -888,6 +918,33 @@ describe("ArtifactLinkPopover", () => {
     window.removeEventListener("unhandledrejection", handleRejection);
 
     expect(rejections).toEqual([]);
+  });
+
+  it("clears an open target when the editor instance changes", async () => {
+    const first = makeEditor(LINK_CONTENT);
+    const second = makeEditor("<p>Replacement editor</p>");
+    first.commands.setTextSelection(2);
+    const { openLink, onOpenChange, rerender } = renderPopover(first, true);
+    await screen.findByRole("dialog", { name: "Edit link" });
+
+    rerender(
+      <>
+        <EditorContent editor={second} />
+        <ArtifactLinkPopover
+          editor={second}
+          editable
+          scrollContainer={null}
+          openLink={openLink}
+          openLinkPending={false}
+          onOpenChange={onOpenChange}
+        />
+      </>,
+    );
+
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Edit link" })).toBeNull(),
+    );
+    expect(onOpenChange).toHaveBeenLastCalledWith(false);
   });
 
   it("captures the full modifier and middle-click sequences before ProseMirror/native routing", () => {
