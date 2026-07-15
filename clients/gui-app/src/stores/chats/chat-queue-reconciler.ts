@@ -175,35 +175,53 @@ export function reconcileSnapshotChange(
   );
 }
 
+export interface StalePendingActionsSweep {
+  readonly pendingActions: Readonly<Record<string, PendingChatAction>>;
+  readonly sweptActionIds: ReadonlySet<string>;
+}
+
+const NO_SWEPT_ACTION_IDS: ReadonlySet<string> = new Set();
+
 /**
- * Drop non-message pending actions dispatched on an earlier connection than
- * the snapshot's. Their `actionAck` died with the dropped stream (frames and
- * acks are fire-and-forget per connection), so keeping them would leave their
- * controls (Stop, restore/revert, plan approval, queue edits) disabled
- * forever. The arriving snapshot is the authority on what actually happened;
- * dropping the pending re-enables the control so the user can re-issue
- * against that state. Message sends/edits are excluded - `
- * reconcileSnapshotChange` settles those by messageId, with composer
- * restoration for unconfirmed sends.
+ * Drop pending actions dispatched on an earlier connection than the
+ * snapshot's. Their `actionAck` died with the dropped stream (frames and
+ * acks are fire-and-forget per connection), so keeping them would leave
+ * their controls (Stop, restore/revert, message edit, plan approval, queue
+ * edits) disabled forever. The arriving snapshot is the authority on what
+ * actually happened; dropping the pending re-enables the control so the user
+ * can re-issue against that state. Only `send` is excluded -
+ * `reconcileSnapshotChange` settles sends by messageId, restoring an
+ * unconfirmed send's content to the composer, a path no other kind has
+ * (a stale APPLIED `editUserMessage` shows in the snapshot's messages
+ * either way; only its accepted-action bookkeeping entry is skipped).
  *
  * Pure function; only ever driven by an authoritative snapshot, never by a
  * connection-status event (a transient wobble must not cancel anything).
+ * Returns the swept ids so the caller can settle sibling records keyed by
+ * the same `clientActionId` (background stops) without re-deriving them.
  */
-export function sweepStaleNonMessagePendingActions(
+export function sweepStalePendingActions(
   pendingActions: Readonly<Record<string, PendingChatAction>>,
   connectionEpoch: number,
-): Readonly<Record<string, PendingChatAction>> {
+): StalePendingActionsSweep {
   const stale = Object.values(pendingActions).filter(
     (pending) =>
-      pending.action !== "send" &&
-      pending.action !== "editUserMessage" &&
-      pending.connectionEpoch < connectionEpoch,
+      pending.action !== "send" && pending.connectionEpoch < connectionEpoch,
   );
-  if (stale.length === 0) return pendingActions;
-  return stale.reduce(
-    (next, pending) => withoutPendingAction(next, pending.clientActionId),
-    pendingActions,
+  if (stale.length === 0) {
+    return { pendingActions, sweptActionIds: NO_SWEPT_ACTION_IDS };
+  }
+  const sweptActionIds = new Set(
+    stale.map((pending) => pending.clientActionId),
   );
+  return {
+    pendingActions: Object.fromEntries(
+      Object.entries(pendingActions).filter(
+        ([clientActionId]) => !sweptActionIds.has(clientActionId),
+      ),
+    ),
+    sweptActionIds,
+  };
 }
 
 /**

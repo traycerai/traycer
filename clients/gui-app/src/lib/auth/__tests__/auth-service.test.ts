@@ -1486,10 +1486,15 @@ describe("AuthService", () => {
       // The finalization validated the token and is now awaiting the save.
       await saveStarted;
 
-      await service.signOut();
+      // Sign out while the save is in flight. Its generation bump lands
+      // synchronously; the storage clear is SERIALIZED behind the hanging
+      // save (last-dispatched op owns the final on-disk state), so the
+      // sign-out settles only after the save is released.
+      const signOutSettled = service.signOut();
+      releaseSave();
+      await signOutSettled;
       expect(useAuthStore.getState().status).toBe("signed-out");
 
-      releaseSave();
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
 
       // The stale finalization must not resurrect the signed-in projection.
@@ -1581,6 +1586,58 @@ describe("AuthService", () => {
       host.tokenStore.set = originalSet;
       await deviceSignIn(service, host, "retry-after-save-failure");
       expect(useAuthStore.getState().status).toBe("signed-in");
+    });
+
+    it("a sign-out during a proactive token refresh is not resurrected by the refresh tail", async () => {
+      const { service, host } = makeService();
+      // 5m of life left → inside the proactive lead window, so an OS resume
+      // drives an immediate force-refresh against `/api/v3/auth/refresh`.
+      const nearExpiry = jwtExpiringInMs(5 * 60_000);
+      await host.tokenStore.set({
+        token: nearExpiry,
+        refreshToken: `${nearExpiry}-refresh`,
+      });
+      restoreFetch();
+      const deferredRefresh = createDeferredResponse();
+      let signalRefreshStarted: () => void = () => undefined;
+      const refreshStarted = new Promise<void>((resolve) => {
+        signalRefreshStarted = resolve;
+      });
+      restoreFetch = installFetch((input) => {
+        const url = typeof input === "string" ? input : String(input);
+        if (url === REFRESH_URL) {
+          signalRefreshStarted();
+          return deferredRefresh.promise;
+        }
+        return okWithProfile();
+      });
+      await service.start();
+      expect(useAuthStore.getState().status).toBe("signed-in");
+
+      // The wake-driven proactive refresh dispatches and hangs on /refresh.
+      host.emitSystemResumed();
+      await refreshStarted;
+
+      await service.signOut();
+      expect(useAuthStore.getState().status).toBe("signed-out");
+
+      // The refresh now resolves successfully - its tail must not resurrect
+      // the session in memory or on disk.
+      const rotated = jwtExpiringInMs(4 * 60 * 60_000);
+      deferredRefresh.resolve(
+        new Response(
+          JSON.stringify({
+            token: rotated,
+            refreshToken: `${rotated}-refresh`,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+      expect(useAuthStore.getState().status).toBe("signed-out");
+      expect(service.getCurrentSessionSnapshot().token).toBeNull();
+      expect(await host.tokenStore.get()).toBeNull();
     });
 
     it("start()'s rehydration defers to an interactive sign-in that began mid-validation", async () => {

@@ -5,7 +5,7 @@ import type { ChatQueueState } from "@traycer/protocol/host/agent/gui/subscribe"
 import {
   reconcileQueueChange,
   reconcileSnapshotChange,
-  sweepStaleNonMessagePendingActions,
+  sweepStalePendingActions,
   type ReconcileQueueInput,
   type ReconcileSnapshotInput,
 } from "@/stores/chats/chat-queue-reconciler";
@@ -535,8 +535,8 @@ describe("chat-queue-reconciler", () => {
     });
   });
 
-  describe("sweepStaleNonMessagePendingActions", () => {
-    it("drops only non-message pendings from an older connection epoch", () => {
+  describe("sweepStalePendingActions", () => {
+    it("drops stale pendings from an older connection epoch, keeping sends", () => {
       const staleStop: PendingChatAction = {
         ...createPendingAction("action-stop", null, "stop"),
         connectionEpoch: 0,
@@ -551,28 +551,41 @@ describe("chat-queue-reconciler", () => {
         ...createPendingAction("action-send", "msg-1", "send"),
         connectionEpoch: 0,
       };
-      const result = sweepStaleNonMessagePendingActions(
+      // A stale EDIT has no restoration path (restoreContent is null and its
+      // fresh messageId never appears in the snapshot when the frame died
+      // with the connection), so it IS swept - otherwise it wedges the edit
+      // affordances forever.
+      const staleEdit: PendingChatAction = {
+        ...createPendingAction("action-edit", "msg-2", "editUserMessage"),
+        connectionEpoch: 0,
+      };
+      const result = sweepStalePendingActions(
         {
           "action-stop": staleStop,
           "action-stop-live": currentStop,
           "action-send": staleSend,
+          "action-edit": staleEdit,
         },
         1,
       );
 
-      expect(Object.keys(result).sort()).toEqual([
+      expect(Object.keys(result.pendingActions).sort()).toEqual([
         "action-send",
         "action-stop-live",
       ]);
+      expect([...result.sweptActionIds].sort()).toEqual([
+        "action-edit",
+        "action-stop",
+      ]);
     });
 
-    it("returns the same reference when nothing is stale", () => {
+    it("returns the same reference and an empty swept set when nothing is stale", () => {
       const pendingActions = {
         "action-1": createPendingAction("action-1", null, "stop"),
       };
-      expect(sweepStaleNonMessagePendingActions(pendingActions, 0)).toBe(
-        pendingActions,
-      );
+      const result = sweepStalePendingActions(pendingActions, 0);
+      expect(result.pendingActions).toBe(pendingActions);
+      expect(result.sweptActionIds.size).toBe(0);
     });
   });
 });

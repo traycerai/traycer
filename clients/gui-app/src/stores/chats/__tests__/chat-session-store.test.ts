@@ -3777,6 +3777,32 @@ describe("non-message pendings across a missed-ack reconnect", () => {
     expect(pendingActionKinds(harness)).toEqual(["stop"]);
   });
 
+  it("clears a stale editUserMessage pending whose ack was lost across a reconnect", () => {
+    const harness = createHarness();
+    emitSnapshot(harness.callbacks(), "owner");
+    const store = harness.handle.store;
+
+    // An edit's fresh messageId only appears in the snapshot if the host
+    // applied it, and it has no composer-restoration path - so a lost frame
+    // would previously wedge the edit affordances forever.
+    expect(
+      store.getState().editUserMessage({
+        targetMessageId: "msg-1",
+        content: { type: "doc", content: [] },
+        sender: { type: "user", userId: OWNER_ID },
+        settings: SETTINGS,
+        revertFileChanges: false,
+        revertArtifacts: false,
+      }),
+    ).not.toBeNull();
+    expect(pendingActionKinds(harness)).toEqual(["editUserMessage"]);
+
+    harness.callbacks().onConnectionStatus("reconnecting", null);
+    // The reconnect snapshot does not contain the edit (never applied).
+    emitSnapshot(harness.callbacks(), "owner");
+    expect(store.getState().pendingActions).toEqual({});
+  });
+
   it("keeps a pending dispatched on the CURRENT connection when its own snapshot arrives", () => {
     const harness = createHarness();
     emitSnapshot(harness.callbacks(), "owner");

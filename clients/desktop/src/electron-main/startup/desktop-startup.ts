@@ -781,9 +781,9 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
 
   const flushShellState = async (): Promise<void> => {
     await Promise.all([
-      services.desktopStateStore.flush().catch((err) => {
-        log.warn("[desktop] desktop-state flush failed", err);
-      }),
+      // No .catch: the store's write chain never rejects (persist failures
+      // are retried once, then surrendered with an error log inside it).
+      services.desktopStateStore.flush(),
       services.windowGeometryPersistence.flushLatest().catch((err) => {
         log.warn("[desktop] window-geometry flush failed", err);
       }),
@@ -867,7 +867,14 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
             QUIT_FRESH_UNSYNCED_SNAPSHOT_TIMEOUT_MS,
           ),
         authorizeQuitAfterFlush,
-        stayOpen: () => services.quitState.resetQuitting(),
+        stayOpen: () => {
+          // Re-arm the first-pass sequence: leaving the flag set would make
+          // the NEXT Restart-to-install take the second-pass shortcut above,
+          // skipping the host reconcile, the renderer drain, AND the shell
+          // flush for that quit.
+          quitTimeHostUpdateStarted = false;
+          services.quitState.resetQuitting();
+        },
       });
       return;
     }

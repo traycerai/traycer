@@ -3,7 +3,7 @@ import {
   pruneAcceptedActions,
   reconcileQueueChange,
   reconcileSnapshotChange,
-  sweepStaleNonMessagePendingActions,
+  sweepStalePendingActions,
   withoutPendingAction,
 } from "@/stores/chats/chat-queue-reconciler";
 import {
@@ -225,8 +225,9 @@ export type ChatRestoreSlot =
        * frame-driven with no snapshot representation, so an in-flight slot
        * whose `restoreCompleted` was lost to a drop would spin forever; the
        * first authoritative snapshot of a NEWER connection clears such a
-       * stale slot instead (a still-running restore re-announces itself via
-       * the live progress/completed frames of the new subscription).
+       * stale slot instead. Trade-off: progress frames refine only an
+       * existing slot, so a restore genuinely still running re-surfaces only
+       * at its `restoreCompleted` (progress shown until then is lost).
        */
       readonly connectionEpoch: number;
     }
@@ -763,22 +764,17 @@ export function createChatSessionStore(
           );
           const now = Date.now();
           // This snapshot is the authority for everything a lost connection
-          // left in limbo: non-message pendings dispatched on an earlier
-          // connection will never see their ack, so drop them here (controls
-          // re-enable; the user can re-issue against the state the snapshot
-          // shows). Message sends/edits stay - `reconcileSnapshotChange`
-          // settles those by messageId with composer restoration.
-          const sweptPendingActions = sweepStaleNonMessagePendingActions(
+          // left in limbo: pendings dispatched on an earlier connection will
+          // never see their ack, so drop them here (controls re-enable; the
+          // user can re-issue against the state the snapshot shows). Message
+          // sends stay - `reconcileSnapshotChange` settles those by messageId
+          // with composer restoration.
+          const sweep = sweepStalePendingActions(
             state.pendingActions,
             connectionEpoch,
           );
-          const sweptActionIds = new Set(
-            Object.keys(state.pendingActions).filter(
-              (clientActionId) => !(clientActionId in sweptPendingActions),
-            ),
-          );
           const pending = reconcileSnapshotChange({
-            pendingActions: sweptPendingActions,
+            pendingActions: sweep.pendingActions,
             pendingUserMessages: state.pendingUserMessages,
             messages,
             queue: frame.snapshot.queue,
@@ -829,13 +825,15 @@ export function createChatSessionStore(
             pendingBackgroundStops: reconcileBackgroundStops(
               withoutBackgroundStopsForActions(
                 state.pendingBackgroundStops,
-                sweptActionIds,
+                sweep.sweptActionIds,
               ),
               frame.snapshot.backgroundItems,
             ),
             pendingBackgroundStopAll:
               state.pendingBackgroundStopAll !== null &&
-              sweptActionIds.has(state.pendingBackgroundStopAll.clientActionId)
+              sweep.sweptActionIds.has(
+                state.pendingBackgroundStopAll.clientActionId,
+              )
                 ? null
                 : reconcileBackgroundStopAll(
                     state.pendingBackgroundStopAll,
@@ -2217,8 +2215,10 @@ function withoutBackgroundStopsForActions(
  * in-flight/progressing slot stamped on an older connection than the
  * authoritative snapshot would otherwise show "restoring" forever, because
  * its `restoreCompleted` died with the dropped stream. A restore that is
- * genuinely still running keeps announcing itself through the new
- * subscription's progress/completed frames, which re-populate the slot.
+ * genuinely still running re-surfaces at its `restoreCompleted` (which sets
+ * the slot unconditionally); progress frames only refine an existing slot,
+ * so intermediate progress after the clear is not re-shown - an accepted
+ * trade-off against the forever-spinner.
  */
 function sweepStaleRestoreSlot(
   slot: ChatRestoreSlot | null,

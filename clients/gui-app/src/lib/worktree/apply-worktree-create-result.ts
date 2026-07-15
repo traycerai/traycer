@@ -26,10 +26,13 @@ export interface WorktreeCreateResultActions {
  * policy is unit-testable without mounting the selector.
  *
  * Policy on a partial failure: successes are committed and unstaged, failed
- * entries KEEP their staged intent, the selector stays open (no resume), and
- * a bounded error names the first failed folder - "Update" then re-applies
- * only the failed subset. An entry the host reported nothing about is treated
- * as failed, never as silently succeeded.
+ * entries KEEP their staged intent, the selector stays open (no
+ * `finishAndResume`), and a bounded error names the first failed folder -
+ * "Update" then re-applies only the failed subset. `commitPaths` still fires
+ * for the successes: the host already applied them to the binding, and the
+ * surface must react to that (a live terminal re-syncs its PTY to the
+ * partially updated binding). An entry the host reported nothing about is
+ * treated as failed, never as silently succeeded.
  */
 export function applyWorktreeCreateResult(args: {
   readonly stagedEntries: readonly WorktreeIntentEntry[];

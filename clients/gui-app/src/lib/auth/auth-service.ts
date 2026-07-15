@@ -490,6 +490,17 @@ export class AuthService {
   }
 
   /**
+   * True while `generation` is still the live identity transition (and the
+   * service is not disposed). Async credential tails capture the generation
+   * before their first await and re-check through this after each one, so a
+   * newer `signIn()` / `signOut()` / `dispose()` always wins over an
+   * already-started save/rotate/provision.
+   */
+  private isIdentityCurrent(generation: number): boolean {
+    return !this.disposed && generation === this.identityGeneration;
+  }
+
+  /**
    * Primary (and only) interactive sign-in: the OAuth 2.0 Device Authorization
    * Grant (RFC 8628). `beginAttempt` first supersedes any in-flight attempt (a
    * stalled retry the user is abandoning) - aborting it and cancelling its
@@ -786,6 +797,10 @@ export class AuthService {
     if (this.isDisposed()) {
       return null;
     }
+    // Same fence as the sign-in finalization: a signOut()/newer signIn()
+    // landing during any await below owns the state - this revalidation must
+    // not re-persist or re-project the identity it started with.
+    const generation = this.identityGeneration;
     const ctx = this.contextProvider.current();
     if (ctx === null || this.currentBearer === null) {
       return null;
@@ -799,7 +814,7 @@ export class AuthService {
       currentToken,
       fallbackRefreshToken,
     );
-    if (this.isDisposed()) {
+    if (!this.isIdentityCurrent(generation)) {
       return null;
     }
 
@@ -812,70 +827,18 @@ export class AuthService {
         // The bearer revalidates to a different user - treat as a fresh
         // sign-in so the cross-user path aborts the old context cleanly.
         await this.tokenStore.save(accepted);
-        if (this.isDisposed()) {
+        if (!this.isIdentityCurrent(generation)) {
           return null;
         }
         this.applySignedIn(accepted.token, outcome.user, undefined);
         return outcome;
       }
       if (accepted.token !== currentToken) {
-        // Same shared persist-then-rotate step the CLI uses: write the rotated
-        // bearer, then rotate the live credential lease in place (observably
-        // silent on the provider, so host-runtime / cache state survives).
-        //
-        // The `rotate` callback re-checks `isDisposed()` because `persist` is an
-        // async IPC save: a sign-out / unmount can dispose the provider while it
-        // is in flight, and `contextProvider.rotateCurrentBearer` throws on a
-        // disposed provider. Skipping the rotate (and the post-check returning
-        // null) preserves the pre-refactor "graceful no-op on teardown" behavior
-        // without leaking disposal awareness into the shared helper.
-        await rotateAndPersistBearer({
-          newTokens: accepted,
-          persist: (tokens) => this.tokenStore.save(tokens),
-          rotate: (token) => {
-            if (this.isDisposed()) {
-              return;
-            }
-            this.contextProvider.rotateCurrentBearer({
-              userId: currentUserId,
-              bearerToken: token,
-            });
-          },
-        });
-        if (this.isDisposed()) {
-          return null;
-        }
-        this.currentBearer = accepted.token;
-        const profile =
-          this.currentProfile ?? this.profileFromUser(outcome.user);
-        const contextMetadata =
-          useAuthStore.getState().contextMetadata ??
-          this.contextMetadataFromUser(outcome.user);
-        useAuthStore
-          .getState()
-          .setSignedIn(
-            profile,
-            contextMetadata,
-            projectShareableTeams(outcome.user),
-          );
-        useAuthStore
-          .getState()
-          .setSubscriptionStatus(
-            outcome.user.userSubscription.subscriptionStatus,
-          );
-        this.currentProfile = profile;
-        this.emitSessionSnapshot();
-        this.refreshScheduler.start();
-        // Re-provision the FULL pair to the machine-local CLI/host credentials.
-        // The snapshot emit above drives `CliCredentialSeeder`, which re-seeds
-        // the bearer ONLY (empty refresh token), so the file would keep the
-        // now-spent refresh token beside the fresh bearer and later host/CLI
-        // refreshes would fail. Mirrors the proactive path's full-pair
-        // re-provision; best-effort and a no-op on shells without a local CLI.
-        await this.ensureLocalProvisioning(
-          accepted.token,
-          accepted.refreshToken,
-          () => this.isDisposed() || this.currentBearer !== accepted.token,
+        await this.applyRevalidatedBearerRotation(
+          accepted,
+          outcome.user,
+          currentUserId,
+          generation,
         );
       }
       return outcome;
@@ -883,6 +846,9 @@ export class AuthService {
     if (outcome.kind === "rejected") {
       appLogger.warn("[auth] current session rejected during revalidation", {});
       await this.clearStoredAuth();
+      if (!this.isIdentityCurrent(generation)) {
+        return outcome;
+      }
       this.setLastError(AUTH_ERROR_SESSION_EXPIRED);
       this.applySignedOut();
     }
@@ -893,6 +859,67 @@ export class AuthService {
       );
     }
     return outcome;
+  }
+
+  /**
+   * Same-user revalidation returned a rotated bearer: run the shared
+   * persist-then-rotate step the CLI uses (write the rotated bearer, then
+   * rotate the live credential lease in place - observably silent on the
+   * provider, so host-runtime / cache state survives), re-project the
+   * signed-in store state, and re-provision the FULL pair to the
+   * machine-local CLI/host credentials (the snapshot emit drives
+   * `CliCredentialSeeder`, which re-seeds the bearer ONLY, so the file would
+   * otherwise keep the now-spent refresh token beside the fresh bearer).
+   *
+   * The `rotate` callback re-checks the identity generation because
+   * `persist` is an async IPC save: a sign-out / newer sign-in / dispose can
+   * land while it is in flight, and `contextProvider.rotateCurrentBearer`
+   * throws on a disposed provider. Skipping the rotate (and each post-await
+   * check returning early) keeps the "graceful no-op on teardown" behavior
+   * without leaking supersession awareness into the shared helper.
+   */
+  private async applyRevalidatedBearerRotation(
+    accepted: StoredAuthTokens,
+    user: AuthenticatedUser,
+    currentUserId: string,
+    generation: number,
+  ): Promise<void> {
+    await rotateAndPersistBearer({
+      newTokens: accepted,
+      persist: (tokens) => this.tokenStore.save(tokens),
+      rotate: (token) => {
+        if (!this.isIdentityCurrent(generation)) {
+          return;
+        }
+        this.contextProvider.rotateCurrentBearer({
+          userId: currentUserId,
+          bearerToken: token,
+        });
+      },
+    });
+    if (!this.isIdentityCurrent(generation)) {
+      return;
+    }
+    this.currentBearer = accepted.token;
+    const profile = this.currentProfile ?? this.profileFromUser(user);
+    const contextMetadata =
+      useAuthStore.getState().contextMetadata ??
+      this.contextMetadataFromUser(user);
+    useAuthStore
+      .getState()
+      .setSignedIn(profile, contextMetadata, projectShareableTeams(user));
+    useAuthStore
+      .getState()
+      .setSubscriptionStatus(user.userSubscription.subscriptionStatus);
+    this.currentProfile = profile;
+    this.emitSessionSnapshot();
+    this.refreshScheduler.start();
+    // Best-effort and a no-op on shells without a local CLI.
+    await this.ensureLocalProvisioning(
+      accepted.token,
+      accepted.refreshToken,
+      () => this.isDisposed() || this.currentBearer !== accepted.token,
+    );
   }
 
   /**
@@ -927,6 +954,10 @@ export class AuthService {
     if (this.isDisposed()) {
       return;
     }
+    // A sign-out (or newer sign-in) that lands during any await below owns
+    // the state from that point on - this tail must neither re-persist nor
+    // re-project the identity it started with.
+    const generation = this.identityGeneration;
     // Defer to an in-flight reactive revalidation. Both paths draw on the same
     // single-use refresh token, so running concurrently would double-spend it
     // and leave whichever loses holding a dead credential (and, for this path,
@@ -936,7 +967,7 @@ export class AuthService {
     // can't be awaited; the store re-reads below cover that race instead.
     if (this.currentRevalidation !== null) {
       await this.currentRevalidation;
-      if (this.isDisposed()) {
+      if (!this.isIdentityCurrent(generation)) {
         return;
       }
     }
@@ -947,7 +978,7 @@ export class AuthService {
     const userId = ctx.identity.userId;
     const currentToken = this.currentBearer;
     const stored = await this.tokenStore.load();
-    if (this.isDisposed()) {
+    if (!this.isIdentityCurrent(generation)) {
       return;
     }
     const refreshToken = stored?.refreshToken ?? "";
@@ -971,7 +1002,7 @@ export class AuthService {
       currentToken,
       refreshToken,
     );
-    if (this.isDisposed()) {
+    if (!this.isIdentityCurrent(generation)) {
       return;
     }
     if (result.kind === "network-error") {
@@ -979,15 +1010,16 @@ export class AuthService {
       return;
     }
     if (result.kind === "rejected") {
-      await this.signOutIfRefreshCredentialDead(currentToken);
+      await this.signOutIfRefreshCredentialDead(currentToken, generation);
       return;
     }
-    await this.applyProactiveRefresh(
+    await this.applyProactiveRefresh({
       userId,
-      currentToken,
-      result.token,
-      result.refreshToken,
-    );
+      refreshedAgainst: currentToken,
+      newToken: result.token,
+      newRefreshToken: result.refreshToken,
+      generation,
+    });
   }
 
   /**
@@ -1001,9 +1033,10 @@ export class AuthService {
    */
   private async signOutIfRefreshCredentialDead(
     refreshedAgainst: string,
+    generation: number,
   ): Promise<void> {
     const afterReject = await this.tokenStore.load();
-    if (this.isDisposed()) {
+    if (!this.isIdentityCurrent(generation)) {
       return;
     }
     if (
@@ -1027,18 +1060,21 @@ export class AuthService {
    * blind-adopt it (the shared shell slot can hold a different user); the
    * validated projection path reconciles instead.
    */
-  private async applyProactiveRefresh(
-    userId: string,
-    refreshedAgainst: string,
-    newToken: string,
-    newRefreshToken: string,
-  ): Promise<void> {
+  private async applyProactiveRefresh(input: {
+    readonly userId: string;
+    readonly refreshedAgainst: string;
+    readonly newToken: string;
+    readonly newRefreshToken: string;
+    readonly generation: number;
+  }): Promise<void> {
+    const { userId, refreshedAgainst, newToken, newRefreshToken, generation } =
+      input;
     const live = this.contextProvider.current();
     if (live === null || live.identity.userId !== userId) {
       return;
     }
     const latest = await this.tokenStore.load();
-    if (this.isDisposed()) {
+    if (!this.isIdentityCurrent(generation)) {
       return;
     }
     if (
@@ -1053,7 +1089,7 @@ export class AuthService {
       newTokens: { token: newToken, refreshToken: newRefreshToken },
       persist: (tokens) => this.tokenStore.save(tokens),
       rotate: (token) => {
-        if (this.isDisposed()) {
+        if (!this.isIdentityCurrent(generation)) {
           return;
         }
         this.contextProvider.rotateCurrentBearer({
@@ -1062,7 +1098,7 @@ export class AuthService {
         });
       },
     });
-    if (this.isDisposed()) {
+    if (!this.isIdentityCurrent(generation)) {
       return;
     }
     this.currentBearer = newToken;
@@ -1152,14 +1188,11 @@ export class AuthService {
         () => null,
         (error: unknown) => error ?? new Error("token save rejected"),
       );
-      if (this.isDisposed()) {
-        return false;
-      }
-      // Checked before acting on the save outcome: a transition that landed
-      // during the save owns the state now, so neither the signed-in
-      // projection nor the failure projection below may run for this stale
-      // finalization.
-      if (generation !== this.identityGeneration) {
+      // Checked before acting on the save outcome: a transition (or dispose)
+      // that landed during the save owns the state now, so neither the
+      // signed-in projection nor the failure projection below may run for
+      // this stale finalization.
+      if (!this.isIdentityCurrent(generation)) {
         appLogger.debug(
           "[auth] dropped sign-in finalization superseded during token save",
           {},
@@ -1187,12 +1220,9 @@ export class AuthService {
       await this.ensureLocalProvisioning(
         accepted.token,
         accepted.refreshToken,
-        () => this.isDisposed() || generation !== this.identityGeneration,
+        () => !this.isIdentityCurrent(generation),
       );
-      if (this.isDisposed()) {
-        return false;
-      }
-      if (generation !== this.identityGeneration) {
+      if (!this.isIdentityCurrent(generation)) {
         appLogger.debug(
           "[auth] dropped sign-in finalization superseded during provisioning",
           {},

@@ -100,6 +100,7 @@ import {
   locationSelectionChanges,
   workspaceRunBranchLabel,
 } from "./workspace-run-item";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { applyWorktreeCreateResult } from "@/lib/worktree/apply-worktree-create-result";
 import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
 import { useChatById } from "@/lib/epic-selectors";
@@ -1500,9 +1501,12 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       {
         onSuccess: (result) => {
           // The RPC resolves per-entry: on a mixed outcome the failed
-          // folders keep their staged intent (popover stays open, no PTY
-          // resume) so Update can re-apply just the failed subset, while the
-          // succeeded folders commit + unstage normally.
+          // folders keep their staged intent (popover stays open) so Update
+          // can re-apply just the failed subset, while the succeeded folders
+          // commit + unstage normally. The commit signal for the successes
+          // still fires - the host already applied them to the binding, and
+          // a live terminal surface must re-sync its PTY to that partially
+          // updated binding rather than keep running against stale folders.
           applyWorktreeCreateResult({
             stagedEntries,
             changedWorkspacePaths,
@@ -1512,7 +1516,13 @@ function InEpicSurface(props: InEpicSurfaceProps) {
               unstageEntry: (workspacePath) =>
                 unstageWorktreeEntry(stagedKey, workspacePath),
               commitPaths: handleBindingCommitted,
-              showPartialFailure: (message) => toast.error(message),
+              showPartialFailure: (message) =>
+                reportableErrorToast(message, undefined, {
+                  title: "Workspace update incomplete",
+                  message: null,
+                  code: null,
+                  source: "Worktree update",
+                }),
             },
           });
           // Telemetry runs strictly after the product work; it is an
