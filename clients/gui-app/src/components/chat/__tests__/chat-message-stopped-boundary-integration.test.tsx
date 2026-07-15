@@ -184,7 +184,7 @@ function turnStoppedEvent(turnId: string, timestamp: number): ChatEvent {
     actor: null,
     message: "Stop requested by owner.",
     turnId,
-    messageId: null,
+    messageId: "m1",
     queueItemId: null,
     approvalId: null,
     blockId: null,
@@ -199,6 +199,42 @@ const FORK_ACTION: ChatMessageAssistantActions = {
 };
 
 describe("Stopped-turn boundary row: hook -> ChatMessage -> AssistantMessageBody", () => {
+  it('renders "Stopped before responding" from a settled event with no assistant record', () => {
+    const { result } = renderHook(() =>
+      useRenderedMessages(
+        {
+          messages: [userMessage("m1")],
+          events: [turnStoppedEvent("turn-pre-setup", 10_500)],
+          pendingUserMessages: [],
+          liveAssistantMessage: null,
+          activeTurn: null,
+          runStatus: "idle",
+          ...BINDING,
+        },
+        displayContext,
+      ),
+    );
+
+    const assistantRow = result.current.find((row) => row.role === "assistant");
+    if (assistantRow === undefined) {
+      throw new Error("expected an event-only stopped assistant boundary");
+    }
+
+    render(
+      <ChatMessage
+        message={assistantRow}
+        actions={null}
+        backgroundToolBlockIds={new Set()}
+        nextStepActions={null}
+      />,
+    );
+
+    expect(
+      screen.getByTestId("assistant-stopped-before-responding").textContent,
+    ).toBe("Stopped before responding");
+    expect(screen.queryByTestId("assistant-elapsed-footer")).toBeNull();
+  });
+
   it('renders "Stopped · {whole-turn elapsed}" plus unchanged copy/fork controls for a [text, steer] stopped turn that DID produce output', () => {
     const clipboard = installClipboardMock();
     const assistant = {

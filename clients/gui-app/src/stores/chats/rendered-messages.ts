@@ -407,6 +407,7 @@ function queueItemsFromEventMetadata(
 interface TurnStoppedEventInfo {
   readonly stoppedAt: number;
   readonly reason: string | null;
+  readonly messageId: string | null;
 }
 
 /**
@@ -427,6 +428,7 @@ function turnStoppedInfoFromEvents(
     out.set(event.turnId, {
       stoppedAt: event.timestamp,
       reason: event.message,
+      messageId: event.messageId,
     });
   }
   return out;
@@ -850,6 +852,14 @@ export function useRenderedMessages(
     () => userMessagesByIdFromMessages(input.messages),
     [input.messages],
   );
+  const retainedUserMessageIds = useMemo(
+    (): ReadonlySet<string> =>
+      new Set([
+        ...userMessagesById.keys(),
+        ...input.pendingUserMessages.map((message) => message.messageId),
+      ]),
+    [userMessagesById, input.pendingUserMessages],
+  );
 
   const activeTurnSteeredIdsKey = liveMergesIntoPersisted
     ? activeTurnSteeredIdsContentKey(partition.activeTurn, liveAssistant)
@@ -878,6 +888,21 @@ export function useRenderedMessages(
     if (liveTurnKey !== null) keys.add(liveTurnKey);
     return keys;
   }, [input.messages, liveTurnKey]);
+  const stoppedWithoutAssistantRecords = useMemo(
+    () =>
+      renderStoppedTurnsWithoutAssistantRecords(
+        turnStoppedByTurnKey,
+        retainedTurnKeys,
+        activeTurnId,
+        retainedUserMessageIds,
+      ),
+    [
+      turnStoppedByTurnKey,
+      retainedTurnKeys,
+      activeTurnId,
+      retainedUserMessageIds,
+    ],
+  );
 
   const persisted = useMemo(() => {
     return renderPersistedMessages({
@@ -1037,6 +1062,7 @@ export function useRenderedMessages(
       ...activeTurn,
       ...dedupedPending,
       ...live,
+      ...stoppedWithoutAssistantRecords,
       ...forkedChatLinkMessages,
       ...trailing,
     ];
@@ -1110,6 +1136,7 @@ export function useRenderedMessages(
     activeTurn,
     pending,
     live,
+    stoppedWithoutAssistantRecords,
     forkedChatLinkMessages,
     setupCardRows,
     setupCardEntries,
@@ -2244,6 +2271,63 @@ function renderPendingRunIndicator(input: {
       steerBadge: null,
     },
   ];
+}
+
+/**
+ * A Stop can settle during the accepted pre-turn setup window, before either
+ * the snapshot or live stream has materialized an assistant record. The
+ * durable event must still own a transcript boundary; otherwise the pending
+ * "Stopping…" row disappears at idle and leaves the user message unanswered.
+ *
+ * Existing assistant/live records remain the authoritative render path. A
+ * retained triggering-user id anchors the otherwise record-less event and
+ * prevents append-only events from resurrecting turns removed by a branch
+ * edit. The active-turn guard preserves the snapshot-race contract: if the
+ * event arrives while that turn is still active, keep rendering the
+ * live/pending state until the snapshot clears it.
+ */
+function renderStoppedTurnsWithoutAssistantRecords(
+  stoppedByTurnKey: ReadonlyMap<string, TurnStoppedEventInfo>,
+  retainedTurnKeys: ReadonlySet<string>,
+  activeTurnId: string | null,
+  retainedUserMessageIds: ReadonlySet<string>,
+): ReadonlyArray<ChatMessageModel> {
+  return [...stoppedByTurnKey.entries()]
+    .filter(
+      ([turnKey, stopped]) =>
+        turnKey !== activeTurnId &&
+        !retainedTurnKeys.has(turnKey) &&
+        stopped.messageId !== null &&
+        retainedUserMessageIds.has(stopped.messageId),
+    )
+    .map(([turnKey, stopped]) => ({
+      id: assistantRowId(turnKey),
+      role: "assistant",
+      content: "",
+      segments: [],
+      structuredContent: null,
+      attachments: [],
+      settings: null,
+      createdAt: stopped.stoppedAt,
+      completedAt: stopped.stoppedAt,
+      stopped: {
+        stoppedAt: stopped.stoppedAt,
+        reason: stopped.reason,
+        turnHadOutput: false,
+        turnReplyText: "",
+      },
+      pausedDurationMs: 0,
+      pausedSinceMs: null,
+      persistentMessageId: null,
+      senderLabel: null,
+      assistantMeta: null,
+      statusLabel: "Completed",
+      runState: null,
+      agentSenderInfo: null,
+      agentMessage: null,
+      sessionAnchor: null,
+      steerBadge: null,
+    }));
 }
 
 function assistantRowId(turnKey: string): string {

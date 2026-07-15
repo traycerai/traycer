@@ -4850,7 +4850,7 @@ describe("useRenderedMessages turn.stopped", () => {
       actor: null,
       message: input.message,
       turnId: input.turnId,
-      messageId: null,
+      messageId: "m1",
       queueItemId: null,
       approvalId: null,
       blockId: null,
@@ -5154,6 +5154,139 @@ describe("useRenderedMessages turn.stopped", () => {
       reason: "Stop requested by owner.",
       turnHadOutput: false,
       turnReplyText: "",
+    });
+  });
+
+  it("synthesizes a stopped boundary when no assistant record ever materialized", () => {
+    const { result } = renderHook(() =>
+      useRenderedMessages(
+        {
+          messages: [userMessage("m1")],
+          events: [
+            terminalEvent({
+              type: "turn.stopped",
+              timestamp: 11_000,
+              turnId: "turn-pre-setup",
+              message: "Stop requested by owner.",
+              severity: "warning",
+              metadata: { reason: "Stop requested by owner." },
+            }),
+          ],
+          pendingUserMessages: [],
+          liveAssistantMessage: null,
+          activeTurn: null,
+          runStatus: "idle",
+          ...BINDING,
+        },
+        displayContext,
+      ),
+    );
+
+    const row = result.current.find((message) => message.role === "assistant");
+    expect(row).toMatchObject({
+      id: "assistant:turn-pre-setup",
+      segments: [],
+      createdAt: 11_000,
+      completedAt: 11_000,
+      persistentMessageId: null,
+      runState: null,
+      stopped: {
+        stoppedAt: 11_000,
+        reason: "Stop requested by owner.",
+        turnHadOutput: false,
+        turnReplyText: "",
+      },
+    });
+  });
+
+  it("does not resurrect an event-only stopped turn whose user message was removed", () => {
+    const { result } = renderHook(() =>
+      useRenderedMessages(
+        {
+          messages: [],
+          events: [
+            terminalEvent({
+              type: "turn.stopped",
+              timestamp: 11_000,
+              turnId: "turn-removed",
+              message: "Stop requested by owner.",
+              severity: "warning",
+              metadata: { reason: "Stop requested by owner." },
+            }),
+          ],
+          pendingUserMessages: [],
+          liveAssistantMessage: null,
+          activeTurn: null,
+          runStatus: "idle",
+          ...BINDING,
+        },
+        displayContext,
+      ),
+    );
+
+    expect(result.current).toHaveLength(0);
+  });
+
+  it("keeps an event-only stopped boundary behind the active-turn snapshot gate", () => {
+    const activeTurn: ChatActiveTurn = {
+      turnId: "turn-pre-setup",
+      status: "running",
+      harnessId: "claude",
+      model: "claude-sonnet-4-5",
+      agentMode: "regular",
+      profileId: null,
+      userMessageId: "m1",
+      startedAt: 10_000,
+      updatedAt: 11_000,
+      reasoningEffort: null,
+      serviceTier: null,
+    };
+    const baseInput: RenderedMessagesInput = {
+      messages: [userMessage("m1")],
+      events: [
+        terminalEvent({
+          type: "turn.stopped",
+          timestamp: 11_000,
+          turnId: "turn-pre-setup",
+          message: "Stop requested by owner.",
+          severity: "warning",
+          metadata: { reason: "Stop requested by owner." },
+        }),
+      ],
+      pendingUserMessages: [],
+      liveAssistantMessage: null,
+      activeTurn,
+      runStatus: "stopping",
+      ...BINDING,
+    };
+
+    const { result, rerender } = renderHook(
+      ({ value }: { value: RenderedMessagesInput }) =>
+        useRenderedMessages(value, displayContext),
+      { initialProps: { value: baseInput } },
+    );
+
+    const stopping = result.current.find(
+      (message) => message.role === "assistant",
+    );
+    expect(stopping?.runState).toBe("stopping");
+    expect(stopping?.stopped).toBeNull();
+
+    rerender({
+      value: {
+        ...baseInput,
+        activeTurn: null,
+        runStatus: "idle",
+      },
+    });
+
+    const settled = result.current.find(
+      (message) => message.role === "assistant",
+    );
+    expect(settled?.runState).toBeNull();
+    expect(settled?.stopped).toMatchObject({
+      stoppedAt: 11_000,
+      turnHadOutput: false,
     });
   });
 
