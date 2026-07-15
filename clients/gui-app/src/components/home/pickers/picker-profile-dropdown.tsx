@@ -15,8 +15,13 @@ import {
   type ProfileDropdownUsagePresentation,
 } from "@/components/providers/profile-dropdown-usage";
 import { useProfileUsageComparison } from "@/hooks/rate-limits/use-profile-usage-comparison";
+import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import { useSampledNow } from "@/lib/relative-time";
 import { guiHarnessIdToProviderId } from "@/lib/provider-ordering";
+import { profileCommitId } from "@/components/providers/provider-profile-model";
+
+const EMPTY_PROFILES: ReadonlyArray<ProviderProfile> = [];
 
 interface PickerProfileDropdownProps {
   readonly providerId: GuiHarnessId;
@@ -53,10 +58,25 @@ function ProfileUsagePickerProfileDropdown({
   readonly props: PickerProfileDropdownProps;
   readonly providerId: ProviderId;
 }) {
+  const runTargetClient = useHostClientForHostId(props.runTargetHostId);
+  const runTargetProvidersQuery = useProvidersListForClient(runTargetClient, {
+    enabled: true,
+    subscribed: true,
+  });
+  const usageProfiles = useMemo(() => {
+    const provider = runTargetProvidersQuery.data?.providers.find(
+      (candidate) => candidate.providerId === providerId,
+    );
+    if (provider === undefined) return EMPTY_PROFILES;
+    return resolveHostConsistentUsageProfiles(
+      props.profiles,
+      provider.profiles,
+    );
+  }, [props.profiles, providerId, runTargetProvidersQuery.data]);
   const comparison = useProfileUsageComparison({
     runTargetHostId: props.runTargetHostId,
     providerId,
-    profiles: props.profiles,
+    profiles: usageProfiles,
   });
   const now = useSampledNow();
   const [pendingRefreshKeys, setPendingRefreshKeys] = useState<
@@ -108,6 +128,59 @@ function ProfileUsagePickerProfileDropdown({
       props={props}
       usagePresentation={usagePresentation}
     />
+  );
+}
+
+/**
+ * Usage rows must never combine one host's visible identity with another
+ * host's rate-limit summary. Only enable comparison when the explicit run
+ * target reports the same complete set of profile identities the dropdown is
+ * rendering; return the target host's objects so every summary field consumed
+ * by `useProfileUsageComparison` comes from that same host. A missing, partial,
+ * renamed, recolored, or differently-authenticated target set stays
+ * identity-only until the picker receives a coherent snapshot.
+ */
+function resolveHostConsistentUsageProfiles(
+  visibleProfiles: ReadonlyArray<ProviderProfile>,
+  runTargetProfiles: ReadonlyArray<ProviderProfile>,
+): ReadonlyArray<ProviderProfile> {
+  if (visibleProfiles.length !== runTargetProfiles.length) {
+    return EMPTY_PROFILES;
+  }
+  const runTargetByCommitId = new Map(
+    runTargetProfiles.map((profile) => [profileCommitId(profile), profile]),
+  );
+  const resolved = visibleProfiles.map((visibleProfile) => {
+    const runTargetProfile = runTargetByCommitId.get(
+      profileCommitId(visibleProfile),
+    );
+    if (
+      runTargetProfile === undefined ||
+      !hasSameVisibleProfileIdentity(visibleProfile, runTargetProfile)
+    ) {
+      return null;
+    }
+    return runTargetProfile;
+  });
+  return resolved.every(
+    (profile): profile is ProviderProfile => profile !== null,
+  )
+    ? resolved
+    : EMPTY_PROFILES;
+}
+
+function hasSameVisibleProfileIdentity(
+  left: ProviderProfile,
+  right: ProviderProfile,
+): boolean {
+  return (
+    left.kind === right.kind &&
+    left.label === right.label &&
+    left.auth.status === right.auth.status &&
+    left.auth.badgeText === right.auth.badgeText &&
+    left.auth.label === right.auth.label &&
+    left.auth.detail === right.auth.detail &&
+    left.accentColor === right.accentColor
   );
 }
 

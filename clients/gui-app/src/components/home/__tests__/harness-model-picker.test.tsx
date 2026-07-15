@@ -7,6 +7,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const openSettingsMock = vi.fn();
 const profileUsageHookMock = vi.hoisted(() => ({
   runTargetHostIds: [] as Array<string | null>,
+  calls: [] as Array<{
+    readonly runTargetHostId: string | null;
+    readonly providerId: string;
+    readonly profiles: ReadonlyArray<ProviderProfile>;
+  }>,
 }));
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
   useSystemTabModalActions: () => ({
@@ -22,8 +27,11 @@ vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
 vi.mock("@/hooks/rate-limits/use-profile-usage-comparison", () => ({
   useProfileUsageComparison: (args: {
     readonly runTargetHostId: string | null;
+    readonly providerId: string;
+    readonly profiles: ReadonlyArray<ProviderProfile>;
   }) => {
     profileUsageHookMock.runTargetHostIds.push(args.runTargetHostId);
+    profileUsageHookMock.calls.push(args);
     return { hostId: args.runTargetHostId, isReady: true, entries: new Map() };
   },
 }));
@@ -104,6 +112,7 @@ import type {
 import {
   PROVIDER_PROFILE_ACCENT_COLORS,
   type ProviderCliState,
+  type ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
 import type { Key, KeyboardEvent, ReactNode } from "react";
 
@@ -831,6 +840,7 @@ describe("<HarnessModelPicker />", () => {
     queryMock.calls.providers = [];
     queryMock.calls.commands = [];
     profileUsageHookMock.runTargetHostIds = [];
+    profileUsageHookMock.calls = [];
     openSettingsMock.mockClear();
     useProvidersFocusStore.getState().clearFocusHarnessId();
     useKeybindingStore.getState().resetAll();
@@ -1763,6 +1773,69 @@ describe("<HarnessModelPicker />", () => {
 
     expect(useProviderProfileAddFlowStore.getState().harnessId).toBe("claude");
     expect(useProviderProfileAddFlowStore.getState().hostId).toBe("tab-host-1");
+  });
+
+  it("keeps usage identity-only when the run target's profile identities differ from the visible default-host rows", async () => {
+    const visibleProfiles = claudeProfilesForDropdown();
+    queryMock.providerStates = [
+      providerCliStateWithProfiles({
+        providerId: "claude-code",
+        profiles: visibleProfiles,
+      }),
+    ];
+    queryMock.providerStatesByClient.set("tab-host-1", [
+      providerCliStateWithProfiles({
+        providerId: "claude-code",
+        profiles: visibleProfiles.map((profile) =>
+          profile.kind === "managed"
+            ? { ...profile, label: "Remote Work" }
+            : profile,
+        ),
+      }),
+    ]);
+
+    renderPicker({ createProfileHostId: "tab-host-1" });
+    await openPicker();
+    fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+
+    const comparisonCall = profileUsageHookMock.calls.find(
+      (call) => call.providerId === "claude-code",
+    );
+    expect(comparisonCall?.runTargetHostId).toBe("tab-host-1");
+    expect(comparisonCall?.profiles).toEqual([]);
+  });
+
+  it("feeds usage comparison the run target's summaries when profile identities match", async () => {
+    const visibleProfiles = claudeProfilesForDropdown();
+    queryMock.providerStates = [
+      providerCliStateWithProfiles({
+        providerId: "claude-code",
+        profiles: visibleProfiles,
+      }),
+    ];
+    const targetProfiles = visibleProfiles.map((profile) => ({
+      ...profile,
+      rateLimitStatus:
+        profile.kind === "managed" ? ("near_limit" as const) : ("ok" as const),
+      usageUpdatedAt: 42,
+    }));
+    queryMock.providerStatesByClient.set("tab-host-1", [
+      providerCliStateWithProfiles({
+        providerId: "claude-code",
+        profiles: targetProfiles,
+      }),
+    ]);
+
+    renderPicker({ createProfileHostId: "tab-host-1" });
+    await openPicker();
+    fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+
+    const comparisonCall = profileUsageHookMock.calls.find(
+      (call) => call.providerId === "claude-code",
+    );
+    expect(comparisonCall?.runTargetHostId).toBe("tab-host-1");
+    expect(comparisonCall?.profiles).toEqual(targetProfiles);
+    expect(comparisonCall?.profiles).not.toBe(visibleProfiles);
   });
 
   it("disables the create-new-profile row when the target host has no OAuth login capability (S8)", async () => {
