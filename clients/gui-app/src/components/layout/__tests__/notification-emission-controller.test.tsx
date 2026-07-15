@@ -38,6 +38,8 @@ function hostEntry(input: {
       sourceRef: input.id,
       severity: "done",
       outcome: "completed",
+      epicId: "epic-1",
+      chatId: "chat-1",
       payload: {
         epicId: "epic-1",
         chatId: "chat-1",
@@ -56,6 +58,8 @@ function hostEntry(input: {
       sourceRef: input.id,
       severity: "failure",
       outcome: "errored",
+      epicId: "epic-1",
+      chatId: "chat-1",
       payload: {
         epicId: "epic-1",
         chatId: "chat-1",
@@ -74,6 +78,8 @@ function hostEntry(input: {
       severity: "needs_action",
       outcome: null,
       resolvedAt: null,
+      epicId: "epic-1",
+      chatId: "chat-1",
       payload: {
         epicId: "epic-1",
         chatId: "chat-1",
@@ -91,6 +97,8 @@ function hostEntry(input: {
     severity: "needs_action",
     outcome: null,
     resolvedAt: null,
+    epicId: "epic-1",
+    chatId: "chat-1",
     payload: {
       epicId: "epic-1",
       chatId: "chat-1",

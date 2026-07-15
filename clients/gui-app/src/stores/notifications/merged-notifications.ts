@@ -6,7 +6,6 @@ import { notificationsMutationKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import {
   buildPayloadFromEvent,
-  parseNotificationPayload,
   type NotificationPayload,
 } from "@/lib/notifications";
 import {
@@ -30,9 +29,11 @@ import {
   useNotificationUnreadCount,
   useNotificationsStore,
 } from "@/stores/notifications/notifications-store";
-import type {
-  HostNotificationOutcome,
-  HostNotificationSeverity,
+import {
+  parseKnownHostNotificationPayloadForKind,
+  type HostNotificationKnownPayload,
+  type HostNotificationOutcome,
+  type HostNotificationSeverity,
 } from "@traycer/protocol/host/notifications/contracts";
 import type { NotificationEntry } from "@traycer/protocol/notifications/notification-entry";
 import { formatNotification } from "@traycer/protocol/notifications/notification-formatter";
@@ -488,31 +489,50 @@ function isCurrentHostNotificationMutation(
 function payloadFromHostEntry(
   entry: HostNotificationFeedEntry,
 ): NotificationPayload | null {
-  const parsed = parseNotificationPayload(entry.payload);
-  if (parsed !== null) return parsed;
-  const epicId = readPayloadString(entry.payload, "epicId");
-  const chatId = readPayloadString(entry.payload, "chatId");
-  if (epicId === null || chatId === null) return null;
-  if (entry.kind === "approval.requested") {
-    return {
-      kind: "approval",
-      epicId,
-      chatId,
-      approvalId: readPayloadString(entry.payload, "approvalId") ?? undefined,
-      sessionId: undefined,
-      artifactId: undefined,
-    };
+  // Second-stage semantic parse: the known payload schemas are the ONLY
+  // contract - a payload this build understands, under its matching row
+  // kind, maps to a typed navigation target compile-linked to the producer
+  // schemas; anything else (a payload from a newer host, a malformed row, or
+  // a cross-kind contradiction) renders generically with no deep-link.
+  // Degrade, never error.
+  const known = parseKnownHostNotificationPayloadForKind(
+    entry.kind,
+    entry.payload,
+  );
+  return known === null ? null : navigationPayloadFromKnown(known);
+}
+
+function navigationPayloadFromKnown(
+  known: HostNotificationKnownPayload,
+): NotificationPayload | null {
+  switch (known.kind) {
+    case "chat":
+      return {
+        kind: "chat",
+        epicId: known.epicId,
+        chatId: known.chatId ?? undefined,
+      };
+    case "agent_stalled":
+      return { kind: "chat", epicId: known.epicId, chatId: known.chatId };
+    case "epic":
+      return { kind: "epic", epicId: known.epicId };
+    case "approval":
+      return {
+        kind: "approval",
+        epicId: known.epicId,
+        chatId: known.chatId,
+        approvalId: known.approvalId,
+        sessionId: undefined,
+        artifactId: undefined,
+      };
+    case "interview":
+      return {
+        kind: "interview",
+        epicId: known.epicId,
+        chatId: known.chatId,
+        interviewBlockId: known.interviewBlockId,
+      };
   }
-  if (entry.kind === "interview.requested") {
-    return {
-      kind: "interview",
-      epicId,
-      chatId,
-      interviewBlockId:
-        readPayloadString(entry.payload, "interviewBlockId") ?? undefined,
-    };
-  }
-  return { kind: "chat", epicId, chatId };
 }
 
 interface NotificationPresentation {
@@ -523,29 +543,79 @@ interface NotificationPresentation {
 function hostNotificationPresentation(
   entry: HostNotificationFeedEntry,
 ): NotificationPresentation {
-  const agentName = readNotificationTitle(entry.payload, "agentName");
-  const chatTitle = readNotificationTitle(entry.payload, "chatTitle");
-  const taskTitle = readNotificationTitle(entry.payload, "taskTitle");
+  // Known payloads present from typed, schema-linked fields; anything else
+  // (a payload from a newer host, a malformed row, or a payload contradicting
+  // its row kind) degrades to generic copy - never a crash, never a dropped
+  // row.
+  const known = parseKnownHostNotificationPayloadForKind(
+    entry.kind,
+    entry.payload,
+  );
+  const agentName =
+    known === null ? null : nonEmptyTitle(knownAgentName(known));
+  const chatTitle =
+    known === null ? null : nonEmptyTitle(knownChatTitle(known));
+  const taskTitle = known === null ? null : nonEmptyTitle(known.taskTitle);
   const title = taskTitle ?? chatTitle ?? agentName ?? "Task";
   const chatContext =
     chatTitle !== null && chatTitle !== title ? chatTitle : "Chat";
+  const isTerminalAgent = known !== null && known.kind === "epic";
   switch (entry.kind) {
     case "agent.stopped": {
-      const context = notificationContext(agentName, title, entry.payload);
+      const context = notificationContext(agentName, title, isTerminalAgent);
+      const code = known === null ? null : knownStoppedCode(known);
       return {
         title,
-        body: `${context} • ${agentStoppedStatus(entry.outcome, readPayloadString(entry.payload, "code"))}`,
+        body: `${context} • ${agentStoppedStatus(entry.outcome, code)}`,
       };
     }
     case "agent.stalled":
       return {
         title,
-        body: `${notificationContext(agentName, title, entry.payload)} • Stalled`,
+        body: `${notificationContext(agentName, title, isTerminalAgent)} • Stalled`,
       };
     case "approval.requested":
       return { title, body: `${chatContext} • Approval requested` };
     case "interview.requested":
       return { title, body: `${chatContext} • Question waiting` };
+  }
+}
+
+function knownAgentName(payload: HostNotificationKnownPayload): string | null {
+  switch (payload.kind) {
+    case "chat":
+    case "epic":
+    case "agent_stalled":
+      return payload.agentName;
+    case "approval":
+    case "interview":
+      return null;
+  }
+}
+
+function knownChatTitle(payload: HostNotificationKnownPayload): string | null {
+  switch (payload.kind) {
+    case "approval":
+    case "interview":
+      return payload.chatTitle;
+    case "chat":
+    case "epic":
+    case "agent_stalled":
+      return null;
+  }
+}
+
+function knownStoppedCode(
+  payload: HostNotificationKnownPayload,
+): string | null {
+  switch (payload.kind) {
+    case "chat":
+    case "epic":
+      return payload.code ?? null;
+    case "agent_stalled":
+    case "approval":
+    case "interview":
+      return null;
   }
 }
 
@@ -562,32 +632,14 @@ function agentStoppedStatus(
 function notificationContext(
   agentName: string | null,
   title: string,
-  payload: HostNotificationFeedEntry["payload"],
+  isTerminalAgent: boolean,
 ): string {
   if (agentName !== null && agentName !== title) return agentName;
-  return readPayloadString(payload, "kind") === "epic"
-    ? "Terminal agent"
-    : "Chat";
+  return isTerminalAgent ? "Terminal agent" : "Chat";
 }
 
-function readPayloadString(
-  payload: HostNotificationFeedEntry["payload"],
-  key: string,
-): string | null {
-  const value = payload[key];
-  return typeof value === "string" && value.length > 0 ? value : null;
-}
-
-function readNotificationTitle(
-  payload: HostNotificationFeedEntry["payload"],
-  key: string,
-): string | null {
-  const value = readPayloadString(payload, key);
-  return value !== null && !LEGACY_ENTITY_UUID_PATTERN.test(value)
-    ? value
-    : null;
+function nonEmptyTitle(value: string | null): string | null {
+  return value !== null && value.length > 0 ? value : null;
 }
 
 const HOST_PAGE_LIMIT = 50;
-const LEGACY_ENTITY_UUID_PATTERN =
-  /^(?:Chat|Task) [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
