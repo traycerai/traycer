@@ -14,12 +14,22 @@ const mocks = vi.hoisted(() => {
   const runPolicy = vi.fn<
     (link: MarkdownFileLink, lifecycle: ChatLinkLifecycle) => boolean
   >(() => true);
+  const worktreeQuery: {
+    data:
+      | {
+          rows: Array<{ runningDir: string; disabledReason: string | null }>;
+        }
+      | undefined;
+    isError: boolean;
+  } = {
+    data: { rows: [{ runningDir: "/tab/repo", disabledReason: null }] },
+    isError: false,
+  };
   return {
     tabClient: { request: vi.fn() },
     defaultClient: { request: vi.fn() },
-    listBindingsForClient: vi.fn(() => ({
-      data: { rows: [{ runningDir: "/tab/repo", disabledReason: null }] },
-    })),
+    worktreeQuery,
+    listBindingsForClient: vi.fn(() => worktreeQuery),
     runPolicy,
     buildPolicy: vi.fn(() => runPolicy),
     openExternal:
@@ -73,6 +83,10 @@ function QueryWrapper(props: { readonly children: ReactNode }) {
 }
 
 beforeEach(() => {
+  mocks.worktreeQuery.data = {
+    rows: [{ runningDir: "/tab/repo", disabledReason: null }],
+  };
+  mocks.worktreeQuery.isError = false;
   mocks.listBindingsForClient.mockClear();
   mocks.buildPolicy.mockClear();
   mocks.runPolicy.mockReset();
@@ -102,6 +116,35 @@ describe("useArtifactLinkOpener", () => {
         workspaceRoots: ["/tab/repo"],
       }),
     );
+  });
+
+  it("gates file routing until workspace roots have loaded", () => {
+    mocks.worktreeQuery.data = undefined;
+    const { result, rerender } = renderHook(
+      () => useArtifactLinkOpener({ epicId: "epic-1", viewTabId: "tab-1" }),
+      { wrapper: QueryWrapper },
+    );
+    const link = {
+      kind: "file" as const,
+      path: "src/index.ts",
+      line: null,
+      col: null,
+    };
+
+    result.current.openLink(link);
+
+    expect(mocks.runPolicy).not.toHaveBeenCalled();
+    expect(mocks.toast).toHaveBeenCalledWith(
+      "Workspace links are still loading",
+    );
+
+    mocks.worktreeQuery.data = {
+      rows: [{ runningDir: "/tab/repo", disabledReason: null }],
+    };
+    rerender();
+    result.current.openLink(link);
+
+    expect(mocks.runPolicy).toHaveBeenCalledTimes(1);
   });
 
   it("routes external links through the runner mutation", () => {

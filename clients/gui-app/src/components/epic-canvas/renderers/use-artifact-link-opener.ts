@@ -32,8 +32,9 @@ export function useArtifactLinkOpener(args: {
     epicId: args.epicId,
     enabled: tabHostClient !== null,
   });
-  const workspaceRoots = useMemo<ReadonlyArray<string>>(() => {
-    const rows = worktrees.data?.rows ?? [];
+  const workspaceRoots = useMemo<ReadonlyArray<string> | null>(() => {
+    if (worktrees.data === undefined) return null;
+    const rows = worktrees.data.rows;
     return Array.from(
       new Set(
         rows.flatMap((row) => (isBrowsable(row) ? [row.runningDir] : [])),
@@ -75,33 +76,32 @@ export function useArtifactLinkOpener(args: {
     return clickTokenRef.current;
   }, []);
 
-  const openFile = useMemo(
-    () =>
-      buildChatLinkPolicy({
-        tabId: args.viewTabId,
-        hostId: tabHostId,
-        workspaceRoots,
-        activeHostId,
-        openEpicId: args.epicId,
-        epicHandle,
-        queryClient,
-        client,
-        navigate,
-        previewTileInTab,
-      }),
-    [
+  const openFile = useMemo(() => {
+    if (workspaceRoots === null) return null;
+    return buildChatLinkPolicy({
+      tabId: args.viewTabId,
+      hostId: tabHostId,
+      workspaceRoots,
       activeHostId,
-      args.epicId,
-      args.viewTabId,
-      client,
+      openEpicId: args.epicId,
       epicHandle,
+      queryClient,
+      client,
       navigate,
       previewTileInTab,
-      queryClient,
-      tabHostId,
-      workspaceRoots,
-    ],
-  );
+    });
+  }, [
+    activeHostId,
+    args.epicId,
+    args.viewTabId,
+    client,
+    epicHandle,
+    navigate,
+    previewTileInTab,
+    queryClient,
+    tabHostId,
+    workspaceRoots,
+  ]);
 
   const openLink = useCallback(
     (link: OpenableArtifactLink): void => {
@@ -114,6 +114,14 @@ export function useArtifactLinkOpener(args: {
             externalOpenInFlightRef.current = false;
           },
         });
+        return;
+      }
+      if (openFile === null) {
+        toast(
+          worktrees.isError
+            ? "Couldn't open link"
+            : "Workspace links are still loading",
+        );
         return;
       }
       const opened = openFile(
@@ -137,7 +145,7 @@ export function useArtifactLinkOpener(args: {
       );
       if (!opened) toast("Couldn't open link");
     },
-    [openExternalLink, openFile, supersedePending],
+    [openExternalLink, openFile, supersedePending, worktrees.isError],
   );
 
   return { openLink, isExternalPending };
