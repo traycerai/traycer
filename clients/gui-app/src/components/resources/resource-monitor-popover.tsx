@@ -765,7 +765,12 @@ function combineHeadlineResourceSummary(
   owners: readonly OwnerResourceSnapshotWire[],
   desktopApp: DesktopAppResourceUsage | null,
 ): TaskResourceSummary | null {
-  if (hostTree === null && app === null && desktopApp === null) {
+  if (
+    hostTree === null &&
+    app === null &&
+    desktopApp === null &&
+    owners.length === 0
+  ) {
     return null;
   }
   // Pre-v1.2 hosts don't send the whole-host-tree aggregate, so fall back to
