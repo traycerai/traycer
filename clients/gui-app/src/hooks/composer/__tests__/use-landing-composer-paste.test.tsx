@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import type { ImageAttachmentAttrs } from "@/components/chat/composer/editor/extensions/image-attachment-extension";
 import type { ComposerPasteEditorHandle } from "@/hooks/composer/use-composer-paste";
 import { useLandingComposerPaste } from "@/hooks/composer/use-landing-composer-paste";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import {
   deleteImage,
   getImageBytes,
@@ -61,6 +62,7 @@ function makeHandle(inserted: ImageAttachmentAttrs[][]): {
 } {
   const focusCalls = { count: 0 };
   const handle: ComposerPasteEditorHandle = {
+    isReady: () => true,
     insertImageAttachments: (attrs) => inserted.push([...attrs]),
     focus: () => {
       focusCalls.count += 1;
@@ -70,6 +72,35 @@ function makeHandle(inserted: ImageAttachmentAttrs[][]): {
 }
 
 describe("useLandingComposerPaste", () => {
+  it("does not report an attachment when a non-null editor is not ready", async () => {
+    const inserted: ImageAttachmentAttrs[][] = [];
+    const track = vi.spyOn(Analytics.getInstance(), "track");
+    const editorRef = {
+      current: {
+        isReady: () => false,
+        insertImageAttachments: (attrs: ReadonlyArray<ImageAttachmentAttrs>) =>
+          inserted.push([...attrs]),
+        focus: () => undefined,
+      },
+    };
+    const { result } = renderHook(() => useLandingComposerPaste(editorRef));
+
+    act(() => {
+      result.current.attachImageFiles([
+        new File(["hello"], "not-ready.png", { type: "image/png" }),
+      ]);
+    });
+    await waitFor(async () => {
+      expect(await imageHashKeys()).toHaveLength(1);
+    });
+
+    expect(inserted).toEqual([]);
+    expect(track).not.toHaveBeenCalledWith(
+      AnalyticsEvent.AttachmentAdded,
+      expect.anything(),
+    );
+  });
+
   it("ingests an image as a hash-only node with bytes + a session object-URL", async () => {
     const inserted: ImageAttachmentAttrs[][] = [];
     const { handle, focusCalls } = makeHandle(inserted);

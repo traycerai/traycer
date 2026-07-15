@@ -24,6 +24,7 @@ import { useSeededWorkspaceSnapshotStore } from "@/stores/worktree/seeded-worksp
 import { resolvePrimaryPath } from "@/lib/worktree/resolve-primary-path";
 import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
 import { restampWorktreeIntentPrimary } from "./worktree-intent-merge";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 export interface PrimaryRemovalTransition {
   // Whether removing the folder demoted-and-reassigned primary to a
@@ -277,6 +278,15 @@ export function useHomeWorkspaceSource(
         };
       },
       setPrimaryFolder: (folderPath) => {
+        // Suppress only the duplicate EVENT on a same-primary re-selection;
+        // the state writes below must still run so a staged worktree intent's
+        // stale isPrimary bit is restamped before launch consumers read it.
+        if (folderPath !== primaryPath) {
+          Analytics.getInstance().track(
+            AnalyticsEvent.WorkspacePrimaryChanged,
+            { source: "direct_ui" },
+          );
+        }
         if (modalEpicId !== null) {
           setModalPrimaryFolder(modalEpicId, modalSeedWorkspace, folderPath);
         } else {

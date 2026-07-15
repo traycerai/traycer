@@ -28,6 +28,24 @@ import type {
   DesktopPerWindowSnapshot,
   DesktopWindowsBridge,
 } from "@/lib/windows/types";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+
+// One `app_opened` per renderer process, emitted when hydration settles (the
+// earliest point this window knows whether it restored content). Secondary
+// windows are separate renderer processes and count too; the `restored_tabs`
+// flag plus PostHog sessions keep launch analyses honest enough without any
+// cross-window coordination.
+let appOpenedTracked = false;
+
+function trackAppOpenedOnce(restoredTabs: boolean): void {
+  if (appOpenedTracked) return;
+  appOpenedTracked = true;
+  Analytics.getInstance().track(AnalyticsEvent.AppOpened, {
+    source: restoredTabs ? "restored_session" : "direct_ui",
+    launch_reason: "normal",
+    restored_tabs: restoredTabs,
+  });
+}
 
 interface WindowsBridgeProviderProps {
   readonly children: ReactNode;
@@ -133,6 +151,7 @@ export function WindowsBridgeProvider(
 function installMissingDesktopWindowsBridge(): () => void {
   clearDesktopWindowsBridge();
   queueMicrotask(() => {
+    trackAppOpenedOnce(false);
     markHydrated();
   });
   return clearDesktopWindowsBridge;
@@ -183,6 +202,9 @@ function installDesktopWindowsBridge(
       const snapshot = await bridge.perWindowState.get();
       if (isCancelled()) return;
       applyPerWindowSnapshot(snapshot);
+      trackAppOpenedOnce(
+        snapshot.epicTabs.length > 0 || snapshot.landingDrafts.length > 0,
+      );
     } catch (error) {
       if (isCancelled()) return;
       // Fall back to not applying a snapshot (empty/absent snapshot

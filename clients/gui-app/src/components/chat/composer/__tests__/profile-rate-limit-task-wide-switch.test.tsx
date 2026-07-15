@@ -1,7 +1,10 @@
 import "../../../../../__tests__/test-browser-apis";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ProfileRateLimitSwitchBanner } from "../profile-rate-limit-switch-banner";
+import { createComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
+import { commitProfileSelection } from "@/stores/composer/commit-selection";
+import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harness-memory-store";
 
 /**
  * Task-wide rate-limit switch: when the limited profile pins more than one
@@ -44,7 +47,14 @@ function renderBanner(input: {
 }
 
 describe("rate-limit banner task-wide switch", () => {
-  afterEach(() => cleanup());
+  beforeEach(() => {
+    useComposerHarnessMemoryStore.getState().resetForTests();
+  });
+
+  afterEach(() => {
+    cleanup();
+    useComposerHarnessMemoryStore.getState().resetForTests();
+  });
 
   it("hides the task-wide option when only this chat is affected", () => {
     renderBanner({
@@ -81,6 +91,52 @@ describe("rate-limit banner task-wide switch", () => {
     );
     expect(onSwitchProfile).toHaveBeenCalledWith(ALTERNATIVE.profileId);
     expect(onSwitchProfileForTask).not.toHaveBeenCalled();
+  });
+
+  it("preserves the session's configured model and reasoning when switching profiles", () => {
+    useComposerHarnessMemoryStore.getState().record({
+      harnessId: "claude",
+      model: "opus-4",
+      permissionMode: "supervised",
+      reasoningEffort: "low",
+      serviceTier: null,
+      agentMode: "regular",
+      profileId: ALTERNATIVE.profileId,
+    });
+    const store = createComposerToolbarStore({
+      seedKey: "rate-limit-banner",
+      values: {
+        permission: "supervised",
+        selection: {
+          harnessId: "claude",
+          modelSlug: "sonnet-4.5",
+          profileId: CURRENT.profileId,
+        },
+        reasoning: "high",
+        serviceTier: "",
+        agentMode: "regular",
+      },
+      onSettingsChange: null,
+      tuiOnly: false,
+    });
+    renderBanner({
+      affectedChatCount: 1,
+      onSwitchProfile: (profileId) => commitProfileSelection(store, profileId),
+      onSwitchProfileForTask: () => undefined,
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: `Continue this session on ${ALTERNATIVE.label}`,
+      }),
+    );
+
+    expect(store.getState().selection).toEqual({
+      harnessId: "claude",
+      modelSlug: "sonnet-4.5",
+      profileId: ALTERNATIVE.profileId,
+    });
+    expect(store.getState().reasoning).toBe("high");
   });
 
   it("switches the whole task (this chat included) from the task-wide option", () => {

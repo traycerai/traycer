@@ -42,7 +42,9 @@ export async function openEpicInNewWindow(
   bridge: DesktopWindowsBridge,
   input: OpenEpicInNewWindowInput,
 ): Promise<void> {
-  Analytics.getInstance().track(AnalyticsEvent.TaskOpened, null);
+  Analytics.getInstance().track(AnalyticsEvent.TaskOpened, {
+    source: "history",
+  });
   const owned = await bridge.ownership.snapshot();
   const existing = owned.find(
     (entry) =>

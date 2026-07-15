@@ -12,6 +12,7 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys, terminalMutationKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 export interface KillTerminalMutationContext {
   readonly hostId: string | null;
@@ -33,6 +34,7 @@ export interface KillTerminalMutationContext {
 export function useTerminalKillFor(
   client: HostClient<HostRpcRegistry> | null,
   errorMessage: string,
+  trackUserIntent: boolean,
 ): UseMutationResult<
   ResponseOfMethod<HostRpcRegistry, "terminal.kill">,
   HostRpcError,
@@ -59,6 +61,11 @@ export function useTerminalKillFor(
       hostId: client === null ? null : client.getActiveHostId(),
     }),
     onSuccess: (_data, _variables, ctx) => {
+      if (trackUserIntent) {
+        Analytics.getInstance().track(AnalyticsEvent.TerminalKilled, {
+          kind: "shell",
+        });
+      }
       if (ctx.hostId === null) return;
       // Only the terminal-session list changed; invalidating the whole host
       // scope would also force-refetch the manual-refresh-only cloud-tasks

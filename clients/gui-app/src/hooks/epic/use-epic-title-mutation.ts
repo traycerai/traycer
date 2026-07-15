@@ -4,6 +4,7 @@ import { useHostMutation } from "@/hooks/host/use-host-query";
 import { useHostClient } from "@/lib/host";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { updateEpicTitleInCloudTaskCaches } from "@/lib/cloud-epic-tasks-query/cache";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 interface UpdateTitleMutationContext {
   readonly hostId: string | null;
@@ -28,6 +29,9 @@ export function useEpicUpdateTitle() {
         userId: client.getRequestContextUserId(),
       }),
       onSuccess: (_response, variables, ctx: UpdateTitleMutationContext) => {
+        Analytics.getInstance().track(AnalyticsEvent.TaskRenamed, {
+          source: "direct_ui",
+        });
         const delta = variables.epicDelta;
         if (
           ctx.userId !== null &&

@@ -72,6 +72,7 @@ import {
   sortProviderStatesByProviderOrder,
 } from "@/lib/provider-ordering";
 import { queryKeys } from "@/lib/query-keys";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import {
   PROVIDER_RATE_LIMITS_STALE_TIME_MS,
   rateLimitFetchLane,
@@ -1368,13 +1369,20 @@ function TraycerRateLimitBlock({
   // invalidation targets only aperture `{ accountContext }` keys, never provider
   // `{ accountContext, providerId }` pulls.
   const refresh = async (): Promise<void> => {
-    await traycerSubscription.query.refetch();
+    const result = await traycerSubscription.query.refetch();
     traycerSubscription.rateLimitAccountContexts.forEach((accountContext) => {
       void queryClient.invalidateQueries({
         queryKey: queryKeys.hostTraycerRateLimitUsage(hostId, accountContext),
         exact: true,
       });
     });
+    // Observational only: the UI awaits exactly what it always did (the
+    // primary refetch; invalidations stay fire-and-forget background work).
+    if (result.status === "success") {
+      Analytics.getInstance().track(AnalyticsEvent.SubscriptionRefreshed, {
+        source: "direct_ui",
+      });
+    }
   };
 
   return (
