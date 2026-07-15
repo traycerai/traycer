@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { v4 as uuidv4 } from "uuid";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useSetupTerminalRegistrationStore } from "@/stores/chats/setup-terminal-registration-store";
@@ -71,9 +72,14 @@ export function useRegisterSetupTerminalTabsFromBinding(options: {
       // setup is still running cannot re-open a tab the user has closed.
       // Keyed by `viewTabId` so the same owner in another view gets its own tab.
       if (!registerSetupTerminalOnce(`${viewTabId}:${sessionId}`)) return;
+      // `instanceId` is per-tab-instance identity (the terminal session
+      // registry keys stream handles by it); reusing the session id here
+      // would alias handles when the same session opens in multiple views.
+      // Dedup/convergence with the setup card's "Open terminal" is by
+      // content `id`, not instance.
       openTileInBackgroundTab(viewTabId, {
         id: sessionId,
-        instanceId: sessionId,
+        instanceId: uuidv4(),
         type: "terminal",
         name: setupTerminalTitle(entry),
         titleSource: "manual",

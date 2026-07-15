@@ -12,10 +12,32 @@ import { AccentDot } from "@/components/providers/accent-dot";
 import {
   profileCommitId,
   profileDisplayLabel,
+  profileAuthStatusText,
   profileRowStatusSuffix,
 } from "@/components/providers/provider-profile-model";
+import {
+  profileUsageAccessibleStatus,
+  type ProfileDropdownUsageEntry,
+  type ProfileDropdownUsagePresentation,
+} from "@/components/providers/profile-dropdown-usage";
+import { ProfileUsageSidecar } from "@/components/providers/profile-usage-sidecar";
+import { isProfileUsageSidecarTarget } from "@/components/providers/profile-usage-sidecar-target";
+import {
+  rateLimitWindowFillPercent,
+  rateLimitWindowSeverityBarClassName,
+} from "@/lib/rate-limits/window-severity";
 import { cn } from "@/lib/utils";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
+import { useState } from "react";
+
+const PROFILE_DROPDOWN_KEYS = new Set([
+  "ArrowDown",
+  "ArrowUp",
+  "Home",
+  "End",
+  "Enter",
+  "Escape",
+]);
 
 /** A row's ⌘⇧-digit shortcut hint - `digit` drives the row's test id,
  *  `label` is the displayed chord text. Keeping both explicit (rather than
@@ -52,6 +74,9 @@ interface ProfileDropdownProps {
    *  the picker can send focus back to its search input instead. Null keeps
    *  the default (Settings has no outer surface to defer to). */
   readonly onCloseAutoFocus: (() => void) | null;
+  /** Picker-only cached usage presentation. Settings passes `null`, which
+   *  preserves the identity-only rows and mounts no usage observers/sidecar. */
+  readonly usagePresentation: ProfileDropdownUsagePresentation | null;
 }
 
 /**
@@ -74,13 +99,40 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
     shortcutHintForIndex,
     contentContainer,
     onCloseAutoFocus,
+    usagePresentation,
   } = props;
   const activeProfile =
     profiles.find((profile) => profileCommitId(profile) === activeProfileId) ??
     profiles[0];
+  const activeCommitId = profileCommitId(activeProfile);
+  const [open, setOpen] = useState(false);
+  const [previewProfileId, setPreviewProfileId] = useState<string | null>(
+    activeCommitId,
+  );
+  const [previewAnchor, setPreviewAnchor] = useState<HTMLElement | null>(null);
+  const previewProfile = profiles.find(
+    (profile) => profileCommitId(profile) === previewProfileId,
+  );
+  const previewEntry = usagePresentation?.entries.get(previewProfileId);
+
+  const preview = (profileId: string | null, anchor: HTMLElement): void => {
+    setPreviewProfileId(profileId);
+    setPreviewAnchor(anchor);
+  };
 
   return (
-    <DropdownMenu modal={false}>
+    <DropdownMenu
+      modal={false}
+      open={open}
+      onOpenChange={(nextOpen) => {
+        setOpen(nextOpen);
+        if (!nextOpen) {
+          setPreviewAnchor(null);
+          return;
+        }
+        setPreviewProfileId(activeCommitId);
+      }}
+    >
       <DropdownMenuTrigger asChild>
         <button
           type="button"
@@ -111,20 +163,65 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
           event.preventDefault();
           onCloseAutoFocus();
         }}
+        onInteractOutside={(event) => {
+          if (isProfileUsageSidecarTarget(event.target)) event.preventDefault();
+        }}
+        onKeyDown={(event) => {
+          // Item-level navigation/selection runs before the event bubbles to
+          // content. At content, Radix calls this handler before its own later
+          // composed callback; stopPropagation blocks enclosing React handlers
+          // without cancelling either same-target continuation.
+          if (PROFILE_DROPDOWN_KEYS.has(event.key)) event.stopPropagation();
+          if (
+            usagePresentation === null ||
+            event.key.toLowerCase() !== "r" ||
+            event.altKey ||
+            event.ctrlKey ||
+            event.metaKey ||
+            event.shiftKey
+          ) {
+            return;
+          }
+          const entry = usagePresentation.entries.get(previewProfileId);
+          if (
+            entry === undefined ||
+            entry.refreshStatus !== "idle" ||
+            !usagePresentation.isHostReady
+          ) {
+            return;
+          }
+          event.preventDefault();
+          void entry.refresh();
+        }}
       >
         {profiles.map((profile, index) => {
           const statusSuffix = profileRowStatusSuffix(profile);
           const commitId = profileCommitId(profile);
           const label = profileDisplayLabel(profile);
           const shortcutHint = shortcutHintForIndex(index);
+          const usageEntry = usagePresentation?.entries.get(commitId);
+          const selected = commitId === activeProfileId;
+          const accessibleLabel = profileRowAccessibleLabel({
+            label,
+            profile,
+            selected,
+            statusSuffix,
+            usageEntry,
+          });
           return (
             <DropdownMenuItem
               key={profile.profileId}
-              aria-label={
-                statusSuffix === null ? label : `${label}, ${statusSuffix}`
-              }
-              aria-current={commitId === activeProfileId ? "true" : undefined}
+              ref={(node) => {
+                if (commitId === previewProfileId && node !== null) {
+                  setPreviewAnchor(node);
+                }
+              }}
+              aria-label={accessibleLabel}
+              aria-keyshortcuts={usageEntry === undefined ? undefined : "R"}
+              aria-current={selected ? "true" : undefined}
               className={cn("pr-1.5", statusSuffix !== null && "opacity-60")}
+              onFocus={(event) => preview(commitId, event.currentTarget)}
+              onPointerMove={(event) => preview(commitId, event.currentTarget)}
               onSelect={() => onSelectProfile(commitId)}
             >
               <AccentDot
@@ -140,6 +237,9 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
                 <span className="shrink-0 text-muted-foreground">
                   {statusSuffix}
                 </span>
+              ) : null}
+              {usageEntry !== undefined ? (
+                <ProfileUsageCompactMeter entry={usageEntry} />
               ) : null}
               {shortcutHint !== null ? (
                 <DropdownMenuShortcut
@@ -168,6 +268,78 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
           Create new profile
         </DropdownMenuItem>
       </DropdownMenuContent>
+      {usagePresentation !== null &&
+      open &&
+      previewProfile !== undefined &&
+      previewEntry !== undefined ? (
+        <ProfileUsageSidecar
+          anchor={previewAnchor}
+          profile={previewProfile}
+          entry={previewEntry}
+          isHostReady={usagePresentation.isHostReady}
+        />
+      ) : null}
     </DropdownMenu>
+  );
+}
+
+function profileRowAccessibleLabel(input: {
+  readonly label: string;
+  readonly profile: ProviderProfile;
+  readonly selected: boolean;
+  readonly statusSuffix: string | null;
+  readonly usageEntry: ProfileDropdownUsageEntry | undefined;
+}): string {
+  if (input.usageEntry === undefined) {
+    if (input.statusSuffix === null) return input.label;
+    return `${input.label}, ${input.statusSuffix}`;
+  }
+  const selection = input.selected ? "Selected" : "Not selected";
+  return `${input.label}, ${profileAuthStatusText(input.profile)}, ${selection}, ${profileUsageAccessibleStatus(input.usageEntry.projection)}`;
+}
+
+function ProfileUsageCompactMeter({
+  entry,
+}: {
+  readonly entry: ProfileDropdownUsageEntry;
+}) {
+  const projection = entry.projection;
+  const hasDetail = projection.kind === "detail" || projection.kind === "stale";
+  const fillPercent = hasDetail
+    ? rateLimitWindowFillPercent(projection.compactWindow.window.usedPercent)
+    : 0;
+  const severity =
+    projection.kind === "detail" ||
+    projection.kind === "stale" ||
+    projection.kind === "semantic_only"
+      ? projection.severity
+      : null;
+  return (
+    <span
+      aria-hidden="true"
+      data-testid={`profile-usage-bar-${String(entry.profileId)}`}
+      data-usage-kind={projection.kind}
+      className={cn(
+        "h-1 w-[clamp(3.5rem,22%,5.5rem)] shrink-0 overflow-hidden rounded-full bg-foreground/15",
+        projection.kind === "semantic_only" &&
+          projection.severity === "running_low" &&
+          "bg-amber-500/25 dark:bg-amber-400/25",
+        projection.kind === "semantic_only" &&
+          projection.severity === "limited" &&
+          "bg-red-500/25 dark:bg-red-400/25",
+        (projection.kind === "stale" || projection.kind === "unavailable") &&
+          "opacity-50",
+      )}
+    >
+      {hasDetail && severity !== null ? (
+        <span
+          className={cn(
+            "block h-full rounded-full transition-[width]",
+            rateLimitWindowSeverityBarClassName(severity),
+          )}
+          style={{ width: `${fillPercent}%` }}
+        />
+      ) : null}
+    </span>
   );
 }

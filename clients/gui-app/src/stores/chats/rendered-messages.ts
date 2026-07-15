@@ -1263,6 +1263,7 @@ function pendingTurnMeta(
     agentId: turn.model ?? turn.harnessId,
     displayName: turn.model,
     reply: { expectsReply: false },
+    inReplyTo: null,
   };
   const display = ctx.resolveAgentSenderDisplay(sender);
   return {

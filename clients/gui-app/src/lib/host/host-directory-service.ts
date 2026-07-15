@@ -10,6 +10,7 @@ import type {
 } from "@traycer-clients/shared/platform/runner-host";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
 import { appLogger } from "@/lib/logger";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 export interface HostDirectoryServiceOptions {
   readonly runnerHost: IRunnerHost;
@@ -149,6 +150,12 @@ export class HostDirectoryService implements IHostDirectoryService {
       return;
     }
     const entry = this.findById(hostId);
+    if (entry !== null) {
+      Analytics.getInstance().track(AnalyticsEvent.HostSelected, {
+        source: "direct_ui",
+        host_kind: entry.kind === "remote" ? "remote" : "local",
+      });
+    }
     this.setSelected(entry);
   }
 

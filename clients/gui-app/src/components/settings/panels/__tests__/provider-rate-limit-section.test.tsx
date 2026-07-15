@@ -261,7 +261,7 @@ describe("ProviderRateLimitForProvider", () => {
     expect(screen.getByText(/^Resets in /)).toBeTruthy();
   });
 
-  it("keeps usage blue through 85% and red above 85% used", () => {
+  it("uses duration-aware Healthy, Running low, and Limited tones", () => {
     mocks.data = envelope({
       ...CLAUDE_RATE_LIMITS,
       fiveHour: {
@@ -274,6 +274,11 @@ describe("ProviderRateLimitForProvider", () => {
         resetsAt: CLAUDE_SEVEN_DAY_RESETS_AT,
         durationMinutes: 10080,
       },
+      sevenDayOpus: {
+        usedPercent: 100,
+        resetsAt: CLAUDE_SEVEN_DAY_RESETS_AT,
+        durationMinutes: 10080,
+      },
     });
     const { container } = render(
       <ProviderRateLimitForProvider
@@ -283,14 +288,16 @@ describe("ProviderRateLimitForProvider", () => {
       />,
     );
 
-    expect(container.querySelectorAll(".bg-yellow-500").length).toBe(0);
     expect(container.querySelectorAll(".bg-blue-500").length).toBeGreaterThan(
+      0,
+    );
+    expect(container.querySelectorAll(".bg-amber-500").length).toBeGreaterThan(
       0,
     );
     expect(container.querySelectorAll(".bg-red-500").length).toBeGreaterThan(0);
   });
 
-  it("keeps the bar blue below the red threshold", () => {
+  it("keeps bars Healthy below their duration-aware warning thresholds", () => {
     mocks.data = envelope(CLAUDE_RATE_LIMITS);
     const { container } = render(
       <ProviderRateLimitForProvider
@@ -300,7 +307,7 @@ describe("ProviderRateLimitForProvider", () => {
       />,
     );
 
-    expect(container.querySelectorAll(".bg-yellow-500").length).toBe(0);
+    expect(container.querySelectorAll(".bg-amber-500").length).toBe(0);
     expect(container.querySelectorAll(".bg-red-500").length).toBe(0);
     expect(container.querySelectorAll(".bg-blue-500").length).toBeGreaterThan(
       0,

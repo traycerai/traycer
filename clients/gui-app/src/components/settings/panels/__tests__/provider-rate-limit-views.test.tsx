@@ -265,7 +265,7 @@ describe("CodexRateLimitView (extended fields)", () => {
     expect(screen.getByText("68% used")).toBeTruthy();
   });
 
-  it("renders the popover variant as '% used' with the shared blue/red bar color", () => {
+  it("renders the popover variant as '% used' with the shared semantic bar color", () => {
     const { container } = render(
       <CodexRateLimitView data={codex} variant="popover-detail" />,
     );
@@ -277,7 +277,62 @@ describe("CodexRateLimitView (extended fields)", () => {
     expect(container.querySelectorAll(".bg-blue-500").length).toBeGreaterThan(
       0,
     );
-    expect(container.querySelectorAll(".bg-yellow-500").length).toBe(0);
+    expect(container.querySelectorAll(".bg-amber-500").length).toBe(0);
+  });
+
+  it("uses the same Healthy, Running low, and Limited tones in Settings and Usage Limits", () => {
+    const severityFixture: CodexRateLimits = {
+      ...codex,
+      primary: {
+        usedPercent: 80,
+        resetsAt: NOW + 60 * 60 * 1000,
+        durationMinutes: 300,
+      },
+      secondary: {
+        usedPercent: 95,
+        resetsAt: NOW + 3 * 24 * 60 * 60 * 1000,
+        durationMinutes: 10_080,
+      },
+      extraWindows: [
+        {
+          limitId: "limited",
+          limitName: "Limited",
+          primary: {
+            usedPercent: 100,
+            resetsAt: NOW + 60 * 60 * 1000,
+            durationMinutes: 300,
+          },
+          secondary: {
+            usedPercent: 40,
+            resetsAt: NOW + 3 * 24 * 60 * 60 * 1000,
+            durationMinutes: 10_080,
+          },
+        },
+      ],
+    };
+
+    const settings = render(
+      <CodexRateLimitView data={severityFixture} variant="settings" />,
+    );
+    expect(settings.container.querySelectorAll(".bg-amber-500")).toHaveLength(
+      2,
+    );
+    expect(settings.container.querySelectorAll(".bg-red-500")).toHaveLength(1);
+    expect(settings.container.querySelectorAll(".bg-blue-500")).toHaveLength(1);
+    cleanup();
+
+    const usageLimits = render(
+      <CodexRateLimitView data={severityFixture} variant="popover-detail" />,
+    );
+    expect(
+      usageLimits.container.querySelectorAll(".bg-amber-500"),
+    ).toHaveLength(2);
+    expect(usageLimits.container.querySelectorAll(".bg-red-500")).toHaveLength(
+      1,
+    );
+    expect(usageLimits.container.querySelectorAll(".bg-blue-500")).toHaveLength(
+      1,
+    );
   });
 
   it("draws every popover window track with a foreground-opacity fill so an empty bar stays visible", () => {

@@ -15,6 +15,7 @@ import {
   __resetRateLimitQueueForTests,
   configureRateLimitQueue,
   enqueueRateLimitFetch,
+  enqueueRateLimitFetchBatch,
   enqueueRateLimitFetchForScope,
   isRateLimitQueueDraining,
   subscribeRateLimitQueueDraining,
@@ -123,6 +124,57 @@ describe("ephemeral-fetch-queue", () => {
 
     settlers[1].ok();
     await flush();
+  });
+
+  it("starts every profile in one refresh batch concurrently, then waits before running the next queue item", async () => {
+    const queryClient = newQueryClient();
+    const profileStarts: Array<string | null> = [];
+    const settlers: Array<() => void> = [];
+    const request = vi.fn<RateLimitQueueRequestFn>(
+      (_hostId, _method, params) => {
+        profileStarts.push(params.profileId);
+        return new Promise((resolve) => {
+          settlers.push(() => resolve(response()));
+        });
+      },
+    );
+    configureRateLimitQueue({ hostId: HOST_ID, queryClient, request });
+
+    void enqueueRateLimitFetchBatch(
+      [
+        {
+          providerId: "codex",
+          accountContext: DEFAULT_ACCOUNT_CONTEXT,
+          profileId: null,
+        },
+        {
+          providerId: "codex",
+          accountContext: DEFAULT_ACCOUNT_CONTEXT,
+          profileId: "work-profile",
+        },
+      ],
+      { force: true },
+    );
+    void enqueueRateLimitFetch("claude-code", DEFAULT_ACCOUNT_CONTEXT, {
+      force: true,
+      profileId: null,
+    });
+
+    await flush();
+    expect(profileStarts).toEqual([null, "work-profile"]);
+    expect(request).toHaveBeenCalledTimes(2);
+
+    settlers[0]();
+    await flush();
+    expect(request).toHaveBeenCalledTimes(2);
+
+    settlers[1]();
+    await flush();
+    expect(profileStarts).toEqual([null, "work-profile", null]);
+
+    settlers[2]();
+    await flush();
+    expect(isRateLimitQueueDraining()).toBe(false);
   });
 
   it("targets an explicit selected host instead of the configured default host and writes only its cache key", async () => {

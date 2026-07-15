@@ -7,8 +7,18 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useHostMutation } from "@/hooks/host/use-host-query";
-import { hostQueryKeys } from "@/lib/query-keys";
+import {
+  agentMutationKeys,
+  hostQueryKeys,
+  providersMutationKeys,
+  workspaceMutationKeys,
+} from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
+import {
+  Analytics,
+  AnalyticsEvent,
+  type AnalyticsProviderOperation,
+} from "@/lib/analytics";
 
 interface HostScopedMutationContext {
   readonly hostId: string | null;
@@ -67,7 +77,8 @@ export function useHostScopedMutationForClient<
     options: {
       mutationKey: args.mutationKey,
       onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
-      onSuccess: (_data, _variables, ctx) => {
+      onSuccess: (_data, variables, ctx) => {
+        trackScopedMutationSuccess(args.mutationKey, variables);
         if (ctx.hostId === null) return;
         for (const method of args.invalidateMethods) {
           void queryClient.invalidateQueries({
@@ -75,7 +86,67 @@ export function useHostScopedMutationForClient<
           });
         }
       },
-      onError: (error) => toastFromHostError(error, args.errorMessage),
+      onError: (error) => {
+        toastFromHostError(error, args.errorMessage);
+      },
     },
   });
+}
+
+const PROVIDER_MUTATION_OPERATIONS: Readonly<
+  Record<string, AnalyticsProviderOperation | undefined>
+> = {
+  [providersMutationKeys.setSelection()[0]]: "selection",
+  [providersMutationKeys.addCustomPath()[0]]: "custom_path",
+  [providersMutationKeys.removeCustomPath()[0]]: "custom_path",
+  [providersMutationKeys.setEnabled()[0]]: "enabled",
+  [providersMutationKeys.setApiKey()[0]]: "api_key",
+  [providersMutationKeys.clearApiKey()[0]]: "api_key",
+  [providersMutationKeys.setTerminalAgentArgs()[0]]: "terminal_args",
+  [providersMutationKeys.setEnvOverride()[0]]: "env_override",
+  [providersMutationKeys.deleteEnvOverride()[0]]: "env_override",
+  [providersMutationKeys.renameProfile()[0]]: "profile",
+  [providersMutationKeys.recolorProfile()[0]]: "profile",
+  [providersMutationKeys.removeProfile()[0]]: "profile",
+  [providersMutationKeys.acknowledgeAmbientDrift()[0]]: "ambient_drift",
+};
+
+function trackScopedMutationSuccess(
+  mutationKey: ReadonlyArray<unknown>,
+  variables: unknown,
+): void {
+  const action = mutationKey[0];
+  if (typeof action !== "string") return;
+  const providerOperation = PROVIDER_MUTATION_OPERATIONS[action];
+  if (providerOperation !== undefined) {
+    Analytics.getInstance().track(AnalyticsEvent.ProviderConfigurationChanged, {
+      operation: providerOperation,
+    });
+    return;
+  }
+  if (action === workspaceMutationKeys.addBindingFolder()[0]) {
+    Analytics.getInstance().track(AnalyticsEvent.WorkspaceFolderAdded, {
+      source: "direct_ui",
+      workspace_kind: "local",
+    });
+    return;
+  }
+  if (action === workspaceMutationKeys.removeBindingEntry()[0]) {
+    Analytics.getInstance().track(AnalyticsEvent.WorkspaceFolderRemoved, {
+      source: "direct_ui",
+      workspace_kind: "unknown",
+    });
+    return;
+  }
+  if (action === agentMutationKeys.stop()[0]) {
+    const cascade =
+      variables !== null &&
+      typeof variables === "object" &&
+      "cascade" in variables &&
+      variables.cascade === true;
+    Analytics.getInstance().track(AnalyticsEvent.AgentStopped, {
+      source: "direct_ui",
+      cascade,
+    });
+  }
 }

@@ -68,5 +68,14 @@ function hostPickerListQueryOptions(
       }
       return registeredDirectory.list();
     },
+    // `list()` is a synchronous in-memory snapshot behind a promise - there
+    // is nothing to cache. Under the global 60s staleTime, a consumer that
+    // mounted at revision 0 was served ANOTHER consumer's boot-time fetch of
+    // the same key - an empty list captured before the host published - and
+    // never refetched, rendering every bound tab "Bound host is offline" for
+    // the whole session (2026-07-14 incident). Always refetch on mount, and
+    // let superseded revision entries fall out of the cache quickly.
+    staleTime: 0,
+    gcTime: 30_000,
   });
 }

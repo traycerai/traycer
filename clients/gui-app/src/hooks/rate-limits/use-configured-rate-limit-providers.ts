@@ -38,14 +38,23 @@ interface ProviderRateLimitCacheState {
   readonly isError: boolean;
 }
 
-const PASSIVE_PROVIDER_RATE_LIMIT_OPTIONS: ProviderRateLimitTanstackOptions = {
-  enabled: false,
-  retry: false,
-  staleTime: PROVIDER_RATE_LIMITS_STALE_TIME_MS,
-  refetchInterval: false,
-  refetchIntervalInBackground: false,
-  refetchOnMount: false,
-};
+/**
+ * Cache-only observation: never `enabled`, so mounting this options object
+ * against a query never initiates its own provider read - it only reflects
+ * whatever the shared serial queue or another lane's active query already
+ * wrote into that exact cache key. Exported for other picker-only surfaces
+ * (`use-profile-usage-comparison.ts`) that need the same "observe, never
+ * fetch" contract this module's own `useVisibleRateLimitProviders` uses.
+ */
+export const PASSIVE_PROVIDER_RATE_LIMIT_OPTIONS: ProviderRateLimitTanstackOptions =
+  {
+    enabled: false,
+    retry: false,
+    staleTime: PROVIDER_RATE_LIMITS_STALE_TIME_MS,
+    refetchInterval: false,
+    refetchIntervalInBackground: false,
+    refetchOnMount: false,
+  };
 
 function hasProviderRateLimitCacheState(
   query: ProviderRateLimitCacheState | undefined,

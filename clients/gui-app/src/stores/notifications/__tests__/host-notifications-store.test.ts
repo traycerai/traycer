@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   hostStreamRpcRegistry,
   type HostStreamRpcRegistry,
@@ -20,6 +20,7 @@ import {
 } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import {
   __resetHostNotificationsStoreForTests,
+  HOST_NOTIFICATIONS_PRESENCE_HEARTBEAT_MS,
   openHostNotificationsStream,
   useHostNotificationsStore,
 } from "@/stores/notifications/host-notifications-store";
@@ -545,5 +546,41 @@ describe("host notifications store", () => {
     });
 
     close();
+  });
+
+  it("re-sends unchanged presence on the heartbeat cadence and stops on close", () => {
+    vi.useFakeTimers();
+    try {
+      const client = new MockWsStreamClient();
+
+      const close = openHostNotificationsStream(client, null, {
+        windowId: "window-1",
+        now: () => 456,
+        displayChannelEmission: () => undefined,
+        onFeedFrame: () => undefined,
+        onPresenceChanged: () => undefined,
+        onStreamOpened: () => undefined,
+      });
+
+      expect(client.session.clientFrames).toHaveLength(1);
+
+      // Nothing changed locally — the heartbeat must still refresh the
+      // host's TTL'd presence record, bypassing the content dedupe.
+      vi.advanceTimersByTime(HOST_NOTIFICATIONS_PRESENCE_HEARTBEAT_MS);
+      expect(client.session.clientFrames).toHaveLength(2);
+      expect(client.session.clientFrames[1]).toMatchObject({
+        kind: "presence",
+        windowId: "window-1",
+      });
+
+      vi.advanceTimersByTime(HOST_NOTIFICATIONS_PRESENCE_HEARTBEAT_MS);
+      expect(client.session.clientFrames).toHaveLength(3);
+
+      close();
+      vi.advanceTimersByTime(3 * HOST_NOTIFICATIONS_PRESENCE_HEARTBEAT_MS);
+      expect(client.session.clientFrames).toHaveLength(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -29,6 +29,11 @@ import {
   type AuthStatus,
 } from "@/stores/auth/auth-store";
 import { normalizeAvatarUrl } from "@/lib/avatar-url";
+import {
+  Analytics,
+  AnalyticsEvent,
+  type AnalyticsBlocker,
+} from "@/lib/analytics";
 import { projectShareableTeams } from "@/hooks/epic/use-epic-shareable-teams";
 import { onWakeReconnect } from "@/lib/host/wake-reconnect";
 import { appLogger, describeLogError } from "@/lib/logger";
@@ -1138,6 +1143,10 @@ export class AuthService {
 
       this.setLastError(null);
       this.applySignedIn(accepted.token, outcome.user, undefined);
+      // Terminal success of an interactive device-flow attempt (this method's
+      // only caller is `finalizeDeviceResult`). Passive token restores use a
+      // different path and deliberately never count as sign-ins.
+      Analytics.getInstance().track(AnalyticsEvent.SignInSucceeded, null);
       return true;
     }
     // Validation `rejected` OR `network-error`: do not persist. Surface
@@ -1592,6 +1601,12 @@ export class AuthService {
     appLogger.warn("[auth] applying auth failure", {
       errorCode: classifyAuthFailureForLog(error),
     });
+    // Every caller of this method is a terminal failure of an interactive
+    // sign-in attempt (launch failure, device denial/expiry, token rejection),
+    // so this is the one seam where `sign_in_failed` is emitted.
+    Analytics.getInstance().track(AnalyticsEvent.SignInFailed, {
+      blocker: SIGN_IN_FAILURE_BLOCKERS[error] ?? "unknown",
+    });
     this.setLastError(error);
     this.applySignedOut();
     await this.clearStoredAuth();
@@ -1716,3 +1731,10 @@ function deviceFailureError(
       return AUTH_ERROR_SIGN_IN_FAILED;
   }
 }
+
+const SIGN_IN_FAILURE_BLOCKERS: Readonly<Record<string, AnalyticsBlocker>> = {
+  [AUTH_ERROR_LAUNCH_FAILED]: "network",
+  [AUTH_ERROR_DEVICE_DENIED]: "authorization",
+  [AUTH_ERROR_DEVICE_EXPIRED]: "timeout",
+  [AUTH_ERROR_SIGN_IN_FAILED]: "authentication",
+};

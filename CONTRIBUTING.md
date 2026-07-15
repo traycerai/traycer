@@ -60,7 +60,7 @@ The hooks then run on every commit; run them on demand with `pre-commit run --al
 
 ## Developer Certificate of Origin (DCO)
 
-Every commit must be **signed off** — it certifies you wrote the patch or have the right to submit it under Apache-2.0. Use `-s`:
+Every commit must be **signed off** — it certifies you wrote the patch or have the right to submit it under MIT. Use `-s`:
 
 ```sh
 git commit -s -m "your message"
@@ -70,4 +70,4 @@ This appends a `Signed-off-by: Your Name <you@example.com>` trailer. See <https:
 
 ## License
 
-By contributing, you agree your contributions are licensed under [Apache-2.0](LICENSE).
+By contributing, you agree your contributions are licensed under the [MIT License](LICENSE).
