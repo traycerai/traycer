@@ -2296,6 +2296,190 @@ describe("createChatSessionStore", () => {
     expect(state.liveAssistantMessage).toBeNull();
   });
 
+  it("routes a steer-split carryover block's events to the frozen pre-split row (completes in place, no duplicate)", () => {
+    // A steer delivered mid-thinking splits the turn into two assistant rows
+    // sharing one turnId, with the reasoning block still STREAMING in the
+    // frozen pre-split row. Its remaining deltas + completion must apply to
+    // that row (the block finishes in place above the steer bubble); only a
+    // genuinely NEW block belongs to the continuation row. Without ownership
+    // routing the delta re-materialized the block as a duplicate in the
+    // continuation row while the original froze mid-sentence.
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const agentSender: Extract<Message, { role: "assistant" }>["sender"] = {
+      type: "agent",
+      harnessId: "claude",
+      agentId: "claude-sonnet",
+      displayName: "claude-sonnet",
+      reply: { expectsReply: false },
+    };
+    callbacks.onSnapshot({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      snapshot: {
+        chat: {
+          id: CHAT_ID,
+          parentId: null,
+          userId: OWNER_ID,
+          hostId: "test-host",
+          title: "Split Chat",
+          createdAt: 1,
+          updatedAt: 5,
+          isTitleEditedByUser: false,
+          settings: null,
+          activeSessionChain: null,
+          claudePendingWakes: [],
+          messages: [
+            persistedUserMessage("message-split-run"),
+            {
+              role: "assistant",
+              messageId: "assistant-frozen",
+              sender: agentSender,
+              blocks: [
+                {
+                  type: "reasoning",
+                  blockId: "think-split",
+                  status: "streaming",
+                  timestamp: 4,
+                  startedAt: 4,
+                  content: "The grep search is pulling in fal",
+                },
+              ],
+              startedAt: 3,
+              timestamp: 4,
+              turnId: "turn-split",
+              usage: null,
+              reasoningEffort: null,
+              serviceTier: null,
+            },
+            persistedUserMessage("message-split-steered"),
+            {
+              role: "assistant",
+              messageId: "assistant-continuation",
+              sender: agentSender,
+              blocks: [
+                {
+                  type: "steer",
+                  blockId: "steer:queue-split-steered",
+                  status: "completed",
+                  timestamp: 5,
+                  queueItemId: "queue-split-steered",
+                  messageId: "message-split-steered",
+                  content: CONTENT,
+                  mode: "safe_point",
+                  sender: null,
+                },
+              ],
+              startedAt: 3,
+              timestamp: 5,
+              turnId: "turn-split",
+              usage: null,
+              reasoningEffort: null,
+              serviceTier: null,
+            },
+          ],
+          events: [],
+        },
+        access: {
+          role: "owner",
+          ownerUserId: OWNER_ID,
+          canAct: true,
+        },
+        queue: { status: "idle", items: [] },
+        runStatus: "running",
+        activeTurn: {
+          turnId: "turn-split",
+          status: "running",
+          harnessId: "claude",
+          model: "claude-sonnet",
+          agentMode: "regular",
+          profileId: null,
+          userMessageId: "message-split-run",
+          startedAt: 3,
+          updatedAt: 5,
+          reasoningEffort: null,
+          serviceTier: null,
+        },
+        pendingApprovals: [],
+        pendingInterviews: [],
+        worktreeBinding: null,
+        missingWorktreePaths: [],
+        pendingFileEditApprovals: [],
+        accumulatedFileChanges: [],
+      },
+    });
+
+    // The SAME in-flight reasoning block keeps streaming after the split,
+    // then finalizes; a genuinely new text block follows it.
+    callbacks.onBlockDelta({
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      event: {
+        type: "reasoning.delta",
+        blockId: "think-split",
+        timestamp: 6,
+        delta: "se positives.",
+      },
+    });
+    callbacks.onBlockDelta({
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      event: {
+        type: "reasoning.completed",
+        blockId: "think-split",
+        timestamp: 7,
+      },
+    });
+    callbacks.onBlockDelta({
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      event: {
+        type: "text.delta",
+        blockId: "text-after-steer",
+        timestamp: 8,
+        delta: "Continuing after the steer.",
+      },
+    });
+
+    const state = harness.handle.store.getState();
+    const frozen = state.messages.find(
+      (message): message is Extract<Message, { role: "assistant" }> =>
+        message.role === "assistant" &&
+        message.messageId === "assistant-frozen",
+    );
+    const continuation = state.messages.find(
+      (message): message is Extract<Message, { role: "assistant" }> =>
+        message.role === "assistant" &&
+        message.messageId === "assistant-continuation",
+    );
+    // The in-flight block completed IN PLACE in the frozen row, whole.
+    expect(frozen?.blocks).toMatchObject([
+      {
+        type: "reasoning",
+        blockId: "think-split",
+        status: "completed",
+        content: "The grep search is pulling in false positives.",
+      },
+    ]);
+    // The continuation row holds the steer marker and the NEW block only -
+    // no duplicate reasoning block below the steer bubble.
+    expect(
+      continuation?.blocks.filter((block) => block.type === "reasoning"),
+    ).toStrictEqual([]);
+    expect(continuation?.blocks).toMatchObject([
+      { type: "steer", blockId: "steer:queue-split-steered" },
+      { type: "text", blockId: "text-after-steer" },
+    ]);
+  });
+
   it("tracks live in-flight usage from usage.updated and carries the final value forward through turn.completed", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
