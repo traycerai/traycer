@@ -185,6 +185,7 @@ export function ProviderProfileScopedSection(
           shortcutHintForIndex={noProfileShortcutHint}
           contentContainer={null}
           onCloseAutoFocus={null}
+          usagePresentation={null}
         />
         <div className="flex flex-wrap items-center justify-end gap-2">
           <ProfileSummary

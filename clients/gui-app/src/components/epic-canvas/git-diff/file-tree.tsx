@@ -23,6 +23,7 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { makeGitFileDiffTileForFile } from "@/lib/git/git-diff-tile";
 import type {
   GitDiffBundleGroup,
+  GitDiffRepositoryContext,
   GitDiffTileRef,
 } from "@/stores/epics/canvas/types";
 import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
@@ -36,6 +37,7 @@ export interface FileTreeProps {
   readonly viewTabId: string;
   readonly hostId: string;
   readonly runningDir: string;
+  readonly repositoryContext: GitDiffRepositoryContext | null;
   readonly allFiles: ReadonlyArray<GitChangedFile>;
   readonly visibleFiles: ReadonlyArray<GitChangedFile>;
   readonly forceExpanded: boolean;
@@ -49,6 +51,7 @@ interface GitTreeSectionBodyProps {
   readonly viewTabId: string;
   readonly hostId: string;
   readonly runningDir: string;
+  readonly repositoryContext: GitDiffRepositoryContext | null;
   readonly group: GitDiffBundleGroup;
   readonly files: ReadonlyArray<GitChangedFile>;
   readonly activeFilePath: string | null;
@@ -67,6 +70,7 @@ export function FileTree(props: FileTreeProps): ReactNode {
         viewTabId={props.viewTabId}
         hostId={props.hostId}
         runningDir={props.runningDir}
+        repositoryContext={props.repositoryContext}
         group={section.group}
         files={section.visibleFiles}
         activeFilePath={section.activeFilePath}
@@ -76,6 +80,7 @@ export function FileTree(props: FileTreeProps): ReactNode {
     [
       props.epicId,
       props.hostId,
+      props.repositoryContext,
       props.runningDir,
       props.viewTabId,
       props.virtualized,
@@ -88,6 +93,7 @@ export function FileTree(props: FileTreeProps): ReactNode {
       viewTabId={props.viewTabId}
       hostId={props.hostId}
       runningDir={props.runningDir}
+      repositoryContext={props.repositoryContext}
       allFiles={props.allFiles}
       visibleFiles={props.visibleFiles}
       forceExpanded={props.forceExpanded}
@@ -202,9 +208,10 @@ function GitTreeSectionBody(props: GitTreeSectionBodyProps): ReactNode {
         hostId: props.hostId,
         runningDir: props.runningDir,
         file,
+        repositoryContext: props.repositoryContext,
       });
     },
-    [fileByPath, props.hostId, props.runningDir],
+    [fileByPath, props.hostId, props.repositoryContext, props.runningDir],
   );
 
   const openFile = useCallback(

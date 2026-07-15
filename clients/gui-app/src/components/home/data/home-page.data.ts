@@ -1,6 +1,6 @@
 import type {
   PermissionRole,
-  TaskLight,
+  ListTaskLight,
   TaskOwnershipScope,
   TaskWorkspaceIdentifier,
 } from "@traycer/protocol/host/epic/unary-schemas";
@@ -41,6 +41,7 @@ export interface HistoryItem {
   pullRequestNumbers: ReadonlyArray<string>;
   ownership: HistoryOwnershipScope;
   permissionRole: PermissionRole | null;
+  isPinned: boolean;
 }
 
 export interface HistoryFilters {
@@ -64,7 +65,7 @@ const HISTORY_GROUP_LABELS: Record<HistoryRecencyBucket, string> = {
 };
 
 export function buildHistoryItemsFromTasks(
-  tasks: ReadonlyArray<TaskLight>,
+  tasks: ReadonlyArray<ListTaskLight>,
   nowMs: number,
   userId: string | null,
 ): ReadonlyArray<HistoryItem> {
@@ -81,6 +82,7 @@ export function buildHistoryItemsFromTasks(
           userId,
           nowMs,
           role: task.epic?.permission?.role ?? null,
+          isPinned: task.pinned ?? false,
         }),
       ];
     }
@@ -101,6 +103,7 @@ export function buildHistoryItemsFromTasks(
         userId,
         nowMs,
         role: task.phase?.permission?.role ?? null,
+        isPinned: false,
       }),
     ];
   });
@@ -110,11 +113,12 @@ function buildHistoryItem(args: {
   light: { id: string; title: string; updatedAt: number; createdBy: string };
   taskType: "epic" | "phase";
   initialUserPrompt: string;
-  task: TaskLight;
+  task: ListTaskLight;
   index: number;
   userId: string | null;
   nowMs: number;
   role: PermissionRole | null;
+  isPinned: boolean;
 }): HistoryItem {
   const {
     light,
@@ -125,6 +129,7 @@ function buildHistoryItem(args: {
     userId,
     nowMs,
     role,
+    isPinned,
   } = args;
   const ownership = light.createdBy === userId ? "mine" : "shared";
   return {
@@ -147,6 +152,7 @@ function buildHistoryItem(args: {
     pullRequestNumbers: [],
     ownership,
     permissionRole: historyPermissionRole(ownership, role),
+    isPinned,
   };
 }
 
@@ -280,6 +286,7 @@ export function sortHistoryItems(
         .slice()
         .sort(
           (left, right) =>
+            comparePinnedHistoryItems(left, right) ||
             right.updatedAtMs - left.updatedAtMs ||
             BUCKET_ORDER[left.updatedBucket] -
               BUCKET_ORDER[right.updatedBucket],
@@ -289,6 +296,7 @@ export function sortHistoryItems(
         .slice()
         .sort(
           (left, right) =>
+            comparePinnedHistoryItems(left, right) ||
             left.updatedAtMs - right.updatedAtMs ||
             BUCKET_ORDER[right.updatedBucket] -
               BUCKET_ORDER[left.updatedBucket],
@@ -296,14 +304,39 @@ export function sortHistoryItems(
     case "title-asc":
       return items
         .slice()
-        .sort((left, right) => left.title.localeCompare(right.title));
+        .sort(
+          (left, right) =>
+            comparePinnedHistoryItems(left, right) ||
+            left.title.localeCompare(right.title),
+        );
     case "title-desc":
       return items
         .slice()
-        .sort((left, right) => right.title.localeCompare(left.title));
+        .sort(
+          (left, right) =>
+            comparePinnedHistoryItems(left, right) ||
+            right.title.localeCompare(left.title),
+        );
     case "relevance":
       return sortHistoryItems(items, "recent");
   }
+}
+
+/** Stable pinned-first partition for relevance-ranked search results. */
+export function prioritizePinnedHistoryItems(
+  items: ReadonlyArray<HistoryItem>,
+): ReadonlyArray<HistoryItem> {
+  return items
+    .slice()
+    .sort((left, right) => comparePinnedHistoryItems(left, right));
+}
+
+function comparePinnedHistoryItems(
+  left: HistoryItem,
+  right: HistoryItem,
+): number {
+  if (left.isPinned === right.isPinned) return 0;
+  return left.isPinned ? -1 : 1;
 }
 
 export function groupHistoryItems(
@@ -348,7 +381,7 @@ function toStartOfDay(timestamp: number): number {
   return date.getTime();
 }
 
-function readTaskRepos(task: TaskLight): ReadonlyArray<string> {
+function readTaskRepos(task: ListTaskLight): ReadonlyArray<string> {
   const repos = task.epic?.repos ?? task.phase?.repos ?? [];
   return Array.from(
     new Set(
@@ -367,7 +400,7 @@ function readTaskRepos(task: TaskLight): ReadonlyArray<string> {
 }
 
 function readTaskWorkspaces(
-  task: TaskLight,
+  task: ListTaskLight,
 ): ReadonlyArray<HistoryWorkspaceRef> {
   const workspaces = task.epic?.workspaces ?? task.phase?.workspaces ?? [];
   const unique = new Map<string, HistoryWorkspaceRef>();

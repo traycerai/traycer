@@ -16,6 +16,10 @@ import {
 } from "@floating-ui/dom";
 
 import { MaterialFileIcon } from "@/components/material-file-icon";
+import {
+  HOVER_PREVIEW_SCROLL_CLASS,
+  HOVER_PREVIEW_SURFACE_CLASS,
+} from "@/components/ui/hover-preview-surface";
 import type { MentionPreview } from "@/lib/composer/types";
 import type { MentionPathTree } from "@/lib/path";
 import { cn } from "@/lib/utils";
@@ -127,13 +131,14 @@ export function MentionPreviewPanel(props: MentionPreviewPanelProps) {
       role="presentation"
       aria-hidden
       className={cn(
-        "pointer-events-auto fixed top-0 left-0 z-50 flex w-[min(90vw,22rem)] flex-col overflow-hidden rounded-xl border border-border/70 bg-popover text-popover-foreground shadow-lg",
+        "pointer-events-auto fixed top-0 left-0 z-50 flex w-[min(90vw,22rem)] flex-col",
+        HOVER_PREVIEW_SURFACE_CLASS,
         !fits && "invisible",
       )}
     >
       <div
         data-slot="mention-preview-panel-scroll-area"
-        className="min-h-0 max-h-[min(50vh,16rem)] overflow-y-auto overscroll-contain px-3 py-2"
+        className={cn("max-h-[min(50vh,16rem)]", HOVER_PREVIEW_SCROLL_CLASS)}
       >
         <PreviewBody preview={preview} />
       </div>

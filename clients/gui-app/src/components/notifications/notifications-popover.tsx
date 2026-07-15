@@ -9,6 +9,7 @@ import {
   MessageCircle,
   MessageSquarePlus,
   MessageSquareX,
+  Settings,
   Shield,
   Trash2,
   UserMinus,
@@ -30,6 +31,7 @@ import {
   useMergedNotificationUnreadCount,
   useMergedNotificationsActions,
 } from "@/stores/notifications/merged-notifications";
+import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import {
   type NotificationEvent,
   NOTIFICATION_EVENT_TYPES,
@@ -57,6 +59,7 @@ export function NotificationsPopover(props: NotificationsPopoverProps) {
   const ids = useMergedNotificationIds();
   const actions = useMergedNotificationsActions();
   const { activate } = useNotificationActivation();
+  const { openSettings } = useSystemTabModalActions();
   const [activeTab, setActiveTab] = useState<NotificationsTab>("unread");
 
   const handleClick = useCallback(
@@ -82,6 +85,11 @@ export function NotificationsPopover(props: NotificationsPopoverProps) {
       setActiveTab(value);
     }
   }, []);
+
+  const handleOpenSettings = useCallback(() => {
+    onNavigate();
+    openSettings({ section: "notifications", resetToGeneral: false });
+  }, [onNavigate, openSettings]);
 
   const isEmpty = ids.length === 0;
   const unreadCount = useMergedNotificationUnreadCount();
@@ -166,6 +174,24 @@ export function NotificationsPopover(props: NotificationsPopoverProps) {
                   className="text-muted-foreground hover:text-destructive"
                 >
                   <Trash2 className="size-3.5" aria-hidden />
+                </Button>
+              </TooltipWrapper>
+              <TooltipWrapper
+                label="Notification settings"
+                side="bottom"
+                sideOffset={6}
+                align="end"
+              >
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={handleOpenSettings}
+                  data-testid="notifications-open-settings"
+                  aria-label="Open notification settings"
+                  className="text-muted-foreground hover:text-foreground"
+                >
+                  <Settings className="size-3.5" aria-hidden />
                 </Button>
               </TooltipWrapper>
             </div>

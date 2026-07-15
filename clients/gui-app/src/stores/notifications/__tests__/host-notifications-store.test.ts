@@ -37,6 +37,8 @@ function entry(
     sourceRef: id,
     severity: "done",
     outcome: "completed",
+    epicId: "epic-1",
+    chatId: "chat-1",
     payload: {
       epicId: "epic-1",
       chatId: "chat-1",
@@ -55,6 +57,8 @@ function promptEntry(id: string): HostNotificationEntry {
     severity: "needs_action",
     outcome: null,
     resolvedAt: null,
+    epicId: "epic-1",
+    chatId: "chat-1",
     payload: { epicId: "epic-1", chatId: "chat-1" },
   };
 }

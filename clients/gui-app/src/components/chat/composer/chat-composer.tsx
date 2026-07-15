@@ -426,6 +426,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
                   dictationPreparing={dictationPreparing}
                   settingsLocked={false}
                   createProfileHostId={tabHostId}
+                  runTargetHostId={tabHostId}
                 />
               }
             />
