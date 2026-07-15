@@ -152,6 +152,7 @@ function TerminalLaunchPanelImpl(props: TerminalLaunchPanelProps) {
           // to yet - the app-wide default host is correct, same as this
           // panel's own `useProvidersList()` read above.
           createProfileHostId={null}
+          runTargetHostId={null}
         />
         <Input
           aria-label="Terminal agent CLI arguments"

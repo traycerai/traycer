@@ -4,24 +4,25 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useEpicRenameChat } from "@/hooks/epic/use-epic-chat-mutations";
 import { useEpicRenameTuiAgent } from "@/hooks/epic/use-epic-tui-agent-mutations";
 import { useEpicRenameArtifact } from "@/hooks/epic/use-epic-node-mutations";
-import { useTerminalRename } from "@/hooks/terminal/use-terminal-rename-mutation";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 
 /**
- * Commit handler for inline tab-title editing in the canvas tab strip. Mirrors
- * the sidebar rename path so a tab renamed from its right-click menu stays in
- * lockstep with the same node renamed from the sidebar tree:
+ * Commit handler for inline tab-title editing in the canvas tab strip, for
+ * RECORD-BACKED nodes only. Mirrors the sidebar rename path so a tab renamed
+ * from its right-click menu stays in lockstep with the same node renamed from
+ * the sidebar tree: chat / terminal-agent / spec / ticket / story / review
+ * live in the epic Y.Doc, so we update the local projection
+ * (`renameArtifact`) and the tab snapshot (`renameArtifactInTab`) for instant
+ * feedback, then fire the kind-specific authoritative RPC.
  *
- * - chat / terminal-agent / spec / ticket / story / review live in the epic
- *   Y.Doc, so we update the local projection (`renameArtifact`) and the tab
- *   snapshot (`renameArtifactInTab`) for instant feedback, then fire the
- *   kind-specific authoritative RPC.
- * - plain terminals are host sessions (not Y.Doc artifacts), so we only
- *   update the tab snapshot and rename the host session record.
+ * Plain terminals never reach this handler: they are host sessions (not
+ * Y.Doc artifacts) whose titles live on the host, so `TabItem` routes their
+ * rename through `useTerminalRenameFor` against the tab's bound host - the
+ * mutation's optimistic `terminal.list` patch updates every title surface at
+ * once.
  *
  * `viewTabId` is the header (epic) view tab that owns the canvas snapshot;
- * `tab.id` is the content id (chat / artifact / session), not the per-tab
- * `instanceId`.
+ * `tab.id` is the content id (chat / artifact), not the per-tab `instanceId`.
  */
 export function useRenameCanvasTab(
   epicId: string,
@@ -32,18 +33,13 @@ export function useRenameCanvasTab(
   const renameChat = useEpicRenameChat();
   const renameTerminalAgent = useEpicRenameTuiAgent();
   const renameArtifact = useEpicRenameArtifact();
-  const renameTerminal = useTerminalRename();
 
   return useCallback(
     (tab, rawTitle) => {
       const trimmed = rawTitle.trim();
       if (trimmed.length === 0) return;
+      if (tab.type === "terminal") return;
       const id = tab.id;
-      if (tab.type === "terminal") {
-        renameArtifactInTab(viewTabId, id, trimmed);
-        renameTerminal.mutate({ sessionId: id, title: trimmed });
-        return;
-      }
       epicHandle.store.getState().renameArtifact(id, trimmed);
       renameArtifactInTab(viewTabId, id, trimmed);
       if (tab.type === "chat") {
@@ -60,7 +56,6 @@ export function useRenameCanvasTab(
       renameArtifact,
       renameArtifactInTab,
       renameChat,
-      renameTerminal,
       renameTerminalAgent,
       viewTabId,
     ],

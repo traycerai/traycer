@@ -58,6 +58,8 @@ import {
   isOpenableEpicNodeKind,
 } from "@/stores/epics/canvas/types";
 import { useIsActivePane, useTabActivation } from "@/stores/epics/canvas/store";
+import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useTerminalRenameFor } from "@/hooks/terminal/use-terminal-rename-for-mutation";
 import {
   TabStripContextMenu,
   type TabStripContextMenuProps,
@@ -449,13 +451,24 @@ function TabItem(props: TabItemProps) {
     id: getArtifactTabDropId(groupId, tab.instanceId),
     data: dropData,
   });
-  const displayTitle = useEpicTabDisplayTitle({
-    id: tab.id,
-    name: tab.name,
-    type: tab.type,
-    instanceId: "instanceId" in tab ? tab.instanceId : undefined,
-    titleSource: "titleSource" in tab ? tab.titleSource : undefined,
-  });
+  // ONE bound-host client per tab, shared by title resolution and the
+  // terminal rename mutation (terminal tabs are host-bound for life; the
+  // default host may differ). Gated to terminals - non-terminal tabs pass
+  // null everywhere, keeping their terminal.list observer disabled.
+  const isTerminalTab = tab.type === "terminal";
+  const resolvedHostClient = useHostClientForHostId(
+    isTerminalTab && "hostId" in tab ? tab.hostId : null,
+  );
+  const terminalHostClient = isTerminalTab ? resolvedHostClient : null;
+  const displayTitle = useEpicTabDisplayTitle(
+    {
+      id: tab.id,
+      name: tab.name,
+      type: tab.type,
+    },
+    epicId,
+    terminalHostClient,
+  );
   const titleGenerationPending = useEpicLiveArtifactTitleGenerating(
     tab.type === "chat" ? tab.id : null,
   );
@@ -467,14 +480,33 @@ function TabItem(props: TabItemProps) {
   // Only chat / artifact / terminal tabs carry an editable title; diff,
   // blank, and workspace-file tabs are not renameable.
   const canRename = canRenameTabs && isOpenableEpicNodeKind(tab.type);
+  // Terminal renames go straight to the tab's bound host via the shared
+  // client above; the mutation's optimistic `terminal.list` patch is what
+  // every title surface renders from, so no per-view canvas rename is
+  // involved.
+  const renameTerminal = useTerminalRenameFor(terminalHostClient);
   // Pull `onRename` out so the commit callback depends on the (stable) handler
   // rather than the per-render `menuProps` object literal.
   const { onRename } = menuProps;
+  const { mutate: renameTerminalMutate } = renameTerminal;
   const handleRename = useCallback(
     (next: string) => {
+      if (isTerminalTab) {
+        const trimmed = next.trim();
+        if (trimmed.length === 0) return;
+        renameTerminalMutate({ sessionId: tab.id, title: trimmed });
+        return;
+      }
       onRename(groupId, tab.instanceId, next);
     },
-    [groupId, onRename, tab.instanceId],
+    [
+      groupId,
+      isTerminalTab,
+      onRename,
+      renameTerminalMutate,
+      tab.id,
+      tab.instanceId,
+    ],
   );
   const rename = useInlineRename({
     value: displayTitle,

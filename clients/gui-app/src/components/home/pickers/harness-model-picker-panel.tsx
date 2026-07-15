@@ -4,7 +4,8 @@ import { LEADER_SCOPE_MODEL_PICKER } from "@/lib/keybindings/leader-scope";
 import { HarnessModelPickerSearch } from "@/components/home/pickers/harness-model-picker-search";
 import { HarnessModelPickerList } from "@/components/home/pickers/harness-model-picker-list";
 import { ProviderRail } from "@/components/home/pickers/harness-model-picker-group";
-import { ProfileDropdown } from "@/components/providers/profile-dropdown";
+import { PickerProfileDropdown } from "@/components/home/pickers/picker-profile-dropdown";
+import { isProfileUsageSidecarTarget } from "@/components/providers/profile-usage-sidecar-target";
 import { useProviderProfileAddFlowStore } from "@/stores/settings/provider-profile-add-flow-store";
 import { pickerProfileShortcutHintForIndex } from "@/components/home/pickers/harness-model-picker-shortcut-hint";
 import type {
@@ -84,6 +85,9 @@ interface HarnessModelPickerPanelProps {
   /** The host "Create new profile" creates on - see `HarnessModelPicker`'s
    *  prop of the same name. */
   readonly createProfileHostId: string | null;
+  /** Exact host where the next run executes. Never inferred from the create
+   *  profile scope, even though current call sites intentionally pass both. */
+  readonly runTargetHostId: string | null;
   readonly createProfileDisabled: boolean;
   readonly createProfileDisabledReason: string | undefined;
 }
@@ -130,6 +134,7 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
     reasoningFooter,
     serviceTierFooter,
     createProfileHostId,
+    runTargetHostId,
     createProfileDisabled,
     createProfileDisabledReason,
   } = props;
@@ -171,6 +176,9 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
         event.preventDefault();
         onQueryChange("");
       }}
+      onInteractOutside={(event) => {
+        if (isProfileUsageSidecarTarget(event.target)) event.preventDefault();
+      }}
     >
       <HarnessModelPickerSearch
         inputRef={inputRef}
@@ -207,7 +215,8 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
               pair. */}
           {activeProviderProfiles.length >= 2 ? (
             <div className="shrink-0 border-b p-2">
-              <ProfileDropdown
+              <PickerProfileDropdown
+                providerId={resolvedActiveProviderId}
                 providerLabel={activeProviderLabel}
                 profiles={activeProviderProfiles}
                 activeProfileId={activeProfileId}
@@ -227,7 +236,8 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
                 createProfileDisabledReason={createProfileDisabledReason}
                 shortcutHintForIndex={pickerProfileShortcutHintForIndex}
                 contentContainer={profileDropdownContainer}
-                onCloseAutoFocus={() => inputRef.current?.focus()}
+                inputRef={inputRef}
+                runTargetHostId={runTargetHostId}
               />
             </div>
           ) : null}
