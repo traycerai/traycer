@@ -1,11 +1,16 @@
+import "../../../../__tests__/test-browser-apis";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { HostNotificationEntry } from "@traycer/protocol/host/notifications/contracts";
 import {
+  displayHostChannelEmission,
   displayNotificationRows,
   notificationReplaceKey,
 } from "@/lib/notifications/notification-display";
 import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { makeOpenableNodeRef } from "@/stores/epics/canvas/types";
 
 interface CapturedToast {
   readonly title: string;
@@ -250,5 +255,119 @@ describe("notification display", () => {
 
     expect(onToastClick).not.toHaveBeenCalled();
     expect(dismiss).toHaveBeenCalledWith("host:chat:chat-1");
+  });
+});
+
+function hostEntry(id: string, chatId: string | null): HostNotificationEntry {
+  return {
+    id,
+    updatedAt: 10,
+    readAt: null,
+    kind: "agent.stopped",
+    sourceRef: id,
+    severity: "done",
+    outcome: "completed",
+    epicId: "epic-1",
+    chatId,
+    payload:
+      chatId === null
+        ? {
+            kind: "epic",
+            epicId: "epic-1",
+            tuiAgentId: "tui-1",
+            agentName: "Agent",
+            taskTitle: "Task",
+            outcome: "completed",
+          }
+        : {
+            kind: "chat",
+            epicId: "epic-1",
+            chatId,
+            agentName: "Agent",
+            taskTitle: "Task",
+            outcome: "completed",
+          },
+  };
+}
+
+describe("host channel emission focus gate", () => {
+  beforeEach(() => {
+    toastCalls.length = 0;
+    customToastCalls.length = 0;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    useEpicCanvasStore.setState({
+      tabsById: {},
+      canvasByTabId: {},
+      openTabOrder: [],
+      activeTabId: null,
+      mostRecentTabIdByEpicId: {},
+    });
+    cleanup();
+  });
+
+  function focusChatTile(chatId: string): void {
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic 1");
+    useEpicCanvasStore.getState().openTileInTab(
+      tabId,
+      makeOpenableNodeRef({
+        id: chatId,
+        instanceId: `${chatId}-instance`,
+        type: "chat",
+        name: "Chat",
+        hostId: "host-1",
+      }),
+    );
+  }
+
+  function displayTarget() {
+    return {
+      showNotification: vi.fn(() => Promise.resolve()),
+      playChime: vi.fn(),
+      onToastClick: vi.fn(),
+    };
+  }
+
+  it("suppresses rows addressed to the focused chat, including epic rollups", () => {
+    focusChatTile("chat-1");
+    const target = displayTarget();
+
+    displayHostChannelEmission(
+      [hostEntry("n-1", "chat-1"), hostEntry("n-2", null)],
+      target,
+    );
+
+    expect(target.showNotification).not.toHaveBeenCalled();
+    expect(target.playChime).not.toHaveBeenCalled();
+    expect(toastCalls).toHaveLength(0);
+    expect(customToastCalls).toHaveLength(0);
+  });
+
+  it("still displays rows for a sibling chat in the same epic", () => {
+    focusChatTile("chat-1");
+    const target = displayTarget();
+
+    displayHostChannelEmission(
+      [hostEntry("n-1", "chat-1"), hostEntry("n-2", "chat-2")],
+      target,
+    );
+
+    expect(target.showNotification).toHaveBeenCalledOnce();
+    expect(target.playChime).toHaveBeenCalledOnce();
+    expect(customToastCalls).toHaveLength(1);
+  });
+
+  it("displays rows for the active entity when the window is blurred", () => {
+    focusChatTile("chat-1");
+    vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    const target = displayTarget();
+
+    displayHostChannelEmission([hostEntry("n-1", "chat-1")], target);
+
+    expect(target.showNotification).toHaveBeenCalledOnce();
+    expect(target.playChime).toHaveBeenCalledOnce();
   });
 });

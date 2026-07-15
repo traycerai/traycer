@@ -10,6 +10,14 @@ import type { HostNotificationsEntityRef } from "@traycer/protocol/host/notifica
 
 export const APP_LOCAL_NOTIFICATIONS_ROW_CAP = 200;
 
+/**
+ * How long a read cause-keyed entry stays acknowledged before a recurrence
+ * of the same cause flips it back to unread. Caps badge churn from a
+ * high-frequency failure at one unread-flip per window while still
+ * re-surfacing a problem the user acknowledged but that keeps happening.
+ */
+export const APP_LOCAL_RESURFACE_COOLDOWN_MS = 5 * 60_000;
+
 export type AppLocalNotificationKind =
   | "terminal.closed"
   | "terminal.crashed"
@@ -42,6 +50,7 @@ export interface AppLocalNotificationsState {
   activateIdentity: (userId: string) => void;
   deactivateIdentity: () => void;
   upsert: (entry: AppLocalNotificationEntry) => void;
+  upsertReplacing: (entry: AppLocalNotificationEntry) => void;
   markAsRead: (id: string, readAt: number) => void;
   markEntityAsRead: (
     entity: HostNotificationsEntityRef,
@@ -117,6 +126,41 @@ export function createAppLocalNotificationsStore(initialName: string) {
             const byId = cappedAppLocalEntries({
               ...state.byId,
               [entry.id]: entry,
+            });
+            const projection = projectAppLocalNotifications(byId);
+            return {
+              byId,
+              orderedIds: projection.orderedIds,
+              unreadCount: projection.unreadCount,
+            };
+          });
+        },
+
+        // For cause-keyed entries (recurring host errors): replaces the
+        // existing row so the single entry carries the latest occurrence -
+        // fresh timestamp, latest detail - instead of either stacking
+        // duplicates or (like `upsert`) silently dropping every recurrence
+        // after the first, which a persisted store would otherwise do
+        // forever. A recurrence flips the row back to unread only when the
+        // user's read-acknowledgement is older than the resurface cooldown;
+        // a cause firing every few seconds must not re-light the badge as
+        // fast as it fires.
+        upsertReplacing: (entry) => {
+          if (get().activeUserId === null) return;
+          set((state) => {
+            const existing = Object.hasOwn(state.byId, entry.id)
+              ? state.byId[entry.id]
+              : null;
+            const acknowledged =
+              existing !== null &&
+              existing.readAt !== null &&
+              entry.updatedAt - existing.readAt <
+                APP_LOCAL_RESURFACE_COOLDOWN_MS;
+            const byId = cappedAppLocalEntries({
+              ...state.byId,
+              [entry.id]: acknowledged
+                ? { ...entry, readAt: existing.readAt }
+                : entry,
             });
             const projection = projectAppLocalNotifications(byId);
             return {
@@ -317,7 +361,7 @@ export function emitHostErrorNotification(input: {
   readonly detail: string | null;
   readonly payload: NotificationPayload | null;
 }): void {
-  useAppLocalNotificationsStore.getState().upsert({
+  useAppLocalNotificationsStore.getState().upsertReplacing({
     id: `host.error:${input.id}`,
     updatedAt: Date.now(),
     readAt: null,

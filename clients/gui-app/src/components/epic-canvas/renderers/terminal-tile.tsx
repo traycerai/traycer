@@ -127,7 +127,13 @@ export function TerminalTile(props: TerminalTileProps) {
       />
     );
   }
-  if (reachability.status === "checking") {
+  // "host-starting" = the directory is empty because the local host hasn't
+  // published yet (boot/ensure/wake). Rendering the dead banner there showed
+  // "permanently closed" for terminals that were seconds from reconnecting.
+  if (
+    reachability.status === "checking" ||
+    reachability.status === "host-starting"
+  ) {
     return (
       <div
         className="flex h-full w-full items-center justify-center bg-canvas"

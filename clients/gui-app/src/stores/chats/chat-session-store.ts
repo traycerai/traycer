@@ -2951,6 +2951,7 @@ function liveAssistantForActiveTurn(
       // Live assistant turns never participate in inter-agent broker
       // threads; replies are meaningful only on `role: "user"` agent senders.
       reply: { expectsReply: false },
+      inReplyTo: null,
     },
     blocks: [],
     startedAt: activeTurn.startedAt,

@@ -12,6 +12,7 @@ const SENDER: AgentSender = {
   agentId: "gpt-5-codex",
   displayName: "GPT-5 Codex",
   reply: { expectsReply: false },
+  inReplyTo: null,
 };
 
 function displayContext(
