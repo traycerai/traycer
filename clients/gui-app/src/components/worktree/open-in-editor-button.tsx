@@ -78,7 +78,7 @@ export function OpenInEditorButton(props: OpenInEditorButtonProps) {
   const activeHostEntry = useHostDirectoryEntry(activeHostId ?? "");
   const defaultEditor = useSettingsStore((s) => s.defaultEditor);
   const setDefaultEditor = useSettingsStore((s) => s.setDefaultEditor);
-  const mutation = useEditorOpen();
+  const mutation = useEditorOpen("workspace");
   const { active: openFeedbackActive, trigger: triggerOpenFeedback } =
     useEditorOpenFeedback();
   const availability = useEditorAvailability();

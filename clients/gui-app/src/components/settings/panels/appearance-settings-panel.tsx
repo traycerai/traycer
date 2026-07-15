@@ -34,6 +34,22 @@ import {
 } from "@/stores/settings/settings-store";
 import { cn } from "@/lib/utils";
 import { useRunnerInstalledFontsQuery } from "@/hooks/runner/use-runner-installed-fonts-query";
+import {
+  trackedSettingSetter,
+  trackSettingChanged,
+  type AnalyticsSetting,
+} from "@/lib/analytics";
+
+function trackedAppearanceSetter<Value>(
+  setting: AnalyticsSetting,
+  setter: (value: Value) => void,
+): (value: Value) => void {
+  return trackedSettingSetter("appearance", setting, setter);
+}
+
+function trackAppearanceSetting(setting: AnalyticsSetting): void {
+  trackSettingChanged("appearance", setting);
+}
 
 export function AppearanceSettingsPanel() {
   const theme = useSettingsStore((state) => state.theme);
@@ -102,13 +118,21 @@ export function AppearanceSettingsPanel() {
       <SettingsRow
         label="Theme"
         description="Use light, dark, or match your system."
-        control={<ThemeModeToggle value={theme} onChange={setTheme} />}
+        control={
+          <ThemeModeToggle
+            value={theme}
+            onChange={trackedAppearanceSetter("theme", setTheme)}
+          />
+        }
       />
       <SettingsRow
         label="Preset"
         description="Pick a named palette. Full-palette presets override the base surface."
         control={
-          <ThemePresetPicker value={themePreset} onChange={setThemePreset} />
+          <ThemePresetPicker
+            value={themePreset}
+            onChange={trackedAppearanceSetter("themePreset", setThemePreset)}
+          />
         }
       />
       <SettingsRow
@@ -122,7 +146,10 @@ export function AppearanceSettingsPanel() {
         control={
           <Switch
             checked={pointerCursors}
-            onCheckedChange={setPointerCursors}
+            onCheckedChange={trackedAppearanceSetter(
+              "pointerCursors",
+              setPointerCursors,
+            )}
             aria-label="Use pointer cursors"
           />
         }
@@ -134,11 +161,18 @@ export function AppearanceSettingsPanel() {
           <EpicNodeIconColorPicker
             enabled={artifactIconColorMode === "byType"}
             onEnabledChange={(enabled) => {
+              trackAppearanceSetting("artifactIconColorMode");
               setArtifactIconColorMode(enabled ? "byType" : "none");
             }}
             colors={artifactIconColors}
-            onChange={setArtifactIconColor}
-            onReset={resetArtifactIconColors}
+            onChange={(type, color) => {
+              trackAppearanceSetting("artifactIconColors");
+              setArtifactIconColor(type, color);
+            }}
+            onReset={() => {
+              trackAppearanceSetting("artifactIconColors");
+              resetArtifactIconColors();
+            }}
           />
         }
       />
@@ -150,7 +184,10 @@ export function AppearanceSettingsPanel() {
           <div className="flex flex-col items-end gap-2">
             <FontPicker
               value={uiFontFamily}
-              onChange={setUiFontFamily}
+              onChange={trackedAppearanceSetter(
+                "uiFontFamily",
+                setUiFontFamily,
+              )}
               options={installedFonts}
               defaultLabel="Figtree (Default)"
               resetTooltip="Reset to default"
@@ -158,7 +195,7 @@ export function AppearanceSettingsPanel() {
             />
             <SettingsNumberInput
               value={uiFontSize}
-              onChange={setUiFontSize}
+              onChange={trackedAppearanceSetter("uiFontSize", setUiFontSize)}
               min={10}
               max={20}
               unit="px"
@@ -176,7 +213,10 @@ export function AppearanceSettingsPanel() {
           <div className="flex flex-col items-end gap-2">
             <FontPicker
               value={codeFontFamily}
-              onChange={setCodeFontFamily}
+              onChange={trackedAppearanceSetter(
+                "codeFontFamily",
+                setCodeFontFamily,
+              )}
               options={installedFonts}
               defaultLabel="System Default"
               resetTooltip="Reset to default"
@@ -184,7 +224,10 @@ export function AppearanceSettingsPanel() {
             />
             <SettingsNumberInput
               value={codeFontSize}
-              onChange={setCodeFontSize}
+              onChange={trackedAppearanceSetter(
+                "codeFontSize",
+                setCodeFontSize,
+              )}
               min={10}
               max={24}
               unit="px"
@@ -202,7 +245,10 @@ export function AppearanceSettingsPanel() {
           <div className="flex flex-col items-end gap-2">
             <FontPicker
               value={terminalFontFamily}
-              onChange={setTerminalFontFamily}
+              onChange={trackedAppearanceSetter(
+                "terminalFontFamily",
+                setTerminalFontFamily,
+              )}
               options={installedFonts}
               defaultLabel="Same as code font"
               resetTooltip="Use code font"
@@ -211,7 +257,10 @@ export function AppearanceSettingsPanel() {
             <NullableFontSizeInput
               value={terminalFontSize}
               followValue={codeFontSize}
-              onChange={setTerminalFontSize}
+              onChange={trackedAppearanceSetter(
+                "terminalFontSize",
+                setTerminalFontSize,
+              )}
               min={10}
               max={24}
               ariaLabel="Terminal font size"
@@ -226,7 +275,10 @@ export function AppearanceSettingsPanel() {
         control={
           <TerminalCursorStylePicker
             value={terminalCursorStyle}
-            onChange={setTerminalCursorStyle}
+            onChange={trackedAppearanceSetter<TerminalCursorStyle>(
+              "terminalCursorStyle",
+              setTerminalCursorStyle,
+            )}
           />
         }
       />
@@ -236,7 +288,10 @@ export function AppearanceSettingsPanel() {
         control={
           <Switch
             checked={terminalCursorBlink}
-            onCheckedChange={setTerminalCursorBlink}
+            onCheckedChange={trackedAppearanceSetter(
+              "terminalCursorBlink",
+              setTerminalCursorBlink,
+            )}
             aria-label="Blink terminal cursor"
           />
         }

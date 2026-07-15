@@ -12,6 +12,7 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys, worktreeMutationKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 export interface SetRepoScriptsMutationContext {
   readonly hostId: string | null;
@@ -64,6 +65,13 @@ export function useWorktreeSetRepoScriptsFor(
       hostId: client === null ? null : client.getActiveHostId(),
     }),
     onSuccess: (_data, _variables, mutationContext) => {
+      Analytics.getInstance().track(AnalyticsEvent.SetupScriptsSaved, {
+        script_count: [_variables.setup, _variables.teardown].filter((script) =>
+          Object.values(script).some(
+            (command) => command !== null && command.trim().length > 0,
+          ),
+        ).length,
+      });
       if (mutationContext.hostId === null) return;
       for (const method of SET_REPO_SCRIPTS_INVALIDATIONS) {
         void queryClient.invalidateQueries({

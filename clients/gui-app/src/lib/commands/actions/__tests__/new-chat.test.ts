@@ -8,6 +8,7 @@ import {
   expect,
   it,
   vi,
+  type MockInstance,
 } from "vitest";
 import type { CreateChatMutationInput } from "@/hooks/epic/use-epic-chat-mutations";
 import {
@@ -28,6 +29,7 @@ import type {
   EpicCanvasState,
   EpicCanvasTileRef,
 } from "@/stores/epics/canvas/types";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 /** Every open tab's payload across all panes, resolved through the canvas. */
 function allTabRefs(
@@ -181,14 +183,18 @@ function nestedFocusRecorder(): {
 }
 
 describe("new chat command actions", () => {
+  let track: MockInstance<Analytics["track"]>;
+
   beforeEach(() => {
     resetCanvasStore();
     registryMock.reset();
+    track = vi.spyOn(Analytics.getInstance(), "track");
   });
 
   afterEach(() => {
     resetCanvasStore();
     registryMock.reset();
+    vi.restoreAllMocks();
   });
 
   it("creates active-tile chats through epic.createChat and queues the host chat id", () => {
@@ -199,6 +205,7 @@ describe("new chat command actions", () => {
       epicId: EPIC_ID,
       tabId: TAB_ID,
       hostId: "test-host",
+      source: "direct_ui",
       worktreeIntent: null,
       settings: null,
       createChat: createChat.createChat,
@@ -224,6 +231,7 @@ describe("new chat command actions", () => {
         tabId: TAB_ID,
         chatId: "host-chat",
         hostId: "test-host",
+        source: "direct_ui",
       },
     ]);
   });
@@ -236,6 +244,7 @@ describe("new chat command actions", () => {
       epicId: EPIC_ID,
       tabId: TAB_ID,
       hostId: "test-host",
+      source: "direct_ui",
       worktreeIntent: SEEDED_WORKTREE_INTENT,
       settings: null,
       createChat: createChat.createChat,
@@ -256,6 +265,7 @@ describe("new chat command actions", () => {
       tabId: TAB_ID,
       chatId: "host-chat",
       hostId: "test-host",
+      source: "direct_ui",
     });
 
     expect(
@@ -293,6 +303,7 @@ describe("new chat command actions", () => {
         tabId: TAB_ID,
         chatId: "host-chat",
         hostId: "test-host",
+        source: "direct_ui",
       },
       navigateNestedFocus: navigation.navigateNestedFocus,
     });
@@ -341,6 +352,7 @@ describe("new chat command actions", () => {
         tabId: TAB_ID,
         chatId: "host-chat",
         hostId: "test-host",
+        source: "direct_ui",
       });
 
       expect(registryMock.listenerCount()).toBe(1);
@@ -368,6 +380,7 @@ describe("new chat command actions", () => {
         tabId: TAB_ID,
         chatId: "host-chat",
         hostId: "test-host",
+        source: "direct_ui",
       });
 
       expect(registryMock.listenerCount()).toBe(1);
@@ -383,6 +396,7 @@ describe("new chat command actions", () => {
         epicId: EPIC_ID,
         tabId: TAB_ID,
         hostId: "test-host",
+        source: "direct_ui",
         worktreeIntent: null,
         settings: null,
         createChat: createChat.createChat,
@@ -404,6 +418,7 @@ describe("new chat command actions", () => {
         epicId: EPIC_ID,
         tabId: TAB_ID,
         hostId: "test-host",
+        source: "direct_ui",
         worktreeIntent: null,
         settings: null,
         createChat: createChat.createChat,
@@ -431,6 +446,7 @@ describe("new chat command actions", () => {
       chatId: "host-chat",
       groupId: targetGroupId,
       hostId: "test-host",
+      source: "command_palette",
     });
     registryMock.projectChat({ id: "host-chat", title: "Host chat" });
 
@@ -442,6 +458,43 @@ describe("new chat command actions", () => {
     expect(paneTabRefs(canvas, target).map((tab) => tab.id)).toEqual([
       "host-chat",
     ]);
+    expect(track).toHaveBeenCalledWith(AnalyticsEvent.ChatOpened, {
+      source: "command_palette",
+    });
+  });
+
+  it("abandons the open (and emits nothing) when the projected target disappears", () => {
+    const sourceGroupId = seedActiveGroup();
+    const targetGroupId = useEpicCanvasStore
+      .getState()
+      .splitPaneEmptyRightInTab(TAB_ID, sourceGroupId);
+    if (targetGroupId === null) throw new Error("expected a target group");
+    openCreatedChatWhenProjected({
+      kind: "target-group",
+      epicId: EPIC_ID,
+      tabId: TAB_ID,
+      chatId: "host-chat",
+      groupId: targetGroupId,
+      hostId: "test-host",
+      source: "command_palette",
+    });
+
+    useEpicCanvasStore.getState().closeCanvasPane(TAB_ID, targetGroupId);
+    registryMock.projectChat({ id: "host-chat", title: "Host chat" });
+
+    // Pre-analytics product behavior: the open is attempted exactly once and
+    // abandoned when its pane is gone - no fallback pane, no chat_opened.
+    const canvas = useEpicCanvasStore.getState().canvasByTabId[TAB_ID];
+    const source = findPaneById(canvas?.root ?? null, sourceGroupId);
+    if (canvas === undefined || source === null) {
+      throw new Error("expected the original pane to survive");
+    }
+    expect(paneTabRefs(canvas, source).map((tab) => tab.id)).not.toContain(
+      "host-chat",
+    );
+    expect(track).not.toHaveBeenCalledWith(AnalyticsEvent.ChatOpened, {
+      source: "command_palette",
+    });
   });
 
   it("splits with the host-created chat id after projection", () => {
@@ -455,6 +508,7 @@ describe("new chat command actions", () => {
       targetGroupId: activeGroupId,
       position: "bottom",
       hostId: "test-host",
+      source: "direct_ui",
     });
     registryMock.projectChat({ id: "host-chat", title: "" });
 

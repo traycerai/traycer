@@ -1,4 +1,4 @@
-import { JsonContent } from "../common/registry";
+import type { JsonContent } from "../common/registry";
 
 /**
  * Extracts unique user IDs from mention nodes in Tiptap JSONContent.

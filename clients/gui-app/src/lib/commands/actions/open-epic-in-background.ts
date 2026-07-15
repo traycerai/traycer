@@ -14,6 +14,8 @@ export function openEpicInBackground(
   epicId: string,
   title: string | undefined,
 ): void {
-  Analytics.getInstance().track(AnalyticsEvent.TaskOpened, null);
+  Analytics.getInstance().track(AnalyticsEvent.TaskOpened, {
+    source: "direct_ui",
+  });
   useEpicCanvasStore.getState().openEpicTabInBackground(epicId, title);
 }

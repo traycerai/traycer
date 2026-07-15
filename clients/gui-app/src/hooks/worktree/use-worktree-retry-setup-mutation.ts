@@ -13,6 +13,7 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys, worktreeMutationKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { WORKTREE_BINDING_INVALIDATIONS } from "@/hooks/worktree/invalidations";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 export interface RetrySetupMutationContext {
   readonly hostId: string | null;
@@ -57,9 +58,12 @@ export function useWorktreeRetrySetupFor(
       }
       return client.request("worktree.retrySetup", variables);
     },
-    onMutate: () => ({
-      hostId: client === null ? null : client.getActiveHostId(),
-    }),
+    onMutate: () => {
+      Analytics.getInstance().track(AnalyticsEvent.SetupScriptsRetryStarted, {
+        source: "direct_ui",
+      });
+      return { hostId: client === null ? null : client.getActiveHostId() };
+    },
     onSuccess: (_data, _variables, ctx) => {
       if (ctx.hostId === null) return;
       for (const method of WORKTREE_BINDING_INVALIDATIONS) {

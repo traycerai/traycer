@@ -35,6 +35,7 @@ import {
   useOnboardingStore,
 } from "@/stores/onboarding/onboarding-store";
 import { cn } from "@/lib/utils";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 const ACT_EASE = [0.32, 0.72, 0, 1] as const;
 const ONBOARDING_FOOTER_LINKS = [
@@ -448,6 +449,12 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
   }, [restart]);
 
   useEffect(() => {
+    Analytics.getInstance().track(AnalyticsEvent.OnboardingStarted, {
+      mode: replay ? "replay" : "first_run",
+    });
+  }, [replay]);
+
+  useEffect(() => {
     const data = agentGuideQuery.data;
     if (data === undefined) return;
     const nextDefault = data.generatedDefaultContent;
@@ -520,6 +527,9 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
     const content = agentGuideDraft ?? agentGuideDefault;
     return setAgentGuideGlobal({ content }).then(
       (result) => {
+        Analytics.getInstance().track(AnalyticsEvent.AgentGuideSaved, {
+          customized: result.content !== result.generatedDefaultContent,
+        });
         agentGuideDraftRef.current = result.content;
         setAgentGuide({
           draft: result.content,
@@ -558,32 +568,57 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
   // no real back target, so we open a fresh draft tab. Either way the user
   // lands on a real tab. The /onboarding + / route guards bounce a completed
   // user onward as needed.
-  const finish = useCallback((): void => {
-    void saveAgentGuideDraft().then((saved) => {
-      if (!saved) return;
-      complete();
-      if (replay) {
-        router.history.back();
-        return;
-      }
-      void navigate({ to: "/draft/new", replace: true });
+  const finish = useCallback(
+    (outcome: "completed" | "skipped"): void => {
+      void saveAgentGuideDraft().then((saved) => {
+        if (!saved) return;
+        Analytics.getInstance().track(
+          outcome === "completed"
+            ? AnalyticsEvent.OnboardingCompleted
+            : AnalyticsEvent.OnboardingSkipped,
+          { last_step: act.id },
+        );
+        complete();
+        if (replay) {
+          router.history.back();
+          return;
+        }
+        void navigate({ to: "/draft/new", replace: true });
+      });
+    },
+    [act.id, complete, navigate, replay, router, saveAgentGuideDraft],
+  );
+
+  const retreatWithAnalytics = useCallback((): void => {
+    const destination = ONBOARDING_ACTS[Math.max(0, step - 1)] ?? act;
+    retreat();
+    Analytics.getInstance().track(AnalyticsEvent.OnboardingNavigated, {
+      direction: "back",
+      step: destination.id,
     });
-  }, [complete, navigate, replay, router, saveAgentGuideDraft]);
+  }, [act, retreat, step]);
 
   const advance = useCallback((): void => {
     if (advanceDisabled) return;
     const advancePastCurrent = (): void => {
       if (isLastAct) {
-        finish();
+        finish("completed");
         return;
       }
+      const destination = ONBOARDING_ACTS[step + 1] ?? act;
       advanceStep();
+      Analytics.getInstance().track(AnalyticsEvent.OnboardingNavigated, {
+        direction: "continue",
+        step: destination.id,
+      });
     };
     advancePastCurrent();
-  }, [advanceDisabled, advanceStep, finish, isLastAct]);
+  }, [act, advanceDisabled, advanceStep, finish, isLastAct, step]);
   const handleKeyboardAdvance = useEffectEvent((): void => advance());
-  const handleKeyboardRetreat = useEffectEvent((): void => retreat());
-  const handleKeyboardFinish = useEffectEvent((): void => finish());
+  const handleKeyboardRetreat = useEffectEvent((): void =>
+    retreatWithAnalytics(),
+  );
+  const handleKeyboardFinish = useEffectEvent((): void => finish("skipped"));
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent): void => {
@@ -630,7 +665,7 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
             <button
               type="button"
               data-testid="onboarding-skip"
-              onClick={finish}
+              onClick={() => finish("skipped")}
               disabled={agentGuideSaving}
               className="absolute right-10 flex h-9 items-center justify-center gap-2 rounded px-2 font-heading text-[0.875rem] leading-[1.125rem] font-normal tracking-normal text-white transition-colors hover:bg-white/10 disabled:pointer-events-none disabled:opacity-55 [@media(min-height:920px)]:h-10 [@media(min-height:920px)]:text-[0.9375rem] max-sm:right-5"
             >
@@ -712,7 +747,7 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
               {step > 0 ? (
                 <button
                   type="button"
-                  onClick={retreat}
+                  onClick={retreatWithAnalytics}
                   className="flex h-9 items-center justify-center gap-2 rounded px-3 font-heading text-[0.875rem] leading-[1.125rem] font-medium text-white transition-colors hover:bg-white/10 [@media(min-height:920px)]:h-10 [@media(min-height:920px)]:px-4 [@media(min-height:920px)]:text-[0.9375rem]"
                 >
                   <Kbd tone="light">←</Kbd>

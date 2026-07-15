@@ -43,3 +43,24 @@ export function commitSelection(
     serviceTier: resolved.serviceTier ?? "",
   });
 }
+
+/**
+ * Commits a profile-only change for the currently selected harness. Unlike
+ * `commitSelection`, this path deliberately does not consult the destination
+ * profile's model/effort memory: switching credentials must not discard model,
+ * reasoning, or service-tier choices the user already configured.
+ *
+ * Shared by the model picker's profile dropdown and the chat rate-limit
+ * banner, so both profile-switch surfaces preserve the same composer state.
+ */
+export function commitProfileSelection(
+  store: ComposerToolbarStore,
+  profileId: string | null,
+): void {
+  const state = store.getState();
+  const selection = { ...state.selection, profileId };
+  useComposerHarnessMemoryStore
+    .getState()
+    .recordProfileSelection(selection.harnessId, profileId);
+  state.setSelection(selection);
+}
