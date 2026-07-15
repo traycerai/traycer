@@ -334,6 +334,7 @@ function assistantSteerMessage(
       agentId: "codex",
       displayName: "Codex",
       reply: { expectsReply: false },
+      inReplyTo: null,
     },
     blocks: [
       {
@@ -2210,6 +2211,7 @@ describe("createChatSessionStore", () => {
                 agentId: "claude-sonnet",
                 displayName: "claude-sonnet",
                 reply: { expectsReply: false },
+                inReplyTo: null,
               },
               blocks: [],
               startedAt: 3,
@@ -2312,6 +2314,7 @@ describe("createChatSessionStore", () => {
       agentId: "claude-sonnet",
       displayName: "claude-sonnet",
       reply: { expectsReply: false },
+      inReplyTo: null,
     };
     callbacks.onSnapshot({
       kind: "snapshot",

@@ -1,11 +1,11 @@
 /**
- * `chat.subscribe@1.3` - versioned streaming-RPC contract for a single
- * host-owned GUI chat session. `chat.subscribe@1.0`/`@1.1`/`@1.2` (frozen, near
- * the bottom of this file) are the exact shapes shipped in earlier hosts; later
- * minors only add to them, so a `1.3` app still bridges to hosts that only know
- * `1.0`/`1.1`/`1.2`. Streams have no cross-major downgrade bridge (see
- * `stream-compat.ts`'s `canBridgeStream()`), so once a method ships, its major
- * must never move again - only additive minors.
+ * `chat.subscribe@1.4` - versioned streaming-RPC contract for a single
+ * host-owned GUI chat session. `chat.subscribe@1.0`/`@1.1`/`@1.2`/`@1.3`
+ * (frozen, near the bottom of this file) are the exact shapes shipped in
+ * earlier hosts; later minors only add to them, so a `1.4` app still bridges to
+ * hosts that only know `1.0`–`1.3`. Streams have no cross-major downgrade
+ * bridge (see `stream-compat.ts`'s `canBridgeStream()`), so once a method
+ * ships, its major must never move again - only additive minors.
  *
  * This stream is intentionally text-frame-only. The existing `epic.subscribe`
  * stream remains responsible for Y.Doc binary updates; chat execution frames
@@ -17,11 +17,15 @@ import { getRecordSchema } from "@traycer/protocol/framework/index";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
   chatEventSchema,
+  chatEventSchemaPreInReplyTo,
   chatRunSettingsSchema,
   chatSchema,
+  chatSchemaPreInReplyTo,
   userMessagePayloadSchema,
   userMessageSchema,
+  userMessageSchemaPreInReplyTo,
   userMessageSenderSchema,
+  userMessageSenderSchemaPreInReplyTo,
   type ChatRunSettings,
 } from "@traycer/protocol/persistence/epic/schemas";
 import {
@@ -46,7 +50,8 @@ import {
   chatQueueSteerModeSchema,
   runtimeApprovalDecisionSchema,
   runtimeEventSchema,
-  runtimeEventSchemaV12,
+  runtimeEventSchemaPreInReplyTo,
+  runtimeEventSchemaV12PreInReplyTo,
   runtimeInterviewAnswerSchema,
   runtimePlanActionSchema,
 } from "@traycer/protocol/host/agent/gui/agent-runtime";
@@ -300,6 +305,32 @@ export const chatQueueStateSchema = z.object({
 });
 export type ChatQueueState = z.infer<typeof chatQueueStateSchema>;
 
+// Wire-freeze copies with the queue item's `sender` swapped for its
+// pre-`inReplyTo` freeze. Bound to the released `chat.subscribe@1.0–1.3`
+// snapshot + `queueChanged` serverFrames. `message` reuses the live
+// `userMessagePayloadSchema` (unaffected — `inReplyTo` lives on the sender, not
+// the message payload). Hand-frozen, not derived from the live shape.
+const chatQueuedItemSchemaPreInReplyTo = z.object({
+  queueItemId: z.string(),
+  messageId: z.string(),
+  message: userMessagePayloadSchema,
+  sender: userMessageSenderSchemaPreInReplyTo,
+  settings: chatRunSettingsSchema,
+  accountContext: accountContextSchema.default(DEFAULT_ACCOUNT_CONTEXT),
+  delivery: chatQueueItemDeliverySchema.default("next_turn"),
+  status: chatQueueItemStatusSchema.default("pending"),
+  targetTurnId: z.string().nullable().default(null),
+  steerRequest: chatQueueSteerRequestSchema.nullable().default(null),
+  fallbackReason: z.string().nullable().default(null),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+});
+
+const chatQueueStateSchemaPreInReplyTo = z.object({
+  status: z.enum(["idle", "running", "paused"]),
+  items: z.array(chatQueuedItemSchemaPreInReplyTo),
+});
+
 /**
  * Authoritative chat-level run state, owned by the host and the single source
  * the GUI reads for the in-progress indicator (assistant response row, composer
@@ -485,144 +516,183 @@ function blockDeltaServerFrameSchema<EventSchema extends z.ZodType>(
   });
 }
 
-const chatSubscribeCommonServerFrameSchemas = [
-  z.object({
-    kind: z.literal("actionAck"),
-    ...textFrameFields,
-    ...chatReferenceFields,
-    clientActionId: z.string(),
-    action: chatActionSchema,
-    status: chatActionAckStatusSchema,
-    reason: z.string().nullable(),
-    code: z.string().nullable(),
-    // For background stop-all, task ids whose provider stop request was accepted
-    // even when the aggregate action is rejected for partial failure. Defaulted
-    // so a `chat.subscribe@1.0` host (no background-items support) still
-    // parses - it never emits a background-stop ack, so `[]` is the correct
-    // reading, not a lossy fallback.
-    backgroundStopTaskIds: z.array(z.string()).default([]),
-  }),
-  z.object({
-    kind: z.literal("messageAccepted"),
-    ...textFrameFields,
-    ...chatReferenceFields,
+// Order-preserving factory for the common (non-blockDelta) shared frames. The
+// three sender-bearing frames (`messageAccepted`/`queueChanged`/`eventAppended`)
+// are parameterized so the released `chat.subscribe@1.0–1.3` lines can bind the
+// pre-`inReplyTo` frozen chat-tree while the live line binds the current one.
+// Everything else is byte-identical across live and frozen. Variant order is
+// preserved (the wire-compat differ matches union variants by `kind`, but
+// keeping order avoids churn in any order-sensitive fixture).
+function buildChatSubscribeCommonServerFrameSchemas<
+  MessageSchema extends z.ZodType,
+  QueueSchema extends z.ZodType,
+  EventSchema extends z.ZodType,
+>(schemas: {
+  readonly message: MessageSchema;
+  readonly queue: QueueSchema;
+  readonly event: EventSchema;
+}) {
+  return [
+    z.object({
+      kind: z.literal("actionAck"),
+      ...textFrameFields,
+      ...chatReferenceFields,
+      clientActionId: z.string(),
+      action: chatActionSchema,
+      status: chatActionAckStatusSchema,
+      reason: z.string().nullable(),
+      code: z.string().nullable(),
+      // For background stop-all, task ids whose provider stop request was accepted
+      // even when the aggregate action is rejected for partial failure. Defaulted
+      // so a `chat.subscribe@1.0` host (no background-items support) still
+      // parses - it never emits a background-stop ack, so `[]` is the correct
+      // reading, not a lossy fallback.
+      backgroundStopTaskIds: z.array(z.string()).default([]),
+    }),
+    z.object({
+      kind: z.literal("messageAccepted"),
+      ...textFrameFields,
+      ...chatReferenceFields,
+      message: schemas.message,
+    }),
+    z.object({
+      kind: z.literal("queueChanged"),
+      ...textFrameFields,
+      ...chatReferenceFields,
+      queue: schemas.queue,
+    }),
+    z.object({
+      kind: z.literal("approvalRequested"),
+      ...textFrameFields,
+      ...chatReferenceFields,
+      approval: chatApprovalStateSchema,
+    }),
+    z.object({
+      kind: z.literal("approvalResolved"),
+      ...textFrameFields,
+      ...chatReferenceFields,
+      approvalId: z.string(),
+      decision: runtimeApprovalDecisionSchema,
+      resolvedAt: z.number(),
+    }),
+    z.object({
+      kind: z.literal("fileEditApprovalRequested"),
+      ...textFrameFields,
+      ...chatReferenceFields,
+      approval: chatFileEditApprovalStateSchema,
+    }),
+    z.object({
+      kind: z.literal("fileEditApprovalResolved"),
+      ...textFrameFields,
+      ...chatReferenceFields,
+      approvalId: z.string(),
+      decision: runtimeApprovalDecisionSchema,
+      resolvedAt: z.number(),
+    }),
+    z.object({
+      kind: z.literal("interviewRequested"),
+      ...textFrameFields,
+      ...chatReferenceFields,
+      blockId: z.string(),
+      requestedAt: z.number(),
+    }),
+    z.object({
+      kind: z.literal("interviewAnswered"),
+      ...textFrameFields,
+      ...chatReferenceFields,
+      blockId: z.string(),
+      answers: z.array(runtimeInterviewAnswerSchema),
+      resolvedAt: z.number(),
+    }),
+    z.object({
+      kind: z.literal("interviewErrored"),
+      ...textFrameFields,
+      ...chatReferenceFields,
+      blockId: z.string(),
+      reason: z.string(),
+      resolvedAt: z.number(),
+    }),
+    z.object({
+      kind: z.literal("eventAppended"),
+      ...textFrameFields,
+      ...chatReferenceFields,
+      event: schemas.event,
+    }),
+    z.object({
+      kind: z.literal("restoreStarted"),
+      ...textFrameFields,
+      ...chatReferenceFields,
+      ...restoreStartedManifestSchema.shape,
+    }),
+    z.object({
+      kind: z.literal("restoreProgress"),
+      ...textFrameFields,
+      ...chatReferenceFields,
+      checkpointId: z.string(),
+      processedCount: z.number(),
+      totalCount: z.number(),
+    }),
+    z.object({
+      kind: z.literal("restoreCompleted"),
+      ...textFrameFields,
+      ...chatReferenceFields,
+      checkpointId: z.string(),
+      finishedAt: z.number(),
+      results: z.array(restoreResultEntrySchema),
+    }),
+    z.object({
+      kind: z.literal("errorNotice"),
+      ...textFrameFields,
+      ...chatReferenceFields,
+      notice: chatErrorNoticeSchema,
+    }),
+    z.object({
+      kind: z.literal("worktreeStateChanged"),
+      ...textFrameFields,
+      ...chatReferenceFields,
+      worktreeBinding: worktreeBindingSchema.nullable(),
+      // Recomputed alongside `worktreeBinding` (see chatSnapshotSchema) so the
+      // composer's missing-worktree gate updates reactively on every binding edit.
+      missingWorktreePaths: z.array(z.string()),
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      ...textFrameFields,
+    }),
+  ];
+}
+
+const chatSubscribeCommonServerFrameSchemas =
+  buildChatSubscribeCommonServerFrameSchemas({
     message: userMessageSchema,
-  }),
-  z.object({
-    kind: z.literal("queueChanged"),
-    ...textFrameFields,
-    ...chatReferenceFields,
     queue: chatQueueStateSchema,
-  }),
-  z.object({
-    kind: z.literal("approvalRequested"),
-    ...textFrameFields,
-    ...chatReferenceFields,
-    approval: chatApprovalStateSchema,
-  }),
-  z.object({
-    kind: z.literal("approvalResolved"),
-    ...textFrameFields,
-    ...chatReferenceFields,
-    approvalId: z.string(),
-    decision: runtimeApprovalDecisionSchema,
-    resolvedAt: z.number(),
-  }),
-  z.object({
-    kind: z.literal("fileEditApprovalRequested"),
-    ...textFrameFields,
-    ...chatReferenceFields,
-    approval: chatFileEditApprovalStateSchema,
-  }),
-  z.object({
-    kind: z.literal("fileEditApprovalResolved"),
-    ...textFrameFields,
-    ...chatReferenceFields,
-    approvalId: z.string(),
-    decision: runtimeApprovalDecisionSchema,
-    resolvedAt: z.number(),
-  }),
-  z.object({
-    kind: z.literal("interviewRequested"),
-    ...textFrameFields,
-    ...chatReferenceFields,
-    blockId: z.string(),
-    requestedAt: z.number(),
-  }),
-  z.object({
-    kind: z.literal("interviewAnswered"),
-    ...textFrameFields,
-    ...chatReferenceFields,
-    blockId: z.string(),
-    answers: z.array(runtimeInterviewAnswerSchema),
-    resolvedAt: z.number(),
-  }),
-  z.object({
-    kind: z.literal("interviewErrored"),
-    ...textFrameFields,
-    ...chatReferenceFields,
-    blockId: z.string(),
-    reason: z.string(),
-    resolvedAt: z.number(),
-  }),
-  z.object({
-    kind: z.literal("eventAppended"),
-    ...textFrameFields,
-    ...chatReferenceFields,
     event: chatEventSchema,
-  }),
-  z.object({
-    kind: z.literal("restoreStarted"),
-    ...textFrameFields,
-    ...chatReferenceFields,
-    ...restoreStartedManifestSchema.shape,
-  }),
-  z.object({
-    kind: z.literal("restoreProgress"),
-    ...textFrameFields,
-    ...chatReferenceFields,
-    checkpointId: z.string(),
-    processedCount: z.number(),
-    totalCount: z.number(),
-  }),
-  z.object({
-    kind: z.literal("restoreCompleted"),
-    ...textFrameFields,
-    ...chatReferenceFields,
-    checkpointId: z.string(),
-    finishedAt: z.number(),
-    results: z.array(restoreResultEntrySchema),
-  }),
-  z.object({
-    kind: z.literal("errorNotice"),
-    ...textFrameFields,
-    ...chatReferenceFields,
-    notice: chatErrorNoticeSchema,
-  }),
-  z.object({
-    kind: z.literal("worktreeStateChanged"),
-    ...textFrameFields,
-    ...chatReferenceFields,
-    worktreeBinding: worktreeBindingSchema.nullable(),
-    // Recomputed alongside `worktreeBinding` (see chatSnapshotSchema) so the
-    // composer's missing-worktree gate updates reactively on every binding edit.
-    missingWorktreePaths: z.array(z.string()),
-  }),
-  z.object({
-    kind: z.literal("pong"),
-    ...textFrameFields,
-  }),
-];
+  });
+
+// Frozen common frames bound to `chat.subscribe@1.0–1.3` (pre-`inReplyTo`).
+const chatSubscribeCommonServerFrameSchemasPreInReplyTo =
+  buildChatSubscribeCommonServerFrameSchemas({
+    message: userMessageSchemaPreInReplyTo,
+    queue: chatQueueStateSchemaPreInReplyTo,
+    event: chatEventSchemaPreInReplyTo,
+  });
 
 // Frozen for `chat.subscribe@1.2` and earlier.
 const chatSubscribeSharedServerFrameSchemasV12 = [
-  ...chatSubscribeCommonServerFrameSchemas,
-  blockDeltaServerFrameSchema(runtimeEventSchemaV12),
+  ...chatSubscribeCommonServerFrameSchemasPreInReplyTo,
+  blockDeltaServerFrameSchema(runtimeEventSchemaV12PreInReplyTo),
 ];
 
 const chatSubscribeSharedServerFrameSchemas = [
   ...chatSubscribeCommonServerFrameSchemas,
   blockDeltaServerFrameSchema(runtimeEventSchema),
+];
+
+// Frozen live-shape shared frames for `chat.subscribe@1.3` (workflow-bearing
+// blockDelta, but pre-`inReplyTo` senders throughout).
+const chatSubscribeSharedServerFrameSchemasPreInReplyTo = [
+  ...chatSubscribeCommonServerFrameSchemasPreInReplyTo,
+  blockDeltaServerFrameSchema(runtimeEventSchemaPreInReplyTo),
 ];
 
 export const chatSubscribeServerFrameSchema = z.discriminatedUnion("kind", [
@@ -876,9 +946,9 @@ const chatSubscribeOpenRequestSchemaV10 = z.object({
 // - a later required field added to the live schema must not silently leak
 // into this frozen contract.
 const chatSnapshotSchemaV10 = z.object({
-  chat: chatSchema,
+  chat: chatSchemaPreInReplyTo,
   access: chatAccessSchema,
-  queue: chatQueueStateSchema,
+  queue: chatQueueStateSchemaPreInReplyTo,
   runStatus: chatRunStatusSchema,
   activeTurn: chatActiveTurnSchema.nullable(),
   pendingApprovals: z.array(chatApprovalStateSchema),
@@ -910,13 +980,13 @@ const chatSubscribeServerFrameSchemaV10 = z.discriminatedUnion("kind", [
     kind: z.literal("messageAccepted"),
     ...textFrameFields,
     ...chatReferenceFields,
-    message: userMessageSchema,
+    message: userMessageSchemaPreInReplyTo,
   }),
   z.object({
     kind: z.literal("queueChanged"),
     ...textFrameFields,
     ...chatReferenceFields,
-    queue: chatQueueStateSchema,
+    queue: chatQueueStateSchemaPreInReplyTo,
   }),
   z.object({
     kind: z.literal("turnStateChanged"),
@@ -929,7 +999,7 @@ const chatSubscribeServerFrameSchemaV10 = z.discriminatedUnion("kind", [
     kind: z.literal("blockDelta"),
     ...textFrameFields,
     ...chatReferenceFields,
-    event: runtimeEventSchema,
+    event: runtimeEventSchemaPreInReplyTo,
   }),
   z.object({
     kind: z.literal("approvalRequested"),
@@ -986,7 +1056,7 @@ const chatSubscribeServerFrameSchemaV10 = z.discriminatedUnion("kind", [
     kind: z.literal("eventAppended"),
     ...textFrameFields,
     ...chatReferenceFields,
-    event: chatEventSchema,
+    event: chatEventSchemaPreInReplyTo,
   }),
   z.object({
     kind: z.literal("restoreStarted"),
@@ -1181,9 +1251,9 @@ const backgroundItemSchemaV11 = z.object({
 });
 
 const chatSnapshotSchemaV11 = z.object({
-  chat: chatSchema,
+  chat: chatSchemaPreInReplyTo,
   access: chatAccessSchema,
-  queue: chatQueueStateSchema,
+  queue: chatQueueStateSchemaPreInReplyTo,
   runStatus: chatRunStatusSchema,
   activeTurn: chatActiveTurnSchema.nullable(),
   pendingApprovals: z.array(chatApprovalStateSchema),
@@ -1240,9 +1310,9 @@ export const chatSubscribeV11 = defineStreamRpcContract({
 // background items, `workflow.*` blockDelta events). Do not add post-1.2
 // fields or variants here.
 const chatSnapshotSchemaV12 = z.object({
-  chat: chatSchema,
+  chat: chatSchemaPreInReplyTo,
   access: chatAccessSchema,
-  queue: chatQueueStateSchema,
+  queue: chatQueueStateSchemaPreInReplyTo,
   runStatus: chatRunStatusSchema,
   activeTurn: chatActiveTurnSchema.nullable(),
   pendingApprovals: z.array(chatApprovalStateSchema),
@@ -1288,11 +1358,61 @@ export const chatSubscribeV12 = defineStreamRpcContract({
   clientFrameSchema: chatSubscribeClientFrameSchemaBeforeV13,
 });
 
-// ─── Live `chat.subscribe@1.3` contract ────────────────────────────────────
+// ─── Frozen `chat.subscribe@1.3` shape (host-v1.x, as shipped) ──────────────
+//
+// `1.3` shipped the live-shape serverFrame (workflow background items +
+// `workflow.*` blockDelta events + `pauseQueue` client frames) but PRE-
+// `inReplyTo`. Pinned here so `1.4` (which adds `inReplyTo` to every sender) can
+// no longer mutate this released line: the frozen chat-tree / runtime-event
+// variants strip `inReplyTo` for a `1.3` peer. `turnStateChanged` carries no
+// sender, so it reuses the live frame. Do not add `1.4`-only fields here.
+const chatSnapshotSchemaV13 = z.object({
+  chat: chatSchemaPreInReplyTo,
+  access: chatAccessSchema,
+  queue: chatQueueStateSchemaPreInReplyTo,
+  runStatus: chatRunStatusSchema,
+  activeTurn: chatActiveTurnSchema.nullable(),
+  pendingApprovals: z.array(chatApprovalStateSchema),
+  pendingInterviews: z.array(chatPendingInterviewStateSchema),
+  worktreeBinding: worktreeBindingSchema.nullable(),
+  missingWorktreePaths: z.array(z.string()),
+  pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
+  accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
+  backgroundItems: z.array(backgroundItemSchema).optional(),
+  turnInProgress: z.boolean().optional(),
+});
+
+const chatSubscribeSnapshotServerFrameSchemaV13 = z.object({
+  kind: z.literal("snapshot"),
+  ...textFrameFields,
+  ...chatReferenceFields,
+  snapshot: chatSnapshotSchemaV13,
+});
+
+const chatSubscribeServerFrameSchemaV13 = z.discriminatedUnion("kind", [
+  chatSubscribeSnapshotServerFrameSchemaV13,
+  chatSubscribeTurnStateChangedServerFrameSchema,
+  ...chatSubscribeSharedServerFrameSchemasPreInReplyTo,
+]);
 
 export const chatSubscribeV13 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 3 } as const,
+  openRequestSchema: chatSubscribeOpenRequestSchema,
+  serverFrameSchema: chatSubscribeServerFrameSchemaV13,
+  clientFrameSchema: chatSubscribeClientFrameSchema,
+});
+
+// ─── Live `chat.subscribe@1.4` contract (adds `inReplyTo` to senders) ───────
+//
+// The live serverFrame carries `inReplyTo` on every agent sender (user-message,
+// assistant, queue item, event `actor`, steer). Older peers negotiate ≤1.3 and
+// receive the frozen frames above, which strip the key. The client frame is
+// identical to `1.3` (`inReplyTo` is host→client only).
+
+export const chatSubscribeV14 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 4 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchema,
   serverFrameSchema: chatSubscribeServerFrameSchema,
   clientFrameSchema: chatSubscribeClientFrameSchema,

@@ -18,6 +18,7 @@ const ASSISTANT_SENDER: AgentSender = {
   agentId: "claude-sonnet-4",
   displayName: "Claude Sonnet 4",
   reply: { expectsReply: false },
+  inReplyTo: null,
 };
 
 const HASH_A = "a".repeat(64);
