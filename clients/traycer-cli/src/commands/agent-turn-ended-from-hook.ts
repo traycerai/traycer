@@ -1,6 +1,6 @@
 import {
-  tuiAgentTurnEndedRequestSchema,
-  tuiAgentTurnEndedResponseSchema,
+  tuiAgentTurnEndedRequestSchemaV11,
+  tuiAgentTurnEndedResponseSchemaV11,
 } from "@traycer/protocol/host/agent/tui/unary-schemas";
 import { tuiHarnessIdSchema } from "@traycer/protocol/host/agent/shared";
 import {
@@ -49,10 +49,16 @@ export function buildAgentTurnEndedFromHookCommand(opts: {
       return noop("missing-context");
     }
 
-    const request = parseUserInput(tuiAgentTurnEndedRequestSchema, {
+    const request = parseUserInput(tuiAgentTurnEndedRequestSchemaV11, {
       epicId,
       tuiAgentId,
       harnessId,
+      // @1.1 causal-proof inputs. The Stop hook's stdin payload (session_id,
+      // transcript_path) is not read yet — the TUI lifecycle slice wires it.
+      // Nulls are the exact @1.0 behavior.
+      observedHarnessSessionId: null,
+      transcriptPath: null,
+      previouslyReportedLeafUuid: null,
     });
 
     // Host-not-running is benign - the hook fires unconditionally and the
@@ -73,7 +79,7 @@ export function buildAgentTurnEndedFromHookCommand(opts: {
     }
 
     const { accepted } = parseHostResponse(
-      tuiAgentTurnEndedResponseSchema,
+      tuiAgentTurnEndedResponseSchemaV11,
       rpcResult,
     );
     // No `human` line: a Stop hook's stdout is not surfaced to the user and
