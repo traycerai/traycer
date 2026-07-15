@@ -37,27 +37,22 @@ import {
 import { useProvidersStartLoginForClient } from "@/hooks/providers/use-providers-start-login-mutation";
 import { useProvidersAwaitLoginForClient } from "@/hooks/providers/use-providers-await-login-mutation";
 import { useProvidersCancelLoginForClient } from "@/hooks/providers/use-providers-cancel-login-mutation";
+import { useProvidersSubmitLoginCodeForClient } from "@/hooks/providers/use-providers-submit-login-code-mutation";
+import { useProvidersTouchLoginForClient } from "@/hooks/providers/use-providers-touch-login-mutation";
 import { useRecolorProviderProfileForClient } from "@/hooks/providers/use-recolor-provider-profile-mutation";
-import { useRemoveProviderProfileForClient } from "@/hooks/providers/use-remove-provider-profile-mutation";
+import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
-import { reportableErrorToast } from "@/lib/reportable-error-toast";
-import { useRunnerHost } from "@/providers/use-runner-host";
 import { redactEmail } from "@/lib/providers/redact-email";
+import { CodePasteField, CodePasteRestartNotice } from "./code-paste-field";
+import { handleSignInLinkCopyError } from "./provider-sign-in-link";
+import { waitingStepCopy } from "./waiting-step-copy";
 import {
   useProviderProfileLoginFlow,
+  type ProviderProfileLoginFlowCodePaste,
   type ProviderProfileLoginFlowState,
 } from "./use-provider-profile-login-flow";
 
 const COPY_CONFIRMATION_RESET_MS = 1600;
-
-const handleSignInLinkCopyError = (): void => {
-  reportableErrorToast("Couldn't copy the sign-in link.", undefined, {
-    title: "Could not copy sign-in link",
-    message: null,
-    code: null,
-    source: "Provider sign-in",
-  });
-};
 
 export interface FailedProviderProfileAttempt {
   readonly providerId: ProviderCliState["providerId"];
@@ -84,7 +79,7 @@ export function AddProviderProfileDialog({
   ) => void;
   readonly onProfileCreated: (profileId: string) => void;
 }): ReactNode {
-  const runnerHost = useRunnerHost();
+  const openExternalLink = useRunnerOpenExternalLink();
   const supportsShareSkillsAndPlugins = state.providerId === "claude-code";
   const [shareSkillsAndPlugins, setShareSkillsAndPlugins] = useState(
     supportsShareSkillsAndPlugins,
@@ -93,7 +88,6 @@ export function AddProviderProfileDialog({
   const [accentColor, setAccentColor] = useState<ProviderProfileAccentColor>(
     () => nextAvailableAccentColor(state.profiles),
   );
-  const savedRef = useRef(false);
   const finalizeAttemptRef = useRef<string | null>(null);
   const startLogin = useProvidersStartLoginForClient(client);
   const awaitLogin = useProvidersAwaitLoginForClient({
@@ -101,15 +95,19 @@ export function AddProviderProfileDialog({
     getCacheHostId: () => client?.getActiveHostId() ?? null,
   });
   const cancelLogin = useProvidersCancelLoginForClient(client);
+  const submitLoginCode = useProvidersSubmitLoginCodeForClient(client);
+  const touchLogin = useProvidersTouchLoginForClient(client);
   const recolorProfile = useRecolorProviderProfileForClient(client);
-  const removeProfile = useRemoveProviderProfileForClient(client);
   const flow = useProviderProfileLoginFlow({
     mode: "create",
     providerId: state.providerId,
     existingProfileId: null,
+    loginCapability: state.loginCapability,
     startLogin,
     awaitLogin,
     cancelLogin,
+    submitLoginCode,
+    touchLogin,
     failureMessages: {
       notStarted:
         "Sign-in did not start. You can retry when the provider is available.",
@@ -121,9 +119,14 @@ export function AddProviderProfileDialog({
   const trimmedLabel = label.trim();
   const linking = flow.state.kind !== "start";
   const finalizing = recolorProfile.isPending;
+  const identityCompletionPending =
+    flow.state.kind === "identity" &&
+    flow.state.existingProfileId === null &&
+    recolorProfile.error === null;
+  const dismissalLocked =
+    flow.commitPending || finalizing || identityCompletionPending;
 
   const complete = (profileId: string): void => {
-    savedRef.current = true;
     onFailedAttempt(null);
     onProfileCreated(profileId);
     onOpenChange(false);
@@ -161,23 +164,13 @@ export function AddProviderProfileDialog({
   });
 
   const close = (nextOpen: boolean): void => {
-    if (!nextOpen && finalizing) return;
+    if (!nextOpen && dismissalLocked) return;
     if (!nextOpen && flow.state.kind === "starting") {
       flow.cancel();
       return;
     }
     if (!nextOpen && flow.state.kind === "waiting") {
       flow.cancel();
-    } else if (
-      !nextOpen &&
-      flow.state.kind === "identity" &&
-      flow.state.existingProfileId === null &&
-      !savedRef.current
-    ) {
-      removeProfile.mutate({
-        providerId: state.providerId,
-        profileId: flow.state.profileId,
-      });
     }
     onOpenChange(nextOpen);
   };
@@ -209,10 +202,16 @@ export function AddProviderProfileDialog({
       <DialogContent
         className="max-h-[min(85dvh,42rem)] w-[min(92vw,30rem)] gap-0 overflow-y-auto p-0 sm:max-w-none"
         showCloseButton={!linking}
+        onEscapeKeyDown={(event) => {
+          if (dismissalLocked) event.preventDefault();
+        }}
+        onPointerDownOutside={(event) => {
+          if (dismissalLocked) event.preventDefault();
+        }}
       >
         <DialogHeader className="gap-1.5 px-5 pt-5 pr-12 pb-4">
           <DialogTitle className="text-ui font-semibold leading-snug">
-            Add profile
+            Add new {PROVIDER_DISPLAY_NAMES[state.providerId]} profile
           </DialogTitle>
           <DialogDescription className="text-ui-sm leading-relaxed text-muted-foreground">
             Name this {PROVIDER_DISPLAY_NAMES[state.providerId]} profile, choose
@@ -242,12 +241,15 @@ export function AddProviderProfileDialog({
           <AddProfileAccountSection
             flowState={flow.state}
             startPending={flow.startPending}
+            cancelPending={flow.cancelPending}
+            cancelDisabled={flow.commitPending}
+            codePaste={flow.codePaste}
             finalizing={finalizing}
             finalizeError={recolorProfile.error}
             duplicateProfile={duplicateProfile}
             linkDisabled={trimmedLabel.length === 0 || flow.busy}
             onLink={linkAccount}
-            onOpenExternalLink={(url) => void runnerHost.openExternalLink(url)}
+            onOpenExternalLink={(url) => openExternalLink.mutate(url)}
             onCancel={() => close(false)}
             onRetryLogin={linkAccount}
             onRetryFinalize={retryFinalize}
@@ -286,6 +288,9 @@ export function AddProviderProfileDialog({
 function AddProfileAccountSection({
   flowState,
   startPending,
+  cancelPending,
+  cancelDisabled,
+  codePaste,
   finalizing,
   finalizeError,
   duplicateProfile,
@@ -298,6 +303,9 @@ function AddProfileAccountSection({
 }: {
   readonly flowState: ProviderProfileLoginFlowState;
   readonly startPending: boolean;
+  readonly cancelPending: boolean;
+  readonly cancelDisabled: boolean;
+  readonly codePaste: ProviderProfileLoginFlowCodePaste;
   readonly finalizing: boolean;
   readonly finalizeError: Error | null;
   readonly duplicateProfile: ProviderProfile | null;
@@ -335,13 +343,17 @@ function AddProfileAccountSection({
 
   if (flowState.kind === "starting" || flowState.kind === "waiting") {
     return (
-      <div className="rounded-lg border border-border/60 bg-muted/20 p-3">
+      <div className="border-t border-border/60 pt-4">
         <AddProfileWaitingStep
           loginUrl={flowState.kind === "waiting" ? flowState.url : null}
           queuePending={startPending}
           cancelRequested={
             flowState.kind === "starting" && flowState.cancelRequested
           }
+          cancelPending={cancelPending}
+          cancelDisabled={cancelDisabled}
+          waiting={flowState.kind === "waiting"}
+          codePaste={codePaste}
           onOpenExternalLink={onOpenExternalLink}
           onCancel={onCancel}
         />
@@ -446,12 +458,25 @@ export function AddProfileWaitingStep({
   loginUrl,
   queuePending,
   cancelRequested,
+  cancelPending,
+  cancelDisabled,
+  waiting,
+  codePaste,
   onOpenExternalLink,
   onCancel,
 }: {
   readonly loginUrl: string | null;
   readonly queuePending: boolean;
   readonly cancelRequested: boolean;
+  readonly cancelPending: boolean;
+  readonly cancelDisabled: boolean;
+  /** True only once the flow has reached `waiting` (a live profileId/child
+   *  exists). The paste field renders only then - during `starting` there
+   *  is nothing yet for a submit to reach, and rendering it anyway would
+   *  let a user's paste silently lock the field without ever being sent
+   *  (fixup review finding 2). */
+  readonly waiting: boolean;
+  readonly codePaste: ProviderProfileLoginFlowCodePaste;
   readonly onOpenExternalLink: (url: string) => void;
   readonly onCancel: () => void;
 }): ReactNode {
@@ -460,65 +485,88 @@ export function AddProfileWaitingStep({
     onSuccess: null,
     onError: handleSignInLinkCopyError,
   });
-  let guidance =
-    "Complete the provider sign-in in your browser. You can reopen the link if needed.";
-  if (queuePending) {
-    guidance =
-      "Another sign-in for this provider is running. This one will start after it finishes.";
-  }
-  if (cancelRequested) {
-    guidance =
-      "Waiting for the sign-in attempt to start so it can be cancelled safely.";
-  }
+  const processingCode = codePaste.phase !== "idle";
+  const { title, guidance } = waitingStepCopy({
+    phase: codePaste.phase,
+    queuePending,
+    cancelRequested,
+  });
+
   return (
-    <div className="flex flex-col gap-3">
-      <div>
-        <div className="flex items-center gap-2 text-ui-sm text-foreground">
-          <MutedAgentSpinner />
-          <span>
-            {cancelRequested
-              ? "Cancelling sign-in"
-              : "Waiting for browser sign-in"}
-          </span>
+    <div className="flex flex-col gap-3" aria-live="polite">
+      {codePaste.restartNotice !== null ? (
+        <CodePasteRestartNotice message={codePaste.restartNotice} />
+      ) : null}
+      <div className="flex items-start gap-2.5">
+        <MutedAgentSpinner />
+        <div className="min-w-0">
+          <div className="text-ui-sm font-medium text-foreground">{title}</div>
+          {guidance !== null ? (
+            <p className="mt-0.5 text-ui-xs leading-relaxed text-muted-foreground">
+              {guidance}
+            </p>
+          ) : null}
         </div>
-        <p className="mt-1 text-ui-xs text-muted-foreground">{guidance}</p>
       </div>
-      <div className="flex flex-wrap items-center gap-2">
-        {loginUrl !== null ? (
-          <>
-            <Button
-              type="button"
-              size="sm"
-              variant="secondary"
-              onClick={() => onOpenExternalLink(loginUrl)}
-            >
-              <ExternalLink className="size-3.5" />
-              Open sign-in page
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="secondary"
-              aria-label={copied ? "Copied sign-in link" : "Copy sign-in link"}
-              onClick={() => copy(loginUrl)}
-            >
-              {copied ? (
-                <Check className="size-3.5" />
-              ) : (
-                <Copy className="size-3.5" />
-              )}
-              {copied ? "Copied" : "Copy link"}
-            </Button>
-          </>
-        ) : null}
+
+      {!processingCode && loginUrl !== null ? (
+        <div className="flex flex-wrap items-center gap-2 pl-6">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => onOpenExternalLink(loginUrl)}
+          >
+            <ExternalLink className="size-3.5" />
+            Open browser again
+          </Button>
+          <Button
+            type="button"
+            size="icon-sm"
+            variant="outline"
+            aria-label={copied ? "Copied sign-in link" : "Copy sign-in link"}
+            onClick={() => copy(loginUrl)}
+          >
+            {copied ? (
+              <Check className="size-3.5" />
+            ) : (
+              <Copy className="size-3.5" />
+            )}
+          </Button>
+        </div>
+      ) : null}
+
+      {waiting && codePaste.enabled ? (
+        <div className="border-t border-border/50 pt-3">
+          {!processingCode ? (
+            <div className="mb-2">
+              <p className="text-ui-xs font-medium text-foreground">
+                Didn&apos;t return automatically?
+              </p>
+              <p className="mt-0.5 text-ui-xs text-muted-foreground">
+                If the browser shows a code, paste it here.
+              </p>
+            </div>
+          ) : null}
+          <CodePasteField
+            key={codePaste.attemptId}
+            codePaste={codePaste}
+            disabled={cancelRequested}
+            visibleLabel={false}
+          />
+        </div>
+      ) : null}
+
+      <div className="flex justify-end">
         <Button
           type="button"
           size="sm"
           variant="destructive"
           aria-label="Cancel sign-in"
-          disabled={cancelRequested}
+          disabled={cancelRequested || cancelPending || cancelDisabled}
           onClick={onCancel}
         >
+          {cancelPending ? <MutedAgentSpinner /> : null}
           Cancel
         </Button>
       </div>

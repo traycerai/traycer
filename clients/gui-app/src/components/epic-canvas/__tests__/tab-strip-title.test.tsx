@@ -60,6 +60,17 @@ vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
   useReactiveActiveHostId: () => "host-test",
 }));
 
+// Terminal titles resolve through the tab's bound-host client; these tests
+// assert chat/artifact titles outside a <HostRuntimeProvider>, so stub the
+// host seam (a null client keeps the terminal.list query disabled).
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => null,
+}));
+
+vi.mock("@/hooks/terminal/use-terminal-rename-for-mutation", () => ({
+  useTerminalRenameFor: () => ({ mutate: () => undefined }),
+}));
+
 vi.mock("@dnd-kit/core", () => ({
   useDraggable: () => ({
     setNodeRef: (_element: HTMLElement | null) => undefined,
