@@ -147,6 +147,25 @@ describe("useArtifactLinkOpener", () => {
     expect(mocks.runPolicy).toHaveBeenCalledTimes(1);
   });
 
+  it("reports a workspace-root loading failure without routing", () => {
+    mocks.worktreeQuery.data = undefined;
+    mocks.worktreeQuery.isError = true;
+    const { result } = renderHook(
+      () => useArtifactLinkOpener({ epicId: "epic-1", viewTabId: "tab-1" }),
+      { wrapper: QueryWrapper },
+    );
+
+    result.current.openLink({
+      kind: "file",
+      path: "src/index.ts",
+      line: null,
+      col: null,
+    });
+
+    expect(mocks.runPolicy).not.toHaveBeenCalled();
+    expect(mocks.toast).toHaveBeenCalledWith("Couldn't open link");
+  });
+
   it("routes external links through the runner mutation", () => {
     const { result } = renderHook(
       () => useArtifactLinkOpener({ epicId: "epic-1", viewTabId: "tab-1" }),
