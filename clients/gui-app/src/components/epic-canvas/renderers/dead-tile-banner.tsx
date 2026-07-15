@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
@@ -169,6 +170,44 @@ export function SnapshotDiffSourceUnavailableBanner(
         presentation="text"
         className={undefined}
       />
+    </div>
+  );
+}
+
+export interface ChatHostStartingBannerProps {
+  readonly className: string | undefined;
+  readonly testId: string;
+}
+
+/**
+ * Non-destructive counterpart to `ChatDeadTileBanner` for the
+ * `"host-starting"` reachability state: the host directory is empty because
+ * this machine's own host has not published yet (boot, ensure/respawn,
+ * post-wake re-probe). No bound host's fate is knowable in that window, so
+ * offering "Clone chat" would invite users to fork healthy threads - the
+ * banner is purely informational and clears on its own once the local host
+ * publishes.
+ */
+export function ChatHostStartingBanner(
+  props: ChatHostStartingBannerProps,
+): ReactNode {
+  return (
+    <div
+      role="status"
+      data-testid={props.testId}
+      className={cn(
+        "flex items-center gap-2 border-b border-border bg-muted/40 px-4 py-2 text-ui-sm text-muted-foreground",
+        props.className,
+      )}
+    >
+      <AgentSpinningDots
+        className="shrink-0"
+        testId={undefined}
+        variant={undefined}
+      />
+      <span className="min-w-0 flex-1">
+        Waiting for the host to start&hellip;
+      </span>
     </div>
   );
 }

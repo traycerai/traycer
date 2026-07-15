@@ -20,6 +20,7 @@ import type {
 } from "@traycer-clients/shared/auth/bearer-source";
 import {
   HostRpcError,
+  HostTransportFailureError,
   RetryableTransportError,
   type IHostMessenger,
   type RequestOfMethod,
@@ -114,7 +115,8 @@ export interface WsRpcClientOptions<Registry extends VersionedRpcRegistry> {
  *
  * Failure mapping (Refactoring Approach D-N2):
  *   - dial timeout / transport unreachable / transport aborted / frame timeout
- *     → `HostRpcError(code: "RPC_ERROR")`
+ *     → `HostTransportFailureError(code: "RPC_ERROR")` (the pre-send subset is
+ *     a `RetryableTransportError`)
  *   - missing / released bearer before dial → `HostRpcError(code: "RPC_ERROR")`
  *   - host `fatalError { code }` (`INCOMPATIBLE`, `UNAUTHORIZED`, or a
  *     domain-specific code) → known RPC codes are preserved on
@@ -173,7 +175,7 @@ export class WsRpcClient<
     const selected = this.endpoint();
 
     if (selected === null) {
-      throw new HostRpcError({
+      throw new HostTransportFailureError({
         code: "RPC_ERROR",
         message: "No host is currently bound to the client",
         requestId,
@@ -810,8 +812,8 @@ function openSession(options: SessionOptions): Session {
   // Flipped the instant the `request` frame is handed to `send`. Before this
   // point every transient failure is provably pre-send (the host never saw the
   // call), so it surfaces as a `RetryableTransportError`; after it, the same
-  // failure shapes stay a plain `HostRpcError` because a retry could
-  // re-execute a non-idempotent method.
+  // failure shapes stay a non-retryable `HostTransportFailureError` because a
+  // retry could re-execute a non-idempotent method.
   let requestSent = false;
   let failure: HostRpcError | null = null;
 
@@ -823,7 +825,7 @@ function openSession(options: SessionOptions): Session {
    */
   const transientFailure = (message: string): HostRpcError =>
     requestSent
-      ? new HostRpcError({
+      ? new HostTransportFailureError({
           code: "RPC_ERROR",
           message,
           requestId,

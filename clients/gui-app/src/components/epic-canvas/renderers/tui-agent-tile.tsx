@@ -212,7 +212,12 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
       />
     );
   }
-  if (reachability.status === "checking") {
+  // "host-starting": local host not published yet (boot/ensure/wake) - show
+  // the loading shell, never the permanently-closed banner.
+  if (
+    reachability.status === "checking" ||
+    reachability.status === "host-starting"
+  ) {
     return (
       <TerminalAgentTileShell tileId={props.tileId}>
         <TerminalAgentWorktreeNotice

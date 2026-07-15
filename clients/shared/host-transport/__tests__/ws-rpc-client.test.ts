@@ -9,7 +9,11 @@ import {
   defineVersionedRpcRegistry,
   type VersionedRpcRegistry,
 } from "@traycer/protocol/framework/index";
-import { HostRpcError, RetryableTransportError } from "../host-messenger";
+import {
+  HostRpcError,
+  HostTransportFailureError,
+  RetryableTransportError,
+} from "../host-messenger";
 import {
   createRequestContext,
   identityFromAuthenticatedUser,
@@ -685,7 +689,7 @@ describe("WsRpcClient", () => {
 
     await expect(pending).rejects.toSatisfy(
       (error: unknown) =>
-        error instanceof HostRpcError &&
+        error instanceof HostTransportFailureError &&
         !(error instanceof RetryableTransportError) &&
         error.message.includes("frame timed out"),
     );
@@ -809,7 +813,7 @@ describe("WsRpcClient", () => {
     await expect(pending).rejects.toSatisfy(
       (error: unknown) =>
         error instanceof HostRpcError &&
-        !(error instanceof RetryableTransportError) &&
+        !(error instanceof HostTransportFailureError) &&
         error.message.includes("Malformed host frame:"),
     );
   });
