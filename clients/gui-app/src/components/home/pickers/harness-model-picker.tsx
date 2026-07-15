@@ -13,7 +13,10 @@ import {
 } from "@/components/home/data/landing-options";
 import { useSurfaceActivity } from "@/components/home/composer/surface-activity-hooks";
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
-import { commitSelection } from "@/stores/composer/commit-selection";
+import {
+  commitProfileSelection,
+  commitSelection,
+} from "@/stores/composer/commit-selection";
 import {
   harnessCatalogEntryNeedsRefresh,
   useDefaultHostClient,
@@ -644,7 +647,19 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       // Mirrors `handleRailEntryChange`'s lock rule: while a fork lock is
       // active the strip stays interactive for the locked provider only.
       if (lockedHarnessId !== null && providerId !== lockedHarnessId) return;
-      commitSelection(store, providerId, null, profileId);
+      // Same-provider profile changes only replace the credential, preserving
+      // the user's configured model, reasoning effort, and tier. The provider
+      // can differ after browsing a degraded rail entry without committing it,
+      // or when this globally retained create-profile callback resolves after
+      // another control changed the selection. In that case preserve the old
+      // provider-switch behavior and restore the target provider/profile's
+      // remembered settings instead of pairing its profile with the current
+      // provider.
+      if (store.getState().selection.harnessId === providerId) {
+        commitProfileSelection(store, profileId);
+      } else {
+        commitSelection(store, providerId, null, profileId);
+      }
       setActiveRailEntry(providerId, profileId);
     },
     [lockedHarnessId, setActiveRailEntry, store],
