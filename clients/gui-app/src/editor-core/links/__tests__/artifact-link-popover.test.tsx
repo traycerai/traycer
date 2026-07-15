@@ -630,6 +630,18 @@ describe("ArtifactLinkPopover", () => {
     expect(editor.getHTML()).toBe(before);
   });
 
+  it("rejects link creation in a textblock that disallows link marks", () => {
+    const editor = makeEditor("<pre><code>const value = 1</code></pre>");
+    editor.commands.setTextSelection({ from: 1, to: 6 });
+    renderPopover(editor, true);
+    const before = editor.getHTML();
+
+    fireEvent.keyDown(editor.view.dom, { key: "k", ctrlKey: true });
+
+    expect(screen.queryByRole("dialog", { name: "Edit link" })).toBeNull();
+    expect(editor.getHTML()).toBe(before);
+  });
+
   it("preserves title metadata and emits no transaction for a no-op blur", async () => {
     const editor = makeEditor(
       '<p><a href="https://example.com" title="Tooltip">Docs</a></p>',
