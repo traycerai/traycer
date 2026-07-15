@@ -51,7 +51,8 @@ export function useArtifactLinkOpener(args: {
   const client = useHostClient();
   const navigate = useNavigate();
   const epicHandle = useOpenEpicHandle();
-  const openExternalLink = useRunnerOpenExternalLink();
+  const { mutate: openExternalLink, isPending: isExternalPending } =
+    useRunnerOpenExternalLink();
   const pendingProjectedOpenCancelRef = useRef<(() => void) | null>(null);
   const disposedRef = useRef(false);
   const clickTokenRef = useRef(0);
@@ -108,7 +109,7 @@ export function useArtifactLinkOpener(args: {
         supersedePending();
         if (externalOpenInFlightRef.current) return;
         externalOpenInFlightRef.current = true;
-        openExternalLink.mutate(link.url, {
+        openExternalLink(link.url, {
           onSettled: () => {
             externalOpenInFlightRef.current = false;
           },
@@ -139,5 +140,5 @@ export function useArtifactLinkOpener(args: {
     [openExternalLink, openFile, supersedePending],
   );
 
-  return { openLink, isExternalPending: openExternalLink.isPending };
+  return { openLink, isExternalPending };
 }

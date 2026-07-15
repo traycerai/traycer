@@ -304,6 +304,7 @@ function refreshEditTarget(
     href,
     attrs: mark.attrs,
     text: mappedText,
+    identityText: mappedText,
     anchor: rangeAnchor(
       editor,
       mappedRange,

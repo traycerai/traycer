@@ -471,6 +471,33 @@ describe("ArtifactLinkPopover", () => {
     expect(updates).toHaveBeenCalledTimes(1);
   });
 
+  it("closes after a boundary insert follows an accepted interior edit", async () => {
+    const { first, second } = makeCollaborativeEditors(
+      "[Example](https://example.com)",
+    );
+    setCaretAndRender(first, true);
+    const display = await screen.findByRole<HTMLInputElement>("textbox", {
+      name: "Link display text",
+    });
+    fireEvent.change(display, { target: { value: "LOCAL TEXT" } });
+
+    second.commands.insertContentAt(4, "REMOTE");
+    await waitFor(() => expect(first.getText()).toBe("ExaREMOTEmple"));
+    expect(screen.getByRole("dialog", { name: "Edit link" })).not.toBeNull();
+
+    second.commands.insertContentAt(14, {
+      type: "text",
+      text: "X",
+      marks: [{ type: "link", attrs: { href: "https://example.com" } }],
+    });
+
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Edit link" })).toBeNull(),
+    );
+    expect(first.getText()).toBe("ExaREMOTEmpleX");
+    expect(first.getText()).not.toContain("LOCAL TEXT");
+  });
+
   it("invalidates post-commit caret suppression on a remote document change", async () => {
     const { first, second } = makeCollaborativeEditors(
       "[Example](https://example.com)",

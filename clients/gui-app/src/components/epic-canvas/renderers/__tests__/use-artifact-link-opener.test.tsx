@@ -118,6 +118,18 @@ describe("useArtifactLinkOpener", () => {
     expect(mocks.openExternal.mock.calls[0]?.[0]).toBe("https://example.com");
   });
 
+  it("keeps the opener stable when the mutation result object is recreated", () => {
+    const { result, rerender } = renderHook(
+      () => useArtifactLinkOpener({ epicId: "epic-1", viewTabId: "tab-1" }),
+      { wrapper: QueryWrapper },
+    );
+    const firstOpenLink = result.current.openLink;
+
+    rerender();
+
+    expect(result.current.openLink).toBe(firstOpenLink);
+  });
+
   it("supersedes an in-flight artifact open before routing an external link", () => {
     const cancel = vi.fn();
     mocks.runPolicy.mockImplementationOnce((_link, lifecycle) => {
