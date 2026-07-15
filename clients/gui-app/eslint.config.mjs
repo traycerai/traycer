@@ -194,6 +194,30 @@ export default tseslint.config(
 
   // ── Per-directory overrides ─────────────────────────────────────────────────
   {
+    // PostHog is reachable only through the typed adapter so every event and
+    // property passes its allowlist sanitizer before leaving the app. The
+    // adapter's own test is the one other legitimate consumer: it drives the
+    // real SDK through the sanitizer to prove the payload boundary.
+    files: ["src/**/*.{ts,tsx}"],
+    ignores: ["src/lib/analytics.ts", "src/lib/__tests__/analytics.test.ts"],
+    rules: {
+      "@typescript-eslint/no-restricted-imports": [
+        "error",
+        {
+          ...traycerClientsImportBoundaryRestrictions,
+          patterns: [
+            ...(traycerClientsImportBoundaryRestrictions.patterns ?? []),
+            {
+              group: ["posthog-js", "posthog-js/*"],
+              message:
+                "Import PostHog only through the typed adapter in @/lib/analytics.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     // shadcn/ui generated primitives follow library conventions that
     // intentionally diverge from app-code rules.
     files: ["src/components/ui/**/*.tsx"],

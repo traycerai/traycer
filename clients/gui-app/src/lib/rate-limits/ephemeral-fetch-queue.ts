@@ -15,12 +15,12 @@ import {
 import { EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS } from "@/lib/rate-limits/rate-limit-timing";
 
 /**
- * Shared serial fetch lane for the `ephemeralProcess` rate-limit providers
- * (codex, claude-code) - the only providers this queue serves. Each of their
- * pulls spawns a real CLI subprocess on the host, so every trigger that can
- * cause one (the interval timer, a turn completion, a manual "Refresh all")
- * routes through here to guarantee **at most one subprocess-spawning fetch is
- * in flight at a time**, no matter how many providers or how fast the clicks.
+ * Shared fetch queue for the `ephemeralProcess` rate-limit providers (codex,
+ * claude-code) - the only providers this queue serves. Each pull spawns a real
+ * CLI subprocess on the host, so interval timers, turn completions, and manual
+ * refreshes all route through here. Queue items run serially, but a deliberate
+ * batch (the popover's "Refresh all") may fan out its distinct profile pulls in
+ * parallel before the next queue item begins.
  *
  * `httpFetch` providers (openrouter, kilocode) NEVER touch this queue - they
  * poll directly via their query's own `refetchInterval`.
@@ -28,10 +28,10 @@ import { EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS } from "@/lib/rate-limits/rate-li
  * The queue is a plain module holding process-wide state. The long-lived app
  * shell binds its default host via `configureRateLimitQueue`, while surfaces
  * that can inspect another host pass an explicit, render-time scope through
- * `enqueueRateLimitFetchForScope`. Both entry points append to the same promise
- * chain, so subprocess work remains serialized across every host scope. Each
- * enqueue snapshots its scope, so it cannot be reassigned by a later host swap
- * and always writes to the query key for the host that receives the RPC.
+ * `enqueueRateLimitFetchForScope`. Every entry point appends to the same promise
+ * chain, so queue items remain ordered across every host scope. Each enqueue
+ * snapshots its scope, so it cannot be reassigned by a later host swap and
+ * always writes to the query key for the host that receives the RPC.
  */
 
 type RateLimitUsageParams = RequestOfMethod<
@@ -51,9 +51,18 @@ export interface RateLimitQueueConfig {
   readonly request: RateLimitQueueRequestFn;
 }
 
+export interface RateLimitQueueBatchTarget {
+  readonly providerId: RateLimitProviderId;
+  readonly accountContext: AccountContext;
+  readonly profileId: string | null;
+}
+
+type RateLimitQueueFetch = () => Promise<ProviderRateLimitEnvelope | undefined>;
+
 let deps: RateLimitQueueConfig | null = null;
-// The serial lane itself: every enqueued fetch appends to the tail of this
-// promise chain, so fetch N+1's `fetchQuery` cannot start until fetch N settles.
+// The serial lane itself: every queue item appends to the tail of this promise
+// chain. An item normally contains one fetch, while an explicit batch may
+// contain several profile fetches that run concurrently inside that item.
 let chain: Promise<unknown> = Promise.resolve();
 let inFlightCount = 0;
 const drainingListeners = new Set<() => void>();
@@ -132,7 +141,7 @@ function notifyDraining(): void {
  * Bind (or, with `null`, unbind) the app-shell default scope. Called from an
  * effect that re-runs on default-host/client changes. Explicit host scopes do
  * not replace this binding; they only snapshot their own dependencies for one
- * enqueue onto the same serialized lane.
+ * enqueue onto the same ordered lane.
  */
 export function configureRateLimitQueue(
   next: RateLimitQueueConfig | null,
@@ -141,10 +150,10 @@ export function configureRateLimitQueue(
 }
 
 /**
- * `useSyncExternalStore`-compatible pair for the "a subprocess fetch is
- * running" signal - a bare promise chain isn't React-observable on its own.
- * The popover consumes this (via `useIsRateLimitQueueDraining`) to disable
- * "Refresh all" while the lane is draining.
+ * `useSyncExternalStore`-compatible pair for the "subprocess work is queued or
+ * running" signal - a bare promise chain isn't React-observable on its own. The
+ * popover consumes this (via `useIsRateLimitQueueDraining`) to disable "Refresh
+ * all" while the lane is draining.
  */
 export function subscribeRateLimitQueueDraining(
   listener: () => void,
@@ -212,9 +221,9 @@ function isInCooldown(
 }
 
 /**
- * Append a rate-limit pull for one `ephemeralProcess` provider to the serial
- * lane. Returns the tail of the chain so a caller ("Refresh all") can await the
- * lane draining.
+ * Append one `ephemeralProcess` provider/profile pull to the serial lane.
+ * Returns the tail of the chain so the caller can await this item and everything
+ * queued before it.
  *
  * - `force: false` (interval timer, turn completion): no-ops if the query's
  *   cached data is younger than `PROVIDER_RATE_LIMITS_STALE_TIME_MS`, so
@@ -238,6 +247,19 @@ export function enqueueRateLimitFetch(
 }
 
 /**
+ * Append one queue item whose distinct provider/profile pulls start together
+ * when that item reaches the front of the lane. Used by the popover's "Refresh
+ * all" action so profiles do not wait top-to-bottom, while later timers, turn
+ * completions, and clicks still wait for the whole refresh round to settle.
+ */
+export function enqueueRateLimitFetchBatch(
+  targets: ReadonlyArray<RateLimitQueueBatchTarget>,
+  opts: { readonly force: boolean },
+): Promise<unknown> {
+  return enqueueRateLimitFetchBatchForScope(deps, targets, opts);
+}
+
+/**
  * Append a provider pull for an explicit host/client/cache scope. The scope is
  * captured at call time and never mutates the app-shell default binding. A
  * `null` scope is the same readiness no-op as an unconfigured default queue.
@@ -248,67 +270,94 @@ export function enqueueRateLimitFetchForScope(
   accountContext: AccountContext,
   opts: { readonly force: boolean; readonly profileId: string | null },
 ): Promise<unknown> {
+  return enqueueRateLimitFetchBatchForScope(
+    scope,
+    [{ providerId, accountContext, profileId: opts.profileId }],
+    { force: opts.force },
+  );
+}
+
+function enqueueRateLimitFetchBatchForScope(
+  scope: RateLimitQueueConfig | null,
+  targets: ReadonlyArray<RateLimitQueueBatchTarget>,
+  opts: { readonly force: boolean },
+): Promise<unknown> {
   if (scope === null) return chain;
   const { hostId, queryClient, request } = scope;
-  const params: RateLimitUsageParams = {
-    accountContext,
-    providerId,
-    profileId: opts.profileId,
-  };
-  const queryKey = queryKeys.hostMethod<
-    HostRpcRegistry,
-    "host.getRateLimitUsage"
-  >(hostId, "host.getRateLimitUsage", params);
+  const fetches = targets
+    .map((target): RateLimitQueueFetch | null => {
+      const params: RateLimitUsageParams = {
+        accountContext: target.accountContext,
+        providerId: target.providerId,
+        profileId: target.profileId,
+      };
+      const queryKey = queryKeys.hostMethod<
+        HostRpcRegistry,
+        "host.getRateLimitUsage"
+      >(hostId, "host.getRateLimitUsage", params);
 
-  const isFresh = (): boolean => {
-    const updatedAt = queryClient.getQueryState(queryKey)?.dataUpdatedAt ?? 0;
-    return Date.now() - updatedAt < PROVIDER_RATE_LIMITS_STALE_TIME_MS;
-  };
-  const shouldSkipAutomatic = (): boolean =>
-    !opts.force &&
-    (isFresh() || isInCooldown(hostId, providerId, opts.profileId));
-  if (shouldSkipAutomatic()) return chain;
+      function isFresh(): boolean {
+        const updatedAt =
+          queryClient.getQueryState(queryKey)?.dataUpdatedAt ?? 0;
+        return Date.now() - updatedAt < PROVIDER_RATE_LIMITS_STALE_TIME_MS;
+      }
+      function shouldSkipAutomatic(): boolean {
+        return (
+          !opts.force &&
+          (isFresh() ||
+            isInCooldown(hostId, target.providerId, target.profileId))
+        );
+      }
+      if (shouldSkipAutomatic()) return null;
 
-  // Named request fn (not an inline closure in `queryFn`) so the host-scoped
-  // key stays the sole cache identity - `request` is stable module state, not a
-  // key input, and inlining it would trip the query plugin's exhaustive-deps
-  // check (mirrors `resolve-artifact-by-path.ts`).
-  const queryFn = async (): Promise<ProviderRateLimitEnvelope> => {
-    const response = await request(hostId, "host.getRateLimitUsage", params);
-    const envelope = mapResponseToProviderRateLimitEnvelope({
-      response,
-      queryClient,
-      queryKey,
-    });
-    applyCooldownPolicy(hostId, providerId, opts.profileId, envelope);
-    return envelope;
-  };
+      // Named request fn (not an inline closure in `queryFn`) so the host-scoped
+      // key stays the sole cache identity - `request` is stable module state, not
+      // a key input, and inlining it would trip the query plugin's exhaustive-deps
+      // check (mirrors `resolve-artifact-by-path.ts`).
+      async function queryFn(): Promise<ProviderRateLimitEnvelope> {
+        const response = await request(
+          hostId,
+          "host.getRateLimitUsage",
+          params,
+        );
+        const envelope = mapResponseToProviderRateLimitEnvelope({
+          response,
+          queryClient,
+          queryKey,
+        });
+        applyCooldownPolicy(
+          hostId,
+          target.providerId,
+          target.profileId,
+          envelope,
+        );
+        return envelope;
+      }
+
+      function runFetch(): Promise<ProviderRateLimitEnvelope | undefined> {
+        // Re-checked when this batch reaches the front of the lane: an earlier
+        // item may have refreshed this exact profile (or entered it into
+        // cool-down) while this item waited.
+        if (shouldSkipAutomatic()) return Promise.resolve(undefined);
+        // `staleTime: 0` is load-bearing: `fetchQuery` inherits the app
+        // QueryClient's GLOBAL `staleTime` default (60s in `query-client.ts`)
+        // and otherwise serves still-fresh cache without fetching at all.
+        return queryClient.fetchQuery({ queryKey, queryFn, staleTime: 0 });
+      }
+
+      return runFetch;
+    })
+    .filter((fetch): fetch is RateLimitQueueFetch => fetch !== null);
+  if (fetches.length === 0) return chain;
 
   inFlightCount += 1;
   notifyDraining();
   chain = chain
-    .then(() => {
-      // Re-checked at this fetch's turn in the lane (not just at enqueue time):
-      // an earlier fetch in the same round may have just refreshed this exact
-      // provider (or just entered it into cool-down), and an automatic trigger
-      // must not re-spawn a subprocess for data that became fresh - or a
-      // provider that entered cool-down - while it waited in the queue.
-      if (shouldSkipAutomatic()) return undefined;
-      // `staleTime: 0` is load-bearing: `fetchQuery` inherits the app
-      // QueryClient's GLOBAL `staleTime` default (60s in `query-client.ts`)
-      // and serves still-fresh cache without fetching at all. The popover's
-      // open-time refresh keeps this data younger than 60s, so without the
-      // override a user's `force: true` refresh silently no-oped - resolving
-      // from cache in a microtask, spawning no subprocess, flipping
-      // `draining` for under a frame - while the httpFetch lane's
-      // `invalidateQueries` (which always refetches) visibly spun. Freshness
-      // policy for automatic triggers lives in the explicit `isFresh` checks
-      // above, never in `fetchQuery`'s own staleness short-circuit.
-      return queryClient.fetchQuery({ queryKey, queryFn, staleTime: 0 });
-    })
-    // One provider's failure must not block the next provider's turn in the
-    // lane, and must not reject the shared chain (which every future enqueue
-    // builds on).
+    .then(() =>
+      Promise.all(fetches.map((fetch) => fetch().catch(() => undefined))),
+    )
+    // One profile's failure must not block a later queue item or reject the
+    // shared chain (which every future enqueue builds on).
     .catch(() => undefined)
     .finally(() => {
       inFlightCount -= 1;

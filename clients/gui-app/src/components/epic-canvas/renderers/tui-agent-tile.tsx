@@ -33,7 +33,6 @@ import {
 } from "@/hooks/terminal/use-terminal-crash-notification";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { beginTerminalLoad } from "@/lib/perf/terminal-load-perf";
-import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { useAgentStartTerminalSession } from "@/hooks/agent/use-prepare-tui-launch-mutation";
 import { useHostClientFor } from "@/hooks/host/use-host-client-for";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
@@ -184,9 +183,6 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
   const sessionId = props.node.id;
   useEffect(() => {
     beginTerminalLoad(sessionId, "terminal-agent");
-    Analytics.getInstance().track(AnalyticsEvent.TerminalOpened, {
-      kind: "agent",
-    });
   }, [sessionId]);
   useEffect(() => {
     if (reachability.status !== "unreachable") return;
@@ -212,7 +208,12 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
       />
     );
   }
-  if (reachability.status === "checking") {
+  // "host-starting": local host not published yet (boot/ensure/wake) - show
+  // the loading shell, never the permanently-closed banner.
+  if (
+    reachability.status === "checking" ||
+    reachability.status === "host-starting"
+  ) {
     return (
       <TerminalAgentTileShell tileId={props.tileId}>
         <TerminalAgentWorktreeNotice
@@ -263,6 +264,7 @@ function TuiAgentTileLive(
   const killTerminal = useTerminalKillFor(
     hostClient,
     "Couldn't restart terminal after updating folders.",
+    false,
   );
 
   // Every harness - Claude included - goes through `agent.startTerminalSession`

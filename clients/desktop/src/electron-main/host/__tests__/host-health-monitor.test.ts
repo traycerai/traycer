@@ -87,6 +87,50 @@ describe("startHostHealthMonitor", () => {
     monitor.dispose();
   });
 
+  it("converges via reload instead of respawning when the disk names a reachable replacement", async () => {
+    const respawn = vi.fn(async () => {});
+    // The supervisor (launchd/systemd) already respawned the host on a new
+    // port; the stale snapshot's endpoint is dead but a reload surfaces the
+    // healthy replacement - restarting it would kill a live host.
+    const reload = vi.fn(async () => SNAPSHOT);
+    const monitor = startHostHealthMonitor({
+      host: fakeHost({ reloadSnapshotFromDisk: reload }),
+      intervalMs: INTERVAL_MS,
+      probe: vi.fn(async () => false),
+      readMetadata: vi.fn(async () => SNAPSHOT),
+      respawn,
+    });
+    await ticks(2);
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(respawn).not.toHaveBeenCalled();
+    monitor.dispose();
+  });
+
+  it("does not respawn a host stopped in the window between the outage and the reload (finding 3)", async () => {
+    // The stop lands DURING recovery: pid.json is still present when the tick
+    // begins, but the reload observes it gone. Deciding respawn off the stale
+    // pre-reload read would resurrect a host the user deliberately stopped, so
+    // the metadata that gates respawn must be read AFTER the reload.
+    const respawn = vi.fn(async () => {});
+    let stopped = false;
+    const reload = vi.fn(async () => {
+      stopped = true; // the `traycer host stop` unlink completes here
+      return null;
+    });
+    const readMetadata = vi.fn(async () => (stopped ? null : SNAPSHOT));
+    const monitor = startHostHealthMonitor({
+      host: fakeHost({ reloadSnapshotFromDisk: reload }),
+      intervalMs: INTERVAL_MS,
+      probe: vi.fn(async () => false),
+      readMetadata,
+      respawn,
+    });
+    await ticks(2);
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(respawn).not.toHaveBeenCalled();
+    monitor.dispose();
+  });
+
   it("does not respawn when a failure streak is broken by a healthy probe", async () => {
     const respawn = vi.fn(async () => {});
     let reachable = false;
@@ -149,7 +193,10 @@ describe("startHostHealthMonitor", () => {
     // Each confirmed outage takes 2 failed ticks; budget is 3 respawns.
     await ticks(8);
     expect(respawn).toHaveBeenCalledTimes(3);
-    expect(reload).toHaveBeenCalledTimes(1); // the budget-exhausted 4th outage
+    // Reload-first convergence runs at every confirmed outage (4 over these
+    // ticks); when it keeps yielding null the respawn budget still caps the
+    // restarts above.
+    expect(reload).toHaveBeenCalledTimes(4);
     monitor.dispose();
   });
 

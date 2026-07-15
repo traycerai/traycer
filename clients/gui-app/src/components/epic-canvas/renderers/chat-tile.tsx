@@ -103,7 +103,7 @@ import {
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { cloneChatOnHostSwitch } from "@/lib/commands/actions/clone-chat-on-host-switch";
 import { enqueuePersistChatRunSettings } from "@/lib/chats/chat-run-settings-write-queue";
-import { ChatDeadTileBanner } from "./dead-tile-banner";
+import { ChatDeadTileBanner, ChatHostStartingBanner } from "./dead-tile-banner";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { flattenCollaborators } from "@/hooks/epics/use-epic-collaborators-query";
@@ -265,17 +265,32 @@ export function ChatTile(props: ChatTileProps) {
   // the host runtime. Mount it only when the banner is actually
   // shown so the live render path does not pay the subscription cost
   // (and tests that omit the host runtime provider stay green).
-  const deadTileBanner =
-    reachability.status === "unreachable" ? (
-      <ChatDeadTileBannerContainer
-        epicId={epicId}
-        tabId={viewTabId}
-        chatId={node.id}
-        sourceHostId={tabHostId}
-        hostLabel={reachability.hostLabel}
-        testId={`chat-dead-tile-${node.id}`}
-      />
-    ) : null;
+  const deadTileBanner = (() => {
+    if (reachability.status === "unreachable") {
+      return (
+        <ChatDeadTileBannerContainer
+          epicId={epicId}
+          tabId={viewTabId}
+          chatId={node.id}
+          sourceHostId={tabHostId}
+          hostLabel={reachability.hostLabel}
+          testId={`chat-dead-tile-${node.id}`}
+        />
+      );
+    }
+    if (reachability.status === "host-starting") {
+      // The local host hasn't published yet (boot/ensure/wake). Never offer
+      // Clone here - the bound host is most likely this machine, seconds
+      // from converging; cloning would fork a healthy thread.
+      return (
+        <ChatHostStartingBanner
+          className={undefined}
+          testId={`chat-host-starting-${node.id}`}
+        />
+      );
+    }
+    return null;
+  })();
 
   if (handle === null) {
     return (

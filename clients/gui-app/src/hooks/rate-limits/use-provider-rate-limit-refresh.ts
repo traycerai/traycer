@@ -26,13 +26,13 @@ import {
  * - **Spinner state (`isRefreshing`)**: `query.isFetching` covers a fetch on
  *   THIS provider's own query key (whoever triggered it - the queue's
  *   `fetchQuery`, a direct refetch, an invalidation). For `ephemeralProcess`
- *   providers it is OR-ed with the queue's `draining` flag, because the queue
- *   runs providers one at a time: this provider's own `isFetching` can settle
- *   the instant its turn finishes while "Refresh all" is still working through a
- *   later provider queued behind it. Gating on `draining` (the whole round)
- *   rather than only this provider's own fetch keeps the button disabled for as
- *   long as any refresh in the shared lane is in flight - matching the user's
- *   "Refresh all is in progress" mental model, not "my own fetch is in flight".
+ *   providers it is OR-ed with the queue's `draining` flag: this provider's own
+ *   `isFetching` can settle while another profile in the same "Refresh all"
+ *   batch is still running, or while another queue item is pending. Gating on
+ *   `draining` (the whole round) rather than only this provider's own fetch keeps
+ *   the button disabled for as long as any refresh in the shared lane is in
+ *   flight - matching the user's "Refresh all is in progress" mental model, not
+ *   "my own fetch is in flight".
  *   `httpFetch` providers refresh concurrently (no shared queue), so their own
  *   `isFetching` is already the complete signal.
  *

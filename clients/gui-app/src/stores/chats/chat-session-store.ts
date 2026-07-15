@@ -2507,6 +2507,80 @@ function assistantMessageOwnsBlock(message: Message, blockId: string): boolean {
   );
 }
 
+// Applies a block event to the frozen pre-split row of the active turn that
+// owns it, when a steer split left that block still streaming there. A child
+// event whose parent lives in such a row follows its parent (the accumulator
+// creates it beside the parent). The sibling scan runs only when the active
+// row does not own the block (a block's first event, or a carryover event).
+// The row's timestamp is deliberately NOT advanced: the frozen row keeps its
+// split-time position semantics (mirrors the host's carryover writer and the
+// detached writer). Returns null when the event is not a carryover (caller
+// falls through to active-row routing).
+function applySteerSplitCarryoverEvent(
+  state: ChatSessionState,
+  assistantIndex: number,
+  event: RuntimeEvent,
+): Partial<ChatSessionState> | null {
+  if (assistantIndex < 0) return null;
+  const active = state.messages[assistantIndex];
+  if (active.role !== "assistant" || !("blockId" in event)) return null;
+  if (assistantMessageOwnsBlock(active, event.blockId)) return null;
+  const siblingIndex = earlierSameTurnRowOwningEventBlock(
+    state.messages,
+    assistantIndex,
+    active.turnId ?? null,
+    event,
+  );
+  if (siblingIndex < 0) return null;
+  const sibling = state.messages[siblingIndex];
+  if (sibling.role !== "assistant") return null;
+  const content = accumulateTurnContent(
+    { blocks: sibling.blocks, blocksVersion: sibling.blocksVersion ?? 0 },
+    event,
+  );
+  if (content.blocks === sibling.blocks) return {};
+  const next = state.messages.slice();
+  next[siblingIndex] = {
+    ...sibling,
+    blocks: content.blocks,
+    ...(sibling.blocksVersion === undefined
+      ? {}
+      : { blocksVersion: content.blocksVersion }),
+  };
+  return { messages: next };
+}
+
+// Finds the EARLIER assistant row of the same turn that owns this event's
+// block (or its parent block) - the frozen pre-split row a steer split left
+// behind while the block was still streaming. Restricted to same-turn rows so
+// a provider blockId reused across turns (e.g. a resumed agent) can never
+// resurrect an unrelated old row. Returns -1 when no sibling owns it.
+function earlierSameTurnRowOwningEventBlock(
+  messages: ReadonlyArray<Message>,
+  activeIndex: number,
+  turnId: string | null,
+  event: RuntimeEvent,
+): number {
+  if (turnId === null || !("blockId" in event)) return -1;
+  const parentBlockId =
+    "parentBlockId" in event && typeof event.parentBlockId === "string"
+      ? event.parentBlockId
+      : null;
+  for (let index = activeIndex - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    // Steered user rows sit between split siblings: skip, don't stop.
+    if (message.role !== "assistant" || message.turnId !== turnId) continue;
+    if (
+      assistantMessageOwnsBlock(message, event.blockId) ||
+      (parentBlockId !== null &&
+        assistantMessageOwnsBlock(message, parentBlockId))
+    ) {
+      return index;
+    }
+  }
+  return -1;
+}
+
 // Apply a detached backgrounded-subagent event to the SETTLED message that owns
 // its card (its spawning turn already ended), so the card keeps updating instead
 // of being dropped (no active turn) or mis-applied to a later turn's row. Returns
@@ -2582,6 +2656,18 @@ function applyContentBlockDelta(
     // no-op) instead.
     if (detachedTarget.mandatory) return state;
   }
+  // Steer-split carryover: a block that was still STREAMING when a steered
+  // user message split the turn lives in an EARLIER assistant row of the SAME
+  // turn (the split freezes that row and continues in a fresh one). Route the
+  // block's later events - deltas, completion - to the row that owns it, so
+  // the block completes in place above the steer bubble instead of
+  // re-materializing as a duplicate in the continuation row.
+  const carryoverRouted = applySteerSplitCarryoverEvent(
+    state,
+    assistantIndex,
+    event,
+  );
+  if (carryoverRouted !== null) return carryoverRouted;
   if (assistantIndex >= 0) {
     const target = state.messages[assistantIndex];
     if (target.role !== "assistant") {
@@ -2865,6 +2951,7 @@ function liveAssistantForActiveTurn(
       // Live assistant turns never participate in inter-agent broker
       // threads; replies are meaningful only on `role: "user"` agent senders.
       reply: { expectsReply: false },
+      inReplyTo: null,
     },
     blocks: [],
     startedAt: activeTurn.startedAt,

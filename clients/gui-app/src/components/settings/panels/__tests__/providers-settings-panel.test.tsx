@@ -55,6 +55,22 @@ type AwaitLoginMutate = (
   options: AwaitLoginOptions,
 ) => void;
 
+type SubmitLoginCodeVariables = {
+  readonly providerId: ProviderCliState["providerId"];
+  readonly profileId: string | null;
+  readonly code: string;
+};
+type SubmitLoginCodeOptions = {
+  readonly onSuccess: (data: {
+    readonly outcome: "accepted" | "noActiveLogin";
+  }) => void;
+  readonly onError: () => void;
+};
+type SubmitLoginCodeMutate = (
+  variables: SubmitLoginCodeVariables,
+  options: SubmitLoginCodeOptions,
+) => void;
+
 type RenameProfileVariables = {
   readonly providerId: ProviderCliState["providerId"];
   readonly profileId: string;
@@ -106,6 +122,16 @@ const providerMocks = vi.hoisted(() => ({
   startLoginMutate: vi.fn<StartLoginMutate>(),
   awaitLoginMutate: vi.fn<AwaitLoginMutate>(),
   cancelLoginMutate: vi.fn(),
+  cancelLoginPending: false,
+  submitLoginCodeMutate: vi.fn<SubmitLoginCodeMutate>(),
+  submitLoginCodeReset: vi.fn(),
+  submitLoginCodePending: false,
+  submitLoginCodeSuccess: false,
+  submitLoginCodeData: undefined as
+    { readonly outcome: "accepted" | "noActiveLogin" } | undefined,
+  submitLoginCodeError: null as Error | null,
+  touchLoginMutate: vi.fn(),
+  touchLoginReset: vi.fn(),
   renameProfileMutate: vi.fn<RenameProfileMutate>(),
   recolorProfileMutate: vi.fn<RecolorProfileMutate>(),
   removeProfileMutate: vi.fn<RemoveProfileMutate>(),
@@ -217,11 +243,39 @@ vi.mock("@/hooks/providers/use-providers-await-login-mutation", () => {
 vi.mock("@/hooks/providers/use-providers-cancel-login-mutation", () => {
   const useProvidersCancelLogin = () => ({
     mutate: providerMocks.cancelLoginMutate,
-    isPending: false,
+    isPending: providerMocks.cancelLoginPending,
   });
   return {
     useProvidersCancelLogin,
     useProvidersCancelLoginForClient: useProvidersCancelLogin,
+  };
+});
+
+vi.mock("@/hooks/providers/use-providers-submit-login-code-mutation", () => {
+  const useProvidersSubmitLoginCode = () => ({
+    mutate: providerMocks.submitLoginCodeMutate,
+    isPending: providerMocks.submitLoginCodePending,
+    isSuccess: providerMocks.submitLoginCodeSuccess,
+    data: providerMocks.submitLoginCodeData,
+    error: providerMocks.submitLoginCodeError,
+    reset: providerMocks.submitLoginCodeReset,
+  });
+  return {
+    useProvidersSubmitLoginCode,
+    useProvidersSubmitLoginCodeForClient: useProvidersSubmitLoginCode,
+  };
+});
+
+vi.mock("@/hooks/providers/use-providers-touch-login-mutation", () => {
+  const useProvidersTouchLogin = () => ({
+    mutate: providerMocks.touchLoginMutate,
+    isPending: false,
+    error: null,
+    reset: providerMocks.touchLoginReset,
+  });
+  return {
+    useProvidersTouchLogin,
+    useProvidersTouchLoginForClient: useProvidersTouchLogin,
   };
 });
 
@@ -285,6 +339,12 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
 
 vi.mock("@/hooks/providers/use-refresh-providers", () => ({
   useRefreshProviders: () => providerMocks.refreshProviders,
+}));
+
+vi.mock("@/hooks/runner/use-open-external-link-mutation", () => ({
+  useRunnerOpenExternalLink: () => ({
+    mutate: providerMocks.openExternalLink,
+  }),
 }));
 
 vi.mock("@/providers/use-runner-host", () => ({
@@ -544,6 +604,81 @@ function firstAwaitLoginCall(): readonly [
   return call;
 }
 
+function firstSubmitLoginCodeCall(): readonly [
+  SubmitLoginCodeVariables,
+  SubmitLoginCodeOptions,
+] {
+  const call = providerMocks.submitLoginCodeMutate.mock.calls.at(0);
+  if (call === undefined) throw new Error("Expected submit login code call.");
+  return call;
+}
+
+function codePasteReauthProviderState(): ProviderCliState {
+  return {
+    ...providerState({
+      providerId: "codex",
+      selected: { kind: "bundled" },
+      candidates: [],
+      envOverrides: [],
+      profiles: [
+        profile({
+          profileId: "ambient",
+          kind: "ambient",
+          label: "Terminal account",
+          email: "ambient@example.test",
+          tier: null,
+          authStatus: "authenticated",
+          duplicateOfProfileId: null,
+          ambientDriftNotice: null,
+        }),
+        profile({
+          profileId: "managed-1",
+          kind: "managed",
+          label: "Work",
+          email: "work@example.test",
+          tier: "Pro",
+          authStatus: "authenticated",
+          duplicateOfProfileId: null,
+          ambientDriftNotice: null,
+        }),
+      ],
+    }),
+    loginCapability: {
+      oauthArgs: ["auth", "login"],
+      token: null,
+      codePaste: {},
+    },
+  };
+}
+
+function codePasteCreateProviderState(): ProviderCliState {
+  return {
+    ...providerState({
+      providerId: "codex",
+      selected: { kind: "bundled" },
+      candidates: [],
+      envOverrides: [],
+      profiles: [
+        profile({
+          profileId: "ambient",
+          kind: "ambient",
+          label: "Terminal account",
+          email: "ambient@example.test",
+          tier: null,
+          authStatus: "authenticated",
+          duplicateOfProfileId: null,
+          ambientDriftNotice: null,
+        }),
+      ],
+    }),
+    loginCapability: {
+      oauthArgs: ["auth", "login"],
+      token: null,
+      codePaste: {},
+    },
+  };
+}
+
 function firstRenameProfileCall(): readonly [
   RenameProfileVariables,
   MutationSuccessOptions,
@@ -604,6 +739,28 @@ describe("<ProvidersSettingsPanel />", () => {
     providerMocks.startLoginMutate.mockReset();
     providerMocks.awaitLoginMutate.mockReset();
     providerMocks.cancelLoginMutate.mockReset();
+    providerMocks.cancelLoginPending = false;
+    providerMocks.submitLoginCodeMutate.mockReset();
+    providerMocks.submitLoginCodePending = false;
+    providerMocks.submitLoginCodeSuccess = false;
+    providerMocks.submitLoginCodeData = undefined;
+    providerMocks.submitLoginCodeError = null;
+    providerMocks.submitLoginCodeMutate.mockImplementation(() => {
+      providerMocks.submitLoginCodePending = true;
+      providerMocks.submitLoginCodeSuccess = false;
+      providerMocks.submitLoginCodeData = undefined;
+      providerMocks.submitLoginCodeError = null;
+    });
+    providerMocks.submitLoginCodeReset.mockReset();
+    providerMocks.submitLoginCodeReset.mockImplementation(() => {
+      providerMocks.submitLoginCodePending = false;
+      providerMocks.submitLoginCodeSuccess = false;
+      providerMocks.submitLoginCodeData = undefined;
+      providerMocks.submitLoginCodeError = null;
+    });
+    providerMocks.touchLoginMutate.mockReset();
+    providerMocks.touchLoginReset.mockClear();
+    providerMocks.openExternalLink.mockClear();
     providerMocks.renameProfileMutate.mockReset();
     providerMocks.recolorProfileMutate.mockReset();
     providerMocks.removeProfileMutate.mockReset();
@@ -1017,7 +1174,11 @@ describe("<ProvidersSettingsPanel />", () => {
               }),
             ],
           }),
-          loginCapability: { oauthArgs: ["auth", "login"], token: null },
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+          },
         },
       ],
     };
@@ -1094,7 +1255,11 @@ describe("<ProvidersSettingsPanel />", () => {
               }),
             ],
           }),
-          loginCapability: { oauthArgs: ["auth", "login"], token: null },
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+          },
         },
       ],
     };
@@ -1188,7 +1353,11 @@ describe("<ProvidersSettingsPanel />", () => {
               ),
             ],
           }),
-          loginCapability: { oauthArgs: ["auth", "login"], token: null },
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+          },
         },
       ],
     };
@@ -1270,7 +1439,11 @@ describe("<ProvidersSettingsPanel />", () => {
           ),
         ],
       }),
-      loginCapability: { oauthArgs: ["auth", "login"], token: null },
+      loginCapability: {
+        oauthArgs: ["auth", "login"],
+        token: null,
+        codePaste: null,
+      },
     };
     const renderSection = (hostId: string): ReactNode => (
       <TooltipProvider>
@@ -1337,7 +1510,11 @@ describe("<ProvidersSettingsPanel />", () => {
               ),
             ],
           }),
-          loginCapability: { oauthArgs: ["auth", "login"], token: null },
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+          },
         },
       ],
     };
@@ -1546,7 +1723,11 @@ describe("<ProvidersSettingsPanel />", () => {
               }),
             ],
           }),
-          loginCapability: { oauthArgs: ["auth", "login"], token: null },
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+          },
         },
       ],
     };
@@ -1582,6 +1763,829 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(typeof awaitOptions.onSuccess).toBe("function");
   });
 
+  it("does not render the paste field until the flow reaches waiting (fixup review finding 2)", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        {
+          ...providerState({
+            providerId: "codex",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+            profiles: [
+              profile({
+                profileId: "ambient",
+                kind: "ambient",
+                label: "Terminal account",
+                email: "ambient@example.test",
+                tier: null,
+                authStatus: "authenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+            ],
+          }),
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: {},
+          },
+        },
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+
+    // Still `starting` - `startLogin` hasn't resolved yet, so there is no
+    // profileId/child for a paste to reach. The field must not render (a
+    // paste here would silently lock the field without ever being sent).
+    expect(screen.queryByLabelText("Paste the code")).toBeNull();
+
+    const [, startOptions] = firstStartLoginCall();
+    act(() => {
+      startOptions.onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "managed-1",
+      });
+    });
+
+    // Now `waiting` - the field appears.
+    expect(screen.getByLabelText("Paste the code")).toBeDefined();
+  });
+
+  it("does not resubmit when Enter is pressed after an auto-submitted paste locks the field (fixup review finding 4)", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        {
+          ...providerState({
+            providerId: "codex",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+            profiles: [
+              profile({
+                profileId: "ambient",
+                kind: "ambient",
+                label: "Terminal account",
+                email: "ambient@example.test",
+                tier: null,
+                authStatus: "authenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+            ],
+          }),
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: {},
+          },
+        },
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    const [, startOptions] = firstStartLoginCall();
+    act(() => {
+      startOptions.onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "managed-1",
+      });
+    });
+
+    const input = screen.getByLabelText("Paste the code");
+
+    // The browser is the primary path and code paste is a visible fallback,
+    // never a numbered second step.
+    expect(screen.getByText("Didn't return automatically?")).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: "Open browser again" }),
+    ).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: "Open browser again" }));
+    expect(providerMocks.openExternalLink).toHaveBeenCalledWith(
+      "https://login.example.test",
+    );
+
+    fireEvent.paste(input, {
+      clipboardData: { getData: () => "abc123#xyz789" },
+    });
+    expect(providerMocks.submitLoginCodeMutate).toHaveBeenCalledTimes(1);
+    expect(providerMocks.submitLoginCodeMutate).toHaveBeenCalledWith(
+      { providerId: "codex", profileId: "managed-1", code: "abc123#xyz789" },
+      expect.anything(),
+    );
+
+    // The field is now locked/masked from the auto-submit - Enter must not
+    // fire a second, duplicate submit.
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(providerMocks.submitLoginCodeMutate).toHaveBeenCalledTimes(1);
+  });
+
+  it("resets the submit mutation state on every fresh attempt so a restart never renders the previous attempt's error (statefulness fixup)", async () => {
+    providerMocks.listResult.data = {
+      providers: [
+        {
+          ...providerState({
+            providerId: "codex",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+            profiles: [
+              profile({
+                profileId: "ambient",
+                kind: "ambient",
+                label: "Terminal account",
+                email: "ambient@example.test",
+                tier: null,
+                authStatus: "authenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+            ],
+          }),
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: {},
+          },
+        },
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    const [, startOptions] = firstStartLoginCall();
+    act(() => {
+      startOptions.onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "managed-1",
+      });
+    });
+
+    const [, awaitOptions] = firstAwaitLoginCall();
+    // A rejected code drives a restart - the underlying mutation objects
+    // must be reset before the fresh attempt's field ever renders, or the
+    // remounted (key-changed) field would still show the previous attempt's
+    // stale error/pending state off the shared mutation.
+    act(() => {
+      awaitOptions.onSuccess({ codeRejected: true });
+    });
+
+    await waitFor(() => {
+      expect(providerMocks.startLoginMutate).toHaveBeenCalledTimes(2);
+    });
+    // Reset fires on every fresh attempt (the initial one and the restart),
+    // so two `startLogin` calls means two resets.
+    expect(providerMocks.submitLoginCodeReset).toHaveBeenCalledTimes(2);
+    expect(providerMocks.touchLoginReset).toHaveBeenCalledTimes(2);
+  });
+
+  it("locks the field while submitting, then shows a verifying header once the relay is accepted and the exchange is still pending (statefulness fixup)", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        {
+          ...providerState({
+            providerId: "codex",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+            profiles: [
+              profile({
+                profileId: "ambient",
+                kind: "ambient",
+                label: "Terminal account",
+                email: "ambient@example.test",
+                tier: null,
+                authStatus: "authenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+            ],
+          }),
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: {},
+          },
+        },
+      ],
+    };
+
+    const view = render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    const [, startOptions] = firstStartLoginCall();
+    act(() => {
+      startOptions.onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "managed-1",
+      });
+    });
+
+    const input = screen.getByLabelText("Paste the code");
+    fireEvent.paste(input, {
+      clipboardData: { getData: () => "abc123#xyz789" },
+    });
+
+    // The real mutation subscription rerenders the parent. The lightweight
+    // mock stores its flags outside React, so explicitly replay that render.
+    view.rerender(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    // "submitting": mutation.isPending locks the field immediately and owns
+    // the visible status.
+    expect(input).toHaveProperty("readOnly", true);
+    expect(screen.getByText("Sending the code…")).toBeDefined();
+
+    const [, submitOptions] = firstSubmitLoginCodeCall();
+    act(() => {
+      providerMocks.submitLoginCodePending = false;
+      providerMocks.submitLoginCodeSuccess = true;
+      providerMocks.submitLoginCodeData = { outcome: "accepted" };
+      submitOptions.onSuccess({ outcome: "accepted" });
+    });
+    view.rerender(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    // "verifying": the relay succeeded, but `awaitLogin` hasn't settled this
+    // attempt yet - the real exchange window `submitPending` alone never
+    // covered. The header must say so instead of still claiming to be
+    // waiting on the browser.
+    expect(screen.getByText("Checking approval…")).toBeDefined();
+    expect(input).toHaveProperty("readOnly", true);
+    expect(
+      screen.queryByRole("button", { name: "Open browser again" }),
+    ).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Cancel sign-in" }),
+    ).toHaveProperty("disabled", true);
+
+    fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
+    expect(screen.getByRole("dialog")).toBeDefined();
+    expect(providerMocks.cancelLoginMutate).not.toHaveBeenCalled();
+  });
+
+  it("keeps cancellation and dismissal available when no login child accepted the code", () => {
+    providerMocks.listResult.data = {
+      providers: [codePasteCreateProviderState()],
+    };
+    const view = render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    const [, startOptions] = firstStartLoginCall();
+    act(() => {
+      startOptions.onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "managed-1",
+      });
+    });
+
+    fireEvent.paste(screen.getByLabelText("Paste the code"), {
+      clipboardData: { getData: () => "abc123#xyz789" },
+    });
+    const [, submitOptions] = firstSubmitLoginCodeCall();
+    act(() => {
+      providerMocks.submitLoginCodePending = false;
+      providerMocks.submitLoginCodeSuccess = true;
+      providerMocks.submitLoginCodeData = { outcome: "noActiveLogin" };
+      submitOptions.onSuccess({ outcome: "noActiveLogin" });
+    });
+    view.rerender(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(screen.queryByText("Checking approval…")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Cancel sign-in" }),
+    ).toHaveProperty("disabled", false);
+
+    fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
+    expect(providerMocks.cancelLoginMutate).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("submits exactly once when a retry paste is followed by Enter before the pending render", () => {
+    providerMocks.listResult.data = {
+      providers: [codePasteCreateProviderState()],
+    };
+    const view = render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    const [, startOptions] = firstStartLoginCall();
+    act(() => {
+      startOptions.onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "managed-1",
+      });
+    });
+
+    const input = screen.getByLabelText("Paste the code");
+    fireEvent.paste(input, {
+      clipboardData: { getData: () => "first-code#first-state" },
+    });
+    const [, firstSubmitOptions] = firstSubmitLoginCodeCall();
+    act(() => {
+      providerMocks.submitLoginCodePending = false;
+      providerMocks.submitLoginCodeSuccess = false;
+      providerMocks.submitLoginCodeData = undefined;
+      providerMocks.submitLoginCodeError = new Error("relay failed");
+      firstSubmitOptions.onError();
+    });
+    view.rerender(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    const retryInput = screen.getByLabelText("Paste the code");
+    fireEvent.paste(retryInput, {
+      clipboardData: { getData: () => "retry-code#retry-state" },
+    });
+    fireEvent.keyDown(retryInput, { key: "Enter" });
+
+    expect(providerMocks.submitLoginCodeMutate).toHaveBeenCalledTimes(2);
+    expect(providerMocks.submitLoginCodeMutate.mock.calls[1]?.[0]).toEqual({
+      providerId: "codex",
+      profileId: "managed-1",
+      code: "retry-code#retry-state",
+    });
+  });
+
+  it("shows the Cancel button's pending state per the AGENTS.md recipe (disabled, unchanged label, inline spinner)", () => {
+    providerMocks.cancelLoginPending = true;
+    providerMocks.listResult.data = {
+      providers: [
+        {
+          ...providerState({
+            providerId: "codex",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+            profiles: [
+              profile({
+                profileId: "ambient",
+                kind: "ambient",
+                label: "Terminal account",
+                email: "ambient@example.test",
+                tier: null,
+                authStatus: "authenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+            ],
+          }),
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+          },
+        },
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    const [, startOptions] = firstStartLoginCall();
+    act(() => {
+      startOptions.onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "managed-1",
+      });
+    });
+
+    const cancelButton = screen.getByRole("button", { name: "Cancel sign-in" });
+    // Never a swapped label - "Cancel" stays exactly as-is, just disabled
+    // with an inline spinner alongside it while the mutation is pending.
+    expect(cancelButton.textContent).toContain("Cancel");
+    expect(cancelButton).toHaveProperty("disabled", true);
+  });
+
+  it("proceeds to identity when awaitLogin succeeds after an earlier noActiveLogin submit response (fixup review finding 1, submit-first ordering)", async () => {
+    providerMocks.listResult.data = {
+      providers: [codePasteReauthProviderState()],
+    };
+
+    const view = render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
+    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
+    await waitFor(() => {
+      expect(providerMocks.startLoginMutate).toHaveBeenCalled();
+    });
+    const [, startOptions] = firstStartLoginCall();
+    act(() => {
+      startOptions.onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "managed-1",
+      });
+    });
+
+    const input = screen.getByLabelText("Paste the code");
+    fireEvent.paste(input, {
+      clipboardData: { getData: () => "abc123#xyz789" },
+    });
+    view.rerender(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+    expect(
+      screen.getByRole("button", { name: "Cancel sign-in" }),
+    ).toHaveProperty("disabled", true);
+
+    const [, submitOptions] = firstSubmitLoginCodeCall();
+    const [, awaitOptions] = firstAwaitLoginCall();
+
+    // The submit response says no active login for this child...
+    act(() => submitOptions.onSuccess({ outcome: "noActiveLogin" }));
+    // ...but the in-flight `awaitLogin` re-probe is authoritative and finds
+    // the profile signed in - it must win over the earlier `noActiveLogin`.
+    act(() => {
+      awaitOptions.onSuccess({
+        state: {
+          profiles: [
+            profile({
+              profileId: "managed-1",
+              kind: "managed",
+              label: "Work",
+              email: "personal@example.test",
+              tier: "Pro",
+              authStatus: "authenticated",
+              duplicateOfProfileId: null,
+              ambientDriftNotice: null,
+            }),
+          ],
+        },
+      });
+    });
+
+    expect(screen.getByText("Signed in as")).toBeDefined();
+    // No restart fired off the earlier `noActiveLogin` - still exactly one
+    // `startLogin` call for the whole flow.
+    expect(providerMocks.startLoginMutate).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an authenticated profile result terminal even when awaitLogin also reports codeRejected", async () => {
+    providerMocks.listResult.data = {
+      providers: [codePasteReauthProviderState()],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
+    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
+    await waitFor(() => {
+      expect(providerMocks.startLoginMutate).toHaveBeenCalled();
+    });
+    const [, startOptions] = firstStartLoginCall();
+    act(() => {
+      startOptions.onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "managed-1",
+      });
+    });
+
+    const input = screen.getByLabelText("Paste the code");
+    fireEvent.paste(input, {
+      clipboardData: { getData: () => "abc123#xyz789" },
+    });
+
+    const [, submitOptions] = firstSubmitLoginCodeCall();
+    const [, awaitOptions] = firstAwaitLoginCall();
+
+    // `awaitLogin` resolves successfully first.
+    act(() => {
+      awaitOptions.onSuccess({
+        codeRejected: true,
+        state: {
+          profiles: [
+            profile({
+              profileId: "managed-1",
+              kind: "managed",
+              label: "Work",
+              email: "personal@example.test",
+              tier: "Pro",
+              authStatus: "authenticated",
+              duplicateOfProfileId: null,
+              ambientDriftNotice: null,
+            }),
+          ],
+        },
+      });
+    });
+    expect(screen.getByText("Signed in as")).toBeDefined();
+
+    // A late submit result cannot undo the already-terminal authenticated
+    // verdict either.
+    act(() => submitOptions.onSuccess({ outcome: "noActiveLogin" }));
+
+    expect(screen.getByText("Signed in as")).toBeDefined();
+    expect(providerMocks.startLoginMutate).toHaveBeenCalledTimes(1);
+  });
+
+  it("restarts with a session-expired notice when awaitLogin also fails after a noActiveLogin submit response (fixup review finding 1, genuine restart)", async () => {
+    providerMocks.listResult.data = {
+      providers: [codePasteReauthProviderState()],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
+    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
+    await waitFor(() => {
+      expect(providerMocks.startLoginMutate).toHaveBeenCalled();
+    });
+    const [, startOptions] = firstStartLoginCall();
+    act(() => {
+      startOptions.onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "managed-1",
+      });
+    });
+
+    const input = screen.getByLabelText("Paste the code");
+    fireEvent.paste(input, {
+      clipboardData: { getData: () => "abc123#xyz789" },
+    });
+
+    const [, submitOptions] = firstSubmitLoginCodeCall();
+    const [, awaitOptions] = firstAwaitLoginCall();
+
+    act(() => submitOptions.onSuccess({ outcome: "noActiveLogin" }));
+    // The await re-probe agrees no profile is signed in - restart, not a
+    // generic failure, and with the session-expired notice, not the
+    // rejected-code one.
+    act(() => {
+      awaitOptions.onSuccess({ state: { profiles: [] } });
+    });
+
+    await waitFor(() => {
+      expect(providerMocks.startLoginMutate).toHaveBeenCalledTimes(2);
+    });
+    const retryCall = providerMocks.startLoginMutate.mock.calls.at(1);
+    if (retryCall === undefined) {
+      throw new Error("Expected retry start login call.");
+    }
+    act(() => {
+      retryCall[1].onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "managed-1",
+      });
+    });
+
+    expect(
+      screen.getByText("That sign-in link expired - a new one was generated."),
+    ).toBeDefined();
+  });
+
+  it("restarts with a session-expired notice when awaitLogin resolves without a promoted profile before a late noActiveLogin submit response arrives (fixup settlement join, create mode await-first ordering)", async () => {
+    providerMocks.listResult.data = {
+      providers: [
+        {
+          ...providerState({
+            providerId: "codex",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+            profiles: [
+              profile({
+                profileId: "ambient",
+                kind: "ambient",
+                label: "Terminal account",
+                email: "ambient@example.test",
+                tier: null,
+                authStatus: "authenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+            ],
+          }),
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: {},
+          },
+        },
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    const [, startOptions] = firstStartLoginCall();
+    act(() => {
+      startOptions.onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "managed-1",
+      });
+    });
+
+    const input = screen.getByLabelText("Paste the code");
+    fireEvent.paste(input, {
+      clipboardData: { getData: () => "abc123#xyz789" },
+    });
+
+    const [, submitOptions] = firstSubmitLoginCodeCall();
+    const [, awaitOptions] = firstAwaitLoginCall();
+
+    // `awaitLogin` resolves first with no promoted profile - previously
+    // this landed on the generic failure immediately, dropping the later
+    // `noActiveLogin` verdict on the floor instead of restarting.
+    act(() => {
+      awaitOptions.onSuccess({ state: { profiles: [] } });
+    });
+    // The submit's verdict arrives late and must still settle the attempt.
+    act(() => submitOptions.onSuccess({ outcome: "noActiveLogin" }));
+
+    await waitFor(() => {
+      expect(providerMocks.startLoginMutate).toHaveBeenCalledTimes(2);
+    });
+    const retryCall = providerMocks.startLoginMutate.mock.calls.at(1);
+    if (retryCall === undefined) {
+      throw new Error("Expected retry start login call.");
+    }
+    act(() => {
+      retryCall[1].onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "managed-1",
+      });
+    });
+
+    expect(
+      screen.getByText("That sign-in link expired - a new one was generated."),
+    ).toBeDefined();
+  });
+
+  it("does not resolve to identity when the resolved reauth profile row exists but is not authenticated (fixup settlement join, finding 2)", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        {
+          ...providerState({
+            providerId: "codex",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+            profiles: [
+              profile({
+                profileId: "ambient",
+                kind: "ambient",
+                label: "Terminal account",
+                email: "ambient@example.test",
+                tier: null,
+                authStatus: "authenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+              profile({
+                profileId: "managed-1",
+                kind: "managed",
+                label: "Work",
+                email: "work@example.test",
+                tier: "Pro",
+                authStatus: "authenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+            ],
+          }),
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+          },
+        },
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
+    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
+    const [, startOptions] = firstStartLoginCall();
+    act(() => {
+      startOptions.onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "managed-1",
+      });
+    });
+
+    const [, awaitOptions] = firstAwaitLoginCall();
+    // The re-probed row for this profile is present but still signed out -
+    // `providers.list` keeps a profile's row even when its account is not
+    // authenticated, so presence alone must not resolve to identity.
+    act(() => {
+      awaitOptions.onSuccess({
+        state: {
+          profiles: [
+            profile({
+              profileId: "managed-1",
+              kind: "managed",
+              label: "Work",
+              email: "work@example.test",
+              tier: "Pro",
+              authStatus: "unauthenticated",
+              duplicateOfProfileId: null,
+              ambientDriftNotice: null,
+            }),
+          ],
+        },
+      });
+    });
+
+    expect(screen.queryByText("Signed in as")).toBeNull();
+    expect(
+      screen.getByText("Sign-in did not finish. Try again."),
+    ).toBeDefined();
+  });
+
   it("gates the add-profile failure report action on capability and reports only fixed generic context", () => {
     providerMocks.listResult.data = {
       providers: [
@@ -1604,7 +2608,11 @@ describe("<ProvidersSettingsPanel />", () => {
               }),
             ],
           }),
-          loginCapability: { oauthArgs: ["auth", "login"], token: null },
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+          },
         },
       ],
     };
@@ -1663,7 +2671,11 @@ describe("<ProvidersSettingsPanel />", () => {
               }),
             ],
           }),
-          loginCapability: { oauthArgs: ["auth", "login"], token: null },
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+          },
         },
       ],
     };
@@ -1742,7 +2754,11 @@ describe("<ProvidersSettingsPanel />", () => {
             envOverrides: [],
             profiles: [createdProfile],
           }),
-          loginCapability: { oauthArgs: ["auth", "login"], token: null },
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+          },
         },
       ],
     };
@@ -1788,7 +2804,11 @@ describe("<ProvidersSettingsPanel />", () => {
               }),
             ],
           }),
-          loginCapability: { oauthArgs: ["auth", "login"], token: null },
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+          },
         },
       ],
     };
@@ -1806,7 +2826,7 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel sign-in" }));
 
     expect(providerMocks.cancelLoginMutate).not.toHaveBeenCalled();
-    expect(screen.getByRole("dialog", { name: "Add profile" })).toBeDefined();
+    expect(screen.getByRole("dialog")).toBeDefined();
     expect(screen.getByText("Cancelling sign-in")).toBeDefined();
 
     act(() => {
@@ -1823,7 +2843,7 @@ describe("<ProvidersSettingsPanel />", () => {
       profileId: "managed-pending",
     });
     expect(providerMocks.awaitLoginMutate).not.toHaveBeenCalled();
-    expect(screen.queryByRole("dialog", { name: "Add profile" })).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("cancels a waiting managed-profile login exactly once", () => {
@@ -1848,7 +2868,11 @@ describe("<ProvidersSettingsPanel />", () => {
               }),
             ],
           }),
-          loginCapability: { oauthArgs: ["auth", "login"], token: null },
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+          },
         },
       ],
     };
@@ -1873,13 +2897,14 @@ describe("<ProvidersSettingsPanel />", () => {
       });
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Cancel sign-in" }));
+    fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
 
     expect(providerMocks.cancelLoginMutate).toHaveBeenCalledTimes(1);
     expect(providerMocks.cancelLoginMutate).toHaveBeenCalledWith({
       providerId: "codex",
       profileId: "managed-1",
     });
+    expect(screen.queryByRole("dialog", { name: "Add profile" })).toBeNull();
   });
 
   it("cancels the known re-auth profile while its initial start is pending", async () => {
@@ -1914,7 +2939,11 @@ describe("<ProvidersSettingsPanel />", () => {
               }),
             ],
           }),
-          loginCapability: { oauthArgs: ["auth", "login"], token: null },
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+          },
         },
       ],
     };
@@ -1986,7 +3015,11 @@ describe("<ProvidersSettingsPanel />", () => {
               }),
             ],
           }),
-          loginCapability: { oauthArgs: ["auth", "login"], token: null },
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+          },
         },
       ],
     };
@@ -2056,7 +3089,11 @@ describe("<ProvidersSettingsPanel />", () => {
               }),
             ],
           }),
-          loginCapability: { oauthArgs: ["auth", "login"], token: null },
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+          },
         },
       ],
     };
@@ -2131,7 +3168,11 @@ describe("<ProvidersSettingsPanel />", () => {
               }),
             ],
           }),
-          loginCapability: { oauthArgs: ["auth", "login"], token: null },
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+          },
         },
       ],
     };
@@ -2276,7 +3317,11 @@ describe("<ProvidersSettingsPanel />", () => {
               }),
             ],
           }),
-          loginCapability: { oauthArgs: ["auth", "login"], token: null },
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+          },
         },
       ],
     };
@@ -2335,7 +3380,7 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
 
     expect(screen.queryByText("Signed in as")).toBeNull();
-    expect(screen.getByText("Waiting for browser sign-in")).toBeDefined();
+    expect(screen.getByText("Opening the sign-in page…")).toBeDefined();
   });
 
   it("does not offer the share-skills-and-plugins checkbox for a provider without the overlay mechanism (codex)", () => {
@@ -2360,7 +3405,11 @@ describe("<ProvidersSettingsPanel />", () => {
               }),
             ],
           }),
-          loginCapability: { oauthArgs: ["auth", "login"], token: null },
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+          },
         },
       ],
     };
@@ -2399,7 +3448,11 @@ describe("<ProvidersSettingsPanel />", () => {
               }),
             ],
           }),
-          loginCapability: { oauthArgs: ["auth", "login"], token: null },
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+          },
         },
       ],
     };
@@ -2454,7 +3507,11 @@ describe("<ProvidersSettingsPanel />", () => {
               }),
             ],
           }),
-          loginCapability: { oauthArgs: ["auth", "login"], token: null },
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+          },
         },
       ],
     };
@@ -2500,7 +3557,11 @@ describe("<ProvidersSettingsPanel />", () => {
               }),
             ],
           }),
-          loginCapability: { oauthArgs: ["auth", "login"], token: null },
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+          },
         },
       ],
     };
@@ -2579,7 +3640,11 @@ describe("<ProvidersSettingsPanel />", () => {
             envOverrides: [],
             profiles: [ambient],
           }),
-          loginCapability: { oauthArgs: ["auth", "login"], token: null },
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+          },
         },
       ],
     };
@@ -2749,7 +3814,11 @@ describe("<ProvidersSettingsPanel />", () => {
               }),
             ],
           }),
-          loginCapability: { oauthArgs: ["auth", "login"], token: null },
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+          },
         },
       ],
     };
@@ -2815,6 +3884,14 @@ describe("<ProvidersSettingsPanel />", () => {
       profileId: "managed-1",
       accentColor: selectedColor,
     });
+
+    // Identity is a real committed render before the finalize effect settles.
+    // Implicit dismissal must neither close nor delete the authenticated
+    // profile during that transient window.
+    fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
+    expect(screen.getByRole("dialog")).toBeDefined();
+    expect(providerMocks.removeProfileMutate).not.toHaveBeenCalled();
+
     act(() => recolorOptions.onSuccess());
 
     expect(providerMocks.removeProfileMutate).not.toHaveBeenCalled();
@@ -2843,7 +3920,11 @@ describe("<ProvidersSettingsPanel />", () => {
               }),
             ],
           }),
-          loginCapability: { oauthArgs: ["auth", "login"], token: null },
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+          },
         },
       ],
     };

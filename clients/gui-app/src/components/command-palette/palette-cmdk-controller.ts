@@ -20,6 +20,11 @@ import type {
   CommandItem as CommandItemShape,
   CommandSubpage,
 } from "@/lib/commands/types";
+import {
+  Analytics,
+  AnalyticsEvent,
+  type AnalyticsCommand,
+} from "@/lib/analytics";
 
 export function buildCmdkValue(item: CommandItemShape): string {
   return `${item.id} ${item.label}`;
@@ -167,6 +172,13 @@ export function usePaletteController(
         resetQuery();
         return;
       }
+      const analyticsCommand = analyticsCommandForItem(item);
+      if (analyticsCommand !== null) {
+        Analytics.getInstance().track(AnalyticsEvent.CommandExecuted, {
+          command: analyticsCommand,
+          source: "command_palette",
+        });
+      }
       void runCommandItem(item, ctx, { recordUse, close });
     },
     [ctx, recordUse, close, resetQuery],
@@ -180,4 +192,23 @@ export function usePaletteController(
   const resetStack = useCallback(() => setSubpageStack([]), []);
 
   return { activeSubpage, runItem, popSubpage, resetStack };
+}
+
+function analyticsCommandForItem(
+  item: CommandItemShape,
+): AnalyticsCommand | null {
+  if (item.id.startsWith("open:files:")) return "open_file";
+  if (item.id.startsWith("open:diff:")) return "open_diff";
+  if (item.id.startsWith("open:chats:")) return "open_chat";
+  if (item.id.startsWith("open:artifacts:")) return "open_artifact";
+  if (item.id.startsWith("open:terminals:")) return "open_terminal";
+  if (item.id.startsWith("open:tui:")) return "open_terminal";
+  if (item.id.startsWith("epic:")) return "open_task";
+  if (item.id === "help:report-issue") return "report_issue";
+  if (item.actionId === "epic.new") return "create_task";
+  if (item.actionId === "epic.duplicate-tab") return "duplicate_tab";
+  if (item.actionId === "app.settings.open") return "open_settings";
+  if (item.actionId === "app.history.open") return "open_task";
+  if (item.actionId === "app.terminal.new") return "open_terminal";
+  return null;
 }

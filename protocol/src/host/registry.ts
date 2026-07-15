@@ -78,6 +78,7 @@ import {
   chatSubscribeV11,
   chatSubscribeV12,
   chatSubscribeV13,
+  chatSubscribeV14,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -125,6 +126,8 @@ import {
   epicListCollaboratorsV10,
   epicListCommentThreadsV10,
   epicListTasksV10,
+  epicListTasksV11,
+  epicListTasksUpgradeV10ToV11,
   epicMentionEpicsV10,
   epicMentionReviewsV10,
   epicMentionSpecsV10,
@@ -141,6 +144,7 @@ import {
   epicResolveArtifactByPathV10,
   epicRevokeCollaboratorV10,
   epicSetCommentThreadResolvedV10,
+  epicSetPinnedV10,
   epicSubscribeV10,
   epicUpdateArtifactStatusV10,
   epicUpdateTitleV10,
@@ -287,6 +291,10 @@ import {
   providersStartLoginRequestSchemaV11,
   providersStartLoginResponseSchema,
   providersStartLoginResponseSchemaV11,
+  providersSubmitLoginCodeRequestSchema,
+  providersSubmitLoginCodeResponseSchema,
+  providersTouchLoginRequestSchema,
+  providersTouchLoginResponseSchema,
   providersListRequestSchema,
   providersListResponseSchema,
   providersListResponseSchemaV10,
@@ -331,6 +339,8 @@ import {
   type ProviderCliState,
   type ProviderCliStateV10,
   type ProviderMutationCliStateV20,
+  type ProviderLoginCapability,
+  type ProviderLoginCapabilityV10,
 } from "@traycer/protocol/host/provider-schemas";
 
 export { hostGetRuntimeCapabilitiesV10 };
@@ -638,8 +648,10 @@ function unsupportedProviderStateDowngrade(
 // downgrades from v2.0 (already `profiles`-free); every other caller
 // downgrades from the live state.
 function downgradeProviderStateForV10(
-  state: Omit<ProviderCliState, "profiles"> & {
+  state: Omit<ProviderCliState, "profiles" | "loginCapability"> & {
     profiles?: ProviderCliState["profiles"];
+    loginCapability:
+      ProviderLoginCapability | ProviderLoginCapabilityV10 | null;
   },
 ): DowngradeResult<ProviderCliStateV10> {
   const downgraded = downgradeProviderCliStateToV10(state);
@@ -650,8 +662,10 @@ function downgradeProviderStateForV10(
 }
 
 function downgradeProviderStateListForV10(
-  states: readonly (Omit<ProviderCliState, "profiles"> & {
+  states: readonly (Omit<ProviderCliState, "profiles" | "loginCapability"> & {
     profiles?: ProviderCliState["profiles"];
+    loginCapability:
+      ProviderLoginCapability | ProviderLoginCapabilityV10 | null;
   })[],
 ): ProviderCliStateV10[] {
   return states.flatMap((state) => {
@@ -670,6 +684,22 @@ function upgradeProviderStateFromV10(
   state: ProviderCliStateV10,
 ): ProviderMutationCliStateV20 {
   return upgradeProviderCliStateV10ToMutationV20(state);
+}
+
+// Fills the code-paste capability slot a frozen pre-`codePaste` state (v1.0,
+// v2.0, v3.0) never carries - same "old host never had this feature"
+// semantics as the `profiles: []` fill these upgrade bridges already apply
+// to the same state. Every v2.0 -> v2.1 (and v3.0 -> v4.0) response upgrade
+// that lifts a frozen state onto the live `ProviderCliState` shape must call
+// this alongside its `profiles: []` fill, or the live shape's `codePaste`
+// key is silently absent on the wire (`upgradeResponseToVersion` chains
+// these callbacks by cast, with no re-parse step to apply `.catch(null)`).
+function upgradeLoginCapabilityFromV10(
+  loginCapability: ProviderLoginCapabilityV10 | null,
+): ProviderLoginCapability | null {
+  return loginCapability === null
+    ? null
+    : { ...loginCapability, codePaste: null };
 }
 
 function downgradeProviderRequestForV10<T>(
@@ -787,6 +817,7 @@ export const providersListUpgradeV3ToV4 = defineUpgradePath<
     providers: response.providers.map((provider) => ({
       ...provider,
       profiles: [],
+      loginCapability: upgradeLoginCapabilityFromV10(provider.loginCapability),
     })),
   }),
 });
@@ -881,7 +912,13 @@ export const providersSetSelectionUpgradeV20ToV21 = defineUpgradePath<
   to: { major: 2, minor: 1 },
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({
-    state: { ...response.state, profiles: [] },
+    state: {
+      ...response.state,
+      profiles: [],
+      loginCapability: upgradeLoginCapabilityFromV10(
+        response.state.loginCapability,
+      ),
+    },
   }),
 });
 
@@ -956,7 +993,13 @@ export const providersAddCustomPathUpgradeV20ToV21 = defineUpgradePath<
   to: { major: 2, minor: 1 },
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({
-    state: { ...response.state, profiles: [] },
+    state: {
+      ...response.state,
+      profiles: [],
+      loginCapability: upgradeLoginCapabilityFromV10(
+        response.state.loginCapability,
+      ),
+    },
   }),
 });
 
@@ -1031,7 +1074,13 @@ export const providersRemoveCustomPathUpgradeV20ToV21 = defineUpgradePath<
   to: { major: 2, minor: 1 },
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({
-    state: { ...response.state, profiles: [] },
+    state: {
+      ...response.state,
+      profiles: [],
+      loginCapability: upgradeLoginCapabilityFromV10(
+        response.state.loginCapability,
+      ),
+    },
   }),
 });
 
@@ -1154,8 +1203,18 @@ export const providersAwaitLoginUpgradeV20ToV21 = defineUpgradePath<
   to: { major: 2, minor: 1 },
   upgradeRequest: (request) => ({ ...request, profileId: null }),
   upgradeResponse: (response) => ({
-    state: response.state === null ? null : { ...response.state, profiles: [] },
+    state:
+      response.state === null
+        ? null
+        : {
+            ...response.state,
+            profiles: [],
+            loginCapability: upgradeLoginCapabilityFromV10(
+              response.state.loginCapability,
+            ),
+          },
     existingProfileId: null,
+    codeRejected: false,
   }),
 });
 
@@ -1224,6 +1283,31 @@ export const providersCancelLoginUpgradeV10ToV11 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
+/**
+ * Brand-new v1.0 method (not part of `RELEASED_FLOOR_METHOD_NAMES` - this
+ * whole code-paste surface is unreleased), registered below with
+ * `degrade: { kind: "unsupported" }`: an old host simply lacks it, and
+ * callers get per-call upgrade guidance instead of a fatal handshake
+ * mismatch (see `agent/profiles.ts`'s note on the same pattern).
+ */
+export const providersSubmitLoginCodeV10 = defineRpcContract({
+  method: "providers.submitLoginCode",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersSubmitLoginCodeRequestSchema,
+  responseSchema: providersSubmitLoginCodeResponseSchema,
+});
+
+/**
+ * Brand-new v1.0 method, registered the same way as
+ * `providers.submitLoginCode` above.
+ */
+export const providersTouchLoginV10 = defineRpcContract({
+  method: "providers.touchLogin",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersTouchLoginRequestSchema,
+  responseSchema: providersTouchLoginResponseSchema,
+});
+
 export const providersSetEnabledV10 = defineRpcContract({
   method: "providers.setEnabled",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -1283,7 +1367,13 @@ export const providersSetEnabledUpgradeV20ToV21 = defineUpgradePath<
   // The released 2.0 response is frozen pre-profiles; the 2.1 response is the
   // live state shape, so a 2.0 host's echo upgrades to `profiles: []`.
   upgradeResponse: (response) => ({
-    state: { ...response.state, profiles: [] },
+    state: {
+      ...response.state,
+      profiles: [],
+      loginCapability: upgradeLoginCapabilityFromV10(
+        response.state.loginCapability,
+      ),
+    },
   }),
 });
 
@@ -1363,7 +1453,13 @@ export const providersSetApiKeyUpgradeV20ToV21 = defineUpgradePath<
   to: { major: 2, minor: 1 },
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({
-    state: { ...response.state, profiles: [] },
+    state: {
+      ...response.state,
+      profiles: [],
+      loginCapability: upgradeLoginCapabilityFromV10(
+        response.state.loginCapability,
+      ),
+    },
   }),
 });
 
@@ -1435,7 +1531,13 @@ export const providersClearApiKeyUpgradeV20ToV21 = defineUpgradePath<
   to: { major: 2, minor: 1 },
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({
-    state: { ...response.state, profiles: [] },
+    state: {
+      ...response.state,
+      profiles: [],
+      loginCapability: upgradeLoginCapabilityFromV10(
+        response.state.loginCapability,
+      ),
+    },
   }),
 });
 
@@ -1510,7 +1612,13 @@ export const providersSetTerminalAgentArgsUpgradeV20ToV21 = defineUpgradePath<
   to: { major: 2, minor: 1 },
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({
-    state: { ...response.state, profiles: [] },
+    state: {
+      ...response.state,
+      profiles: [],
+      loginCapability: upgradeLoginCapabilityFromV10(
+        response.state.loginCapability,
+      ),
+    },
   }),
 });
 
@@ -1585,7 +1693,13 @@ export const providersSetEnvOverrideUpgradeV20ToV21 = defineUpgradePath<
   to: { major: 2, minor: 1 },
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({
-    state: { ...response.state, profiles: [] },
+    state: {
+      ...response.state,
+      profiles: [],
+      loginCapability: upgradeLoginCapabilityFromV10(
+        response.state.loginCapability,
+      ),
+    },
   }),
 });
 
@@ -1660,7 +1774,13 @@ export const providersDeleteEnvOverrideUpgradeV20ToV21 = defineUpgradePath<
   to: { major: 2, minor: 1 },
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({
-    state: { ...response.state, profiles: [] },
+    state: {
+      ...response.state,
+      profiles: [],
+      loginCapability: upgradeLoginCapabilityFromV10(
+        response.state.loginCapability,
+      ),
+    },
   }),
 });
 
@@ -2380,15 +2500,32 @@ const HOST_RPC_REGISTRY_DEFINITION = {
   },
   "epic.listTasks": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicListTasksV10,
           upgradeFromPreviousVersion: null,
         },
+        1: {
+          contract: epicListTasksV11,
+          upgradeFromPreviousVersion: epicListTasksUpgradeV10ToV11,
+        },
       },
       downgradePathsFromLatest: {},
     },
+  },
+  "epic.setPinned": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicSetPinnedV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
   },
   "epic.create": {
     1: {
@@ -3425,6 +3562,32 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  "providers.submitLoginCode": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersSubmitLoginCodeV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "providers.touchLogin": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersTouchLoginV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "providers.setApiKey": {
     1: {
       latestMinor: 0,
@@ -3717,7 +3880,7 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
   },
   "chat.subscribe": {
     1: {
-      latestMinor: 3,
+      latestMinor: 4,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -3730,6 +3893,9 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
         },
         3: {
           contract: chatSubscribeV13,
+        },
+        4: {
+          contract: chatSubscribeV14,
         },
       },
     },

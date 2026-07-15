@@ -297,7 +297,8 @@ export type HostNotificationsSubscribeClientFrame = z.infer<
 >;
 
 export const hostNotificationsIndicatorStateSchema = z.object({
-  pendingPrompt: z.boolean(),
+  pendingApproval: z.boolean(),
+  pendingInterview: z.boolean(),
   unreadFailure: z.boolean(),
   unreadDone: z.boolean(),
 });

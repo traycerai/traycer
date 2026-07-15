@@ -11,6 +11,7 @@ import type {
 import type {
   ListTasksFacets,
   ListTasksResponse,
+  ListTaskLight,
   ListTasksSort,
   TaskLight,
   TaskRepoIdentifier,
@@ -26,12 +27,22 @@ import { hostQueryKeys } from "@/lib/query-keys";
 import { cloudEpicTasksQueryKeyMatchesScope } from "@/lib/cloud-epic-tasks-query/cache";
 import type { ListCloudTasksRequest } from "@/lib/cloud-epic-tasks-query";
 import { toastFromHostError } from "@/lib/host-error-toast";
-import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import {
+  Analytics,
+  AnalyticsEvent,
+  analyticsBlockerFromError,
+} from "@/lib/analytics";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 
 interface CreateEpicMutationContext {
   readonly hostId: string | null;
   readonly userId: string | null;
+}
+
+function taskCreationMode(
+  chat: RequestOfMethod<HostRpcRegistry, "epic.create">["chat"],
+): "chat" | "terminal_agent" {
+  return chat === null ? "terminal_agent" : "chat";
 }
 
 export function useEpicCreate(): UseMutationResult<
@@ -51,13 +62,20 @@ export function useEpicCreate(): UseMutationResult<
     method: "epic.create",
     mapVariables: (variables) => variables,
     options: {
-      onMutate: () => ({
-        hostId: client.getActiveHostId(),
-        userId: client.getRequestContextUserId(),
-      }),
+      onMutate: (variables) => {
+        Analytics.getInstance().track(AnalyticsEvent.TaskCreationStarted, {
+          source: "direct_ui",
+          mode: taskCreationMode(variables.chat),
+          workspace_count: variables.workspaces.length,
+        });
+        return {
+          hostId: client.getActiveHostId(),
+          userId: client.getRequestContextUserId(),
+        };
+      },
       onSuccess: (response, variables, ctx) => {
         Analytics.getInstance().track(AnalyticsEvent.TaskCreated, {
-          mode: variables.chat?.initialMessage?.settings.agentMode ?? "regular",
+          mode: taskCreationMode(variables.chat),
         });
         if (ctx.hostId === null) return;
         // The new epic's workspace folders are seeded into the host's
@@ -81,7 +99,14 @@ export function useEpicCreate(): UseMutationResult<
         if (task === null || task === undefined) return;
         patchCreatedTaskIntoCloudTaskCaches(queryClient, ctx, task);
       },
-      onError: (error) => toastFromHostError(error, "Couldn't create epic."),
+      onError: (error, variables) => {
+        Analytics.getInstance().track(AnalyticsEvent.TaskCreationFailed, {
+          source: "direct_ui",
+          mode: taskCreationMode(variables.chat),
+          blocker: analyticsBlockerFromError(error),
+        });
+        toastFromHostError(error, "Couldn't create epic.");
+      },
     },
   });
 }
@@ -134,14 +159,18 @@ function mergeTaskIntoCloudTasksResponse(
     (existing) => taskProjection(existing)?.id === incomingProjection.id,
   );
   const taskToMerge = taskWithPreferredEpicTitle(task, existingTask);
-  const projection = taskProjection(taskToMerge);
+  const listTaskToMerge: ListTaskLight = {
+    ...taskToMerge,
+    pinned: existingTask?.pinned ?? false,
+  };
+  const projection = taskProjection(listTaskToMerge);
   if (projection === null) return response;
   if (!taskProjectionMatchesRequest(projection, request, userId)) {
     return response;
   }
   const tasks = response.tasks
     .filter((existing) => taskProjection(existing)?.id !== projection.id)
-    .concat(taskToMerge)
+    .concat(listTaskToMerge)
     .sort((left, right) =>
       compareTaskLights(
         left,
@@ -492,11 +521,14 @@ function taskWorkspaces(task: TaskLight): readonly TaskWorkspaceIdentifier[] {
 }
 
 function compareTaskLights(
-  left: TaskLight,
-  right: TaskLight,
+  left: ListTaskLight,
+  right: ListTaskLight,
   sort: ListTasksSort,
   query: string | null,
 ): number {
+  const leftPinned = left.pinned ?? false;
+  const rightPinned = right.pinned ?? false;
+  if (leftPinned !== rightPinned) return leftPinned ? -1 : 1;
   const leftProjection = taskProjection(left);
   const rightProjection = taskProjection(right);
   if (leftProjection === null || rightProjection === null) return 0;

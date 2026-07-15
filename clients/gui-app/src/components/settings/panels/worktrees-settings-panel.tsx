@@ -590,6 +590,12 @@ function WorktreesBody(props: {
         Checking {reachability.hostLabel}…
       </WorktreesStateMessage>
     );
+  } else if (reachability.status === "host-starting") {
+    content = (
+      <WorktreesStateMessage tone="muted" spinner>
+        Waiting for the host to start…
+      </WorktreesStateMessage>
+    );
   } else if (!reachable) {
     content = (
       <WorktreesStateMessage tone="muted" spinner={false}>

@@ -103,6 +103,8 @@ import {
 import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
 import { useChatById } from "@/lib/epic-selectors";
 import { toast } from "sonner";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import { trackUserInitiatedWorktreeWrite } from "@/lib/worktree/user-worktree-analytics";
 
 /**
  *
@@ -704,6 +706,9 @@ function HomeWorkspaceRows(props: {
   const handleEditEnvironment = useCallback((path: string): void => {
     // Keep the picker open: the scripts modal stacks on top of it, so closing
     // the modal returns to the still-open picker.
+    Analytics.getInstance().track(AnalyticsEvent.SetupScriptsOpened, {
+      source: "direct_ui",
+    });
     setScriptsTargetPath(path);
   }, []);
   const scriptsTarget = useMemo<WorktreeScriptsTarget | null>(() => {
@@ -801,7 +806,6 @@ function HomeWorkspaceSummaryControl(props: {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={props.onEditEnvironment}
-          hoverPreviewEnabled={false}
           popoverTestId="home-workspace-rows-popover"
           popoverSide="top"
         />
@@ -1492,7 +1496,14 @@ function InEpicSurface(props: InEpicSurfaceProps) {
         ownerKind,
         entries: [...stagedEntries],
       },
-      { onSuccess: finishAndResume },
+      {
+        onSuccess: (result) => {
+          finishAndResume();
+          // Telemetry runs strictly after the product work; it is an
+          // observer and never part of the mutation chain.
+          trackUserInitiatedWorktreeWrite(stagedEntries, result);
+        },
+      },
     );
   }, [
     editor.dirtyPathsSinceResume,
@@ -1667,6 +1678,11 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   const emitForFolder = useCallback(
     (ws: WorktreeWorkspaceSummary) =>
       (intent: WorktreeFolderIntent): void => {
+        if (intent.kind !== "local") {
+          Analytics.getInstance().track(AnalyticsEvent.WorktreeSelected, {
+            source: "direct_ui",
+          });
+        }
         // Persist the per-folder choice immediately (not at send) so it survives
         // a reload and seeds future adds of this folder.
         setFolderIntent(intent, Date.now());
@@ -1718,7 +1734,12 @@ function InEpicSurface(props: InEpicSurfaceProps) {
                 },
               ],
             },
-            { onSuccess: () => handleBindingCommitted([ws.workspacePath]) },
+            {
+              onSuccess: (result) => {
+                handleBindingCommitted([ws.workspacePath]);
+                trackUserInitiatedWorktreeWrite([intent], result);
+              },
+            },
           );
           return;
         }
@@ -1885,6 +1906,9 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   );
   const handleEditEnvironment = useCallback((path: string): void => {
     // Keep the picker open: the scripts modal stacks on top of it.
+    Analytics.getInstance().track(AnalyticsEvent.SetupScriptsOpened, {
+      source: "direct_ui",
+    });
     setScriptsTargetPath(path);
   }, []);
   const scriptsTarget = useMemo<WorktreeScriptsTarget | null>(() => {
@@ -1961,7 +1985,6 @@ function InEpicSurface(props: InEpicSurfaceProps) {
                 : null
             }
             onEditEnvironment={handleEditEnvironment}
-            hoverPreviewEnabled
             popoverTestId="workspace-rows-popover"
             // The terminal-agent toolbar is anchored at the TOP of its tile, so the
             // editor must open DOWNWARD into the terminal body (plenty of room).

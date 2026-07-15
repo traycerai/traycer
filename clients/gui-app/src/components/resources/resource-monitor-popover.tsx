@@ -116,14 +116,6 @@ const desktopAppResourceListeners = new Set<() => void>();
 let desktopAppResourceSnapshot: DesktopAppResourceUsage | null = null;
 let desktopAppResourceTimer: number | null = null;
 let desktopAppResourceInFlight = false;
-const EMPTY_RESOURCE_SUMMARY: TaskResourceSummary = {
-  cpuPercent: 0,
-  rssBytes: 0,
-  trackedProcessCount: 0,
-  openTerminalCount: 0,
-  tuiAgentCount: 0,
-  guiAgentCount: 0,
-};
 
 interface ResourceMonitorPopoverProps {
   readonly className: string | undefined;
@@ -293,10 +285,17 @@ function ResourceMonitorContent(props: { readonly onClose: () => void }) {
     () =>
       combineHeadlineResourceSummary(
         supportsHostTree ? projection.hostTree : null,
-        projection.summary,
+        projection.app,
+        projection.owners,
         desktopApp,
       ),
-    [desktopApp, projection.hostTree, projection.summary, supportsHostTree],
+    [
+      desktopApp,
+      projection.app,
+      projection.hostTree,
+      projection.owners,
+      supportsHostTree,
+    ],
   );
 
   const canvasIndex = useMemo(() => buildCanvasResourceIndex(canvas), [canvas]);
@@ -502,7 +501,6 @@ function ResourceMonitorContent(props: { readonly onClose: () => void }) {
                   }}
                 />
               </div>
-              <ResourceCounts summary={summary} />
             </>
           )}
         </div>
@@ -647,26 +645,6 @@ function MetricBlock(props: {
   );
 }
 
-function ResourceCounts(props: { readonly summary: TaskResourceSummary }) {
-  return (
-    <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-ui-xs text-muted-foreground">
-      <span>
-        {countLabel(
-          props.summary.openTerminalCount,
-          "open terminal",
-          "open terminals",
-        )}
-      </span>
-      <span>
-        {countLabel(props.summary.tuiAgentCount, "TUI agent", "TUI agents")}
-      </span>
-      <span>
-        {countLabel(props.summary.guiAgentCount, "GUI agent", "GUI agents")}
-      </span>
-    </div>
-  );
-}
-
 function DesktopAppResourceSection(props: {
   readonly app: DesktopAppResourceUsage;
   readonly sortOption: ResourceSortOption;
@@ -783,22 +761,27 @@ function resourcesSubscribeV12Supported(
 
 function combineHeadlineResourceSummary(
   hostTree: HostTreeResourceSnapshotWire | null,
-  legacySummary: TaskResourceSummary | null,
+  app: AppResourceUsage | null,
+  owners: readonly OwnerResourceSnapshotWire[],
   desktopApp: DesktopAppResourceUsage | null,
 ): TaskResourceSummary | null {
-  if (hostTree === null && legacySummary === null && desktopApp === null) {
+  if (
+    hostTree === null &&
+    app === null &&
+    desktopApp === null &&
+    owners.length === 0
+  ) {
     return null;
   }
+  // Pre-v1.2 hosts don't send the whole-host-tree aggregate, so fall back to
+  // the host app process plus the tracked owner trees.
   const base =
     hostTree === null
-      ? (legacySummary ?? EMPTY_RESOURCE_SUMMARY)
+      ? legacyHeadlineSummary(app, owners)
       : {
           cpuPercent: hostTree.cpuPercent,
           rssBytes: hostTree.rssBytes,
           trackedProcessCount: hostTree.processCount,
-          openTerminalCount: legacySummary?.openTerminalCount ?? 0,
-          tuiAgentCount: legacySummary?.tuiAgentCount ?? 0,
-          guiAgentCount: legacySummary?.guiAgentCount ?? 0,
         };
   const desktop = desktopResourceSummary(desktopApp);
 
@@ -806,10 +789,25 @@ function combineHeadlineResourceSummary(
     cpuPercent: base.cpuPercent + desktop.cpuPercent,
     rssBytes: base.rssBytes + desktop.rssBytes,
     trackedProcessCount: base.trackedProcessCount + desktop.processCount,
-    openTerminalCount: base.openTerminalCount,
-    tuiAgentCount: base.tuiAgentCount,
-    guiAgentCount: base.guiAgentCount,
   };
+}
+
+function legacyHeadlineSummary(
+  app: AppResourceUsage | null,
+  owners: readonly OwnerResourceSnapshotWire[],
+): TaskResourceSummary {
+  return owners.reduce(
+    (summary, owner) => ({
+      cpuPercent: summary.cpuPercent + owner.cpuPercent,
+      rssBytes: summary.rssBytes + owner.rssBytes,
+      trackedProcessCount: summary.trackedProcessCount + owner.processCount,
+    }),
+    {
+      cpuPercent: app?.cpuPercent ?? 0,
+      rssBytes: app?.rssBytes ?? 0,
+      trackedProcessCount: app?.processCount ?? 0,
+    },
+  );
 }
 
 function desktopResourceSummary(

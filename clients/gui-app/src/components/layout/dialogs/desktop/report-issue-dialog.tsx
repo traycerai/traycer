@@ -22,6 +22,11 @@ import type { DesktopSupportSnapshot } from "@/lib/windows/types";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import type { DesktopSupportDialogProps } from "./types";
+import {
+  Analytics,
+  AnalyticsEvent,
+  analyticsBlockerFromError,
+} from "@/lib/analytics";
 
 interface ReportIssueForm {
   title: string;
@@ -73,6 +78,10 @@ export function ReportIssueDialog(
       return result.reportId;
     },
     onSuccess: (reportId, submission) => {
+      Analytics.getInstance().track(AnalyticsEvent.ReportIssueHandedOff, {
+        outcome: "succeeded",
+        blocker: null,
+      });
       const url = buildSupportIssueUrl(
         submission.snapshot,
         submission.form,
@@ -80,6 +89,12 @@ export function ReportIssueDialog(
       );
       void runnerHost.openExternalLink(url);
       closeReportIssueDraft(submission.draftId);
+    },
+    onError: (error) => {
+      Analytics.getInstance().track(AnalyticsEvent.ReportIssueHandedOff, {
+        outcome: "failed",
+        blocker: analyticsBlockerFromError(error),
+      });
     },
   });
 

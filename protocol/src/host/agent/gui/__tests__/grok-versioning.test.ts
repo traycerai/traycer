@@ -166,12 +166,12 @@ describe("post-v1.0 GUI harness non-breaking v2→v1 downgrade bridges", () => {
     expect(PROVIDER_AUTH_STATUS_SCHEMA.safeParse("unavailable").success).toBe(
       true,
     );
-    expect(PROVIDER_AUTH_STATUS_SCHEMA_V10.safeParse("configured").success).toBe(
-      false,
-    );
-    expect(PROVIDER_AUTH_STATUS_SCHEMA_V10.safeParse("unavailable").success).toBe(
-      false,
-    );
+    expect(
+      PROVIDER_AUTH_STATUS_SCHEMA_V10.safeParse("configured").success,
+    ).toBe(false);
+    expect(
+      PROVIDER_AUTH_STATUS_SCHEMA_V10.safeParse("unavailable").success,
+    ).toBe(false);
 
     const v2Response = providersListResponseSchemaV20.parse({
       providers: [
@@ -213,6 +213,7 @@ describe("post-v1.0 GUI harness non-breaking v2→v1 downgrade bridges", () => {
     const awaitLogin = providersAwaitLoginDowngradeV2ToV1.downgradeResponse({
       state,
       existingProfileId: null,
+      codeRejected: false,
     });
     expect(awaitLogin.ok).toBe(true);
     if (!awaitLogin.ok) return;
@@ -222,6 +223,7 @@ describe("post-v1.0 GUI harness non-breaking v2→v1 downgrade bridges", () => {
       providersAwaitLoginDowngradeV2ToV1.downgradeResponse({
         state: null,
         existingProfileId: null,
+        codeRejected: false,
       }),
     ).toEqual({ ok: true, value: { state: null } });
   });
@@ -310,7 +312,8 @@ describe("post-v2.0 Amp non-breaking v3→v2 / v3→v1 downgrade bridges", () =>
       ],
     });
 
-    const toV2 = agentGuiListHarnessesDowngradeV3ToV2.downgradeResponse(v3Response);
+    const toV2 =
+      agentGuiListHarnessesDowngradeV3ToV2.downgradeResponse(v3Response);
     expect(toV2.ok).toBe(true);
     if (!toV2.ok) return;
     expect(toV2.value.harnesses.map((harness) => harness.id)).toEqual([
@@ -321,7 +324,8 @@ describe("post-v2.0 Amp non-breaking v3→v2 / v3→v1 downgrade bridges", () =>
       listGuiHarnessesResponseSchemaV20.parse(toV2.value),
     ).not.toThrow();
 
-    const toV1 = agentGuiListHarnessesDowngradeV3ToV1.downgradeResponse(v3Response);
+    const toV1 =
+      agentGuiListHarnessesDowngradeV3ToV1.downgradeResponse(v3Response);
     expect(toV1.ok).toBe(true);
     if (!toV1.ok) return;
     expect(toV1.value.harnesses.map((harness) => harness.id)).toEqual([
@@ -374,9 +378,9 @@ describe("post-v2.0 Amp non-breaking v3→v2 / v3→v1 downgrade bridges", () =>
     const toV2 = providersListDowngradeV3ToV2.downgradeResponse(v3Response);
     expect(toV2.ok).toBe(true);
     if (!toV2.ok) return;
-    expect(toV2.value.providers.map((provider) => provider.providerId)).toEqual([
-      "cursor",
-    ]);
+    expect(toV2.value.providers.map((provider) => provider.providerId)).toEqual(
+      ["cursor"],
+    );
     expect(() =>
       providersListResponseSchemaV20.parse(toV2.value),
     ).not.toThrow();
@@ -384,9 +388,9 @@ describe("post-v2.0 Amp non-breaking v3→v2 / v3→v1 downgrade bridges", () =>
     const toV1 = providersListDowngradeV3ToV1.downgradeResponse(v3Response);
     expect(toV1.ok).toBe(true);
     if (!toV1.ok) return;
-    expect(toV1.value.providers.map((provider) => provider.providerId)).toEqual([
-      "cursor",
-    ]);
+    expect(toV1.value.providers.map((provider) => provider.providerId)).toEqual(
+      ["cursor"],
+    );
     expect(() =>
       providersListResponseSchemaV10.parse(toV1.value),
     ).not.toThrow();
@@ -405,7 +409,8 @@ describe("post-v3.0 Devin/Pi non-breaking v4→v3 / v4→v2 / v4→v1 downgrade 
       ],
     });
 
-    const toV3 = agentGuiListHarnessesDowngradeV4ToV3.downgradeResponse(v4Response);
+    const toV3 =
+      agentGuiListHarnessesDowngradeV4ToV3.downgradeResponse(v4Response);
     expect(toV3.ok).toBe(true);
     if (!toV3.ok) return;
     expect(toV3.value.harnesses.map((harness) => harness.id)).toEqual([
@@ -417,7 +422,8 @@ describe("post-v3.0 Devin/Pi non-breaking v4→v3 / v4→v2 / v4→v1 downgrade 
       listGuiHarnessesResponseSchemaV30.parse(toV3.value),
     ).not.toThrow();
 
-    const toV2 = agentGuiListHarnessesDowngradeV4ToV2.downgradeResponse(v4Response);
+    const toV2 =
+      agentGuiListHarnessesDowngradeV4ToV2.downgradeResponse(v4Response);
     expect(toV2.ok).toBe(true);
     if (!toV2.ok) return;
     expect(toV2.value.harnesses.map((harness) => harness.id)).toEqual([
@@ -428,7 +434,8 @@ describe("post-v3.0 Devin/Pi non-breaking v4→v3 / v4→v2 / v4→v1 downgrade 
       listGuiHarnessesResponseSchemaV20.parse(toV2.value),
     ).not.toThrow();
 
-    const toV1 = agentGuiListHarnessesDowngradeV4ToV1.downgradeResponse(v4Response);
+    const toV1 =
+      agentGuiListHarnessesDowngradeV4ToV1.downgradeResponse(v4Response);
     expect(toV1.ok).toBe(true);
     if (!toV1.ok) return;
     expect(toV1.value.harnesses.map((harness) => harness.id)).toEqual([
@@ -495,10 +502,9 @@ describe("post-v3.0 Devin/Pi non-breaking v4→v3 / v4→v2 / v4→v1 downgrade 
     const toV3 = providersListDowngradeV4ToV3.downgradeResponse(v4Response);
     expect(toV3.ok).toBe(true);
     if (!toV3.ok) return;
-    expect(toV3.value.providers.map((provider) => provider.providerId)).toEqual([
-      "cursor",
-      "amp",
-    ]);
+    expect(toV3.value.providers.map((provider) => provider.providerId)).toEqual(
+      ["cursor", "amp"],
+    );
     expect(() =>
       providersListResponseSchemaV30.parse(toV3.value),
     ).not.toThrow();
@@ -506,9 +512,9 @@ describe("post-v3.0 Devin/Pi non-breaking v4→v3 / v4→v2 / v4→v1 downgrade 
     const toV2 = providersListDowngradeV4ToV2.downgradeResponse(v4Response);
     expect(toV2.ok).toBe(true);
     if (!toV2.ok) return;
-    expect(toV2.value.providers.map((provider) => provider.providerId)).toEqual([
-      "cursor",
-    ]);
+    expect(toV2.value.providers.map((provider) => provider.providerId)).toEqual(
+      ["cursor"],
+    );
     expect(() =>
       providersListResponseSchemaV20.parse(toV2.value),
     ).not.toThrow();
@@ -516,9 +522,9 @@ describe("post-v3.0 Devin/Pi non-breaking v4→v3 / v4→v2 / v4→v1 downgrade 
     const toV1 = providersListDowngradeV4ToV1.downgradeResponse(v4Response);
     expect(toV1.ok).toBe(true);
     if (!toV1.ok) return;
-    expect(toV1.value.providers.map((provider) => provider.providerId)).toEqual([
-      "cursor",
-    ]);
+    expect(toV1.value.providers.map((provider) => provider.providerId)).toEqual(
+      ["cursor"],
+    );
     expect(() =>
       providersListResponseSchemaV10.parse(toV1.value),
     ).not.toThrow();

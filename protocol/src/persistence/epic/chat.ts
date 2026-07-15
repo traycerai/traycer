@@ -1,6 +1,12 @@
-import { chatEventSchema } from "@traycer/protocol/persistence/epic/chat-events";
+import {
+  chatEventSchema,
+  chatEventSchemaPreInReplyTo,
+} from "@traycer/protocol/persistence/epic/chat-events";
 import { chatRunSettingsSchema } from "@traycer/protocol/persistence/epic/foundation";
-import { messageSchema } from "@traycer/protocol/persistence/epic/messages";
+import {
+  messageSchema,
+  messageSchemaPreInReplyTo,
+} from "@traycer/protocol/persistence/epic/messages";
 import { activeSessionChainSchema } from "@traycer/protocol/persistence/epic/senders";
 import { z } from "zod";
 
@@ -55,3 +61,24 @@ export const chatSchema = z.object({
   events: z.array(chatEventSchema).default([]),
 });
 export type Chat = z.infer<typeof chatSchema>;
+
+// Wire-freeze copy with `messages`/`events` swapped for their pre-`inReplyTo`
+// freezes, bound to `chat.subscribe@1.0–1.3` snapshot serverFrames so those
+// lines match the shipped wire and strip `inReplyTo` for older peers.
+// Hand-frozen (non-sender fields reuse the live sub-schemas); NOT derived from
+// the live shape. See `agentSenderSchemaPreInReplyTo`.
+export const chatSchemaPreInReplyTo = z.object({
+  parentId: z.string().nullable(),
+  id: z.string(),
+  userId: z.string(),
+  hostId: z.string(),
+  title: z.string(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+  isTitleEditedByUser: z.boolean(),
+  settings: chatRunSettingsSchema.nullable().default(null),
+  activeSessionChain: activeSessionChainSchema.nullable().default(null),
+  claudePendingWakes: z.array(claudePendingWakeSchema).default([]),
+  messages: z.array(messageSchemaPreInReplyTo),
+  events: z.array(chatEventSchemaPreInReplyTo).default([]),
+});

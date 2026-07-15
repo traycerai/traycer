@@ -40,7 +40,9 @@ describe("<EpicNodeTabIcon /> terminal indicator", () => {
     const indicator = screen.getByRole("status", {
       name: "Task needs attention",
     });
-    expect(indicator.firstElementChild?.className).toContain("text-red-500");
+    expect(indicator.firstElementChild?.className).toContain(
+      "text-destructive",
+    );
     expect(indicator.textContent).toBe("⠿");
 
     act(() => {
@@ -66,6 +68,7 @@ function renderTerminalTabIcon(): void {
         epicId="epic-1"
         variant="live"
         className="size-3.5 shrink-0"
+        defaultIcon={undefined}
       />
     </NotificationIndicatorsProvider>,
   );

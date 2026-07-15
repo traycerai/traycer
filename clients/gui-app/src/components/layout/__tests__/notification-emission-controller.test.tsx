@@ -1,5 +1,5 @@
 import "../../../../__tests__/test-browser-apis";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { NotificationEmissionController } from "@/components/layout/bridges/notification-emission-controller";
@@ -10,6 +10,12 @@ import {
 } from "@/stores/notifications/host-notifications-store";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
 import type { HostNotificationEntry } from "@traycer/protocol/host/notifications/contracts";
+
+const activate = vi.hoisted(() => vi.fn());
+
+vi.mock("@/hooks/notifications/use-notification-activation", () => ({
+  useNotificationActivation: () => ({ activate, isPending: false }),
+}));
 
 function createRunnerHost(): MockRunnerHost {
   return new MockRunnerHost({
@@ -118,6 +124,7 @@ function renderController(runnerHost: MockRunnerHost): void {
 
 describe("NotificationEmissionController", () => {
   beforeEach(() => {
+    activate.mockReset();
     __resetHostNotificationsStoreForTests();
     useAppLocalNotificationsStore.getState().resetForTests();
     useAppLocalNotificationsStore.getState().activateIdentity("user-1");

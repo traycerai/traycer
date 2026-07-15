@@ -472,13 +472,24 @@ export type ListEpicCollaboratorsResponse = z.infer<
   typeof listEpicCollaboratorsResponseSchema
 >;
 
-// ─── Task list (epic.listTasks@1.0 wire shape) ───────────────────────────────
+// ─── Task list (versioned epic.listTasks wire shapes) ───────────────────────
 
 export const taskLightSchema = z.object({
   epic: epicLightWithPermissionSchema.nullable().optional(),
   phase: phaseLightWithPermissionSchema.nullable().optional(),
 });
 export type TaskLight = z.infer<typeof taskLightSchema>;
+
+// The task list carries viewer-specific presentation state in addition to the
+// reusable TaskLight core. Keep the v1.0 row frozen so a v1.1 client can bridge
+// an older host by defaulting every row to unpinned.
+export const listTaskLightSchemaV10 = taskLightSchema;
+export type ListTaskLightV10 = z.infer<typeof listTaskLightSchemaV10>;
+
+export const listTaskLightSchema = taskLightSchema.extend({
+  pinned: z.boolean().optional(),
+});
+export type ListTaskLight = z.infer<typeof listTaskLightSchema>;
 
 export const listTasksRequestSchema = z.object({
   limit: z.number(),
@@ -512,13 +523,34 @@ export const listTasksFacetsSchema = z.object({
 });
 export type ListTasksFacets = z.infer<typeof listTasksFacetsSchema>;
 
+export const listTasksResponseSchemaV10 = z.object({
+  tasks: z.array(listTaskLightSchemaV10),
+  nextCursor: z.string().optional(),
+  hasMore: z.boolean(),
+  facets: listTasksFacetsSchema.optional(),
+});
+export type ListTasksResponseV10 = z.infer<typeof listTasksResponseSchemaV10>;
+
 export const listTasksResponseSchema = z.object({
-  tasks: z.array(taskLightSchema),
+  tasks: z.array(listTaskLightSchema),
   nextCursor: z.string().optional(),
   hasMore: z.boolean(),
   facets: listTasksFacetsSchema.optional(),
 });
 export type ListTasksResponse = z.infer<typeof listTasksResponseSchema>;
+
+// ─── Personal history pinning (epic.setPinned@1.0) ──────────────────────────
+
+export const setEpicPinnedRequestSchema = z.object({
+  epicId: z.string(),
+  pinned: z.boolean(),
+});
+export type SetEpicPinnedRequest = z.infer<typeof setEpicPinnedRequestSchema>;
+
+export const setEpicPinnedResponseSchema = z.object({
+  pinned: z.boolean(),
+});
+export type SetEpicPinnedResponse = z.infer<typeof setEpicPinnedResponseSchema>;
 
 // ─── Epic/entity mentions ────────────────────────────────────────────────────
 

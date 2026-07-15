@@ -36,6 +36,42 @@ import { requestAppQuit } from "@/lib/desktop-app-lifecycle";
 import { runnerQueryKeys } from "@/lib/query-keys";
 import { cn } from "@/lib/utils";
 import { createReportIssueContext } from "@/lib/report-issue-context";
+import {
+  Analytics,
+  AnalyticsEvent,
+  analyticsBlockerFromError,
+} from "@/lib/analytics";
+
+type HostSetupReason = "launch" | "recovery" | "reinstall" | "update";
+
+// Best-effort setup telemetry around the `ensureHost` mutation. Emitted from
+// mutation events, never renders. `host-busy`/`removed` results are neither
+// success nor failure - the user resolves them through their own surfaces.
+function hostSetupAnalyticsCallbacks(
+  reason: HostSetupReason,
+  onSuccess: (result: HostEnsureResult) => void,
+): {
+  readonly onSuccess: (result: HostEnsureResult) => void;
+  readonly onError: (error: unknown) => void;
+} {
+  Analytics.getInstance().track(AnalyticsEvent.HostSetupStarted, { reason });
+  return {
+    onSuccess: (result) => {
+      onSuccess(result);
+      if (result.action !== "host-busy" && result.action !== "removed") {
+        Analytics.getInstance().track(AnalyticsEvent.HostSetupSucceeded, {
+          reason,
+        });
+      }
+    },
+    onError: (error) => {
+      Analytics.getInstance().track(AnalyticsEvent.HostSetupFailed, {
+        source: "direct_ui",
+        blocker: analyticsBlockerFromError(error),
+      });
+    },
+  };
+}
 
 /**
  * URL prefix that bypasses the host-readiness gate. Settings work without
@@ -412,12 +448,12 @@ function useHostProvisioning(args: {
   // Retry/forced update: clear any prior error/progress, then re-run ensure. Only
   // `onSuccess` transitions the busy-keep latch; an error leaves it untouched
   // (see markBusyKeep).
-  const run = (force: boolean): void => {
+  const run = (force: boolean, reason: HostSetupReason): void => {
     reset();
     setProgress(null);
     mutate(
       { force, onProgress: (event) => setProgress(event) },
-      { onSuccess: markBusyKeep },
+      hostSetupAnalyticsCallbacks(reason, markBusyKeep),
     );
   };
 
@@ -437,7 +473,7 @@ function useHostProvisioning(args: {
       removedByUser: false,
     });
     void management.clearRemoval().then(
-      () => run(false),
+      () => run(false, "reinstall"),
       () => {
         // The sentinel couldn't be cleared, so ensure would just short-circuit
         // back to `removed`. Restore the removed surface instead of flashing a
@@ -457,7 +493,7 @@ function useHostProvisioning(args: {
     attemptedRef.current = true;
     mutate(
       { force: false, onProgress: (event) => setProgress(event) },
-      { onSuccess: markBusyKeep },
+      hostSetupAnalyticsCallbacks("launch", markBusyKeep),
     );
   }, [canProvision, args.isReady, mutate, markBusyKeep]);
 
@@ -490,8 +526,8 @@ function useHostProvisioning(args: {
     hostBusy: hasManagement && inBusyKeepFlow,
     removed: hasManagement && isRemoved,
     canManageHost: hasManagement,
-    retry: () => run(false),
-    force: () => run(true),
+    retry: () => run(false, "recovery"),
+    force: () => run(true, "update"),
     reinstall,
   };
 }
