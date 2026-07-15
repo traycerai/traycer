@@ -67,6 +67,41 @@ export const userMessageSenderSchema = z.discriminatedUnion("type", [
 export type UserMessageSender = z.infer<typeof userMessageSenderSchema>;
 export type AssistantMessageSender = z.infer<typeof agentSenderSchema>;
 
+/**
+ * Wire-freeze copy of {@link agentSenderSchema} WITHOUT `inReplyTo`, bound to
+ * the released `chat.subscribe@1.0–1.3` serverFrames (via the frozen chat-tree
+ * variants below) so a peer that negotiated an older minor keeps receiving
+ * frames a strict decoder accepts — a plain `z.object` silently strips the
+ * unmodeled `inReplyTo` key on reparse (the provider-cli-state v2/v3 discipline).
+ *
+ * Hand-frozen field-for-field, NOT derived via `.omit()`/`.extend()` off the
+ * live shape: a future agent-sender field must not silently leak onto the
+ * frozen wire. Extend the live `agentSenderSchema` and freeze here explicitly.
+ * The live line that carries `inReplyTo` is `chat.subscribe@1.4`.
+ */
+export const agentSenderSchemaPreInReplyTo = z.object({
+  type: z.literal("agent"),
+  harnessId: guiHarnessIdSchema,
+  agentId: z.string(),
+  displayName: z.string().nullable(),
+  reply: z
+    .discriminatedUnion("expectsReply", [
+      z.object({
+        expectsReply: z.literal(true),
+        responseId: z.string(),
+      }),
+      z.object({
+        expectsReply: z.literal(false),
+      }),
+    ])
+    .default({ expectsReply: false }),
+});
+
+export const userMessageSenderSchemaPreInReplyTo = z.discriminatedUnion(
+  "type",
+  [userSenderSchema, agentSenderSchemaPreInReplyTo],
+);
+
 export const activeSessionChainSchema = z.object({
   harnessId: guiHarnessIdSchema,
   sessionId: z.string(),
