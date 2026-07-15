@@ -44,6 +44,19 @@ export const agentSenderSchema = z.object({
       }),
     ])
     .default({ expectsReply: false }),
+  /**
+   * The broker thread id this message SETTLED: the message resumes a request
+   * the receiving chat itself opened (`expectReply=true` on its own earlier
+   * `agent.sendMessage`), either as the counterparty's reply or as the
+   * system inactivity notice closing out that thread. `null` for fresh
+   * requests, fire-and-forget sends, and rows persisted before this field
+   * existed. Distinct from `reply`, which is the NEW expectation this
+   * message carries. Consumers use it to tell a thread-resumed turn (it
+   * continues the chain that sent the request, keeping that chain's
+   * human/agent root) from a fresh agent-initiated request (which roots a
+   * new agent-driven chain).
+   */
+  inReplyTo: z.string().nullable().default(null),
 });
 export type AgentSender = z.infer<typeof agentSenderSchema>;
 
