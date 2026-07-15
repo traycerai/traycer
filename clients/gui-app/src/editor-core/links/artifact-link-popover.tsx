@@ -16,7 +16,7 @@ import {
   shift,
   type VirtualElement,
 } from "@floating-ui/dom";
-import { Check, Copy, ExternalLink, Link2Off } from "lucide-react";
+import { Check, Copy, File, Globe2, Hash, Link2, Link2Off } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -361,6 +361,116 @@ function createTargetFromSelection(editor: Editor): LinkTarget | null {
   };
 }
 
+interface LinkKindIndicatorProps {
+  readonly classifiedHref: ClassifiedHref;
+  readonly href: string;
+}
+
+function LinkKindIndicator(props: LinkKindIndicatorProps) {
+  const iconClassName = "mx-1 size-3.5 shrink-0 text-muted-foreground/75";
+  if (props.classifiedHref.kind === "external") {
+    return (
+      <Globe2 role="img" aria-label="External link" className={iconClassName} />
+    );
+  }
+  if (props.classifiedHref.kind === "file") {
+    return (
+      <File
+        role="img"
+        aria-label="Internal file link"
+        className={iconClassName}
+      />
+    );
+  }
+  if (props.href.trim().startsWith("#")) {
+    return (
+      <Hash role="img" aria-label="Section link" className={iconClassName} />
+    );
+  }
+  return <Link2 role="img" aria-label="Link" className={iconClassName} />;
+}
+
+interface LinkPreviewProps {
+  readonly classifiedHref: ClassifiedHref;
+  readonly copied: boolean;
+  readonly editable: boolean;
+  readonly href: string;
+  readonly openLinkPending: boolean;
+  readonly onCopy: () => void;
+  readonly onEdit: () => void;
+  readonly onOpen: () => void;
+}
+
+function LinkPreview(props: LinkPreviewProps) {
+  const openable =
+    props.classifiedHref.kind === "external" ||
+    props.classifiedHref.kind === "file";
+  const externalOpenPending =
+    props.classifiedHref.kind === "external" && props.openLinkPending;
+  return (
+    <>
+      <LinkKindIndicator
+        classifiedHref={props.classifiedHref}
+        href={props.href}
+      />
+      {openable ? (
+        <Button
+          type="button"
+          size="xs"
+          variant="ghost"
+          aria-label={`Open link: ${props.href}`}
+          title={props.href}
+          className="min-w-0 max-w-[min(55vw,16rem)] justify-start px-1.5 font-normal text-muted-foreground hover:text-foreground"
+          disabled={props.href.trim().length === 0 || externalOpenPending}
+          onClick={props.onOpen}
+        >
+          <span className="truncate">{props.href}</span>
+          {externalOpenPending ? (
+            <AgentSpinningDots
+              className={undefined}
+              testId="artifact-link-open-pending"
+              variant={undefined}
+            />
+          ) : null}
+        </Button>
+      ) : (
+        <span
+          title={props.href}
+          className="min-w-0 max-w-[min(55vw,16rem)] truncate px-1.5 text-ui-xs text-muted-foreground"
+        >
+          {props.href}
+        </span>
+      )}
+      <Button
+        type="button"
+        size="icon-xs"
+        variant="ghost"
+        disabled={props.href.trim().length === 0}
+        aria-label={props.copied ? "Copied" : "Copy link"}
+        title={props.copied ? "Copied" : "Copy link"}
+        onClick={props.onCopy}
+      >
+        {props.copied ? (
+          <Check aria-hidden="true" />
+        ) : (
+          <Copy aria-hidden="true" />
+        )}
+      </Button>
+      {props.editable ? (
+        <Button
+          type="button"
+          size="xs"
+          variant="ghost"
+          className="px-1.5 text-muted-foreground hover:text-foreground"
+          onClick={props.onEdit}
+        >
+          Edit
+        </Button>
+      ) : null}
+    </>
+  );
+}
+
 /**
  * One trigger-aware floating surface for authored ProseMirror links.
  *
@@ -384,6 +494,7 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
   const hrefDirtyRef = useRef(false);
   const textDirtyRef = useRef(false);
   const expectedCaretPositionRef = useRef<number | null>(null);
+  const focusEditUrlRef = useRef(false);
   const cardRef = useRef<HTMLDivElement | null>(null);
   const urlInputRef = useRef<HTMLInputElement | null>(null);
   const showTimerRef = useRef<number | null>(null);
@@ -441,6 +552,14 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
     },
     [cancelHide, cancelShow, onOpenChange, setLiveTarget],
   );
+
+  const beginEditing = useCallback((): void => {
+    const current = targetRef.current;
+    if (!editable || current?.mode !== "edit") return;
+    cancelHide();
+    focusEditUrlRef.current = true;
+    setLiveTarget({ ...current, trigger: "caret" });
+  }, [cancelHide, editable, setLiveTarget]);
 
   const expectCaretPosition = useCallback((position: number): void => {
     expectedCaretPositionRef.current = position;
@@ -852,7 +971,10 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
   }, [cancelHide, scheduleHoverHide, target]);
 
   useLayoutEffect(() => {
-    if (target?.mode === "create") urlInputRef.current?.focus();
+    if (target?.mode === "create" || focusEditUrlRef.current) {
+      focusEditUrlRef.current = false;
+      urlInputRef.current?.focus();
+    }
   }, [target]);
 
   const commit = useCallback((): void => {
@@ -928,15 +1050,19 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
   const classifiedDraftHref = classifyHref(href);
   const unusualScheme =
     href.trim().length > 0 && classifiedDraftHref.kind === "ignore";
-  const surfaceLabel = editable ? "Edit link" : "Link details";
+  const compact =
+    target.mode === "edit" && (target.trigger === "hover" || !editable);
+  const surfaceLabel = compact ? "Link preview" : "Edit link";
 
   const handleSurfaceBlur = (event: ReactFocusEvent<HTMLFormElement>): void => {
     const next = event.relatedTarget;
     if (next instanceof Node && event.currentTarget.contains(next)) return;
-    if (editable) {
-      commit();
-      return;
-    }
+    commit();
+  };
+
+  const handlePreviewBlur = (event: ReactFocusEvent<HTMLDivElement>): void => {
+    const next = event.relatedTarget;
+    if (next instanceof Node && event.currentTarget.contains(next)) return;
     close();
   };
 
@@ -949,106 +1075,90 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
       className={cn(
         HOVER_PREVIEW_SURFACE_CLASS,
         // Editor floating surfaces stay below modal overlay/content at z-50.
-        "fixed top-0 left-0 z-40 flex w-[min(92vw,24rem)] flex-col gap-3 p-3",
+        "fixed top-0 left-0 z-40",
+        compact
+          ? "flex max-w-[min(88vw,24rem)] items-center gap-0.5 rounded-lg border-border/55 px-1.5 py-1 shadow-md"
+          : "flex w-[min(92vw,20rem)] flex-col gap-2.5 rounded-lg border-border/60 p-2.5 shadow-md",
       )}
+      onBlur={compact ? handlePreviewBlur : undefined}
     >
-      <form
-        aria-label={surfaceLabel}
-        onBlur={handleSurfaceBlur}
-        onSubmit={(event) => {
-          event.preventDefault();
-          commit();
-        }}
-        className="contents"
-      >
-        <label
-          htmlFor={urlFieldId}
-          className="flex flex-col gap-1 text-ui-xs font-medium"
-        >
-          URL
-        </label>
-        <Input
-          ref={urlInputRef}
-          id={urlFieldId}
-          aria-label="Link URL"
-          value={href}
-          readOnly={!editable}
-          onChange={(event) => {
-            hrefDirtyRef.current = true;
-            setHref(event.target.value);
-          }}
+      {compact ? (
+        <LinkPreview
+          classifiedHref={classifiedDraftHref}
+          copied={copied}
+          editable={editable}
+          href={href}
+          openLinkPending={openLinkPending}
+          onCopy={() => copy(href.trim())}
+          onEdit={beginEditing}
+          onOpen={() => routeHref(href)}
         />
-        {unusualScheme ? (
-          <p role="status" className="text-ui-xs text-warning-foreground">
-            This scheme can be saved, but Traycer will not open it.
-          </p>
-        ) : null}
-        <label
-          htmlFor={displayFieldId}
-          className="flex flex-col gap-1 text-ui-xs font-medium"
-        >
-          Display text
-        </label>
-        <Input
-          id={displayFieldId}
-          aria-label="Link display text"
-          value={displayText}
-          readOnly={!editable}
-          onChange={(event) => {
-            textDirtyRef.current = true;
-            setDisplayText(event.target.value);
+      ) : (
+        <form
+          aria-label={surfaceLabel}
+          onBlur={handleSurfaceBlur}
+          onSubmit={(event) => {
+            event.preventDefault();
+            commit();
           }}
-        />
-        <div className="flex flex-wrap items-center gap-1.5">
-          {classifiedDraftHref.kind === "default" ||
-          classifiedDraftHref.kind === "ignore" ? null : (
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={href.trim().length === 0 || openLinkPending}
-              onClick={() => routeHref(href)}
+          className="flex flex-col gap-2.5"
+        >
+          <div className="flex flex-col gap-1.5">
+            <label
+              htmlFor={urlFieldId}
+              className="text-ui-xs font-medium text-muted-foreground"
             >
-              <ExternalLink aria-hidden="true" />
-              Open
-              {openLinkPending ? (
-                <AgentSpinningDots
-                  className={undefined}
-                  testId="artifact-link-open-pending"
-                  variant={undefined}
-                />
-              ) : null}
-            </Button>
-          )}
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            disabled={href.trim().length === 0}
-            aria-label={copied ? "Copied" : "Copy link"}
-            onClick={() => copy(href.trim())}
-          >
-            {copied ? (
-              <Check aria-hidden="true" />
-            ) : (
-              <Copy aria-hidden="true" />
-            )}
-            {copied ? "Copied" : "Copy link"}
-          </Button>
-          {editable ? (
-            <Button type="button" size="sm" variant="ghost" onClick={remove}>
-              <Link2Off aria-hidden="true" />
-              Remove link
-            </Button>
+              Page or URL
+            </label>
+            <Input
+              ref={urlInputRef}
+              id={urlFieldId}
+              aria-label="Link URL"
+              value={href}
+              onChange={(event) => {
+                hrefDirtyRef.current = true;
+                setHref(event.target.value);
+              }}
+            />
+          </div>
+          {unusualScheme ? (
+            <p role="status" className="text-ui-xs text-warning-foreground">
+              This scheme can be saved, but Traycer will not open it.
+            </p>
           ) : null}
-          {editable ? (
-            <Button type="submit" size="sm" className="ml-auto">
-              <Check aria-hidden="true" />
-              Apply
-            </Button>
+          <div className="flex flex-col gap-1.5">
+            <label
+              htmlFor={displayFieldId}
+              className="text-ui-xs font-medium text-muted-foreground"
+            >
+              Link title
+            </label>
+            <Input
+              id={displayFieldId}
+              aria-label="Link display text"
+              value={displayText}
+              onChange={(event) => {
+                textDirtyRef.current = true;
+                setDisplayText(event.target.value);
+              }}
+            />
+          </div>
+          {target.mode === "edit" ? (
+            <div className="mt-0.5 border-t border-border/60 pt-1.5">
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="-ml-1.5 text-muted-foreground hover:text-destructive"
+                onClick={remove}
+              >
+                <Link2Off aria-hidden="true" />
+                Remove link
+              </Button>
+            </div>
           ) : null}
-        </div>
-      </form>
+        </form>
+      )}
     </div>,
     document.body,
   );
