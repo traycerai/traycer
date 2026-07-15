@@ -1,4 +1,5 @@
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
+import type { ProviderRateLimits } from "@traycer/protocol/host/rate-limit";
 import { PROVIDER_RATE_LIMITS_STALE_TIME_MS } from "@/lib/rate-limit-providers";
 import type {
   AvailableProviderRateLimits,
@@ -19,6 +20,10 @@ import type {
 export type ProfileUsageSemanticWarning = "near_limit" | "hard_limit";
 
 export type ProfileUsageRefreshStatus = "idle" | "queued" | "refreshing";
+type UnavailableProviderRateLimits = Extract<
+  ProviderRateLimits,
+  { available: false }
+>;
 
 /**
  * Detail-cache classification for one profile, independent of refresh
@@ -34,8 +39,10 @@ export type ProfileUsageRefreshStatus = "idle" | "queued" | "refreshing";
  *   than `PROVIDER_RATE_LIMITS_STALE_TIME_MS`.
  * - `failed-with-last-good`: the current attempt is a failure, but a prior
  *   `usage` reading is retained and dimmed alongside it.
- * - `failed-no-last-good`: the current attempt is a failure and no reading
- *   has ever been retained - nothing to show but the error/empty state.
+ * - `unavailable`: the provider successfully reported an authoritative or
+ *   transient unavailable snapshot; its wire reason is retained exactly.
+ * - `failed-no-last-good`: the query itself threw and no reading has ever been
+ *   retained - nothing to show but the generic error/empty state.
  */
 export type ProfileUsageDetailState =
   | { readonly kind: "never-checked" }
@@ -53,6 +60,10 @@ export type ProfileUsageDetailState =
       readonly usage: AvailableProviderRateLimits;
       readonly asOf: number;
       readonly failedAt: number;
+    }
+  | {
+      readonly kind: "unavailable";
+      readonly usage: UnavailableProviderRateLimits;
     }
   | { readonly kind: "failed-no-last-good"; readonly failedAt: number | null };
 
@@ -78,6 +89,37 @@ function isSemanticWarning(
   return status === "near_limit" || status === "hard_limit";
 }
 
+function unavailableDetailState(
+  envelope: ProviderRateLimitEnvelope | undefined,
+): Extract<ProfileUsageDetailState, { kind: "unavailable" }> | null {
+  if (envelope === undefined) return null;
+  const latest = envelope.latest;
+  if (latest === null || latest.available || envelope.lastGood !== null) {
+    return null;
+  }
+  return { kind: "unavailable", usage: latest };
+}
+
+function queryFailureDetailState(
+  envelope: ProviderRateLimitEnvelope | undefined,
+  queryFailureAt: number | null,
+  now: number,
+): Extract<
+  ProfileUsageDetailState,
+  { kind: "failed-with-last-good" | "failed-no-last-good" }
+> | null {
+  if (queryFailureAt === null) return null;
+  if (envelope?.lastGood !== null && envelope?.lastGood !== undefined) {
+    return {
+      kind: "failed-with-last-good",
+      usage: envelope.lastGood,
+      asOf: envelope.lastGoodAt ?? now,
+      failedAt: queryFailureAt,
+    };
+  }
+  return { kind: "failed-no-last-good", failedAt: queryFailureAt };
+}
+
 /**
  * Pure classifier: folds a target-host cache-only `ProviderRateLimitEnvelope`
  * (`undefined` when this renderer's cache has never observed this exact
@@ -92,17 +134,10 @@ export function deriveProfileUsageDetailState(
   queryFailureAt: number | null,
   now: number,
 ): ProfileUsageDetailState {
-  if (queryFailureAt !== null) {
-    if (envelope?.lastGood !== null && envelope?.lastGood !== undefined) {
-      return {
-        kind: "failed-with-last-good",
-        usage: envelope.lastGood,
-        asOf: envelope.lastGoodAt ?? now,
-        failedAt: queryFailureAt,
-      };
-    }
-    return { kind: "failed-no-last-good", failedAt: queryFailureAt };
-  }
+  const queryFailure = queryFailureDetailState(envelope, queryFailureAt, now);
+  if (queryFailure !== null) return queryFailure;
+  const unavailable = unavailableDetailState(envelope);
+  if (unavailable !== null) return unavailable;
   if (envelope !== undefined && envelope.latest !== null) {
     if (envelope.lastGood !== null) {
       if (!envelope.latest.available) {
@@ -125,7 +160,7 @@ export function deriveProfileUsageDetailState(
         asOf,
       };
     }
-    return { kind: "failed-no-last-good", failedAt: envelope.lastFailureAt };
+    return { kind: "never-checked" };
   }
 
   if (isSemanticWarning(hostSummary.rateLimitStatus)) {

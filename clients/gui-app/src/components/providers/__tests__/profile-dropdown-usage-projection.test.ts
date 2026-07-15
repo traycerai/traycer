@@ -87,7 +87,28 @@ describe("picker comparison projection adapter", () => {
       NOW,
     );
     expect(cold.projection.kind).toBe("unavailable");
+    expect(cold.projection).toMatchObject({ reason: "fetch_failed" });
     expect(cold.projection.compactWindow).toBeNull();
     expect(profileUsageAccessibleStatus(cold.projection)).toBe("Not checked");
+  });
+
+  it("preserves a successful provider-unavailable reason instead of treating it as a query failure", () => {
+    const projected = projectComparisonEntry(
+      entry({
+        kind: "unavailable",
+        usage: {
+          provider: "claude-code",
+          available: false,
+          reason: "insufficient_permissions",
+        },
+      }),
+      NOW,
+    );
+
+    expect(projected.projection).toMatchObject({
+      kind: "unavailable",
+      reason: "insufficient_permissions",
+    });
+    expect(projected.projection.compactWindow).toBeNull();
   });
 });

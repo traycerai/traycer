@@ -53,6 +53,13 @@ function envelopeFromDetail(
         lastGoodAt: detail.asOf,
         lastFailureAt: detail.failedAt,
       };
+    case "unavailable":
+      return {
+        latest: detail.usage,
+        lastGood: null,
+        lastGoodAt: null,
+        lastFailureAt: null,
+      };
     case "never-checked":
     case "semantic-only":
     case "failed-no-last-good":

@@ -121,8 +121,7 @@ describe("deriveProfileUsageDetailState", () => {
     });
   });
 
-  it("returns failed-no-last-good when the latest attempt is an authoritative failure and nothing is retained", () => {
-    const failedAt = NOW - 100;
+  it("retains an authoritative unavailable reason when nothing is retained", () => {
     const state = deriveProfileUsageDetailState(
       envelope({
         latest: {
@@ -132,16 +131,23 @@ describe("deriveProfileUsageDetailState", () => {
         },
         lastGood: null,
         lastGoodAt: null,
-        lastFailureAt: failedAt,
+        lastFailureAt: NOW - 100,
       }),
       { rateLimitStatus: "ok", usageUpdatedAt: null },
       null,
       NOW,
     );
-    expect(state).toEqual({ kind: "failed-no-last-good", failedAt });
+    expect(state).toEqual({
+      kind: "unavailable",
+      usage: {
+        provider: "claude-code",
+        available: false,
+        reason: "cli_not_found",
+      },
+    });
   });
 
-  it("returns failed-no-last-good when a transient failure has never once succeeded", () => {
+  it("retains a transient unavailable reason when the provider request succeeds without usage", () => {
     const state = deriveProfileUsageDetailState(
       envelope({
         latest: {
@@ -157,7 +163,14 @@ describe("deriveProfileUsageDetailState", () => {
       null,
       NOW,
     );
-    expect(state).toEqual({ kind: "failed-no-last-good", failedAt: NOW });
+    expect(state).toEqual({
+      kind: "unavailable",
+      usage: {
+        provider: "claude-code",
+        available: false,
+        reason: "timeout",
+      },
+    });
   });
 
   it("surfaces query failures with and without retained last-good data", () => {
