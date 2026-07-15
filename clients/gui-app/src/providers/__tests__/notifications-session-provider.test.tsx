@@ -216,6 +216,8 @@ function hostEntry(input: {
       severity: input.severity,
       outcome: null,
       resolvedAt: null,
+      epicId: input.epicId,
+      chatId: input.chatId,
       payload: { epicId: input.epicId, chatId: input.chatId },
     };
   }
@@ -227,6 +229,8 @@ function hostEntry(input: {
     sourceRef: input.id,
     severity: input.severity,
     outcome: "completed",
+    epicId: input.epicId,
+    chatId: input.chatId,
     payload: {
       epicId: input.epicId,
       chatId: input.chatId,
