@@ -92,6 +92,7 @@ const MESSAGE: ChatMessage = {
   settings: null,
   createdAt: 0,
   completedAt: null,
+  stopped: null,
   persistentMessageId: "persisted-message-1",
   senderLabel: null,
   assistantMeta: null,
