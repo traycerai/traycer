@@ -21,6 +21,7 @@ import {
   type ProfileDropdownUsagePresentation,
 } from "@/components/providers/profile-dropdown-usage";
 import { ProfileUsageSidecar } from "@/components/providers/profile-usage-sidecar";
+import { isProfileUsageSidecarTarget } from "@/components/providers/profile-usage-sidecar-target";
 import {
   rateLimitWindowFillPercent,
   rateLimitWindowSeverityBarClassName,
@@ -76,13 +77,6 @@ interface ProfileDropdownProps {
   /** Picker-only cached usage presentation. Settings passes `null`, which
    *  preserves the identity-only rows and mounts no usage observers/sidecar. */
   readonly usagePresentation: ProfileDropdownUsagePresentation | null;
-}
-
-function isProfileUsageSidecarTarget(target: EventTarget | null): boolean {
-  return (
-    target instanceof Element &&
-    target.closest("[data-profile-usage-sidecar]") !== null
-  );
 }
 
 /**

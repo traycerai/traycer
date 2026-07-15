@@ -25,6 +25,7 @@ import {
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { MeterRow } from "@/components/settings/panels/traycer-subscription-views";
 import { contextUsageTone } from "@/components/chat/context-usage";
+import { creditUsageSeverity } from "@/lib/rate-limits/window-severity";
 import {
   formatUnavailableReason,
   resolveProviderRateLimitViewState,
@@ -843,7 +844,7 @@ function ClaudeExtraUsageRow({
       <MeterRow
         label="Extra usage"
         usedPercent={usedPercent}
-        severity={usedPercent > 85 ? "limited" : "healthy"}
+        severity={creditUsageSeverity(usedPercent)}
         detail={`${formatClaudeExtraUsageCents(extraUsage.usedCredits)} / ${formatClaudeExtraUsageCents(extraUsage.monthlyLimit)}`}
       />
     );
@@ -940,7 +941,7 @@ function OpenRouterCreditBar({
     <MeterRow
       label="Credits"
       usedPercent={usedPercent}
-      severity={usedPercent > 85 ? "limited" : "healthy"}
+      severity={creditUsageSeverity(usedPercent)}
       detail={`${formatProviderCurrency(consumed)} / ${formatProviderCurrency(limit)}`}
     />
   );

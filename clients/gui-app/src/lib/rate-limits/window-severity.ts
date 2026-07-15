@@ -2,6 +2,13 @@ import type { LiveProviderRateLimitSeverity } from "@traycer/protocol/host/rate-
 
 export type RateLimitWindowSeverity = LiveProviderRateLimitSeverity;
 
+/** Binary severity for credit/balance meters that have no reset window. */
+export function creditUsageSeverity(
+  usedPercent: number,
+): RateLimitWindowSeverity {
+  return usedPercent > 85 ? "limited" : "healthy";
+}
+
 /** Tailwind fill color for a severity tier, matching the Core Flows wireframe's bar colors. */
 export function rateLimitWindowSeverityBarClassName(
   severity: RateLimitWindowSeverity,

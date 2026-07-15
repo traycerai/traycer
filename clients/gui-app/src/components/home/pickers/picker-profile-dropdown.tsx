@@ -1,4 +1,4 @@
-import { useMemo, type RefObject } from "react";
+import { useMemo, useState, type RefObject } from "react";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type {
   ProviderId,
@@ -10,6 +10,7 @@ import {
 } from "@/components/providers/profile-dropdown";
 import {
   projectComparisonEntry,
+  scopeProfileUsageRefreshStatus,
   type ProfileDropdownUsageEntry,
   type ProfileDropdownUsagePresentation,
 } from "@/components/providers/profile-dropdown-usage";
@@ -58,13 +59,45 @@ function ProfileUsagePickerProfileDropdown({
     profiles: props.profiles,
   });
   const now = useSampledNow();
+  const [pendingRefreshKeys, setPendingRefreshKeys] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
   const entries = useMemo(() => {
     const projected = new Map<string | null, ProfileDropdownUsageEntry>();
     comparison.entries.forEach((entry, profileId) => {
-      projected.set(profileId, projectComparisonEntry(entry, now));
+      const refreshKey = JSON.stringify([providerId, profileId]);
+      const refresh = async (): Promise<void> => {
+        setPendingRefreshKeys((current) => {
+          const next = new Set(current);
+          next.add(refreshKey);
+          return next;
+        });
+        await entry.refresh().finally(() => {
+          setPendingRefreshKeys((current) => {
+            if (!current.has(refreshKey)) return current;
+            const next = new Set(current);
+            next.delete(refreshKey);
+            return next;
+          });
+        });
+      };
+      projected.set(
+        profileId,
+        projectComparisonEntry(
+          {
+            ...entry,
+            refreshStatus: scopeProfileUsageRefreshStatus(
+              entry.refreshStatus,
+              pendingRefreshKeys.has(refreshKey),
+            ),
+            refresh,
+          },
+          now,
+        ),
+      );
     });
     return projected;
-  }, [comparison.entries, now]);
+  }, [comparison.entries, now, pendingRefreshKeys, providerId]);
   const usagePresentation = useMemo<ProfileDropdownUsagePresentation>(
     () => ({ isHostReady: comparison.isReady, entries }),
     [comparison.isReady, entries],

@@ -47,6 +47,7 @@ import {
   type TraycerSubscription,
 } from "@/lib/auth/traycer-subscription-content";
 import {
+  creditUsageSeverity,
   rateLimitWindowFillPercent,
   rateLimitWindowSeverityBarClassName,
   type RateLimitWindowSeverity,
@@ -304,7 +305,7 @@ function CreditMeterRow({
       label={label}
       usedPercent={usedPercent}
       detail={`${formatValue(consumed)} / ${formatValue(total)}`}
-      severity={usedPercent > 85 ? "limited" : "healthy"}
+      severity={creditUsageSeverity(usedPercent)}
     />
   );
 }

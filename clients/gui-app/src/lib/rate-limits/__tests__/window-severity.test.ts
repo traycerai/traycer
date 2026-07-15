@@ -1,8 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
+  creditUsageSeverity,
   rateLimitWindowFillPercent,
   rateLimitWindowSeverityBarClassName,
 } from "@/lib/rate-limits/window-severity";
+
+describe("creditUsageSeverity", () => {
+  it("marks only usage above 85 percent as limited", () => {
+    expect(creditUsageSeverity(85)).toBe("healthy");
+    expect(creditUsageSeverity(85.01)).toBe("limited");
+  });
+});
 
 describe("rateLimitWindowSeverityBarClassName", () => {
   it("maps each severity to a distinct fill color", () => {

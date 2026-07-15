@@ -4,6 +4,7 @@ import type { ProfileUsageComparisonEntry } from "@/lib/rate-limits/profile-usag
 import {
   profileUsageAccessibleStatus,
   projectComparisonEntry,
+  scopeProfileUsageRefreshStatus,
 } from "../profile-dropdown-usage";
 
 const NOW = 2_000_000;
@@ -36,6 +37,15 @@ function entry(
 }
 
 describe("picker comparison projection adapter", () => {
+  it("only exposes queued state for a refresh initiated by this profile", () => {
+    expect(scopeProfileUsageRefreshStatus("queued", false)).toBe("idle");
+    expect(scopeProfileUsageRefreshStatus("idle", true)).toBe("queued");
+    expect(scopeProfileUsageRefreshStatus("queued", true)).toBe("queued");
+    expect(scopeProfileUsageRefreshStatus("refreshing", false)).toBe(
+      "refreshing",
+    );
+  });
+
   it("uses T1's most-constrained live window and duration-aware severity", () => {
     const projected = projectComparisonEntry(
       entry({ kind: "fresh", usage: USAGE, asOf: NOW }),

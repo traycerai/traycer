@@ -5,6 +5,7 @@ import { HarnessModelPickerSearch } from "@/components/home/pickers/harness-mode
 import { HarnessModelPickerList } from "@/components/home/pickers/harness-model-picker-list";
 import { ProviderRail } from "@/components/home/pickers/harness-model-picker-group";
 import { PickerProfileDropdown } from "@/components/home/pickers/picker-profile-dropdown";
+import { isProfileUsageSidecarTarget } from "@/components/providers/profile-usage-sidecar-target";
 import { useProviderProfileAddFlowStore } from "@/stores/settings/provider-profile-add-flow-store";
 import { pickerProfileShortcutHintForIndex } from "@/components/home/pickers/harness-model-picker-shortcut-hint";
 import type {
@@ -176,13 +177,7 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
         onQueryChange("");
       }}
       onInteractOutside={(event) => {
-        const target = event.target;
-        if (
-          target instanceof Element &&
-          target.closest("[data-profile-usage-sidecar]") !== null
-        ) {
-          event.preventDefault();
-        }
+        if (isProfileUsageSidecarTarget(event.target)) event.preventDefault();
       }}
     >
       <HarnessModelPickerSearch
