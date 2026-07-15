@@ -1,5 +1,4 @@
 import {
-  useMutation,
   useQueryClient,
   type QueryKey,
   type UseMutationResult,
@@ -12,7 +11,7 @@ import type {
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { ListTerminalsResponseV20 } from "@traycer/protocol/host/terminal/unary-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
-import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
+import { useHostMutation } from "@/hooks/host/use-host-query";
 import { hostQueryKeys, terminalMutationKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -35,14 +34,15 @@ export interface RenameTerminalMutationContext {
  * through ONE optimistic patch of those cached rows - an explicitly justified
  * `setQueriesData`: the requested title IS the resulting host state, and the
  * host's `sessionUpdated` stream frame re-asserts it idempotently. No
- * invalidation here - the metadata stream subscription must never trigger
- * `terminal.list` refetches (see the feedback-loop note in
+ * stream-driven invalidation - the metadata stream subscription must never
+ * trigger `terminal.list` refetches (see the feedback-loop note in
  * `terminal-session-registry.ts`).
  *
  * On success the persisted tile-name snapshots (the restart-recovery fallback
  * rendered only while the host has no row for the session) are refreshed in
- * every view tab. On error the patch is rolled back with a compare-and-swap
- * guard so a newer rename or stream frame is never clobbered.
+ * every view tab, guarded latest-wins against out-of-order settles. On error
+ * the patch is rolled back with a compare-and-swap guard plus a one-shot
+ * mutation-boundary refetch as the authoritative repair.
  *
  * `useTerminalRename` is the default-host convenience wrapper over this hook.
  */
@@ -55,117 +55,112 @@ export function useTerminalRenameFor(
   RenameTerminalMutationContext
 > {
   const queryClient = useQueryClient();
-  return useMutation<
-    ResponseOfMethod<HostRpcRegistry, "terminal.rename">,
-    HostRpcError,
-    RequestOfMethod<HostRpcRegistry, "terminal.rename">,
+  return useHostMutation<
+    HostRpcRegistry,
+    "terminal.rename",
     RenameTerminalMutationContext
   >({
-    mutationKey: terminalMutationKeys.rename(),
-    mutationFn: (variables) => {
-      if (client === null) {
-        // Must be a real HostRpcError: `toastFromHostError` reads
-        // `error.fatalDetails`, which a plain Error does not carry.
-        return Promise.reject<
-          ResponseOfMethod<HostRpcRegistry, "terminal.rename">
-        >(hostClientUnavailableError("terminal.rename"));
-      }
-      return client.request("terminal.rename", variables);
-    },
-    onMutate: async (variables) => {
-      const hostId = client === null ? null : client.getActiveHostId();
-      if (hostId === null) return { hostId: null, previous: [] };
-      const queryKey = hostQueryKeys.methodScope(hostId, "terminal.list");
-      await queryClient.cancelQueries({ queryKey });
-      const previous = queryClient.getQueriesData<ListTerminalsResponseV20>({
-        queryKey,
-      });
-      queryClient.setQueriesData<ListTerminalsResponseV20>(
-        { queryKey },
-        (data) => {
-          if (data === undefined) return undefined;
-          const target = data.sessions.find(
-            (session) => session.sessionId === variables.sessionId,
-          );
-          if (target === undefined || target.title === variables.title) {
-            return data;
-          }
-          return {
-            sessions: data.sessions.map((session) =>
-              session.sessionId === variables.sessionId
-                ? { ...session, title: variables.title }
-                : session,
-            ),
-          };
-        },
-      );
-      return { hostId, previous };
-    },
-    onSuccess: (_data, variables, ctx) => {
-      if (ctx.hostId === null) return;
-      // Latest-wins guard: two successful renames can settle out of order.
-      // If any cached row already carries a DIFFERENT title, a newer rename
-      // superseded this one - writing this title into the persisted
-      // snapshots would preserve a stale fallback name.
-      const superseded = queryClient
-        .getQueriesData<ListTerminalsResponseV20>({
-          queryKey: hostQueryKeys.methodScope(ctx.hostId, "terminal.list"),
-        })
-        .some(([, data]) => {
-          const row = data?.sessions.find(
-            (session) => session.sessionId === variables.sessionId,
-          );
-          return row !== undefined && row.title !== variables.title;
-        });
-      if (superseded) return;
-      useEpicCanvasStore
-        .getState()
-        .updateTerminalNameSnapshots(
-          ctx.hostId,
-          variables.sessionId,
-          variables.title,
-        );
-    },
-    onError: (error, variables, ctx) => {
-      toastFromHostError(error, "Couldn't rename the terminal.");
-      if (ctx === undefined || ctx.hostId === null) return;
-      // Instant unwind first (CAS-guarded below), then a one-shot refetch as
-      // the authoritative repair: with overlapping renames the snapshots can
-      // legitimately disagree about the pre-mutation title (a later mutation's
-      // snapshot captured an earlier one's optimistic value), so local unwind
-      // alone can strand a title the host never accepted. A mutation-boundary
-      // invalidation is safe - the documented feedback loop only applies to
-      // invalidating from the STREAM metadata subscription.
-      ctx.previous.forEach(([queryKey, snapshot]) => {
-        const previousRow = snapshot?.sessions.find(
-          (session) => session.sessionId === variables.sessionId,
-        );
-        if (previousRow === undefined) return;
-        queryClient.setQueryData<ListTerminalsResponseV20>(
+    client,
+    method: "terminal.rename",
+    mapVariables: (variables) => variables,
+    options: {
+      mutationKey: terminalMutationKeys.rename(),
+      onMutate: async (variables) => {
+        const hostId = client === null ? null : client.getActiveHostId();
+        if (hostId === null) return { hostId: null, previous: [] };
+        const queryKey = hostQueryKeys.methodScope(hostId, "terminal.list");
+        await queryClient.cancelQueries({ queryKey });
+        const previous = queryClient.getQueriesData<ListTerminalsResponseV20>({
           queryKey,
-          (current) => {
-            if (current === undefined) return undefined;
-            const target = current.sessions.find(
+        });
+        queryClient.setQueriesData<ListTerminalsResponseV20>(
+          { queryKey },
+          (data) => {
+            if (data === undefined) return undefined;
+            const target = data.sessions.find(
               (session) => session.sessionId === variables.sessionId,
             );
-            // Compare-and-swap: only unwind rows still carrying THIS
-            // mutation's optimistic title.
-            if (target === undefined || target.title !== variables.title) {
-              return current;
+            if (target === undefined || target.title === variables.title) {
+              return data;
             }
             return {
-              sessions: current.sessions.map((session) =>
+              sessions: data.sessions.map((session) =>
                 session.sessionId === variables.sessionId
-                  ? { ...session, title: previousRow.title }
+                  ? { ...session, title: variables.title }
                   : session,
               ),
             };
           },
         );
-      });
-      void queryClient.invalidateQueries({
-        queryKey: hostQueryKeys.methodScope(ctx.hostId, "terminal.list"),
-      });
+        return { hostId, previous };
+      },
+      onSuccess: (_data, variables, ctx) => {
+        if (ctx.hostId === null) return;
+        // Latest-wins guard: two successful renames can settle out of order.
+        // If any cached row already carries a DIFFERENT title, a newer rename
+        // superseded this one - writing this title into the persisted
+        // snapshots would preserve a stale fallback name.
+        const superseded = queryClient
+          .getQueriesData<ListTerminalsResponseV20>({
+            queryKey: hostQueryKeys.methodScope(ctx.hostId, "terminal.list"),
+          })
+          .some(([, data]) => {
+            const row = data?.sessions.find(
+              (session) => session.sessionId === variables.sessionId,
+            );
+            return row !== undefined && row.title !== variables.title;
+          });
+        if (superseded) return;
+        useEpicCanvasStore
+          .getState()
+          .updateTerminalNameSnapshots(
+            ctx.hostId,
+            variables.sessionId,
+            variables.title,
+          );
+      },
+      onError: (error, variables, ctx) => {
+        toastFromHostError(error, "Couldn't rename the terminal.");
+        if (ctx === undefined || ctx.hostId === null) return;
+        // Instant unwind first (CAS-guarded below), then a one-shot refetch
+        // as the authoritative repair: with overlapping renames the snapshots
+        // can legitimately disagree about the pre-mutation title (a later
+        // mutation's snapshot captured an earlier one's optimistic value), so
+        // local unwind alone can strand a title the host never accepted. A
+        // mutation-boundary invalidation is safe - the documented feedback
+        // loop only applies to invalidating from the STREAM metadata
+        // subscription.
+        ctx.previous.forEach(([queryKey, snapshot]) => {
+          const previousRow = snapshot?.sessions.find(
+            (session) => session.sessionId === variables.sessionId,
+          );
+          if (previousRow === undefined) return;
+          queryClient.setQueryData<ListTerminalsResponseV20>(
+            queryKey,
+            (current) => {
+              if (current === undefined) return undefined;
+              const target = current.sessions.find(
+                (session) => session.sessionId === variables.sessionId,
+              );
+              // Compare-and-swap: only unwind rows still carrying THIS
+              // mutation's optimistic title.
+              if (target === undefined || target.title !== variables.title) {
+                return current;
+              }
+              return {
+                sessions: current.sessions.map((session) =>
+                  session.sessionId === variables.sessionId
+                    ? { ...session, title: previousRow.title }
+                    : session,
+                ),
+              };
+            },
+          );
+        });
+        void queryClient.invalidateQueries({
+          queryKey: hostQueryKeys.methodScope(ctx.hostId, "terminal.list"),
+        });
+      },
     },
   });
 }

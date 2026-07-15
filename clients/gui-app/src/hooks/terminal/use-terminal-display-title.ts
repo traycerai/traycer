@@ -35,9 +35,10 @@ export function useTerminalDisplayTitle(args: {
   const enabled =
     args.client !== null && args.epicId !== null && args.sessionId !== null;
   const epicId = args.epicId;
+  // `epicId` is only null while the hook is disabled (the list client below
+  // is gated to null), so the empty placeholder never reaches a live query.
   const scope = useMemo<TerminalScope>(
-    () =>
-      epicId === null ? { kind: "independent" } : { kind: "epic", epicId },
+    () => ({ kind: "epic", epicId: epicId ?? "" }),
     [epicId],
   );
   const list = useTerminalListFor(enabled ? args.client : null, scope);
