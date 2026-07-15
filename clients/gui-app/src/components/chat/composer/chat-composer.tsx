@@ -60,7 +60,7 @@ import {
   type AmbientDriftSendNotice,
 } from "./use-ambient-drift-gate";
 import { useComposerPickerItems } from "./picker/use-composer-picker-items";
-import { commitSelection } from "@/stores/composer/commit-selection";
+import { commitProfileSelection } from "@/stores/composer/commit-selection";
 import { useTaskProfileRateLimitSwitch } from "./use-task-profile-rate-limit-switch";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
@@ -216,7 +216,6 @@ function ChatComposerImpl(props: ChatComposerProps) {
   );
   const harnessId = useStore(toolbarStore, (s) => s.selection.harnessId);
   const profileId = useStore(toolbarStore, (s) => s.selection.profileId);
-  const modelSlug = useStore(toolbarStore, (s) => s.selection.modelSlug);
   // Connection-level auth gate for the selected provider, scoped to the tab's
   // host. When the provider CLI is signed out it blocks send and mounts the
   // re-auth banner above the composer; a doomed turn can't start.
@@ -241,9 +240,9 @@ function ChatComposerImpl(props: ChatComposerProps) {
   useRefreshProvidersListOnTurn(harnessId, tabHostId);
   const onSwitchProfile = useCallback(
     (nextProfileId: string | null) => {
-      commitSelection(toolbarStore, harnessId, modelSlug, nextProfileId);
+      commitProfileSelection(toolbarStore, nextProfileId);
     },
-    [toolbarStore, harnessId, modelSlug],
+    [toolbarStore],
   );
   // Task-wide extension of the rate-limit switch: sibling chats of this task
   // pinned to the same limited profile, and the action moving them together.
