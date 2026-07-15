@@ -32,6 +32,7 @@ import type {
   AssistantTurnMeta,
   ChatMessage as ChatMessageModel,
   ChatMessageRunState,
+  ChatMessageStoppedInfo,
   ArtifactChangeRow,
   ChatMessageSteerBadge,
   FileChangeSegment,
@@ -56,6 +57,7 @@ import {
   buildSetupCardRows,
   type SetupCardRow,
 } from "@/stores/chats/setup-card-rows";
+import { collectAssistantReplyText } from "@/lib/chat/collect-assistant-reply-text";
 
 type PlanContentBlock = Extract<ContentBlock, { type: "plan" }>;
 
@@ -395,6 +397,43 @@ function queueItemsFromEventMetadata(
   return parsed.success ? [parsed.data] : [];
 }
 
+/**
+ * Pure event-log projection of a `turn.stopped` event - everything
+ * `turnStoppedInfoFromEvents` can know without looking at the turn's
+ * rendered rows. `withTurnCompletion` upgrades this into the UI-facing
+ * `ChatMessageStoppedInfo` (adding `turnHadOutput`) once it has row
+ * visibility, which this pure scan does not.
+ */
+interface TurnStoppedEventInfo {
+  readonly stoppedAt: number;
+  readonly reason: string | null;
+  readonly messageId: string | null;
+}
+
+/**
+ * `turn.stopped` events keyed by `turnId`, mirroring `steeredMessageIdsFromEvents`.
+ * A user Stop (direct or cascaded `agent.stop`) always lands exactly one such
+ * event per turn - the host's terminal latch (`recordTerminalTurn`) guarantees
+ * at most one terminal event per turn attempt, so last-write-wins here is only
+ * a defensive fallback, never an expected overwrite. `event.message` carries
+ * the host's stop reason (e.g. "Stop requested by owner.") - see
+ * `chat-session-manager.ts`'s `turn.stopped` handling.
+ */
+function turnStoppedInfoFromEvents(
+  events: ReadonlyArray<ChatEvent>,
+): ReadonlyMap<string, TurnStoppedEventInfo> {
+  const out = new Map<string, TurnStoppedEventInfo>();
+  for (const event of events) {
+    if (event.type !== "turn.stopped" || event.turnId === null) continue;
+    out.set(event.turnId, {
+      stoppedAt: event.timestamp,
+      reason: event.message,
+      messageId: event.messageId,
+    });
+  }
+  return out;
+}
+
 function nestedSteeredUsersSignature(
   blocks: ReadonlyArray<ContentBlock>,
   userMessagesById: ReadonlyMap<string, UserMessage>,
@@ -470,6 +509,12 @@ const NO_PENDING_TURN_META_INPUT: PendingTurnMetaInput = {
 
 function turnPauseSignature(pause: TurnPauseAccounting): string {
   return `${pause.pausedDurationMs}:${pause.pausedSinceMs ?? "none"}`;
+}
+
+function stoppedSignature(stopped: TurnStoppedEventInfo | null): string {
+  return stopped === null
+    ? "stopped:none"
+    : `stopped:${stopped.stoppedAt}:${stopped.reason ?? ""}`;
 }
 
 function buildTurnPauseAccounting(input: {
@@ -733,6 +778,10 @@ export function useRenderedMessages(
     () => steeredMessageIdsFromEvents(input.events),
     [input.events],
   );
+  const turnStoppedByTurnKey = useMemo(
+    () => turnStoppedInfoFromEvents(input.events),
+    [input.events],
+  );
   // The setup card row(s) are derived from the same event log, keyed on events
   // plus the (stable) binding identity, so a streamed delta doesn't re-scan or
   // re-partition the setup lifecycle windows.
@@ -803,6 +852,14 @@ export function useRenderedMessages(
     () => userMessagesByIdFromMessages(input.messages),
     [input.messages],
   );
+  const retainedUserMessageIds = useMemo(
+    (): ReadonlySet<string> =>
+      new Set([
+        ...userMessagesById.keys(),
+        ...input.pendingUserMessages.map((message) => message.messageId),
+      ]),
+    [userMessagesById, input.pendingUserMessages],
+  );
 
   const activeTurnSteeredIdsKey = liveMergesIntoPersisted
     ? activeTurnSteeredIdsContentKey(partition.activeTurn, liveAssistant)
@@ -831,6 +888,21 @@ export function useRenderedMessages(
     if (liveTurnKey !== null) keys.add(liveTurnKey);
     return keys;
   }, [input.messages, liveTurnKey]);
+  const stoppedWithoutAssistantRecords = useMemo(
+    () =>
+      renderStoppedTurnsWithoutAssistantRecords(
+        turnStoppedByTurnKey,
+        retainedTurnKeys,
+        activeTurnId,
+        retainedUserMessageIds,
+      ),
+    [
+      turnStoppedByTurnKey,
+      retainedTurnKeys,
+      activeTurnId,
+      retainedUserMessageIds,
+    ],
+  );
 
   const persisted = useMemo(() => {
     return renderPersistedMessages({
@@ -843,6 +915,7 @@ export function useRenderedMessages(
       activeRunState,
       turnPauseAccounting,
       steeredMessageIds,
+      turnStoppedByTurnKey,
       sweepRetainedTurnKeys: retainedTurnKeys,
       ctx: displayContext,
     });
@@ -856,6 +929,7 @@ export function useRenderedMessages(
     activeRunState,
     turnPauseAccounting,
     steeredMessageIds,
+    turnStoppedByTurnKey,
     displayContext,
   ]);
 
@@ -877,6 +951,7 @@ export function useRenderedMessages(
             activeRunState,
             turnPauseAccounting,
             steeredMessageIds,
+            turnStoppedByTurnKey,
             // The tail walk runs per streamed delta; only the settled-head
             // walk (once per snapshot) sweeps the turn cache.
             sweepRetainedTurnKeys: null,
@@ -891,6 +966,7 @@ export function useRenderedMessages(
       activeRunState,
       turnPauseAccounting,
       steeredMessageIds,
+      turnStoppedByTurnKey,
       displayContext,
     ],
   );
@@ -986,6 +1062,7 @@ export function useRenderedMessages(
       ...activeTurn,
       ...dedupedPending,
       ...live,
+      ...stoppedWithoutAssistantRecords,
       ...forkedChatLinkMessages,
       ...trailing,
     ];
@@ -1059,6 +1136,7 @@ export function useRenderedMessages(
     activeTurn,
     pending,
     live,
+    stoppedWithoutAssistantRecords,
     forkedChatLinkMessages,
     setupCardRows,
     setupCardEntries,
@@ -1122,6 +1200,7 @@ function buildSetupCardMessage(
     settings: null,
     createdAt: row.createdAt,
     completedAt: null,
+    stopped: null,
     persistentMessageId: null,
     senderLabel: null,
     assistantMeta: null,
@@ -1170,6 +1249,7 @@ function buildForkedChatLinkMessages(
         settings: null,
         createdAt: event.timestamp,
         completedAt: null,
+        stopped: null,
         persistentMessageId: null,
         senderLabel: null,
         assistantMeta: null,
@@ -1279,6 +1359,8 @@ interface PersistedMessagesRenderInput {
   readonly activeRunState: ChatMessageRunState | null;
   readonly turnPauseAccounting: ReadonlyMap<string, TurnPauseAccounting>;
   readonly steeredMessageIds: ReadonlySet<string>;
+  /** `turn.stopped` event info by `turnId`. See `turnStoppedInfoFromEvents`. */
+  readonly turnStoppedByTurnKey: ReadonlyMap<string, TurnStoppedEventInfo>;
   /**
    * Turn keys to retain in the per-context assistant-turn cache; entries for
    * any other turn are evicted after the walk. Non-null only on the
@@ -1486,6 +1568,7 @@ function renderPersistedAssistantMessageTurn(
   const turnComplete = input.activeTurnId !== turnKey;
   const runState = turnComplete ? null : input.activeRunState;
   const pause = input.turnPauseAccounting.get(turnKey) ?? NO_TURN_PAUSE;
+  const stopped = input.turnStoppedByTurnKey.get(turnKey) ?? null;
   const startedAt = acc.startedAt ?? args.lastUserTimestamp ?? acc.timestamp;
   // Signature includes `acc.timestamp` (when complete) and `startedAt` so a
   // post-completion snapshot re-emit that moves either instant (cloud-sync
@@ -1502,6 +1585,7 @@ function renderPersistedAssistantMessageTurn(
     runState ?? "none",
     String(startedAt),
     turnPauseSignature(pause),
+    stoppedSignature(stopped),
   ].join(":");
   const cached = turnCache.get(turnKey);
   if (cached !== undefined && cached.cacheKey === cacheKey) {
@@ -1514,6 +1598,7 @@ function renderPersistedAssistantMessageTurn(
     turnComplete,
     runState,
     pause,
+    stopped,
     userMessagesById: args.userMessagesById,
     startedAt,
     ctx: input.ctx,
@@ -1595,6 +1680,8 @@ interface AssistantTurnRenderInput {
   readonly turnComplete: boolean;
   readonly runState: ChatMessageRunState | null;
   readonly pause: TurnPauseAccounting;
+  /** `turn.stopped` event info for this turn, if any. See `withTurnCompletion`. */
+  readonly stopped: TurnStoppedEventInfo | null;
   readonly userMessagesById: ReadonlyMap<string, UserMessage>;
   /**
    * Wall-clock turn start used to anchor `createdAt` on EVERY row this turn
@@ -1696,10 +1783,13 @@ function renderAssistantTurnRows(
 }
 
 /**
- * Stamp `completedAt` onto the LAST assistant row of a completed turn so the
- * "Worked for Nm Xs" footer renders once, on the turn's final slice, measuring
- * the whole turn (every row already anchors `createdAt` at the turn start).
- * Live turns get `null` so the footer stays hidden until completion.
+ * Stamp `completedAt` (and, when the turn ended via a user Stop, `stopped`)
+ * onto the LAST assistant row of a completed turn so the elapsed footer
+ * renders once, on the turn's final slice, measuring the whole turn (every
+ * row already anchors `createdAt` at the turn start). Live turns get `null`
+ * for both so the footer stays hidden until completion - `input.stopped` is
+ * looked up unconditionally by the caller, but only takes effect here, behind
+ * the same `turnComplete` gate as `completedAt`.
  */
 function withTurnCompletion(
   rows: ReadonlyArray<ChatMessageModel>,
@@ -1708,9 +1798,35 @@ function withTurnCompletion(
   if (!input.turnComplete) return rows;
   const lastAssistantIndex = lastAssistantRowIndex(rows);
   if (lastAssistantIndex === -1) return rows;
+  // The stamped row is sometimes a content-less boundary marker (synthesized
+  // after a trailing steer bubble by `attachRunStateToTrailingAssistantSlice`),
+  // so both "did the turn produce output" and "what is the turn's copyable
+  // reply text" must be derived across every row of the turn, not just the
+  // one being stamped - otherwise a turn that DID answer before the steer
+  // would misreport as having produced nothing, and its copy button would
+  // have no text to copy (the boundary row's own segments are empty).
+  const stopped: ChatMessageStoppedInfo | null =
+    input.stopped === null
+      ? null
+      : {
+          stoppedAt: input.stopped.stoppedAt,
+          reason: input.stopped.reason,
+          turnHadOutput: rows.some(
+            (row) => row.role === "assistant" && row.segments.length > 0,
+          ),
+          turnReplyText: collectAssistantReplyText(
+            rows.flatMap((row) =>
+              row.role === "assistant" ? row.segments : [],
+            ),
+          ),
+        };
   return rows.map((row, index) =>
     index === lastAssistantIndex
-      ? { ...row, completedAt: input.acc.timestamp }
+      ? {
+          ...row,
+          completedAt: stopped?.stoppedAt ?? input.acc.timestamp,
+          stopped,
+        }
       : row,
   );
 }
@@ -1770,6 +1886,7 @@ function renderAssistantTurnSlice(
     // Stamped onto the turn's last slice by `withTurnCompletion`; null on
     // every other slice and while the turn is still live.
     completedAt: null,
+    stopped: null,
     pausedDurationMs: input.pause.pausedDurationMs,
     pausedSinceMs: input.pause.pausedSinceMs,
     persistentMessageId: input.acc.messageId,
@@ -1792,15 +1909,38 @@ function attachRunStateToTrailingAssistantSlice(
   input: AssistantTurnRenderInput,
   nextChunkIndex: number,
 ): ReadonlyArray<ChatMessageModel> {
-  if (input.runState === null) return rows;
+  // A live turn needs a trailing indicator row. A STOPPED turn needs one too,
+  // for a different reason: `withTurnCompletion` stamps `completedAt`/`stopped`
+  // onto whichever row is last, and when the turn's last persisted block is a
+  // steer, that's a `role: "user"` row that can't carry them - without a
+  // trailing assistant row here, the marker lands on the assistant chunk
+  // BEFORE the steer (wrong boundary) or, if the turn is steer-only, on no
+  // row at all (dropped entirely). A non-stopped completed turn never sets
+  // `input.stopped`, so it falls through this check unchanged.
+  const needsTrailingRow =
+    input.runState !== null || (input.turnComplete && input.stopped !== null);
+  if (!needsTrailingRow) return rows;
   const lastAssistantIndex = lastAssistantRowIndex(rows);
   if (lastAssistantIndex === rows.length - 1) {
+    if (input.runState === null) return rows;
     return rows.map((row, index) =>
       index === lastAssistantIndex ? { ...row, runState: input.runState } : row,
     );
   }
+  // Live case (unchanged): bump past every existing row so the trailing
+  // indicator sorts last - its `createdAt` only ever feeds a live, still-
+  // ticking timer, so this ordering-only offset is harmless there.
+  // Stopped case: every other row in this turn already anchors `createdAt` to
+  // `input.startedAt` (see the steer-row comment below) and relies on push
+  // order + the stable `createdAt` sort for position, not on a numerically
+  // later value - reuse that anchor exactly so `AssistantElapsedFooter`'s
+  // frozen `completedAt - createdAt - pausedDurationMs` measures the real
+  // turn duration instead of landing 1ms short (which `formatWorkedFor`'s
+  // second-flooring would round down at an exact-second boundary).
   const createdAt =
-    rows.reduce((latest, row) => Math.max(latest, row.createdAt), 0) + 1;
+    input.runState !== null
+      ? rows.reduce((latest, row) => Math.max(latest, row.createdAt), 0) + 1
+      : input.startedAt;
   return [
     ...rows,
     renderAssistantTurnSlice({
@@ -1905,6 +2045,7 @@ function renderSteeredUserMessage(input: {
     settings: input.settings,
     createdAt: input.timestamp,
     completedAt: null,
+    stopped: null,
     persistentMessageId: input.persistentMessageId,
     senderLabel: input.senderLabel,
     assistantMeta: null,
@@ -1963,6 +2104,7 @@ function renderUserMessage(
     settings: null,
     createdAt: message.timestamp,
     completedAt: null,
+    stopped: null,
     persistentMessageId: message.messageId,
     senderLabel: ctx.resolveUserSenderLabel(message.sender),
     assistantMeta: null,
@@ -2003,6 +2145,7 @@ function renderPendingUserMessage(
     settings: message.settings,
     createdAt: message.timestamp,
     completedAt: null,
+    stopped: null,
     persistentMessageId: null,
     senderLabel: ctx.resolveUserSenderLabel(message.sender),
     assistantMeta: null,
@@ -2047,6 +2190,10 @@ function renderLiveAssistant(
     // after the turn completes (runStatus idle) must not show a spinner.
     runState: input.activeRunState,
     pause: input.turnPauseAccounting.get(liveAssistant.turnId) ?? NO_TURN_PAUSE,
+    // A live turn is never `turnComplete`, so `withTurnCompletion` never stamps
+    // this - the persisted re-render (once the `turn.stopped` event lands)
+    // owns the stopped marker.
+    stopped: null,
     userMessagesById: input.userMessagesById,
     // Anchor on the turn-start (mirrors `ChatActiveTurn.startedAt`, set once at
     // turn-start) so the live row sorts at the same `createdAt` the persisted
@@ -2110,6 +2257,7 @@ function renderPendingRunIndicator(input: {
       settings: null,
       createdAt: latestCreatedAt + 1,
       completedAt: null,
+      stopped: null,
       pausedDurationMs: pause.pausedDurationMs,
       pausedSinceMs: pause.pausedSinceMs,
       persistentMessageId: null,
@@ -2123,6 +2271,63 @@ function renderPendingRunIndicator(input: {
       steerBadge: null,
     },
   ];
+}
+
+/**
+ * A Stop can settle during the accepted pre-turn setup window, before either
+ * the snapshot or live stream has materialized an assistant record. The
+ * durable event must still own a transcript boundary; otherwise the pending
+ * "Stopping…" row disappears at idle and leaves the user message unanswered.
+ *
+ * Existing assistant/live records remain the authoritative render path. A
+ * retained triggering-user id anchors the otherwise record-less event and
+ * prevents append-only events from resurrecting turns removed by a branch
+ * edit. The active-turn guard preserves the snapshot-race contract: if the
+ * event arrives while that turn is still active, keep rendering the
+ * live/pending state until the snapshot clears it.
+ */
+function renderStoppedTurnsWithoutAssistantRecords(
+  stoppedByTurnKey: ReadonlyMap<string, TurnStoppedEventInfo>,
+  retainedTurnKeys: ReadonlySet<string>,
+  activeTurnId: string | null,
+  retainedUserMessageIds: ReadonlySet<string>,
+): ReadonlyArray<ChatMessageModel> {
+  return [...stoppedByTurnKey.entries()]
+    .filter(
+      ([turnKey, stopped]) =>
+        turnKey !== activeTurnId &&
+        !retainedTurnKeys.has(turnKey) &&
+        stopped.messageId !== null &&
+        retainedUserMessageIds.has(stopped.messageId),
+    )
+    .map(([turnKey, stopped]) => ({
+      id: assistantRowId(turnKey),
+      role: "assistant",
+      content: "",
+      segments: [],
+      structuredContent: null,
+      attachments: [],
+      settings: null,
+      createdAt: stopped.stoppedAt,
+      completedAt: stopped.stoppedAt,
+      stopped: {
+        stoppedAt: stopped.stoppedAt,
+        reason: stopped.reason,
+        turnHadOutput: false,
+        turnReplyText: "",
+      },
+      pausedDurationMs: 0,
+      pausedSinceMs: null,
+      persistentMessageId: null,
+      senderLabel: null,
+      assistantMeta: null,
+      statusLabel: "Completed",
+      runState: null,
+      agentSenderInfo: null,
+      agentMessage: null,
+      sessionAnchor: null,
+      steerBadge: null,
+    }));
 }
 
 function assistantRowId(turnKey: string): string {
