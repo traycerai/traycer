@@ -4,6 +4,8 @@ import { useHostMutation } from "@/hooks/host/use-host-query";
 import { useHostClient } from "@/lib/host/runtime";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { queryKeys } from "@/lib/query-keys";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import { projectCollaborators } from "@/hooks/epics/use-epic-collaborators-query";
 
 /**
  * Mutation hook for `epic.grantAccess`.
@@ -21,6 +23,19 @@ export function useEpicGrantAccess() {
     mapVariables: (variables) => variables,
     options: {
       onSuccess: (data, variables) => {
+        const collaborators = projectCollaborators(data.collaborators);
+        if (variables.input.kind === "team") {
+          const input = variables.input;
+          const wasGranted = collaborators.teams.some(
+            (team) => team.teamId === input.teamId && team.role === input.role,
+          );
+          if (wasGranted) {
+            Analytics.getInstance().track(AnalyticsEvent.ShareInviteSent, {
+              target: "team",
+              role: input.role,
+            });
+          }
+        }
         const hostId = client.getActiveHostId();
         if (hostId === null) return;
         queryClient.setQueryData(
@@ -54,6 +69,28 @@ export function useEpicBatchUpdateRoles() {
     mapVariables: (variables) => variables,
     options: {
       onSuccess: (data, variables) => {
+        if (variables.input.intent !== "invite") {
+          const collaborators = projectCollaborators(data.collaborators);
+          variables.input.changes.forEach((change) => {
+            const wasChanged =
+              change.teamId !== undefined
+                ? collaborators.teams.some(
+                    (team) =>
+                      team.teamId === change.teamId &&
+                      team.role === change.newRole,
+                  )
+                : collaborators.directUsers.some(
+                    (user) =>
+                      user.userId === change.userId &&
+                      user.role === change.newRole,
+                  );
+            if (!wasChanged) return;
+            Analytics.getInstance().track(AnalyticsEvent.ShareRoleChanged, {
+              target: change.teamId === undefined ? "person" : "team",
+              role: change.newRole,
+            });
+          });
+        }
         const hostId = client.getActiveHostId();
         if (hostId === null) return;
         queryClient.setQueryData(
@@ -87,6 +124,19 @@ export function useEpicRevokeCollaborator() {
     mapVariables: (variables) => variables,
     options: {
       onSuccess: (data, variables) => {
+        const collaborators = projectCollaborators(data.collaborators);
+        const input = variables.input;
+        const wasRevoked =
+          input.kind === "team"
+            ? !collaborators.teams.some((team) => team.teamId === input.teamId)
+            : !collaborators.directUsers.some(
+                (user) => user.userId === input.userId,
+              );
+        if (wasRevoked) {
+          Analytics.getInstance().track(AnalyticsEvent.ShareAccessRevoked, {
+            target: input.kind === "team" ? "team" : "person",
+          });
+        }
         const hostId = client.getActiveHostId();
         if (hostId === null) return;
         queryClient.setQueryData(

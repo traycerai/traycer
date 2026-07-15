@@ -9,6 +9,11 @@ import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
+import {
+  Analytics,
+  AnalyticsEvent,
+  type AnalyticsProviderOperation,
+} from "@/lib/analytics";
 
 interface HostScopedMutationContext {
   readonly hostId: string | null;
@@ -67,7 +72,8 @@ export function useHostScopedMutationForClient<
     options: {
       mutationKey: args.mutationKey,
       onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
-      onSuccess: (_data, _variables, ctx) => {
+      onSuccess: (_data, variables, ctx) => {
+        trackScopedMutationSuccess(args.mutationKey, variables);
         if (ctx.hostId === null) return;
         for (const method of args.invalidateMethods) {
           void queryClient.invalidateQueries({
@@ -75,7 +81,67 @@ export function useHostScopedMutationForClient<
           });
         }
       },
-      onError: (error) => toastFromHostError(error, args.errorMessage),
+      onError: (error) => {
+        toastFromHostError(error, args.errorMessage);
+      },
     },
   });
+}
+
+const PROVIDER_MUTATION_OPERATIONS: Readonly<
+  Record<string, AnalyticsProviderOperation | undefined>
+> = {
+  "providers.setSelection": "selection",
+  "providers.addCustomPath": "custom_path",
+  "providers.removeCustomPath": "custom_path",
+  "providers.setEnabled": "enabled",
+  "providers.setApiKey": "api_key",
+  "providers.clearApiKey": "api_key",
+  "providers.setTerminalAgentArgs": "terminal_args",
+  "providers.setEnvOverride": "env_override",
+  "providers.deleteEnvOverride": "env_override",
+  "providers.renameProfile": "profile",
+  "providers.recolorProfile": "profile",
+  "providers.removeProfile": "profile",
+  "providers.acknowledgeAmbientDrift": "ambient_drift",
+};
+
+function trackScopedMutationSuccess(
+  mutationKey: ReadonlyArray<unknown>,
+  variables: unknown,
+): void {
+  const action = mutationKey[0];
+  if (typeof action !== "string") return;
+  const providerOperation = PROVIDER_MUTATION_OPERATIONS[action];
+  if (providerOperation !== undefined) {
+    Analytics.getInstance().track(AnalyticsEvent.ProviderConfigurationChanged, {
+      operation: providerOperation,
+    });
+    return;
+  }
+  if (action === "workspaceBinding.addFolder") {
+    Analytics.getInstance().track(AnalyticsEvent.WorkspaceFolderAdded, {
+      source: "direct_ui",
+      workspace_kind: "local",
+    });
+    return;
+  }
+  if (action === "workspaceBinding.removeEntry") {
+    Analytics.getInstance().track(AnalyticsEvent.WorkspaceFolderRemoved, {
+      source: "direct_ui",
+      workspace_kind: "unknown",
+    });
+    return;
+  }
+  if (action === "agent.stop") {
+    const cascade =
+      variables !== null &&
+      typeof variables === "object" &&
+      "cascade" in variables &&
+      variables.cascade === true;
+    Analytics.getInstance().track(AnalyticsEvent.AgentStopped, {
+      source: "direct_ui",
+      cascade,
+    });
+  }
 }

@@ -1,6 +1,7 @@
 import type { AccountContext } from "@traycer/protocol/common/schemas";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 /**
  * Global, persisted "whose subscription am I looking at" selector. Mirrors the
@@ -27,6 +28,9 @@ export const useAccountContextStore = create<AccountContextStoreState>()(
     (set) => ({
       accountContext: { type: "PERSONAL" },
       setAccountContext: (accountContext) => {
+        Analytics.getInstance().track(AnalyticsEvent.AccountContextChanged, {
+          context: accountContext.type === "TEAM" ? "team" : "personal",
+        });
         set({ accountContext });
       },
     }),

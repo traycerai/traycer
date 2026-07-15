@@ -83,7 +83,7 @@ describe("useEpicUpdateArtifactStatus", () => {
 
 describe("useEpicRenameArtifact", () => {
   it("shows fallback on error", () => {
-    renderHook(() => useEpicRenameArtifact());
+    renderHook(() => useEpicRenameArtifact(true));
     const opts = capturedOptions["epic.renameArtifact"] as {
       onError: (e: HostRpcError) => void;
     };

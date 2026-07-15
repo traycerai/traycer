@@ -3,6 +3,7 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { useHostClient } from "@/lib/host/runtime";
 import { toastFromHostError } from "@/lib/host-error-toast";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 /**
  * Mutation hook for `epic.createTerminalAgent`.
@@ -33,6 +34,12 @@ export function useEpicCreateTuiAgentForClient(
     method: "epic.createTuiAgent",
     mapVariables: (variables) => variables,
     options: {
+      onSuccess: (_data, variables) => {
+        Analytics.getInstance().track(AnalyticsEvent.TerminalAgentLaunched, {
+          source: "direct_ui",
+          harness: variables.harnessId,
+        });
+      },
       onError: (error) => {
         toastFromHostError(error, "Couldn't create terminal agent.");
       },
@@ -55,6 +62,11 @@ export function useEpicDeleteTuiAgent() {
     method: "epic.deleteTuiAgent",
     mapVariables: (variables) => variables,
     options: {
+      onSuccess: () => {
+        Analytics.getInstance().track(AnalyticsEvent.TerminalAgentStopped, {
+          source: "direct_ui",
+        });
+      },
       onError: (error) => {
         toastFromHostError(error, "Couldn't delete terminal agent.");
       },
@@ -73,6 +85,11 @@ export function useEpicRenameTuiAgent() {
     method: "epic.renameTuiAgent",
     mapVariables: (variables) => variables,
     options: {
+      onSuccess: () => {
+        Analytics.getInstance().track(AnalyticsEvent.TerminalRenamed, {
+          kind: "agent",
+        });
+      },
       onError: (error) => {
         toastFromHostError(error, "Couldn't rename terminal agent.");
       },
