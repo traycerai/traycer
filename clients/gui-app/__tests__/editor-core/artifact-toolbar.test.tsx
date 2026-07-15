@@ -287,6 +287,10 @@ describe("ArtifactToolbar", () => {
       "scroll",
       expect.any(Function),
     );
+    const windowScrollHandler = windowAddEventListener.mock.calls
+      .filter(([eventName]) => eventName === "scroll")
+      .at(-1)?.[1];
+    expect(windowScrollHandler).toEqual(expect.any(Function));
 
     view.rerender(
       <EditorContext.Provider value={{ editor }}>
@@ -304,13 +308,17 @@ describe("ArtifactToolbar", () => {
     await waitFor(() => {
       expect(windowRemoveEventListener).toHaveBeenCalledWith(
         "scroll",
-        expect.any(Function),
+        windowScrollHandler,
       );
       expect(containerAddEventListener).toHaveBeenCalledWith(
         "scroll",
         expect.any(Function),
       );
     });
+    const containerScrollHandler = containerAddEventListener.mock.calls
+      .filter(([eventName]) => eventName === "scroll")
+      .at(-1)?.[1];
+    expect(containerScrollHandler).toEqual(expect.any(Function));
 
     view.rerender(
       <EditorContext.Provider value={{ editor }}>
@@ -328,13 +336,17 @@ describe("ArtifactToolbar", () => {
     await waitFor(() => {
       expect(containerRemoveEventListener).toHaveBeenCalledWith(
         "scroll",
-        expect.any(Function),
+        containerScrollHandler,
       );
       expect(replacementAddEventListener).toHaveBeenCalledWith(
         "scroll",
         expect.any(Function),
       );
     });
+    const replacementScrollHandler = replacementAddEventListener.mock.calls
+      .filter(([eventName]) => eventName === "scroll")
+      .at(-1)?.[1];
+    expect(replacementScrollHandler).toEqual(expect.any(Function));
 
     coordsAtPos.mockClear();
     fireEvent.scroll(replacementScrollContainer);
@@ -342,14 +354,10 @@ describe("ArtifactToolbar", () => {
       timeout: 500,
     });
 
-    const activeScrollHandler = replacementAddEventListener.mock.calls.find(
-      ([eventName]) => eventName === "scroll",
-    )?.[1];
-    expect(activeScrollHandler).toEqual(expect.any(Function));
     view.unmount();
     expect(replacementRemoveEventListener).toHaveBeenCalledWith(
       "scroll",
-      activeScrollHandler,
+      replacementScrollHandler,
     );
 
     editor.destroy();
