@@ -31,6 +31,7 @@ import {
   QUIT_HOST_UPDATE_TIMEOUT_MS,
 } from "../host/host-auto-update";
 import { isHostRemovedByUser } from "../host/host-removal-state";
+import { runUpdateInstallQuitSequence } from "./update-install-quit";
 import { RunnerIpcBridge } from "../ipc/register-runner-ipc";
 import {
   checkForUpdatesAfterResume,
@@ -836,46 +837,38 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
         return;
       }
       // First pass: attempt a coordinated, idle-gated host update before the
-      // desktop swaps its own bytes, then re-quit. Fail-open - a busy host,
-      // failure, or the bounded CLI timeout all fall through to the quit, with
-      // the next-launch reconcile as the guaranteed fallback. The host update
-      // runs as a subprocess that would die with us, so we must hold the quit
-      // until it settles rather than racing it.
+      // desktop swaps its own bytes, drain the renderer's freshest per-window
+      // projection into the state store, then re-quit. Fail-open at every
+      // step - a busy host, failure, or the bounded CLI timeout all fall
+      // through to the quit, with the next-launch reconcile as the guaranteed
+      // fallback. The host update runs as a subprocess that would die with
+      // us, so we must hold the quit until it settles rather than racing it.
       quitTimeHostUpdateStarted = true;
       event.preventDefault();
       log.info(
         "[desktop] before-quit - install pending; attempting idle host update first",
       );
-      void reconcileHostAutoUpdate(
-        "quit-install",
-        defaultHostAutoUpdateDeps(
-          services.host,
-          QUIT_HOST_UPDATE_TIMEOUT_MS,
-          // The host was discovered long ago - no need to wait at quit time.
-          () => Promise.resolve(),
-          services.bridge,
-        ),
-      )
-        .then((outcome) =>
-          log.info("[host-auto-update] quit reconcile complete", { outcome }),
-        )
-        .catch((err) =>
-          log.warn("[host-auto-update] quit reconcile threw", err),
-        )
-        .finally(() => {
-          // If `quitAndInstall` failed in the meantime (e.g. read-only volume),
-          // `isInstallingUpdate()` is now false and the failure was surfaced as
-          // an error - don't quit out from under the user; let them read it and
-          // retry. Only the still-pending install proceeds to quit.
-          if (!isInstallingUpdate()) {
-            log.info(
-              "[desktop] before-quit - install failed during reconcile, staying open",
-            );
-            services.quitState.resetQuitting();
-            return;
-          }
-          authorizeQuitAfterFlush();
-        });
+      void runUpdateInstallQuitSequence({
+        reconcileHostUpdate: () =>
+          reconcileHostAutoUpdate(
+            "quit-install",
+            defaultHostAutoUpdateDeps(
+              services.host,
+              QUIT_HOST_UPDATE_TIMEOUT_MS,
+              // The host was discovered long ago - no need to wait at quit
+              // time.
+              () => Promise.resolve(),
+              services.bridge,
+            ),
+          ),
+        isInstallPending: isInstallingUpdate,
+        drainRendererProjection: () =>
+          activeBridge.requestFreshUnsyncedSnapshot(
+            QUIT_FRESH_UNSYNCED_SNAPSHOT_TIMEOUT_MS,
+          ),
+        authorizeQuitAfterFlush,
+        stayOpen: () => services.quitState.resetQuitting(),
+      });
       return;
     }
 
