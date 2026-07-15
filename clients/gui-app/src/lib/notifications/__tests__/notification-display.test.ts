@@ -226,6 +226,8 @@ describe("notification display", () => {
     });
 
     expect(toastCalls).toHaveLength(1);
+    expect(isValidElement(toastCalls[0]?.title)).toBe(true);
+    expect(toastCalls[0]?.options.description).toBeUndefined();
   });
 });
 
@@ -342,7 +344,7 @@ describe("host channel emission focus gate", () => {
 });
 
 function renderActionableToast(): void {
-  const title = toastCalls[0]?.title;
+  const title = toastCalls.at(-1)?.title;
   if (!isValidElement(title)) {
     throw new Error("Expected an actionable standard toast.");
   }
