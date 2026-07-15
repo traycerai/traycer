@@ -571,27 +571,29 @@ function runDeferred(state: BootState, services: AppServices): void {
     return services.host.bootstrap();
   });
 
-  // Windows-only watchdog for a host that dies without rewriting pid.json
-  // (external kill/crash): the pid-file watcher never fires for those, and
-  // the Scheduled Task cannot restart-on-failure (its hidden-launcher action
-  // detaches the host and exits, so the task completes long before the host
-  // can die). On macOS/Linux the service manager itself supervises the host
-  // (launchd KeepAlive / systemd Restart) and respawns it within seconds -
-  // a desktop-side watchdog there would be redundant at best and, on macOS,
-  // could auto-fire the SMAppService re-register cycle. Started after
-  // bootstrap so the initial 60s readiness wait can't register as an outage.
-  if (process.platform === "win32") {
-    void hostReady.then(() => {
-      const healthMonitor = startHostHealthMonitor({
-        host: services.host,
-        intervalMs: undefined,
-        probe: undefined,
-        readMetadata: undefined,
-        respawn: undefined,
-      });
-      state.bridge?.disposeFns.push(() => healthMonitor.dispose());
+  // All-platform watchdog for a host that dies without rewriting pid.json
+  // (external kill/crash): the pid-file watcher never fires for those, so the
+  // cached snapshot stays "reachable" against a dead endpoint forever. On
+  // Windows it also owns auto-respawn (the Scheduled Task cannot
+  // restart-on-failure - its hidden-launcher action detaches the host and
+  // exits, so the task completes long before the host can die). On
+  // macOS/Linux the service manager (launchd KeepAlive / systemd Restart)
+  // respawns crashes itself, but the SUPERVISOR cannot fix the desktop's
+  // stale snapshot when the respawned host binds a new port and the watcher
+  // edge is missed - the monitor's reload-first convergence covers exactly
+  // that, and only falls back to `respawnHost` when the disk still names an
+  // unreachable host. Started after bootstrap so the initial 60s readiness
+  // wait can't register as an outage.
+  void hostReady.then(() => {
+    const healthMonitor = startHostHealthMonitor({
+      host: services.host,
+      intervalMs: undefined,
+      probe: undefined,
+      readMetadata: undefined,
+      respawn: undefined,
     });
-  }
+    state.bridge?.disposeFns.push(() => healthMonitor.dispose());
+  });
 
   void timed("deferred", "registry-probe", async () => {
     // `force: true` - matches the app's own `checkForUpdatesNow` on launch

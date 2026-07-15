@@ -1,6 +1,6 @@
 {
   "name": "@traycer-clients/shared",
-  "license": "Apache-2.0",
+  "license": "MIT",
   "type": "module",
   "private": true,
   "scripts": {

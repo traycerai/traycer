@@ -209,6 +209,7 @@ const ASSISTANT_SENDER: AgentSender = {
   agentId: "claude-sonnet-4",
   displayName: "Claude Sonnet 4",
   reply: { expectsReply: false },
+  inReplyTo: null,
 };
 
 function assistantMessage(
@@ -795,6 +796,7 @@ describe("useRenderedMessages", () => {
         agentId: "agent-sender-1",
         displayName: "Review Agent",
         reply: { expectsReply: true, responseId: "response-1" },
+        inReplyTo: null,
       },
       message: {
         kind: "agent",
@@ -4683,6 +4685,7 @@ describe("useRenderedMessages head/tail partition", () => {
     agentId: "agent-7",
     displayName: "Reviewer",
     reply: { expectsReply: true, responseId: "resp-1" },
+    inReplyTo: null,
   };
 
   // `turnKey` must be unique per case: rendered rows are memoized by turn/block

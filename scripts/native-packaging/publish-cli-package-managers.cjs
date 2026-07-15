@@ -665,7 +665,7 @@ function main() {
     args.releaseNotesUrl ||
     `https://github.com/${releaseRepo}/releases/tag/cli-v${version}`;
   const homepage = args.homepage || "https://traycer.ai";
-  const license = args.license || "Apache-2.0";
+  const license = args.license || "MIT";
   if (args.desktopCask === true) {
     const macArm = {
       url: requiredArg(args, "macArmUrl"),

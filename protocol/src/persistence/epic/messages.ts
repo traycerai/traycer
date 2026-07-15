@@ -4,8 +4,10 @@ import { contentBlockSchema } from "@traycer/protocol/persistence/epic/content-b
 import { tokenUsageSchema } from "@traycer/protocol/persistence/epic/foundation";
 import {
   agentSenderSchema,
+  agentSenderSchemaPreInReplyTo,
   chatSessionAnchorSchema,
   userMessageSenderSchema,
+  userMessageSenderSchemaPreInReplyTo,
 } from "@traycer/protocol/persistence/epic/senders";
 import { z } from "zod";
 
@@ -112,3 +114,48 @@ export const messageSchema = z.discriminatedUnion("role", [
   assistantMessageSchema,
 ]);
 export type Message = z.infer<typeof messageSchema>;
+
+// ── Wire-freeze variants (pre-inReplyTo) ────────────────────────────────────
+// Hand-frozen copies of the message schemas with the sender leaf swapped for
+// its pre-`inReplyTo` freeze (see `agentSenderSchemaPreInReplyTo`). Bound to the
+// released `chat.subscribe@1.0–1.3` serverFrames so those lines structurally
+// match the shipped wire and strip `inReplyTo` for older peers. Field-for-field
+// hand copies, NOT `.omit()`/`.extend()` off the live shape — a future message
+// field must not silently leak onto the frozen wire. Non-sender fields reuse the
+// live sub-schemas (same convention as the frozen `chatSnapshotSchemaV1x`).
+export const userMessageSchemaPreInReplyTo = z
+  .object({
+    role: z.literal("user"),
+    messageId: z.string(),
+    sender: userMessageSenderSchemaPreInReplyTo,
+    message: userMessagePayloadSchema,
+    timestamp: z.number(),
+    sessionAnchor: chatSessionAnchorSchema.nullable(),
+  })
+  .superRefine((message, ctx) => {
+    if (message.sender.type === message.message.kind) return;
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["message", "kind"],
+      message: "User message sender.type must match message.kind.",
+    });
+  });
+
+export const assistantMessageSchemaPreInReplyTo = z.object({
+  role: z.literal("assistant"),
+  messageId: z.string().min(1),
+  sender: agentSenderSchemaPreInReplyTo,
+  blocks: z.array(contentBlockSchema),
+  startedAt: z.number().nullable().default(null),
+  blocksVersion: z.number().int().nonnegative().optional(),
+  timestamp: z.number(),
+  turnId: z.string().nullable(),
+  usage: tokenUsageSchema.nullable(),
+  reasoningEffort: z.string().nullable().default(null),
+  serviceTier: z.string().nullable().default(null),
+});
+
+export const messageSchemaPreInReplyTo = z.discriminatedUnion("role", [
+  userMessageSchemaPreInReplyTo,
+  assistantMessageSchemaPreInReplyTo,
+]);
