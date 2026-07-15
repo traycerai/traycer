@@ -17,7 +17,10 @@ import {
   Strikethrough,
 } from "lucide-react";
 import { useCallback, useMemo } from "react";
-import { artifactToolbarPluginKey } from "./artifact-toolbar-position";
+import {
+  artifactToolbarPluginKey,
+  createArtifactToolbarOptions,
+} from "./artifact-toolbar-position";
 import { ToolbarButton } from "./toolbar-button";
 
 export interface ArtifactCommentAction {
@@ -109,7 +112,7 @@ export function ArtifactToolbar(props: ArtifactToolbarProps) {
 
   const editable = editor.isEditable;
   const bubbleMenuOptions = useMemo(
-    () => ({ scrollTarget: scrollTarget ?? undefined }),
+    () => createArtifactToolbarOptions(scrollTarget),
     [scrollTarget],
   );
   const shouldShow = useCallback(
@@ -153,12 +156,16 @@ export function ArtifactToolbar(props: ArtifactToolbarProps) {
   // mounts (so BubbleMenu can keep its listeners attached), but its own
   // `shouldShow` returns false for viewers. Buttons are also `disabled` as a
   // second layer in case the menu is forced open by custom callers.
+  // `style` lands on BubbleMenu's positioned wrapper, not the inner toolbar.
+  // Keep z-index 40 below the shared Dialog overlay/content at z-50, including
+  // future dialogs that opt out of Radix's default focus transfer.
   return (
     <BubbleMenu
       editor={editor}
       pluginKey={artifactToolbarPluginKey}
       options={bubbleMenuOptions}
       shouldShow={shouldShow}
+      style={{ zIndex: 40 }}
     >
       <div
         role="toolbar"

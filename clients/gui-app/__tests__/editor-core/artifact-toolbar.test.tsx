@@ -5,6 +5,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { Editor } from "@tiptap/core";
 import { EditorContent, EditorContext, useEditor } from "@tiptap/react";
@@ -17,6 +18,7 @@ import {
   deriveCollabUser,
   updateArtifactToolbarPosition,
 } from "@/editor-core";
+import { createArtifactToolbarOptions } from "@/editor-core/toolbar/artifact-toolbar-position";
 
 function buildToolbarFixture() {
   const doc = new Y.Doc();
@@ -107,9 +109,7 @@ async function revealBubbleMenu(editor: Editor): Promise<void> {
   editor.commands.selectAll();
   await waitFor(
     () => {
-      if (
-        screen.queryByRole("toolbar", { name: /editor formatting/i }) === null
-      ) {
+      if (screen.queryByRole("toolbar", { hidden: true }) === null) {
         throw new Error("bubble menu not shown yet");
       }
     },
@@ -123,6 +123,17 @@ afterEach(() => {
 });
 
 describe("ArtifactToolbar", () => {
+  it("bounds floating middleware to the tile scroll container", () => {
+    const scrollTarget = document.createElement("div");
+
+    expect(createArtifactToolbarOptions(scrollTarget)).toEqual({
+      scrollTarget,
+      flip: { boundary: scrollTarget, padding: 4 },
+      shift: { boundary: scrollTarget, padding: 4 },
+      hide: { boundary: scrollTarget },
+    });
+  });
+
   it("exposes a toolbar region with formatting buttons when selection active", async () => {
     const editor = mountToolbarEditor();
     render(
@@ -138,10 +149,16 @@ describe("ArtifactToolbar", () => {
       </EditorContext.Provider>,
     );
     await revealBubbleMenu(editor);
-    expect(screen.getByRole("button", { name: /bold/i })).toBeTruthy();
-    expect(screen.getByRole("button", { name: /heading 1/i })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /^undo$/i })).toBeNull();
-    expect(screen.queryByRole("button", { name: /^redo$/i })).toBeNull();
+    const toolbar = screen.getByRole("toolbar", { hidden: true });
+    const buttonLabels = within(toolbar)
+      .getAllByRole("button", { hidden: true })
+      .map((button) => button.getAttribute("aria-label"));
+    expect(buttonLabels).toContain("Bold");
+    expect(buttonLabels).toContain("Heading 1");
+    expect(buttonLabels).not.toContain("Undo");
+    expect(buttonLabels).not.toContain("Redo");
+    expect(toolbar.style.zIndex).toBe("");
+    expect(toolbar.parentElement?.style.zIndex).toBe("40");
     editor.destroy();
   });
 
