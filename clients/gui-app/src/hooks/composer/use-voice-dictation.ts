@@ -209,9 +209,6 @@ export function useVoiceDictation(
         );
         return null;
       }
-      Analytics.getInstance().track(AnalyticsEvent.VoicePermissionResolved, {
-        permission: "granted",
-      });
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
           // Use the browser's built-in audio processing (noise suppression /
@@ -231,6 +228,9 @@ export function useVoiceDictation(
           for (const track of stream.getTracks()) track.stop();
           return null;
         }
+        Analytics.getInstance().track(AnalyticsEvent.VoicePermissionResolved, {
+          permission: "granted",
+        });
         return stream;
       } catch (error) {
         const denied =
@@ -408,6 +408,11 @@ export function useVoiceDictation(
           }
         },
         onFlushed: () => {
+          // A later attempt (auto-restart, or a stop/start racing this flush)
+          // already superseded this session - ignore its stale resolution,
+          // matching onTranscript's guard. Otherwise this would finalize()
+          // the ACTIVE session out from under it.
+          if (speechClientRef.current !== client) return;
           // Same gate as the stopped event: a flush of a session that never
           // reached "recording" transcribed nothing worth counting.
           if (recordingStartedAtRef.current !== null) {
