@@ -392,6 +392,9 @@ export function useProviderProfileLoginFlow(
   // attempt, on cancellation, and on unmount so a late tick can never
   // re-await a superseded or abandoned attempt.
   const repollTimerRef = useRef<number | null>(null);
+  // Latched by the unmount cleanup below so a re-poll already in flight at
+  // unmount cannot schedule its successor.
+  const unmountedRef = useRef(false);
   const lastStartOptionsRef = useRef<{
     readonly label: string | null;
     readonly shareSkillsAndPlugins: boolean;
@@ -416,9 +419,22 @@ export function useProviderProfileLoginFlow(
     }
   }, []);
 
-  // Unmount-only cleanup: callers conditionally unmount to discard the flow,
-  // and a re-poll tick surviving that would re-await a discarded attempt.
-  useEffect(() => clearRepollTimer, [clearRepollTimer]);
+  // Unmount-only cleanup: callers conditionally unmount to discard the flow
+  // (the Settings panel's reauth section, and the in-chat banner the moment
+  // its reauth gate clears), and a re-poll surviving that would keep
+  // re-awaiting a discarded attempt. Clearing the timer alone is not enough:
+  // an already-dispatched `awaitOnce` resolves after unmount, and a
+  // still-pending verdict would arm a fresh timer on a dead hook - so the
+  // unmount is latched into `attemptAbandoned` too. Reset on every effect run
+  // rather than only at declaration: StrictMode's dev double-invoke unmounts
+  // and remounts, which would otherwise leave this latched on for good.
+  useEffect(() => {
+    unmountedRef.current = false;
+    return () => {
+      unmountedRef.current = true;
+      clearRepollTimer();
+    };
+  }, [clearRepollTimer]);
 
   const cancelProfile = useCallback(
     (profileId: string | null): void => {
@@ -637,27 +653,25 @@ export function useProviderProfileLoginFlow(
             // the constant's doc comment). Scoped to this attempt's closure -
             // an auto-restart mints a fresh attempt with a fresh budget.
             let authPendingRepolls = 0;
-            // A resolution this attempt must no longer act on: either a later
-            // attempt (auto-restart, or the child finishing while a restart
-            // was already triggered) superseded this long-poll, or the flow
-            // was cancelled. Clearing the re-poll timer cannot cancel an
-            // already-dispatched RPC, and cancelling leaves `attemptIdRef`
-            // untouched - so without the cancellation half, a re-poll landing
-            // after `finishCancellation` would settle the attempt and
-            // overwrite the terminal `cancelled` state with a failure.
+            // A resolution this attempt must no longer act on: a later attempt
+            // (auto-restart, or the child finishing while a restart was
+            // already triggered) superseded this long-poll, the flow was
+            // cancelled, or the hook unmounted. Clearing the re-poll timer
+            // cannot recall an already-dispatched RPC, and neither cancelling
+            // nor unmounting touches `attemptIdRef` - so without the other two
+            // halves a re-poll landing afterward would settle the attempt
+            // (overwriting the terminal `cancelled` state with a failure) or
+            // arm a fresh timer on a dead hook.
             const attemptAbandoned = (): boolean =>
               attemptIdRef.current !== thisAttemptId ||
               cancelRequestedRef.current ||
-              cancelledRef.current;
+              cancelledRef.current ||
+              unmountedRef.current;
             const scheduleAuthPendingRepoll = (): boolean => {
               if (authPendingRepolls >= AMBIENT_AUTH_PENDING_REPOLL_CAP) {
                 return false;
               }
               authPendingRepolls += 1;
-              appLogger.info(
-                "[provider-login] ambient auth still pending after login completion; re-polling",
-                { provider: providerId, repoll: authPendingRepolls },
-              );
               repollTimerRef.current = window.setTimeout(() => {
                 repollTimerRef.current = null;
                 if (attemptAbandoned()) return;

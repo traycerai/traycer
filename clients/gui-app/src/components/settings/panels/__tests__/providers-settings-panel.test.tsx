@@ -2551,6 +2551,64 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(providerMocks.startLoginMutate).toHaveBeenCalledTimes(1);
   });
 
+  it("stops re-polling when an in-flight ambient re-poll resolves after the flow unmounted", async () => {
+    providerMocks.listResult.data = {
+      providers: [codePasteReauthProviderState()],
+    };
+
+    const view = render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Terminal account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
+    await waitFor(() => {
+      expect(providerMocks.startLoginMutate).toHaveBeenCalled();
+    });
+    const [, startOptions] = firstStartLoginCall();
+    vi.useFakeTimers();
+    act(() => {
+      startOptions.onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "ambient",
+      });
+    });
+
+    const [, awaitOptions] = firstAwaitLoginCall();
+    act(() => {
+      awaitOptions.onSuccess(pendingAmbientAwaitResponse());
+    });
+    act(() => {
+      vi.advanceTimersByTime(AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS);
+    });
+    expect(providerMocks.awaitLoginMutate).toHaveBeenCalledTimes(2);
+    const repollCall = providerMocks.awaitLoginMutate.mock.calls.at(1);
+    if (repollCall === undefined) {
+      throw new Error("Expected re-poll await login call.");
+    }
+
+    // The flow goes away with its re-poll still in flight - no cancel involved
+    // (the in-chat banner unmounts on its own the moment its reauth gate
+    // clears). Clearing the scheduled timer is not enough: the dispatched RPC
+    // still resolves, and a still-pending verdict must not arm a fresh timer on
+    // a dead hook.
+    act(() => {
+      view.unmount();
+    });
+    act(() => {
+      repollCall[1].onSuccess(pendingAmbientAwaitResponse());
+    });
+    act(() => {
+      vi.advanceTimersByTime(AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS * 3);
+    });
+
+    expect(providerMocks.awaitLoginMutate).toHaveBeenCalledTimes(2);
+  });
+
   it("fails after the ambient authPending re-poll budget is exhausted without a definitive verdict", async () => {
     providerMocks.listResult.data = {
       providers: [codePasteReauthProviderState()],
