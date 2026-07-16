@@ -465,6 +465,31 @@ function runInboxSubscription(
   });
 }
 
+/**
+ * True when a frame carries @1.1-only delivery metadata. Such a frame that
+ * fails the @1.1 parse is malformed, not legacy — the frozen @1.0 schema
+ * strips unknown keys, so reinterpreting it would silently discard the
+ * delivery identity/outcome.
+ */
+function frameCarriesV11Metadata(envelope: StreamFrameEnvelope): boolean {
+  const payload =
+    envelope.kind === "message"
+      ? envelope["item"]
+      : envelope.kind === "notice"
+        ? envelope["notice"]
+        : null;
+  if (payload === null || typeof payload !== "object") return false;
+  const keys = Object.keys(payload);
+  return [
+    "deliveryId",
+    "replyToDeliveryId",
+    "consumedResponseId",
+    "outcome",
+    "isCorrective",
+    "durableQueuedWorkRemains",
+  ].some((v11Key) => keys.includes(v11Key));
+}
+
 function handleServerFrame(
   envelope: StreamFrameEnvelope,
   target: InboxTarget,
@@ -499,6 +524,23 @@ function handleServerFrame(
       printInboxNoticeV11(parsedV11.data.notice);
       return;
     }
+    return;
+  }
+
+  // A frame carrying v1.1-only metadata that failed the @1.1 parse must NOT
+  // be reinterpreted through the frozen @1.0 schema — @1.0 strips unknown
+  // keys, so the delivery identity/outcome would be silently discarded and
+  // the frame rendered as if it were legacy. Drop it with the @1.1 error
+  // instead; the legacy fallback below is only for genuinely @1.0 frames.
+  if (frameCarriesV11Metadata(envelope)) {
+    diag(`dropping malformed @1.1 frame kind=${String(envelope.kind)}`);
+    logger.warn("Monitor dropped malformed @1.1 inbox frame", {
+      environment: config.environment,
+      frameKind: String(envelope.kind),
+      issueCount: parsedV11.error.issues.length,
+      agentId: target.agentId,
+      epicId: target.epicId,
+    });
     return;
   }
 

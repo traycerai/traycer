@@ -176,21 +176,21 @@ describe("R21 — released @1.0 A2A schemas are frozen against the baseline", ()
     const theirs = releasedBaselineSurface();
     const mine = liveSurface();
 
-    for (const method of A2A_UNARY_METHODS) {
+    A2A_UNARY_METHODS.forEach((method) => {
       const released = theirs.unary[method]?.schemas["1.0"];
       const live = mine.unary[method]?.schemas["1.0"];
       expect(released, `${method} missing from released baseline`).toBeDefined();
       expect(live, `${method} missing from live surface`).toBeDefined();
       expect(stableStringify(live)).toBe(stableStringify(released));
-    }
+    });
 
-    for (const method of A2A_STREAM_METHODS) {
+    A2A_STREAM_METHODS.forEach((method) => {
       const released = theirs.stream[method]?.schemas["1.0"];
       const live = mine.stream[method]?.schemas["1.0"];
       expect(released, `${method} missing from released baseline`).toBeDefined();
       expect(live, `${method} missing from live surface`).toBeDefined();
       expect(stableStringify(live)).toBe(stableStringify(released));
-    }
+    });
   });
 
   it("registry still installs frozen @1.0 contracts for all four methods", () => {
@@ -257,7 +257,7 @@ describe("R22 — new client + old host negotiates 1.0 with best-effort defaults
     };
 
     // Per-method checks against the live (new) registry as the client side.
-    for (const method of A2A_UNARY_METHODS) {
+    A2A_UNARY_METHODS.forEach((method) => {
       const mine = { [method]: newClientManifest[method] };
       const theirs = { [method]: oldHostManifest[method] };
       const result = checkCompatibility(
@@ -269,7 +269,7 @@ describe("R22 — new client + old host negotiates 1.0 with best-effort defaults
       expect(result.ok, `${method} should bridge new-client/old-host`).toBe(
         true,
       );
-    }
+    });
   });
 
   it("sendMessage 1.0→1.1 upgrade fabricates deliveryId:null + legacy-best-effort", () => {
@@ -369,14 +369,14 @@ describe("R22 — new client + old host negotiates 1.0 with best-effort defaults
 describe("R23 — old client + new host projects frozen v1 frames", () => {
   it("unary handshake stays compatible when client is still @1.0 canonical", () => {
     const newHostManifest = buildConnectionManifest(hostRpcRegistry);
-    for (const method of A2A_UNARY_METHODS) {
+    A2A_UNARY_METHODS.forEach((method) => {
       const mine = { [method]: newHostManifest[method] };
       const theirs = { [method]: { major: 1, minor: 0 } };
       const result = checkCompatibility(hostRpcRegistry, mine, theirs, "host");
       expect(result.ok, `${method} should bridge old-client/new-host`).toBe(
         true,
       );
-    }
+    });
   });
 
   it("stream: old subscribe@1.0 client stays connected against a 1.1 host", () => {
@@ -434,15 +434,14 @@ describe("R23 — old client + new host projects frozen v1 frames", () => {
     const v1Reasons = new Set<string>(
       agentInboxNoticeSchema.shape.reason.options,
     );
-    for (const outcome of agentDeliveryOutcomeSchema.options) {
-      if (v1Reasons.has(outcome)) {
-        continue;
-      }
-      expect(
-        agentInboxNoticeSchema.shape.reason.safeParse(outcome).success,
-        `v1 reason must not admit v2 outcome ${outcome}`,
-      ).toBe(false);
-    }
+    agentDeliveryOutcomeSchema.options
+      .filter((outcome) => !v1Reasons.has(outcome))
+      .forEach((outcome) => {
+        expect(
+          agentInboxNoticeSchema.shape.reason.safeParse(outcome).success,
+          `v1 reason must not admit v2 outcome ${outcome}`,
+        ).toBe(false);
+      });
   });
 
   it("1.1 server frames parse with delivery identity; 1.0 frames reject it", () => {
