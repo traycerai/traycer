@@ -100,28 +100,74 @@ export interface WsStreamClientOptions<
  */
 
 /**
- * Shared inert `IStreamSession` returned when `subscribe()` is called on a
- * closed client. Stateless "no live transport": it drops outbound frames,
- * emits nothing, and its `close()` is a no-op - so a stale late subscribe
- * degrades quietly instead of throwing. One instance is safe to share.
+ * Builds the inert `IStreamSession` returned when `subscribe()` is called on a
+ * closed client. "No live transport": it drops outbound frames and its
+ * `close()` only suppresses the pending status emission - so a stale late
+ * subscribe degrades without throwing. Unlike the earlier fully-silent
+ * variant, it emits a single terminal `onStatusChange("closed", fatalError)`
+ * on a microtask (deferred so a wrapper constructor finishes wiring its
+ * handlers first), because a consumer that never learns its session is dead
+ * renders a pending state forever - the "stuck git-diff skeleton" incident.
  */
-const INERT_STREAM_SESSION: IStreamSession = {
-  sendClientFrame: () => undefined,
-  onServerFrame: () => undefined,
-  onStatusChange: () => undefined,
-  close: () => undefined,
-};
+function createInertStreamSession(closedReason: string): IStreamSession {
+  let closed = false;
+  let statusHandler: StatusChangeHandler | null = null;
+  let emissionScheduled = false;
+  return {
+    sendClientFrame: () => undefined,
+    onServerFrame: () => undefined,
+    onStatusChange: (handler) => {
+      statusHandler = handler;
+      if (emissionScheduled) {
+        return;
+      }
+      emissionScheduled = true;
+      queueMicrotask(() => {
+        if (closed) {
+          return;
+        }
+        statusHandler?.("closed", {
+          kind: "fatalError",
+          details: {
+            code: "CLIENT_CLOSED",
+            reason: `stream client was already closed (${closedReason})`,
+            incompatibleMethods: null,
+            upgradeGuidance: null,
+          },
+        });
+      });
+    },
+    close: () => {
+      closed = true;
+    },
+  };
+}
+
+/** Monotonic source for `WsStreamClient.instanceId` (log correlation only). */
+let nextStreamClientId = 1;
 
 export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
+  /**
+   * Stable per-instance tag (`stream-client-<n>`) carried in every lifecycle
+   * log line so a "subscribe on a closed client" warning can be correlated
+   * with the close that preceded it. Also the identity key consumers use to
+   * scope per-client caches (e.g. the git status shared-subscription map).
+   */
+  readonly instanceId: string;
+
   private readonly options: WsStreamClientOptions<Registry>;
   private readonly ownedSessions = new Set<StreamSession<Registry>>();
   private readonly methodSupport = new Map<string, StreamMethodSupport>();
   private readonly methodSchemaVersions = new Map<string, SchemaVersion>();
   private readonly methodSupportListeners = new Set<() => void>();
+  private readonly closedListeners = new Set<() => void>();
   private closed = false;
+  private closedReason: string | null = null;
 
   constructor(options: WsStreamClientOptions<Registry>) {
     this.options = options;
+    this.instanceId = `stream-client-${nextStreamClientId}`;
+    nextStreamClientId += 1;
   }
 
   /**
@@ -137,18 +183,22 @@ export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
   ): IStreamSession {
     if (this.closed) {
       // Defense-in-depth (tech-plan D4): a subscribe on an already-closed
-      // client is a stale call from a torn-down consumer. The live model
-      // rebuilds the client and re-subscribes, so this is unreachable by
-      // design - but degrading to an inert "no live transport" session, rather
-      // than throwing, keeps a stray late subscribe from tearing the renderer
-      // down through its error boundary (the crash class this rework removed).
-      // The companion `isClosed()` accessor lets callers detect this up front.
+      // client is a stale call from a torn-down consumer. Degrading to an
+      // inert "no live transport" session, rather than throwing, keeps a
+      // stray late subscribe from tearing the renderer down through its error
+      // boundary (the crash class this rework removed). Production showed
+      // this path IS reachable (a closed client left in the provider context
+      // after a host respawn), so the inert session emits a terminal status
+      // instead of staying silent, and the warning carries the close reason
+      // so the closer can be identified from the log alone. The companion
+      // `isClosed()` accessor lets callers detect this up front.
+      const closedReason = this.closedReason ?? "unknown";
       console.warn(
         `[stream] subscribe on a closed WsStreamClient ignored (method=${String(
           method,
-        )})`,
+        )}, client=${this.instanceId}, closedReason=${closedReason})`,
       );
-      return INERT_STREAM_SESSION;
+      return createInertStreamSession(closedReason);
     }
     let removeSession = (): void => undefined;
     const session = new StreamSession<Registry>({
@@ -177,15 +227,41 @@ export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
     return session;
   }
 
-  close(): void {
+  /**
+   * Tears the client down. `reason` is a short caller-authored tag recorded on
+   * the instance and logged, so a later "subscribe on a closed client"
+   * warning identifies WHO closed the transport - the instrumentation that
+   * pins down any repeat of the closed-client-left-in-context wedge.
+   */
+  close(reason: string): void {
     if (this.closed) {
       return;
     }
     this.closed = true;
+    this.closedReason = reason;
+    console.info(
+      `[stream] WsStreamClient closed (client=${this.instanceId}, reason=${reason}, sessions=${this.ownedSessions.size})`,
+    );
     for (const session of Array.from(this.ownedSessions)) {
       session.close();
     }
     this.ownedSessions.clear();
+    const listeners = Array.from(this.closedListeners);
+    this.closedListeners.clear();
+    const listenerErrors: unknown[] = [];
+    listeners.forEach((listener) => {
+      try {
+        listener();
+      } catch (error) {
+        listenerErrors.push(error);
+      }
+    });
+    if (listenerErrors.length > 0) {
+      console.error(
+        `[stream] ${listenerErrors.length} closed-listener(s) threw during close (client=${this.instanceId}, reason=${reason})`,
+        listenerErrors,
+      );
+    }
   }
 
   /**
@@ -196,6 +272,27 @@ export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
    */
   isClosed(): boolean {
     return this.closed;
+  }
+
+  /** The `close()` reason tag, or `null` while the client is still open. */
+  getClosedReason(): string | null {
+    return this.closedReason;
+  }
+
+  /**
+   * Subscribes to the client's terminal `close()`. Fires once, synchronously
+   * inside `close()`, after every owned session has been torn down. NOT
+   * retro-fired for an already-closed client - callers that may attach late
+   * must check `isClosed()` first (the owner-side liveness guard does both).
+   */
+  onClosed(listener: () => void): () => void {
+    if (this.closed) {
+      return () => undefined;
+    }
+    this.closedListeners.add(listener);
+    return () => {
+      this.closedListeners.delete(listener);
+    };
   }
 
   getMethodSupport<Method extends keyof Registry & string>(

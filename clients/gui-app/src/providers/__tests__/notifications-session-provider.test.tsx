@@ -101,6 +101,7 @@ class MockStreamSession implements IStreamSession {
   private serverFrameHandler: ServerFrameHandler | null = null;
   private statusChangeHandler: StatusChangeHandler | null = null;
   readonly clientFrames: HostNotificationsSubscribeClientFrame[] = [];
+  closeCount = 0;
 
   sendClientFrame(envelope: StreamFrameEnvelope): void {
     this.clientFrames.push(
@@ -116,7 +117,9 @@ class MockStreamSession implements IStreamSession {
     this.statusChangeHandler = handler;
   }
 
-  close(): void {}
+  close(): void {
+    this.closeCount += 1;
+  }
 
   emitServerFrame(envelope: StreamFrameEnvelope): void {
     this.serverFrameHandler?.(envelope, null);
@@ -129,6 +132,7 @@ class MockStreamSession implements IStreamSession {
 
 class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
   readonly session = new MockStreamSession();
+  readonly subscribedMethods: string[] = [];
 
   constructor() {
     super({
@@ -151,9 +155,10 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
   }
 
   override subscribe<Method extends keyof HostStreamRpcRegistry & string>(
-    _method: Method,
+    method: Method,
     _params: ParamsOf<HostStreamRpcRegistry, Method>,
   ): IStreamSession {
+    this.subscribedMethods.push(method);
     return this.session;
   }
 }
@@ -485,6 +490,73 @@ describe("<NotificationsSessionProvider />", () => {
       expect(streams[0].closeCount).toBe(1);
       expect(useNotificationsStore.getState().entries).toEqual([]);
     });
+  });
+
+  it("rebinds both notification streams to a replaced stream client without resetting the replica", async () => {
+    const markReadCalls: Array<HostNotificationsMarkReadRequest> = [];
+    const firstClient = new MockWsStreamClient();
+    const queryClient = new QueryClient();
+    hostState.id = mockLocalHostEntry.hostId;
+    hostState.client = createHostClient(markReadCalls);
+    streamState.client = firstClient;
+    useAppLocalNotificationsStore
+      .getState()
+      .activateIdentity("alice@example.com");
+
+    const view = render(
+      <QueryClientProvider client={queryClient}>
+        <NotificationsSessionProvider>
+          <div />
+        </NotificationsSessionProvider>
+      </QueryClientProvider>,
+    );
+
+    act(() => {
+      resetAuth("signed-in", "alice@example.com");
+    });
+
+    await waitFor(() => {
+      expect(firstClient.session.clientFrames).toHaveLength(1);
+    });
+    expect([...firstClient.subscribedMethods].sort()).toEqual([
+      "host.notifications.subscribe",
+      "notifications.subscribe",
+    ]);
+
+    act(() => {
+      appendEntry(invitedEntry("n-1", "epic-alpha"));
+    });
+    await waitFor(() => {
+      expect(useNotificationsStore.getState().entries).toHaveLength(1);
+    });
+
+    // Same host + same user: ONLY the stream client is replaced - the
+    // app-wide liveness rebuild after the old client was closed underneath
+    // the provider. Both notification streams must rebind to the new client
+    // (the old client's sessions are dead), and the replica must survive.
+    const secondClient = new MockWsStreamClient();
+    act(() => {
+      streamState.client = secondClient;
+      view.rerender(
+        <QueryClientProvider client={queryClient}>
+          <NotificationsSessionProvider>
+            <div />
+          </NotificationsSessionProvider>
+        </QueryClientProvider>,
+      );
+    });
+
+    await waitFor(() => {
+      expect(secondClient.session.clientFrames).toHaveLength(1);
+    });
+    expect([...secondClient.subscribedMethods].sort()).toEqual([
+      "host.notifications.subscribe",
+      "notifications.subscribe",
+    ]);
+    // Both streams shared `firstClient.session` in this mock, so both old
+    // sessions closing is observed as two closes on that shared session.
+    expect(firstClient.session.closeCount).toBe(2);
+    expect(useNotificationsStore.getState().entries).toHaveLength(1);
   });
 
   it("consumes an active entity once when a done row is present", async () => {
