@@ -14,6 +14,7 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useInlineRename } from "@/hooks/ui/use-inline-rename";
 import { cn } from "@/lib/utils";
 import type { LandingTerminalTabRef } from "@/stores/home/landing-terminal-store";
@@ -21,7 +22,13 @@ import type { LandingTerminalTabRef } from "@/stores/home/landing-terminal-store
 export interface LandingTerminalTabStripProps {
   readonly tabs: ReadonlyArray<LandingTerminalTabRef>;
   readonly activeInstanceId: string | null;
-  readonly canCreate: boolean;
+  /**
+   * Why creating a terminal is currently unavailable, or `null` when the
+   * create affordances are live. Doubles as the disabled flag: the "+"
+   * button and the empty-strip double-click gate on it, and the button
+   * surfaces the string as a tooltip so the dead control explains itself.
+   */
+  readonly createDisabledReason: string | null;
   readonly onAdd: () => void;
   readonly onActivate: (instanceId: string) => void;
   readonly onClose: (tab: LandingTerminalTabRef) => void;
@@ -41,7 +48,8 @@ export interface LandingTerminalTabStripProps {
 export function LandingTerminalTabStrip(
   props: LandingTerminalTabStripProps,
 ): ReactNode {
-  const { canCreate, onAdd } = props;
+  const { createDisabledReason, onAdd } = props;
+  const canCreate = createDisabledReason === null;
   const handleStripDoubleClick = (event: MouseEvent<HTMLDivElement>): void => {
     if (!canCreate) return;
     // Only the empty strip background opens a terminal. A double-click that
@@ -76,20 +84,57 @@ export function LandingTerminalTabStrip(
           ))}
         </div>
         <div className="flex shrink-0 items-center px-1">
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label="New terminal"
-            data-testid="landing-terminal-new-tab"
-            disabled={!props.canCreate}
-            onClick={props.onAdd}
-          >
-            <Plus className="size-4" />
-          </Button>
+          <NewTerminalButton
+            disabledReason={createDisabledReason}
+            onAdd={onAdd}
+          />
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * The strip's "+" affordance. While creation is unavailable the button is
+ * `aria-disabled` rather than natively `disabled`, so it stays hoverable and
+ * focusable and the reason is reachable as a tooltip - the same
+ * disabled-with-hint convention as `ComposerSendButton` / the launch panel's
+ * `StartButton` (a native `disabled` button emits no pointer events, so a
+ * tooltip on it would never open).
+ */
+function NewTerminalButton(props: {
+  readonly disabledReason: string | null;
+  readonly onAdd: () => void;
+}): ReactNode {
+  const { disabledReason, onAdd } = props;
+  const disabled = disabledReason !== null;
+  const button = (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon-sm"
+      aria-label="New terminal"
+      data-testid="landing-terminal-new-tab"
+      aria-disabled={disabled || undefined}
+      className="aria-disabled:cursor-not-allowed aria-disabled:opacity-50 aria-disabled:hover:bg-transparent aria-disabled:hover:text-current dark:aria-disabled:hover:bg-transparent"
+      onClick={() => {
+        if (disabled) return;
+        onAdd();
+      }}
+    >
+      <Plus className="size-4" />
+    </Button>
+  );
+  if (disabledReason === null) return button;
+  return (
+    <TooltipWrapper
+      label={disabledReason}
+      side="bottom"
+      sideOffset={undefined}
+      align={undefined}
+    >
+      <span className="inline-flex">{button}</span>
+    </TooltipWrapper>
   );
 }
 

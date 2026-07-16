@@ -27,6 +27,12 @@ export const LEADER_SCOPE_MODEL_PICKER = "model-picker";
  * leader digits are swallowed instead of switching the tabs behind the modal.
  */
 export const LEADER_SCOPE_NEW_CONVERSATION_MODAL = "new-conversation-modal";
+/**
+ * The landing page's terminal panel. Owns `mod` digits for its tab strip while
+ * the panel is open with at least one terminal - the landing analog of the
+ * canvas-tabs scope, which is inactive without an active epic tab.
+ */
+export const LEADER_SCOPE_LANDING_TERMINAL = "landing-terminal";
 
 export type LeaderDigitSequenceState = "invalid" | "exact" | "ambiguous";
 
