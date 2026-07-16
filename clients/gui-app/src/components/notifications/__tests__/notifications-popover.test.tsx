@@ -461,7 +461,9 @@ describe("NotificationsPopover click routing", () => {
     expect(completed?.textContent).toContain("Agent • Done");
     expect(stalled?.dataset.notificationSeverity).toBe("failure");
     expect(stalled?.textContent).toContain(TASK_TITLE);
-    expect(stalled?.textContent).toContain("Agent • Stalled");
+    expect(stalled?.textContent).toContain(
+      "Agent • Provider is taking longer than expected",
+    );
 
     if (completed === undefined) throw new Error("missing completed row");
     const notificationTitle =

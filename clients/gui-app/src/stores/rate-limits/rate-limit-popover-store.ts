@@ -12,9 +12,16 @@ import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
  */
 export type RateLimitPopoverTab = "overview" | RateLimitProviderId | "traycer";
 
+interface RateLimitPopoverSize {
+  readonly widthPx: number;
+  readonly heightPx: number;
+}
+
 interface RateLimitPopoverStoreState {
   readonly activeTab: RateLimitPopoverTab;
+  readonly size: RateLimitPopoverSize | null;
   readonly setActiveTab: (tab: RateLimitPopoverTab) => void;
+  readonly setSize: (size: RateLimitPopoverSize | null) => void;
 }
 
 const RATE_LIMIT_POPOVER_PERSIST_KEY = persistKey(STORE_KEYS.rateLimitPopover);
@@ -30,13 +37,45 @@ function persistedActiveTab(persistedState: unknown): RateLimitPopoverTab {
   return result.success ? result.data : "overview";
 }
 
+function persistedSize(persistedState: unknown): RateLimitPopoverSize | null {
+  if (typeof persistedState !== "object" || persistedState === null)
+    return null;
+  if (!("size" in persistedState)) return null;
+  const size = persistedState.size;
+  if (typeof size !== "object" || size === null) return null;
+  if (!("widthPx" in size) || !("heightPx" in size)) return null;
+  const { widthPx, heightPx } = size;
+  if (
+    typeof widthPx !== "number" ||
+    !Number.isFinite(widthPx) ||
+    widthPx <= 0 ||
+    typeof heightPx !== "number" ||
+    !Number.isFinite(heightPx) ||
+    heightPx <= 0
+  ) {
+    return null;
+  }
+  return { widthPx, heightPx };
+}
+
 export const useRateLimitPopoverStore = create<RateLimitPopoverStoreState>()(
   persist(
     (set, get) => ({
       activeTab: "overview",
+      size: null,
       setActiveTab: (activeTab) => {
         if (get().activeTab === activeTab) return;
         set({ activeTab });
+      },
+      setSize: (size) => {
+        const currentSize = get().size;
+        if (
+          currentSize?.widthPx === size?.widthPx &&
+          currentSize?.heightPx === size?.heightPx
+        ) {
+          return;
+        }
+        set({ size });
       },
     }),
     {
@@ -45,9 +84,11 @@ export const useRateLimitPopoverStore = create<RateLimitPopoverStoreState>()(
       merge: (persistedState, currentState) => ({
         ...currentState,
         activeTab: persistedActiveTab(persistedState),
+        size: persistedSize(persistedState),
       }),
       partialize: (state) => ({
         activeTab: state.activeTab,
+        size: state.size,
       }),
     },
   ),

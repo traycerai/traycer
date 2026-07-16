@@ -1,7 +1,10 @@
 import "../../../../__tests__/test-browser-apis";
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
-import { NotificationIndicatorIcon } from "@/components/notifications/notification-indicator-icon";
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  NotificationIndicatorIcon,
+  type IndicatorRunningKind,
+} from "@/components/notifications/notification-indicator-icon";
 import {
   contrastRatio,
   DARK_THEME_SURFACES,
@@ -17,14 +20,19 @@ const DEFAULT_STATE = {
   unreadDone: false,
 };
 
+afterEach(cleanup);
+
 describe("<NotificationIndicatorIcon />", () => {
   it("renders status icons ahead of running, then running ahead of completion", () => {
-    const { rerender } = renderIcon({
-      unreadFailure: true,
-      pendingApproval: true,
-      pendingInterview: true,
-      unreadDone: true,
-    });
+    const { rerender } = renderIcon(
+      {
+        unreadFailure: true,
+        pendingApproval: true,
+        pendingInterview: true,
+        unreadDone: true,
+      },
+      "turn",
+    );
 
     expect(
       screen.getByTestId("indicator-failure-subject-1").getAttribute("class"),
@@ -43,7 +51,7 @@ describe("<NotificationIndicatorIcon />", () => {
           pendingInterview: true,
           unreadDone: true,
         },
-        true,
+        "turn",
       ),
     );
     expect(
@@ -61,7 +69,7 @@ describe("<NotificationIndicatorIcon />", () => {
           pendingInterview: false,
           unreadDone: true,
         },
-        true,
+        "turn",
       ),
     );
     expect(
@@ -79,7 +87,7 @@ describe("<NotificationIndicatorIcon />", () => {
           pendingInterview: false,
           unreadDone: true,
         },
-        true,
+        "turn",
       ),
     );
     expect(screen.getByTestId("indicator-activity-subject-1")).toBeDefined();
@@ -103,7 +111,7 @@ describe("<NotificationIndicatorIcon />", () => {
       screen.getByTestId("indicator-done-subject-1").getAttribute("class"),
     ).toContain("lucide-message-square-check");
 
-    rerender(renderIconContent(DEFAULT_STATE, true));
+    rerender(renderIconContent(DEFAULT_STATE, "turn"));
     expect(screen.getByTestId("indicator-activity-subject-1")).toBeDefined();
 
     rerender(
@@ -115,11 +123,41 @@ describe("<NotificationIndicatorIcon />", () => {
         className={undefined}
         style={undefined}
         runningTitle="Task activity in progress"
+        backgroundRunningTitle={undefined}
         defaultIcon={<span data-testid="default-icon" />}
         statusPresentation="message"
       />,
     );
     expect(screen.getByTestId("default-icon")).toBeDefined();
+  });
+
+  it("renders the background tier muted and titled distinctly from the turn spinner", () => {
+    renderIcon(DEFAULT_STATE, "background");
+
+    expect(
+      screen.getByRole("status", { name: "Background tasks running" }),
+    ).toBeDefined();
+    expect(
+      screen.queryByRole("status", { name: "Task activity in progress" }),
+    ).toBeNull();
+    // Class assertion needs the inner spinner node, which carries the tier's
+    // muted styling; the role query above owns the presence contract.
+    expect(
+      screen
+        .getByTestId("indicator-background-activity-subject-1")
+        .getAttribute("class"),
+    ).toContain("text-muted-foreground");
+  });
+
+  it("renders status icons ahead of the background tier", () => {
+    renderIcon({ ...DEFAULT_STATE, pendingApproval: true }, "background");
+
+    expect(
+      screen.getByRole("status", { name: "Task waiting for your approval" }),
+    ).toBeDefined();
+    expect(
+      screen.queryByRole("status", { name: "Background tasks running" }),
+    ).toBeNull();
   });
 
   it("keeps the failure and completion status colors at >=3:1 against every theme preset's background and canvas", () => {
@@ -154,13 +192,16 @@ describe("<NotificationIndicatorIcon />", () => {
   });
 });
 
-function renderIcon(state: {
-  readonly unreadFailure: boolean;
-  readonly pendingApproval: boolean;
-  readonly pendingInterview: boolean;
-  readonly unreadDone: boolean;
-}) {
-  return render(renderIconContent(state, true));
+function renderIcon(
+  state: {
+    readonly unreadFailure: boolean;
+    readonly pendingApproval: boolean;
+    readonly pendingInterview: boolean;
+    readonly unreadDone: boolean;
+  },
+  running: IndicatorRunningKind,
+) {
+  return render(renderIconContent(state, running));
 }
 
 function renderIconContent(
@@ -170,7 +211,7 @@ function renderIconContent(
     readonly pendingInterview: boolean;
     readonly unreadDone: boolean;
   },
-  running: boolean,
+  running: IndicatorRunningKind,
 ) {
   return (
     <NotificationIndicatorIcon
@@ -181,6 +222,7 @@ function renderIconContent(
       className={undefined}
       style={undefined}
       runningTitle="Task activity in progress"
+      backgroundRunningTitle="Background tasks running"
       defaultIcon={<span data-testid="default-icon" />}
       statusPresentation="message"
     />
