@@ -89,6 +89,11 @@ interface LegacyHarnessModelKey extends LegacyHarnessProfileKey {
   readonly modelSlug: string;
 }
 
+interface LegacyEffortCandidate {
+  readonly profileId: string | null;
+  readonly record: HarnessModelEffortRecord;
+}
+
 function parseJsonTuple(value: string): unknown {
   try {
     const parsed: unknown = JSON.parse(value);
@@ -206,19 +211,35 @@ export function migrateComposerHarnessMemoryPersistedState(
       entry.record.updatedAt,
     ]),
   );
-  const effortByHarnessModel = legacyEffortEntries.reduce<
-    Record<string, HarnessModelEffortRecord>
+  const effortCandidates = legacyEffortEntries.reduce<
+    Record<string, LegacyEffortCandidate>
   >((records, entry) => {
     const key = harnessModelKey(entry.harnessId, entry.modelSlug);
     const existing = ownRecordValue(records, key);
+    const rememberedProfile = lastProfileByHarness[entry.harnessId];
+    const candidateBreaksTie =
+      existing !== undefined &&
+      entry.record.updatedAt === existing.record.updatedAt &&
+      entry.profileId === rememberedProfile &&
+      existing.profileId !== rememberedProfile;
     if (
       existing === undefined ||
-      entry.record.updatedAt >= existing.updatedAt
+      entry.record.updatedAt > existing.record.updatedAt ||
+      candidateBreaksTie
     ) {
-      records[key] = entry.record;
+      records[key] = {
+        profileId: entry.profileId,
+        record: entry.record,
+      };
     }
     return records;
   }, {});
+  const effortByHarnessModel = Object.fromEntries(
+    Object.entries(effortCandidates).map(([key, candidate]) => [
+      key,
+      candidate.record,
+    ]),
+  );
   const lastModelCandidates = isRecord(persisted.lastModelByHarness)
     ? Object.entries(persisted.lastModelByHarness).flatMap(
         ([key, modelSlug]) => {

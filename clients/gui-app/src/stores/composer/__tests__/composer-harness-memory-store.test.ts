@@ -425,4 +425,42 @@ describe("composer harness memory store", () => {
       serviceTier: null,
     });
   });
+
+  it("prefers the remembered profile's effort when v1 timestamps tie", async () => {
+    window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        state: {
+          lastProfileByHarness: { claude: "work" },
+          lastModelByHarness: {
+            '["claude","work"]': "sonnet-4.5",
+            '["claude","personal"]': "sonnet-4.5",
+          },
+          effortByHarnessModel: {
+            '["claude","work","sonnet-4.5"]': {
+              reasoningEffort: "high",
+              serviceTier: "flex",
+              updatedAt: 1,
+            },
+            '["claude","personal","sonnet-4.5"]': {
+              reasoningEffort: "low",
+              serviceTier: null,
+              updatedAt: 1,
+            },
+          },
+        },
+        version: 1,
+      }),
+    );
+
+    await useComposerHarnessMemoryStore.persist.rehydrate();
+
+    expect(
+      useComposerHarnessMemoryStore.getState().resolveHarnessSwitch("claude"),
+    ).toEqual({
+      modelSlug: "sonnet-4.5",
+      reasoningEffort: "high",
+      serviceTier: "flex",
+    });
+  });
 });
