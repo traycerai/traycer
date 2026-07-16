@@ -137,13 +137,18 @@ export interface TerminalXtermHostProps {
    */
   readonly shouldFocusOnActivePane: boolean;
   /**
-   * Whether the underlying terminal session is still live (a running
-   * terminal-agent). The host keeps the persistent xterm engine cached across
-   * unmount when true, so splitting a pane / switching tabs / reopening does not
-   * dispose the `Terminal` and lose its scrollback. Plain terminals (and exited
-   * agents) pass false: their session handle is torn down on unmount too, so the
-   * next open rebuilds both and replays a fresh host snapshot. Mirrors the
-   * keep-lease-free rule in `TerminalSessionRegistry`.
+   * Whether the underlying terminal session is still live. The host keeps the
+   * persistent xterm engine cached across unmount when true, so splitting a
+   * pane / switching tabs / reopening does not dispose the `Terminal` and lose
+   * its scrollback. Mirrors the lease-free retention rules in
+   * `TerminalSessionRegistry`: a running terminal-agent's handle is kept warm
+   * indefinitely and a running plain terminal's lingers for the release-linger
+   * window, and in both cases the session store's writer keeps pointing at
+   * this engine - so the engine must outlive the unmount with it, or the
+   * reattach would render blank (the host snapshot was already consumed).
+   * Exited sessions pass false: their handle is torn down with the tile, and
+   * the registry follower disposes any cached engine once the handle leaves
+   * the session registry.
    */
   readonly keepAlive: boolean;
   /**
