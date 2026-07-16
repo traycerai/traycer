@@ -389,11 +389,19 @@ export function isExternallyHandled(id: ActionId): boolean {
 }
 
 // Actions whose chord must fire once per physical press, never on OS key-repeat.
-// A toggle (e.g. the model picker) would otherwise flip open/closed rapidly
-// while the chord is held. The provider still reserves the chord on repeat
-// (preventDefault) but skips re-dispatch.
+// A toggle (the model picker, the terminal panel's open and maximize states)
+// would otherwise flip rapidly while the chord is held and settle in a
+// timing-dependent state; a spawner (new terminal) would open one shell per
+// repeat event. The provider still reserves the chord on repeat
+// (preventDefault) but skips re-dispatch. `tab.new` is repeat-safe on the epic
+// canvas (the store reuses an active blank tab), but on the landing page it
+// shares the new-terminal handler, so it needs the same protection.
 const REPEAT_SENSITIVE_ACTIONS: ReadonlySet<ActionId> = new Set([
   "composer.model-picker.toggle",
+  "app.terminal.toggle",
+  "app.terminal.new",
+  "app.terminal.maximize",
+  "tab.new",
 ]);
 
 export function isRepeatSensitiveAction(id: ActionId): boolean {

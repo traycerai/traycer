@@ -377,10 +377,15 @@ function TerminalLive(props: TerminalLiveProps) {
                 ? `terminal:${props.viewTabId}:${props.tileId}:${handle.sessionId}`
                 : null
             }
-            // Plain terminals have no scrollback to preserve beyond the host
-            // snapshot: their session handle is disposed on unmount and the next
-            // open replays a fresh snapshot, so the xterm engine is rebuilt too.
-            keepAlive={false}
+            // Mirrors the registry's linger rule: a running plain terminal's
+            // handle now outlives this unmount (its stream stays subscribed for
+            // the linger window so tab switches reattach instantly), and the
+            // store's writer keeps pointing at this engine - dispose the engine
+            // and the reattach would be blank, since the host snapshot was
+            // already consumed. The registry follower disposes the engine when
+            // the lingering handle is finally evicted; only an exited session
+            // tears down eagerly.
+            keepAlive={status !== "exited"}
           />
         </Suspense>
         {overlayState !== null ? (

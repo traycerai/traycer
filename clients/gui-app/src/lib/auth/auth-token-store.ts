@@ -14,20 +14,38 @@ import type {
  */
 export class AuthTokenStore {
   private readonly tokenStore: ITokenStore;
+  // Serializes every persisted-token operation. save/clear are dispatched
+  // from independently-awaiting flows (sign-in finalization, sign-out,
+  // refresh rotation), and the underlying keychain IPC gives no cross-call
+  // ordering guarantee - without this chain a sign-out's delete could be
+  // applied BEFORE a still-in-flight save, leaving the signed-out user's
+  // token on disk for the next launch to rehydrate. The chain makes the
+  // last-dispatched operation own the final on-disk state; loads join it so
+  // they always read a settled value.
+  private opChain: Promise<unknown> = Promise.resolve();
 
   constructor(tokenStore: ITokenStore) {
     this.tokenStore = tokenStore;
   }
 
+  private enqueue<T>(op: () => Promise<T>): Promise<T> {
+    const run = this.opChain.then(op, op);
+    this.opChain = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
   async load(): Promise<StoredAuthTokens | null> {
-    return this.tokenStore.get();
+    return this.enqueue(() => this.tokenStore.get());
   }
 
   async save(tokens: StoredAuthTokens): Promise<void> {
-    await this.tokenStore.set(tokens);
+    await this.enqueue(() => this.tokenStore.set(tokens));
   }
 
   async clear(): Promise<void> {
-    await this.tokenStore.delete();
+    await this.enqueue(() => this.tokenStore.delete());
   }
 }

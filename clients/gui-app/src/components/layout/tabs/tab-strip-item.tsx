@@ -468,12 +468,15 @@ function TabLeadingIcon(props: {
   return (
     <NotificationIndicatorIcon
       state={indicatorState}
-      running={props.activityStatus === "running"}
+      // Epic-level activity is binary (any agent busy, background included);
+      // the per-chat turn/background split lives on the chat icons.
+      running={props.activityStatus === "running" ? "turn" : false}
       subjectId={props.tabId}
       testIdPrefix="header-tab"
       className="text-muted-foreground"
       style={undefined}
       runningTitle="Task activity in progress"
+      backgroundRunningTitle={undefined}
       defaultIcon={defaultIcon}
       statusPresentation="message"
     />

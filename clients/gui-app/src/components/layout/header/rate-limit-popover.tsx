@@ -2,7 +2,9 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -116,6 +118,11 @@ type RailTabDescriptor =
   | { readonly kind: "traycer" };
 
 const PERSONAL_ACCOUNT_CONTEXT: AccountContext = { type: "PERSONAL" };
+
+const POPOVER_SURFACE_CLASS_NAME =
+  "w-[min(92vw,30rem)] min-w-[min(92vw,20rem,var(--radix-popover-content-available-width))] max-w-[var(--radix-popover-content-available-width)] max-h-[var(--radix-popover-content-available-height)] resize overflow-hidden";
+
+type RateLimitPopoverSurfaceVariant = "content" | "empty";
 
 function railTabProviderId(tab: RailTabDescriptor): ProviderId {
   return tab.kind === "traycer" ? "traycer" : tab.providerId;
@@ -235,7 +242,7 @@ export function RateLimitPopover({
       collisionPadding={12}
       role="dialog"
       aria-label="Usage limits"
-      className="w-[min(92vw,30rem)] gap-0 overflow-hidden rounded-xl p-0"
+      className="w-fit max-w-[var(--radix-popover-content-available-width)] max-h-[var(--radix-popover-content-available-height)] gap-0 overflow-hidden rounded-xl p-0"
       // Radix auto-focuses the first focusable child on open. Here that's the
       // Overview rail tab, whose `TooltipWrapper` opens the tooltip on focus
       // (keyboard a11y) - so it would pop open the instant the popover mounts
@@ -261,6 +268,82 @@ export function RateLimitPopover({
         profileSelection={profileSelection}
       />
     </PopoverContent>
+  );
+}
+
+/**
+ * Viewport-bounded, two-axis CSS resize surface. The browser owns live drag
+ * frames and writes the resulting inline dimensions; pointer release commits
+ * that measured size once so subsequent opens restore it.
+ */
+function RateLimitPopoverResizeSurface({
+  variant,
+  children,
+}: {
+  readonly variant: RateLimitPopoverSurfaceVariant;
+  readonly children: ReactNode;
+}): ReactNode {
+  const size = useRateLimitPopoverStore((state) => state.size);
+  const setSize = useRateLimitPopoverStore((state) => state.setSize);
+  const surfaceRef = useRef<HTMLDivElement | null>(null);
+  const commitResizedDimensions = (
+    event: ReactPointerEvent<HTMLDivElement>,
+  ): void => {
+    if (event.target !== event.currentTarget) return;
+    const { width, height } = event.currentTarget.getBoundingClientRect();
+    if (width <= 0 || height <= 0) return;
+    setSize({ widthPx: width, heightPx: height });
+  };
+  useEffect(() => {
+    const surface = surfaceRef.current;
+    if (surface === null) return;
+    const win = surface.ownerDocument.defaultView;
+    if (win === null) return;
+
+    let initialized = false;
+    let applyTimer: number | null = null;
+    const applyMeasuredSize = (): void => {
+      const { width, height } = surface.getBoundingClientRect();
+      if (width <= 0 || height <= 0) return;
+      surface.style.width = `${width}px`;
+      surface.style.height = `${height}px`;
+    };
+    const observer = new ResizeObserver(() => {
+      if (!initialized) {
+        initialized = true;
+        return;
+      }
+      if (applyTimer !== null) win.clearTimeout(applyTimer);
+      applyTimer = win.setTimeout(applyMeasuredSize, 100);
+    });
+    observer.observe(surface);
+    return () => {
+      observer.disconnect();
+      if (applyTimer === null) return;
+      win.clearTimeout(applyTimer);
+      applyMeasuredSize();
+    };
+  }, []);
+
+  return (
+    <div
+      ref={surfaceRef}
+      data-testid="rate-limit-popover-resize-surface"
+      className={cn(
+        POPOVER_SURFACE_CLASS_NAME,
+        variant === "content"
+          ? "grid h-[max(50vh,22rem)] min-h-[min(35vh,16rem,var(--radix-popover-content-available-height))] grid-cols-[3rem_minmax(0,1fr)] grid-rows-[minmax(0,1fr)]"
+          : "flex min-h-[min(20vh,8rem,var(--radix-popover-content-available-height))] flex-col items-start gap-3 p-4",
+      )}
+      style={
+        size === null
+          ? undefined
+          : { width: size.widthPx, height: size.heightPx }
+      }
+      onPointerUp={commitResizedDimensions}
+    >
+      {children}
+    </div>
   );
 }
 
@@ -294,7 +377,11 @@ function RateLimitPopoverBody({
   // Zero-state only when there is genuinely nothing to show: no host-RPC
   // providers AND no eligible Traycer tab.
   if (providers.length === 0 && !traycerSubscription.eligible) {
-    return <RateLimitZeroState onClose={onClose} />;
+    return (
+      <RateLimitPopoverResizeSurface variant="empty">
+        <RateLimitZeroState onClose={onClose} />
+      </RateLimitPopoverResizeSurface>
+    );
   }
 
   // A credential removed (or Traycer becoming ineligible) mid-session can drop
@@ -310,15 +397,12 @@ function RateLimitPopoverBody({
     ? activeTab
     : "overview";
 
-  // A *fixed target* height (not content-sized), plus an explicit
-  // `minmax(0,1fr)` grid row, is what makes the popover a stable box across
-  // tabs and lets its panes scroll. The target is at least half the viewport in
-  // normal header placement, while Radix's available-height guard keeps it
-  // inside short windows. `minmax(0,1fr)` pins the row to the used container
-  // height regardless of content, and both columns stretch into it with their
-  // own `min-h-0` + `overflow-y-auto`, so each scrolls internally.
+  // The default target height keeps the popover stable across tabs. The resize
+  // surface applies the remembered user size within fluid viewport bounds.
+  // `minmax(0,1fr)` pins the row to that height, and both columns keep their
+  // own `min-h-0` + `overflow-y-auto` scrolling.
   return (
-    <div className="grid h-[max(50vh,22rem)] max-h-[var(--radix-popover-content-available-height)] grid-cols-[3rem_minmax(0,1fr)] grid-rows-[minmax(0,1fr)] overflow-hidden">
+    <RateLimitPopoverResizeSurface variant="content">
       <RateLimitRail
         railTabs={railTabs}
         providers={providers}
@@ -348,7 +432,7 @@ function RateLimitPopoverBody({
           />
         )}
       </div>
-    </div>
+    </RateLimitPopoverResizeSurface>
   );
 }
 
@@ -1639,7 +1723,7 @@ function RateLimitZeroState({
     openSettings({ section: "providers", resetToGeneral: false });
   };
   return (
-    <div className="flex flex-col items-start gap-3 p-4">
+    <div className="flex h-full flex-col items-start gap-3">
       <p className="text-ui-sm text-muted-foreground">
         Connect Claude Code or Codex to see usage here.
       </p>

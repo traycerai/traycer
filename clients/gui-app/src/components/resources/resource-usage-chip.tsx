@@ -4,7 +4,6 @@ import type { ResourceOwnerKindWire } from "@traycer/protocol/host/resources/sub
 import {
   useEpicResourceUsage,
   useOwnerResourceUsage,
-  useTaskResourceSummary,
 } from "@/stores/resources/resources-registry";
 import {
   formatCpuPercent,
@@ -129,69 +128,5 @@ export function EpicResourceChip(props: EpicResourceChipProps) {
       label="Epic resource usage"
       className={props.className}
     />
-  );
-}
-
-export interface TaskResourceSummaryChipProps {
-  readonly epicId: string;
-  readonly className: string | undefined;
-}
-
-/**
- * Task-level readout derived from the live owner snapshots already carried by
- * `resources.subscribe`. It keeps the host protocol unchanged while surfacing
- * semantic counts that only the renderer needs: open terminals, TUI agents,
- * and GUI chat agents.
- */
-export function TaskResourceSummaryChip(props: TaskResourceSummaryChipProps) {
-  const summary = useTaskResourceSummary(props.epicId);
-  if (summary === null) return null;
-
-  const cpu = formatCpuPercent(summary.cpuPercent);
-  const memory = formatMemoryBytes(summary.rssBytes);
-  const trackedProcesses = formatProcessCount(summary.trackedProcessCount);
-  const openTerminals = formatProcessCount(summary.openTerminalCount);
-  const tuiAgents = formatProcessCount(summary.tuiAgentCount);
-  const guiAgents = formatProcessCount(summary.guiAgentCount);
-  const trackedProcessWord = pluralize(
-    summary.trackedProcessCount,
-    "tracked process",
-    "tracked processes",
-  );
-  const terminalWord = pluralize(
-    summary.openTerminalCount,
-    "open terminal",
-    "open terminals",
-  );
-  const tuiAgentWord = pluralize(
-    summary.tuiAgentCount,
-    "TUI agent",
-    "TUI agents",
-  );
-  const guiAgentWord = pluralize(
-    summary.guiAgentCount,
-    "GUI agent",
-    "GUI agents",
-  );
-  const description = `Task resource usage: ${cpu} CPU, ${memory} memory, ${trackedProcesses} ${trackedProcessWord}, ${openTerminals} ${terminalWord}, ${tuiAgents} ${tuiAgentWord}, ${guiAgents} ${guiAgentWord}`;
-
-  return (
-    <ResourceChipFrame
-      slot="task-resource-summary-chip"
-      description={description}
-      className={props.className}
-    >
-      <span>{cpu}</span>
-      <ResourceChipSeparator />
-      <span>{memory}</span>
-      <ResourceChipSeparator />
-      <span>{trackedProcesses} proc</span>
-      <ResourceChipSeparator />
-      <span>{openTerminals} term</span>
-      <ResourceChipSeparator />
-      <span>{tuiAgents} TUI</span>
-      <ResourceChipSeparator />
-      <span>{guiAgents} GUI</span>
-    </ResourceChipFrame>
   );
 }

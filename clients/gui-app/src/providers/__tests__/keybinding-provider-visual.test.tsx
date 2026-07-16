@@ -10,6 +10,7 @@ vi.mock("@/lib/keybindings/platform", () => createPlatformMock(platformMock));
 import { createMemoryHistory } from "@tanstack/react-router";
 import { createAppRouter, type AppRouter } from "@/router";
 import { getDefaultBindings } from "@/lib/keybindings/actions";
+import { registerDynamicActionHandler } from "@/lib/keybindings/dispatch";
 import type { KeybindingRouterSource } from "@/lib/keybindings/router-adapter";
 import { KeybindingProvider } from "@/providers/keybinding-provider";
 import {
@@ -367,6 +368,36 @@ describe("<KeybindingProvider /> visual leader hints", () => {
     });
 
     expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("dispatches repeat-sensitive toggles once per physical press", () => {
+    renderProbe("/epics/e1");
+    const calls: Array<string> = [];
+    const unregister = registerDynamicActionHandler(
+      "app.terminal.maximize",
+      () => calls.push("maximize"),
+    );
+
+    const first = keyDown({
+      code: "KeyJ",
+      key: "j",
+      metaKey: true,
+      altKey: true,
+    });
+    const repeated = keyDown({
+      code: "KeyJ",
+      key: "j",
+      metaKey: true,
+      altKey: true,
+      repeat: true,
+    });
+    unregister();
+
+    // One dispatch per physical press: the OS repeat is swallowed, but the
+    // chord stays reserved so the browser default can't run on it either.
+    expect(calls).toHaveLength(1);
+    expect(first.defaultPrevented).toBe(true);
+    expect(repeated.defaultPrevented).toBe(true);
   });
 
   it("shows both task-tab leader bindings when either leader is held", () => {

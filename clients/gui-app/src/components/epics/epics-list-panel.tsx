@@ -1315,12 +1315,15 @@ function HistoryRowLeadingIcon(props: { readonly item: HistoryItem }) {
   return (
     <NotificationIndicatorIcon
       state={indicatorState}
-      running={activityStatus === "running"}
+      // Epic-level activity is binary (any agent busy, background included);
+      // the per-chat turn/background split lives on the chat icons.
+      running={activityStatus === "running" ? "turn" : false}
       subjectId={props.item.epicId}
       testIdPrefix="epics-list-row"
       className="text-muted-foreground group-hover/list-row:text-foreground"
       style={undefined}
       runningTitle="Task activity in progress"
+      backgroundRunningTitle={undefined}
       defaultIcon={
         <Layers className="size-4 shrink-0 text-muted-foreground group-hover/list-row:text-foreground" />
       }

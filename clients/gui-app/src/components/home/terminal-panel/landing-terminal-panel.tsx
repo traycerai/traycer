@@ -24,6 +24,11 @@ import { useHostClient } from "@/lib/host";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { registerDynamicActionHandler } from "@/lib/keybindings/dispatch";
 import {
+  LEADER_SCOPE_LANDING_TERMINAL,
+  registerLeaderScope,
+} from "@/lib/keybindings/leader-scope";
+import { getSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
+import {
   pointerDragHandleAxisClassName,
   usePointerDragCommit,
 } from "@/components/epic-canvas/canvas/use-pointer-drag-commit";
@@ -240,17 +245,25 @@ function LandingTerminalPanelContents(
     panelWidthFraction: props.panelWidthFraction,
     setPanelWidthFraction: props.onSetPanelWidthFraction,
   });
-  const canCreate =
-    props.availability === "supported" && props.primaryWorkspacePath !== null;
+  const createDisabledReason = landingTerminalCreateDisabledReason(
+    props.availability,
+    props.primaryWorkspacePath,
+  );
   const createEnabled =
     props.panelOpen &&
     props.availability === "supported" &&
     props.activeHostId !== null &&
     props.reconciledHostId === props.activeHostId;
   useLandingTerminalShortcuts({
+    panelOpen: props.panelOpen,
+    maximized: props.maximized,
     onTogglePanel: props.onTogglePanel,
     onOpenPanel: props.onOpenPanel,
     onCreateTerminal: props.onCreateTerminal,
+    onToggleMaximized: props.onToggleMaximized,
+    onActivateTab: props.onActivateTab,
+    onCloseTab: props.onCloseTab,
+    onCloseAllTabs: props.onCloseAllTabs,
   });
   const panelStyle = props.maximized
     ? undefined
@@ -287,6 +300,11 @@ function LandingTerminalPanelContents(
         data-open={props.panelOpen ? "true" : "false"}
         className={cn(
           "flex h-full min-h-0 shrink-0 flex-col overflow-hidden border-t border-l border-canvas-border/70 bg-canvas transition-[width,visibility]",
+          // The width transition exists for open/collapse only. During a
+          // resize drag the global freeze class suspends it - otherwise every
+          // per-frame `style.width` write eases over the default duration and
+          // the panel rubber-bands behind the pointer.
+          "[.traycer-panel-resizing_&]:transition-none",
           !props.panelOpen && "invisible pointer-events-none",
           props.maximized && "absolute inset-0 z-20 w-full",
         )}
@@ -300,7 +318,7 @@ function LandingTerminalPanelContents(
         <LandingTerminalTabStrip
           tabs={props.tabs}
           activeInstanceId={props.activeInstanceId}
-          canCreate={canCreate}
+          createDisabledReason={createDisabledReason}
           onAdd={props.onCreateTerminal}
           onActivate={props.onActivateTab}
           onClose={props.onCloseTab}
@@ -324,33 +342,187 @@ function LandingTerminalPanelContents(
 }
 
 /**
+ * Why the strip's "+" is unavailable (surfaced as its tooltip), `null` when
+ * creating is live. Mirrors the empty-state copy so the strip explains itself
+ * even when tabs are already open (e.g. the pinned folder was removed after
+ * the terminals were spawned).
+ */
+function landingTerminalCreateDisabledReason(
+  availability: LandingTerminalAvailability,
+  primaryWorkspacePath: string | null,
+): string | null {
+  if (availability !== "supported") return "Connecting to the selected host…";
+  if (primaryWorkspacePath === null) {
+    return "Pick a folder to open a terminal in.";
+  }
+  return null;
+}
+
+/**
+ * The system-tab modal (Settings / History) is transparent to chord dispatch
+ * (it hosts its own leader scope), so the terminal tab shortcuts gate
+ * themselves at dispatch time: acting on tabs the modal fully occludes would
+ * be invisible. The epic canvas handlers for the same chords no-op while the
+ * overlay is open for the same reason.
+ */
+function systemTabOverlayActive(): boolean {
+  const api = getSystemTabModalApi();
+  if (api === null) return false;
+  return api.isOverlayActive("settings") || api.isOverlayActive("history");
+}
+
+/**
  * Binds the panel's chords. Registered here (not in `LandingTerminalPanel`)
  * so they exist exactly while the panel is a real affordance: an unsupported
  * host or no selected host renders nothing, and the chords must not silently
  * flip persisted panel state behind an invisible surface.
+ *
+ * Beyond the panel-chrome chords (`app.terminal.*`), the hook claims the
+ * epic canvas's tab-family actions - `tab.new`, `tab.close`, `tab.close-all`,
+ * `tab.next`/`tab.prev`, and `mod`-digit switching - so the terminal strip
+ * answers the same chords a canvas group's tab strip does. Those actions'
+ * static handlers all no-op on the landing route, so the dynamic
+ * registrations shadow nothing.
  */
 function useLandingTerminalShortcuts(args: {
+  readonly panelOpen: boolean;
+  readonly maximized: boolean;
   readonly onTogglePanel: () => void;
   readonly onOpenPanel: () => void;
   readonly onCreateTerminal: () => void;
+  readonly onToggleMaximized: () => void;
+  readonly onActivateTab: (instanceId: string) => void;
+  readonly onCloseTab: (tab: LandingTerminalTabRef) => void;
+  readonly onCloseAllTabs: () => void;
 }): void {
-  const { onTogglePanel, onOpenPanel, onCreateTerminal } = args;
+  const {
+    panelOpen,
+    maximized,
+    onTogglePanel,
+    onOpenPanel,
+    onCreateTerminal,
+    onToggleMaximized,
+    onActivateTab,
+    onCloseTab,
+    onCloseAllTabs,
+  } = args;
   useEffect(
     () => registerDynamicActionHandler("app.terminal.toggle", onTogglePanel),
     [onTogglePanel],
   );
+  const revealAndCreate = useCallback(() => {
+    // Reveal first: a collapsed panel with no tabs would otherwise let
+    // reconciliation's auto-spawn race this create and open two shells.
+    // Creating the tab up-front leaves a non-empty set, which suppresses
+    // the auto-spawn. Both calls self-gate, so this is safe while the
+    // host is still connecting.
+    onOpenPanel();
+    onCreateTerminal();
+  }, [onCreateTerminal, onOpenPanel]);
+  useEffect(
+    () => registerDynamicActionHandler("app.terminal.new", revealAndCreate),
+    [revealAndCreate],
+  );
   useEffect(
     () =>
-      registerDynamicActionHandler("app.terminal.new", () => {
-        // Reveal first: a collapsed panel with no tabs would otherwise let
-        // reconciliation's auto-spawn race this create and open two shells.
-        // Creating the tab up-front leaves a non-empty set, which suppresses
-        // the auto-spawn. Both calls self-gate, so this is safe while the
-        // host is still connecting.
-        onOpenPanel();
-        onCreateTerminal();
+      registerDynamicActionHandler("tab.new", () => {
+        if (systemTabOverlayActive()) return;
+        revealAndCreate();
       }),
-    [onCreateTerminal, onOpenPanel],
+    [revealAndCreate],
+  );
+  useEffect(
+    () =>
+      registerDynamicActionHandler("app.terminal.maximize", () => {
+        if (!panelOpen) {
+          // Revealing an already-maximized panel (possible when the last tab
+          // closed while maximized) must not un-maximize it.
+          onOpenPanel();
+          if (!maximized) onToggleMaximized();
+          return;
+        }
+        onToggleMaximized();
+      }),
+    [maximized, onOpenPanel, onToggleMaximized, panelOpen],
+  );
+  useEffect(
+    () =>
+      registerDynamicActionHandler("tab.close", () => {
+        if (systemTabOverlayActive()) return;
+        const state = useLandingTerminalStore.getState();
+        if (!state.panelOpen) return;
+        const active = state.tabs.find(
+          (tab) => tab.instanceId === state.activeInstanceId,
+        );
+        if (active === undefined) return;
+        onCloseTab(active);
+      }),
+    [onCloseTab],
+  );
+  useEffect(
+    () =>
+      registerDynamicActionHandler("tab.close-all", () => {
+        if (systemTabOverlayActive()) return;
+        const state = useLandingTerminalStore.getState();
+        if (!state.panelOpen || state.tabs.length === 0) return;
+        onCloseAllTabs();
+      }),
+    [onCloseAllTabs],
+  );
+  const activateAdjacentTab = useCallback(
+    (delta: 1 | -1) => {
+      if (systemTabOverlayActive()) return;
+      const state = useLandingTerminalStore.getState();
+      if (!state.panelOpen || state.tabs.length < 2) return;
+      const index = state.tabs.findIndex(
+        (tab) => tab.instanceId === state.activeInstanceId,
+      );
+      const count = state.tabs.length;
+      const next = state.tabs[(Math.max(index, 0) + delta + count) % count];
+      onActivateTab(next.instanceId);
+    },
+    [onActivateTab],
+  );
+  useEffect(
+    () =>
+      registerDynamicActionHandler("tab.next", () => activateAdjacentTab(1)),
+    [activateAdjacentTab],
+  );
+  useEffect(
+    () =>
+      registerDynamicActionHandler("tab.prev", () => activateAdjacentTab(-1)),
+    [activateAdjacentTab],
+  );
+  useEffect(
+    () =>
+      registerLeaderScope({
+        id: LEADER_SCOPE_LANDING_TERMINAL,
+        actions: [
+          {
+            actionId: "tab.switch.byDigit",
+            isActive: () => {
+              const state = useLandingTerminalStore.getState();
+              return (
+                state.panelOpen &&
+                state.tabs.length > 0 &&
+                !systemTabOverlayActive()
+              );
+            },
+            // Same digit convention as the canvas strip: physical "1"-"9"
+            // reach tabs 1-9; "0" maps to index -1 and falls through.
+            dispatch: (digit) => {
+              const index = digit - 1;
+              const tabs = useLandingTerminalStore.getState().tabs;
+              if (index < 0 || index >= tabs.length) return false;
+              onActivateTab(tabs[index].instanceId);
+              return true;
+            },
+            dispatchSequence: null,
+            sequenceState: null,
+          },
+        ],
+      }),
+    [onActivateTab],
   );
 }
 
@@ -364,7 +536,11 @@ function LandingTerminalPanelToggle(props: {
       size="icon-sm"
       aria-label="Open terminal panel"
       data-testid="landing-terminal-toggle"
-      className="absolute top-3 right-4 z-10"
+      // Occupies exactly the box the header's collapse button renders in
+      // while the panel is open (1px panel border + an icon-sm button
+      // centered in the h-9 header row, inset by the header's px-2), so
+      // toggling the panel never moves the control under the pointer.
+      className="absolute top-[5px] right-2 z-10"
       onClick={props.onOpenPanel}
     >
       <PanelRightOpen className="size-4" />

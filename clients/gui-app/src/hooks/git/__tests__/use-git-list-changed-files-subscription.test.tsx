@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { renderHook, waitFor } from "@testing-library/react";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import type { GitSubscribeStatusEvent } from "@traycer/protocol/host/git-schemas";
@@ -561,6 +561,150 @@ describe("useGitListChangedFilesSubscription", () => {
     await waitFor(() => {
       expect(mockWsStreamClient.subscribeCallCount).toBe(2);
     });
+  });
+
+  it("transport-terminal close surfaces a fatal error instead of pending forever", async () => {
+    const { result } = renderHook(
+      () =>
+        useGitListChangedFilesSubscription({
+          hostId: "host1",
+          runningDir: "/repo",
+          ignoreWhitespace: false,
+          enabled: true,
+        }),
+      { wrapper: createWrapper() },
+    );
+
+    await waitFor(() => {
+      expect(mockWsStreamClient.subscribeCallCount).toBe(1);
+    });
+
+    const session = mockWsStreamClient.getSession("git.subscribeStatus", {
+      hostId: "host1",
+      runningDir: "/repo",
+      ignoreWhitespace: false,
+    });
+    if (!session) throw new Error("Session should exist");
+
+    // A transport-terminal close (fatal error frame, closed client, the
+    // UNAUTHORIZED give-up) produces NO domain error frame - only a status
+    // transition. It must surface as a fatal error, not an eternal skeleton.
+    act(() => {
+      session.emitStatus("closed", {
+        kind: "fatalError",
+        details: {
+          code: "UNAUTHORIZED",
+          reason: "gave up after no-progress reconnects",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.error).not.toBeNull();
+    });
+    const error = result.current.error;
+    if (error === null || error.type !== "error") {
+      throw new Error("Expected an error event");
+    }
+    expect(error.isFatal).toBe(true);
+    expect(error.message).toContain("UNAUTHORIZED");
+    expect(result.current.isPending).toBe(false);
+    expect(session.closed).toBe(true);
+  });
+
+  it("a closed stream client surfaces an error via the inert session", async () => {
+    const closedClient = new WsStreamClient<HostStreamRpcRegistry>({
+      registry: hostStreamRpcRegistry,
+      endpoint: () => null,
+      bearer: () => null,
+      auth: null,
+      webSocketFactory: {
+        create: () => {
+          throw new Error("a closed client must not dial");
+        },
+      },
+      dialTimeoutMs: 1_000,
+      openAckTimeoutMs: 1_000,
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+    closedClient.close("test-close");
+
+    const warnSpy = vi
+      .spyOn(console, "warn")
+      .mockImplementation(() => undefined);
+    const closedWrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>
+        <StreamRuntimeContext.Provider value={{ wsStreamClient: closedClient }}>
+          {children}
+        </StreamRuntimeContext.Provider>
+      </QueryClientProvider>
+    );
+
+    const { result } = renderHook(
+      () =>
+        useGitListChangedFilesSubscription({
+          hostId: "host1",
+          runningDir: "/repo",
+          ignoreWhitespace: false,
+          enabled: true,
+        }),
+      { wrapper: closedWrapper },
+    );
+
+    await waitFor(() => {
+      expect(result.current.error).not.toBeNull();
+    });
+    const error = result.current.error;
+    if (error === null || error.type !== "error") {
+      throw new Error("Expected an error event");
+    }
+    expect(error.isFatal).toBe(true);
+    expect(error.message).toContain("CLIENT_CLOSED");
+    expect(result.current.isPending).toBe(false);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    warnSpy.mockRestore();
+  });
+
+  it("a rebuilt stream client gets a fresh subscription (per-client keying)", async () => {
+    const { rerender } = renderHook(
+      () =>
+        useGitListChangedFilesSubscription({
+          hostId: "host1",
+          runningDir: "/repo",
+          ignoreWhitespace: false,
+          enabled: true,
+        }),
+      { wrapper: createWrapper() },
+    );
+
+    await waitFor(() => {
+      expect(mockWsStreamClient.subscribeCallCount).toBe(1);
+    });
+    const firstClient = mockWsStreamClient;
+    const firstSession = firstClient.getSession("git.subscribeStatus", {
+      hostId: "host1",
+      runningDir: "/repo",
+      ignoreWhitespace: false,
+    });
+    if (!firstSession) throw new Error("Session should exist");
+
+    // Swap the context to a NEW client - a provider rebuild after host swap or
+    // the liveness guard. The shared map is keyed per client instance, so the
+    // consumer must drain the old entry (closing its session) and open a fresh
+    // subscription on the new client instead of clinging to the dead session.
+    mockWsStreamClient = new MockWsStreamClient();
+    rerender();
+
+    await waitFor(() => {
+      expect(mockWsStreamClient.subscribeCallCount).toBe(1);
+    });
+    expect(firstSession.closed).toBe(true);
+    expect(firstClient.instanceId).not.toBe(mockWsStreamClient.instanceId);
   });
 
   it("last unmount tears down immediately (no grace period, ADR-0003)", async () => {

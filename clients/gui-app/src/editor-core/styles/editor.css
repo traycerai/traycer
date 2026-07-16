@@ -51,7 +51,6 @@
   box-shadow:
     0 10px 24px -12px rgba(0, 0, 0, 0.35),
     0 4px 8px -4px rgba(0, 0, 0, 0.2);
-  z-index: 40;
 }
 
 .tc-editor-toolbar-group {
@@ -208,6 +207,33 @@
   background: transparent;
   padding: 0;
   font-size: inherit;
+}
+
+.tc-editor-prose a[data-link-href] {
+  color: var(--color-primary);
+  text-decoration-line: underline;
+  text-decoration-color: color-mix(
+    in oklab,
+    var(--color-primary) 55%,
+    transparent
+  );
+  text-underline-offset: 0.16em;
+  cursor: pointer;
+}
+
+.tc-editor-prose
+  a:is(
+    [data-link-href^="http://" i],
+    [data-link-href^="https://" i],
+    [data-link-href^="mailto:" i]
+  )::after {
+  content: "\2197";
+  display: inline-block;
+  margin-inline-start: 0.12em;
+  font-size: 0.72em;
+  line-height: 1;
+  text-decoration: none;
+  vertical-align: 0.18em;
 }
 
 /*

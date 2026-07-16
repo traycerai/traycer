@@ -181,7 +181,6 @@ describe("createResourcesStore", () => {
       state.owners.get(resourceOwnerKey("terminal", "s1"))?.processes[0].name,
     ).toBe("bash");
     expect(state.epic?.cpuPercent).toBe(12);
-    expect(state.taskSummary?.cpuPercent).toBe(12);
     handle.dispose();
   });
 
@@ -203,60 +202,10 @@ describe("createResourcesStore", () => {
       state.owners.get(resourceOwnerKey("terminal", "s1")),
     ).toBeUndefined();
     expect(state.owners.size).toBe(0);
-    expect(state.taskSummary).toBeNull();
     handle.dispose();
   });
 
-  it("derives a task summary from the live owner projection", () => {
-    const fake = makeFakeClient();
-    const handle = createResourcesStore({
-      scope: { kind: "epic", epicId: "epic-1" },
-      streamClientFactory: fake.factory,
-    });
-
-    fake.callbacks().onSnapshot(
-      projection({
-        owners: [
-          makeOwner("terminal", "term-1", {
-            rootPids: [101],
-            processCount: 3,
-            cpuPercent: 10,
-            rssBytes: 100,
-          }),
-          makeOwner("terminal", "term-2", {
-            rootPids: [201],
-            processCount: 1,
-            cpuPercent: 5,
-            rssBytes: 200,
-          }),
-          makeOwner("terminal-agent", "agent-1", {
-            rootPids: [301, 302],
-            processCount: 4,
-            cpuPercent: 7,
-            rssBytes: 300,
-          }),
-          makeOwner("chat", "chat-1", {
-            rootPids: [401],
-            processCount: 2,
-            cpuPercent: 3,
-            rssBytes: 400,
-          }),
-        ],
-      }),
-    );
-
-    expect(handle.store.getState().taskSummary).toEqual({
-      cpuPercent: 25,
-      rssBytes: 1_000,
-      trackedProcessCount: 10,
-      openTerminalCount: 2,
-      tuiAgentCount: 1,
-      guiAgentCount: 1,
-    });
-    handle.dispose();
-  });
-
-  it("includes host app usage in the task summary totals", () => {
+  it("includes host app usage in the epic aggregate totals", () => {
     const fake = makeFakeClient();
     const handle = createResourcesStore({
       scope: { kind: "epic", epicId: "epic-1" },
@@ -278,12 +227,6 @@ describe("createResourcesStore", () => {
     );
 
     expect(handle.store.getState().app?.process?.name).toBe("traycer-host");
-    expect(handle.store.getState().taskSummary).toMatchObject({
-      cpuPercent: 12,
-      rssBytes: 600,
-      trackedProcessCount: 3,
-      openTerminalCount: 1,
-    });
     handle.dispose();
   });
 
@@ -492,14 +435,8 @@ describe("resourcesRegistry", () => {
 
     const global = resourcesRegistry.getGlobalProjection();
     expect(global.entries).toHaveLength(2);
+    // Only the latest app snapshot is exposed (charged once, not summed per epic).
     expect(global.app?.sampledAt).toBe(2_000);
-    expect(global.summary).toMatchObject({
-      cpuPercent: 20,
-      rssBytes: 1_100,
-      trackedProcessCount: 5,
-      openTerminalCount: 1,
-      tuiAgentCount: 0,
-      guiAgentCount: 1,
-    });
+    expect(global.owners).toHaveLength(2);
   });
 });

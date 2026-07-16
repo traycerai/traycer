@@ -5,6 +5,7 @@ import type { ChatQueueState } from "@traycer/protocol/host/agent/gui/subscribe"
 import {
   reconcileQueueChange,
   reconcileSnapshotChange,
+  sweepStalePendingActions,
   type ReconcileQueueInput,
   type ReconcileSnapshotInput,
 } from "@/stores/chats/chat-queue-reconciler";
@@ -49,6 +50,7 @@ function createPendingAction(
     sender: isSendOrEdit ? SENDER : null,
     settings: isSendOrEdit ? SETTINGS : null,
     createdAt: 1000,
+    connectionEpoch: 0,
   };
 }
 
@@ -141,6 +143,7 @@ describe("chat-queue-reconciler", () => {
         sender: SENDER,
         settings: SETTINGS,
         createdAt: 1000,
+        connectionEpoch: 0,
       };
       const user1 = createPendingUserMessage("action-1", "msg-1");
       const user2: PendingUserMessage = {
@@ -195,6 +198,7 @@ describe("chat-queue-reconciler", () => {
         sender: SENDER,
         settings: SETTINGS,
         createdAt: 1000,
+        connectionEpoch: 0,
       };
       const action3 = createPendingAction("action-3", null, "stop");
       const input: ReconcileQueueInput = {
@@ -348,6 +352,7 @@ describe("chat-queue-reconciler", () => {
         sender: SENDER,
         settings: SETTINGS,
         createdAt: 1000,
+        connectionEpoch: 0,
       };
       const confirmedMessage: Message = {
         role: "user",
@@ -429,6 +434,7 @@ describe("chat-queue-reconciler", () => {
         sender: SENDER,
         settings: SETTINGS,
         createdAt: 1000,
+        connectionEpoch: 0,
       };
       const input: ReconcileSnapshotInput = {
         pendingActions: { "action-1": pendingAction },
@@ -526,6 +532,60 @@ describe("chat-queue-reconciler", () => {
       expect(Object.keys(result.acceptedActions).length).toBeLessThanOrEqual(
         70,
       );
+    });
+  });
+
+  describe("sweepStalePendingActions", () => {
+    it("drops stale pendings from an older connection epoch, keeping sends", () => {
+      const staleStop: PendingChatAction = {
+        ...createPendingAction("action-stop", null, "stop"),
+        connectionEpoch: 0,
+      };
+      const currentStop: PendingChatAction = {
+        ...createPendingAction("action-stop-live", null, "stop"),
+        connectionEpoch: 1,
+      };
+      // A stale SEND is never swept - it reconciles by messageId with
+      // composer restoration instead.
+      const staleSend: PendingChatAction = {
+        ...createPendingAction("action-send", "msg-1", "send"),
+        connectionEpoch: 0,
+      };
+      // A stale EDIT has no restoration path (restoreContent is null and its
+      // fresh messageId never appears in the snapshot when the frame died
+      // with the connection), so it IS swept - otherwise it wedges the edit
+      // affordances forever.
+      const staleEdit: PendingChatAction = {
+        ...createPendingAction("action-edit", "msg-2", "editUserMessage"),
+        connectionEpoch: 0,
+      };
+      const result = sweepStalePendingActions(
+        {
+          "action-stop": staleStop,
+          "action-stop-live": currentStop,
+          "action-send": staleSend,
+          "action-edit": staleEdit,
+        },
+        1,
+      );
+
+      expect(Object.keys(result.pendingActions).sort()).toEqual([
+        "action-send",
+        "action-stop-live",
+      ]);
+      expect([...result.sweptActionIds].sort()).toEqual([
+        "action-edit",
+        "action-stop",
+      ]);
+    });
+
+    it("returns the same reference and an empty swept set when nothing is stale", () => {
+      const pendingActions = {
+        "action-1": createPendingAction("action-1", null, "stop"),
+      };
+      const result = sweepStalePendingActions(pendingActions, 0);
+      expect(result.pendingActions).toBe(pendingActions);
+      expect(result.sweptActionIds.size).toBe(0);
     });
   });
 });
