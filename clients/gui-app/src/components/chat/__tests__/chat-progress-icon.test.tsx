@@ -14,7 +14,8 @@ const EPIC_ID = "epic-1";
 const CHAT_ID = "chat-1";
 const TEST_ID = "chat-progress";
 const RUNNING_TEST_ID = `${TEST_ID}-activity-${CHAT_ID}`;
-const BACKGROUND_RUNNING_TEST_ID = `${TEST_ID}-background-activity-${CHAT_ID}`;
+const TURN_RUNNING_LABEL = "Chat in progress";
+const BACKGROUND_RUNNING_LABEL = "Background tasks running — chat idle";
 
 const MONITOR_ITEM = {
   taskId: "task-1",
@@ -152,12 +153,12 @@ describe("<ChatProgressIcon />", () => {
 
     renderIcon();
 
-    expect(screen.queryByTestId(BACKGROUND_RUNNING_TEST_ID)).not.toBeNull();
     expect(
-      screen.queryByTitle("Background tasks running — chat idle"),
-    ).not.toBeNull();
-    expect(screen.queryByTestId(RUNNING_TEST_ID)).toBeNull();
-    expect(screen.queryByTitle("Chat in progress")).toBeNull();
+      screen.getByRole("status", { name: BACKGROUND_RUNNING_LABEL }),
+    ).toBeDefined();
+    expect(
+      screen.queryByRole("status", { name: TURN_RUNNING_LABEL }),
+    ).toBeNull();
   });
 
   it("prioritizes the turn spinner when a turn and background work run simultaneously", () => {
@@ -171,9 +172,12 @@ describe("<ChatProgressIcon />", () => {
 
     renderIcon();
 
-    expect(screen.queryByTestId(RUNNING_TEST_ID)).not.toBeNull();
-    expect(screen.queryByTitle("Chat in progress")).not.toBeNull();
-    expect(screen.queryByTestId(BACKGROUND_RUNNING_TEST_ID)).toBeNull();
+    expect(
+      screen.getByRole("status", { name: TURN_RUNNING_LABEL }),
+    ).toBeDefined();
+    expect(
+      screen.queryByRole("status", { name: BACKGROUND_RUNNING_LABEL }),
+    ).toBeNull();
   });
 
   it("keeps the running spinner for an active opened chat that needs approval", () => {

@@ -134,21 +134,29 @@ describe("<NotificationIndicatorIcon />", () => {
   it("renders the background tier muted and titled distinctly from the turn spinner", () => {
     renderIcon(DEFAULT_STATE, "background");
 
-    const indicator = screen.getByTestId(
-      "indicator-background-activity-subject-1",
-    );
-    expect(indicator.getAttribute("class")).toContain("text-muted-foreground");
-    expect(screen.getByTitle("Background tasks running")).toBeDefined();
-    expect(screen.queryByTestId("indicator-activity-subject-1")).toBeNull();
-    expect(screen.queryByTitle("Task activity in progress")).toBeNull();
+    expect(
+      screen.getByRole("status", { name: "Background tasks running" }),
+    ).toBeDefined();
+    expect(
+      screen.queryByRole("status", { name: "Task activity in progress" }),
+    ).toBeNull();
+    // Class assertion needs the inner spinner node, which carries the tier's
+    // muted styling; the role query above owns the presence contract.
+    expect(
+      screen
+        .getByTestId("indicator-background-activity-subject-1")
+        .getAttribute("class"),
+    ).toContain("text-muted-foreground");
   });
 
   it("renders status icons ahead of the background tier", () => {
     renderIcon({ ...DEFAULT_STATE, pendingApproval: true }, "background");
 
-    expect(screen.getByTestId("indicator-approval-subject-1")).toBeDefined();
     expect(
-      screen.queryByTestId("indicator-background-activity-subject-1"),
+      screen.getByRole("status", { name: "Task waiting for your approval" }),
+    ).toBeDefined();
+    expect(
+      screen.queryByRole("status", { name: "Background tasks running" }),
     ).toBeNull();
   });
 
