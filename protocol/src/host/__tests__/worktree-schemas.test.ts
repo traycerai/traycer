@@ -24,7 +24,12 @@ import {
   worktreeListAllForHostResponseSchemaV11,
   worktreeListAllForHostRequestSchemaV12,
   worktreeListAllForHostResponseSchemaV12,
+  worktreeListAllForHostRequestSchemaV13,
+  worktreeListAllForHostResponseSchemaV13,
   worktreeListBindingsForEpicResponseSchemaV11,
+  worktreeListByWorkspacePathsRequestSchemaV11,
+  worktreeListByWorkspacePathsRequestSchemaV12,
+  worktreeListByWorkspacePathsResponseSchemaV12,
   worktreeSubmoduleMergeFactSchema,
   worktreeSubmoduleMergeFactSchemaV12,
 } from "@traycer/protocol/host/worktree-schemas";
@@ -32,8 +37,11 @@ import {
 const V10 = { major: 1, minor: 0 } as const;
 const V11 = { major: 1, minor: 1 } as const;
 const V12 = { major: 1, minor: 2 } as const;
+const V13 = { major: 1, minor: 3 } as const;
 
 const listAllForHostRegistry = hostRpcRegistry["worktree.listAllForHost"];
+const listByWorkspacePathsRegistry =
+  hostRpcRegistry["worktree.listByWorkspacePaths"];
 
 // A v1.0 entry - every field the shipped listing already carries, none of the
 // v1.1 staleness signals.
@@ -648,13 +656,116 @@ describe("worktree.listAllForHost v1.0 <-> v1.2 negotiation", () => {
     );
   });
 
-  it("exposes v1.2 as the latest installed minor of major 1", () => {
-    expect(listAllForHostRegistry[1].latestMinor).toBe(2);
+  it("upgrades a v1.2 request to v1.3 by defaulting forceRefresh to false", () => {
+    const request = {
+      includeActivity: false,
+      activityPaths: null,
+      cursor: null,
+      limit: null,
+    };
+    const upgraded = upgradeRequestToVersion(
+      listAllForHostRegistry,
+      V12,
+      V13,
+      request,
+    );
+    expect(upgraded).toEqual({ ...request, forceRefresh: false });
+    expect(worktreeListAllForHostRequestSchemaV13.parse(upgraded)).toEqual(
+      upgraded,
+    );
+  });
+
+  it("upgrades a v1.2 response to v1.3 unchanged", () => {
+    const response = {
+      worktrees: [
+        {
+          ...v10Entry,
+          lastActivityAt: null,
+          owners: [],
+          branchStatus: null,
+          createdAt: null,
+          ...mergeProvenanceAbsent,
+          submodules: [],
+        },
+      ],
+      nextCursor: null,
+    };
+    const upgraded = upgradeResponseToVersion(
+      listAllForHostRegistry,
+      V12,
+      V13,
+      response,
+    );
+    expect(upgraded).toEqual(response);
+    expect(worktreeListAllForHostResponseSchemaV13.parse(upgraded)).toEqual(
+      upgraded,
+    );
+  });
+
+  it("exposes v1.3 as the latest installed minor of major 1", () => {
+    expect(listAllForHostRegistry[1].latestMinor).toBe(3);
     expect(Object.keys(listAllForHostRegistry[1].versions).sort()).toEqual([
       "0",
       "1",
       "2",
+      "3",
     ]);
+  });
+});
+
+describe("worktree.listByWorkspacePaths v1.1 <-> v1.2 negotiation", () => {
+  it("upgrades a v1.1 request to v1.2 by defaulting forceRefresh to false", () => {
+    const request = {
+      workspacePaths: ["/Users/dev/acme/web"],
+      scriptRefs: [],
+    };
+    const upgraded = upgradeRequestToVersion(
+      listByWorkspacePathsRegistry,
+      V11,
+      V12,
+      request,
+    );
+    expect(upgraded).toEqual({ ...request, forceRefresh: false });
+    expect(
+      worktreeListByWorkspacePathsRequestSchemaV12.parse(upgraded),
+    ).toEqual(upgraded);
+  });
+
+  it("upgrades a v1.1 response to v1.2 unchanged", () => {
+    const response = {
+      workspaces: [],
+      scriptsAtRefs: [],
+    };
+    const upgraded = upgradeResponseToVersion(
+      listByWorkspacePathsRegistry,
+      V11,
+      V12,
+      response,
+    );
+    expect(upgraded).toEqual(response);
+    expect(
+      worktreeListByWorkspacePathsResponseSchemaV12.parse(upgraded),
+    ).toEqual(upgraded);
+  });
+
+  it("rejects a v1.1 request against the v1.2 schema (forceRefresh is required)", () => {
+    const request = {
+      workspacePaths: ["/Users/dev/acme/web"],
+      scriptRefs: [],
+    };
+    expect(worktreeListByWorkspacePathsRequestSchemaV11.parse(request)).toEqual(
+      request,
+    );
+    expect(() =>
+      worktreeListByWorkspacePathsRequestSchemaV12.parse(request),
+    ).toThrow();
+  });
+
+  it("exposes v1.2 as the latest installed minor of major 1", () => {
+    expect(listByWorkspacePathsRegistry[1].latestMinor).toBe(2);
+    expect(
+      Object.keys(listByWorkspacePathsRegistry[1].versions).sort(),
+    ).toEqual(["0", "1", "2"]);
   });
 });
 

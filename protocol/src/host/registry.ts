@@ -220,6 +220,8 @@ import {
   worktreeListAllForHostResponseSchemaV11,
   worktreeListAllForHostRequestSchemaV12,
   worktreeListAllForHostResponseSchemaV12,
+  worktreeListAllForHostRequestSchemaV13,
+  worktreeListAllForHostResponseSchemaV13,
   worktreeImportRequestSchema,
   worktreeImportResponseSchema,
   worktreeListBranchesRequestSchema,
@@ -228,6 +230,8 @@ import {
   worktreeListByWorkspacePathsResponseSchema,
   worktreeListByWorkspacePathsRequestSchemaV11,
   worktreeListByWorkspacePathsResponseSchemaV11,
+  worktreeListByWorkspacePathsRequestSchemaV12,
+  worktreeListByWorkspacePathsResponseSchemaV12,
   worktreeListBindingsForEpicRequestSchema,
   worktreeListBindingsForEpicResponseSchema,
   worktreeListBindingsForEpicResponseSchemaV11,
@@ -425,6 +429,33 @@ export const worktreeListByWorkspacePathsUpgradeV10ToV11 = defineUpgradePath<
   }),
 });
 
+// v1.2 adds `forceRefresh`, the manual-refresh escape hatch over the
+// minutes-scale TTL cache `WorktreeService` now serves `listForWorkspace`
+// summaries from. Response shape is identical to v1.1.
+export const worktreeListByWorkspacePathsV12 = defineRpcContract({
+  method: "worktree.listByWorkspacePaths",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: worktreeListByWorkspacePathsRequestSchemaV12,
+  responseSchema: worktreeListByWorkspacePathsResponseSchemaV12,
+});
+
+// Additive upgrade from v1.1: an older peer never asks for a forced
+// recompute, so the request defaults `forceRefresh: false` (cached-read
+// behavior, unchanged from what v1.1 always did). The response is passed
+// through unchanged.
+export const worktreeListByWorkspacePathsUpgradeV11ToV12 = defineUpgradePath<
+  typeof worktreeListByWorkspacePathsV11,
+  typeof worktreeListByWorkspacePathsV12
+>({
+  from: worktreeListByWorkspacePathsV11.schemaVersion,
+  to: worktreeListByWorkspacePathsV12.schemaVersion,
+  upgradeRequest: (request) => ({
+    ...request,
+    forceRefresh: false,
+  }),
+  upgradeResponse: (response) => response,
+});
+
 export const worktreeListBranchesV10 = defineRpcContract({
   method: "worktree.listBranches",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -580,6 +611,34 @@ export const worktreeListAllForHostUpgradeV11ToV12 = defineUpgradePath<
     })),
     nextCursor: response.nextCursor,
   }),
+});
+
+// v1.3 adds `forceRefresh`, the manual-refresh escape hatch over the
+// minutes-scale TTL cache `WorktreeService` now serves the disk-truth
+// enumeration + per-worktree status from. Response shape is identical to
+// v1.2.
+export const worktreeListAllForHostV13 = defineRpcContract({
+  method: "worktree.listAllForHost",
+  schemaVersion: { major: 1, minor: 3 } as const,
+  requestSchema: worktreeListAllForHostRequestSchemaV13,
+  responseSchema: worktreeListAllForHostResponseSchemaV13,
+});
+
+// Additive upgrade from v1.2: an older peer never asks for a forced
+// recompute, so the request defaults `forceRefresh: false` (cached-read
+// behavior, unchanged from what v1.2 always did). The response is passed
+// through unchanged.
+export const worktreeListAllForHostUpgradeV12ToV13 = defineUpgradePath<
+  typeof worktreeListAllForHostV12,
+  typeof worktreeListAllForHostV13
+>({
+  from: worktreeListAllForHostV12.schemaVersion,
+  to: worktreeListAllForHostV13.schemaVersion,
+  upgradeRequest: (request) => ({
+    ...request,
+    forceRefresh: false,
+  }),
+  upgradeResponse: (response) => response,
 });
 
 export const worktreeSetRepoScriptsV10 = defineRpcContract({
@@ -3143,7 +3202,7 @@ const HOST_RPC_REGISTRY_DEFINITION = {
   },
   "worktree.listByWorkspacePaths": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: worktreeListByWorkspacePathsV10,
@@ -3153,6 +3212,11 @@ const HOST_RPC_REGISTRY_DEFINITION = {
           contract: worktreeListByWorkspacePathsV11,
           upgradeFromPreviousVersion:
             worktreeListByWorkspacePathsUpgradeV10ToV11,
+        },
+        2: {
+          contract: worktreeListByWorkspacePathsV12,
+          upgradeFromPreviousVersion:
+            worktreeListByWorkspacePathsUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},
@@ -3256,7 +3320,7 @@ const HOST_RPC_REGISTRY_DEFINITION = {
   },
   "worktree.listAllForHost": {
     1: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: worktreeListAllForHostV10,
@@ -3269,6 +3333,10 @@ const HOST_RPC_REGISTRY_DEFINITION = {
         2: {
           contract: worktreeListAllForHostV12,
           upgradeFromPreviousVersion: worktreeListAllForHostUpgradeV11ToV12,
+        },
+        3: {
+          contract: worktreeListAllForHostV13,
+          upgradeFromPreviousVersion: worktreeListAllForHostUpgradeV12ToV13,
         },
       },
       downgradePathsFromLatest: {},
