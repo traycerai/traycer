@@ -21,7 +21,7 @@ function resetMemory(): void {
 describe("commitProfileSelection", () => {
   beforeEach(resetMemory);
 
-  it("changes only the profile even when the destination remembers different model settings", () => {
+  it("changes only the profile when provider memory contains different model settings", () => {
     useComposerHarnessMemoryStore.getState().record({
       harnessId: "claude",
       model: "opus-4",
@@ -85,7 +85,7 @@ describe("commitProfileSelection", () => {
 describe("commitSelection - provider switch", () => {
   beforeEach(resetMemory);
 
-  it("restores the selected profile's remembered model when changing providers", () => {
+  it("restores the provider's last model independently of its selected profile", () => {
     useComposerHarnessMemoryStore.getState().record({
       harnessId: "claude",
       model: "opus-4",
@@ -94,6 +94,15 @@ describe("commitSelection - provider switch", () => {
       serviceTier: null,
       agentMode: "regular",
       profileId: "profile-b",
+    });
+    useComposerHarnessMemoryStore.getState().record({
+      harnessId: "claude",
+      model: "sonnet-4.5",
+      permissionMode: "supervised",
+      reasoningEffort: "high",
+      serviceTier: "fast",
+      agentMode: "regular",
+      profileId: "profile-a",
     });
 
     const emitted: Array<{ modelSlug: string; profileId: string | null }> = [];
@@ -118,17 +127,19 @@ describe("commitSelection - provider switch", () => {
       tuiOnly: false,
     });
 
-    // Provider-rail click: modelSlug is null, so the harness-switch resolver
-    // restores the destination provider/profile's own last model.
+    // Provider-rail click: modelSlug is null, so the provider switch restores
+    // its last model/config while committing the independently chosen profile.
     commitSelection(store, "claude", null, "profile-b");
 
     expect(store.getState().selection).toEqual({
       harnessId: "claude",
-      modelSlug: "opus-4",
+      modelSlug: "sonnet-4.5",
       profileId: "profile-b",
     });
+    expect(store.getState().reasoning).toBe("high");
+    expect(store.getState().serviceTier).toBe("fast");
     expect(emitted.at(-1)).toEqual({
-      modelSlug: "opus-4",
+      modelSlug: "sonnet-4.5",
       profileId: "profile-b",
     });
   });

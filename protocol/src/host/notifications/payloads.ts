@@ -29,6 +29,62 @@ import {
  * letting it through would mint an unusable deep-link instead of degrading. */
 const idSchema = z.string().min(1);
 
+export const HOST_NOTIFICATION_STOPPED_REASONS = [
+  "auth",
+  "rate_limit",
+  "billing",
+  "model_unavailable",
+  "provider_unavailable",
+  "provider_connection_failed",
+  "turn_start_timeout",
+  "missing_terminal_event",
+  "background_work_failed",
+] as const;
+export type HostNotificationStoppedReason =
+  (typeof HOST_NOTIFICATION_STOPPED_REASONS)[number];
+
+/**
+ * Central normalization for the stable runtime codes that are safe to explain
+ * in a durable notification. Unknown, ambiguous, configuration, and
+ * provider-controlled errors deliberately return `null`: consumers must use
+ * generic failure copy rather than infer semantics from raw text.
+ *
+ * New rows persist the result at the host notification boundary. Consumers may
+ * also call this only as a compatibility fallback for rows minted before the
+ * additive `reason` field existed.
+ */
+export function deriveHostNotificationStoppedReason(
+  code: string | null,
+): HostNotificationStoppedReason | null {
+  const normalized = code?.trim().toLowerCase() ?? null;
+  switch (normalized) {
+    case "auth":
+      return "auth";
+    case "rate_limit":
+    case "usage_limit_exceeded":
+    case "session_budget_exceeded":
+      return "rate_limit";
+    case "billing_error":
+      return "billing";
+    case "model_not_found":
+      return "model_unavailable";
+    case "overloaded":
+    case "server_error":
+      return "provider_unavailable";
+    case "claude_code_transport":
+      return "provider_connection_failed";
+    case "turn_start_timeout":
+      return "turn_start_timeout";
+    case "missing_terminal_event":
+      return "missing_terminal_event";
+    case "background_work_died":
+      return "background_work_failed";
+    case null:
+    default:
+      return null;
+  }
+}
+
 /**
  * GUI `agent.stopped` payload: the "chat" shape. `agentName` carries the
  * chat title (the GUI agent IS the chat).
@@ -43,6 +99,8 @@ export const hostNotificationChatStoppedPayloadSchema = z
     outcome: hostNotificationOutcomeSchema,
     code: z.string().optional(),
     message: z.string().optional(),
+    reason: z.string().optional(),
+    providerId: z.string().optional(),
   })
   .catchall(z.unknown());
 export type HostNotificationChatStoppedPayload = z.infer<
@@ -63,6 +121,8 @@ export const hostNotificationEpicStoppedPayloadSchema = z
     outcome: hostNotificationOutcomeSchema,
     code: z.string().optional(),
     message: z.string().optional(),
+    reason: z.string().optional(),
+    providerId: z.string().optional(),
   })
   .catchall(z.unknown());
 export type HostNotificationEpicStoppedPayload = z.infer<
@@ -122,16 +182,13 @@ export type HostNotificationInterviewPayload = z.infer<
   typeof hostNotificationInterviewPayloadSchema
 >;
 
-export const hostNotificationKnownPayloadSchema = z.discriminatedUnion(
-  "kind",
-  [
-    hostNotificationChatStoppedPayloadSchema,
-    hostNotificationEpicStoppedPayloadSchema,
-    hostNotificationAgentStalledPayloadSchema,
-    hostNotificationApprovalPayloadSchema,
-    hostNotificationInterviewPayloadSchema,
-  ],
-);
+export const hostNotificationKnownPayloadSchema = z.discriminatedUnion("kind", [
+  hostNotificationChatStoppedPayloadSchema,
+  hostNotificationEpicStoppedPayloadSchema,
+  hostNotificationAgentStalledPayloadSchema,
+  hostNotificationApprovalPayloadSchema,
+  hostNotificationInterviewPayloadSchema,
+]);
 export type HostNotificationKnownPayload = z.infer<
   typeof hostNotificationKnownPayloadSchema
 >;
