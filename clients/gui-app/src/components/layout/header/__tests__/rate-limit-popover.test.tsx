@@ -566,6 +566,12 @@ describe("<RateLimitPopover /> zero-provider state", () => {
     expect(surface.className).toContain(
       "max-h-[var(--radix-popover-content-available-height)]",
     );
+    expect(surface.className).toContain(
+      "min-w-[min(92vw,20rem,var(--radix-popover-content-available-width))]",
+    );
+    expect(surface.className).toContain(
+      "min-h-[min(20vh,8rem,var(--radix-popover-content-available-height))]",
+    );
     expect(surface.className).toContain("resize");
   });
 
@@ -607,6 +613,9 @@ describe("<RateLimitPopover /> rail", () => {
     expect(surface.style.width).toBe("540px");
     expect(surface.style.height).toBe("460px");
     expect(surface.className).toContain("grid-rows-[minmax(0,1fr)]");
+    expect(surface.className).toContain(
+      "min-h-[min(35vh,16rem,var(--radix-popover-content-available-height))]",
+    );
     expect(surface.className).toContain("overflow-hidden");
 
     rectSpy.mockRestore();

@@ -120,7 +120,7 @@ type RailTabDescriptor =
 const PERSONAL_ACCOUNT_CONTEXT: AccountContext = { type: "PERSONAL" };
 
 const POPOVER_SURFACE_CLASS_NAME =
-  "w-[min(92vw,30rem)] min-w-[min(92vw,20rem)] max-w-[var(--radix-popover-content-available-width)] max-h-[var(--radix-popover-content-available-height)] resize overflow-hidden";
+  "w-[min(92vw,30rem)] min-w-[min(92vw,20rem,var(--radix-popover-content-available-width))] max-w-[var(--radix-popover-content-available-width)] max-h-[var(--radix-popover-content-available-height)] resize overflow-hidden";
 
 type RateLimitPopoverSurfaceVariant = "content" | "empty";
 
@@ -331,8 +331,8 @@ function RateLimitPopoverResizeSurface({
       className={cn(
         POPOVER_SURFACE_CLASS_NAME,
         variant === "content"
-          ? "grid h-[max(50vh,22rem)] min-h-[min(35vh,16rem)] grid-cols-[3rem_minmax(0,1fr)] grid-rows-[minmax(0,1fr)]"
-          : "flex min-h-[min(20vh,8rem)] flex-col items-start gap-3 p-4",
+          ? "grid h-[max(50vh,22rem)] min-h-[min(35vh,16rem,var(--radix-popover-content-available-height))] grid-cols-[3rem_minmax(0,1fr)] grid-rows-[minmax(0,1fr)]"
+          : "flex min-h-[min(20vh,8rem,var(--radix-popover-content-available-height))] flex-col items-start gap-3 p-4",
       )}
       style={
         size === null
