@@ -57,11 +57,9 @@ export function applyWorktreeCreateResult(args: {
   const failedPaths = new Set(
     failedEntries.map((entry) => entry.workspacePath),
   );
-  for (const entry of stagedEntries) {
-    if (!failedPaths.has(entry.workspacePath)) {
-      actions.unstageEntry(entry.workspacePath);
-    }
-  }
+  stagedEntries
+    .filter((entry) => !failedPaths.has(entry.workspacePath))
+    .forEach((entry) => actions.unstageEntry(entry.workspacePath));
   const committedPaths = changedWorkspacePaths.filter(
     (path) => !failedPaths.has(path),
   );

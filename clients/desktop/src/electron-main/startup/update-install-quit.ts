@@ -64,5 +64,15 @@ export async function runUpdateInstallQuitSequence(
       err,
     );
   }
+
+  // `quitAndInstall` can still fail asynchronously while the drain was in
+  // flight - re-check before authorizing the quit.
+  if (!deps.isInstallPending()) {
+    log.info(
+      "[desktop] before-quit - install failed during renderer drain, staying open",
+    );
+    deps.stayOpen();
+    return;
+  }
   deps.authorizeQuitAfterFlush();
 }

@@ -124,8 +124,10 @@ export interface PendingChatAction {
    * authoritative snapshot means the frame's ack can never arrive (frames
    * and acks are fire-and-forget per connection), so snapshot reconciliation
    * drops such non-message pendings instead of leaving their controls
-   * disabled forever. Message sends/edits are excluded - they reconcile by
-   * messageId with composer restoration.
+   * disabled forever. Only `send` is excluded - it reconciles by messageId
+   * with composer restoration. A stale `editUserMessage` is swept (its
+   * applied edit still shows in the snapshot's messages either way; only
+   * its accepted-action bookkeeping entry is skipped).
    */
   readonly connectionEpoch: number;
 }

@@ -1473,9 +1473,11 @@ describe("AuthService", () => {
       const saveStarted = new Promise<void>((resolve) => {
         signalSaveStarted = resolve;
       });
-      host.tokenStore.set = async (): Promise<void> => {
+      const originalSet = host.tokenStore.set.bind(host.tokenStore);
+      host.tokenStore.set = async (tokens: StoredAuthTokens): Promise<void> => {
         signalSaveStarted();
         await savePending;
+        await originalSet(tokens);
       };
 
       host.deviceFlow.emitResult({
@@ -1500,6 +1502,7 @@ describe("AuthService", () => {
       // The stale finalization must not resurrect the signed-in projection.
       expect(useAuthStore.getState().status).toBe("signed-out");
       expect(service.getCurrentSessionSnapshot().token).toBeNull();
+      expect(await host.tokenStore.get()).toBeNull();
     });
 
     it("a newer sign-in wins over a finalization awaiting local provisioning", async () => {

@@ -105,6 +105,30 @@ describe("runUpdateInstallQuitSequence", () => {
     expect(order).toEqual(["stay-open"]);
   });
 
+  it("stays open instead of quitting when quitAndInstall fails while the renderer drain was in flight", async () => {
+    const order: string[] = [];
+    let installPending = true;
+    await runUpdateInstallQuitSequence({
+      reconcileHostUpdate: async () => "updated",
+      isInstallPending: () => installPending,
+      drainRendererProjection: async () => {
+        order.push("drain");
+        // quitAndInstall's async failure (e.g. read-only volume) lands
+        // while the drain is still awaiting the renderer's reply.
+        installPending = false;
+        return [];
+      },
+      authorizeQuitAfterFlush: () => {
+        order.push("authorize");
+      },
+      stayOpen: () => {
+        order.push("stay-open");
+      },
+    });
+
+    expect(order).toEqual(["drain", "stay-open"]);
+  });
+
   describe("state persisted across the install quit", () => {
     let tempDir: string;
     const logger = { warn: vi.fn(), error: vi.fn() };
