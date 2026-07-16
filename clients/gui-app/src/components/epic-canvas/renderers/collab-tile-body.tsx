@@ -4,6 +4,7 @@ import {
 } from "@/components/comments";
 import {
   applyCommentDecorationSnapshot,
+  ArtifactLinkPopover,
   ArtifactToolbar,
   deriveCollabUser,
   updateArtifactToolbarPosition,
@@ -67,6 +68,7 @@ import { createArtifactEditorFindAdapter } from "../tile-find/artifact-editor-fi
 import { seedArtifactTitleHeading } from "./artifact-editor-seed";
 import { useArtifactDocTitleFollow } from "./use-artifact-doc-title-follow";
 import { useCollabTileEditor } from "./use-collab-tile-editor";
+import { useArtifactLinkOpener } from "./use-artifact-link-opener";
 
 /**
  * Hint shown inside the empty leading title heading of a freshly seeded
@@ -166,9 +168,13 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
   const role = useEpicPermissionRole();
   const profile = useAuthStore((s) => s.profile);
   const editable = role === "owner" || role === "editor";
+  const [linkPopoverOpen, setLinkPopoverOpen] = useState(false);
+  const [scrollContainer, setScrollContainer] = useState<HTMLDivElement | null>(
+    null,
+  );
   const editorRootRef = useRef<HTMLDivElement>(null);
-  const [scrollTarget, setScrollTarget] = useState<HTMLDivElement | null>(null);
   const epicId = useOpenEpicId();
+  const artifactLinkOpener = useArtifactLinkOpener({ epicId, viewTabId });
   const commentArtifactKind =
     node.type === WORKSPACE_FILE_TAB_KIND
       ? null
@@ -432,7 +438,7 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
   const setScrollContainerRef = useCallback(
     (element: HTMLDivElement | null): void => {
       editorRootRef.current = element;
-      setScrollTarget(element);
+      setScrollContainer(element);
       scrollRestorationRef(element);
     },
     [scrollRestorationRef],
@@ -440,13 +446,15 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
   const onScroll = useCallback(
     (event: UIEvent<HTMLDivElement>): void => {
       onScrollRestoration(event);
-      if (editor === null || ownedDraftRange !== null) return;
+      if (editor === null || ownedDraftRange !== null || linkPopoverOpen) {
+        return;
+      }
       // TipTap's native BubbleMenu scroll listener is trailing-debounced.
       // Drive its documented escape hatch from this existing handler so the
       // selection toolbar tracks every native tile scroll event immediately.
       updateArtifactToolbarPosition(editor);
     },
-    [editor, onScrollRestoration, ownedDraftRange],
+    [editor, linkPopoverOpen, onScrollRestoration, ownedDraftRange],
   );
 
   return (
@@ -469,9 +477,9 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
             <ArtifactToolbar
               editor={editor}
               className={undefined}
-              scrollTarget={scrollTarget}
+              scrollTarget={scrollContainer}
               commentAction={commentAction}
-              suppressBubbleMenu={ownedDraftRange !== null}
+              suppressBubbleMenu={ownedDraftRange !== null || linkPopoverOpen}
             />
           ) : null}
         </div>
@@ -503,6 +511,16 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
             onActivateThread={onActivateThread}
           />
         </>
+      ) : null}
+      {editor !== null ? (
+        <ArtifactLinkPopover
+          editor={editor}
+          editable={editable}
+          scrollContainer={scrollContainer}
+          openLink={artifactLinkOpener.openLink}
+          openLinkPending={artifactLinkOpener.isExternalPending}
+          onOpenChange={setLinkPopoverOpen}
+        />
       ) : null}
     </div>
   );

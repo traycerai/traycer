@@ -12,16 +12,22 @@ import {
   List,
   ListOrdered,
   ListTodo,
+  Link,
   MessageSquarePlus,
   Quote,
   Strikethrough,
 } from "lucide-react";
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import {
   artifactToolbarPluginKey,
   createArtifactToolbarOptions,
+  hideArtifactToolbar,
+  showArtifactToolbar,
 } from "./artifact-toolbar-position";
 import { ToolbarButton } from "./toolbar-button";
+import { ARTIFACT_LINK_CREATE_EVENT } from "../links/artifact-link-popover";
+import { canUseArtifactLinkControl } from "../links/artifact-link-selection";
+import { isMac } from "@/lib/keybindings/platform";
 
 export interface ArtifactCommentAction {
   /** Snap the current selection into a draft and open the floating
@@ -66,6 +72,8 @@ interface ToolbarState {
   readonly isBlockquote: boolean;
   readonly isCodeBlock: boolean;
   readonly isCodeInline: boolean;
+  readonly isLink: boolean;
+  readonly canUseLinkControl: boolean;
 }
 
 function selectToolbarState({ editor }: { editor: Editor }): ToolbarState {
@@ -82,6 +90,8 @@ function selectToolbarState({ editor }: { editor: Editor }): ToolbarState {
     isBlockquote: editor.isActive("blockquote"),
     isCodeBlock: editor.isActive("codeBlock"),
     isCodeInline: editor.isActive("code"),
+    isLink: editor.isActive("link"),
+    canUseLinkControl: canUseArtifactLinkControl(editor),
   };
 }
 
@@ -111,20 +121,13 @@ export function ArtifactToolbar(props: ArtifactToolbarProps) {
   });
 
   const editable = editor.isEditable;
+  const linkShortcutLabel = isMac() ? "Link (⌘K)" : "Link (Ctrl+K)";
   const bubbleMenuOptions = useMemo(
     () => createArtifactToolbarOptions(scrollTarget),
     [scrollTarget],
   );
-  const shouldShow = useCallback(
-    ({
-      editor: currentEditor,
-      from,
-      to,
-    }: {
-      readonly editor: Editor;
-      readonly from: number;
-      readonly to: number;
-    }): boolean => {
+  const canShowToolbar = useCallback(
+    (currentEditor: Editor, from: number, to: number): boolean => {
       // Viewers (non-editable) still see the bar when commenting is
       // available - the bar will only render the 💬 button via the
       // `commentAction !== null` branch below; formatting buttons stay
@@ -142,8 +145,36 @@ export function ArtifactToolbar(props: ArtifactToolbarProps) {
     },
     [commentAction],
   );
+  const shouldShow = useCallback(
+    ({
+      editor: currentEditor,
+      from,
+      to,
+    }: {
+      readonly editor: Editor;
+      readonly from: number;
+      readonly to: number;
+    }): boolean => {
+      // Keep BubbleMenu mounted for the editor's lifetime. Unmounting it
+      // unregisters its ProseMirror plugin and reconfigures the state; with
+      // ySync that can emit a full-document replacement transaction.
+      return !suppressBubbleMenu && canShowToolbar(currentEditor, from, to);
+    },
+    [canShowToolbar, suppressBubbleMenu],
+  );
 
-  if (suppressBubbleMenu) return null;
+  const previouslySuppressedRef = useRef(suppressBubbleMenu);
+  useEffect(() => {
+    const previouslySuppressed = previouslySuppressedRef.current;
+    previouslySuppressedRef.current = suppressBubbleMenu;
+    if (suppressBubbleMenu) {
+      hideArtifactToolbar(editor);
+      return;
+    }
+    if (!previouslySuppressed) return;
+    const { from, to } = editor.state.selection;
+    if (canShowToolbar(editor, from, to)) showArtifactToolbar(editor);
+  }, [canShowToolbar, editor, suppressBubbleMenu]);
 
   // Focus the editor after a button click so the selection does not collapse
   // through the button's momentary focus steal (which would dismiss the menu).
@@ -240,6 +271,19 @@ export function ArtifactToolbar(props: ArtifactToolbarProps) {
             onClick={() =>
               run(() => editor.chain().focus().toggleStrike().run())
             }
+            className="tc-editor-toolbar-button"
+          />
+          <ToolbarButton
+            icon={<Link className="size-4" aria-hidden="true" />}
+            label={linkShortcutLabel}
+            active={state.isLink}
+            disabled={!editable || !state.canUseLinkControl}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => {
+              editor.view.dom.dispatchEvent(
+                new CustomEvent(ARTIFACT_LINK_CREATE_EVENT),
+              );
+            }}
             className="tc-editor-toolbar-button"
           />
         </div>
