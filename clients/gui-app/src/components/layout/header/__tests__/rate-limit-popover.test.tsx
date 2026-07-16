@@ -532,7 +532,7 @@ beforeEach(() => {
   };
   mocks.authUser = coldAuthUser();
   useAccountContextStore.setState({ accountContext: { type: "PERSONAL" } });
-  useRateLimitPopoverStore.setState({ activeTab: "overview" });
+  useRateLimitPopoverStore.setState({ activeTab: "overview", size: null });
   useRateLimitPopoverStore.persist.clearStorage();
   onClose = vi.fn();
 });
@@ -556,6 +556,19 @@ describe("<RateLimitPopover /> zero-provider state", () => {
     expect(screen.queryByRole("tablist")).toBeNull();
   });
 
+  it("keeps the empty surface resizable within the available viewport", () => {
+    renderPopover();
+
+    const surface = screen.getByTestId("rate-limit-popover-resize-surface");
+    expect(surface.className).toContain(
+      "max-w-[var(--radix-popover-content-available-width)]",
+    );
+    expect(surface.className).toContain(
+      "max-h-[var(--radix-popover-content-available-height)]",
+    );
+    expect(surface.className).toContain("resize");
+  });
+
   it("opens provider settings and closes the popover from the CTA", () => {
     mocks.configured = [];
     renderPopover();
@@ -571,6 +584,42 @@ describe("<RateLimitPopover /> zero-provider state", () => {
 });
 
 describe("<RateLimitPopover /> rail", () => {
+  it("remembers the last drag size across popover reopens", () => {
+    mocks.configured = [
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+    ];
+    mocks.results = { codex: readyResult(codexReady()) };
+    const first = renderPopover();
+
+    const surface = screen.getByTestId("rate-limit-popover-resize-surface");
+    const rectSpy = vi
+      .spyOn(surface, "getBoundingClientRect")
+      .mockReturnValue(new DOMRect(0, 0, 540, 460));
+    // CSS `resize` owns live drag frames and writes these inline dimensions.
+    surface.style.width = "540px";
+    surface.style.height = "460px";
+    fireEvent.pointerUp(surface);
+
+    expect(useRateLimitPopoverStore.getState().size).toEqual({
+      widthPx: 540,
+      heightPx: 460,
+    });
+    expect(surface.style.width).toBe("540px");
+    expect(surface.style.height).toBe("460px");
+    expect(surface.className).toContain("grid-rows-[minmax(0,1fr)]");
+    expect(surface.className).toContain("overflow-hidden");
+
+    rectSpy.mockRestore();
+    first.unmount();
+    renderPopover();
+
+    const reopenedSurface = screen.getByTestId(
+      "rate-limit-popover-resize-surface",
+    );
+    expect(reopenedSurface.style.width).toBe("540px");
+    expect(reopenedSurface.style.height).toBe("460px");
+  });
+
   it("pins Overview first, then one tab per provider in app order", () => {
     // Passed out of order; the rail must sort to codex, claude-code, ...
     mocks.configured = [
