@@ -180,10 +180,11 @@ describe("TerminalSessionRegistry", () => {
     owned.forEach((entry, index) => {
       registry.acquire(`terminal-${index}`, () => entry.handle);
     });
+    // All releases happen in the same synchronous batch (same tick), so
+    // ordering relies entirely on the monotonic release sequence, not on
+    // `Date.now()` ticking between them.
     owned.forEach((_entry, index) => {
       registry.release(`terminal-${index}`);
-      // Distinct release stamps so oldest-first ordering is deterministic.
-      vi.advanceTimersByTime(1);
     });
 
     expect(owned[0].closeCount()).toBe(1);
@@ -206,7 +207,6 @@ describe("TerminalSessionRegistry", () => {
     owned.forEach((entry, index) => {
       registry.acquire(`terminal-${index}`, () => entry.handle);
       registry.release(`terminal-${index}`);
-      vi.advanceTimersByTime(1);
     });
 
     // The warm agent neither counts toward the cap (all plains retained) nor

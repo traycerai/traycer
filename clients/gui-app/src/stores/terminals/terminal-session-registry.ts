@@ -35,8 +35,14 @@ interface RegistryEntry {
   leases: number;
   /** Pending timed eviction for a lease-free, still-running plain terminal. */
   lingerTimer: number | null;
-  /** When the last lease released; orders warm-cap eviction (oldest first). */
-  lastReleasedAt: number;
+  /**
+   * Monotonic release ordinal, orders warm-cap eviction (oldest first).
+   * `Date.now()` is not fine-grained enough - two releases in the same
+   * synchronous batch (e.g. `closeAllTabs`) can land on the same millisecond,
+   * making the sort order ambiguous - so a per-registry counter is used
+   * instead.
+   */
+  releaseSequence: number;
 }
 
 /**
@@ -64,6 +70,7 @@ interface RegistryEntry {
 export class TerminalSessionRegistry {
   private readonly entries = new Map<string, RegistryEntry>();
   private readonly listeners = new Set<() => void>();
+  private nextReleaseSequence = 0;
 
   size(): number {
     return this.entries.size;
@@ -141,7 +148,7 @@ export class TerminalSessionRegistry {
       }),
       leases: 1,
       lingerTimer: null,
-      lastReleasedAt: 0,
+      releaseSequence: 0,
     };
     this.entries.set(instanceId, entry);
     this.notify();
@@ -162,7 +169,7 @@ export class TerminalSessionRegistry {
       // so the xterm follower keeps its engine; eviction happens on the timer,
       // on session exit or stream loss (the status subscription above), on
       // warm-cap overflow, or via forceRelease.
-      entry.lastReleasedAt = Date.now();
+      entry.releaseSequence = this.nextReleaseSequence++;
       entry.lingerTimer = window.setTimeout(() => {
         entry.lingerTimer = null;
         if (entry.leases > 0) return;
@@ -222,11 +229,11 @@ export class TerminalSessionRegistry {
     );
     const overflow = lingering.length - MAX_LINGERING_PLAIN_TERMINALS;
     if (overflow <= 0) return;
-    lingering.sort((a, b) => a.lastReleasedAt - b.lastReleasedAt);
-    for (const entry of lingering.slice(0, overflow)) {
+    lingering.sort((a, b) => a.releaseSequence - b.releaseSequence);
+    lingering.slice(0, overflow).forEach((entry) => {
       this.entries.delete(entry.instanceId);
       this.disposeEntry(entry);
-    }
+    });
     this.notify();
   }
 
