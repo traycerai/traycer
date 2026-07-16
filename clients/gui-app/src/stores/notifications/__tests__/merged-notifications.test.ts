@@ -202,11 +202,71 @@ describe("merged notifications feed", () => {
     });
     expect(rowFromHostEntry(stalled)).toMatchObject({
       title: "Checkout notifications",
-      body: "Deploy checkout fix • Stalled",
+      body:
+        "Deploy checkout fix • Provider is taking longer than expected",
     });
     expect(rowFromHostEntry(interview)).toMatchObject({
       title: "Checkout notifications",
       body: "Deploy checkout fix • Question waiting",
+    });
+  });
+
+  it("renders safe semantic failure copy without exposing raw messages", () => {
+    const base = {
+      id: "notification-semantic",
+      updatedAt: 10,
+      readAt: null,
+      sourceRef: "agent-1",
+      epicId: "epic-1",
+      chatId: "chat-1",
+      kind: "agent.stopped",
+      severity: "failure",
+      outcome: "errored",
+    } as const;
+    const entry = (
+      reason: string | undefined,
+      code: string,
+      providerId: "claude-code" | undefined,
+    ): HostNotificationEntry => ({
+      ...base,
+      payload: {
+        kind: "chat",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        agentName: "Debug notifications",
+        taskTitle: "Notification errors",
+        outcome: "errored",
+        code,
+        message: "raw /Users/alice/private-path and provider output",
+        reason,
+        providerId,
+      },
+    });
+
+    expect(
+      rowFromHostEntry(entry("auth", "auth", "claude-code")),
+    ).toMatchObject({
+      body: "Debug notifications • Claude Code is signed out. Reconnect to continue.",
+    });
+    expect(
+      rowFromHostEntry(entry("rate_limit", "future-code", "claude-code")),
+    ).toMatchObject({
+      body: "Debug notifications • Claude Code rate limit reached",
+    });
+    expect(
+      rowFromHostEntry(entry("future-reason", "future-code", undefined)),
+    ).toMatchObject({
+      body: "Debug notifications • Failed",
+    });
+    expect(rowFromHostEntry(entry(undefined, "auth", undefined))).toMatchObject(
+      {
+        body: "Debug notifications • Provider is signed out. Reconnect to continue.",
+      },
+    );
+    expect(
+      rowFromHostEntry(entry(undefined, "MISSING_API_KEY", "claude-code")),
+    ).toMatchObject({
+      body: "Debug notifications • Failed",
     });
   });
 

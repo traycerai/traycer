@@ -30,11 +30,18 @@ import {
   useNotificationsStore,
 } from "@/stores/notifications/notifications-store";
 import {
+  deriveHostNotificationStoppedReason,
   parseKnownHostNotificationPayloadForKind,
   type HostNotificationKnownPayload,
   type HostNotificationOutcome,
   type HostNotificationSeverity,
 } from "@traycer/protocol/host/notifications/contracts";
+import {
+  PROVIDER_DISPLAY_NAMES,
+  providerIdSchema,
+  type ProviderId,
+} from "@traycer/protocol/host/provider-schemas";
+import { providerSignedOutMessage } from "@traycer/protocol/host/provider-display";
 import type { NotificationEntry } from "@traycer/protocol/notifications/notification-entry";
 import { formatNotification } from "@traycer/protocol/notifications/notification-formatter";
 
@@ -563,16 +570,17 @@ function hostNotificationPresentation(
   switch (entry.kind) {
     case "agent.stopped": {
       const context = notificationContext(agentName, title, isTerminalAgent);
-      const code = known === null ? null : knownStoppedCode(known);
+      const reason = known === null ? null : knownStoppedReason(known);
+      const providerId = known === null ? null : knownProviderId(known);
       return {
         title,
-        body: `${context} • ${agentStoppedStatus(entry.outcome, code)}`,
+        body: `${context} • ${agentStoppedStatus(entry.outcome, reason, providerId)}`,
       };
     }
     case "agent.stalled":
       return {
         title,
-        body: `${notificationContext(agentName, title, isTerminalAgent)} • Stalled`,
+        body: `${notificationContext(agentName, title, isTerminalAgent)} • ${agentStalledStatus(known)}`,
       };
     case "approval.requested":
       return { title, body: `${chatContext} • Approval requested` };
@@ -605,13 +613,32 @@ function knownChatTitle(payload: HostNotificationKnownPayload): string | null {
   }
 }
 
-function knownStoppedCode(
+function knownStoppedReason(
   payload: HostNotificationKnownPayload,
 ): string | null {
   switch (payload.kind) {
     case "chat":
     case "epic":
-      return payload.code ?? null;
+      return (
+        payload.reason ??
+        deriveHostNotificationStoppedReason(payload.code ?? null)
+      );
+    case "agent_stalled":
+    case "approval":
+    case "interview":
+      return null;
+  }
+}
+
+function knownProviderId(
+  payload: HostNotificationKnownPayload,
+): ProviderId | null {
+  switch (payload.kind) {
+    case "chat":
+    case "epic": {
+      const parsed = providerIdSchema.safeParse(payload.providerId);
+      return parsed.success ? parsed.data : null;
+    }
     case "agent_stalled":
     case "approval":
     case "interview":
@@ -621,12 +648,69 @@ function knownStoppedCode(
 
 function agentStoppedStatus(
   outcome: HostNotificationOutcome,
-  code: string | null,
+  reason: string | null,
+  providerId: ProviderId | null,
 ): string {
-  if (code === "RATE_LIMIT") return "Rate limit reached";
-  if (outcome === "errored") return "Failed";
+  if (outcome === "errored") {
+    return agentStoppedFailureStatus(reason, providerId);
+  }
   if (outcome === "stopped") return "Stopped";
   return "Done";
+}
+
+function agentStoppedFailureStatus(
+  reason: string | null,
+  providerId: ProviderId | null,
+): string {
+  const providerName =
+    providerId === null ? null : PROVIDER_DISPLAY_NAMES[providerId];
+  switch (reason) {
+    case "auth":
+      return providerId === null
+        ? "Provider is signed out. Reconnect to continue."
+        : providerSignedOutMessage(providerId);
+    case "rate_limit":
+      return providerName === null
+        ? "Rate limit reached"
+        : `${providerName} rate limit reached`;
+    case "billing":
+      return providerName === null
+        ? "Provider billing issue"
+        : `${providerName} billing issue`;
+    case "model_unavailable":
+      return "Model unavailable";
+    case "provider_unavailable":
+      return providerName === null
+        ? "Provider is temporarily unavailable"
+        : `${providerName} is temporarily unavailable`;
+    case "provider_connection_failed":
+      return providerName === null
+        ? "Provider connection failed"
+        : `Connection to ${providerName} failed`;
+    case "turn_start_timeout":
+      return "Provider did not start in time";
+    case "missing_terminal_event":
+      return "Provider stopped responding";
+    case "background_work_failed":
+      return "Background work stopped";
+    case null:
+    default:
+      return "Failed";
+  }
+}
+
+function agentStalledStatus(
+  payload: HostNotificationKnownPayload | null,
+): string {
+  if (payload?.kind !== "agent_stalled") return "Stalled";
+  switch (payload.reason) {
+    case "provider_buffering":
+      return "Provider is taking longer than expected";
+    case "provider_reroute":
+      return "Provider is rerouting";
+    default:
+      return "Stalled";
+  }
 }
 
 function notificationContext(
