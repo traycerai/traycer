@@ -533,7 +533,7 @@ describe("<LandingTerminalPanel />", () => {
     await waitFor(() => {
       expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
     });
-    fireEvent.click(screen.getByTestId("landing-terminal-new-tab"));
+    fireEvent.click(screen.getByRole("button", { name: "New terminal" }));
     await waitFor(() => {
       expect(useLandingTerminalStore.getState().tabs).toHaveLength(2);
     });
@@ -568,20 +568,28 @@ describe("<LandingTerminalPanel />", () => {
     await waitFor(() => {
       expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
     });
-    expect(screen.queryByLabelText("Restore terminal panel")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Restore terminal panel" }),
+    ).toBeNull();
 
     act(() => {
       dispatchAction("app.terminal.maximize", router);
     });
-    expect(screen.queryByLabelText("Restore terminal panel")).not.toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Restore terminal panel" }),
+    ).not.toBeNull();
 
     act(() => {
       dispatchAction("app.terminal.maximize", router);
     });
-    expect(screen.queryByLabelText("Restore terminal panel")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Restore terminal panel" }),
+    ).toBeNull();
 
     // Collapsed panel: the chord reveals and maximizes in one stroke.
-    fireEvent.click(screen.getByTestId("landing-terminal-collapse"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Collapse terminal panel" }),
+    );
     expect(screen.getByTestId("landing-terminal-panel").dataset.open).toBe(
       "false",
     );
@@ -591,7 +599,9 @@ describe("<LandingTerminalPanel />", () => {
     expect(screen.getByTestId("landing-terminal-panel").dataset.open).toBe(
       "true",
     );
-    expect(screen.queryByLabelText("Restore terminal panel")).not.toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Restore terminal panel" }),
+    ).not.toBeNull();
   });
 
   it("explains the disabled + button with a tooltip while no folder is pinned", async () => {
@@ -602,7 +612,7 @@ describe("<LandingTerminalPanel />", () => {
     useLandingTerminalStore.getState().setPanelOpen(true);
     render(panelUi());
 
-    const plus = await screen.findByTestId("landing-terminal-new-tab");
+    const plus = await screen.findByRole("button", { name: "New terminal" });
     expect(plus.getAttribute("aria-disabled")).toBe("true");
     // aria-disabled instead of the native attr keeps it inert but reachable.
     fireEvent.click(plus);
@@ -627,7 +637,7 @@ describe("<LandingTerminalPanel />", () => {
     await waitFor(() => {
       expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
     });
-    const plus = screen.getByTestId("landing-terminal-new-tab");
+    const plus = screen.getByRole("button", { name: "New terminal" });
     expect(plus.getAttribute("aria-disabled")).toBeNull();
     fireEvent.click(plus);
     await waitFor(() => {
