@@ -16,6 +16,14 @@ import type { ReactNode } from "react";
 vi.mock("@/hooks/editor/use-editor-open-mutation", () => ({
   useEditorOpen: () => ({ mutate: () => undefined }),
 }));
+// Platform-dependent keyboard behavior (plain Home/End claim scroll on macOS
+// only) needs both branches testable; jsdom always reports non-mac.
+const platformMock = vi.hoisted(() => ({ isMac: false }));
+vi.mock("@/lib/keybindings/platform", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/lib/keybindings/platform")>();
+  return { ...actual, isMac: () => platformMock.isMac };
+});
 vi.mock("@/lib/epic-selectors", () => ({
   useEpicArtifact: (artifactId: string | null) =>
     artifactId === "agent-sender-1"
@@ -58,6 +66,7 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import { useTileFindStore, type TileFindAdapter } from "@/stores/tile-find";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { BackgroundItem } from "@traycer/protocol/host/agent/gui/subscribe";
+import { isMac } from "@/lib/keybindings/platform";
 
 import {
   makeAssistantMessage,
@@ -187,22 +196,32 @@ function chatMessagesJsx(
   },
 ): ReactNode {
   return (
-    <VirtuosoMessageListTestingContext.Provider value={VIRTUOSO_TEST_CONTEXT}>
-      <ChatMessages
-        taskTitle="Transcript"
-        taskId="test-task"
-        messages={messages}
-        backgroundItems={opts.backgroundItems}
-        minimapItems={opts.minimapItems}
-        scrollStateKey={opts.scrollStateKey}
-        getMessageActions={() => null}
-        nextStepActions={null}
-        instanceId={TILE_FIND_TEST_INSTANCE_ID}
-        visible={opts.visible}
-        systemOverlayActive={opts.systemOverlayActive}
-        scrollRequest={opts.scrollRequest}
-      />
-    </VirtuosoMessageListTestingContext.Provider>
+    <div data-tile-find-scope="" data-active="true">
+      <div
+        data-chat-keyboard-scroll-scope=""
+        data-active="true"
+        data-testid="chat-keyboard-scroll-scope"
+      >
+        <VirtuosoMessageListTestingContext.Provider
+          value={VIRTUOSO_TEST_CONTEXT}
+        >
+          <ChatMessages
+            taskTitle="Transcript"
+            taskId="test-task"
+            messages={messages}
+            backgroundItems={opts.backgroundItems}
+            minimapItems={opts.minimapItems}
+            scrollStateKey={opts.scrollStateKey}
+            getMessageActions={() => null}
+            nextStepActions={null}
+            instanceId={TILE_FIND_TEST_INSTANCE_ID}
+            visible={opts.visible}
+            systemOverlayActive={opts.systemOverlayActive}
+            scrollRequest={opts.scrollRequest}
+          />
+        </VirtuosoMessageListTestingContext.Provider>
+      </div>
+    </div>
   );
 }
 
@@ -302,6 +321,7 @@ function rerenderChatMessagesWithTileFind(
 
 describe("ChatMessages Virtuoso renderer", () => {
   afterEach(() => {
+    platformMock.isMac = false;
     useTileFindStore.getState().resetForTests();
     useSettingsStore.getState().setQuoteReplyEnabled(true);
     window.getSelection()?.removeAllRanges();
@@ -406,6 +426,143 @@ describe("ChatMessages Virtuoso renderer", () => {
       expect(ids).toContain("message-99");
       expect(ids).not.toContain("message-0");
     });
+  });
+
+  it("scrolls the transcript with page keys and platform-modified Home/End", () => {
+    const messages = makeMessages(100);
+    renderChatMessages(
+      messages,
+      makeDefaultOpts({ minimapItems: minimapItemsFor(messages) }),
+    );
+    const scroller = screen.getByTestId("virtuoso-scroller");
+    Object.defineProperties(scroller, {
+      clientHeight: { configurable: true, value: 500 },
+      scrollHeight: { configurable: true, value: 2_000 },
+      scrollTo: {
+        configurable: true,
+        value: (options: ScrollToOptions) => {
+          if (typeof options.top === "number") scroller.scrollTop = options.top;
+        },
+      },
+    });
+
+    scroller.scrollTop = 1_000;
+    fireEvent.keyDown(document.body, { key: "PageUp" });
+    expect(scroller.scrollTop).toBe(500);
+
+    fireEvent.keyDown(document.body, { key: "PageDown" });
+    expect(scroller.scrollTop).toBe(1_000);
+
+    const platformModifier = isMac() ? { metaKey: true } : { ctrlKey: true };
+    fireEvent.keyDown(document.body, { key: "Home", ...platformModifier });
+    expect(scroller.scrollTop).toBe(0);
+
+    fireEvent.keyDown(document.body, { key: "End", ...platformModifier });
+    expect(scroller.scrollTop).toBe(1_500);
+
+    screen
+      .getByTestId("chat-keyboard-scroll-scope")
+      .setAttribute("data-active", "false");
+    fireEvent.keyDown(document.body, { key: "PageUp" });
+    expect(scroller.scrollTop).toBe(1_500);
+  });
+
+  it("claims scroll keys rooted on canvas chrome above the tile, but not from sibling subtrees", () => {
+    const messages = makeMessages(100);
+    const { container } = renderChatMessages(
+      messages,
+      makeDefaultOpts({ minimapItems: minimapItemsFor(messages) }),
+    );
+    const scroller = screen.getByTestId("virtuoso-scroller");
+    Object.defineProperties(scroller, {
+      clientHeight: { configurable: true, value: 500 },
+      scrollHeight: { configurable: true, value: 2_000 },
+    });
+
+    // The canvas focus management parks focus on chrome ABOVE the tile (the
+    // pane tab layer / tab-group root) - an ancestor, but not `body`. The
+    // active tile must still claim navigation keys from there.
+    const paneChrome = container.firstElementChild;
+    if (!(paneChrome instanceof HTMLElement)) throw new Error("no wrapper");
+    scroller.scrollTop = 1_000;
+    fireEvent.keyDown(paneChrome, { key: "PageUp" });
+    expect(scroller.scrollTop).toBe(500);
+
+    fireEvent.keyDown(paneChrome, {
+      key: "End",
+      ...(isMac() ? { metaKey: true } : { ctrlKey: true }),
+    });
+    expect(scroller.scrollTop).toBe(1_500);
+
+    // A key rooted in a sibling subtree (another pane, a dialog, the sidebar)
+    // is never claimed.
+    const sibling = document.createElement("div");
+    document.body.appendChild(sibling);
+    fireEvent.keyDown(sibling, { key: "PageUp" });
+    expect(scroller.scrollTop).toBe(1_500);
+    sibling.remove();
+  });
+
+  it("scrolls the transcript with plain Home/End on macOS, including from editable targets", () => {
+    platformMock.isMac = true;
+    const messages = makeMessages(100);
+    renderChatMessages(
+      messages,
+      makeDefaultOpts({ minimapItems: minimapItemsFor(messages) }),
+    );
+    const scroller = screen.getByTestId("virtuoso-scroller");
+    Object.defineProperties(scroller, {
+      clientHeight: { configurable: true, value: 500 },
+      scrollHeight: { configurable: true, value: 2_000 },
+    });
+
+    scroller.scrollTop = 1_000;
+    fireEvent.keyDown(document.body, { key: "Home" });
+    expect(scroller.scrollTop).toBe(0);
+
+    fireEvent.keyDown(document.body, { key: "End" });
+    expect(scroller.scrollTop).toBe(1_500);
+
+    // Mac editors don't use Home/End for caret movement (that's Cmd+←/→), so
+    // the chords stay transcript-scroll even while the composer has focus.
+    const composer = document.createElement("textarea");
+    screen.getByTestId("chat-keyboard-scroll-scope").appendChild(composer);
+    composer.focus();
+    fireEvent.keyDown(composer, { key: "Home" });
+    expect(scroller.scrollTop).toBe(0);
+
+    // Shift+Home is a selection chord; leave it to the focused control.
+    fireEvent.keyDown(composer, { key: "End", shiftKey: true });
+    expect(scroller.scrollTop).toBe(0);
+  });
+
+  it("leaves plain Home/End to editable targets off macOS", () => {
+    const messages = makeMessages(100);
+    renderChatMessages(
+      messages,
+      makeDefaultOpts({ minimapItems: minimapItemsFor(messages) }),
+    );
+    const scroller = screen.getByTestId("virtuoso-scroller");
+    Object.defineProperties(scroller, {
+      clientHeight: { configurable: true, value: 500 },
+      scrollHeight: { configurable: true, value: 2_000 },
+    });
+
+    // Windows/Linux editors use Home/End for caret movement - keep them.
+    const composer = document.createElement("textarea");
+    screen.getByTestId("chat-keyboard-scroll-scope").appendChild(composer);
+    composer.focus();
+    scroller.scrollTop = 1_000;
+    fireEvent.keyDown(composer, { key: "Home" });
+    expect(scroller.scrollTop).toBe(1_000);
+
+    // A non-editable target (body-rooted after clicking the transcript)
+    // scrolls the transcript.
+    fireEvent.keyDown(document.body, { key: "Home" });
+    expect(scroller.scrollTop).toBe(0);
+
+    fireEvent.keyDown(document.body, { key: "End" });
+    expect(scroller.scrollTop).toBe(1_500);
   });
 
   it("searches a virtualized row and paints after the target mounts", async () => {

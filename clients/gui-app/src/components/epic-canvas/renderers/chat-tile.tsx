@@ -649,6 +649,8 @@ function ChatTileSessionView(props: ChatTileSessionViewProps) {
         <div
           data-testid="chat-tile"
           data-node-id={view.node.id}
+          data-chat-keyboard-scroll-scope=""
+          data-active={props.isActive ? "true" : "false"}
           className="flex h-full min-h-0 flex-col"
         >
           <ChatSessionMessagesSurface
