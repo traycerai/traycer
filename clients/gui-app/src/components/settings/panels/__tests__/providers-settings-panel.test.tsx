@@ -476,6 +476,10 @@ vi.mock("@/components/ui/dropdown-menu", () => {
 
 import { ProvidersSettingsPanel } from "@/components/settings/panels/providers-settings-panel";
 import { ProviderProfileScopedSection } from "@/components/settings/panels/provider-profile-scoped-section";
+import {
+  AMBIENT_AUTH_PENDING_REPOLL_CAP,
+  AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS,
+} from "@/components/settings/panels/use-provider-profile-login-flow";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { redactEmail } from "@/lib/providers/redact-email";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
@@ -651,6 +655,41 @@ function codePasteReauthProviderState(): ProviderCliState {
   };
 }
 
+/**
+ * An `awaitLogin` response for the ambient row taken while the host's auth
+ * probe is still in flight: the login runner evicts the ambient auth-cache
+ * entry when the login child closes, so the row can read non-definitive with
+ * `authPending` set even though the sign-in landed. The flow must treat this
+ * as unsettled, never as a failed sign-in.
+ */
+function pendingAmbientAwaitResponse(): unknown {
+  return {
+    codeRejected: false,
+    existingProfileId: null,
+    state: {
+      authPending: true,
+      auth: {
+        status: "unknown",
+        badgeText: null,
+        label: null,
+        detail: null,
+      },
+      profiles: [
+        profile({
+          profileId: "ambient",
+          kind: "ambient",
+          label: "Terminal account",
+          email: null,
+          tier: null,
+          authStatus: "unknown",
+          duplicateOfProfileId: null,
+          ambientDriftNotice: null,
+        }),
+      ],
+    },
+  };
+}
+
 function codePasteCreateProviderState(): ProviderCliState {
   return {
     ...providerState({
@@ -769,6 +808,10 @@ describe("<ProvidersSettingsPanel />", () => {
   });
 
   afterEach(() => {
+    // Unconditional and before `cleanup()`: the ambient re-poll tests opt into
+    // fake timers mid-test, and a leaked fake clock would strand every later
+    // test's timers (and Testing Library's own unmount work).
+    vi.useRealTimers();
     cleanup();
     useDesktopDialogStore.setState({
       activeDialog: null,
@@ -2348,6 +2391,278 @@ describe("<ProvidersSettingsPanel />", () => {
     act(() => submitOptions.onSuccess({ outcome: "noActiveLogin" }));
 
     expect(screen.getByText("Signed in as")).toBeDefined();
+    expect(providerMocks.startLoginMutate).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-polls awaitLogin instead of failing when the ambient row is still authPending after the login completes (terminal-account switch)", async () => {
+    providerMocks.listResult.data = {
+      providers: [codePasteReauthProviderState()],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Terminal account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
+    await waitFor(() => {
+      expect(providerMocks.startLoginMutate).toHaveBeenCalled();
+    });
+    const [startVariables, startOptions] = firstStartLoginCall();
+    expect(startVariables).toEqual({
+      providerId: "codex",
+      profileId: "ambient",
+      createProfile: null,
+    });
+    // From here on the re-poll's timer is the only thing being waited on -
+    // drive it deterministically instead of sleeping out the real delay.
+    vi.useFakeTimers();
+    act(() => {
+      startOptions.onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "ambient",
+      });
+    });
+
+    // The sign-in landed, but the host assembled the response right after
+    // the login runner evicted the ambient auth-cache entry: the ambient row
+    // reads non-definitive with the probe still in flight (`authPending`).
+    // That must resolve as "not settled yet" - never as a failed sign-in.
+    const [awaitVariables, awaitOptions] = firstAwaitLoginCall();
+    expect(awaitVariables).toEqual({
+      providerId: "codex",
+      profileId: "ambient",
+    });
+    act(() => {
+      awaitOptions.onSuccess(pendingAmbientAwaitResponse());
+    });
+
+    expect(screen.queryByText("Sign-in did not finish. Try again.")).toBeNull();
+
+    // The bounded re-poll fires after its short delay; its re-probed state
+    // is authoritative and resolves the switch to the identity step.
+    act(() => {
+      vi.advanceTimersByTime(AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS);
+    });
+    expect(providerMocks.awaitLoginMutate).toHaveBeenCalledTimes(2);
+    const repollCall = providerMocks.awaitLoginMutate.mock.calls.at(1);
+    if (repollCall === undefined) {
+      throw new Error("Expected re-poll await login call.");
+    }
+    expect(repollCall[0]).toEqual({
+      providerId: "codex",
+      profileId: "ambient",
+    });
+    act(() => {
+      repollCall[1].onSuccess({
+        codeRejected: false,
+        existingProfileId: null,
+        state: {
+          authPending: false,
+          profiles: [
+            profile({
+              profileId: "ambient",
+              kind: "ambient",
+              label: "Terminal account",
+              email: "personal@example.test",
+              tier: null,
+              authStatus: "authenticated",
+              duplicateOfProfileId: null,
+              ambientDriftNotice: null,
+            }),
+          ],
+        },
+      });
+    });
+
+    expect(screen.getByText("Signed in as")).toBeDefined();
+    // Exactly one login child for the whole switch - re-polling never
+    // restarts the OAuth flow.
+    expect(providerMocks.startLoginMutate).toHaveBeenCalledTimes(1);
+  }, 10_000);
+
+  it("ignores an in-flight ambient re-poll that resolves after the sign-in was cancelled", async () => {
+    providerMocks.listResult.data = {
+      providers: [codePasteReauthProviderState()],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Terminal account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
+    await waitFor(() => {
+      expect(providerMocks.startLoginMutate).toHaveBeenCalled();
+    });
+    const [, startOptions] = firstStartLoginCall();
+    vi.useFakeTimers();
+    act(() => {
+      startOptions.onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "ambient",
+      });
+    });
+
+    const [, awaitOptions] = firstAwaitLoginCall();
+    act(() => {
+      awaitOptions.onSuccess(pendingAmbientAwaitResponse());
+    });
+
+    // The re-poll is dispatched...
+    act(() => {
+      vi.advanceTimersByTime(AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS);
+    });
+    expect(providerMocks.awaitLoginMutate).toHaveBeenCalledTimes(2);
+    const repollCall = providerMocks.awaitLoginMutate.mock.calls.at(1);
+    if (repollCall === undefined) {
+      throw new Error("Expected re-poll await login call.");
+    }
+
+    // ...and the user cancels while it is still in flight. Clearing the timer
+    // cannot recall an already-dispatched RPC, and cancelling leaves the
+    // attempt id untouched, so the late resolution must be ignored outright -
+    // otherwise it settles a cancelled attempt, and a still-pending verdict
+    // would arm yet another re-poll for a sign-in the user already abandoned.
+    fireEvent.click(screen.getByRole("button", { name: "Cancel sign-in" }));
+    expect(providerMocks.cancelLoginMutate).toHaveBeenCalledWith({
+      providerId: "codex",
+      profileId: "ambient",
+    });
+
+    act(() => {
+      repollCall[1].onSuccess(pendingAmbientAwaitResponse());
+    });
+
+    // No third await: the cancelled attempt must not keep re-polling. Advanced
+    // well past the delay so any scheduled tick would have fired.
+    act(() => {
+      vi.advanceTimersByTime(AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS * 3);
+    });
+    expect(providerMocks.awaitLoginMutate).toHaveBeenCalledTimes(2);
+    expect(providerMocks.startLoginMutate).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops re-polling when an in-flight ambient re-poll resolves after the flow unmounted", async () => {
+    providerMocks.listResult.data = {
+      providers: [codePasteReauthProviderState()],
+    };
+
+    const view = render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Terminal account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
+    await waitFor(() => {
+      expect(providerMocks.startLoginMutate).toHaveBeenCalled();
+    });
+    const [, startOptions] = firstStartLoginCall();
+    vi.useFakeTimers();
+    act(() => {
+      startOptions.onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "ambient",
+      });
+    });
+
+    const [, awaitOptions] = firstAwaitLoginCall();
+    act(() => {
+      awaitOptions.onSuccess(pendingAmbientAwaitResponse());
+    });
+    act(() => {
+      vi.advanceTimersByTime(AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS);
+    });
+    expect(providerMocks.awaitLoginMutate).toHaveBeenCalledTimes(2);
+    const repollCall = providerMocks.awaitLoginMutate.mock.calls.at(1);
+    if (repollCall === undefined) {
+      throw new Error("Expected re-poll await login call.");
+    }
+
+    // The flow goes away with its re-poll still in flight - no cancel involved
+    // (the in-chat banner unmounts on its own the moment its reauth gate
+    // clears). Clearing the scheduled timer is not enough: the dispatched RPC
+    // still resolves, and a still-pending verdict must not arm a fresh timer on
+    // a dead hook.
+    act(() => {
+      view.unmount();
+    });
+    act(() => {
+      repollCall[1].onSuccess(pendingAmbientAwaitResponse());
+    });
+    act(() => {
+      vi.advanceTimersByTime(AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS * 3);
+    });
+
+    expect(providerMocks.awaitLoginMutate).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails after the ambient authPending re-poll budget is exhausted without a definitive verdict", async () => {
+    providerMocks.listResult.data = {
+      providers: [codePasteReauthProviderState()],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Terminal account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
+    await waitFor(() => {
+      expect(providerMocks.startLoginMutate).toHaveBeenCalled();
+    });
+    const [, startOptions] = firstStartLoginCall();
+    vi.useFakeTimers();
+    act(() => {
+      startOptions.onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "ambient",
+      });
+    });
+
+    // The initial await plus every budgeted re-poll keeps reporting the
+    // probe as still pending - after the budget is spent the flow must land
+    // on the ordinary not-finished failure instead of re-polling forever.
+    for (
+      let attempt = 0;
+      attempt < AMBIENT_AUTH_PENDING_REPOLL_CAP + 1;
+      attempt += 1
+    ) {
+      expect(providerMocks.awaitLoginMutate).toHaveBeenCalledTimes(attempt + 1);
+      const awaitCall = providerMocks.awaitLoginMutate.mock.calls.at(attempt);
+      if (awaitCall === undefined) {
+        throw new Error("Expected await login call.");
+      }
+      act(() => {
+        awaitCall[1].onSuccess(pendingAmbientAwaitResponse());
+      });
+      act(() => {
+        vi.advanceTimersByTime(AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS);
+      });
+    }
+
+    expect(
+      screen.getByText("Sign-in did not finish. Try again."),
+    ).toBeDefined();
+    expect(providerMocks.awaitLoginMutate).toHaveBeenCalledTimes(
+      AMBIENT_AUTH_PENDING_REPOLL_CAP + 1,
+    );
     expect(providerMocks.startLoginMutate).toHaveBeenCalledTimes(1);
   });
 
