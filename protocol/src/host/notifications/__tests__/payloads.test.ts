@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  deriveHostNotificationStoppedReason,
   hostNotificationPayloadWithChatTitle,
   parseKnownHostNotificationPayload,
   parseKnownHostNotificationPayloadForKind,
@@ -88,6 +89,35 @@ describe("parseKnownHostNotificationPayload", () => {
     });
   });
 
+  it("accepts additive stopped reason and provider attribution fields", () => {
+    expect(
+      parseKnownHostNotificationPayload({
+        ...CHAT_STOPPED,
+        outcome: "errored",
+        code: "auth",
+        reason: "auth",
+        providerId: "claude-code",
+      }),
+    ).toMatchObject({
+      kind: "chat",
+      code: "auth",
+      reason: "auth",
+      providerId: "claude-code",
+    });
+  });
+
+  it("keeps a future provider id without invalidating the known payload", () => {
+    expect(
+      parseKnownHostNotificationPayload({
+        ...CHAT_STOPPED,
+        providerId: "future-provider",
+      }),
+    ).toMatchObject({
+      kind: "chat",
+      providerId: "future-provider",
+    });
+  });
+
   // A malformed row with empty identifiers must degrade rather than mint an
   // unusable deep-link.
   it("rejects empty identifier fields", () => {
@@ -121,6 +151,38 @@ describe("parseKnownHostNotificationPayload", () => {
     expect(parseKnownHostNotificationPayload(null)).toBeNull();
     expect(parseKnownHostNotificationPayload(undefined)).toBeNull();
     expect(parseKnownHostNotificationPayload([CHAT_STOPPED])).toBeNull();
+  });
+});
+
+describe("deriveHostNotificationStoppedReason", () => {
+  it.each([
+    ["auth", "auth"],
+    ["rate_limit", "rate_limit"],
+    ["RATE_LIMIT", "rate_limit"],
+    ["usage_limit_exceeded", "rate_limit"],
+    ["session_budget_exceeded", "rate_limit"],
+    ["billing_error", "billing"],
+    ["model_not_found", "model_unavailable"],
+    ["overloaded", "provider_unavailable"],
+    ["server_error", "provider_unavailable"],
+    ["CLAUDE_CODE_TRANSPORT", "provider_connection_failed"],
+    ["TURN_START_TIMEOUT", "turn_start_timeout"],
+    ["MISSING_TERMINAL_EVENT", "missing_terminal_event"],
+    ["background_work_died", "background_work_failed"],
+  ])("normalizes %s to %s", (code, reason) => {
+    expect(deriveHostNotificationStoppedReason(code)).toBe(reason);
+  });
+
+  it.each([
+    null,
+    "MISSING_API_KEY",
+    "invalid_request",
+    "refusal",
+    "RUNTIME_THROWN",
+    "TURN_FINALIZATION_FAILED",
+    "future_error",
+  ])("keeps unsafe or unknown code %s generic", (code) => {
+    expect(deriveHostNotificationStoppedReason(code)).toBeNull();
   });
 });
 
