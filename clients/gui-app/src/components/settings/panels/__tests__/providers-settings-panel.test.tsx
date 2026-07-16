@@ -2441,7 +2441,9 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
-    fireEvent.click(screen.getByRole("menuitem", { name: "Terminal account" }));
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Terminal account, Terminal" }),
+    );
     fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
     await waitFor(() => {
@@ -2532,7 +2534,9 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
-    fireEvent.click(screen.getByRole("menuitem", { name: "Terminal account" }));
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Terminal account, Terminal" }),
+    );
     fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
     await waitFor(() => {
@@ -2598,7 +2602,9 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
-    fireEvent.click(screen.getByRole("menuitem", { name: "Terminal account" }));
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Terminal account, Terminal" }),
+    );
     fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
     await waitFor(() => {
@@ -2656,7 +2662,9 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
-    fireEvent.click(screen.getByRole("menuitem", { name: "Terminal account" }));
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Terminal account, Terminal" }),
+    );
     fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
     await waitFor(() => {
