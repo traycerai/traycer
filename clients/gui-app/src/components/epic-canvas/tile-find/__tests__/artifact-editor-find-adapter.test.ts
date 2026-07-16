@@ -4,6 +4,7 @@ import { Editor } from "@tiptap/core";
 import type { Transaction } from "@tiptap/pm/state";
 import StarterKit from "@tiptap/starter-kit";
 import { ArtifactFindExtension, getArtifactFindState } from "@/editor-core";
+import { artifactToolbarPluginKey } from "@/editor-core/toolbar/artifact-toolbar-position";
 import type { TileKindId } from "@/stores/epics/canvas/tile-kinds";
 import {
   useTileFindStore,
@@ -114,6 +115,44 @@ describe("createArtifactEditorFindAdapter", () => {
     expect(after?.currentRequestId).toBe(before?.currentRequestId);
     expect(after?.lastSnapshot.status).toBe(before?.lastSnapshot.status);
     expect(editor.getText()).toBe("alpha beta");
+  });
+
+  it("keeps find state identity-stable for toolbar and selection transactions while closed", () => {
+    const editor = makeEditor("<p>alpha beta</p>", true);
+    const adapter = makeAdapter(editor, "spec", "foreign-meta");
+    useTileFindStore.getState().registerTarget({
+      tileInstanceId: adapter.tileInstanceId,
+      contentId: "foreign-meta-content",
+      viewTabId: "view-1",
+      tileId: "foreign-meta-tile",
+      epicId: "epic-1",
+      tileKind: adapter.tileKind,
+      isEligible: true,
+      adapter,
+    });
+    const adapterListener = vi.fn();
+    const unsubscribeAdapter = adapter.subscribe(adapterListener);
+    const storeListener = vi.fn();
+    const unsubscribeStore = useTileFindStore.subscribe(storeListener);
+    const snapshotBefore = adapter.getSnapshot();
+    const storeBefore = useTileFindStore.getState();
+    const uiBefore = storeBefore.uiByTileInstanceId[adapter.tileInstanceId];
+
+    editor.view.dispatch(
+      editor.state.tr.setMeta(artifactToolbarPluginKey, "updatePosition"),
+    );
+    expect(editor.commands.setTextSelection({ from: 1, to: 6 })).toBe(true);
+
+    expect(adapterListener).not.toHaveBeenCalled();
+    expect(storeListener).not.toHaveBeenCalled();
+    expect(adapter.getSnapshot()).toBe(snapshotBefore);
+    expect(useTileFindStore.getState()).toBe(storeBefore);
+    expect(
+      useTileFindStore.getState().uiByTileInstanceId[adapter.tileInstanceId],
+    ).toBe(uiBefore);
+
+    unsubscribeStore();
+    unsubscribeAdapter();
   });
 
   it.each(["spec", "ticket", "story", "review"] as const)(

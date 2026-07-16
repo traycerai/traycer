@@ -33,7 +33,7 @@ export function TrayOpenEpicBridge(): null {
       navigate,
       openRequest.epicId,
       router.state.location.pathname,
-      epic?.title,
+      { title: epic?.title, source: "system_tray" },
     );
   }, [openRequest, navigate, router]);
 

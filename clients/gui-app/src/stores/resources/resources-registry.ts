@@ -2,7 +2,6 @@ import { useCallback, useSyncExternalStore } from "react";
 import { create, useStore } from "zustand";
 import type { ResourceOwnerKindWire } from "@traycer/protocol/host/resources/subscribe";
 import {
-  deriveTaskResourceSummary,
   resourceOwnerKey,
   type AppResourceUsage,
   type EpicResourceUsage,
@@ -11,7 +10,6 @@ import {
   type OwnerResourceUsage,
   type ResourcesState,
   type ResourcesStoreHandle,
-  type TaskResourceSummary,
 } from "@/stores/resources/resources-store";
 
 /**
@@ -42,7 +40,6 @@ export interface GlobalResourceEpicEntry {
   readonly other: OtherResourceUsage | null;
   readonly owners: readonly OwnerResourceUsage[];
   readonly epic: EpicResourceUsage | null;
-  readonly taskSummary: TaskResourceSummary | null;
 }
 
 export interface GlobalResourceProjection {
@@ -52,7 +49,6 @@ export interface GlobalResourceProjection {
   readonly other: OtherResourceUsage | null;
   readonly owners: readonly OwnerResourceUsage[];
   readonly entries: readonly GlobalResourceEpicEntry[];
-  readonly summary: TaskResourceSummary | null;
 }
 
 class ResourcesRegistry {
@@ -120,7 +116,6 @@ class ResourcesRegistry {
         other: state.other,
         owners: [...state.owners.values()],
         epic: state.epic,
-        taskSummary: state.taskSummary,
       };
     });
     const owners = entries.flatMap((entry) => entry.owners);
@@ -138,7 +133,6 @@ class ResourcesRegistry {
       other,
       owners,
       entries,
-      summary: deriveTaskResourceSummary(app, owners),
     };
     this.globalProjectionCache = {
       version: this.globalVersion,
@@ -176,7 +170,6 @@ class ResourcesRegistry {
         other: state.other,
         owners: scopedOwners,
         epic,
-        taskSummary: deriveTaskResourceSummary(null, scopedOwners),
       };
     });
     return {
@@ -186,7 +179,6 @@ class ResourcesRegistry {
       other: state.other,
       owners,
       entries,
-      summary: deriveTaskResourceSummary(state.app, owners),
     };
   }
 
@@ -374,7 +366,6 @@ const emptyResourcesStore = create<ResourcesState>()(() => ({
   other: null,
   epic: null,
   epics: new Map(),
-  taskSummary: null,
   dispose: () => undefined,
 }));
 
@@ -429,16 +420,4 @@ export function useGlobalResourceProjection(): GlobalResourceProjection {
     () => resourcesRegistry.getGlobalProjection(),
     () => resourcesRegistry.getGlobalProjection(),
   );
-}
-
-/**
- * Live task-level resource summary derived in the renderer from the current
- * owner projection. `null` means no tracked owners are present.
- */
-export function useTaskResourceSummary(
-  epicId: string,
-): TaskResourceSummary | null {
-  const handle = useResourcesHandle(epicId);
-  const store = handle === null ? emptyResourcesStore : handle.store;
-  return useStore(store, (state) => state.taskSummary);
 }

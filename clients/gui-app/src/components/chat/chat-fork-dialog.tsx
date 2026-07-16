@@ -44,6 +44,7 @@ import type { SeedIntentOverride } from "@/lib/worktree/worktree-intent-seeding"
 import { readSeededLaunchWorkspace } from "@/lib/worktree/seeded-launch-worktree-intent";
 import { useSeededWorkspaceSnapshotStore } from "@/stores/worktree/seeded-workspace-snapshot-store";
 import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 const activeChatForkWorkspaceOwnerByKey = new Map<string, symbol>();
 
@@ -265,6 +266,10 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       },
       {
         onSuccess: (result) => {
+          Analytics.getInstance().track(AnalyticsEvent.ChatForked, {
+            source: "direct_ui",
+            include_history: true,
+          });
           clearChatForkWorkspace(stagingKey);
           const cancel = openCreatedChatWhenProjectedWithNavigation({
             intent: {
@@ -273,6 +278,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
               tabId,
               chatId: result.chatId,
               hostId,
+              source: "direct_ui",
             },
             navigateNestedFocus,
           });

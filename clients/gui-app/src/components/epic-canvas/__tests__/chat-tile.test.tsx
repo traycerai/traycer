@@ -482,6 +482,7 @@ function nextStepsAssistantMessage(): Message {
       agentId: "codex",
       displayName: "Codex",
       reply: { expectsReply: false },
+      inReplyTo: null,
     },
     blocks: [
       {
@@ -518,6 +519,7 @@ function streamingInterviewAssistantMessage(): Message {
       agentId: "claude",
       displayName: "Claude",
       reply: { expectsReply: false },
+      inReplyTo: null,
     },
     blocks: [
       {

@@ -58,7 +58,10 @@ import {
   resolveRateLimitProfileId,
   type RateLimitProfileSelection,
 } from "@/hooks/rate-limits/use-rate-limit-profile-selection";
-import { enqueueRateLimitFetch } from "@/lib/rate-limits/ephemeral-fetch-queue";
+import {
+  enqueueRateLimitFetch,
+  enqueueRateLimitFetchBatch,
+} from "@/lib/rate-limits/ephemeral-fetch-queue";
 import {
   formatUnavailableReason,
   resolvePopoverProviderRateLimitState,
@@ -72,6 +75,7 @@ import {
   sortProviderStatesByProviderOrder,
 } from "@/lib/provider-ordering";
 import { queryKeys } from "@/lib/query-keys";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import {
   PROVIDER_RATE_LIMITS_STALE_TIME_MS,
   rateLimitFetchLane,
@@ -191,7 +195,7 @@ function configuredProviderProfiles(
 function refreshTargetsForProvider(
   provider: ConfiguredRateLimitProvider,
 ): ReadonlyArray<string | null> {
-  if (provider.profiles.length <= 1) return [null];
+  if (provider.profiles.length === 0) return [null];
   return provider.profiles
     .filter(profileLoggedInForUsage)
     .map(rateLimitProfileId);
@@ -630,16 +634,17 @@ function useTraycerRateLimitUsageState(
 
 /**
  * The rail's icon-only "Refresh all" (Core Flows): ephemeralProcess providers
- * refresh one at a time through the shared serial queue (`force: true`), while
- * httpFetch providers refresh concurrently alongside via a direct query
- * invalidation - a plain GET has no subprocess cost to serialize. The synthetic
- * Traycer entry refreshes here too: it refetches the AuthService subscription
- * query, and rate-limit based plans additionally invalidate the unscoped
- * aperture `host.getRateLimitUsage` query that backs the live artifact bar.
+ * refresh as one queued batch whose profile pulls run concurrently
+ * (`force: true`), while httpFetch providers refresh concurrently alongside via
+ * a direct query invalidation - a plain GET has no subprocess cost to serialize.
+ * The synthetic Traycer entry refreshes here too: it refetches the AuthService
+ * subscription query, and rate-limit based plans additionally invalidate the
+ * unscoped aperture `host.getRateLimitUsage` query that backs the live artifact
+ * bar.
  * `refreshing` combines all lanes' real query state - the queue's draining flag
- * for ephemeralProcess (which stays true a beat longer than any single
- * provider's `isFetching`, covering the "still waiting behind an earlier
- * provider in the queue" gap), each configured httpFetch provider's own
+ * for ephemeralProcess (which stays true until every profile in the batch has
+ * settled, even after one provider's own `isFetching` clears), each configured
+ * httpFetch provider's own
  * `isFetching` (read via `useHostQueries` against the exact same query keys the
  * invalidation below targets), plus Traycer's auth/aperture fetch state - so
  * the icon spins for the whole round regardless of which lane(s) are actually
@@ -669,6 +674,15 @@ function RateLimitRefreshAllButton({
       profileId,
     })),
   );
+  const ephemeralProcessRequests = providers
+    .filter((provider) => provider.lane === "ephemeralProcess")
+    .flatMap((provider) =>
+      refreshTargetsForProvider(provider).map((profileId) => ({
+        providerId: provider.providerId,
+        accountContext: DEFAULT_ACCOUNT_CONTEXT,
+        profileId,
+      })),
+    );
   // Every httpFetch provider resolves to the exact same lane options (the
   // `isHttpFetch` branch in `providerRateLimitQueryOptions` doesn't vary by
   // provider id) - reusing the first one's is safe without the "verify every
@@ -710,8 +724,8 @@ function RateLimitRefreshAllButton({
     traycerRefreshing;
 
   // Fire-and-forget, not awaited: httpFetch providers refresh concurrently via a
-  // direct invalidation, ephemeralProcess providers queue through the shared
-  // serial lane, and Traycer refetches its subscription/usage queries. Returns
+  // direct invalidation, ephemeralProcess profiles fan out inside one queued
+  // batch, and Traycer refetches its subscription/usage queries. Returns
   // an already-resolved promise so `RefreshIconButton` gets its
   // `() => Promise<void>` contract without gating the spinner on the fetches
   // themselves - `refreshing` (above) owns that.
@@ -728,17 +742,7 @@ function RateLimitRefreshAllButton({
         }),
       });
     });
-    providers
-      .filter((provider) => provider.lane === "ephemeralProcess")
-      .forEach((provider) => {
-        refreshTargetsForProvider(provider).forEach((profileId) => {
-          void enqueueRateLimitFetch(
-            provider.providerId,
-            DEFAULT_ACCOUNT_CONTEXT,
-            { force: true, profileId },
-          );
-        });
-      });
+    void enqueueRateLimitFetchBatch(ephemeralProcessRequests, { force: true });
     if (traycerRefreshTarget.enabled) {
       void traycerRefreshTarget.refetch();
       traycerRefreshTarget.rateLimitAccountContexts.forEach(
@@ -907,7 +911,7 @@ function SingleProfileRateLimitProviderBlock({
               // `isRefreshing` (from useProviderRateLimitRefresh) already folds
               // in the ephemeralProcess `draining` flag, so this button stays
               // disabled for a "Refresh all" round's full duration, not just
-              // this provider's own slice of it.
+              // this provider's own fetch.
               refreshing={isRefreshing}
             />
           ) : null}
@@ -1368,13 +1372,20 @@ function TraycerRateLimitBlock({
   // invalidation targets only aperture `{ accountContext }` keys, never provider
   // `{ accountContext, providerId }` pulls.
   const refresh = async (): Promise<void> => {
-    await traycerSubscription.query.refetch();
+    const result = await traycerSubscription.query.refetch();
     traycerSubscription.rateLimitAccountContexts.forEach((accountContext) => {
       void queryClient.invalidateQueries({
         queryKey: queryKeys.hostTraycerRateLimitUsage(hostId, accountContext),
         exact: true,
       });
     });
+    // Observational only: the UI awaits exactly what it always did (the
+    // primary refetch; invalidations stay fire-and-forget background work).
+    if (result.status === "success") {
+      Analytics.getInstance().track(AnalyticsEvent.SubscriptionRefreshed, {
+        source: "direct_ui",
+      });
+    }
   };
 
   return (

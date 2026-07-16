@@ -93,7 +93,9 @@ describe("MarkdownAnchor", () => {
     const openFileLink = vi.fn(() => true);
     render(
       <RunnerHostContext.Provider value={host}>
-        <MarkdownLinkContext.Provider value={{ openFileLink }}>
+        <MarkdownLinkContext.Provider
+          value={{ openFileLink, supersedePendingFileLink: () => undefined }}
+        >
           <TraycerMarkdown
             className={null}
             proseSize="normal"
@@ -126,7 +128,9 @@ describe("MarkdownAnchor", () => {
     useDesktopDialogStore.setState({ reportIssueAvailable: true });
     render(
       <RunnerHostContext.Provider value={host}>
-        <MarkdownLinkContext.Provider value={{ openFileLink }}>
+        <MarkdownLinkContext.Provider
+          value={{ openFileLink, supersedePendingFileLink: () => undefined }}
+        >
           <TraycerMarkdown
             className={null}
             proseSize="normal"
@@ -190,7 +194,9 @@ describe("MarkdownAnchor", () => {
     const openFileLink = vi.fn(() => true);
     render(
       <RunnerHostContext.Provider value={host}>
-        <MarkdownLinkContext.Provider value={{ openFileLink }}>
+        <MarkdownLinkContext.Provider
+          value={{ openFileLink, supersedePendingFileLink: () => undefined }}
+        >
           <TraycerMarkdown
             className={null}
             proseSize="normal"
@@ -221,7 +227,9 @@ describe("MarkdownAnchor", () => {
     const openFileLink = vi.fn(() => true);
     render(
       <RunnerHostContext.Provider value={host}>
-        <MarkdownLinkContext.Provider value={{ openFileLink }}>
+        <MarkdownLinkContext.Provider
+          value={{ openFileLink, supersedePendingFileLink: () => undefined }}
+        >
           <TraycerMarkdown
             className={null}
             proseSize="normal"
@@ -257,7 +265,9 @@ describe("MarkdownAnchor", () => {
     const openFileLink = vi.fn(() => true);
     render(
       <RunnerHostContext.Provider value={host}>
-        <MarkdownLinkContext.Provider value={{ openFileLink }}>
+        <MarkdownLinkContext.Provider
+          value={{ openFileLink, supersedePendingFileLink: () => undefined }}
+        >
           <TraycerMarkdown
             className={null}
             proseSize="normal"

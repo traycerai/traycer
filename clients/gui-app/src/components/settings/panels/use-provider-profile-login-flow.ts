@@ -11,6 +11,12 @@ import type {
   ProviderLoginCapability,
   ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
+import {
+  Analytics,
+  AnalyticsEvent,
+  analyticsBlockerFromError,
+  type AnalyticsBlocker,
+} from "@/lib/analytics";
 
 type LoginMutationContext = { readonly hostId: string | null };
 
@@ -308,17 +314,30 @@ export function useProviderProfileLoginFlow(
       // means the host never minted a profile-scoped child, so there is
       // nothing to cancel.
       if (mode === "reauth" || profileId !== null) cancelProfile(profileId);
+      Analytics.getInstance().track(
+        AnalyticsEvent.ProviderProfileLinkCancelled,
+        { provider: providerId, mode },
+      );
       setState({ kind: "cancelled" });
     },
-    [cancelProfile, mode],
+    [cancelProfile, mode, providerId],
   );
 
+  // The blocker is classified from the REAL error at each call site (or an
+  // explicit bounded value for error-less outcomes), never from the display
+  // message - UI copy like "Sign-in did not…" would misclassify everything
+  // as `authentication`.
   const fail = useCallback(
-    (message: string): void => {
+    (message: string, blocker: AnalyticsBlocker): void => {
+      Analytics.getInstance().track(AnalyticsEvent.ProviderProfileLinkFailed, {
+        provider: providerId,
+        mode,
+        blocker,
+      });
       setState({ kind: "failed", message });
       onFailed(message);
     },
-    [onFailed],
+    [mode, onFailed, providerId],
   );
 
   /**
@@ -334,7 +353,7 @@ export function useProviderProfileLoginFlow(
         return;
       }
       if (restartCountRef.current >= CODE_PASTE_RESTART_CAP) {
-        fail(CODE_PASTE_RESTART_LIMIT_MESSAGES[cause]);
+        fail(CODE_PASTE_RESTART_LIMIT_MESSAGES[cause], "timeout");
         return;
       }
       restartCountRef.current += 1;
@@ -378,6 +397,10 @@ export function useProviderProfileLoginFlow(
       if (awaitOutcome === null) return;
       const ambient = mode === "reauth" && existingProfileId === null;
       if (awaitOutcome === "authenticated") {
+        Analytics.getInstance().track(
+          AnalyticsEvent.ProviderProfileLinkSucceeded,
+          { provider: providerId, mode },
+        );
         if (ambient) {
           setState({ kind: "start" });
           return;
@@ -403,9 +426,9 @@ export function useProviderProfileLoginFlow(
         setState({ kind: "start" });
         return;
       }
-      fail(failureMessages.notFinished);
+      fail(failureMessages.notFinished, "authentication");
     },
-    [existingProfileId, fail, failureMessages, mode, restart],
+    [existingProfileId, fail, failureMessages, mode, providerId, restart],
   );
 
   const beginLogin = useCallback(
@@ -465,7 +488,9 @@ export function useProviderProfileLoginFlow(
               !data.started ||
               (mode === "create" && nextProfileId === null)
             ) {
-              fail(failureMessages.notStarted);
+              // The RPC succeeded but the host declined to start the login:
+              // the provider tooling is the limiting factor, not auth.
+              fail(failureMessages.notStarted, "provider_unavailable");
               return;
             }
             setState({
@@ -540,12 +565,12 @@ export function useProviderProfileLoginFlow(
               },
             );
           },
-          onError: () => {
+          onError: (error) => {
             if (cancelRequestedRef.current) {
               finishCancellation(null);
               return;
             }
-            fail(failureMessages.notStarted);
+            fail(failureMessages.notStarted, analyticsBlockerFromError(error));
           },
         },
       );
@@ -588,9 +613,21 @@ export function useProviderProfileLoginFlow(
       cancelRequestedRef.current = false;
       cancelledRef.current = false;
       restartCountRef.current = 0;
+      Analytics.getInstance().track(AnalyticsEvent.ProviderProfileLinkStarted, {
+        source: "direct_ui",
+        provider: providerId,
+        mode,
+      });
       beginLogin(options, null);
     },
-    [awaitLogin.isPending, beginLogin, startLogin.isPending, state.kind],
+    [
+      awaitLogin.isPending,
+      beginLogin,
+      mode,
+      providerId,
+      startLogin.isPending,
+      state.kind,
+    ],
   );
 
   const commitPending =

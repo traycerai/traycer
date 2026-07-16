@@ -9,6 +9,7 @@ import {
 import type { ReportIssueContext } from "@/lib/report-issue-context";
 import { cn } from "@/lib/utils";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 interface ReportIssueActionProps {
   readonly context: ReportIssueContext;
@@ -26,6 +27,9 @@ export function ReportIssueAction(props: ReportIssueActionProps): ReactNode {
   if (!reportIssueAvailable) return null;
 
   const handleClick = () => {
+    Analytics.getInstance().track(AnalyticsEvent.ReportIssueOpened, {
+      source: "direct_ui",
+    });
     openReportIssueWithContext(props.context);
   };
 

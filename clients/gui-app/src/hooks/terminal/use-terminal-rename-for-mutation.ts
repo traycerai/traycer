@@ -15,6 +15,7 @@ import { useHostMutation } from "@/hooks/host/use-host-query";
 import { hostQueryKeys, terminalMutationKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 export interface RenameTerminalMutationContext {
   readonly hostId: string | null;
@@ -111,6 +112,9 @@ export function useTerminalRenameFor(
             return row !== undefined && row.title !== variables.title;
           });
         if (superseded) return;
+        Analytics.getInstance().track(AnalyticsEvent.TerminalRenamed, {
+          kind: "shell",
+        });
         useEpicCanvasStore
           .getState()
           .updateTerminalNameSnapshots(

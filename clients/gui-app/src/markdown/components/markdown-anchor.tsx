@@ -92,6 +92,7 @@ export function MarkdownAnchor({
         return;
       }
 
+      linkPolicy?.supersedePendingFileLink();
       if (runnerHost !== null) void runnerHost.openExternalLink(classified.url);
     },
     [href, linkPolicy, reportIssueAvailable, runnerHost],

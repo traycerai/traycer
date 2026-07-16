@@ -9,6 +9,7 @@ import { appLogger } from "@/lib/logger";
 import { epicMutationKeys } from "@/lib/query-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 interface ArtifactExportSelection {
   readonly id: string;
@@ -48,8 +49,14 @@ export function useEpicExportArtifacts() {
       });
       return saveBlobToDisk(output.blob, output.suggestedName);
     },
-    onSuccess: (saved) => {
-      if (saved !== null) toast.success(`Saved ${saved}`);
+    onSuccess: (saved, input) => {
+      if (saved !== null) {
+        Analytics.getInstance().track(AnalyticsEvent.ArtifactExported, {
+          format: input.format,
+          artifact_count: input.artifacts.length,
+        });
+        toast.success(`Saved ${saved}`);
+      }
     },
     onError: (error, input) => {
       appLogger.errorSummary(

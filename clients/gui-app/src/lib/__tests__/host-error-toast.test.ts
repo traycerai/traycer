@@ -16,7 +16,10 @@ import {
   __resetAppLocalNotificationsStoreForTests,
   useAppLocalNotificationsStore,
 } from "@/stores/notifications/app-local-notifications-store";
-import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  HostRpcError,
+  HostTransportFailureError,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 
 function makeError(code: HostRpcError["code"], message: string): HostRpcError {
   return new HostRpcError({
@@ -28,8 +31,30 @@ function makeError(code: HostRpcError["code"], message: string): HostRpcError {
   });
 }
 
+function unauthorizedFatal(
+  requestId: string,
+  method: string,
+  reason: string,
+  retryable: boolean,
+): HostRpcError {
+  return new HostRpcError({
+    code: "UNAUTHORIZED",
+    message: reason,
+    requestId,
+    method,
+    fatalDetails: {
+      code: "UNAUTHORIZED",
+      reason,
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+      ...(retryable ? { retryable: true } : {}),
+    },
+  });
+}
+
 describe("toastFromHostError", () => {
   afterEach(() => {
+    vi.mocked(toast.error).mockClear();
     __resetAppLocalNotificationsStoreForTests();
   });
 
@@ -65,35 +90,126 @@ describe("toastFromHostError", () => {
     expect(toast.error).toHaveBeenCalledWith("Please sign in again.");
   });
 
-  it("uses operation copy for retryable UNAUTHORIZED host failures", () => {
-    __resetAppLocalNotificationsStoreForTests();
+  it("uses verify-session copy for retryable UNAUTHORIZED host failures", () => {
     useAppLocalNotificationsStore.getState().activateIdentity("user-1");
     const reason = "Signing key unavailable: request timed out";
-    const error = new HostRpcError({
-      code: "UNAUTHORIZED",
-      message: reason,
-      requestId: "req-retryable-auth",
-      method: "providers.list",
-      fatalDetails: {
-        code: "UNAUTHORIZED",
-        reason,
-        incompatibleMethods: null,
-        upgradeGuidance: null,
-        retryable: true,
-      },
-    });
 
-    toastFromHostError(error, "Couldn't refresh providers.");
+    toastFromHostError(
+      unauthorizedFatal("req-retryable-auth", "providers.list", reason, true),
+      "Couldn't refresh providers.",
+    );
 
-    expect(toast.error).toHaveBeenCalledWith("Couldn't refresh providers.");
+    expect(toast.error).toHaveBeenCalledWith(
+      "The host couldn't verify your session. Try again in a moment.",
+      { id: "host-error:UNAUTHORIZED:UNAUTHORIZED", cancel: null },
+    );
     expect(
       useAppLocalNotificationsStore.getState().byId[
-        "host.error:providers.list:req-retryable-auth"
+        "host.error:UNAUTHORIZED:UNAUTHORIZED"
       ],
     ).toMatchObject({
-      message: "Couldn't refresh providers.",
+      message: "The host couldn't verify your session. Try again in a moment.",
       detail: reason,
     });
+  });
+
+  it("collapses repeated same-cause fatal failures into one resurfacing feed entry", () => {
+    useAppLocalNotificationsStore.getState().activateIdentity("user-1");
+
+    toastFromHostError(
+      unauthorizedFatal(
+        "req-1",
+        "providers.list",
+        "Expected 200 OK from the JSON Web Key Set endpoint",
+        false,
+      ),
+      "Couldn't load providers.",
+    );
+    useAppLocalNotificationsStore
+      .getState()
+      .markAsRead("host.error:UNAUTHORIZED:UNAUTHORIZED", 10);
+    toastFromHostError(
+      unauthorizedFatal(
+        "req-2",
+        "epic.list",
+        "Host is not provisioned - sign in on this machine to authorize it",
+        false,
+      ),
+      "Couldn't load epics.",
+    );
+
+    const state = useAppLocalNotificationsStore.getState();
+    expect(state.orderedIds).toEqual(["host.error:UNAUTHORIZED:UNAUTHORIZED"]);
+    expect(state.byId["host.error:UNAUTHORIZED:UNAUTHORIZED"]).toMatchObject({
+      message: "Please sign in again.",
+      detail:
+        "Host is not provisioned - sign in on this machine to authorize it",
+      readAt: null,
+    });
+    expect(toast.error).toHaveBeenCalledTimes(2);
+    expect(toast.error).toHaveBeenLastCalledWith("Please sign in again.", {
+      id: "host-error:UNAUTHORIZED:UNAUTHORIZED",
+      cancel: null,
+    });
+  });
+
+  it("does not re-flip a recently acknowledged entry back to unread", () => {
+    useAppLocalNotificationsStore.getState().activateIdentity("user-1");
+
+    toastFromHostError(
+      unauthorizedFatal(
+        "req-1",
+        "providers.list",
+        "Expected 200 OK from the JSON Web Key Set endpoint",
+        false,
+      ),
+      "Couldn't load providers.",
+    );
+    const readAt = Date.now();
+    useAppLocalNotificationsStore
+      .getState()
+      .markAsRead("host.error:UNAUTHORIZED:UNAUTHORIZED", readAt);
+    toastFromHostError(
+      unauthorizedFatal(
+        "req-2",
+        "epic.list",
+        "Host is not provisioned - sign in on this machine to authorize it",
+        false,
+      ),
+      "Couldn't load epics.",
+    );
+
+    const state = useAppLocalNotificationsStore.getState();
+    expect(state.orderedIds).toEqual(["host.error:UNAUTHORIZED:UNAUTHORIZED"]);
+    // A recurrence seconds after the user read the entry keeps it read but
+    // still refreshes it with the latest cause detail.
+    expect(state.byId["host.error:UNAUTHORIZED:UNAUTHORIZED"]).toMatchObject({
+      readAt,
+      detail:
+        "Host is not provisioned - sign in on this machine to authorize it",
+    });
+    expect(state.unreadCount).toBe(0);
+  });
+
+  it("dedupes transport-failure toasts under one id without a feed entry", () => {
+    useAppLocalNotificationsStore.getState().activateIdentity("user-1");
+
+    toastFromHostError(
+      new HostTransportFailureError({
+        code: "RPC_ERROR",
+        message: "WebSocket closed before next frame",
+        requestId: "req-transport",
+        method: "epic.list",
+        fatalDetails: null,
+      }),
+      "Couldn't load epics.",
+    );
+
+    expect(toast.error).toHaveBeenCalledWith(
+      "Can't reach the Traycer host. It may be restarting — try again in a moment.",
+      { id: "host-error:transport", cancel: null },
+    );
+    expect(useAppLocalNotificationsStore.getState().orderedIds).toHaveLength(0);
   });
 
   it("shows rebind-blocked copy for WORKTREE_REBIND_BLOCKED", () => {

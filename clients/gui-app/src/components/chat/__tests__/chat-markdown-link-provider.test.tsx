@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -364,6 +365,43 @@ describe("ChatMarkdownLinkProvider", () => {
     expect(typeof openArgs.openTileInTab).toBe("function");
     expect(mocks.navigate).not.toHaveBeenCalled();
     // It claimed the click without falling through to a file preview.
+    expect(previewTabId(tabId)).toBeNull();
+  });
+
+  it("lets an external click supersede a slow artifact resolution", async () => {
+    let resolveArtifact: (
+      value: ResolveArtifactByPathResult | null,
+    ) => void = () => undefined;
+    mocks.resolveArtifactByPath.mockReturnValue(
+      new Promise((resolve) => {
+        resolveArtifact = resolve;
+      }),
+    );
+    const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic 1");
+    renderProvider(
+      tabId,
+      <AgentReferenceMarkdown
+        isStreaming={false}
+        markdown={`[Artifact](${SAME_EPIC_ARTIFACT_PATH}) [External](https://example.com)`}
+        proseSize="compact"
+        quotable={false}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("link", { name: "Artifact" }));
+    await waitFor(() =>
+      expect(mocks.resolveArtifactByPath).toHaveBeenCalledTimes(1),
+    );
+    fireEvent.click(screen.getByRole("link", { name: "External" }));
+    await act(async () => {
+      resolveArtifact({ artifactId: "stale-artifact", kind: "spec" });
+      await Promise.resolve();
+    });
+
+    expect(
+      mocks.openProjectedSidebarNodeInTabWhenAvailable,
+    ).not.toHaveBeenCalled();
+    expect(mocks.navigate).not.toHaveBeenCalled();
     expect(previewTabId(tabId)).toBeNull();
   });
 

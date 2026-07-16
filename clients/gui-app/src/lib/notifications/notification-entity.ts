@@ -1,6 +1,7 @@
 import type {
   HostNotificationEntry,
   HostNotificationsEntityRef,
+  HostNotificationsPresenceEntity,
 } from "@traycer/protocol/host/notifications/contracts";
 
 /**
@@ -37,6 +38,21 @@ export function notificationEntitiesMatch(
   right: HostNotificationsEntityRef,
 ): boolean {
   return left.epicId === right.epicId && left.chatId === right.chatId;
+}
+
+/**
+ * Whether a notification's entity is covered by a focused presence entity,
+ * mirroring the host emission service's suppression semantics: the epic must
+ * match, and a chat-addressed notification additionally needs the same chat
+ * in focus. An epic-level notification is covered by any focused tile inside
+ * that epic; a chat-level one is not covered by a sibling chat.
+ */
+export function notificationEntityMatchesPresence(
+  entity: HostNotificationsEntityRef,
+  presence: HostNotificationsPresenceEntity,
+): boolean {
+  if (presence.epicId !== entity.epicId) return false;
+  return entity.chatId === undefined || presence.chatId === entity.chatId;
 }
 
 export function notificationPayloadBelongsToEntity(

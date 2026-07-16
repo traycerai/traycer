@@ -92,6 +92,7 @@ let pendingCancel: (() => void) | null = null;
 let disposed = false;
 let clickToken = 0;
 const previewTileInTab = vi.fn();
+const onAsyncFailure = vi.fn();
 
 function makeDeps(overrides: Partial<ChatLinkPolicyDeps>): ChatLinkPolicyDeps {
   return {
@@ -123,6 +124,7 @@ const lifecycle: ChatLinkLifecycle = {
     return clickToken;
   },
   isCurrent: (token) => token === clickToken,
+  onAsyncFailure,
 };
 
 function fileLink(overrides: Partial<MarkdownFileLink>): MarkdownFileLink {
@@ -140,6 +142,7 @@ beforeEach(() => {
   disposed = false;
   clickToken = 0;
   previewTileInTab.mockReset();
+  onAsyncFailure.mockReset();
   mocks.resolveArtifactByPath.mockReset();
   mocks.openProjectedSidebarNodeInTabWhenAvailable.mockReset();
   mocks.openProjectedSidebarNodeInTabWhenAvailable.mockReturnValue(
@@ -451,5 +454,18 @@ describe("buildChatLinkPolicy", () => {
 
     expect(mocks.workspaceFileRefFromAbsoluteFilePath).not.toHaveBeenCalled();
     expect(previewTileInTab).not.toHaveBeenCalled();
+    expect(onAsyncFailure).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a rejected artifact resolution when its safe fallback cannot open", async () => {
+    mocks.resolveArtifactByPath.mockRejectedValue(new Error("transport"));
+    mocks.workspaceFileRefFromLinkPath.mockReturnValue(null);
+    const run = buildChatLinkPolicy(makeDeps({}));
+
+    run(fileLink({ path: SAME_EPIC_ARTIFACT_PATH }), lifecycle);
+    await flush();
+
+    expect(previewTileInTab).not.toHaveBeenCalled();
+    expect(onAsyncFailure).toHaveBeenCalledTimes(1);
   });
 });

@@ -3,10 +3,12 @@ import type {
   CreateCommentThreadRequest,
   ListCommentThreadsResponse,
 } from "@traycer/protocol/host/epic/unary-schemas";
+import { extractUserMentionIds } from "@traycer/protocol/notifications/comment-notification-utils";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { useHostClient } from "@/lib/host/runtime";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { commentThreadsQueryKey } from "./use-epic-comment-threads";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 /**
  * Mutation hooks for the host comment-thread RPC surface.
@@ -59,6 +61,9 @@ export function useCreateCommentThread() {
     options: {
       onMutate: () => ({ hostId: client.getActiveHostId() }),
       onSuccess: (_data, variables: CreateCommentThreadRequest, ctx) => {
+        Analytics.getInstance().track(AnalyticsEvent.CommentCreated, {
+          has_mention: extractUserMentionIds(variables.content).length > 0,
+        });
         invalidate(
           (ctx as MutationContext).hostId,
           variables.epicId,
@@ -83,6 +88,9 @@ export function useReplyToCommentThread() {
     options: {
       onMutate: () => ({ hostId: client.getActiveHostId() }),
       onSuccess: (_data, variables, ctx) => {
+        Analytics.getInstance().track(AnalyticsEvent.CommentReplied, {
+          has_mention: extractUserMentionIds(variables.content).length > 0,
+        });
         invalidate(
           (ctx as MutationContext).hostId,
           variables.epicId,
@@ -107,6 +115,7 @@ export function useEditComment() {
     options: {
       onMutate: () => ({ hostId: client.getActiveHostId() }),
       onSuccess: (_data, variables, ctx) => {
+        Analytics.getInstance().track(AnalyticsEvent.CommentEdited, null);
         invalidate(
           (ctx as MutationContext).hostId,
           variables.epicId,
@@ -131,6 +140,7 @@ export function useDeleteComment() {
     options: {
       onMutate: () => ({ hostId: client.getActiveHostId() }),
       onSuccess: (_data, variables, ctx) => {
+        Analytics.getInstance().track(AnalyticsEvent.CommentDeleted, null);
         invalidate(
           (ctx as MutationContext).hostId,
           variables.epicId,
@@ -155,6 +165,12 @@ export function useSetCommentThreadResolved() {
     options: {
       onMutate: () => ({ hostId: client.getActiveHostId() }),
       onSuccess: (_data, variables, ctx) => {
+        Analytics.getInstance().track(
+          variables.resolved
+            ? AnalyticsEvent.CommentResolved
+            : AnalyticsEvent.CommentReopened,
+          null,
+        );
         invalidate(
           (ctx as MutationContext).hostId,
           variables.epicId,
@@ -180,6 +196,7 @@ export function useDeleteCommentThread() {
     options: {
       onMutate: () => ({ hostId: client.getActiveHostId() }),
       onSuccess: (_data, variables, ctx) => {
+        Analytics.getInstance().track(AnalyticsEvent.CommentDeleted, null);
         const { hostId } = ctx as MutationContext;
         if (hostId !== null) {
           // Clear the deleted thread from the cached list eagerly so the

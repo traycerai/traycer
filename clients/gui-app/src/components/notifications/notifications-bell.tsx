@@ -12,6 +12,7 @@ import { useMergedNotificationUnreadCount } from "@/stores/notifications/merged-
 import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
 import { useTitleBarDragSuppression } from "@/stores/layout/title-bar-drag-store";
 import { cn } from "@/lib/utils";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 /**
  * Top-level notifications trigger in the app header. Shows an unread-count
@@ -32,7 +33,18 @@ export function NotificationsBell() {
   const ariaLabel =
     unread > 0 ? `Notifications, ${unread} unread` : "Notifications";
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (nextOpen) {
+          Analytics.getInstance().track(
+            AnalyticsEvent.NotificationCenterOpened,
+            null,
+          );
+        }
+        setOpen(nextOpen);
+      }}
+    >
       <TooltipWrapper
         label={open ? null : "Notifications"}
         side="top"

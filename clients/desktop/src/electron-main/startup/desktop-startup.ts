@@ -31,6 +31,7 @@ import {
   QUIT_HOST_UPDATE_TIMEOUT_MS,
 } from "../host/host-auto-update";
 import { isHostRemovedByUser } from "../host/host-removal-state";
+import { runUpdateInstallQuitSequence } from "./update-install-quit";
 import { RunnerIpcBridge } from "../ipc/register-runner-ipc";
 import {
   checkForUpdatesAfterResume,
@@ -571,27 +572,29 @@ function runDeferred(state: BootState, services: AppServices): void {
     return services.host.bootstrap();
   });
 
-  // Windows-only watchdog for a host that dies without rewriting pid.json
-  // (external kill/crash): the pid-file watcher never fires for those, and
-  // the Scheduled Task cannot restart-on-failure (its hidden-launcher action
-  // detaches the host and exits, so the task completes long before the host
-  // can die). On macOS/Linux the service manager itself supervises the host
-  // (launchd KeepAlive / systemd Restart) and respawns it within seconds -
-  // a desktop-side watchdog there would be redundant at best and, on macOS,
-  // could auto-fire the SMAppService re-register cycle. Started after
-  // bootstrap so the initial 60s readiness wait can't register as an outage.
-  if (process.platform === "win32") {
-    void hostReady.then(() => {
-      const healthMonitor = startHostHealthMonitor({
-        host: services.host,
-        intervalMs: undefined,
-        probe: undefined,
-        readMetadata: undefined,
-        respawn: undefined,
-      });
-      state.bridge?.disposeFns.push(() => healthMonitor.dispose());
+  // All-platform watchdog for a host that dies without rewriting pid.json
+  // (external kill/crash): the pid-file watcher never fires for those, so the
+  // cached snapshot stays "reachable" against a dead endpoint forever. On
+  // Windows it also owns auto-respawn (the Scheduled Task cannot
+  // restart-on-failure - its hidden-launcher action detaches the host and
+  // exits, so the task completes long before the host can die). On
+  // macOS/Linux the service manager (launchd KeepAlive / systemd Restart)
+  // respawns crashes itself, but the SUPERVISOR cannot fix the desktop's
+  // stale snapshot when the respawned host binds a new port and the watcher
+  // edge is missed - the monitor's reload-first convergence covers exactly
+  // that, and only falls back to `respawnHost` when the disk still names an
+  // unreachable host. Started after bootstrap so the initial 60s readiness
+  // wait can't register as an outage.
+  void hostReady.then(() => {
+    const healthMonitor = startHostHealthMonitor({
+      host: services.host,
+      intervalMs: undefined,
+      probe: undefined,
+      readMetadata: undefined,
+      respawn: undefined,
     });
-  }
+    state.bridge?.disposeFns.push(() => healthMonitor.dispose());
+  });
 
   void timed("deferred", "registry-probe", async () => {
     // `force: true` - matches the app's own `checkForUpdatesNow` on launch
@@ -778,9 +781,9 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
 
   const flushShellState = async (): Promise<void> => {
     await Promise.all([
-      services.desktopStateStore.flush().catch((err) => {
-        log.warn("[desktop] desktop-state flush failed", err);
-      }),
+      // No .catch: the store's write chain never rejects (persist failures
+      // are retried once, then surrendered with an error log inside it).
+      services.desktopStateStore.flush(),
       services.windowGeometryPersistence.flushLatest().catch((err) => {
         log.warn("[desktop] window-geometry flush failed", err);
       }),
@@ -834,46 +837,45 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
         return;
       }
       // First pass: attempt a coordinated, idle-gated host update before the
-      // desktop swaps its own bytes, then re-quit. Fail-open - a busy host,
-      // failure, or the bounded CLI timeout all fall through to the quit, with
-      // the next-launch reconcile as the guaranteed fallback. The host update
-      // runs as a subprocess that would die with us, so we must hold the quit
-      // until it settles rather than racing it.
+      // desktop swaps its own bytes, drain the renderer's freshest per-window
+      // projection into the state store, then re-quit. Fail-open at every
+      // step - a busy host, failure, or the bounded CLI timeout all fall
+      // through to the quit, with the next-launch reconcile as the guaranteed
+      // fallback. The host update runs as a subprocess that would die with
+      // us, so we must hold the quit until it settles rather than racing it.
       quitTimeHostUpdateStarted = true;
       event.preventDefault();
       log.info(
         "[desktop] before-quit - install pending; attempting idle host update first",
       );
-      void reconcileHostAutoUpdate(
-        "quit-install",
-        defaultHostAutoUpdateDeps(
-          services.host,
-          QUIT_HOST_UPDATE_TIMEOUT_MS,
-          // The host was discovered long ago - no need to wait at quit time.
-          () => Promise.resolve(),
-          services.bridge,
-        ),
-      )
-        .then((outcome) =>
-          log.info("[host-auto-update] quit reconcile complete", { outcome }),
-        )
-        .catch((err) =>
-          log.warn("[host-auto-update] quit reconcile threw", err),
-        )
-        .finally(() => {
-          // If `quitAndInstall` failed in the meantime (e.g. read-only volume),
-          // `isInstallingUpdate()` is now false and the failure was surfaced as
-          // an error - don't quit out from under the user; let them read it and
-          // retry. Only the still-pending install proceeds to quit.
-          if (!isInstallingUpdate()) {
-            log.info(
-              "[desktop] before-quit - install failed during reconcile, staying open",
-            );
-            services.quitState.resetQuitting();
-            return;
-          }
-          authorizeQuitAfterFlush();
-        });
+      void runUpdateInstallQuitSequence({
+        reconcileHostUpdate: () =>
+          reconcileHostAutoUpdate(
+            "quit-install",
+            defaultHostAutoUpdateDeps(
+              services.host,
+              QUIT_HOST_UPDATE_TIMEOUT_MS,
+              // The host was discovered long ago - no need to wait at quit
+              // time.
+              () => Promise.resolve(),
+              services.bridge,
+            ),
+          ),
+        isInstallPending: isInstallingUpdate,
+        drainRendererProjection: () =>
+          activeBridge.requestFreshUnsyncedSnapshot(
+            QUIT_FRESH_UNSYNCED_SNAPSHOT_TIMEOUT_MS,
+          ),
+        authorizeQuitAfterFlush,
+        stayOpen: () => {
+          // Re-arm the first-pass sequence: leaving the flag set would make
+          // the NEXT Restart-to-install take the second-pass shortcut above,
+          // skipping the host reconcile, the renderer drain, AND the shell
+          // flush for that quit.
+          quitTimeHostUpdateStarted = false;
+          services.quitState.resetQuitting();
+        },
+      });
       return;
     }
 

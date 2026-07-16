@@ -25,6 +25,7 @@ import {
   chatSubscribeV11,
   chatSubscribeV12,
   chatSubscribeV13,
+  chatSubscribeV14,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 // ─── GUI-surface catalog (`agent.gui.*`) ──────────────────────────────────
@@ -174,7 +175,6 @@ export const agentGuiListHarnessesDowngradeV3ToV1 = defineDowngradePath<
   }),
 });
 
-
 export const agentGuiListHarnessesV40 = defineRpcContract({
   method: "agent.gui.listHarnesses",
   schemaVersion: { major: 4, minor: 0 } as const,
@@ -275,4 +275,5 @@ export {
   chatSubscribeV11,
   chatSubscribeV12,
   chatSubscribeV13,
+  chatSubscribeV14,
 };

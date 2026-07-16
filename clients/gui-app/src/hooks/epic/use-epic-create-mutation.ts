@@ -27,12 +27,22 @@ import { hostQueryKeys } from "@/lib/query-keys";
 import { cloudEpicTasksQueryKeyMatchesScope } from "@/lib/cloud-epic-tasks-query/cache";
 import type { ListCloudTasksRequest } from "@/lib/cloud-epic-tasks-query";
 import { toastFromHostError } from "@/lib/host-error-toast";
-import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import {
+  Analytics,
+  AnalyticsEvent,
+  analyticsBlockerFromError,
+} from "@/lib/analytics";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 
 interface CreateEpicMutationContext {
   readonly hostId: string | null;
   readonly userId: string | null;
+}
+
+function taskCreationMode(
+  chat: RequestOfMethod<HostRpcRegistry, "epic.create">["chat"],
+): "chat" | "terminal_agent" {
+  return chat === null ? "terminal_agent" : "chat";
 }
 
 export function useEpicCreate(): UseMutationResult<
@@ -52,13 +62,20 @@ export function useEpicCreate(): UseMutationResult<
     method: "epic.create",
     mapVariables: (variables) => variables,
     options: {
-      onMutate: () => ({
-        hostId: client.getActiveHostId(),
-        userId: client.getRequestContextUserId(),
-      }),
+      onMutate: (variables) => {
+        Analytics.getInstance().track(AnalyticsEvent.TaskCreationStarted, {
+          source: "direct_ui",
+          mode: taskCreationMode(variables.chat),
+          workspace_count: variables.workspaces.length,
+        });
+        return {
+          hostId: client.getActiveHostId(),
+          userId: client.getRequestContextUserId(),
+        };
+      },
       onSuccess: (response, variables, ctx) => {
         Analytics.getInstance().track(AnalyticsEvent.TaskCreated, {
-          mode: variables.chat?.initialMessage?.settings.agentMode ?? "regular",
+          mode: taskCreationMode(variables.chat),
         });
         if (ctx.hostId === null) return;
         // The new epic's workspace folders are seeded into the host's
@@ -82,7 +99,14 @@ export function useEpicCreate(): UseMutationResult<
         if (task === null || task === undefined) return;
         patchCreatedTaskIntoCloudTaskCaches(queryClient, ctx, task);
       },
-      onError: (error) => toastFromHostError(error, "Couldn't create epic."),
+      onError: (error, variables) => {
+        Analytics.getInstance().track(AnalyticsEvent.TaskCreationFailed, {
+          source: "direct_ui",
+          mode: taskCreationMode(variables.chat),
+          blocker: analyticsBlockerFromError(error),
+        });
+        toastFromHostError(error, "Couldn't create epic.");
+      },
     },
   });
 }

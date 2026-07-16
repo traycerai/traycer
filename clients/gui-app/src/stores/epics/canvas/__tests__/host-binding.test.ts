@@ -5,10 +5,13 @@
  * `EpicNodeRef` variant - chat, artifact, terminal, terminal-agent,
  * and workspace-file - carries a `readonly hostId: string` set at
  * open time, and the binding never changes for the lifetime of that
- * tile. After a restart the persisted tile keeps its bound `hostId`
- * - even if that host is no longer in the directory - and
- * `useHostReachability(hostId)` then reports `unreachable` so the
- * renderer can swap in the dead-tile banner.
+ * tile. After a restart the persisted tile keeps its bound `hostId`.
+ *
+ * `useHostReachability(hostId)` reports `unreachable` (dead-tile banner)
+ * ONLY when the directory HAS a live host but not this bound one. A
+ * resolved-but-EMPTY directory means the local host has not published yet
+ * and reports `host-starting` (a non-fatal waiting state), never a per-tab
+ * death - see the `host-starting` case below.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook } from "@testing-library/react";
@@ -153,6 +156,19 @@ describe("host binding survives restart", () => {
     } else {
       throw new Error("expected workspace-file tile in rehydrated tab");
     }
+  });
+
+  it("useHostReachability reports `host-starting` (never `unreachable`) while the directory is empty", () => {
+    // An empty directory means the local host has not published yet
+    // (boot / ensure / post-wake) - no bound host's fate is knowable, so
+    // the verdict must stay non-fatal. The 2026-07-14 incident rendered
+    // every tab's death banner from exactly this transient window.
+    directoryEntries.current = [];
+
+    const { result } = renderHook(() => useHostReachability(SOURCE_HOST));
+
+    expect(result.current.status).toBe("host-starting");
+    expect(result.current.hostLabel).toBe(SOURCE_HOST);
   });
 
   it("useHostReachability reports `unreachable` when the directory only knows a different host", () => {

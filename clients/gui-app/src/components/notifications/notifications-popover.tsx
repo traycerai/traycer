@@ -36,6 +36,7 @@ import {
   type NotificationEvent,
   NOTIFICATION_EVENT_TYPES,
 } from "@traycer/protocol/notifications/notification-entry";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 interface NotificationsPopoverProps {
   readonly onNavigate: () => void;
@@ -65,6 +66,13 @@ export function NotificationsPopover(props: NotificationsPopoverProps) {
   const handleClick = useCallback(
     (row: MergedNotificationRow) => {
       if (row.payload === null) {
+        // Payload-less rows have no preflight: the click IS the activation.
+        Analytics.getInstance().track(AnalyticsEvent.NotificationActivated, {
+          category: row.source,
+        });
+        Analytics.getInstance().track(AnalyticsEvent.NotificationMarkedRead, {
+          category: row.source,
+        });
         actions.markAsRead(row.feedId);
         return;
       }
@@ -72,7 +80,16 @@ export function NotificationsPopover(props: NotificationsPopoverProps) {
       activate({
         payload: row.payload,
         receivedAt: Date.now(),
+        // Fires only after activation preflight succeeds, so a failed
+        // preflight is not counted as an activation - and the auto-read that
+        // accompanies it is recorded too.
         onActivated: () => {
+          Analytics.getInstance().track(AnalyticsEvent.NotificationActivated, {
+            category: row.source,
+          });
+          Analytics.getInstance().track(AnalyticsEvent.NotificationMarkedRead, {
+            category: row.source,
+          });
           actions.markAsRead(row.feedId);
         },
       });
@@ -148,7 +165,13 @@ export function NotificationsPopover(props: NotificationsPopoverProps) {
                   type="button"
                   variant="ghost"
                   size="icon-sm"
-                  onClick={() => actions.markAllAsRead()}
+                  onClick={() => {
+                    Analytics.getInstance().track(
+                      AnalyticsEvent.NotificationsMarkedAllRead,
+                      null,
+                    );
+                    actions.markAllAsRead();
+                  }}
                   disabled={unreadCount === 0}
                   data-testid="notifications-mark-all-read"
                   aria-label="Mark all notifications as read"
@@ -167,7 +190,13 @@ export function NotificationsPopover(props: NotificationsPopoverProps) {
                   type="button"
                   variant="ghost"
                   size="icon-sm"
-                  onClick={() => actions.clearAll()}
+                  onClick={() => {
+                    Analytics.getInstance().track(
+                      AnalyticsEvent.NotificationsCleared,
+                      { scope: "all" },
+                    );
+                    actions.clearAll();
+                  }}
                   disabled={isEmpty}
                   data-testid="notifications-clear-all"
                   aria-label="Clear all notifications"
@@ -400,6 +429,10 @@ function NotificationRow(props: NotificationRowProps) {
             type="button"
             onClick={(event) => {
               event.stopPropagation();
+              Analytics.getInstance().track(
+                AnalyticsEvent.NotificationMarkedRead,
+                { category: row.source },
+              );
               onMarkRead(row.feedId);
             }}
             aria-label="Mark as read"
