@@ -44,6 +44,7 @@ const testState = vi.hoisted(() => ({
     reason: null,
   },
   prefetch: vi.fn(),
+  refresh: vi.fn<() => Promise<void>>(),
 }));
 
 vi.mock("@/hooks/worktree/use-worktree-list-bindings-for-epic-query", () => ({
@@ -100,6 +101,10 @@ vi.mock("@/hooks/git/use-git-list-changed-files-with-submodules", () => ({
     isPending: false,
     error: null,
   }),
+}));
+
+vi.mock("@/hooks/git/use-git-submodule-snapshot-refresh", () => ({
+  useGitSubmoduleSnapshotRefresh: () => testState.refresh,
 }));
 
 vi.mock("@/components/worktree/open-in-editor-button", () => ({
@@ -298,6 +303,8 @@ describe("<GitDiffPanelBodyLive /> workspace switcher integration", () => {
   beforeEach(() => {
     cleanup();
     testState.prefetch.mockClear();
+    testState.refresh.mockReset();
+    testState.refresh.mockResolvedValue(undefined);
     testState.rows = [
       row({}),
       row({

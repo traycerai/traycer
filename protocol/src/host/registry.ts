@@ -212,6 +212,7 @@ import {
   gitGetFileDiffsV10,
   gitGetCapabilitiesV10,
   gitSubscribeStatusV10,
+  gitSubscribeStatusV11,
 } from "@traycer/protocol/host/git-contracts";
 import { defineRpcContract } from "@traycer/protocol/framework/index";
 import {
@@ -3801,7 +3802,7 @@ export type HostRpcRegistry = typeof hostRpcRegistry;
  *
  * One manifest per `/stream` WS: `epic.subscribe@1.0`,
  * `chat.subscribe@1.3`, `notifications.subscribe@1.0`,
- * `terminal.subscribe@1.0`, `git.subscribeStatus@1.0`,
+ * `terminal.subscribe@1.0`, `git.subscribeStatus@1.1`,
  * `resources.subscribe@1.0`, `agent.inbox.subscribe@1.0`,
  * `speech.dictate@1.0`, and
  * `migration.run@1.0` are negotiated from this registry. Later minors within
@@ -3897,10 +3898,17 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
   },
   "git.subscribeStatus": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: gitSubscribeStatusV10,
+        },
+        // Nested-snapshot minor: `submodules[]` + `nestedFingerprint` + v1.1
+        // file rows on server frames. Additive; the HOST resolver projects
+        // frames per negotiated minor (streams have no version bridges). See
+        // the COMPAT POSTURE note on `gitSubscribeStatusV11`.
+        1: {
+          contract: gitSubscribeStatusV11,
         },
       },
     },

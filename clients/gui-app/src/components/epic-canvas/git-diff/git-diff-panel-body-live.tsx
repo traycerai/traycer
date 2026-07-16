@@ -29,7 +29,7 @@ import type {
   GitDiffRepoSwitcherRootCounts,
   GitDiffRepoSwitcherRootInput,
 } from "@/lib/git/git-diff-repo-switcher";
-import { invalidateGitSubmoduleSnapshot } from "@/lib/git/invalidate-git-submodule-snapshot";
+import { useGitSubmoduleSnapshotRefresh } from "@/hooks/git/use-git-submodule-snapshot-refresh";
 import {
   selectGitPanelEpicState,
   useGitPanelStore,
@@ -321,7 +321,6 @@ interface GitDiffPanelLoadedProps {
 
 function GitDiffPanelLoaded(props: GitDiffPanelLoadedProps): ReactNode {
   const { selected, selectedRootRow } = props;
-  const queryClient = useQueryClient();
   const [repoSwitcherOpen, setRepoSwitcherOpen] = useState(false);
   const ignoreWhitespace = useSettingsStore(
     (s) => s.diffViewerPreferences.ignoreWhitespace,
@@ -431,15 +430,14 @@ function GitDiffPanelLoaded(props: GitDiffPanelLoadedProps): ReactNode {
     setSelectedRepo,
   ]);
 
-  const handleRefresh = useCallback(
-    (): Promise<void> =>
-      invalidateGitSubmoduleSnapshot(queryClient, {
-        hostId: selectedRootRow.hostId,
-        rootRunningDir: selectedRootRow.runningDir,
-        ignoreWhitespace,
-      }),
-    [ignoreWhitespace, queryClient, selectedRootRow],
-  );
+  // Explicit generation-aware unary fetch (works under stream ownership too,
+  // where the passive unary query is disabled) - see
+  // `useGitSubmoduleSnapshotRefresh`.
+  const handleRefresh = useGitSubmoduleSnapshotRefresh({
+    hostId: selectedRootRow.hostId,
+    rootRunningDir: selectedRootRow.runningDir,
+    ignoreWhitespace,
+  });
   const referenceRefresh = useRefreshSpinner({
     onRefresh: handleRefresh,
     externalRefreshing: snapshot.isPending,

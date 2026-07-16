@@ -21,6 +21,7 @@ import {
   gitGetCapabilitiesResponseSchema,
   gitSubscribeStatusRequestSchema,
   gitSubscribeStatusEventSchema,
+  gitSubscribeStatusEventSchemaV11,
 } from "./git-schemas";
 
 /**
@@ -54,18 +55,22 @@ export const gitGetFileDiffsV10 = defineRpcContract({
   responseSchema: gitGetFileDiffsResponseSchema,
 });
 
-// ---- Submodule-aware v1.1 (unary-only) ---------------------------------- //
+// ---- Submodule-aware v1.1 ------------------------------------------------ //
 //
-// `git.listChangedFiles@1.1` is the ONLY minor bump - it carries the
-// host-composed nested snapshot on its response (`submodules[]` + parent-row
-// `gitlink`). `getFileDiff`/`getFileDiffs` stay v1.0-only: the submodule diff
-// path is plain stage-based (run against the submodule repo root), so they need
-// no request change and earn no v1.1. No new method names (a new name fatally
+// Two v1.1 surfaces carry the host-composed nested snapshot (`submodules[]` +
+// parent-row `gitlink`): the unary `git.listChangedFiles@1.1` response and the
+// `git.subscribeStatus@1.1` stream frames (contract at the bottom of this
+// file - it deliberately REVERSES the earlier "stream stays v1.0" scoping so
+// the renderer's separate 5s submodule refetch timer can die).
+// `getFileDiff`/`getFileDiffs` stay v1.0-only: the submodule diff path is
+// plain stage-based (run against the submodule repo root), so they need no
+// request change and earn no v1.1. No new method names (a new name fatally
 // fails the equal-set handshake against a shipped v1.0.0 host).
-// `git.subscribeStatus` stays v1.0. The same-major minor needs no downgrade
-// path: a v1.1 peer projects onto a v1.0 host by re-parsing through the
-// (non-strict) v1.0 schema, which strips the new response fields on the wire.
-// The upgrade path below bridges a v1.0 peer UP to canonical.
+// The same-major unary minor needs no downgrade path: a v1.1 peer projects
+// onto a v1.0 host by re-parsing through the (non-strict) v1.0 schema, which
+// strips the new response fields on the wire. The upgrade path below bridges
+// a v1.0 peer UP to canonical. Streams have no bridges at all: the HOST
+// resolver projects frames to each connection's negotiated minor.
 
 /**
  * `git.listChangedFiles@1.1` - adds parent-file `gitlink` descriptors and the
@@ -126,13 +131,46 @@ const noClientFramesSchema = z.discriminatedUnion("type", [
  * updated events; client has no frames.
  *
  * Per ADR-0003, the open request does NOT include `pollIntervalMs` - the
- * host's GitStatusBroadcaster polls every 5 seconds, period, and is
- * ref-counted across subscribers.
+ * host's GitStatusBroadcaster owns the refresh cadence (ref-counted across
+ * subscribers; watcher-driven with a fallback tick on newer hosts) and it is
+ * never a client knob.
+ *
+ * FROZEN at minor 0: a connection negotiated here receives resolver-projected
+ * parent-only frames. The nested-snapshot frames live on `@1.1` below.
  */
 export const gitSubscribeStatusV10 = defineStreamRpcContract({
   method: "git.subscribeStatus",
   schemaVersion: { major: 1, minor: 0 } as const,
   openRequestSchema: gitSubscribeStatusRequestSchema,
   serverFrameSchema: gitSubscribeStatusEventSchema,
+  clientFrameSchema: noClientFramesSchema,
+});
+
+/**
+ * `git.subscribeStatus@1.1` - the nested-snapshot minor. `snapshot`/`updated`
+ * frames additionally carry `submodules[]` (with per-submodule `changedPaths`
+ * on `updated`), `nestedFingerprint`, and v1.1 `files[]` rows (`gitlink`
+ * descriptors). The open request is the v1.0 schema VERBATIM - deliberately no
+ * `includeSubmodules` knob: the host always computes the nested snapshot and
+ * the resolver projects each frame to the connection's negotiated minor.
+ *
+ * COMPAT POSTURE (read before touching this line):
+ * - `fingerprint` keeps PARENT-ONLY semantics on both minors (stream <-> unary
+ *   parity invariant); `nestedFingerprint` is the rich-slot identity and must
+ *   never appear in - or fold into the `fingerprint` of - a minor-0 frame.
+ * - `gitlink` inside `files[]` rows is a WITHIN-FIELD change the
+ *   minor-additivity checker does not inspect (it detects dropped fields, not
+ *   item-schema changes). It is wire-safe via two INDEPENDENT guards: the host
+ *   resolver projects minor-0 connections onto the frozen v1.0 frame schema,
+ *   and released clients parse frames with non-strict zod (unknown fields are
+ *   stripped). Do not remove either guard.
+ * - Streams have no version bridges: this minor exists for handshake
+ *   negotiation + resolver-side projection only, never for payload upgrading.
+ */
+export const gitSubscribeStatusV11 = defineStreamRpcContract({
+  method: "git.subscribeStatus",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  openRequestSchema: gitSubscribeStatusRequestSchema,
+  serverFrameSchema: gitSubscribeStatusEventSchemaV11,
   clientFrameSchema: noClientFramesSchema,
 });
