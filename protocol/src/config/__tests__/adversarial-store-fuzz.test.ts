@@ -1,6 +1,7 @@
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { AsyncLocalStorage } from "node:async_hooks";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Same harness seams the sibling store.test.ts uses: redirect the config file
@@ -8,12 +9,27 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // defaultShellPath() is deterministic (the mirror's args-only-auto branch reads
 // it). os.platform() stays real: on the macOS/Linux CI runner isWindows === false,
 // so path comparison is case-sensitive throughout.
-const h = vi.hoisted(() => ({ home: "", passwdShell: "/bin/zsh" }));
+//
+// The home is BOUND per test via AsyncLocalStorage, not just read from the
+// shared mutable: when vitest times a test out, its async body keeps running
+// (a "zombie"), and any store mutator it is mid-await on resolves
+// cliConfigPath() during that in-flight work. With only a shared `h.home`,
+// that resolution can land in the NEXT test's freshly-minted store. Under
+// ALS every continuation of the zombie keeps ITS OWN home for life, so its
+// reads and writes stay in its own dead directory. `h.home` remains as the
+// fallback for any execution context the ALS binding does not reach.
+const h = vi.hoisted(() => ({
+  home: "",
+  passwdShell: "/bin/zsh",
+  homeCtx: null as AsyncLocalStorage<{ readonly home: string }> | null,
+}));
 vi.mock("node:os", async (importActual) => {
   const actual = await importActual<typeof import("node:os")>();
+  const hooks = await import("node:async_hooks");
+  h.homeCtx = new hooks.AsyncLocalStorage<{ readonly home: string }>();
   return {
     ...actual,
-    homedir: () => h.home,
+    homedir: () => h.homeCtx?.getStore()?.home ?? h.home,
     userInfo: (...args: Parameters<typeof actual.userInfo>) => {
       const base = actual.userInfo(...args);
       return { ...base, shell: h.passwdShell };
@@ -37,8 +53,12 @@ import {
 const DEFAULT_PATH = "/bin/zsh"; // == passwdShell, so defaultShellPath() returns it.
 
 beforeEach(async () => {
-  h.home = await mkdtemp(join(tmpdir(), "traycer-fuzz-config-"));
+  const home = await mkdtemp(join(tmpdir(), "traycer-fuzz-config-"));
+  h.home = home;
   h.passwdShell = "/bin/zsh";
+  // Bind this test's home to the current async execution context; every
+  // continuation of this test (including a timed-out zombie's) inherits it.
+  h.homeCtx?.enterWith({ home });
 });
 
 // ------------------------------------------------------------------ //
@@ -226,13 +246,12 @@ describe("adversarial: property-style op-sequence fuzz vs reference model", () =
     async (seed) => {
       const rng = mulberry32(seed);
       const ref: RefState = { path: null, args: null, entries: [] };
-      // Zombie guard: when vitest times a test out, the async body keeps
-      // running. All seeds share the mutable `h` the homedir mock reads, so
-      // without this check a timed-out seed keeps writing into the NEXT
-      // seed's fresh store and fails it in milliseconds (observed in CI:
-      // seed 7 timed out at ~5s, then seed 1020 "failed" at 60ms). If
-      // another test has re-pointed the home, this run is already dead —
-      // stop touching the filesystem.
+      // Zombie fallback guard: the ALS home binding (see the os mock) is
+      // the primary isolation — a timed-out seed's continuations keep their
+      // own dead home, so in-flight mutator writes cannot land in the next
+      // seed's store (observed in CI: seed 7 timed out at ~5s, then seed
+      // 1020 "failed" at 60ms). This check only stops the zombie's pointless
+      // work in any execution context the ALS binding does not reach.
       const myHome = h.home;
 
       for (let step = 0; step < OPS_PER_SEED; step++) {
