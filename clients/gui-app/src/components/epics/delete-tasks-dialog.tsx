@@ -60,7 +60,7 @@ export function DeleteTasksDialog(props: DeleteTasksDialogProps) {
           <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-destructive/10 text-destructive ring-1 ring-destructive/15">
             <AlertTriangle className="size-4" aria-hidden />
           </div>
-          <div className="min-w-0 flex-1 space-y-1.5">
+          <div className="max-h-[min(32dvh,14rem)] min-h-0 min-w-0 flex-1 space-y-1.5 overflow-y-auto overscroll-contain pr-1">
             <DialogTitle className="text-ui font-semibold leading-snug wrap-anywhere">
               {title}
             </DialogTitle>
