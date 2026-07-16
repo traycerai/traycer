@@ -590,6 +590,65 @@ describe("<RateLimitPopover /> zero-provider state", () => {
 });
 
 describe("<RateLimitPopover /> rail", () => {
+  it("applies observed drag dimensions without persisting before pointer-up", () => {
+    mocks.configured = [
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+    ];
+    mocks.results = { codex: readyResult(codexReady()) };
+    const OriginalResizeObserver = globalThis.ResizeObserver;
+    class TestResizeObserver implements ResizeObserver {
+      static triggerSurface: (() => void) | null = null;
+
+      constructor(private readonly callback: ResizeObserverCallback) {}
+
+      observe(target: Element): void {
+        if (
+          target.getAttribute("data-testid") ===
+          "rate-limit-popover-resize-surface"
+        ) {
+          TestResizeObserver.triggerSurface = () => this.callback([], this);
+        }
+      }
+
+      unobserve(): void {}
+
+      disconnect(): void {}
+    }
+    globalThis.ResizeObserver = TestResizeObserver;
+    vi.useFakeTimers();
+
+    try {
+      const view = renderPopover();
+      const surface = screen.getByTestId("rate-limit-popover-resize-surface");
+      vi.spyOn(surface, "getBoundingClientRect").mockReturnValue(
+        new DOMRect(0, 0, 540, 460),
+      );
+      const triggerSurface = TestResizeObserver.triggerSurface;
+      if (triggerSurface === null)
+        throw new Error("expected surface ResizeObserver");
+
+      act(triggerSurface);
+      act(triggerSurface);
+      act(() => {
+        vi.advanceTimersByTime(99);
+      });
+      expect(surface.style.width).toBe("");
+      expect(useRateLimitPopoverStore.getState().size).toBeNull();
+
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(surface.style.width).toBe("540px");
+      expect(surface.style.height).toBe("460px");
+      expect(useRateLimitPopoverStore.getState().size).toBeNull();
+      view.unmount();
+      expect(useRateLimitPopoverStore.getState().size).toBeNull();
+    } finally {
+      vi.useRealTimers();
+      globalThis.ResizeObserver = OriginalResizeObserver;
+    }
+  });
+
   it("remembers the last drag size across popover reopens", () => {
     mocks.configured = [
       { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },

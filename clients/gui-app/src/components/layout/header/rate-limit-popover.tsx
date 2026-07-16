@@ -301,28 +301,29 @@ function RateLimitPopoverResizeSurface({
     if (win === null) return;
 
     let initialized = false;
-    let commitTimer: number | null = null;
-    const commitMeasuredSize = (): void => {
+    let applyTimer: number | null = null;
+    const applyMeasuredSize = (): void => {
       const { width, height } = surface.getBoundingClientRect();
-      if (width > 0 && height > 0)
-        setSize({ widthPx: width, heightPx: height });
+      if (width <= 0 || height <= 0) return;
+      surface.style.width = `${width}px`;
+      surface.style.height = `${height}px`;
     };
     const observer = new ResizeObserver(() => {
       if (!initialized) {
         initialized = true;
         return;
       }
-      if (commitTimer !== null) win.clearTimeout(commitTimer);
-      commitTimer = win.setTimeout(commitMeasuredSize, 100);
+      if (applyTimer !== null) win.clearTimeout(applyTimer);
+      applyTimer = win.setTimeout(applyMeasuredSize, 100);
     });
     observer.observe(surface);
     return () => {
       observer.disconnect();
-      if (commitTimer === null) return;
-      win.clearTimeout(commitTimer);
-      commitMeasuredSize();
+      if (applyTimer === null) return;
+      win.clearTimeout(applyTimer);
+      applyMeasuredSize();
     };
-  }, [setSize]);
+  }, []);
 
   return (
     <div
