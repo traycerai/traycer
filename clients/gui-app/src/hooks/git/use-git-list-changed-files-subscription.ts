@@ -1,7 +1,8 @@
-import { useMemo, useCallback, useEffect, useState } from "react";
+import { useMemo, useEffect, useReducer, useState } from "react";
 import { queryOptions, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { QueryClient } from "@tanstack/react-query";
 import type { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import type { StreamCloseReason } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import {
   gitSubscribeStatusEventSchema,
@@ -23,8 +24,6 @@ export interface GitListChangedFilesSubscriptionResult {
   readonly pollStartedAtMs: number | null;
 }
 
-type SubscriptionKey = `${string}|${string}|${string}`;
-
 interface ActiveSubscriptionArgs {
   readonly hostId: string;
   readonly runningDir: string;
@@ -35,11 +34,47 @@ interface SharedSubscription {
   refCount: number;
   unsubscribeFromStream: () => void;
   lastEvent: GitSubscribeStatusEvent | null;
-  consumers: Map<symbol, (event: GitSubscribeStatusEvent) => void>;
+  consumers: Map<symbol, () => void>;
 }
 
-// Module-level ref-counted subscriptions.
-const subscriptions = new Map<SubscriptionKey, SharedSubscription>();
+/**
+ * Module-level ref-counted subscriptions, keyed by the OWNING CLIENT INSTANCE
+ * plus the subscription params. The client instance is part of the key so a
+ * rebuilt `WsStreamClient` (host swap, sign-in change, liveness rebuild) can
+ * never be served a shared entry whose session belongs to a previous - possibly
+ * closed - client: every consumer's effect re-runs on the client change, drains
+ * the old entry to refCount 0 (tearing its session down), and opens a fresh
+ * entry against the new client.
+ */
+const subscriptions = new Map<string, SharedSubscription>();
+
+function subscriptionKeyFor(
+  client: WsStreamClient<HostStreamRpcRegistry>,
+  args: ActiveSubscriptionArgs,
+): string {
+  return `${client.instanceId}|${args.hostId}|${args.runningDir}|${args.ignoreWhitespace ? "1" : "0"}`;
+}
+
+/** Render-time lookup of the shared entry this hook instance is attached to. */
+function activeSubscriptionFor(
+  client: WsStreamClient<HostStreamRpcRegistry> | null,
+  args: {
+    readonly hostId: string | null;
+    readonly runningDir: string | null;
+    readonly ignoreWhitespace: boolean;
+  },
+): SharedSubscription | undefined {
+  if (client === null || args.hostId === null || args.runningDir === null) {
+    return undefined;
+  }
+  return subscriptions.get(
+    subscriptionKeyFor(client, {
+      hostId: args.hostId,
+      runningDir: args.runningDir,
+      ignoreWhitespace: args.ignoreWhitespace,
+    }),
+  );
+}
 
 // Test helper to reset module state.
 export function __resetSubscriptionsForTesting(): void {
@@ -58,6 +93,13 @@ export function useGitListChangedFilesSubscription(args: {
 }): GitListChangedFilesSubscriptionResult {
   const queryClient = useQueryClient();
   const wsStreamClient = useWsStreamClient();
+  // Re-render channel for subscription events that do NOT write the query
+  // cache (errors, terminal closes). Cache-writing events re-render through
+  // `useQuery` below; invalidating a disabled query does not reliably notify
+  // observers, so events must not lean on invalidation for visibility.
+  const [, forceRender] = useReducer((renderCount: number) => {
+    return renderCount + 1;
+  }, 0);
 
   // Memoize args to stabilize the reference for effect deps.
   // We reconstruct based on properties to avoid the linter complaint about args being a whole object.
@@ -70,10 +112,6 @@ export function useGitListChangedFilesSubscription(args: {
     }),
     [args.hostId, args.runningDir, args.ignoreWhitespace, args.enabled],
   );
-
-  const makeKey = useCallback((): SubscriptionKey => {
-    return `${stableArgs.hostId}|${stableArgs.runningDir}|${stableArgs.ignoreWhitespace ? "1" : "0"}`;
-  }, [stableArgs]);
 
   // Create a unique symbol for this hook instance to identify its consumer.
   const [consumerId] = useState(() =>
@@ -91,12 +129,12 @@ export function useGitListChangedFilesSubscription(args: {
       return;
     }
 
-    const key = makeKey();
     const activeArgs: ActiveSubscriptionArgs = {
       hostId: stableArgs.hostId,
       runningDir: stableArgs.runningDir,
       ignoreWhitespace: stableArgs.ignoreWhitespace,
     };
+    const key = subscriptionKeyFor(wsStreamClient, activeArgs);
     let shared = subscriptions.get(key);
 
     if (shared === undefined) {
@@ -104,33 +142,17 @@ export function useGitListChangedFilesSubscription(args: {
         wsStreamClient,
         queryClient,
         activeArgs,
-        () => {
-          subscriptions.delete(key);
-        },
       );
       subscriptions.set(key, shared);
     }
 
     // Increment ref count and register local consumer.
     shared.refCount += 1;
-
-    const localUpdate = () => {
-      // Trigger a re-render by invalidating the query.
-      // The hook's useQuery below will pick up the latest cache state.
-      void queryClient.invalidateQueries({
-        queryKey: gitQueryKeys.listChangedFiles(
-          stableArgs.hostId ?? "",
-          stableArgs.runningDir ?? "",
-          stableArgs.ignoreWhitespace,
-        ),
-      });
-    };
-
-    shared.consumers.set(consumerId, localUpdate);
+    shared.consumers.set(consumerId, forceRender);
 
     // If we have a cached event, deliver it immediately.
     if (shared.lastEvent !== null) {
-      localUpdate();
+      forceRender();
     }
 
     // Cleanup on unmount.
@@ -144,7 +166,7 @@ export function useGitListChangedFilesSubscription(args: {
         subscriptions.delete(key);
       }
     };
-  }, [stableArgs, makeKey, queryClient, wsStreamClient, consumerId]);
+  }, [stableArgs, queryClient, wsStreamClient, consumerId]);
 
   // Read current cache state via useQuery with disabled fetching.
   // The subscription effect above feeds cache updates, so this renders
@@ -163,9 +185,7 @@ export function useGitListChangedFilesSubscription(args: {
     enabled: false,
   });
 
-  const subscription = subscriptions.get(
-    `${stableArgs.hostId}|${stableArgs.runningDir}|${stableArgs.ignoreWhitespace ? "1" : "0"}`,
-  );
+  const subscription = activeSubscriptionFor(wsStreamClient, stableArgs);
 
   const lastEvent = subscription?.lastEvent ?? null;
   const errorEvent = lastEvent?.type === "error" ? lastEvent : null;
@@ -179,7 +199,7 @@ export function useGitListChangedFilesSubscription(args: {
   return {
     data,
     error: errorEvent,
-    isPending: data === null,
+    isPending: data === null && errorEvent === null,
     repoState: data?.repoState ?? null,
     repoMode: data?.repoMode ?? null,
     pollStartedAtMs,
@@ -190,7 +210,6 @@ function createSharedSubscription(
   wsStreamClient: WsStreamClient<HostStreamRpcRegistry>,
   queryClient: QueryClient,
   args: ActiveSubscriptionArgs,
-  removeSubscription: () => void,
 ): SharedSubscription {
   const session = wsStreamClient.subscribe("git.subscribeStatus", {
     hostId: args.hostId,
@@ -209,6 +228,19 @@ function createSharedSubscription(
     consumers: new Map(),
   };
 
+  // Terminal teardown that keeps the map entry (and its error) alive for the
+  // mounted consumers: the entry only leaves the map through the refCount
+  // lifecycle, so a later fresh mount re-subscribes from scratch while the
+  // current ones render the error instead of a forever-pending skeleton.
+  const markTerminal = (event: GitSubscribeStatusEvent): void => {
+    sessionClosed = true;
+    session.close();
+    shared.lastEvent = event;
+    for (const consumer of shared.consumers.values()) {
+      consumer();
+    }
+  };
+
   session.onServerFrame((envelope) => {
     if (sessionClosed) return;
 
@@ -220,22 +252,42 @@ function createSharedSubscription(
     }
     const event = parseResult.data;
 
+    if (event.type === "error" && event.isFatal) {
+      markTerminal(event);
+      return;
+    }
+
     shared.lastEvent = event;
 
     for (const consumer of shared.consumers.values()) {
-      consumer(event);
+      consumer();
     }
 
     writeIntoCache(queryClient, args, event);
+  });
 
-    if (event.type === "error" && event.isFatal) {
-      shared.unsubscribeFromStream();
-      shared.consumers.clear();
-      removeSubscription();
-    }
+  // Transport-terminal transitions (a fatal error frame, a closed client's
+  // inert session, the no-progress UNAUTHORIZED give-up) never produce a
+  // domain error frame - without this handler the subscription would sit in
+  // a pending state forever (the stuck git-diff skeleton incident).
+  session.onStatusChange((status, reason) => {
+    if (sessionClosed) return;
+    if (status !== "closed") return;
+    markTerminal({
+      type: "error",
+      message: describeStreamClose(reason),
+      isFatal: true,
+    });
   });
 
   return shared;
+}
+
+function describeStreamClose(reason: StreamCloseReason | null): string {
+  if (reason === null || reason.kind === "caller") {
+    return "The Git changes stream closed unexpectedly.";
+  }
+  return `The Git changes stream failed (${reason.details.code}): ${reason.details.reason}`;
 }
 
 /**
