@@ -596,10 +596,9 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         return;
       }
       // Commit the picked model through the memory-aware funnel (restores that
-      // (harness, profile, model)'s remembered effort/tier, or the model's
-      // defaults). Selecting a model keeps the picker open; it only closes on
-      // an outside click / escape (handled by Popover's onOpenChange ->
-      // closeOnly).
+      // (provider, model)'s remembered effort/tier, or the model's defaults).
+      // Selecting a model keeps the picker open; it only closes on an outside
+      // click / escape (handled by Popover's onOpenChange -> closeOnly).
       commitSelection(store, row.harnessId, row.value, activePanelProfileId);
     },
     [activePanelProfileId, closeOnly, disabled, store],
@@ -652,9 +651,8 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       // can differ after browsing a degraded rail entry without committing it,
       // or when this globally retained create-profile callback resolves after
       // another control changed the selection. In that case preserve the old
-      // provider-switch behavior and restore the target provider/profile's
-      // remembered settings instead of pairing its profile with the current
-      // provider.
+      // provider-switch behavior and restore the target provider's remembered
+      // settings instead of pairing its profile with the current provider.
       if (store.getState().selection.harnessId === providerId) {
         commitProfileSelection(store, profileId);
       } else {

@@ -132,7 +132,7 @@ async function runWorktreeDeleteStream(
       if (settled) return;
       settled = true;
       session.close();
-      client.close();
+      client.close("worktree-delete-settled");
       act();
     };
     session.onServerFrame((envelope) => {

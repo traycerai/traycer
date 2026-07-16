@@ -4,14 +4,14 @@ import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harnes
 
 /**
  * The single memory-aware commit funnel behind every `(harness, model)` change.
- * Reads the per-harness / per-(harness, model) memory, then drives the toolbar
+ * Reads the per-provider / per-(provider, model) memory, then drives the toolbar
  * store's combined `applyComposerSelection` so the switch restores what was last
  * used for that harness - model, thinking effort, and service tier - falling
  * back to the model's own defaults (the `""` no-carry lever) when there is no
  * history.
  *
- * - `modelSlug === null` is a harness SWITCH: resolve the harness's last model
- *   and that pair's effort/tier (`resolveHarnessSwitch`).
+ * - `modelSlug === null` is a provider SWITCH: resolve the provider's last
+ *   model and that pair's effort/tier (`resolveHarnessSwitch`).
  * - a concrete `modelSlug` is an explicit model PICK: keep the slug, restore
  *   only that pair's effort/tier (`resolveModelSelection`).
  *
@@ -32,10 +32,10 @@ export function commitSelection(
   memory.recordProfileSelection(harnessId, profileId);
   const resolved =
     modelSlug === null
-      ? memory.resolveHarnessSwitch(harnessId, profileId)
+      ? memory.resolveHarnessSwitch(harnessId)
       : {
           modelSlug,
-          ...memory.resolveModelSelection(harnessId, profileId, modelSlug),
+          ...memory.resolveModelSelection(harnessId, modelSlug),
         };
   store.getState().applyComposerSelection({
     selection: { harnessId, profileId, modelSlug: resolved.modelSlug },
@@ -47,8 +47,8 @@ export function commitSelection(
 /**
  * Commits a profile-only change for the currently selected harness. Unlike
  * `commitSelection`, this path deliberately does not consult the destination
- * profile's model/effort memory: switching credentials must not discard model,
- * reasoning, or service-tier choices the user already configured.
+ * provider's model/effort memory: switching credentials must not discard
+ * model, reasoning, or service-tier choices the user already configured.
  *
  * Shared by the model picker's profile dropdown and the chat rate-limit
  * banner, so both profile-switch surfaces preserve the same composer state.

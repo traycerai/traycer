@@ -215,11 +215,11 @@ function assertInvariants(cfg: CliConfig, entryPathsBefore: Set<string>): void {
 describe("adversarial: property-style op-sequence fuzz vs reference model", () => {
   const SEEDS = Array.from({ length: 30 }, (_, i) => i * 1013 + 7);
   const OPS_PER_SEED = 500;
-  // Hang detector, not a performance bound: a seed typically finishes in
-  // <1s locally but has been observed at >3s per seed on a contended 2-core
-  // CI runner, where the 5s default flakes. Correctness is unaffected by
-  // duration, so the deadline is set far above any plausible healthy run.
-  const SEED_TIMEOUT_MS = 120_000;
+  // Correctness-only test: the timeout exists to catch hangs, not to assert
+  // speed. 500 ops typically finish in <1s, but a contended 2-core CI runner
+  // has pushed marginal seeds past vitest's 5s default (seed 7 twice on
+  // 2026-07-16). 12x headroom keeps load out of the verdict.
+  const FUZZ_TEST_TIMEOUT_MS = 60_000;
 
   it.each(SEEDS)(
     "holds mirror/canonicalisation/resolution invariants (seed %i)",
@@ -298,6 +298,6 @@ describe("adversarial: property-style op-sequence fuzz vs reference model", () =
         assertInvariants(cfg, before);
       }
     },
-    SEED_TIMEOUT_MS,
+    FUZZ_TEST_TIMEOUT_MS,
   );
 });

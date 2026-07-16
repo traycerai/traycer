@@ -1270,9 +1270,22 @@ describe("WsStreamClient", () => {
     completeHandshake(sockets[0].socket);
     completeHandshake(sockets[1].socket);
 
+    const closedListenerCalls: number[] = [];
+    const unsubscribeClosed = client.onClosed(() => {
+      closedListenerCalls.push(1);
+    });
+
     expect(client.isClosed()).toBe(false);
-    client.close();
+    expect(client.getClosedReason()).toBeNull();
+    client.close("test-teardown");
     expect(client.isClosed()).toBe(true);
+    expect(client.getClosedReason()).toBe("test-teardown");
+    expect(closedListenerCalls).toHaveLength(1);
+    // A second close is a no-op: the first reason wins, listeners fire once.
+    client.close("second-close");
+    expect(client.getClosedReason()).toBe("test-teardown");
+    expect(closedListenerCalls).toHaveLength(1);
+    unsubscribeClosed();
 
     expect(sockets[0].socket.closed).toEqual({
       code: 1000,
@@ -1283,21 +1296,55 @@ describe("WsStreamClient", () => {
       reason: "closed-by-caller",
     });
     // Defense-in-depth: a stale subscribe on a closed client degrades to an
-    // inert no-op session instead of throwing into the renderer error boundary.
-    // No new socket is dialed, and the returned session is safe to drive.
+    // inert session instead of throwing into the renderer error boundary. No
+    // new socket is dialed, the returned session is safe to drive, and it
+    // emits ONE terminal status (on a microtask) so the consumer learns its
+    // subscription is dead instead of pending forever.
     const warnSpy = vi
       .spyOn(console, "warn")
       .mockImplementation(() => undefined);
     const inert = client.subscribe("epic.subscribe", { epicId: "epic-2" });
     expect(sockets).toHaveLength(2);
+    const inertStatuses: Array<{
+      status: StreamConnectionStatus;
+      reason: StreamCloseReason | null;
+    }> = [];
     expect(() => {
       inert.onServerFrame(() => undefined);
-      inert.onStatusChange(() => undefined);
+      inert.onStatusChange((status, reason) => {
+        inertStatuses.push({ status, reason });
+      });
       inert.sendClientFrame({ kind: "noop", hasBinaryPayload: false }, null);
-      inert.close();
     }).not.toThrow();
     expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0]?.[0]).toContain("closedReason=test-teardown");
     warnSpy.mockRestore();
+
+    await Promise.resolve();
+    expect(inertStatuses).toHaveLength(1);
+    expect(inertStatuses[0].status).toBe("closed");
+    expect(inertStatuses[0].reason).toEqual({
+      kind: "fatalError",
+      details: {
+        code: "CLIENT_CLOSED",
+        reason: "stream client was already closed (test-teardown)",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+    // Closing the inert session before the microtask suppresses the emission.
+    const closeWarnSpy = vi
+      .spyOn(console, "warn")
+      .mockImplementation(() => undefined);
+    const closedFirst = client.subscribe("epic.subscribe", { epicId: "e3" });
+    closeWarnSpy.mockRestore();
+    const lateStatuses: StreamConnectionStatus[] = [];
+    closedFirst.onStatusChange((status) => {
+      lateStatuses.push(status);
+    });
+    closedFirst.close();
+    await Promise.resolve();
+    expect(lateStatuses).toHaveLength(0);
   });
 
   it("rewrites a directory entry's '/rpc' suffix to '/stream' on first dial", async () => {

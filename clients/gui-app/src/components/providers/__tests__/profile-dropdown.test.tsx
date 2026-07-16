@@ -1,6 +1,12 @@
 import "../../../../__tests__/test-browser-apis";
 import type { KeyboardEvent, ReactNode } from "react";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import type { ProfileDropdownShortcutHint } from "../profile-dropdown";
@@ -174,6 +180,33 @@ describe("<ProfileDropdown />", () => {
       name: "Codex profile: Work",
     });
     expect(trigger.textContent).toContain("Work");
+    expect(
+      within(trigger).queryByText("Terminal", {
+        selector: '[data-slot="badge"]',
+      }),
+    ).toBeNull();
+  });
+
+  it("shows the Terminal badge on the closed trigger for the ambient profile", () => {
+    renderDropdown({
+      profiles: [AMBIENT, WORK],
+      activeProfileId: null,
+      onSelectProfile: vi.fn(),
+      onCreateProfile: vi.fn(),
+      createProfileDisabled: false,
+      createProfileDisabledReason: undefined,
+      shortcutHintForIndex: stubShortcutHintForIndex,
+      onCloseAutoFocus: null,
+    });
+
+    const trigger = screen.getByRole("button", {
+      name: "Codex profile: Terminal account, Terminal",
+    });
+    expect(
+      within(trigger).getByText("Terminal", {
+        selector: '[data-slot="badge"]',
+      }),
+    ).toBeDefined();
   });
 
   it("renders non-modal so nested picker clicks can dismiss only the profile menu", () => {
@@ -231,7 +264,7 @@ describe("<ProfileDropdown />", () => {
     });
 
     expect(
-      screen.getByRole("menuitem", { name: "Terminal account" }),
+      screen.getByRole("menuitem", { name: "Terminal account, Terminal" }),
     ).toBeDefined();
     expect(screen.getByRole("menuitem", { name: "Work" })).toBeDefined();
     const signedOutRow = screen.getByRole("menuitem", {
@@ -253,7 +286,9 @@ describe("<ProfileDropdown />", () => {
       onCloseAutoFocus: null,
     });
 
-    fireEvent.click(screen.getByRole("menuitem", { name: "Terminal account" }));
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Terminal account, Terminal" }),
+    );
     expect(onSelectProfile).toHaveBeenLastCalledWith(null);
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
@@ -385,7 +420,7 @@ describe("<ProfileDropdown />", () => {
     ).toBe("true");
     expect(
       screen
-        .getByRole("menuitem", { name: "Terminal account" })
+        .getByRole("menuitem", { name: "Terminal account, Terminal" })
         .getAttribute("aria-current"),
     ).toBeNull();
   });
