@@ -225,7 +225,7 @@ describe("merged notifications feed", () => {
     const entry = (
       reason: string | undefined,
       code: string,
-      providerId: "claude-code" | undefined,
+      providerId: string | undefined,
     ): HostNotificationEntry => ({
       ...base,
       payload: {
@@ -262,6 +262,11 @@ describe("merged notifications feed", () => {
         body: "Debug notifications • Provider is signed out. Reconnect to continue.",
       },
     );
+    expect(
+      rowFromHostEntry(entry("auth", "auth", "future-provider")),
+    ).toMatchObject({
+      body: "Debug notifications • Provider is signed out. Reconnect to continue.",
+    });
     expect(
       rowFromHostEntry(entry(undefined, "MISSING_API_KEY", "claude-code")),
     ).toMatchObject({
