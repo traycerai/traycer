@@ -185,10 +185,32 @@ export class DesktopStateStore {
   }
 
   private scheduleWrite(): void {
-    const next = this.writeChain.then(() => this.persist());
-    this.writeChain = next.catch((err) => {
-      this.logger.warn("[desktop-state] failed to persist state file", { err });
-    });
+    this.writeChain = this.writeChain.then(() => this.persistWithRetry());
+  }
+
+  // Persist policy: one immediate retry, then surrender with an error-level
+  // log. The chain itself never rejects - `flush()` resolving is what
+  // authorizes a quit, and a failed state write must never block it (the
+  // previous on-disk payload stays intact thanks to the tmp+rename swap; the
+  // cost of surrender is stale window state on the next launch, which the
+  // error log makes attributable).
+  private async persistWithRetry(): Promise<void> {
+    try {
+      await this.persist();
+      return;
+    } catch (err) {
+      this.logger.warn("[desktop-state] persist failed - retrying once", {
+        err,
+      });
+    }
+    try {
+      await this.persist();
+    } catch (err) {
+      this.logger.error(
+        "[desktop-state] persist retry failed - window state will be stale on next launch",
+        { err, filePath: this.filePath },
+      );
+    }
   }
 
   private async persist(): Promise<void> {
