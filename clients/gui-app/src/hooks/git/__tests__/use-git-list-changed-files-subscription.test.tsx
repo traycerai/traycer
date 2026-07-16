@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import type { GitSubscribeStatusEvent } from "@traycer/protocol/host/git-schemas";
@@ -589,14 +589,16 @@ describe("useGitListChangedFilesSubscription", () => {
     // A transport-terminal close (fatal error frame, closed client, the
     // UNAUTHORIZED give-up) produces NO domain error frame - only a status
     // transition. It must surface as a fatal error, not an eternal skeleton.
-    session.emitStatus("closed", {
-      kind: "fatalError",
-      details: {
-        code: "UNAUTHORIZED",
-        reason: "gave up after no-progress reconnects",
-        incompatibleMethods: null,
-        upgradeGuidance: null,
-      },
+    act(() => {
+      session.emitStatus("closed", {
+        kind: "fatalError",
+        details: {
+          code: "UNAUTHORIZED",
+          reason: "gave up after no-progress reconnects",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        },
+      });
     });
 
     await waitFor(() => {

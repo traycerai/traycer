@@ -132,6 +132,7 @@ class MockStreamSession implements IStreamSession {
 
 class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
   readonly session = new MockStreamSession();
+  readonly subscribedMethods: string[] = [];
 
   constructor() {
     super({
@@ -154,9 +155,10 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
   }
 
   override subscribe<Method extends keyof HostStreamRpcRegistry & string>(
-    _method: Method,
+    method: Method,
     _params: ParamsOf<HostStreamRpcRegistry, Method>,
   ): IStreamSession {
+    this.subscribedMethods.push(method);
     return this.session;
   }
 }
@@ -516,6 +518,10 @@ describe("<NotificationsSessionProvider />", () => {
     await waitFor(() => {
       expect(firstClient.session.clientFrames).toHaveLength(1);
     });
+    expect([...firstClient.subscribedMethods].sort()).toEqual([
+      "host.notifications.subscribe",
+      "notifications.subscribe",
+    ]);
 
     act(() => {
       appendEntry(invitedEntry("n-1", "epic-alpha"));
@@ -543,7 +549,13 @@ describe("<NotificationsSessionProvider />", () => {
     await waitFor(() => {
       expect(secondClient.session.clientFrames).toHaveLength(1);
     });
-    expect(firstClient.session.closeCount).toBeGreaterThan(0);
+    expect([...secondClient.subscribedMethods].sort()).toEqual([
+      "host.notifications.subscribe",
+      "notifications.subscribe",
+    ]);
+    // Both streams shared `firstClient.session` in this mock, so both old
+    // sessions closing is observed as two closes on that shared session.
+    expect(firstClient.session.closeCount).toBe(2);
     expect(useNotificationsStore.getState().entries).toHaveLength(1);
   });
 

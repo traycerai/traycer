@@ -246,10 +246,22 @@ export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
       session.close();
     }
     this.ownedSessions.clear();
-    for (const listener of Array.from(this.closedListeners)) {
-      listener();
-    }
+    const listeners = Array.from(this.closedListeners);
     this.closedListeners.clear();
+    const listenerErrors: unknown[] = [];
+    for (const listener of listeners) {
+      try {
+        listener();
+      } catch (error) {
+        listenerErrors.push(error);
+      }
+    }
+    if (listenerErrors.length > 0) {
+      console.error(
+        `[stream] ${listenerErrors.length} closed-listener(s) threw during close (client=${this.instanceId}, reason=${reason})`,
+        listenerErrors,
+      );
+    }
   }
 
   /**
