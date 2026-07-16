@@ -215,65 +215,89 @@ function assertInvariants(cfg: CliConfig, entryPathsBefore: Set<string>): void {
 describe("adversarial: property-style op-sequence fuzz vs reference model", () => {
   const SEEDS = Array.from({ length: 30 }, (_, i) => i * 1013 + 7);
   const OPS_PER_SEED = 500;
+  // Hang detector, not a performance bound: a seed typically finishes in
+  // <1s locally but has been observed at >3s per seed on a contended 2-core
+  // CI runner, where the 5s default flakes. Correctness is unaffected by
+  // duration, so the deadline is set far above any plausible healthy run.
+  const SEED_TIMEOUT_MS = 120_000;
 
-  it.each(SEEDS)("holds mirror/canonicalisation/resolution invariants (seed %i)", async (seed) => {
-    const rng = mulberry32(seed);
-    const ref: RefState = { path: null, args: null, entries: [] };
+  it.each(SEEDS)(
+    "holds mirror/canonicalisation/resolution invariants (seed %i)",
+    async (seed) => {
+      const rng = mulberry32(seed);
+      const ref: RefState = { path: null, args: null, entries: [] };
+      // Zombie guard: when vitest times a test out, the async body keeps
+      // running. All seeds share the mutable `h` the homedir mock reads, so
+      // without this check a timed-out seed keeps writing into the NEXT
+      // seed's fresh store and fails it in milliseconds (observed in CI:
+      // seed 7 timed out at ~5s, then seed 1020 "failed" at 60ms). If
+      // another test has re-pointed the home, this run is already dead —
+      // stop touching the filesystem.
+      const myHome = h.home;
 
-    for (let step = 0; step < OPS_PER_SEED; step++) {
-      const before = new Set(ref.entries.map((e) => e.path));
-      const opRoll = rng();
-      if (opRoll < 0.4) {
-        // setShell across all four shapes.
-        const shape = rng();
-        let path: string | null;
-        let args: string[] | null;
-        if (shape < 0.3) {
-          path = pick(rng, PATH_POOL);
-          args = null; // pick a shell
-        } else if (shape < 0.55) {
-          path = null;
-          args = pick(rng, ARGS_POOL.filter((a) => a !== null)) as string[]; // args-only
-        } else if (shape < 0.85) {
-          path = pick(rng, PATH_POOL);
-          args = pick(rng, ARGS_POOL.filter((a) => a !== null)) as string[]; // both
+      for (let step = 0; step < OPS_PER_SEED; step++) {
+        if (h.home !== myHome) return;
+        const before = new Set(ref.entries.map((e) => e.path));
+        const opRoll = rng();
+        if (opRoll < 0.4) {
+          // setShell across all four shapes.
+          const shape = rng();
+          let path: string | null;
+          let args: string[] | null;
+          if (shape < 0.3) {
+            path = pick(rng, PATH_POOL);
+            args = null; // pick a shell
+          } else if (shape < 0.55) {
+            path = null;
+            args = pick(
+              rng,
+              ARGS_POOL.filter((a) => a !== null),
+            ) as string[]; // args-only
+          } else if (shape < 0.85) {
+            path = pick(rng, PATH_POOL);
+            args = pick(
+              rng,
+              ARGS_POOL.filter((a) => a !== null),
+            ) as string[]; // both
+          } else {
+            // Degenerate null/null is guarded upstream; skip so we mirror callers.
+            path = pick(rng, PATH_POOL);
+            args = null;
+          }
+          refSetShell(ref, path, args);
+          await setShell(path, args);
+        } else if (opRoll < 0.6) {
+          const path = pick(rng, PATH_POOL);
+          refAddShell(ref, path);
+          await addShell(path);
+        } else if (opRoll < 0.78) {
+          const path = pick(rng, PATH_POOL);
+          refRemoveShell(ref, path);
+          await removeShell(path);
+        } else if (opRoll < 0.92) {
+          const path = pick(rng, PATH_POOL);
+          refRevertShellArgs(ref, path);
+          await revertShellArgs(path);
         } else {
-          // Degenerate null/null is guarded upstream; skip so we mirror callers.
-          path = pick(rng, PATH_POOL);
-          args = null;
+          refReset(ref);
+          await resetShell();
         }
-        refSetShell(ref, path, args);
-        await setShell(path, args);
-      } else if (opRoll < 0.6) {
-        const path = pick(rng, PATH_POOL);
-        refAddShell(ref, path);
-        await addShell(path);
-      } else if (opRoll < 0.78) {
-        const path = pick(rng, PATH_POOL);
-        refRemoveShell(ref, path);
-        await removeShell(path);
-      } else if (opRoll < 0.92) {
-        const path = pick(rng, PATH_POOL);
-        refRevertShellArgs(ref, path);
-        await revertShellArgs(path);
-      } else {
-        refReset(ref);
-        await resetShell();
-      }
 
-      const cfg = await readCliConfig();
-      // 1. Implementation state must match the independent reference model.
-      expect({
-        path: cfg.shell.path,
-        args: cfg.shell.args,
-        entries: sortEntries(cfg.shell.entries),
-      }).toEqual({
-        path: ref.path,
-        args: ref.args,
-        entries: sortEntries(ref.entries),
-      });
-      // 2. Contract invariants hold on the persisted config.
-      assertInvariants(cfg, before);
-    }
-  });
+        const cfg = await readCliConfig();
+        // 1. Implementation state must match the independent reference model.
+        expect({
+          path: cfg.shell.path,
+          args: cfg.shell.args,
+          entries: sortEntries(cfg.shell.entries),
+        }).toEqual({
+          path: ref.path,
+          args: ref.args,
+          entries: sortEntries(ref.entries),
+        });
+        // 2. Contract invariants hold on the persisted config.
+        assertInvariants(cfg, before);
+      }
+    },
+    SEED_TIMEOUT_MS,
+  );
 });
