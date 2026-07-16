@@ -186,8 +186,12 @@ describe.skipIf(process.platform !== "darwin")(
     });
 
     it("produces a packaged .app containing the helper .app and a LaunchAgent plist with NumberOfFiles=8192, valid via plutil -lint", () => {
-      expect(packagedAppPath).not.toBeNull();
-      const appPath = packagedAppPath as string;
+      if (packagedAppPath === null) {
+        throw new Error(
+          "packagedAppPath was not set - packaging must have failed",
+        );
+      }
+      const appPath = packagedAppPath;
       expect(existsSync(appPath)).toBe(true);
 
       const helperAppPath = path.join(
@@ -245,8 +249,12 @@ describe.skipIf(process.platform !== "darwin")(
     });
 
     it("relocates cleanly - after cp -R to a different path, BundleProgram (parsed, not grepped) still resolves to a real executable file", () => {
-      expect(packagedAppPath).not.toBeNull();
-      const appPath = packagedAppPath as string;
+      if (packagedAppPath === null) {
+        throw new Error(
+          "packagedAppPath was not set - packaging must have failed",
+        );
+      }
+      const appPath = packagedAppPath;
       const agentPlistPath = path.join(
         appPath,
         "Contents",
@@ -258,8 +266,10 @@ describe.skipIf(process.platform !== "darwin")(
       const bundleProgramMatch = agentPlist.match(
         /<key>BundleProgram<\/key>\s*<string>([^<]+)<\/string>/,
       );
-      expect(bundleProgramMatch).not.toBeNull();
-      const relativeHelperPath = (bundleProgramMatch as RegExpMatchArray)[1];
+      if (bundleProgramMatch === null) {
+        throw new Error("BundleProgram not found in the generated plist");
+      }
+      const relativeHelperPath = bundleProgramMatch[1];
       expect(relativeHelperPath.startsWith("/")).toBe(false);
 
       const relocatedRoot = path.join(

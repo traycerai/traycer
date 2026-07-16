@@ -8,6 +8,17 @@ import {
   type Mock,
 } from "vitest";
 import type { HostEnsureIpcResult } from "../../ipc/host-ensure-ipc";
+import type { Environment, HostFsLayout } from "../host-paths";
+import type {
+  HostEnsureError,
+  HostEnsureResultPayload,
+  HostReadinessResult,
+  ServiceLifecycleSnapshot,
+} from "../host-readiness";
+import type {
+  HostLoginItemStatus,
+  RegisterHostLoginItemResult,
+} from "../../app/host-login-item";
 
 // Ticket packaging-smappservice-activation / marker-monitor: the pending
 // LaunchAgent revision monitor closes the gap where `ensureHost()`'s
@@ -40,47 +51,64 @@ vi.mock("electron-log", () => ({
   },
 }));
 
-const isHostRemovedByUser: Mock = vi.fn();
+const isHostRemovedByUser: Mock<() => Promise<boolean>> = vi.fn();
 vi.mock("../host-removal-state", () => ({
   isHostRemovedByUser: () => isHostRemovedByUser(),
 }));
 
-const hostManagesHostLoginItem: Mock = vi.fn();
-const hasPendingLoginItemRevision: Mock = vi.fn();
-const registerHostLoginItem: Mock = vi.fn();
-const readHostLoginItemStatus: Mock = vi.fn();
+const hostManagesHostLoginItem: Mock<() => Promise<boolean>> = vi.fn();
+const hasPendingLoginItemRevision: Mock<
+  (environment: Environment) => Promise<boolean>
+> = vi.fn();
+const registerHostLoginItem: Mock<() => Promise<RegisterHostLoginItemResult>> =
+  vi.fn();
+const readHostLoginItemStatus: Mock<() => HostLoginItemStatus> = vi.fn();
 vi.mock("../../app/host-login-item", () => ({
   hostManagesHostLoginItem: () => hostManagesHostLoginItem(),
-  hasPendingLoginItemRevision: (environment: unknown) =>
+  hasPendingLoginItemRevision: (environment: Environment) =>
     hasPendingLoginItemRevision(environment),
   registerHostLoginItem: () => registerHostLoginItem(),
   readHostLoginItemStatus: () => readHostLoginItemStatus(),
 }));
 
-const approvalRequiredMessage: Mock = vi.fn();
+const approvalRequiredMessage: Mock<() => string> = vi.fn();
 vi.mock("../../app/host-respawn", () => ({
   approvalRequiredMessage: () => approvalRequiredMessage(),
 }));
 
-const probeHostActivityBusy: Mock = vi.fn();
+const probeHostActivityBusy: Mock<(websocketUrl: string) => Promise<boolean>> =
+  vi.fn();
 vi.mock("@traycer-clients/shared/host-client/host-activity-probe", () => ({
   probeHostActivityBusy: (listenUrl: string) =>
     probeHostActivityBusy(listenUrl),
 }));
 
-const canReachHostWebsocketUrl: Mock = vi.fn();
+const canReachHostWebsocketUrl: Mock<(url: string) => Promise<boolean>> =
+  vi.fn();
 vi.mock("../host-lifecycle", () => ({
   canReachHostWebsocketUrl: (url: string) => canReachHostWebsocketUrl(url),
 }));
 
-const waitForHostReady: Mock = vi.fn();
-const categorizeHostCliError: Mock = vi.fn();
-const readServiceLifecycle: Mock = vi.fn();
+const waitForHostReady: Mock<
+  (
+    timeoutMs: number,
+    pidPath: string,
+    pollIntervalMs: number,
+    skipPid: number | null,
+  ) => Promise<HostReadinessResult>
+> = vi.fn();
+const categorizeHostCliError: Mock<(err: unknown) => HostEnsureError> = vi.fn();
+const readServiceLifecycle: Mock<
+  (
+    payload: HostEnsureResultPayload | null | undefined,
+  ) => ServiceLifecycleSnapshot
+> = vi.fn();
 vi.mock("../host-readiness", () => ({
   HOST_READY_TIMEOUT_MS: 60_000,
   HOST_READY_POLL_MS: 250,
   categorizeHostCliError: (err: unknown) => categorizeHostCliError(err),
-  readServiceLifecycle: (payload: unknown) => readServiceLifecycle(payload),
+  readServiceLifecycle: (payload: HostEnsureResultPayload | null | undefined) =>
+    readServiceLifecycle(payload),
   waitForHostReady: (
     timeoutMs: number,
     pidPath: string,
@@ -89,13 +117,15 @@ vi.mock("../host-readiness", () => ({
   ) => waitForHostReady(timeoutMs, pidPath, pollIntervalMs, skipPid),
 }));
 
-const getHostFsLayout: Mock = vi.fn();
+const getHostFsLayout: Mock<(environment: Environment) => HostFsLayout> =
+  vi.fn();
 vi.mock("../host-paths", () => ({
-  getHostFsLayout: (environment: unknown) => getHostFsLayout(environment),
+  getHostFsLayout: (environment: Environment) => getHostFsLayout(environment),
 }));
 
-const getActiveEnvironment: Mock = vi.fn();
-const streamCliWithProgress: Mock = vi.fn();
+const getActiveEnvironment: Mock<() => Environment> = vi.fn();
+const streamCliWithProgress: Mock<(...args: unknown[]) => Promise<unknown>> =
+  vi.fn();
 vi.mock("../../ipc/host-management-ipc", () => ({
   getActiveEnvironment: () => getActiveEnvironment(),
   optionalString: (raw: unknown, key: string) => {
@@ -123,16 +153,31 @@ const LISTEN_URL = "ws://127.0.0.1:9999/rpc";
 const SERVICE_VERSION = "1.2.3";
 const SERVICE_PID = 111;
 
+// `FakeBridge` below is fully typed (no member is `any`/unparameterized), but
+// every `runEnsureHost(bridge as never, ...)` call site still needs the cast:
+// `RunnerIpcBridge` is a concrete class with private fields, so no plain
+// object - however precisely typed - can structurally satisfy it. Only
+// `options.host.{getServiceStatus,reloadSnapshotFromDisk}` are ever
+// dereferenced on the fast (already-reachable) path these tests exercise.
+interface FakeServiceStatus {
+  readonly state: "running" | "stopped" | "not-installed";
+  readonly version: string | null;
+  readonly listenUrl: string | null;
+  readonly pid: number | null;
+}
+
 interface FakeBridge {
   readonly options: {
     readonly host: {
-      readonly getServiceStatus: Mock;
-      readonly reloadSnapshotFromDisk: Mock;
+      readonly getServiceStatus: Mock<() => Promise<FakeServiceStatus>>;
+      readonly reloadSnapshotFromDisk: Mock<() => Promise<null>>;
     };
   };
 }
 
-function fakeBridge(getServiceStatus: Mock): FakeBridge {
+function fakeBridge(
+  getServiceStatus: Mock<() => Promise<FakeServiceStatus>>,
+): FakeBridge {
   return {
     options: {
       host: {
@@ -143,7 +188,7 @@ function fakeBridge(getServiceStatus: Mock): FakeBridge {
   };
 }
 
-function runningServiceStatus(): Mock {
+function runningServiceStatus(): Mock<() => Promise<FakeServiceStatus>> {
   return vi.fn(async () => ({
     state: "running" as const,
     version: SERVICE_VERSION,

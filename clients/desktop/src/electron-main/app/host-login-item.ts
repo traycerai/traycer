@@ -79,12 +79,14 @@ export type HostLoginItemStatus =
 
 /**
  * `registerHostLoginItem`'s result: the SMAppService status the cycle
- * settled on, or `removed-by-user` when the locked section found the
- * removal sentinel set and refused to run the cycle at all (see the
- * re-check rationale in `registerHostLoginItemUnserialized`).
+ * settled on, `removed-by-user` when the locked section found the removal
+ * sentinel set and refused to run the cycle at all, or `deferred-busy` when
+ * the caller's own `revalidateBeforeBootout` guard failed once the cycle
+ * reached the front of the registration lock's queue (see the re-check
+ * rationale in `registerHostLoginItemUnserialized`).
  */
 export type RegisterHostLoginItemResult =
-  HostLoginItemStatus | "removed-by-user";
+  HostLoginItemStatus | "removed-by-user" | "deferred-busy";
 
 // True only when this is a shipped macOS build that ships the in-bundle
 // LaunchAgent plist. Used by the ensure flow to decide whether the desktop
@@ -189,11 +191,26 @@ const REGISTER_STATUS_POLL_INTERVAL_MS = 100;
  * synchronous status read can transiently say `not-registered` for
  * <100ms on cold-BTM (first-install) machines.
  */
-export function registerHostLoginItem(): Promise<RegisterHostLoginItemResult> {
-  return withHostLoginItemRegistrationLock(registerHostLoginItemUnserialized);
+// `revalidateBeforeBootout`, when provided, is called INSIDE the locked
+// section immediately before `bootoutStaleAgent()` - not just at the call
+// site - because a caller's own idle/busy check (e.g. the pending-revision
+// fast path's `probeHostActivityBusy`) can go stale while queued behind
+// another in-flight cycle (`respawnHost` and `runEnsureHost` share this same
+// lock). Without a re-check here, a cycle that was idle when queued could
+// still boot out a host that picked up real work while waiting its turn.
+// Return `false` from the callback to defer without mutating anything;
+// `registerHostLoginItemUnserialized` reports that back as `"deferred-busy"`.
+export function registerHostLoginItem(
+  revalidateBeforeBootout: (() => Promise<boolean>) | undefined,
+): Promise<RegisterHostLoginItemResult> {
+  return withHostLoginItemRegistrationLock(() =>
+    registerHostLoginItemUnserialized(revalidateBeforeBootout),
+  );
 }
 
-async function registerHostLoginItemUnserialized(): Promise<RegisterHostLoginItemResult> {
+async function registerHostLoginItemUnserialized(
+  revalidateBeforeBootout: (() => Promise<boolean>) | undefined,
+): Promise<RegisterHostLoginItemResult> {
   // Re-checked HERE, inside the locked section, not only at the callers'
   // entry points: an ensure can spend minutes streaming the CLI before its
   // register lands on this lock's tail - possibly queued BEHIND an in-app
@@ -206,6 +223,16 @@ async function registerHostLoginItemUnserialized(): Promise<RegisterHostLoginIte
       "[host-login-item] register skipped - host removed by user on this device",
     );
     return "removed-by-user";
+  }
+
+  if (
+    revalidateBeforeBootout !== undefined &&
+    !(await revalidateBeforeBootout())
+  ) {
+    log.info(
+      "[host-login-item] register cycle deferred - caller's guard failed once dequeued from the registration lock (host is no longer idle)",
+    );
+    return "deferred-busy";
   }
 
   const plistPath = inAppLaunchAgentPlistPath();

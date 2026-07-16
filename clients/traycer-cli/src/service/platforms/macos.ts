@@ -79,7 +79,7 @@ async function installService(
   // A stale `~/Library/LaunchAgents/<label>.plist` can coexist with an
   // in-bundle SMAppService load of the same label; bootout/bootstrap of
   // the raw path would corrupt BTM / CDHash state that Desktop manages.
-  const ownership = await inspectLaunchdOwnership(options.label, run);
+  const ownership = await inspectLaunchdOwnership(serviceTarget, run);
   if (ownership.kind === "smappservice") {
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
@@ -223,6 +223,23 @@ interface ReloadRegisteredServiceOptions {
 async function reloadRegisteredService(
   options: ReloadRegisteredServiceOptions,
 ): Promise<void> {
+  // The competing registrar that won the race this reload exists to fix
+  // may be Desktop's SMAppService, not another CLI process - re-probe
+  // ownership right before mutating. Booting out an SMAppService-owned job
+  // would corrupt the BTM state Desktop manages, exactly what
+  // `installService`'s own upfront refusal exists to prevent.
+  const raceOwnership = await inspectLaunchdOwnership(
+    options.serviceTarget,
+    options.run,
+  );
+  if (raceOwnership.kind === "smappservice") {
+    throw cliError({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      message: `service install: label '${options.labelId}' was taken over by SMAppService (loaded from ${raceOwnership.path}) during the reload race; the CLI must not bootout/bootstrap this label. Desktop owns registration on .app builds.`,
+      details: { label: options.labelId, loadedPath: raceOwnership.path },
+      exitCode: 1,
+    });
+  }
   try {
     await options.run("launchctl", ["bootout", options.serviceTarget], {
       env: undefined,
@@ -259,7 +276,7 @@ async function reloadRegisteredService(
     );
   } catch (cause) {
     // A second "already loaded" after our own explicit bootout means a
-    // concurrent installer won the reload race - and it bootstrapped the
+    // concurrent registrar won the reload race - and it bootstrapped the
     // same freshly regenerated on-disk plist this process just wrote (every
     // path that bootstraps this label rewrites the manifest first). The
     // loaded definition is therefore current, not the stale pre-rewrite
@@ -267,7 +284,28 @@ async function reloadRegisteredService(
     // caller's kickstart run the winner's definition. Reporting
     // SERVICE_INSTALL_FAILED here failed a healthy install for losing a
     // benign race.
+    //
+    // But the winner of THIS race could also be Desktop's SMAppService
+    // grabbing the label in the window between our own bootout and this
+    // bootstrap attempt - re-verify before accepting the failure as benign,
+    // since kickstart-ing "the winner's definition" would otherwise
+    // kickstart Desktop's SMAppService-owned job.
     if (isBenignBootstrapFailure(cause)) {
+      const postRaceOwnership = await inspectLaunchdOwnership(
+        options.serviceTarget,
+        options.run,
+      );
+      if (postRaceOwnership.kind === "smappservice") {
+        throw cliError({
+          code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+          message: `service install: label '${options.labelId}' was taken over by SMAppService (loaded from ${postRaceOwnership.path}) after the CLI's own bootout; the CLI's install did not complete. Desktop now owns this label.`,
+          details: {
+            label: options.labelId,
+            loadedPath: postRaceOwnership.path,
+          },
+          exitCode: 1,
+        });
+      }
       return;
     }
     // A genuine second-bootstrap failure leaves the label fully
@@ -315,10 +353,9 @@ type LaunchdOwnership =
 // CLI accepts this edge; Desktop's own register cycle (bootout first)
 // self-heals it on its next ensure.
 async function inspectLaunchdOwnership(
-  label: ServiceLabel,
+  serviceTarget: string,
   run: ProcessRunner,
 ): Promise<LaunchdOwnership> {
-  const serviceTarget = `${guiDomain()}/${label.id}`;
   const result = await run("launchctl", ["print", serviceTarget], {
     env: undefined,
     cwd: undefined,
@@ -396,7 +433,7 @@ async function uninstallService(
   //
   // The probe is advisory only: a launchctl that hangs or cannot spawn must
   // never block a removal, so probe failures read as "not loaded".
-  const ownership = await inspectLaunchdOwnership(options.label, run).catch(
+  const ownership = await inspectLaunchdOwnership(serviceTarget, run).catch(
     (): LaunchdOwnership => ({ kind: "not-loaded" }),
   );
   if (ownership.kind === "smappservice") {
@@ -451,7 +488,8 @@ async function statusService(
   // here used to make every `traycer login` on a Desktop-managed machine
   // select "service repair" and run straight into `installService`'s
   // SMAppService refusal.
-  const ownership = await inspectLaunchdOwnership(label, run);
+  const serviceTarget = `${guiDomain()}/${label.id}`;
+  const ownership = await inspectLaunchdOwnership(serviceTarget, run);
   if (ownership.kind === "smappservice") {
     return {
       state: "externally-managed",

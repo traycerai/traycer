@@ -293,6 +293,12 @@ interface FakeBridgeServiceStatus {
   readonly listenUrl: string | null;
   readonly pid: number | null;
 }
+// Every `runEnsureHost(bridge as never, ...)` call site below still needs
+// the cast even though this fake is fully typed: `RunnerIpcBridge` is a
+// concrete class with private fields, so no plain object - however
+// precisely typed - can structurally satisfy it. Only
+// `options.host.{getServiceStatus,reloadSnapshotFromDisk}` are ever
+// dereferenced on the fast (already-reachable) path these tests exercise.
 function fakeBridge(status: FakeBridgeServiceStatus): {
   readonly options: {
     readonly host: {
@@ -426,13 +432,19 @@ describe("shared registration-cycle lock: respawnHost vs runEnsureHost", () => {
 
     // The first cycle is now inside its ~200ms real poll-retry window (two
     // queued "not-registered" responses, each followed by a real 100ms
-    // sleep). Spot-check partway through that guaranteed-open window: a
-    // correctly-locked second cycle cannot have made ANY `setLoginItemSettings`
-    // call yet, because its `registerHostLoginItemUnserialized()` body has
-    // not even started executing - it is still chained behind the first
-    // cycle's still-pending promise in `withHostLoginItemRegistrationLock`.
-    await new Promise<void>((resolve) => setTimeout(resolve, 60));
-    expect(setLoginItemSettingsMock).toHaveBeenCalledTimes(2);
+    // sleep). Sample repeatedly across that guaranteed-open window rather
+    // than a single wall-clock sleep + one-shot snapshot: a correctly-locked
+    // second cycle cannot have made ANY `setLoginItemSettings` call yet
+    // (its `registerHostLoginItemUnserialized()` body has not even started
+    // executing - it is still chained behind the first cycle's still-pending
+    // promise in `withHostLoginItemRegistrationLock`), and repeated sampling
+    // means a single event-loop stall landing on one sample can't by itself
+    // make the check pass against a premature second-cycle call.
+    const midpointDeadline = Date.now() + 150;
+    while (Date.now() < midpointDeadline) {
+      expect(setLoginItemSettingsMock).toHaveBeenCalledTimes(2);
+      await new Promise<void>((resolve) => setTimeout(resolve, 15));
+    }
 
     await vi.waitFor(
       () => {
@@ -557,6 +569,86 @@ describe("runEnsureHost force-coalescing (individual semantics unchanged)", () =
     const secondArgs = streamCliWithProgressMock.mock.calls[1]?.[0] as
       readonly string[] | undefined;
     expect(firstArgs).not.toContain("--force");
+    expect(secondArgs).toContain("--force");
+  });
+
+  it("coalesces two force:true callers queued behind an in-flight force:false op onto ONE shared forced cycle, not two separate ones", async () => {
+    // Guards against a same-force check that only runs BEFORE the coalescing
+    // wait: if it doesn't also apply once dequeued, two force:true callers
+    // that both had to wait behind a force:false op could each start their
+    // OWN forced cycle instead of sharing one.
+    hostManagesHostLoginItemMock.mockResolvedValue(false);
+    waitForHostReadyMock.mockResolvedValue({
+      ready: true,
+      version: "irrelevant",
+      pid: 1,
+      reason: "ready",
+    });
+    readServiceLifecycleMock.mockReturnValue({
+      priorServiceState: null,
+      postSwapAction: null,
+      postSwapError: null,
+    });
+
+    const firstCycle = deferred<{
+      readonly version: string;
+      readonly serviceLifecycle: { readonly postSwapError: string | null };
+    }>();
+    streamCliWithProgressMock
+      .mockImplementationOnce(() => firstCycle.promise)
+      .mockImplementationOnce(() =>
+        Promise.resolve({
+          version: "3.3.3",
+          serviceLifecycle: { postSwapError: null },
+        }),
+      );
+
+    const bridge = fakeBridge({
+      state: "stopped",
+      version: null,
+      listenUrl: null,
+      pid: null,
+    });
+
+    const nonForcePromise = runEnsureHost(
+      bridge as never,
+      "op-non-force",
+      false,
+    );
+    await vi.waitFor(() => {
+      if (streamCliWithProgressMock.mock.calls.length < 1) {
+        throw new Error("waiting for the non-force CLI cycle to start");
+      }
+    });
+
+    const forcePromiseA = runEnsureHost(bridge as never, "op-force-a", true);
+    const forcePromiseB = runEnsureHost(bridge as never, "op-force-b", true);
+    // Both force calls are blocked on the non-force cycle's still-pending
+    // promise; no amount of microtask flushing can start a CLI cycle early.
+    await flushMicrotasks(10);
+    expect(streamCliWithProgressMock).toHaveBeenCalledTimes(1);
+
+    firstCycle.resolve({
+      version: "1.1.1",
+      serviceLifecycle: { postSwapError: null },
+    });
+
+    const [nonForceResult, forceResultA, forceResultB] = await Promise.all([
+      nonForcePromise,
+      forcePromiseA,
+      forcePromiseB,
+    ]);
+
+    expect(nonForceResult).toEqual({
+      action: "provisioned",
+      running: true,
+      version: "irrelevant",
+    });
+    // Exactly one MORE cycle ran (the two force callers shared it) - not two.
+    expect(streamCliWithProgressMock).toHaveBeenCalledTimes(2);
+    expect(forceResultA).toEqual(forceResultB);
+    const secondArgs = streamCliWithProgressMock.mock.calls[1]?.[0] as
+      readonly string[] | undefined;
     expect(secondArgs).toContain("--force");
   });
 

@@ -107,7 +107,10 @@ async function respawnViaLoginItem(host: IpcHostLifecycle): Promise<void> {
   host.notifyRespawning();
 
   if (host.isDisposed) return;
-  const status = await registerHostLoginItem();
+  // No revalidation guard: a respawn is a deliberate teardown+re-register,
+  // not an opportunistic idle-only refresh, so it intentionally proceeds
+  // regardless of host activity.
+  const status = await registerHostLoginItem(undefined);
   if (host.isDisposed) return;
   if (status === "removed-by-user") {
     // "Remove Traycer" ran while this respawn waited on the registration
@@ -118,6 +121,13 @@ async function respawnViaLoginItem(host: IpcHostLifecycle): Promise<void> {
   }
   if (status === "requires-approval") {
     throw new Error(approvalRequiredMessage());
+  }
+  if (status === "deferred-busy") {
+    // Unreachable: this call site passes no revalidation guard (see above),
+    // so `registerHostLoginItemUnserialized` never produces this outcome.
+    throw new Error(
+      "[host-respawn] registerHostLoginItem reported deferred-busy without a revalidation guard",
+    );
   }
   if (status !== "enabled") {
     log.warn(

@@ -207,6 +207,12 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
   }
 
   // ---- 3. Pid metadata freshness ----
+  // Desktop's SMAppService owns registration+recovery for an
+  // externally-managed label (see the info issue above); the CLI must not
+  // hand the user a `host-restart`/`host-free-port-and-restart` fix for a
+  // job it doesn't control. Diagnostics below still surface, but their
+  // fixAction/terminalCommand are suppressed in that case.
+  const isExternallyManaged = serviceStatus?.state === "externally-managed";
   const pidMetadata = await readHostPidMetadata(opts.environment);
   const hostProcessAlive =
     pidMetadata !== null && isProcessAlive(pidMetadata.pid);
@@ -232,8 +238,8 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
       severity: "warning",
       title: "Stale host pid metadata",
       message: `pid.json references pid=${pidMetadata.pid} which is no longer alive.`,
-      fixAction: "host-restart",
-      terminalCommand: `traycer host restart`,
+      fixAction: isExternallyManaged ? null : "host-restart",
+      terminalCommand: isExternallyManaged ? null : `traycer host restart`,
       details: { pid: pidMetadata.pid, version: pidMetadata.version },
     });
   } else {
@@ -265,8 +271,10 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
           severity: "error",
           title: "Host port held by another process",
           message: `Port ${portInfo.port} (${pidMetadata.websocketUrl}) is held by ${conflict.processName} (pid=${conflict.pid}), not the host (pid=${pidMetadata.pid}).`,
-          fixAction: "host-free-port-and-restart",
-          terminalCommand: `traycer host free-port-and-restart --pid ${conflict.pid} --port ${portInfo.port}`,
+          fixAction: isExternallyManaged ? null : "host-free-port-and-restart",
+          terminalCommand: isExternallyManaged
+            ? null
+            : `traycer host free-port-and-restart --pid ${conflict.pid} --port ${portInfo.port}`,
           details: {
             pid: pidMetadata.pid,
             websocketUrl: pidMetadata.websocketUrl,
@@ -285,8 +293,8 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
           severity: "error",
           title: "Host endpoint unreachable",
           message: `Host process (pid=${pidMetadata.pid}) is running but its endpoint ${pidMetadata.websocketUrl} did not accept a TCP connection. No identifiable foreign listener on this port - restart the service.`,
-          fixAction: "host-restart",
-          terminalCommand: `traycer host restart`,
+          fixAction: isExternallyManaged ? null : "host-restart",
+          terminalCommand: isExternallyManaged ? null : `traycer host restart`,
           details: {
             pid: pidMetadata.pid,
             websocketUrl: pidMetadata.websocketUrl,
@@ -312,7 +320,13 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
         },
         opts.environment,
       );
-      if (rpcIssue !== null) issues.push(rpcIssue);
+      if (rpcIssue !== null) {
+        issues.push(
+          isExternallyManaged && rpcIssue.fixAction === "host-restart"
+            ? { ...rpcIssue, fixAction: null, terminalCommand: null }
+            : rpcIssue,
+        );
+      }
     }
   }
 

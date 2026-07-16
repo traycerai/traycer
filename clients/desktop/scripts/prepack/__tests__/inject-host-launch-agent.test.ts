@@ -310,8 +310,10 @@ describe("inject-host-launch-agent afterPack", () => {
         const bundleProgramMatch = agentPlist.match(
           /<key>BundleProgram<\/key>\s*<string>([^<]+)<\/string>/,
         );
-        expect(bundleProgramMatch).not.toBeNull();
-        const relativeHelperPath = (bundleProgramMatch as RegExpMatchArray)[1];
+        if (bundleProgramMatch === null) {
+          throw new Error("BundleProgram not found in the generated plist");
+        }
+        const relativeHelperPath = bundleProgramMatch[1];
         expect(relativeHelperPath.startsWith("/")).toBe(false);
 
         // Actually relocate the packaged .app (cp -R to a different path) and

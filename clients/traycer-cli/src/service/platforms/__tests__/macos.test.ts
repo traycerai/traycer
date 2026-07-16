@@ -342,6 +342,7 @@ describe("macOS service lifecycle", () => {
       "print",
       "bootout",
       "bootstrap",
+      "print",
       "bootout",
       "bootstrap",
       "kickstart",
@@ -394,6 +395,7 @@ describe("macOS service lifecycle", () => {
       "print",
       "bootout",
       "bootstrap",
+      "print",
       "bootout",
       "bootstrap",
       "kickstart",
@@ -446,6 +448,7 @@ describe("macOS service lifecycle", () => {
       "print",
       "bootout",
       "bootstrap",
+      "print",
       "bootout",
     ]);
   });
@@ -483,10 +486,123 @@ describe("macOS service lifecycle", () => {
       "print",
       "bootout",
       "bootstrap",
+      "print",
       "bootout",
       "bootstrap",
+      "print",
       "kickstart",
     ]);
+  });
+
+  it("refuses to bootout Desktop's SMAppService job when it wins the reload race before the recovery bootout", async () => {
+    // A competing registrar that re-loads the label between the CLI's
+    // failed first bootstrap and the reload recovery's own bootout may be
+    // Desktop's SMAppService, not another CLI process. The reload must
+    // re-verify ownership and refuse to bootout/bootstrap Desktop's job.
+    const calls: RecordedCall[] = [];
+    const smPath =
+      "/Applications/Traycer.app/Contents/Library/LaunchAgents/ai.traycer.host.plist";
+    let printAttempts = 0;
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (args[0] === "print") {
+        printAttempts += 1;
+        // First print (installService's upfront check) sees no existing
+        // registration; the reload recovery's re-check (second print)
+        // finds Desktop's SMAppService won the race.
+        if (printAttempts >= 2) {
+          return { stdout: `path = ${smPath}\n`, stderr: "", exitCode: 0 };
+        }
+        return buildSuccessResult();
+      }
+      if (args[0] === "bootstrap") {
+        throw buildLaunchctlError({
+          command,
+          cmdArgs: args,
+          stderr: "Bootstrap failed: 37: Service is already loaded\n",
+          stdout: "",
+          exitCode: 37,
+        });
+      }
+      return buildSuccessResult();
+    };
+    const controller = createMacosController(runner);
+    createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
+
+    await expect(
+      controller.install({
+        label,
+        cli: { command: "/usr/local/bin/traycer", args: [] },
+        enableLinger: false,
+      }),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      message: expect.stringContaining("SMAppService"),
+    });
+    // The re-check runs BEFORE the recovery bootout - no second
+    // bootout/bootstrap/kickstart against Desktop's job.
+    expect(calls.map((c) => c.args[0])).toEqual([
+      "print",
+      "bootout",
+      "bootstrap",
+      "print",
+    ]);
+  });
+
+  it("refuses to treat a post-bootout 'already loaded' as a benign race win when Desktop's SMAppService is the new owner", async () => {
+    // Mirror of the above, one step later: Desktop's SMAppService can also
+    // win the race in the window between the reload's OWN bootout and its
+    // bootstrap retry. The existing "concurrent installer" benign-success
+    // path must not kickstart Desktop's job.
+    const calls: RecordedCall[] = [];
+    const smPath =
+      "/Applications/Traycer.app/Contents/Library/LaunchAgents/ai.traycer.host.plist";
+    let printAttempts = 0;
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (args[0] === "print") {
+        printAttempts += 1;
+        // Third print (post-bootout re-check inside the reload) finds
+        // Desktop's SMAppService now owns the label.
+        if (printAttempts >= 3) {
+          return { stdout: `path = ${smPath}\n`, stderr: "", exitCode: 0 };
+        }
+        return buildSuccessResult();
+      }
+      if (args[0] === "bootstrap") {
+        throw buildLaunchctlError({
+          command,
+          cmdArgs: args,
+          stderr: "Bootstrap failed: 37: Service is already loaded\n",
+          stdout: "",
+          exitCode: 37,
+        });
+      }
+      return buildSuccessResult();
+    };
+    const controller = createMacosController(runner);
+    createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
+
+    await expect(
+      controller.install({
+        label,
+        cli: { command: "/usr/local/bin/traycer", args: [] },
+        enableLinger: false,
+      }),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      message: expect.stringContaining("SMAppService"),
+    });
+    expect(calls.map((c) => c.args[0])).toEqual([
+      "print",
+      "bootout",
+      "bootstrap",
+      "print",
+      "bootout",
+      "bootstrap",
+      "print",
+    ]);
+    expect(calls.some((c) => c.args[0] === "kickstart")).toBe(false);
   });
 
   it.skip("inherits the regenerated descriptor limit through a real re-register/spawn", () => {

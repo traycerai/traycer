@@ -231,7 +231,7 @@ describe("registerHostLoginItem", () => {
     getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" });
     getLoginItemSettings.mockReturnValueOnce({ status: "enabled" });
 
-    const status = await registerHostLoginItem();
+    const status = await registerHostLoginItem(undefined);
 
     expect(setLoginItemSettings).toHaveBeenCalledTimes(2);
     expect(setLoginItemSettings.mock.calls[0]?.[0]).toMatchObject({
@@ -247,7 +247,9 @@ describe("registerHostLoginItem", () => {
     getLoginItemSettings.mockReturnValueOnce({ status: "enabled" });
     getLoginItemSettings.mockReturnValueOnce({ status: "requires-approval" });
 
-    await expect(registerHostLoginItem()).resolves.toBe("requires-approval");
+    await expect(registerHostLoginItem(undefined)).resolves.toBe(
+      "requires-approval",
+    );
   });
 
   it("normalizes unknown / missing `status` values to `not-registered` so callers fail closed instead of treating an unknown state as success", async () => {
@@ -255,7 +257,9 @@ describe("registerHostLoginItem", () => {
     // an unknown shape so the BTM-commit poll exhausts its deadline.
     getLoginItemSettings.mockReturnValue({ status: "something-new" });
 
-    await expect(registerHostLoginItem()).resolves.toBe("not-registered");
+    await expect(registerHostLoginItem(undefined)).resolves.toBe(
+      "not-registered",
+    );
   });
 
   it("retries the post-register status read for the BTM-commit lag - a transient `not-registered` immediately followed by `enabled` resolves to `enabled` instead of failing closed", async () => {
@@ -267,7 +271,7 @@ describe("registerHostLoginItem", () => {
     getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" }); // retry 2
     getLoginItemSettings.mockReturnValueOnce({ status: "enabled" }); // committed
 
-    await expect(registerHostLoginItem()).resolves.toBe("enabled");
+    await expect(registerHostLoginItem(undefined)).resolves.toBe("enabled");
   });
 
   it("surfaces `not-registered` instead of throwing when `setLoginItemSettings` itself throws - the boundary catch keeps Electron API errors from poisoning the renderer", async () => {
@@ -277,7 +281,9 @@ describe("registerHostLoginItem", () => {
     // No getLoginItemSettings mock needed - the throw on the first
     // setLoginItemSettings short-circuits before any status read.
 
-    await expect(registerHostLoginItem()).resolves.toBe("not-registered");
+    await expect(registerHostLoginItem(undefined)).resolves.toBe(
+      "not-registered",
+    );
   });
 
   it("refuses the whole cycle with `removed-by-user` when the removal sentinel is set - no SMAppService mutation runs at all", async () => {
@@ -286,9 +292,37 @@ describe("registerHostLoginItem", () => {
     // re-create the BTM login item ("Remove Traycer" must stay removed).
     isHostRemovedByUserMock.mockResolvedValue(true);
 
-    await expect(registerHostLoginItem()).resolves.toBe("removed-by-user");
+    await expect(registerHostLoginItem(undefined)).resolves.toBe(
+      "removed-by-user",
+    );
     expect(setLoginItemSettings).not.toHaveBeenCalled();
     expect(getLoginItemSettings).not.toHaveBeenCalled();
+  });
+
+  it("refuses the cycle with `deferred-busy` when the caller's revalidation guard fails once the cycle is dequeued - no SMAppService mutation runs, exactly like the removed-by-user refusal", async () => {
+    // Proves the fix for the "revalidate the idle gate after acquiring the
+    // lock" finding: a caller's own busy-check can go stale while queued
+    // behind another cycle on the shared registration lock, so the guard is
+    // re-run INSIDE the locked section, immediately before the bootout that
+    // would otherwise kill a host that picked up work while queued.
+    const revalidate = vi.fn().mockResolvedValue(false);
+
+    await expect(registerHostLoginItem(revalidate)).resolves.toBe(
+      "deferred-busy",
+    );
+    expect(revalidate).toHaveBeenCalledTimes(1);
+    expect(setLoginItemSettings).not.toHaveBeenCalled();
+    expect(getLoginItemSettings).not.toHaveBeenCalled();
+  });
+
+  it("proceeds with the cycle when the revalidation guard passes", async () => {
+    const revalidate = vi.fn().mockResolvedValue(true);
+    getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" });
+    getLoginItemSettings.mockReturnValueOnce({ status: "enabled" });
+
+    await expect(registerHostLoginItem(revalidate)).resolves.toBe("enabled");
+    expect(revalidate).toHaveBeenCalledTimes(1);
+    expect(setLoginItemSettings).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -404,7 +438,7 @@ describe("registerHostLoginItem - pending LaunchAgent revision marker", () => {
     getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" });
     getLoginItemSettings.mockReturnValueOnce({ status: "enabled" });
 
-    const status = await registerHostLoginItem();
+    const status = await registerHostLoginItem(undefined);
 
     expect(status).toBe("enabled");
     expect(existsSync(pendingRevisionMarkerPath())).toBe(false);
@@ -415,7 +449,7 @@ describe("registerHostLoginItem - pending LaunchAgent revision marker", () => {
     getLoginItemSettings.mockReturnValueOnce({ status: "enabled" });
     getLoginItemSettings.mockReturnValueOnce({ status: "requires-approval" });
 
-    const status = await registerHostLoginItem();
+    const status = await registerHostLoginItem(undefined);
 
     expect(status).toBe("requires-approval");
     expect(existsSync(pendingRevisionMarkerPath())).toBe(true);
@@ -427,7 +461,7 @@ describe("registerHostLoginItem - pending LaunchAgent revision marker", () => {
     // exhausts its deadline and the cycle fails closed.
     getLoginItemSettings.mockReturnValue({ status: "not-registered" });
 
-    const status = await registerHostLoginItem();
+    const status = await registerHostLoginItem(undefined);
 
     expect(status).toBe("not-registered");
     expect(existsSync(pendingRevisionMarkerPath())).toBe(true);
@@ -437,7 +471,7 @@ describe("registerHostLoginItem - pending LaunchAgent revision marker", () => {
     getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" });
     getLoginItemSettings.mockReturnValueOnce({ status: "enabled" });
 
-    const status = await registerHostLoginItem();
+    const status = await registerHostLoginItem(undefined);
 
     expect(status).toBe("enabled");
     expect(existsSync(pendingRevisionMarkerPath())).toBe(false);

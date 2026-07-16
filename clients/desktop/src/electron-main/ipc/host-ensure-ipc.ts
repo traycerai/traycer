@@ -90,11 +90,14 @@ export async function runEnsureHost(
   // Coalesce only identical (same-force) concurrent ensures. A Force must
   // never be served by an in-flight non-force ensure (#6) - that would
   // silently drop `--force`. Wait for any different-force op to settle, then
-  // run ours, so two installs never race.
-  if (inFlight !== null && inFlightForce === force) {
-    return inFlight;
-  }
+  // run ours, so two installs never race. Re-check on every iteration (not
+  // just once before the loop) so two same-force callers who both queue
+  // behind a different-force in-flight op share ONE cycle instead of each
+  // starting their own once the in-flight op settles.
   while (inFlight !== null) {
+    if (inFlightForce === force) {
+      return inFlight;
+    }
     try {
       await inFlight;
     } catch {
@@ -295,7 +298,11 @@ async function ensureHost(
     if (prePid !== null && readHostLoginItemStatus() === "requires-approval") {
       throw new Error(approvalRequiredMessage());
     }
-    const loginItemStatus = await registerHostLoginItem();
+    // No revalidation guard here (unlike the pending-revision fast path
+    // below): this call follows a full CLI provisioning round-trip, and the
+    // busy re-check a few lines up already surfaces a host that became busy
+    // before reaching this point. Scoped out for now - see PR discussion.
+    const loginItemStatus = await registerHostLoginItem(undefined);
     if (loginItemStatus === "removed-by-user") {
       // The user hit "Remove Traycer" while this ensure was in flight; the
       // locked register cycle refused to resurrect the login item. Mirror
@@ -437,10 +444,23 @@ async function applyPendingLoginItemRevisionIfIdle(
   log.info(
     "[host-ensure] host idle with a pending LaunchAgent revision - refreshing SMAppService registration",
   );
-  const status = await registerHostLoginItem();
+  // The busy probe above can go stale while this cycle waits its turn on
+  // the shared registration lock (a concurrent `respawnHost` or another
+  // ensure can be mid-cycle right now) - re-check right before the bootout
+  // actually runs, so a host that picked up real work while queued isn't
+  // killed anyway.
+  const status = await registerHostLoginItem(
+    async () => !(await probeHostActivityBusy(listenUrl)),
+  );
   if (status === "removed-by-user") {
     log.info("[host-ensure] skipped - host removed by user mid-ensure");
     return { action: "removed", running: false, version: null };
+  }
+  if (status === "deferred-busy") {
+    log.debug(
+      "[host-ensure] pending LaunchAgent revision deferred - host became busy while queued behind another registration cycle",
+    );
+    return null;
   }
   if (status === "requires-approval") {
     pendingRevisionRefreshQuarantined = true;

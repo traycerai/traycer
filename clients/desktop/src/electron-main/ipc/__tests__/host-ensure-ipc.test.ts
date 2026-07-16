@@ -1,4 +1,15 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import type { Environment, HostFsLayout } from "../../host/host-paths";
+import type {
+  HostEnsureError,
+  HostEnsureResultPayload,
+  HostReadinessResult,
+  ServiceLifecycleSnapshot,
+} from "../../host/host-readiness";
+import type {
+  HostLoginItemStatus,
+  RegisterHostLoginItemResult,
+} from "../../app/host-login-item";
 
 // Ticket packaging-smappservice-activation (issue #287 descriptor-hardening
 // review, Finding 3): a busy/indeterminate `desktop-install-cloud.js`
@@ -15,56 +26,74 @@ import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 // `ensureHost`/`applyPendingLoginItemRevisionIfIdle` functions directly
 // (neither is exported - only `registerHostEnsureIpc` is).
 //
-// NOTE: there is no recurring/automatic trigger that re-invokes
-// `traycerHostEnsure` while the app keeps running - the only caller
-// (`local-host-gate.tsx`) fires once per mount, gated by a ref that never
-// resets. So a marker left behind while the fast path observes the host
-// busy is retried only on the NEXT app launch, not "whenever the host
-// later becomes idle" within the same session. These tests deliberately do
-// NOT assert an eventual-retry-while-running guarantee - only the single
-// invocation's observable behavior for each activity state.
+// NOTE: `local-host-gate.tsx`'s own `traycerHostEnsure` call fires once per
+// mount (gated by a ref that never resets), so THIS invocation path has no
+// recurring trigger on its own. But `pending-login-item-revision-monitor.ts`
+// separately invokes `runEnsureHost` every 30s (via its own tick loop) for as
+// long as a pending marker remains and the session isn't quarantined - see
+// `pending-login-item-revision-monitor.test.ts` for that recurring-retry
+// coverage. These tests deliberately do NOT assert an eventual-retry-while-
+// running guarantee for the gate-invoked path - only the single invocation's
+// observable behavior for each activity state.
 
-const isHostRemovedByUser: Mock = vi.fn();
+const isHostRemovedByUser: Mock<() => Promise<boolean>> = vi.fn();
 vi.mock("../../host/host-removal-state", () => ({
   isHostRemovedByUser: () => isHostRemovedByUser(),
 }));
 
-const hostManagesHostLoginItem: Mock = vi.fn();
-const hasPendingLoginItemRevision: Mock = vi.fn();
-const registerHostLoginItem: Mock = vi.fn();
-const readHostLoginItemStatus: Mock = vi.fn();
+const hostManagesHostLoginItem: Mock<() => Promise<boolean>> = vi.fn();
+const hasPendingLoginItemRevision: Mock<
+  (environment: Environment) => Promise<boolean>
+> = vi.fn();
+const registerHostLoginItem: Mock<() => Promise<RegisterHostLoginItemResult>> =
+  vi.fn();
+const readHostLoginItemStatus: Mock<() => HostLoginItemStatus> = vi.fn();
 vi.mock("../../app/host-login-item", () => ({
   hostManagesHostLoginItem: () => hostManagesHostLoginItem(),
-  hasPendingLoginItemRevision: (environment: unknown) =>
+  hasPendingLoginItemRevision: (environment: Environment) =>
     hasPendingLoginItemRevision(environment),
   registerHostLoginItem: () => registerHostLoginItem(),
   readHostLoginItemStatus: () => readHostLoginItemStatus(),
 }));
 
-const approvalRequiredMessage: Mock = vi.fn();
+const approvalRequiredMessage: Mock<() => string> = vi.fn();
 vi.mock("../../app/host-respawn", () => ({
   approvalRequiredMessage: () => approvalRequiredMessage(),
 }));
 
-const probeHostActivityBusy: Mock = vi.fn();
+const probeHostActivityBusy: Mock<(websocketUrl: string) => Promise<boolean>> =
+  vi.fn();
 vi.mock("@traycer-clients/shared/host-client/host-activity-probe", () => ({
   probeHostActivityBusy: (listenUrl: string) =>
     probeHostActivityBusy(listenUrl),
 }));
 
-const canReachHostWebsocketUrl: Mock = vi.fn();
+const canReachHostWebsocketUrl: Mock<(url: string) => Promise<boolean>> =
+  vi.fn();
 vi.mock("../../host/host-lifecycle", () => ({
   canReachHostWebsocketUrl: (url: string) => canReachHostWebsocketUrl(url),
 }));
 
-const waitForHostReady: Mock = vi.fn();
-const categorizeHostCliError: Mock = vi.fn();
-const readServiceLifecycle: Mock = vi.fn();
+const waitForHostReady: Mock<
+  (
+    timeoutMs: number,
+    pidPath: string,
+    pollIntervalMs: number,
+    skipPid: number | null,
+  ) => Promise<HostReadinessResult>
+> = vi.fn();
+const categorizeHostCliError: Mock<(err: unknown) => HostEnsureError> = vi.fn();
+const readServiceLifecycle: Mock<
+  (
+    payload: HostEnsureResultPayload | null | undefined,
+  ) => ServiceLifecycleSnapshot
+> = vi.fn();
 vi.mock("../../host/host-readiness", () => ({
   HOST_READY_TIMEOUT_MS: 60_000,
   HOST_READY_POLL_MS: 250,
   categorizeHostCliError: (err: unknown) => categorizeHostCliError(err),
-  readServiceLifecycle: (payload: unknown) => readServiceLifecycle(payload),
+  readServiceLifecycle: (payload: HostEnsureResultPayload | null | undefined) =>
+    readServiceLifecycle(payload),
   waitForHostReady: (
     timeoutMs: number,
     pidPath: string,
@@ -73,13 +102,15 @@ vi.mock("../../host/host-readiness", () => ({
   ) => waitForHostReady(timeoutMs, pidPath, pollIntervalMs, skipPid),
 }));
 
-const getHostFsLayout: Mock = vi.fn();
+const getHostFsLayout: Mock<(environment: Environment) => HostFsLayout> =
+  vi.fn();
 vi.mock("../../host/host-paths", () => ({
-  getHostFsLayout: (environment: unknown) => getHostFsLayout(environment),
+  getHostFsLayout: (environment: Environment) => getHostFsLayout(environment),
 }));
 
-const getActiveEnvironment: Mock = vi.fn();
-const streamCliWithProgress: Mock = vi.fn();
+const getActiveEnvironment: Mock<() => Environment> = vi.fn();
+const streamCliWithProgress: Mock<(...args: unknown[]) => Promise<unknown>> =
+  vi.fn();
 vi.mock("../host-management-ipc", () => ({
   getActiveEnvironment: () => getActiveEnvironment(),
   optionalString: (raw: unknown, key: string) => {
@@ -110,6 +141,18 @@ const SERVICE_VERSION = "1.2.3";
 const SERVICE_LISTEN_URL = "ws://127.0.0.1:9999/rpc";
 const SERVICE_PID = 111;
 
+interface FakeServiceStatus {
+  readonly state: "running" | "stopped" | "not-installed";
+  readonly version: string | null;
+  readonly listenUrl: string | null;
+  readonly pid: number | null;
+}
+
+// `handleInvoke` + `options.host.{getServiceStatus,reloadSnapshotFromDisk}`
+// is exactly what `registerHostEnsureIpc`'s fast (already-reachable) path
+// dereferences, but `registerHostEnsureIpc(bridge as never)` below still
+// needs the cast: `RunnerIpcBridge` is a concrete class with private fields,
+// so no plain object - however precisely typed - can structurally satisfy it.
 interface FakeBridge {
   readonly handlers: Map<
     string,
@@ -117,8 +160,8 @@ interface FakeBridge {
   >;
   readonly options: {
     readonly host: {
-      readonly getServiceStatus: Mock;
-      readonly reloadSnapshotFromDisk: Mock;
+      readonly getServiceStatus: Mock<() => Promise<FakeServiceStatus>>;
+      readonly reloadSnapshotFromDisk: Mock<() => Promise<null>>;
     };
   };
   handleInvoke(
@@ -128,8 +171,8 @@ interface FakeBridge {
 }
 
 function makeBridge(
-  getServiceStatus: Mock,
-  reloadSnapshotFromDisk: Mock,
+  getServiceStatus: Mock<() => Promise<FakeServiceStatus>>,
+  reloadSnapshotFromDisk: Mock<() => Promise<null>>,
 ): FakeBridge {
   const handlers = new Map<
     string,
@@ -180,7 +223,14 @@ beforeEach(() => {
     .mockReset()
     .mockReturnValue("The host's macOS login item requires approval.");
   getHostFsLayout.mockReset().mockReturnValue({
+    rootDir: "/tmp/traycer-host-ensure-ipc-test",
     pidMetadataFile: PID_METADATA_FILE,
+    logFile: "/tmp/traycer-host-ensure-ipc-test/host.log",
+    installDir: "/tmp/traycer-host-ensure-ipc-test/install",
+    installRecordFile: "/tmp/traycer-host-ensure-ipc-test/install/install.json",
+    pendingLoginItemRevisionFile:
+      "/tmp/traycer-host-ensure-ipc-test/pending-login-item-revision.json",
+    environment: "production",
   });
   getActiveEnvironment.mockReset().mockReturnValue("production");
   streamCliWithProgress.mockReset();
