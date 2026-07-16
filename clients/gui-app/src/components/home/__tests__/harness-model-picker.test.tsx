@@ -2373,9 +2373,8 @@ describe("<HarnessModelPicker />", () => {
         ],
       }),
     ];
-    // The destination profile remembers a different model and effort. A
-    // profile-only switch must ignore that memory and preserve the current
-    // composer configuration.
+    // The provider memory contains a different model and effort. A profile-only
+    // switch must preserve the current composer configuration.
     useComposerHarnessMemoryStore.getState().record({
       harnessId: "claude",
       model: "claude-opus-4-7",
