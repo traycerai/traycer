@@ -202,8 +202,7 @@ describe("merged notifications feed", () => {
     });
     expect(rowFromHostEntry(stalled)).toMatchObject({
       title: "Checkout notifications",
-      body:
-        "Deploy checkout fix • Provider is taking longer than expected",
+      body: "Deploy checkout fix • Provider is taking longer than expected",
     });
     expect(rowFromHostEntry(interview)).toMatchObject({
       title: "Checkout notifications",

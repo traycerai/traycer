@@ -662,31 +662,37 @@ function agentStoppedFailureStatus(
   reason: string | null,
   providerId: ProviderId | null,
 ): string {
-  const providerName =
-    providerId === null ? null : PROVIDER_DISPLAY_NAMES[providerId];
   switch (reason) {
     case "auth":
       return providerId === null
         ? "Provider is signed out. Reconnect to continue."
         : providerSignedOutMessage(providerId);
     case "rate_limit":
-      return providerName === null
-        ? "Rate limit reached"
-        : `${providerName} rate limit reached`;
+      return providerSpecificFailureStatus(
+        providerId,
+        "Rate limit reached",
+        (providerName) => `${providerName} rate limit reached`,
+      );
     case "billing":
-      return providerName === null
-        ? "Provider billing issue"
-        : `${providerName} billing issue`;
+      return providerSpecificFailureStatus(
+        providerId,
+        "Provider billing issue",
+        (providerName) => `${providerName} billing issue`,
+      );
     case "model_unavailable":
       return "Model unavailable";
     case "provider_unavailable":
-      return providerName === null
-        ? "Provider is temporarily unavailable"
-        : `${providerName} is temporarily unavailable`;
+      return providerSpecificFailureStatus(
+        providerId,
+        "Provider is temporarily unavailable",
+        (providerName) => `${providerName} is temporarily unavailable`,
+      );
     case "provider_connection_failed":
-      return providerName === null
-        ? "Provider connection failed"
-        : `Connection to ${providerName} failed`;
+      return providerSpecificFailureStatus(
+        providerId,
+        "Provider connection failed",
+        (providerName) => `Connection to ${providerName} failed`,
+      );
     case "turn_start_timeout":
       return "Provider did not start in time";
     case "missing_terminal_event":
@@ -697,6 +703,16 @@ function agentStoppedFailureStatus(
     default:
       return "Failed";
   }
+}
+
+function providerSpecificFailureStatus(
+  providerId: ProviderId | null,
+  genericStatus: string,
+  providerStatus: (providerName: string) => string,
+): string {
+  return providerId === null
+    ? genericStatus
+    : providerStatus(PROVIDER_DISPLAY_NAMES[providerId]);
 }
 
 function agentStalledStatus(
