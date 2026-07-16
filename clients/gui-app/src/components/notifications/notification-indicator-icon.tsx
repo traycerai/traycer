@@ -7,17 +7,36 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import type { AgentSpinnerVariant } from "@/components/ui/agent-spinner-variant";
 import type { NotificationIndicatorState } from "@/stores/notifications/notification-indicator-state";
 import { cn } from "@/lib/utils";
 
+/**
+ * Live-activity tier for the running slot. `"turn"` is the agent actually
+ * processing (an active or activating turn — the busy spinner); `"background"`
+ * is background-only work (Monitor / `run_in_background` / a scheduled
+ * wakeup) keeping the chat non-idle while the agent itself is NOT running —
+ * rendered calmer and muted so the two are distinguishable at a glance.
+ * Callers resolve the tier (turn wins when both are happening); this
+ * component only presents it.
+ */
+export type IndicatorRunningKind = "turn" | "background" | false;
+
 interface NotificationIndicatorIconProps {
   readonly state: NotificationIndicatorState;
-  readonly running: boolean;
+  readonly running: IndicatorRunningKind;
   readonly subjectId: string;
   readonly testIdPrefix: string;
   readonly className: string | undefined;
   readonly style: CSSProperties | undefined;
   readonly runningTitle: string;
+  /**
+   * Tooltip/label for the `"background"` running tier. `undefined` is valid
+   * for consumers whose activity signal is binary and never passes
+   * `"background"`; if the tier does render without one, the turn title is
+   * reused rather than showing an untitled indicator.
+   */
+  readonly backgroundRunningTitle: string | undefined;
   readonly defaultIcon: ReactNode;
   readonly statusPresentation: "message" | "spinner";
 }
@@ -25,7 +44,8 @@ interface NotificationIndicatorIconProps {
 /**
  * The single renderer for notification status icons. Notification state wins
  * over live activity: errors first, then unresolved prompts, followed by the
- * session-backed running spinner and unread completion.
+ * session-backed running indicator (turn spinner, or the muted background
+ * variant) and unread completion.
  */
 export function NotificationIndicatorIcon(
   props: NotificationIndicatorIconProps,
@@ -34,13 +54,28 @@ export function NotificationIndicatorIcon(
   if (tone !== null) {
     return <IndicatorTonePresentation tone={tone} indicatorProps={props} />;
   }
-  if (props.running) {
+  if (props.running === "turn") {
     return (
       <IndicatorSpan
         indicatorProps={props}
         title={props.runningTitle}
         dotsClassName="text-current"
+        variant={undefined}
         testId={`${props.testIdPrefix}-activity-${props.subjectId}`}
+      />
+    );
+  }
+  if (props.running === "background") {
+    return (
+      <IndicatorSpan
+        indicatorProps={props}
+        title={props.backgroundRunningTitle ?? props.runningTitle}
+        dotsClassName="text-muted-foreground"
+        // A slow single-dot bounce, deliberately distinct from the busy
+        // multi-dot turn spin: "something is ticking over" rather than
+        // "the agent is working".
+        variant="bounce"
+        testId={`${props.testIdPrefix}-background-activity-${props.subjectId}`}
       />
     );
   }
@@ -176,6 +211,7 @@ function IndicatorSpan(props: {
   readonly indicatorProps: NotificationIndicatorIconProps;
   readonly title: string;
   readonly dotsClassName: string;
+  readonly variant: AgentSpinnerVariant | undefined;
   readonly testId: string;
 }): ReactNode {
   return (
@@ -192,7 +228,7 @@ function IndicatorSpan(props: {
       <AgentSpinningDots
         className={cn(props.dotsClassName)}
         testId={props.testId}
-        variant={undefined}
+        variant={props.variant}
       />
     </span>
   );

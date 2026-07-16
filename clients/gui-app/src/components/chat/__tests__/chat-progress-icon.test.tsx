@@ -14,6 +14,17 @@ const EPIC_ID = "epic-1";
 const CHAT_ID = "chat-1";
 const TEST_ID = "chat-progress";
 const RUNNING_TEST_ID = `${TEST_ID}-activity-${CHAT_ID}`;
+const TURN_RUNNING_LABEL = "Chat in progress";
+const BACKGROUND_RUNNING_LABEL = "Background tasks running — chat idle";
+
+const MONITOR_ITEM = {
+  taskId: "task-1",
+  kind: "monitor" as const,
+  title: "Monitor",
+  blockId: "block-1",
+  parentTaskId: null,
+  scheduledFor: null,
+};
 
 const mockSessionState = vi.hoisted<{
   readonly activeAgentIds: Set<string>;
@@ -126,6 +137,47 @@ describe("<ChatProgressIcon />", () => {
 
     expect(screen.queryByTestId(RUNNING_TEST_ID)).not.toBeNull();
     expect(screen.queryByTitle("Chat in progress")).not.toBeNull();
+  });
+
+  it("shows the muted background indicator instead of the turn spinner when only background work runs", () => {
+    const handle = createHandle();
+    handle.store.setState({
+      runStatus: "running",
+      turnInProgress: false,
+      backgroundItems: [MONITOR_ITEM],
+    });
+    // Epic-level activity also reads active during background-only phases;
+    // the session's own tri-state must still win.
+    mockSessionState.activeAgentIds.add(CHAT_ID);
+    mockSessionState.existingHandle = handle;
+
+    renderIcon();
+
+    expect(
+      screen.getByRole("status", { name: BACKGROUND_RUNNING_LABEL }),
+    ).toBeDefined();
+    expect(
+      screen.queryByRole("status", { name: TURN_RUNNING_LABEL }),
+    ).toBeNull();
+  });
+
+  it("prioritizes the turn spinner when a turn and background work run simultaneously", () => {
+    const handle = createHandle();
+    handle.store.setState({
+      runStatus: "running",
+      turnInProgress: true,
+      backgroundItems: [MONITOR_ITEM],
+    });
+    mockSessionState.existingHandle = handle;
+
+    renderIcon();
+
+    expect(
+      screen.getByRole("status", { name: TURN_RUNNING_LABEL }),
+    ).toBeDefined();
+    expect(
+      screen.queryByRole("status", { name: BACKGROUND_RUNNING_LABEL }),
+    ).toBeNull();
   });
 
   it("keeps the running spinner for an active opened chat that needs approval", () => {

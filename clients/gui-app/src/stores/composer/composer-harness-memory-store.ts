@@ -33,11 +33,11 @@ interface ComposerHarnessMemoryStore {
   // Terminal profile and is stored deliberately (rather than represented by
   // a missing key) so it can replace an earlier managed-profile selection.
   lastProfileByHarness: Partial<Record<GuiHarnessId, string | null>>;
-  // (harnessId, profileId) -> last committed model slug, keyed via
-  // `harnessProfileKey` below (bounded by harness x profile count).
+  // harnessId -> last committed model slug. Profile memory is deliberately
+  // separate so changing credentials cannot change the remembered model.
   lastModelByHarness: Record<string, string>;
-  // (harnessId, profileId, modelSlug) -> effort/tier, keyed via
-  // `harnessModelKey` below, LRU-capped by updatedAt.
+  // (harnessId, modelSlug) -> effort/tier, LRU-capped by updatedAt. Like the
+  // last model, these settings belong to the provider/model, not a profile.
   effortByHarnessModel: Record<string, HarnessModelEffortRecord>;
 
   // WRITE — settings.model is always resolved (onSettingsChange guarantees it).
@@ -50,51 +50,242 @@ interface ComposerHarnessMemoryStore {
   // READ — missing memory falls back to the ambient Terminal profile.
   resolveLastProfile: (harnessId: GuiHarnessId) => string | null;
   // READ — harness switch: last model + its record (or "" / null defaults).
-  resolveHarnessSwitch: (
-    harnessId: string,
-    profileId: string | null,
-  ) => ResolvedHarnessSwitch;
+  resolveHarnessSwitch: (harnessId: string) => ResolvedHarnessSwitch;
   // READ — explicit model pick: that pair's record (or null defaults).
   resolveModelSelection: (
     harnessId: string,
-    profileId: string | null,
     modelSlug: string,
   ) => ResolvedModelSelection;
   resetForTests: () => void;
 }
 
-// Ambient (`profileId === null`) keeps today's exact bare-`harnessId` key -
-// byte-identical for single/no-profile providers, and every entry written
-// before profiles existed transparently becomes that harness's ambient record
-// with no migration step: there is nothing to migrate FROM, since the old key
-// already IS the new ambient key (see memory `persisted-store-shape-drift`).
-// A managed profile is keyed by the JSON-encoded tuple instead of a
-// separator-joined string: a plain separator risks ambiguity if an
-// id/slug happens to contain it (e.g. a literal space), while
-// `JSON.stringify` of an array always starts with the `[` character - which a
-// bare harnessId (a short lowercase enum) or a space-joined ambient key can
-// never start with - so the two formats can never collide.
-function harnessProfileKey(
-  harnessId: string,
-  profileId: string | null,
-): string {
-  return profileId === null
-    ? harnessId
-    : JSON.stringify([harnessId, profileId]);
+// Keeps the pre-profile persisted key byte-identical, so v1 ambient records
+// migrate without rewriting their provider/model identity.
+function harnessModelKey(harnessId: string, modelSlug: string): string {
+  return `${harnessId} ${modelSlug}`;
 }
 
-// Ambient keeps today's exact `"${harnessId} ${modelSlug}"` (space-joined) key
-// for the same reason as `harnessProfileKey` above; a managed profile uses the
-// same JSON-tuple encoding, so it can never collide with the space-joined
-// ambient format.
-function harnessModelKey(
-  harnessId: string,
-  profileId: string | null,
-  modelSlug: string,
-): string {
-  return profileId === null
-    ? `${harnessId} ${modelSlug}`
-    : JSON.stringify([harnessId, profileId, modelSlug]);
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isUnknownArray(value: unknown): value is ReadonlyArray<unknown> {
+  return Array.isArray(value);
+}
+
+function ownRecordValue<T>(
+  record: Readonly<Record<string, T>>,
+  key: string,
+): T | undefined {
+  return Object.hasOwn(record, key) ? record[key] : undefined;
+}
+
+interface LegacyHarnessProfileKey {
+  readonly harnessId: string;
+  readonly profileId: string | null;
+}
+
+interface LegacyHarnessModelKey extends LegacyHarnessProfileKey {
+  readonly modelSlug: string;
+}
+
+interface LegacyEffortCandidate {
+  readonly profileId: string | null;
+  readonly record: HarnessModelEffortRecord;
+}
+
+function parseJsonTuple(value: string): unknown {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function parseLegacyHarnessProfileKey(
+  key: string,
+): LegacyHarnessProfileKey | null {
+  if (!key.startsWith("[")) return { harnessId: key, profileId: null };
+  const tuple = parseJsonTuple(key);
+  if (
+    !isUnknownArray(tuple) ||
+    tuple.length !== 2 ||
+    typeof tuple[0] !== "string" ||
+    (typeof tuple[1] !== "string" && tuple[1] !== null)
+  ) {
+    return null;
+  }
+  return { harnessId: tuple[0], profileId: tuple[1] };
+}
+
+function parseLegacyHarnessModelKey(key: string): LegacyHarnessModelKey | null {
+  if (key.startsWith("[")) {
+    const tuple = parseJsonTuple(key);
+    if (
+      !isUnknownArray(tuple) ||
+      tuple.length !== 3 ||
+      typeof tuple[0] !== "string" ||
+      (typeof tuple[1] !== "string" && tuple[1] !== null) ||
+      typeof tuple[2] !== "string"
+    ) {
+      return null;
+    }
+    return {
+      harnessId: tuple[0],
+      profileId: tuple[1],
+      modelSlug: tuple[2],
+    };
+  }
+  const separatorIndex = key.indexOf(" ");
+  if (separatorIndex <= 0 || separatorIndex === key.length - 1) return null;
+  return {
+    harnessId: key.slice(0, separatorIndex),
+    profileId: null,
+    modelSlug: key.slice(separatorIndex + 1),
+  };
+}
+
+function parseEffortRecord(value: unknown): HarnessModelEffortRecord | null {
+  if (!isRecord(value)) return null;
+  const { reasoningEffort, serviceTier, updatedAt } = value;
+  if (
+    (typeof reasoningEffort !== "string" && reasoningEffort !== null) ||
+    (typeof serviceTier !== "string" && serviceTier !== null) ||
+    typeof updatedAt !== "number" ||
+    !Number.isFinite(updatedAt)
+  ) {
+    return null;
+  }
+  return { reasoningEffort, serviceTier, updatedAt };
+}
+
+function legacySelectionKey(input: LegacyHarnessModelKey): string {
+  return JSON.stringify([input.harnessId, input.profileId, input.modelSlug]);
+}
+
+interface ComposerHarnessMemoryPersistedState {
+  readonly lastProfileByHarness: Record<string, string | null>;
+  readonly lastModelByHarness: Record<string, string>;
+  readonly effortByHarnessModel: Record<string, HarnessModelEffortRecord>;
+}
+
+/**
+ * v1 -> v2 migration. v1 scoped model and effort memory to a provider profile,
+ * so changing credentials could restore a different model/reasoning tuple.
+ * v2 keeps profile memory independent and collapses profile-scoped records to
+ * the most recently updated provider/model records.
+ */
+export function migrateComposerHarnessMemoryPersistedState(
+  persisted: unknown,
+): ComposerHarnessMemoryPersistedState {
+  if (!isRecord(persisted)) {
+    return {
+      lastProfileByHarness: {},
+      lastModelByHarness: {},
+      effortByHarnessModel: {},
+    };
+  }
+  const lastProfileByHarness = isRecord(persisted.lastProfileByHarness)
+    ? Object.entries(persisted.lastProfileByHarness).reduce<
+        Record<string, string | null>
+      >((profiles, [harnessId, profileId]) => {
+        if (typeof profileId === "string" || profileId === null) {
+          profiles[harnessId] = profileId;
+        }
+        return profiles;
+      }, {})
+    : {};
+  const legacyEffortEntries = isRecord(persisted.effortByHarnessModel)
+    ? Object.entries(persisted.effortByHarnessModel).flatMap(([key, value]) => {
+        const parsedKey = parseLegacyHarnessModelKey(key);
+        const record = parseEffortRecord(value);
+        return parsedKey === null || record === null
+          ? []
+          : [{ ...parsedKey, record }];
+      })
+    : [];
+  const updatedAtByLegacySelection = new Map(
+    legacyEffortEntries.map((entry) => [
+      legacySelectionKey(entry),
+      entry.record.updatedAt,
+    ]),
+  );
+  const effortCandidates = legacyEffortEntries.reduce<
+    Record<string, LegacyEffortCandidate>
+  >((records, entry) => {
+    const key = harnessModelKey(entry.harnessId, entry.modelSlug);
+    const existing = ownRecordValue(records, key);
+    const rememberedProfile = lastProfileByHarness[entry.harnessId];
+    const candidateBreaksTie =
+      existing !== undefined &&
+      entry.record.updatedAt === existing.record.updatedAt &&
+      entry.profileId === rememberedProfile &&
+      existing.profileId !== rememberedProfile;
+    if (
+      existing === undefined ||
+      entry.record.updatedAt > existing.record.updatedAt ||
+      candidateBreaksTie
+    ) {
+      records[key] = {
+        profileId: entry.profileId,
+        record: entry.record,
+      };
+    }
+    return records;
+  }, {});
+  const effortByHarnessModel = Object.fromEntries(
+    Object.entries(effortCandidates).map(([key, candidate]) => [
+      key,
+      candidate.record,
+    ]),
+  );
+  const lastModelCandidates = isRecord(persisted.lastModelByHarness)
+    ? Object.entries(persisted.lastModelByHarness).flatMap(
+        ([key, modelSlug]) => {
+          const parsedKey = parseLegacyHarnessProfileKey(key);
+          if (parsedKey === null || typeof modelSlug !== "string") return [];
+          return [
+            {
+              ...parsedKey,
+              modelSlug,
+              updatedAt:
+                updatedAtByLegacySelection.get(
+                  legacySelectionKey({ ...parsedKey, modelSlug }),
+                ) ?? -1,
+            },
+          ];
+        },
+      )
+    : [];
+  const lastModelByHarness = lastModelCandidates.reduce<
+    Record<string, LegacyHarnessModelKey & { readonly updatedAt: number }>
+  >((candidates, candidate) => {
+    const existing = ownRecordValue(candidates, candidate.harnessId);
+    const rememberedProfile = lastProfileByHarness[candidate.harnessId];
+    const candidateBreaksTie =
+      existing !== undefined &&
+      candidate.updatedAt === existing.updatedAt &&
+      candidate.profileId === rememberedProfile;
+    if (
+      existing === undefined ||
+      candidate.updatedAt > existing.updatedAt ||
+      candidateBreaksTie
+    ) {
+      candidates[candidate.harnessId] = candidate;
+    }
+    return candidates;
+  }, {});
+  return {
+    lastProfileByHarness,
+    lastModelByHarness: Object.fromEntries(
+      Object.entries(lastModelByHarness).map(([harnessId, candidate]) => [
+        harnessId,
+        candidate.modelSlug,
+      ]),
+    ),
+    effortByHarnessModel,
+  };
 }
 
 export const useComposerHarnessMemoryStore =
@@ -117,16 +308,11 @@ export const useComposerHarnessMemoryStore =
           // `resolveHarnessSwitch` treat it as a record and suppress the lazy
           // `globalLastRunSettings` fallback.
           if (settings.model.length === 0) return;
-          const profileKey = harnessProfileKey(settings.harnessId, profileId);
-          const modelKey = harnessModelKey(
-            settings.harnessId,
-            profileId,
-            settings.model,
-          );
+          const modelKey = harnessModelKey(settings.harnessId, settings.model);
           set((state) => ({
             lastModelByHarness: {
               ...state.lastModelByHarness,
-              [profileKey]: settings.model,
+              [settings.harnessId]: settings.model,
             },
             // Always write - no value dedup. `updatedAt` is the recency key the
             // cap sorts on, so even re-selecting the same pair must refresh it;
@@ -167,39 +353,22 @@ export const useComposerHarnessMemoryStore =
         resolveLastProfile: (harnessId) => {
           return get().lastProfileByHarness[harnessId] ?? null;
         },
-        resolveHarnessSwitch: (harnessId, profileId) => {
+        resolveHarnessSwitch: (harnessId) => {
           const state = get();
-          const profileKey = harnessProfileKey(harnessId, profileId);
-          if (Object.hasOwn(state.lastModelByHarness, profileKey)) {
-            const modelSlug = state.lastModelByHarness[profileKey];
+          const modelSlug = ownRecordValue(state.lastModelByHarness, harnessId);
+          if (modelSlug !== undefined) {
             // Reuse the model-pick resolver for the exact same (harness,
-            // profile, model) record lookup - `{ null, null }` when absent.
+            // model) record lookup - `{ null, null }` when absent.
             return {
               modelSlug,
-              ...state.resolveModelSelection(harnessId, profileId, modelSlug),
+              ...state.resolveModelSelection(harnessId, modelSlug),
             };
           }
-          // A managed profile with no record of its own inherits the SAME
-          // harness's ambient record first - "ambient is the implicit
-          // fallback" per the multi-profile decision log - before falling
-          // further back to the cross-harness `globalLastRunSettings` sticky
-          // below. The ambient profile itself already hit the check above, so
-          // this only ever runs for a managed profileId.
-          if (profileId !== null) {
-            const ambientKey = harnessProfileKey(harnessId, null);
-            if (Object.hasOwn(state.lastModelByHarness, ambientKey)) {
-              const modelSlug = state.lastModelByHarness[ambientKey];
-              return {
-                modelSlug,
-                ...state.resolveModelSelection(harnessId, null, modelSlug),
-              };
-            }
-          }
           // Lazy backfill (read-time `getState()` only, no eager hydration-time
-          // write): when this (harness, profile) has no record, fall back to
-          // the last-run tuple iff it belongs to the same harness. A real
-          // record always wins over this fallback because of the
-          // `Object.hasOwn` checks above.
+          // write): when this harness has no record, fall back to the last-run
+          // tuple iff it belongs to the same harness. A real
+          // record always wins over this fallback because of the stored-model
+          // check above.
           const global =
             useComposerRunSettingsStore.getState().globalLastRunSettings;
           if (global !== null && global.harnessId === harnessId) {
@@ -211,13 +380,13 @@ export const useComposerHarnessMemoryStore =
           }
           return { modelSlug: "", reasoningEffort: null, serviceTier: null };
         },
-        resolveModelSelection: (harnessId, profileId, modelSlug) => {
+        resolveModelSelection: (harnessId, modelSlug) => {
           const state = get();
-          const key = harnessModelKey(harnessId, profileId, modelSlug);
-          if (!Object.hasOwn(state.effortByHarnessModel, key)) {
+          const key = harnessModelKey(harnessId, modelSlug);
+          const record = ownRecordValue(state.effortByHarnessModel, key);
+          if (record === undefined) {
             return { reasoningEffort: null, serviceTier: null };
           }
-          const record = state.effortByHarnessModel[key];
           return {
             reasoningEffort: record.reasoningEffort,
             serviceTier: record.serviceTier,
@@ -233,12 +402,15 @@ export const useComposerHarnessMemoryStore =
       }),
       {
         ...basePersistOptions(composerHarnessMemoryKey(null)),
+        version: 2,
         storage: createJSONStorage(() => window.localStorage),
         partialize: (state) => ({
           lastProfileByHarness: state.lastProfileByHarness,
           lastModelByHarness: state.lastModelByHarness,
           effortByHarnessModel: state.effortByHarnessModel,
         }),
+        migrate: (persisted) =>
+          migrateComposerHarnessMemoryPersistedState(persisted),
       },
     ),
   );
