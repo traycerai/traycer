@@ -108,8 +108,11 @@ const CODE_PASTE_KEEPALIVE_INTERVAL_MS = 60_000;
  * instead of misreporting a successful switch as a failure. Definitive
  * verdicts (`authenticated`/`unauthenticated`) are never re-polled.
  */
-const AMBIENT_AUTH_PENDING_REPOLL_CAP = 3;
-const AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS = 2_000;
+export const AMBIENT_AUTH_PENDING_REPOLL_CAP = 3;
+// Exported so tests can drive the re-poll deterministically with fake timers
+// instead of hardcoding a duplicate magic number that could silently drift
+// from this value.
+export const AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS = 2_000;
 
 function isDefinitiveAuthStatus(
   status: ProviderProfile["auth"]["status"],
@@ -634,6 +637,18 @@ export function useProviderProfileLoginFlow(
             // the constant's doc comment). Scoped to this attempt's closure -
             // an auto-restart mints a fresh attempt with a fresh budget.
             let authPendingRepolls = 0;
+            // A resolution this attempt must no longer act on: either a later
+            // attempt (auto-restart, or the child finishing while a restart
+            // was already triggered) superseded this long-poll, or the flow
+            // was cancelled. Clearing the re-poll timer cannot cancel an
+            // already-dispatched RPC, and cancelling leaves `attemptIdRef`
+            // untouched - so without the cancellation half, a re-poll landing
+            // after `finishCancellation` would settle the attempt and
+            // overwrite the terminal `cancelled` state with a failure.
+            const attemptAbandoned = (): boolean =>
+              attemptIdRef.current !== thisAttemptId ||
+              cancelRequestedRef.current ||
+              cancelledRef.current;
             const scheduleAuthPendingRepoll = (): boolean => {
               if (authPendingRepolls >= AMBIENT_AUTH_PENDING_REPOLL_CAP) {
                 return false;
@@ -645,17 +660,13 @@ export function useProviderProfileLoginFlow(
               );
               repollTimerRef.current = window.setTimeout(() => {
                 repollTimerRef.current = null;
-                if (attemptIdRef.current !== thisAttemptId) return;
-                if (cancelRequestedRef.current || cancelledRef.current) return;
+                if (attemptAbandoned()) return;
                 awaitOnce();
               }, AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS);
               return true;
             };
             const handleAwaitSuccess = (result: AwaitLoginResult): void => {
-              // A later attempt (auto-restart, or the child finished
-              // while another restart was already triggered) already
-              // superseded this long-poll - ignore its stale resolution.
-              if (attemptIdRef.current !== thisAttemptId) return;
+              if (attemptAbandoned()) return;
               const resolution =
                 mode === "reauth" && existingProfileId === null
                   ? classifyAmbientAwaitResult(result)
@@ -680,7 +691,7 @@ export function useProviderProfileLoginFlow(
               settleAttempt(thisAttemptId);
             };
             const handleAwaitError = (): void => {
-              if (attemptIdRef.current !== thisAttemptId) return;
+              if (attemptAbandoned()) return;
               awaitOutcomeRef.current = "notAuthenticated";
               settleAttempt(thisAttemptId);
             };
