@@ -145,6 +145,10 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
+      pendingLoginItemRevisionFile: join(
+        dir,
+        "pending-login-item-revision.json",
+      ),
       environment: "production" as const,
     };
     const { server, port } = await listenOnEphemeralPort();
@@ -193,6 +197,10 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
+      pendingLoginItemRevisionFile: join(
+        dir,
+        "pending-login-item-revision.json",
+      ),
       environment: "production" as const,
     };
     const lifecycle = new HostLifecycle({
@@ -235,6 +243,10 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
+      pendingLoginItemRevisionFile: join(
+        dir,
+        "pending-login-item-revision.json",
+      ),
       environment: "dev" as const,
     };
     const { server, port } = await listenOnEphemeralPort();
@@ -287,6 +299,10 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
+      pendingLoginItemRevisionFile: join(
+        dir,
+        "pending-login-item-revision.json",
+      ),
       environment: "production" as const,
     };
     const { server, port } = await listenOnEphemeralPort();
@@ -331,6 +347,10 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
+      pendingLoginItemRevisionFile: join(
+        dir,
+        "pending-login-item-revision.json",
+      ),
       environment: "dev" as const,
     };
     const { server, port } = await listenOnEphemeralPort();
@@ -377,6 +397,10 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
+      pendingLoginItemRevisionFile: join(
+        dir,
+        "pending-login-item-revision.json",
+      ),
       environment: "production" as const,
     };
     await writeFile(
@@ -422,6 +446,10 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
+      pendingLoginItemRevisionFile: join(
+        dir,
+        "pending-login-item-revision.json",
+      ),
       environment: "production" as const,
     };
     await writeFile(
@@ -466,6 +494,10 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
+      pendingLoginItemRevisionFile: join(
+        dir,
+        "pending-login-item-revision.json",
+      ),
       environment: "production" as const,
     };
     const websocketUrl = "ws://127.0.0.1:54321/rpc";
@@ -526,6 +558,10 @@ describe("HostLifecycle.getServiceStatus", () => {
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
+      pendingLoginItemRevisionFile: join(
+        dir,
+        "pending-login-item-revision.json",
+      ),
       environment: "production" as const,
     };
     await writeFile(
@@ -574,6 +610,8 @@ describe("HostLifecycle.respawn (CLI subprocess)", () => {
           logFile: "/tmp/no-such-dir/host.log",
           installDir: "/tmp/no-such-dir/install",
           installRecordFile: "/tmp/no-such-dir/install/install.json",
+          pendingLoginItemRevisionFile:
+            "/tmp/no-such-dir/pending-login-item-revision.json",
           environment,
         },
         bundledBinaryPath: null,

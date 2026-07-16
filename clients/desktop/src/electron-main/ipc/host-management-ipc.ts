@@ -932,7 +932,8 @@ function projectInstallResult(raw: unknown): HostInstallResult {
             priorServiceState:
               lifecycleRaw.priorServiceState === "running" ||
               lifecycleRaw.priorServiceState === "stopped" ||
-              lifecycleRaw.priorServiceState === "not-installed"
+              lifecycleRaw.priorServiceState === "not-installed" ||
+              lifecycleRaw.priorServiceState === "externally-managed"
                 ? lifecycleRaw.priorServiceState
                 : "not-installed",
             stoppedBeforeSwap: lifecycleRaw.stoppedBeforeSwap === true,
@@ -960,6 +961,10 @@ export function narrowPostSwapAction(raw: unknown): PostSwapAction {
   if (raw === "install") return "install";
   if (raw === "restart") return "restart";
   if (raw === "start") return "start";
+  // An explicit "none" is routine (e.g. an externally-managed/SMAppService
+  // label where the CLI deliberately leaves the service alone) - it must not
+  // trip the version-skew warning below.
+  if (raw === "none") return "none";
   if (raw === undefined) return "none";
   log.warn(
     "[host-management] unknown postSwapAction value from CLI - collapsing to 'none'",

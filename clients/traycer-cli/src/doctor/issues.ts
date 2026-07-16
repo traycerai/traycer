@@ -7,6 +7,11 @@ export const DOCTOR_ISSUE_CODES = {
   HOST_BINARY_MISSING: "HOST_BINARY_MISSING",
   HOST_BINARY_UNVERIFIED: "HOST_BINARY_UNVERIFIED",
   SERVICE_NOT_REGISTERED: "SERVICE_NOT_REGISTERED",
+  // macOS: the label is registered by Traycer Desktop via SMAppService, not
+  // by the CLI. A healthy configuration surfaced as info-only - the CLI has
+  // no fix to offer (its own `service install` refuses SMAppService-owned
+  // labels by design; the Desktop app is the management surface).
+  SERVICE_EXTERNALLY_MANAGED: "SERVICE_EXTERNALLY_MANAGED",
   SERVICE_STOPPED: "SERVICE_STOPPED",
   PID_METADATA_MISSING: "PID_METADATA_MISSING",
   PID_METADATA_STALE: "PID_METADATA_STALE",

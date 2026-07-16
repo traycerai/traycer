@@ -1,10 +1,12 @@
 import { app } from "electron";
 import { spawn } from "node:child_process";
-import { access } from "node:fs/promises";
+import { access, rm } from "node:fs/promises";
 import { constants } from "node:fs";
 import { dirname, join } from "node:path";
 import { config, isDevBuild } from "../../config";
-import { labelForEnvironment } from "../host/host-paths";
+import { getHostFsLayout, labelForEnvironment } from "../host/host-paths";
+import type { Environment } from "../host/host-paths";
+import { isHostRemovedByUser } from "../host/host-removal-state";
 import { log } from "./logger";
 
 // macOS Login Items / Background Activity attribution for the host.
@@ -26,6 +28,31 @@ import { log } from "./logger";
 // their name. SMAppService resolves the plist by this exact filename.
 const HOST_LABEL = labelForEnvironment(config.environment).id;
 const HOST_SERVICE_NAME = `${HOST_LABEL}.plist`;
+
+// Every SMAppService mutation for the host label must flow through this
+// promise tail. `registerHostLoginItem` is a non-atomic bootout → unregister
+// → register sequence; `ensureHost`, the pending-revision monitor, and
+// `respawnHost` can all need it independently. Letting any two of them cross
+// that boundary at the same time can leave BTM with the stale LWCR this module
+// is designed to clear.
+//
+// This intentionally serializes rather than coalesces. The callers own their
+// own policies (force-ensure handling, monitor failure budget, and respawn
+// dedup/backoff), so a second caller must receive its own eventual result
+// after the first cycle settles. The tail always resolves so a failed cycle
+// never wedges later callers.
+let hostLoginItemRegistrationTail: Promise<void> = Promise.resolve();
+
+export function withHostLoginItemRegistrationLock<Result>(
+  operation: () => Promise<Result>,
+): Promise<Result> {
+  const result = hostLoginItemRegistrationTail.then(operation);
+  hostLoginItemRegistrationTail = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
+}
 
 /**
  * Electron's `LoginItemSettings.status` is optional - `agentService`
@@ -49,6 +76,15 @@ export type HostLoginItemStatus =
   | "not-registered"
   | "not-found"
   | "not-supported";
+
+/**
+ * `registerHostLoginItem`'s result: the SMAppService status the cycle
+ * settled on, or `removed-by-user` when the locked section found the
+ * removal sentinel set and refused to run the cycle at all (see the
+ * re-check rationale in `registerHostLoginItemUnserialized`).
+ */
+export type RegisterHostLoginItemResult =
+  HostLoginItemStatus | "removed-by-user";
 
 // True only when this is a shipped macOS build that ships the in-bundle
 // LaunchAgent plist. Used by the ensure flow to decide whether the desktop
@@ -153,7 +189,25 @@ const REGISTER_STATUS_POLL_INTERVAL_MS = 100;
  * synchronous status read can transiently say `not-registered` for
  * <100ms on cold-BTM (first-install) machines.
  */
-export async function registerHostLoginItem(): Promise<HostLoginItemStatus> {
+export function registerHostLoginItem(): Promise<RegisterHostLoginItemResult> {
+  return withHostLoginItemRegistrationLock(registerHostLoginItemUnserialized);
+}
+
+async function registerHostLoginItemUnserialized(): Promise<RegisterHostLoginItemResult> {
+  // Re-checked HERE, inside the locked section, not only at the callers'
+  // entry points: an ensure can spend minutes streaming the CLI before its
+  // register lands on this lock's tail - possibly queued BEHIND an in-app
+  // uninstall's `unregisterHostLoginItem()` (which persists the removed-by-
+  // user sentinel before taking the lock). Without this check that queued
+  // register would re-create the BTM login item right after "Remove
+  // Traycer", and BTM would silently respawn the host at the next login.
+  if (await isHostRemovedByUser()) {
+    log.info(
+      "[host-login-item] register skipped - host removed by user on this device",
+    );
+    return "removed-by-user";
+  }
+
   const plistPath = inAppLaunchAgentPlistPath();
 
   // Flush BTM's stale LWCR before touching SMAppService. On macOS 26+
@@ -184,7 +238,42 @@ export async function registerHostLoginItem(): Promise<HostLoginItemStatus> {
     plistPath,
     status,
   });
+  if (status === "enabled") {
+    // Whatever prompted this cycle (a normal ensure, or the already-ready
+    // fast path applying a deferred install), the on-disk plist is now the
+    // one active in launchd - any pending-revision marker the installer
+    // left behind is resolved.
+    await clearPendingLoginItemRevision(config.environment);
+  }
   return status;
+}
+
+/**
+ * Whether `scripts/desktop-install-cloud.js` (internal repo) left a pending
+ * LaunchAgent revision marker for `environment` - see `getHostFsLayout`'s
+ * doc comment for the full cross-repo contract. Best-effort: a read error
+ * (permissions, race) is treated as "no pending revision" so a transient FS
+ * hiccup never blocks the ensure fast path.
+ */
+export async function hasPendingLoginItemRevision(
+  environment: Environment,
+): Promise<boolean> {
+  return fileExists(getHostFsLayout(environment).pendingLoginItemRevisionFile);
+}
+
+async function clearPendingLoginItemRevision(
+  environment: Environment,
+): Promise<void> {
+  try {
+    await rm(getHostFsLayout(environment).pendingLoginItemRevisionFile, {
+      force: true,
+    });
+  } catch (err) {
+    log.warn(
+      "[host-login-item] failed to clear pending LaunchAgent revision marker",
+      { err },
+    );
+  }
 }
 
 /**
@@ -200,7 +289,11 @@ export async function registerHostLoginItem(): Promise<HostLoginItemStatus> {
  * Caller must have confirmed `hostManagesHostLoginItem()` first; on every
  * other build there is no SMAppService registration to remove.
  */
-export async function unregisterHostLoginItem(): Promise<void> {
+export function unregisterHostLoginItem(): Promise<void> {
+  return withHostLoginItemRegistrationLock(unregisterHostLoginItemUnserialized);
+}
+
+async function unregisterHostLoginItemUnserialized(): Promise<void> {
   await bootoutStaleAgent();
   const cleared = trySetLoginItemSettings(false);
   log.info("[host-login-item] SMAppService registration torn down", {

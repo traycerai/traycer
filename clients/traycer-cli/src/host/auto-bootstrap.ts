@@ -84,6 +84,11 @@ export async function detectBootstrapState(runtime: RuntimeContext): Promise<{
   try {
     const label = serviceLabelFor(runtime.environment);
     const status = await createServiceController().status(label);
+    // `externally-managed` (Desktop-owned SMAppService label) counts as
+    // registered: a registration exists, it just isn't the CLI's to repair.
+    // Treating it as unregistered used to send every `traycer login` on a
+    // Desktop-managed machine into the "service repair" branch, straight
+    // into `installService`'s SMAppService refusal.
     serviceRegistered = status.state !== "not-installed";
   } catch (err) {
     runtime.logger.warn("Auto-bootstrap service status probe failed", {

@@ -163,6 +163,21 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
         terminalCommand: `traycer host service install`,
         details: { label: label.id },
       });
+    } else if (serviceStatus.state === "externally-managed") {
+      // Desktop's SMAppService owns this label. This is a healthy
+      // configuration, NOT a missing registration - and the old error card's
+      // suggested fix (`service install`) refuses SMAppService-owned labels
+      // by design, so surfacing it as an error routed users into a repair
+      // loop with no working fix. Informational only.
+      issues.push({
+        code: DOCTOR_ISSUE_CODES.SERVICE_EXTERNALLY_MANAGED,
+        severity: "info",
+        title: "Service managed by Traycer Desktop",
+        message: `The OS service '${label.id}' is registered by the Traycer Desktop app (SMAppService login item); the CLI does not manage it. Use the Traycer app to repair or remove the host on this machine.`,
+        fixAction: null,
+        terminalCommand: null,
+        details: { label: label.id },
+      });
     } else if (serviceStatus.state === "stopped") {
       // `host-start` is intentionally kept as the GUI `fixAction`
       // label - Desktop's CLI bridge maps that key to

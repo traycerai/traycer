@@ -53,7 +53,7 @@ afterEach(() => {
 
 interface StageServiceMocksInput {
   readonly hostExecutablePath: string;
-  readonly serviceState: "stopped" | "not-installed";
+  readonly serviceState: "stopped" | "not-installed" | "externally-managed";
   readonly pidMetadata: {
     readonly pid: number;
     readonly hostId: string;
@@ -191,6 +191,41 @@ describe("runDoctor SERVICE_STOPPED recovery routing", () => {
     expect(
       result.issues.find((i) => i.code === "PORT_UNREACHABLE"),
     ).toBeDefined();
+  });
+
+  it("emits an info-only SERVICE_EXTERNALLY_MANAGED card (no fix) for a Desktop/SMAppService-owned label instead of the not-registered error", async () => {
+    // The old behavior surfaced SERVICE_NOT_REGISTERED (error) whose
+    // suggested fix - `traycer host service install` - refuses
+    // SMAppService-owned labels by design: a permanent error card with no
+    // working fix on every Desktop-managed machine.
+    const hostExecutablePath = join(workHome, "bin", "host");
+    mkdirSync(join(workHome, "bin"), { recursive: true });
+    writeFileSync(hostExecutablePath, "host-bin");
+    stageServiceMocks({
+      hostExecutablePath,
+      serviceState: "externally-managed",
+      pidMetadata: null,
+    });
+
+    const { runDoctor } = await import("../engine");
+    const result = await runDoctor({
+      environment: "production",
+      portConflictDeps: null,
+    });
+
+    expect(
+      result.issues.find((i) => i.code === "SERVICE_NOT_REGISTERED"),
+    ).toBeUndefined();
+    expect(
+      result.issues.find((i) => i.code === "SERVICE_STOPPED"),
+    ).toBeUndefined();
+    const issue = result.issues.find(
+      (i) => i.code === "SERVICE_EXTERNALLY_MANAGED",
+    );
+    expect(issue).toBeDefined();
+    expect(issue?.severity).toBe("info");
+    expect(issue?.fixAction).toBeNull();
+    expect(issue?.terminalCommand).toBeNull();
   });
 
   it("still emits SERVICE_NOT_REGISTERED when pid metadata proves a host process is running", async () => {
