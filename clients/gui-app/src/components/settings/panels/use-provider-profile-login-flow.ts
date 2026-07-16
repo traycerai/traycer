@@ -17,6 +17,7 @@ import {
   analyticsBlockerFromError,
   type AnalyticsBlocker,
 } from "@/lib/analytics";
+import { appLogger } from "@/lib/logger";
 
 type LoginMutationContext = { readonly hostId: string | null };
 
@@ -94,6 +95,109 @@ const CODE_PASTE_RESTART_LIMIT_MESSAGES: Record<CodePasteRestartCause, string> =
  *  typing (code-paste decision log's "Timeouts" row). */
 const CODE_PASTE_TOUCH_THROTTLE_MS = 45_000;
 const CODE_PASTE_KEEPALIVE_INTERVAL_MS = 60_000;
+
+/**
+ * Bounded re-poll for the ambient row's `authPending` window: the host's
+ * `providers.awaitLogin` response can carry a non-definitive ambient auth
+ * reading (the login runner evicts the ambient auth cache when the login
+ * child closes, and older hosts assemble the response from a non-blocking
+ * probe), so a not-yet-authenticated ambient verdict with `authPending` set
+ * means "the probe is still running", not "sign-in failed". Re-awaiting is
+ * cheap - with no login job in flight the host resolves immediately with a
+ * re-probed state - so a few short re-polls let the background probe land
+ * instead of misreporting a successful switch as a failure. Definitive
+ * verdicts (`authenticated`/`unauthenticated`) are never re-polled.
+ */
+const AMBIENT_AUTH_PENDING_REPOLL_CAP = 3;
+const AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS = 2_000;
+
+function isDefinitiveAuthStatus(
+  status: ProviderProfile["auth"]["status"],
+): boolean {
+  return status === "authenticated" || status === "unauthenticated";
+}
+
+type AwaitLoginResult = ResponseOfMethod<
+  HostRpcRegistry,
+  "providers.awaitLogin"
+>;
+
+/** What a settled `providers.awaitLogin` response means for the current
+ *  attempt - computed by the pure classifiers below, acted on by
+ *  `beginLogin`'s success handler. */
+type AwaitLoginResolution =
+  | {
+      readonly kind: "authenticated";
+      readonly payload: {
+        readonly profile: ProviderProfile;
+        readonly profiles: readonly ProviderProfile[];
+        readonly existingProfileId: string | null;
+      } | null;
+    }
+  | { readonly kind: "codeRejected" }
+  | { readonly kind: "authPending" }
+  | { readonly kind: "notAuthenticated" };
+
+/**
+ * Ambient reauth (no profile picker - the in-chat banner's OAuth reconnect)
+ * has no profile row to check: the re-probed top-level auth status is the
+ * only success signal, since `providers.list` keeps a profile row present
+ * even when it is signed out (fixup review finding 2 - presence alone is
+ * not success). A non-definitive top-level status with the probe still in
+ * flight is "not settled yet" (see `AMBIENT_AUTH_PENDING_REPOLL_CAP`).
+ */
+function classifyAmbientAwaitResult(
+  result: AwaitLoginResult,
+): AwaitLoginResolution {
+  if (result.state?.auth.status === "authenticated") {
+    return { kind: "authenticated", payload: null };
+  }
+  if (result.codeRejected) return { kind: "codeRejected" };
+  if (
+    result.state !== null &&
+    result.state.authPending &&
+    !isDefinitiveAuthStatus(result.state.auth.status)
+  ) {
+    return { kind: "authPending" };
+  }
+  return { kind: "notAuthenticated" };
+}
+
+/**
+ * Same presence-is-not-success caveat as the ambient classifier: a resolved
+ * row must also be authenticated, not merely present. The ambient row
+ * mirrors the state's top-level auth, whose force-refresh read is
+ * non-blocking host-side - a non-definitive ambient verdict with the probe
+ * still in flight is "not settled yet", never a failure. Managed rows get an
+ * awaited per-profile probe host-side, so that window is ambient-only.
+ */
+function classifyProfileAwaitResult(
+  result: AwaitLoginResult,
+  awaitedProfileId: string | null,
+): AwaitLoginResolution {
+  const profiles = result.state?.profiles ?? [];
+  const existingProfileId = result.existingProfileId ?? null;
+  const resolvedProfileId = existingProfileId ?? awaitedProfileId;
+  const profile =
+    profiles.find((candidate) => candidate.profileId === resolvedProfileId) ??
+    null;
+  if (profile !== null && profile.auth.status === "authenticated") {
+    return {
+      kind: "authenticated",
+      payload: { profile, profiles, existingProfileId },
+    };
+  }
+  if (result.codeRejected) return { kind: "codeRejected" };
+  if (
+    profile !== null &&
+    profile.kind === "ambient" &&
+    !isDefinitiveAuthStatus(profile.auth.status) &&
+    (result.state?.authPending ?? false)
+  ) {
+    return { kind: "authPending" };
+  }
+  return { kind: "notAuthenticated" };
+}
 
 /**
  * The paste field's real-world phases, derived from the mutation lifecycle:
@@ -280,6 +384,11 @@ export function useProviderProfileLoginFlow(
     readonly existingProfileId: string | null;
   } | null>(null);
   const lastTouchAtRef = useRef(0);
+  // Pending timer for the bounded ambient `authPending` re-poll (see
+  // `scheduleAuthPendingRepoll` inside `beginLogin`). Cleared on every fresh
+  // attempt, on cancellation, and on unmount so a late tick can never
+  // re-await a superseded or abandoned attempt.
+  const repollTimerRef = useRef<number | null>(null);
   const lastStartOptionsRef = useRef<{
     readonly label: string | null;
     readonly shareSkillsAndPlugins: boolean;
@@ -297,6 +406,17 @@ export function useProviderProfileLoginFlow(
     ) => void
   >(() => {});
 
+  const clearRepollTimer = useCallback((): void => {
+    if (repollTimerRef.current !== null) {
+      window.clearTimeout(repollTimerRef.current);
+      repollTimerRef.current = null;
+    }
+  }, []);
+
+  // Unmount-only cleanup: callers conditionally unmount to discard the flow,
+  // and a re-poll tick surviving that would re-await a discarded attempt.
+  useEffect(() => clearRepollTimer, [clearRepollTimer]);
+
   const cancelProfile = useCallback(
     (profileId: string | null): void => {
       if (cancelledRef.current) return;
@@ -308,6 +428,7 @@ export function useProviderProfileLoginFlow(
 
   const finishCancellation = useCallback(
     (profileId: string | null): void => {
+      clearRepollTimer();
       // Reauth always targets a real login child - a specific profile, or
       // the ambient/no-profile-picker identity when `existingProfileId` is
       // null (the in-chat banner's OAuth reconnect). Create mode's `null`
@@ -320,7 +441,7 @@ export function useProviderProfileLoginFlow(
       );
       setState({ kind: "cancelled" });
     },
-    [cancelProfile, mode, providerId],
+    [cancelProfile, clearRepollTimer, mode, providerId],
   );
 
   // The blocker is classified from the REAL error at each call site (or an
@@ -329,6 +450,15 @@ export function useProviderProfileLoginFlow(
   // as `authentication`.
   const fail = useCallback(
     (message: string, blocker: AnalyticsBlocker): void => {
+      // Flow-level failures otherwise surface only as inline dialog copy -
+      // log them so a failed sign-in/switch is diagnosable from the desktop
+      // log after the fact.
+      appLogger.warn("[provider-login] flow failed", {
+        provider: providerId,
+        mode,
+        blocker,
+        message,
+      });
       Analytics.getInstance().track(AnalyticsEvent.ProviderProfileLinkFailed, {
         provider: providerId,
         mode,
@@ -440,6 +570,8 @@ export function useProviderProfileLoginFlow(
       notice: string | null,
     ): void => {
       lastStartOptionsRef.current = options;
+      // A fresh attempt supersedes any pending ambient re-poll tick.
+      clearRepollTimer();
       attemptIdRef.current += 1;
       const thisAttemptId = attemptIdRef.current;
       awaitOutcomeRef.current = null;
@@ -498,72 +630,67 @@ export function useProviderProfileLoginFlow(
               profileId: nextProfileId,
               url: data.url,
             });
-            awaitLogin.mutate(
-              { providerId, profileId: nextProfileId },
-              {
-                onSuccess: (result) => {
-                  // A later attempt (auto-restart, or the child finished
-                  // while another restart was already triggered) already
-                  // superseded this long-poll - ignore its stale resolution.
-                  if (attemptIdRef.current !== thisAttemptId) return;
-                  // Ambient reauth (no profile picker - the in-chat banner's
-                  // OAuth reconnect) has no profile row to check: the
-                  // re-probed top-level auth status is the only success
-                  // signal, since `providers.list` keeps a profile row
-                  // present even when it is signed out (fixup review
-                  // finding 2 - presence alone is not success).
-                  if (mode === "reauth" && existingProfileId === null) {
-                    if (result.state?.auth.status === "authenticated") {
-                      awaitOutcomeRef.current = "authenticated";
-                      settleAttempt(thisAttemptId);
-                      return;
-                    }
-                    if (result.codeRejected) {
-                      restart("codeRejected");
-                      return;
-                    }
-                    awaitOutcomeRef.current = "notAuthenticated";
-                    settleAttempt(thisAttemptId);
-                    return;
-                  }
-                  const profiles = result.state?.profiles ?? [];
-                  const resolvedExistingProfileId =
-                    result.existingProfileId ?? null;
-                  const resolvedProfileId =
-                    resolvedExistingProfileId ?? nextProfileId;
-                  const profile =
-                    profiles.find(
-                      (candidate) => candidate.profileId === resolvedProfileId,
-                    ) ?? null;
-                  // Same presence-is-not-success caveat: a resolved row must
-                  // also be authenticated, not merely present.
-                  if (
-                    profile !== null &&
-                    profile.auth.status === "authenticated"
-                  ) {
-                    awaitOutcomeRef.current = "authenticated";
-                    successPayloadRef.current = {
-                      profile,
-                      profiles,
-                      existingProfileId: resolvedExistingProfileId,
-                    };
-                    settleAttempt(thisAttemptId);
-                    return;
-                  }
-                  if (result.codeRejected) {
-                    restart("codeRejected");
-                    return;
-                  }
-                  awaitOutcomeRef.current = "notAuthenticated";
-                  settleAttempt(thisAttemptId);
-                },
-                onError: () => {
-                  if (attemptIdRef.current !== thisAttemptId) return;
-                  awaitOutcomeRef.current = "notAuthenticated";
-                  settleAttempt(thisAttemptId);
-                },
-              },
-            );
+            // Per-attempt budget for the ambient `authPending` re-poll (see
+            // the constant's doc comment). Scoped to this attempt's closure -
+            // an auto-restart mints a fresh attempt with a fresh budget.
+            let authPendingRepolls = 0;
+            const scheduleAuthPendingRepoll = (): boolean => {
+              if (authPendingRepolls >= AMBIENT_AUTH_PENDING_REPOLL_CAP) {
+                return false;
+              }
+              authPendingRepolls += 1;
+              appLogger.info(
+                "[provider-login] ambient auth still pending after login completion; re-polling",
+                { provider: providerId, repoll: authPendingRepolls },
+              );
+              repollTimerRef.current = window.setTimeout(() => {
+                repollTimerRef.current = null;
+                if (attemptIdRef.current !== thisAttemptId) return;
+                if (cancelRequestedRef.current || cancelledRef.current) return;
+                awaitOnce();
+              }, AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS);
+              return true;
+            };
+            const handleAwaitSuccess = (result: AwaitLoginResult): void => {
+              // A later attempt (auto-restart, or the child finished
+              // while another restart was already triggered) already
+              // superseded this long-poll - ignore its stale resolution.
+              if (attemptIdRef.current !== thisAttemptId) return;
+              const resolution =
+                mode === "reauth" && existingProfileId === null
+                  ? classifyAmbientAwaitResult(result)
+                  : classifyProfileAwaitResult(result, nextProfileId);
+              if (resolution.kind === "authenticated") {
+                awaitOutcomeRef.current = "authenticated";
+                successPayloadRef.current = resolution.payload;
+                settleAttempt(thisAttemptId);
+                return;
+              }
+              if (resolution.kind === "codeRejected") {
+                restart("codeRejected");
+                return;
+              }
+              if (
+                resolution.kind === "authPending" &&
+                scheduleAuthPendingRepoll()
+              ) {
+                return;
+              }
+              awaitOutcomeRef.current = "notAuthenticated";
+              settleAttempt(thisAttemptId);
+            };
+            const handleAwaitError = (): void => {
+              if (attemptIdRef.current !== thisAttemptId) return;
+              awaitOutcomeRef.current = "notAuthenticated";
+              settleAttempt(thisAttemptId);
+            };
+            const awaitOnce = (): void => {
+              awaitLogin.mutate(
+                { providerId, profileId: nextProfileId },
+                { onSuccess: handleAwaitSuccess, onError: handleAwaitError },
+              );
+            };
+            awaitOnce();
           },
           onError: (error) => {
             if (cancelRequestedRef.current) {
@@ -577,6 +704,7 @@ export function useProviderProfileLoginFlow(
     },
     [
       awaitLogin,
+      clearRepollTimer,
       existingProfileId,
       fail,
       failureMessages,
