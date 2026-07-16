@@ -1231,7 +1231,9 @@ describe("<HarnessModelPicker />", () => {
     // a sibling profile is allowed even though every OTHER rail provider is
     // disabled.
     expect(
-      screen.getByRole("button", { name: "Claude profile: Terminal account" }),
+      screen.getByRole("button", {
+        name: "Claude profile: Terminal account, Terminal",
+      }),
     ).not.toBeNull();
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
 
@@ -1540,7 +1542,7 @@ describe("<HarnessModelPicker />", () => {
     // ("Terminal account") profile.
     expect(
       screen.getByRole("button", {
-        name: "Claude profile: Terminal account",
+        name: "Claude profile: Terminal account, Terminal",
       }),
     ).not.toBeNull();
     await waitFor(() => {
@@ -1552,7 +1554,7 @@ describe("<HarnessModelPicker />", () => {
     });
     expect(
       screen
-        .getByRole("menuitem", { name: "Terminal account" })
+        .getByRole("menuitem", { name: "Terminal account, Terminal" })
         .getAttribute("aria-current"),
     ).toBe("true");
     expect(
@@ -1569,7 +1571,9 @@ describe("<HarnessModelPicker />", () => {
     // The ambient row must commit `null` - the same value every other
     // run/session-level profileId (and the composer's memory keying) use for
     // ambient - not the wire array's literal "ambient" sentinel.
-    fireEvent.click(screen.getByRole("menuitem", { name: "Terminal account" }));
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Terminal account, Terminal" }),
+    );
     expect(selections.at(-1)?.harnessId).toBe("claude");
     expect(selections.at(-1)?.profileId).toBeNull();
   });

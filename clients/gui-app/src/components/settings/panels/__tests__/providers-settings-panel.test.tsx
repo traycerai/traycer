@@ -1190,10 +1190,17 @@ describe("<ProvidersSettingsPanel />", () => {
     );
 
     expect(
-      screen.getByRole("button", { name: "Codex profile: Terminal account" }),
+      screen.getByRole("button", {
+        name: "Codex profile: Terminal account, Terminal",
+      }),
     ).toBeDefined();
+    const terminalProfileRow = screen.getByRole("menuitem", {
+      name: "Terminal account, Terminal",
+    });
     expect(
-      screen.getByRole("menuitem", { name: "Terminal account" }),
+      within(terminalProfileRow).getByText("Terminal", {
+        selector: '[data-slot="badge"]',
+      }),
     ).toBeDefined();
     expect(
       screen.getByRole("menuitem", { name: "Create new profile" }),
@@ -1217,6 +1224,35 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.focus(manageProfileButton);
     expect((await screen.findByRole("tooltip")).textContent).toBe(
       "Change the profile name and accent color, sign in again, or remove this profile.",
+    );
+    fireEvent.click(manageProfileButton);
+    const editProfileDialog = screen.getByRole("dialog", {
+      name: "Edit profile",
+    });
+    const removeProfileButton = within(editProfileDialog).getByRole("button", {
+      name: /Remove profile/,
+    });
+    if (!(removeProfileButton instanceof HTMLButtonElement)) {
+      throw new Error("Expected remove profile button");
+    }
+    expect(removeProfileButton.disabled).toBe(true);
+    expect(
+      within(editProfileDialog).queryByText("Terminal", {
+        selector: '[data-slot="badge"]',
+      }),
+    ).toBeNull();
+    const removeProfileTooltipTrigger = removeProfileButton.parentElement;
+    if (!(removeProfileTooltipTrigger instanceof HTMLElement)) {
+      throw new Error("Expected remove profile tooltip trigger");
+    }
+    const removeProfileDisabledReason =
+      "This profile uses your default CLI login and cannot be removed.";
+    expect(removeProfileTooltipTrigger.title).toBe(removeProfileDisabledReason);
+    expect(removeProfileButton.getAttribute("aria-label")).toBe(
+      `Remove profile. ${removeProfileDisabledReason}`,
+    );
+    fireEvent.click(
+      within(editProfileDialog).getByRole("button", { name: "Cancel" }),
     );
     expect(
       screen.queryByRole("button", { name: "Refresh usage limits" }),
