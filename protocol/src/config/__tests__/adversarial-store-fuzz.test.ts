@@ -215,6 +215,11 @@ function assertInvariants(cfg: CliConfig, entryPathsBefore: Set<string>): void {
 describe("adversarial: property-style op-sequence fuzz vs reference model", () => {
   const SEEDS = Array.from({ length: 30 }, (_, i) => i * 1013 + 7);
   const OPS_PER_SEED = 500;
+  // Correctness-only test: the timeout exists to catch hangs, not to assert
+  // speed. 500 ops typically finish in <1s, but a contended 2-core CI runner
+  // has pushed marginal seeds past vitest's 5s default (seed 7 twice on
+  // 2026-07-16). 12x headroom keeps load out of the verdict.
+  const FUZZ_TEST_TIMEOUT_MS = 60_000;
 
   it.each(SEEDS)("holds mirror/canonicalisation/resolution invariants (seed %i)", async (seed) => {
     const rng = mulberry32(seed);
@@ -275,5 +280,5 @@ describe("adversarial: property-style op-sequence fuzz vs reference model", () =
       // 2. Contract invariants hold on the persisted config.
       assertInvariants(cfg, before);
     }
-  });
+  }, FUZZ_TEST_TIMEOUT_MS);
 });
