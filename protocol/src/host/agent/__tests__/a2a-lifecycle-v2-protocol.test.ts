@@ -95,11 +95,9 @@ function exceptions() {
 function stableStringify(value: unknown): string {
   return JSON.stringify(value, (_, nested) => {
     if (nested !== null && typeof nested === "object" && !Array.isArray(nested)) {
-      const sorted: Record<string, unknown> = {};
-      for (const key of Object.keys(nested as Record<string, unknown>).sort()) {
-        sorted[key] = (nested as Record<string, unknown>)[key];
-      }
-      return sorted;
+      return Object.fromEntries(
+        Object.entries(nested).sort(([a], [b]) => a.localeCompare(b)),
+      );
     }
     return nested;
   });

@@ -754,8 +754,11 @@ function deliveryOutcomeGuidance(
 ): readonly string[] {
   switch (outcome) {
     case "service-unconfirmed":
+      // R25: state the unknown positively. Naming the outcomes this is NOT
+      // (failure / "not responding") would plant the very reading the rule
+      // exists to prevent, and defeats a substring audit of this guarantee.
       return [
-        `[traycer inbox] status is unknown — do not treat this as failure or "not responding"`,
+        `[traycer inbox] status is unknown — it may still be working, or may have already processed this`,
         `[traycer inbox] check what it is doing: traycer agent transcript --agent-id ${notice.receiverAgentId}`,
       ];
     case "service-failed":

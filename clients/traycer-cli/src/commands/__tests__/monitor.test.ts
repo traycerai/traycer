@@ -178,6 +178,48 @@ describe("runMonitor recovery", () => {
     void monitor;
   });
 
+  it("renders service-unconfirmed as accepted unknown status, never failure", async () => {
+    const stdout = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation(() => true);
+    const monitor = runMonitor({ agentId: "a1", epicId: "e1" });
+    await flush(0);
+    const session = sessions[0];
+    if (session === undefined || session.serverFrame === null) {
+      throw new Error("monitor stream handler was not registered");
+    }
+    session.serverFrame({
+      kind: "notice",
+      hasBinaryPayload: false,
+      notice: {
+        kind: "inactivity",
+        senderAgentId: "sender",
+        responseId: "response",
+        receiverAgentId: "receiver",
+        receiverTitle: null,
+        receiverHarnessId: null,
+        epicId: "e1",
+        reason: "errored",
+        detail: null,
+        droppedReceivers: null,
+        noticedAt: 1,
+        deliveryId: "delivery",
+        replyToDeliveryId: null,
+        consumedResponseId: null,
+        outcome: "service-unconfirmed",
+        isCorrective: false,
+        durableQueuedWorkRemains: null,
+      },
+    });
+    const output = stdout.mock.calls.map(([text]) => String(text)).join("");
+    expect(output).toContain(
+      "accepted, processing unconfirmed, status unknown",
+    );
+    expect(output).not.toContain("failed");
+    expect(output).not.toContain("not responding");
+    void monitor;
+  });
+
   it("re-subscribes after a refresh that rotated the bearer (UNAUTHORIZED)", async () => {
     revalidateMock.mockResolvedValue("rotated");
     const result = runMonitor({ agentId: "a1", epicId: "e1" }).catch((e) => e);
