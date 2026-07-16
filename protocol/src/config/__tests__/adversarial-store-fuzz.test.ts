@@ -53,13 +53,26 @@ import {
 const DEFAULT_PATH = "/bin/zsh"; // == passwdShell, so defaultShellPath() returns it.
 
 beforeEach(async () => {
-  const home = await mkdtemp(join(tmpdir(), "traycer-fuzz-config-"));
-  h.home = home;
+  h.home = await mkdtemp(join(tmpdir(), "traycer-fuzz-config-"));
   h.passwdShell = "/bin/zsh";
-  // Bind this test's home to the current async execution context; every
-  // continuation of this test (including a timed-out zombie's) inherits it.
-  h.homeCtx?.enterWith({ home });
 });
+
+/**
+ * Run a test body with its home pinned for every continuation via
+ * AsyncLocalStorage. `run()` (not `enterWith`) is essential: an `enterWith`
+ * issued inside one beforeEach does not reliably reach the NEXT test's body
+ * under vitest's hook/test chaining — sequential tests then all inherit the
+ * first binding and poison each other. `run()` scopes the binding exactly to
+ * this body and all of its async descendants, which is also what pins a
+ * timed-out zombie to its own dead directory forever.
+ */
+function withPinnedHome(body: () => Promise<void>): Promise<void> {
+  const ctx = h.homeCtx;
+  if (ctx === null) {
+    throw new Error("os mock did not initialize the home ALS context");
+  }
+  return ctx.run({ home: h.home }, body);
+}
 
 // ------------------------------------------------------------------ //
 // Independent reference model of the intended (contract) semantics.
@@ -243,80 +256,81 @@ describe("adversarial: property-style op-sequence fuzz vs reference model", () =
 
   it.each(SEEDS)(
     "holds mirror/canonicalisation/resolution invariants (seed %i)",
-    async (seed) => {
-      const rng = mulberry32(seed);
-      const ref: RefState = { path: null, args: null, entries: [] };
-      // Zombie fallback guard: the ALS home binding (see the os mock) is
-      // the primary isolation — a timed-out seed's continuations keep their
-      // own dead home, so in-flight mutator writes cannot land in the next
-      // seed's store (observed in CI: seed 7 timed out at ~5s, then seed
-      // 1020 "failed" at 60ms). This check only stops the zombie's pointless
-      // work in any execution context the ALS binding does not reach.
-      const myHome = h.home;
+    (seed) =>
+      withPinnedHome(async () => {
+        const rng = mulberry32(seed);
+        const ref: RefState = { path: null, args: null, entries: [] };
+        // Zombie fallback guard: the ALS home binding (see the os mock) is
+        // the primary isolation — a timed-out seed's continuations keep their
+        // own dead home, so in-flight mutator writes cannot land in the next
+        // seed's store (observed in CI: seed 7 timed out at ~5s, then seed
+        // 1020 "failed" at 60ms). This check only stops the zombie's pointless
+        // work in any execution context the ALS binding does not reach.
+        const myHome = h.home;
 
-      for (let step = 0; step < OPS_PER_SEED; step++) {
-        if (h.home !== myHome) return;
-        const before = new Set(ref.entries.map((e) => e.path));
-        const opRoll = rng();
-        if (opRoll < 0.4) {
-          // setShell across all four shapes.
-          const shape = rng();
-          let path: string | null;
-          let args: string[] | null;
-          if (shape < 0.3) {
-            path = pick(rng, PATH_POOL);
-            args = null; // pick a shell
-          } else if (shape < 0.55) {
-            path = null;
-            args = pick(
-              rng,
-              ARGS_POOL.filter((a) => a !== null),
-            ) as string[]; // args-only
-          } else if (shape < 0.85) {
-            path = pick(rng, PATH_POOL);
-            args = pick(
-              rng,
-              ARGS_POOL.filter((a) => a !== null),
-            ) as string[]; // both
+        for (let step = 0; step < OPS_PER_SEED; step++) {
+          if (h.home !== myHome) return;
+          const before = new Set(ref.entries.map((e) => e.path));
+          const opRoll = rng();
+          if (opRoll < 0.4) {
+            // setShell across all four shapes.
+            const shape = rng();
+            let path: string | null;
+            let args: string[] | null;
+            if (shape < 0.3) {
+              path = pick(rng, PATH_POOL);
+              args = null; // pick a shell
+            } else if (shape < 0.55) {
+              path = null;
+              args = pick(
+                rng,
+                ARGS_POOL.filter((a) => a !== null),
+              ) as string[]; // args-only
+            } else if (shape < 0.85) {
+              path = pick(rng, PATH_POOL);
+              args = pick(
+                rng,
+                ARGS_POOL.filter((a) => a !== null),
+              ) as string[]; // both
+            } else {
+              // Degenerate null/null is guarded upstream; skip so we mirror callers.
+              path = pick(rng, PATH_POOL);
+              args = null;
+            }
+            refSetShell(ref, path, args);
+            await setShell(path, args);
+          } else if (opRoll < 0.6) {
+            const path = pick(rng, PATH_POOL);
+            refAddShell(ref, path);
+            await addShell(path);
+          } else if (opRoll < 0.78) {
+            const path = pick(rng, PATH_POOL);
+            refRemoveShell(ref, path);
+            await removeShell(path);
+          } else if (opRoll < 0.92) {
+            const path = pick(rng, PATH_POOL);
+            refRevertShellArgs(ref, path);
+            await revertShellArgs(path);
           } else {
-            // Degenerate null/null is guarded upstream; skip so we mirror callers.
-            path = pick(rng, PATH_POOL);
-            args = null;
+            refReset(ref);
+            await resetShell();
           }
-          refSetShell(ref, path, args);
-          await setShell(path, args);
-        } else if (opRoll < 0.6) {
-          const path = pick(rng, PATH_POOL);
-          refAddShell(ref, path);
-          await addShell(path);
-        } else if (opRoll < 0.78) {
-          const path = pick(rng, PATH_POOL);
-          refRemoveShell(ref, path);
-          await removeShell(path);
-        } else if (opRoll < 0.92) {
-          const path = pick(rng, PATH_POOL);
-          refRevertShellArgs(ref, path);
-          await revertShellArgs(path);
-        } else {
-          refReset(ref);
-          await resetShell();
-        }
 
-        const cfg = await readCliConfig();
-        // 1. Implementation state must match the independent reference model.
-        expect({
-          path: cfg.shell.path,
-          args: cfg.shell.args,
-          entries: sortEntries(cfg.shell.entries),
-        }).toEqual({
-          path: ref.path,
-          args: ref.args,
-          entries: sortEntries(ref.entries),
-        });
-        // 2. Contract invariants hold on the persisted config.
-        assertInvariants(cfg, before);
-      }
-    },
+          const cfg = await readCliConfig();
+          // 1. Implementation state must match the independent reference model.
+          expect({
+            path: cfg.shell.path,
+            args: cfg.shell.args,
+            entries: sortEntries(cfg.shell.entries),
+          }).toEqual({
+            path: ref.path,
+            args: ref.args,
+            entries: sortEntries(ref.entries),
+          });
+          // 2. Contract invariants hold on the persisted config.
+          assertInvariants(cfg, before);
+        }
+      }),
     FUZZ_TEST_TIMEOUT_MS,
   );
 });
