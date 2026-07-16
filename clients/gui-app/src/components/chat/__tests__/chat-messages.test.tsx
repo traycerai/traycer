@@ -503,6 +503,34 @@ describe("ChatMessages Virtuoso renderer", () => {
     sibling.remove();
   });
 
+  it("keeps scrolling from a focused descendant when the tile is inactive", () => {
+    const messages = makeMessages(100);
+    renderChatMessages(
+      messages,
+      makeDefaultOpts({ minimapItems: minimapItemsFor(messages) }),
+    );
+    const scroller = screen.getByTestId("virtuoso-scroller");
+    Object.defineProperties(scroller, {
+      clientHeight: { configurable: true, value: 500 },
+      scrollHeight: { configurable: true, value: 2_000 },
+    });
+
+    // A split pane that isn't the active pane still renders its selected chat
+    // visibly and focusably (unselected tabs are display:none, which blurs).
+    // Focus is the authority for a key rooted INSIDE the tile: no other tile
+    // would claim it, so gating this branch on `data-active` would drop the
+    // key entirely rather than route it elsewhere.
+    const tile = screen.getByTestId("chat-keyboard-scroll-scope");
+    tile.setAttribute("data-active", "false");
+    const composer = document.createElement("textarea");
+    tile.appendChild(composer);
+    composer.focus();
+
+    scroller.scrollTop = 1_000;
+    fireEvent.keyDown(composer, { key: "PageUp" });
+    expect(scroller.scrollTop).toBe(500);
+  });
+
   it("scrolls the transcript with plain Home/End on macOS, including from editable targets", () => {
     platformMock.isMac = true;
     const messages = makeMessages(100);
