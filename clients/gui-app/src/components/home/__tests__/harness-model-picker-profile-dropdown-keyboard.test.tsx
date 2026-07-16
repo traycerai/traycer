@@ -129,13 +129,13 @@ describe("nested picker profile-dropdown keyboard ownership", () => {
 
     fireEvent.pointerDown(
       screen.getByRole("button", {
-        name: "Claude profile: Terminal account",
+        name: "Claude profile: Terminal account, Terminal",
       }),
       { button: 0, ctrlKey: false },
     );
     const menu = await screen.findByRole("menu");
     const terminalProfile = screen.getByRole("menuitem", {
-      name: "Terminal account",
+      name: "Terminal account, Terminal",
     });
     const workProfile = screen.getByRole("menuitem", { name: "Work" });
     terminalProfile.focus();

@@ -35,6 +35,7 @@ vi.mock("sonner", () => ({
 }));
 
 import {
+  chatActivityIndicator,
   chatMessageEditingForInlineEdit,
   resolvedTurnStatus,
   showRestoreResultToast,
@@ -482,5 +483,109 @@ describe("resolvedTurnStatus - turnInProgress present (host-sent, exact)", () =>
         null,
       ),
     ).toBeNull();
+  });
+});
+
+describe("chatActivityIndicator", () => {
+  const MONITOR_ITEM = {
+    taskId: "t1",
+    kind: "monitor" as const,
+    title: "Monitor",
+    blockId: "t1",
+    parentTaskId: null,
+    scheduledFor: null,
+  };
+
+  it("reads null for an idle chat", () => {
+    expect(
+      chatActivityIndicator({
+        runStatus: "idle",
+        activeTurn: null,
+        queue: EMPTY_QUEUE,
+        backgroundItems: [],
+        turnInProgress: false,
+      }),
+    ).toBeNull();
+  });
+
+  it("reads turn while the host reports a genuine turn in progress", () => {
+    expect(
+      chatActivityIndicator({
+        runStatus: "running",
+        activeTurn: ACTIVE_TURN,
+        queue: EMPTY_QUEUE,
+        backgroundItems: [],
+        turnInProgress: true,
+      }),
+    ).toBe("turn");
+  });
+
+  it("reads background when only a Monitor/background task keeps the chat non-idle", () => {
+    expect(
+      chatActivityIndicator({
+        runStatus: "running",
+        activeTurn: null,
+        queue: EMPTY_QUEUE,
+        backgroundItems: [MONITOR_ITEM],
+        turnInProgress: false,
+      }),
+    ).toBe("background");
+  });
+
+  it("prioritizes the turn when a turn and background work run simultaneously", () => {
+    expect(
+      chatActivityIndicator({
+        runStatus: "running",
+        activeTurn: ACTIVE_TURN,
+        queue: EMPTY_QUEUE,
+        backgroundItems: [MONITOR_ITEM],
+        turnInProgress: true,
+      }),
+    ).toBe("turn");
+  });
+
+  it("reads turn (not background) while a runnable queue drains between turns", () => {
+    expect(
+      chatActivityIndicator({
+        runStatus: "running",
+        activeTurn: null,
+        queue: runnableQueue(1),
+        backgroundItems: [],
+        turnInProgress: false,
+      }),
+    ).toBe("turn");
+  });
+
+  it("keeps the stopping phase on the turn tier", () => {
+    expect(
+      chatActivityIndicator({
+        runStatus: "stopping",
+        activeTurn: ACTIVE_TURN,
+        queue: EMPTY_QUEUE,
+        backgroundItems: [],
+        turnInProgress: true,
+      }),
+    ).toBe("turn");
+  });
+
+  it("falls back to the older-host heuristic when turnInProgress is absent", () => {
+    expect(
+      chatActivityIndicator({
+        runStatus: "running",
+        activeTurn: null,
+        queue: EMPTY_QUEUE,
+        backgroundItems: [MONITOR_ITEM],
+        turnInProgress: undefined,
+      }),
+    ).toBe("background");
+    expect(
+      chatActivityIndicator({
+        runStatus: "running",
+        activeTurn: null,
+        queue: EMPTY_QUEUE,
+        backgroundItems: undefined,
+        turnInProgress: undefined,
+      }),
+    ).toBe("turn");
   });
 });

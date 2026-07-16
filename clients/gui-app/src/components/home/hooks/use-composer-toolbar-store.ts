@@ -219,9 +219,8 @@ export function useComposerToolbarStore(
       setServiceTier: actions.setServiceTier,
       setPermission: actions.setPermission,
       // The command palette has no rail/profile context of its own - default
-      // to the ambient profile, mirroring "ambient is the implicit fallback"
-      // (the memory-store's own ambient-first resolution then restores that
-      // harness's last-used ambient model/effort/tier).
+      // the independent profile choice to ambient while restoring the
+      // provider's last-used model/effort/tier.
       switchHarness: (harnessId: ProviderId) =>
         commitSelection(store, harnessId, null, null),
       selectModel: (harnessId: ProviderId, modelSlug: string) =>

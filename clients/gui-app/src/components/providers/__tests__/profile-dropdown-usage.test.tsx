@@ -249,7 +249,7 @@ describe("ProfileDropdown picker usage opt-in", () => {
 
   it("keeps Settings/default rows identity-only with no bars or sidecar", async () => {
     renderDropdown(null, vi.fn());
-    await screen.findByRole("menuitem", { name: "Terminal account" });
+    await screen.findByRole("menuitem", { name: "Terminal account, Terminal" });
     expect(screen.queryByTestId("profile-usage-bar-null")).toBeNull();
     expect(screen.queryByRole("complementary")).toBeNull();
   });
@@ -311,7 +311,7 @@ describe("ProfileDropdown picker usage opt-in", () => {
     } satisfies ProfileDropdownUsagePresentation;
     renderDropdown(usagePresentation, onSelect);
     const ambient = await screen.findByRole("menuitem", {
-      name: "Terminal account, Signed in, Not selected, Limited",
+      name: "Terminal account, Terminal, Signed in, Not selected, Limited",
     });
 
     fireEvent.pointerMove(ambient);
@@ -356,7 +356,7 @@ describe("ProfileDropdown picker usage opt-in", () => {
     expect(onSelect).not.toHaveBeenCalled();
 
     const ambient = screen.getByRole("menuitem", {
-      name: "Terminal account, Signed in, Not selected, Limited",
+      name: "Terminal account, Terminal, Signed in, Not selected, Limited",
     });
     fireEvent.pointerMove(ambient);
     const refreshButton = await screen.findByRole("button", {
