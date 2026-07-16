@@ -44,6 +44,7 @@ import type { SeedIntentOverride } from "@/lib/worktree/worktree-intent-seeding"
 import { readSeededLaunchWorkspace } from "@/lib/worktree/seeded-launch-worktree-intent";
 import { useSeededWorkspaceSnapshotStore } from "@/stores/worktree/seeded-workspace-snapshot-store";
 import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 const activeChatForkWorkspaceOwnerByKey = new Map<string, symbol>();
 
@@ -51,6 +52,9 @@ export interface ChatForkDialogTarget {
   readonly sourceChatId: string;
   readonly sourceChatTitle: string;
   readonly assistantMessageId: string;
+  // Q&A forks identify the exact interview block within an assistant row;
+  // ordinary message-level forks leave this null and retain the whole row.
+  readonly interviewBlockId: string | null;
   readonly parentId: string | null;
   readonly settingsSeed: ChatRunSettings;
   // The full seed (intent + folder snapshot) projected from the source chat's
@@ -256,11 +260,16 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
         forkSource: {
           sourceChatId: target.sourceChatId,
           assistantMessageId: target.assistantMessageId,
+          interviewBlockId: target.interviewBlockId,
           carriedInterviews: target.carriedInterviews,
         },
       },
       {
         onSuccess: (result) => {
+          Analytics.getInstance().track(AnalyticsEvent.ChatForked, {
+            source: "direct_ui",
+            include_history: true,
+          });
           clearChatForkWorkspace(stagingKey);
           const cancel = openCreatedChatWhenProjectedWithNavigation({
             intent: {
@@ -269,6 +278,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
               tabId,
               chatId: result.chatId,
               hostId,
+              source: "direct_ui",
             },
             navigateNestedFocus,
           });
@@ -332,6 +342,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
                 disabled={createChat.isPending}
                 registerActivation={false}
                 createProfileHostId={tabHostId}
+                runTargetHostId={tabHostId}
               />
               <div className="shrink-0">
                 <AgentModeToggle

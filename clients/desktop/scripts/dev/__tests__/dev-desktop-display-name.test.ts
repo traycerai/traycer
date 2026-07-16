@@ -4,7 +4,6 @@ import { describe, expect, it } from "vitest";
 const require = createRequire(import.meta.url);
 const devDesktopDisplayName = require("../dev-desktop-display-name.cjs") as {
   resolveDevDesktopDisplayName: (env: NodeJS.ProcessEnv) => string | null;
-  resolveDevDesktopWorktreeLabel: (env: NodeJS.ProcessEnv) => string | null;
 };
 
 describe("resolveDevDesktopDisplayName", () => {
@@ -14,11 +13,6 @@ describe("resolveDevDesktopDisplayName", () => {
         DEV_DESKTOP_SLOT: "traycer-spry-panda-a2acaa5e",
       }),
     ).toBe("Traycer Dev — spry-panda");
-    expect(
-      devDesktopDisplayName.resolveDevDesktopWorktreeLabel({
-        DEV_DESKTOP_SLOT: "traycer-spry-panda-a2acaa5e",
-      }),
-    ).toBe("spry-panda");
   });
 
   it("strips the generated hash without requiring a traycer prefix", () => {

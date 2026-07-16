@@ -7,6 +7,10 @@ import {
 import { guiHarnessIdSchema } from "@traycer/protocol/host/agent/shared";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
 import {
+  userMessageSenderSchema,
+  userMessageSenderSchemaPreInReplyTo,
+} from "@traycer/protocol/persistence/epic/senders";
+import {
   interviewAnswerSchema,
   interviewQuestionOptionSchema,
   interviewQuestionSchema,
@@ -526,8 +530,30 @@ export const steerSubmittedEventSchema = z.object({
   messageId: z.string(),
   content: jsonContentSchema,
   mode: chatQueueSteerModeSchema.default("safe_point"),
+  // Who authored the steered message, carried onto the `steer` content block by
+  // the shared accumulator. The steered USER row (`messageId`) is the primary
+  // record, but it and the block have asymmetric durability - so a renderer that
+  // sees only the block must still be able to tell an agent-to-agent message
+  // from a human one. Additive + nullable: a host that predates this field sends
+  // no sender, the block's stays `null`, and the fallback renders a plain user
+  // row exactly as before.
+  sender: userMessageSenderSchema.nullable().default(null),
 });
 export type SteerSubmittedEvent = z.infer<typeof steerSubmittedEventSchema>;
+
+// Wire-freeze copy with the `sender` swapped for its pre-`inReplyTo` freeze,
+// bound (via the frozen runtime unions below) to the `blockDelta` frame on the
+// released `chat.subscribe@1.0–1.3` lines so those lines strip `inReplyTo` from
+// a steer sender too. Hand-frozen; see `agentSenderSchemaPreInReplyTo`.
+export const steerSubmittedEventSchemaPreInReplyTo = z.object({
+  ...baseRuntimeEventFields,
+  type: z.literal("steer.submitted"),
+  queueItemId: z.string(),
+  messageId: z.string(),
+  content: jsonContentSchema,
+  mode: chatQueueSteerModeSchema.default("safe_point"),
+  sender: userMessageSenderSchemaPreInReplyTo.nullable().default(null),
+});
 
 export const interviewRequestedEventSchema = z.object({
   ...baseRuntimeEventFields,
@@ -1049,3 +1075,58 @@ export const runtimeEventSchema = z.discriminatedUnion("type", [
   providerNoticeUpsertEventSchema,
 ]);
 export type RuntimeEvent = z.infer<typeof runtimeEventSchema>;
+
+// Wire-freeze copies of the runtime-event unions with `steer.submitted` swapped
+// for its pre-`inReplyTo` freeze — bound to the `blockDelta` frame on the
+// released `chat.subscribe@1.0–1.3` lines. `steer.submitted` is the only runtime
+// event that carries a sender. Explicitly listed (not derived from the live
+// union) so the freeze can't silently absorb a future sender-bearing event, and
+// to keep the discriminated-union typing intact.
+export const runtimeEventSchemaV12PreInReplyTo = z.discriminatedUnion("type", [
+  textDeltaEventSchema,
+  textCompletedEventSchema,
+  reasoningDeltaEventSchema,
+  reasoningCompletedEventSchema,
+  toolCallStartedEventSchema,
+  toolCallCompletedEventSchema,
+  toolCallErroredEventSchema,
+  toolCallProgressEventSchema,
+  approvalRequestedEventSchema,
+  approvalResolvedEventSchema,
+  todoUpdatedEventSchema,
+  planDeltaEventSchema,
+  planUpdatedEventSchema,
+  planCompletedEventSchema,
+  compactionStartedEventSchema,
+  compactionCompletedEventSchema,
+  compactionErroredEventSchema,
+  interviewRequestedEventSchema,
+  interviewResolvedEventSchema,
+  interviewErroredEventSchema,
+  subAgentStartedEventSchema,
+  subAgentProgressEventSchema,
+  subAgentCompletedEventSchema,
+  fileChangeStartedEventSchema,
+  fileChangeCompletedEventSchema,
+  artifactOperationEventSchema,
+  commandStartedEventSchema,
+  commandCompletedEventSchema,
+  sessionCreatedEventSchema,
+  sessionResumedEventSchema,
+  turnStartedEventSchema,
+  userMessageAnchorResolvedEventSchema,
+  turnCompletedEventSchema,
+  turnStoppedEventSchema,
+  turnInterruptedEventSchema,
+  steerSubmittedEventSchemaPreInReplyTo,
+  usageUpdatedEventSchema,
+  errorEventSchema,
+]);
+
+export const runtimeEventSchemaPreInReplyTo = z.discriminatedUnion("type", [
+  ...runtimeEventSchemaV12PreInReplyTo.def.options,
+  workflowStartedEventSchema,
+  workflowProgressEventSchema,
+  workflowCompletedEventSchema,
+  providerNoticeUpsertEventSchema,
+]);

@@ -44,6 +44,7 @@ function renderRow(tabId: string): void {
         viewTabId={tabId}
         hostId="host-1"
         runningDir="/repo"
+        repositoryContext={null}
         file={changedFile("src/app.ts")}
         active={false}
         pathRanges={[]}

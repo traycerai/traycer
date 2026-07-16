@@ -124,11 +124,23 @@ const SERVICE_VERSION = "1.2.3";
 const SERVICE_PID = 111;
 
 interface FakeBridge {
-  readonly options: { readonly host: { readonly getServiceStatus: Mock } };
+  readonly options: {
+    readonly host: {
+      readonly getServiceStatus: Mock;
+      readonly reloadSnapshotFromDisk: Mock;
+    };
+  };
 }
 
 function fakeBridge(getServiceStatus: Mock): FakeBridge {
-  return { options: { host: { getServiceStatus } } };
+  return {
+    options: {
+      host: {
+        getServiceStatus,
+        reloadSnapshotFromDisk: vi.fn(async () => null),
+      },
+    },
+  };
 }
 
 function runningServiceStatus(): Mock {

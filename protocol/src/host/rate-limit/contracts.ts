@@ -5,13 +5,23 @@ import {
 } from "@traycer/protocol/framework/index";
 import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
 import {
+  providersConsumeRateLimitResetCreditRequestSchema,
+  providersConsumeRateLimitResetCreditResponseSchema,
   rateLimitUsageRequestSchemaV10,
   rateLimitUsageRequestSchemaV11,
   rateLimitUsageRequestSchemaV12,
   rateLimitUsageResponseSchema,
   rateLimitUsageResponseSchemaV12,
   rateLimitUsageResponseSchemaV20,
+  rateLimitUsageResponseSchemaV21,
 } from "@traycer/protocol/host/rate-limit/schemas";
+
+export const providersConsumeRateLimitResetCreditV10 = defineRpcContract({
+  method: "providers.consumeRateLimitResetCredit",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersConsumeRateLimitResetCreditRequestSchema,
+  responseSchema: providersConsumeRateLimitResetCreditResponseSchema,
+});
 
 export const hostGetRateLimitUsageV10 = defineRpcContract({
   method: "host.getRateLimitUsage",
@@ -104,16 +114,36 @@ export const hostGetRateLimitUsageUpgradeV12ToV20 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
-// Downgrade bridge 2.0 -> 1.2: request is identity (unchanged shape).
+export const hostGetRateLimitUsageV21 = defineRpcContract({
+  method: "host.getRateLimitUsage",
+  schemaVersion: { major: 2, minor: 1 } as const,
+  requestSchema: rateLimitUsageRequestSchemaV12,
+  responseSchema: rateLimitUsageResponseSchemaV21,
+});
+
+export const hostGetRateLimitUsageUpgradeV20ToV21 = defineUpgradePath<
+  typeof hostGetRateLimitUsageV20,
+  typeof hostGetRateLimitUsageV21
+>({
+  from: hostGetRateLimitUsageV20.schemaVersion,
+  to: hostGetRateLimitUsageV21.schemaVersion,
+  upgradeRequest: (request) => request,
+  // Parsing fills `resetCredits.credits` with null for a v2.0 count-only
+  // response, producing the canonical additive v2.1 shape.
+  upgradeResponse: (response) =>
+    rateLimitUsageResponseSchemaV21.parse(response),
+});
+
+// Downgrade bridge 2.1 -> 1.2: request is identity (unchanged shape).
 // `usage_fetch_failed` (v2-only) maps down to `rate_limits_not_available` so
 // a v1.2 client's frozen enum keeps parsing; every other reason and every
 // `available: true` arm is already a valid v1.2 shape and passes through the
-// re-parse unchanged.
+// re-parse unchanged. The v1.2 parse also strips v2.1 reset-credit detail.
 export const hostGetRateLimitUsageDowngradeV2ToV1 = defineDowngradePath<
-  typeof hostGetRateLimitUsageV20,
+  typeof hostGetRateLimitUsageV21,
   typeof hostGetRateLimitUsageV12
 >({
-  from: hostGetRateLimitUsageV20.schemaVersion,
+  from: hostGetRateLimitUsageV21.schemaVersion,
   to: hostGetRateLimitUsageV12.schemaVersion,
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({

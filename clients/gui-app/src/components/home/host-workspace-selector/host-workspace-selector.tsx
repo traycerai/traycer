@@ -44,12 +44,10 @@ import { useEpicCreateChat } from "@/hooks/epic/use-epic-chat-mutations";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useResolvedWorkspaceFolders } from "@/hooks/workspace/use-resolved-workspace-folders-query";
 import type { ResolvedFolder } from "@/lib/workspace/resolved-folder";
-import {
-  preparedWorkspaceFolderToWorkspaceFolderInfo,
-  useWorkspaceFolderActionsForClient,
-} from "@/hooks/workspace/use-workspace-folder-actions";
+import { useWorkspaceFolderActionsForClient } from "@/hooks/workspace/use-workspace-folder-actions";
 import type { LandingDraftWorkspaceSnapshot } from "@/stores/home/landing-draft-store";
 import { resolvePrimaryPath } from "@/lib/worktree/resolve-primary-path";
+import { usePickAndAddWorkspaceFolders } from "./use-pick-and-add-folders";
 import {
   readStagedWorktreeIntent,
   useWorktreeIntentStagingStore,
@@ -102,9 +100,13 @@ import {
   locationSelectionChanges,
   workspaceRunBranchLabel,
 } from "./workspace-run-item";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import { applyWorktreeCreateResult } from "@/lib/worktree/apply-worktree-create-result";
 import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
 import { useChatById } from "@/lib/epic-selectors";
 import { toast } from "sonner";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import { trackUserInitiatedWorktreeWrite } from "@/lib/worktree/user-worktree-analytics";
 
 /**
  *
@@ -438,7 +440,6 @@ function HomeWorkspaceRows(props: {
     seedIntent,
     seedIntentOverride,
   } = props;
-  const folderActions = useWorkspaceFolderActionsForClient(activeHostClient);
   const setFolderIntent = useWorktreeIntentMemoryStore(
     (state) => state.setFolderIntent,
   );
@@ -465,15 +466,10 @@ function HomeWorkspaceRows(props: {
     usePrimaryChangeAnnouncement();
   const addFolderPending =
     useIsMutating({ mutationKey: workspaceMutationKeys.prepareFolders() }) > 0;
-  const pickAndAddFolders = useCallback(async (): Promise<boolean> => {
-    const result = await folderActions.pickAndPrepareFolders();
-    if (result === null) return false;
-    const folders = result.folders.map(
-      preparedWorkspaceFolderToWorkspaceFolderInfo,
-    );
-    workspaceSource.addResolvedFolders(folders);
-    return folders.length > 0;
-  }, [folderActions, workspaceSource]);
+  const pickAndAddFolders = usePickAndAddWorkspaceFolders(
+    activeHostClient,
+    workspaceSource,
+  );
   const queryableFolderPaths = useMemo<ReadonlyArray<string>>(
     () => [...new Set(resolvedFolders.map((entry) => entry.path))],
     [resolvedFolders],
@@ -712,6 +708,9 @@ function HomeWorkspaceRows(props: {
   const handleEditEnvironment = useCallback((path: string): void => {
     // Keep the picker open: the scripts modal stacks on top of it, so closing
     // the modal returns to the still-open picker.
+    Analytics.getInstance().track(AnalyticsEvent.SetupScriptsOpened, {
+      source: "direct_ui",
+    });
     setScriptsTargetPath(path);
   }, []);
   const scriptsTarget = useMemo<WorktreeScriptsTarget | null>(() => {
@@ -809,7 +808,6 @@ function HomeWorkspaceSummaryControl(props: {
           updatePending={false}
           onDiscardStaged={null}
           onEditEnvironment={props.onEditEnvironment}
-          hoverPreviewEnabled={false}
           popoverTestId="home-workspace-rows-popover"
           popoverSide="top"
         />
@@ -1500,7 +1498,39 @@ function InEpicSurface(props: InEpicSurfaceProps) {
         ownerKind,
         entries: [...stagedEntries],
       },
-      { onSuccess: finishAndResume },
+      {
+        onSuccess: (result) => {
+          // The RPC resolves per-entry: on a mixed outcome the failed
+          // folders keep their staged intent (popover stays open) so Update
+          // can re-apply just the failed subset, while the succeeded folders
+          // commit + unstage normally. The commit signal for the successes
+          // still fires - the host already applied them to the binding, and
+          // a live terminal surface must re-sync its PTY to that partially
+          // updated binding rather than keep running against stale folders.
+          applyWorktreeCreateResult({
+            stagedEntries,
+            changedWorkspacePaths,
+            perEntry: result.perEntry,
+            actions: {
+              finishAndResume,
+              unstageEntry: (workspacePath) =>
+                unstageWorktreeEntry(stagedKey, workspacePath),
+              commitPaths: handleBindingCommitted,
+              showPartialFailure: (message) =>
+                reportableErrorToast(message, undefined, {
+                  title: "Workspace update incomplete",
+                  message: null,
+                  code: null,
+                  source: "Worktree update",
+                }),
+            },
+          });
+          // Telemetry runs strictly after the product work; it is an
+          // observer and never part of the mutation chain (and it already
+          // gates each event on per-entry success).
+          trackUserInitiatedWorktreeWrite(stagedEntries, result);
+        },
+      },
     );
   }, [
     editor.dirtyPathsSinceResume,
@@ -1510,6 +1540,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     ownerKind,
     stagedKey,
     clearStagedWorktreeIntent,
+    unstageWorktreeEntry,
     handleBindingCommitted,
   ]);
   // Terminal-agent add/remove commit to the binding but deliberately do NOT
@@ -1675,6 +1706,11 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   const emitForFolder = useCallback(
     (ws: WorktreeWorkspaceSummary) =>
       (intent: WorktreeFolderIntent): void => {
+        if (intent.kind !== "local") {
+          Analytics.getInstance().track(AnalyticsEvent.WorktreeSelected, {
+            source: "direct_ui",
+          });
+        }
         // Persist the per-folder choice immediately (not at send) so it survives
         // a reload and seeds future adds of this folder.
         setFolderIntent(intent, Date.now());
@@ -1726,7 +1762,12 @@ function InEpicSurface(props: InEpicSurfaceProps) {
                 },
               ],
             },
-            { onSuccess: () => handleBindingCommitted([ws.workspacePath]) },
+            {
+              onSuccess: (result) => {
+                handleBindingCommitted([ws.workspacePath]);
+                trackUserInitiatedWorktreeWrite([intent], result);
+              },
+            },
           );
           return;
         }
@@ -1893,6 +1934,9 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   );
   const handleEditEnvironment = useCallback((path: string): void => {
     // Keep the picker open: the scripts modal stacks on top of it.
+    Analytics.getInstance().track(AnalyticsEvent.SetupScriptsOpened, {
+      source: "direct_ui",
+    });
     setScriptsTargetPath(path);
   }, []);
   const scriptsTarget = useMemo<WorktreeScriptsTarget | null>(() => {
@@ -1969,7 +2013,6 @@ function InEpicSurface(props: InEpicSurfaceProps) {
                 : null
             }
             onEditEnvironment={handleEditEnvironment}
-            hoverPreviewEnabled
             popoverTestId="workspace-rows-popover"
             // The terminal-agent toolbar is anchored at the TOP of its tile, so the
             // editor must open DOWNWARD into the terminal body (plenty of room).

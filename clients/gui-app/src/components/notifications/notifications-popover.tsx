@@ -9,6 +9,7 @@ import {
   MessageCircle,
   MessageSquarePlus,
   MessageSquareX,
+  Settings,
   Shield,
   Trash2,
   UserMinus,
@@ -30,10 +31,12 @@ import {
   useMergedNotificationUnreadCount,
   useMergedNotificationsActions,
 } from "@/stores/notifications/merged-notifications";
+import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import {
   type NotificationEvent,
   NOTIFICATION_EVENT_TYPES,
 } from "@traycer/protocol/notifications/notification-entry";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 interface NotificationsPopoverProps {
   readonly onNavigate: () => void;
@@ -57,11 +60,19 @@ export function NotificationsPopover(props: NotificationsPopoverProps) {
   const ids = useMergedNotificationIds();
   const actions = useMergedNotificationsActions();
   const { activate } = useNotificationActivation();
+  const { openSettings } = useSystemTabModalActions();
   const [activeTab, setActiveTab] = useState<NotificationsTab>("unread");
 
   const handleClick = useCallback(
     (row: MergedNotificationRow) => {
       if (row.payload === null) {
+        // Payload-less rows have no preflight: the click IS the activation.
+        Analytics.getInstance().track(AnalyticsEvent.NotificationActivated, {
+          category: row.source,
+        });
+        Analytics.getInstance().track(AnalyticsEvent.NotificationMarkedRead, {
+          category: row.source,
+        });
         actions.markAsRead(row.feedId);
         return;
       }
@@ -69,7 +80,16 @@ export function NotificationsPopover(props: NotificationsPopoverProps) {
       activate({
         payload: row.payload,
         receivedAt: Date.now(),
+        // Fires only after activation preflight succeeds, so a failed
+        // preflight is not counted as an activation - and the auto-read that
+        // accompanies it is recorded too.
         onActivated: () => {
+          Analytics.getInstance().track(AnalyticsEvent.NotificationActivated, {
+            category: row.source,
+          });
+          Analytics.getInstance().track(AnalyticsEvent.NotificationMarkedRead, {
+            category: row.source,
+          });
           actions.markAsRead(row.feedId);
         },
       });
@@ -82,6 +102,11 @@ export function NotificationsPopover(props: NotificationsPopoverProps) {
       setActiveTab(value);
     }
   }, []);
+
+  const handleOpenSettings = useCallback(() => {
+    onNavigate();
+    openSettings({ section: "notifications", resetToGeneral: false });
+  }, [onNavigate, openSettings]);
 
   const isEmpty = ids.length === 0;
   const unreadCount = useMergedNotificationUnreadCount();
@@ -140,7 +165,13 @@ export function NotificationsPopover(props: NotificationsPopoverProps) {
                   type="button"
                   variant="ghost"
                   size="icon-sm"
-                  onClick={() => actions.markAllAsRead()}
+                  onClick={() => {
+                    Analytics.getInstance().track(
+                      AnalyticsEvent.NotificationsMarkedAllRead,
+                      null,
+                    );
+                    actions.markAllAsRead();
+                  }}
                   disabled={unreadCount === 0}
                   data-testid="notifications-mark-all-read"
                   aria-label="Mark all notifications as read"
@@ -159,13 +190,37 @@ export function NotificationsPopover(props: NotificationsPopoverProps) {
                   type="button"
                   variant="ghost"
                   size="icon-sm"
-                  onClick={() => actions.clearAll()}
+                  onClick={() => {
+                    Analytics.getInstance().track(
+                      AnalyticsEvent.NotificationsCleared,
+                      { scope: "all" },
+                    );
+                    actions.clearAll();
+                  }}
                   disabled={isEmpty}
                   data-testid="notifications-clear-all"
                   aria-label="Clear all notifications"
                   className="text-muted-foreground hover:text-destructive"
                 >
                   <Trash2 className="size-3.5" aria-hidden />
+                </Button>
+              </TooltipWrapper>
+              <TooltipWrapper
+                label="Notification settings"
+                side="bottom"
+                sideOffset={6}
+                align="end"
+              >
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={handleOpenSettings}
+                  data-testid="notifications-open-settings"
+                  aria-label="Open notification settings"
+                  className="text-muted-foreground hover:text-foreground"
+                >
+                  <Settings className="size-3.5" aria-hidden />
                 </Button>
               </TooltipWrapper>
             </div>
@@ -238,7 +293,7 @@ interface NotificationListProps {
 
 function NotificationList(props: NotificationListProps) {
   return (
-    <ul className="flex flex-col py-1">
+    <ul className="flex flex-col gap-2 p-2">
       {props.ids.map((id) => (
         <NotificationRow
           key={id}
@@ -296,7 +351,10 @@ function NotificationRow(props: NotificationRowProps) {
 
   return (
     <li
-      className="group/row relative"
+      className={cn(
+        "group/row relative overflow-hidden rounded-2xl border border-border/60 bg-muted/35 shadow-sm",
+        !isRead && "bg-accent/55",
+      )}
       data-testid="notification-entry"
       data-notification-id={row.feedId}
       data-notification-source={row.source}
@@ -308,38 +366,56 @@ function NotificationRow(props: NotificationRowProps) {
         <span
           aria-hidden
           data-testid="notification-unread-marker"
-          className="pointer-events-none absolute inset-y-0 left-0 z-10 w-1 rounded-r-full bg-blue-500 dark:bg-blue-400"
+          className="pointer-events-none absolute inset-y-2 left-0 z-10 w-1 rounded-r-full bg-blue-500 dark:bg-blue-400"
         />
       )}
       <button
         type="button"
         onClick={() => onActivate(row)}
+        aria-label={`${row.title}. ${row.body}`}
         className={cn(
-          "flex w-full items-start gap-3 px-4 py-2.5 text-left transition-colors",
-          "hover:bg-accent focus-visible:bg-accent focus-visible:outline-none",
-          !isRead && "bg-accent/30",
+          "flex w-full items-start gap-3 rounded-2xl px-3 py-3 text-left transition-colors",
+          "hover:bg-accent/70 focus-visible:bg-accent/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
         )}
       >
-        <span aria-hidden className="mt-1.5 h-4 w-0.5 shrink-0" />
         <span
           aria-hidden
           className={cn(
-            "relative mt-0.5 grid size-7 shrink-0 place-items-center rounded-full",
+            "relative grid size-10 shrink-0 place-items-center rounded-xl",
             meta.tone,
           )}
         >
-          <Icon className="size-3.5" />
+          <Icon className="size-5" />
         </span>
-        <div className="flex min-w-0 flex-1 flex-col gap-0.5 pr-7">
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <div className="flex min-w-0 items-baseline gap-2">
+            <TooltipWrapper
+              label={row.title}
+              side="bottom"
+              sideOffset={6}
+              align="start"
+            >
+              <span
+                data-testid="notification-title"
+                className={cn(
+                  "min-w-0 flex-1 truncate text-ui-sm font-semibold leading-snug",
+                  isRead ? "text-muted-foreground" : "text-foreground",
+                )}
+              >
+                {row.title}
+              </span>
+            </TooltipWrapper>
+            <NotificationTimestamp createdAt={row.createdAt} />
+          </div>
           <span
+            data-testid="notification-body"
             className={cn(
-              "line-clamp-2 text-ui-sm leading-snug",
-              isRead ? "text-muted-foreground" : "text-foreground",
+              "truncate text-ui-sm leading-snug",
+              isRead ? "text-muted-foreground/80" : "text-foreground/80",
             )}
           >
-            {row.text}
+            {row.body}
           </span>
-          <NotificationTimestamp createdAt={row.createdAt} />
         </div>
       </button>
       {!isRead && (
@@ -353,13 +429,17 @@ function NotificationRow(props: NotificationRowProps) {
             type="button"
             onClick={(event) => {
               event.stopPropagation();
+              Analytics.getInstance().track(
+                AnalyticsEvent.NotificationMarkedRead,
+                { category: row.source },
+              );
               onMarkRead(row.feedId);
             }}
             aria-label="Mark as read"
             data-testid="notification-mark-read"
             className={cn(
-              "absolute right-2 top-2 inline-flex size-6 items-center justify-center rounded-md",
-              "text-muted-foreground opacity-0 transition-opacity",
+              "absolute right-2.5 top-2.5 inline-flex size-6 items-center justify-center rounded-md",
+              "bg-background/90 text-muted-foreground opacity-0 shadow-sm transition-opacity",
               "hover:bg-background hover:text-foreground",
               "focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
               "group-hover/row:opacity-100",

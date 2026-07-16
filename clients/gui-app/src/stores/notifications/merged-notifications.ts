@@ -6,7 +6,6 @@ import { notificationsMutationKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import {
   buildPayloadFromEvent,
-  parseNotificationPayload,
   type NotificationPayload,
 } from "@/lib/notifications";
 import {
@@ -30,10 +29,19 @@ import {
   useNotificationUnreadCount,
   useNotificationsStore,
 } from "@/stores/notifications/notifications-store";
-import type {
-  HostNotificationOutcome,
-  HostNotificationSeverity,
+import {
+  deriveHostNotificationStoppedReason,
+  parseKnownHostNotificationPayloadForKind,
+  type HostNotificationKnownPayload,
+  type HostNotificationOutcome,
+  type HostNotificationSeverity,
 } from "@traycer/protocol/host/notifications/contracts";
+import {
+  PROVIDER_DISPLAY_NAMES,
+  providerIdSchema,
+  type ProviderId,
+} from "@traycer/protocol/host/provider-schemas";
+import { providerSignedOutMessage } from "@traycer/protocol/host/provider-display";
 import type { NotificationEntry } from "@traycer/protocol/notifications/notification-entry";
 import { formatNotification } from "@traycer/protocol/notifications/notification-formatter";
 
@@ -45,7 +53,8 @@ export interface MergedNotificationRow {
   readonly sourceId: string;
   readonly createdAt: number;
   readonly readAt: number | null;
-  readonly text: string;
+  readonly title: string;
+  readonly body: string;
   readonly payload: NotificationPayload | null;
   readonly hostKind: HostNotificationFeedEntry["kind"] | null;
   readonly appLocalKind: AppLocalNotificationEntry["kind"] | null;
@@ -299,6 +308,33 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
     },
   });
 
+  const clearHostAll = useHostMutation<
+    HostRpcRegistry,
+    "host.notifications.clearAll",
+    HostNotificationMutationContext,
+    { readonly beforeUpdatedAt: number }
+  >({
+    client,
+    method: "host.notifications.clearAll",
+    mapVariables: (variables) => ({
+      beforeUpdatedAt: variables.beforeUpdatedAt,
+    }),
+    options: {
+      mutationKey: notificationsMutationKeys.clearAll(),
+      onMutate: () => captureHostNotificationMutationContext(client),
+      onSuccess: (_data, variables, context) => {
+        if (!isCurrentHostNotificationMutation(client, context)) return;
+        useHostNotificationsStore
+          .getState()
+          .clearBeforeLocally(variables.beforeUpdatedAt, context.snapshotEpoch);
+      },
+      onError: (error, _variables, context) => {
+        if (!isCurrentHostNotificationMutation(client, context)) return;
+        toastFromHostError(error, "Couldn't clear notifications.");
+      },
+    },
+  });
+
   return useMemo(
     () => ({
       markAsRead: (feedId) => {
@@ -328,6 +364,15 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       clearAll: () => {
         globalClearAll();
         appLocalClearAll();
+        const hostState = useHostNotificationsStore.getState();
+        const newestHostId = hostState.orderedIds.at(0);
+        const newestHostEntry =
+          newestHostId === undefined ? undefined : hostState.byId[newestHostId];
+        if (client !== null) {
+          clearHostAll.mutate({
+            beforeUpdatedAt: newestHostEntry?.updatedAt ?? Date.now(),
+          });
+        }
       },
       loadMoreHost: () => {
         if (hostNextCursor === null || client === null) return;
@@ -346,6 +391,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       markHostRead,
       markHostAllRead,
       loadMoreHost,
+      clearHostAll,
       hostNextCursor,
       client,
     ],
@@ -355,13 +401,15 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
 export function rowFromHostEntry(
   entry: HostNotificationFeedEntry,
 ): MergedNotificationRow {
+  const presentation = hostNotificationPresentation(entry);
   return {
     feedId: hostFeedId(entry.id),
     source: "host",
     sourceId: entry.id,
     createdAt: entry.updatedAt,
     readAt: entry.readAt,
-    text: formatHostNotification(entry),
+    title: presentation.title,
+    body: presentation.body,
     payload: payloadFromHostEntry(entry),
     hostKind: entry.kind,
     appLocalKind: null,
@@ -380,10 +428,8 @@ export function rowFromAppLocalEntry(
     sourceId: entry.id,
     createdAt: entry.updatedAt,
     readAt: entry.readAt,
-    text:
-      entry.detail === null
-        ? entry.message
-        : `${entry.message} ${entry.detail}`,
+    title: entry.message,
+    body: entry.detail ?? "Traycer notification",
     payload: entry.payload,
     hostKind: null,
     appLocalKind: entry.kind,
@@ -402,7 +448,8 @@ export function rowFromGlobalEntry(
     sourceId: entry.id,
     createdAt: entry.createdAt,
     readAt: entry.readAt,
-    text: formatNotification(entry.event, undefined),
+    title: formatNotification(entry.event, undefined),
+    body: "Collaboration",
     payload: buildPayloadFromEvent(entry.event),
     hostKind: null,
     appLocalKind: null,
@@ -449,68 +496,250 @@ function isCurrentHostNotificationMutation(
 function payloadFromHostEntry(
   entry: HostNotificationFeedEntry,
 ): NotificationPayload | null {
-  const parsed = parseNotificationPayload(entry.payload);
-  if (parsed !== null) return parsed;
-  const epicId = readPayloadString(entry.payload, "epicId");
-  const chatId = readPayloadString(entry.payload, "chatId");
-  if (epicId === null || chatId === null) return null;
-  if (entry.kind === "approval.requested") {
-    return {
-      kind: "approval",
-      epicId,
-      chatId,
-      approvalId: readPayloadString(entry.payload, "approvalId") ?? undefined,
-      sessionId: undefined,
-      artifactId: undefined,
-    };
-  }
-  if (entry.kind === "interview.requested") {
-    return {
-      kind: "interview",
-      epicId,
-      chatId,
-      interviewBlockId:
-        readPayloadString(entry.payload, "interviewBlockId") ?? undefined,
-    };
-  }
-  return { kind: "chat", epicId, chatId };
+  // Second-stage semantic parse: the known payload schemas are the ONLY
+  // contract - a payload this build understands, under its matching row
+  // kind, maps to a typed navigation target compile-linked to the producer
+  // schemas; anything else (a payload from a newer host, a malformed row, or
+  // a cross-kind contradiction) renders generically with no deep-link.
+  // Degrade, never error.
+  const known = parseKnownHostNotificationPayloadForKind(
+    entry.kind,
+    entry.payload,
+  );
+  return known === null ? null : navigationPayloadFromKnown(known);
 }
 
-function formatHostNotification(entry: HostNotificationFeedEntry): string {
-  const agentName = readPayloadString(entry.payload, "agentName");
-  const chatTitle = readPayloadString(entry.payload, "chatTitle");
+function navigationPayloadFromKnown(
+  known: HostNotificationKnownPayload,
+): NotificationPayload | null {
+  switch (known.kind) {
+    case "chat":
+      return {
+        kind: "chat",
+        epicId: known.epicId,
+        chatId: known.chatId ?? undefined,
+      };
+    case "agent_stalled":
+      return { kind: "chat", epicId: known.epicId, chatId: known.chatId };
+    case "epic":
+      return { kind: "epic", epicId: known.epicId };
+    case "approval":
+      return {
+        kind: "approval",
+        epicId: known.epicId,
+        chatId: known.chatId,
+        approvalId: known.approvalId,
+        sessionId: undefined,
+        artifactId: undefined,
+      };
+    case "interview":
+      return {
+        kind: "interview",
+        epicId: known.epicId,
+        chatId: known.chatId,
+        interviewBlockId: known.interviewBlockId,
+      };
+  }
+}
+
+interface NotificationPresentation {
+  readonly title: string;
+  readonly body: string;
+}
+
+function hostNotificationPresentation(
+  entry: HostNotificationFeedEntry,
+): NotificationPresentation {
+  // Known payloads present from typed, schema-linked fields; anything else
+  // (a payload from a newer host, a malformed row, or a payload contradicting
+  // its row kind) degrades to generic copy - never a crash, never a dropped
+  // row.
+  const known = parseKnownHostNotificationPayloadForKind(
+    entry.kind,
+    entry.payload,
+  );
+  const agentName =
+    known === null ? null : nonEmptyTitle(knownAgentName(known));
+  const chatTitle =
+    known === null ? null : nonEmptyTitle(knownChatTitle(known));
+  const taskTitle = known === null ? null : nonEmptyTitle(known.taskTitle);
+  const title = taskTitle ?? chatTitle ?? agentName ?? "Task";
+  const chatContext =
+    chatTitle !== null && chatTitle !== title ? chatTitle : "Chat";
+  const isTerminalAgent = known !== null && known.kind === "epic";
   switch (entry.kind) {
-    case "agent.stopped":
-      return formatAgentStoppedNotification(agentName, entry.outcome);
+    case "agent.stopped": {
+      const context = notificationContext(agentName, title, isTerminalAgent);
+      const reason = known === null ? null : knownStoppedReason(known);
+      const providerId = known === null ? null : knownProviderId(known);
+      return {
+        title,
+        body: `${context} • ${agentStoppedStatus(entry.outcome, reason, providerId)}`,
+      };
+    }
     case "agent.stalled":
-      return agentName === null ? "Agent stalled" : `${agentName} stalled`;
+      return {
+        title,
+        body: `${notificationContext(agentName, title, isTerminalAgent)} • ${agentStalledStatus(known)}`,
+      };
     case "approval.requested":
-      return chatTitle === null
-        ? "Approval requested"
-        : `Approval requested in ${chatTitle}`;
+      return { title, body: `${chatContext} • Approval requested` };
     case "interview.requested":
-      return chatTitle === null
-        ? "Question waiting"
-        : `Question waiting in ${chatTitle}`;
+      return { title, body: `${chatContext} • Question waiting` };
   }
 }
 
-function formatAgentStoppedNotification(
-  agentName: string | null,
-  outcome: HostNotificationOutcome,
-): string {
-  const name = agentName ?? "Agent";
-  if (outcome === "errored") return `${name} failed`;
-  if (outcome === "stopped") return `${name} stopped`;
-  return `${name} finished`;
+function knownAgentName(payload: HostNotificationKnownPayload): string | null {
+  switch (payload.kind) {
+    case "chat":
+    case "epic":
+    case "agent_stalled":
+      return payload.agentName;
+    case "approval":
+    case "interview":
+      return null;
+  }
 }
 
-function readPayloadString(
-  payload: HostNotificationFeedEntry["payload"],
-  key: string,
+function knownChatTitle(payload: HostNotificationKnownPayload): string | null {
+  switch (payload.kind) {
+    case "approval":
+    case "interview":
+      return payload.chatTitle;
+    case "chat":
+    case "epic":
+    case "agent_stalled":
+      return null;
+  }
+}
+
+function knownStoppedReason(
+  payload: HostNotificationKnownPayload,
 ): string | null {
-  const value = payload[key];
-  return typeof value === "string" && value.length > 0 ? value : null;
+  switch (payload.kind) {
+    case "chat":
+    case "epic":
+      return (
+        payload.reason ??
+        deriveHostNotificationStoppedReason(payload.code ?? null)
+      );
+    case "agent_stalled":
+    case "approval":
+    case "interview":
+      return null;
+  }
+}
+
+function knownProviderId(
+  payload: HostNotificationKnownPayload,
+): ProviderId | null {
+  switch (payload.kind) {
+    case "chat":
+    case "epic": {
+      const parsed = providerIdSchema.safeParse(payload.providerId);
+      return parsed.success ? parsed.data : null;
+    }
+    case "agent_stalled":
+    case "approval":
+    case "interview":
+      return null;
+  }
+}
+
+function agentStoppedStatus(
+  outcome: HostNotificationOutcome,
+  reason: string | null,
+  providerId: ProviderId | null,
+): string {
+  if (outcome === "errored") {
+    return agentStoppedFailureStatus(reason, providerId);
+  }
+  if (outcome === "stopped") return "Stopped";
+  return "Done";
+}
+
+function agentStoppedFailureStatus(
+  reason: string | null,
+  providerId: ProviderId | null,
+): string {
+  switch (reason) {
+    case "auth":
+      return providerId === null
+        ? "Provider is signed out. Reconnect to continue."
+        : providerSignedOutMessage(providerId);
+    case "rate_limit":
+      return providerSpecificFailureStatus(
+        providerId,
+        "Rate limit reached",
+        (providerName) => `${providerName} rate limit reached`,
+      );
+    case "billing":
+      return providerSpecificFailureStatus(
+        providerId,
+        "Provider billing issue",
+        (providerName) => `${providerName} billing issue`,
+      );
+    case "model_unavailable":
+      return "Model unavailable";
+    case "provider_unavailable":
+      return providerSpecificFailureStatus(
+        providerId,
+        "Provider is temporarily unavailable",
+        (providerName) => `${providerName} is temporarily unavailable`,
+      );
+    case "provider_connection_failed":
+      return providerSpecificFailureStatus(
+        providerId,
+        "Provider connection failed",
+        (providerName) => `Connection to ${providerName} failed`,
+      );
+    case "turn_start_timeout":
+      return "Provider did not start in time";
+    case "missing_terminal_event":
+      return "Provider stopped responding";
+    case "background_work_failed":
+      return "Background work stopped";
+    case null:
+    default:
+      return "Failed";
+  }
+}
+
+function providerSpecificFailureStatus(
+  providerId: ProviderId | null,
+  genericStatus: string,
+  providerStatus: (providerName: string) => string,
+): string {
+  return providerId === null
+    ? genericStatus
+    : providerStatus(PROVIDER_DISPLAY_NAMES[providerId]);
+}
+
+function agentStalledStatus(
+  payload: HostNotificationKnownPayload | null,
+): string {
+  if (payload?.kind !== "agent_stalled") return "Stalled";
+  switch (payload.reason) {
+    case "provider_buffering":
+      return "Provider is taking longer than expected";
+    case "provider_reroute":
+      return "Provider is rerouting";
+    default:
+      return "Stalled";
+  }
+}
+
+function notificationContext(
+  agentName: string | null,
+  title: string,
+  isTerminalAgent: boolean,
+): string {
+  if (agentName !== null && agentName !== title) return agentName;
+  return isTerminalAgent ? "Terminal agent" : "Chat";
+}
+
+function nonEmptyTitle(value: string | null): string | null {
+  return value !== null && value.length > 0 ? value : null;
 }
 
 const HOST_PAGE_LIMIT = 50;

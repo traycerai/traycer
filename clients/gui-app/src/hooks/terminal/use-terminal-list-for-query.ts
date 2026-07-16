@@ -6,6 +6,7 @@ import type {
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useHostQuery } from "@/hooks/host/use-host-query";
+import type { TerminalScope } from "@traycer/protocol/host/terminal/unary-schemas";
 
 /**
  * `terminal.list` against an EXPLICIT host client rather than the app-wide
@@ -19,7 +20,7 @@ import { useHostQuery } from "@/hooks/host/use-host-query";
  */
 export function useTerminalListFor(
   client: HostClient<HostRpcRegistry> | null,
-  epicId: string,
+  scope: TerminalScope,
 ): UseQueryResult<
   ResponseOfMethod<HostRpcRegistry, "terminal.list">,
   HostRpcError
@@ -28,7 +29,10 @@ export function useTerminalListFor(
     cacheKeyIdentity: undefined,
     client,
     method: "terminal.list",
-    params: { epicId },
+    // `useHostQuery` includes request params in its query key. The
+    // discriminated scope therefore makes independent and epic lists stable,
+    // distinct cache entries without a parallel GUI-only key shape.
+    params: { scope },
     options: null,
   });
 }

@@ -1524,7 +1524,7 @@ function AgentGuidePane(props: {
       placeholder={agentGuide.loading ? "Loading…" : undefined}
       ariaLabel="Onboarding agent selection instructions"
       testId="onboarding-agent-guide-input"
-      textareaClassName="flex-1 resize-none"
+      editorClassName="flex-1"
       className="size-full overflow-hidden rounded-lg border border-border bg-card p-4 shadow-2xl"
       revertDisabled={agentGuide.loading || agentGuide.saving || isAtDefault}
       onRevert={agentGuide.onRevertToDefault}

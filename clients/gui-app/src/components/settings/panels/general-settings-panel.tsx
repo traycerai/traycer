@@ -39,6 +39,7 @@ import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useLocalSnapshotClearStore } from "@/stores/settings/local-snapshot-clear-store";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
+import { trackSettingChanged, type AnalyticsSetting } from "@/lib/analytics";
 
 const MIGRATION_PROGRESS_LABEL = "Migrating tasks";
 const SNAPSHOTS_LOCAL_STORAGE_PARAMS = {};
@@ -55,6 +56,10 @@ function formatMigrationProgress(state: MigrationRunState): string | null {
   const tasks = `${taskChainsSeen(state.counts)}/${totalTaskChains}`;
   const epics = `${epicsSeen(state.counts)}/${totalLocalEpics}`;
   return `${MIGRATION_PROGRESS_LABEL} - tasks ${tasks}, epics ${epics}`;
+}
+
+function trackGeneralSetting(setting: AnalyticsSetting): void {
+  trackSettingChanged("general", setting);
 }
 
 export function GeneralSettingsPanel() {
@@ -107,7 +112,10 @@ export function GeneralSettingsPanel() {
         control={
           <Switch
             checked={preventSleepWhileRunning}
-            onCheckedChange={setPreventSleepWhileRunning}
+            onCheckedChange={(value) => {
+              trackGeneralSetting("preventSleepWhileRunning");
+              setPreventSleepWhileRunning(value);
+            }}
             aria-label="Prevent sleep while running"
           />
         }
@@ -118,7 +126,10 @@ export function GeneralSettingsPanel() {
         control={
           <Switch
             checked={showGlobalResourceMonitor}
-            onCheckedChange={setShowGlobalResourceMonitor}
+            onCheckedChange={(value) => {
+              trackGeneralSetting("showGlobalResourceMonitor");
+              setShowGlobalResourceMonitor(value);
+            }}
             aria-label="Show global resources button"
           />
         }
@@ -129,7 +140,10 @@ export function GeneralSettingsPanel() {
         control={
           <Switch
             checked={showNavigatorResourceStats}
-            onCheckedChange={setShowNavigatorResourceStats}
+            onCheckedChange={(value) => {
+              trackGeneralSetting("showNavigatorResourceStats");
+              setShowNavigatorResourceStats(value);
+            }}
             aria-label="Show navigator resource stats"
           />
         }
@@ -140,7 +154,10 @@ export function GeneralSettingsPanel() {
         control={
           <Switch
             checked={pinContextUsageBreakdown}
-            onCheckedChange={setPinContextUsageBreakdown}
+            onCheckedChange={(value) => {
+              trackGeneralSetting("pinContextUsageBreakdown");
+              setPinContextUsageBreakdown(value);
+            }}
             aria-label="Pin context usage breakdown"
           />
         }
@@ -151,7 +168,10 @@ export function GeneralSettingsPanel() {
         control={
           <Switch
             checked={quoteReplyEnabled}
-            onCheckedChange={setQuoteReplyEnabled}
+            onCheckedChange={(value) => {
+              trackGeneralSetting("quoteReplyEnabled");
+              setQuoteReplyEnabled(value);
+            }}
             aria-label="Quote reply on text selection"
           />
         }

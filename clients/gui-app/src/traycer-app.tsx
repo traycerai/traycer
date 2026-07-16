@@ -27,6 +27,8 @@ import { WorktreeIntentMemoryPersistLifecycleBridge } from "@/providers/worktree
 import { WorktreeIntentStagingPersistLifecycleBridge } from "@/providers/worktree-intent-staging-persist-lifecycle-bridge";
 import { EpicCanvasPersistLifecycleBridge } from "@/providers/epic-canvas-persist-lifecycle-bridge";
 import { AppLocalNotificationsPersistLifecycleBridge } from "@/providers/app-local-notifications-persist-lifecycle-bridge";
+import { LandingTerminalPersistLifecycleBridge } from "@/providers/landing-terminal-persist-lifecycle-bridge";
+import { LandingTerminalTombstoneRecoveryBridge } from "@/providers/landing-terminal-tombstone-recovery-bridge";
 import { EpicTabExistenceReconciler } from "@/providers/epic-tab-existence-reconciler";
 import { CliCredentialSeeder } from "@/providers/cli-credential-seeder";
 import { HarnessCatalogPrefetcher } from "@/providers/harness-catalog-prefetcher";
@@ -177,14 +179,17 @@ function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
               <WorktreeIntentMemoryPersistLifecycleBridge>
                 <WorktreeIntentStagingPersistLifecycleBridge>
                   <EpicCanvasPersistLifecycleBridge>
-                    <EpicTabExistenceReconciler />
-                    <HostStreamProvider>
-                      <AppLocalNotificationsPersistLifecycleBridge>
-                        <NotificationsSessionProvider>
-                          <TraycerAppRuntimeSurface router={props.router} />
-                        </NotificationsSessionProvider>
-                      </AppLocalNotificationsPersistLifecycleBridge>
-                    </HostStreamProvider>
+                    <LandingTerminalPersistLifecycleBridge>
+                      <LandingTerminalTombstoneRecoveryBridge />
+                      <EpicTabExistenceReconciler />
+                      <HostStreamProvider>
+                        <AppLocalNotificationsPersistLifecycleBridge>
+                          <NotificationsSessionProvider>
+                            <TraycerAppRuntimeSurface router={props.router} />
+                          </NotificationsSessionProvider>
+                        </AppLocalNotificationsPersistLifecycleBridge>
+                      </HostStreamProvider>
+                    </LandingTerminalPersistLifecycleBridge>
                   </EpicCanvasPersistLifecycleBridge>
                 </WorktreeIntentStagingPersistLifecycleBridge>
               </WorktreeIntentMemoryPersistLifecycleBridge>

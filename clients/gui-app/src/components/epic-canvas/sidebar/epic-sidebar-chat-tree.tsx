@@ -35,10 +35,9 @@ import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-di
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { ContextMenuContent } from "@/components/ui/context-menu";
 import {
   SidebarContent,
   SidebarGroup,
@@ -78,6 +77,8 @@ import {
   useEpicActiveAgentIds,
   useEpicArtifactRecords,
   useEpicConnectionStatus,
+  useEpicNodeHostId,
+  useEpicNodeOwnerKind,
   useEpicPermissionRole,
   useEpicTreeIndex,
   useEpicTreeNode,
@@ -135,6 +136,12 @@ import { SidebarReparentRowDropWrapper } from "@/components/epic-canvas/sidebar/
 import { NewConversationModalAction } from "@/components/epic-canvas/sidebar/new-conversation-modal";
 import { SidebarPanelEmptyState } from "@/components/epic-canvas/sidebar/sidebar-panel-empty-state";
 import { useHostNotificationIndicators } from "@/hooks/notifications/use-host-notification-indicators-query";
+import { WorktreeOwnerMetadataTooltip } from "@/components/worktree/worktree-owner-metadata";
+import {
+  SidebarContextMenuItems,
+  SidebarDropdownMenuItems,
+  type SidebarRowMenuEntry,
+} from "@/components/epic-canvas/sidebar/sidebar-row-menu-items";
 
 interface ChatTreePanelBodyProps {
   readonly epicId: string;
@@ -852,6 +859,12 @@ function ChatNodeShell(props: ChatNodeShellProps) {
   // The row `+` (child-create trigger) reserves right padding and is offered
   // whenever the epic is editable and we are not bulk-selecting.
   const showAddChild = canEdit && !selectionMode;
+  const rowMenuEntries = chatRowMenuEntries({
+    nodeId,
+    canMutate,
+    onStartRename,
+    onPerformDelete,
+  });
 
   return (
     <li
@@ -864,6 +877,13 @@ function ChatNodeShell(props: ChatNodeShellProps) {
         viewTabId={tabId}
         nodeId={nodeId}
         panelId="chats"
+        contextMenu={
+          canEdit && !isRenaming && !selectionMode ? (
+            <ContextMenuContent>
+              <SidebarContextMenuItems entries={rowMenuEntries} />
+            </ContextMenuContent>
+          ) : null
+        }
       >
         {isRenaming ? (
           <ChatRenameRow
@@ -933,9 +953,7 @@ function ChatNodeShell(props: ChatNodeShellProps) {
           <ChatMoreMenu
             nodeId={nodeId}
             nodeName={nodeName}
-            canMutate={canMutate}
-            onStartRename={onStartRename}
-            onPerformDelete={onPerformDelete}
+            entries={rowMenuEntries}
           />
         ) : null}
       </SidebarReparentRowDropWrapper>
@@ -1218,6 +1236,8 @@ function ChatRowButton(props: ChatRowButtonProps) {
   const showNavigatorResourceStats = useSettingsStore(
     (state) => state.showNavigatorResourceStats,
   );
+  const ownerHostId = useEpicNodeHostId(nodeId);
+  const ownerKind = useEpicNodeOwnerKind(nodeId);
 
   // A chat row's "+" (add child) and "⋯" (more menu) are both gated by canEdit
   // and hidden in selection mode, so both pad-right zones share one flag. The
@@ -1275,7 +1295,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
     );
   }
 
-  return (
+  const button = (
     <button
       ref={dragRef}
       {...attributes}
@@ -1316,6 +1336,16 @@ function ChatRowButton(props: ChatRowButtonProps) {
       </span>
     </button>
   );
+  if (ownerHostId === null || ownerKind === null) return button;
+  return (
+    <WorktreeOwnerMetadataTooltip
+      trigger={button}
+      hostId={ownerHostId}
+      epicId={epicId}
+      ownerId={nodeId}
+      ownerKind={ownerKind}
+    />
+  );
 }
 
 interface ChatSidebarNodeIconProps {
@@ -1336,6 +1366,7 @@ function ChatSidebarNodeIcon(props: ChatSidebarNodeIconProps) {
         className={undefined}
         mutedClassName="text-muted-foreground/70"
         testId="chat-sidebar-spinner"
+        defaultIcon={undefined}
       />
     );
   }
@@ -1426,16 +1457,53 @@ function StaticSidebarNodeIcon(props: {
   );
 }
 
-interface SidebarNodeActionsProps {
+interface ChatRowMenuEntriesProps {
   readonly nodeId: string;
-  readonly nodeName: string;
   readonly canMutate: boolean;
   readonly onStartRename: () => void;
   readonly onPerformDelete: () => void;
 }
 
-function ChatMoreMenu(props: SidebarNodeActionsProps) {
-  const { nodeId, nodeName, canMutate, onStartRename, onPerformDelete } = props;
+function chatRowMenuEntries(
+  props: ChatRowMenuEntriesProps,
+): ReadonlyArray<SidebarRowMenuEntry> {
+  return [
+    {
+      kind: "item",
+      id: "rename",
+      label: "Rename",
+      icon: <Pencil className="size-3.5" />,
+      disabled: !props.canMutate,
+      variant: "default",
+      testIds: {
+        dropdown: `epic-sidebar-rename-${props.nodeId}`,
+        context: `epic-sidebar-context-rename-${props.nodeId}`,
+      },
+      onSelect: props.onStartRename,
+    },
+    { kind: "separator", id: "before-delete" },
+    {
+      kind: "item",
+      id: "delete",
+      label: "Delete",
+      icon: <Trash2 className="size-3.5" />,
+      disabled: !props.canMutate,
+      variant: "destructive",
+      testIds: {
+        dropdown: `epic-sidebar-delete-${props.nodeId}`,
+        context: `epic-sidebar-context-delete-${props.nodeId}`,
+      },
+      onSelect: props.onPerformDelete,
+    },
+  ];
+}
+
+function ChatMoreMenu(props: {
+  readonly nodeId: string;
+  readonly nodeName: string;
+  readonly entries: ReadonlyArray<SidebarRowMenuEntry>;
+}) {
+  const { nodeId, nodeName, entries } = props;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -1454,28 +1522,7 @@ function ChatMoreMenu(props: SidebarNodeActionsProps) {
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
-        <DropdownMenuItem
-          data-testid={`epic-sidebar-rename-${nodeId}`}
-          disabled={!canMutate}
-          onSelect={() => {
-            onStartRename();
-          }}
-        >
-          <Pencil className="size-3.5" />
-          Rename
-        </DropdownMenuItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem
-          data-testid={`epic-sidebar-delete-${nodeId}`}
-          disabled={!canMutate}
-          onSelect={() => {
-            onPerformDelete();
-          }}
-          variant="destructive"
-        >
-          <Trash2 className="size-3.5" />
-          Delete
-        </DropdownMenuItem>
+        <SidebarDropdownMenuItems entries={entries} />
       </DropdownMenuContent>
     </DropdownMenu>
   );

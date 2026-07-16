@@ -581,6 +581,10 @@ export function accumulateEvent(
           messageId: event.messageId,
           content: event.content,
           mode: event.mode,
+          // Provenance, so the block can stand in for the steered user row if
+          // that row is ever missing (the two are not equally durable). `null`
+          // from a pre-field host keeps the old "render as a user row" fallback.
+          sender: event.sender,
         },
       ];
 

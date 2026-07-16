@@ -297,6 +297,7 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
 
       if (hasLeaderModifier(event)) spendHintSession(pathname);
       if (event.defaultPrevented) return;
+      if (isArtifactEditorLinkShortcut(event)) return;
 
       // Digit actions (e.g. ⌘1 or header tab sequences like ⌥1,0) must match
       // before full chords -
@@ -442,6 +443,16 @@ function resolveReservedAction(event: KeyboardEvent): ActionId | null {
   const actionId = findActionForChord(chord);
   if (actionId === null) return null;
   return isExternallyHandled(actionId) ? null : actionId;
+}
+
+function isArtifactEditorLinkShortcut(event: KeyboardEvent): boolean {
+  const target = event.target;
+  return (
+    event.key.toLowerCase() === "k" &&
+    (event.metaKey || event.ctrlKey) &&
+    target instanceof Element &&
+    target.closest("[data-artifact-editor]") !== null
+  );
 }
 
 function clearDigitSequenceTimer(timerRef: RefBox<number | null>): void {

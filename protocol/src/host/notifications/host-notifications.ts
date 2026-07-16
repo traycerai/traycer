@@ -79,6 +79,15 @@ const hostNotificationEntryBaseFields = {
   readAt: z.number().int().nonnegative().nullable(),
   sourceRef: z.string().nullable(),
   severity: hostNotificationSeveritySchema,
+  /**
+   * The entity this notification addresses, sourced from the row's durable
+   * columns - NOT from the payload. This is the single contract for
+   * presence matching, indicator invalidation, and focus consumption: a row
+   * whose payload fails the semantic parse still addresses its entity, and
+   * a payload cannot claim an entity its row does not have.
+   */
+  epicId: z.string().min(1).nullable(),
+  chatId: z.string().min(1).nullable(),
 } as const;
 
 export const hostNotificationEntrySchema = z.discriminatedUnion("kind", [
@@ -183,6 +192,18 @@ export type HostNotificationsMarkAllReadResponse = z.infer<
   typeof hostNotificationsMarkAllReadResponseSchema
 >;
 
+export const hostNotificationsClearAllRequestSchema = z.object({
+  beforeUpdatedAt: z.number().int().nonnegative(),
+});
+export type HostNotificationsClearAllRequest = z.infer<
+  typeof hostNotificationsClearAllRequestSchema
+>;
+
+export const hostNotificationsClearAllResponseSchema = z.object({});
+export type HostNotificationsClearAllResponse = z.infer<
+  typeof hostNotificationsClearAllResponseSchema
+>;
+
 export const hostNotificationsSubscribeOpenRequestSchema = z.object({
   filter: hostNotificationFilterSchema,
   initialLimit: z.number().int().min(1).max(500),
@@ -231,6 +252,11 @@ export const hostNotificationsSubscribeServerFrameSchema = z.discriminatedUnion(
       resolvedAt: z.number().int().nonnegative().nullable(),
     }),
     z.object({
+      kind: z.literal("cleared"),
+      ...textFrameFields,
+      beforeUpdatedAt: z.number().int().nonnegative(),
+    }),
+    z.object({
       kind: z.literal("channelEmission"),
       ...textFrameFields,
       emissionId: z.string(),
@@ -271,7 +297,8 @@ export type HostNotificationsSubscribeClientFrame = z.infer<
 >;
 
 export const hostNotificationsIndicatorStateSchema = z.object({
-  pendingPrompt: z.boolean(),
+  pendingApproval: z.boolean(),
+  pendingInterview: z.boolean(),
   unreadFailure: z.boolean(),
   unreadDone: z.boolean(),
 });
@@ -409,6 +436,13 @@ export const hostNotificationsMarkAllRead = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: hostNotificationsMarkAllReadRequestSchema,
   responseSchema: hostNotificationsMarkAllReadResponseSchema,
+});
+
+export const hostNotificationsClearAll = defineRpcContract({
+  method: "host.notifications.clearAll",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: hostNotificationsClearAllRequestSchema,
+  responseSchema: hostNotificationsClearAllResponseSchema,
 });
 
 export const hostNotificationsSubscribe = defineStreamRpcContract({

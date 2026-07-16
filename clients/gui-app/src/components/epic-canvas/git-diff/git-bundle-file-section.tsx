@@ -68,6 +68,7 @@ export function BundleFileSection(props: BundleFileSectionProps): ReactNode {
       hostId: props.node.hostId,
       runningDir: props.node.diff.runningDir,
       file: props.file,
+      repositoryContext: props.node.repositoryContext,
     });
     navigateNested(epicId, props.viewTabId, () =>
       prepareOpenTileInTabFocusTarget(props.viewTabId, tile),
@@ -79,6 +80,7 @@ export function BundleFileSection(props: BundleFileSectionProps): ReactNode {
     props.file,
     props.node.hostId,
     props.node.diff.runningDir,
+    props.node.repositoryContext,
     props.viewTabId,
   ]);
 

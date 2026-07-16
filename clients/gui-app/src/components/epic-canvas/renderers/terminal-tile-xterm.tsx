@@ -19,6 +19,10 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { CanvasAddon } from "@xterm/addon-canvas";
 import "@xterm/xterm/css/xterm.css";
 import { useRegisterTileFindAdapter } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
+import {
+  isPlainBoundaryKey,
+  isPlatformModifiedBoundaryKey,
+} from "@/lib/keybindings/chord";
 import { isMac } from "@/lib/keybindings/platform";
 import { translateLineEditChord } from "@/lib/terminal-line-edit";
 import {
@@ -31,6 +35,7 @@ import {
   buildFontFamilyValue,
 } from "@/lib/default-font-stacks";
 import { useRunnerHost } from "@/providers/use-runner-host";
+import { cn } from "@/lib/utils";
 import { useTerminalTheme } from "@/lib/terminal-theme";
 import { scheduleAtlasClear } from "@/lib/terminal-theme-scheduler";
 import type { TerminalDataWriter } from "@/stores/terminals/terminal-session-store";
@@ -136,13 +141,18 @@ export interface TerminalXtermHostProps {
    */
   readonly shouldFocusOnActivePane: boolean;
   /**
-   * Whether the underlying terminal session is still live (a running
-   * terminal-agent). The host keeps the persistent xterm engine cached across
-   * unmount when true, so splitting a pane / switching tabs / reopening does not
-   * dispose the `Terminal` and lose its scrollback. Plain terminals (and exited
-   * agents) pass false: their session handle is torn down on unmount too, so the
-   * next open rebuilds both and replays a fresh host snapshot. Mirrors the
-   * keep-lease-free rule in `TerminalSessionRegistry`.
+   * Whether the underlying terminal session is still live. The host keeps the
+   * persistent xterm engine cached across unmount when true, so splitting a
+   * pane / switching tabs / reopening does not dispose the `Terminal` and lose
+   * its scrollback. Mirrors the lease-free retention rules in
+   * `TerminalSessionRegistry`: a running terminal-agent's handle is kept warm
+   * indefinitely and a running plain terminal's lingers for the release-linger
+   * window, and in both cases the session store's writer keeps pointing at
+   * this engine - so the engine must outlive the unmount with it, or the
+   * reattach would render blank (the host snapshot was already consumed).
+   * Exited sessions pass false: their handle is torn down with the tile, and
+   * the registry follower disposes any cached engine once the handle leaves
+   * the session registry.
    */
   readonly keepAlive: boolean;
   /**
@@ -152,6 +162,14 @@ export interface TerminalXtermHostProps {
    * xterm's rendered DOM.
    */
   readonly findTargetId: string | null;
+  /**
+   * How the xterm viewport meets its container. `"padded"` insets the grid
+   * from the tile's edges - the canvas tiles sit on a card, so the gutter reads
+   * as tile chrome. `"flush"` gives the grid the full box; the landing panel
+   * IS the terminal's frame, so an inset there just leaks panel background
+   * around a rectangle of terminal background.
+   */
+  readonly chrome: "padded" | "flush";
 }
 
 export function TerminalXtermHost(props: TerminalXtermHostProps) {
@@ -474,7 +492,10 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
     <div className="absolute inset-0 bg-canvas">
       <div
         ref={mountRef}
-        className="h-full w-full p-2"
+        className={cn(
+          "h-full w-full",
+          props.chrome === "padded" ? "p-2" : "p-0",
+        )}
         onDragEnter={handleDragEnter}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
@@ -483,7 +504,10 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
       {isDraggingFiles ? (
         <div
           aria-hidden
-          className="pointer-events-none absolute inset-2 z-10 flex items-center justify-center border-2 border-dashed border-primary bg-canvas/85 text-ui-sm font-medium text-foreground"
+          className={cn(
+            "pointer-events-none absolute z-10 flex items-center justify-center border-2 border-dashed border-primary bg-canvas/85 text-ui-sm font-medium text-foreground",
+            props.chrome === "padded" ? "inset-2" : "inset-0",
+          )}
         >
           Drop files to paste paths
         </div>
@@ -777,6 +801,43 @@ function createXtermEntry(
   };
 }
 
+function handleTerminalScrollKey(
+  term: Terminal,
+  event: KeyboardEvent,
+): boolean | null {
+  // Scroll-to-top/bottom on Cmd+Home/End (macOS) / Ctrl+Home/End (elsewhere),
+  // with VS Code's !terminalAltBufferActive gating: jump the viewport on the
+  // normal buffer, pass through on the alternate one so the program sees the
+  // chord. On macOS plain Home/End scroll too - Terminal.app convention, where
+  // line editing at the prompt is Cmd+arrows / Ctrl-A/E instead. Off-mac they
+  // stay shell line-edit keys.
+  if (
+    isPlatformModifiedBoundaryKey(event) ||
+    (isMac() && isPlainBoundaryKey(event))
+  ) {
+    if (term.buffer.active.type === "alternate") return true;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.key === "Home") {
+      term.scrollToTop();
+    } else {
+      term.scrollToBottom();
+    }
+    return false;
+  }
+
+  // Page keys scroll the viewport only on the normal buffer. Fullscreen
+  // programs (less, vim - the alternate buffer) have no scrollback to reveal;
+  // let xterm encode CSI 5~/6~ so the pager pages natively, matching VS Code's
+  // !terminalAltBufferActive gating.
+  if (event.key !== "PageUp" && event.key !== "PageDown") return null;
+  if (term.buffer.active.type === "alternate") return true;
+  event.preventDefault();
+  event.stopPropagation();
+  term.scrollPages(event.key === "PageUp" ? -1 : 1);
+  return false;
+}
+
 function handleTerminalCustomKeyEvent(
   term: Terminal,
   event: KeyboardEvent,
@@ -793,6 +854,11 @@ function handleTerminalCustomKeyEvent(
     term.input(lineEdit, true);
     return false;
   }
+
+  // Must precede the Mac Cmd-chord early-return below: alternate-buffer
+  // Home/End explicitly bypass that generic guard and reach the program.
+  const scrollKeyResult = handleTerminalScrollKey(term, event);
+  if (scrollKeyResult !== null) return scrollKeyResult;
 
   // Preserve Mac clipboard / select-all once the kitty protocol is on. With
   // kitty active inside a TUI, xterm would otherwise CSI-u encode Cmd chords
@@ -811,13 +877,6 @@ function handleTerminalCustomKeyEvent(
     // to the browser so its keydown->copy/paste pipeline (which drives xterm's
     // clipboard events) runs. Do NOT preventDefault - that pipeline needs the
     // default action.
-    return false;
-  }
-
-  if (event.key === "PageUp" || event.key === "PageDown") {
-    event.preventDefault();
-    event.stopPropagation();
-    term.scrollPages(event.key === "PageUp" ? -1 : 1);
     return false;
   }
 

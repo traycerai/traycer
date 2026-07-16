@@ -178,6 +178,7 @@ interface SnapshotFrameInput {
   readonly messages: ReadonlyArray<Message>;
   readonly queue: ChatQueueState;
   readonly pendingFileEditApprovals: ReadonlyArray<ChatFileEditApprovalState>;
+  readonly settings?: ChatRunSettings | null;
   readonly pendingInterviews?: ReadonlyArray<ChatPendingInterviewState>;
   readonly backgroundItems?: ReadonlyArray<BackgroundItem>;
   readonly claudePendingWakes?: ReadonlyArray<ClaudePendingWake>;
@@ -200,7 +201,7 @@ function emitSnapshotFrame(input: SnapshotFrameInput): void {
         createdAt: 1,
         updatedAt: 1,
         isTitleEditedByUser: false,
-        settings: null,
+        settings: input.settings ?? null,
         activeSessionChain: null,
         claudePendingWakes: [...(input.claudePendingWakes ?? [])],
         messages: [...input.messages],
@@ -333,6 +334,7 @@ function assistantSteerMessage(
       agentId: "codex",
       displayName: "Codex",
       reply: { expectsReply: false },
+      inReplyTo: null,
     },
     blocks: [
       {
@@ -344,6 +346,7 @@ function assistantSteerMessage(
         messageId,
         content: CONTENT,
         mode: "safe_point",
+        sender: null,
       },
     ],
     startedAt: 4,
@@ -505,6 +508,23 @@ describe("createChatSessionStore", () => {
     expect(harness.handle.store.getState().chat?.claudePendingWakes).toEqual([
       PENDING_CLAUDE_WAKE,
     ]);
+  });
+
+  it("seeds composer settings from the initial persisted chat snapshot", () => {
+    const harness = createHarness();
+
+    emitSnapshotFrame({
+      callbacks: harness.callbacks(),
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      settings: SETTINGS,
+    });
+
+    expect(harness.handle.store.getState().currentComposerSettings).toEqual(
+      SETTINGS,
+    );
   });
 
   it("tracks send actions until actionAck and accepts host messages", () => {
@@ -1773,6 +1793,7 @@ describe("createChatSessionStore", () => {
       startedAt: 2,
       processedCount: 1,
       totalCount: 2,
+      connectionEpoch: 0,
     });
 
     callbacks.onRestoreCompleted({
@@ -2191,6 +2212,7 @@ describe("createChatSessionStore", () => {
                 agentId: "claude-sonnet",
                 displayName: "claude-sonnet",
                 reply: { expectsReply: false },
+                inReplyTo: null,
               },
               blocks: [],
               startedAt: 3,
@@ -2275,6 +2297,232 @@ describe("createChatSessionStore", () => {
       { type: "text", text: "I am in the host folder." },
     ]);
     expect(state.liveAssistantMessage).toBeNull();
+  });
+
+  it("routes a steer-split carryover block's events to the frozen pre-split row (completes in place, no duplicate)", () => {
+    // A steer delivered mid-thinking splits the turn into two assistant rows
+    // sharing one turnId, with the reasoning block still STREAMING in the
+    // frozen pre-split row. Its remaining deltas + completion must apply to
+    // that row (the block finishes in place above the steer bubble); only a
+    // genuinely NEW block belongs to the continuation row. Without ownership
+    // routing the delta re-materialized the block as a duplicate in the
+    // continuation row while the original froze mid-sentence.
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const agentSender: Extract<Message, { role: "assistant" }>["sender"] = {
+      type: "agent",
+      harnessId: "claude",
+      agentId: "claude-sonnet",
+      displayName: "claude-sonnet",
+      reply: { expectsReply: false },
+      inReplyTo: null,
+    };
+    callbacks.onSnapshot({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      snapshot: {
+        chat: {
+          id: CHAT_ID,
+          parentId: null,
+          userId: OWNER_ID,
+          hostId: "test-host",
+          title: "Split Chat",
+          createdAt: 1,
+          updatedAt: 5,
+          isTitleEditedByUser: false,
+          settings: null,
+          activeSessionChain: null,
+          claudePendingWakes: [],
+          messages: [
+            persistedUserMessage("message-split-run"),
+            {
+              role: "assistant",
+              messageId: "assistant-frozen",
+              sender: agentSender,
+              blocks: [
+                {
+                  type: "reasoning",
+                  blockId: "think-split",
+                  status: "streaming",
+                  timestamp: 4,
+                  startedAt: 4,
+                  content: "The grep search is pulling in fal",
+                },
+              ],
+              startedAt: 3,
+              timestamp: 4,
+              turnId: "turn-split",
+              usage: null,
+              reasoningEffort: null,
+              serviceTier: null,
+            },
+            persistedUserMessage("message-split-steered"),
+            {
+              role: "assistant",
+              messageId: "assistant-continuation",
+              sender: agentSender,
+              blocks: [
+                {
+                  type: "steer",
+                  blockId: "steer:queue-split-steered",
+                  status: "completed",
+                  timestamp: 5,
+                  queueItemId: "queue-split-steered",
+                  messageId: "message-split-steered",
+                  content: CONTENT,
+                  mode: "safe_point",
+                  sender: null,
+                },
+              ],
+              startedAt: 3,
+              timestamp: 5,
+              turnId: "turn-split",
+              usage: null,
+              reasoningEffort: null,
+              serviceTier: null,
+            },
+          ],
+          events: [],
+        },
+        access: {
+          role: "owner",
+          ownerUserId: OWNER_ID,
+          canAct: true,
+        },
+        queue: { status: "idle", items: [] },
+        runStatus: "running",
+        activeTurn: {
+          turnId: "turn-split",
+          status: "running",
+          harnessId: "claude",
+          model: "claude-sonnet",
+          agentMode: "regular",
+          profileId: null,
+          userMessageId: "message-split-run",
+          startedAt: 3,
+          updatedAt: 5,
+          reasoningEffort: null,
+          serviceTier: null,
+        },
+        pendingApprovals: [],
+        pendingInterviews: [],
+        worktreeBinding: null,
+        missingWorktreePaths: [],
+        pendingFileEditApprovals: [],
+        accumulatedFileChanges: [],
+      },
+    });
+
+    // The SAME in-flight reasoning block keeps streaming after the split,
+    // then finalizes; a genuinely new text block follows it.
+    callbacks.onBlockDelta({
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      event: {
+        type: "reasoning.delta",
+        blockId: "think-split",
+        timestamp: 6,
+        delta: "se positives.",
+      },
+    });
+    callbacks.onBlockDelta({
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      event: {
+        type: "reasoning.completed",
+        blockId: "think-split",
+        timestamp: 7,
+      },
+    });
+    callbacks.onBlockDelta({
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      event: {
+        type: "text.delta",
+        blockId: "text-after-steer",
+        timestamp: 8,
+        delta: "Continuing after the steer.",
+      },
+    });
+
+    const state = harness.handle.store.getState();
+    const frozen = state.messages.find(
+      (message): message is Extract<Message, { role: "assistant" }> =>
+        message.role === "assistant" &&
+        message.messageId === "assistant-frozen",
+    );
+    const continuation = state.messages.find(
+      (message): message is Extract<Message, { role: "assistant" }> =>
+        message.role === "assistant" &&
+        message.messageId === "assistant-continuation",
+    );
+    // The in-flight block completed IN PLACE in the frozen row, whole.
+    expect(frozen?.blocks).toMatchObject([
+      {
+        type: "reasoning",
+        blockId: "think-split",
+        status: "completed",
+        content: "The grep search is pulling in false positives.",
+      },
+    ]);
+    // The frozen row's own timestamp is untouched by carryover routing - only
+    // its blocks/blocksVersion change (mirrors the host's carryover writer).
+    expect(frozen?.timestamp).toBe(4);
+    // The continuation row holds the steer marker and the NEW block only -
+    // no duplicate reasoning block below the steer bubble.
+    expect(
+      continuation?.blocks.filter((block) => block.type === "reasoning"),
+    ).toStrictEqual([]);
+    expect(continuation?.blocks).toMatchObject([
+      { type: "steer", blockId: "steer:queue-split-steered" },
+      { type: "text", blockId: "text-after-steer" },
+    ]);
+
+    // A CHILD of the frozen block (parentBlockId) also follows its parent
+    // into the frozen row, not the continuation row.
+    callbacks.onBlockDelta({
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      event: {
+        type: "tool_call.started",
+        blockId: "child-of-think-split",
+        parentBlockId: "think-split",
+        timestamp: 9,
+        toolName: "read_file",
+        agentMessageSend: null,
+      },
+    });
+
+    const stateAfterChild = harness.handle.store.getState();
+    const frozenAfterChild = stateAfterChild.messages.find(
+      (message): message is Extract<Message, { role: "assistant" }> =>
+        message.role === "assistant" &&
+        message.messageId === "assistant-frozen",
+    );
+    const continuationAfterChild = stateAfterChild.messages.find(
+      (message): message is Extract<Message, { role: "assistant" }> =>
+        message.role === "assistant" &&
+        message.messageId === "assistant-continuation",
+    );
+    expect(frozenAfterChild?.blocks).toMatchObject([
+      { blockId: "think-split" },
+      { blockId: "child-of-think-split", parentBlockId: "think-split" },
+    ]);
+    expect(
+      continuationAfterChild?.blocks.some(
+        (block) => block.blockId === "child-of-think-split",
+      ),
+    ).toBe(false);
   });
 
   it("tracks live in-flight usage from usage.updated and carries the final value forward through turn.completed", () => {
@@ -3477,5 +3725,178 @@ describe("in-flight block finalization on stop / steer", () => {
       },
     });
     expect(liveToolStatus(harness)).toBe("interrupted");
+  });
+});
+
+// Non-message pendings (stop / approvalDecision / restoreCheckpoint /
+// background stops) are cleared only by their actionAck - which dies with a
+// dropped connection. The authoritative post-reconnect snapshot must settle
+// them so their controls re-enable and the action can be re-issued; the
+// disconnect event itself must settle nothing.
+describe("non-message pendings across a missed-ack reconnect", () => {
+  function pendingActionKinds(harness: Harness): string[] {
+    return Object.values(harness.handle.store.getState().pendingActions).map(
+      (pending) => pending.action,
+    );
+  }
+
+  it("clears stop/approval/restore pendings on the post-reconnect snapshot and allows re-issuing", () => {
+    const harness = createHarness();
+    emitSnapshot(harness.callbacks(), "owner");
+    const store = harness.handle.store;
+
+    expect(store.getState().stopTurn()).not.toBeNull();
+    expect(
+      store.getState().approvalDecision("approval-1", { approved: true }),
+    ).not.toBeNull();
+    expect(
+      store.getState().restoreCheckpoint("checkpoint-1", false),
+    ).not.toBeNull();
+    expect(pendingActionKinds(harness)).toEqual([
+      "stop",
+      "approvalDecision",
+      "restoreCheckpoint",
+    ]);
+
+    // The connection drops before any ack arrives; the drop itself settles
+    // NOTHING (a transient wobble must not cancel in-flight actions).
+    harness.callbacks().onConnectionStatus("reconnecting", null);
+    expect(pendingActionKinds(harness)).toEqual([
+      "stop",
+      "approvalDecision",
+      "restoreCheckpoint",
+    ]);
+
+    // The reconnect snapshot is the authority: the lost acks can never
+    // arrive, so the pendings clear and the controls re-enable.
+    emitSnapshot(harness.callbacks(), "owner");
+    expect(store.getState().pendingActions).toEqual({});
+
+    // Re-issuing after the reconnect works (nothing is wedged).
+    expect(store.getState().stopTurn()).not.toBeNull();
+    expect(pendingActionKinds(harness)).toEqual(["stop"]);
+  });
+
+  it("clears a stale editUserMessage pending whose ack was lost across a reconnect", () => {
+    const harness = createHarness();
+    emitSnapshot(harness.callbacks(), "owner");
+    const store = harness.handle.store;
+
+    // An edit's fresh messageId only appears in the snapshot if the host
+    // applied it, and it has no composer-restoration path - so a lost frame
+    // would previously wedge the edit affordances forever.
+    expect(
+      store.getState().editUserMessage({
+        targetMessageId: "msg-1",
+        content: { type: "doc", content: [] },
+        sender: { type: "user", userId: OWNER_ID },
+        settings: SETTINGS,
+        revertFileChanges: false,
+        revertArtifacts: false,
+      }),
+    ).not.toBeNull();
+    expect(pendingActionKinds(harness)).toEqual(["editUserMessage"]);
+
+    harness.callbacks().onConnectionStatus("reconnecting", null);
+    // The reconnect snapshot does not contain the edit (never applied).
+    emitSnapshot(harness.callbacks(), "owner");
+    expect(store.getState().pendingActions).toEqual({});
+  });
+
+  it("keeps a pending dispatched on the CURRENT connection when its own snapshot arrives", () => {
+    const harness = createHarness();
+    emitSnapshot(harness.callbacks(), "owner");
+
+    // Reconnect first, then act on the NEW connection before its snapshot
+    // lands - that pending's ack is still live and must survive the sweep.
+    harness.callbacks().onConnectionStatus("reconnecting", null);
+    harness.callbacks().onConnectionStatus("open", null);
+    expect(harness.handle.store.getState().stopTurn()).not.toBeNull();
+
+    emitSnapshot(harness.callbacks(), "owner");
+    expect(pendingActionKinds(harness)).toEqual(["stop"]);
+  });
+
+  it("makes a background stop whose frame died with the connection retryable, keeping ack-accepted stops disabled", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const runningTasks: BackgroundItem[] = [
+      {
+        taskId: "task-lost",
+        kind: "command",
+        title: "sleep 60",
+        blockId: "tool-1",
+        parentTaskId: null,
+        scheduledFor: null,
+      },
+      {
+        taskId: "task-accepted",
+        kind: "command",
+        title: "sleep 90",
+        blockId: "tool-2",
+        parentTaskId: null,
+        scheduledFor: null,
+      },
+    ];
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      backgroundItems: runningTasks,
+    });
+    const store = harness.handle.store;
+
+    // One stop gets its ack before the drop; the other's frame/ack is lost.
+    expect(store.getState().stopBackgroundItem("task-accepted")).not.toBeNull();
+    acceptLastAction(harness);
+    expect(store.getState().stopBackgroundItem("task-lost")).not.toBeNull();
+
+    // Both tasks are still running when the reconnect snapshot arrives.
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      backgroundItems: runningTasks,
+    });
+
+    // The lost stop is retryable again; the host-confirmed stop stays
+    // disabled until its task actually terminates.
+    expect(Object.keys(store.getState().pendingBackgroundStops)).toEqual([
+      "task-accepted",
+    ]);
+    expect(store.getState().stopBackgroundItem("task-lost")).not.toBeNull();
+    expect(store.getState().stopBackgroundItem("task-accepted")).toBeNull();
+  });
+
+  it("clears a restore slot stranded in-flight by a drop, but not one on the live connection", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    callbacks.onRestoreStarted({
+      kind: "restoreStarted",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      checkpointId: "turn-1",
+      restoringUserId: OWNER_ID,
+      restoringHostId: "host-1",
+      startedAt: 2,
+    });
+
+    // A snapshot on the SAME connection leaves the live restore alone.
+    emitSnapshot(callbacks, "owner");
+    expect(harness.handle.store.getState().restore?.kind).toBe("in-flight");
+
+    // After a drop, its restoreCompleted can never arrive - the reconnect
+    // snapshot clears the stranded slot instead of spinning forever.
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+    expect(harness.handle.store.getState().restore).toBeNull();
   });
 });

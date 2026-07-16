@@ -119,7 +119,7 @@ export function useArtifactDocTitleFollow(params: {
   const nodeType = node.type;
   const handle = useOpenEpicHandle();
   const renameArtifactInTab = useEpicCanvasStore((s) => s.renameArtifactInTab);
-  const renameArtifact = useEpicRenameArtifact();
+  const renameArtifact = useEpicRenameArtifact(false);
   // TanStack Query keeps `mutate` referentially stable, so depending on it
   // does not re-subscribe the editor listener on every mutation state change.
   const persistRename = renameArtifact.mutate;

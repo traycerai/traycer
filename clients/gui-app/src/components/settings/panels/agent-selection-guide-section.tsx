@@ -137,14 +137,14 @@ export function AgentSelectionGuideSection() {
     );
   }
 
-  return <div className="shrink-0 px-5 py-5">{panelContent}</div>;
+  return <div className="h-full min-h-0 p-5">{panelContent}</div>;
 }
 
 function AgentSelectionGuideMessage(props: { readonly children: ReactNode }) {
   return (
     <section
       aria-labelledby="agent-selection-guide-heading"
-      className="flex flex-col gap-3"
+      className="flex h-full min-h-0 flex-col gap-3"
     >
       <div className="min-w-0">
         <h2
@@ -312,8 +312,8 @@ function AgentsGuideEditor(props: {
         placeholder={undefined}
         ariaLabel="Global agent selection instructions"
         testId="agents-selection-guide-input"
-        textareaClassName="max-h-[min(32vh,16rem)] min-h-[min(20vh,10rem)]"
-        className=""
+        editorClassName="flex-1"
+        className="h-full"
         revertDisabled={
           isAtDefault || state.saveInFlight || state.resetInFlight
         }
@@ -371,8 +371,8 @@ function SaveStatus(props: {
 
 function EditorSkeleton() {
   return (
-    <div className="space-y-3">
-      <div className="h-[min(22vh,11rem)] animate-pulse rounded-md bg-muted/40" />
+    <div className="flex min-h-0 flex-1 flex-col gap-3">
+      <div className="min-h-[min(22vh,11rem)] flex-1 animate-pulse rounded-md bg-muted/40" />
       <div className="h-4 w-2/3 animate-pulse rounded bg-muted/30" />
     </div>
   );

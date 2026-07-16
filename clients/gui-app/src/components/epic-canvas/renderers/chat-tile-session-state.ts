@@ -227,6 +227,36 @@ export function resolvedTurnStatus(
   return isQueueRunnable || hasVisibleBackgroundWork ? null : turnStatus;
 }
 
+/**
+ * Tri-state activity for the chat's progress indicators (sidebar tree, tab
+ * icons): is the agent actually processing, or is only background work
+ * (Bash `run_in_background` / a subagent / Monitor / a scheduled wakeup)
+ * keeping the chat non-idle? `runStatus` alone can't tell the two apart, and
+ * showing the same spinner for both left users unable to see whether the
+ * agent was really running.
+ *
+ * `"turn"` wins whenever a genuine turn is active or activating (the host's
+ * `turnInProgress`, via {@link resolvedTurnStatus}) — background work running
+ * alongside a turn is subsumed by it. A runnable queue also reads `"turn"`:
+ * the next prompt is imminent, and the momentary turn-boundary gaps while a
+ * queue drains must not flicker the indicator through the background style.
+ */
+export type ChatActivityIndicator = "turn" | "background" | null;
+
+export function chatActivityIndicator(
+  state: Pick<
+    ChatSessionState,
+    "runStatus" | "activeTurn" | "queue" | "backgroundItems" | "turnInProgress"
+  >,
+): ChatActivityIndicator {
+  const turnStatus = composerTurnStatus(state.runStatus);
+  if (turnStatus === null) return null;
+  if (resolvedTurnStatus(state, turnStatus) !== null) return "turn";
+  const isQueueRunnable =
+    state.queue.status !== "paused" && state.queue.items.length > 0;
+  return isQueueRunnable ? "turn" : "background";
+}
+
 export function normalizeInlineEditForSession(
   inlineEdit: InlineEditState | null,
   state: Pick<
@@ -414,13 +444,13 @@ export function forkableAssistantMessageId(
   return message.persistentMessageId;
 }
 
-// Fork boundary for a message that is CURRENTLY asking a question. Unlike
-// `forkableAssistantMessageId` it does NOT require the turn to be finished
-// (`completedAt`/`runState`) — forking during Q&A is the whole point. The host
-// copies history through this in-flight message and settles the carried
-// interview. Still requires a stable, non-transient persistent id, since a
-// transient live id is not a durable fork boundary.
-function forkableInterviewAssistantMessageId(
+// Fork boundary for a message containing a pending or resolved interview.
+// Unlike `forkableAssistantMessageId` it does NOT require the turn to be
+// finished (`completedAt`/`runState`) — question-level fork actions remain
+// available while the assistant resumes after an answer. Still requires a
+// stable, non-transient persistent id, since a transient live id is not a
+// durable fork boundary.
+export function forkableInterviewAssistantMessageId(
   message: ChatMessageModel,
 ): string | null {
   if (message.role !== "assistant") return null;

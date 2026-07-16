@@ -9,6 +9,11 @@ import { v4 as uuidv4 } from "uuid";
 
 import type { ImageAttachmentAttrs } from "@/components/chat/composer/editor/extensions/image-attachment-extension";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import {
+  Analytics,
+  AnalyticsEvent,
+  analyticsBlockerFromError,
+} from "@/lib/analytics";
 
 export const IMAGE_MIME_PREFIX = "image/";
 export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
@@ -31,7 +36,15 @@ function readFileAsDataUrl(file: File): Promise<string> {
   });
 }
 
-export function collectImages(files: ReadonlyArray<File>): File[] {
+/**
+ * `onOversized` lets each surface observe the 5MB rejection (which is
+ * user-visible via the toast here) without the shared filter knowing surface
+ * names; it receives no file details so nothing sensitive can leak into it.
+ */
+export function collectImages(
+  files: ReadonlyArray<File>,
+  onOversized: () => void,
+): File[] {
   const accepted: File[] = [];
   for (const file of files) {
     if (!file.type.startsWith(IMAGE_MIME_PREFIX)) continue;
@@ -48,6 +61,7 @@ export function collectImages(files: ReadonlyArray<File>): File[] {
           source: "Chat composer",
         },
       );
+      onOversized();
       continue;
     }
     accepted.push(file);
@@ -58,7 +72,14 @@ export function collectImages(files: ReadonlyArray<File>): File[] {
 async function filesToImageAttrs(
   files: ReadonlyArray<File>,
 ): Promise<ImageAttachmentAttrs[]> {
-  const accepted = collectImages(files);
+  // This base64 ingest serves only chat / new-conversation surfaces.
+  const accepted = collectImages(files, () => {
+    Analytics.getInstance().track(AnalyticsEvent.AttachmentRejected, {
+      kind: "image",
+      surface: "chat",
+      blocker: "invalid_input",
+    });
+  });
   if (accepted.length === 0) return [];
   const results = await Promise.all(
     accepted.map(async (file) => {
@@ -180,13 +201,34 @@ export function useComposerPasteEvents(
  * is the behavior every non-landing surface relies on — do NOT change it.
  */
 export function useComposerPasteAdapter(
-  insertAttrs: (attrs: ReadonlyArray<ImageAttachmentAttrs>) => void,
+  insertAttrs: (attrs: ReadonlyArray<ImageAttachmentAttrs>) => number,
 ): UseComposerPasteResult {
   const onFiles = useCallback(
     (files: ReadonlyArray<File>) => {
-      void filesToImageAttrs(files).then((attrs) => {
-        if (attrs.length > 0) insertAttrs(attrs);
-      });
+      void filesToImageAttrs(files)
+        .then((attrs) => {
+          if (attrs.length > 0) {
+            const acceptedCount = Math.min(
+              attrs.length,
+              Math.max(0, insertAttrs(attrs)),
+            );
+            attrs.slice(0, acceptedCount).forEach(() => {
+              Analytics.getInstance().track(AnalyticsEvent.AttachmentAdded, {
+                kind: "image",
+                surface: "chat",
+              });
+            });
+          }
+        })
+        .catch((error: unknown) => {
+          // A FileReader failure previously surfaced only as an unhandled
+          // rejection; record it so chat rejections exist in the funnel.
+          Analytics.getInstance().track(AnalyticsEvent.AttachmentRejected, {
+            kind: "image",
+            surface: "chat",
+            blocker: analyticsBlockerFromError(error),
+          });
+        });
     },
     [insertAttrs],
   );
@@ -194,6 +236,7 @@ export function useComposerPasteAdapter(
 }
 
 export interface ComposerPasteEditorHandle {
+  readonly isReady: () => boolean;
   readonly insertImageAttachments: (
     attrs: ReadonlyArray<ImageAttachmentAttrs>,
   ) => void;
@@ -204,11 +247,12 @@ export function useComposerPaste(editorRef: {
   readonly current: ComposerPasteEditorHandle | null;
 }): UseComposerPasteResult {
   const insertAttrs = useCallback(
-    (attrs: ReadonlyArray<ImageAttachmentAttrs>) => {
+    (attrs: ReadonlyArray<ImageAttachmentAttrs>): number => {
       const handle = editorRef.current;
-      if (handle === null) return;
+      if (handle === null || !handle.isReady()) return 0;
       handle.insertImageAttachments(attrs);
       handle.focus();
+      return attrs.length;
     },
     [editorRef],
   );

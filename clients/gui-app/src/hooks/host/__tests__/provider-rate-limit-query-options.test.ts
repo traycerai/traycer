@@ -5,7 +5,7 @@ describe("providerRateLimitQueryOptions", () => {
   it("gives an httpFetch provider its own refetchInterval and keeps TanStack's default refetchOnMount", () => {
     const { options } = providerRateLimitQueryOptions("openrouter", null);
     expect(options.enabled).toBe(true);
-    expect(options.refetchInterval).toBe(5 * 60 * 1000);
+    expect(options.refetchInterval).toBe(15 * 60 * 1000);
     expect(options.refetchOnMount).toBe(true);
   });
 

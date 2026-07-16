@@ -30,10 +30,7 @@ import { ComposerSlotApprovalQueue } from "@/components/chat/segments/composer-s
 import { ComposerSlotFileEditApprovalQueue } from "@/components/chat/segments/composer-slot-file-edit-approval-queue";
 import { ComposerReadonlyWorkspaceModeRow } from "@/components/home/composer/composer-workspace-mode-row";
 import { lowerScrollRegionMaxHeightClass } from "@/lib/chat/chat-lower-scroll-budget";
-import {
-  WORKSPACE_COMPOSER_READY,
-  type WorkspaceComposerAvailability,
-} from "@/lib/composer/workspace-composer-availability";
+import type { WorkspaceComposerAvailability } from "@/lib/composer/workspace-composer-availability";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
 import { cn } from "@/lib/utils";
 import type { PendingInterviewView } from "./chat-tile-types";
@@ -388,19 +385,7 @@ function ComposerSurface(props: {
 }): ReactNode {
   const { model, layout } = props;
   if (!model.runtime.snapshotLoaded) {
-    return (
-      <InertChatComposer
-        taskId={model.composer.nodeId}
-        isActive={model.composer.isActive}
-        mentionRoots={model.composer.mentionRoots}
-        fallbackToGlobalMentionRoots={
-          model.composer.fallbackToGlobalMentionRoots
-        }
-        currentEpicId={model.composer.currentEpicId}
-        workspaceControls={model.composer.workspaceControls}
-        topSpacing={layout.topSpacing}
-      />
-    );
+    return null;
   }
   if (model.access.isViewer) {
     return (
@@ -497,41 +482,6 @@ function PendingApprovalQueues(props: {
         onDecision={props.onApprovalDecision}
       />
     </div>
-  );
-}
-
-export function InertChatComposer(props: {
-  readonly taskId: string;
-  readonly isActive: boolean;
-  readonly mentionRoots: ReadonlyArray<string>;
-  readonly fallbackToGlobalMentionRoots: boolean;
-  readonly currentEpicId: string;
-  readonly workspaceControls: ReactNode;
-  readonly topSpacing: ChatLowerSurfaceTopSpacing;
-}) {
-  return (
-    <ChatComposer
-      taskId={props.taskId}
-      isActive={props.isActive}
-      sendDisabled
-      mentionRoots={props.mentionRoots}
-      fallbackToGlobalMentionRoots={props.fallbackToGlobalMentionRoots}
-      currentEpicId={props.currentEpicId}
-      settingsSeed={null}
-      fallbackSettingsSeed={null}
-      onSubmitMessage={() => false}
-      onSettingsChange={null}
-      activeTurnStatus={null}
-      editingQueueItemId={null}
-      onCancelQueueEdit={null}
-      hasPendingApprovals={false}
-      stopDisabled
-      onStopTurn={null}
-      workspaceControls={props.workspaceControls}
-      workspaceAvailability={WORKSPACE_COMPOSER_READY}
-      topSpacing={props.topSpacing}
-      topSlot={null}
-    />
   );
 }
 

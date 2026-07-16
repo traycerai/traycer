@@ -7,6 +7,7 @@ import {
   chatSubscribeV11,
   chatSubscribeV12,
   chatSubscribeV13,
+  chatSubscribeV14,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
 import { autonomousResumeTriggerSchema } from "@traycer/protocol/persistence/epic/content-blocks";
@@ -1170,6 +1171,156 @@ describe("chat.subscribe@1.3 server frames", () => {
           },
         },
       }),
-    ).toMatchObject({ kind: "blockDelta", event: { type: "provider_notice.upsert" } });
+    ).toMatchObject({
+      kind: "blockDelta",
+      event: { type: "provider_notice.upsert" },
+    });
+  });
+});
+
+describe("chat.subscribe@1.4 (inReplyTo on senders)", () => {
+  // An agent-authored user message whose sender carries `inReplyTo` (it
+  // resumed an A2A thread the receiving chat opened).
+  const agentUserMessage: UserMessage = {
+    role: "user",
+    messageId: "message-a2a",
+    sender: {
+      type: "agent",
+      harnessId: "codex",
+      agentId: "agent-sender",
+      displayName: "Sibling agent",
+      reply: { expectsReply: false },
+      inReplyTo: "response-7",
+    },
+    message: {
+      kind: "agent",
+      content: { type: "doc", content: [] },
+      fromAgentId: "agent-sender",
+      senderTitle: "Sibling agent",
+      senderHarnessId: "codex",
+      reply: { expectsReply: false },
+    },
+    timestamp: 2000,
+    sessionAnchor: null,
+  };
+
+  const agentEvent: ChatEvent = {
+    ...event,
+    eventId: "event-a2a",
+    actor: {
+      type: "agent",
+      harnessId: "codex",
+      agentId: "agent-sender",
+      displayName: "Sibling agent",
+      reply: { expectsReply: false },
+      inReplyTo: "response-7",
+    },
+  };
+
+  const chatWithAgentSender: Chat = {
+    ...chat,
+    messages: [userMessage, agentUserMessage],
+    events: [agentEvent],
+  };
+
+  const queueItem = {
+    queueItemId: "q-a2a",
+    messageId: "message-a2a",
+    message: agentUserMessage.message,
+    sender: agentUserMessage.sender,
+    settings: {
+      harnessId: "codex" as const,
+      model: "gpt-5-codex",
+      permissionMode: "supervised" as const,
+      reasoningEffort: null,
+      serviceTier: null,
+      agentMode: "epic" as const,
+    },
+    createdAt: 2000,
+    updatedAt: 2000,
+  };
+
+  const snapshotFrame = {
+    kind: "snapshot" as const,
+    hasBinaryPayload: false,
+    epicId: "epic-1",
+    chatId: "chat-1",
+    snapshot: {
+      chat: chatWithAgentSender,
+      access: { role: "owner", ownerUserId: "user-1", canAct: true },
+      queue: { status: "idle", items: [queueItem] },
+      activeTurn: null,
+      runStatus: "idle",
+      pendingApprovals: [],
+      pendingInterviews: [],
+      pendingFileEditApprovals: [],
+      worktreeBinding: null,
+      missingWorktreePaths: [],
+      accumulatedFileChanges: [],
+    },
+  };
+
+  it("declares schemaVersion 1.4", () => {
+    expect(chatSubscribeV14.schemaVersion).toEqual({ major: 1, minor: 4 });
+  });
+
+  it("carries inReplyTo through message, queue-item, and event senders", () => {
+    const parsed = chatSubscribeV14.serverFrameSchema.parse(snapshotFrame);
+    if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
+    const [, message] = parsed.snapshot.chat.messages;
+    expect(message.sender).toMatchObject({
+      type: "agent",
+      inReplyTo: "response-7",
+    });
+    expect(parsed.snapshot.queue.items[0]?.sender).toMatchObject({
+      type: "agent",
+      inReplyTo: "response-7",
+    });
+    expect(parsed.snapshot.chat.events[0]?.actor).toMatchObject({
+      type: "agent",
+      inReplyTo: "response-7",
+    });
+  });
+
+  it("carries inReplyTo on the messageAccepted frame", () => {
+    const parsed = chatSubscribeV14.serverFrameSchema.parse({
+      kind: "messageAccepted",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      message: agentUserMessage,
+    });
+    if (parsed.kind !== "messageAccepted")
+      throw new Error("expected messageAccepted");
+    expect(parsed.message.sender).toMatchObject({ inReplyTo: "response-7" });
+  });
+
+  it("strips inReplyTo from every sender path for a 1.3 (pre-inReplyTo) peer", () => {
+    // The whole point of the frozen 1.0–1.3 lines: an older peer strict-parses
+    // a frame the live host built and the unmodeled key drops out, rather than
+    // rejecting the frame.
+    const parsed = chatSubscribeV13.serverFrameSchema.parse(snapshotFrame);
+    if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
+    const [, message] = parsed.snapshot.chat.messages;
+    expect(message.sender).not.toHaveProperty("inReplyTo");
+    expect(parsed.snapshot.queue.items[0]?.sender).not.toHaveProperty(
+      "inReplyTo",
+    );
+    expect(parsed.snapshot.chat.events[0]?.actor).not.toHaveProperty(
+      "inReplyTo",
+    );
+  });
+
+  it("strips inReplyTo on the messageAccepted frame for a 1.3 peer", () => {
+    const parsed = chatSubscribeV13.serverFrameSchema.parse({
+      kind: "messageAccepted",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      message: agentUserMessage,
+    });
+    if (parsed.kind !== "messageAccepted")
+      throw new Error("expected messageAccepted");
+    expect(parsed.message.sender).not.toHaveProperty("inReplyTo");
   });
 });

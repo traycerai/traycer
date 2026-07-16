@@ -18,6 +18,7 @@ let capturedArgs: {
   options: {
     mutationKey?: ReadonlyArray<unknown>;
     onError?: (e: unknown) => void;
+    onSuccess?: (response: unknown, variables: { editorId: string }) => void;
   };
 } | null = null;
 vi.mock("@/hooks/host/use-host-query", () => ({
@@ -33,6 +34,7 @@ import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messen
 import type { RpcErrorCode } from "@traycer/protocol/framework/index";
 import { useEditorOpen } from "@/hooks/editor/use-editor-open-mutation";
 import { editorMutationKeys } from "@/lib/query-keys";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 function makeError(code: RpcErrorCode, message: string): HostRpcError {
   return new HostRpcError({
@@ -46,7 +48,7 @@ function makeError(code: RpcErrorCode, message: string): HostRpcError {
 
 describe("useEditorOpen", () => {
   it("targets editor.openPaths with the host client and the editor mutation key", () => {
-    renderHook(() => useEditorOpen());
+    renderHook(() => useEditorOpen("workspace"));
     expect(capturedArgs).not.toBeNull();
     expect(capturedArgs?.method).toBe("editor.openPaths");
     expect(capturedArgs?.client).toBe(fakeClient);
@@ -56,7 +58,7 @@ describe("useEditorOpen", () => {
   });
 
   it("passes the host error message through as the toast for generic RPC errors", () => {
-    renderHook(() => useEditorOpen());
+    renderHook(() => useEditorOpen("workspace"));
     capturedArgs?.options.onError?.(
       makeError("RPC_ERROR", "Windsurf isn't installed on this machine."),
     );
@@ -66,10 +68,28 @@ describe("useEditorOpen", () => {
   });
 
   it("uses the FORBIDDEN copy for permission errors", () => {
-    renderHook(() => useEditorOpen());
+    renderHook(() => useEditorOpen("workspace"));
     capturedArgs?.options.onError?.(makeError("FORBIDDEN", "denied"));
     expect(toast.error).toHaveBeenCalledWith(
       "You don't have permission to do that.",
     );
+  });
+
+  it("emits workspace_opened_in_editor only for the workspace intent", () => {
+    const track = vi.spyOn(Analytics.getInstance(), "track");
+    try {
+      renderHook(() => useEditorOpen("file"));
+      capturedArgs?.options.onSuccess?.({}, { editorId: "vscode" });
+      expect(track).not.toHaveBeenCalled();
+
+      renderHook(() => useEditorOpen("workspace"));
+      capturedArgs?.options.onSuccess?.({}, { editorId: "vscode" });
+      expect(track).toHaveBeenCalledWith(
+        AnalyticsEvent.WorkspaceOpenedInEditor,
+        { source: "direct_ui", editor: "vscode" },
+      );
+    } finally {
+      track.mockRestore();
+    }
   });
 });

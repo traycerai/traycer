@@ -7,6 +7,8 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { StrictMode, act } from "react";
+import { syntaxTree } from "@codemirror/language";
+import { EditorView } from "@uiw/react-codemirror";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type Deferred<T> = {
@@ -51,6 +53,7 @@ vi.mock(
 );
 
 import { AgentSelectionGuideSection } from "@/components/settings/panels/agent-selection-guide-section";
+import { AgentsSettingsPanel } from "@/components/settings/panels/agents-settings-panel";
 
 function renderPanel() {
   return render(
@@ -66,6 +69,33 @@ function strictPanel() {
       <AgentSelectionGuideSection />
     </StrictMode>
   );
+}
+
+function getCodeMirrorView(element: HTMLElement): EditorView {
+  const view = EditorView.findFromDOM(element);
+  if (view === null) throw new Error("Expected a CodeMirror editor element");
+  return view;
+}
+
+function readMarkdown(element: HTMLElement): string {
+  return getCodeMirrorView(element).state.doc.toString();
+}
+
+function replaceMarkdown(element: HTMLElement, markdown: string): void {
+  act(() => {
+    const view = getCodeMirrorView(element);
+    view.dispatch({
+      changes: { from: 0, to: view.state.doc.length, insert: markdown },
+    });
+  });
+}
+
+function blurCodeMirror(element: HTMLElement): void {
+  const content = element.querySelector(".cm-content");
+  if (!(content instanceof HTMLElement)) {
+    throw new Error("Expected CodeMirror content to render");
+  }
+  fireEvent.blur(content);
 }
 
 describe("AgentSelectionGuideSection", () => {
@@ -88,18 +118,18 @@ describe("AgentSelectionGuideSection", () => {
 
   afterEach(() => {
     cleanup();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("updates generated defaults without clobbering the active editor draft", async () => {
     const { rerender } = renderPanel();
-    const editor = screen.getByTestId<HTMLTextAreaElement>(
-      "agents-selection-guide-input",
-    );
+    const editor = screen.getByTestId("agents-selection-guide-input");
     const revert = screen.getByTestId<HTMLButtonElement>(
       "agents-selection-guide-revert",
     );
 
-    expect(editor.value).toBe("claude guide");
+    expect(readMarkdown(editor)).toBe("claude guide");
     expect(revert.disabled).toBe(true);
 
     guideMocks.queryData = {
@@ -109,11 +139,59 @@ describe("AgentSelectionGuideSection", () => {
     rerender(strictPanel());
 
     await waitFor(() => {
-      expect(editor.value).toBe("claude guide");
+      expect(readMarkdown(editor)).toBe("claude guide");
       expect(revert.disabled).toBe(false);
     });
     expect(guideMocks.setGlobalMutateAsync).not.toHaveBeenCalled();
     expect(guideMocks.resetGlobalMutateAsync).not.toHaveBeenCalled();
+  });
+
+  it("renders Markdown source with line numbers at full height", () => {
+    guideMocks.queryData = {
+      content: "# Choose an agent\n\n- Match the task",
+      generatedDefaultContent: "# Choose an agent\n\n- Match the task",
+    };
+    render(
+      <StrictMode>
+        <AgentsSettingsPanel />
+      </StrictMode>,
+    );
+    const editor = screen.getByTestId("agents-selection-guide-input");
+    const editorShell = editor.closest(
+      "[data-agent-selection-guide-editor-shell]",
+    );
+    if (!(editorShell instanceof HTMLElement)) {
+      throw new Error("Expected the editor shell to render");
+    }
+    const panelShell = editor.closest("[data-settings-panel-shell]");
+    const panelBody = editor.closest("[data-settings-panel-body]");
+    if (!(panelShell instanceof HTMLElement)) {
+      throw new Error("Expected the settings panel shell to render");
+    }
+    if (!(panelBody instanceof HTMLElement)) {
+      throw new Error("Expected the settings panel body to render");
+    }
+
+    const editorView = getCodeMirrorView(editor);
+    expect(editorView.state.doc.toString()).toBe(
+      "# Choose an agent\n\n- Match the task",
+    );
+    expect(
+      syntaxTree(editorView.state).topNode.getChild("ATXHeading1"),
+    ).not.toBeNull();
+    expect(
+      screen.getByRole("textbox", {
+        name: "Global agent selection instructions",
+      }),
+    ).toBeTruthy();
+    expect(editor.querySelector(".cm-lineNumbers")).not.toBeNull();
+    expect(editor.className).toContain("h-full");
+    expect(editorShell.className).toContain("flex-1");
+    expect(panelShell.className).toContain("h-full");
+    expect(panelBody.className).toContain("flex-1");
+    expect(
+      screen.queryByRole("heading", { name: "Choose an agent" }),
+    ).toBeNull();
   });
 
   it("reverts through the host reset API instead of sending generated content back", async () => {
@@ -128,8 +206,7 @@ describe("AgentSelectionGuideSection", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByTestId<HTMLTextAreaElement>("agents-selection-guide-input")
-          .value,
+        readMarkdown(screen.getByTestId("agents-selection-guide-input")),
       ).toBe("codex guide");
     });
     expect(guideMocks.resetGlobalMutateAsync).toHaveBeenCalledWith({});
@@ -149,20 +226,18 @@ describe("AgentSelectionGuideSection", () => {
       .mockReturnValueOnce(first.promise)
       .mockReturnValueOnce(second.promise);
     renderPanel();
-    const editor = screen.getByTestId<HTMLTextAreaElement>(
-      "agents-selection-guide-input",
-    );
+    const editor = screen.getByTestId("agents-selection-guide-input");
 
-    fireEvent.change(editor, { target: { value: "first edit" } });
-    fireEvent.blur(editor);
+    replaceMarkdown(editor, "first edit");
+    blurCodeMirror(editor);
 
     expect(guideMocks.setGlobalMutateAsync).toHaveBeenCalledTimes(1);
     expect(guideMocks.setGlobalMutateAsync).toHaveBeenLastCalledWith({
       content: "first edit",
     });
 
-    fireEvent.change(editor, { target: { value: "second edit" } });
-    fireEvent.blur(editor);
+    replaceMarkdown(editor, "second edit");
+    blurCodeMirror(editor);
 
     expect(guideMocks.setGlobalMutateAsync).toHaveBeenCalledTimes(1);
 

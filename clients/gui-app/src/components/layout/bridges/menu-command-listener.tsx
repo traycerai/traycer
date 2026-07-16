@@ -26,6 +26,11 @@ import {
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { RestartHostConfirmDialog } from "@/components/host/restart-host-confirm-dialog";
+import {
+  Analytics,
+  AnalyticsEvent,
+  analyticsBlockerFromError,
+} from "@/lib/analytics";
 
 interface HostWithRequestClose extends IRunnerHost {
   readonly windows: {
@@ -111,7 +116,13 @@ export function MenuCommandListener() {
       }
       return management.updateHost({ onProgress: null });
     },
+    onMutate: () => {
+      Analytics.getInstance().track(AnalyticsEvent.HostUpdateStarted, {
+        source: "native_menu",
+      });
+    },
     onSuccess: (data) => {
+      Analytics.getInstance().track(AnalyticsEvent.HostUpdateSucceeded, null);
       toast.success(`Updated host to v${data.version}`);
       if (management !== null) {
         if (service !== null) {
@@ -130,7 +141,12 @@ export function MenuCommandListener() {
         });
       }
     },
-    onError: (err) => toastFromRunnerError(err, "Couldn't install host update"),
+    onError: (err) => {
+      Analytics.getInstance().track(AnalyticsEvent.HostUpdateFailed, {
+        blocker: analyticsBlockerFromError(err),
+      });
+      toastFromRunnerError(err, "Couldn't install host update");
+    },
   });
 
   const { mutate: mutateInstallUpdate } = installUpdateMutation;
@@ -234,18 +250,32 @@ function handleMenuCommand(
   handlers: MenuCommandHandlers,
 ): void {
   if (payload.command === "app.openSettings") {
+    Analytics.getInstance().track(AnalyticsEvent.SettingsOpened, {
+      source: "native_menu",
+      section: "general",
+    });
     handlers.navigateSettings();
     return;
   }
   if (payload.command === "app.signIn") {
+    Analytics.getInstance().track(AnalyticsEvent.SignInStarted, {
+      source: "native_menu",
+    });
     void handlers.authService.signIn();
     return;
   }
   if (payload.command === "app.signOut") {
+    Analytics.getInstance().track(AnalyticsEvent.SignOutRequested, {
+      source: "native_menu",
+    });
     void handlers.authService.signOut();
     return;
   }
   if (payload.command === "app.openLogs") {
+    Analytics.getInstance().track(AnalyticsEvent.CommandExecuted, {
+      source: "native_menu",
+      command: "open_logs",
+    });
     handlers.openLogs();
     return;
   }
@@ -262,14 +292,25 @@ function handleMenuCommand(
     return;
   }
   if (payload.command === "app.reportIssue") {
+    Analytics.getInstance().track(AnalyticsEvent.ReportIssueOpened, {
+      source: "native_menu",
+    });
     handlers.reportIssue();
     return;
   }
   if (payload.command === "host.installUpdate") {
+    Analytics.getInstance().track(AnalyticsEvent.CommandExecuted, {
+      source: "native_menu",
+      command: "install_host_update",
+    });
     handlers.installHostUpdate();
     return;
   }
   if (payload.command === "host.restart") {
+    Analytics.getInstance().track(AnalyticsEvent.CommandExecuted, {
+      source: "native_menu",
+      command: "restart_host",
+    });
     handlers.requestHostRestart();
     return;
   }

@@ -166,6 +166,11 @@ export interface GitDiffBundleTilePayload {
   readonly bundleGroup: GitDiffBundleGroup;
 }
 
+export interface GitDiffRepositoryContext {
+  readonly workspaceLabel: string;
+  readonly repositoryLabel: string;
+}
+
 /**
  * Snapshot diff payloads address a chat file-edit by reference (not by copying
  * content): the renderer re-reads the agent's `beforeContent`/`afterContent`
@@ -228,6 +233,7 @@ export interface GitDiffTileRef {
   readonly type: typeof TILE_KIND_GIT_DIFF;
   readonly name: string;
   readonly hostId: string;
+  readonly repositoryContext: GitDiffRepositoryContext | null;
   readonly diff: GitDiffTilePayload;
   readonly view: GitDiffTileViewState;
 }

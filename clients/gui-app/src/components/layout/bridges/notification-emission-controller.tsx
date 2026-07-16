@@ -1,13 +1,27 @@
-import { useEffect } from "react";
+import { useCallback, useEffect } from "react";
 import {
   displayAppLocalNotification,
   playNotificationChime,
 } from "@/lib/notifications/notification-display";
+import { useNotificationActivation } from "@/hooks/notifications/use-notification-activation";
+import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
 import { useNotificationShow } from "@/hooks/notifications/use-notifications";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
 
 export function NotificationEmissionController(): null {
   const showNotification = useNotificationShow();
+  const { activate } = useNotificationActivation();
+  const onToastClick = useCallback(
+    (row: MergedNotificationRow): void => {
+      if (row.payload === null) return;
+      activate({
+        payload: row.payload,
+        receivedAt: row.createdAt,
+        onActivated: null,
+      });
+    },
+    [activate],
+  );
 
   useEffect(() => {
     return useAppLocalNotificationsStore.subscribe((state, previous) => {
@@ -19,10 +33,11 @@ export function NotificationEmissionController(): null {
         displayAppLocalNotification(entry, {
           showNotification,
           playChime: playNotificationChime,
+          onToastClick,
         });
       }
     });
-  }, [showNotification]);
+  }, [showNotification, onToastClick]);
 
   return null;
 }

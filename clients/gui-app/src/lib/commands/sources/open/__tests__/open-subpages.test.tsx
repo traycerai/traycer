@@ -156,6 +156,7 @@ vi.mock("@/hooks/terminal/use-terminal-list-query", () => ({
       sessions: [
         {
           sessionId: "term-1",
+          scope: { kind: "epic", epicId: "epic-1" },
           sessionKind: "terminal",
           status: "running",
           title: "shell one",

@@ -33,7 +33,6 @@ import {
 } from "@/hooks/terminal/use-terminal-crash-notification";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { beginTerminalLoad } from "@/lib/perf/terminal-load-perf";
-import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { useAgentStartTerminalSession } from "@/hooks/agent/use-prepare-tui-launch-mutation";
 import { useHostClientFor } from "@/hooks/host/use-host-client-for";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
@@ -62,8 +61,11 @@ import {
 } from "@/components/ui/popover";
 import { HostWorkspaceSelector } from "@/components/home/host-workspace-selector/host-workspace-selector";
 import { useWorktreeGetBinding } from "@/hooks/worktree/use-worktree-get-binding-query";
+import { useTuiSetupTerminalListRefreshDriver } from "@/hooks/agent/use-tui-setup-terminal-list-refresh-driver";
+import { useTuiSetupTerminalTabRegisterDriver } from "@/hooks/agent/use-tui-setup-terminal-tab-register-driver";
 import { SetupCardSegment } from "@/components/chat/segments/setup-card-segment";
 import { buildTuiAgentSetupCardModel } from "@/stores/chats/tui-agent-setup-card-model";
+import type { WorktreeBinding } from "@traycer/protocol/host/worktree-schemas";
 import { AgentModeReadonlyLabel } from "@/components/home/pickers/agent-mode-toggle";
 import type { AgentMode } from "@/components/home/data/landing-options";
 import { useAgentStopControls } from "@/hooks/agent/use-agent-stop-controls";
@@ -85,42 +87,22 @@ import { ReportIssueAction } from "@/components/report-issue/report-issue-action
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
-const WORKTREE_SETUP_ERROR_CODES: ReadonlyArray<string> = [
-  "WORKTREE_SETUP_FAILED",
-  "WORKTREE_SETUP_CANCELLED",
-];
+// Poll cadence for the setup card's binding while a worktree setup script is
+// still in flight. The script runs in a background PTY server-side and only
+// mutates the binding, so without polling a completion/failure would not
+// surface until the next window refocus - the card would stay "setting up".
+const SETUP_BINDING_POLL_INTERVAL_MS = 2_000;
 
-const WORKTREE_SETUP_ERROR_PATTERNS: ReadonlyArray<string> = [
-  "WORKTREE_SETUP_FAILED",
-  "WORKTREE_SETUP_CANCELLED",
-  "WorktreeSetupFailed",
-  "WorktreeSetupCancelled",
-];
-
-/**
- * Setup-related errors surface to the user via toasts (raised by the
- * `agent.startTerminalSession` mutation hook) plus the host's setup
- * terminal tab. The terminal-agent tile must not render a persistent
- * "Failed to start terminal: …" banner for those - recovery is through
- * the setup terminal context.
- *
- * The host's RPC handler maps setup failures to typed `WORKTREE_SETUP_*`
- * codes on `HostRpcError`; check the typed code first so messages that
- * do not include the code string still classify correctly. The legacy
- * message-pattern path stays as a fallback for non-`HostRpcError`
- * carriers (raw `Error` instances thrown by the harness layer, etc.).
- */
-function isWorktreeSetupError(
-  error: { readonly code?: string; readonly message?: string } | null,
-): boolean {
-  if (error === null) return false;
-  const code = typeof error.code === "string" ? error.code : "";
-  if (code.length > 0 && WORKTREE_SETUP_ERROR_CODES.includes(code)) {
-    return true;
-  }
-  const message = typeof error.message === "string" ? error.message : "";
-  return WORKTREE_SETUP_ERROR_PATTERNS.some((pattern) =>
-    message.includes(pattern),
+// A created worktree whose setup script has neither settled nor failed yet.
+// `pending`/`running` are the only non-terminal setup states; every other
+// state (succeeded / not_required / failed / cancelled) is final, so polling
+// stops once no entry is in flight.
+function hasInFlightWorktreeSetup(binding: WorktreeBinding | null): boolean {
+  if (binding === null) return false;
+  return binding.entries.some(
+    (entry) =>
+      entry.mode === "worktree" &&
+      (entry.setupState === "pending" || entry.setupState === "running"),
   );
 }
 
@@ -201,9 +183,6 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
   const sessionId = props.node.id;
   useEffect(() => {
     beginTerminalLoad(sessionId, "terminal-agent");
-    Analytics.getInstance().track(AnalyticsEvent.TerminalOpened, {
-      kind: "agent",
-    });
   }, [sessionId]);
   useEffect(() => {
     if (reachability.status !== "unreachable") return;
@@ -229,7 +208,12 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
       />
     );
   }
-  if (reachability.status === "checking") {
+  // "host-starting": local host not published yet (boot/ensure/wake) - show
+  // the loading shell, never the permanently-closed banner.
+  if (
+    reachability.status === "checking" ||
+    reachability.status === "host-starting"
+  ) {
     return (
       <TerminalAgentTileShell tileId={props.tileId}>
         <TerminalAgentWorktreeNotice
@@ -280,6 +264,7 @@ function TuiAgentTileLive(
   const killTerminal = useTerminalKillFor(
     hostClient,
     "Couldn't restart terminal after updating folders.",
+    false,
   );
 
   // Every harness - Claude included - goes through `agent.startTerminalSession`
@@ -365,6 +350,7 @@ function TuiAgentTileLive(
 
   const bootstrap = useTerminalTileBootstrap({
     hostId,
+    scope: { kind: "epic", epicId },
     sessionId,
     instanceId,
     sessionKind: "terminal-agent",
@@ -606,13 +592,6 @@ interface TerminalAgentBodyProps {
 function TerminalAgentBody(props: TerminalAgentBodyProps): React.ReactNode {
   if (props.prepareLaunchIsError || props.createIsError) {
     const error = props.prepareLaunchError ?? props.createError;
-    if (isWorktreeSetupError(error)) {
-      return (
-        <div className="flex h-full w-full items-center justify-center text-ui-sm text-muted-foreground">
-          Waiting for worktree setup. Check the setup terminal tab.
-        </div>
-      );
-    }
     if (isWorktreeMissingError(error)) {
       // No silent demote-to-Local: the host refused to launch into a missing
       // cwd. A terminal agent stays bound to its folder for life (a PTY can't
@@ -744,6 +723,9 @@ function TerminalAgentPreLaunchToolbar(
     // enabled regardless of focus so the chip always renders.
     staleTime: 0,
     refetchOnWindowFocus: paneVisible,
+    // The nested setup notice owns the in-flight polling; this observer only
+    // needs the binding for the chip, so it shares the cache without polling.
+    refetchInterval: false,
   });
   const binding = bindingQuery.data?.binding ?? null;
   const sourceStagingKey = useMemo<WorktreeStagingKey>(
@@ -907,8 +889,24 @@ function TerminalAgentWorktreeNotice(props: {
     // pane is visible, so a completed setup flips the card without a reopen).
     staleTime: 0,
     refetchOnWindowFocus: paneVisible,
+    // Poll while a setup script is in flight so a background completion/failure
+    // surfaces on the card even while the agent PTY runs (no chat subscription
+    // to push binding transitions). TanStack re-runs this against the freshest
+    // binding after each fetch, so polling stops the moment every entry settles.
+    refetchInterval: (query) =>
+      hasInFlightWorktreeSetup(query.state.data?.binding ?? null)
+        ? SETUP_BINDING_POLL_INTERVAL_MS
+        : false,
   });
   const binding = bindingQuery.data?.binding ?? null;
+  // Setup PTYs are spawned server-side, so nothing invalidates the renderer's
+  // one-shot `terminal.list` query on its own; drive that off the binding so the
+  // card's "Open terminal" liveness tracks the setup terminal as it starts/ends.
+  useTuiSetupTerminalListRefreshDriver({ binding });
+  // Register the running setup PTY as a background canvas tab so it auto-appears
+  // in the canvas and survives a host/GUI restart (the host keeps no terminal
+  // state across restarts - persistence comes only from a saved canvas tab).
+  useTuiSetupTerminalTabRegisterDriver({ binding, viewTabId: props.viewTabId });
   const model = useMemo(
     () =>
       buildTuiAgentSetupCardModel(binding, { epicId, ownerId: props.agentId }),
@@ -1187,6 +1185,7 @@ function TerminalAgentLive(props: TerminalAgentLiveProps) {
         <TerminalXtermHost
           sessionId={handle.sessionId}
           tileKind="terminal-agent"
+          chrome="padded"
           instanceId={props.instanceId}
           effectiveCols={effectiveCols}
           effectiveRows={effectiveRows}

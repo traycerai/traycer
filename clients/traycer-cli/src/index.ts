@@ -11,7 +11,10 @@ import { config } from "./config";
 import { buildCliMarkSourceCommand } from "./commands/cli-mark-source";
 import { buildCliReAnchorCommand } from "./commands/cli-re-anchor";
 import { buildCliUpgradeCommand } from "./commands/cli-upgrade";
+import { buildAgentConfigureCommand } from "./commands/agent-configure";
 import { buildAgentCreateCommand } from "./commands/agent-create";
+import { buildAgentListProfilesCommand } from "./commands/agent-list-profiles";
+import { buildAgentProfileRateLimitsCommand } from "./commands/agent-profile-rate-limits";
 import { buildAgentActivityFromHookCommand } from "./commands/agent-activity-from-hook";
 import { buildAgentListHarnessesCommand } from "./commands/agent-list-harnesses";
 import { buildAgentListHarnessModelsCommand } from "./commands/agent-list-harness-models";
@@ -37,9 +40,12 @@ import { buildConfigEnvGetCommand } from "./commands/config-env-get";
 import { buildConfigEnvListCommand } from "./commands/config-env-list";
 import { buildConfigEnvSetCommand } from "./commands/config-env-set";
 import { buildConfigEnvUnsetCommand } from "./commands/config-env-unset";
+import { buildConfigShellAddCommand } from "./commands/config-shell-add";
 import { configShellGetCommand } from "./commands/config-shell-get";
 import { configShellListCommand } from "./commands/config-shell-list";
+import { buildConfigShellRemoveCommand } from "./commands/config-shell-remove";
 import { configShellResetCommand } from "./commands/config-shell-reset";
+import { buildConfigShellRevertArgsCommand } from "./commands/config-shell-revert-args";
 import { buildConfigShellSetCommand } from "./commands/config-shell-set";
 import { buildHostAvailableCommand } from "./commands/host-available";
 import { hostDoctorCommand } from "./commands/host-doctor";
@@ -753,10 +759,10 @@ function registerConfigCommands(program: Command): void {
     shell
       .command("set")
       .description(
-        "Set the shell path and/or args. Pass each arg as a separate token after `--`, e.g. `traycer config shell set --path /bin/zsh -- -i -l`. Use --clear-args to store an explicit empty list.",
+        "Select a shell and/or set its flags. Flags attach to a program, not the panel: `--path` alone picks a shell and materialises its default flags, while flags after `--` (e.g. `traycer config shell set --path /bin/zsh -- -i -l`) are remembered for that shell. Passing flags with no --path configures the currently-selected shell, or the login shell while still following the system default. Use --clear-args to store an explicit empty list.",
       )
       .option("--path <path>", "Absolute path to the shell binary")
-      .option("--clear-args", "Store an explicit empty args list")
+      .option("--clear-args", "Store an explicit empty args list for the shell")
       .argument(
         "[shellArgs...]",
         "Shell flags (recommended: pass after `--` so leading dashes aren't parsed as options)",
@@ -795,9 +801,54 @@ function registerConfigCommands(program: Command): void {
 
   withRunner(
     shell
+      .command("add")
+      .description(
+        "Remember a shell (any executable) and select it. Unlike `set`, the path must exist and be executable.",
+      )
+      .requiredOption("--path <path>", "Absolute path to the program to add"),
+    (opts) =>
+      buildConfigShellAddCommand({
+        path: typeof opts.path === "string" ? opts.path : "",
+      }),
+  );
+
+  withRunner(
+    shell
+      .command("remove")
+      .description(
+        "Forget a previously-added shell; if it was selected, fall back to the OS default",
+      )
+      .requiredOption(
+        "--path <path>",
+        "Absolute path to the program to remove",
+      ),
+    (opts) =>
+      buildConfigShellRemoveCommand({
+        path: typeof opts.path === "string" ? opts.path : "",
+      }),
+  );
+
+  withRunner(
+    shell
+      .command("revert-args")
+      .description(
+        "Restore a remembered shell's flags to its family default; the shell stays remembered",
+      )
+      .requiredOption(
+        "--path <path>",
+        "Absolute path to the shell whose flags to restore",
+      ),
+    (opts) =>
+      buildConfigShellRevertArgsCommand({
+        path: typeof opts.path === "string" ? opts.path : "",
+      }),
+  );
+
+  withRunner(
+    shell
       .command("reset")
       .description(
-        "Clear the stored shell overrides; defaults are synthesised on next read",
+        "Clear the shell selection (return to the system default); remembered shells and their flags are kept",
       ),
     () => configShellResetCommand,
   );
@@ -1015,6 +1066,14 @@ function registerAgentCommands(program: Command): void {
   const cliSurface = resolveAgentCliSurface(readonlyEnv());
   const readonlyHidden = { hidden: cliSurface === "readonly" };
   const harnessHelp = `Harness id: ${AGENT_FACING_HARNESS_ID_LIST}`;
+  // Deliberately spells out what OMITTING the option does: omission is its own
+  // selection (the remembered last-used profile), not a synonym for 'ambient'.
+  const profileHelp =
+    "Provider profile: 'ambient' for the provider's CLI login, or a managed profile id from 'traycer agent list-profiles <harness>'. Omit to use the last-used profile.";
+  // Rate-limit reads and configuration resolve no last-used fallback - they
+  // act on the one profile the caller names - so `--profile` is required there.
+  const profileRequiredHelp =
+    "Provider profile: 'ambient' for the provider's CLI login, or a managed profile id from 'traycer agent list-profiles <harness>'.";
   const agent = program
     .command("agent")
     .description("Agent inspection and communication for the calling agent");
@@ -1065,6 +1124,7 @@ function registerAgentCommands(program: Command): void {
         "--fast",
         "Request fast mode for supported models. Only available for gui surface.",
       )
+      .option("--profile <ambient|id>", profileHelp)
       .option(
         "--cwd <path>",
         "Primary working directory for the child agent. Use this with a path returned by 'traycer worktree create'.",
@@ -1096,6 +1156,7 @@ function registerAgentCommands(program: Command): void {
             ? opts.reasoningEffort
             : null,
         fast: opts.fast === true,
+        profile: typeof opts.profile === "string" ? opts.profile : null,
         cwd: typeof opts.cwd === "string" ? opts.cwd : null,
         workspacePaths: Array.isArray(opts.workspacePath)
           ? opts.workspacePath.filter(
@@ -1155,6 +1216,90 @@ function registerAgentCommands(program: Command): void {
         senderAgentId:
           typeof opts.senderAgentId === "string" ? opts.senderAgentId : null,
         harnessId: expectRequiredPositional(args[0], "harness"),
+      }),
+  );
+
+  withRunner(
+    agent
+      .command("list-profiles", readonlyHidden)
+      .description(
+        "List the provider profiles available for one harness, with their cached rate-limit status.",
+      )
+      .argument("<harness>", harnessHelp)
+      .option("--epic-id <id>", "Epic (defaults to $TRAYCER_EPIC_ID)")
+      .option(
+        "--sender-agent-id <id>",
+        "Calling agent (defaults to $TRAYCER_AGENT_ID)",
+      ),
+    (opts, args) =>
+      buildAgentListProfilesCommand({
+        epicId: typeof opts.epicId === "string" ? opts.epicId : null,
+        senderAgentId:
+          typeof opts.senderAgentId === "string" ? opts.senderAgentId : null,
+        harnessId: expectRequiredPositional(args[0], "harness"),
+      }),
+  );
+
+  withRunner(
+    agent
+      .command("profile-rate-limits", readonlyHidden)
+      .description(
+        "Read fresh, detailed rate limits for one provider profile of a harness.",
+      )
+      .argument("<harness>", harnessHelp)
+      .requiredOption("--profile <ambient|id>", profileRequiredHelp)
+      .option("--epic-id <id>", "Epic (defaults to $TRAYCER_EPIC_ID)")
+      .option(
+        "--sender-agent-id <id>",
+        "Calling agent (defaults to $TRAYCER_AGENT_ID)",
+      ),
+    (opts, args) =>
+      buildAgentProfileRateLimitsCommand({
+        epicId: typeof opts.epicId === "string" ? opts.epicId : null,
+        senderAgentId:
+          typeof opts.senderAgentId === "string" ? opts.senderAgentId : null,
+        harnessId: expectRequiredPositional(args[0], "harness"),
+        profile: typeof opts.profile === "string" ? opts.profile : "",
+      }),
+  );
+
+  withRunner(
+    agent
+      .command("configure", readonlyHidden)
+      .description(
+        "Switch the harness, model, and provider profile an existing GUI agent uses for future turns.",
+      )
+      .requiredOption("--agent-id <id>", "GUI agent to configure")
+      .requiredOption("--harness <id>", harnessHelp)
+      .requiredOption("--model <id>", "Model id for future turns")
+      .requiredOption("--profile <ambient|id>", profileRequiredHelp)
+      .option("--epic-id <id>", "Epic (defaults to $TRAYCER_EPIC_ID)")
+      .option(
+        "--sender-agent-id <id>",
+        "Calling agent (defaults to $TRAYCER_AGENT_ID)",
+      )
+      .option(
+        "--reasoning-effort <effort>",
+        "Reasoning effort for supported models. Omitting it sets no reasoning effort.",
+      )
+      .option(
+        "--fast",
+        "Enable fast mode for supported models. Omitting it disables fast mode.",
+      ),
+    (opts) =>
+      buildAgentConfigureCommand({
+        epicId: typeof opts.epicId === "string" ? opts.epicId : null,
+        senderAgentId:
+          typeof opts.senderAgentId === "string" ? opts.senderAgentId : null,
+        agentId: typeof opts.agentId === "string" ? opts.agentId : "",
+        harness: typeof opts.harness === "string" ? opts.harness : "",
+        model: typeof opts.model === "string" ? opts.model : "",
+        profile: typeof opts.profile === "string" ? opts.profile : "",
+        reasoningEffort:
+          typeof opts.reasoningEffort === "string"
+            ? opts.reasoningEffort
+            : null,
+        fast: opts.fast === true,
       }),
   );
 

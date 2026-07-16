@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { cleanup, render, waitFor } from "@testing-library/react";
 import { TerminalXtermHost } from "@/components/epic-canvas/renderers/terminal-tile-xterm";
 import { __disposeAllXtermHostsForTests } from "@/components/epic-canvas/renderers/xterm-host-registry";
+import { isMac } from "@/lib/keybindings/platform";
 
 type LinkActivate = (event: MouseEvent, uri: string) => void;
 
@@ -12,7 +13,12 @@ type CapturedOptions = {
 
 type MockTerminalInstance = {
   readonly options: CapturedOptions;
+  readonly buffer: {
+    readonly active: { type: "normal" | "alternate" };
+  };
   readonly scrollPages: Mock;
+  readonly scrollToTop: Mock;
+  readonly scrollToBottom: Mock;
 };
 
 const xtermMocks = vi.hoisted(() => ({
@@ -21,6 +27,15 @@ const xtermMocks = vi.hoisted(() => ({
   webLinksHandlers: [] as LinkActivate[],
   openExternalLink: vi.fn(() => Promise.resolve()),
 }));
+
+// Platform-dependent keyboard behavior (plain Home/End scroll history on macOS
+// only) needs both branches testable; jsdom always reports non-mac.
+const platformMock = vi.hoisted(() => ({ isMac: false }));
+vi.mock("@/lib/keybindings/platform", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/lib/keybindings/platform")>();
+  return { ...actual, isMac: () => platformMock.isMac };
+});
 
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({
@@ -37,9 +52,13 @@ vi.mock("@xterm/xterm", () => ({
     cols = 80;
     rows = 24;
     options: CapturedOptions & Record<string, unknown>;
-    readonly buffer = { active: { baseY: 0, length: 24 } };
+    readonly buffer = {
+      active: { baseY: 0, length: 24, type: "normal" as const },
+    };
     readonly focus = vi.fn();
     readonly scrollPages = vi.fn();
+    readonly scrollToTop = vi.fn();
+    readonly scrollToBottom = vi.fn();
 
     constructor(options: Record<string, unknown>) {
       this.options = options;
@@ -141,12 +160,14 @@ function renderHost(): void {
       shouldFocusOnActivePane={false}
       findTargetId={null}
       keepAlive={false}
+      chrome="padded"
     />,
   );
 }
 
 describe("<TerminalXtermHost /> link handling", () => {
   afterEach(() => {
+    platformMock.isMac = false;
     cleanup();
     __disposeAllXtermHostsForTests();
     xtermMocks.terminals.length = 0;
@@ -222,5 +243,148 @@ describe("<TerminalXtermHost /> link handling", () => {
     expect(stopPageUpPropagation).toHaveBeenCalledTimes(1);
     expect(preventPageDownDefault).toHaveBeenCalledTimes(1);
     expect(stopPageDownPropagation).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes Page Up and Page Down through on the alternate buffer", async () => {
+    renderHost();
+
+    await waitFor(() => {
+      expect(xtermMocks.customKeyHandlers[0]).toBeDefined();
+    });
+
+    const terminal = xtermMocks.terminals[0];
+    terminal.buffer.active.type = "alternate";
+    const handler = xtermMocks.customKeyHandlers[0];
+    const pageUp = new KeyboardEvent("keydown", { key: "PageUp" });
+    const pageDown = new KeyboardEvent("keydown", { key: "PageDown" });
+
+    expect(handler(pageUp)).toBe(true);
+    expect(handler(pageDown)).toBe(true);
+    expect(terminal.scrollPages).not.toHaveBeenCalled();
+  });
+
+  it("scrolls to terminal history boundaries and passes the chords through on the alternate buffer", async () => {
+    renderHost();
+
+    await waitFor(() => {
+      expect(xtermMocks.customKeyHandlers[0]).toBeDefined();
+    });
+
+    const terminal = xtermMocks.terminals[0];
+    const handler = xtermMocks.customKeyHandlers[0];
+    const platformModifier = isMac() ? { metaKey: true } : { ctrlKey: true };
+    const homeCode = isMac() ? "ArrowLeft" : "Home";
+    const endCode = isMac() ? "ArrowRight" : "End";
+
+    expect(
+      handler(new KeyboardEvent("keydown", { key: "End", code: endCode })),
+    ).toBe(true);
+    expect(terminal.scrollToBottom).not.toHaveBeenCalled();
+
+    expect(
+      handler(
+        new KeyboardEvent("keydown", {
+          key: "Home",
+          code: homeCode,
+          ...platformModifier,
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      handler(
+        new KeyboardEvent("keydown", {
+          key: "End",
+          code: endCode,
+          ...platformModifier,
+        }),
+      ),
+    ).toBe(false);
+    expect(terminal.scrollToTop).toHaveBeenCalledTimes(1);
+    expect(terminal.scrollToBottom).toHaveBeenCalledTimes(1);
+
+    terminal.buffer.active.type = "alternate";
+    expect(
+      handler(
+        new KeyboardEvent("keydown", {
+          key: "Home",
+          code: homeCode,
+          ...platformModifier,
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      handler(
+        new KeyboardEvent("keydown", {
+          key: "End",
+          code: endCode,
+          ...platformModifier,
+        }),
+      ),
+    ).toBe(true);
+    expect(terminal.scrollToTop).toHaveBeenCalledTimes(1);
+    expect(terminal.scrollToBottom).toHaveBeenCalledTimes(1);
+  });
+
+  it("scrolls history with plain Home/End on macOS and passes them through on the alternate buffer", async () => {
+    platformMock.isMac = true;
+    renderHost();
+
+    await waitFor(() => {
+      expect(xtermMocks.customKeyHandlers[0]).toBeDefined();
+    });
+
+    const terminal = xtermMocks.terminals[0];
+    const handler = xtermMocks.customKeyHandlers[0];
+
+    expect(
+      handler(new KeyboardEvent("keydown", { key: "Home", code: "Home" })),
+    ).toBe(false);
+    expect(terminal.scrollToTop).toHaveBeenCalledTimes(1);
+    expect(
+      handler(new KeyboardEvent("keydown", { key: "End", code: "End" })),
+    ).toBe(false);
+    expect(terminal.scrollToBottom).toHaveBeenCalledTimes(1);
+
+    // Shift+Home is a selection/passthrough chord, not a scroll command.
+    expect(
+      handler(
+        new KeyboardEvent("keydown", {
+          key: "Home",
+          code: "Home",
+          shiftKey: true,
+        }),
+      ),
+    ).toBe(true);
+    expect(terminal.scrollToTop).toHaveBeenCalledTimes(1);
+
+    terminal.buffer.active.type = "alternate";
+    expect(
+      handler(new KeyboardEvent("keydown", { key: "Home", code: "Home" })),
+    ).toBe(true);
+    expect(
+      handler(new KeyboardEvent("keydown", { key: "End", code: "End" })),
+    ).toBe(true);
+    expect(terminal.scrollToTop).toHaveBeenCalledTimes(1);
+    expect(terminal.scrollToBottom).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps plain Home/End as shell line-edit keys off macOS", async () => {
+    renderHost();
+
+    await waitFor(() => {
+      expect(xtermMocks.customKeyHandlers[0]).toBeDefined();
+    });
+
+    const terminal = xtermMocks.terminals[0];
+    const handler = xtermMocks.customKeyHandlers[0];
+
+    expect(
+      handler(new KeyboardEvent("keydown", { key: "Home", code: "Home" })),
+    ).toBe(true);
+    expect(
+      handler(new KeyboardEvent("keydown", { key: "End", code: "End" })),
+    ).toBe(true);
+    expect(terminal.scrollToTop).not.toHaveBeenCalled();
+    expect(terminal.scrollToBottom).not.toHaveBeenCalled();
   });
 });

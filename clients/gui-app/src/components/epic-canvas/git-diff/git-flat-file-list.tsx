@@ -3,6 +3,7 @@ import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import type { GitChangedFile } from "@traycer/protocol/host";
 import { sortGitPanelFlatFiles } from "@/lib/git/panel-file-rendering";
 import { NO_HIGHLIGHT, type HighlightRanges } from "@/lib/git/path-highlight";
+import type { GitDiffRepositoryContext } from "@/stores/epics/canvas/types";
 import { FileRow } from "./file-row";
 
 export interface GitFlatFileListProps {
@@ -10,6 +11,7 @@ export interface GitFlatFileListProps {
   readonly viewTabId: string;
   readonly hostId: string;
   readonly runningDir: string;
+  readonly repositoryContext: GitDiffRepositoryContext | null;
   readonly files: ReadonlyArray<GitChangedFile>;
   /** Filter match ranges keyed by file path; empty map when no filter active. */
   readonly pathRangesByPath: ReadonlyMap<string, HighlightRanges>;
@@ -24,6 +26,7 @@ interface GitFlatFileListItemProps {
   readonly viewTabId: string;
   readonly hostId: string;
   readonly runningDir: string;
+  readonly repositoryContext: GitDiffRepositoryContext | null;
   readonly file: GitChangedFile;
   readonly activeFilePath: string | null;
   readonly pathRangesByPath: ReadonlyMap<string, HighlightRanges>;
@@ -37,6 +40,7 @@ function GitFlatFileListItem(props: GitFlatFileListItemProps): ReactNode {
       viewTabId={props.viewTabId}
       hostId={props.hostId}
       runningDir={props.runningDir}
+      repositoryContext={props.repositoryContext}
       file={props.file}
       active={props.file.path === props.activeFilePath}
       pathRanges={props.pathRangesByPath.get(props.file.path) ?? NO_HIGHLIGHT}
@@ -52,6 +56,7 @@ export function GitFlatFileList(props: GitFlatFileListProps): ReactNode {
     epicId,
     files: unsortedFiles,
     pathRangesByPath,
+    repositoryContext,
     runningDir,
     viewTabId,
   } = props;
@@ -91,6 +96,7 @@ export function GitFlatFileList(props: GitFlatFileListProps): ReactNode {
         viewTabId={viewTabId}
         hostId={hostId}
         runningDir={runningDir}
+        repositoryContext={repositoryContext}
         file={file}
         activeFilePath={activeFilePath}
         pathRangesByPath={pathRangesByPath}
@@ -102,6 +108,7 @@ export function GitFlatFileList(props: GitFlatFileListProps): ReactNode {
       hostId,
       epicId,
       pathRangesByPath,
+      repositoryContext,
       props.nestedRows,
       runningDir,
       viewTabId,
@@ -123,6 +130,7 @@ export function GitFlatFileList(props: GitFlatFileListProps): ReactNode {
             viewTabId={viewTabId}
             hostId={hostId}
             runningDir={runningDir}
+            repositoryContext={repositoryContext}
             file={file}
             activeFilePath={activeFilePath}
             pathRangesByPath={pathRangesByPath}

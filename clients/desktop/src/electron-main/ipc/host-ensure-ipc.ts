@@ -165,6 +165,14 @@ async function ensureHost(
       if (refreshed !== null) {
         return refreshed;
       }
+      // Publish the reachable host into the lifecycle before returning.
+      // This probe is private to the ensure flow - it does NOT update
+      // `HostLifecycle.currentSnapshot` - and the watcher edge that should
+      // have populated it may already be spent (edge-triggered on the
+      // pid.json WRITE, while reachability is time-varying). Without this,
+      // ensure can report success while the renderer's host directory stays
+      // empty for the rest of the session (2026-07-14 incident).
+      await bridge.options.host.reloadSnapshotFromDisk();
       return {
         action: "already-ready",
         running: true,
@@ -350,6 +358,13 @@ async function ensureHost(
     version: readiness.version,
     pid: readiness.pid,
   });
+  // `waitForHostReady` proved reachability with its own private poll; the
+  // lifecycle snapshot the renderer reads knows nothing about it yet. Push
+  // the result into `HostLifecycle` instead of hoping the pid.json watcher
+  // edge lands after the port is answering - in the 2026-07-14 incident the
+  // main process logged this exact success while every chat tab stayed on
+  // "Bound host is offline" until an app restart.
+  await bridge.options.host.reloadSnapshotFromDisk();
   return { action: "provisioned", running: true, version: readiness.version };
 }
 

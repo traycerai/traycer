@@ -2,7 +2,9 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -29,6 +31,7 @@ import {
   ProviderRateLimitDetail,
   type ProviderRateLimitQueryState,
 } from "@/components/settings/panels/provider-rate-limit-views";
+import { resolveCodexResetCreditAction } from "@/components/settings/panels/codex-reset-credit-availability";
 import { useHostProviderRateLimitsQuery } from "@/hooks/host/use-host-provider-rate-limits-query";
 import { useRefreshProviderRateLimitsOnMount } from "@/hooks/host/use-refresh-provider-rate-limits-on-mount";
 import {
@@ -57,7 +60,10 @@ import {
   resolveRateLimitProfileId,
   type RateLimitProfileSelection,
 } from "@/hooks/rate-limits/use-rate-limit-profile-selection";
-import { enqueueRateLimitFetch } from "@/lib/rate-limits/ephemeral-fetch-queue";
+import {
+  enqueueRateLimitFetch,
+  enqueueRateLimitFetchBatch,
+} from "@/lib/rate-limits/ephemeral-fetch-queue";
 import {
   formatUnavailableReason,
   resolvePopoverProviderRateLimitState,
@@ -71,6 +77,7 @@ import {
   sortProviderStatesByProviderOrder,
 } from "@/lib/provider-ordering";
 import { queryKeys } from "@/lib/query-keys";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import {
   PROVIDER_RATE_LIMITS_STALE_TIME_MS,
   rateLimitFetchLane,
@@ -111,6 +118,11 @@ type RailTabDescriptor =
   | { readonly kind: "traycer" };
 
 const PERSONAL_ACCOUNT_CONTEXT: AccountContext = { type: "PERSONAL" };
+
+const POPOVER_SURFACE_CLASS_NAME =
+  "w-[min(92vw,30rem)] min-w-[min(92vw,20rem,var(--radix-popover-content-available-width))] max-w-[var(--radix-popover-content-available-width)] max-h-[var(--radix-popover-content-available-height)] resize overflow-hidden";
+
+type RateLimitPopoverSurfaceVariant = "content" | "empty";
 
 function railTabProviderId(tab: RailTabDescriptor): ProviderId {
   return tab.kind === "traycer" ? "traycer" : tab.providerId;
@@ -190,7 +202,7 @@ function configuredProviderProfiles(
 function refreshTargetsForProvider(
   provider: ConfiguredRateLimitProvider,
 ): ReadonlyArray<string | null> {
-  if (provider.profiles.length <= 1) return [null];
+  if (provider.profiles.length === 0) return [null];
   return provider.profiles
     .filter(profileLoggedInForUsage)
     .map(rateLimitProfileId);
@@ -230,7 +242,7 @@ export function RateLimitPopover({
       collisionPadding={12}
       role="dialog"
       aria-label="Usage limits"
-      className="w-[min(92vw,30rem)] gap-0 overflow-hidden rounded-xl p-0"
+      className="w-fit max-w-[var(--radix-popover-content-available-width)] max-h-[var(--radix-popover-content-available-height)] gap-0 overflow-hidden rounded-xl p-0"
       // Radix auto-focuses the first focusable child on open. Here that's the
       // Overview rail tab, whose `TooltipWrapper` opens the tooltip on focus
       // (keyboard a11y) - so it would pop open the instant the popover mounts
@@ -239,12 +251,99 @@ export function RateLimitPopover({
       // focusable is its search input, so it wants and keeps the auto-focus), so
       // opting out of the initial focus is harmless and stops the stuck tooltip.
       onOpenAutoFocus={(event) => event.preventDefault()}
+      onInteractOutside={(event) => {
+        const target = event.target;
+        if (
+          target instanceof Element &&
+          (target.closest('[data-testid="confirm-destructive-dialog"]') !==
+            null ||
+            target.closest('[data-slot="dialog-overlay"]') !== null)
+        ) {
+          event.preventDefault();
+        }
+      }}
     >
       <RateLimitPopoverBody
         onClose={onClose}
         profileSelection={profileSelection}
       />
     </PopoverContent>
+  );
+}
+
+/**
+ * Viewport-bounded, two-axis CSS resize surface. The browser owns live drag
+ * frames and writes the resulting inline dimensions; pointer release commits
+ * that measured size once so subsequent opens restore it.
+ */
+function RateLimitPopoverResizeSurface({
+  variant,
+  children,
+}: {
+  readonly variant: RateLimitPopoverSurfaceVariant;
+  readonly children: ReactNode;
+}): ReactNode {
+  const size = useRateLimitPopoverStore((state) => state.size);
+  const setSize = useRateLimitPopoverStore((state) => state.setSize);
+  const surfaceRef = useRef<HTMLDivElement | null>(null);
+  const commitResizedDimensions = (
+    event: ReactPointerEvent<HTMLDivElement>,
+  ): void => {
+    if (event.target !== event.currentTarget) return;
+    const { width, height } = event.currentTarget.getBoundingClientRect();
+    if (width <= 0 || height <= 0) return;
+    setSize({ widthPx: width, heightPx: height });
+  };
+  useEffect(() => {
+    const surface = surfaceRef.current;
+    if (surface === null) return;
+    const win = surface.ownerDocument.defaultView;
+    if (win === null) return;
+
+    let initialized = false;
+    let applyTimer: number | null = null;
+    const applyMeasuredSize = (): void => {
+      const { width, height } = surface.getBoundingClientRect();
+      if (width <= 0 || height <= 0) return;
+      surface.style.width = `${width}px`;
+      surface.style.height = `${height}px`;
+    };
+    const observer = new ResizeObserver(() => {
+      if (!initialized) {
+        initialized = true;
+        return;
+      }
+      if (applyTimer !== null) win.clearTimeout(applyTimer);
+      applyTimer = win.setTimeout(applyMeasuredSize, 100);
+    });
+    observer.observe(surface);
+    return () => {
+      observer.disconnect();
+      if (applyTimer === null) return;
+      win.clearTimeout(applyTimer);
+      applyMeasuredSize();
+    };
+  }, []);
+
+  return (
+    <div
+      ref={surfaceRef}
+      data-testid="rate-limit-popover-resize-surface"
+      className={cn(
+        POPOVER_SURFACE_CLASS_NAME,
+        variant === "content"
+          ? "grid h-[max(50vh,22rem)] min-h-[min(35vh,16rem,var(--radix-popover-content-available-height))] grid-cols-[3rem_minmax(0,1fr)] grid-rows-[minmax(0,1fr)]"
+          : "flex min-h-[min(20vh,8rem,var(--radix-popover-content-available-height))] flex-col items-start gap-3 p-4",
+      )}
+      style={
+        size === null
+          ? undefined
+          : { width: size.widthPx, height: size.heightPx }
+      }
+      onPointerUp={commitResizedDimensions}
+    >
+      {children}
+    </div>
   );
 }
 
@@ -278,7 +377,11 @@ function RateLimitPopoverBody({
   // Zero-state only when there is genuinely nothing to show: no host-RPC
   // providers AND no eligible Traycer tab.
   if (providers.length === 0 && !traycerSubscription.eligible) {
-    return <RateLimitZeroState onClose={onClose} />;
+    return (
+      <RateLimitPopoverResizeSurface variant="empty">
+        <RateLimitZeroState onClose={onClose} />
+      </RateLimitPopoverResizeSurface>
+    );
   }
 
   // A credential removed (or Traycer becoming ineligible) mid-session can drop
@@ -294,15 +397,12 @@ function RateLimitPopoverBody({
     ? activeTab
     : "overview";
 
-  // A *fixed target* height (not content-sized), plus an explicit
-  // `minmax(0,1fr)` grid row, is what makes the popover a stable box across
-  // tabs and lets its panes scroll. The target is at least half the viewport in
-  // normal header placement, while Radix's available-height guard keeps it
-  // inside short windows. `minmax(0,1fr)` pins the row to the used container
-  // height regardless of content, and both columns stretch into it with their
-  // own `min-h-0` + `overflow-y-auto`, so each scrolls internally.
+  // The default target height keeps the popover stable across tabs. The resize
+  // surface applies the remembered user size within fluid viewport bounds.
+  // `minmax(0,1fr)` pins the row to that height, and both columns keep their
+  // own `min-h-0` + `overflow-y-auto` scrolling.
   return (
-    <div className="grid h-[max(50vh,22rem)] max-h-[var(--radix-popover-content-available-height)] grid-cols-[3rem_minmax(0,1fr)] grid-rows-[minmax(0,1fr)] overflow-hidden">
+    <RateLimitPopoverResizeSurface variant="content">
       <RateLimitRail
         railTabs={railTabs}
         providers={providers}
@@ -332,7 +432,7 @@ function RateLimitPopoverBody({
           />
         )}
       </div>
-    </div>
+    </RateLimitPopoverResizeSurface>
   );
 }
 
@@ -618,16 +718,17 @@ function useTraycerRateLimitUsageState(
 
 /**
  * The rail's icon-only "Refresh all" (Core Flows): ephemeralProcess providers
- * refresh one at a time through the shared serial queue (`force: true`), while
- * httpFetch providers refresh concurrently alongside via a direct query
- * invalidation - a plain GET has no subprocess cost to serialize. The synthetic
- * Traycer entry refreshes here too: it refetches the AuthService subscription
- * query, and rate-limit based plans additionally invalidate the unscoped
- * aperture `host.getRateLimitUsage` query that backs the live artifact bar.
+ * refresh as one queued batch whose profile pulls run concurrently
+ * (`force: true`), while httpFetch providers refresh concurrently alongside via
+ * a direct query invalidation - a plain GET has no subprocess cost to serialize.
+ * The synthetic Traycer entry refreshes here too: it refetches the AuthService
+ * subscription query, and rate-limit based plans additionally invalidate the
+ * unscoped aperture `host.getRateLimitUsage` query that backs the live artifact
+ * bar.
  * `refreshing` combines all lanes' real query state - the queue's draining flag
- * for ephemeralProcess (which stays true a beat longer than any single
- * provider's `isFetching`, covering the "still waiting behind an earlier
- * provider in the queue" gap), each configured httpFetch provider's own
+ * for ephemeralProcess (which stays true until every profile in the batch has
+ * settled, even after one provider's own `isFetching` clears), each configured
+ * httpFetch provider's own
  * `isFetching` (read via `useHostQueries` against the exact same query keys the
  * invalidation below targets), plus Traycer's auth/aperture fetch state - so
  * the icon spins for the whole round regardless of which lane(s) are actually
@@ -657,6 +758,15 @@ function RateLimitRefreshAllButton({
       profileId,
     })),
   );
+  const ephemeralProcessRequests = providers
+    .filter((provider) => provider.lane === "ephemeralProcess")
+    .flatMap((provider) =>
+      refreshTargetsForProvider(provider).map((profileId) => ({
+        providerId: provider.providerId,
+        accountContext: DEFAULT_ACCOUNT_CONTEXT,
+        profileId,
+      })),
+    );
   // Every httpFetch provider resolves to the exact same lane options (the
   // `isHttpFetch` branch in `providerRateLimitQueryOptions` doesn't vary by
   // provider id) - reusing the first one's is safe without the "verify every
@@ -698,8 +808,8 @@ function RateLimitRefreshAllButton({
     traycerRefreshing;
 
   // Fire-and-forget, not awaited: httpFetch providers refresh concurrently via a
-  // direct invalidation, ephemeralProcess providers queue through the shared
-  // serial lane, and Traycer refetches its subscription/usage queries. Returns
+  // direct invalidation, ephemeralProcess profiles fan out inside one queued
+  // batch, and Traycer refetches its subscription/usage queries. Returns
   // an already-resolved promise so `RefreshIconButton` gets its
   // `() => Promise<void>` contract without gating the spinner on the fetches
   // themselves - `refreshing` (above) owns that.
@@ -716,17 +826,7 @@ function RateLimitRefreshAllButton({
         }),
       });
     });
-    providers
-      .filter((provider) => provider.lane === "ephemeralProcess")
-      .forEach((provider) => {
-        refreshTargetsForProvider(provider).forEach((profileId) => {
-          void enqueueRateLimitFetch(
-            provider.providerId,
-            DEFAULT_ACCOUNT_CONTEXT,
-            { force: true, profileId },
-          );
-        });
-      });
+    void enqueueRateLimitFetchBatch(ephemeralProcessRequests, { force: true });
     if (traycerRefreshTarget.enabled) {
       void traycerRefreshTarget.refetch();
       traycerRefreshTarget.rateLimitAccountContexts.forEach(
@@ -895,13 +995,13 @@ function SingleProfileRateLimitProviderBlock({
               // `isRefreshing` (from useProviderRateLimitRefresh) already folds
               // in the ephemeralProcess `draining` flag, so this button stays
               // disabled for a "Refresh all" round's full duration, not just
-              // this provider's own slice of it.
+              // this provider's own fetch.
               refreshing={isRefreshing}
             />
           ) : null}
         </div>
       </div>
-      <RateLimitProviderBody state={state} variant={variant} />
+      <RateLimitProviderBody state={state} variant={variant} profileId={null} />
     </div>
   );
 }
@@ -1145,7 +1245,11 @@ function RateLimitProviderProfileRow({
           />
         </div>
       </div>
-      <RateLimitProviderBody state={state} variant={variant} />
+      <RateLimitProviderBody
+        state={state}
+        variant={variant}
+        profileId={profileId}
+      />
     </div>
   );
 }
@@ -1255,9 +1359,11 @@ function UpdatedAgoText({
 function RateLimitProviderBody({
   state,
   variant,
+  profileId,
 }: {
   readonly state: PopoverProviderRateLimitState;
   readonly variant: PopoverBlockVariant;
+  readonly profileId: string | null;
 }): ReactNode {
   switch (state.kind) {
     case "cold":
@@ -1291,7 +1397,15 @@ function RateLimitProviderBody({
       // than replacing it with an error (Core Flows).
       return (
         <div className={cn(state.degraded && "opacity-60")}>
-          <ProviderRateLimitDetail data={state.data} variant={variant} />
+          <ProviderRateLimitDetail
+            data={state.data}
+            variant={variant}
+            codexResetAction={resolveCodexResetCreditAction(
+              state.data.provider,
+              profileId,
+              variant === "popover-detail",
+            )}
+          />
         </div>
       );
   }
@@ -1342,13 +1456,20 @@ function TraycerRateLimitBlock({
   // invalidation targets only aperture `{ accountContext }` keys, never provider
   // `{ accountContext, providerId }` pulls.
   const refresh = async (): Promise<void> => {
-    await traycerSubscription.query.refetch();
+    const result = await traycerSubscription.query.refetch();
     traycerSubscription.rateLimitAccountContexts.forEach((accountContext) => {
       void queryClient.invalidateQueries({
         queryKey: queryKeys.hostTraycerRateLimitUsage(hostId, accountContext),
         exact: true,
       });
     });
+    // Observational only: the UI awaits exactly what it always did (the
+    // primary refetch; invalidations stay fire-and-forget background work).
+    if (result.status === "success") {
+      Analytics.getInstance().track(AnalyticsEvent.SubscriptionRefreshed, {
+        source: "direct_ui",
+      });
+    }
   };
 
   return (
@@ -1602,7 +1723,7 @@ function RateLimitZeroState({
     openSettings({ section: "providers", resetToGeneral: false });
   };
   return (
-    <div className="flex flex-col items-start gap-3 p-4">
+    <div className="flex h-full flex-col items-start gap-3">
       <p className="text-ui-sm text-muted-foreground">
         Connect Claude Code or Codex to see usage here.
       </p>

@@ -22,10 +22,6 @@ function resolveDevDesktopDisplayName(env) {
   return resolveDevDesktopIdentity(env)?.displayName ?? null;
 }
 
-function resolveDevDesktopWorktreeLabel(env) {
-  return resolveDevDesktopIdentity(env)?.worktreeLabel ?? null;
-}
-
 function sanitizeDevDesktopSlot(value) {
   return value
     .trim()
@@ -46,7 +42,5 @@ function displayNameForSlot(slot) {
 
 module.exports = {
   DEV_DESKTOP_DISPLAY_NAME_ENV,
-  resolveDevDesktopIdentity,
   resolveDevDesktopDisplayName,
-  resolveDevDesktopWorktreeLabel,
 };

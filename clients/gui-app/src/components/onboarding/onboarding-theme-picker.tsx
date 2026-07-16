@@ -4,6 +4,7 @@ import {
   useSettingsStore,
   type ThemeMode,
 } from "@/stores/settings/settings-store";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 const MODES: ReadonlyArray<{ id: ThemeMode; label: string }> = [
   { id: "light", label: "Light" },
@@ -37,7 +38,14 @@ export function OnboardingThemePicker() {
             key={mode.id}
             type="button"
             aria-pressed={theme === mode.id}
-            onClick={() => setTheme(mode.id)}
+            onClick={() => {
+              if (mode.id === theme) return;
+              Analytics.getInstance().track(
+                AnalyticsEvent.OnboardingThemeChanged,
+                { theme: `mode:${mode.id}` },
+              );
+              setTheme(mode.id);
+            }}
             className={cn(
               "px-3 py-1.5 font-mono text-overline uppercase tracking-wider transition-colors duration-200",
               theme === mode.id
@@ -62,7 +70,14 @@ export function OnboardingThemePicker() {
             aria-pressed={themePreset === preset.id}
             aria-label={preset.label}
             title={preset.label}
-            onClick={() => setThemePreset(preset.id)}
+            onClick={() => {
+              if (preset.id === themePreset) return;
+              Analytics.getInstance().track(
+                AnalyticsEvent.OnboardingThemeChanged,
+                { theme: `preset:${preset.id}` },
+              );
+              setThemePreset(preset.id);
+            }}
             className={cn(
               "relative size-7 shrink-0 overflow-hidden rounded-full border transition-transform duration-200",
               themePreset === preset.id

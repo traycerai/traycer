@@ -9,6 +9,12 @@ import type {
 } from "@/lib/windows/types";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import { progressToast } from "@/lib/toast/progress-toast";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import {
+  settleUpdateDownloadOutcome,
+  trackUpdateDownloadStarted,
+} from "@/lib/app-update-analytics";
 
 const APP_UPDATE_TOAST_ID = "traycer-app-update";
 const APP_UPDATE_TRANSIENT_TOAST_DURATION_MS = 4000;
@@ -66,6 +72,11 @@ export function AppUpdateToastController(): null {
     }
     handledSequenceRef.current = snapshot.sequence;
     handledReportCapabilityRef.current = reportIssueAvailable;
+    // Terminal download outcomes settle the window-local flow armed by a
+    // download gesture; replayed snapshots in other windows are no-ops there.
+    if (snapshot.status === "ready" || snapshot.status === "error") {
+      settleUpdateDownloadOutcome(snapshot.status, snapshot.errorMessage);
+    }
     const mountedAtMs = mountedAtMsRef.current;
     if (isManualReplayFromBeforeMount(snapshot, mountedAtMs)) {
       return;
@@ -73,10 +84,17 @@ export function AppUpdateToastController(): null {
 
     showAppUpdateToast(snapshot, {
       onDownload: () => {
+        trackUpdateDownloadStarted("direct_ui");
         void bridge.downloadUpdate();
       },
       onRestart: openConfirmRestartUpdate,
-      onViewInstructions: openInstallGuidance,
+      onViewInstructions: () => {
+        Analytics.getInstance().track(
+          AnalyticsEvent.UpdateInstallGuidanceOpened,
+          { source: "direct_ui" },
+        );
+        openInstallGuidance();
+      },
       onReportIssue: reportIssueAvailable
         ? () => openReportIssueWithContext(APP_UPDATE_REPORT_CONTEXT)
         : null,
@@ -147,7 +165,7 @@ function showAppUpdateToast(
       );
       return;
     case "downloading":
-      toast.loading("Downloading update…", {
+      progressToast("Downloading update…", {
         id: APP_UPDATE_TOAST_ID,
         description:
           snapshot.downloadProgress === null

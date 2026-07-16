@@ -20,6 +20,8 @@ import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-i
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { type HostRpcRegistry, useHostClient } from "@/lib/host";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
 import { tuiAgentDisplayTitle } from "@/lib/display-title";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
@@ -83,14 +85,14 @@ type WorktreeCreateMutateAsync = (
  *      record),
  *   2. opens a canvas tab placeholder for the client-minted id BEFORE
  *      worktree creation and `agent.tui.prepareLaunch` for normal launches so
- *      the user has a visible tui-agent surface inside the Epic while the
- *      resolver awaits orchestrator setup. Fork launches intentionally wait
- *      until `agent.tui.prepareLaunch` returns the new forked session so the
- *      tab opens on the forked session rather than a pre-fork placeholder.
- *      The tile renders "Loading terminal agent…" until the persisted record
- *      lands (or the user closes the tab), so a long-running / failed /
- *      cancelled setup cannot strand the user without a placeholder/recovery
- *      surface in the Epic context.
+ *      the user has a visible tui-agent surface inside the Epic while
+ *      worktree creation and launch preparation run. Fork launches
+ *      intentionally wait until `agent.tui.prepareLaunch` returns the new
+ *      forked session so the tab opens on the forked session rather than a
+ *      pre-fork placeholder. The tile renders "Loading terminal agent…" until
+ *      the persisted record lands (or the user closes the tab), so a slow
+ *      worktree creation or launch preparation cannot strand the user without
+ *      a placeholder/recovery surface in the Epic context.
  *   3. for Worktree-mode launches, dispatches the matching `worktree.*`
  *      RPC so the host SQLite binding row exists before the harness
  *      preparation reads it,
@@ -98,29 +100,32 @@ type WorktreeCreateMutateAsync = (
  *      which seeds a default owner-scoped binding from the epic's folders
  *      when none was dispatched in step 3 (the always-non-empty seam),
  *      rejects with `WORKTREE_MISSING` if a bound folder is gone on disk
- *      (no silent demote), and awaits orchestrator setup,
+ *      (no silent demote); the worktree setup script keeps running in its
+ *      background terminal and never gates the launch,
  *   5. inserts a tui-agent record via `epic.createTuiAgent`
  *      with the client-minted id (the Y.Doc projection swaps the
  *      placeholder out for the real record).
  *
  * Errors from any step propagate; the underlying TanStack Query mutations'
- * default toasts surface user-facing messaging. Setup failure / cancellation
- * (`WORKTREE_SETUP_FAILED` / `WORKTREE_SETUP_CANCELLED`) and a missing bound
- * folder (`WORKTREE_MISSING`) surface as typed errors from
- * `agent.tui.prepareLaunch`; when any fires the harness never starts and the
- * persisted record is never written. Normal launches keep the placeholder
- * canvas tab visible as the durable recovery surface alongside the setup
- * terminal tab plus the typed error (and, for `WORKTREE_MISSING`, the
- * tui-agent tile's own restore/retry body). Fork launches do not open the
- * placeholder until the forked session is ready.
+ * default toasts surface user-facing messaging. A missing bound folder
+ * (`WORKTREE_MISSING`) surfaces as a typed error from
+ * `agent.tui.prepareLaunch`; when it fires the harness never starts and the
+ * persisted record is never written. Setup-script failure / cancellation is
+ * NOT a launch error - the launch is non-blocking and the tile's setup card
+ * owns that UX (progress, Open terminal, Retry). Normal launches keep the
+ * placeholder canvas tab visible as the durable recovery surface alongside
+ * the typed error (and, for `WORKTREE_MISSING`, the tui-agent tile's own
+ * restore/retry body). Fork launches do not open the placeholder until the
+ * forked session is ready.
  *
  * Orphan-binding boundary (be precise — these two paths differ):
  *   - DEFAULT (null intent): no binding is written until prepareLaunch's seam
  *     runs, and the resolver preflights the missing-check BEFORE that seam write,
  *     so a rejected default-seed launch persists NO binding row. Orphan-safe.
  *   - EXPLICIT intent: step 3's `worktree.create` persists the binding BEFORE
- *     prepareLaunch, so a setup failure / cancel after that write leaves a
- *     binding row for an owner id that never gets a record. This orphan window is
+ *     prepareLaunch, so a prepareLaunch rejection (e.g. `WORKTREE_MISSING`)
+ *     after that write leaves a binding row for an owner id that never gets
+ *     a record. This orphan window is
  *     inherent to this deliberately non-atomic 3-step flow (kept for the
  *     placeholder-during-setup UX; a single atomic create RPC would close it) and
  *     is PRE-EXISTING, not introduced by the missing-worktree work. The retained
@@ -424,10 +429,38 @@ async function dispatchWorktreeIntent(
   // routing and binding composition owned by `resolveIntent` instead of
   // re-deriving them client-side across separate create / import / setEntryMode
   // RPCs.
-  await args.worktreeCreate({
+  const result = await args.worktreeCreate({
     epicId,
     ownerId: tuiAgentId,
     ownerKind: "terminal-agent",
     entries: [...intent.entries],
   });
+  // The RPC resolves per-entry: an entry the host failed - or reported
+  // nothing about - has no `ok` row. Launching anyway would run the agent
+  // against a silently-partial binding, so surface the failure and abort
+  // before any harness work happens (the placeholder cleanup in the caller's
+  // finally handles the tab).
+  const okPaths = new Set(
+    result.perEntry
+      .filter((entryResult) => entryResult.ok)
+      .map((entryResult) => entryResult.workspacePath),
+  );
+  const failedPaths = intent.entries
+    .map((entry) => entry.workspacePath)
+    .filter((workspacePath) => !okPaths.has(workspacePath));
+  if (failedPaths.length > 0) {
+    const folder = workspaceFolderName(failedPaths[0]);
+    const scope =
+      failedPaths.length === 1
+        ? `"${folder}"`
+        : `${failedPaths.length} folders, starting with "${folder}"`;
+    const message = `Couldn't prepare the workspace for ${scope}. The terminal agent was not launched.`;
+    reportableErrorToast(message, undefined, {
+      title: "Terminal agent launch aborted",
+      message: null,
+      code: null,
+      source: "Worktree create",
+    });
+    throw new Error(message);
+  }
 }

@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useReducer, useRef } from "react";
+import { useEffect, useMemo, useReducer, useRef } from "react";
 import { TerminalStreamClient } from "@traycer-clients/shared/host-transport/terminal-stream-client";
 import { useHostClient } from "@/lib/host";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
@@ -15,8 +15,9 @@ import {
 } from "@/stores/terminals/terminal-session-store";
 import { TerminalSessionRegistry } from "@/stores/terminals/terminal-session-registry";
 import type {
-  ListTerminalsResponse,
+  ListTerminalsResponseV20,
   TerminalSessionKind,
+  TerminalScope,
 } from "@traycer/protocol/host/terminal/unary-schemas";
 
 const registry = new TerminalSessionRegistry();
@@ -51,7 +52,7 @@ export function disposeAllTerminalSessions(): void {
 
 export interface UseTerminalSessionHandleArgs {
   readonly hostId: string;
-  readonly epicId: string;
+  readonly scope: TerminalScope;
   readonly sessionId: string;
   /**
    * Per-tab instance id this handle is registered under. Keying by
@@ -74,8 +75,9 @@ export function useTerminalSessionHandle(
   const hostEntry = useHostDirectoryEntry(args.hostId);
   const globalClient = useHostClient();
   // Terminal is a DURABLE per-tab stream: its `WsStreamClient` is OWNED by the
-  // session store for the session's warm lifetime (terminal-agent sessions are
-  // kept warm across tile unmount), NOT by this tile - so closing then reopening
+  // session store for the session's warm lifetime (live sessions are kept warm
+  // across tile unmount - agents indefinitely, plain terminals for the
+  // release-linger window), NOT by this tile - so closing then reopening
   // the tab no longer hands the revived warm session a socket the unmounting
   // tile already closed. The opener wires the shared "durable stream = auth +
   // wake" recovery; the returned handle's `close()` tears it down on dispose.
@@ -112,6 +114,18 @@ export function useTerminalSessionHandle(
       reattachMode: args.reattachMode,
     };
   }, [args.cols, args.rows, args.reattachMode]);
+
+  const scopeEpicId = args.scope.kind === "epic" ? args.scope.epicId : null;
+  // Callers commonly construct a scope literal during render. Keep an
+  // equivalent scope referentially stable so that a render cannot release and
+  // reacquire this instanceId's durable stream.
+  const scope = useMemo<TerminalScope>(
+    () =>
+      scopeEpicId === null
+        ? { kind: "independent" }
+        : { kind: "epic", epicId: scopeEpicId },
+    [scopeEpicId],
+  );
 
   useEffect(() => {
     if (!args.enabled) {
@@ -169,7 +183,7 @@ export function useTerminalSessionHandle(
     const next = registry.acquire(args.instanceId, () => {
       const creationConfig = creationConfigRef.current;
       return createTerminalSessionStore({
-        epicId: args.epicId,
+        scope,
         sessionId: args.sessionId,
         cols: creationConfig.cols,
         rows: creationConfig.rows,
@@ -189,7 +203,7 @@ export function useTerminalSessionHandle(
   }, [
     args.hostId,
     args.enabled,
-    args.epicId,
+    scope,
     args.sessionId,
     args.instanceId,
     args.kind,
@@ -221,7 +235,7 @@ export function useTerminalSessionHandle(
         // looped forever, bouncing the PTY stream and leaving reattached
         // terminals blank. (An explicitly justified `setQueriesData`:
         // stream-pushed state IS the response state.)
-        queryClient.setQueriesData<ListTerminalsResponse>(
+        queryClient.setQueriesData<ListTerminalsResponseV20>(
           { queryKey: hostQueryKeys.methodScope(args.hostId, "terminal.list") },
           (data) => {
             if (data === undefined) return undefined;

@@ -236,6 +236,7 @@ function forkTarget(profileId: string | null): ChatForkDialogTarget {
     sourceChatId: "source-chat",
     sourceChatTitle: "Source chat",
     assistantMessageId: "assistant-message-1",
+    interviewBlockId: null,
     parentId: null,
     settingsSeed: {
       harnessId: "claude",
@@ -320,6 +321,31 @@ describe("D4: ChatForkDialog seeded from a tombstoned profile", () => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     useSeededWorkspaceSnapshotStore.getState().resetForTests();
     cleanup();
+  });
+
+  it("forwards the selected Q&A checkpoint in the fork request", async () => {
+    dialogMocks.providersByClient.set(TAB_HOST_CLIENT, [
+      claudeState([profile("ambient", "ambient", "Terminal account")]),
+    ]);
+    renderDialog({
+      ...forkTarget(null),
+      interviewBlockId: "question-tool:interview",
+      forkMode: "cross-question",
+    });
+
+    await submitFork();
+
+    const [request] = dialogMocks.createMutate.mock.calls[0];
+    expect(request).toEqual(
+      expect.objectContaining({
+        forkSource: {
+          sourceChatId: "source-chat",
+          assistantMessageId: "assistant-message-1",
+          interviewBlockId: "question-tool:interview",
+          carriedInterviews: "settled",
+        },
+      }),
+    );
   });
 
   it("preserves live workspace edits after a failed attempt so retry submits the same snapshot", async () => {

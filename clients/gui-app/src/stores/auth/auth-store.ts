@@ -104,10 +104,10 @@ export const useAuthStore = create<AuthState>()((set) => ({
     shareableTeams: ReadonlyArray<EpicShareableTeam>,
   ) => {
     set({ status: "signed-in", profile, contextMetadata, shareableTeams });
-    Analytics.getInstance().identify(contextMetadata.userId, {
-      name: profile.userName,
-      email: profile.email,
-    });
+    // Email is the one person property sent (deliberate product decision so
+    // PostHog dashboards can look users up); the final sanitizer drops
+    // everything else the SDK stages on $identify.
+    Analytics.getInstance().identify(contextMetadata.userId, profile.email);
   },
   setSubscriptionStatus: (status: SubscriptionStatus | null) => {
     set({ subscriptionStatus: status });

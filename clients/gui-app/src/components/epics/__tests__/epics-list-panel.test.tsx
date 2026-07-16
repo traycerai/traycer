@@ -39,6 +39,12 @@ import { DEFAULT_HISTORY_SEARCH } from "@/lib/history-search";
 import { WindowsBridgeContext } from "@/providers/windows-bridge-context";
 import { setDesktopEpicOwnershipBridge } from "@/lib/windows/desktop-epic-ownership";
 import type { DesktopWindowsBridge } from "@/lib/windows/types";
+import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/worktree-schemas";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+
+const queryClient = new QueryClient({
+  defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+});
 
 /**
  * Light up the desktop "Open in New Window" path: both the renderer context
@@ -104,6 +110,11 @@ interface RenameEpicTitleVariables {
   };
 }
 
+interface SetEpicPinnedVariables {
+  readonly epicId: string;
+  readonly pinned: boolean;
+}
+
 interface WorktreeCleanupCandidateStub {
   readonly worktreePath: string;
   readonly repoLabel: string;
@@ -147,6 +158,7 @@ const testState = vi.hoisted(() => ({
   isFetching: false,
   bridge: null as DesktopWindowsBridge | null,
   worktreeCandidates: [] as WorktreeCleanupCandidateStub[],
+  worktreesByEpicId: new Map<string, readonly WorktreeHostEntryV12[]>(),
   mutate:
     vi.fn<
       (
@@ -155,6 +167,8 @@ const testState = vi.hoisted(() => ({
       ) => void
     >(),
   renameMutate: vi.fn<(variables: RenameEpicTitleVariables) => void>(),
+  setPinnedMutate: vi.fn<(variables: SetEpicPinnedVariables) => void>(),
+  pendingSetPinnedEpicIds: new Set<string>(),
   refetch: vi.fn(),
   fetchNextPage: vi.fn(),
 }));
@@ -167,6 +181,7 @@ vi.mock("@/hooks/home/use-history-query", () => ({
       availableWorkspaces: testState.availableWorkspaces,
       totalCount: testState.items.length,
       facets: testState.facets,
+      worktreesByEpicId: testState.worktreesByEpicId,
     },
     isPending: false,
     isFetching: testState.isFetching,
@@ -200,6 +215,13 @@ vi.mock("@/hooks/epic/use-epic-title-mutation", () => ({
   }),
 }));
 
+vi.mock("@/hooks/epic/use-epic-set-pinned-mutation", () => ({
+  useEpicSetPinned: () => ({
+    mutate: testState.setPinnedMutate,
+  }),
+  usePendingSetPinnedEpicIds: () => testState.pendingSetPinnedEpicIds,
+}));
+
 vi.mock("@/hooks/epic/use-epic-activity-status", () => ({
   useEpicActivityStatus: (epicId: string | null) =>
     epicId === null
@@ -219,9 +241,41 @@ function historyItem(overrides: Partial<HistoryItem>): HistoryItem {
     updatedBucket: "today",
     linkedRepos: [],
     linkedWorkspaces: [],
+    pullRequestNumbers: [],
     ownership: "mine",
     permissionRole: "owner",
+    isPinned: false,
     ...overrides,
+  };
+}
+
+function historyWorktree(): WorktreeHostEntryV12 {
+  return {
+    worktreePath: "/worktrees/app/feature-history",
+    repoLabel: "acme/app",
+    repoIdentifier: { owner: "acme", repo: "app" },
+    branch: "feature/history",
+    inUse: false,
+    uncommittedCount: 0,
+    gitRemovable: true,
+    scripts: null,
+    lastActivityAt: null,
+    owners: [
+      {
+        epicId: "epic-from-history",
+        ownerKind: "chat",
+        ownerId: "chat-1",
+        updatedAt: 1,
+      },
+    ],
+    branchStatus: { ahead: 1, behind: 0, mergedIntoDefault: false },
+    createdAt: null,
+    prState: "open",
+    prNumber: 84,
+    prUrl: "https://github.com/acme/app/pull/84",
+    mergedHeadShaMatches: false,
+    submodules: [],
+    atBaseCommit: false,
   };
 }
 
@@ -262,9 +316,11 @@ function renderPanel(variant: EpicsListPanelVariant, initialEntry: string) {
 
 function RootOutlet(): ReactNode {
   const content = (
-    <TooltipProvider>
-      <Outlet />
-    </TooltipProvider>
+    <QueryClientProvider client={queryClient}>
+      <TooltipProvider>
+        <Outlet />
+      </TooltipProvider>
+    </QueryClientProvider>
   );
   if (testState.bridge === null) return content;
   return (
@@ -290,12 +346,16 @@ describe("<EpicsListPanel />", () => {
     testState.isFetching = false;
     testState.bridge = null;
     testState.worktreeCandidates = [];
+    testState.worktreesByEpicId = new Map();
     setDesktopEpicOwnershipBridge(null);
     testState.mutate.mockReset();
     testState.renameMutate.mockReset();
+    testState.setPinnedMutate.mockReset();
+    testState.pendingSetPinnedEpicIds = new Set();
     testState.refetch.mockReset();
     testState.fetchNextPage.mockReset();
     testState.activityByEpicId.clear();
+    queryClient.clear();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useHistorySearchStore.setState({ search: DEFAULT_HISTORY_SEARCH });
   });
@@ -326,6 +386,148 @@ describe("<EpicsListPanel />", () => {
     expect(screen.queryByTestId("old-epic-route")).toBeNull();
   });
 
+  it("unpins a pinned app history epic from the row control", async () => {
+    testState.items = [historyItem({ isPinned: true })];
+    renderPanel("embedded", "/");
+
+    const unpin = await screen.findByRole("button", {
+      name: "Unpin Open from landing from top",
+    });
+    expect(unpin.getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByTestId("epics-list-row").dataset.pinned).toBe("true");
+    fireEvent.click(unpin);
+    expect(testState.setPinnedMutate).toHaveBeenCalledWith({
+      epicId: "epic-from-history",
+      pinned: false,
+    });
+  });
+
+  it("pins an unpinned app history epic", async () => {
+    renderPanel("embedded", "/");
+
+    const pin = await screen.findByRole("button", {
+      name: "Pin Open from landing to top",
+    });
+    expect(pin.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(pin);
+    expect(testState.setPinnedMutate).toHaveBeenCalledWith({
+      epicId: "epic-from-history",
+      pinned: true,
+    });
+  });
+
+  it("clicks the pin control without triggering the row navigation layer", async () => {
+    const router = renderPanel("embedded", "/");
+
+    const pin = await screen.findByRole("button", {
+      name: "Pin Open from landing to top",
+    });
+    fireEvent.click(pin);
+
+    expect(testState.setPinnedMutate).toHaveBeenCalledWith({
+      epicId: "epic-from-history",
+      pinned: true,
+    });
+    // The pin control sits alongside - not inside - the row's absolute <Link>
+    // overlay. A regression that nested it inside the link, or dropped the
+    // sibling stacking, would fire navigation on the same click.
+    expect(router.state.location.pathname).toBe("/");
+    expect(screen.queryByTestId("epic-tab-route")).toBeNull();
+  });
+
+  it("keeps two independently pending pin rows disabled, without swapping their icons for a spinner", async () => {
+    testState.items = [
+      historyItem({}),
+      historyItem({
+        id: "history-epic-2",
+        epicId: "epic-two",
+        title: "Second history item",
+      }),
+      historyItem({
+        id: "history-epic-3",
+        epicId: "epic-three",
+        title: "Third history item",
+      }),
+    ];
+    // Simulates two rows having each fired their own `epic.setPinned` call
+    // concurrently: both must read as pending off the shared mutation
+    // cache, independent of which one was clicked most recently. The pin
+    // state itself is optimistic, so the icon keeps showing each row's
+    // current state - pending only disables re-toggling, with no spinner.
+    testState.pendingSetPinnedEpicIds = new Set([
+      "epic-from-history",
+      "epic-two",
+    ]);
+    renderPanel("embedded", "/");
+
+    const pendingPinOne = await screen.findByRole("button", {
+      name: "Pin Open from landing to top",
+    });
+    const pendingPinTwo = screen.getByRole("button", {
+      name: "Pin Second history item to top",
+    });
+    const idlePin = screen.getByRole("button", {
+      name: "Pin Third history item to top",
+    });
+
+    expect(pendingPinOne.hasAttribute("disabled")).toBe(true);
+    expect(pendingPinTwo.hasAttribute("disabled")).toBe(true);
+    expect(idlePin.hasAttribute("disabled")).toBe(false);
+
+    expect(pendingPinOne.querySelector("svg")).not.toBeNull();
+    expect(pendingPinTwo.querySelector("svg")).not.toBeNull();
+    expect(screen.queryByTestId("epics-list-row-pin-spinner")).toBeNull();
+  });
+
+  it("shows no pin control for a phase row even when the raw task carries isPinned true", async () => {
+    testState.items = [
+      historyItem({
+        id: "history-phase-pinned",
+        epicId: "phase-pinned",
+        taskType: "phase",
+        title: "Phase somehow pinned",
+        // A phase can never legitimately be pinned - the data layer always
+        // projects `isPinned: false` for phases - but the row control must
+        // stay defensive even if a stale/bad projection carried `true`
+        // through.
+        isPinned: true,
+      }),
+    ];
+    renderPanel("embedded", "/");
+
+    expect(await screen.findByText("Phase somehow pinned")).not.toBeNull();
+    expect(screen.queryByTestId("epics-list-row-pin")).toBeNull();
+  });
+
+  it("shows task PR pills without replacing the row navigation layer", async () => {
+    testState.worktreesByEpicId = new Map([
+      ["epic-from-history", [historyWorktree()]],
+    ]);
+    renderPanel("embedded", "/");
+
+    const pr = await screen.findByRole("link", { name: "Open PR #84 Open" });
+    expect(pr.getAttribute("href")).toBe("https://github.com/acme/app/pull/84");
+    const pills = screen.getByTestId("task-history-prs-epic-from-history");
+    expect(pills.className).toContain("opacity-0");
+    expect(pills.className).toContain("group-hover/list-row:opacity-100");
+    expect(pills.className).toContain(
+      "group-focus-within/list-row:opacity-100",
+    );
+    expect(
+      screen.getByRole("link", { name: /open task open from landing/i }),
+    ).not.toBeNull();
+  });
+
+  it("keeps the updated timestamp visible when a task has no PR pills", async () => {
+    renderPanel("embedded", "/");
+
+    const updated = await screen.findByText("updated about 2 hours ago");
+    expect(updated.className).not.toContain("group-hover/list-row:opacity-0");
+    expect(updated.className).not.toContain(
+      "group-focus-within/list-row:opacity-0",
+    );
+  });
+
   it("offers both context-menu actions for an epic row", async () => {
     enableDesktopBridge();
     renderPanel("embedded", "/");
@@ -354,6 +556,8 @@ describe("<EpicsListPanel />", () => {
       }),
     ];
     renderPanel("embedded", "/");
+
+    expect(screen.queryByTestId("epics-list-row-pin")).toBeNull();
 
     fireEvent.contextMenu(await screen.findByTestId("epics-list-row-card"));
 

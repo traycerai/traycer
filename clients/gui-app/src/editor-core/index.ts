@@ -18,6 +18,7 @@ export {
   type ArtifactToolbarProps,
   type ArtifactCommentAction,
 } from "./toolbar/artifact-toolbar";
+export { updateArtifactToolbarPosition } from "./toolbar/artifact-toolbar-position";
 
 export { MermaidNode } from "./nodes/mermaid";
 export type { MermaidAttrs } from "./nodes/mermaid";
@@ -51,3 +52,11 @@ export {
   type ArtifactFindPluginState,
   type ArtifactFindSearchParams,
 } from "./extensions/artifact-find-extension";
+
+export { artifactDocumentBundle } from "./artifact-document-bundle";
+export {
+  ArtifactLinkPopover,
+  ARTIFACT_LINK_CREATE_EVENT,
+  type ArtifactLinkPopoverProps,
+  type OpenableArtifactLink,
+} from "./links/artifact-link-popover";

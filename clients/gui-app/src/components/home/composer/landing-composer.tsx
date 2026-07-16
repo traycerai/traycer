@@ -48,6 +48,7 @@ import { contentIsSubmittable } from "@/lib/composer/composer-content";
 import { nextComposerMode } from "@/components/home/data/landing-options";
 import { ArrowLeftRight } from "lucide-react";
 import { useHostBinding, useHostClient } from "@/lib/host";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 interface LandingComposerProps {
   readonly draftId: string | null;
@@ -222,6 +223,10 @@ export function LandingComposer(props: LandingComposerProps) {
   );
 
   const handleRemoveImage = useCallback((id: string) => {
+    Analytics.getInstance().track(AnalyticsEvent.AttachmentRemoved, {
+      kind: "image",
+      surface: "draft",
+    });
     editorRef.current?.removeImageAttachmentById(id);
   }, []);
 

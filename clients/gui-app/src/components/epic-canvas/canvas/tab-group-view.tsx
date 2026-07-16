@@ -170,12 +170,12 @@ export const TabGroupView = memo(function TabGroupView(
     [promotePreviewInTab, tabId],
   );
 
-  const handleSplitRight = useCallback(
-    (groupId: string) => {
+  const handleSplit = useCallback(
+    (groupId: string, direction: SplitDirection) => {
       // The new empty pane self-renders the inline opener (PaneOpener); no
       // explicit trigger needed.
       navigateNested(epicId, tabId, () =>
-        prepareSplitPaneEmptyFocusTarget(tabId, groupId, "horizontal"),
+        prepareSplitPaneEmptyFocusTarget(tabId, groupId, direction),
       );
     },
     [epicId, navigateNested, prepareSplitPaneEmptyFocusTarget, tabId],
@@ -335,7 +335,7 @@ export const TabGroupView = memo(function TabGroupView(
             onSelectTab={handleSelectTab}
             onCloseTab={handleCloseTab}
             onPromotePreview={handlePromotePreview}
-            onSplitRight={handleSplitRight}
+            onSplit={handleSplit}
             onCloseGroup={handleCloseGroup}
             onOpenBlankTab={handleOpenBlankTab}
             canRenameTabs={canRenameTabs}

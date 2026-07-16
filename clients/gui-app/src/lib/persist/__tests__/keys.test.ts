@@ -5,6 +5,7 @@ import {
   composerHarnessMemoryKey,
   composerRunSettingsKey,
   epicCanvasKey,
+  landingTerminalsKey,
   openEpicKey,
   persistKey,
   scopeBucket,
@@ -79,7 +80,7 @@ describe("persist key builders — output-preserving against current source", ()
     );
   });
 
-  it("emits the current localStorage key for each of the 7 scoped stores", () => {
+  it("emits the current localStorage key for each of the 8 scoped stores", () => {
     // Source: src/stores/composer/composer-run-settings-store.ts
     // (`composerRunSettingsPersistKey`).
     expect(composerRunSettingsKey(null)).toBe(
@@ -116,6 +117,13 @@ describe("persist key builders — output-preserving against current source", ()
     // by userId).
     expect(epicCanvasKey(null)).toBe("traycer-gui-app:epic-canvas:anon");
     expect(epicCanvasKey("u1")).toBe("traycer-gui-app:epic-canvas:u1");
+    // Source: src/stores/home/landing-terminal-store.ts.
+    expect(landingTerminalsKey(null)).toBe(
+      "traycer-gui-app:landing-terminals:anon",
+    );
+    expect(landingTerminalsKey("u1")).toBe(
+      "traycer-gui-app:landing-terminals:u1",
+    );
     // Source: src/stores/epics/open-epic/store.ts (local
     // `persistKey(epicId, userId)` emits `…:open-epic:{userBucket}:{epicId}`).
     expect(openEpicKey(null, "e1")).toBe("traycer-gui-app:open-epic:anon:e1");

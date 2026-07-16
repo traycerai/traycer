@@ -8,9 +8,9 @@ import { runnerMutationKeys, runnerQueryKeys } from "@/lib/query-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
 
 /**
- * Drops the stored shell row entirely; the next read synthesises defaults.
- * Useful when a user has wedged themselves into a non-functional shell and
- * wants to fall back to the OS default.
+ * Returns to the system default by clearing only the selection; remembered
+ * shells and their flags are kept (the login shell's entry is inherited). Only
+ * the shell config changes, so just that query is invalidated.
  */
 export function useRunnerTraycerShellConfigResetMutation(): UseMutationResult<
   void,

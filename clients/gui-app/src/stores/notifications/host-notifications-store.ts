@@ -21,6 +21,15 @@ import {
 
 export const HOST_NOTIFICATIONS_INITIAL_LIMIT = 50;
 
+/**
+ * The host expires presence records after a short TTL (15s at the time of
+ * writing) so a dead window can't suppress deliveries forever. A change-driven
+ * presence send alone therefore goes stale whenever the user simply stays on
+ * one tab — exactly the case suppression exists for — so the stream re-sends
+ * the current presence on this cadence, comfortably inside that TTL.
+ */
+export const HOST_NOTIFICATIONS_PRESENCE_HEARTBEAT_MS = 5_000;
+
 export type HostNotificationFeedEntry = HostNotificationEntry;
 
 export type HostNotificationsFeedFrame = Extract<
@@ -28,6 +37,7 @@ export type HostNotificationsFeedFrame = Extract<
   | { readonly kind: "snapshot" }
   | { readonly kind: "upserted" }
   | { readonly kind: "readStateChanged" }
+  | { readonly kind: "cleared" }
 >;
 
 interface HostNotificationsProjection {
@@ -62,6 +72,10 @@ interface HostNotificationsState {
   markAllReadLocally: (
     beforeUpdatedAt: number,
     readAt: number,
+    expectedSnapshotEpoch: number,
+  ) => void;
+  clearBeforeLocally: (
+    beforeUpdatedAt: number,
     expectedSnapshotEpoch: number,
   ) => void;
   reset: () => void;
@@ -250,6 +264,26 @@ export const useHostNotificationsStore = create<HostNotificationsState>()(
       });
     },
 
+    clearBeforeLocally: (beforeUpdatedAt, expectedSnapshotEpoch) => {
+      set((state) => {
+        if (state.snapshotEpoch !== expectedSnapshotEpoch) return state;
+        const retainedEntries = Object.values(state.byId).filter(
+          (entry) => entry.updatedAt > beforeUpdatedAt,
+        );
+        if (retainedEntries.length === state.orderedIds.length) return state;
+        const byId = Object.fromEntries(
+          retainedEntries.map((entry) => [entry.id, entry]),
+        );
+        const projection = projectHostNotifications(byId);
+        return {
+          byId,
+          orderedIds: projection.orderedIds,
+          unreadCount: projection.unreadCount,
+          nextCursor: null,
+        };
+      });
+    },
+
     reset: () => set(initialState()),
   }),
 );
@@ -273,7 +307,9 @@ export function openHostNotificationsStream(
     initialLimit: HOST_NOTIFICATIONS_INITIAL_LIMIT,
   });
   let lastPresenceKey: string | null = null;
-  const sendPresence = (): void => {
+  // `force` refreshes the host's TTL'd presence record even when nothing
+  // changed locally; change-driven sends stay deduplicated by content.
+  const sendPresence = (force: boolean): void => {
     const frame = readHostNotificationPresenceFrame({
       windowId: options.windowId,
       now: options.now,
@@ -286,13 +322,18 @@ export function openHostNotificationsStream(
       focused: presence.focused,
       entity: presence.entity,
     });
-    if (presenceKey === lastPresenceKey) return;
+    if (!force && presenceKey === lastPresenceKey) return;
     lastPresenceKey = presenceKey;
     session.sendClientFrame(presence, null);
     options.onPresenceChanged(presence);
   };
-  const unsubscribePresence = subscribeHostNotificationPresence(sendPresence);
-  sendPresence();
+  const unsubscribePresence = subscribeHostNotificationPresence(() => {
+    sendPresence(false);
+  });
+  const presenceHeartbeat = globalThis.setInterval(() => {
+    sendPresence(true);
+  }, HOST_NOTIFICATIONS_PRESENCE_HEARTBEAT_MS);
+  sendPresence(true);
   session.onServerFrame((envelope, binaryPayload) => {
     if (binaryPayload !== null) return;
     const parsed =
@@ -321,9 +362,27 @@ export function openHostNotificationsStream(
           );
         options.onFeedFrame(frame);
         return;
+      case "cleared":
+        useHostNotificationsStore
+          .getState()
+          .clearBeforeLocally(
+            frame.beforeUpdatedAt,
+            useHostNotificationsStore.getState().snapshotEpoch,
+          );
+        options.onFeedFrame(frame);
+        return;
       case "channelEmission":
         if (frame.channelId === "renderer") {
-          options.displayChannelEmission(frame.rows);
+          const currentById = useHostNotificationsStore.getState().byId;
+          options.displayChannelEmission(
+            frame.rows.map((entry) => {
+              const current = currentById[entry.id];
+              return Object.hasOwn(currentById, entry.id) &&
+                current.updatedAt >= entry.updatedAt
+                ? current
+                : entry;
+            }),
+          );
         }
         return;
       case "pong":
@@ -335,11 +394,12 @@ export function openHostNotificationsStream(
     if (status === "open") {
       lastPresenceKey = null;
       options.onStreamOpened();
-      sendPresence();
+      sendPresence(true);
     }
     handleHostNotificationsCloseReason(reason, onAuthError);
   });
   return () => {
+    globalThis.clearInterval(presenceHeartbeat);
     unsubscribePresence();
     session.close();
   };

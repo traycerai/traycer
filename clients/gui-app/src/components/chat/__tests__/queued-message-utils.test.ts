@@ -19,6 +19,7 @@ const AGENT_SENDER = {
   agentId: "agent-1",
   displayName: null,
   reply: { expectsReply: false as const },
+  inReplyTo: null,
 };
 
 describe("queueItemCanPauseFromQueueHeader", () => {

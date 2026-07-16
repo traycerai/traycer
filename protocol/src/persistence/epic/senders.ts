@@ -44,6 +44,19 @@ export const agentSenderSchema = z.object({
       }),
     ])
     .default({ expectsReply: false }),
+  /**
+   * The broker thread id this message SETTLED: the message resumes a request
+   * the receiving chat itself opened (`expectReply=true` on its own earlier
+   * `agent.sendMessage`), either as the counterparty's reply or as the
+   * system inactivity notice closing out that thread. `null` for fresh
+   * requests, fire-and-forget sends, and rows persisted before this field
+   * existed. Distinct from `reply`, which is the NEW expectation this
+   * message carries. Consumers use it to tell a thread-resumed turn (it
+   * continues the chain that sent the request, keeping that chain's
+   * human/agent root) from a fresh agent-initiated request (which roots a
+   * new agent-driven chain).
+   */
+  inReplyTo: z.string().nullable().default(null),
 });
 export type AgentSender = z.infer<typeof agentSenderSchema>;
 
@@ -53,6 +66,41 @@ export const userMessageSenderSchema = z.discriminatedUnion("type", [
 ]);
 export type UserMessageSender = z.infer<typeof userMessageSenderSchema>;
 export type AssistantMessageSender = z.infer<typeof agentSenderSchema>;
+
+/**
+ * Wire-freeze copy of {@link agentSenderSchema} WITHOUT `inReplyTo`, bound to
+ * the released `chat.subscribe@1.0–1.3` serverFrames (via the frozen chat-tree
+ * variants below) so a peer that negotiated an older minor keeps receiving
+ * frames a strict decoder accepts — a plain `z.object` silently strips the
+ * unmodeled `inReplyTo` key on reparse (the provider-cli-state v2/v3 discipline).
+ *
+ * Hand-frozen field-for-field, NOT derived via `.omit()`/`.extend()` off the
+ * live shape: a future agent-sender field must not silently leak onto the
+ * frozen wire. Extend the live `agentSenderSchema` and freeze here explicitly.
+ * The live line that carries `inReplyTo` is `chat.subscribe@1.4`.
+ */
+export const agentSenderSchemaPreInReplyTo = z.object({
+  type: z.literal("agent"),
+  harnessId: guiHarnessIdSchema,
+  agentId: z.string(),
+  displayName: z.string().nullable(),
+  reply: z
+    .discriminatedUnion("expectsReply", [
+      z.object({
+        expectsReply: z.literal(true),
+        responseId: z.string(),
+      }),
+      z.object({
+        expectsReply: z.literal(false),
+      }),
+    ])
+    .default({ expectsReply: false }),
+});
+
+export const userMessageSenderSchemaPreInReplyTo = z.discriminatedUnion(
+  "type",
+  [userSenderSchema, agentSenderSchemaPreInReplyTo],
+);
 
 export const activeSessionChainSchema = z.object({
   harnessId: guiHarnessIdSchema,

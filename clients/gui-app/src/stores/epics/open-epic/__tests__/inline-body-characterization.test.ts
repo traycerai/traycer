@@ -7,11 +7,12 @@
  * a per-artifact-room Y.Doc replica seeded by `onArtifactRoomSnapshot`. These tests pin the
  * post-cutover invariants:
  *
- *   - `createArtifact` creates metadata-only local placeholders with no
- *     root `content` fragment and no `artifactRoomId`.
+ *   - Freshly created artifacts are metadata-only placeholders with no
+ *     root `content` fragment and no `artifactRoomId` (seeded here via
+ *     `createArtifactInDocForTests`, standing in for the host-side create).
  *   - `getArtifactFragment` returns null when no artifactRoom has been seeded for
  *     the artifact's `artifactRoomId` (the expected state after a fresh
- *     `createArtifact`).
+ *     create).
  *   - Chat / unknown artifacts still return null.
  *   - The projector no longer bumps `contentRevByArtifactId` on edits to
  *     the legacy root `content` fragment because body edits now live on
@@ -20,6 +21,7 @@
 import "../../../../../__tests__/test-browser-apis";
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
+import { createArtifactInDocForTests } from "./projection-helpers-test-shims";
 import {
   createOpenEpicStore,
   type EpicStreamClientFactory,
@@ -103,9 +105,9 @@ function readContentField(
 }
 
 describe("open-epic store artifact-room binding (post-B6)", () => {
-  it("createArtifact writes a metadata-only root entry with no local body fragment", () => {
+  it("a freshly seeded artifact is a metadata-only root entry with no local body fragment", () => {
     const { handle } = newSession();
-    const id = handle.store.getState().createArtifact("spec", null);
+    const id = createArtifactInDocForTests(handle.doc, "spec", null);
     const fragment = readContentField(handle.doc, id);
     expect(fragment).toBeNull();
     expect(
@@ -116,7 +118,7 @@ describe("open-epic store artifact-room binding (post-B6)", () => {
 
   it("does not bump contentRevByArtifactId for legacy root content edits", () => {
     const { handle } = newSession();
-    const id = handle.store.getState().createArtifact("spec", null);
+    const id = createArtifactInDocForTests(handle.doc, "spec", null);
     const before = handle.store.getState().contentRevByArtifactId[id];
 
     const epic = handle.doc.getMap<unknown>("epic");
@@ -143,7 +145,7 @@ describe("open-epic store artifact-room binding (post-B6)", () => {
     // then the editor must render a placeholder rather than bind a stale
     // root-doc fragment.
     const { handle } = newSession();
-    const id = handle.store.getState().createArtifact("spec", null);
+    const id = createArtifactInDocForTests(handle.doc, "spec", null);
     expect(handle.store.getState().getArtifactFragment(id)).toBeNull();
     expect(handle.store.getState().getArtifactBodyAvailability(id)).toBe(
       "unavailable",
@@ -153,7 +155,7 @@ describe("open-epic store artifact-room binding (post-B6)", () => {
 
   it("getArtifactFragment returns null for chat artifacts (no body fragment)", () => {
     const { handle } = newSession();
-    const id = handle.store.getState().createArtifact("chat", null);
+    const id = createArtifactInDocForTests(handle.doc, "chat", null);
     expect(handle.store.getState().getArtifactFragment(id)).toBeNull();
     handle.dispose();
   });

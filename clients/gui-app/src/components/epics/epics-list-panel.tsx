@@ -15,6 +15,7 @@ import {
   Layers,
   ListChecks,
   Pencil,
+  Pin,
   RefreshCwIcon,
   Search,
   Trash2,
@@ -46,6 +47,10 @@ import {
 import { useEpicBatchDelete } from "@/hooks/epic/use-epic-batch-delete-mutation";
 import { useTaskDeleteWorktreeCandidates } from "@/hooks/epic/use-task-delete-worktree-candidates-query";
 import { useEpicUpdateTitle } from "@/hooks/epic/use-epic-title-mutation";
+import {
+  useEpicSetPinned,
+  usePendingSetPinnedEpicIds,
+} from "@/hooks/epic/use-epic-set-pinned-mutation";
 import { useInlineRename } from "@/hooks/ui/use-inline-rename";
 import { withMemberToggled } from "@/lib/immutable-set";
 import { cn } from "@/lib/utils";
@@ -93,10 +98,18 @@ import type {
   HistorySearchPatch,
   HistorySearchState,
 } from "@/lib/history-search";
+import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/worktree-schemas";
+import { WorktreePrPills } from "@/components/worktree/worktree-pr-metadata";
+import { worktreePrReferences } from "@/components/worktree/worktree-pr-metadata-model";
 
 const EMPTY_REPOS: ReadonlyArray<string> = [];
 const EMPTY_WORKSPACES: ReadonlyArray<HistoryWorkspaceRef> = [];
 const EMPTY_ITEMS: ReadonlyArray<HistoryItem> = [];
+const EMPTY_WORKTREES: readonly WorktreeHostEntryV12[] = [];
+const EMPTY_WORKTREES_BY_EPIC: ReadonlyMap<
+  string,
+  readonly WorktreeHostEntryV12[]
+> = new Map();
 const VIEWER_DELETE_TOOLTIP = "Viewers cannot select task for deletion.";
 const NO_DELETE_PERMISSION_TOOLTIP =
   "You don't have permission to delete this task.";
@@ -246,6 +259,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   });
 
   const items = data?.items ?? EMPTY_ITEMS;
+  const worktreesByEpicId = data?.worktreesByEpicId ?? EMPTY_WORKTREES_BY_EPIC;
   const indicatorEpicIds = useMemo(
     () => items.map((item) => item.epicId),
     [items],
@@ -274,6 +288,15 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     ReadonlyMap<string, boolean>
   >(() => new Map());
   const deleteMutation = useEpicBatchDelete();
+  const setPinnedMutation = useEpicSetPinned();
+  const setPinned = setPinnedMutation.mutate;
+  const pendingSetPinnedEpicIds = usePendingSetPinnedEpicIds();
+  const handleSetPinned = useCallback(
+    (epicId: string, pinned: boolean) => {
+      setPinned({ epicId, pinned });
+    },
+    [setPinned],
+  );
 
   const { candidates: worktreeCandidates } =
     useTaskDeleteWorktreeCandidates(pendingDeleteIds);
@@ -476,12 +499,15 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
               selectedIds={selectedIds}
               onToggleSelection={toggleSelection}
               onRequestDelete={requestDelete}
+              onSetPinned={handleSetPinned}
+              pendingSetPinnedEpicIds={pendingSetPinnedEpicIds}
               hasNextPage={hasNextPage}
               isFetchingNextPage={isFetchingNextPage}
               onLoadMore={fetchNextPage}
               onSelectEpic={onSelectEpic}
               onOpenInNewWindow={openInNewWindowFlow.requestOpen}
               openInNewWindowAvailable={openInNewWindowFlow.isAvailable}
+              worktreesByEpicId={worktreesByEpicId}
             />
           </div>
         </NotificationIndicatorsProvider>
@@ -559,7 +585,7 @@ function PanelSearchInput(props: PanelSearchInputProps): ReactNode {
           onChange={(event) => {
             props.onChange(event.target.value);
           }}
-          placeholder="Search by title or repo"
+          placeholder="Search by title, repo, or PR"
           aria-label="Search tasks"
         />
         {props.value.length > 0 ? (
@@ -761,12 +787,18 @@ interface EpicsListBodyProps {
   readonly selectedIds: ReadonlySet<string>;
   readonly onToggleSelection: (id: string) => void;
   readonly onRequestDelete: (ids: ReadonlyArray<string>) => void;
+  readonly onSetPinned: (epicId: string, pinned: boolean) => void;
+  readonly pendingSetPinnedEpicIds: ReadonlySet<string>;
   readonly hasNextPage: boolean;
   readonly isFetchingNextPage: boolean;
   readonly onLoadMore: () => void;
   readonly onSelectEpic: ((epicId: string) => void) | null;
   readonly onOpenInNewWindow: HistoryNewWindowFlow["requestOpen"];
   readonly openInNewWindowAvailable: boolean;
+  readonly worktreesByEpicId: ReadonlyMap<
+    string,
+    readonly WorktreeHostEntryV12[]
+  >;
 }
 
 function EpicsListBody(props: EpicsListBodyProps): ReactNode {
@@ -781,12 +813,15 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
     selectedIds,
     onToggleSelection,
     onRequestDelete,
+    onSetPinned,
+    pendingSetPinnedEpicIds,
     hasNextPage,
     isFetchingNextPage,
     onLoadMore,
     onSelectEpic,
     onOpenInNewWindow,
     openInNewWindowAvailable,
+    worktreesByEpicId,
   } = props;
 
   if (error !== null) {
@@ -820,9 +855,12 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
               isSelected={selectedIds.has(item.epicId)}
               onToggleSelection={onToggleSelection}
               onRequestDelete={onRequestDelete}
+              onSetPinned={onSetPinned}
+              isPinPending={pendingSetPinnedEpicIds.has(item.epicId)}
               onSelectEpic={onSelectEpic}
               onOpenInNewWindow={onOpenInNewWindow}
               openInNewWindowAvailable={openInNewWindowAvailable}
+              worktrees={worktreesByEpicId.get(item.epicId) ?? EMPTY_WORKTREES}
             />
           ))}
         </ul>
@@ -885,9 +923,43 @@ interface EpicsListRowProps {
   readonly isSelected: boolean;
   readonly onToggleSelection: (id: string) => void;
   readonly onRequestDelete: (ids: ReadonlyArray<string>) => void;
+  readonly onSetPinned: (epicId: string, pinned: boolean) => void;
+  readonly isPinPending: boolean;
   readonly onSelectEpic: ((epicId: string) => void) | null;
   readonly onOpenInNewWindow: HistoryNewWindowFlow["requestOpen"];
   readonly openInNewWindowAvailable: boolean;
+  readonly worktrees: readonly WorktreeHostEntryV12[];
+}
+
+function HistoryRowTrailingMetadata(props: {
+  readonly epicId: string;
+  readonly selectionMode: boolean;
+  readonly updatedLabel: string;
+  readonly worktrees: readonly WorktreeHostEntryV12[];
+}): ReactNode {
+  const hasPrPills =
+    !props.selectionMode && worktreePrReferences(props.worktrees).length > 0;
+  return (
+    <span className="grid shrink-0 items-center justify-items-end text-ui-xs">
+      <span
+        className={cn(
+          "col-start-1 row-start-1 text-muted-foreground",
+          hasPrPills &&
+            "transition-opacity group-hover/list-row:opacity-0 group-focus-within/list-row:opacity-0",
+        )}
+      >
+        updated {props.updatedLabel}
+      </span>
+      {hasPrPills ? (
+        <WorktreePrPills
+          worktrees={props.worktrees}
+          detailOnHover
+          className="pointer-events-none col-start-1 row-start-1 max-w-[min(36vw,22rem)] opacity-0 transition-opacity group-hover/list-row:pointer-events-auto group-hover/list-row:opacity-100 group-focus-within/list-row:pointer-events-auto group-focus-within/list-row:opacity-100"
+          testId={`task-history-prs-${props.epicId}`}
+        />
+      ) : null}
+    </span>
+  );
 }
 
 const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
@@ -897,9 +969,12 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
     isSelected,
     onToggleSelection,
     onRequestDelete,
+    onSetPinned,
+    isPinPending,
     onSelectEpic,
     onOpenInNewWindow,
     openInNewWindowAvailable,
+    worktrees,
   } = props;
   const isPhase = item.taskType === "phase";
   const displayTitle = historyItemDisplayTitle(item);
@@ -977,7 +1052,10 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
     // Passing the row's title threads it through tab creation so the
     // cold-open canvas skeleton can render the real epic title at +0ms,
     // not "Untitled epic" until the snapshot arrives.
-    openEpicFromCommand(navigate, item.epicId, pathname, item.title);
+    openEpicFromCommand(navigate, item.epicId, pathname, {
+      title: item.title,
+      source: "direct_ui",
+    });
   }, [isPhase, item.epicId, item.title, navigate, onSelectEpic, pathname]);
   const toggleEpicSelection = () => {
     if (!canDeleteItem) return;
@@ -1046,6 +1124,14 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
       <TooltipContent>{deleteDisabledTooltip}</TooltipContent>
     </Tooltip>
   );
+  const pinControl = (
+    <HistoryPinControl
+      item={item}
+      isPending={isPinPending}
+      selectionMode={selectionMode}
+      onSetPinned={onSetPinned}
+    />
+  );
   const rowInteractionLayer = selectionMode ? (
     <HistorySelectionOverlay
       item={item}
@@ -1110,13 +1196,17 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
               <span className="truncate font-medium text-foreground">
                 {displayTitle}
               </span>
+              {pinControl}
               {titleEditControl}
             </span>
           )}
         </span>
-        <span className="shrink-0 text-ui-xs text-muted-foreground">
-          updated {item.updatedLabel}
-        </span>
+        <HistoryRowTrailingMetadata
+          epicId={item.epicId}
+          selectionMode={selectionMode}
+          updatedLabel={item.updatedLabel}
+          worktrees={worktrees}
+        />
       </div>
       {deleteControl}
     </div>
@@ -1146,6 +1236,7 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
   return (
     <li
       data-testid="epics-list-row"
+      data-pinned={item.isPinned}
       className="group/list-row flex items-stretch gap-1.5"
     >
       <div className="flex w-5 shrink-0 items-center justify-center">
@@ -1171,6 +1262,49 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
   );
 });
 
+function HistoryPinControl(props: {
+  readonly item: HistoryItem;
+  readonly isPending: boolean;
+  readonly selectionMode: boolean;
+  readonly onSetPinned: (epicId: string, pinned: boolean) => void;
+}): ReactNode {
+  if (props.selectionMode || props.item.taskType === "phase") return null;
+  const displayTitle = historyItemDisplayTitle(props.item);
+  const label = props.item.isPinned
+    ? `Unpin ${displayTitle} from top`
+    : `Pin ${displayTitle} to top`;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          aria-label={label}
+          aria-pressed={props.item.isPinned}
+          data-testid="epics-list-row-pin"
+          disabled={props.isPending}
+          className={cn(
+            "pointer-events-auto flex size-5 shrink-0 items-center justify-center rounded-sm outline-none transition-[color,opacity] hover:bg-muted focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-wait",
+            props.item.isPinned
+              ? "text-primary opacity-100"
+              : "text-muted-foreground opacity-0 group-hover/list-row:opacity-100 group-focus-within/list-row:opacity-100",
+          )}
+          onClick={() => {
+            props.onSetPinned(props.item.epicId, !props.item.isPinned);
+          }}
+        >
+          {/* The pin state is optimistic - it flips at click time - so the
+              icon always shows the row's current state; the brief disabled
+              window only serializes rapid re-toggles, with no spinner. */}
+          <Pin
+            className={cn("size-3.5", props.item.isPinned && "fill-current")}
+          />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
+  );
+}
+
 function HistoryRowLeadingIcon(props: { readonly item: HistoryItem }) {
   const activityStatus = useEpicActivityStatus(
     props.item.taskType === "epic" ? props.item.epicId : null,
@@ -1181,15 +1315,19 @@ function HistoryRowLeadingIcon(props: { readonly item: HistoryItem }) {
   return (
     <NotificationIndicatorIcon
       state={indicatorState}
-      running={activityStatus === "running"}
+      // Epic-level activity is binary (any agent busy, background included);
+      // the per-chat turn/background split lives on the chat icons.
+      running={activityStatus === "running" ? "turn" : false}
       subjectId={props.item.epicId}
       testIdPrefix="epics-list-row"
       className="text-muted-foreground group-hover/list-row:text-foreground"
       style={undefined}
       runningTitle="Task activity in progress"
+      backgroundRunningTitle={undefined}
       defaultIcon={
         <Layers className="size-4 shrink-0 text-muted-foreground group-hover/list-row:text-foreground" />
       }
+      statusPresentation="message"
     />
   );
 }

@@ -1,6 +1,27 @@
-import type { HostNotificationsEntityRef } from "@traycer/protocol/host/notifications/contracts";
+import type {
+  HostNotificationEntry,
+  HostNotificationsEntityRef,
+  HostNotificationsPresenceEntity,
+} from "@traycer/protocol/host/notifications/contracts";
 
-/** Returns the table entity addressed by a notification payload, when known. */
+/**
+ * The entity a HOST notification addresses, from the wire entry's typed
+ * entity fields (sourced host-side from the row's durable columns). This is
+ * the one contract for host rows: a payload the semantic parse rejects still
+ * addresses its entity, and a payload cannot claim an entity its row does
+ * not have. The payload-based reader below serves app-local notifications
+ * only, whose payloads are renderer-typed.
+ */
+export function notificationEntityFromHostEntry(
+  entry: HostNotificationEntry,
+): HostNotificationsEntityRef | null {
+  if (entry.epicId === null) return null;
+  return entry.chatId === null
+    ? { epicId: entry.epicId }
+    : { epicId: entry.epicId, chatId: entry.chatId };
+}
+
+/** Returns the table entity addressed by an app-local notification payload. */
 export function notificationEntityFromPayload(
   payload: unknown,
 ): HostNotificationsEntityRef | null {
@@ -17,6 +38,21 @@ export function notificationEntitiesMatch(
   right: HostNotificationsEntityRef,
 ): boolean {
   return left.epicId === right.epicId && left.chatId === right.chatId;
+}
+
+/**
+ * Whether a notification's entity is covered by a focused presence entity,
+ * mirroring the host emission service's suppression semantics: the epic must
+ * match, and a chat-addressed notification additionally needs the same chat
+ * in focus. An epic-level notification is covered by any focused tile inside
+ * that epic; a chat-level one is not covered by a sibling chat.
+ */
+export function notificationEntityMatchesPresence(
+  entity: HostNotificationsEntityRef,
+  presence: HostNotificationsPresenceEntity,
+): boolean {
+  if (presence.epicId !== entity.epicId) return false;
+  return entity.chatId === undefined || presence.chatId === entity.chatId;
 }
 
 export function notificationPayloadBelongsToEntity(
