@@ -54,3 +54,9 @@ export {
 } from "./extensions/artifact-find-extension";
 
 export { artifactDocumentBundle } from "./artifact-document-bundle";
+export {
+  ArtifactLinkPopover,
+  ARTIFACT_LINK_CREATE_EVENT,
+  type ArtifactLinkPopoverProps,
+  type OpenableArtifactLink,
+} from "./links/artifact-link-popover";
