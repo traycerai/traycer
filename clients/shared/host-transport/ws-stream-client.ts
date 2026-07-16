@@ -249,13 +249,13 @@ export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
     const listeners = Array.from(this.closedListeners);
     this.closedListeners.clear();
     const listenerErrors: unknown[] = [];
-    for (const listener of listeners) {
+    listeners.forEach((listener) => {
       try {
         listener();
       } catch (error) {
         listenerErrors.push(error);
       }
-    }
+    });
     if (listenerErrors.length > 0) {
       console.error(
         `[stream] ${listenerErrors.length} closed-listener(s) threw during close (client=${this.instanceId}, reason=${reason})`,
