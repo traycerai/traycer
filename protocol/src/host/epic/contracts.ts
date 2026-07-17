@@ -42,6 +42,8 @@ import {
   listCommentThreadsResponseSchema,
   listEpicCollaboratorsRequestSchema,
   listEpicCollaboratorsResponseSchema,
+  getTaskContextsRequestSchema,
+  getTaskContextsResponseSchema,
   listTasksRequestSchema,
   listTasksResponseSchema,
   listTasksResponseSchemaV10,
@@ -117,6 +119,16 @@ export const epicSetPinnedV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: setEpicPinnedRequestSchema,
   responseSchema: setEpicPinnedResponseSchema,
+});
+
+// Batch resolve task ids → list-row shapes (titles/context). Optional/non-floor
+// so clients retain the released unary handshake; old hosts return
+// E_HOST_UNSUPPORTED for this call only.
+export const epicGetTaskContextsV10 = defineRpcContract({
+  method: "epic.getTaskContexts",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: getTaskContextsRequestSchema,
+  responseSchema: getTaskContextsResponseSchema,
 });
 
 // `epic.create@1.0` - host-side entry point for the CloudData epic create

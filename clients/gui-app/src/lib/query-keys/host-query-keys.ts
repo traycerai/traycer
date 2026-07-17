@@ -5,6 +5,8 @@ import type { WorkspaceReadFileRequest } from "@traycer/protocol/host/workspace/
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework";
 
+const EPIC_TASK_CONTEXTS_METHOD = "epic.getTaskContexts" as const;
+
 export const hostQueryKeys = {
   base: () => ["host"] as const,
   scope: (hostId: string | null) =>
@@ -69,4 +71,32 @@ export const hostQueryKeys = {
       "host.getRateLimitUsage",
       { accountContext, profileId: null },
     ),
+  /**
+   * Batch task-context title lookup (`epic.getTaskContexts`). Key shape matches
+   * what `useHostQuery` / `useHostQueries` produce for that method with
+   * `cacheKeyIdentity: userId`: `["host", hostId, method, { taskIds }, userId]`.
+   * Callers must pass a sorted `taskIds` array for stable cache identity.
+   */
+  epicTaskContexts: (
+    hostId: string | null,
+    userId: string,
+    taskIds: readonly string[],
+  ) =>
+    [
+      ...hostQueryKeys.method<
+        HostRpcRegistry,
+        typeof EPIC_TASK_CONTEXTS_METHOD
+      >(hostId, EPIC_TASK_CONTEXTS_METHOD, { taskIds: [...taskIds] }),
+      userId,
+    ] as const,
 };
+
+/**
+ * True for any `epic.getTaskContexts` host query key (any host / user / id set).
+ * Used by rename write-through to find batch-title cache entries to patch.
+ */
+export function isEpicTaskContextsQueryKey(
+  queryKey: readonly unknown[],
+): boolean {
+  return queryKey[0] === "host" && queryKey[2] === EPIC_TASK_CONTEXTS_METHOD;
+}

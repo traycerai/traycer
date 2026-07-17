@@ -552,6 +552,33 @@ export const setEpicPinnedResponseSchema = z.object({
 });
 export type SetEpicPinnedResponse = z.infer<typeof setEpicPinnedResponseSchema>;
 
+// ─── Batch task context (epic.getTaskContexts@1.0) ───────────────────────────
+// Optional (non-floor) capability: resolve a small set of task ids to list-row
+// shapes for title/context (e.g. worktree owner titles). Old hosts fail only
+// this call with E_HOST_UNSUPPORTED; callers degrade to cache-only resolution.
+//
+// `null` in the response map means deleted OR not permitted to the requester —
+// indistinguishable by design. Clients render both the same way (e.g. muted
+// "Owner unresolved").
+
+export const GET_TASK_CONTEXTS_MAX_IDS = 50;
+
+export const getTaskContextsRequestSchema = z.object({
+  taskIds: z.array(z.string()).max(GET_TASK_CONTEXTS_MAX_IDS),
+});
+export type GetTaskContextsRequest = z.infer<
+  typeof getTaskContextsRequestSchema
+>;
+
+export const getTaskContextsResponseSchema = z.object({
+  // Per-id: ListTaskLight when readable, null when deleted or not permitted
+  // (indistinguishable by design).
+  tasks: z.record(z.string(), listTaskLightSchema.nullable()),
+});
+export type GetTaskContextsResponse = z.infer<
+  typeof getTaskContextsResponseSchema
+>;
+
 // ─── Epic/entity mentions ────────────────────────────────────────────────────
 
 export const epicMentionEpicsRequestSchema = z.object({

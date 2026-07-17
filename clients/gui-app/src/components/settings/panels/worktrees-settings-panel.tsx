@@ -45,6 +45,11 @@ import type {
   WorktreeHostEntry,
   WorktreeHostEntryV14,
 } from "@traycer/protocol/host/index";
+import type {
+  WorktreeEntryScripts,
+  WorktreePrState,
+  WorktreeSubmoduleMergeFactV12,
+} from "@traycer/protocol/host/worktree-schemas";
 import {
   WORKTREE_TIER_LABEL,
   WORKTREE_TIER_ORDER,
@@ -55,19 +60,14 @@ import {
   provenRemovable,
   type WorktreeTier,
 } from "@traycer-clients/shared/worktree/classify-worktree";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
   buildTaskMergeRollups,
   taskMergeRollupEqual,
   taskMergeRollupLabel,
   type TaskMergeRollup,
 } from "@/lib/worktree/task-merge-rollup";
-import type {
-  WorktreeEntryScripts,
-  WorktreePrState,
-  WorktreeSubmoduleMergeFactV12,
-} from "@traycer/protocol/host/worktree-schemas";
-import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { cn } from "@/lib/utils";
 import {
   withMemberAdded,
@@ -114,8 +114,7 @@ import { useWorktreeDeleteStreamTransportFactory } from "@/lib/host/use-worktree
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
 import { useRelativeTimestamp } from "@/lib/relative-time";
-import { useCloudEpicTasksQuery } from "@/hooks/epics/use-cloud-epic-tasks-query";
-import { readEpicTitlesFromCloudTaskCaches } from "@/lib/cloud-epic-tasks-query/cache";
+import { useWorktreeTaskTitles } from "./use-worktree-task-titles";
 import { invalidateWorktreeListingAndBindingCaches } from "@/hooks/worktree/invalidations";
 import {
   backgroundForegroundWorktreeDeleteForHost,
@@ -153,7 +152,6 @@ type WorktreeTierFilterSet = ReadonlySet<WorktreeTier>;
 const EMPTY_TIER_FILTER: WorktreeTierFilterSet = new Set();
 const WORKTREES_REFRESH_TIMEOUT_MS = 10_000;
 const EMPTY_REPO_KEY_SET: ReadonlySet<string> = new Set();
-const EMPTY_TASK_TITLES: ReadonlyMap<string, string> = new Map();
 
 // Virtualization tuning. Row/header heights are estimates only - each rendered
 // item is measured (`virtualizer.measureElement`) so variable-height rows (a
@@ -546,9 +544,9 @@ function WorktreesBody(props: {
     hostId,
     worktreePaths,
   );
-  // Owning-Task titles come from the cloud epic-tasks caches the app already
-  // maintains (keyed by the signed-in user, any host) - no host-side title join.
-  const taskTitlesByEpicId = useWorktreeTaskTitles(listing.worktrees);
+  // Owning-Task titles: tier 1 scans free cloud listTasks caches; tier 2 batches
+  // still-unresolved ids through epic.getTaskContexts on this host.
+  const taskTitlesByEpicId = useWorktreeTaskTitles(client, listing.worktrees);
   const canRefresh = reachable && client !== null;
   const onRefresh = useCallback(() => listing.refresh(), [listing]);
   const toolbarProps = {
@@ -699,53 +697,6 @@ function WorktreesPartialListingBanner(props: {
       />
     </div>
   );
-}
-
-/**
- * Resolves each owner `epicId` on the listing to its Task title by reading the
- * cloud epic-tasks caches the app already maintains for the signed-in user
- * (`readEpicTitlesFromCloudTaskCaches`). We warm those caches with the shared
- * first-page query - the same one History/home use, so the cache is reused, not
- * duplicated - and read titles back for the epics this host's worktrees own.
- *
- * Scope is `hostId: null` so an epic cached under any host (epics are
- * user-scoped, not host-scoped) still resolves. An `epicId` with no cached Task
- * (unknown / deleted / not yet loaded) is simply absent from the map, which the
- * chip renderer degrades gracefully.
- */
-function useWorktreeTaskTitles(
-  worktrees: readonly WorktreeHostEntryV14[],
-): ReadonlyMap<string, string> {
-  const queryClient = useQueryClient();
-  const epicIds = useMemo(
-    () => [
-      ...new Set(
-        worktrees.flatMap((entry) => entry.owners.map((owner) => owner.epicId)),
-      ),
-    ],
-    [worktrees],
-  );
-  // Only warm the shared cloud-tasks cache when something actually needs a title.
-  const cloud = useCloudEpicTasksQuery(undefined, {
-    enabled: epicIds.length > 0,
-  });
-  const userId = cloud.currentUserId;
-  const cloudTasks = cloud.tasks;
-  return useMemo(() => {
-    if (userId === null || epicIds.length === 0) return EMPTY_TASK_TITLES;
-    // `cloudTasks` is a recompute trigger: the read scans the query cache
-    // directly, so we re-derive whenever a fetched page changes it.
-    void cloudTasks;
-    return new Map(
-      Object.entries(
-        readEpicTitlesFromCloudTaskCaches(
-          queryClient,
-          { hostId: null, userId },
-          epicIds,
-        ),
-      ),
-    );
-  }, [queryClient, userId, epicIds, cloudTasks]);
 }
 
 /**
