@@ -14,6 +14,7 @@ export * from "./speech";
 export * from "./status";
 export * from "./terminal";
 export * from "./workspace";
+export * from "./worktree-changed-stream";
 
 export {
   hostRpcRegistry,
@@ -29,9 +30,11 @@ export {
   worktreeListAllForHostV12,
   worktreeListAllForHostV11,
   worktreeListAllForHostV13,
+  worktreeListAllForHostV14,
   worktreeListAllForHostUpgradeV10ToV11,
   worktreeListAllForHostUpgradeV11ToV12,
   worktreeListAllForHostUpgradeV12ToV13,
+  worktreeListAllForHostUpgradeV13ToV14,
   worktreeImportV10,
   worktreeListBranchesV10,
   worktreeListBindingsForEpicV10,
@@ -40,8 +43,10 @@ export {
   worktreeListByWorkspacePathsV10,
   worktreeListByWorkspacePathsV11,
   worktreeListByWorkspacePathsV12,
+  worktreeListByWorkspacePathsV13,
   worktreeListByWorkspacePathsUpgradeV10ToV11,
   worktreeListByWorkspacePathsUpgradeV11ToV12,
+  worktreeListByWorkspacePathsUpgradeV12ToV13,
   worktreeRetrySetupV10,
   workspaceBindingRemoveEntryV10,
   worktreeSetEntryModeV10,
@@ -78,6 +83,7 @@ export {
   worktreeSubmoduleMergeFactSchemaV12,
   worktreeHostEntrySchemaV11,
   worktreeHostEntrySchemaV12,
+  worktreeHostEntrySchemaV14,
   worktreeListAllForHostRequestSchema,
   worktreeListAllForHostResponseSchema,
   worktreeListAllForHostRequestSchemaV11,
@@ -86,6 +92,8 @@ export {
   worktreeListAllForHostResponseSchemaV12,
   worktreeListAllForHostRequestSchemaV13,
   worktreeListAllForHostResponseSchemaV13,
+  worktreeListAllForHostRequestSchemaV14,
+  worktreeListAllForHostResponseSchemaV14,
   worktreeImportEntrySchema,
   worktreeImportRequestSchema,
   worktreeImportResponseSchema,
@@ -102,6 +110,8 @@ export {
   worktreeListByWorkspacePathsResponseSchemaV11,
   worktreeListByWorkspacePathsRequestSchemaV12,
   worktreeListByWorkspacePathsResponseSchemaV12,
+  worktreeListByWorkspacePathsRequestSchemaV13,
+  worktreeListByWorkspacePathsResponseSchemaV13,
   worktreeScriptRefSchema,
   worktreeScriptsAtRefSchema,
   worktreeBindingSelectorDisabledReasonSchema,
@@ -120,6 +130,7 @@ export {
   worktreeGetBindingResponseSchema,
   worktreeSetupStateSchema,
   worktreeWorkspaceSummarySchema,
+  worktreeWorkspaceSummarySchemaV13,
   type DiskWorktreeEntry,
   type OsScript,
   type WorkspaceScripts,
@@ -145,6 +156,7 @@ export {
   type WorktreeSubmoduleMergeFactV12,
   type WorktreeHostEntryV11,
   type WorktreeHostEntryV12,
+  type WorktreeHostEntryV14,
   type WorktreeListAllForHostRequest,
   type WorktreeListAllForHostResponse,
   type WorktreeListAllForHostRequestV11,
@@ -153,6 +165,8 @@ export {
   type WorktreeListAllForHostResponseV12,
   type WorktreeListAllForHostRequestV13,
   type WorktreeListAllForHostResponseV13,
+  type WorktreeListAllForHostRequestV14,
+  type WorktreeListAllForHostResponseV14,
   type WorktreeImportEntry,
   type WorktreeImportRequest,
   type WorktreeImportResponse,
@@ -170,6 +184,8 @@ export {
   type WorktreeListByWorkspacePathsResponseV11,
   type WorktreeListByWorkspacePathsRequestV12,
   type WorktreeListByWorkspacePathsResponseV12,
+  type WorktreeListByWorkspacePathsRequestV13,
+  type WorktreeListByWorkspacePathsResponseV13,
   type WorktreeScriptRef,
   type WorktreeScriptsAtRef,
   type WorktreeBindingSelectorDisabledReason,
@@ -188,6 +204,7 @@ export {
   type WorktreeGetBindingResponse,
   type WorktreeSetupState,
   type WorktreeWorkspaceSummary,
+  type WorktreeWorkspaceSummaryV13,
 } from "./worktree-schemas";
 
 export {

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
-import { buildStreamManifest } from "@traycer/protocol/framework/stream-compat";
+import {
+  buildStreamManifest,
+  splitStreamManifest,
+} from "@traycer/protocol/framework/stream-compat";
+import { RELEASED_STREAM_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import {
   createRequestContext,
   identityFromAuthenticatedUser,
@@ -104,7 +108,20 @@ function completeHandshake(
   manifest: Record<string, { readonly major: number; readonly minor: number }>,
 ): void {
   socket.fireOpen();
-  socket.fireText({ kind: "openAck", manifest });
+  const channels = splitStreamManifest(
+    hostStreamRpcRegistry,
+    RELEASED_STREAM_FLOOR_METHOD_NAMES,
+  );
+  socket.fireText({
+    kind: "openAck",
+    manifest: Object.fromEntries(
+      Object.keys(channels.manifest).flatMap((method) => {
+        const version = manifest[method];
+        return version === undefined ? [] : [[method, version]];
+      }),
+    ),
+    optionalManifest: channels.optionalManifest,
+  });
 }
 
 const canonicalSession = {

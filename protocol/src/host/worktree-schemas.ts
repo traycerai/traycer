@@ -358,6 +358,36 @@ export const worktreeListByWorkspacePathsResponseSchemaV12 =
 export type WorktreeListByWorkspacePathsResponseV12 =
   WorktreeListByWorkspacePathsResponseV11;
 
+/**
+ * `worktree.listByWorkspacePaths` v1.3 request. Unchanged from v1.2; the
+ * minor bump adds the response freshness marker only.
+ */
+export const worktreeListByWorkspacePathsRequestSchemaV13 =
+  worktreeListByWorkspacePathsRequestSchemaV12;
+export type WorktreeListByWorkspacePathsRequestV13 =
+  WorktreeListByWorkspacePathsRequestV12;
+
+/**
+ * `worktree.listByWorkspacePaths` v1.3 summary. `null` means the host has not
+ * derived this row yet; clients must not treat schema-safe fallback facts as
+ * authoritative until a non-null timestamp arrives.
+ */
+export const worktreeWorkspaceSummarySchemaV13 =
+  worktreeWorkspaceSummarySchema.extend({
+    resolvedAt: z.number().nonnegative().nullable(),
+  });
+export type WorktreeWorkspaceSummaryV13 = z.infer<
+  typeof worktreeWorkspaceSummarySchemaV13
+>;
+
+export const worktreeListByWorkspacePathsResponseSchemaV13 = z.object({
+  workspaces: z.array(worktreeWorkspaceSummarySchemaV13),
+  scriptsAtRefs: z.array(worktreeScriptsAtRefSchema),
+});
+export type WorktreeListByWorkspacePathsResponseV13 = z.infer<
+  typeof worktreeListByWorkspacePathsResponseSchemaV13
+>;
+
 export const worktreeBranchSchema = z.object({
   name: z.string(),
   isCurrent: z.boolean(),
@@ -800,6 +830,16 @@ export const worktreeHostEntrySchemaV12 = worktreeHostEntrySchemaV11.extend({
 export type WorktreeHostEntryV12 = z.infer<typeof worktreeHostEntrySchemaV12>;
 
 /**
+ * `worktree.listAllForHost` v1.4 entry. `null` means the host has not derived
+ * this row yet; clients must not treat schema-safe fallback facts as
+ * authoritative until a non-null timestamp arrives.
+ */
+export const worktreeHostEntrySchemaV14 = worktreeHostEntrySchemaV12.extend({
+  resolvedAt: z.number().nonnegative().nullable(),
+});
+export type WorktreeHostEntryV14 = z.infer<typeof worktreeHostEntrySchemaV14>;
+
+/**
  * `worktree.listAllForHost` v1.1 request. Adds `includeActivity`: the git
  * probes (reflog, ahead/behind, merged) add per-worktree cost, so the Settings
  * tab passes `false` (or stays on v1.0) to keep the panel snappy while the
@@ -929,6 +969,22 @@ export const worktreeListAllForHostResponseSchemaV13 =
   worktreeListAllForHostResponseSchemaV12;
 export type WorktreeListAllForHostResponseV13 =
   WorktreeListAllForHostResponseV12;
+
+/**
+ * `worktree.listAllForHost` v1.4 request. Unchanged from v1.3; the minor bump
+ * adds the response freshness marker only.
+ */
+export const worktreeListAllForHostRequestSchemaV14 =
+  worktreeListAllForHostRequestSchemaV13;
+export type WorktreeListAllForHostRequestV14 = WorktreeListAllForHostRequestV13;
+
+export const worktreeListAllForHostResponseSchemaV14 = z.object({
+  worktrees: z.array(worktreeHostEntrySchemaV14),
+  nextCursor: z.string().nullable(),
+});
+export type WorktreeListAllForHostResponseV14 = z.infer<
+  typeof worktreeListAllForHostResponseSchemaV14
+>;
 
 /**
  * Returns `null` when no row exists yet so a fresh terminal-agent

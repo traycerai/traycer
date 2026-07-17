@@ -22,6 +22,26 @@ describe("stream-ws-protocol cross-version compatibility", () => {
   const manifest = { "epic.subscribe": { major: 1, minor: 0 } };
 
   describe("clientStreamOpenFrame (client -> host)", () => {
+    it("preserves an optional manifest when sent and accepts old peers without it", () => {
+      expect(
+        clientStreamOpenFrameSchema.parse({
+          kind: "open",
+          token: "bearer",
+          manifest,
+        }).optionalManifest,
+      ).toBeUndefined();
+      expect(
+        clientStreamOpenFrameSchema.parse({
+          kind: "open",
+          token: "bearer",
+          manifest,
+          optionalManifest: {
+            "worktree.changed": { major: 1, minor: 0 },
+          },
+        }).optionalManifest,
+      ).toEqual({ "worktree.changed": { major: 1, minor: 0 } });
+    });
+
     it("strips unknown additive fields instead of rejecting", () => {
       const parsed = clientStreamOpenFrameSchema.safeParse({
         kind: "open",
@@ -38,6 +58,24 @@ describe("stream-ws-protocol cross-version compatibility", () => {
   });
 
   describe("hostStreamOpenAckFrame (host -> client)", () => {
+    it("preserves an optional manifest when sent and accepts old peers without it", () => {
+      expect(
+        hostStreamOpenAckFrameSchema.parse({
+          kind: "openAck",
+          manifest,
+        }).optionalManifest,
+      ).toBeUndefined();
+      expect(
+        hostStreamOpenAckFrameSchema.parse({
+          kind: "openAck",
+          manifest,
+          optionalManifest: {
+            "worktree.changed": { major: 1, minor: 0 },
+          },
+        }).optionalManifest,
+      ).toEqual({ "worktree.changed": { major: 1, minor: 0 } });
+    });
+
     it("strips unknown keys instead of rejecting (older client tolerates a newer host's additive fields)", () => {
       // A future host adds a field this version's client has never heard of.
       // The schema MUST strip it, not reject — otherwise the connection drops.
@@ -91,6 +129,9 @@ describe("stream-ws-protocol cross-version compatibility", () => {
       const parsed = legacyOpenAck.safeParse({
         kind: "openAck",
         manifest,
+        optionalManifest: {
+          "worktree.changed": { major: 1, minor: 0 },
+        },
         capabilities: [STREAM_CAPABILITY_CREDENTIAL_UPDATE],
       });
       expect(parsed.success).toBe(true);

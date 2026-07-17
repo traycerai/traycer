@@ -7,7 +7,11 @@ import {
   type IncompatibleMethodDetails,
   type FatalErrorDetails,
 } from "@traycer/protocol/framework/ws-protocol";
-import { buildConnectionManifest } from "@traycer/protocol/framework/capability-manifest";
+import {
+  buildConnectionManifest,
+  splitConnectionManifest,
+  type SplitConnectionManifest,
+} from "@traycer/protocol/framework/capability-manifest";
 import {
   buildIncompatibleReason,
   collectManifestMethods,
@@ -27,6 +31,18 @@ export function buildStreamManifest(
   registry: VersionedStreamRpcRegistry,
 ): ConnectionManifest {
   return buildConnectionManifest(registry);
+}
+
+/**
+ * Splits the stream registry into the released floor and additive methods.
+ * Compatibility is checked only across the floor; additive methods are
+ * merged afterward and negotiated only when a peer selects one.
+ */
+export function splitStreamManifest(
+  registry: VersionedStreamRpcRegistry,
+  floorMethodNames: readonly string[],
+): SplitConnectionManifest {
+  return splitConnectionManifest(registry, floorMethodNames);
 }
 
 /**
