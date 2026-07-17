@@ -60,7 +60,10 @@ import type {
   ChatRunStatus,
   ChatSubscribeClientFrame,
 } from "@traycer/protocol/host/agent/gui/subscribe";
-import type { WorktreeBinding } from "@traycer/protocol/host/worktree-schemas";
+import type {
+  WorktreeBinding,
+  WorktreeIntent,
+} from "@traycer/protocol/host/worktree-schemas";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type { RestoreResultEntry } from "@traycer/protocol/persistence/epic/checkpoint-manifests";
 import type {
@@ -117,6 +120,12 @@ export interface PendingChatAction {
   readonly restoreContent: JsonContent | null;
   readonly sender: UserMessageSender | null;
   readonly settings: ChatRunSettings | null;
+  /**
+   * Workspace selection consumed when a send goes on the wire. A rejected
+   * send restores it to the owner's staging slot together with the composer
+   * content, so retrying cannot silently fall back to the prior binding.
+   */
+  readonly restoreWorktreeIntent: WorktreeIntent | null;
   readonly createdAt: number;
   /**
    * The connection epoch the action's frame was dispatched on (stamped by
@@ -885,6 +894,33 @@ export function createChatSessionStore(
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
           return;
         }
+        const rejectedPending =
+          frame.status === "rejected"
+            ? pendingActionForId(get().pendingActions, frame.clientActionId)
+            : null;
+        if (
+          rejectedPending !== null &&
+          rejectedPending.restoreWorktreeIntent !== null
+        ) {
+          const stagingKey: WorktreeStagingKey = {
+            surface: "owner",
+            epicId: options.epicId,
+            ownerKind: "chat",
+            ownerId: options.chatId,
+          };
+          const newerIntent = readStagedWorktreeIntent(stagingKey);
+          const stagingStore = useWorktreeIntentStagingStore.getState();
+          stagingStore.setIntent(
+            stagingKey,
+            rejectedPending.restoreWorktreeIntent,
+          );
+          // A newer picker edit made while the send was in flight wins for
+          // overlapping folders, while the rejected selection is restored for
+          // every untouched folder.
+          if (newerIntent !== null) {
+            stagingStore.stageIntent(stagingKey, newerIntent);
+          }
+        }
         set((state) => {
           const pending = pendingActionForId(
             state.pendingActions,
@@ -1474,6 +1510,7 @@ export function createChatSessionStore(
             restoreContent: content,
             sender,
             settings,
+            restoreWorktreeIntent: worktreeIntent,
             createdAt: Date.now(),
           },
           // Echo the user message optimistically so it paints INSTANTLY on send -
@@ -1572,6 +1609,7 @@ export function createChatSessionStore(
             restoreContent: input.content,
             sender: input.sender,
             settings: input.settings,
+            restoreWorktreeIntent: null,
             createdAt: Date.now(),
           },
           pendingUserMessage: {
@@ -1636,6 +1674,7 @@ export function createChatSessionStore(
             restoreContent: null,
             sender: null,
             settings: null,
+            restoreWorktreeIntent: null,
             createdAt: Date.now(),
           },
           pendingUserMessage: null,
@@ -1684,6 +1723,7 @@ export function createChatSessionStore(
             restoreContent: null,
             sender: null,
             settings: null,
+            restoreWorktreeIntent: null,
             createdAt: Date.now(),
           },
           pendingUserMessage: null,
@@ -2188,6 +2228,7 @@ function basicPending(
     restoreContent: null,
     sender: null,
     settings: null,
+    restoreWorktreeIntent: null,
     createdAt: Date.now(),
   };
 }

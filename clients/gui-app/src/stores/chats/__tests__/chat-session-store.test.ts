@@ -650,6 +650,70 @@ describe("createChatSessionStore", () => {
     expect(pendingEchoes[0]?.messageId).toBe(frame.messageId);
   });
 
+  it("restores a staged worktree intent when the send is rejected", () => {
+    useWorktreeIntentStagingStore.setState({ intentByKey: {} });
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    const intent: WorktreeIntent = {
+      entries: [
+        {
+          kind: "worktree",
+          scripts: null,
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+          branch: {
+            type: "new",
+            name: "feat",
+            source: "main",
+            carryUncommittedChanges: false,
+          },
+        },
+      ],
+    };
+    useWorktreeIntentStagingStore.getState().stageIntent(key, intent);
+
+    harness.handle.store
+      .getState()
+      .sendMessage(CONTENT, { type: "user", userId: OWNER_ID }, SETTINGS);
+
+    const frame = harness.sent.at(-1);
+    if (frame === undefined || frame.kind !== "send") {
+      throw new Error("Expected send frame");
+    }
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toBeUndefined();
+
+    callbacks.onActionAck({
+      kind: "actionAck",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      clientActionId: frame.clientActionId,
+      action: "send",
+      status: "rejected",
+      reason: "Stop the active chat run before rebinding its worktree.",
+      code: "WORKTREE_CREATE_FAILED",
+      backgroundStopTaskIds: [],
+    });
+
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toEqual(intent);
+  });
+
   it("sends worktreeIntent null when nothing is staged", () => {
     useWorktreeIntentStagingStore.setState({ intentByKey: {} });
     const harness = createHarness();
