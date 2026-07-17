@@ -27,6 +27,7 @@ import { createSelector, lruMemoize } from "reselect";
 import { v4 as uuidv4 } from "uuid";
 import * as Y from "yjs";
 import type { Awareness } from "y-protocols/awareness";
+import { artifactFolderChain } from "@/lib/artifacts/artifact-folder-chain";
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import type { WorktreeBindingOwnerKind } from "@traycer/protocol/host/worktree-schemas";
@@ -916,6 +917,28 @@ export function useDescendantIds(nodeId: string): readonly string[] {
     }
     return out.length === 0 ? EMPTY_TREE_ID_ARRAY : out;
   }, [index, nodeId]);
+}
+
+/**
+ * This artifact's own root-to-leaf on-disk folder-name chain (ending with
+ * its own `folderName`), or `null` when it can't be reconstructed (unknown
+ * id, a tree cycle, a non-artifact ancestor, or an empty folder name
+ * somewhere in the chain). Feeds `resolveArtifactRelativeLinkPath` so a
+ * relative markdown link authored inside this artifact can be rewritten into
+ * the same artifact-shaped path the absolute-link flow already resolves.
+ *
+ * Selected via `useShallow` (a plain array of primitive strings) rather than
+ * subscribing to the raw `tree`/`artifacts` slices directly: those slices get
+ * a fresh top-level identity on ANY artifact edit anywhere in the epic, which
+ * would otherwise re-render every link consumer even when THIS artifact's own
+ * chain is unchanged.
+ */
+export function useArtifactFolderChain(
+  artifactId: string,
+): readonly string[] | null {
+  return useEpicStore(
+    useShallow((s) => artifactFolderChain(s.tree, s.artifacts, artifactId)),
+  );
 }
 
 // ─── Reselect derived views (cross-slice / sorted / filtered) ─────────────
