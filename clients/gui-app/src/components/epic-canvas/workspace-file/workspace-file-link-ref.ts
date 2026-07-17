@@ -182,6 +182,59 @@ export function candidateWorkspaceFileRefsForRelativeLinkPath(
 }
 
 /**
+ * Resolves one ABSOLUTE target into a ref: the most-specific bound root it
+ * falls under, or (when it belongs to no bound root) the out-of-root
+ * synthesized single-file root. The shared "how do we address an absolute
+ * path" step behind both a direct open and each candidate in
+ * {@link candidateWorkspaceFileRefsForAbsoluteLinkPath} - existence is NOT
+ * checked here, only how to ADDRESS the target once probed.
+ */
+function workspaceFileRefForAbsoluteTarget(
+  hostId: string,
+  roots: ReadonlyArray<string>,
+  absoluteTarget: string,
+): WorkspaceFileRef | null {
+  return (
+    workspaceFileRefFromLinkPath(hostId, roots, absoluteTarget) ??
+    workspaceFileRefFromAbsoluteFilePath(hostId, absoluteTarget)
+  );
+}
+
+/**
+ * Builds the ordered candidate refs for an ambiguous ABSOLUTE link path,
+ * mirroring {@link relativeLinkTargets}'s direct-file-then-`index.md`
+ * shape for the absolute case: an explicit trailing separator is
+ * unambiguous (directory), so it's canonicalized straight to its
+ * `index.md`; a slashless target can't be told apart from a directory
+ * reference by spelling alone, so BOTH the direct file and its `index.md`
+ * fallback are returned - the caller probes each for existence (the same
+ * ambiguity `workspace.readFile` already forces the relative case to
+ * sidestep this way: `content: null` either way for "missing" and "is a
+ * directory") and opens whichever wins.
+ *
+ * Returns `null` for a non-absolute or degenerate path, or when neither
+ * candidate can be addressed at all (no bound root match AND the
+ * out-of-root synthesis itself fails, e.g. a bare filesystem root).
+ */
+export function candidateWorkspaceFileRefsForAbsoluteLinkPath(
+  hostId: string,
+  roots: ReadonlyArray<string>,
+  absolutePath: string,
+): ReadonlyArray<WorkspaceFileRef> | null {
+  const trimmed = absolutePath.trim();
+  if (trimmed.length === 0 || !isAbsolutePath(trimmed)) return null;
+  const directoryIndex = joinPath(trimmed, DIRECTORY_INDEX_FILENAME);
+  const targets = hasTrailingSeparator(trimmed)
+    ? [directoryIndex]
+    : [trimmed, directoryIndex];
+  const refs = targets.flatMap((target) => {
+    const ref = workspaceFileRefForAbsoluteTarget(hostId, roots, target);
+    return ref === null ? [] : [ref];
+  });
+  return refs.length === 0 ? null : refs;
+}
+
+/**
  * Builds a `WorkspaceFileRef` for an ABSOLUTE file path that belongs to no bound
  * workspace root, by treating the file's own directory as the workspace root
  * (`{ workspacePath: dirname, filePath: basename }`). This is the deliberate,

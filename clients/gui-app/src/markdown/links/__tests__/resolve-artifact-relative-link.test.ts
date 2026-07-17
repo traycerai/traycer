@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  isArtifactFolderHref,
-  resolveArtifactRelativeLinkPath,
-} from "@/markdown/links/resolve-artifact-relative-link";
+import { resolveArtifactRelativeLinkPath } from "@/markdown/links/resolve-artifact-relative-link";
 
 const EPIC_ID = "epic-1";
 const SELF_CHAIN = ["ticket-breakdown", "01-something"];
@@ -68,6 +65,21 @@ describe("resolveArtifactRelativeLinkPath", () => {
     ).toBeNull();
   });
 
+  it("returns null (not a parent/artifacts-root fallback guess) when the author writes one '../' too many", () => {
+    // Mirrors the corpus report's Gap 2: selfChain is 2 deep, so exactly 2
+    // '../' reach the artifacts root - a 3rd walks the resolver off the top
+    // of selfChain. There is deliberately no fallback base to retry against;
+    // a wrong guess would silently open a DIFFERENT real artifact rather
+    // than surfacing the authoring mistake.
+    expect(
+      resolveArtifactRelativeLinkPath(
+        EPIC_ID,
+        ["remote-host-support", "implementation-fixes-plan"],
+        "../../../debates/remote-host-fixset-soundness/final-synthesis/index.md",
+      ),
+    ).toBeNull();
+  });
+
   it("returns null for an empty href", () => {
     expect(resolveArtifactRelativeLinkPath(EPIC_ID, SELF_CHAIN, "")).toBeNull();
     expect(
@@ -114,42 +126,5 @@ describe("resolveArtifactRelativeLinkPath", () => {
     ).toBe(
       "epics/epic-1/artifacts/ticket-breakdown/01-something/bad%escape/index.md",
     );
-  });
-});
-
-describe("isArtifactFolderHref", () => {
-  it("treats a bare extension-less name as folder-shaped", () => {
-    expect(isArtifactFolderHref("01-sub-ticket")).toBe(true);
-  });
-
-  it("treats a trailing-separator href as folder-shaped", () => {
-    expect(isArtifactFolderHref("./01-sub-ticket/")).toBe(true);
-  });
-
-  it("treats an explicit index.md href as folder-shaped", () => {
-    expect(isArtifactFolderHref("./01-sub-ticket/index.md")).toBe(true);
-  });
-
-  it("treats bare '.' and '..' as folder-shaped", () => {
-    expect(isArtifactFolderHref(".")).toBe(true);
-    expect(isArtifactFolderHref("..")).toBe(true);
-  });
-
-  it("treats a relative href with a non-index.md file extension as NOT folder-shaped", () => {
-    expect(isArtifactFolderHref("diagram.png")).toBe(false);
-    expect(isArtifactFolderHref("../src/main.ts")).toBe(false);
-  });
-
-  it("treats a dotfile-style name (leading dot, no extension) as folder-shaped", () => {
-    expect(isArtifactFolderHref(".gitignore")).toBe(true);
-  });
-
-  it("decodes before checking, so an encoded '..' is folder-shaped", () => {
-    expect(isArtifactFolderHref("%2E%2E")).toBe(true);
-  });
-
-  it("returns false for an empty or blank href", () => {
-    expect(isArtifactFolderHref("")).toBe(false);
-    expect(isArtifactFolderHref("   ")).toBe(false);
   });
 });

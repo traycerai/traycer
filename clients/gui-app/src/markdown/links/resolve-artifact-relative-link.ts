@@ -5,12 +5,19 @@
  * `epic.resolveArtifactByPath`).
  *
  * Agents write markdown from the artifact tree's own point of view, where
- * `./`, `../`, and bare names WITHOUT a file extension navigate FOLDERS (each
- * sub-artifact is a directory holding its own `index.md` - the sub-artifact
- * convention). A bare name WITH a file extension (`../src/main.ts`,
- * `diagram.png`) is not a sub-artifact reference at all - see
- * `isArtifactFolderHref`, which the caller consults FIRST so a genuine file
- * reference is left untouched instead of being coerced into `name/index.md`.
+ * `./`, `../`, and bare names navigate FOLDERS (each sub-artifact is a
+ * directory holding its own `index.md` - the sub-artifact convention).
+ * Whether a given href is ACTUALLY folder-shaped versus a genuine relative
+ * file reference (`../src/main.ts`) is NOT decided here by spelling - a real
+ * file can be named `README`, `LICENSE`, or `.env` (no extension, or a
+ * leading dot, exactly like a folder slug), and a real sub-artifact folder
+ * can carry a dot (`v1.2`), so no extension-based guess is reliable (see the
+ * corpus report backing this design). The caller
+ * (`use-artifact-link-opener.ts`) instead races this function's result
+ * (resolved via the read-only artifact RPC) against the plain
+ * workspace-file interpretation of the SAME href and opens whichever
+ * resolves to something real.
+ *
  * Resolution here walks `selfChain` (this artifact's own root-to-leaf
  * folder-name chain, see `artifact-folder-chain.ts`) the same way a
  * filesystem would walk directory segments, then reappends `index.md` unless
@@ -31,45 +38,22 @@ function decodeHrefComponent(href: string): string {
   }
 }
 
-function hasFileExtension(segment: string): boolean {
-  // A dot at position 0 is a dotfile-style name (".gitignore"), not an
-  // extension - folder slugs never start with a dot either, so treating it
-  // as extension-less (folder-shaped) is safe on both counts.
-  return segment.lastIndexOf(".") > 0;
-}
-
-/**
- * Whether `href` (as authored inside an artifact) navigates the ARTIFACT
- * FOLDER tree rather than referencing an arbitrary file: directory-shaped
- * (trailing separator), a bare `.`/`..` navigation token, an explicit
- * `index.md`, or a bare name with no file extension (the folder-slug
- * convention). A last segment carrying any OTHER extension (`main.ts`,
- * `diagram.png`) is a genuine relative file reference - the caller should
- * leave the href unchanged and resolve it as a normal workspace-relative
- * file instead of calling `resolveArtifactRelativeLinkPath`.
- */
-export function isArtifactFolderHref(href: string): boolean {
-  const trimmed = href.trim();
-  if (trimmed.length === 0) return false;
-  const decoded = decodeHrefComponent(trimmed);
-  if (decoded.endsWith("/") || decoded.endsWith("\\")) return true;
-  const segments = decoded.split(/[\\/]+/u).filter((s) => s.length > 0);
-  if (segments.length === 0) return false;
-  const last = segments[segments.length - 1];
-  if (last === "." || last === ".." || last === EPIC_ARTIFACT_INDEX_FILENAME) {
-    return true;
-  }
-  return !hasFileExtension(last);
-}
-
 /**
  * Resolves `relativeHref` (as authored inside the artifact whose own
  * folder-name chain is `selfChain`) to an artifact-shaped path string, or
  * `null` when the href is empty/degenerate or navigates above the epic's
- * `artifacts/` root. The caller is responsible for only calling this for
- * NON-absolute hrefs that `isArtifactFolderHref` has already confirmed are
- * folder-shaped; an absolute href already carries its own marker and needs a
- * different canonicalization (see `use-artifact-link-opener.ts`).
+ * `artifacts/` root.
+ *
+ * A `null` return for an over-`../`'d href is a DELIBERATE dead end, not a
+ * bug: an authoring agent that miscounts `../` depth either lands one level
+ * short (a DIFFERENT real artifact than intended - since nearly every
+ * directory in practice holds an `index.md`, guessing a fallback base would
+ * silently open the WRONG one) or, as here, walks off the top of
+ * `selfChain` entirely. There is no parent-directory or artifacts-root
+ * fallback for either case - the caller's plain workspace-file race is the
+ * only other candidate, and if that also misses, the ordinary "Couldn't
+ * open link" toast is the correct, visible outcome for an authoring
+ * mistake, not a wrong-artifact open.
  */
 export function resolveArtifactRelativeLinkPath(
   epicId: string,

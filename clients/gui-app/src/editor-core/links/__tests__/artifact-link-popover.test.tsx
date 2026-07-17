@@ -521,6 +521,59 @@ describe("ArtifactLinkPopover", () => {
     expect(lastAnchorRect().left).toBe(40);
   });
 
+  it("moves the caret-triggered anchor when the caret moves within the same wrapped link, without resetting a dirty draft", async () => {
+    const editor = makeEditor(`${LINK_CONTENT}<p>Elsewhere</p>`);
+    // "Example" spans positions 1-8; both 2 and 6 are inside that range, so
+    // the caret move stays on the SAME target (not a re-open).
+    editor.commands.setTextSelection(2);
+    renderPopover(editor, true);
+
+    const url = await screen.findByRole<HTMLInputElement>("textbox", {
+      name: "Link URL",
+    });
+    fireEvent.change(url, { target: { value: "https://draft.example" } });
+    expect(lastAnchorRect().left).toBe(20);
+
+    act(() => {
+      editor.commands.setTextSelection(6);
+    });
+
+    // trackEditor's coordsAtPos stub returns `left: position * 10`, so the
+    // anchor following the caret to 6 (not staying pinned at 2, the
+    // pre-fix behavior) yields left = 60.
+    await waitFor(() => expect(lastAnchorRect().left).toBe(60));
+    // The card stayed open on the SAME target rather than being reset via
+    // `open`: the in-progress draft survives the caret move.
+    expect(
+      screen.getByRole<HTMLInputElement>("textbox", { name: "Link URL" }).value,
+    ).toBe("https://draft.example");
+  });
+
+  it("anchors a caret parked exactly at the link's end to the preceding side, not the following line", async () => {
+    const editor = makeEditor(`${LINK_CONTENT}<p>Elsewhere</p>`);
+    // "Example" spans positions 1-8, so range.to = 8 - the end-EXCLUSIVE
+    // boundary. coordsAtPos's default (positive) side there reports
+    // whatever follows the mark, which at a wrap boundary is the next
+    // visual line; the preceding side (-1) must be requested instead.
+    vi.spyOn(editor.view, "coordsAtPos").mockImplementation(
+      (position, side) => ({
+        left: position * 10,
+        right: position * 10 + 5,
+        top: position === 8 && side === -1 ? 100 : 200,
+        bottom: position === 8 && side === -1 ? 120 : 220,
+      }),
+    );
+    editor.commands.setTextSelection(4);
+    renderPopover(editor, true);
+
+    await screen.findByRole("dialog", { name: "Edit link" });
+    act(() => {
+      editor.commands.setTextSelection(8);
+    });
+
+    await waitFor(() => expect(lastAnchorRect().top).toBe(100));
+  });
+
   it("promotes the compact hover preview to an autosaving editor", async () => {
     vi.useFakeTimers();
     const editor = makeEditor(`${LINK_CONTENT}<p>Elsewhere</p>`);

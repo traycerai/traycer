@@ -157,6 +157,19 @@ function clampToRange(position: number, range: Range): number {
 }
 
 /**
+ * The `coordsAtPos` side to resolve `position` on: `range.to` is the
+ * end-EXCLUSIVE boundary of the mark, so the default positive side (biased
+ * toward the character AFTER the position) would report coordinates for
+ * whatever follows the link - at a line-wrap boundary, that's the start of
+ * the NEXT visual line, landing the card a line low. Every other position
+ * (including `range.from`, the boundary BEFORE the mark's first character)
+ * wants the default positive side.
+ */
+function anchorSide(position: number, range: Range): number {
+  return position === range.to ? -1 : 1;
+}
+
+/**
  * Builds the floating-ui reference for a link target, anchored to a single
  * ProseMirror document position re-resolved LIVE on every call via
  * `coordsAtPos`.
@@ -170,18 +183,21 @@ function clampToRange(position: number, range: Range): number {
  * the line the pointer is actually over. Because `coordsAtPos` is invoked
  * FRESH every time floating-ui's `autoUpdate` calls this (scroll, resize,
  * mutation), the anchor also can't go stale the way a frozen viewport pixel
- * point could - there's no cached rect to invalidate.
+ * point could - there's no cached rect to invalidate. `side` carries the
+ * endpoint bias from `anchorSide` so a boundary position resolves to the
+ * correct side of the wrap.
  */
 function rangeAnchor(
   editor: Editor,
   contextElement: HTMLElement,
   position: number,
+  side: number,
 ): VirtualElement {
   return {
     contextElement,
     getBoundingClientRect: () => {
       if (editor.isDestroyed) return new DOMRect();
-      const coords = editor.view.coordsAtPos(position);
+      const coords = editor.view.coordsAtPos(position, side);
       return new DOMRect(
         coords.left,
         coords.top,
@@ -324,7 +340,12 @@ function linkTargetAtPosition(
     text: editor.state.doc.textBetween(range.from, range.to),
     identityText: editor.state.doc.textBetween(range.from, range.to),
     attrs: mark.attrs,
-    anchor: rangeAnchor(editor, liveContext, anchorDocPosition),
+    anchor: rangeAnchor(
+      editor,
+      liveContext,
+      anchorDocPosition,
+      anchorSide(anchorDocPosition, range),
+    ),
     mode: "edit",
     trigger: options.trigger,
     yBookmark: createYBookmark(editor, range, anchorDocPosition),
@@ -358,7 +379,12 @@ function refreshCreateTarget(
     range: mappedRange,
     text: editor.state.doc.textBetween(mappedRange.from, mappedRange.to),
     anchorDocPosition: mappedAnchor,
-    anchor: rangeAnchor(editor, editor.view.dom, mappedAnchor),
+    anchor: rangeAnchor(
+      editor,
+      editor.view.dom,
+      mappedAnchor,
+      anchorSide(mappedAnchor, mappedRange),
+    ),
   };
 }
 
@@ -400,6 +426,7 @@ function refreshEditTarget(
       editor,
       linkElementAtRange(editor, mappedRange),
       mappedAnchor,
+      anchorSide(mappedAnchor, mappedRange),
     ),
   };
 }
@@ -430,6 +457,31 @@ function refreshMappedTarget(
   return refreshEditTarget(editor, target, mappedRange, mappedAnchor);
 }
 
+/**
+ * Moves the anchor to `position` (the caret's new spot, still within
+ * `target.range`) without touching `href`/`text`/`identityText` or any of
+ * the dirty-edit-field bookkeeping the caller owns - unlike `open`, this
+ * must not reset an in-progress edit just because the caret moved to a
+ * different visual fragment of the same wrapped link.
+ */
+function refreshCaretAnchor(
+  editor: Editor,
+  target: EditLinkTarget,
+  position: number,
+): EditLinkTarget {
+  return {
+    ...target,
+    anchorDocPosition: position,
+    anchor: rangeAnchor(
+      editor,
+      linkElementAtRange(editor, target.range),
+      position,
+      anchorSide(position, target.range),
+    ),
+    yBookmark: createYBookmark(editor, target.range, position),
+  };
+}
+
 function createTargetFromSelection(editor: Editor): LinkTarget | null {
   const { from, to } = editor.state.selection;
   const caretOptions = {
@@ -456,7 +508,12 @@ function createTargetFromSelection(editor: Editor): LinkTarget | null {
     text: editor.state.doc.textBetween(from, to),
     identityText: editor.state.doc.textBetween(from, to),
     attrs: {},
-    anchor: rangeAnchor(editor, editor.view.dom, range.from),
+    anchor: rangeAnchor(
+      editor,
+      editor.view.dom,
+      range.from,
+      anchorSide(range.from, range),
+    ),
     mode: "create",
     yBookmark: createYBookmark(editor, range, range.from),
     anchorDocPosition: range.from,
@@ -878,6 +935,14 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
       }
       const position = editor.state.selection.from;
       if (current !== null && rangeContainsPosition(current.range, position)) {
+        // The caret moved to a different visual fragment of the SAME
+        // wrapped link (still inside current.range): keep the open target
+        // (don't reset href/text/dirty-edit state via `open`), but refresh
+        // where it anchors so the card follows the caret across the wrap
+        // instead of staying pinned to the position it first opened at.
+        if (position !== current.anchorDocPosition) {
+          setLiveTarget(refreshCaretAnchor(editor, current, position));
+        }
         return;
       }
       const expectedPosition = expectedCaretPositionRef.current;

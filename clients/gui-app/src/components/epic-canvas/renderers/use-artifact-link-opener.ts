@@ -2,7 +2,16 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { toast } from "sonner";
-import { buildChatLinkPolicy } from "@/components/chat/build-chat-link-policy";
+import {
+  buildChatLinkPolicy,
+  firstEagerlyTrueIndex,
+  openResolvedArtifact,
+  openResolvedWorkspaceTarget,
+  type ChatLinkLifecycle,
+  type ChatLinkPolicyDeps,
+} from "@/components/chat/build-chat-link-policy";
+import { candidateWorkspaceFileRefsForRelativeLinkPath } from "@/components/epic-canvas/workspace-file/workspace-file-link-ref";
+import type { ResolveArtifactByPathResult } from "@traycer/protocol/host/epic/unary-schemas";
 import type { OpenableArtifactLink } from "@/editor-core";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
@@ -12,14 +21,12 @@ import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link
 import { useWorktreeListBindingsForEpicForClient } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
 import { useArtifactFolderChain } from "@/lib/epic-selectors";
 import { useHostClient } from "@/lib/host";
+import { fetchResolveArtifactByPath } from "@/lib/host/resolve-artifact-by-path";
+import { fetchWorkspaceFileExists } from "@/lib/host/probe-workspace-file-exists";
 import { isAbsolutePath } from "@/lib/path/cross-platform-path";
 import { isBrowsable } from "@/lib/worktree/worktree-row-browsable";
-import { artifactEpicIdFromLinkPath } from "@/markdown/links/artifact-link-path";
-import {
-  isArtifactFolderHref,
-  resolveArtifactRelativeLinkPath,
-} from "@/markdown/links/resolve-artifact-relative-link";
-import { EPIC_ARTIFACT_INDEX_FILENAME } from "@traycer/protocol/common/artifact-path";
+import type { MarkdownFileLink } from "@/markdown/links/markdown-link-context";
+import { resolveArtifactRelativeLinkPath } from "@/markdown/links/resolve-artifact-relative-link";
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 
@@ -28,43 +35,128 @@ export interface ArtifactLinkOpener {
   readonly isExternalPending: boolean;
 }
 
-function withArtifactIndexSuffix(path: string): string {
-  if (path.endsWith(`/${EPIC_ARTIFACT_INDEX_FILENAME}`)) return path;
-  return `${path.endsWith("/") ? path : `${path}/`}${EPIC_ARTIFACT_INDEX_FILENAME}`;
-}
-
 /**
- * A directory-shaped absolute artifact href (no explicit `/index.md`
- * suffix) is canonicalized the same way a relative one already is - only
- * when appending the suffix would make the result structurally match the
- * artifact-path marker, so an unrelated absolute directory reference (a
- * plain workspace folder) is never mangled.
+ * Races the ARTIFACT-FOLDER interpretation of a relative href (resolved
+ * against THIS artifact's own folder chain, confirmed via the read-only
+ * `epic.resolveArtifactByPath` RPC) against its plain WORKSPACE-FILE
+ * interpretation (resolved against the chat's bound roots, existence-probed
+ * the same way a chat link is) - whichever resolves first, BY PRIORITY,
+ * wins. File candidates take priority (listed first in the combined probe
+ * list): the corpus backing this design found extension-bearing targets are
+ * always real workspace files, never sub-artifact references, so a fast,
+ * common file hit is never held up waiting on the slower RPC-based folder
+ * candidate to settle (`firstEagerlyTrueIndex` only blocks a LATER
+ * candidate on an EARLIER one still being pending, never the reverse).
+ *
+ * This replaces guessing folder-vs-file from the href's spelling (a real
+ * file literally named `README`, `LICENSE`, or `.env`, or a dotted folder
+ * like `v1.2`, defeats any such guess - see the corpus report) with an
+ * actual existence check on both interpretations. The RPC candidate still
+ * fires even when a file candidate is likely to win first; the wasted
+ * round-trip is the accepted cost of not re-introducing a spelling-based
+ * skip that would regress the `v1.2`-style dotted-folder case.
+ *
+ * `resolveArtifactRelativeLinkPath` returning `null` (the href walks above
+ * the epic's artifacts root) is a deliberate dead end, NOT a bug to route
+ * around with a parent-directory or artifacts-root fallback: the corpus
+ * backing this design found that walking one level too far almost always
+ * lands on SOME real artifact - just the wrong one - so guessing a
+ * different base would silently open an unrelated artifact instead of
+ * failing visibly. The click still races the plain workspace-file
+ * candidates in that case; it just has no folder candidate to race against,
+ * so a genuine `../` depth miscount by the authoring agent surfaces as the
+ * ordinary "Couldn't open link" toast rather than a silent wrong open.
  */
-function canonicalizeAbsoluteArtifactHref(path: string): string {
-  if (artifactEpicIdFromLinkPath(path) !== null) return path;
-  const withSuffix = withArtifactIndexSuffix(path);
-  return artifactEpicIdFromLinkPath(withSuffix) !== null ? withSuffix : path;
-}
-
-/**
- * Resolves an artifact-editor-authored href to the path `openFile` should
- * act on: an absolute href is canonicalized (directory -> index.md) and
- * passed through; a RELATIVE href that navigates the artifact folder tree
- * (`isArtifactFolderHref`) is rewritten against `selfFolderChain`; anything
- * else (a relative href with a non-index.md file extension, e.g.
- * `../src/main.ts`) is left UNCHANGED so `openFile`'s existing relative-path
- * branch resolves it as a normal workspace file instead of coercing it into
- * `name/index.md`.
- */
-function resolveArtifactLinkPath(
-  epicId: string,
-  selfFolderChain: readonly string[] | null,
-  path: string,
-): string | null {
-  if (isAbsolutePath(path)) return canonicalizeAbsoluteArtifactHref(path);
-  if (!isArtifactFolderHref(path)) return path;
-  if (selfFolderChain === null) return null;
-  return resolveArtifactRelativeLinkPath(epicId, selfFolderChain, path);
+function resolveAndOpenArtifactRelativeHref(
+  deps: ChatLinkPolicyDeps,
+  lifecycle: ChatLinkLifecycle,
+  link: MarkdownFileLink,
+  context: {
+    readonly epicId: string;
+    readonly selfFolderChain: readonly string[] | null;
+  },
+): Promise<void> {
+  const { epicId, selfFolderChain } = context;
+  const clickToken = lifecycle.beginClick();
+  lifecycle.getPendingProjectedOpenCancel()?.();
+  lifecycle.setPendingProjectedOpenCancel(null);
+  if (deps.hostId === null || deps.workspaceClient === null) {
+    lifecycle.onAsyncFailure();
+    return Promise.resolve();
+  }
+  const hostId = deps.hostId;
+  const workspaceClient = deps.workspaceClient;
+  const fileCandidates =
+    candidateWorkspaceFileRefsForRelativeLinkPath(
+      hostId,
+      deps.workspaceRoots,
+      link.path,
+    ) ?? [];
+  const fileProbes = fileCandidates.map((ref) =>
+    fetchWorkspaceFileExists({
+      queryClient: deps.queryClient,
+      client: workspaceClient,
+      hostId,
+      workspacePath: ref.workspacePath,
+      filePath: ref.filePath,
+    }),
+  );
+  const folderCandidatePath =
+    selfFolderChain === null
+      ? null
+      : resolveArtifactRelativeLinkPath(epicId, selfFolderChain, link.path);
+  const resolveHostId = deps.activeHostId;
+  const fetchFolderArtifact =
+    (): Promise<ResolveArtifactByPathResult | null> =>
+      folderCandidatePath === null || resolveHostId === null
+        ? Promise.resolve(null)
+        : fetchResolveArtifactByPath({
+            queryClient: deps.queryClient,
+            client: deps.client,
+            hostId: resolveHostId,
+            epicId,
+            filePath: folderCandidatePath,
+          });
+  const probes = [
+    ...fileProbes,
+    fetchFolderArtifact().then((artifact) => artifact !== null),
+  ];
+  const folderIndex = probes.length - 1;
+  return firstEagerlyTrueIndex(probes).then((winningIndex) => {
+    if (lifecycle.isDisposed()) return;
+    if (!lifecycle.isCurrent(clickToken)) return;
+    if (winningIndex === -1) {
+      lifecycle.onAsyncFailure();
+      return;
+    }
+    if (winningIndex !== folderIndex) {
+      openResolvedWorkspaceTarget(deps, lifecycle, link, {
+        ref: fileCandidates[winningIndex],
+        clickToken,
+      });
+      return;
+    }
+    if (folderCandidatePath === null || resolveHostId === null) {
+      lifecycle.onAsyncFailure();
+      return;
+    }
+    // The winning probe already confirmed a real artifact exists; this
+    // re-fetch is a cache hit (`fetchResolveArtifactByPath`'s query stays
+    // fresh for 15s), not a second round-trip - `firstEagerlyTrueIndex`
+    // only reports WHICH candidate won, not the value it resolved to.
+    void fetchFolderArtifact().then((artifact) => {
+      if (lifecycle.isDisposed() || !lifecycle.isCurrent(clickToken)) return;
+      if (artifact === null) {
+        lifecycle.onAsyncFailure();
+        return;
+      }
+      openResolvedArtifact(deps, lifecycle, {
+        artifact,
+        target: { artifactEpicId: epicId, resolveHostId, clickToken },
+        onUnavailable: () => lifecycle.onAsyncFailure(),
+      });
+    });
+  });
 }
 
 export function useArtifactLinkOpener(args: {
@@ -125,9 +217,9 @@ export function useArtifactLinkOpener(args: {
     return clickTokenRef.current;
   }, []);
 
-  const openFile = useMemo(() => {
+  const chatDeps = useMemo<ChatLinkPolicyDeps | null>(() => {
     if (workspaceRoots === null) return null;
-    return buildChatLinkPolicy({
+    return {
       tabId: args.viewTabId,
       hostId: tabHostId,
       workspaceRoots,
@@ -139,7 +231,7 @@ export function useArtifactLinkOpener(args: {
       workspaceClient: tabHostClient,
       navigate,
       previewTileInTab,
-    });
+    };
   }, [
     activeHostId,
     args.epicId,
@@ -154,6 +246,11 @@ export function useArtifactLinkOpener(args: {
     workspaceRoots,
   ]);
 
+  const openFile = useMemo(
+    () => (chatDeps === null ? null : buildChatLinkPolicy(chatDeps)),
+    [chatDeps],
+  );
+
   const openLink = useCallback(
     (link: OpenableArtifactLink): void => {
       if (link.kind === "external") {
@@ -167,7 +264,7 @@ export function useArtifactLinkOpener(args: {
         });
         return;
       }
-      if (openFile === null) {
+      if (openFile === null || chatDeps === null) {
         toast(
           worktrees.isError
             ? "Couldn't open link"
@@ -175,45 +272,45 @@ export function useArtifactLinkOpener(args: {
         );
         return;
       }
-      // A relative href is authored from the artifact tree's own point of
-      // view (`./`, `../`, bare folder names), NOT the code workspace -
-      // rewrite it against this artifact's own on-disk directory before
-      // handing off to the shared absolute-path-capable resolve+open flow.
-      // An unresolvable relative href (chain data unavailable, or the
-      // navigation walks above the epic's artifacts root) fails the click
-      // directly rather than falling through to workspace-root resolution.
-      const resolvedPath = resolveArtifactLinkPath(
-        args.epicId,
-        selfFolderChain,
-        link.path,
-      );
-      if (resolvedPath === null) {
-        toast("Couldn't open link");
+      const lifecycle: ChatLinkLifecycle = {
+        isDisposed: () => disposedRef.current,
+        getPendingProjectedOpenCancel: () =>
+          pendingProjectedOpenCancelRef.current,
+        setPendingProjectedOpenCancel: (cancel) => {
+          pendingProjectedOpenCancelRef.current = cancel;
+        },
+        beginClick: supersedePending,
+        isCurrent: (token) => token === clickTokenRef.current,
+        onAsyncFailure: () => toast("Couldn't open link"),
+      };
+      const markdownLink: MarkdownFileLink = {
+        path: link.path,
+        line: link.line,
+        col: link.col,
+        isDirectory: false,
+      };
+      if (isAbsolutePath(link.path)) {
+        // An absolute href, authored inside an artifact, is passed through
+        // UNCHANGED - `buildChatLinkPolicy`'s absolute resolution races the
+        // direct file against its `index.md` fallback and reclassifies the
+        // winner as an artifact when it turns out to be index.md-shaped (A,
+        // C1), so no client-side canonicalization is needed here.
+        if (!openFile(markdownLink, lifecycle)) toast("Couldn't open link");
         return;
       }
-      const opened = openFile(
+      void resolveAndOpenArtifactRelativeHref(
+        chatDeps,
+        lifecycle,
+        markdownLink,
         {
-          path: resolvedPath,
-          line: link.line,
-          col: link.col,
-          isDirectory: false,
-        },
-        {
-          isDisposed: () => disposedRef.current,
-          getPendingProjectedOpenCancel: () =>
-            pendingProjectedOpenCancelRef.current,
-          setPendingProjectedOpenCancel: (cancel) => {
-            pendingProjectedOpenCancelRef.current = cancel;
-          },
-          beginClick: supersedePending,
-          isCurrent: (token) => token === clickTokenRef.current,
-          onAsyncFailure: () => toast("Couldn't open link"),
+          epicId: args.epicId,
+          selfFolderChain,
         },
       );
-      if (!opened) toast("Couldn't open link");
     },
     [
       args.epicId,
+      chatDeps,
       openExternalLink,
       openFile,
       selfFolderChain,

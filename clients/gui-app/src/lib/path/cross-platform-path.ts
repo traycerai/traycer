@@ -27,17 +27,66 @@ export function joinPath(...segments: readonly string[]): string {
   return nonEmpty.length === 0 ? "." : normalizePath(nonEmpty.join("/"));
 }
 
+interface PathAuthority {
+  /** The volume/share root, always ending in `/` (`/`, `C:/`, `//server/share/`). */
+  readonly prefix: string;
+  /** `basePath` with `prefix` stripped and no leading separator. */
+  readonly rest: string;
+}
+
+/**
+ * Splits `basePath` into its filesystem authority (a POSIX root, a Windows
+ * drive, or a UNC share) and everything after it. The authority is the
+ * floor `..` traversal must never climb above - `resolveAbsolutePath` joins
+ * and walks `rest`, then re-prepends `prefix` unconditionally, so a drive
+ * letter or UNC share can never be stripped or escaped by enough `../`
+ * segments.
+ */
+function pathAuthority(basePath: string): PathAuthority {
+  const uncMatch = WINDOWS_UNC_PATH_PATTERN.exec(basePath);
+  if (uncMatch !== null) {
+    return {
+      prefix: `${uncMatch[0]}/`,
+      rest: basePath.slice(uncMatch[0].length).replace(/^[/\\]+/, ""),
+    };
+  }
+  const driveMatch = WINDOWS_DRIVE_PATH_PATTERN.exec(basePath);
+  if (driveMatch !== null) {
+    return {
+      prefix: `${basePath.slice(0, 2)}/`,
+      rest: basePath.slice(2).replace(/^[/\\]+/, ""),
+    };
+  }
+  return { prefix: "/", rest: basePath.replace(/^[/\\]+/, "") };
+}
+
 /**
  * Resolves `relativePath` against `basePath` into a normalized absolute path
- * (POSIX-style string manipulation only, no filesystem access). `basePath`
- * must already be absolute; the result may land outside it when
- * `relativePath` contains enough `../` segments to escape.
+ * (string manipulation only, no filesystem access). `basePath` must already
+ * be absolute. Traversal is clamped at `basePath`'s filesystem authority
+ * (POSIX root, Windows drive, or UNC share): enough `../` segments to climb
+ * above it lands AT the authority root rather than stripping the drive/share
+ * or producing a non-absolute result, matching how a real filesystem clamps
+ * `..` at its own root instead of erroring or escaping.
  */
 export function resolveAbsolutePath(
   basePath: string,
   relativePath: string,
 ): string {
-  return normalizePath(`${basePath}/${relativePath}`);
+  const { prefix, rest } = pathAuthority(basePath);
+  const joined = rest.length > 0 ? `${rest}/${relativePath}` : relativePath;
+  const segments = joined
+    .split(/[/\\]+/u)
+    .filter((segment) => segment.length > 0 && segment !== ".");
+  const clamped: string[] = [];
+  for (const segment of segments) {
+    if (segment === "..") {
+      if (clamped.length > 0) clamped.pop();
+      continue;
+    }
+    clamped.push(segment);
+  }
+  return prefix + clamped.join("/");
 }
 
 export function isAbsolutePath(path: string): boolean {

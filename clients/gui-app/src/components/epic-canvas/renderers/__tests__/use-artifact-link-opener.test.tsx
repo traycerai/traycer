@@ -1,9 +1,12 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { type ReactNode, useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatLinkLifecycle } from "@/components/chat/build-chat-link-policy";
+import type { FetchResolveArtifactByPathArgs } from "@/lib/host/resolve-artifact-by-path";
+import type { ProjectedSidebarNodeOpenArgs } from "@/components/epic-canvas/sidebar/open-projected-sidebar-node";
 import type { MarkdownFileLink } from "@/markdown/links/markdown-link-context";
+import type { ResolveArtifactByPathResult } from "@traycer/protocol/host/epic/unary-schemas";
 import { useArtifactLinkOpener } from "../use-artifact-link-opener";
 
 interface ExternalMutationOptions {
@@ -14,6 +17,7 @@ const mocks = vi.hoisted(() => {
   const runPolicy = vi.fn<
     (link: MarkdownFileLink, lifecycle: ChatLinkLifecycle) => boolean
   >(() => true);
+  const previewTileInTab = vi.fn();
   const worktreeQuery: {
     data:
       | {
@@ -39,6 +43,43 @@ const mocks = vi.hoisted(() => {
     folderChain: vi.fn<(artifactId: string) => readonly string[] | null>(() => [
       "root-artifact",
     ]),
+    navigate: vi.fn(),
+    previewTileInTab,
+    epicHandle: { store: {} },
+    // A STABLE object reference returned on every call, matching how the
+    // real hook (context/Zustand-backed) behaves - a fresh literal per call
+    // would destabilize every memo/callback downstream of it for reasons
+    // that don't exist in production.
+    tileNavigation: { openTilePreviewInTab: previewTileInTab },
+    candidateWorkspaceFileRefsForRelativeLinkPath: vi.fn<
+      (
+        hostId: string,
+        roots: ReadonlyArray<string>,
+        path: string,
+      ) => ReadonlyArray<{
+        readonly id: string;
+        readonly workspacePath: string;
+        readonly filePath: string;
+      }> | null
+    >(),
+    fetchWorkspaceFileExists:
+      vi.fn<(args: { readonly workspacePath: string }) => Promise<boolean>>(),
+    resolveArtifactByPath:
+      vi.fn<
+        (
+          args: FetchResolveArtifactByPathArgs,
+        ) => Promise<ResolveArtifactByPathResult | null>
+      >(),
+    openProjectedSidebarNodeInTabWhenAvailable:
+      vi.fn<(args: ProjectedSidebarNodeOpenArgs) => () => void>(),
+    navigateToTabIntent: vi.fn(),
+    openOrFocusEpicIntent: vi.fn(
+      (input: { epicId: string; focus: unknown }) => ({
+        kind: "epic" as const,
+        ...input,
+      }),
+    ),
+    setWorkspaceFileRevealTarget: vi.fn(),
   };
 });
 
@@ -60,8 +101,60 @@ vi.mock("@/lib/host", () => ({
 vi.mock("@/lib/epic-selectors", () => ({
   useArtifactFolderChain: (artifactId: string) => mocks.folderChain(artifactId),
 }));
-vi.mock("@/components/chat/build-chat-link-policy", () => ({
-  buildChatLinkPolicy: mocks.buildPolicy,
+// `buildChatLinkPolicy` (used for the ABSOLUTE-href branch, and internally
+// for the shared workspace-file/artifact-open primitives the RELATIVE-href
+// race reuses) is mocked ONLY at its `buildChatLinkPolicy` export;
+// `firstEagerlyTrueIndex`/`openResolvedArtifact`/`openResolvedWorkspaceTarget`
+// stay REAL - they're independently covered in build-chat-link-policy.test.ts,
+// and the race logic under test here depends on their actual behavior, not a
+// stand-in.
+vi.mock("@/components/chat/build-chat-link-policy", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/components/chat/build-chat-link-policy")
+    >();
+  return { ...actual, buildChatLinkPolicy: mocks.buildPolicy };
+});
+vi.mock(
+  "@/components/epic-canvas/workspace-file/workspace-file-link-ref",
+  () => ({
+    candidateWorkspaceFileRefsForRelativeLinkPath: (
+      hostId: string,
+      roots: ReadonlyArray<string>,
+      path: string,
+    ) =>
+      mocks.candidateWorkspaceFileRefsForRelativeLinkPath(hostId, roots, path),
+  }),
+);
+vi.mock("@/lib/host/probe-workspace-file-exists", () => ({
+  fetchWorkspaceFileExists: (args: { readonly workspacePath: string }) =>
+    mocks.fetchWorkspaceFileExists(args),
+}));
+vi.mock("@/lib/host/resolve-artifact-by-path", () => ({
+  fetchResolveArtifactByPath: (args: FetchResolveArtifactByPathArgs) =>
+    mocks.resolveArtifactByPath(args),
+}));
+vi.mock("@/components/epic-canvas/sidebar/open-projected-sidebar-node", () => ({
+  openProjectedSidebarNodeInTabWhenAvailable: (
+    args: ProjectedSidebarNodeOpenArgs,
+  ) => mocks.openProjectedSidebarNodeInTabWhenAvailable(args),
+}));
+vi.mock("@/lib/tab-navigation", () => ({
+  navigateToTabIntent: (navigate: unknown, intent: unknown) => {
+    mocks.navigateToTabIntent(navigate, intent);
+  },
+  openOrFocusEpicIntent: (input: { epicId: string; focus: unknown }) =>
+    mocks.openOrFocusEpicIntent(input),
+}));
+vi.mock("@/stores/epics/canvas/workspace-file-reveal-store", () => ({
+  setWorkspaceFileRevealTarget: (
+    tabId: string,
+    contentId: string,
+    line: number,
+    col: number | null,
+  ) => {
+    mocks.setWorkspaceFileRevealTarget(tabId, contentId, line, col);
+  },
 }));
 vi.mock("@/hooks/runner/use-open-external-link-mutation", () => ({
   useRunnerOpenExternalLink: () => ({
@@ -70,19 +163,27 @@ vi.mock("@/hooks/runner/use-open-external-link-mutation", () => ({
   }),
 }));
 vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
-  useEpicTileNavigation: () => ({ openTilePreviewInTab: vi.fn() }),
+  useEpicTileNavigation: () => mocks.tileNavigation,
 }));
 vi.mock("@/providers/use-open-epic-handle", () => ({
-  useOpenEpicHandle: () => ({ store: {} }),
+  useOpenEpicHandle: () => mocks.epicHandle,
 }));
 vi.mock("@tanstack/react-router", () => ({
-  useNavigate: () => vi.fn(),
+  // A STABLE reference across renders, matching the real `useNavigate`'s
+  // behavior (it doesn't change identity when the router context doesn't) -
+  // an unstable mock here would destabilize every memo/callback downstream
+  // of `navigate` for reasons that don't exist in production.
+  useNavigate: () => mocks.navigate,
 }));
 vi.mock("sonner", () => ({ toast: mocks.toast }));
 
 function QueryWrapper(props: { readonly children: ReactNode }) {
+  // A STABLE client across rerenders - constructing `new QueryClient()`
+  // inline in the render body would hand `useQueryClient()` a different
+  // instance on every rerender, destabilizing anything memoized on it.
+  const [queryClient] = useState(() => new QueryClient());
   return (
-    <QueryClientProvider client={new QueryClient()}>
+    <QueryClientProvider client={queryClient}>
       {props.children}
     </QueryClientProvider>
   );
@@ -102,7 +203,24 @@ beforeEach(() => {
   mocks.toast.mockClear();
   mocks.folderChain.mockReset();
   mocks.folderChain.mockReturnValue(["root-artifact"]);
+  mocks.navigate.mockClear();
+  mocks.previewTileInTab.mockReset();
+  mocks.candidateWorkspaceFileRefsForRelativeLinkPath.mockReset();
+  mocks.candidateWorkspaceFileRefsForRelativeLinkPath.mockReturnValue(null);
+  mocks.fetchWorkspaceFileExists.mockReset();
+  mocks.fetchWorkspaceFileExists.mockResolvedValue(false);
+  mocks.resolveArtifactByPath.mockReset();
+  mocks.resolveArtifactByPath.mockResolvedValue(null);
+  mocks.openProjectedSidebarNodeInTabWhenAvailable.mockReset();
+  mocks.openProjectedSidebarNodeInTabWhenAvailable.mockReturnValue(
+    () => undefined,
+  );
+  mocks.navigateToTabIntent.mockReset();
+  mocks.openOrFocusEpicIntent.mockClear();
+  mocks.setWorkspaceFileRevealTarget.mockReset();
 });
+
+const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe("useArtifactLinkOpener", () => {
   it("queries roots with the tab client while resolving artifacts with the default client", () => {
@@ -143,9 +261,11 @@ describe("useArtifactLinkOpener", () => {
         }),
       { wrapper: QueryWrapper },
     );
+    // Absolute, so the gate is exercised in isolation from the relative-href
+    // race (which never even reaches `openFile`/`runPolicy`).
     const link = {
       kind: "file" as const,
-      path: "src/index.ts",
+      path: "/artifact/index.md",
       line: null,
       col: null,
     };
@@ -323,8 +443,47 @@ describe("useArtifactLinkOpener", () => {
     expect(mocks.toast).toHaveBeenCalledWith("Couldn't open link");
   });
 
-  it("rewrites a bare sibling href against this artifact's own folder chain", () => {
+  it("passes an absolute href through unchanged to the shared policy (A, C1 now live in build-chat-link-policy)", () => {
+    mocks.folderChain.mockReturnValue(null);
+    const { result } = renderHook(
+      () =>
+        useArtifactLinkOpener({
+          epicId: "epic-1",
+          artifactId: "artifact-1",
+          viewTabId: "tab-1",
+        }),
+      { wrapper: QueryWrapper },
+    );
+
+    result.current.openLink({
+      kind: "file",
+      path: "/Users/me/.traycer/epics/epic-1/artifacts/some-spec/README.md",
+      line: null,
+      col: null,
+    });
+
+    expect(mocks.runPolicy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: "/Users/me/.traycer/epics/epic-1/artifacts/some-spec/README.md",
+      }),
+      expect.anything(),
+    );
+  });
+
+  it("opens the artifact-folder candidate when it resolves, racing against the plain-file candidates (E)", async () => {
     mocks.folderChain.mockReturnValue(["ticket-breakdown", "01-something"]);
+    mocks.candidateWorkspaceFileRefsForRelativeLinkPath.mockReturnValue([
+      {
+        id: "file-candidate",
+        workspacePath: "/tab/repo",
+        filePath: "01-sub-ticket/index.md",
+      },
+    ]);
+    mocks.fetchWorkspaceFileExists.mockResolvedValue(false);
+    mocks.resolveArtifactByPath.mockResolvedValue({
+      artifactId: "artifact-sub",
+      kind: "ticket",
+    });
     const { result } = renderHook(
       () =>
         useArtifactLinkOpener({
@@ -341,148 +500,41 @@ describe("useArtifactLinkOpener", () => {
       line: null,
       col: null,
     });
+    await flush();
 
-    expect(mocks.runPolicy).toHaveBeenCalledWith(
+    expect(mocks.resolveArtifactByPath).toHaveBeenCalledWith(
       expect.objectContaining({
-        path: "epics/epic-1/artifacts/ticket-breakdown/01-something/01-sub-ticket/index.md",
+        hostId: "default-host",
+        epicId: "epic-1",
+        filePath:
+          "epics/epic-1/artifacts/ticket-breakdown/01-something/01-sub-ticket/index.md",
       }),
-      expect.anything(),
     );
+    expect(
+      mocks.openProjectedSidebarNodeInTabWhenAvailable,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tabId: "tab-1",
+        nodeId: "artifact-sub",
+        fallbackHostId: "default-host",
+      }),
+    );
+    expect(mocks.previewTileInTab).not.toHaveBeenCalled();
+    expect(mocks.runPolicy).not.toHaveBeenCalled();
   });
 
-  it("resolves a ../ href against the parent artifact's folder", () => {
+  it("opens the winning plain-file candidate for a relative href with a non-index.md extension, without ever attempting the folder RPC race to win (E)", async () => {
     mocks.folderChain.mockReturnValue(["ticket-breakdown", "01-something"]);
-    const { result } = renderHook(
-      () =>
-        useArtifactLinkOpener({
-          epicId: "epic-1",
-          artifactId: "artifact-1",
-          viewTabId: "tab-1",
-        }),
-      { wrapper: QueryWrapper },
-    );
-
-    result.current.openLink({
-      kind: "file",
-      path: "../02-other/index.md",
-      line: null,
-      col: null,
-    });
-
-    expect(mocks.runPolicy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        path: "epics/epic-1/artifacts/ticket-breakdown/02-other/index.md",
-      }),
-      expect.anything(),
-    );
-  });
-
-  it("resolves a bare index.md href back to this artifact's own directory", () => {
-    mocks.folderChain.mockReturnValue(["ticket-breakdown", "01-something"]);
-    const { result } = renderHook(
-      () =>
-        useArtifactLinkOpener({
-          epicId: "epic-1",
-          artifactId: "artifact-1",
-          viewTabId: "tab-1",
-        }),
-      { wrapper: QueryWrapper },
-    );
-
-    result.current.openLink({
-      kind: "file",
-      path: "index.md",
-      line: null,
-      col: null,
-    });
-
-    expect(mocks.runPolicy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        path: "epics/epic-1/artifacts/ticket-breakdown/01-something/index.md",
-      }),
-      expect.anything(),
-    );
-  });
-
-  it("does not rewrite an absolute href", () => {
-    mocks.folderChain.mockReturnValue(null);
-    const { result } = renderHook(
-      () =>
-        useArtifactLinkOpener({
-          epicId: "epic-1",
-          artifactId: "artifact-1",
-          viewTabId: "tab-1",
-        }),
-      { wrapper: QueryWrapper },
-    );
-
-    result.current.openLink({
-      kind: "file",
-      path: "/artifact/index.md",
-      line: null,
-      col: null,
-    });
-
-    expect(mocks.runPolicy).toHaveBeenCalledWith(
-      expect.objectContaining({ path: "/artifact/index.md" }),
-      expect.anything(),
-    );
-  });
-
-  it("canonicalizes a directory-shaped absolute artifact href to its index.md, the same way a relative one already is", () => {
-    mocks.folderChain.mockReturnValue(null);
-    const { result } = renderHook(
-      () =>
-        useArtifactLinkOpener({
-          epicId: "epic-1",
-          artifactId: "artifact-1",
-          viewTabId: "tab-1",
-        }),
-      { wrapper: QueryWrapper },
-    );
-
-    result.current.openLink({
-      kind: "file",
-      path: "/Users/me/.traycer/epics/epic-1/artifacts/some-spec/",
-      line: null,
-      col: null,
-    });
-
-    expect(mocks.runPolicy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        path: "/Users/me/.traycer/epics/epic-1/artifacts/some-spec/index.md",
-      }),
-      expect.anything(),
-    );
-  });
-
-  it("does not mangle an absolute directory href that isn't artifact-shaped", () => {
-    mocks.folderChain.mockReturnValue(null);
-    const { result } = renderHook(
-      () =>
-        useArtifactLinkOpener({
-          epicId: "epic-1",
-          artifactId: "artifact-1",
-          viewTabId: "tab-1",
-        }),
-      { wrapper: QueryWrapper },
-    );
-
-    result.current.openLink({
-      kind: "file",
-      path: "/repo/src/",
-      line: null,
-      col: null,
-    });
-
-    expect(mocks.runPolicy).toHaveBeenCalledWith(
-      expect.objectContaining({ path: "/repo/src/" }),
-      expect.anything(),
-    );
-  });
-
-  it("passes a relative href with a non-index.md file extension through unchanged, instead of coercing it into an artifact folder", () => {
-    mocks.folderChain.mockReturnValue(["ticket-breakdown", "01-something"]);
+    const fileRef = {
+      id: "main-ts",
+      workspacePath: "/tab/repo",
+      filePath: "src/main.ts",
+    };
+    mocks.candidateWorkspaceFileRefsForRelativeLinkPath.mockReturnValue([
+      fileRef,
+    ]);
+    mocks.fetchWorkspaceFileExists.mockResolvedValue(true);
+    mocks.resolveArtifactByPath.mockResolvedValue(null);
     const { result } = renderHook(
       () =>
         useArtifactLinkOpener({
@@ -499,18 +551,57 @@ describe("useArtifactLinkOpener", () => {
       line: null,
       col: null,
     });
+    await flush();
 
-    // Not rewritten into "…/src/main.ts/index.md" - left as the ORIGINAL
-    // relative href so the shared policy's relative-workspace-file branch
-    // resolves it as a normal file, not an artifact-folder reference.
-    expect(mocks.runPolicy).toHaveBeenCalledWith(
-      expect.objectContaining({ path: "../src/main.ts" }),
-      expect.anything(),
+    // Not rewritten into an artifact-folder reference: the real file wins the
+    // race, so it opens as a plain workspace-file preview.
+    expect(mocks.previewTileInTab).toHaveBeenCalledWith("tab-1", fileRef);
+    expect(
+      mocks.openProjectedSidebarNodeInTabWhenAvailable,
+    ).not.toHaveBeenCalled();
+  });
+
+  it("resolves a bare index.md href back to this artifact's own directory via the folder RPC candidate", async () => {
+    mocks.folderChain.mockReturnValue(["ticket-breakdown", "01-something"]);
+    mocks.candidateWorkspaceFileRefsForRelativeLinkPath.mockReturnValue(null);
+    mocks.resolveArtifactByPath.mockResolvedValue({
+      artifactId: "artifact-self",
+      kind: "spec",
+    });
+    const { result } = renderHook(
+      () =>
+        useArtifactLinkOpener({
+          epicId: "epic-1",
+          artifactId: "artifact-1",
+          viewTabId: "tab-1",
+        }),
+      { wrapper: QueryWrapper },
+    );
+
+    result.current.openLink({
+      kind: "file",
+      path: "index.md",
+      line: null,
+      col: null,
+    });
+    await flush();
+
+    expect(mocks.resolveArtifactByPath).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filePath:
+          "epics/epic-1/artifacts/ticket-breakdown/01-something/index.md",
+      }),
+    );
+    expect(
+      mocks.openProjectedSidebarNodeInTabWhenAvailable,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({ nodeId: "artifact-self" }),
     );
   });
 
-  it("toasts without opening when the folder chain can't be resolved", () => {
+  it("toasts without opening when the folder chain can't be resolved and no plain-file candidate exists", async () => {
     mocks.folderChain.mockReturnValue(null);
+    mocks.candidateWorkspaceFileRefsForRelativeLinkPath.mockReturnValue(null);
     const { result } = renderHook(
       () =>
         useArtifactLinkOpener({
@@ -527,13 +618,15 @@ describe("useArtifactLinkOpener", () => {
       line: null,
       col: null,
     });
+    await flush();
 
-    expect(mocks.runPolicy).not.toHaveBeenCalled();
+    expect(mocks.resolveArtifactByPath).not.toHaveBeenCalled();
     expect(mocks.toast).toHaveBeenCalledWith("Couldn't open link");
   });
 
-  it("toasts without opening when a relative href walks above the epic root", () => {
+  it("toasts without opening (not a parent/artifacts-root fallback guess) when a relative href walks above the epic root and no plain-file candidate exists", async () => {
     mocks.folderChain.mockReturnValue(["only-artifact"]);
+    mocks.candidateWorkspaceFileRefsForRelativeLinkPath.mockReturnValue(null);
     const { result } = renderHook(
       () =>
         useArtifactLinkOpener({
@@ -550,8 +643,11 @@ describe("useArtifactLinkOpener", () => {
       line: null,
       col: null,
     });
+    await flush();
 
-    expect(mocks.runPolicy).not.toHaveBeenCalled();
+    // resolveArtifactRelativeLinkPath (real) returns null for this walk, so
+    // the folder candidate is never even attempted via the RPC.
+    expect(mocks.resolveArtifactByPath).not.toHaveBeenCalled();
     expect(mocks.toast).toHaveBeenCalledWith("Couldn't open link");
   });
 });

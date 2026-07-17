@@ -54,6 +54,17 @@ const mocks = vi.hoisted(() => ({
       readonly filePath: string;
     }> | null
   >(),
+  candidateWorkspaceFileRefsForAbsoluteLinkPath: vi.fn<
+    (
+      hostId: string,
+      roots: ReadonlyArray<string>,
+      path: string,
+    ) => ReadonlyArray<{
+      readonly id: string;
+      readonly workspacePath: string;
+      readonly filePath: string;
+    }> | null
+  >(),
   fetchWorkspaceFileExists:
     vi.fn<
       (args: {
@@ -109,6 +120,12 @@ vi.mock(
       path: string,
     ) =>
       mocks.candidateWorkspaceFileRefsForRelativeLinkPath(hostId, roots, path),
+    candidateWorkspaceFileRefsForAbsoluteLinkPath: (
+      hostId: string,
+      roots: ReadonlyArray<string>,
+      path: string,
+    ) =>
+      mocks.candidateWorkspaceFileRefsForAbsoluteLinkPath(hostId, roots, path),
   }),
 );
 
@@ -198,6 +215,14 @@ beforeEach(() => {
   mocks.candidateWorkspaceFileRefsForRelativeLinkPath.mockReturnValue([
     { id: "content-1", workspacePath: "/repo", filePath: "src/app.ts" },
   ]);
+  // `null` (no structural candidates) is the default so EXISTING absolute-path
+  // tests, written against the old deterministic longest-prefix match, keep
+  // exercising that same `openChatWorkspaceFilePreview` fallback (via
+  // `workspaceFileRefFromLinkPath`/`workspaceFileRefFromAbsoluteFilePath`)
+  // rather than the new probe-race; tests exercising the race set their own
+  // candidates explicitly.
+  mocks.candidateWorkspaceFileRefsForAbsoluteLinkPath.mockReset();
+  mocks.candidateWorkspaceFileRefsForAbsoluteLinkPath.mockReturnValue(null);
   mocks.fetchWorkspaceFileExists.mockReset();
   mocks.fetchWorkspaceFileExists.mockResolvedValue(true);
 });
@@ -571,12 +596,14 @@ describe("buildChatLinkPolicy", () => {
     expect(previewTileInTab).not.toHaveBeenCalled();
   });
 
-  it("treats an artifact path as a plain file when there is no active host", () => {
+  it("treats an artifact path as a plain file when there is no active host", async () => {
     const run = buildChatLinkPolicy(makeDeps({ activeHostId: null }));
     expect(run(fileLink({ path: SAME_EPIC_ARTIFACT_PATH }), lifecycle)).toBe(
       true,
     );
     expect(mocks.resolveArtifactByPath).not.toHaveBeenCalled();
+    await flush();
+
     expect(previewTileInTab).toHaveBeenCalledTimes(1);
   });
 
@@ -651,9 +678,11 @@ describe("buildChatLinkPolicy", () => {
     );
   });
 
-  it("opens a non-artifact out-of-root absolute path via a synthesized workspace ref", () => {
-    // In-root resolution misses (out-of-root); the absolute-file fallback
-    // supplies the synthesized ref so the file still opens (D1/D2).
+  it("opens a non-artifact out-of-root absolute path via a synthesized workspace ref", async () => {
+    // No structural candidate (default mock): falls to the deterministic
+    // fallback, where in-root resolution misses (out-of-root) and the
+    // absolute-file fallback supplies the synthesized ref so the file still
+    // opens (D1/D2).
     mocks.workspaceFileRefFromLinkPath.mockReturnValue(null);
     mocks.workspaceFileRefFromAbsoluteFilePath.mockReturnValue({
       id: "abs-content",
@@ -664,6 +693,8 @@ describe("buildChatLinkPolicy", () => {
 
     expect(run(fileLink({ path: skillPath }), lifecycle)).toBe(true);
     expect(mocks.resolveArtifactByPath).not.toHaveBeenCalled();
+    await flush();
+
     expect(mocks.workspaceFileRefFromAbsoluteFilePath).toHaveBeenCalledWith(
       CHAT_HOST_ID,
       skillPath,
@@ -671,6 +702,161 @@ describe("buildChatLinkPolicy", () => {
     expect(previewTileInTab).toHaveBeenCalledWith(TAB_ID, {
       id: "abs-content",
     });
+  });
+
+  it("opens the direct absolute candidate when it exists, instead of coercing it into a directory reference (A)", async () => {
+    const directRef = {
+      id: "readme-content",
+      workspacePath: "/repo/epics/e1/artifacts/spec",
+      filePath: "README.md",
+    };
+    const dirIndexRef = {
+      id: "readme-index-content",
+      workspacePath: "/repo/epics/e1/artifacts/spec/README.md",
+      filePath: "index.md",
+    };
+    mocks.candidateWorkspaceFileRefsForAbsoluteLinkPath.mockReturnValue([
+      directRef,
+      dirIndexRef,
+    ]);
+    mocks.fetchWorkspaceFileExists.mockImplementation(
+      (args: { readonly workspacePath: string }) =>
+        Promise.resolve(args.workspacePath === directRef.workspacePath),
+    );
+    const run = buildChatLinkPolicy(makeDeps({}));
+
+    run(
+      fileLink({ path: "/repo/epics/e1/artifacts/spec/README.md" }),
+      lifecycle,
+    );
+    await flush();
+
+    // README.md is a real file - not the `index.md` fallback, even though
+    // BOTH candidates were probed.
+    expect(previewTileInTab).toHaveBeenCalledWith(TAB_ID, directRef);
+  });
+
+  it("falls back to the index.md candidate when the direct absolute target doesn't exist (A, C1)", async () => {
+    const directRef = {
+      id: "sub-ticket-content",
+      workspacePath: "/repo/epics/e1/artifacts",
+      filePath: "01-sub-ticket",
+    };
+    const dirIndexRef = {
+      id: "sub-ticket-index-content",
+      workspacePath: "/repo/epics/e1/artifacts/01-sub-ticket",
+      filePath: "index.md",
+    };
+    mocks.candidateWorkspaceFileRefsForAbsoluteLinkPath.mockReturnValue([
+      directRef,
+      dirIndexRef,
+    ]);
+    mocks.fetchWorkspaceFileExists.mockImplementation(
+      (args: { readonly workspacePath: string }) =>
+        Promise.resolve(args.workspacePath === dirIndexRef.workspacePath),
+    );
+    mocks.resolveArtifactByPath.mockResolvedValue({
+      artifactId: "artifact-sub-ticket",
+      kind: "ticket",
+    });
+    const run = buildChatLinkPolicy(makeDeps({}));
+
+    run(
+      fileLink({ path: "/repo/epics/e1/artifacts/01-sub-ticket" }),
+      lifecycle,
+    );
+    await flush();
+
+    // The winning candidate is index.md-shaped, so it routes through the
+    // artifact resolver (B) rather than opening a raw file preview.
+    expect(mocks.resolveArtifactByPath).toHaveBeenCalledWith(
+      expect.objectContaining({
+        epicId: "e1",
+        filePath: "/repo/epics/e1/artifacts/01-sub-ticket/index.md",
+      }),
+    );
+    expect(
+      mocks.openProjectedSidebarNodeInTabWhenAvailable,
+    ).not.toHaveBeenCalled();
+    expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
+    expect(previewTileInTab).not.toHaveBeenCalled();
+  });
+
+  it("opens the direct absolute candidate when NEITHER candidate is confirmed to exist, preserving the open-any-file capability", async () => {
+    const directRef = {
+      id: "unsynced-content",
+      workspacePath: "/repo",
+      filePath: "just-written.ts",
+    };
+    const dirIndexRef = {
+      id: "unsynced-index-content",
+      workspacePath: "/repo/just-written.ts",
+      filePath: "index.md",
+    };
+    mocks.candidateWorkspaceFileRefsForAbsoluteLinkPath.mockReturnValue([
+      directRef,
+      dirIndexRef,
+    ]);
+    mocks.fetchWorkspaceFileExists.mockResolvedValue(false);
+    const run = buildChatLinkPolicy(makeDeps({}));
+
+    run(fileLink({ path: "/repo/just-written.ts" }), lifecycle);
+    await flush();
+
+    expect(previewTileInTab).toHaveBeenCalledWith(TAB_ID, directRef);
+    expect(onAsyncFailure).not.toHaveBeenCalled();
+  });
+
+  it("routes a resolved RELATIVE workspace-file winner through the artifact resolver when it lands on an index.md (B)", async () => {
+    const winner = {
+      id: "cross-artifact-content",
+      workspacePath: "/repo",
+      filePath: "epics/other-epic/artifacts/spec/index.md",
+    };
+    mocks.candidateWorkspaceFileRefsForRelativeLinkPath.mockReturnValue([
+      winner,
+    ]);
+    mocks.resolveArtifactByPath.mockResolvedValue({
+      artifactId: "artifact-cross",
+      kind: "spec",
+    });
+    const run = buildChatLinkPolicy(makeDeps({}));
+
+    run(
+      fileLink({ path: "../../.traycer/epics/other-epic/artifacts/spec" }),
+      lifecycle,
+    );
+    await flush();
+
+    expect(mocks.resolveArtifactByPath).toHaveBeenCalledWith(
+      expect.objectContaining({
+        epicId: "other-epic",
+        filePath: "/repo/epics/other-epic/artifacts/spec/index.md",
+      }),
+    );
+    expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
+    expect(previewTileInTab).not.toHaveBeenCalled();
+  });
+
+  it("falls back to opening the winning file when its index.md-shaped path doesn't resolve to a real artifact (B)", async () => {
+    const winner = {
+      id: "coincidental-content",
+      workspacePath: "/repo",
+      filePath: "epics/other-epic/artifacts/spec/index.md",
+    };
+    mocks.candidateWorkspaceFileRefsForRelativeLinkPath.mockReturnValue([
+      winner,
+    ]);
+    mocks.resolveArtifactByPath.mockResolvedValue(null);
+    const run = buildChatLinkPolicy(makeDeps({}));
+
+    run(
+      fileLink({ path: "../../.traycer/epics/other-epic/artifacts/spec" }),
+      lifecycle,
+    );
+    await flush();
+
+    expect(previewTileInTab).toHaveBeenCalledWith(TAB_ID, winner);
   });
 
   it("keeps the artifact-null fallback a no-op with out-of-root synthesis disabled (D5)", async () => {
