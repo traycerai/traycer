@@ -166,7 +166,7 @@ describe("notification display", () => {
       screen.getByRole("button", { name: "Traycer 2 new notifications" }),
     );
 
-    expect(onToastClick).toHaveBeenCalledWith(first);
+    expect(onToastClick).toHaveBeenCalledWith(first, expect.any(Number));
   });
 
   it("still plays the chime when native notification setup throws", () => {
@@ -203,7 +203,7 @@ describe("notification display", () => {
       }),
     );
 
-    expect(onToastClick).toHaveBeenCalledWith(notification);
+    expect(onToastClick).toHaveBeenCalledWith(notification, expect.any(Number));
   });
 
   it("does not make notifications without a destination clickable", () => {

@@ -103,7 +103,9 @@ vi.mock(
   }),
 );
 vi.mock("@/components/home/terminal-panel/landing-terminal-tile", () => ({
-  LandingTerminalTile: () => <div data-testid="landing-terminal-tile" />,
+  LandingTerminalTile: () => (
+    <div data-testid="landing-terminal-tile">Starting terminal…</div>
+  ),
 }));
 
 import { LandingTerminalPanel } from "@/components/home/terminal-panel/landing-terminal-panel";
@@ -257,6 +259,27 @@ describe("<LandingTerminalPanel />", () => {
 
     fireEvent.click(pick);
     expect(mocks.pickAndAddFolders).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows only the host connection state while an existing terminal waits for the probe", () => {
+    mocks.activeHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "tab-1",
+      sessionId: "session-1",
+      hostId: "host-a",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+    });
+    useLandingTerminalStore.getState().setPanelOpen(true);
+
+    render(panelUi());
+
+    expect(screen.getByRole("status").textContent).toBe(
+      "Connecting to the selected host…",
+    );
+    expect(screen.queryByText("Starting terminal…")).toBeNull();
   });
 
   it("opens a terminal when the empty tab-strip space is double-clicked", async () => {

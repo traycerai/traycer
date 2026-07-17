@@ -21,10 +21,7 @@
  * `AgentActivityTracker` on open/close, replacing the older PTY-data
  * heuristic from `TerminalSessionManager`.
  */
-import {
-  defineRpcContract,
-  defineUpgradePath,
-} from "@traycer/protocol/framework/index";
+import { defineRpcContract } from "@traycer/protocol/framework/index";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 import { z } from "zod";
 
@@ -81,56 +78,6 @@ export const agentInboxMessageSchema = z.object({
   enqueuedAt: z.number().int(),
 });
 export type AgentInboxMessage = z.infer<typeof agentInboxMessageSchema>;
-
-/**
- * Product delivery outcomes for lifecycle v2 (see A2A per-delivery lifecycle
- * requirements). These are the only host-proven truths a v2 notice may claim.
- * Legacy v1 `reason` values stay frozen on `@1.0` and are retained on `@1.1`
- * for strip-downgrade; v2 truth rides the additive `outcome` field.
- */
-export const agentDeliveryOutcomeSchema = z.enum([
-  "replied",
-  "turn-ended-without-reply",
-  "delivery-failed",
-  "service-failed",
-  "service-unconfirmed",
-  "cancelled",
-  "purged",
-  "deleted",
-  "exited",
-  "stopped",
-]);
-export type AgentDeliveryOutcome = z.infer<typeof agentDeliveryOutcomeSchema>;
-
-/**
- * Delivery identity shared by `agent.inbox.subscribe@1.1` messages/notices
- * and `agent.inbox.read@1.1` messages. Nulls mean the route is untracked
- * (legacy-best-effort) or the field does not apply to this envelope.
- */
-export const agentDeliveryIdentityFields = {
-  /** Broker delivery object id, or null when the route is untracked. */
-  deliveryId: z.string().nullable(),
-  /**
-   * When this envelope is a reply (or notice about a reply chain), the
-   * delivery id of the message being answered. Null when not a reply.
-   */
-  replyToDeliveryId: z.string().nullable(),
-  /**
-   * When this send consumed a reverse pending response, that response id.
-   * Null when no reverse response was consumed.
-   */
-  consumedResponseId: z.string().nullable(),
-} as const;
-
-/**
- * `agent.inbox.*@1.1` message shape - additive delivery identity over the
- * frozen `@1.0` message. Within-major strip-downgrade drops the three new
- * keys and yields a valid v1.0 message.
- */
-export const agentInboxMessageSchemaV11 = agentInboxMessageSchema.extend(
-  agentDeliveryIdentityFields,
-);
-export type AgentInboxMessageV11 = z.infer<typeof agentInboxMessageSchemaV11>;
 
 /**
  * Out-of-band notice the broker emits when a receiver the calling agent
@@ -214,25 +161,6 @@ export const agentInboxNoticeSchema = z.object({
 });
 export type AgentInboxNotice = z.infer<typeof agentInboxNoticeSchema>;
 
-/**
- * `agent.inbox.subscribe@1.1` notice - keeps the frozen v1 `reason` vocabulary
- * (so a within-major strip-downgrade never invents an unknown enum for a
- * released `@1.0` client) and adds delivery identity plus the v2 product
- * `outcome` field. `outcome` is null only when the host is emitting a legacy
- * heuristic notice that has no v2 product mapping (e.g. advisory `quiet`);
- * tracked-v2 routes always populate it. `isCorrective` is true for the one
- * allowed late settlement after a provisional `service-failed` /
- * `service-unconfirmed` notice.
- */
-export const agentInboxNoticeSchemaV11 = agentInboxNoticeSchema.extend({
-  ...agentDeliveryIdentityFields,
-  outcome: agentDeliveryOutcomeSchema.nullable(),
-  isCorrective: z.boolean(),
-  /** Host-proven durable queue state; null when the host cannot determine it. */
-  durableQueuedWorkRemains: z.boolean().nullable(),
-});
-export type AgentInboxNoticeV11 = z.infer<typeof agentInboxNoticeSchemaV11>;
-
 export const agentInboxSubscribeServerFrameSchema = z.discriminatedUnion(
   "kind",
   [
@@ -256,29 +184,6 @@ export type AgentInboxSubscribeServerFrame = z.infer<
   typeof agentInboxSubscribeServerFrameSchema
 >;
 
-export const agentInboxSubscribeServerFrameSchemaV11 = z.discriminatedUnion(
-  "kind",
-  [
-    z.object({
-      kind: z.literal("message"),
-      ...textFrameFields,
-      item: agentInboxMessageSchemaV11,
-    }),
-    z.object({
-      kind: z.literal("notice"),
-      ...textFrameFields,
-      notice: agentInboxNoticeSchemaV11,
-    }),
-    z.object({
-      kind: z.literal("pong"),
-      ...textFrameFields,
-    }),
-  ],
-);
-export type AgentInboxSubscribeServerFrameV11 = z.infer<
-  typeof agentInboxSubscribeServerFrameSchemaV11
->;
-
 export const agentInboxSubscribeClientFrameSchema = z.discriminatedUnion(
   "kind",
   [
@@ -297,21 +202,6 @@ export const agentInboxSubscribeV10 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   openRequestSchema: agentInboxSubscribeOpenRequestSchema,
   serverFrameSchema: agentInboxSubscribeServerFrameSchema,
-  clientFrameSchema: agentInboxSubscribeClientFrameSchema,
-});
-
-/**
- * `agent.inbox.subscribe@1.1` - additive delivery identity + v2 outcomes on
- * server frames. Open request and client frames are unchanged from `@1.0`.
- * Streams have no cross-major bridge; staying on major 1 keeps every shipped
- * v1 monitor connected. A negotiated `@1.0` subscriber continues to receive
- * projected v1 frames only (no 1.1 fields or enums).
- */
-export const agentInboxSubscribeV11 = defineStreamRpcContract({
-  method: "agent.inbox.subscribe",
-  schemaVersion: { major: 1, minor: 1 } as const,
-  openRequestSchema: agentInboxSubscribeOpenRequestSchema,
-  serverFrameSchema: agentInboxSubscribeServerFrameSchemaV11,
   clientFrameSchema: agentInboxSubscribeClientFrameSchema,
 });
 
@@ -346,40 +236,4 @@ export const agentInboxReadV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: agentInboxReadRequestSchema,
   responseSchema: agentInboxReadResponseSchema,
-});
-
-/**
- * `agent.inbox.read@1.1` - same request; messages carry delivery identity.
- */
-export const agentInboxReadResponseSchemaV11 = z.object({
-  messages: z.array(agentInboxMessageSchemaV11),
-});
-export type AgentInboxReadResponseV11 = z.infer<
-  typeof agentInboxReadResponseSchemaV11
->;
-
-export const agentInboxReadV11 = defineRpcContract({
-  method: "agent.inbox.read",
-  schemaVersion: { major: 1, minor: 1 } as const,
-  requestSchema: agentInboxReadRequestSchema,
-  responseSchema: agentInboxReadResponseSchemaV11,
-});
-
-// A v1.0 read response has no delivery identity. Upgrade fabricates honest
-// legacy nulls rather than inventing tracked-v2 deliveries.
-export const agentInboxReadUpgradeV10ToV11 = defineUpgradePath<
-  typeof agentInboxReadV10,
-  typeof agentInboxReadV11
->({
-  from: agentInboxReadV10.schemaVersion,
-  to: agentInboxReadV11.schemaVersion,
-  upgradeRequest: (request) => request,
-  upgradeResponse: (response) => ({
-    messages: response.messages.map((message) => ({
-      ...message,
-      deliveryId: null,
-      replyToDeliveryId: null,
-      consumedResponseId: null,
-    })),
-  }),
 });

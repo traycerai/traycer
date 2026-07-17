@@ -1,6 +1,6 @@
 import {
-  tuiAgentTurnEndedRequestSchemaV11,
-  tuiAgentTurnEndedResponseSchemaV11,
+  tuiAgentTurnEndedRequestSchema,
+  tuiAgentTurnEndedResponseSchema,
 } from "@traycer/protocol/host/agent/tui/unary-schemas";
 import { tuiHarnessIdSchema } from "@traycer/protocol/host/agent/shared";
 import {
@@ -18,7 +18,7 @@ type NoopReason = "missing-context" | "unknown-provider" | "host-unreachable";
 /**
  * `traycer agent turn-ended-from-hook --provider <provider>` - invoked by
  * a provider `Stop` hook when a terminal-agent finishes a turn. Signals the
- * host (`agent.tui.turnEnded@1.1`) so the inter-agent broker can fire a
+ * host (`agent.tui.turnEnded@1.0`) so the inter-agent broker can fire a
  * `turn-ended` inactivity notice for any thread the agent still owes a
  * reply on. This is the accurate, primary "done" edge - it replaces
  * inferring "done" from raw PTY silence.
@@ -30,9 +30,8 @@ type NoopReason = "missing-context" | "unknown-provider" | "host-unreachable";
  * hook fires unconditionally, so any benign condition must be a silent
  * no-op. Genuine errors (auth rejection, schema mismatch) still surface.
  *
- * @1.1: reads `session_id` + `transcript_path` from the Stop hook's stdin
- * JSON payload (Claude Code). `previouslyReportedLeafUuid` is null here —
- * the host's causal-proof leaf cache is authoritative.
+ * The hook's stdin payload (session metadata) is not needed - the turn-end
+ * signal is keyed entirely on the bound agent context from the environment.
  */
 export function buildAgentTurnEndedFromHookCommand(opts: {
   readonly provider: string;
@@ -50,16 +49,10 @@ export function buildAgentTurnEndedFromHookCommand(opts: {
       return noop("missing-context");
     }
 
-    const hookPayload = await readStopHookStdinPayload(readStdinUtf8);
-
-    const request = parseUserInput(tuiAgentTurnEndedRequestSchemaV11, {
+    const request = parseUserInput(tuiAgentTurnEndedRequestSchema, {
       epicId,
       tuiAgentId,
       harnessId,
-      observedHarnessSessionId: hookPayload.sessionId,
-      transcriptPath: hookPayload.transcriptPath,
-      // Host cache is authoritative for the previous leaf.
-      previouslyReportedLeafUuid: null,
     });
 
     // Host-not-running is benign - the hook fires unconditionally and the
@@ -79,85 +72,18 @@ export function buildAgentTurnEndedFromHookCommand(opts: {
       return noop("host-unreachable");
     }
 
-    const { accepted, acceptedLeafUuid } = parseHostResponse(
-      tuiAgentTurnEndedResponseSchemaV11,
+    const { accepted } = parseHostResponse(
+      tuiAgentTurnEndedResponseSchema,
       rpcResult,
     );
     // No `human` line: a Stop hook's stdout is not surfaced to the user and
     // a status string would only be noise.
     return {
-      data: { accepted, acceptedLeafUuid, reason: null },
+      data: { accepted, reason: null },
       human: null,
       exitCode: 0,
     };
   };
-}
-
-type StopHookStdinPayload = {
-  readonly sessionId: string | null;
-  readonly transcriptPath: string | null;
-};
-
-/**
- * Read Claude Code Stop-hook stdin JSON. Tolerates empty/missing/malformed
- * stdin (returns nulls → exact @1.0 host behavior).
- * Callers must pass a stdin reader (production uses {@link readStdinUtf8}).
- */
-export async function readStopHookStdinPayload(
-  readStdin: () => Promise<string>,
-): Promise<StopHookStdinPayload> {
-  let raw: string;
-  try {
-    raw = await readStdin();
-  } catch {
-    return { sessionId: null, transcriptPath: null };
-  }
-  const trimmed = raw.trim();
-  if (trimmed.length === 0) {
-    return { sessionId: null, transcriptPath: null };
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(trimmed);
-  } catch {
-    return { sessionId: null, transcriptPath: null };
-  }
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return { sessionId: null, transcriptPath: null };
-  }
-  const sessionId = readStringField(parsed, "session_id", "sessionId");
-  const transcriptPath = readStringField(
-    parsed,
-    "transcript_path",
-    "transcriptPath",
-  );
-  return {
-    sessionId: sessionId !== null && sessionId.length > 0 ? sessionId : null,
-    transcriptPath:
-      transcriptPath !== null && transcriptPath.length > 0
-        ? transcriptPath
-        : null,
-  };
-}
-
-function readStringField(
-  obj: object,
-  snake: string,
-  camel: string,
-): string | null {
-  const snakeVal = Reflect.get(obj, snake);
-  if (typeof snakeVal === "string") return snakeVal;
-  const camelVal = Reflect.get(obj, camel);
-  if (typeof camelVal === "string") return camelVal;
-  return null;
-}
-
-export async function readStdinUtf8(): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of process.stdin) {
-    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-  }
-  return Buffer.concat(chunks).toString("utf8");
 }
 
 function noop(reason: NoopReason) {

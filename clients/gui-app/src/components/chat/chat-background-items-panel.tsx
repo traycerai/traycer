@@ -4,6 +4,7 @@ import {
   Bot,
   ChevronDown,
   Monitor,
+  Plug,
   Square,
   TerminalSquare,
   Workflow,
@@ -60,6 +61,8 @@ function backgroundKindLabel(kind: BackgroundItem["kind"]): string {
       return "Wake";
     case "workflow":
       return "Workflow";
+    case "mcp":
+      return "MCP tool";
   }
   const unreachableKind: never = kind;
   return unreachableKind;
@@ -93,6 +96,8 @@ function BackgroundKindIcon(props: { readonly kind: BackgroundItem["kind"] }) {
       return (
         <Workflow aria-hidden className="size-3.5 shrink-0 text-primary/80" />
       );
+    case "mcp":
+      return <Plug aria-hidden className="size-3.5 shrink-0 text-primary/80" />;
   }
   const unreachableKind: never = props.kind;
   return unreachableKind;
@@ -158,6 +163,11 @@ function backgroundItemDisplayTitle(item: BackgroundItem): string {
   if (item.kind === "workflow") {
     const summary = workflowRowSummary(item);
     return summary === null ? item.title : `${item.title} — ${summary}`;
+  }
+  if (item.kind === "mcp") {
+    // The structured MCP identity beats the freeform title (which mirrors the
+    // CLI's "server/tool" description and degrades with old hosts).
+    return `${item.serverName} · ${item.toolName}`;
   }
   return item.title;
 }
