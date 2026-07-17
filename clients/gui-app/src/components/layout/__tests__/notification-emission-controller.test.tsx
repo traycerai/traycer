@@ -132,6 +132,16 @@ function renderController(runnerHost: MockRunnerHost): void {
   );
 }
 
+function renderLifecycleController(runnerHost: MockRunnerHost): void {
+  render(
+    <AppLocalNotificationsPersistLifecycleBridge>
+      <RunnerHostProvider runnerHost={runnerHost}>
+        <NotificationEmissionController />
+      </RunnerHostProvider>
+    </AppLocalNotificationsPersistLifecycleBridge>,
+  );
+}
+
 function resetAuthSignedIn(userId: string, email: string): void {
   useAuthStore.setState({
     status: "signed-in",
@@ -141,6 +151,15 @@ function resetAuthSignedIn(userId: string, email: string): void {
       email,
     },
     contextMetadata: { userId, username: userId },
+    shareableTeams: [],
+  });
+}
+
+function resetAuthSignedOut(): void {
+  useAuthStore.setState({
+    status: "signed-out",
+    profile: null,
+    contextMetadata: null,
     shareableTeams: [],
   });
 }
@@ -192,13 +211,7 @@ function renderPersistedController(
     unreadCount: 0,
   });
   const runnerHost = createRunnerHost();
-  render(
-    <AppLocalNotificationsPersistLifecycleBridge>
-      <RunnerHostProvider runnerHost={runnerHost}>
-        <NotificationEmissionController />
-      </RunnerHostProvider>
-    </AppLocalNotificationsPersistLifecycleBridge>,
-  );
+  renderLifecycleController(runnerHost);
   return runnerHost;
 }
 
@@ -392,6 +405,11 @@ describe("NotificationEmissionController", () => {
       id: "host.error:delayed-display",
       sourceRef: "delayed-display",
     };
+    const version = {
+      userId: "user-1",
+      notificationId: pending.id,
+      updatedAt: pending.updatedAt,
+    };
 
     act(() => {
       useAppLocalNotificationsStore.getState().upsert(pending);
@@ -403,6 +421,7 @@ describe("NotificationEmissionController", () => {
       useAppLocalNotificationsStore.getState().byId[pending.id]
         .displayedUpdatedAt,
     ).toBeNull();
+    expect(hasAppLocalDisplayReceipt(version)).toBe(false);
 
     act(() => {
       resolveDisplay?.();
@@ -413,6 +432,91 @@ describe("NotificationEmissionController", () => {
           .displayedUpdatedAt,
       ).toBe(pending.updatedAt);
     });
+    expect(hasAppLocalDisplayReceipt(version)).toBe(true);
+  });
+
+  it("does not recreate a cleared receipt when native display completes after sign-out", async () => {
+    let resolveDisplay: (() => void) | null = null;
+    const displayPending = new Promise<void>((resolve) => {
+      resolveDisplay = resolve;
+    });
+    const runnerHost = createRunnerHost();
+    const showNotification = vi
+      .spyOn(runnerHost.notifications, "show")
+      .mockReturnValue(displayPending);
+    renderLifecycleController(runnerHost);
+    const pending = {
+      ...persistedAppLocalEntry(null),
+      id: "host.error:sign-out-in-flight",
+      sourceRef: "sign-out-in-flight",
+    };
+    const version = {
+      userId: "user-1",
+      notificationId: pending.id,
+      updatedAt: pending.updatedAt,
+    };
+
+    act(() => {
+      useAppLocalNotificationsStore.getState().upsert(pending);
+    });
+    await waitFor(() => {
+      expect(showNotification).toHaveBeenCalledOnce();
+    });
+    act(() => {
+      resetAuthSignedOut();
+    });
+    await waitFor(() => {
+      expect(useAppLocalNotificationsStore.getState().activeUserId).toBeNull();
+    });
+    await act(async () => {
+      resolveDisplay?.();
+      await displayPending;
+    });
+
+    expect(hasAppLocalDisplayReceipt(version)).toBe(false);
+  });
+
+  it("acknowledges an in-flight receipt after a direct user switch", async () => {
+    let resolveDisplay: (() => void) | null = null;
+    const displayPending = new Promise<void>((resolve) => {
+      resolveDisplay = resolve;
+    });
+    const runnerHost = createRunnerHost();
+    const showNotification = vi
+      .spyOn(runnerHost.notifications, "show")
+      .mockReturnValue(displayPending);
+    renderLifecycleController(runnerHost);
+    const pending = {
+      ...persistedAppLocalEntry(null),
+      id: "host.error:user-switch-in-flight",
+      sourceRef: "user-switch-in-flight",
+    };
+    const version = {
+      userId: "user-1",
+      notificationId: pending.id,
+      updatedAt: pending.updatedAt,
+    };
+
+    act(() => {
+      useAppLocalNotificationsStore.getState().upsert(pending);
+    });
+    await waitFor(() => {
+      expect(showNotification).toHaveBeenCalledOnce();
+    });
+    act(() => {
+      resetAuthSignedIn("user-2", "other@example.com");
+    });
+    await waitFor(() => {
+      expect(useAppLocalNotificationsStore.getState().activeUserId).toBe(
+        "user-2",
+      );
+    });
+    await act(async () => {
+      resolveDisplay?.();
+      await displayPending;
+    });
+
+    expect(hasAppLocalDisplayReceipt(version)).toBe(true);
   });
 
   it("leaves a failed native display pending and retries after remount", async () => {

@@ -9,7 +9,9 @@ import { useNotificationShow } from "@/hooks/notifications/use-notifications";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
 import {
   appLocalDisplayDeliveryKey,
+  captureAppLocalDisplayReceiptSession,
   hasAppLocalDisplayReceipt,
+  isAppLocalDisplayReceiptSessionCurrent,
   recordAppLocalDisplayReceipt,
   type AppLocalDisplayReceiptVersion,
 } from "@/lib/notifications/app-local-display-receipts";
@@ -58,6 +60,7 @@ export function NotificationEmissionController(): null {
           return;
         }
         if (inFlightVersionsRef.current.has(deliveryKey)) return;
+        const receiptSession = captureAppLocalDisplayReceiptSession(userId);
         inFlightVersionsRef.current.add(deliveryKey);
         void displayAppLocalNotification(
           entry,
@@ -69,6 +72,7 @@ export function NotificationEmissionController(): null {
           deliveryKey,
         )
           .then(() => {
+            if (!isAppLocalDisplayReceiptSessionCurrent(receiptSession)) return;
             recordAppLocalDisplayReceipt(version);
             const current = useAppLocalNotificationsStore.getState();
             if (current.activeUserId === userId) {

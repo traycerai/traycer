@@ -65,17 +65,36 @@ export const appLocalNotificationDisplayReceiptPrefix = (
     encodeURIComponent(userId),
   );
 
-export const appLocalNotificationDisplayReceiptKey = (input: {
+export const appLocalNotificationDisplayReceiptNotificationPrefix = (input: {
   readonly userId: string;
   readonly notificationId: string;
-  readonly updatedAt: number;
 }): string =>
   scopedPersistKey(
     "app-local-notification-display-receipt",
     encodeURIComponent(input.userId),
     encodeURIComponent(input.notificationId),
-    String(input.updatedAt),
   );
+
+export const appLocalNotificationDisplayReceiptKey = (input: {
+  readonly userId: string;
+  readonly notificationId: string;
+  readonly updatedAt: number;
+}): string =>
+  `${appLocalNotificationDisplayReceiptNotificationPrefix(input)}:${String(input.updatedAt)}`;
+
+export const appLocalNotificationDisplayReceiptFloorPrefix = (
+  userId: string,
+): string =>
+  scopedPersistKey(
+    "app-local-notification-display-receipt-floor",
+    encodeURIComponent(userId),
+  );
+
+export const appLocalNotificationDisplayReceiptFloorKey = (input: {
+  readonly userId: string;
+  readonly updatedAt: number;
+}): string =>
+  `${appLocalNotificationDisplayReceiptFloorPrefix(input.userId)}:${String(input.updatedAt)}`;
 
 // Host-scoped (not identity-scoped): the worktrees panel's warm-open snapshot
 // of per-path activity entries (worktrees-enrichment-persistence.ts). A host
@@ -214,6 +233,14 @@ export const PERSIST_STORES = [
   {
     camelName: "appLocalNotificationDisplayReceipt",
     leaf: "app-local-notification-display-receipt",
+    kind: "scoped",
+  },
+  // Set-only compaction floors preserve suppression after older exact-version
+  // receipt keys are removed. Separate timestamped keys make concurrent stale
+  // windows monotonic instead of allowing a lower floor to overwrite a higher.
+  {
+    camelName: "appLocalNotificationDisplayReceiptFloor",
+    leaf: "app-local-notification-display-receipt-floor",
     kind: "scoped",
   },
   // `worktree-activity-cache:<hostId>` — the worktrees panel's warm-open
