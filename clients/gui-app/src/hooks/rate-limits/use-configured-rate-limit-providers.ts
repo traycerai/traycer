@@ -152,6 +152,8 @@ export function useVisibleRateLimitProviders(): ReadonlyArray<ConfiguredRateLimi
   >({
     client,
     cacheKeyIdentity: undefined,
+    // No fetch directive: send the cache-identity params verbatim.
+    toRequestParams: undefined,
     requests: candidates.map((provider) => {
       const { method, params } = providerRateLimitQueryOptions(
         provider.providerId,

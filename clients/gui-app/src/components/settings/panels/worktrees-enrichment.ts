@@ -27,6 +27,7 @@ import {
   pruneWorktreeSnapshots,
   readWorktreeActivitySnapshot,
 } from "@/components/settings/panels/worktrees-enrichment-persistence";
+import { isWorktreeForceRefreshing } from "@/components/settings/panels/worktrees-force-refresh";
 
 const EMPTY_PATHS: readonly string[] = [];
 const EMPTY_ENRICHED: ReadonlyMap<string, WorktreeHostEntryV12> = new Map();
@@ -105,13 +106,29 @@ interface SweepRetryState {
 
 // The per-path enrichment params, shared by the viewport observers and the
 // background sweep so both produce identical query keys - the cache fold and
-// TanStack's request dedupe both hinge on that identity.
+// TanStack's request dedupe both hinge on that identity. `forceRefresh` is
+// pinned to its canonical `false`: it is a fetch directive, so a forced
+// refetch must land in this same entry rather than fork a second one (see
+// `worktrees-force-refresh.ts`). `perPathEnrichmentRequest` carries the live
+// directive for the wire.
 function perPathEnrichmentParams(path: string) {
   return {
     includeActivity: true,
     activityPaths: [path],
     cursor: null,
     limit: null,
+    forceRefresh: false,
+  };
+}
+
+// The wire request for one path: the cache-identity params above, plus the
+// per-fetch directive. `true` only while the toolbar's Refresh drives this
+// fetch, so the viewport observers and the background sweep never make a poll
+// pay for a disk-fresh recompute.
+function perPathEnrichmentRequest(hostId: string | null, path: string) {
+  return {
+    ...perPathEnrichmentParams(path),
+    forceRefresh: isWorktreeForceRefreshing(hostId),
   };
 }
 
@@ -149,7 +166,10 @@ function sweepEnrichmentFetchOptions(
   path: string,
 ) {
   const fetcher = () =>
-    client.request("worktree.listAllForHost", perPathEnrichmentParams(path));
+    client.request(
+      "worktree.listAllForHost",
+      perPathEnrichmentRequest(hostId, path),
+    );
   return queryOptions({
     queryKey: perPathEnrichmentQueryKey(hostId, path),
     queryFn: fetcher,
@@ -532,6 +552,13 @@ export function useWorktreeActivityEnrichment(
     client,
     cacheKeyIdentity: undefined,
     requests,
+    // The directive, resolved per-fetch so a refetch driven by the toolbar's
+    // Refresh bypasses the host's TTL cache while landing in the SAME key the
+    // overlay reads. Poll/viewport-driven fetches send `false`.
+    toRequestParams: (params) => ({
+      ...params,
+      forceRefresh: isWorktreeForceRefreshing(hostId),
+    }),
     options: { enabled: reachable, gcTime: WORKTREE_ENRICHMENT_GC_MS },
   });
   const coldPrRefetchStateRef = useRef<Map<string, ColdPrRefetchState>>(

@@ -307,6 +307,8 @@ export function useGuiHarnessCatalog(
   const modelQueries = useHostQueries<HostRpcRegistry, "agent.gui.listModels">({
     client,
     cacheKeyIdentity: undefined,
+    // No fetch directive: send the cache-identity params verbatim.
+    toRequestParams: undefined,
     requests,
     options: {
       enabled: activity.enabled,

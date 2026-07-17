@@ -22,13 +22,19 @@ import {
   persistWorktreeListingSnapshot,
   readWorktreeListingSnapshot,
 } from "@/components/settings/panels/worktrees-enrichment-persistence";
+import { isWorktreeForceRefreshing } from "@/components/settings/panels/worktrees-force-refresh";
 
 export const SETTINGS_WORKTREE_LIST_PAGE_LIMIT = 32;
+// The listing's cache IDENTITY. `forceRefresh` is pinned to its canonical
+// `false` here and never varies: it is a fetch directive, so a forced refetch
+// must land in this same entry rather than fork a second one. See
+// `worktrees-force-refresh.ts`.
 const SETTINGS_WORKTREE_LIST_BASE_PARAMS = {
   includeActivity: false,
   activityPaths: null,
   cursor: null,
   limit: SETTINGS_WORKTREE_LIST_PAGE_LIMIT,
+  forceRefresh: false,
 } as const;
 const EMPTY_WORKTREES: readonly WorktreeHostEntryV12[] = [];
 // Debounce for the warm-open listing snapshot writes, mirroring the activity
@@ -157,10 +163,12 @@ export function useWorktreeListing(
       throw hostClientUnavailableError("worktree.listAllForHost");
     }
     return client.request("worktree.listAllForHost", {
-      includeActivity: false,
-      activityPaths: null,
+      ...SETTINGS_WORKTREE_LIST_BASE_PARAMS,
       cursor: pageParam,
-      limit: SETTINGS_WORKTREE_LIST_PAGE_LIMIT,
+      // The directive, read per-fetch: `true` only while the toolbar's
+      // Refresh is driving this refetch, so a poll never pays for a
+      // disk-fresh recompute. Deliberately not part of the query key above.
+      forceRefresh: isWorktreeForceRefreshing(readiness.hostId),
     });
   };
   const {

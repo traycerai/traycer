@@ -1,6 +1,6 @@
 import {
-  worktreeListAllForHostRequestSchemaV12,
-  worktreeListAllForHostResponseSchemaV12,
+  worktreeListAllForHostRequestSchemaV13,
+  worktreeListAllForHostResponseSchemaV13,
 } from "@traycer/protocol/host";
 import type { WorktreeHostEntryV12 } from "@traycer/protocol/host";
 import {
@@ -51,7 +51,7 @@ interface WorktreeListPage {
 
 /**
  * `traycer worktree list` - host-wide listing of every Traycer-managed
- * worktree under `~/.traycer/worktrees/`. Calls `worktree.listAllForHost@1.2`;
+ * worktree under `~/.traycer/worktrees/`. Calls `worktree.listAllForHost@1.3`;
  * the canonical (latest) request carries `includeActivity`, so a v1.0 host is
  * bridged up transparently (enriched fields default to empty `owners` / `null`
  * timestamps). Human mode renders a scannable table; `--json` hands the
@@ -127,18 +127,21 @@ async function requestWorktreeListPage(
   cursor: string | null,
   limit: number | null,
 ): Promise<WorktreeListPage> {
-  const request = parseUserInput(worktreeListAllForHostRequestSchemaV12, {
+  const request = parseUserInput(worktreeListAllForHostRequestSchemaV13, {
     includeActivity,
     // The CLI is a paged-listing caller, never a GUI per-selection probe.
     activityPaths: null,
     cursor,
     limit,
+    // A paged listing, never a manual refresh: serve the host's TTL-cached
+    // view rather than forcing a disk recompute of every managed worktree.
+    forceRefresh: false,
   });
   const result = await toAgentCliError(
     callHostRpc("worktree.listAllForHost", request),
   );
   const parsed = parseHostResponse(
-    worktreeListAllForHostResponseSchemaV12,
+    worktreeListAllForHostResponseSchemaV13,
     result,
   );
   return {

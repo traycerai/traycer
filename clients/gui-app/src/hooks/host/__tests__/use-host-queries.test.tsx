@@ -31,6 +31,7 @@ describe("useHostQueries enabled handling", () => {
         useHostQueries({
           client: fixture.client,
           cacheKeyIdentity: undefined,
+          toRequestParams: undefined,
           requests: [{ method: "host.status", params: {} }],
           options: { enabled: () => false },
         }),
@@ -45,6 +46,7 @@ describe("useHostQueries enabled handling", () => {
         useHostQueries({
           client: fixture.client,
           cacheKeyIdentity: undefined,
+          toRequestParams: undefined,
           requests: [{ method: "host.status", params: {} }],
           options: { enabled: () => true },
         }),
@@ -78,6 +80,7 @@ describe("useHostQueries enabled handling", () => {
         >({
           client: fixture.client,
           cacheKeyIdentity: undefined,
+          toRequestParams: undefined,
           requests: [{ method: "host.status", params: {} }],
           options: null,
           combine: (results) => ({ data: results[0]?.data }),

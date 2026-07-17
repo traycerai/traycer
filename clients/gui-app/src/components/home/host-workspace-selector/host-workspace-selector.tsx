@@ -573,6 +573,8 @@ function HomeWorkspaceRows(props: {
   >({
     client: activeHostClient,
     cacheKeyIdentity: undefined,
+    // No fetch directive: send the cache-identity params verbatim.
+    toRequestParams: undefined,
     requests: branchValidationPaths.map((workspacePath) => ({
       method: "worktree.listBranches",
       params: { workspacePath, includeRemote: true },

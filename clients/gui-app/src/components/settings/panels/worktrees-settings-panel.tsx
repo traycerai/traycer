@@ -130,6 +130,7 @@ import { WorktreeDeleteProgressModal } from "@/components/settings/panels/worktr
 import { WorktreeListRenderProfiler } from "@/components/settings/panels/worktree-list-render-profiler";
 import { useWorktreeActivityEnrichment } from "@/components/settings/panels/worktrees-enrichment";
 import { useWorktreeListing } from "@/components/settings/panels/worktrees-listing-query";
+import { withWorktreeForceRefresh } from "@/components/settings/panels/worktrees-force-refresh";
 import {
   navigateToTabIntent,
   openOrFocusEpicIntent,
@@ -560,12 +561,21 @@ function WorktreesBody(props: {
   // a per-path cache entry for EVERY row, and those entries have no observers -
   // "all" would refetch the entire list in one concurrent fan-out. "active"
   // only MARKS them invalidated; the sweep re-probes them in bounded chunks.
+  //
+  // The refetches this invalidation drives run inside a force-refresh window,
+  // so each one sends `forceRefresh: true` and bypasses the host's minutes-
+  // scale TTL cache - the manual refresh is the freshness path the TTL rests
+  // on, so it must observe disk, not a cached view. The directive rides the
+  // request only; the keys are unchanged, so the fresh data lands in the very
+  // entries these rows already read (see `worktrees-force-refresh.ts`).
   const onRefresh = useCallback(() => {
     if (hostId === null) return Promise.resolve();
-    return queryClient.invalidateQueries({
-      queryKey: hostQueryKeys.methodScope(hostId, "worktree.listAllForHost"),
-      refetchType: "active",
-    });
+    return withWorktreeForceRefresh(hostId, () =>
+      queryClient.invalidateQueries({
+        queryKey: hostQueryKeys.methodScope(hostId, "worktree.listAllForHost"),
+        refetchType: "active",
+      }),
+    );
   }, [queryClient, hostId]);
   const toolbarProps = {
     hosts,

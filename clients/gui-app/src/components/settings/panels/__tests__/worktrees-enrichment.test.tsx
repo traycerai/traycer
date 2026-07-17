@@ -73,14 +73,28 @@ const METHOD_SCOPE = hostQueryKeys.methodScope(
 function perPathKey(path: string): readonly unknown[] {
   return [
     ...METHOD_SCOPE,
-    { includeActivity: true, activityPaths: [path], cursor: null, limit: null },
+    {
+      includeActivity: true,
+      activityPaths: [path],
+      cursor: null,
+      limit: null,
+      // The directive is pinned to `false` in the cache identity and never
+      // varies - a forced refetch lands in this same entry.
+      forceRefresh: false,
+    },
   ];
 }
 
 function baseKey(): readonly unknown[] {
   return [
     ...METHOD_SCOPE,
-    { includeActivity: false, activityPaths: null, cursor: null, limit: 32 },
+    {
+      includeActivity: false,
+      activityPaths: null,
+      cursor: null,
+      limit: 32,
+      forceRefresh: false,
+    },
   ];
 }
 

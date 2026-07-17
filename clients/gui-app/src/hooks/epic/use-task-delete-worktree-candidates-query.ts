@@ -67,11 +67,15 @@ export function useTaskDeleteWorktreeCandidates(
 ): TaskDeleteWorktreeCandidatesResult {
   const client = useHostClient();
   const readiness = useReactiveHostReadiness(client);
+  // Cache identity for the whole paged walk. `forceRefresh: false`: opening
+  // the dialog is an automatic read, so it serves the host's TTL-cached view
+  // rather than forcing a disk recompute of every managed worktree.
   const queryParams = {
     includeActivity: true,
     activityPaths: null,
     cursor: null,
     limit: TASK_DELETE_WORKTREE_PROBED_PAGE_LIMIT,
+    forceRefresh: false,
   } as const;
   const fetchWorktreePages =
     async (): Promise<WorktreeListAllForHostResponseV12> => {
@@ -85,10 +89,8 @@ export function useTaskDeleteWorktreeCandidates(
       for (let page = 0; page < TASK_DELETE_WORKTREE_MAX_PAGES; page += 1) {
         const response: WorktreeListAllForHostResponseV12 =
           await client.request("worktree.listAllForHost", {
-            includeActivity: true,
-            activityPaths: null,
+            ...queryParams,
             cursor,
-            limit: TASK_DELETE_WORKTREE_PROBED_PAGE_LIMIT,
           });
         worktrees.push(...response.worktrees);
         if (response.nextCursor === null) {

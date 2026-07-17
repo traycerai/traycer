@@ -29,6 +29,10 @@ import {
 } from "@traycer/protocol/host/registry";
 import { WorktreesList } from "@/components/settings/panels/worktrees-settings-panel";
 import { useWorktreeListing } from "@/components/settings/panels/worktrees-listing-query";
+import {
+  isWorktreeForceRefreshing,
+  withWorktreeForceRefresh,
+} from "@/components/settings/panels/worktrees-force-refresh";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { __resetWorktreeDeleteRunForTests } from "@/components/settings/panels/use-worktree-delete-run";
 import { hostQueryKeys } from "@/lib/query-keys";
@@ -459,20 +463,97 @@ describe("useWorktreeListing", () => {
         ["/wt/a", "/wt/b"],
       );
     });
+    // Every page of the automatic listing sends `forceRefresh: false`: a poll
+    // must serve the host's TTL-cached view, never force a disk recompute.
+    // Only the toolbar's Refresh sends `true`.
     expect(requests).toEqual([
       {
         includeActivity: false,
         activityPaths: null,
         cursor: null,
         limit: 32,
+        forceRefresh: false,
       },
       {
         includeActivity: false,
         activityPaths: null,
         cursor: first.worktreePath,
         limit: 32,
+        forceRefresh: false,
       },
     ]);
+  });
+
+  // The 5-minute host-side TTL rests on "staleness between polls is acceptable
+  // BECAUSE manual refresh is the freshness path", so the refresh MUST send
+  // `forceRefresh: true` - and the fresh data must land in the SAME cache entry
+  // the view already reads, not a forked `forceRefresh: true` key.
+  it("sends forceRefresh: true for a manual refresh and lands it in the same cache entry", async () => {
+    const stale = entry({ worktreePath: "/wt/a", branch: "stale" });
+    const fresh = entry({ worktreePath: "/wt/a", branch: "fresh" });
+    const requests: Array<{ readonly forceRefresh: boolean }> = [];
+    const client = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: { invalidateHostScope: () => undefined },
+      messenger: new MockHostMessenger<HostRpcRegistry>({
+        registry: hostRpcRegistry,
+        requestId: () => "req-1",
+        handlers: {
+          "worktree.listAllForHost": (params) => {
+            requests.push({ forceRefresh: params.forceRefresh });
+            // The host serves its TTL-cached (stale) view unless forced.
+            return {
+              worktrees: [params.forceRefresh ? fresh : stale],
+              nextCursor: null,
+            };
+          },
+        },
+      }),
+    });
+    client.bind(mockLocalHostEntry);
+    client.setRequestContext(
+      createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+    );
+    const queryClient = new QueryClient();
+    const wrapper = (props: { readonly children: ReactNode }): ReactNode => (
+      <QueryClientProvider client={queryClient}>
+        {props.children}
+      </QueryClientProvider>
+    );
+
+    const { result } = renderHook(() => useWorktreeListing(client, true), {
+      wrapper,
+    });
+    await waitFor(() => {
+      expect(result.current.worktrees.map((item) => item.branch)).toEqual([
+        "stale",
+      ]);
+    });
+    expect(requests).toEqual([{ forceRefresh: false }]);
+
+    // Exactly what the toolbar's Refresh button runs (worktrees-settings-panel).
+    await act(async () => {
+      await withWorktreeForceRefresh(mockLocalHostEntry.hostId, () =>
+        queryClient.invalidateQueries({
+          queryKey: hostQueryKeys.methodScope(
+            mockLocalHostEntry.hostId,
+            "worktree.listAllForHost",
+          ),
+          refetchType: "active",
+        }),
+      );
+    });
+
+    expect(requests).toEqual([{ forceRefresh: false }, { forceRefresh: true }]);
+    // Same hook instance - so the forced response landed in the entry this
+    // view reads, rather than a second, forked cache entry.
+    await waitFor(() => {
+      expect(result.current.worktrees.map((item) => item.branch)).toEqual([
+        "fresh",
+      ]);
+    });
+    // And the window is closed again: a later poll is back to cached reads.
+    expect(isWorktreeForceRefreshing(mockLocalHostEntry.hostId)).toBe(false);
   });
 
   it("flags a truncated list as partial instead of hiding the failed page", async () => {
