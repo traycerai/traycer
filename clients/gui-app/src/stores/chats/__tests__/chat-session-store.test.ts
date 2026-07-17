@@ -1446,6 +1446,59 @@ describe("createChatSessionStore", () => {
     });
   });
 
+  it("attaches a staged worktree intent when editing and resending a stopped message", () => {
+    useWorktreeIntentStagingStore.setState({ intentByKey: {} });
+    const harness = createHarness();
+    emitSnapshot(harness.callbacks(), "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    const intent: WorktreeIntent = {
+      entries: [
+        {
+          kind: "worktree",
+          scripts: null,
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+          branch: {
+            type: "new",
+            name: "edited-first-message",
+            source: "main",
+            carryUncommittedChanges: false,
+          },
+        },
+      ],
+    };
+    useWorktreeIntentStagingStore.getState().stageIntent(key, intent);
+
+    harness.handle.store.getState().editUserMessage({
+      targetMessageId: "message-1",
+      content: CONTENT,
+      sender: { type: "user", userId: OWNER_ID },
+      settings: SETTINGS,
+      revertFileChanges: false,
+      revertArtifacts: true,
+    });
+
+    const frame = harness.sent.at(-1);
+    if (frame === undefined || frame.kind !== "editUserMessage") {
+      throw new Error("Expected editUserMessage frame");
+    }
+    expect(frame).toMatchObject({ worktreeIntent: intent });
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toBeUndefined();
+    expect(
+      useWorktreeIntentMemoryStore.getState().getEpicIntent(EPIC_ID),
+    ).toEqual(intent);
+  });
+
   it("sends queue settings update owner actions", () => {
     const harness = createHarness();
     emitSnapshot(harness.callbacks(), "owner");

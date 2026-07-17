@@ -777,6 +777,10 @@ const chatSubscribeClientFrameSchemaBeforeV13Options = [
     // Billing/account context the turn runs under. Global app-wide selection
     // (not per-chat), stamped onto the frame at send time.
     accountContext: accountContextSchema,
+    // Editing and resending a stopped message is another turn-start path. A
+    // worktree staged in the composer must ride on this frame just as it does
+    // on a normal send, otherwise it is not created until the next message.
+    worktreeIntent: worktreeIntentSchema.nullable().default(null),
     // When true, revert all file changes made by the edited message's turn
     // and every turn after it (cumulative, to the state before this message)
     // before trimming history and starting the new turn. Set by the
