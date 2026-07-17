@@ -40,6 +40,11 @@ export function useGitSubmoduleSnapshotRefresh(args: {
     if (client === null || hostId === null || rootRunningDir === null) {
       return;
     }
+    const queryKey = gitQueryKeys.listChangedFilesWithSubmodules(
+      hostId,
+      rootRunningDir,
+      ignoreWhitespace,
+    );
     const request = createRichSlotRequest({
       queryClient,
       hostId,
@@ -53,16 +58,20 @@ export function useGitSubmoduleSnapshotRefresh(args: {
           includeSubmodules: true,
         }),
     });
+    // Cancel any fetch already in flight for this key first: `fetchQuery`
+    // otherwise JOINS an existing in-flight promise instead of starting a
+    // fresh request, so a click while an earlier fetch is hung would silently
+    // await that same hung promise - defeating this refresh's documented
+    // "I suspect the host is wedged" use case. `revert: false` for the same
+    // stream-write-preservation reason as the ownership-transition cancel in
+    // `useGitListChangedFilesWithSubmodules`.
+    await queryClient.cancelQueries({ queryKey }, { revert: false });
     // Failures land in the query's error state (surfaced by the passive
     // hook); the refresh affordance itself just stops spinning.
     await queryClient
       .fetchQuery(
         queryOptions({
-          queryKey: gitQueryKeys.listChangedFilesWithSubmodules(
-            hostId,
-            rootRunningDir,
-            ignoreWhitespace,
-          ),
+          queryKey,
           queryFn: request,
           staleTime: 0,
         }),

@@ -206,4 +206,20 @@ describe("createRichSlotRequest", () => {
       ownershipEpoch: 0,
     });
   });
+
+  it("never aliases two distinct slots whose fields could collide under delimiter concatenation", () => {
+    // A naive `${hostId}|${runningDir}|...` join would alias these two -
+    // runningDir is a filesystem path and can legitimately contain "|".
+    const keyA = richSlotOrderingKey({
+      hostId: "a|b",
+      runningDir: "c",
+      ignoreWhitespace: false,
+    });
+    const keyB = richSlotOrderingKey({
+      hostId: "a",
+      runningDir: "b|c",
+      ignoreWhitespace: false,
+    });
+    expect(keyA).not.toBe(keyB);
+  });
 });

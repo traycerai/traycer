@@ -171,13 +171,31 @@ function useRichSlotOwnershipTransitions(opts: {
     bumpRichSlotOwnershipEpoch(slotKey);
     if (!ownershipChanged) return;
     if (streamOwnsRichSlot) {
-      void queryClient.cancelQueries({
-        queryKey: gitQueryKeys.listChangedFilesWithSubmodules(
-          hostId,
-          runningDir,
-          ignoreWhitespace,
-        ),
-      });
+      const queryKey = gitQueryKeys.listChangedFilesWithSubmodules(
+        hostId,
+        runningDir,
+        ignoreWhitespace,
+      );
+      // `revert: false`: this key is shared with the stream writer, and
+      // `cancelQueries`'s default revert:true restores the cache to its
+      // pre-fetch snapshot - which would wipe a newer stream frame that
+      // landed (via a direct `setQueryData`) WHILE the now-superseded unary
+      // fetch was still in flight. But TanStack's non-revert cancel path
+      // dispatches an 'error' state that ALSO marks the query invalidated -
+      // which would make React Query auto-refetch this (now stream-owned,
+      // disabled) query the next time it re-enables, duplicating this hook's
+      // own explicit refetch in the fallback branch below. Re-stamp the
+      // CURRENT (untouched) cache value through `setQueryData` once the
+      // cancel settles - a 'success' dispatch, so it clears the invalidated
+      // flag without altering the data.
+      void queryClient
+        .cancelQueries({ queryKey }, { revert: false })
+        .then(() => {
+          const current = queryClient.getQueryData(queryKey);
+          if (current !== undefined) {
+            queryClient.setQueryData(queryKey, current);
+          }
+        });
     } else {
       // Same coalescing rule as the first-observation branch above.
       lastTokenRef.current = null;

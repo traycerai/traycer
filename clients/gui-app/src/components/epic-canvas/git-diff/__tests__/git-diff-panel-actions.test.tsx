@@ -8,12 +8,22 @@ import { DEFAULT_DIFF_VIEWER_PREFERENCES } from "@/lib/diff/diff-viewer-preferen
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
+interface RefreshHookArgs {
+  readonly hostId: string | null;
+  readonly rootRunningDir: string | null;
+  readonly ignoreWhitespace: boolean;
+}
+
 const testState = vi.hoisted(() => ({
   refresh: vi.fn<() => Promise<void>>(),
+  refreshArgs: [] as RefreshHookArgs[],
 }));
 
 vi.mock("@/hooks/git/use-git-submodule-snapshot-refresh", () => ({
-  useGitSubmoduleSnapshotRefresh: () => testState.refresh,
+  useGitSubmoduleSnapshotRefresh: (args: RefreshHookArgs) => {
+    testState.refreshArgs.push(args);
+    return testState.refresh;
+  },
 }));
 
 function setup() {
@@ -33,6 +43,7 @@ describe("<GitDiffPanelActions />", () => {
     cleanup();
     testState.refresh.mockReset();
     testState.refresh.mockResolvedValue(undefined);
+    testState.refreshArgs = [];
     useGitPanelStore.setState({ stateByEpicId: {} });
     useSettingsStore.setState({
       diffViewerPreferences: DEFAULT_DIFF_VIEWER_PREFERENCES,
@@ -108,5 +119,10 @@ describe("<GitDiffPanelActions />", () => {
     fireEvent.click(screen.getByTestId("git-diff-panel-refresh"));
 
     expect(testState.refresh).toHaveBeenCalledTimes(1);
+    expect(testState.refreshArgs.at(-1)).toEqual({
+      hostId: "host-1",
+      rootRunningDir: "/repo",
+      ignoreWhitespace: true,
+    });
   });
 });

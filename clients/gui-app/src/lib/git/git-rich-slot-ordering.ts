@@ -55,7 +55,11 @@ export function richSlotOrderingKey(args: {
   readonly runningDir: string;
   readonly ignoreWhitespace: boolean;
 }): string {
-  return `${args.hostId ?? ""}|${args.runningDir}|${args.ignoreWhitespace ? "1" : "0"}`;
+  // JSON-encode rather than delimiter-join: `runningDir` is a filesystem path
+  // and can legitimately contain "|", so naive concatenation could alias two
+  // distinct slots (one slot's stream write would then make the OTHER slot
+  // discard a fresher unary response in favor of stale cached data).
+  return JSON.stringify([args.hostId, args.runningDir, args.ignoreWhitespace]);
 }
 
 function orderingFor(key: string): RichSlotOrdering {
