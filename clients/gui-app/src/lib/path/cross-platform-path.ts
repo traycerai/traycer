@@ -41,23 +41,34 @@ interface PathAuthority {
  * and walks `rest`, then re-prepends `prefix` unconditionally, so a drive
  * letter or UNC share can never be stripped or escaped by enough `../`
  * segments.
+ *
+ * `basePath` may arrive in native backslash form (`D:\repo`,
+ * `\\server\share\nested`, a bound workspace root reported by a Windows
+ * host) or with mixed separators - normalized to forward slashes FIRST
+ * because `WINDOWS_DRIVE_PATH_PATTERN`/`WINDOWS_UNC_PATH_PATTERN` only match
+ * the forward-slash form. Without this, a native-backslash drive base falls
+ * through both patterns into the POSIX branch, which only strips a LEADING
+ * separator - `D:\repo` has none (it starts with `D`), so the drive letter
+ * ends up folded into `rest` and re-prefixed with a bogus POSIX `/` root
+ * instead of being recognized as the authority itself.
  */
 function pathAuthority(basePath: string): PathAuthority {
-  const uncMatch = WINDOWS_UNC_PATH_PATTERN.exec(basePath);
+  const slashForm = basePath.replace(/\\/g, "/");
+  const uncMatch = WINDOWS_UNC_PATH_PATTERN.exec(slashForm);
   if (uncMatch !== null) {
     return {
       prefix: `${uncMatch[0]}/`,
-      rest: basePath.slice(uncMatch[0].length).replace(/^[/\\]+/, ""),
+      rest: slashForm.slice(uncMatch[0].length).replace(/^\/+/, ""),
     };
   }
-  const driveMatch = WINDOWS_DRIVE_PATH_PATTERN.exec(basePath);
+  const driveMatch = WINDOWS_DRIVE_PATH_PATTERN.exec(slashForm);
   if (driveMatch !== null) {
     return {
-      prefix: `${basePath.slice(0, 2)}/`,
-      rest: basePath.slice(2).replace(/^[/\\]+/, ""),
+      prefix: `${slashForm.slice(0, 2)}/`,
+      rest: slashForm.slice(2).replace(/^\/+/, ""),
     };
   }
-  return { prefix: "/", rest: basePath.replace(/^[/\\]+/, "") };
+  return { prefix: "/", rest: slashForm.replace(/^\/+/, "") };
 }
 
 /**

@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildChatLinkPolicy } from "@/components/chat/build-chat-link-policy";
+import {
+  buildChatLinkPolicy,
+  firstEagerlyTrueIndex,
+} from "@/components/chat/build-chat-link-policy";
 import type {
   ChatLinkLifecycle,
   ChatLinkPolicyDeps,
@@ -232,6 +235,24 @@ afterEach(() => {
 });
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+describe("firstEagerlyTrueIndex", () => {
+  it("treats a rejected higher-priority probe as false rather than hanging forever (#2)", async () => {
+    const winningIndex = await firstEagerlyTrueIndex([
+      Promise.reject(new Error("transport error")),
+      Promise.resolve(true),
+    ]);
+    expect(winningIndex).toBe(1);
+  });
+
+  it("resolves -1 (not hanging) when every probe rejects", async () => {
+    const winningIndex = await firstEagerlyTrueIndex([
+      Promise.reject(new Error("a")),
+      Promise.reject(new Error("b")),
+    ]);
+    expect(winningIndex).toBe(-1);
+  });
+});
 
 describe("buildChatLinkPolicy", () => {
   it("ignores directory links without calling the RPC", () => {
@@ -798,6 +819,12 @@ describe("buildChatLinkPolicy", () => {
       dirIndexRef,
     ]);
     mocks.fetchWorkspaceFileExists.mockResolvedValue(false);
+    // The fallback re-derives the direct ref via `openChatWorkspaceFilePreview`
+    // (the same pre-existing synchronous path the no-candidates/no-client
+    // branches already use) rather than reusing the race's own candidate
+    // object, so this must resolve to the SAME ref the mocked candidate list
+    // above used for its direct (non-index.md) entry.
+    mocks.workspaceFileRefFromLinkPath.mockReturnValue(directRef);
     const run = buildChatLinkPolicy(makeDeps({}));
 
     run(fileLink({ path: "/repo/just-written.ts" }), lifecycle);
@@ -805,6 +832,110 @@ describe("buildChatLinkPolicy", () => {
 
     expect(previewTileInTab).toHaveBeenCalledWith(TAB_ID, directRef);
     expect(onAsyncFailure).not.toHaveBeenCalled();
+    // A non-artifact-shaped miss never attempts the RPC at all.
+    expect(mocks.resolveArtifactByPath).not.toHaveBeenCalled();
+  });
+
+  it("tries a structurally artifact-shaped candidate through the resolver before defaulting to the direct candidate when neither local probe hits (#4)", async () => {
+    const directRef = {
+      id: "foreign-direct",
+      workspacePath: "/Users/them/.traycer/epics/foreign-epic/artifacts",
+      filePath: "some-dir",
+    };
+    const dirIndexRef = {
+      id: "foreign-index",
+      workspacePath:
+        "/Users/them/.traycer/epics/foreign-epic/artifacts/some-dir",
+      filePath: "index.md",
+    };
+    mocks.candidateWorkspaceFileRefsForAbsoluteLinkPath.mockReturnValue([
+      directRef,
+      dirIndexRef,
+    ]);
+    mocks.fetchWorkspaceFileExists.mockResolvedValue(false);
+    mocks.resolveArtifactByPath.mockResolvedValue({
+      artifactId: "artifact-foreign",
+      kind: "spec",
+    });
+    const run = buildChatLinkPolicy(makeDeps({}));
+
+    run(
+      fileLink({
+        path: "/Users/them/.traycer/epics/foreign-epic/artifacts/some-dir",
+      }),
+      lifecycle,
+    );
+    await flush();
+
+    expect(mocks.resolveArtifactByPath).toHaveBeenCalledWith(
+      expect.objectContaining({
+        epicId: "foreign-epic",
+        filePath:
+          "/Users/them/.traycer/epics/foreign-epic/artifacts/some-dir/index.md",
+      }),
+    );
+    // Cross-epic (differs from OPEN_EPIC_ID): navigate, not a same-epic preview.
+    expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
+    expect(previewTileInTab).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the direct candidate when the artifact-shaped fallback also misses (#4)", async () => {
+    const directRef = {
+      id: "foreign-direct-miss",
+      workspacePath: "/Users/them/.traycer/epics/foreign-epic/artifacts",
+      filePath: "some-dir",
+    };
+    const dirIndexRef = {
+      id: "foreign-index-miss",
+      workspacePath:
+        "/Users/them/.traycer/epics/foreign-epic/artifacts/some-dir",
+      filePath: "index.md",
+    };
+    mocks.candidateWorkspaceFileRefsForAbsoluteLinkPath.mockReturnValue([
+      directRef,
+      dirIndexRef,
+    ]);
+    mocks.fetchWorkspaceFileExists.mockResolvedValue(false);
+    mocks.resolveArtifactByPath.mockResolvedValue(null);
+    mocks.workspaceFileRefFromLinkPath.mockReturnValue(directRef);
+    const run = buildChatLinkPolicy(makeDeps({}));
+
+    run(
+      fileLink({
+        path: "/Users/them/.traycer/epics/foreign-epic/artifacts/some-dir",
+      }),
+      lifecycle,
+    );
+    await flush();
+
+    expect(previewTileInTab).toHaveBeenCalledWith(TAB_ID, directRef);
+    expect(mocks.navigateToTabIntent).not.toHaveBeenCalled();
+  });
+
+  it("tries a structurally artifact-shaped candidate through the resolver even when the chat's own workspace client hasn't resolved yet (#4)", async () => {
+    mocks.resolveArtifactByPath.mockResolvedValue({
+      artifactId: "artifact-foreign-no-client",
+      kind: "spec",
+    });
+    const run = buildChatLinkPolicy(makeDeps({ workspaceClient: null }));
+
+    run(
+      fileLink({
+        path: "/Users/them/.traycer/epics/foreign-epic/artifacts/some-dir",
+      }),
+      lifecycle,
+    );
+    await flush();
+
+    expect(mocks.resolveArtifactByPath).toHaveBeenCalledWith(
+      expect.objectContaining({
+        epicId: "foreign-epic",
+        filePath:
+          "/Users/them/.traycer/epics/foreign-epic/artifacts/some-dir/index.md",
+      }),
+    );
+    expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
+    expect(previewTileInTab).not.toHaveBeenCalled();
   });
 
   it("routes a resolved RELATIVE workspace-file winner through the artifact resolver when it lands on an index.md (B)", async () => {

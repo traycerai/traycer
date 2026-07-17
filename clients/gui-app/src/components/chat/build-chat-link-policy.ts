@@ -3,6 +3,7 @@ import type { UseNavigateResult } from "@tanstack/react-router";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { ResolveArtifactByPathResult } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
+import { EPIC_ARTIFACT_INDEX_FILENAME } from "@traycer/protocol/common/artifact-path";
 import {
   candidateWorkspaceFileRefsForAbsoluteLinkPath,
   candidateWorkspaceFileRefsForRelativeLinkPath,
@@ -451,6 +452,14 @@ export function openResolvedWorkspaceTarget(
  * earlier index is known). Resolves `-1` once every candidate has settled
  * `false`. A lower-priority probe still pending after the winner is decided
  * is left to settle on its own; its result is simply never read.
+ *
+ * A REJECTED probe is treated as `false`, the same as a settled miss - most
+ * callers here already swallow their own transport errors
+ * (`fetchWorkspaceFileExists` never rejects), but a caller that races a raw
+ * RPC promise (e.g. an artifact-resolve candidate) must not be able to hang
+ * this race forever: an unobserved rejection would leave that slot
+ * permanently pending, blocking every later-priority candidate from ever
+ * being decided and leaving the whole race unsettled.
  */
 export function firstEagerlyTrueIndex(
   probes: ReadonlyArray<Promise<boolean>>,
@@ -477,10 +486,15 @@ export function firstEagerlyTrueIndex(
       }
     };
     probes.forEach((probe, index) => {
-      void probe.then((value) => {
-        results[index] = value;
-        tryDecide();
-      });
+      void probe
+        .then((value) => {
+          results[index] = value;
+          tryDecide();
+        })
+        .catch(() => {
+          results[index] = false;
+          tryDecide();
+        });
     });
   });
 }
@@ -548,6 +562,60 @@ function resolveAndOpenRelativeWorkspaceFile(
 }
 
 /**
+ * The last resort for an ABSOLUTE link whose local existence probes all
+ * missed: tries `directoryIndexPath` (the href suffixed with `index.md`)
+ * through the root-prefix-agnostic artifact resolver ONCE, and only calls
+ * `openDirectFallback` if that candidate isn't structurally artifact-shaped,
+ * `activeHostId` isn't set, the resolve comes back `null`, or it rejects.
+ *
+ * Exists because a foreign-prefix artifact directory (a collaborator's
+ * home, a different device's `~/.traycer`) can never win the local
+ * existence-probe race - `workspace.readFile` only sees THIS machine's
+ * filesystem - even though the RPC would resolve it correctly, since it
+ * matches the `epics/<id>/artifacts/<chain>/index.md` marker as a
+ * SUBSEQUENCE anywhere in the path rather than requiring a local prefix
+ * match.
+ */
+function resolveArtifactShapedFallback(
+  deps: ChatLinkPolicyDeps,
+  lifecycle: ChatLinkLifecycle,
+  fallback: {
+    readonly clickToken: number;
+    readonly directoryIndexPath: string;
+    readonly openDirectFallback: () => void;
+  },
+): void {
+  const { clickToken, directoryIndexPath, openDirectFallback } = fallback;
+  const artifactEpicId = artifactEpicIdFromLinkPath(directoryIndexPath);
+  const resolveHostId = deps.activeHostId;
+  if (artifactEpicId === null || resolveHostId === null) {
+    openDirectFallback();
+    return;
+  }
+  void fetchResolveArtifactByPath({
+    queryClient: deps.queryClient,
+    client: deps.client,
+    hostId: resolveHostId,
+    epicId: artifactEpicId,
+    filePath: directoryIndexPath,
+  })
+    .then((artifact) => {
+      if (lifecycle.isDisposed()) return;
+      if (!lifecycle.isCurrent(clickToken)) return;
+      if (artifact === null) {
+        openDirectFallback();
+        return;
+      }
+      openResolvedArtifact(deps, lifecycle, {
+        artifact,
+        target: { artifactEpicId, resolveHostId, clickToken },
+        onUnavailable: openDirectFallback,
+      });
+    })
+    .catch(() => openDirectFallback());
+}
+
+/**
  * Resolves an ABSOLUTE plain-file link that isn't already a deterministic
  * bound-root match into whichever of its two shapes actually exists: the
  * direct file, or (a slashless target that's really a directory reference)
@@ -557,12 +625,18 @@ function resolveAndOpenRelativeWorkspaceFile(
  * coerced into `spec/README.md/index.md` just because the suffixed form
  * would ALSO parse as artifact-shaped.
  *
- * When NEITHER candidate is confirmed to exist (e.g. a file the agent just
- * wrote that hasn't synced to the host's view yet), opens the direct
- * candidate anyway rather than failing the click - unlike the relative case,
- * an absolute link has no "wrong workspace" ambiguity to fail safely out of,
- * so this preserves the deliberate "open any agent-emitted file" capability
- * `openChatWorkspaceFilePreview` already had for the synchronous case.
+ * When NEITHER local candidate probes true, a structurally artifact-shaped
+ * candidate (the href suffixed with `index.md`) still gets one shot through
+ * the root-prefix-agnostic artifact resolver before falling back to the
+ * direct candidate: a foreign-prefix artifact directory (a collaborator's
+ * home, a different device) will never probe true against THIS machine's
+ * filesystem, but the resolver doesn't care about the literal prefix
+ * (`resolveArtifactShapedFallback`, C1/#4). Only once that also misses does
+ * this open the direct candidate anyway rather than failing the click -
+ * unlike the relative case, an absolute link has no "wrong workspace"
+ * ambiguity to fail safely out of, so this preserves the deliberate "open
+ * any agent-emitted file" capability `openChatWorkspaceFilePreview` already
+ * had for the synchronous case.
  */
 function resolveAndOpenAbsoluteWorkspaceFile(
   deps: ChatLinkPolicyDeps,
@@ -571,12 +645,23 @@ function resolveAndOpenAbsoluteWorkspaceFile(
   target: WorkspaceFileProbeTarget,
 ): Promise<void> {
   const openDirectFallback = (): void => {
+    if (lifecycle.isDisposed()) return;
+    if (!lifecycle.isCurrent(target.clickToken)) return;
     if (!openChatWorkspaceFilePreview(deps, lifecycle, link, true)) {
       lifecycle.onAsyncFailure();
     }
   };
+  // Computed from `link.path` alone (no host/workspace dependency), so it's
+  // available even in the no-workspace-client branch below, where the
+  // artifact resolver - bound to `deps.client`/`deps.activeHostId`, NOT
+  // `deps.hostId`/`deps.workspaceClient` - can still be worth a try.
+  const directoryIndexPath = joinPath(link.path, EPIC_ARTIFACT_INDEX_FILENAME);
   if (deps.hostId === null || deps.workspaceClient === null) {
-    openDirectFallback();
+    resolveArtifactShapedFallback(deps, lifecycle, {
+      clickToken: target.clickToken,
+      directoryIndexPath,
+      openDirectFallback,
+    });
     return Promise.resolve();
   }
   const hostId = deps.hostId;
@@ -602,11 +687,17 @@ function resolveAndOpenAbsoluteWorkspaceFile(
   return firstEagerlyTrueIndex(probes).then((winningIndex) => {
     if (lifecycle.isDisposed()) return;
     if (!lifecycle.isCurrent(target.clickToken)) return;
-    const winner =
-      winningIndex === -1 ? candidates[0] : candidates[winningIndex];
-    openResolvedWorkspaceTarget(deps, lifecycle, link, {
-      ref: winner,
+    if (winningIndex !== -1) {
+      openResolvedWorkspaceTarget(deps, lifecycle, link, {
+        ref: candidates[winningIndex],
+        clickToken: target.clickToken,
+      });
+      return;
+    }
+    resolveArtifactShapedFallback(deps, lifecycle, {
       clickToken: target.clickToken,
+      directoryIndexPath,
+      openDirectFallback,
     });
   });
 }

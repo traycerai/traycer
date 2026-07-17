@@ -35,4 +35,28 @@ describe("resolveAbsolutePath", () => {
       "//server/share/x.ts",
     );
   });
+
+  it("recognizes a native-backslash Windows drive base as the authority, not a POSIX root", () => {
+    expect(resolveAbsolutePath("D:\\repo\\nested", "..\\x.ts")).toBe(
+      "D:/repo/x.ts",
+    );
+  });
+
+  it("recognizes a mixed-separator Windows drive base as the authority", () => {
+    expect(resolveAbsolutePath("D:\\work/repo", "../x.ts")).toBe(
+      "D:/work/x.ts",
+    );
+  });
+
+  it("recognizes a native-backslash UNC share base as the authority", () => {
+    expect(
+      resolveAbsolutePath("\\\\server\\share\\nested", "..\\..\\x.ts"),
+    ).toBe("//server/share/x.ts");
+  });
+
+  it("recognizes a mixed-separator UNC share base as the authority", () => {
+    expect(resolveAbsolutePath("\\\\server/share\\nested", "../x.ts")).toBe(
+      "//server/share/x.ts",
+    );
+  });
 });

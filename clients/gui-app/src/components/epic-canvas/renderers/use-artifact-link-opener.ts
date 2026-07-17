@@ -41,20 +41,25 @@ export interface ArtifactLinkOpener {
  * `epic.resolveArtifactByPath` RPC) against its plain WORKSPACE-FILE
  * interpretation (resolved against the chat's bound roots, existence-probed
  * the same way a chat link is) - whichever resolves first, BY PRIORITY,
- * wins. File candidates take priority (listed first in the combined probe
- * list): the corpus backing this design found extension-bearing targets are
- * always real workspace files, never sub-artifact references, so a fast,
- * common file hit is never held up waiting on the slower RPC-based folder
- * candidate to settle (`firstEagerlyTrueIndex` only blocks a LATER
- * candidate on an EARLIER one still being pending, never the reverse).
+ * wins. The own-directory ARTIFACT candidate takes priority (listed FIRST in
+ * the combined probe list): own-directory resolution is the corpus's
+ * majority case (923/957 own-dir-only links are folder-shaped), so `[self
+ * ](index.md)` or `./01-child/` must resolve to the artifact's OWN
+ * sub-artifact when one exists there, not to a same-named file that happens
+ * to also exist somewhere in the chat's bound workspace roots - a
+ * lower-priority candidate is only even considered once the higher-priority
+ * one is known to have missed (`firstEagerlyTrueIndex` only blocks a LATER
+ * candidate on an EARLIER one still being pending, never the reverse, so the
+ * artifact candidate winning never waits on a slower file probe either).
  *
  * This replaces guessing folder-vs-file from the href's spelling (a real
  * file literally named `README`, `LICENSE`, or `.env`, or a dotted folder
  * like `v1.2`, defeats any such guess - see the corpus report) with an
- * actual existence check on both interpretations. The RPC candidate still
- * fires even when a file candidate is likely to win first; the wasted
- * round-trip is the accepted cost of not re-introducing a spelling-based
- * skip that would regress the `v1.2`-style dotted-folder case.
+ * actual existence check on both interpretations. The file candidates still
+ * fire concurrently even when the artifact candidate is likely to win; the
+ * wasted round-trips are the accepted cost of not re-introducing a
+ * spelling-based skip that would regress the `v1.2`-style dotted-folder
+ * case.
  *
  * `resolveArtifactRelativeLinkPath` returning `null` (the href walks above
  * the epic's artifacts root) is a deliberate dead end, NOT a bug to route
@@ -106,22 +111,31 @@ function resolveAndOpenArtifactRelativeHref(
       ? null
       : resolveArtifactRelativeLinkPath(epicId, selfFolderChain, link.path);
   const resolveHostId = deps.activeHostId;
-  const fetchFolderArtifact =
-    (): Promise<ResolveArtifactByPathResult | null> =>
-      folderCandidatePath === null || resolveHostId === null
-        ? Promise.resolve(null)
-        : fetchResolveArtifactByPath({
-            queryClient: deps.queryClient,
-            client: deps.client,
-            hostId: resolveHostId,
-            epicId,
-            filePath: folderCandidatePath,
-          });
-  const probes = [
-    ...fileProbes,
-    fetchFolderArtifact().then((artifact) => artifact !== null),
-  ];
-  const folderIndex = probes.length - 1;
+  // Retains the resolved artifact (or `null` on a miss/transport rejection)
+  // so the winner branch below can use it directly - `firstEagerlyTrueIndex`
+  // only reports WHICH candidate won, not the value it resolved to, and a
+  // second RPC call just to re-derive that value would be a wasted
+  // round-trip. A rejection maps to `null`/`false` here explicitly (rather
+  // than relying solely on `firstEagerlyTrueIndex`'s own rejection handling)
+  // so this retained value stays in sync with what the race actually saw.
+  let folderArtifactResult: ResolveArtifactByPathResult | null = null;
+  const folderProbe: Promise<boolean> =
+    folderCandidatePath === null || resolveHostId === null
+      ? Promise.resolve(false)
+      : fetchResolveArtifactByPath({
+          queryClient: deps.queryClient,
+          client: deps.client,
+          hostId: resolveHostId,
+          epicId,
+          filePath: folderCandidatePath,
+        })
+          .then((artifact) => {
+            folderArtifactResult = artifact;
+            return artifact !== null;
+          })
+          .catch(() => false);
+  const probes = [folderProbe, ...fileProbes];
+  const folderIndex = 0;
   return firstEagerlyTrueIndex(probes).then((winningIndex) => {
     if (lifecycle.isDisposed()) return;
     if (!lifecycle.isCurrent(clickToken)) return;
@@ -131,30 +145,19 @@ function resolveAndOpenArtifactRelativeHref(
     }
     if (winningIndex !== folderIndex) {
       openResolvedWorkspaceTarget(deps, lifecycle, link, {
-        ref: fileCandidates[winningIndex],
+        ref: fileCandidates[winningIndex - 1],
         clickToken,
       });
       return;
     }
-    if (folderCandidatePath === null || resolveHostId === null) {
+    if (folderArtifactResult === null || resolveHostId === null) {
       lifecycle.onAsyncFailure();
       return;
     }
-    // The winning probe already confirmed a real artifact exists; this
-    // re-fetch is a cache hit (`fetchResolveArtifactByPath`'s query stays
-    // fresh for 15s), not a second round-trip - `firstEagerlyTrueIndex`
-    // only reports WHICH candidate won, not the value it resolved to.
-    void fetchFolderArtifact().then((artifact) => {
-      if (lifecycle.isDisposed() || !lifecycle.isCurrent(clickToken)) return;
-      if (artifact === null) {
-        lifecycle.onAsyncFailure();
-        return;
-      }
-      openResolvedArtifact(deps, lifecycle, {
-        artifact,
-        target: { artifactEpicId: epicId, resolveHostId, clickToken },
-        onUnavailable: () => lifecycle.onAsyncFailure(),
-      });
+    openResolvedArtifact(deps, lifecycle, {
+      artifact: folderArtifactResult,
+      target: { artifactEpicId: epicId, resolveHostId, clickToken },
+      onUnavailable: () => lifecycle.onAsyncFailure(),
     });
   });
 }

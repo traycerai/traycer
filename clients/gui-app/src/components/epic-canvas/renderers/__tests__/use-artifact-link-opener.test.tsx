@@ -523,6 +523,172 @@ describe("useArtifactLinkOpener", () => {
     expect(mocks.runPolicy).not.toHaveBeenCalled();
   });
 
+  it("opens the own-directory artifact candidate over a same-named workspace file when both exist (#1)", async () => {
+    mocks.folderChain.mockReturnValue(["ticket-breakdown", "01-something"]);
+    mocks.candidateWorkspaceFileRefsForRelativeLinkPath.mockReturnValue([
+      {
+        id: "same-named-file",
+        workspacePath: "/tab/repo",
+        filePath: "01-child/index.md",
+      },
+    ]);
+    mocks.fetchWorkspaceFileExists.mockResolvedValue(true);
+    mocks.resolveArtifactByPath.mockResolvedValue({
+      artifactId: "artifact-own-dir",
+      kind: "ticket",
+    });
+    const { result } = renderHook(
+      () =>
+        useArtifactLinkOpener({
+          epicId: "epic-1",
+          artifactId: "artifact-1",
+          viewTabId: "tab-1",
+        }),
+      { wrapper: QueryWrapper },
+    );
+
+    result.current.openLink({
+      kind: "file",
+      path: "./01-child/",
+      line: null,
+      col: null,
+    });
+    await flush();
+
+    // The own-directory artifact wins even though a same-named workspace file
+    // also exists - own-directory resolution is the corpus's majority case,
+    // so it must not be shadowed by a coincidentally-matching file elsewhere
+    // in the chat's bound roots.
+    expect(
+      mocks.openProjectedSidebarNodeInTabWhenAvailable,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({ nodeId: "artifact-own-dir" }),
+    );
+    expect(mocks.previewTileInTab).not.toHaveBeenCalled();
+  });
+
+  it("opens the own-directory artifact candidate as soon as it resolves, without waiting on a slower file probe (#1)", async () => {
+    mocks.folderChain.mockReturnValue(["ticket-breakdown", "01-something"]);
+    mocks.candidateWorkspaceFileRefsForRelativeLinkPath.mockReturnValue([
+      {
+        id: "slow-file",
+        workspacePath: "/tab/repo",
+        filePath: "01-child/index.md",
+      },
+    ]);
+    // Never settles within the test - proves the artifact candidate winning
+    // doesn't wait on it.
+    mocks.fetchWorkspaceFileExists.mockReturnValue(
+      new Promise(() => undefined),
+    );
+    mocks.resolveArtifactByPath.mockResolvedValue({
+      artifactId: "artifact-fast",
+      kind: "ticket",
+    });
+    const { result } = renderHook(
+      () =>
+        useArtifactLinkOpener({
+          epicId: "epic-1",
+          artifactId: "artifact-1",
+          viewTabId: "tab-1",
+        }),
+      { wrapper: QueryWrapper },
+    );
+
+    result.current.openLink({
+      kind: "file",
+      path: "./01-child/",
+      line: null,
+      col: null,
+    });
+    await flush();
+
+    expect(
+      mocks.openProjectedSidebarNodeInTabWhenAvailable,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({ nodeId: "artifact-fast" }),
+    );
+  });
+
+  it("toasts instead of hanging when the folder RPC rejects and no plain-file candidate exists (#2)", async () => {
+    mocks.folderChain.mockReturnValue(["ticket-breakdown", "01-something"]);
+    mocks.candidateWorkspaceFileRefsForRelativeLinkPath.mockReturnValue(null);
+    mocks.resolveArtifactByPath.mockRejectedValue(new Error("transport error"));
+    const { result } = renderHook(
+      () =>
+        useArtifactLinkOpener({
+          epicId: "epic-1",
+          artifactId: "artifact-1",
+          viewTabId: "tab-1",
+        }),
+      { wrapper: QueryWrapper },
+    );
+
+    result.current.openLink({
+      kind: "file",
+      path: "index.md",
+      line: null,
+      col: null,
+    });
+    await flush();
+
+    expect(mocks.toast).toHaveBeenCalledWith("Couldn't open link");
+    expect(
+      mocks.openProjectedSidebarNodeInTabWhenAvailable,
+    ).not.toHaveBeenCalled();
+  });
+
+  it("drops a rejected folder-RPC settlement from a superseded click instead of surfacing a stale toast (#2)", async () => {
+    mocks.folderChain.mockReturnValue(["ticket-breakdown", "01-something"]);
+    mocks.candidateWorkspaceFileRefsForRelativeLinkPath.mockReturnValue(null);
+    let rejectFirst: (error: Error) => void = () => undefined;
+    mocks.resolveArtifactByPath
+      .mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            rejectFirst = reject;
+          }),
+      )
+      .mockResolvedValueOnce({
+        artifactId: "artifact-second-click",
+        kind: "spec",
+      });
+    const { result } = renderHook(
+      () =>
+        useArtifactLinkOpener({
+          epicId: "epic-1",
+          artifactId: "artifact-1",
+          viewTabId: "tab-1",
+        }),
+      { wrapper: QueryWrapper },
+    );
+
+    result.current.openLink({
+      kind: "file",
+      path: "index.md",
+      line: null,
+      col: null,
+    });
+    result.current.openLink({
+      kind: "file",
+      path: "index.md",
+      line: null,
+      col: null,
+    });
+    rejectFirst(new Error("transport error"));
+    await flush();
+
+    expect(mocks.toast).not.toHaveBeenCalled();
+    expect(
+      mocks.openProjectedSidebarNodeInTabWhenAvailable,
+    ).toHaveBeenCalledTimes(1);
+    expect(
+      mocks.openProjectedSidebarNodeInTabWhenAvailable,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({ nodeId: "artifact-second-click" }),
+    );
+  });
+
   it("opens the winning plain-file candidate for a relative href with a non-index.md extension, without ever attempting the folder RPC race to win (E)", async () => {
     mocks.folderChain.mockReturnValue(["ticket-breakdown", "01-something"]);
     const fileRef = {
