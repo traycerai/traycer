@@ -549,6 +549,52 @@ describe("ArtifactLinkPopover", () => {
     ).toBe("https://draft.example");
   });
 
+  it("remaps the caret-triggered anchor after a remote Yjs edit moves its link", async () => {
+    const { first, doc } = makeCollaborativeEditors(
+      "[Example](https://example.com)",
+    );
+    first.commands.setTextSelection(2);
+    renderPopover(first, true);
+
+    await screen.findByRole("dialog", { name: "Edit link" });
+    const initialLeft = lastAnchorRect().left;
+    const remoteDoc = new Y.Doc();
+    docs.push(remoteDoc);
+    Y.applyUpdate(remoteDoc, Y.encodeStateAsUpdate(doc));
+    const remoteFragment = remoteDoc.getXmlFragment("artifact-body");
+    const remote = trackEditor(
+      new Editor({
+        extensions: [
+          StarterKit.configure({ undoRedo: false, link: false }),
+          artifactLinkExtension,
+          Collaboration.configure({
+            document: remoteDoc,
+            fragment: remoteFragment,
+          }),
+        ],
+      }),
+    );
+
+    act(() => {
+      remote.commands.insertContentAt(0, "<p>Before</p>");
+      Y.applyUpdate(
+        doc,
+        Y.encodeStateAsUpdate(remoteDoc, Y.encodeStateVector(doc)),
+      );
+    });
+
+    const precedingParagraph = first.state.doc.firstChild;
+    if (precedingParagraph === null) {
+      throw new Error("Expected the remote edit to insert a paragraph");
+    }
+    await waitFor(() =>
+      expect(lastAnchorRect().left).toBe(
+        (precedingParagraph.nodeSize + 2) * 10,
+      ),
+    );
+    expect(lastAnchorRect().left).not.toBe(initialLeft);
+  });
+
   it("anchors a caret parked exactly at the link's end to the preceding side, not the following line", async () => {
     const editor = makeEditor(`${LINK_CONTENT}<p>Elsewhere</p>`);
     // "Example" spans positions 1-8, so range.to = 8 - the end-EXCLUSIVE

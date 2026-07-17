@@ -25,6 +25,7 @@ import { fetchResolveArtifactByPath } from "@/lib/host/resolve-artifact-by-path"
 import { fetchWorkspaceFileExists } from "@/lib/host/probe-workspace-file-exists";
 import { isAbsolutePath } from "@/lib/path/cross-platform-path";
 import { isBrowsable } from "@/lib/worktree/worktree-row-browsable";
+import { artifactEpicIdFromLinkPath } from "@/markdown/links/artifact-link-path";
 import type { MarkdownFileLink } from "@/markdown/links/markdown-link-context";
 import { resolveArtifactRelativeLinkPath } from "@/markdown/links/resolve-artifact-relative-link";
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
@@ -268,6 +269,10 @@ export function useArtifactLinkOpener(args: {
         return;
       }
       if (openFile === null || chatDeps === null) {
+        // This is still a newer click. Invalidate any earlier async resolve or
+        // projection wait before returning, otherwise that earlier click can
+        // open after this one has already reported that links are unavailable.
+        supersedePending();
         toast(
           worktrees.isError
             ? "Couldn't open link"
@@ -292,12 +297,14 @@ export function useArtifactLinkOpener(args: {
         col: link.col,
         isDirectory: false,
       };
-      if (isAbsolutePath(link.path)) {
-        // An absolute href, authored inside an artifact, is passed through
-        // UNCHANGED - `buildChatLinkPolicy`'s absolute resolution races the
-        // direct file against its `index.md` fallback and reclassifies the
-        // winner as an artifact when it turns out to be index.md-shaped (A,
-        // C1), so no client-side canonicalization is needed here.
+      if (
+        isAbsolutePath(link.path) ||
+        artifactEpicIdFromLinkPath(link.path) !== null
+      ) {
+        // Absolute hrefs and rootless artifact-shaped hrefs are passed through
+        // UNCHANGED. The shared policy resolves artifact paths before plain
+        // file handling, so prefixing a rootless `epics/<id>/artifacts/...`
+        // path with this artifact's folder chain would target the wrong item.
         if (!openFile(markdownLink, lifecycle)) toast("Couldn't open link");
         return;
       }

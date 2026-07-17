@@ -286,6 +286,42 @@ describe("useArtifactLinkOpener", () => {
     expect(mocks.runPolicy).toHaveBeenCalledTimes(1);
   });
 
+  it("supersedes an earlier async file click when a newer click hits the readiness gate", () => {
+    const cancel = vi.fn();
+    const state: { firstLifecycle: ChatLinkLifecycle | null } = {
+      firstLifecycle: null,
+    };
+    mocks.runPolicy.mockImplementationOnce((_link, lifecycle) => {
+      state.firstLifecycle = lifecycle;
+      lifecycle.beginClick();
+      lifecycle.setPendingProjectedOpenCancel(cancel);
+      return true;
+    });
+    const { result, rerender } = renderHook(
+      () =>
+        useArtifactLinkOpener({
+          epicId: "epic-1",
+          artifactId: "artifact-1",
+          viewTabId: "tab-1",
+        }),
+      { wrapper: QueryWrapper },
+    );
+    const link = {
+      kind: "file" as const,
+      path: "/artifact/index.md",
+      line: null,
+      col: null,
+    };
+
+    result.current.openLink(link);
+    mocks.worktreeQuery.data = undefined;
+    rerender();
+    result.current.openLink(link);
+
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(state.firstLifecycle?.isCurrent(1)).toBe(false);
+  });
+
   it("reports a workspace-root loading failure without routing", () => {
     mocks.worktreeQuery.data = undefined;
     mocks.worktreeQuery.isError = true;
@@ -468,6 +504,35 @@ describe("useArtifactLinkOpener", () => {
       }),
       expect.anything(),
     );
+  });
+
+  it("passes a rootless artifact-shaped href through unchanged to the shared policy", () => {
+    const { result } = renderHook(
+      () =>
+        useArtifactLinkOpener({
+          epicId: "epic-1",
+          artifactId: "artifact-1",
+          viewTabId: "tab-1",
+        }),
+      { wrapper: QueryWrapper },
+    );
+
+    result.current.openLink({
+      kind: "file",
+      path: "epics/epic-2/artifacts/spec/index.md",
+      line: null,
+      col: null,
+    });
+
+    expect(mocks.runPolicy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: "epics/epic-2/artifacts/spec/index.md",
+      }),
+      expect.anything(),
+    );
+    expect(
+      mocks.candidateWorkspaceFileRefsForRelativeLinkPath,
+    ).not.toHaveBeenCalled();
   });
 
   it("opens the artifact-folder candidate when it resolves, racing against the plain-file candidates (E)", async () => {

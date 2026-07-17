@@ -155,7 +155,7 @@ export function candidateWorkspaceFileRefsForRelativeLinkPath(
   const normalized = normalizePath(trimmed);
   if (
     normalized.length === 0 ||
-    normalized === "." ||
+    (normalized === "." && !hasTrailingSeparator(trimmed)) ||
     isAbsolutePath(normalized)
   ) {
     return null;

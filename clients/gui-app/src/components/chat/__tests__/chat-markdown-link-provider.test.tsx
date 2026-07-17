@@ -18,6 +18,7 @@ import type { EpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { MarkdownLinkContext } from "@/markdown/links/markdown-link-context";
 import type { MarkdownFileLink } from "@/markdown/links/markdown-link-context";
 import type { FetchResolveArtifactByPathArgs } from "@/lib/host/resolve-artifact-by-path";
+import type { FetchWorkspaceFileExistsArgs } from "@/lib/host/probe-workspace-file-exists";
 import type { ProjectedSidebarNodeOpenArgs } from "@/components/epic-canvas/sidebar/open-projected-sidebar-node";
 import type { ResolveArtifactByPathResult } from "@traycer/protocol/host/epic/unary-schemas";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -54,9 +55,9 @@ const mocks = vi.hoisted(() => ({
   // opening; these provider-wiring tests exercise the OPEN behavior, not the
   // probe itself (that's `fetchWorkspaceFileExists`'s own unit tests), so
   // every candidate reports "exists" by default.
-  workspaceFileExists: vi.fn<(args: unknown) => Promise<boolean>>(() =>
-    Promise.resolve(true),
-  ),
+  workspaceFileExists: vi.fn<
+    (args: FetchWorkspaceFileExistsArgs) => Promise<boolean>
+  >(() => Promise.resolve(true)),
 }));
 
 interface EpicRouteFocusLike {
@@ -101,7 +102,8 @@ vi.mock("@/lib/host/resolve-artifact-by-path", () => ({
 }));
 
 vi.mock("@/lib/host/probe-workspace-file-exists", () => ({
-  fetchWorkspaceFileExists: (args: unknown) => mocks.workspaceFileExists(args),
+  fetchWorkspaceFileExists: (args: FetchWorkspaceFileExistsArgs) =>
+    mocks.workspaceFileExists(args),
 }));
 
 vi.mock("@/components/epic-canvas/sidebar/open-projected-sidebar-node", () => ({

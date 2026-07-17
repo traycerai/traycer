@@ -1,19 +1,49 @@
 import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, it, vi, type Mock } from "vitest";
-import { fetchWorkspaceFileExists } from "@/lib/host/probe-workspace-file-exists";
-import type { WorkspaceReadFileResponse } from "@traycer/protocol/host/workspace/unary-schemas";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
+import type {
+  WorkspaceReadFileRequest,
+  WorkspaceReadFileResponse,
+} from "@traycer/protocol/host/workspace/unary-schemas";
+import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import {
+  fetchWorkspaceFileExists,
+  type FetchWorkspaceFileExistsArgs,
+} from "@/lib/host/probe-workspace-file-exists";
 
 const HOST_ID = "host-1";
 
 type ReadFileRequest = (
-  method: string,
-  params: unknown,
+  method: "workspace.readFile",
+  params: WorkspaceReadFileRequest,
 ) => Promise<WorkspaceReadFileResponse>;
 
-function makeArgs(queryClient: QueryClient, request: Mock<ReadFileRequest>) {
+function makeArgs(
+  queryClient: QueryClient,
+  request: Mock<ReadFileRequest>,
+): FetchWorkspaceFileExistsArgs {
+  const client = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: createHostQueryInvalidator(queryClient),
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "workspace-read-file",
+      handlers: {
+        "workspace.readFile": (params) => request("workspace.readFile", params),
+      },
+    }),
+  });
+  client.bind(mockLocalHostEntry);
+  client.setRequestContext(
+    createRequestContextFixture({ origin: "renderer", bearerToken: "token" }),
+  );
   return {
     queryClient,
-    client: { request } as never,
+    client,
     hostId: HOST_ID,
     workspacePath: "/repo",
     filePath: "src/app.ts",

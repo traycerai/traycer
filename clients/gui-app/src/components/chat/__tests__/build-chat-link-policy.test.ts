@@ -1,4 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
 import {
   buildChatLinkPolicy,
   firstEagerlyTrueIndex,
@@ -11,6 +16,7 @@ import type { MarkdownFileLink } from "@/markdown/links/markdown-link-context";
 import type { FetchResolveArtifactByPathArgs } from "@/lib/host/resolve-artifact-by-path";
 import type { ProjectedSidebarNodeOpenArgs } from "@/components/epic-canvas/sidebar/open-projected-sidebar-node";
 import type { ResolveArtifactByPathResult } from "@traycer/protocol/host/epic/unary-schemas";
+import type { FetchWorkspaceFileExistsArgs } from "@/lib/host/probe-workspace-file-exists";
 
 const OPEN_EPIC_ID = "epic-open";
 const ACTIVE_HOST_ID = "host-active";
@@ -69,12 +75,7 @@ const mocks = vi.hoisted(() => ({
     }> | null
   >(),
   fetchWorkspaceFileExists:
-    vi.fn<
-      (args: {
-        readonly workspacePath: string;
-        readonly client: { readonly request: unknown };
-      }) => Promise<boolean>
-    >(),
+    vi.fn<(args: FetchWorkspaceFileExistsArgs) => Promise<boolean>>(),
 }));
 
 vi.mock("@/lib/host/resolve-artifact-by-path", () => ({
@@ -133,10 +134,8 @@ vi.mock(
 );
 
 vi.mock("@/lib/host/probe-workspace-file-exists", () => ({
-  fetchWorkspaceFileExists: (args: {
-    readonly workspacePath: string;
-    readonly client: { readonly request: unknown };
-  }) => mocks.fetchWorkspaceFileExists(args),
+  fetchWorkspaceFileExists: (args: FetchWorkspaceFileExistsArgs) =>
+    mocks.fetchWorkspaceFileExists(args),
 }));
 
 let pendingCancel: (() => void) | null = null;
@@ -145,12 +144,29 @@ let clickToken = 0;
 const previewTileInTab = vi.fn();
 const onAsyncFailure = vi.fn();
 
-// Distinct sentinel object identities (not `{} as never` each time) so a test
+function createHostClient(requestId: string): HostClient<HostRpcRegistry> {
+  const client = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: { invalidateHostScope: () => undefined },
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => requestId,
+      handlers: {},
+    }),
+  });
+  client.bind(mockLocalHostEntry);
+  client.setRequestContext(
+    createRequestContextFixture({ origin: "renderer", bearerToken: "token" }),
+  );
+  return client;
+}
+
+// Distinct client identities so a test
 // can assert WHICH client a call actually received - `client` (bound to the
 // active/default host) and `workspaceClient` (bound to the chat tab's own
 // host) must never be interchangeable.
-const DEFAULT_CLIENT = { id: "default-client" } as never;
-const WORKSPACE_CLIENT = { id: "workspace-client" } as never;
+const DEFAULT_CLIENT = createHostClient("default-client");
+const WORKSPACE_CLIENT = createHostClient("workspace-client");
 
 function makeDeps(overrides: Partial<ChatLinkPolicyDeps>): ChatLinkPolicyDeps {
   return {
