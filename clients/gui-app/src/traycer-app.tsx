@@ -35,6 +35,7 @@ import { HarnessCatalogPrefetcher } from "@/providers/harness-catalog-prefetcher
 import { HistoryPruneProvider } from "@/providers/history-prune-provider";
 import { KeybindingProvider } from "@/providers/keybinding-provider";
 import { NotificationsSessionProvider } from "@/providers/notifications-session-provider";
+import { WorktreeChangedStreamMount } from "@/providers/worktree-changed-stream-mount";
 import { RateLimitQueueProvider } from "@/providers/rate-limit-queue-provider";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { ThemeProvider } from "@/providers/theme-provider";
@@ -183,6 +184,7 @@ function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
                       <LandingTerminalTombstoneRecoveryBridge />
                       <EpicTabExistenceReconciler />
                       <HostStreamProvider>
+                        <WorktreeChangedStreamMount />
                         <AppLocalNotificationsPersistLifecycleBridge>
                           <NotificationsSessionProvider>
                             <TraycerAppRuntimeSurface router={props.router} />

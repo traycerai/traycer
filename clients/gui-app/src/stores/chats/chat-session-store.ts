@@ -21,6 +21,7 @@ import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
 import {
   readStagedWorktreeIntent,
+  stagedWorktreeIntentIsSuspended,
   useWorktreeIntentStagingStore,
   type WorktreeStagingKey,
 } from "@/stores/worktree/worktree-intent-staging-store";
@@ -1448,6 +1449,7 @@ export function createChatSessionStore(
           ownerKind: "chat",
           ownerId: options.chatId,
         };
+        if (stagedWorktreeIntentIsSuspended(stagedKey)) return null;
         const worktreeIntent = readStagedWorktreeIntent(stagedKey);
         const frame: ChatOwnerActionFrame = {
           kind: "send",

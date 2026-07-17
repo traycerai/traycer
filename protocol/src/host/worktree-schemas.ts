@@ -333,6 +333,61 @@ export type WorktreeListByWorkspacePathsResponseV11 = z.infer<
   typeof worktreeListByWorkspacePathsResponseSchemaV11
 >;
 
+/**
+ * `worktree.listByWorkspacePaths` v1.2 request. Adds `forceRefresh`: the host
+ * now serves `listForWorkspace` summaries from a minutes-scale TTL cache
+ * (see the freshness-doctrine comment in `worktree-service.ts`), and this
+ * flag is the manual-refresh escape hatch that bypasses the cache, recomputes
+ * from disk, and repopulates it. An older peer that never sends the field
+ * upgrades to `forceRefresh: false` (cached-read behavior unchanged).
+ */
+export const worktreeListByWorkspacePathsRequestSchemaV12 =
+  worktreeListByWorkspacePathsRequestSchemaV11.extend({
+    forceRefresh: z.boolean(),
+  });
+export type WorktreeListByWorkspacePathsRequestV12 = z.infer<
+  typeof worktreeListByWorkspacePathsRequestSchemaV12
+>;
+
+/**
+ * `worktree.listByWorkspacePaths` v1.2 response. Unchanged from v1.1; the
+ * minor bump is solely for the additive `forceRefresh` request field.
+ */
+export const worktreeListByWorkspacePathsResponseSchemaV12 =
+  worktreeListByWorkspacePathsResponseSchemaV11;
+export type WorktreeListByWorkspacePathsResponseV12 =
+  WorktreeListByWorkspacePathsResponseV11;
+
+/**
+ * `worktree.listByWorkspacePaths` v1.3 request. Unchanged from v1.2; the
+ * minor bump adds the response freshness marker only.
+ */
+export const worktreeListByWorkspacePathsRequestSchemaV13 =
+  worktreeListByWorkspacePathsRequestSchemaV12;
+export type WorktreeListByWorkspacePathsRequestV13 =
+  WorktreeListByWorkspacePathsRequestV12;
+
+/**
+ * `worktree.listByWorkspacePaths` v1.3 summary. `null` means the host has not
+ * derived this row yet; clients must not treat schema-safe fallback facts as
+ * authoritative until a non-null timestamp arrives.
+ */
+export const worktreeWorkspaceSummarySchemaV13 =
+  worktreeWorkspaceSummarySchema.extend({
+    resolvedAt: z.number().nonnegative().nullable(),
+  });
+export type WorktreeWorkspaceSummaryV13 = z.infer<
+  typeof worktreeWorkspaceSummarySchemaV13
+>;
+
+export const worktreeListByWorkspacePathsResponseSchemaV13 = z.object({
+  workspaces: z.array(worktreeWorkspaceSummarySchemaV13),
+  scriptsAtRefs: z.array(worktreeScriptsAtRefSchema),
+});
+export type WorktreeListByWorkspacePathsResponseV13 = z.infer<
+  typeof worktreeListByWorkspacePathsResponseSchemaV13
+>;
+
 export const worktreeBranchSchema = z.object({
   name: z.string(),
   isCurrent: z.boolean(),
@@ -700,7 +755,6 @@ export type WorktreeSubmoduleMergeFactV12 = z.infer<
   typeof worktreeSubmoduleMergeFactSchemaV12
 >;
 
-
 /**
  * `worktree.listAllForHost` v1.1 entry. Adds the staleness signals the
  * housekeeping skill and the Settings ▸ Worktrees tab use, on top of every
@@ -775,6 +829,15 @@ export const worktreeHostEntrySchemaV12 = worktreeHostEntrySchemaV11.extend({
 });
 export type WorktreeHostEntryV12 = z.infer<typeof worktreeHostEntrySchemaV12>;
 
+/**
+ * `worktree.listAllForHost` v1.4 entry. `null` means the host has not derived
+ * this row yet; clients must not treat schema-safe fallback facts as
+ * authoritative until a non-null timestamp arrives.
+ */
+export const worktreeHostEntrySchemaV14 = worktreeHostEntrySchemaV12.extend({
+  resolvedAt: z.number().nonnegative().nullable(),
+});
+export type WorktreeHostEntryV14 = z.infer<typeof worktreeHostEntrySchemaV14>;
 
 /**
  * `worktree.listAllForHost` v1.1 request. Adds `includeActivity`: the git
@@ -855,9 +918,7 @@ export type WorktreeListAllForHostRequestV11 = z.infer<
  */
 export const worktreeListAllForHostRequestSchemaV12 =
   worktreeListAllForHostRequestSchemaV11;
-export type WorktreeListAllForHostRequestV12 =
-  WorktreeListAllForHostRequestV11;
-
+export type WorktreeListAllForHostRequestV12 = WorktreeListAllForHostRequestV11;
 
 /**
  * `worktree.listAllForHost` v1.1 response. Same `worktrees` field, enriched
@@ -884,6 +945,46 @@ export type WorktreeListAllForHostResponseV12 = z.infer<
   typeof worktreeListAllForHostResponseSchemaV12
 >;
 
+/**
+ * `worktree.listAllForHost` v1.3 request. Adds `forceRefresh`: the disk-truth
+ * walk this method backs is now served from a minutes-scale TTL cache (see
+ * the freshness-doctrine comment in `worktree-service.ts`), and this flag is
+ * the manual-refresh escape hatch that bypasses the cache, recomputes, and
+ * repopulates it. An older peer that never sends the field upgrades to
+ * `forceRefresh: false` (cached-read behavior unchanged).
+ */
+export const worktreeListAllForHostRequestSchemaV13 =
+  worktreeListAllForHostRequestSchemaV12.extend({
+    forceRefresh: z.boolean(),
+  });
+export type WorktreeListAllForHostRequestV13 = z.infer<
+  typeof worktreeListAllForHostRequestSchemaV13
+>;
+
+/**
+ * `worktree.listAllForHost` v1.3 response. Unchanged from v1.2; the minor
+ * bump is solely for the additive `forceRefresh` request field.
+ */
+export const worktreeListAllForHostResponseSchemaV13 =
+  worktreeListAllForHostResponseSchemaV12;
+export type WorktreeListAllForHostResponseV13 =
+  WorktreeListAllForHostResponseV12;
+
+/**
+ * `worktree.listAllForHost` v1.4 request. Unchanged from v1.3; the minor bump
+ * adds the response freshness marker only.
+ */
+export const worktreeListAllForHostRequestSchemaV14 =
+  worktreeListAllForHostRequestSchemaV13;
+export type WorktreeListAllForHostRequestV14 = WorktreeListAllForHostRequestV13;
+
+export const worktreeListAllForHostResponseSchemaV14 = z.object({
+  worktrees: z.array(worktreeHostEntrySchemaV14),
+  nextCursor: z.string().nullable(),
+});
+export type WorktreeListAllForHostResponseV14 = z.infer<
+  typeof worktreeListAllForHostResponseSchemaV14
+>;
 
 /**
  * Returns `null` when no row exists yet so a fresh terminal-agent
