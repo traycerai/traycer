@@ -13,7 +13,15 @@ export { serviceLabelFor, serviceManifestPath, windowsTaskName } from "./label";
 export type { CliInvocation } from "./cli-binary";
 export { resolveServiceCliInvocation } from "./cli-binary";
 
-export type ServiceState = "running" | "stopped" | "not-installed";
+// `externally-managed` (macOS only): the label is loaded in launchd from an
+// SMAppService in-bundle plist - Traycer Desktop owns the registration, not
+// the CLI. A registration EXISTS (so auto-bootstrap must not select "service
+// repair" and doctor must not render a not-registered error), but every CLI
+// service mutation (bootstrap/bootout/manifest rewrite) must leave it alone;
+// `installService` refuses it outright. Run-state is deliberately not folded
+// in: liveness checks key off pid metadata (`busy-check.ts`), never off this.
+export type ServiceState =
+  "running" | "stopped" | "not-installed" | "externally-managed";
 
 export interface ServiceStatus {
   readonly state: ServiceState;

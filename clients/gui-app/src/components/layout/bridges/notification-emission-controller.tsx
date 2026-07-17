@@ -12,11 +12,11 @@ export function NotificationEmissionController(): null {
   const showNotification = useNotificationShow();
   const { activate } = useNotificationActivation();
   const onToastClick = useCallback(
-    (row: MergedNotificationRow): void => {
+    (row: MergedNotificationRow, activatedAt: number): void => {
       if (row.payload === null) return;
       activate({
         payload: row.payload,
-        receivedAt: row.createdAt,
+        receivedAt: activatedAt,
         onActivated: null,
       });
     },

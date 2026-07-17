@@ -9,12 +9,16 @@
  *     to `submodules: []` / `gitlink: null`; old-GUI/new-host strips the v1.1
  *     response fields, and a v1.0 listChangedFiles request upgrades with
  *     `includeSubmodules: false` (parent-only, no fan-out).
- *  3. Stream no-leak - `subscribeStatus@1.0` frames stay parse-equivalent to
- *     today and carry no `gitlink` / `submodules`, even when a domain value does.
+ *  3. Stream minor-0 projection guard - `subscribeStatus@1.0` frames stay
+ *     parse-equivalent to today and carry no `gitlink` / `submodules` /
+ *     `nestedFingerprint`, even when fed a genuine v1.1 frame (this is the
+ *     client-side of the two independent projection guards).
  *  4. Simplified shapes - the minimal `submodulePointer` (pin equality via
  *     `diverged` + dirty/conflicted flags, no merge-base direction) and the
  *     working-tree-only `submoduleChangeset` (files + a `pointer`, no
  *     commits-ahead expansion).
+ *  5. Stream v1.1 frames - `subscribeStatus@1.1` nested-snapshot fixtures
+ *     round-trip (snapshot + updated with per-submodule `changedPaths`).
  */
 import { describe, it, expect } from "vitest";
 import {
@@ -32,6 +36,7 @@ import {
   gitListChangedFilesResponseSchema,
   gitListChangedFilesResponseSchemaV11,
   gitSubscribeStatusEventSchema,
+  gitSubscribeStatusEventSchemaV11,
   submoduleAvailabilitySchema,
   submoduleChangesetSchema,
   submodulePointerSchema,
@@ -114,14 +119,19 @@ describe("git.*@1.1 registry", () => {
     }
   });
 
-  it("leaves git.subscribeStatus frozen at v1.0 (stream, only version 0)", () => {
-    // subscribeStatus is a stream method - it must never gain a minor. Absence
-    // from the unary registry is not enough; assert the stream line itself.
+  it("registers git.subscribeStatus minors {0,1} on major 1 (nested-snapshot minor)", () => {
+    // subscribeStatus is a stream method - absence from the unary registry is
+    // structural; assert the stream line itself. The unary-v1.1 work froze the
+    // stream at 1.0; the watcher-driven-refresh plan DELIBERATELY reversed
+    // that scoping: minor 1 carries the nested snapshot, the v1.0 frame schema
+    // stays byte-frozen, and the HOST resolver projects frames for minor-0
+    // connections (streams have no version bridges). No new major, no new
+    // method name - both are handshake-fatal against released peers.
     expect("git.subscribeStatus" in hostRpcRegistry).toBe(false);
 
     const streamLine = hostStreamRpcRegistry["git.subscribeStatus"][1];
-    expect(streamLine.latestMinor).toBe(0);
-    expect(Object.keys(streamLine.versions)).toEqual(["0"]);
+    expect(streamLine.latestMinor).toBe(1);
+    expect(Object.keys(streamLine.versions)).toEqual(["0", "1"]);
   });
 });
 
@@ -180,7 +190,41 @@ describe("transport skew - old GUI (v1.0) against new host (v1.1)", () => {
   });
 });
 
-describe("subscribeStatus@1.0 no-leak", () => {
+// A genuine v1.1 snapshot frame - the fixture T5 (host projection) and T6
+// (renderer version-aware parse) tests build on.
+const v11SnapshotFrame = {
+  type: "snapshot" as const,
+  runningDir: "/repo",
+  headSha: "head-sha",
+  branch: "development",
+  files: [
+    { ...v10File, gitlink: null },
+    { ...v10File, path: "traycer", gitlink: gitlinkDescriptor },
+  ],
+  fingerprint: "fp-parent",
+  nestedFingerprint: "fp-nested",
+  repoMode: "normal" as const,
+  repoState: { kind: "clean" as const },
+  submodules: [submoduleChangeset],
+  pollStartedAtMs: 1_700_000_000,
+};
+
+// A genuine v1.1 updated frame - per-submodule `changedPaths` on top of the
+// snapshot's submodule section.
+const v11UpdatedFrame = {
+  ...v11SnapshotFrame,
+  type: "updated" as const,
+  changedPaths: [v10File.path],
+  submodules: [
+    {
+      ...submoduleChangeset,
+      changedPaths: ["clients/gui-app/src/app.tsx"],
+    },
+  ],
+  pollStartedAtMs: 1_700_000_001,
+};
+
+describe("subscribeStatus minor-0 projection guard (client side)", () => {
   const cleanSnapshot = {
     type: "snapshot" as const,
     runningDir: "/repo",
@@ -199,46 +243,69 @@ describe("subscribeStatus@1.0 no-leak", () => {
     );
   });
 
-  it("drops leaked gitlink AND top-level submodules from a snapshot", () => {
-    const leaky = {
-      ...cleanSnapshot,
-      files: [{ ...v10File, gitlink: gitlinkDescriptor }],
-      submodules: [submoduleChangeset],
-    };
-
-    const parsed = gitSubscribeStatusEventSchema.parse(leaky);
-    // Stripped back to the frozen shape - identical to the clean snapshot.
-    expect(parsed).toEqual(cleanSnapshot);
+  it("strips gitlink, submodules AND nestedFingerprint from a v1.1 snapshot", () => {
+    // The non-strict v1.0 parse is the RELEASED-CLIENT half of the two
+    // independent projection guards (the host resolver is the other): even if
+    // a v1.1 frame ever reached a v1.0 parser, every v1.1 field is dropped.
+    const parsed = gitSubscribeStatusEventSchema.parse(v11SnapshotFrame);
     expect("submodules" in parsed).toBe(false);
+    expect("nestedFingerprint" in parsed).toBe(false);
     if (parsed.type === "snapshot") {
       expect(parsed.files.every((file) => !("gitlink" in file))).toBe(true);
+      // Parent-only fingerprint semantics survive the strip untouched.
+      expect(parsed.fingerprint).toBe("fp-parent");
     } else {
       expect.fail("expected snapshot");
     }
   });
 
-  it("drops leaked gitlink AND top-level submodules from an updated frame", () => {
-    const leaky = {
-      type: "updated" as const,
-      runningDir: "/repo",
-      headSha: "head-sha",
-      branch: "development",
-      files: [{ ...v10File, gitlink: gitlinkDescriptor }],
-      fingerprint: "fp",
-      repoMode: "normal" as const,
-      repoState: { kind: "clean" as const },
-      changedPaths: [v10File.path],
-      pollStartedAtMs: 1_700_000_001,
-      submodules: [submoduleChangeset],
-    };
-
-    const parsed = gitSubscribeStatusEventSchema.parse(leaky);
+  it("strips gitlink, submodules AND nestedFingerprint from a v1.1 updated frame", () => {
+    const parsed = gitSubscribeStatusEventSchema.parse(v11UpdatedFrame);
     expect("submodules" in parsed).toBe(false);
+    expect("nestedFingerprint" in parsed).toBe(false);
     if (parsed.type === "updated") {
       expect(parsed.files.every((file) => !("gitlink" in file))).toBe(true);
+      expect(parsed.changedPaths).toEqual([v10File.path]);
     } else {
       expect.fail("expected updated");
     }
+  });
+});
+
+describe("subscribeStatus@1.1 nested-snapshot frames", () => {
+  it("round-trips a snapshot frame (submodules + nestedFingerprint + gitlink rows)", () => {
+    const parsed = gitSubscribeStatusEventSchemaV11.parse(v11SnapshotFrame);
+    expect(gitSubscribeStatusEventSchemaV11.parse(parsed)).toEqual(parsed);
+    if (parsed.type === "snapshot") {
+      expect(parsed.nestedFingerprint).toBe("fp-nested");
+      expect(parsed.fingerprint).toBe("fp-parent");
+      expect(parsed.submodules).toHaveLength(1);
+      expect(parsed.files[1].gitlink).toEqual(gitlinkDescriptor);
+      // Snapshot submodule sections carry full state, no delta.
+      expect("changedPaths" in parsed.submodules[0]).toBe(false);
+    } else {
+      expect.fail("expected snapshot");
+    }
+  });
+
+  it("round-trips an updated frame with per-submodule changedPaths", () => {
+    const parsed = gitSubscribeStatusEventSchemaV11.parse(v11UpdatedFrame);
+    expect(gitSubscribeStatusEventSchemaV11.parse(parsed)).toEqual(parsed);
+    if (parsed.type === "updated") {
+      expect(parsed.changedPaths).toEqual([v10File.path]);
+      expect(parsed.submodules[0].changedPaths).toEqual([
+        "clients/gui-app/src/app.tsx",
+      ]);
+      expect(parsed.submodules[0].parentPath).toBe("traycer");
+    } else {
+      expect.fail("expected updated");
+    }
+  });
+
+  it("keeps the error variant identical across minors", () => {
+    const error = { type: "error" as const, message: "boom", isFatal: false };
+    expect(gitSubscribeStatusEventSchemaV11.parse(error)).toEqual(error);
+    expect(gitSubscribeStatusEventSchema.parse(error)).toEqual(error);
   });
 });
 

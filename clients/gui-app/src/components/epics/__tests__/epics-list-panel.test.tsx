@@ -149,7 +149,7 @@ const testState = vi.hoisted(() => ({
   items: [] as HistoryItem[],
   availableRepos: [] as string[],
   availableWorkspaces: [] as HistoryItem["linkedWorkspaces"],
-  activityByEpicId: new Map<string, "idle" | "running">(),
+  activityByEpicId: new Map<string, "idle" | "turn" | "background">(),
   facets: {
     repos: [] as HistoryFacets["repos"],
     workspaces: [] as HistoryFacets["workspaces"],
@@ -590,13 +590,27 @@ describe("<EpicsListPanel />", () => {
   });
 
   it("shows the running activity status on history rows", async () => {
-    testState.activityByEpicId.set("epic-from-history", "running");
+    testState.activityByEpicId.set("epic-from-history", "turn");
     renderPanel("embedded", "/");
 
     expect(
       await screen.findByTestId("epics-list-row-activity-epic-from-history"),
     ).toBeDefined();
     expect(screen.queryByTitle("Task activity in progress")).not.toBeNull();
+  });
+
+  it("shows the background activity status on history rows", async () => {
+    testState.activityByEpicId.set("epic-from-history", "background");
+    renderPanel("embedded", "/");
+
+    expect(
+      await screen.findByTestId(
+        "epics-list-row-background-activity-epic-from-history",
+      ),
+    ).toBeDefined();
+    expect(
+      screen.queryByTitle("Background tasks running — task idle"),
+    ).not.toBeNull();
   });
 
   it("selects a history row from the outside checkbox without opening the epic", async () => {

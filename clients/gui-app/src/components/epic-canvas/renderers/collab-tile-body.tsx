@@ -174,7 +174,11 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
   );
   const editorRootRef = useRef<HTMLDivElement>(null);
   const epicId = useOpenEpicId();
-  const artifactLinkOpener = useArtifactLinkOpener({ epicId, viewTabId });
+  const artifactLinkOpener = useArtifactLinkOpener({
+    epicId,
+    artifactId: node.id,
+    viewTabId,
+  });
   const commentArtifactKind =
     node.type === WORKSPACE_FILE_TAB_KIND
       ? null

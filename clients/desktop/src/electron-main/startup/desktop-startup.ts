@@ -124,6 +124,8 @@ import {
 } from "../config/desktop-config";
 import { installHostWakeRecovery } from "./host-wake-recovery";
 import { startHostHealthMonitor } from "../host/host-health-monitor";
+import { startPendingLoginItemRevisionMonitor } from "../host/pending-login-item-revision-monitor";
+import { hostManagesHostLoginItem } from "../app/host-login-item";
 import { DESKTOP_APP_NAME } from "../../config";
 
 // Per-window fresh-snapshot query budget during `before-quit`. Each renderer,
@@ -595,6 +597,32 @@ function runDeferred(state: BootState, services: AppServices): void {
     });
     state.bridge?.disposeFns.push(() => healthMonitor.dispose());
   });
+
+  // macOS-only: guarantees a busy-preserved install's pending LaunchAgent
+  // revision (see `desktop-install-cloud.js`'s marker + `host-ensure-ipc.ts`'s
+  // `applyPendingLoginItemRevisionIfIdle`) gets applied within this running
+  // session once the host goes idle, not only at the next relaunch - the
+  // renderer's ensure fast path only gets one shot at it per app launch.
+  // Gated on `hostManagesHostLoginItem()` since a non-macOS build, a dev
+  // build, or a build without the in-bundle plist never has SMAppService
+  // registration (or a marker) to refresh in the first place.
+  if (process.platform === "darwin") {
+    void hostReady.then(async () => {
+      const bridge = state.bridge;
+      if (bridge === null) return;
+      if (!(await hostManagesHostLoginItem())) return;
+      const revisionMonitor = startPendingLoginItemRevisionMonitor({
+        bridge,
+        intervalMs: undefined,
+        environment: undefined,
+        hasPendingRevision: undefined,
+        canReach: undefined,
+        isRefreshQuarantined: undefined,
+        runEnsure: undefined,
+      });
+      state.bridge?.disposeFns.push(() => revisionMonitor.dispose());
+    });
+  }
 
   void timed("deferred", "registry-probe", async () => {
     // `force: true` - matches the app's own `checkForUpdatesNow` on launch

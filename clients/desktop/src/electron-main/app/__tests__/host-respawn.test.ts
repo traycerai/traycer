@@ -161,6 +161,19 @@ describe("respawnHost - host-owned login item path", () => {
     expect(waitForHostReady).not.toHaveBeenCalled();
   });
 
+  it("returns silently (no error, no readiness wait) when the locked register cycle reports removed-by-user mid-respawn", async () => {
+    // "Remove Traycer" ran while this respawn waited on the registration
+    // lock - the cycle refused to resurrect the login item, and the respawn
+    // must treat that like its own entry check: skip, don't error.
+    const host = new FakeHost();
+    hostManagesHostLoginItem.mockResolvedValueOnce(true);
+    registerHostLoginItem.mockResolvedValueOnce("removed-by-user");
+
+    await expect(respawnHost(host)).resolves.toBeUndefined();
+    expect(waitForHostReady).not.toHaveBeenCalled();
+    expect(host.respawnCalls).toBe(0);
+  });
+
   it("re-reads login-item status after a readiness timeout and substitutes the approval message when the user toggled it off mid-wait", async () => {
     const host = new FakeHost();
     hostManagesHostLoginItem.mockResolvedValueOnce(true);

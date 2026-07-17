@@ -25,6 +25,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
 import {
   readStagedWorktreeIntent,
+  stagedWorktreeIntentIsSuspended,
   useWorktreeIntentStagingStore,
   type WorktreeStagingKey,
 } from "@/stores/worktree/worktree-intent-staging-store";
@@ -585,6 +586,7 @@ export function useLandingComposerActions(): LandingComposerActions {
   const submit = useCallback(
     (args: LandingComposerSubmitArgs) => {
       const workspaceContext = readLandingWorkspaceContext();
+      if (workspaceContext.worktreeIntentSuspended) return;
       dispatchSubmission(args, workspaceContext);
       clearConsumedLandingWorktreeIntent(workspaceContext);
     },
@@ -594,6 +596,7 @@ export function useLandingComposerActions(): LandingComposerActions {
   const selectTerminalAgent = useCallback(
     (launch: TerminalAgentLaunch) => {
       const workspaceContext = readLandingWorkspaceContext();
+      if (workspaceContext.worktreeIntentSuspended) return;
       dispatchTerminalAgent(launch, workspaceContext);
       clearConsumedLandingWorktreeIntent(workspaceContext);
     },
@@ -615,6 +618,7 @@ interface LandingWorkspaceContext {
     Record<string, WorkspaceFolderInfo>
   >;
   readonly worktreeIntent: WorktreeIntent | null;
+  readonly worktreeIntentSuspended: boolean;
   readonly workspaceMode: WorktreeBindingWorkspaceMode;
   readonly activeDraftId: string | null;
 }
@@ -632,10 +636,15 @@ function readLandingWorkspaceContext(): LandingWorkspaceContext {
     surface: "landing",
     draftId: activeDraftId,
   });
+  const worktreeIntentSuspended = stagedWorktreeIntentIsSuspended({
+    surface: "landing",
+    draftId: activeDraftId,
+  });
   if (activeDraft !== null) {
     return {
       ...canonicalLaunchWorkspace(activeDraft.workspace, stagedWorktreeIntent),
       workspaceFolderInfoByPath: activeDraft.workspace.folderInfoByPath,
+      worktreeIntentSuspended,
       activeDraftId,
     };
   }
@@ -650,6 +659,7 @@ function readLandingWorkspaceContext(): LandingWorkspaceContext {
       stagedWorktreeIntent,
     ),
     workspaceFolderInfoByPath: globalState.folderInfoByPath,
+    worktreeIntentSuspended,
     activeDraftId: null,
   };
 }

@@ -49,6 +49,7 @@ interface ProviderRateLimitCacheState {
 export const PASSIVE_PROVIDER_RATE_LIMIT_OPTIONS: ProviderRateLimitTanstackOptions =
   {
     enabled: false,
+    gcTime: Infinity,
     retry: false,
     staleTime: PROVIDER_RATE_LIMITS_STALE_TIME_MS,
     refetchInterval: false,

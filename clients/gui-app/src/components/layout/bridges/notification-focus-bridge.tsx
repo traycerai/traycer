@@ -1,5 +1,4 @@
 import { useEffect } from "react";
-import { useNavigate } from "@tanstack/react-router";
 import { parseNotificationPayload } from "@/lib/notifications";
 import { useNotificationActivation } from "@/hooks/notifications/use-notification-activation";
 import { useNotificationEventsStore } from "@/stores/notifications/notification-events-store";
@@ -20,6 +19,7 @@ import { useNotificationsPopoverStore } from "@/stores/notifications/notificatio
  *                 (and `focusThreadId` when present) when `payload.epicId`
  *                 is known
  *   - `chat` / `approval` / `interview` → then navigate to the owning chat
+ *   - `terminal` → then navigate to the exact task tab and terminal tile
  *   - `session` / artifact-without-epic → open only
  *
  * `receivedAt` is forwarded as `focusedAt` so repeat clicks of the same
@@ -29,7 +29,6 @@ export function NotificationFocusBridge(): null {
   const notificationEvent = useNotificationEventsStore(
     (state) => state.notificationEvent,
   );
-  const navigate = useNavigate();
   const { activate } = useNotificationActivation();
 
   useEffect(() => {
@@ -39,7 +38,9 @@ export function NotificationFocusBridge(): null {
 
     const parsed = parseNotificationPayload(notificationEvent.payload);
 
-    useNotificationsPopoverStore.getState().setOpen(true);
+    if (notificationEvent.openPopover) {
+      useNotificationsPopoverStore.getState().setOpen(true);
+    }
 
     if (parsed === null) {
       return;
@@ -48,6 +49,7 @@ export function NotificationFocusBridge(): null {
     if (
       parsed.kind === "epic" ||
       parsed.kind === "chat" ||
+      parsed.kind === "terminal" ||
       parsed.kind === "approval" ||
       parsed.kind === "interview"
     ) {
@@ -66,7 +68,7 @@ export function NotificationFocusBridge(): null {
         onActivated: null,
       });
     }
-  }, [notificationEvent, navigate, activate]);
+  }, [notificationEvent, activate]);
 
   return null;
 }

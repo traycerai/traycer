@@ -5,6 +5,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ClipboardEvent,
   type DragEvent,
   type RefObject,
 } from "react";
@@ -19,6 +20,10 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { CanvasAddon } from "@xterm/addon-canvas";
 import "@xterm/xterm/css/xterm.css";
 import { useRegisterTileFindAdapter } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
+import {
+  isPlainBoundaryKey,
+  isPlatformModifiedBoundaryKey,
+} from "@/lib/keybindings/chord";
 import { isMac } from "@/lib/keybindings/platform";
 import { translateLineEditChord } from "@/lib/terminal-line-edit";
 import {
@@ -31,6 +36,7 @@ import {
   buildFontFamilyValue,
 } from "@/lib/default-font-stacks";
 import { useRunnerHost } from "@/providers/use-runner-host";
+import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { cn } from "@/lib/utils";
 import { useTerminalTheme } from "@/lib/terminal-theme";
 import { scheduleAtlasClear } from "@/lib/terminal-theme-scheduler";
@@ -72,7 +78,7 @@ interface XtermInitialOptions extends ITerminalOptions {
   };
 }
 
-const TERMINAL_DRAG_PATH_ESCAPE_PATTERN = /([\\\s!"#$&'()*;<>?[\]^`{|}])/g;
+const TERMINAL_PATH_ESCAPE_PATTERN = /([\\\s!"#$&'()*;<>?[\]^`{|}])/g;
 const getEmptyFindTargetId = (): string | null => null;
 const ignoreSearchResults = (): void => {};
 
@@ -137,13 +143,18 @@ export interface TerminalXtermHostProps {
    */
   readonly shouldFocusOnActivePane: boolean;
   /**
-   * Whether the underlying terminal session is still live (a running
-   * terminal-agent). The host keeps the persistent xterm engine cached across
-   * unmount when true, so splitting a pane / switching tabs / reopening does not
-   * dispose the `Terminal` and lose its scrollback. Plain terminals (and exited
-   * agents) pass false: their session handle is torn down on unmount too, so the
-   * next open rebuilds both and replays a fresh host snapshot. Mirrors the
-   * keep-lease-free rule in `TerminalSessionRegistry`.
+   * Whether the underlying terminal session is still live. The host keeps the
+   * persistent xterm engine cached across unmount when true, so splitting a
+   * pane / switching tabs / reopening does not dispose the `Terminal` and lose
+   * its scrollback. Mirrors the lease-free retention rules in
+   * `TerminalSessionRegistry`: a running terminal-agent's handle is kept warm
+   * indefinitely and a running plain terminal's lingers for the release-linger
+   * window, and in both cases the session store's writer keeps pointing at
+   * this engine - so the engine must outlive the unmount with it, or the
+   * reattach would render blank (the host snapshot was already consumed).
+   * Exited sessions pass false: their handle is torn down with the tile, and
+   * the registry follower disposes any cached engine once the handle leaves
+   * the session registry.
    */
   readonly keepAlive: boolean;
   /**
@@ -387,6 +398,13 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
   });
   useActiveTerminalFocus(termRef, props.shouldFocusOnActivePane);
 
+  const pastePaths = useCallback((paths: readonly string[]): void => {
+    const input = terminalPathInput(uniquePaths(paths));
+    if (input.length === 0) return;
+    termRef.current?.paste(input);
+    termRef.current?.focus();
+  }, []);
+
   const handleDragEnter = useCallback(
     (event: DragEvent<HTMLDivElement>): void => {
       if (!dataTransferHasFiles(event.dataTransfer)) return;
@@ -429,38 +447,36 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
       event.stopPropagation();
       dragDepthRef.current = 0;
       setIsDraggingFiles(false);
-      const files = collectDroppedFiles(event.dataTransfer);
-      // File-URL drops are a fallback for sources that expose no `File` object -
-      // notably the macOS screenshot thumbnail. Those URLs point at an ephemeral
-      // file the OS reclaims shortly after the drag, so they are copied into a
-      // stable app-managed temp file (`copyDroppedFilePaths`) rather than pasted
-      // verbatim - otherwise the running program reads the path after the source
-      // is gone and silently drops it. When real `File` objects are present
-      // (Finder drags), their duplicate `text/uri-list` entry is ignored so the
-      // user's real path is pasted, not a temp copy.
-      const fileUrlPaths =
-        files.length === 0
-          ? collectDroppedFileUrlPaths(event.dataTransfer)
-          : [];
-      if (files.length === 0 && fileUrlPaths.length === 0) return;
-      const resolvedFilePaths =
-        files.length === 0
-          ? Promise.resolve([] as readonly string[])
-          : runnerHost.fileDrops.resolveDroppedFilePaths(files);
-      const stableUrlPaths =
-        fileUrlPaths.length === 0
-          ? Promise.resolve([] as readonly string[])
-          : runnerHost.fileDrops.copyDroppedFilePaths(fileUrlPaths);
-      void Promise.all([resolvedFilePaths, stableUrlPaths])
-        .then(([paths, urlPaths]) => {
-          const input = droppedPathInput(uniquePaths([...paths, ...urlPaths]));
-          if (input.length === 0) return;
-          termRef.current?.paste(input);
-          termRef.current?.focus();
+      const resolvedPaths = resolveFileTransferPaths(
+        event.dataTransfer,
+        runnerHost.fileDrops,
+      );
+      if (resolvedPaths === null) return;
+      void resolvedPaths
+        .then((paths) => {
+          pastePaths(paths);
         })
         .catch(() => undefined);
     },
-    [runnerHost.fileDrops, setIsDraggingFiles],
+    [pastePaths, runnerHost.fileDrops, setIsDraggingFiles],
+  );
+
+  const handlePaste = useCallback(
+    (event: ClipboardEvent<HTMLDivElement>): void => {
+      const resolvedPaths = resolveFileTransferPaths(
+        event.clipboardData,
+        runnerHost.fileDrops,
+      );
+      if (resolvedPaths === null) return;
+      event.preventDefault();
+      event.stopPropagation();
+      void resolvedPaths
+        .then((paths) => {
+          pastePaths(paths);
+        })
+        .catch(() => undefined);
+    },
+    [pastePaths, runnerHost.fileDrops],
   );
 
   // `absolute inset-0` sidesteps the percentage-height chain (`h-full` →
@@ -475,8 +491,11 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
   // directly and is robust to initial-mount timing.
   //
   // `mountRef` is the imperative attach point for the persistent xterm
-  // container (owned by the registry, not React) and carries the file-drop
+  // container (owned by the registry, not React) and carries the file-transfer
   // handlers so it stays the direct parent of `data-testid="terminal-xterm-host"`.
+  // Paste uses capture because xterm handles clipboard events on its hidden
+  // textarea; file clipboard entries must be claimed before that target handler
+  // discards their empty text payload.
   // The drag overlay is a React sibling so React never reconciles around the
   // foreign container node.
   return (
@@ -491,6 +510,7 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
+        onPasteCapture={handlePaste}
       />
       {isDraggingFiles ? (
         <div
@@ -792,6 +812,43 @@ function createXtermEntry(
   };
 }
 
+function handleTerminalScrollKey(
+  term: Terminal,
+  event: KeyboardEvent,
+): boolean | null {
+  // Scroll-to-top/bottom on Cmd+Home/End (macOS) / Ctrl+Home/End (elsewhere),
+  // with VS Code's !terminalAltBufferActive gating: jump the viewport on the
+  // normal buffer, pass through on the alternate one so the program sees the
+  // chord. On macOS plain Home/End scroll too - Terminal.app convention, where
+  // line editing at the prompt is Cmd+arrows / Ctrl-A/E instead. Off-mac they
+  // stay shell line-edit keys.
+  if (
+    isPlatformModifiedBoundaryKey(event) ||
+    (isMac() && isPlainBoundaryKey(event))
+  ) {
+    if (term.buffer.active.type === "alternate") return true;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.key === "Home") {
+      term.scrollToTop();
+    } else {
+      term.scrollToBottom();
+    }
+    return false;
+  }
+
+  // Page keys scroll the viewport only on the normal buffer. Fullscreen
+  // programs (less, vim - the alternate buffer) have no scrollback to reveal;
+  // let xterm encode CSI 5~/6~ so the pager pages natively, matching VS Code's
+  // !terminalAltBufferActive gating.
+  if (event.key !== "PageUp" && event.key !== "PageDown") return null;
+  if (term.buffer.active.type === "alternate") return true;
+  event.preventDefault();
+  event.stopPropagation();
+  term.scrollPages(event.key === "PageUp" ? -1 : 1);
+  return false;
+}
+
 function handleTerminalCustomKeyEvent(
   term: Terminal,
   event: KeyboardEvent,
@@ -808,6 +865,11 @@ function handleTerminalCustomKeyEvent(
     term.input(lineEdit, true);
     return false;
   }
+
+  // Must precede the Mac Cmd-chord early-return below: alternate-buffer
+  // Home/End explicitly bypass that generic guard and reach the program.
+  const scrollKeyResult = handleTerminalScrollKey(term, event);
+  if (scrollKeyResult !== null) return scrollKeyResult;
 
   // Preserve Mac clipboard / select-all once the kitty protocol is on. With
   // kitty active inside a TUI, xterm would otherwise CSI-u encode Cmd chords
@@ -826,13 +888,6 @@ function handleTerminalCustomKeyEvent(
     // to the browser so its keydown->copy/paste pipeline (which drives xterm's
     // clipboard events) runs. Do NOT preventDefault - that pipeline needs the
     // default action.
-    return false;
-  }
-
-  if (event.key === "PageUp" || event.key === "PageDown") {
-    event.preventDefault();
-    event.stopPropagation();
-    term.scrollPages(event.key === "PageUp" ? -1 : 1);
     return false;
   }
 
@@ -867,6 +922,32 @@ function collectDroppedFiles(dataTransfer: DataTransfer): readonly File[] {
     const file = item.getAsFile();
     return file === null ? [] : [file];
   });
+}
+
+function resolveFileTransferPaths(
+  dataTransfer: DataTransfer,
+  fileDrops: IRunnerHost["fileDrops"],
+): Promise<readonly string[]> | null {
+  const files = collectDroppedFiles(dataTransfer);
+  // File URLs are a fallback for sources that expose no `File` object - notably
+  // macOS screenshot thumbnails. Their backing file can disappear after either
+  // a drag or paste, so copy it into an app-managed temporary location before
+  // insertion. Real Finder files can carry a duplicate URI list; favor their
+  // original path rather than a copied one.
+  const fileUrlPaths =
+    files.length === 0 ? collectDroppedFileUrlPaths(dataTransfer) : [];
+  if (files.length === 0 && fileUrlPaths.length === 0) return null;
+  const resolvedFilePaths =
+    files.length === 0
+      ? Promise.resolve([] as readonly string[])
+      : fileDrops.resolveDroppedFilePaths(files);
+  const stableUrlPaths =
+    fileUrlPaths.length === 0
+      ? Promise.resolve([] as readonly string[])
+      : fileDrops.copyDroppedFilePaths(fileUrlPaths);
+  return Promise.all([resolvedFilePaths, stableUrlPaths]).then(
+    ([paths, urlPaths]) => [...paths, ...urlPaths],
+  );
 }
 
 function collectDroppedFileUrlPaths(
@@ -949,12 +1030,12 @@ function uniquePaths(paths: readonly string[]): readonly string[] {
   return Array.from(new Set(paths.filter((path) => path.length > 0)));
 }
 
-function droppedPathInput(paths: readonly string[]): string {
-  return paths.map(escapeTerminalDragPath).join(" ");
+function terminalPathInput(paths: readonly string[]): string {
+  return paths.map(escapeTerminalPath).join(" ");
 }
 
-function escapeTerminalDragPath(path: string): string {
-  return path.replace(TERMINAL_DRAG_PATH_ESCAPE_PATTERN, "\\$1");
+function escapeTerminalPath(path: string): string {
+  return path.replace(TERMINAL_PATH_ESCAPE_PATTERN, "\\$1");
 }
 
 function useTerminalFindRegistration(

@@ -361,7 +361,70 @@ describe("chat.subscribe@1.2 server frames", () => {
       status: "completed",
       blockId: "wake-tool-1",
       outputFile: null,
+      mcp: null,
     });
+  });
+
+  it("defaults the trigger mcp identity on pre-mcp data and round-trips it when present", () => {
+    const legacy = autonomousResumeTriggerSchema.parse({
+      kind: "command",
+      title: "probe/slow_op",
+      summary: "MCP tool finished",
+      status: "completed",
+      blockId: "tool-9",
+      outputFile: null,
+    });
+    expect(legacy.mcp).toBeNull();
+
+    const mcpTrigger = autonomousResumeTriggerSchema.parse({
+      kind: "command",
+      title: "probe/slow_op",
+      summary: "MCP tool finished",
+      status: "completed",
+      blockId: "tool-9",
+      outputFile: null,
+      mcp: { serverName: "probe", toolName: "slow_op" },
+    });
+    expect(mcpTrigger.kind).toBe("command");
+    expect(mcpTrigger.mcp).toEqual({ serverName: "probe", toolName: "slow_op" });
+  });
+
+  it("parses mcp background items on 1.4, defaulting startedAt for old-host frames", () => {
+    const mcpItem = {
+      taskId: "task-9",
+      kind: "mcp",
+      title: "probe/slow_op",
+      blockId: "tool-9",
+      parentTaskId: null,
+      serverName: "probe",
+      toolName: "slow_op",
+    };
+    const frame = (backgroundItem: Record<string, unknown>) => ({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      runStatus: "running",
+      activeTurn: null,
+      backgroundItems: [backgroundItem],
+    });
+
+    expect(chatSubscribeV14.serverFrameSchema.parse(frame(mcpItem))).toMatchObject({
+      backgroundItems: [{ ...mcpItem, startedAt: null }],
+    });
+    expect(
+      chatSubscribeV14.serverFrameSchema.parse(
+        frame({ ...mcpItem, startedAt: 1_700_000_000_000 }),
+      ),
+    ).toMatchObject({
+      backgroundItems: [{ ...mcpItem, startedAt: 1_700_000_000_000 }],
+    });
+    // The released ≤1.3 lines must never observe the kind at all.
+    expect(
+      chatSubscribeV13.serverFrameSchema.safeParse(
+        frame({ ...mcpItem, startedAt: 1_700_000_000_000 }),
+      ).success,
+    ).toBe(false);
   });
 
   it("parses action acknowledgements for accepted and rejected owner actions", () => {

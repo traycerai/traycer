@@ -14,10 +14,14 @@ import {
   type QueryKey,
 } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/index";
-import type { WorktreeListAllForHostResponseV12 } from "@traycer/protocol/host/worktree-schemas";
+import type { WorktreeHostEntryV14 } from "@traycer/protocol/host/index";
+import type { WorktreeListAllForHostResponseV14 } from "@traycer/protocol/host/worktree-schemas";
 import { type HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
+import {
+  isPerPathEnrichmentQueryKey,
+  perPathEnrichmentQueryPath,
+} from "@/lib/query-keys/worktree-enrichment-keys";
 import { logPerfEvent } from "@/lib/perf/perf-telemetry";
 import { useHostQueries } from "@/hooks/host/use-host-queries";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
@@ -29,7 +33,7 @@ import {
 } from "@/components/settings/panels/worktrees-enrichment-persistence";
 
 const EMPTY_PATHS: readonly string[] = [];
-const EMPTY_ENRICHED: ReadonlyMap<string, WorktreeHostEntryV12> = new Map();
+const EMPTY_ENRICHED: ReadonlyMap<string, WorktreeHostEntryV14> = new Map();
 const EMPTY_SEEDED: ReadonlySet<string> = new Set();
 const EMPTY_ERRORED: ReadonlySet<string> = new Set();
 // The boundary between snapshot-seeded and live cache data: the warm-open
@@ -105,13 +109,16 @@ interface SweepRetryState {
 
 // The per-path enrichment params, shared by the viewport observers and the
 // background sweep so both produce identical query keys - the cache fold and
-// TanStack's request dedupe both hinge on that identity.
+// TanStack's request dedupe both hinge on that identity. `forceRefresh` is
+// pinned to its canonical `false`: it is a fetch directive, so every automatic
+// enrichment/refetch lands in the same entry and remains a cache-only host read.
 function perPathEnrichmentParams(path: string) {
   return {
     includeActivity: true,
     activityPaths: [path],
     cursor: null,
     limit: null,
+    forceRefresh: false,
   };
 }
 
@@ -122,7 +129,7 @@ function perPathEnrichmentParams(path: string) {
 // owned submodule's PR fact is still warming (the detached-submodule shape),
 // and one unproven submodule holds the whole row in Review.
 function responseHasColdPrState(
-  response: WorktreeListAllForHostResponseV12,
+  response: WorktreeListAllForHostResponseV14,
 ): boolean {
   return response.worktrees.some(
     (entry) =>
@@ -236,7 +243,7 @@ function selectSweepChunk(args: {
     // Paths in the reported window are viewport-owned: their observers fetch
     // them and their cold retries run on the viewport's own ledger.
     if (viewportPaths.has(path)) continue;
-    const state = queryClient.getQueryState<WorktreeListAllForHostResponseV12>(
+    const state = queryClient.getQueryState<WorktreeListAllForHostResponseV14>(
       perPathEnrichmentQueryKey(hostId, path),
     );
     if (state?.fetchStatus === "fetching") continue;
@@ -264,33 +271,6 @@ function selectSweepChunk(args: {
 }
 
 // A `worktree.listAllForHost` query key is `["host", hostId, method, params]`
-// (see `hostQueryKeys.method`). The panel's per-path enrichment queries are the
-// only ones whose `activityPaths` is an array (`[path]`); the base list and the
-// task-delete whole-list query both pass `activityPaths: null`. Folding ONLY the
-// per-path queries keeps the overlay to fully-enriched, on-screen-driven data -
-// crucially it EXCLUDES the base list's `includeActivity: false` entries, so an
-// un-probed row stays "pending" (absent from the overlay) instead of being
-// classified from base-only fields.
-function isPerPathEnrichmentQueryKey(key: QueryKey): boolean {
-  const params = key[3];
-  if (typeof params !== "object" || params === null) return false;
-  if (!("activityPaths" in params)) return false;
-  return Array.isArray(params.activityPaths);
-}
-
-// The worktree path a per-path enrichment key targets (`activityPaths[0]`),
-// or null for any other key under the method scope. Used by the warm-open
-// restore to invalidate exactly the seeded queries in ONE cache scan.
-function perPathEnrichmentQueryPath(key: QueryKey): string | null {
-  const params = key[3];
-  if (typeof params !== "object" || params === null) return null;
-  if (!("activityPaths" in params)) return null;
-  const { activityPaths } = params;
-  return Array.isArray(activityPaths) && typeof activityPaths[0] === "string"
-    ? activityPaths[0]
-    : null;
-}
-
 function queryKeyHasPrefix(key: unknown, prefix: readonly unknown[]): boolean {
   if (!Array.isArray(key)) return false;
   return (
@@ -301,14 +281,14 @@ function queryKeyHasPrefix(key: unknown, prefix: readonly unknown[]): boolean {
 function foldEnrichedWorktrees(
   queryClient: QueryClient,
   methodScope: readonly unknown[],
-): ReadonlyMap<string, WorktreeHostEntryV12> {
-  const entries = queryClient.getQueriesData<WorktreeListAllForHostResponseV12>(
+): ReadonlyMap<string, WorktreeHostEntryV14> {
+  const entries = queryClient.getQueriesData<WorktreeListAllForHostResponseV14>(
     {
       queryKey: methodScope,
       predicate: (query) => isPerPathEnrichmentQueryKey(query.queryKey),
     },
   );
-  const map = new Map<string, WorktreeHostEntryV12>();
+  const map = new Map<string, WorktreeHostEntryV14>();
   for (const [, data] of entries) {
     if (data === undefined) continue;
     for (const entry of data.worktrees) map.set(entry.worktreePath, entry);
@@ -337,7 +317,7 @@ function foldEnrichedWorktrees(
 export function useCachedWorktreeEnrichment(
   queryClient: QueryClient,
   hostId: string | null,
-): ReadonlyMap<string, WorktreeHostEntryV12> {
+): ReadonlyMap<string, WorktreeHostEntryV14> {
   const methodScope = useMemo(
     () => hostQueryKeys.methodScope(hostId, "worktree.listAllForHost"),
     [hostId],
@@ -345,7 +325,7 @@ export function useCachedWorktreeEnrichment(
   // Cached fold + the scope it was folded for, so the snapshot is recomputed on a
   // relevant cache event OR a host change, and is otherwise referentially stable.
   const snapshotRef =
-    useRef<ReadonlyMap<string, WorktreeHostEntryV12>>(EMPTY_ENRICHED);
+    useRef<ReadonlyMap<string, WorktreeHostEntryV14>>(EMPTY_ENRICHED);
   const snapshotScopeRef = useRef<readonly unknown[] | null>(null);
   const dirtyRef = useRef(true);
 
@@ -390,7 +370,7 @@ export function useCachedWorktreeEnrichment(
   );
   const getSnapshot = useCallback((): ReadonlyMap<
     string,
-    WorktreeHostEntryV12
+    WorktreeHostEntryV14
   > => {
     if (!dirtyRef.current && snapshotScopeRef.current === methodScope) {
       return snapshotRef.current;
@@ -464,7 +444,7 @@ export function useWorktreeActivityEnrichment(
   // denominator. The viewport machinery works purely off reported paths.
   worktreePaths: readonly string[],
 ): {
-  readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV12>;
+  readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV14>;
   // Paths whose per-path enrichment query SETTLED to an error (retries exhausted).
   // A path here is distinct from one still in flight: the row must stop reading as
   // progress and fall back to a non-animated "Unknown" pill instead of spinning
@@ -638,9 +618,9 @@ export function useWorktreeActivityEnrichment(
     for (const entry of snapshot.entries) {
       const key = perPathEnrichmentQueryKey(hostId, entry.worktreePath);
       const state =
-        queryClient.getQueryState<WorktreeListAllForHostResponseV12>(key);
+        queryClient.getQueryState<WorktreeListAllForHostResponseV14>(key);
       if (state?.data !== undefined) continue;
-      queryClient.setQueryData<WorktreeListAllForHostResponseV12>(
+      queryClient.setQueryData<WorktreeListAllForHostResponseV14>(
         key,
         { worktrees: [entry], nextCursor: null },
         // The snapshot's own age: restored entries are stale from birth, so
@@ -839,7 +819,7 @@ export function useWorktreeActivityEnrichment(
           // stays consumed), while a successful-but-cold refetch clears it
           // (→ false: the NEXT refresh may grant a fresh budget again).
           const stateNow =
-            queryClient.getQueryState<WorktreeListAllForHostResponseV12>(
+            queryClient.getQueryState<WorktreeListAllForHostResponseV14>(
               perPathEnrichmentQueryKey(sweepHostId, path),
             );
           ledger.set(path, {
@@ -908,7 +888,7 @@ export function useWorktreeActivityEnrichment(
     const seeded = new Set<string>();
     for (const path of enrichedByPath.keys()) {
       const state =
-        queryClient.getQueryState<WorktreeListAllForHostResponseV12>(
+        queryClient.getQueryState<WorktreeListAllForHostResponseV14>(
           perPathEnrichmentQueryKey(hostId, path),
         );
       if (state !== undefined && state.dataUpdatedAt < APP_SESSION_START_MS) {

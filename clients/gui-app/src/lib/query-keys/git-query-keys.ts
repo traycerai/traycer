@@ -38,11 +38,15 @@ export const gitQueryKeys = {
     ] as const,
 
   /**
-   * Query key for the submodule-aware `git.listChangedFiles@1.1` nested
-   * snapshot (parent changeset + `submodules[]`). A distinct slot from
-   * `listChangedFiles` so the frozen v1.0 `subscribeStatus` stream, which feeds
-   * the v1.0 slot, never clobbers the richer nested snapshot. The passive fetch
-   * and the manual refresh (a plain `invalidateQueries`) share this stable slot.
+   * Query key for the submodule-aware nested snapshot (parent changeset +
+   * `submodules[]`) - the RICH slot. A distinct slot from `listChangedFiles`
+   * so a minor-0 `subscribeStatus` frame (which feeds the v1.0 slot) never
+   * clobbers the richer nested snapshot. Ownership is exclusive per the
+   * negotiated stream version: minor >= 1 frames write it (stream-generation
+   * guarded); otherwise the unary query + dirty timer own it. Manual refresh
+   * is an explicit generation-aware `fetchQuery({ staleTime: 0 })`
+   * (`use-git-submodule-snapshot-refresh.ts`) - NEVER `invalidateQueries`,
+   * which cannot refetch the query while stream ownership keeps it disabled.
    */
   listChangedFilesWithSubmodules: (
     hostId: string | null,

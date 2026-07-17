@@ -98,13 +98,14 @@ let followerInstalled = false;
 
 /**
  * Evict any kept-alive engine whose tab instance has left the
- * `TerminalSessionRegistry`. Plain terminals release their engine eagerly
- * (`releaseXtermHost(..., false)`), so by the time the session-membership
- * change fires there is nothing to evict here. The follower's job is the
- * terminal-agent case: an agent kept lease-free (tab closed, agent still
- * running) keeps its engine alive for instant reopen, and this drops that
- * engine once the agent exits and the session registry evicts the handle. The
- * registry keys handles by `instanceId` too, so the membership sets line up.
+ * `TerminalSessionRegistry`. Live sessions keep their engine cached across
+ * unmount (`releaseXtermHost(..., true)`) - terminal-agents for as long as the
+ * agent runs, plain terminals for the registry's release-linger window - so
+ * the engine's true owner is the session handle, and this follower is what
+ * finally disposes the engine when the registry evicts that handle (agent
+ * exit, linger expiry, or a forced release). Only exited sessions release
+ * their engine eagerly. The registry keys handles by `instanceId` too, so the
+ * membership sets line up.
  */
 function installFollowerOnce(): void {
   if (followerInstalled) return;
@@ -145,11 +146,12 @@ export function acquireXtermHost(
 
 /**
  * Drop a host's reference to the engine. `keepAlive` is the caller's "this
- * session is still live" signal (a running terminal-agent): true keeps the
- * engine cached for the next host so scrollback and cursor state survive a
- * split / tab-switch / reopen; false (plain terminals, exited agents) disposes
- * it now - the matching session handle is being torn down too, so the next open
- * rebuilds both and replays a fresh host snapshot.
+ * session is still live" signal (a running terminal-agent or plain terminal):
+ * true keeps the engine cached for the next host so scrollback and cursor
+ * state survive a split / tab-switch / reopen, with the follower disposing it
+ * once the session registry evicts the matching handle; false (exited
+ * sessions) disposes it now - the matching session handle is being torn down
+ * too, so the next open rebuilds both and replays a fresh host snapshot.
  */
 export function releaseXtermHost(instanceId: string, keepAlive: boolean): void {
   if (keepAlive) return;

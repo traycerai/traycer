@@ -35,7 +35,7 @@ export type HostProvisionAction =
 export interface HostProvisionServiceLifecycle {
   readonly priorServiceState: ServiceState;
   readonly stoppedBeforeSwap: boolean;
-  readonly postSwapAction: "restart" | "start" | "install" | "none";
+  readonly postSwapAction: "install" | "none";
   readonly postSwapError: string | null;
 }
 

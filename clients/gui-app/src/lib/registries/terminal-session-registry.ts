@@ -75,8 +75,9 @@ export function useTerminalSessionHandle(
   const hostEntry = useHostDirectoryEntry(args.hostId);
   const globalClient = useHostClient();
   // Terminal is a DURABLE per-tab stream: its `WsStreamClient` is OWNED by the
-  // session store for the session's warm lifetime (terminal-agent sessions are
-  // kept warm across tile unmount), NOT by this tile - so closing then reopening
+  // session store for the session's warm lifetime (live sessions are kept warm
+  // across tile unmount - agents indefinitely, plain terminals for the
+  // release-linger window), NOT by this tile - so closing then reopening
   // the tab no longer hands the revived warm session a socket the unmounting
   // tile already closed. The opener wires the shared "durable stream = auth +
   // wake" recovery; the returned handle's `close()` tears it down on dispose.

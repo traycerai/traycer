@@ -184,6 +184,50 @@ describe("useLandingComposerActions", () => {
     queryClient.clear();
   });
 
+  it("refuses launch while a staged worktree path has unresolved metadata", () => {
+    setSingleWorkspace();
+    const key = { surface: "landing" as const, draftId: null };
+    useWorktreeIntentStagingStore.getState().stageIntent(key, {
+      entries: [
+        {
+          kind: "worktree",
+          scripts: null,
+          workspacePath: WORKSPACE_PATH,
+          repoIdentifier: null,
+          isPrimary: true,
+          branch: {
+            type: "new",
+            name: "feat-unresolved",
+            source: "main",
+            carryUncommittedChanges: false,
+          },
+        },
+      ],
+    });
+    useWorktreeIntentStagingStore
+      .getState()
+      .setSuspendedWorkspacePaths(key, [WORKSPACE_PATH]);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(() => useLandingComposerActions(), {
+      wrapper: queryClientWrapper(queryClient),
+    });
+
+    act(() => {
+      result.current.submit({
+        editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        toolbar: defaultToolbar(),
+      });
+    });
+
+    expect(landingMocks.request).not.toHaveBeenCalled();
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey["landing:"],
+    ).toBeDefined();
+    queryClient.clear();
+  });
+
   it("threads a non-ambient profileId into the initial chat message's run settings", async () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },

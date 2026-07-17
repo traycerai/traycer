@@ -50,6 +50,28 @@ describe("<AutonomousResumeSegment />", () => {
     hostQueryMock.calls = [];
   });
 
+  it("renders an mcp-identified trigger as an MCP tool card with structured identity", () => {
+    render(
+      <AutonomousResumeSegment
+        triggers={[
+          {
+            kind: "command",
+            title: "probe/slow_op",
+            status: "completed",
+            summary: 'MCP tool "probe/slow_op" completed',
+            blockId: "tool-9",
+            outputFile: null,
+            mcp: { serverName: "probe", toolName: "slow_op" },
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("MCP tool completed")).toBeTruthy();
+    expect(screen.getByText("probe · slow_op")).toBeTruthy();
+    expect(screen.queryByText("Command completed")).toBeNull();
+  });
+
   it("renders a background command resume card that fetches output on expand", () => {
     render(
       <AutonomousResumeSegment
@@ -64,6 +86,7 @@ describe("<AutonomousResumeSegment />", () => {
               workspacePath: "/tmp/traycer-output",
               filePath: "task.output",
             },
+            mcp: null,
           },
         ]}
       />,
@@ -115,6 +138,7 @@ describe("<AutonomousResumeSegment />", () => {
             summary: "Command finished",
             blockId: "tool-1",
             outputFile: null,
+            mcp: null,
           },
         ]}
       />,
@@ -143,6 +167,7 @@ describe("<AutonomousResumeSegment />", () => {
             summary: "Monitor stopped",
             blockId: "tool-2",
             outputFile: null,
+            mcp: null,
           },
         ]}
       />,
@@ -173,6 +198,7 @@ describe("<AutonomousResumeSegment />", () => {
             summary: "Check the health dashboard and summarize alerts.",
             blockId: "wake-tool",
             outputFile: null,
+            mcp: null,
           },
         ]}
       />,

@@ -3,9 +3,9 @@ import { queryOptions, useQuery } from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   WorktreeBranchStatus,
-  WorktreeHostEntryV12,
+  WorktreeHostEntryV14,
 } from "@traycer/protocol/host/index";
-import type { WorktreeListAllForHostResponseV12 } from "@traycer/protocol/host/worktree-schemas";
+import type { WorktreeListAllForHostResponseV14 } from "@traycer/protocol/host/worktree-schemas";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
@@ -67,15 +67,19 @@ export function useTaskDeleteWorktreeCandidates(
 ): TaskDeleteWorktreeCandidatesResult {
   const client = useHostClient();
   const readiness = useReactiveHostReadiness(client);
+  // Cache identity for the whole paged walk. `forceRefresh: false`: opening
+  // the dialog is an automatic read, so it serves the host's TTL-cached view
+  // rather than forcing a disk recompute of every managed worktree.
   const queryParams = {
     includeActivity: true,
     activityPaths: null,
     cursor: null,
     limit: TASK_DELETE_WORKTREE_PROBED_PAGE_LIMIT,
+    forceRefresh: false,
   } as const;
   const fetchWorktreePages =
-    async (): Promise<WorktreeListAllForHostResponseV12> => {
-      const worktrees: WorktreeHostEntryV12[] = [];
+    async (): Promise<WorktreeListAllForHostResponseV14> => {
+      const worktrees: WorktreeHostEntryV14[] = [];
       // A repeated cursor means the host is cycling; a run past the page cap
       // means it is handing out fresh cursors without ever terminating. Either
       // way the destructive dialog must fail closed (an error yields zero
@@ -83,12 +87,10 @@ export function useTaskDeleteWorktreeCandidates(
       const seenCursors = new Set<string>();
       let cursor: string | null = null;
       for (let page = 0; page < TASK_DELETE_WORKTREE_MAX_PAGES; page += 1) {
-        const response: WorktreeListAllForHostResponseV12 =
+        const response: WorktreeListAllForHostResponseV14 =
           await client.request("worktree.listAllForHost", {
-            includeActivity: true,
-            activityPaths: null,
+            ...queryParams,
             cursor,
-            limit: TASK_DELETE_WORKTREE_PROBED_PAGE_LIMIT,
           });
         worktrees.push(...response.worktrees);
         if (response.nextCursor === null) {
@@ -107,7 +109,7 @@ export function useTaskDeleteWorktreeCandidates(
       );
     };
   const { data, isError } = useQuery(
-    queryOptions<WorktreeListAllForHostResponseV12, HostRpcError>({
+    queryOptions<WorktreeListAllForHostResponseV14, HostRpcError>({
       queryKey: hostQueryKeys.method<
         HostRpcRegistry,
         "worktree.listAllForHost"
@@ -130,6 +132,7 @@ export function useTaskDeleteWorktreeCandidates(
     }
     const deletedSet = new Set(deletedEpicIds);
     return worktrees.flatMap((entry) => {
+      if (entry.resolvedAt === null) return [];
       if (entry.inUse) return [];
       if (entry.owners.length === 0) return [];
       if (!entry.owners.every((owner) => deletedSet.has(owner.epicId))) {

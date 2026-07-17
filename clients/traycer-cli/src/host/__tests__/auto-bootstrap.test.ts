@@ -92,7 +92,7 @@ function makeRuntime(overrides: Partial<RuntimeContext>): RuntimeContext {
 }
 
 interface FakeServiceControllerState {
-  state: "running" | "stopped" | "not-installed";
+  state: "running" | "stopped" | "not-installed" | "externally-managed";
   installCalls: number;
   startCalls: number;
   installShouldThrow: Error | null;
@@ -222,6 +222,33 @@ describe("evaluateAutoBootstrap", () => {
     expect(decision.reason).toBe("service-registered");
     expect(decision.hostInstalled).toBe(true);
     expect(decision.serviceRegistered).toBe(false);
+  });
+
+  it("returns ready (never 'service repair') when the service is externally managed by Desktop's SMAppService", async () => {
+    // Desktop-managed machines have an install record (Desktop installs
+    // host bytes via the CLI) and an SMAppService-owned label. Reading that
+    // as "service missing" used to select the service-repair branch on
+    // every `traycer login`, which then died on installService's
+    // SMAppService refusal - a permanent repair loop with no working fix.
+    readHostInstallRecordMock.mockReturnValue({ version: "1.5.0" });
+    const fake = makeFakeServiceController({
+      state: "externally-managed",
+      installCalls: 0,
+      startCalls: 0,
+      installShouldThrow: null,
+    });
+    createServiceControllerMock.mockReturnValue(fake.controller);
+
+    const decision = await evaluateAutoBootstrap({
+      runtime: makeRuntime({}),
+      trigger: "login",
+      onProgress: null,
+    });
+
+    expect(decision.status).toBe("ready");
+    expect(decision.reason).toBe("already-installed");
+    expect(decision.serviceRegistered).toBe(true);
+    expect(fake.state.installCalls).toBe(0);
   });
 
   it("returns installed placeholder when neither host nor service is present", async () => {

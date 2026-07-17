@@ -100,6 +100,7 @@ function artifact(id: string, title: string): ArtifactProjection {
     id,
     kind: "spec",
     title,
+    folderName: "",
     parentId: null,
     artifactRoomId: null,
     createdAt: 0,
