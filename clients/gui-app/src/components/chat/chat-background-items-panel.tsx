@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
 import { LivePulse } from "@/components/ui/live-pulse";
+import { LiveElapsed } from "@/components/chat/segments/segment-elapsed";
 import { cn } from "@/lib/utils";
 import {
   BASE_PAD_LEFT,
@@ -424,6 +425,9 @@ function BackgroundTreeRow(props: {
               <span className="block min-w-0 flex-1 truncate text-ui-xs text-foreground/85">
                 {displayTitle}
               </span>
+              {item.kind === "mcp" && item.startedAt !== null ? (
+                <LiveElapsed startedAt={item.startedAt} />
+              ) : null}
               <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-ui-xs uppercase text-muted-foreground">
                 {backgroundKindLabel(item.kind)}
               </span>

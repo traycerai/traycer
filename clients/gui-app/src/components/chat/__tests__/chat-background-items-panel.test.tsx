@@ -348,6 +348,66 @@ describe("<BackgroundItemsPanel />", () => {
     expect(onStopItem).toHaveBeenCalledWith("wake-tool");
   });
 
+  it("renders an mcp row with structured identity, live elapsed, and its stop affordance", () => {
+    const onStopItem = vi.fn(() => null);
+    const mcp = backgroundItem({
+      taskId: "mcp-task",
+      kind: "mcp",
+      title: "probe/slow_op",
+      blockId: "tool-9",
+      parentTaskId: null,
+      serverName: "probe",
+      toolName: "slow_op",
+      startedAt: Date.now() - 65_000,
+    });
+
+    renderPanel({
+      items: [mcp],
+      onItemClick: () => undefined,
+      onStopItem,
+      onStopAll: () => null,
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /Background.*1 running/ }),
+    );
+
+    const row = screen.getByRole("button", {
+      name: /probe · slow_op.*1m 5s.*MCP tool/,
+    });
+    expect(row).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop MCP tool" }));
+    expect(onStopItem).toHaveBeenCalledWith("mcp-task");
+  });
+
+  it("hides the mcp elapsed counter when the host predates startedAt", () => {
+    const mcp = backgroundItem({
+      taskId: "mcp-task",
+      kind: "mcp",
+      title: "probe/slow_op",
+      blockId: "tool-9",
+      parentTaskId: null,
+      serverName: "probe",
+      toolName: "slow_op",
+      startedAt: null,
+    });
+
+    renderPanel({
+      items: [mcp],
+      onItemClick: () => undefined,
+      onStopItem: () => null,
+      onStopAll: () => null,
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /Background.*1 running/ }),
+    );
+
+    const row = screen.getByRole("button", { name: /probe · slow_op/ });
+    expect(row.textContent).toBe("probe · slow_opMCP tool");
+  });
+
   it("renders a workflow row with its phase/active-label/counts summary and Workflow chip", () => {
     const onItemClick = vi.fn();
     const workflow = backgroundItem({
