@@ -16,7 +16,7 @@ import {
 } from "@/lib/cloud-epic-tasks-query";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useWorktreeTaskTitles } from "@/components/settings/panels/worktrees-settings-panel";
+import { useWorktreeTaskTitles } from "@/components/settings/panels/use-worktree-task-titles";
 
 const HOST_ID = "host-test";
 const USER_ID = "user-test";
@@ -154,26 +154,25 @@ describe("useWorktreeTaskTitles", () => {
     const tier1Tasks = [listTaskLight("epic-cached", "From cache")];
     seedTier1Cache(queryClient, tier1Tasks);
 
-    mockHostClient.request.mockImplementation((method: string, params: unknown) => {
-      if (method === "epic.listTasks") {
-        // Keep tier-1 cache populated when the warm query refetches.
-        return Promise.resolve({ tasks: tier1Tasks, hasMore: false });
-      }
-      if (method === "epic.getTaskContexts") {
-        const taskIds = (params as { taskIds: string[] }).taskIds;
-        expect(taskIds).toEqual(["epic-unresolved"]);
-        const response: GetTaskContextsResponse = {
-          tasks: {
-            "epic-unresolved": listTaskLight(
-              "epic-unresolved",
-              "From batch",
-            ),
-          },
-        };
-        return Promise.resolve(response);
-      }
-      return Promise.reject(new Error(`unexpected method: ${method}`));
-    });
+    mockHostClient.request.mockImplementation(
+      (method: string, params: unknown) => {
+        if (method === "epic.listTasks") {
+          // Keep tier-1 cache populated when the warm query refetches.
+          return Promise.resolve({ tasks: tier1Tasks, hasMore: false });
+        }
+        if (method === "epic.getTaskContexts") {
+          const taskIds = (params as { taskIds: string[] }).taskIds;
+          expect(taskIds).toEqual(["epic-unresolved"]);
+          const response: GetTaskContextsResponse = {
+            tasks: {
+              "epic-unresolved": listTaskLight("epic-unresolved", "From batch"),
+            },
+          };
+          return Promise.resolve(response);
+        }
+        return Promise.reject(new Error(`unexpected method: ${method}`));
+      },
+    );
 
     const worktrees = [
       worktreeWithOwners("/wt/a", ["epic-cached"]),
@@ -181,11 +180,7 @@ describe("useWorktreeTaskTitles", () => {
     ];
 
     const { result } = renderHook(
-      () =>
-        useWorktreeTaskTitles(
-          mockHostClient as never,
-          worktrees,
-        ),
+      () => useWorktreeTaskTitles(mockHostClient as never, worktrees),
       { wrapper: makeWrapper(queryClient) },
     );
 
@@ -294,21 +289,23 @@ describe("useWorktreeTaskTitles", () => {
     );
 
     const batchCalls: string[][] = [];
-    mockHostClient.request.mockImplementation((method: string, params: unknown) => {
-      if (method === "epic.listTasks") {
-        return Promise.resolve({ tasks: [], hasMore: false });
-      }
-      if (method === "epic.getTaskContexts") {
-        const taskIds = (params as { taskIds: string[] }).taskIds;
-        batchCalls.push(taskIds);
-        const tasks: GetTaskContextsResponse["tasks"] = {};
-        for (const id of taskIds) {
-          tasks[id] = listTaskLight(id, `Title ${id}`);
+    mockHostClient.request.mockImplementation(
+      (method: string, params: unknown) => {
+        if (method === "epic.listTasks") {
+          return Promise.resolve({ tasks: [], hasMore: false });
         }
-        return Promise.resolve({ tasks });
-      }
-      return Promise.reject(new Error(`unexpected method: ${method}`));
-    });
+        if (method === "epic.getTaskContexts") {
+          const taskIds = (params as { taskIds: string[] }).taskIds;
+          batchCalls.push(taskIds);
+          const tasks: GetTaskContextsResponse["tasks"] = {};
+          for (const id of taskIds) {
+            tasks[id] = listTaskLight(id, `Title ${id}`);
+          }
+          return Promise.resolve({ tasks });
+        }
+        return Promise.reject(new Error(`unexpected method: ${method}`));
+      },
+    );
 
     const worktrees = [worktreeWithOwners("/wt/many", epicIds)];
     const { result } = renderHook(
