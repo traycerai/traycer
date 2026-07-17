@@ -36,6 +36,7 @@ import {
   buildFontFamilyValue,
 } from "@/lib/default-font-stacks";
 import { useRunnerHost } from "@/providers/use-runner-host";
+import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { cn } from "@/lib/utils";
 import { useTerminalTheme } from "@/lib/terminal-theme";
 import { scheduleAtlasClear } from "@/lib/terminal-theme-scheduler";
@@ -446,31 +447,14 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
       event.stopPropagation();
       dragDepthRef.current = 0;
       setIsDraggingFiles(false);
-      const files = collectDroppedFiles(event.dataTransfer);
-      // File-URL drops are a fallback for sources that expose no `File` object -
-      // notably the macOS screenshot thumbnail. Those URLs point at an ephemeral
-      // file the OS reclaims shortly after the drag, so they are copied into a
-      // stable app-managed temp file (`copyDroppedFilePaths`) rather than pasted
-      // verbatim - otherwise the running program reads the path after the source
-      // is gone and silently drops it. When real `File` objects are present
-      // (Finder drags), their duplicate `text/uri-list` entry is ignored so the
-      // user's real path is pasted, not a temp copy.
-      const fileUrlPaths =
-        files.length === 0
-          ? collectDroppedFileUrlPaths(event.dataTransfer)
-          : [];
-      if (files.length === 0 && fileUrlPaths.length === 0) return;
-      const resolvedFilePaths =
-        files.length === 0
-          ? Promise.resolve([] as readonly string[])
-          : runnerHost.fileDrops.resolveDroppedFilePaths(files);
-      const stableUrlPaths =
-        fileUrlPaths.length === 0
-          ? Promise.resolve([] as readonly string[])
-          : runnerHost.fileDrops.copyDroppedFilePaths(fileUrlPaths);
-      void Promise.all([resolvedFilePaths, stableUrlPaths])
-        .then(([paths, urlPaths]) => {
-          pastePaths([...paths, ...urlPaths]);
+      const resolvedPaths = resolveFileTransferPaths(
+        event.dataTransfer,
+        runnerHost.fileDrops,
+      );
+      if (resolvedPaths === null) return;
+      void resolvedPaths
+        .then((paths) => {
+          pastePaths(paths);
         })
         .catch(() => undefined);
     },
@@ -479,25 +463,16 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
 
   const handlePaste = useCallback(
     (event: ClipboardEvent<HTMLDivElement>): void => {
-      const files = collectDroppedFiles(event.clipboardData);
-      const fileUrlPaths =
-        files.length === 0
-          ? collectDroppedFileUrlPaths(event.clipboardData)
-          : [];
-      if (files.length === 0 && fileUrlPaths.length === 0) return;
+      const resolvedPaths = resolveFileTransferPaths(
+        event.clipboardData,
+        runnerHost.fileDrops,
+      );
+      if (resolvedPaths === null) return;
       event.preventDefault();
       event.stopPropagation();
-      const resolvedFilePaths =
-        files.length === 0
-          ? Promise.resolve([] as readonly string[])
-          : runnerHost.fileDrops.resolveDroppedFilePaths(files);
-      const stableUrlPaths =
-        fileUrlPaths.length === 0
-          ? Promise.resolve([] as readonly string[])
-          : runnerHost.fileDrops.copyDroppedFilePaths(fileUrlPaths);
-      void Promise.all([resolvedFilePaths, stableUrlPaths])
-        .then(([paths, urlPaths]) => {
-          pastePaths([...paths, ...urlPaths]);
+      void resolvedPaths
+        .then((paths) => {
+          pastePaths(paths);
         })
         .catch(() => undefined);
     },
@@ -947,6 +922,32 @@ function collectDroppedFiles(dataTransfer: DataTransfer): readonly File[] {
     const file = item.getAsFile();
     return file === null ? [] : [file];
   });
+}
+
+function resolveFileTransferPaths(
+  dataTransfer: DataTransfer,
+  fileDrops: IRunnerHost["fileDrops"],
+): Promise<readonly string[]> | null {
+  const files = collectDroppedFiles(dataTransfer);
+  // File URLs are a fallback for sources that expose no `File` object - notably
+  // macOS screenshot thumbnails. Their backing file can disappear after either
+  // a drag or paste, so copy it into an app-managed temporary location before
+  // insertion. Real Finder files can carry a duplicate URI list; favor their
+  // original path rather than a copied one.
+  const fileUrlPaths =
+    files.length === 0 ? collectDroppedFileUrlPaths(dataTransfer) : [];
+  if (files.length === 0 && fileUrlPaths.length === 0) return null;
+  const resolvedFilePaths =
+    files.length === 0
+      ? Promise.resolve([] as readonly string[])
+      : fileDrops.resolveDroppedFilePaths(files);
+  const stableUrlPaths =
+    fileUrlPaths.length === 0
+      ? Promise.resolve([] as readonly string[])
+      : fileDrops.copyDroppedFilePaths(fileUrlPaths);
+  return Promise.all([resolvedFilePaths, stableUrlPaths]).then(
+    ([paths, urlPaths]) => [...paths, ...urlPaths],
+  );
 }
 
 function collectDroppedFileUrlPaths(
