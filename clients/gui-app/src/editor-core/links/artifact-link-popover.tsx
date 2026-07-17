@@ -69,6 +69,13 @@ interface LinkTargetBase {
   readonly attrs: Readonly<Record<string, unknown>>;
   readonly anchor: VirtualElement;
   readonly yBookmark: YRangeBookmark | null;
+  /**
+   * Viewport coordinates of the pointer when a hover trigger opened this
+   * target, else `null` (caret/create triggers, which have no pointer
+   * position). Carried through transaction refreshes so a hover card that
+   * survives a remote edit keeps anchoring to the same rect.
+   */
+  readonly pointerPoint: PointerPoint | null;
 }
 
 interface EditLinkTarget extends LinkTargetBase {
@@ -111,22 +118,78 @@ function linkElementAtRange(editor: Editor, range: Range): HTMLElement {
   return element?.closest<HTMLElement>("a[data-link-href]") ?? editor.view.dom;
 }
 
+/** Viewport coordinates of the pointer at the moment a hover target opened. */
+interface PointerPoint {
+  readonly x: number;
+  readonly y: number;
+}
+
+/**
+ * The individual client rect (one per wrapped visual line / table-cell
+ * fragment) that `point` falls inside, or `null` if none matches. Distinct
+ * from `Element.getBoundingClientRect()`, which unions every fragment into
+ * one box spanning all of them - exactly the shape that misplaces the card
+ * when a link wraps across lines.
+ */
+function rectContainingPoint(
+  rects: ArrayLike<DOMRect>,
+  point: PointerPoint,
+): DOMRect | null {
+  for (let i = 0; i < rects.length; i += 1) {
+    const rect = rects[i];
+    if (
+      point.x >= rect.left &&
+      point.x <= rect.right &&
+      point.y >= rect.top &&
+      point.y <= rect.bottom
+    ) {
+      return rect;
+    }
+  }
+  return null;
+}
+
+/**
+ * Builds the floating-ui reference for a link target.
+ *
+ * Anchoring must resolve to a SINGLE visual line, never a box spanning
+ * several: a link (or a create-mode selection) that wraps across lines, or
+ * sits inside a table cell, exposes multiple client rects. Unioning
+ * `coordsAtPos(range.from)`/`coordsAtPos(range.to)` - the previous approach -
+ * builds a box enclosing every fragment, so `placement: "top-start"` lands
+ * the card above the topmost line at the leftmost edge, which can be far from
+ * the line the pointer is actually over.
+ *
+ * When a hover `pointerPoint` is known, pick the specific client rect of
+ * `contextElement` the pointer is inside. Otherwise (caret trigger, or a
+ * hover target refreshed after a remote transaction with a now-stale point),
+ * fall back to `coordsAtPos(fallbackPosition)` - a single document position,
+ * which - unlike a from/to union - always resolves to one visual line.
+ */
 function rangeAnchor(
   editor: Editor,
-  range: Range,
   contextElement: HTMLElement,
+  fallbackPosition: number,
+  pointerPoint: PointerPoint | null,
 ): VirtualElement {
   return {
     contextElement,
     getBoundingClientRect: () => {
       if (editor.isDestroyed) return new DOMRect();
-      const start = editor.view.coordsAtPos(range.from);
-      const end = editor.view.coordsAtPos(range.to);
-      const left = Math.min(start.left, end.left);
-      const right = Math.max(start.right, end.right);
-      const top = Math.min(start.top, end.top);
-      const bottom = Math.max(start.bottom, end.bottom);
-      return new DOMRect(left, top, right - left, bottom - top);
+      if (pointerPoint !== null) {
+        const matched = rectContainingPoint(
+          contextElement.getClientRects(),
+          pointerPoint,
+        );
+        if (matched !== null) return matched;
+      }
+      const coords = editor.view.coordsAtPos(fallbackPosition);
+      return new DOMRect(
+        coords.left,
+        coords.top,
+        Math.max(coords.right - coords.left, 0),
+        coords.bottom - coords.top,
+      );
     },
   };
 }
@@ -216,8 +279,11 @@ function resolveYBookmark(
 function linkTargetAtPosition(
   editor: Editor,
   position: number,
-  trigger: "hover" | "caret",
-  contextElement: HTMLElement | null,
+  options: {
+    readonly trigger: "hover" | "caret";
+    readonly contextElement: HTMLElement | null;
+    readonly pointerPoint: PointerPoint | null;
+  },
 ): EditLinkTarget | null {
   const safePosition = Math.max(
     0,
@@ -231,17 +297,19 @@ function linkTargetAtPosition(
   const mark = markAtRange(editor, range);
   const href = typeof mark?.attrs.href === "string" ? mark.attrs.href : "";
   if (mark === null || href.length === 0) return null;
-  const liveContext = contextElement ?? linkElementAtRange(editor, range);
+  const liveContext =
+    options.contextElement ?? linkElementAtRange(editor, range);
   return {
     range,
     href,
     text: editor.state.doc.textBetween(range.from, range.to),
     identityText: editor.state.doc.textBetween(range.from, range.to),
     attrs: mark.attrs,
-    anchor: rangeAnchor(editor, range, liveContext),
+    anchor: rangeAnchor(editor, liveContext, range.from, options.pointerPoint),
     mode: "edit",
-    trigger,
+    trigger: options.trigger,
     yBookmark: createYBookmark(editor, range),
+    pointerPoint: options.pointerPoint,
   };
 }
 
@@ -269,7 +337,12 @@ function refreshCreateTarget(
     ...target,
     range: mappedRange,
     text: editor.state.doc.textBetween(mappedRange.from, mappedRange.to),
-    anchor: rangeAnchor(editor, mappedRange, editor.view.dom),
+    anchor: rangeAnchor(
+      editor,
+      editor.view.dom,
+      mappedRange.from,
+      target.pointerPoint,
+    ),
   };
 }
 
@@ -307,8 +380,9 @@ function refreshEditTarget(
     identityText: mappedText,
     anchor: rangeAnchor(
       editor,
-      mappedRange,
       linkElementAtRange(editor, mappedRange),
+      mappedRange.from,
+      target.pointerPoint,
     ),
   };
 }
@@ -336,10 +410,15 @@ function refreshMappedTarget(
 
 function createTargetFromSelection(editor: Editor): LinkTarget | null {
   const { from, to } = editor.state.selection;
+  const caretOptions = {
+    trigger: "caret" as const,
+    contextElement: null,
+    pointerPoint: null,
+  };
   if (from === to) {
-    return linkTargetAtPosition(editor, from, "caret", null);
+    return linkTargetAtPosition(editor, from, caretOptions);
   }
-  const existing = linkTargetAtPosition(editor, from, "caret", null);
+  const existing = linkTargetAtPosition(editor, from, caretOptions);
   if (
     existing !== null &&
     existing.range.from <= from &&
@@ -355,9 +434,10 @@ function createTargetFromSelection(editor: Editor): LinkTarget | null {
     text: editor.state.doc.textBetween(from, to),
     identityText: editor.state.doc.textBetween(from, to),
     attrs: {},
-    anchor: rangeAnchor(editor, range, editor.view.dom),
+    anchor: rangeAnchor(editor, editor.view.dom, range.from, null),
     mode: "create",
     yBookmark: createYBookmark(editor, range),
+    pointerPoint: null,
   };
 }
 
@@ -603,6 +683,10 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
     const anchor = linkAnchor(event.target);
     if (anchor === null) return;
     cancelShow();
+    // Captured at hover-entry so the card anchors to the rect the pointer
+    // actually entered through, even if the anchor itself spans several
+    // visual lines (a wrapped link) by the time the show delay elapses.
+    const pointerPoint: PointerPoint = { x: event.clientX, y: event.clientY };
     showTimerRef.current = window.setTimeout(() => {
       showTimerRef.current = null;
       if (!anchor.isConnected) return;
@@ -610,8 +694,7 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
       const nextTarget = linkTargetAtPosition(
         editor,
         anchorPosition(editor, anchor),
-        "hover",
-        anchor,
+        { trigger: "hover", contextElement: anchor, pointerPoint },
       );
       if (nextTarget !== null) open(nextTarget);
     }, HOVER_SHOW_DELAY_MS);
@@ -722,8 +805,7 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
     const nextTarget = linkTargetAtPosition(
       editor,
       anchorPosition(editor, anchor),
-      "caret",
-      anchor,
+      { trigger: "caret", contextElement: anchor, pointerPoint: null },
     );
     if (nextTarget === null) return;
     const current = targetRef.current;
@@ -747,8 +829,7 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
       const nextTarget = linkTargetAtPosition(
         editor,
         editor.state.selection.from,
-        "caret",
-        null,
+        { trigger: "caret", contextElement: null, pointerPoint: null },
       );
       if (nextTarget !== null) {
         open(nextTarget);
@@ -776,7 +857,11 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
         return;
       }
       expectedCaretPositionRef.current = null;
-      const nextTarget = linkTargetAtPosition(editor, position, "caret", null);
+      const nextTarget = linkTargetAtPosition(editor, position, {
+        trigger: "caret",
+        contextElement: null,
+        pointerPoint: null,
+      });
       if (nextTarget === null) {
         if (current !== null) close();
         return;

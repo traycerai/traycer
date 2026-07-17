@@ -221,6 +221,7 @@ export function projectArtifact(
     id,
     kind,
     title: readMaybeString(entry, "title"),
+    folderName: readMaybeString(entry, "folderName"),
     parentId: readMaybeNullableString(entry, "parentId"),
     artifactRoomId:
       artifactRoomId !== null && artifactRoomId.length > 0
@@ -364,6 +365,7 @@ export function artifactProjectionsEq(
     a.id === b.id &&
     a.kind === b.kind &&
     a.title === b.title &&
+    a.folderName === b.folderName &&
     a.parentId === b.parentId &&
     a.artifactRoomId === b.artifactRoomId &&
     a.createdAt === b.createdAt &&

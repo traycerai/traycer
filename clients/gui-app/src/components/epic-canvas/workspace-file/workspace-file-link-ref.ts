@@ -94,6 +94,48 @@ export function workspaceFileRefFromLinkPath(
 }
 
 /**
+ * Builds one candidate `WorkspaceFileRef` per bound root for a RELATIVE chat
+ * markdown link path, in root order. Unlike an absolute path (whose longest-
+ * matching bound root is deterministic via prefix match), a relative path is
+ * ambiguous across multiple roots that may be unrelated siblings on disk - the
+ * caller probes each candidate for existence (host RPC, at click time; see
+ * `resolveAndOpenRelativeWorkspaceFile`) and opens the first hit.
+ *
+ * Unlike `workspaceFileRefFromLinkPath`'s relative branch, a `..`-escaping
+ * path is NOT rejected here: `workspace.readFile` enforces containment within
+ * the SUPPLIED root itself, so an out-of-bounds candidate simply fails its own
+ * existence probe rather than needing a client-side reject up front.
+ *
+ * Returns `null` for an empty/directory-shaped/degenerate path, an absolute
+ * path (the caller routes those through `workspaceFileRefFromLinkPath`
+ * instead), or when no roots are bound.
+ */
+export function candidateWorkspaceFileRefsForRelativeLinkPath(
+  hostId: string,
+  roots: ReadonlyArray<string>,
+  linkPath: string,
+): ReadonlyArray<WorkspaceFileRef> | null {
+  const trimmed = linkPath.trim();
+  if (trimmed.length === 0 || roots.length === 0) return null;
+  if (hasTrailingSeparator(trimmed)) return null;
+  const normalized = normalizePath(trimmed);
+  if (
+    normalized.length === 0 ||
+    normalized === "." ||
+    isAbsolutePath(normalized)
+  ) {
+    return null;
+  }
+  const basename = getBasename(normalized);
+  const refs = roots
+    .map((root) =>
+      workspaceFileRefFromTreePath(hostId, root, normalized, basename),
+    )
+    .filter((ref): ref is WorkspaceFileRef => ref !== null);
+  return refs.length === 0 ? null : refs;
+}
+
+/**
  * Builds a `WorkspaceFileRef` for an ABSOLUTE file path that belongs to no bound
  * workspace root, by treating the file's own directory as the workspace root
  * (`{ workspacePath: dirname, filePath: basename }`). This is the deliberate,

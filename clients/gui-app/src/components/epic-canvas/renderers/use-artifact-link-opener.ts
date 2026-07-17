@@ -10,8 +10,11 @@ import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-i
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
 import { useWorktreeListBindingsForEpicForClient } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
+import { useArtifactFolderChain } from "@/lib/epic-selectors";
 import { useHostClient } from "@/lib/host";
+import { isAbsolutePath } from "@/lib/path/cross-platform-path";
 import { isBrowsable } from "@/lib/worktree/worktree-row-browsable";
+import { resolveArtifactRelativeLinkPath } from "@/markdown/links/resolve-artifact-relative-link";
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 
@@ -20,11 +23,23 @@ export interface ArtifactLinkOpener {
   readonly isExternalPending: boolean;
 }
 
+function resolveArtifactLinkPath(
+  epicId: string,
+  selfFolderChain: readonly string[] | null,
+  path: string,
+): string | null {
+  if (isAbsolutePath(path)) return path;
+  if (selfFolderChain === null) return null;
+  return resolveArtifactRelativeLinkPath(epicId, selfFolderChain, path);
+}
+
 export function useArtifactLinkOpener(args: {
   readonly epicId: string;
+  readonly artifactId: string;
   readonly viewTabId: string;
 }): ArtifactLinkOpener {
   const tabHostId = useTabHostId();
+  const selfFolderChain = useArtifactFolderChain(args.artifactId);
   const tabHostClient = useTabHostClient();
   const activeHostId = useReactiveActiveHostId();
   const worktrees = useWorktreeListBindingsForEpicForClient({
@@ -124,9 +139,25 @@ export function useArtifactLinkOpener(args: {
         );
         return;
       }
+      // A relative href is authored from the artifact tree's own point of
+      // view (`./`, `../`, bare folder names), NOT the code workspace -
+      // rewrite it against this artifact's own on-disk directory before
+      // handing off to the shared absolute-path-capable resolve+open flow.
+      // An unresolvable relative href (chain data unavailable, or the
+      // navigation walks above the epic's artifacts root) fails the click
+      // directly rather than falling through to workspace-root resolution.
+      const resolvedPath = resolveArtifactLinkPath(
+        args.epicId,
+        selfFolderChain,
+        link.path,
+      );
+      if (resolvedPath === null) {
+        toast("Couldn't open link");
+        return;
+      }
       const opened = openFile(
         {
-          path: link.path,
+          path: resolvedPath,
           line: link.line,
           col: link.col,
           isDirectory: false,
@@ -145,7 +176,14 @@ export function useArtifactLinkOpener(args: {
       );
       if (!opened) toast("Couldn't open link");
     },
-    [openExternalLink, openFile, supersedePending, worktrees.isError],
+    [
+      args.epicId,
+      openExternalLink,
+      openFile,
+      selfFolderChain,
+      supersedePending,
+      worktrees.isError,
+    ],
   );
 
   return { openLink, isExternalPending };

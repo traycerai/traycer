@@ -48,6 +48,13 @@ const mocks = vi.hoisted(() => ({
       focus: input.focus,
     }),
   ),
+  // Relative chat links now probe each bound root for existence before
+  // opening; these provider-wiring tests exercise the OPEN behavior, not the
+  // probe itself (that's `fetchWorkspaceFileExists`'s own unit tests), so
+  // every candidate reports "exists" by default.
+  workspaceFileExists: vi.fn<(args: unknown) => Promise<boolean>>(() =>
+    Promise.resolve(true),
+  ),
 }));
 
 interface EpicRouteFocusLike {
@@ -81,6 +88,10 @@ vi.mock("@/providers/use-open-epic-handle", () => ({
 vi.mock("@/lib/host/resolve-artifact-by-path", () => ({
   fetchResolveArtifactByPath: (args: FetchResolveArtifactByPathArgs) =>
     mocks.resolveArtifactByPath(args),
+}));
+
+vi.mock("@/lib/host/probe-workspace-file-exists", () => ({
+  fetchWorkspaceFileExists: (args: unknown) => mocks.workspaceFileExists(args),
 }));
 
 vi.mock("@/components/epic-canvas/sidebar/open-projected-sidebar-node", () => ({
@@ -126,6 +137,8 @@ beforeEach(() => {
     () => undefined,
   );
   mocks.openOrFocusEpicIntent.mockClear();
+  mocks.workspaceFileExists.mockReset();
+  mocks.workspaceFileExists.mockResolvedValue(true);
 });
 
 afterEach(() => {
@@ -200,7 +213,7 @@ function expectedWorkspaceFileContentId(linkPath: string): string {
 }
 
 describe("ChatMarkdownLinkProvider", () => {
-  it("routes rendered markdown file links through the shared tile navigation hook", () => {
+  it("routes rendered markdown file links through the shared tile navigation hook", async () => {
     const openTilePreviewInTab = vi.fn<
       EpicTileNavigation["openTilePreviewInTab"]
     >(() => null);
@@ -227,18 +240,20 @@ describe("ChatMarkdownLinkProvider", () => {
 
       fireEvent.click(screen.getByRole("link", { name: "Open app" }));
 
-      expect(openTilePreviewInTab).toHaveBeenCalledWith(
-        tabId,
-        expect.objectContaining({
-          id: workspaceFileTabId(HOST_ID, "/repo", "src/app.ts"),
-        }),
-      );
+      await waitFor(() => {
+        expect(openTilePreviewInTab).toHaveBeenCalledWith(
+          tabId,
+          expect.objectContaining({
+            id: workspaceFileTabId(HOST_ID, "/repo", "src/app.ts"),
+          }),
+        );
+      });
     } finally {
       hookSpy.mockRestore();
     }
   });
 
-  it("opens chat file links as replaceable preview tabs", () => {
+  it("opens chat file links as replaceable preview tabs", async () => {
     const store = useEpicCanvasStore.getState();
     const tabId = store.openEpicTab("epic-1", "Epic 1");
 
@@ -267,16 +282,20 @@ describe("ChatMarkdownLinkProvider", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Open app" }));
-    expect(requirePreviewTileContentId(tabId)).toBe(
-      workspaceFileTabId(HOST_ID, "/repo", "src/app.ts"),
-    );
+    await waitFor(() => {
+      expect(requirePreviewTileContentId(tabId)).toBe(
+        workspaceFileTabId(HOST_ID, "/repo", "src/app.ts"),
+      );
+    });
 
     fireEvent.click(screen.getByRole("button", { name: "Open route" }));
+    await waitFor(() => {
+      expect(requirePreviewTileContentId(tabId)).toBe(
+        workspaceFileTabId(HOST_ID, "/repo", "src/route.ts"),
+      );
+    });
     const pane = requireOnlyPane(tabId);
     expect(pane.tabInstanceIds).toHaveLength(1);
-    expect(requirePreviewTileContentId(tabId)).toBe(
-      workspaceFileTabId(HOST_ID, "/repo", "src/route.ts"),
-    );
   });
 
   it("declines a relative file link when no workspace roots are bound (the no-binding failure mode #2 fixes upstream)", () => {
@@ -491,7 +510,7 @@ describe("ChatMarkdownLinkProvider", () => {
     ).not.toHaveBeenCalled();
   });
 
-  it("treats a non-artifact path as a normal file preview without calling the RPC", () => {
+  it("treats a non-artifact path as a normal file preview without calling the RPC", async () => {
     const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic 1");
 
     renderProvider(
@@ -508,13 +527,15 @@ describe("ChatMarkdownLinkProvider", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Open file" }));
-    expect(requirePreviewTileContentId(tabId)).toBe(
-      workspaceFileTabId(HOST_ID, "/repo", "src/deep/module.ts"),
-    );
+    await waitFor(() => {
+      expect(requirePreviewTileContentId(tabId)).toBe(
+        workspaceFileTabId(HOST_ID, "/repo", "src/deep/module.ts"),
+      );
+    });
     expect(mocks.resolveArtifactByPath).not.toHaveBeenCalled();
   });
 
-  it("records a reveal target on the file content id when a line is present, then opens the preview", () => {
+  it("records a reveal target on the file content id when a line is present, then opens the preview", async () => {
     const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic 1");
     const contentId = expectedWorkspaceFileContentId("src/app.ts");
 
@@ -530,11 +551,13 @@ describe("ChatMarkdownLinkProvider", () => {
 
     // The reveal target is keyed on the (tabId, content id) composite and set
     // before the tab opens, so it lands only on this tab's preview (CL-6).
-    expect(
-      useWorkspaceFileRevealStore.getState().targetsByKey[
-        `${tabId}\u0000${contentId}`
-      ],
-    ).toEqual({ line: 1177, col: 5, nonce: 1 });
+    await waitFor(() => {
+      expect(
+        useWorkspaceFileRevealStore.getState().targetsByKey[
+          `${tabId}\u0000${contentId}`
+        ],
+      ).toEqual({ line: 1177, col: 5, nonce: 1 });
+    });
     // The file still opens as a normal preview tab.
     expect(requirePreviewTileContentId(tabId)).toBe(contentId);
   });
@@ -555,7 +578,7 @@ describe("ChatMarkdownLinkProvider", () => {
     expect(useWorkspaceFileRevealStore.getState().targetsByKey).toEqual({});
   });
 
-  it("reuses the same tab and bumps the reveal nonce when a different line is clicked on an open file", () => {
+  it("reuses the same tab and bumps the reveal nonce when a different line is clicked on an open file", async () => {
     const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic 1");
     const contentId = expectedWorkspaceFileContentId("src/app.ts");
 
@@ -574,19 +597,23 @@ describe("ChatMarkdownLinkProvider", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Line 10" }));
-    expect(
-      useWorkspaceFileRevealStore.getState().targetsByKey[
-        `${tabId}\u0000${contentId}`
-      ],
-    ).toEqual({ line: 10, col: null, nonce: 1 });
+    await waitFor(() => {
+      expect(
+        useWorkspaceFileRevealStore.getState().targetsByKey[
+          `${tabId}\u0000${contentId}`
+        ],
+      ).toEqual({ line: 10, col: null, nonce: 1 });
+    });
 
     fireEvent.click(screen.getByRole("button", { name: "Line 20" }));
+    await waitFor(() => {
+      expect(
+        useWorkspaceFileRevealStore.getState().targetsByKey[
+          `${tabId}\u0000${contentId}`
+        ],
+      ).toEqual({ line: 20, col: null, nonce: 2 });
+    });
     // Same content id -> single tab; the channel re-fires with a bumped nonce.
     expect(requireOnlyPane(tabId).tabInstanceIds).toHaveLength(1);
-    expect(
-      useWorkspaceFileRevealStore.getState().targetsByKey[
-        `${tabId}\u0000${contentId}`
-      ],
-    ).toEqual({ line: 20, col: null, nonce: 2 });
   });
 });

@@ -3,12 +3,14 @@ import type { UseNavigateResult } from "@tanstack/react-router";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import {
+  candidateWorkspaceFileRefsForRelativeLinkPath,
   workspaceFileRefFromAbsoluteFilePath,
   workspaceFileRefFromLinkPath,
 } from "@/components/epic-canvas/workspace-file/workspace-file-link-ref";
 import { isAbsolutePath } from "@/lib/path/cross-platform-path";
 import { openProjectedSidebarNodeInTabWhenAvailable } from "@/components/epic-canvas/sidebar/open-projected-sidebar-node";
 import { fetchResolveArtifactByPath } from "@/lib/host/resolve-artifact-by-path";
+import { fetchWorkspaceFileExists } from "@/lib/host/probe-workspace-file-exists";
 import {
   navigateToTabIntent,
   openOrFocusEpicIntent,
@@ -17,7 +19,10 @@ import { artifactEpicIdFromLinkPath } from "@/markdown/links/artifact-link-path"
 import type { MarkdownFileLink } from "@/markdown/links/markdown-link-context";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import { setWorkspaceFileRevealTarget } from "@/stores/epics/canvas/workspace-file-reveal-store";
-import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
+import type {
+  EpicCanvasTileRef,
+  WorkspaceFileRef,
+} from "@/stores/epics/canvas/types";
 
 /**
  * Static dependencies the chat link policy closes over, all sourced from React
@@ -131,6 +136,18 @@ export function buildChatLinkPolicy(deps: ChatLinkPolicyDeps): ChatLinkHandler {
       void resolveAndOpenArtifactLink(deps, lifecycle, link, {
         artifactEpicId,
         resolveHostId: deps.activeHostId,
+        clickToken,
+      });
+      return true;
+    }
+
+    // A relative path is ambiguous across the chat's bound roots (they may
+    // be unrelated sibling worktrees on disk), so it needs an existence
+    // probe per candidate root - claim the click and resolve asynchronously.
+    // An absolute path keeps the existing synchronous longest-prefix-match
+    // resolution (deterministic, no probing needed).
+    if (!isAbsolutePath(link.path)) {
+      void resolveAndOpenRelativeWorkspaceFile(deps, lifecycle, link, {
         clickToken,
       });
       return true;
@@ -286,15 +303,85 @@ function openChatWorkspaceFilePreview(
       ? workspaceFileRefFromAbsoluteFilePath(deps.hostId, link.path)
       : null);
   if (ref === null) return false;
-  // A `:line` target is transient and NOT part of tab identity: record it on
-  // the (tab, content-id)-keyed reveal channel IMMEDIATELY BEFORE the open so
-  // the tile (new or re-focused, deduped on `ref.id`) reads the fresh value on
-  // mount / nonce change, then re-clicking a different line reuses the same tab
-  // and re-scrolls. Artifact links carry no line, so only this normal-file
-  // branch touches the channel.
+  openWorkspaceFileRef(deps, link, ref);
+  return true;
+}
+
+/**
+ * A `:line` target is transient and NOT part of tab identity: record it on
+ * the (tab, content-id)-keyed reveal channel IMMEDIATELY BEFORE the open so
+ * the tile (new or re-focused, deduped on `ref.id`) reads the fresh value on
+ * mount / nonce change, then re-clicking a different line reuses the same tab
+ * and re-scrolls. Artifact links carry no line, so only the plain-file paths
+ * that call this touch the channel.
+ */
+function openWorkspaceFileRef(
+  deps: ChatLinkPolicyDeps,
+  link: MarkdownFileLink,
+  ref: WorkspaceFileRef,
+): void {
   if (link.line !== null) {
     setWorkspaceFileRevealTarget(deps.tabId, ref.id, link.line, link.col);
   }
   deps.previewTileInTab(deps.tabId, ref);
-  return true;
+}
+
+/** The click's supersession token, checked when the existence probe settles. */
+interface RelativeWorkspaceFileTarget {
+  readonly clickToken: number;
+}
+
+/**
+ * Resolves a RELATIVE plain-file link against every one of the chat's bound
+ * roots and opens the first one that actually exists. Roots may be unrelated
+ * sibling worktrees on disk, so - unlike an absolute path's deterministic
+ * longest-prefix match - the right root can't be picked by string matching
+ * alone; each candidate is probed via `workspace.readFile` (existence-only,
+ * `maxBytes: 1`) at click time, run concurrently, and the first-BY-ROOT-ORDER
+ * hit wins regardless of which probe settles first.
+ *
+ * Mirrors `resolveAndOpenArtifactLink`'s lifecycle guards: a torn-down tab or
+ * a superseding later click drops this resolve silently; finding no existing
+ * candidate reports `onAsyncFailure` (the click-failure toast).
+ */
+function resolveAndOpenRelativeWorkspaceFile(
+  deps: ChatLinkPolicyDeps,
+  lifecycle: ChatLinkLifecycle,
+  link: MarkdownFileLink,
+  target: RelativeWorkspaceFileTarget,
+): Promise<void> {
+  if (deps.hostId === null) {
+    lifecycle.onAsyncFailure();
+    return Promise.resolve();
+  }
+  const hostId = deps.hostId;
+  const candidates = candidateWorkspaceFileRefsForRelativeLinkPath(
+    hostId,
+    deps.workspaceRoots,
+    link.path,
+  );
+  if (candidates === null) {
+    lifecycle.onAsyncFailure();
+    return Promise.resolve();
+  }
+  return Promise.all(
+    candidates.map((ref) =>
+      fetchWorkspaceFileExists({
+        queryClient: deps.queryClient,
+        client: deps.client,
+        hostId,
+        workspacePath: ref.workspacePath,
+        filePath: ref.filePath,
+      }),
+    ),
+  ).then((existsByCandidate) => {
+    if (lifecycle.isDisposed()) return;
+    if (!lifecycle.isCurrent(target.clickToken)) return;
+    const firstExistingIndex = existsByCandidate.indexOf(true);
+    if (firstExistingIndex === -1) {
+      lifecycle.onAsyncFailure();
+      return;
+    }
+    openWorkspaceFileRef(deps, link, candidates[firstExistingIndex]);
+  });
 }

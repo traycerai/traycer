@@ -43,6 +43,19 @@ const mocks = vi.hoisted(() => ({
     >(),
   workspaceFileRefFromAbsoluteFilePath:
     vi.fn<(hostId: string, path: string) => { id: string } | null>(),
+  candidateWorkspaceFileRefsForRelativeLinkPath: vi.fn<
+    (
+      hostId: string,
+      roots: ReadonlyArray<string>,
+      path: string,
+    ) => ReadonlyArray<{
+      readonly id: string;
+      readonly workspacePath: string;
+      readonly filePath: string;
+    }> | null
+  >(),
+  fetchWorkspaceFileExists:
+    vi.fn<(args: { readonly workspacePath: string }) => Promise<boolean>>(),
 }));
 
 vi.mock("@/lib/host/resolve-artifact-by-path", () => ({
@@ -85,8 +98,19 @@ vi.mock(
     ) => mocks.workspaceFileRefFromLinkPath(hostId, roots, path),
     workspaceFileRefFromAbsoluteFilePath: (hostId: string, path: string) =>
       mocks.workspaceFileRefFromAbsoluteFilePath(hostId, path),
+    candidateWorkspaceFileRefsForRelativeLinkPath: (
+      hostId: string,
+      roots: ReadonlyArray<string>,
+      path: string,
+    ) =>
+      mocks.candidateWorkspaceFileRefsForRelativeLinkPath(hostId, roots, path),
   }),
 );
+
+vi.mock("@/lib/host/probe-workspace-file-exists", () => ({
+  fetchWorkspaceFileExists: (args: { readonly workspacePath: string }) =>
+    mocks.fetchWorkspaceFileExists(args),
+}));
 
 let pendingCancel: (() => void) | null = null;
 let disposed = false;
@@ -155,6 +179,12 @@ beforeEach(() => {
   mocks.workspaceFileRefFromLinkPath.mockReturnValue({ id: "content-1" });
   mocks.workspaceFileRefFromAbsoluteFilePath.mockReset();
   mocks.workspaceFileRefFromAbsoluteFilePath.mockReturnValue(null);
+  mocks.candidateWorkspaceFileRefsForRelativeLinkPath.mockReset();
+  mocks.candidateWorkspaceFileRefsForRelativeLinkPath.mockReturnValue([
+    { id: "content-1", workspacePath: "/repo", filePath: "src/app.ts" },
+  ]);
+  mocks.fetchWorkspaceFileExists.mockReset();
+  mocks.fetchWorkspaceFileExists.mockResolvedValue(true);
 });
 
 afterEach(() => {
@@ -171,23 +201,34 @@ describe("buildChatLinkPolicy", () => {
     expect(previewTileInTab).not.toHaveBeenCalled();
   });
 
-  it("opens a non-artifact path as a workspace-file preview without the RPC", () => {
+  it("opens a relative non-artifact path as a workspace-file preview after probing the root for existence", async () => {
     const run = buildChatLinkPolicy(makeDeps({}));
     expect(run(fileLink({ path: "src/app.ts" }), lifecycle)).toBe(true);
     expect(mocks.resolveArtifactByPath).not.toHaveBeenCalled();
-    expect(mocks.workspaceFileRefFromLinkPath).toHaveBeenCalledWith(
-      CHAT_HOST_ID,
-      ["/repo"],
-      "src/app.ts",
+    await flush();
+
+    expect(
+      mocks.candidateWorkspaceFileRefsForRelativeLinkPath,
+    ).toHaveBeenCalledWith(CHAT_HOST_ID, ["/repo"], "src/app.ts");
+    expect(mocks.fetchWorkspaceFileExists).toHaveBeenCalledWith(
+      expect.objectContaining({
+        hostId: CHAT_HOST_ID,
+        workspacePath: "/repo",
+        filePath: "src/app.ts",
+      }),
     );
     expect(previewTileInTab).toHaveBeenCalledWith(TAB_ID, {
       id: "content-1",
+      workspacePath: "/repo",
+      filePath: "src/app.ts",
     });
   });
 
-  it("records a reveal target before opening when the link carries a line", () => {
+  it("records a reveal target before opening when the link carries a line", async () => {
     const run = buildChatLinkPolicy(makeDeps({}));
     run(fileLink({ path: "src/app.ts", line: 42, col: 7 }), lifecycle);
+    await flush();
+
     expect(mocks.setWorkspaceFileRevealTarget).toHaveBeenCalledWith(
       TAB_ID,
       "content-1",
@@ -195,6 +236,98 @@ describe("buildChatLinkPolicy", () => {
       7,
     );
     expect(previewTileInTab).toHaveBeenCalledTimes(1);
+  });
+
+  it("probes every bound root and opens the first one that has the file", async () => {
+    mocks.candidateWorkspaceFileRefsForRelativeLinkPath.mockReturnValue([
+      { id: "root-a-content", workspacePath: "/repo-a", filePath: "app.ts" },
+      { id: "root-b-content", workspacePath: "/repo-b", filePath: "app.ts" },
+    ]);
+    mocks.fetchWorkspaceFileExists.mockImplementation(
+      (args: { readonly workspacePath: string }) =>
+        Promise.resolve(args.workspacePath === "/repo-b"),
+    );
+    const run = buildChatLinkPolicy(
+      makeDeps({ workspaceRoots: ["/repo-a", "/repo-b"] }),
+    );
+
+    expect(run(fileLink({ path: "app.ts" }), lifecycle)).toBe(true);
+    await flush();
+
+    expect(previewTileInTab).toHaveBeenCalledWith(TAB_ID, {
+      id: "root-b-content",
+      workspacePath: "/repo-b",
+      filePath: "app.ts",
+    });
+  });
+
+  it("prefers the first root by order even when a later root's probe settles first", async () => {
+    mocks.candidateWorkspaceFileRefsForRelativeLinkPath.mockReturnValue([
+      { id: "root-a-content", workspacePath: "/repo-a", filePath: "app.ts" },
+      { id: "root-b-content", workspacePath: "/repo-b", filePath: "app.ts" },
+    ]);
+    let resolveRootA: (exists: boolean) => void = () => undefined;
+    mocks.fetchWorkspaceFileExists.mockImplementation(
+      (args: { readonly workspacePath: string }) =>
+        args.workspacePath === "/repo-a"
+          ? new Promise<boolean>((resolve) => {
+              resolveRootA = resolve;
+            })
+          : Promise.resolve(true),
+    );
+    const run = buildChatLinkPolicy(
+      makeDeps({ workspaceRoots: ["/repo-a", "/repo-b"] }),
+    );
+
+    run(fileLink({ path: "app.ts" }), lifecycle);
+    await flush();
+    expect(previewTileInTab).not.toHaveBeenCalled();
+
+    resolveRootA(true);
+    await flush();
+
+    expect(previewTileInTab).toHaveBeenCalledWith(TAB_ID, {
+      id: "root-a-content",
+      workspacePath: "/repo-a",
+      filePath: "app.ts",
+    });
+  });
+
+  it("reports a click failure when no bound root has the relative file", async () => {
+    mocks.fetchWorkspaceFileExists.mockResolvedValue(false);
+    const run = buildChatLinkPolicy(makeDeps({}));
+
+    run(fileLink({ path: "missing.ts" }), lifecycle);
+    await flush();
+
+    expect(previewTileInTab).not.toHaveBeenCalled();
+    expect(onAsyncFailure).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a click failure for a directory-shaped relative href without probing", async () => {
+    mocks.candidateWorkspaceFileRefsForRelativeLinkPath.mockReturnValue(null);
+    const run = buildChatLinkPolicy(makeDeps({}));
+
+    run(fileLink({ path: "sub-dir/" }), lifecycle);
+    await flush();
+
+    expect(mocks.fetchWorkspaceFileExists).not.toHaveBeenCalled();
+    expect(previewTileInTab).not.toHaveBeenCalled();
+    expect(onAsyncFailure).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a click failure for a relative link without probing when there is no bound host", async () => {
+    const run = buildChatLinkPolicy(makeDeps({ hostId: null }));
+
+    expect(run(fileLink({ path: "src/app.ts" }), lifecycle)).toBe(true);
+    await flush();
+
+    expect(
+      mocks.candidateWorkspaceFileRefsForRelativeLinkPath,
+    ).not.toHaveBeenCalled();
+    expect(mocks.fetchWorkspaceFileExists).not.toHaveBeenCalled();
+    expect(previewTileInTab).not.toHaveBeenCalled();
+    expect(onAsyncFailure).toHaveBeenCalledTimes(1);
   });
 
   it("resolves a same-epic artifact link and opens it via the projection waiter", async () => {
@@ -375,9 +508,12 @@ describe("buildChatLinkPolicy", () => {
     expect(run(fileLink({ path: "src/app.ts" }), lifecycle)).toBe(true);
     expect(cancelPriorWait).toHaveBeenCalledTimes(1);
     expect(pendingCancel).toBeNull();
+    await flush();
     expect(previewTileInTab).toHaveBeenCalledTimes(1);
     expect(previewTileInTab).toHaveBeenLastCalledWith(TAB_ID, {
       id: "content-1",
+      workspacePath: "/repo",
+      filePath: "src/app.ts",
     });
   });
 

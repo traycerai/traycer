@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  candidateWorkspaceFileRefsForRelativeLinkPath,
   workspaceFileRefFromAbsoluteFilePath,
   workspaceFileRefFromLinkPath,
 } from "@/components/epic-canvas/workspace-file/workspace-file-link-ref";
@@ -118,5 +119,60 @@ describe("workspaceFileRefFromAbsoluteFilePath", () => {
 
   it("returns null for a blank path", () => {
     expect(workspaceFileRefFromAbsoluteFilePath(HOST_ID, "   ")).toBeNull();
+  });
+});
+
+describe("candidateWorkspaceFileRefsForRelativeLinkPath", () => {
+  it("builds one candidate per bound root, in root order", () => {
+    const refs = candidateWorkspaceFileRefsForRelativeLinkPath(
+      HOST_ID,
+      ["/repo-a", "/repo-b"],
+      "src/app.ts",
+    );
+
+    expect(refs).toHaveLength(2);
+    expect(refs?.[0]?.workspacePath).toBe("/repo-a");
+    expect(refs?.[0]?.filePath).toBe("src/app.ts");
+    expect(refs?.[1]?.workspacePath).toBe("/repo-b");
+    expect(refs?.[1]?.filePath).toBe("src/app.ts");
+  });
+
+  it("does not reject a parent-escaping relative path (the host enforces containment per root)", () => {
+    const refs = candidateWorkspaceFileRefsForRelativeLinkPath(
+      HOST_ID,
+      ROOTS,
+      "../sibling/app.ts",
+    );
+
+    expect(refs).toHaveLength(1);
+    expect(refs?.[0]?.filePath).toBe("../sibling/app.ts");
+  });
+
+  it("returns null for a directory-shaped relative path (trailing separator)", () => {
+    expect(
+      candidateWorkspaceFileRefsForRelativeLinkPath(HOST_ID, ROOTS, "src/"),
+    ).toBeNull();
+  });
+
+  it("returns null for an absolute path", () => {
+    expect(
+      candidateWorkspaceFileRefsForRelativeLinkPath(
+        HOST_ID,
+        ROOTS,
+        "/repo/src/app.ts",
+      ),
+    ).toBeNull();
+  });
+
+  it("returns null when no roots are bound", () => {
+    expect(
+      candidateWorkspaceFileRefsForRelativeLinkPath(HOST_ID, [], "src/app.ts"),
+    ).toBeNull();
+  });
+
+  it("returns null for a blank path", () => {
+    expect(
+      candidateWorkspaceFileRefsForRelativeLinkPath(HOST_ID, ROOTS, "   "),
+    ).toBeNull();
   });
 });

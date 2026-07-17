@@ -36,6 +36,9 @@ const mocks = vi.hoisted(() => {
       vi.fn<(url: string, options: ExternalMutationOptions) => void>(),
     runnerPending: false,
     toast: vi.fn(),
+    folderChain: vi.fn<(artifactId: string) => readonly string[] | null>(() => [
+      "root-artifact",
+    ]),
   };
 });
 
@@ -53,6 +56,9 @@ vi.mock("@/hooks/worktree/use-worktree-list-bindings-for-epic-query", () => ({
 }));
 vi.mock("@/lib/host", () => ({
   useHostClient: () => mocks.defaultClient,
+}));
+vi.mock("@/lib/epic-selectors", () => ({
+  useArtifactFolderChain: (artifactId: string) => mocks.folderChain(artifactId),
 }));
 vi.mock("@/components/chat/build-chat-link-policy", () => ({
   buildChatLinkPolicy: mocks.buildPolicy,
@@ -94,12 +100,19 @@ beforeEach(() => {
   mocks.openExternal.mockClear();
   mocks.runnerPending = false;
   mocks.toast.mockClear();
+  mocks.folderChain.mockReset();
+  mocks.folderChain.mockReturnValue(["root-artifact"]);
 });
 
 describe("useArtifactLinkOpener", () => {
   it("queries roots with the tab client while resolving artifacts with the default client", () => {
     renderHook(
-      () => useArtifactLinkOpener({ epicId: "epic-1", viewTabId: "tab-1" }),
+      () =>
+        useArtifactLinkOpener({
+          epicId: "epic-1",
+          artifactId: "artifact-1",
+          viewTabId: "tab-1",
+        }),
       { wrapper: QueryWrapper },
     );
 
@@ -121,7 +134,12 @@ describe("useArtifactLinkOpener", () => {
   it("gates file routing until workspace roots have loaded", () => {
     mocks.worktreeQuery.data = undefined;
     const { result, rerender } = renderHook(
-      () => useArtifactLinkOpener({ epicId: "epic-1", viewTabId: "tab-1" }),
+      () =>
+        useArtifactLinkOpener({
+          epicId: "epic-1",
+          artifactId: "artifact-1",
+          viewTabId: "tab-1",
+        }),
       { wrapper: QueryWrapper },
     );
     const link = {
@@ -151,7 +169,12 @@ describe("useArtifactLinkOpener", () => {
     mocks.worktreeQuery.data = undefined;
     mocks.worktreeQuery.isError = true;
     const { result } = renderHook(
-      () => useArtifactLinkOpener({ epicId: "epic-1", viewTabId: "tab-1" }),
+      () =>
+        useArtifactLinkOpener({
+          epicId: "epic-1",
+          artifactId: "artifact-1",
+          viewTabId: "tab-1",
+        }),
       { wrapper: QueryWrapper },
     );
 
@@ -168,7 +191,12 @@ describe("useArtifactLinkOpener", () => {
 
   it("routes external links through the runner mutation", () => {
     const { result } = renderHook(
-      () => useArtifactLinkOpener({ epicId: "epic-1", viewTabId: "tab-1" }),
+      () =>
+        useArtifactLinkOpener({
+          epicId: "epic-1",
+          artifactId: "artifact-1",
+          viewTabId: "tab-1",
+        }),
       { wrapper: QueryWrapper },
     );
 
@@ -182,7 +210,12 @@ describe("useArtifactLinkOpener", () => {
 
   it("keeps the opener stable when the mutation result object is recreated", () => {
     const { result, rerender } = renderHook(
-      () => useArtifactLinkOpener({ epicId: "epic-1", viewTabId: "tab-1" }),
+      () =>
+        useArtifactLinkOpener({
+          epicId: "epic-1",
+          artifactId: "artifact-1",
+          viewTabId: "tab-1",
+        }),
       { wrapper: QueryWrapper },
     );
     const firstOpenLink = result.current.openLink;
@@ -200,7 +233,12 @@ describe("useArtifactLinkOpener", () => {
       return true;
     });
     const { result } = renderHook(
-      () => useArtifactLinkOpener({ epicId: "epic-1", viewTabId: "tab-1" }),
+      () =>
+        useArtifactLinkOpener({
+          epicId: "epic-1",
+          artifactId: "artifact-1",
+          viewTabId: "tab-1",
+        }),
       { wrapper: QueryWrapper },
     );
 
@@ -225,7 +263,12 @@ describe("useArtifactLinkOpener", () => {
       settle = options.onSettled;
     });
     const { result } = renderHook(
-      () => useArtifactLinkOpener({ epicId: "epic-1", viewTabId: "tab-1" }),
+      () =>
+        useArtifactLinkOpener({
+          epicId: "epic-1",
+          artifactId: "artifact-1",
+          viewTabId: "tab-1",
+        }),
       { wrapper: QueryWrapper },
     );
 
@@ -242,7 +285,12 @@ describe("useArtifactLinkOpener", () => {
   it("exposes runner pending state", () => {
     mocks.runnerPending = true;
     const { result } = renderHook(
-      () => useArtifactLinkOpener({ epicId: "epic-1", viewTabId: "tab-1" }),
+      () =>
+        useArtifactLinkOpener({
+          epicId: "epic-1",
+          artifactId: "artifact-1",
+          viewTabId: "tab-1",
+        }),
       { wrapper: QueryWrapper },
     );
 
@@ -255,7 +303,12 @@ describe("useArtifactLinkOpener", () => {
       return true;
     });
     const { result } = renderHook(
-      () => useArtifactLinkOpener({ epicId: "epic-1", viewTabId: "tab-1" }),
+      () =>
+        useArtifactLinkOpener({
+          epicId: "epic-1",
+          artifactId: "artifact-1",
+          viewTabId: "tab-1",
+        }),
       { wrapper: QueryWrapper },
     );
 
@@ -266,6 +319,158 @@ describe("useArtifactLinkOpener", () => {
       col: null,
     });
 
+    expect(mocks.toast).toHaveBeenCalledWith("Couldn't open link");
+  });
+
+  it("rewrites a bare sibling href against this artifact's own folder chain", () => {
+    mocks.folderChain.mockReturnValue(["ticket-breakdown", "01-something"]);
+    const { result } = renderHook(
+      () =>
+        useArtifactLinkOpener({
+          epicId: "epic-1",
+          artifactId: "artifact-1",
+          viewTabId: "tab-1",
+        }),
+      { wrapper: QueryWrapper },
+    );
+
+    result.current.openLink({
+      kind: "file",
+      path: "01-sub-ticket/",
+      line: null,
+      col: null,
+    });
+
+    expect(mocks.runPolicy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: "epics/epic-1/artifacts/ticket-breakdown/01-something/01-sub-ticket/index.md",
+      }),
+      expect.anything(),
+    );
+  });
+
+  it("resolves a ../ href against the parent artifact's folder", () => {
+    mocks.folderChain.mockReturnValue(["ticket-breakdown", "01-something"]);
+    const { result } = renderHook(
+      () =>
+        useArtifactLinkOpener({
+          epicId: "epic-1",
+          artifactId: "artifact-1",
+          viewTabId: "tab-1",
+        }),
+      { wrapper: QueryWrapper },
+    );
+
+    result.current.openLink({
+      kind: "file",
+      path: "../02-other/index.md",
+      line: null,
+      col: null,
+    });
+
+    expect(mocks.runPolicy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: "epics/epic-1/artifacts/ticket-breakdown/02-other/index.md",
+      }),
+      expect.anything(),
+    );
+  });
+
+  it("resolves a bare index.md href back to this artifact's own directory", () => {
+    mocks.folderChain.mockReturnValue(["ticket-breakdown", "01-something"]);
+    const { result } = renderHook(
+      () =>
+        useArtifactLinkOpener({
+          epicId: "epic-1",
+          artifactId: "artifact-1",
+          viewTabId: "tab-1",
+        }),
+      { wrapper: QueryWrapper },
+    );
+
+    result.current.openLink({
+      kind: "file",
+      path: "index.md",
+      line: null,
+      col: null,
+    });
+
+    expect(mocks.runPolicy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: "epics/epic-1/artifacts/ticket-breakdown/01-something/index.md",
+      }),
+      expect.anything(),
+    );
+  });
+
+  it("does not rewrite an absolute href", () => {
+    mocks.folderChain.mockReturnValue(null);
+    const { result } = renderHook(
+      () =>
+        useArtifactLinkOpener({
+          epicId: "epic-1",
+          artifactId: "artifact-1",
+          viewTabId: "tab-1",
+        }),
+      { wrapper: QueryWrapper },
+    );
+
+    result.current.openLink({
+      kind: "file",
+      path: "/artifact/index.md",
+      line: null,
+      col: null,
+    });
+
+    expect(mocks.runPolicy).toHaveBeenCalledWith(
+      expect.objectContaining({ path: "/artifact/index.md" }),
+      expect.anything(),
+    );
+  });
+
+  it("toasts without opening when the folder chain can't be resolved", () => {
+    mocks.folderChain.mockReturnValue(null);
+    const { result } = renderHook(
+      () =>
+        useArtifactLinkOpener({
+          epicId: "epic-1",
+          artifactId: "artifact-1",
+          viewTabId: "tab-1",
+        }),
+      { wrapper: QueryWrapper },
+    );
+
+    result.current.openLink({
+      kind: "file",
+      path: "./index.md",
+      line: null,
+      col: null,
+    });
+
+    expect(mocks.runPolicy).not.toHaveBeenCalled();
+    expect(mocks.toast).toHaveBeenCalledWith("Couldn't open link");
+  });
+
+  it("toasts without opening when a relative href walks above the epic root", () => {
+    mocks.folderChain.mockReturnValue(["only-artifact"]);
+    const { result } = renderHook(
+      () =>
+        useArtifactLinkOpener({
+          epicId: "epic-1",
+          artifactId: "artifact-1",
+          viewTabId: "tab-1",
+        }),
+      { wrapper: QueryWrapper },
+    );
+
+    result.current.openLink({
+      kind: "file",
+      path: "../../escaped/index.md",
+      line: null,
+      col: null,
+    });
+
+    expect(mocks.runPolicy).not.toHaveBeenCalled();
     expect(mocks.toast).toHaveBeenCalledWith("Couldn't open link");
   });
 });
