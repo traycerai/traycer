@@ -25,7 +25,8 @@ export function WorktreeChangedStreamMount(): ReactNode {
     const stream = new WorktreeChangedStreamClient({
       wsStreamClient,
       callbacks: {
-        onChanged: () => invalidateWorktreeChangedCaches(queryClient, hostId),
+        onChanged: (scope) =>
+          invalidateWorktreeChangedCaches(queryClient, hostId, scope),
         onConnectionStatus: () => undefined,
       },
     });

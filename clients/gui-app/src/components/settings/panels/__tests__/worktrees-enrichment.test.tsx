@@ -8,7 +8,7 @@ import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type {
   WorktreeHostEntryV14,
-  WorktreeListAllForHostResponseV12,
+  WorktreeListAllForHostResponseV14,
 } from "@traycer/protocol/host/worktree-schemas";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
@@ -100,7 +100,7 @@ function baseKey(): readonly unknown[] {
 }
 
 function seedEnriched(qc: QueryClient, entry: WorktreeHostEntryV14): void {
-  qc.setQueryData<WorktreeListAllForHostResponseV12>(
+  qc.setQueryData<WorktreeListAllForHostResponseV14>(
     perPathKey(entry.worktreePath),
     {
       worktrees: [entry],
@@ -121,7 +121,7 @@ describe("useCachedWorktreeEnrichment (cache-backed overlay)", () => {
     // The base list (includeActivity: false) carries a DIFFERENT path's base-only
     // data. It must NOT enter the overlay - else that row would classify from
     // base-only fields instead of staying pending.
-    qc.setQueryData<WorktreeListAllForHostResponseV12>(baseKey(), {
+    qc.setQueryData<WorktreeListAllForHostResponseV14>(baseKey(), {
       worktrees: [enrichedEntry("/wt/b", "feat-b")],
       nextCursor: null,
     });
@@ -1100,7 +1100,7 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
       };
       seedLastRunSnapshot([warmEntry("/wt/a", "feat-a")], Date.now());
       const qc = createAppQueryClient();
-      qc.setQueryData<WorktreeListAllForHostResponseV12>(perPathKey("/wt/a"), {
+      qc.setQueryData<WorktreeListAllForHostResponseV14>(perPathKey("/wt/a"), {
         worktrees: [liveA],
         nextCursor: null,
       });
@@ -1124,7 +1124,7 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
       // no probe here - `HostClient.bind` invalidates the whole host scope on
       // its own.)
       const cached =
-        fixture.queryClient.getQueryData<WorktreeListAllForHostResponseV12>(
+        fixture.queryClient.getQueryData<WorktreeListAllForHostResponseV14>(
           perPathKey("/wt/a"),
         );
       expect(cached?.worktrees[0]?.prState).toBe("open");

@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from "vitest";
-import { QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -87,7 +87,10 @@ it("refetches a changed worktree event into the active canonical cache entry wit
   );
 
   act(() => {
-    invalidateWorktreeChangedCaches(queryClient, mockLocalHostEntry.hostId);
+    invalidateWorktreeChangedCaches(queryClient, mockLocalHostEntry.hostId, {
+      kind: "worktreePath",
+      worktreePath: "/wt/app",
+    });
   });
 
   await waitFor(() => {
@@ -97,4 +100,56 @@ it("refetches a changed worktree event into the active canonical cache entry wit
   expect(queryClient.getQueryCache().findAll({ queryKey: scope })).toHaveLength(
     1,
   );
+});
+
+function seedOverlay(
+  queryClient: QueryClient,
+  path: string,
+): readonly unknown[] {
+  const key = hostQueryKeys.method(
+    mockLocalHostEntry.hostId,
+    "worktree.listAllForHost",
+    {
+      includeActivity: true,
+      activityPaths: [path],
+      cursor: null,
+      limit: null,
+      forceRefresh: false,
+    },
+  );
+  queryClient.setQueryData(key, { worktrees: [], nextCursor: null });
+  return key;
+}
+
+// A `worktreePath` event names exactly one row. Invalidating every on-screen
+// row's overlay would turn one commit into one refetch PER ROW - the request
+// storm this stream exists to remove.
+it("invalidates only the named path's enrichment overlay on a worktreePath event", () => {
+  const queryClient = createAppQueryClient();
+  const named = seedOverlay(queryClient, "/wt/app");
+  const other = seedOverlay(queryClient, "/wt/other");
+
+  invalidateWorktreeChangedCaches(queryClient, mockLocalHostEntry.hostId, {
+    kind: "worktreePath",
+    worktreePath: "/wt/app",
+  });
+
+  expect(queryClient.getQueryState(named)?.isInvalidated).toBe(true);
+  expect(queryClient.getQueryState(other)?.isInvalidated).toBe(false);
+});
+
+// A `root` event says nothing about WHICH worktrees under it moved, so every
+// overlay has to re-probe.
+it("invalidates every enrichment overlay on a root event", () => {
+  const queryClient = createAppQueryClient();
+  const named = seedOverlay(queryClient, "/wt/app");
+  const other = seedOverlay(queryClient, "/wt/other");
+
+  invalidateWorktreeChangedCaches(queryClient, mockLocalHostEntry.hostId, {
+    kind: "root",
+    root: "/repo",
+  });
+
+  expect(queryClient.getQueryState(named)?.isInvalidated).toBe(true);
+  expect(queryClient.getQueryState(other)?.isInvalidated).toBe(true);
 });

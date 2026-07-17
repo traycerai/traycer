@@ -12,6 +12,7 @@ import type { WorktreeListAllForHostResponseV14 } from "@traycer/protocol/host/w
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { type HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys, worktreeMutationKeys } from "@/lib/query-keys";
+import { isPerPathEnrichmentQueryKey } from "@/lib/query-keys/worktree-enrichment-keys";
 import { logPerfEvent } from "@/lib/perf/perf-telemetry";
 import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
@@ -213,6 +214,20 @@ export function useWorktreeListing(
       >(listingQueryKeyFor(input.hostId), {
         pages: [response],
         pageParams: [null],
+      });
+      // The forced listing re-resolves the BASE rows, so every cached overlay
+      // is now older than its base row and `acceptedEnrichedByPath` rejects it
+      // - the rows read "Checking..." until something re-probes them. Nothing
+      // would: the overlays keep their keys, so they are neither invalidated
+      // nor sweep candidates. Without this the Refresh button strands every
+      // on-screen row, permanently on a host that lacks `worktree.changed`.
+      void queryClient.invalidateQueries({
+        queryKey: hostQueryKeys.methodScope(
+          input.hostId,
+          "worktree.listAllForHost",
+        ),
+        refetchType: "active",
+        predicate: (query) => isPerPathEnrichmentQueryKey(query.queryKey),
       });
     },
   });

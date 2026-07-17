@@ -18,6 +18,10 @@ import type { WorktreeHostEntryV14 } from "@traycer/protocol/host/index";
 import type { WorktreeListAllForHostResponseV14 } from "@traycer/protocol/host/worktree-schemas";
 import { type HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
+import {
+  isPerPathEnrichmentQueryKey,
+  perPathEnrichmentQueryPath,
+} from "@/lib/query-keys/worktree-enrichment-keys";
 import { logPerfEvent } from "@/lib/perf/perf-telemetry";
 import { useHostQueries } from "@/hooks/host/use-host-queries";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
@@ -267,33 +271,6 @@ function selectSweepChunk(args: {
 }
 
 // A `worktree.listAllForHost` query key is `["host", hostId, method, params]`
-// (see `hostQueryKeys.method`). The panel's per-path enrichment queries are the
-// only ones whose `activityPaths` is an array (`[path]`); the base list and the
-// task-delete whole-list query both pass `activityPaths: null`. Folding ONLY the
-// per-path queries keeps the overlay to fully-enriched, on-screen-driven data -
-// crucially it EXCLUDES the base list's `includeActivity: false` entries, so an
-// un-probed row stays "pending" (absent from the overlay) instead of being
-// classified from base-only fields.
-function isPerPathEnrichmentQueryKey(key: QueryKey): boolean {
-  const params = key[3];
-  if (typeof params !== "object" || params === null) return false;
-  if (!("activityPaths" in params)) return false;
-  return Array.isArray(params.activityPaths);
-}
-
-// The worktree path a per-path enrichment key targets (`activityPaths[0]`),
-// or null for any other key under the method scope. Used by the warm-open
-// restore to invalidate exactly the seeded queries in ONE cache scan.
-function perPathEnrichmentQueryPath(key: QueryKey): string | null {
-  const params = key[3];
-  if (typeof params !== "object" || params === null) return null;
-  if (!("activityPaths" in params)) return null;
-  const { activityPaths } = params;
-  return Array.isArray(activityPaths) && typeof activityPaths[0] === "string"
-    ? activityPaths[0]
-    : null;
-}
-
 function queryKeyHasPrefix(key: unknown, prefix: readonly unknown[]): boolean {
   if (!Array.isArray(key)) return false;
   return (

@@ -10,6 +10,7 @@ import type { WorktreeHostEntryV14 } from "@traycer/protocol/host/worktree-schem
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { createAppQueryClient } from "@/lib/query-client";
+import { hostQueryKeys } from "@/lib/query-keys";
 import {
   SETTINGS_WORKTREE_LIST_PAGE_LIMIT,
   listingQueryKeyFor,
@@ -303,5 +304,48 @@ describe("useWorktreeListing (warm-open listing snapshot)", () => {
         `traycer-gui-app:worktree-listing-cache:${HOST_ID}`,
       ),
     ).toBeNull();
+  });
+  // `forceRefresh` re-resolves the BASE rows, so every cached per-path overlay
+  // is instantly older than its base row and `acceptedEnrichedByPath` rejects
+  // it - the row reads "Checking...". The overlays keep their keys, so nothing
+  // else re-probes them: without this invalidation the Refresh button strands
+  // every on-screen row, permanently against a host with no `worktree.changed`.
+  it("invalidates the per-path enrichment overlays after a forced refresh", async () => {
+    const live = [listedEntry("/wt/a", "main")];
+    const fixture = createFixture(() => live, null, null);
+    const { result } = renderHook(
+      () => useWorktreeListing(fixture.client, true),
+      { wrapper: fixture.Wrapper },
+    );
+    await waitFor(() => {
+      expect(result.current.worktrees).toHaveLength(1);
+    });
+
+    const overlayKey = hostQueryKeys.method(
+      HOST_ID,
+      "worktree.listAllForHost",
+      {
+        includeActivity: true,
+        activityPaths: ["/wt/a"],
+        cursor: null,
+        limit: null,
+        forceRefresh: false,
+      },
+    );
+    fixture.queryClient.setQueryData(overlayKey, {
+      worktrees: [listedEntry("/wt/a", "main")],
+      nextCursor: null,
+    });
+    expect(fixture.queryClient.getQueryState(overlayKey)?.isInvalidated).toBe(
+      false,
+    );
+
+    await act(async () => {
+      await result.current.refresh();
+    });
+
+    expect(fixture.queryClient.getQueryState(overlayKey)?.isInvalidated).toBe(
+      true,
+    );
   });
 });
