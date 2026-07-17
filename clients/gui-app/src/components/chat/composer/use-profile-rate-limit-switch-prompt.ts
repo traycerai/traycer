@@ -1,63 +1,149 @@
 import { useCallback } from "react";
-import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
+import type {
+  ProviderId,
+  ProviderProfile,
+} from "@traycer/protocol/host/provider-schemas";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { useTabProvidersList } from "@/hooks/providers/use-tab-providers-list-query";
 import { useRateLimitSwitchPromptDismissalsStore } from "@/stores/rate-limits/rate-limit-switch-prompt-dismissals-store";
-import {
-  profileCommitId,
-  profileDisplayLabel,
-} from "@/components/providers/provider-profile-model";
+import { profileCommitId } from "@/components/providers/provider-profile-model";
 import { providerIdForHarness } from "./use-provider-reauth-gate";
 
-function isLimited(profile: ProviderProfile): boolean {
-  return (
-    profile.rateLimitStatus === "near_limit" ||
-    profile.rateLimitStatus === "hard_limit"
-  );
-}
+export type ProfileRateLimitSeverity = "near_limit" | "hard_limit";
 
-export interface ProfileRateLimitProfileChip {
-  /** Normalized for `onSwitchProfile`/composer-selection semantics - `null`
-   *  for the ambient profile. */
+export interface ProfileRateLimitDestination {
+  readonly profile: ProviderProfile;
+  /** Normalized for composer-selection semantics: `null` is the ambient
+   * profile even though its wire id is the literal ambient sentinel. */
   readonly profileId: string | null;
-  /** The raw, always-present `ProviderProfile.profileId` (never `null` even
-   *  for ambient) - the stable key `AccentDot`'s hash fallback needs. */
-  readonly accentDotId: string;
-  readonly label: string;
-  readonly accentColor: string | null;
+  readonly selectable: boolean;
 }
 
-export type ProfileRateLimitAlternative = ProfileRateLimitProfileChip;
-
-export interface ProfileRateLimitSwitchPrompt {
-  /** True only when the composer's OWN committed profile is near/at its limit,
-   *  at least one authenticated non-limited alternative exists, and the user
-   *  has not dismissed this exact warning. */
-  readonly limited: boolean;
-  readonly hardLimited: boolean;
-  /** The limited profile the banner switches away from. Remains populated
-   *  after dismissal while the underlying rate-limit condition still holds. */
-  readonly current: ProfileRateLimitProfileChip | null;
-  readonly alternatives: ReadonlyArray<ProfileRateLimitAlternative>;
-  /** Hides this exact warning in EVERY composer for the rest of the app
-   *  session (shared dismissal store, not per-composer state). A change in
-   *  source profile, severity, or viable alternatives creates a new warning. */
+interface HiddenProfileRateLimitPrompt {
+  readonly kind: "hidden";
   readonly dismiss: () => void;
 }
 
-const NO_ALTERNATIVES: ReadonlyArray<ProfileRateLimitAlternative> = [];
-const NO_PROFILES: ReadonlyArray<ProviderProfile> = [];
+interface VisibleProfileRateLimitPrompt {
+  readonly kind: "visible";
+  readonly warningKey: string;
+  readonly providerId: ProviderId;
+  readonly severity: ProfileRateLimitSeverity;
+  readonly current: ProviderProfile;
+  readonly profiles: ReadonlyArray<ProviderProfile>;
+  /** Every other provider profile in the host's stable order. Rows that
+   * are unavailable for switching stay here so the menu can explain why. */
+  readonly destinations: ReadonlyArray<ProfileRateLimitDestination>;
+  /** First selectable destination in provider order. Usage is never used
+   * to rank this default action. */
+  readonly primaryTarget: ProfileRateLimitDestination | null;
+  readonly dismiss: () => void;
+}
 
+export type ProfileRateLimitSwitchPrompt =
+  HiddenProfileRateLimitPrompt | VisibleProfileRateLimitPrompt;
+
+interface ProfileRateLimitWarningProjection {
+  readonly warningKey: string;
+  readonly providerId: ProviderId;
+  readonly severity: ProfileRateLimitSeverity;
+  readonly current: ProviderProfile;
+  readonly profiles: ReadonlyArray<ProviderProfile>;
+  readonly destinations: ReadonlyArray<ProfileRateLimitDestination>;
+  readonly primaryTarget: ProfileRateLimitDestination | null;
+}
+
+const NO_PROFILES: ReadonlyArray<ProviderProfile> = [];
 function noop(): void {}
 
+function rateLimitSeverity(
+  profile: ProviderProfile,
+): ProfileRateLimitSeverity | null {
+  if (profile.rateLimitStatus === "near_limit") return "near_limit";
+  if (profile.rateLimitStatus === "hard_limit") return "hard_limit";
+  return null;
+}
+
+function hiddenPrompt(): HiddenProfileRateLimitPrompt {
+  return { kind: "hidden", dismiss: noop };
+}
+
+function findLimitedProfile(
+  profiles: ReadonlyArray<ProviderProfile>,
+  profileId: string | null,
+): {
+  readonly current: ProviderProfile;
+  readonly severity: ProfileRateLimitSeverity;
+} | null {
+  if (profiles.length < 2) return null;
+  const current = profiles.find(
+    (profile) => profileCommitId(profile) === profileId,
+  );
+  if (current === undefined) return null;
+  const severity = rateLimitSeverity(current);
+  return severity === null ? null : { current, severity };
+}
+
+function selectableDestination(profile: ProviderProfile): boolean {
+  return (
+    profile.auth.status === "authenticated" &&
+    rateLimitSeverity(profile) === null
+  );
+}
+
+function destinationsForLimitedProfile(
+  profiles: ReadonlyArray<ProviderProfile>,
+  current: ProviderProfile,
+): ReadonlyArray<ProfileRateLimitDestination> {
+  return profiles
+    .filter((profile) => profile.profileId !== current.profileId)
+    .map((profile) => ({
+      profile,
+      profileId: profileCommitId(profile),
+      selectable: selectableDestination(profile),
+    }));
+}
+
+function warningProjection(input: {
+  readonly harnessId: GuiHarnessId;
+  readonly providerId: ProviderId | null;
+  readonly profiles: ReadonlyArray<ProviderProfile>;
+  readonly profileId: string | null;
+}): ProfileRateLimitWarningProjection | null {
+  if (input.providerId === null) return null;
+  const limited = findLimitedProfile(input.profiles, input.profileId);
+  if (limited === null) return null;
+  const destinations = destinationsForLimitedProfile(
+    input.profiles,
+    limited.current,
+  );
+  const primaryTarget =
+    destinations.find((destination) => destination.selectable) ?? null;
+  return {
+    warningKey: JSON.stringify([
+      input.harnessId,
+      limited.current.profileId,
+      limited.severity,
+      destinations
+        .filter((destination) => destination.selectable)
+        .map((destination) => destination.profile.profileId)
+        .toSorted(),
+    ]),
+    providerId: input.providerId,
+    severity: limited.severity,
+    current: limited.current,
+    profiles: input.profiles,
+    destinations,
+    primaryTarget,
+  };
+}
+
 /**
- * Composer-facing rate-limit signal for the mid-chat "Continue on <profile>"
- * switch prompt (multi-profile decision log's "Rate-limit moment"). Derives
- * everything from the SAME `providers.list` read the reauth gate already
- * queries (dedupes via the query cache - no new host RPC), reading the
- * per-profile `rateLimitStatus` the host derives from its passive-capture
- * gauge cache. Never switches automatically - this is a read-only signal the
- * banner turns into a user-confirmed action.
+ * Composer-facing rate-limit warning projection. Its eligibility comes only
+ * from the subscribed tab-host `providers.list` snapshot; detailed usage is a
+ * separate, cache-only presentation concern in the banner. The visible state
+ * deliberately remains representable with no selectable alternative so the
+ * user can inspect profile limits instead of losing the warning entirely.
  */
 export function useProfileRateLimitSwitchPrompt(
   harnessId: GuiHarnessId,
@@ -70,73 +156,28 @@ export function useProfileRateLimitSwitchPrompt(
   const providerId = providerIdForHarness(harnessId);
   const enabled = active && providerId !== null;
   const query = useTabProvidersList({ enabled, subscribed: enabled });
-
-  const profiles =
-    query.data?.providers.find((p) => p.providerId === providerId)?.profiles ??
-    NO_PROFILES;
-  const current =
-    profiles.length < 2
-      ? undefined
-      : profiles.find((profile) => profileCommitId(profile) === profileId);
-  const currentChip: ProfileRateLimitProfileChip | null =
-    current !== undefined && isLimited(current)
-      ? {
-          profileId: profileCommitId(current),
-          accentDotId: current.profileId,
-          label: profileDisplayLabel(current),
-          accentColor: current.accentColor,
-        }
-      : null;
-  const alternatives =
-    currentChip === null
-      ? NO_ALTERNATIVES
-      : profiles
-          .filter(
-            (profile) =>
-              profileCommitId(profile) !== profileId &&
-              profile.auth.status === "authenticated" &&
-              !isLimited(profile),
-          )
-          .map((profile) => ({
-            profileId: profileCommitId(profile),
-            accentDotId: profile.profileId,
-            label: profileDisplayLabel(profile),
-            accentColor: profile.accentColor,
-          }));
-  const hardLimited = current?.rateLimitStatus === "hard_limit";
-  const promptKey =
-    currentChip === null
-      ? null
-      : JSON.stringify([
-          harnessId,
-          currentChip.accentDotId,
-          hardLimited,
-          alternatives.map((alternative) => alternative.accentDotId).sort(),
-        ]);
-  // Subscribes to this exact key's dismissed bit (a boolean, so a dismissal
-  // of an unrelated prompt key never re-renders this composer).
+  const profiles: ReadonlyArray<ProviderProfile> =
+    query.data?.providers.find((provider) => provider.providerId === providerId)
+      ?.profiles ?? NO_PROFILES;
+  const projection = warningProjection({
+    harnessId,
+    providerId,
+    profiles,
+    profileId,
+  });
   const dismissed = useRateLimitSwitchPromptDismissalsStore(
-    (state) => promptKey !== null && state.dismissedKeys.has(promptKey),
+    (state) =>
+      projection !== null && state.dismissedKeys.has(projection.warningKey),
   );
   const dismiss = useCallback((): void => {
-    if (promptKey !== null) dismissPromptKey(promptKey);
-  }, [dismissPromptKey, promptKey]);
+    if (projection !== null) dismissPromptKey(projection.warningKey);
+  }, [dismissPromptKey, projection]);
 
-  if (currentChip === null || promptKey === null) {
-    return {
-      limited: false,
-      hardLimited: false,
-      current: null,
-      alternatives: NO_ALTERNATIVES,
-      dismiss: noop,
-    };
-  }
+  if (projection === null || dismissed) return hiddenPrompt();
 
   return {
-    limited: alternatives.length > 0 && !dismissed,
-    hardLimited,
-    current: currentChip,
-    alternatives,
+    kind: "visible",
+    ...projection,
     dismiss,
   };
 }
