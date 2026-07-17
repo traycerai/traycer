@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   PERSIST_STORES,
-  appLocalNotificationDisplayReceiptFloorKey,
-  appLocalNotificationDisplayReceiptFloorPrefix,
   appLocalNotificationDisplayReceiptKey,
   appLocalNotificationDisplayReceiptNotificationPrefix,
   appLocalNotificationDisplayReceiptPrefix,
@@ -173,17 +171,6 @@ describe("persist key builders — output-preserving against current source", ()
       }),
     ).toBe(
       "traycer-gui-app:app-local-notification-display-receipt:user-1:host.error%3Atransport:42",
-    );
-    expect(appLocalNotificationDisplayReceiptFloorPrefix("user-1")).toBe(
-      "traycer-gui-app:app-local-notification-display-receipt-floor:user-1",
-    );
-    expect(
-      appLocalNotificationDisplayReceiptFloorKey({
-        userId: "user-1",
-        updatedAt: 42,
-      }),
-    ).toBe(
-      "traycer-gui-app:app-local-notification-display-receipt-floor:user-1:42",
     );
   });
 

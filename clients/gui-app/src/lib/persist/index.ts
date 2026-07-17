@@ -2,8 +2,6 @@ export {
   PERSIST_PREFIX,
   PERSIST_STORES,
   STORE_KEYS,
-  appLocalNotificationDisplayReceiptFloorKey,
-  appLocalNotificationDisplayReceiptFloorPrefix,
   appLocalNotificationDisplayReceiptKey,
   appLocalNotificationDisplayReceiptNotificationPrefix,
   appLocalNotificationDisplayReceiptPrefix,

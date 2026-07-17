@@ -1,12 +1,11 @@
 import {
-  appLocalNotificationDisplayReceiptFloorKey,
-  appLocalNotificationDisplayReceiptFloorPrefix,
   appLocalNotificationDisplayReceiptKey,
   appLocalNotificationDisplayReceiptNotificationPrefix,
   appLocalNotificationDisplayReceiptPrefix,
 } from "@/lib/persist";
 
-export const APP_LOCAL_DISPLAY_RECEIPTS_PER_USER_CAP = 512;
+export const APP_LOCAL_DISPLAY_RECEIPT_NOTIFICATION_CAP = 512;
+export const APP_LOCAL_DISPLAY_RECEIPT_VERSION_CAP = 8;
 
 const receiptSessionGenerationByUserId = new Map<string, number>();
 
@@ -26,6 +25,10 @@ interface StoredVersion {
   readonly updatedAt: number;
 }
 
+interface StoredReceipt extends StoredVersion {
+  readonly notificationKey: string;
+}
+
 export function appLocalDisplayDeliveryKey(
   version: AppLocalDisplayReceiptVersion,
 ): string {
@@ -42,12 +45,6 @@ export function hasAppLocalDisplayReceipt(
   ) {
     return true;
   }
-  const compactedThrough = highestStoredVersion(
-    appLocalNotificationDisplayReceiptFloorPrefix(version.userId),
-  );
-  if (compactedThrough !== null && version.updatedAt <= compactedThrough) {
-    return true;
-  }
   return storedVersions(
     appLocalNotificationDisplayReceiptNotificationPrefix(version),
   ).some((stored) => stored.updatedAt >= version.updatedAt);
@@ -60,7 +57,8 @@ export function recordAppLocalDisplayReceipt(
     appLocalNotificationDisplayReceiptKey(version),
     "1",
   );
-  compactAppLocalDisplayReceipts(version.userId);
+  compactNotificationVersions(version);
+  compactNotificationIds(version);
 }
 
 export function captureAppLocalDisplayReceiptSession(
@@ -83,51 +81,81 @@ export function clearAppLocalDisplayReceipts(userId: string): void {
     userId,
     receiptSessionGeneration(userId) + 1,
   );
-  const prefixes = [
-    appLocalNotificationDisplayReceiptPrefix(userId),
-    appLocalNotificationDisplayReceiptFloorPrefix(userId),
-  ].map((prefix) => `${prefix}:`);
+  const prefix = `${appLocalNotificationDisplayReceiptPrefix(userId)}:`;
   storageKeys()
-    .filter((key) => prefixes.some((prefix) => key.startsWith(prefix)))
+    .filter((key) => key.startsWith(prefix))
     .forEach((key) => window.localStorage.removeItem(key));
 }
 
-function compactAppLocalDisplayReceipts(userId: string): void {
-  const receipts = [
-    ...storedVersions(appLocalNotificationDisplayReceiptPrefix(userId)),
-  ].sort((left, right) => left.updatedAt - right.updatedAt);
-  const removeCount = receipts.length - APP_LOCAL_DISPLAY_RECEIPTS_PER_USER_CAP;
-  if (removeCount <= 0) return;
-  const obsolete = receipts.slice(0, removeCount);
-  const floor = obsolete[obsolete.length - 1].updatedAt;
-  // Publish a set-only floor before deleting exact keys. Concurrent stale
-  // windows can add lower floors, but readers take the maximum and no window
-  // can overwrite or regress a newer compaction boundary.
-  window.localStorage.setItem(
-    appLocalNotificationDisplayReceiptFloorKey({ userId, updatedAt: floor }),
-    "1",
-  );
-  compactDisplayReceiptFloors(userId);
+function compactNotificationVersions(
+  version: AppLocalDisplayReceiptVersion,
+): void {
+  const obsolete = [
+    ...storedVersions(
+      appLocalNotificationDisplayReceiptNotificationPrefix(version),
+    ),
+  ]
+    .sort((left, right) => right.updatedAt - left.updatedAt)
+    .slice(APP_LOCAL_DISPLAY_RECEIPT_VERSION_CAP);
   obsolete.forEach(({ key }) => window.localStorage.removeItem(key));
 }
 
-function compactDisplayReceiptFloors(userId: string): void {
-  const prefix = appLocalNotificationDisplayReceiptFloorPrefix(userId);
-  const floors = storedVersions(prefix);
-  const highest = highestStoredVersion(prefix);
-  if (highest === null) return;
-  floors
-    .filter((floor) => floor.updatedAt < highest)
+function compactNotificationIds(version: AppLocalDisplayReceiptVersion): void {
+  const receipts = storedReceiptsForUser(version.userId);
+  const latestByNotificationKey = new Map<string, number>();
+  receipts.forEach((receipt) => {
+    latestByNotificationKey.set(
+      receipt.notificationKey,
+      Math.max(
+        latestByNotificationKey.get(receipt.notificationKey) ??
+          Number.NEGATIVE_INFINITY,
+        receipt.updatedAt,
+      ),
+    );
+  });
+  if (
+    latestByNotificationKey.size <= APP_LOCAL_DISPLAY_RECEIPT_NOTIFICATION_CAP
+  ) {
+    return;
+  }
+  // Forget the oldest IDs once the index is full. That can permit a retry for
+  // an ancient evicted row, but unlike a user-wide watermark it can never
+  // suppress a notification ID that has no display evidence of its own.
+  const currentNotificationKey = encodedNotificationKey(version);
+  const obsoleteNotificationKeys = new Set(
+    [...latestByNotificationKey.entries()]
+      .sort((left, right) => {
+        const leftIsCurrent = left[0] === currentNotificationKey;
+        const rightIsCurrent = right[0] === currentNotificationKey;
+        if (leftIsCurrent !== rightIsCurrent) return leftIsCurrent ? -1 : 1;
+        return right[1] - left[1];
+      })
+      .slice(APP_LOCAL_DISPLAY_RECEIPT_NOTIFICATION_CAP)
+      .map(([notificationKey]) => notificationKey),
+  );
+  receipts
+    .filter((receipt) => obsoleteNotificationKeys.has(receipt.notificationKey))
     .forEach(({ key }) => window.localStorage.removeItem(key));
 }
 
-function highestStoredVersion(prefix: string): number | null {
-  const versions = storedVersions(prefix);
-  if (versions.length === 0) return null;
-  return versions.reduce(
-    (highest, version) => Math.max(highest, version.updatedAt),
-    Number.NEGATIVE_INFINITY,
-  );
+function storedReceiptsForUser(userId: string): ReadonlyArray<StoredReceipt> {
+  const prefix = `${appLocalNotificationDisplayReceiptPrefix(userId)}:`;
+  return storageKeys().flatMap((key) => {
+    if (!key.startsWith(prefix)) return [];
+    if (window.localStorage.getItem(key) !== "1") return [];
+    const suffix = key.slice(prefix.length);
+    const separatorIndex = suffix.lastIndexOf(":");
+    if (separatorIndex <= 0) return [];
+    const updatedAt = Number(suffix.slice(separatorIndex + 1));
+    if (!Number.isFinite(updatedAt)) return [];
+    return [
+      {
+        key,
+        notificationKey: suffix.slice(0, separatorIndex),
+        updatedAt,
+      },
+    ];
+  });
 }
 
 function storedVersions(prefix: string): ReadonlyArray<StoredVersion> {
@@ -139,6 +167,15 @@ function storedVersions(prefix: string): ReadonlyArray<StoredVersion> {
     if (!Number.isFinite(updatedAt)) return [];
     return [{ key, updatedAt }];
   });
+}
+
+function encodedNotificationKey(
+  version: AppLocalDisplayReceiptVersion,
+): string {
+  const userPrefix = `${appLocalNotificationDisplayReceiptPrefix(version.userId)}:`;
+  return appLocalNotificationDisplayReceiptNotificationPrefix(version).slice(
+    userPrefix.length,
+  );
 }
 
 function storageKeys(): ReadonlyArray<string> {
