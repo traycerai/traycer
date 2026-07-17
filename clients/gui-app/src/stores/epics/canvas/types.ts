@@ -11,6 +11,7 @@ import type {
 import {
   TILE_KIND_BLANK,
   TILE_KIND_GIT_DIFF,
+  TILE_KIND_PR_DETAIL,
   TILE_KIND_SNAPSHOT_DIFF,
 } from "./tile-kinds";
 
@@ -262,8 +263,35 @@ export interface BlankTileRef {
   readonly hostId: string;
 }
 
+/**
+ * GitHub-style PR full-view tile. Pure ref, `isRecordBacked: false` (same
+ * family as `GitDiffTileRef`/`SnapshotDiffTileRef`) - the heavy PR fact is
+ * fetched live over `pr.subscribeDetail`, never stored in the tile itself.
+ * `githubHost`/`owner`/`repo`/`prNumber` are the PR's base coordinates (only
+ * fully-identified rows are tile-able, per the panel's unknown-base rule).
+ * `epicId` is deliberately NOT part of the ref: it is resolved from canvas
+ * context (`TileRenderArgs.epicId`) at subscribe time, since the ref is a
+ * pure GitHub-coordinate identity that must dedupe/reopen the same tile
+ * regardless of which epic's panel opened it.
+ */
+export interface PrDetailTileRef {
+  readonly id: string;
+  readonly instanceId: string;
+  readonly type: typeof TILE_KIND_PR_DETAIL;
+  readonly name: string;
+  readonly hostId: string;
+  readonly githubHost: string;
+  readonly owner: string;
+  readonly repo: string;
+  readonly prNumber: number;
+}
+
 export type EpicCanvasTileRef =
-  EpicNodeRef | GitDiffTileRef | SnapshotDiffTileRef | BlankTileRef;
+  | EpicNodeRef
+  | GitDiffTileRef
+  | SnapshotDiffTileRef
+  | PrDetailTileRef
+  | BlankTileRef;
 
 export function isBlankTileRef(
   value: EpicCanvasTileRef,
@@ -287,6 +315,12 @@ export function isSnapshotDiffTileRef(
   value: EpicCanvasTileRef,
 ): value is SnapshotDiffTileRef {
   return value.type === TILE_KIND_SNAPSHOT_DIFF;
+}
+
+export function isPrDetailTileRef(
+  value: EpicCanvasTileRef,
+): value is PrDetailTileRef {
+  return value.type === TILE_KIND_PR_DETAIL;
 }
 
 export function isDiffTileRef(

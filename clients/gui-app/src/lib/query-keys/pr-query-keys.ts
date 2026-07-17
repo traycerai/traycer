@@ -15,4 +15,28 @@ export const prQueryKeys = {
    */
   listForEpic: (hostId: string | null, epicId: string) =>
     [...hostQueryKeys.scope(hostId), "pr", "listForEpic", epicId] as const,
+
+  /**
+   * Query key for one PR's heavy detail cache (`pr.subscribeDetail`). Scoped
+   * by `(hostId, githubHost, owner, repo, prNumber)` - NOT by `epicId`: the
+   * heavy fact is host-global (tech plan: "a PR shared by two epics is one
+   * row"), so tiles opened from different epics for the same PR on the same
+   * host share one cache entry.
+   */
+  detail: (args: {
+    readonly hostId: string;
+    readonly githubHost: string;
+    readonly owner: string;
+    readonly repo: string;
+    readonly prNumber: number;
+  }) =>
+    [
+      ...hostQueryKeys.scope(args.hostId),
+      "pr",
+      "detail",
+      args.githubHost,
+      args.owner,
+      args.repo,
+      args.prNumber,
+    ] as const,
 };

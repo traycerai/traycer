@@ -23,6 +23,7 @@ import { TicketTile } from "./ticket-tile";
 import { WorkspaceFileTile } from "./workspace-file-tile";
 import { GitDiffTile } from "./git-diff-tile";
 import { SnapshotDiffTile } from "./snapshot-diff-tile";
+import { PrDetailTile } from "./pr-detail-tile";
 import { PaneOpener } from "@/components/epic-canvas/canvas/pane-opener";
 
 export interface TileRenderArgs<R extends EpicCanvasTileRef> {
@@ -107,6 +108,9 @@ const TILE_RENDERERS: TileRendererRegistry = {
   ),
   "snapshot-diff": ({ node, viewTabId }) => (
     <SnapshotDiffTile node={node} viewTabId={viewTabId} />
+  ),
+  "pr-detail": ({ node, epicId, isActive }) => (
+    <PrDetailTile node={node} epicId={epicId} isActive={isActive} />
   ),
   // A blank tab's body IS the inline opener; picking content replaces it in
   // place (via openTileInPane). `tileId` is the group id; `isActive` drives

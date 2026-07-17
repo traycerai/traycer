@@ -224,7 +224,15 @@ export function formatPrReviewDecision(
   return "Review required";
 }
 
-export function formatPrBranchSummary(item: PrLightItem): string {
+/**
+ * Structural (not `PrLightItem`-specific) so `PrDetailCore` - which carries
+ * the same two fields but is not a `PrLightItem` - can share this formatter
+ * with the panel row.
+ */
+export function formatPrBranchSummary(item: {
+  readonly headRefName: string | null;
+  readonly baseRefName: string | null;
+}): string {
   const head =
     item.headRefName !== null && item.headRefName.length > 0
       ? item.headRefName

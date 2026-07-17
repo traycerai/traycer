@@ -1,3 +1,4 @@
+import { nestedFocusBoundaryMock } from "@/__tests__/nested-focus-boundary-mock";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   cleanup,
@@ -29,12 +30,15 @@ import {
 import { StreamRuntimeContext } from "@/lib/host/stream-runtime-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { pickAutoExpandItem } from "@/lib/pr/pr-list-projection";
+import { prDetailTileId } from "@/lib/pr/pr-detail-tile";
 import {
   PR_PANEL_PERSIST_KEY,
   migratePrPanelPersistedState,
   usePrPanelStore,
   type PrPanelExpandedRow,
 } from "@/stores/epics/pr-panel-store";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import type { TilePane } from "@/stores/epics/canvas/tile-tree";
 
 vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
   useReactiveActiveHostId: () => "host1",
@@ -46,26 +50,41 @@ vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
 // semantics under test here. Stub it to a minimal clickable row that still
 // exercises the REAL toggle wiring in `pr-panel-body.tsx` (`handleToggle`
 // calling the real `usePrPanelStore`), keeping the WS transport as the only
-// faked external boundary plus this one unrelated presentational seam.
+// faked external boundary plus this one unrelated presentational seam. The
+// stub also forwards `onOpenFullView` (T6) as a plain button so the panel's
+// real row-click -> tile-open wiring is exercised without pulling in the
+// real `PrListRow`'s Y.doc dependency.
 vi.mock("@/components/epic-canvas/pr/pr-list-row", () => ({
   PrListRow: (props: {
     readonly item: PrLightItem;
     readonly expanded: boolean;
     readonly onToggle: () => void;
+    readonly onOpenFullView: (() => void) | null;
   }) => {
     const label =
       props.item.base !== null
         ? `${props.item.base.owner}/${props.item.base.repo}#${props.item.base.prNumber}`
         : (props.item.headRefName ?? "unknown-head");
     return (
-      <button
-        type="button"
-        data-testid={`mock-pr-row-${label}`}
-        data-expanded={props.expanded ? "true" : "false"}
-        onClick={props.onToggle}
-      >
-        {label}
-      </button>
+      <div>
+        <button
+          type="button"
+          data-testid={`mock-pr-row-${label}`}
+          data-expanded={props.expanded ? "true" : "false"}
+          onClick={props.onToggle}
+        >
+          {label}
+        </button>
+        {props.expanded && props.onOpenFullView !== null ? (
+          <button
+            type="button"
+            data-testid="pr-open-full-view"
+            onClick={props.onOpenFullView}
+          >
+            Open full view
+          </button>
+        ) : null}
+      </div>
     );
   },
 }));
@@ -193,6 +212,10 @@ function resetPrPanelStore(): void {
   usePrPanelStore.setState({ stateByEpicId: {} });
 }
 
+function resetCanvas(): void {
+  useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+}
+
 /** Narrows a parsed `zustand/persist` localStorage blob to `{ state }` without an `as` cast. */
 function hasStateField(value: unknown): value is { readonly state: unknown } {
   return typeof value === "object" && value !== null && "state" in value;
@@ -218,6 +241,8 @@ describe("PrPanelBody expansion persistence", () => {
 
   beforeEach(() => {
     resetPrPanelStore();
+    resetCanvas();
+    nestedFocusBoundaryMock.navigateNested.mockClear();
     queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
@@ -227,6 +252,7 @@ describe("PrPanelBody expansion persistence", () => {
   afterEach(() => {
     cleanup();
     resetPrPanelStore();
+    resetCanvas();
     queryClient.clear();
   });
 
@@ -400,6 +426,82 @@ describe("PrPanelBody expansion persistence", () => {
         usePrPanelStore.getState().stateByEpicId[epicId].expandedPr,
       ).toEqual(expectedRow);
     });
+  });
+
+  it("(d) clicking 'Open full view' on an expanded, fully-identified row opens a pr-detail tile via the real canvas store", async () => {
+    const epicId = "epic-d1";
+    usePrPanelStore.setState({
+      stateByEpicId: { [epicId]: { expandedPr: null } },
+    });
+
+    const item = buildPrItem({
+      base: { owner: "acme", repo: "widgets", prNumber: 55 },
+      githubHost: "github.com",
+      prUrl: "https://github.com/acme/widgets/pull/55",
+      headRefName: "feature/full-view",
+      title: "Full view PR",
+    });
+
+    renderPanel({ epicId, tabId: "tab-d1" });
+
+    await waitFor(() => {
+      expect(mockWsStreamClient.subscribeCallCount).toBe(1);
+    });
+    const session = mockWsStreamClient.getSession("pr.subscribeListForEpic", {
+      epicId,
+      mode: "foreground",
+    });
+    expect(session).toBeDefined();
+    if (session === undefined) return;
+
+    session.emitFrame({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      sourceStatus: "ok",
+      items: [item],
+    });
+
+    const row = await screen.findByTestId("mock-pr-row-acme/widgets#55");
+    fireEvent.click(row);
+
+    await waitFor(() => {
+      expect(row.getAttribute("data-expanded")).toBe("true");
+    });
+
+    const openFullViewButton = await screen.findByTestId("pr-open-full-view");
+    fireEvent.click(openFullViewButton);
+
+    const expectedTileId = prDetailTileId({
+      hostId: "host1",
+      githubHost: "github.com",
+      owner: "acme",
+      repo: "widgets",
+      prNumber: 55,
+    });
+
+    const canvasState = useEpicCanvasStore.getState();
+    const tabId = Object.keys(canvasState.tabsById).find(
+      (id) => canvasState.tabsById[id]?.epicId === epicId,
+    );
+    expect(tabId).toBeDefined();
+    if (tabId === undefined) return;
+
+    const canvas = canvasState.canvasByTabId[tabId];
+    if (canvas?.root?.kind !== "pane") throw new Error("expected a pane");
+    const pane: TilePane = canvas.root;
+    expect(pane.tabInstanceIds).toHaveLength(1);
+    const tile = canvas.tilesByInstanceId[pane.tabInstanceIds[0]];
+    expect(tile).toBeDefined();
+    if (tile === undefined) return;
+
+    expect(tile.id).toBe(expectedTileId);
+    expect(tile.type).toBe("pr-detail");
+    if (tile.type !== "pr-detail") throw new Error("expected a pr-detail tile");
+    expect(tile.hostId).toBe("host1");
+    expect(tile.githubHost).toBe("github.com");
+    expect(tile.owner).toBe("acme");
+    expect(tile.repo).toBe("widgets");
+    expect(tile.prNumber).toBe(55);
   });
 });
 

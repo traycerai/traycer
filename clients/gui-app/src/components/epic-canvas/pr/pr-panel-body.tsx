@@ -16,9 +16,12 @@ import { PrListRow } from "@/components/epic-canvas/pr/pr-list-row";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { usePrListSubscription } from "@/hooks/pr/use-pr-list-subscription";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { useStreamMethodSupport } from "@/lib/host/stream-runtime-context";
+import { makePrDetailTile } from "@/lib/pr/pr-detail-tile";
 import {
   expandedPrRowKey,
+  formatPrRowTitle,
   formatRepoGroupLabel,
   fullyIdentifiedPrBase,
   groupPrItemsByRepo,
@@ -103,6 +106,7 @@ function PrPanelBodyContent(props: {
     (s) => selectPrPanelEpicState(props.epicId)(s).expandedPr,
   );
   const setExpandedPr = usePrPanelStore((s) => s.setExpandedPr);
+  const tileNavigation = useEpicTileNavigation();
 
   // Unknown-base rows expand only in component state (never persisted):
   // `{ kind: "auto" }` defers to the recomputed first-open pick below; an
@@ -284,6 +288,23 @@ function PrPanelBodyContent(props: {
               identified === null
                 ? currentTransientKey === rowKey
                 : persistedExpandedKey === rowKey;
+            const hostId = props.hostId;
+            const onOpenFullView =
+              hostId === null || identified === null
+                ? null
+                : () => {
+                    tileNavigation.openTileInEpic(
+                      props.epicId,
+                      makePrDetailTile({
+                        hostId,
+                        githubHost: identified.githubHost,
+                        owner: identified.base.owner,
+                        repo: identified.base.repo,
+                        prNumber: identified.base.prNumber,
+                        name: formatPrRowTitle(item),
+                      }),
+                    );
+                  };
             return (
               <PrListRow
                 key={rowKey}
@@ -292,6 +313,7 @@ function PrPanelBodyContent(props: {
                 onToggle={() => {
                   handleToggle(item);
                 }}
+                onOpenFullView={onOpenFullView}
               />
             );
           })}

@@ -34,6 +34,7 @@ export function PrListRow(props: {
   readonly item: PrLightItem;
   readonly expanded: boolean;
   readonly onToggle: () => void;
+  readonly onOpenFullView: (() => void) | null;
 }): ReactNode {
   const owner = props.item.owners[0] ?? null;
   const tone = prChecksDotTone(props.item.checksRollup);
@@ -109,7 +110,7 @@ export function PrListRow(props: {
       {props.expanded ? (
         <PrListRowExpanded
           item={props.item}
-          canOpenFullView={identified !== null}
+          onOpenFullView={props.onOpenFullView}
         />
       ) : null}
     </div>
@@ -124,7 +125,7 @@ function formatPrCommentLabel(commentCount: number | null): string {
 
 function PrListRowExpanded(props: {
   readonly item: PrLightItem;
-  readonly canOpenFullView: boolean;
+  readonly onOpenFullView: (() => void) | null;
 }): ReactNode {
   const commentLabel = formatPrCommentLabel(props.item.commentCount);
 
@@ -148,34 +149,43 @@ function PrListRowExpanded(props: {
         </dd>
       </dl>
       <div className="flex flex-wrap items-center gap-1.5">
-        {/*
-          TODO(T6): wire Open full view to open the pr-detail canvas tile.
-          The tile is intentionally out of scope for T5; keep this button
-          disabled with the coming-soon affordance until T6 lands.
-        */}
-        <TooltipWrapper
-          label="coming with the PR tile"
-          side="bottom"
-          sideOffset={4}
-          align="start"
-        >
-          <span className="inline-flex">
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled
-              aria-label="Open full view"
-              data-testid="pr-open-full-view"
-              className="h-7 text-ui-xs"
-            >
-              Open full view
-            </Button>
-          </span>
-        </TooltipWrapper>
+        {props.onOpenFullView !== null ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={props.onOpenFullView}
+            aria-label="Open full view"
+            data-testid="pr-open-full-view"
+            className="h-7 text-ui-xs"
+          >
+            Open full view
+          </Button>
+        ) : (
+          <TooltipWrapper
+            label="Full identity is still resolving"
+            side="bottom"
+            sideOffset={4}
+            align="start"
+          >
+            <span className="inline-flex">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled
+                aria-label="Open full view"
+                data-testid="pr-open-full-view"
+                className="h-7 text-ui-xs"
+              >
+                Open full view
+              </Button>
+            </span>
+          </TooltipWrapper>
+        )}
         <PrGitHubLink prUrl={props.item.prUrl} />
       </div>
-      {!props.canOpenFullView ? (
+      {props.onOpenFullView === null ? (
         <p className="text-ui-xs text-muted-foreground/70">
           Full identity is still resolving — expansion is not remembered yet.
         </p>
