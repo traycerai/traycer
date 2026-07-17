@@ -869,32 +869,50 @@ export function WorktreesList(props: {
     openStreamTransport,
   } = props;
   const queryClient = useQueryClient();
-  // The merged view every downstream computation reads: each base row overlaid
-  // with its enriched entry once that has landed. Base fields (repo, branch, path,
-  // owners, createdAt) are identical in both, so grouping / search / sort are
-  // stable across enrichment; only the activity-probed fields fill in. A row is
-  // "pending" until its path appears in the overlay.
+  // TanStack retains invalidated enrichment rows, so presence alone cannot make
+  // one authoritative. A newly-unresolved base row must fail closed even when a
+  // previous resolved overlay is still cached; resolved overlays only win when
+  // they are at least as fresh as the resolved base row.
+  const acceptedEnrichedByPath = useMemo(() => {
+    const accepted = new Map<string, WorktreeHostEntryV14>();
+    for (const base of worktrees) {
+      const enriched = enrichedByPath.get(base.worktreePath);
+      if (
+        base.resolvedAt !== null &&
+        enriched !== undefined &&
+        enriched.resolvedAt !== null &&
+        enriched.resolvedAt >= base.resolvedAt
+      ) {
+        accepted.set(base.worktreePath, enriched);
+      }
+    }
+    return accepted;
+  }, [worktrees, enrichedByPath]);
+  // The merged view every downstream computation reads. A row is "pending"
+  // until a freshness-valid overlay exists for its current base row.
   const mergedWorktrees = useMemo(
     () =>
-      worktrees.map((entry) => enrichedByPath.get(entry.worktreePath) ?? entry),
-    [worktrees, enrichedByPath],
+      worktrees.map(
+        (entry) => acceptedEnrichedByPath.get(entry.worktreePath) ?? entry,
+      ),
+    [worktrees, acceptedEnrichedByPath],
   );
   // Un-enriched for classification/filtering (covers BOTH still-in-flight and
   // settled-error rows - neither has a known tier, so both stay out of the green /
   // tier-filtered cohorts).
   const isPending = useCallback(
-    (worktreePath: string) => !enrichedByPath.has(worktreePath),
-    [enrichedByPath],
+    (worktreePath: string) => !acceptedEnrichedByPath.has(worktreePath),
+    [acceptedEnrichedByPath],
   );
   // The row PILL, however, distinguishes the two: an errored row reads a settled
   // "Unknown" (non-animated), never an infinite "Checking…" spinner.
   const enrichmentStateFor = useCallback(
     (worktreePath: string): WorktreeEnrichmentState => {
-      if (enrichedByPath.has(worktreePath)) return "ready";
+      if (acceptedEnrichedByPath.has(worktreePath)) return "ready";
       if (erroredPaths.has(worktreePath)) return "unknown";
       return "pending";
     },
-    [enrichedByPath, erroredPaths],
+    [acceptedEnrichedByPath, erroredPaths],
   );
   // DELETE surfaces read this variant instead: a snapshot-seeded row reads
   // "pending" (its restored tier is last-run display data, not verified

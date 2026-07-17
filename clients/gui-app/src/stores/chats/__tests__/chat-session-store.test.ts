@@ -650,6 +650,49 @@ describe("createChatSessionStore", () => {
     expect(pendingEchoes[0]?.messageId).toBe(frame.messageId);
   });
 
+  it("refuses chat send while staged worktree metadata is unresolved", () => {
+    const harness = createHarness();
+    emitSnapshot(harness.callbacks(), "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    useWorktreeIntentStagingStore.getState().stageIntent(key, {
+      entries: [
+        {
+          kind: "worktree",
+          scripts: null,
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+          branch: {
+            type: "new",
+            name: "feat-unresolved",
+            source: "main",
+            carryUncommittedChanges: false,
+          },
+        },
+      ],
+    });
+    useWorktreeIntentStagingStore
+      .getState()
+      .setSuspendedWorkspacePaths(key, ["/repo"]);
+
+    const result = harness.handle.store
+      .getState()
+      .sendMessage(CONTENT, { type: "user", userId: OWNER_ID }, SETTINGS);
+
+    expect(result).toBeNull();
+    expect(harness.sent).toEqual([]);
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toBeDefined();
+  });
+
   it("sends worktreeIntent null when nothing is staged", () => {
     useWorktreeIntentStagingStore.setState({ intentByKey: {} });
     const harness = createHarness();

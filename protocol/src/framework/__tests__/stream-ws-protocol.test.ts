@@ -42,6 +42,19 @@ describe("stream-ws-protocol cross-version compatibility", () => {
       ).toEqual({ "worktree.changed": { major: 1, minor: 0 } });
     });
 
+    it("rejects an optional method that collides with a required client method", () => {
+      expect(
+        clientStreamOpenFrameSchema.safeParse({
+          kind: "open",
+          token: "bearer",
+          manifest,
+          optionalManifest: {
+            "epic.subscribe": { major: 2, minor: 0 },
+          },
+        }).success,
+      ).toBe(false);
+    });
+
     it("strips unknown additive fields instead of rejecting", () => {
       const parsed = clientStreamOpenFrameSchema.safeParse({
         kind: "open",
@@ -74,6 +87,18 @@ describe("stream-ws-protocol cross-version compatibility", () => {
           },
         }).optionalManifest,
       ).toEqual({ "worktree.changed": { major: 1, minor: 0 } });
+    });
+
+    it("rejects an optional method that collides with a required host method", () => {
+      expect(
+        hostStreamOpenAckFrameSchema.safeParse({
+          kind: "openAck",
+          manifest,
+          optionalManifest: {
+            "epic.subscribe": { major: 2, minor: 0 },
+          },
+        }).success,
+      ).toBe(false);
     });
 
     it("strips unknown keys instead of rejecting (older client tolerates a newer host's additive fields)", () => {

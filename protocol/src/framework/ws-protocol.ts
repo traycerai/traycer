@@ -34,9 +34,7 @@ export type ConnectionManifest = Readonly<Record<string, SchemaVersion>>;
  *   between the two canonicals using its installed upgrade/downgrade paths.
  */
 export type IncompatibleMethodBlocking =
-  | "client-missing-method"
-  | "host-missing-method"
-  | "no-bridge";
+  "client-missing-method" | "host-missing-method" | "no-bridge";
 
 /**
  * Per-method incompatibility record carried on a fatal error frame. Either
@@ -117,9 +115,7 @@ export type ClientFatalErrorFrame = {
  * connection.
  */
 export type ClientFrame =
-  | ClientOpenFrame
-  | ClientRequestFrame
-  | ClientFatalErrorFrame;
+  ClientOpenFrame | ClientRequestFrame | ClientFatalErrorFrame;
 
 /**
  * Host acknowledgement of a successful token + compatibility check, carrying
@@ -160,9 +156,7 @@ export type HostFatalErrorFrame = {
  * connection.
  */
 export type HostFrame =
-  | HostOpenAckFrame
-  | HostResponseFrame
-  | HostFatalErrorFrame;
+  HostOpenAckFrame | HostResponseFrame | HostFatalErrorFrame;
 
 // ---- Canonical Zod schemas -------------------------------------------- //
 
@@ -180,6 +174,32 @@ export const connectionManifestSchema = z.record(
   z.string(),
   schemaVersionSchema,
 );
+
+type ManifestChannels = {
+  readonly manifest: ConnectionManifest;
+  readonly optionalManifest?: ConnectionManifest;
+};
+
+/** Rejects a method advertised in both the required and optional channels. */
+export function rejectOverlappingManifestChannels(
+  value: ManifestChannels,
+  context: z.RefinementCtx,
+): void {
+  if (value.optionalManifest === undefined) {
+    return;
+  }
+  const overlappingMethod = Object.keys(value.optionalManifest).find(
+    (method) => value.manifest[method] !== undefined,
+  );
+  if (overlappingMethod === undefined) {
+    return;
+  }
+  context.addIssue({
+    code: z.ZodIssueCode.custom,
+    path: ["optionalManifest", overlappingMethod],
+    message: `Method ${overlappingMethod} cannot appear in both manifest channels`,
+  });
+}
 
 /**
  * Canonical schema for the per-method incompatibility record carried on a
@@ -219,12 +239,14 @@ export const fatalErrorDetailsSchema = z.object({
 });
 
 /** Canonical schema for the client `open` frame. */
-export const clientOpenFrameSchema = z.object({
-  kind: z.literal("open"),
-  token: z.string(),
-  manifest: connectionManifestSchema,
-  optionalManifest: connectionManifestSchema.optional(),
-});
+export const clientOpenFrameSchema = z
+  .object({
+    kind: z.literal("open"),
+    token: z.string(),
+    manifest: connectionManifestSchema,
+    optionalManifest: connectionManifestSchema.optional(),
+  })
+  .superRefine(rejectOverlappingManifestChannels);
 
 /** Canonical schema for the client `request` frame. */
 export const clientRequestFrameSchema = z.object({
@@ -253,11 +275,13 @@ export const clientFrameSchema = z.discriminatedUnion("kind", [
 ]);
 
 /** Canonical schema for the host `openAck` frame. */
-export const hostOpenAckFrameSchema = z.object({
-  kind: z.literal("openAck"),
-  manifest: connectionManifestSchema,
-  optionalManifest: connectionManifestSchema.optional(),
-});
+export const hostOpenAckFrameSchema = z
+  .object({
+    kind: z.literal("openAck"),
+    manifest: connectionManifestSchema,
+    optionalManifest: connectionManifestSchema.optional(),
+  })
+  .superRefine(rejectOverlappingManifestChannels);
 
 /**
  * Canonical schema for the host `response` envelope's error payload. The

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   connectionManifestSchema,
+  rejectOverlappingManifestChannels,
   schemaVersionSchema,
   fatalErrorDetailsSchema,
   type ConnectionManifest,
@@ -106,12 +107,14 @@ export type HostStreamFatalErrorFrame = {
   readonly details: FatalErrorDetails;
 };
 
-export const clientStreamOpenFrameSchema = z.object({
-  kind: z.literal("open"),
-  token: z.string(),
-  manifest: connectionManifestSchema,
-  optionalManifest: connectionManifestSchema.optional(),
-});
+export const clientStreamOpenFrameSchema = z
+  .object({
+    kind: z.literal("open"),
+    token: z.string(),
+    manifest: connectionManifestSchema,
+    optionalManifest: connectionManifestSchema.optional(),
+  })
+  .superRefine(rejectOverlappingManifestChannels);
 
 export const clientStreamSubscribeFrameSchema = z.object({
   kind: z.literal("subscribe"),
@@ -130,15 +133,17 @@ export const clientStreamFatalErrorFrameSchema = z.object({
   details: fatalErrorDetailsSchema,
 });
 
-export const hostStreamOpenAckFrameSchema = z.object({
-  kind: z.literal("openAck"),
-  manifest: connectionManifestSchema,
-  optionalManifest: connectionManifestSchema.optional(),
-  // Backward-compat: an older host omits `capabilities`; default to none so a
-  // newer client parsing an older host's ack still succeeds and treats every
-  // capability as unsupported.
-  capabilities: z.array(z.string()).default([]),
-});
+export const hostStreamOpenAckFrameSchema = z
+  .object({
+    kind: z.literal("openAck"),
+    manifest: connectionManifestSchema,
+    optionalManifest: connectionManifestSchema.optional(),
+    // Backward-compat: an older host omits `capabilities`; default to none so a
+    // newer client parsing an older host's ack still succeeds and treats every
+    // capability as unsupported.
+    capabilities: z.array(z.string()).default([]),
+  })
+  .superRefine(rejectOverlappingManifestChannels);
 
 export const hostStreamFatalErrorFrameSchema = z.object({
   kind: z.literal("fatalError"),

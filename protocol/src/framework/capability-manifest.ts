@@ -45,5 +45,13 @@ export function mergeConnectionManifests(
   if (optionalManifest === undefined) {
     return { ...manifest };
   }
+  const overlappingMethod = Object.keys(optionalManifest).find(
+    (method) => manifest[method] !== undefined,
+  );
+  if (overlappingMethod !== undefined) {
+    throw new Error(
+      `Method ${overlappingMethod} cannot appear in both manifest channels`,
+    );
+  }
   return { ...manifest, ...optionalManifest };
 }

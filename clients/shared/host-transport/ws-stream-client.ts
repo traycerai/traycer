@@ -250,6 +250,10 @@ export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
     if (this.closed) {
       return;
     }
+    // An optional method rejected by an older host has no owned session left to
+    // reconnect. Reset that cached verdict so an endpoint replacement / host
+    // upgrade can make its consumer mount and probe the method again.
+    this.resetUnsupportedMethodSupport();
     // Wake-recovery trace (piped to the desktop log via the renderer-console
     // bridge): proves the wake signal arrived and how many sessions re-dialed.
     console.debug(
@@ -257,6 +261,20 @@ export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
     );
     for (const session of Array.from(this.ownedSessions)) {
       session.forceReconnect(reason);
+    }
+  }
+
+  private resetUnsupportedMethodSupport(): void {
+    let changed = false;
+    for (const [method, support] of this.methodSupport) {
+      if (support !== "unsupported") continue;
+      this.methodSupport.set(method, "unknown");
+      this.methodSchemaVersions.delete(method);
+      changed = true;
+    }
+    if (!changed) return;
+    for (const listener of Array.from(this.methodSupportListeners)) {
+      listener();
     }
   }
 

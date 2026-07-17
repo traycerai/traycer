@@ -79,6 +79,18 @@ describe("ws-protocol canonical Zod schemas", () => {
       expect(clientFrameSchema.safeParse(frame).success).toBe(true);
     });
 
+    it("rejects a client open frame whose optional channel collides with the floor", () => {
+      const frame = {
+        kind: "open" as const,
+        token: "t-0",
+        manifest: { "host.status": { major: 1, minor: 0 } },
+        optionalManifest: { "host.status": { major: 2, minor: 0 } },
+      };
+
+      expect(clientOpenFrameSchema.safeParse(frame).success).toBe(false);
+      expect(clientFrameSchema.safeParse(frame).success).toBe(false);
+    });
+
     it("models a shipped client `open` parser stripping future additive keys", () => {
       const legacyClientOpenFrameSchema = z.object({
         kind: z.literal("open"),
@@ -200,6 +212,17 @@ describe("ws-protocol canonical Zod schemas", () => {
   });
 
   describe("host frames", () => {
+    it("rejects a host openAck whose optional channel collides with the floor", () => {
+      const frame = {
+        kind: "openAck" as const,
+        manifest: { "host.status": { major: 1, minor: 0 } },
+        optionalManifest: { "host.status": { major: 2, minor: 0 } },
+      };
+
+      expect(hostOpenAckFrameSchema.safeParse(frame).success).toBe(false);
+      expect(hostFrameSchema.safeParse(frame).success).toBe(false);
+    });
+
     it("accepts an `openAck` frame with the host manifest", () => {
       const frame = {
         kind: "openAck" as const,

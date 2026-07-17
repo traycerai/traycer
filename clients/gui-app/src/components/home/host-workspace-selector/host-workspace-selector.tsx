@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useReducer,
   useRef,
@@ -50,6 +51,7 @@ import { resolvePrimaryPath } from "@/lib/worktree/resolve-primary-path";
 import { usePickAndAddWorkspaceFolders } from "./use-pick-and-add-folders";
 import {
   readStagedWorktreeIntent,
+  stagedWorktreeIntentIsSuspended,
   useWorktreeIntentStagingStore,
   worktreeStagingKeyString,
   type WorktreeStagingKey,
@@ -489,6 +491,20 @@ function HomeWorkspaceRows(props: {
     }
     return map;
   }, [summariesQuery.data]);
+  const setSuspendedWorkspacePaths = useWorktreeIntentStagingStore(
+    (state) => state.setSuspendedWorkspacePaths,
+  );
+  const unresolvedMetadataPaths = useMemo(
+    () =>
+      queryableFolderPaths.filter((path) => {
+        const summary = summariesByPath.get(path);
+        return summary === undefined || summary.resolvedAt === null;
+      }),
+    [queryableFolderPaths, summariesByPath],
+  );
+  useLayoutEffect(() => {
+    setSuspendedWorkspacePaths(stagingKey, unresolvedMetadataPaths);
+  }, [setSuspendedWorkspacePaths, stagingKey, unresolvedMetadataPaths]);
   const gitSummaries = useMemo<ReadonlyArray<WorktreeWorkspaceSummaryV13>>(
     () =>
       resolvedFolders.flatMap((entry) => {
@@ -1404,6 +1420,20 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   const stagedIntent = useWorktreeIntentStagingStore(
     (s) => s.intentByKey[worktreeStagingKeyString(stagedKey)],
   );
+  const setSuspendedWorkspacePaths = useWorktreeIntentStagingStore(
+    (state) => state.setSuspendedWorkspacePaths,
+  );
+  const unresolvedMetadataPaths = useMemo(
+    () =>
+      bindingWorkspacePaths.filter((path) => {
+        const summary = summariesByPath.get(path);
+        return summary === undefined || summary.resolvedAt === null;
+      }),
+    [bindingWorkspacePaths, summariesByPath],
+  );
+  useLayoutEffect(() => {
+    setSuspendedWorkspacePaths(stagedKey, unresolvedMetadataPaths);
+  }, [setSuspendedWorkspacePaths, stagedKey, unresolvedMetadataPaths]);
   const stagedEntryByPath = useMemo(() => {
     const map = new Map<string, WorktreeFolderIntent>();
     if (stagedIntent === undefined) return map;
@@ -1473,6 +1503,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     changedWorkspacePathsSinceResume,
   );
   const applyStagedFoldersAndResume = useCallback((): void => {
+    if (stagedWorktreeIntentIsSuspended(stagedKey)) return;
     const staged = readStagedWorktreeIntent(stagedKey);
     const stagedEntries = staged?.entries ?? [];
     // A just-added git folder may still be waiting for metadata so the default

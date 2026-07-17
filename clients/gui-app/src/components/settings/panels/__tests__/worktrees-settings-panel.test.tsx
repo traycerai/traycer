@@ -671,6 +671,48 @@ describe("WorktreesList delete flow", () => {
     ).toBe(true);
   });
 
+  it("keeps an unresolved base row authoritative over a cached resolved enrichment", () => {
+    const unresolvedBase = entry({
+      worktreePath: "/wt/regressed",
+      branch: "feat-regressed",
+      resolvedAt: null,
+      inUse: false,
+      uncommittedCount: 0,
+      gitRemovable: true,
+    });
+    const staleResolvedEnrichment = entry({
+      worktreePath: "/wt/regressed",
+      branch: "feat-regressed",
+      resolvedAt: 100,
+      inUse: false,
+      uncommittedCount: 0,
+      gitRemovable: true,
+    });
+    const deleteRunsBefore = streamMock.paths.length;
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [unresolvedBase],
+      enrichedByPath: fullyEnriched([staleResolvedEnrichment]),
+      erroredPaths: undefined,
+      seededPaths: undefined,
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
+    });
+
+    screen.getByTestId("worktree-tier-pill-pending-spinner");
+    const checkbox = screen.getByRole("checkbox", {
+      name: "Select worktree feat-regressed",
+    });
+    expect(checkbox.getAttribute("aria-disabled")).toBe("true");
+    const deleteButton = screen.getByRole("button", {
+      name: /status is still being checked/i,
+    });
+    expect(deleteButton.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(deleteButton);
+    expect(streamMock.paths).toHaveLength(deleteRunsBefore);
+  });
+
   it("gates delete on live data: a snapshot-seeded row keeps its restored tier but is not deletable", () => {
     const seededRow = entry({
       worktreePath: "/wt/seeded",

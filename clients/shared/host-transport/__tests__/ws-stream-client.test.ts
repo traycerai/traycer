@@ -458,6 +458,48 @@ describe("WsStreamClient", () => {
     session.close();
   });
 
+  it("re-probes an unsupported optional method after the host endpoint reconnects", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "token-abc",
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+    const oldSession = client.subscribe("worktree.changed", {});
+    await flush();
+    sockets[0].socket.fireOpen();
+    const channels = splitStreamManifest(
+      hostStreamRpcRegistry,
+      RELEASED_STREAM_FLOOR_METHOD_NAMES,
+    );
+    sockets[0].socket.fireText({
+      kind: "openAck",
+      manifest: channels.manifest,
+    });
+    expect(client.getMethodSupport("worktree.changed")).toBe("unsupported");
+
+    client.reconnectAll("host-endpoint-change");
+    expect(client.getMethodSupport("worktree.changed")).toBe("unknown");
+    const upgradedSession = client.subscribe("worktree.changed", {});
+    await flush();
+    expect(sockets).toHaveLength(2);
+    sockets[1].socket.fireOpen();
+    sockets[1].socket.fireText(
+      streamOpenAck(buildStreamManifest(hostStreamRpcRegistry), undefined),
+    );
+
+    expect(client.getMethodSupport("worktree.changed")).toBe("supported");
+    expect(parseText(sockets[1].socket.textSent[1])).toMatchObject({
+      kind: "subscribe",
+      method: "worktree.changed",
+    });
+    oldSession.close();
+    upgradedSession.close();
+  });
+
   it("subscribes worktree.changed when both peers advertise it optionally", async () => {
     const { factory, sockets } = makeFactory();
     const client = makeClient({
