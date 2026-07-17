@@ -3914,6 +3914,26 @@ export const chatSchemaSurfaceBaseline = {
                                     },
                                   ],
                                 },
+                                mcp: {
+                                  default: null,
+                                  anyOf: [
+                                    {
+                                      type: "object",
+                                      properties: {
+                                        serverName: {
+                                          type: "string",
+                                        },
+                                        toolName: {
+                                          type: "string",
+                                        },
+                                      },
+                                      required: ["serverName", "toolName"],
+                                    },
+                                    {
+                                      type: "null",
+                                    },
+                                  ],
+                                },
                               },
                               required: ["kind", "title", "status", "summary"],
                             },
@@ -9083,6 +9103,27 @@ export const chatSchemaSurfaceBaseline = {
                                     },
                                   ],
                                 },
+                                mcp: {
+                                  default: null,
+                                  anyOf: [
+                                    {
+                                      type: "object",
+                                      properties: {
+                                        serverName: {
+                                          type: "string",
+                                        },
+                                        toolName: {
+                                          type: "string",
+                                        },
+                                      },
+                                      required: ["serverName", "toolName"],
+                                      additionalProperties: false,
+                                    },
+                                    {
+                                      type: "null",
+                                    },
+                                  ],
+                                },
                               },
                               required: [
                                 "kind",
@@ -9091,6 +9132,7 @@ export const chatSchemaSurfaceBaseline = {
                                 "summary",
                                 "blockId",
                                 "outputFile",
+                                "mcp",
                               ],
                               additionalProperties: false,
                             },

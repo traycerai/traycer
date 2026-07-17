@@ -148,21 +148,80 @@ describe("app-local notifications store", () => {
     expect(store.getState().unreadCount).toBe(1);
   });
 
-  it("enriches terminal closed entries with their epic and tile entity", () => {
+  it("addresses terminal closed entries to their exact canvas tile", () => {
     useAppLocalNotificationsStore.getState().activateIdentity("user-a");
 
     emitTerminalClosedNotification({
       instanceId: "terminal-instance",
       hostLabel: "MacBook",
-      epicId: "epic-1",
-      chatId: "terminal-tile-1",
+      target: {
+        kind: "terminal",
+        epicId: "epic-1",
+        terminalId: "terminal-tile-1",
+        tabId: "view-tab-1",
+        paneId: "pane-1",
+        tileInstanceId: "terminal-instance",
+      },
     });
 
     expect(
       useAppLocalNotificationsStore.getState().byId[
         "terminal.closed:terminal-instance"
       ].payload,
-    ).toEqual({ kind: "chat", epicId: "epic-1", chatId: "terminal-tile-1" });
+    ).toEqual({
+      kind: "terminal",
+      epicId: "epic-1",
+      terminalId: "terminal-tile-1",
+      tabId: "view-tab-1",
+      paneId: "pane-1",
+      tileInstanceId: "terminal-instance",
+    });
+  });
+
+  it("refreshes a terminal-closed entry's target after the terminal moves", () => {
+    useAppLocalNotificationsStore.getState().activateIdentity("user-a");
+
+    emitTerminalClosedNotification({
+      instanceId: "terminal-instance",
+      hostLabel: "MacBook",
+      target: {
+        kind: "terminal",
+        epicId: "epic-1",
+        terminalId: "terminal-tile-1",
+        tabId: "view-tab-1",
+        paneId: "pane-1",
+        tileInstanceId: "terminal-instance",
+      },
+    });
+    useAppLocalNotificationsStore
+      .getState()
+      .markAsRead("terminal.closed:terminal-instance", 123);
+
+    emitTerminalClosedNotification({
+      instanceId: "terminal-instance",
+      hostLabel: "MacBook",
+      target: {
+        kind: "terminal",
+        epicId: "epic-1",
+        terminalId: "terminal-tile-1",
+        tabId: "view-tab-2",
+        paneId: "pane-2",
+        tileInstanceId: "terminal-instance",
+      },
+    });
+
+    expect(
+      useAppLocalNotificationsStore.getState().byId[
+        "terminal.closed:terminal-instance"
+      ],
+    ).toMatchObject({
+      readAt: 123,
+      payload: {
+        kind: "terminal",
+        tabId: "view-tab-2",
+        paneId: "pane-2",
+      },
+    });
   });
 
   it("keeps successive terminal deaths as distinct entity-addressable rows", () => {
@@ -170,14 +229,26 @@ describe("app-local notifications store", () => {
 
     emitTerminalCrashedNotification({
       instanceId: "terminal-instance",
-      epicId: "epic-1",
-      chatId: "terminal-tile-1",
+      target: {
+        kind: "terminal",
+        epicId: "epic-1",
+        terminalId: "terminal-tile-1",
+        tabId: "view-tab-1",
+        paneId: "pane-1",
+        tileInstanceId: "terminal-instance",
+      },
       cause: "exit",
     });
     emitTerminalCrashedNotification({
       instanceId: "terminal-instance",
-      epicId: "epic-1",
-      chatId: "terminal-tile-1",
+      target: {
+        kind: "terminal",
+        epicId: "epic-1",
+        terminalId: "terminal-tile-1",
+        tabId: "view-tab-1",
+        paneId: "pane-1",
+        tileInstanceId: "terminal-instance",
+      },
       cause: "recovery-exhausted",
     });
 
@@ -190,8 +261,22 @@ describe("app-local notifications store", () => {
       "terminal.crashed",
     ]);
     expect(entries.map((entry) => entry.payload)).toEqual([
-      { kind: "chat", epicId: "epic-1", chatId: "terminal-tile-1" },
-      { kind: "chat", epicId: "epic-1", chatId: "terminal-tile-1" },
+      {
+        kind: "terminal",
+        epicId: "epic-1",
+        terminalId: "terminal-tile-1",
+        tabId: "view-tab-1",
+        paneId: "pane-1",
+        tileInstanceId: "terminal-instance",
+      },
+      {
+        kind: "terminal",
+        epicId: "epic-1",
+        terminalId: "terminal-tile-1",
+        tabId: "view-tab-1",
+        paneId: "pane-1",
+        tileInstanceId: "terminal-instance",
+      },
     ]);
   });
 });

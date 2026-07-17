@@ -603,11 +603,21 @@ function LandingTerminalPanelBody(props: {
   readonly folderPickPending: boolean;
   readonly onPickFolder: () => void;
 }): ReactNode {
+  if (props.availability === "unknown") {
+    return (
+      <div
+        role="status"
+        className="flex min-h-0 flex-1 items-center justify-center p-6 text-center text-ui-sm text-muted-foreground"
+      >
+        Connecting to the selected host…
+      </div>
+    );
+  }
+
   return (
     <div className="relative min-h-0 flex-1">
       {props.tabs.length === 0 ? (
         <LandingTerminalEmptyState
-          availability={props.availability}
           primaryWorkspacePath={props.primaryWorkspacePath}
           folderPickPending={props.folderPickPending}
           onPickFolder={props.onPickFolder}
@@ -634,28 +644,15 @@ function LandingTerminalPanelBody(props: {
           </div>
         ))
       )}
-      {props.availability === "unknown" ? (
-        <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-canvas/85 p-6 text-center text-ui-sm text-muted-foreground">
-          Connecting to the selected host…
-        </div>
-      ) : null}
     </div>
   );
 }
 
 function LandingTerminalEmptyState(props: {
-  readonly availability: LandingTerminalAvailability;
   readonly primaryWorkspacePath: string | null;
   readonly folderPickPending: boolean;
   readonly onPickFolder: () => void;
 }): ReactNode {
-  if (props.availability === "unknown") {
-    return (
-      <div className="flex h-full min-h-0 items-center justify-center p-6 text-center text-ui-sm text-muted-foreground">
-        Connecting to the selected host…
-      </div>
-    );
-  }
   // No folder means no cwd to spawn in. Offer the picker here rather than
   // telling the user to go find it: it writes through the same workspace
   // source as the composer's picker, so the folder they choose becomes the

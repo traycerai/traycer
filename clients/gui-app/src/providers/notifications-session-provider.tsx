@@ -25,7 +25,6 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { useAuthService } from "@/lib/host";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useNotificationShow } from "@/hooks/notifications/use-notifications";
-import { useNotificationActivation } from "@/hooks/notifications/use-notification-activation";
 import { useNotificationMarkEntityRead } from "@/hooks/notifications/use-notification-mark-entity-read-mutation";
 import { useWindowsBridge } from "@/providers/windows-bridge-context";
 import {
@@ -49,6 +48,7 @@ import {
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
 import type { HostNotificationsEntityRef } from "@traycer/protocol/host/notifications/contracts";
 import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
+import { useNotificationEventsStore } from "@/stores/notifications/notification-events-store";
 
 export interface NotificationsSessionProviderProps {
   readonly children: ReactNode;
@@ -69,7 +69,9 @@ export function NotificationsSessionProvider(
   const activeHostId = useReactiveActiveHostId();
   const authService = useAuthService();
   const showNotification = useNotificationShow();
-  const { activate } = useNotificationActivation();
+  const recordInAppClick = useNotificationEventsStore(
+    (state) => state.recordInAppClick,
+  );
   const windowsBridge = useWindowsBridge();
   const status = useAuthStore((state) => state.status);
   const email = useAuthStore((state) => state.profile?.email ?? null);
@@ -89,15 +91,11 @@ export function NotificationsSessionProvider(
   const markEntityRead = markEntityReadMutation.mutate;
   const activeEntityRef = useRef<HostNotificationsEntityRef | null>(null);
   const onToastClick = useCallback(
-    (row: MergedNotificationRow): void => {
+    (row: MergedNotificationRow, activatedAt: number): void => {
       if (row.payload === null) return;
-      activate({
-        payload: row.payload,
-        receivedAt: row.createdAt,
-        onActivated: null,
-      });
+      recordInAppClick(row.payload, activatedAt);
     },
-    [activate],
+    [recordInAppClick],
   );
   const onToastClickRef = useRef(onToastClick);
   useEffect(() => {
@@ -253,7 +251,8 @@ export function NotificationsSessionProvider(
             displayHostChannelEmission(entries, {
               showNotification,
               playChime: playNotificationChime,
-              onToastClick: (row) => onToastClickRef.current(row),
+              onToastClick: (row, activatedAt) =>
+                onToastClickRef.current(row, activatedAt),
             });
           },
           onFeedFrame: (frame) => onFeedFrame(frame, streamHostId),

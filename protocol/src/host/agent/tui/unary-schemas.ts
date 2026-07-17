@@ -195,42 +195,6 @@ export type TuiAgentTurnEndedResponse = z.infer<
   typeof tuiAgentTurnEndedResponseSchema
 >;
 
-// ─── `agent.tui.turnEnded@1.1` - causal service-proof + epoch replay inputs ─
-//
-// Additive minor over v1.0 for the TUI lifecycle-v2 service-proof path:
-//
-//   • `observedHarnessSessionId` - live Claude `session_id` from the Stop
-//     hook payload (session-scoped leaf cache / proof boundary). Null when
-//     the hook did not observe one (v1.0-upgraded default).
-//   • `transcriptPath` - absolute path of the session JSONL the host walks
-//     for ancestry proof. Null when unavailable.
-//   • `previouslyReportedLeafUuid` - last accepted completed-leaf UUID the
-//     caller already reported for this (agent, session), so the host can
-//     enforce the replay boundary walk. Null on the first report or when
-//     the client has no prior leaf.
-//
-// Response adds `acceptedLeafUuid` - the leaf UUID the host accepted for
-// this completion edge (idempotent replay key). Null when `accepted` is
-// false or no leaf was established.
-
-export const tuiAgentTurnEndedRequestSchemaV11 =
-  tuiAgentTurnEndedRequestSchema.extend({
-    observedHarnessSessionId: z.string().nullable().default(null),
-    transcriptPath: z.string().nullable().default(null),
-    previouslyReportedLeafUuid: z.string().nullable().default(null),
-  });
-export type TuiAgentTurnEndedRequestV11 = z.infer<
-  typeof tuiAgentTurnEndedRequestSchemaV11
->;
-
-export const tuiAgentTurnEndedResponseSchemaV11 =
-  tuiAgentTurnEndedResponseSchema.extend({
-    acceptedLeafUuid: z.string().nullable(),
-  });
-export type TuiAgentTurnEndedResponseV11 = z.infer<
-  typeof tuiAgentTurnEndedResponseSchemaV11
->;
-
 // ─── `agent.tui.recordActivity@1.0` - hook-driven activity edges ──────────
 //
 // Provider hook/plugin configs call this when a terminal-agent turn starts or

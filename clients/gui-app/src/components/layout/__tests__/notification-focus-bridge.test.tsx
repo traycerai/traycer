@@ -125,6 +125,81 @@ describe("NotificationFocusBridge", () => {
     });
   });
 
+  it("routes in-app Chat toast clicks without opening the popover", () => {
+    const tabId = useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-in-app", "In-app epic");
+    renderBridge();
+
+    act(() => {
+      useNotificationEventsStore.getState().recordInAppClick(
+        {
+          kind: "chat",
+          epicId: "epic-in-app",
+          chatId: "chat-in-app",
+        },
+        1_777_768_800_123,
+      );
+    });
+
+    expect(useNotificationsPopoverStore.getState().open).toBe(false);
+    expect(navigateSpy).toHaveBeenCalledWith({
+      to: "/epics/$epicId/$tabId",
+      params: { epicId: "epic-in-app", tabId },
+      search: {
+        focusedAt: 1_777_768_800_123,
+        focusArtifactId: "chat-in-app",
+        focusThreadId: undefined,
+        migrationSource: undefined,
+      },
+    });
+  });
+
+  it("parses and routes terminal payloads to their exact canvas tile", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-terminal", "Terminal epic");
+    store.openTileInTab(tabId, {
+      id: "terminal-1",
+      instanceId: "terminal-instance-1",
+      type: "terminal",
+      name: "Terminal",
+      titleSource: "manual",
+      hostId: "host-1",
+      cwd: "/repo",
+    });
+    const canvas = useEpicCanvasStore.getState().canvasByTabId[tabId];
+    if (canvas === undefined || canvas.activePaneId === null) {
+      throw new Error("expected terminal canvas");
+    }
+    const paneId = canvas.activePaneId;
+    renderBridge();
+
+    act(() => {
+      useNotificationEventsStore.getState().recordClick({
+        kind: "terminal",
+        epicId: "epic-terminal",
+        terminalId: "terminal-1",
+        tabId,
+        paneId,
+        tileInstanceId: "terminal-instance-1",
+      });
+    });
+
+    expect(useNotificationsPopoverStore.getState().open).toBe(true);
+    expect(navigateSpy).toHaveBeenCalledWith({
+      to: "/epics/$epicId/$tabId",
+      params: { epicId: "epic-terminal", tabId },
+      search: {
+        focusedAt: 1_777_768_800_000,
+        focusArtifactId: undefined,
+        focusThreadId: undefined,
+        migrationSource: undefined,
+        focusPaneId: paneId,
+        focusTileInstanceId: "terminal-instance-1",
+      },
+    });
+  });
+
   it.each([
     ["session", { kind: "session", sessionId: "session-1" }],
     [
