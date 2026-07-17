@@ -7,6 +7,8 @@ export * from "./git-constants";
 export * from "./git-schemas";
 export * from "./migration";
 export * from "./notifications";
+export * from "./pr-contracts";
+export * from "./pr-schemas";
 export * from "./rate-limit";
 export * from "./released-floor";
 export * from "./runtime-capabilities";
