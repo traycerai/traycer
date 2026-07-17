@@ -7,6 +7,7 @@ import {
   createAppLocalNotificationsStore,
   emitTerminalClosedNotification,
   emitTerminalCrashedNotification,
+  migrateAppLocalNotificationsPersistedState,
   type AppLocalNotificationEntry,
   useAppLocalNotificationsStore,
 } from "@/stores/notifications/app-local-notifications-store";
@@ -20,7 +21,7 @@ function entry(
     id,
     updatedAt,
     readAt,
-    kind: "worktree.setup.failed",
+    kind: "stream.transport.error",
     sourceRef: id,
     payload: { kind: "chat", epicId: "epic-1", chatId: "chat-1" },
     message: `Message ${id}`,
@@ -32,6 +33,26 @@ describe("app-local notifications store", () => {
   beforeEach(() => {
     window.localStorage.clear();
     __resetAppLocalNotificationsStoreForTests();
+  });
+
+  it("removes retired worktree setup rows during the v2 migration", () => {
+    expect(
+      migrateAppLocalNotificationsPersistedState({
+        byId: {
+          retired: {
+            ...entry("retired", 10, null),
+            kind: "worktree.setup.failed",
+          },
+          retained: entry("retained", 20, null),
+        },
+        orderedIds: ["retained", "retired"],
+        unreadCount: 2,
+      }),
+    ).toEqual({
+      byId: { retained: entry("retained", 20, null) },
+      orderedIds: ["retained"],
+      unreadCount: 1,
+    });
   });
 
   it("persists entries across store re-create", () => {

@@ -152,6 +152,33 @@ export type HostNotificationAgentStalledPayload = z.infer<
   typeof hostNotificationAgentStalledPayloadSchema
 >;
 
+/**
+ * `workspace.operation.failed` payload. `operation` stays open so a newer host
+ * can add workspace lifecycle operations without making an older renderer drop
+ * the row's typed chat navigation and generic failure presentation.
+ */
+export const hostNotificationWorkspaceOperationFailedPayloadSchema = z
+  .object({
+    kind: z.literal("workspace_operation_failed"),
+    epicId: idSchema,
+    chatId: idSchema,
+    chatTitle: z.string(),
+    taskTitle: z.string(),
+    operation: idSchema,
+    title: z.string(),
+    message: z.string(),
+    workspacePath: z.string().optional(),
+    worktreePath: z.string().optional(),
+    branch: z.string().optional(),
+    setupExitCode: z.number().int().nullable().optional(),
+    terminalSessionId: z.string().optional(),
+    outcome: z.literal("errored"),
+  })
+  .catchall(z.unknown());
+export type HostNotificationWorkspaceOperationFailedPayload = z.infer<
+  typeof hostNotificationWorkspaceOperationFailedPayloadSchema
+>;
+
 /** `approval.requested` payload. `chatTitle` carries the chat title. */
 export const hostNotificationApprovalPayloadSchema = z
   .object({
@@ -186,6 +213,7 @@ export const hostNotificationKnownPayloadSchema = z.discriminatedUnion("kind", [
   hostNotificationChatStoppedPayloadSchema,
   hostNotificationEpicStoppedPayloadSchema,
   hostNotificationAgentStalledPayloadSchema,
+  hostNotificationWorkspaceOperationFailedPayloadSchema,
   hostNotificationApprovalPayloadSchema,
   hostNotificationInterviewPayloadSchema,
 ]);
@@ -237,6 +265,8 @@ function payloadKindMatchesNotificationKind(
       return payloadKind === "chat" || payloadKind === "epic";
     case "agent.stalled":
       return payloadKind === "agent_stalled";
+    case "workspace.operation.failed":
+      return payloadKind === "workspace_operation_failed";
     case "approval.requested":
       return payloadKind === "approval";
     case "interview.requested":
@@ -260,6 +290,7 @@ export function hostNotificationPayloadWithChatTitle(
   switch (payload.kind) {
     case "approval":
     case "interview":
+    case "workspace_operation_failed":
       return payload.chatTitle === chatTitle ? null : { ...payload, chatTitle };
     case "chat":
     case "agent_stalled":
