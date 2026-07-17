@@ -8,6 +8,11 @@ import { notificationPayloadBelongsToEntity } from "@/lib/notifications";
 import { appLocalNotificationsKey, basePersistOptions } from "@/lib/persist";
 import type { HostNotificationsEntityRef } from "@traycer/protocol/host/notifications/contracts";
 
+type TerminalNotificationTarget = Extract<
+  NotificationPayload,
+  { readonly kind: "terminal" }
+>;
+
 export const APP_LOCAL_NOTIFICATIONS_ROW_CAP = 200;
 
 /**
@@ -51,6 +56,9 @@ export interface AppLocalNotificationsState {
   deactivateIdentity: () => void;
   upsert: (entry: AppLocalNotificationEntry) => void;
   upsertReplacing: (entry: AppLocalNotificationEntry) => void;
+  upsertReplacingPreservingReadState: (
+    entry: AppLocalNotificationEntry,
+  ) => void;
   markAsRead: (id: string, readAt: number) => void;
   markEntityAsRead: (
     entity: HostNotificationsEntityRef,
@@ -171,6 +179,28 @@ export function createAppLocalNotificationsStore(initialName: string) {
           });
         },
 
+        upsertReplacingPreservingReadState: (entry) => {
+          if (get().activeUserId === null) return;
+          set((state) => {
+            const existing = Object.hasOwn(state.byId, entry.id)
+              ? state.byId[entry.id]
+              : null;
+            const byId = cappedAppLocalEntries({
+              ...state.byId,
+              [entry.id]:
+                existing === null
+                  ? entry
+                  : { ...entry, readAt: existing.readAt },
+            });
+            const projection = projectAppLocalNotifications(byId);
+            return {
+              byId,
+              orderedIds: projection.orderedIds,
+              unreadCount: projection.unreadCount,
+            };
+          });
+        },
+
         markAsRead: (id, readAt) => {
           if (get().activeUserId === null) return;
           set((state) => {
@@ -262,21 +292,16 @@ export const useAppLocalNotificationsStore = createAppLocalNotificationsStore(
 export function emitTerminalClosedNotification(input: {
   readonly instanceId: string;
   readonly hostLabel: string;
-  readonly epicId: string;
-  readonly chatId: string;
+  readonly target: TerminalNotificationTarget;
 }): void {
   const message = `Terminal closed: host "${input.hostLabel}" is unreachable.`;
-  useAppLocalNotificationsStore.getState().upsert({
+  useAppLocalNotificationsStore.getState().upsertReplacingPreservingReadState({
     id: `terminal.closed:${input.instanceId}`,
     updatedAt: Date.now(),
     readAt: null,
     kind: "terminal.closed",
     sourceRef: input.instanceId,
-    payload: {
-      kind: "chat",
-      epicId: input.epicId,
-      chatId: input.chatId,
-    },
+    payload: input.target,
     message,
     detail: "The terminal is bound to that host and cannot migrate.",
   });
@@ -284,8 +309,7 @@ export function emitTerminalClosedNotification(input: {
 
 export function emitTerminalCrashedNotification(input: {
   readonly instanceId: string;
-  readonly epicId: string;
-  readonly chatId: string;
+  readonly target: TerminalNotificationTarget;
   readonly cause: "exit" | "recovery-exhausted";
 }): void {
   const isRecoveryExhausted = input.cause === "recovery-exhausted";
@@ -299,11 +323,7 @@ export function emitTerminalCrashedNotification(input: {
     readAt: null,
     kind: "terminal.crashed",
     sourceRef: input.instanceId,
-    payload: {
-      kind: "chat",
-      epicId: input.epicId,
-      chatId: input.chatId,
-    },
+    payload: input.target,
     message: isRecoveryExhausted
       ? "Terminal connection could not be recovered."
       : "Terminal exited unexpectedly.",

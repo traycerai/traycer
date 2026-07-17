@@ -60,11 +60,23 @@ export function TerminalTile(props: TerminalTileProps) {
     crashReportedRef.current = true;
     emitTerminalCrashedNotification({
       instanceId: props.node.instanceId,
-      epicId,
-      chatId: props.node.id,
+      target: {
+        kind: "terminal",
+        epicId,
+        terminalId: props.node.id,
+        tabId: props.viewTabId,
+        paneId: props.tileId,
+        tileInstanceId: props.node.instanceId,
+      },
       cause: "exit",
     });
-  }, [epicId, props.node.id, props.node.instanceId]);
+  }, [
+    epicId,
+    props.node.id,
+    props.node.instanceId,
+    props.tileId,
+    props.viewTabId,
+  ]);
   const reportRecoveryExhausted = useCallback(() => {
     // Whichever path observes this terminal death first owns its notification.
     if (crashReportedRef.current) return;
@@ -72,11 +84,23 @@ export function TerminalTile(props: TerminalTileProps) {
     crashReportedRef.current = true;
     emitTerminalCrashedNotification({
       instanceId: props.node.instanceId,
-      epicId,
-      chatId: props.node.id,
+      target: {
+        kind: "terminal",
+        epicId,
+        terminalId: props.node.id,
+        tabId: props.viewTabId,
+        paneId: props.tileId,
+        tileInstanceId: props.node.instanceId,
+      },
       cause: "recovery-exhausted",
     });
-  }, [epicId, props.node.id, props.node.instanceId]);
+  }, [
+    epicId,
+    props.node.id,
+    props.node.instanceId,
+    props.tileId,
+    props.viewTabId,
+  ]);
   const closeCanvasTile = useCloseCanvasTileWithNestedFocus(
     props.viewTabId,
     props.tileId,
@@ -104,8 +128,14 @@ export function TerminalTile(props: TerminalTileProps) {
     emitTerminalClosedNotification({
       instanceId: props.node.instanceId,
       hostLabel: reachability.hostLabel,
-      epicId,
-      chatId: props.node.id,
+      target: {
+        kind: "terminal",
+        epicId,
+        terminalId: props.node.id,
+        tabId: props.viewTabId,
+        paneId: props.tileId,
+        tileInstanceId: props.node.instanceId,
+      },
     });
   }, [
     reachability.status,
@@ -113,6 +143,8 @@ export function TerminalTile(props: TerminalTileProps) {
     epicId,
     props.node.id,
     props.node.instanceId,
+    props.tileId,
+    props.viewTabId,
   ]);
   if (reachability.status === "unreachable") {
     return (
