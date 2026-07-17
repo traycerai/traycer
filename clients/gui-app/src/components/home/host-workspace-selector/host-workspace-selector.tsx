@@ -1986,6 +1986,11 @@ function InEpicSurface(props: InEpicSurfaceProps) {
                 // Terminal-agent: remove from the binding but don't resume —
                 // only "Update" does. Chat: no PTY to resume (no-op callback).
                 onSuccess: () => {
+                  // A folder removed before its metadata resolved has nothing
+                  // to seed - its summary never arrives, so left in place the
+                  // path would pin the pending-defaults guard and block
+                  // Update's resume forever.
+                  pendingDefaultPathsRef.current?.delete(ws.workspacePath);
                   if (surface.kind === "terminal-agent") {
                     markBindingDirtyWithoutResume([ws.workspacePath]);
                     return;
