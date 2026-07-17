@@ -421,6 +421,11 @@ describe("useGuiHarnessCatalog (batched interval removal regression)", () => {
       throw new Error("Expected the batched model catalog query to be cached");
     }
     expect(modelQuery.state.data).toEqual(modelsResponse(1));
+    await fixture.queryClient.invalidateQueries({
+      queryKey: modelQuery.queryKey,
+      refetchType: "none",
+    });
+    expect(modelQuery.state.isInvalidated).toBe(true);
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(6 * 60 * 1000);
