@@ -17,7 +17,10 @@ import { readFocusedHostNotificationPresenceEntity } from "@/lib/notifications/n
 export interface NotificationDisplayTarget {
   readonly showNotification: NotificationShow;
   readonly playChime: () => void;
-  readonly onToastClick: (row: MergedNotificationRow) => void;
+  readonly onToastClick: (
+    row: MergedNotificationRow,
+    activatedAt: number,
+  ) => void;
 }
 
 export function displayNotificationRows(
@@ -47,8 +50,11 @@ export function displayNotificationRows(
         {
           type: "button",
           "aria-label": `${content.title} ${content.body}`,
+          "data-notification-toast-action": "",
           className: "min-w-0 text-left",
-          onClick: () => target.onToastClick(content.row),
+          onClick: () => {
+            target.onToastClick(content.row, Date.now());
+          },
         },
         createElement(
           "span",
@@ -175,6 +181,7 @@ function hostEntityReplaceKey(
       return `host:chat:${payload.chatId}`;
     case "artifact":
     case "epic":
+    case "terminal":
       return epicReplaceKey(payload.epicId);
     case "session":
       return null;

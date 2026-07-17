@@ -685,36 +685,6 @@ export type SendAgentMessageResponse = z.infer<
 >;
 
 /**
- * Per-route delivery guarantee selected at send time and returned on
- * `agent.sendMessage@1.1`. `tracked-v2` is the product lifecycle-v2 promise
- * (per-delivery outcomes); `legacy-best-effort` is the honest v1 label —
- * "sent best-effort; this route cannot confirm delivery or completion."
- * Fabricated only via the 1.0→1.1 upgrade path when a peer still speaks 1.0.
- */
-export const agentDeliveryGuaranteeSchema = z.enum([
-  "tracked-v2",
-  "legacy-best-effort",
-]);
-export type AgentDeliveryGuarantee = z.infer<
-  typeof agentDeliveryGuaranteeSchema
->;
-
-/**
- * `agent.sendMessage@1.1` response - additive over v1.0. Returns the same
- * `responseId` plus delivery identity and the negotiated per-route guarantee.
- * `deliveryId` is null when the route is legacy-best-effort (no tracked
- * delivery object was opened).
- */
-export const sendAgentMessageResponseSchemaV11 =
-  sendAgentMessageResponseSchema.extend({
-    deliveryId: z.string().nullable(),
-    deliveryGuarantee: agentDeliveryGuaranteeSchema,
-  });
-export type SendAgentMessageResponseV11 = z.infer<
-  typeof sendAgentMessageResponseSchemaV11
->;
-
-/**
  * `agent.getTranscript@1.0` - flatten an agent's conversation into an
  * XML-tagged string so a sibling agent can read it without re-implementing
  * the discriminated `messageSchema` shape. For GUI agents the host

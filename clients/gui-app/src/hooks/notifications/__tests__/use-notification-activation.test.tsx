@@ -11,6 +11,8 @@ type CapturedNavigate = {
     readonly focusArtifactId: string | undefined;
     readonly focusThreadId: string | undefined;
     readonly migrationSource: string | undefined;
+    readonly focusPaneId: string | undefined;
+    readonly focusTileInstanceId: string | undefined;
   };
 };
 
@@ -111,6 +113,8 @@ describe("useNotificationActivation", () => {
       focusArtifactId: undefined,
       focusThreadId: undefined,
       migrationSource: undefined,
+      focusPaneId: undefined,
+      focusTileInstanceId: undefined,
     });
     expect(onActivated).not.toHaveBeenCalled();
 
@@ -159,6 +163,8 @@ describe("useNotificationActivation", () => {
       focusArtifactId: "artifact-1",
       focusThreadId: "thread-1",
       migrationSource: undefined,
+      focusPaneId: undefined,
+      focusTileInstanceId: undefined,
     });
   });
 
@@ -190,12 +196,114 @@ describe("useNotificationActivation", () => {
       focusArtifactId: "chat-approval",
       focusThreadId: undefined,
       migrationSource: undefined,
+      focusPaneId: undefined,
+      focusTileInstanceId: undefined,
     });
 
     await waitFor(() => {
       expect(requestMock).toHaveBeenCalledWith("epic.listCollaborators", {
         epicId: "epic-approval",
       });
+    });
+  });
+
+  it("routes terminal notifications to the exact canvas tile", async () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-terminal", "Terminal epic");
+    store.openTileInTab(tabId, {
+      id: "setup:chat-1:repo:branch",
+      instanceId: "terminal-instance",
+      type: "terminal",
+      name: "Setup terminal",
+      titleSource: "manual",
+      hostId: "host-1",
+      cwd: "/repo",
+    });
+    const canvas = useEpicCanvasStore.getState().canvasByTabId[tabId];
+    if (canvas === undefined || canvas.activePaneId === null) {
+      throw new Error("expected terminal canvas");
+    }
+    const paneId = canvas.activePaneId;
+    const hook = renderHook(() => useNotificationActivation(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      hook.result.current.activate({
+        payload: {
+          kind: "terminal",
+          epicId: "epic-terminal",
+          terminalId: "setup:chat-1:repo:branch",
+          tabId,
+          paneId,
+          tileInstanceId: "terminal-instance",
+        },
+        receivedAt: 901,
+        onActivated: null,
+      });
+    });
+
+    expect(navigateSpy.mock.calls[0][0]).toEqual({
+      to: "/epics/$epicId/$tabId",
+      params: { epicId: "epic-terminal", tabId },
+      search: {
+        focusedAt: 901,
+        focusArtifactId: undefined,
+        focusThreadId: undefined,
+        migrationSource: undefined,
+        focusPaneId: paneId,
+        focusTileInstanceId: "terminal-instance",
+      },
+    });
+
+    await waitFor(() => {
+      expect(requestMock).toHaveBeenCalledWith("epic.listCollaborators", {
+        epicId: "epic-terminal",
+      });
+    });
+  });
+
+  it("routes persisted legacy terminal rows to their open canvas tile", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-legacy", "Legacy terminal epic");
+    const terminalId = "setup:chat-legacy:repo:branch";
+    store.openTileInTab(tabId, {
+      id: terminalId,
+      instanceId: "legacy-terminal-instance",
+      type: "terminal",
+      name: "Setup terminal",
+      titleSource: "manual",
+      hostId: "host-1",
+      cwd: "/repo",
+    });
+    const canvas = useEpicCanvasStore.getState().canvasByTabId[tabId];
+    if (canvas === undefined || canvas.activePaneId === null) {
+      throw new Error("expected legacy terminal canvas");
+    }
+    const hook = renderHook(() => useNotificationActivation(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      hook.result.current.activate({
+        payload: {
+          kind: "chat",
+          epicId: "epic-legacy",
+          chatId: terminalId,
+        },
+        receivedAt: 902,
+        onActivated: null,
+      });
+    });
+
+    expect(navigateSpy.mock.calls[0][0]).toMatchObject({
+      params: { epicId: "epic-legacy", tabId },
+      search: {
+        focusedAt: 902,
+        focusArtifactId: undefined,
+        focusPaneId: canvas.activePaneId,
+        focusTileInstanceId: "legacy-terminal-instance",
+      },
     });
   });
 });
