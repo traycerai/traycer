@@ -503,6 +503,81 @@ describe("<TabStrip />", () => {
     ).toBeDefined();
   });
 
+  it("shows the chat-level background indicator when only background work remains", async () => {
+    openEpicFixture(EPIC_A);
+    registerActiveEpicHeader(EPIC_A, "owner", ["chat-background"]);
+    registerChatSession(EPIC_A.id, "chat-background");
+    const handle = __getChatSessionRegistryForTests().peek(
+      EPIC_A.id,
+      "chat-background",
+    );
+    if (handle === null) throw new Error("expected chat session handle");
+    handle.store.setState({
+      runStatus: "running",
+      activeTurn: null,
+      turnInProgress: false,
+      backgroundItems: [
+        {
+          taskId: "background-task",
+          kind: "monitor",
+          title: "Monitor",
+          blockId: "background-task",
+          parentTaskId: null,
+          scheduledFor: null,
+        },
+      ],
+    });
+    const router = buildRouter("/epics/e-a/e-a");
+    render(<RouterProvider router={router} />);
+
+    expect(
+      await screen.findByTestId(`header-tab-background-activity-${EPIC_A.id}`),
+    ).toBeDefined();
+    expect(screen.queryByTestId(`header-tab-activity-${EPIC_A.id}`)).toBeNull();
+    expect(
+      screen.queryByTitle("Background tasks running — task idle"),
+    ).not.toBeNull();
+  });
+
+  it("prioritizes turn activity over background work from another chat", async () => {
+    openEpicFixture(EPIC_A);
+    registerActiveEpicHeader(EPIC_A, "owner", ["chat-background", "chat-turn"]);
+    registerChatSession(EPIC_A.id, "chat-background");
+    registerChatSession(EPIC_A.id, "chat-turn");
+    const backgroundHandle = __getChatSessionRegistryForTests().peek(
+      EPIC_A.id,
+      "chat-background",
+    );
+    const turnHandle = __getChatSessionRegistryForTests().peek(
+      EPIC_A.id,
+      "chat-turn",
+    );
+    if (backgroundHandle === null || turnHandle === null) {
+      throw new Error("expected chat session handles");
+    }
+    backgroundHandle.store.setState({
+      runStatus: "running",
+      activeTurn: null,
+      turnInProgress: false,
+      backgroundItems: [],
+    });
+    turnHandle.store.setState({
+      runStatus: "running",
+      activeTurn: null,
+      turnInProgress: true,
+      backgroundItems: [],
+    });
+    const router = buildRouter("/epics/e-a/e-a");
+    render(<RouterProvider router={router} />);
+
+    expect(
+      await screen.findByTestId(`header-tab-activity-${EPIC_A.id}`),
+    ).toBeDefined();
+    expect(
+      screen.queryByTestId(`header-tab-background-activity-${EPIC_A.id}`),
+    ).toBeNull();
+  });
+
   it("ignores stale active awareness for a deleted chat", async () => {
     openEpicFixture(EPIC_A);
     registerStaleActiveEpicHeader(EPIC_A, "owner", ["chat-deleted"]);
