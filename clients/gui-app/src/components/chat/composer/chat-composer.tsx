@@ -247,7 +247,9 @@ function ChatComposerImpl(props: ChatComposerProps) {
   // Task-wide extension of the rate-limit switch: sibling chats of this task
   // pinned to the same limited profile, and the action moving them together.
   const taskProfileSwitch = useTaskProfileRateLimitSwitch({
-    enabled: rateLimitPrompt.limited,
+    enabled:
+      rateLimitPrompt.kind === "visible" &&
+      rateLimitPrompt.primaryTarget !== null,
     harnessId,
     profileId,
     epicId: currentEpicId,
@@ -293,11 +295,12 @@ function ChatComposerImpl(props: ChatComposerProps) {
   const topBannerKind = resolveComposerTopBannerKind({
     reauthVisible: reauthBanner !== null,
     ambientDriftVisible: ambientDrift.pendingNotice !== null,
-    rateLimitVisible: !reauthGate.signedOut && rateLimitPrompt.limited,
+    rateLimitVisible:
+      !reauthGate.signedOut && rateLimitPrompt.kind === "visible",
   });
   const continueAfterAmbientDrift = (): void => {
     ambientDrift.acknowledge(() => {
-      if (rateLimitPrompt.limited) return;
+      if (rateLimitPrompt.kind === "visible") return;
       submitDraft();
     });
   };
@@ -340,16 +343,25 @@ function ChatComposerImpl(props: ChatComposerProps) {
         <ChatComposerBannerPortal>
           <div className="bg-canvas px-4 pt-4">
             <div className="mx-auto w-full max-w-3xl">
-              <ProfileRateLimitSwitchBanner
-                harnessId={harnessId}
-                hardLimited={rateLimitPrompt.hardLimited}
-                current={rateLimitPrompt.current}
-                alternatives={rateLimitPrompt.alternatives}
-                onSwitchProfile={onSwitchProfile}
-                affectedChatCount={taskProfileSwitch.affectedChatCount}
-                onSwitchProfileForTask={taskProfileSwitch.switchOtherTaskChats}
-                onDismiss={rateLimitPrompt.dismiss}
-              />
+              {rateLimitPrompt.kind === "visible" ? (
+                <ProfileRateLimitSwitchBanner
+                  key={rateLimitPrompt.warningKey}
+                  harnessId={harnessId}
+                  providerId={rateLimitPrompt.providerId}
+                  severity={rateLimitPrompt.severity}
+                  current={rateLimitPrompt.current}
+                  profiles={rateLimitPrompt.profiles}
+                  destinations={rateLimitPrompt.destinations}
+                  primaryTarget={rateLimitPrompt.primaryTarget}
+                  runTargetHostId={tabHostId}
+                  onSwitchProfile={onSwitchProfile}
+                  affectedChatCount={taskProfileSwitch.affectedChatCount}
+                  onSwitchProfileForTask={
+                    taskProfileSwitch.switchOtherTaskChats
+                  }
+                  onDismiss={rateLimitPrompt.dismiss}
+                />
+              ) : null}
             </div>
           </div>
         </ChatComposerBannerPortal>
