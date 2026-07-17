@@ -21,6 +21,7 @@ import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
 import {
   readStagedWorktreeIntent,
+  stagedWorktreeIntentRevision,
   stagedWorktreeIntentIsSuspended,
   useWorktreeIntentStagingStore,
   type WorktreeStagingKey,
@@ -61,7 +62,10 @@ import type {
   ChatRunStatus,
   ChatSubscribeClientFrame,
 } from "@traycer/protocol/host/agent/gui/subscribe";
-import type { WorktreeBinding } from "@traycer/protocol/host/worktree-schemas";
+import type {
+  WorktreeBinding,
+  WorktreeIntent,
+} from "@traycer/protocol/host/worktree-schemas";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type { RestoreResultEntry } from "@traycer/protocol/persistence/epic/checkpoint-manifests";
 import type {
@@ -118,6 +122,17 @@ export interface PendingChatAction {
   readonly restoreContent: JsonContent | null;
   readonly sender: UserMessageSender | null;
   readonly settings: ChatRunSettings | null;
+  /**
+   * Workspace selection consumed when a send goes on the wire. A rejected
+   * send restores it to the owner's staging slot together with the composer
+   * content, so retrying cannot silently fall back to the prior binding.
+   */
+  readonly restoreWorktreeIntent: WorktreeIntent | null;
+  /**
+   * Staging revision immediately after the send consumes its selection. A
+   * rejection restores only when the user has made no newer picker choice.
+   */
+  readonly restoreWorktreeStagingRevision: number | null;
   readonly createdAt: number;
   /**
    * The connection epoch the action's frame was dispatched on (stamped by
@@ -886,6 +901,32 @@ export function createChatSessionStore(
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
           return;
         }
+        const rejectedPending =
+          frame.status === "rejected"
+            ? pendingActionForId(get().pendingActions, frame.clientActionId)
+            : null;
+        if (
+          rejectedPending !== null &&
+          rejectedPending.restoreWorktreeIntent !== null &&
+          rejectedPending.restoreWorktreeStagingRevision !== null
+        ) {
+          const stagingKey: WorktreeStagingKey = {
+            surface: "owner",
+            epicId: options.epicId,
+            ownerKind: "chat",
+            ownerId: options.chatId,
+          };
+          const stagingStore = useWorktreeIntentStagingStore.getState();
+          if (
+            stagedWorktreeIntentRevision(stagingKey) ===
+            rejectedPending.restoreWorktreeStagingRevision
+          ) {
+            stagingStore.setIntent(
+              stagingKey,
+              rejectedPending.restoreWorktreeIntent,
+            );
+          }
+        }
         set((state) => {
           const pending = pendingActionForId(
             state.pendingActions,
@@ -1465,6 +1506,16 @@ export function createChatSessionStore(
           deliveryPolicy: "auto",
           worktreeIntent,
         };
+        // Consume before dispatch so the pending action captures precisely the
+        // revision it may later restore. A synchronous action rejection cannot
+        // race ahead of this transition.
+        const stagingStore = useWorktreeIntentStagingStore.getState();
+        let restoreWorktreeStagingRevision: number | null = null;
+        if (worktreeIntent !== null) {
+          stagingStore.clear(stagedKey);
+          restoreWorktreeStagingRevision =
+            stagedWorktreeIntentRevision(stagedKey);
+        }
         const sentClientActionId = sendAction({
           set,
           get,
@@ -1476,6 +1527,8 @@ export function createChatSessionStore(
             restoreContent: content,
             sender,
             settings,
+            restoreWorktreeIntent: worktreeIntent,
+            restoreWorktreeStagingRevision,
             createdAt: Date.now(),
           },
           // Echo the user message optimistically so it paints INSTANTLY on send -
@@ -1499,7 +1552,12 @@ export function createChatSessionStore(
               }
             : null,
         });
-        if (sentClientActionId === null) return null;
+        if (sentClientActionId === null) {
+          if (worktreeIntent !== null) {
+            stagingStore.setIntent(stagedKey, worktreeIntent);
+          }
+          return null;
+        }
         const optimisticQueuedItem = optimisticQueuedItemForSend({
           state: get(),
           clientActionId,
@@ -1523,7 +1581,6 @@ export function createChatSessionStore(
           useWorktreeIntentMemoryStore
             .getState()
             .setEpicIntent(options.epicId, worktreeIntent, Date.now());
-          useWorktreeIntentStagingStore.getState().clear(stagedKey);
           get().refreshMissingWorktreePaths([]);
         }
         return { clientActionId: sentClientActionId, messageId };
@@ -1574,6 +1631,8 @@ export function createChatSessionStore(
             restoreContent: input.content,
             sender: input.sender,
             settings: input.settings,
+            restoreWorktreeIntent: null,
+            restoreWorktreeStagingRevision: null,
             createdAt: Date.now(),
           },
           pendingUserMessage: {
@@ -1647,6 +1706,8 @@ export function createChatSessionStore(
             restoreContent: null,
             sender: null,
             settings: null,
+            restoreWorktreeIntent: null,
+            restoreWorktreeStagingRevision: null,
             createdAt: Date.now(),
           },
           pendingUserMessage: null,
@@ -1702,6 +1763,8 @@ export function createChatSessionStore(
             restoreContent: null,
             sender: null,
             settings: null,
+            restoreWorktreeIntent: null,
+            restoreWorktreeStagingRevision: null,
             createdAt: Date.now(),
           },
           pendingUserMessage: null,
@@ -2206,6 +2269,8 @@ function basicPending(
     restoreContent: null,
     sender: null,
     settings: null,
+    restoreWorktreeIntent: null,
+    restoreWorktreeStagingRevision: null,
     createdAt: Date.now(),
   };
 }

@@ -156,6 +156,12 @@ interface WorktreeIntentStagingStore {
   readonly suspendedWorkspacePathsByKey: Readonly<
     Record<string, readonly string[] | undefined>
   >;
+  /**
+   * Monotonic local edit sequence for each staging slot. It is deliberately
+   * not persisted: it only distinguishes edits made while an action is in
+   * flight in this renderer session.
+   */
+  readonly revisionByKey: Readonly<Record<string, number | undefined>>;
   /** Merge one folder's intent into the staged intent for `key`. */
   readonly stageEntry: (
     key: WorktreeStagingKey,
@@ -195,12 +201,23 @@ interface WorktreeIntentStagingStore {
   readonly resetForTests: () => void;
 }
 
+function incrementStagingRevision(
+  revisionByKey: Readonly<Record<string, number | undefined>>,
+  id: string,
+): Readonly<Record<string, number | undefined>> {
+  return {
+    ...revisionByKey,
+    [id]: (revisionByKey[id] ?? 0) + 1,
+  };
+}
+
 export const useWorktreeIntentStagingStore =
   create<WorktreeIntentStagingStore>()(
     persist(
       (set) => ({
         intentByKey: {},
         suspendedWorkspacePathsByKey: {},
+        revisionByKey: {},
         stageEntry: (key, entry) =>
           set((state) => {
             const id = worktreeStagingKeyString(key);
@@ -210,6 +227,7 @@ export const useWorktreeIntentStagingStore =
                 ...state.intentByKey,
                 [id]: mergeWorktreeIntentEntry(existing, entry),
               },
+              revisionByKey: incrementStagingRevision(state.revisionByKey, id),
             };
           }),
         stageIntent: (key, intent) =>
@@ -220,29 +238,36 @@ export const useWorktreeIntentStagingStore =
               (acc, entry) => mergeWorktreeIntentEntry(acc, entry),
               existing ?? { entries: [] },
             );
-            return { intentByKey: { ...state.intentByKey, [id]: merged } };
+            return {
+              intentByKey: { ...state.intentByKey, [id]: merged },
+              revisionByKey: incrementStagingRevision(state.revisionByKey, id),
+            };
           }),
         setIntent: (key, intent) =>
           set((state) => {
             const id = worktreeStagingKeyString(key);
             const next = { ...state.intentByKey };
             if (intent === null || intent.entries.length === 0) {
-              if (
-                !(id in next) &&
-                !(id in state.suspendedWorkspacePathsByKey)
-              ) {
-                return state;
-              }
               delete next[id];
               const suspendedWorkspacePathsByKey = {
                 ...state.suspendedWorkspacePathsByKey,
               };
               delete suspendedWorkspacePathsByKey[id];
-              return { intentByKey: next, suspendedWorkspacePathsByKey };
+              return {
+                intentByKey: next,
+                suspendedWorkspacePathsByKey,
+                revisionByKey: incrementStagingRevision(
+                  state.revisionByKey,
+                  id,
+                ),
+              };
             }
             next[id] = intent;
 
-            return { intentByKey: next };
+            return {
+              intentByKey: next,
+              revisionByKey: incrementStagingRevision(state.revisionByKey, id),
+            };
           }),
         unstageEntry: (key, workspacePath) =>
           set((state) => {
@@ -277,7 +302,11 @@ export const useWorktreeIntentStagingStore =
                 }
               }
             }
-            return { intentByKey, suspendedWorkspacePathsByKey };
+            return {
+              intentByKey,
+              suspendedWorkspacePathsByKey,
+              revisionByKey: incrementStagingRevision(state.revisionByKey, id),
+            };
           }),
         stageScripts: (key, workspacePath, scripts) =>
           set((state) => {
@@ -291,6 +320,7 @@ export const useWorktreeIntentStagingStore =
             if (next === existing) return state;
             return {
               intentByKey: { ...state.intentByKey, [id]: next ?? undefined },
+              revisionByKey: incrementStagingRevision(state.revisionByKey, id),
             };
           }),
         setSuspendedWorkspacePaths: (key, workspacePaths) =>
@@ -317,22 +347,27 @@ export const useWorktreeIntentStagingStore =
         clear: (key) =>
           set((state) => {
             const id = worktreeStagingKeyString(key);
-            if (
-              !(id in state.intentByKey) &&
-              !(id in state.suspendedWorkspacePathsByKey)
-            ) {
-              return state;
-            }
             const next = { ...state.intentByKey };
             delete next[id];
             const suspendedWorkspacePathsByKey = {
               ...state.suspendedWorkspacePathsByKey,
             };
             delete suspendedWorkspacePathsByKey[id];
-            return { intentByKey: next, suspendedWorkspacePathsByKey };
+            return {
+              intentByKey: next,
+              suspendedWorkspacePathsByKey,
+              // An explicit clear after a send consumes the slot is still a
+              // newer user choice. Record it so a rejected send cannot put the
+              // old selection back.
+              revisionByKey: incrementStagingRevision(state.revisionByKey, id),
+            };
           }),
         resetForTests: () =>
-          set({ intentByKey: {}, suspendedWorkspacePathsByKey: {} }),
+          set({
+            intentByKey: {},
+            suspendedWorkspacePathsByKey: {},
+            revisionByKey: {},
+          }),
       }),
       {
         ...basePersistOptions(worktreeIntentStagingKey(null)),
@@ -352,6 +387,18 @@ export function readStagedWorktreeIntent(
     useWorktreeIntentStagingStore.getState().intentByKey[
       worktreeStagingKeyString(key)
     ] ?? null
+  );
+}
+
+/**
+ * Current in-memory edit sequence for a staging slot. Used to make rejected
+ * action restoration conditional on no newer selection (including a clear).
+ */
+export function stagedWorktreeIntentRevision(key: WorktreeStagingKey): number {
+  return (
+    useWorktreeIntentStagingStore.getState().revisionByKey[
+      worktreeStagingKeyString(key)
+    ] ?? 0
   );
 }
 
