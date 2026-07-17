@@ -312,14 +312,10 @@ export function createAppLocalNotificationsStore(initialName: string) {
               : null;
             let replacement = pendingEntry;
             if (existing !== null) {
-              const displayedUpdatedAt =
-                existing.displayedUpdatedAt === null
-                  ? null
-                  : pendingEntry.updatedAt;
               replacement = {
                 ...pendingEntry,
                 readAt: existing.readAt,
-                displayedUpdatedAt,
+                displayedUpdatedAt: existing.displayedUpdatedAt,
               };
             }
             const byId = cappedAppLocalEntries({

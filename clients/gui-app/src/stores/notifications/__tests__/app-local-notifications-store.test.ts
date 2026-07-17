@@ -1,5 +1,5 @@
 import "../../../../__tests__/test-browser-apis";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { appLocalNotificationsKey } from "@/lib/persist";
 import {
   hasAppLocalDisplayReceipt,
@@ -293,6 +293,7 @@ describe("app-local notifications store", () => {
     useAppLocalNotificationsStore
       .getState()
       .markAsDisplayed("terminal.closed:terminal-instance", firstUpdatedAt);
+    const now = vi.spyOn(Date, "now").mockReturnValue(firstUpdatedAt + 1);
 
     emitTerminalClosedNotification({
       instanceId: "terminal-instance",
@@ -306,12 +307,14 @@ describe("app-local notifications store", () => {
         tileInstanceId: "terminal-instance",
       },
     });
+    now.mockRestore();
 
     expect(
       useAppLocalNotificationsStore.getState().byId[
         "terminal.closed:terminal-instance"
       ],
     ).toMatchObject({
+      updatedAt: firstUpdatedAt + 1,
       readAt: 123,
       displayedUpdatedAt: firstUpdatedAt,
       payload: {
