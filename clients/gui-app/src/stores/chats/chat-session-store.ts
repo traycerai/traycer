@@ -21,6 +21,7 @@ import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
 import {
   readStagedWorktreeIntent,
+  stagedWorktreeIntentRevision,
   stagedWorktreeIntentIsSuspended,
   useWorktreeIntentStagingStore,
   type WorktreeStagingKey,
@@ -127,6 +128,11 @@ export interface PendingChatAction {
    * content, so retrying cannot silently fall back to the prior binding.
    */
   readonly restoreWorktreeIntent: WorktreeIntent | null;
+  /**
+   * Staging revision immediately after the send consumes its selection. A
+   * rejection restores only when the user has made no newer picker choice.
+   */
+  readonly restoreWorktreeStagingRevision: number | null;
   readonly createdAt: number;
   /**
    * The connection epoch the action's frame was dispatched on (stamped by
@@ -901,7 +907,8 @@ export function createChatSessionStore(
             : null;
         if (
           rejectedPending !== null &&
-          rejectedPending.restoreWorktreeIntent !== null
+          rejectedPending.restoreWorktreeIntent !== null &&
+          rejectedPending.restoreWorktreeStagingRevision !== null
         ) {
           const stagingKey: WorktreeStagingKey = {
             surface: "owner",
@@ -909,17 +916,15 @@ export function createChatSessionStore(
             ownerKind: "chat",
             ownerId: options.chatId,
           };
-          const newerIntent = readStagedWorktreeIntent(stagingKey);
           const stagingStore = useWorktreeIntentStagingStore.getState();
-          stagingStore.setIntent(
-            stagingKey,
-            rejectedPending.restoreWorktreeIntent,
-          );
-          // A newer picker edit made while the send was in flight wins for
-          // overlapping folders, while the rejected selection is restored for
-          // every untouched folder.
-          if (newerIntent !== null) {
-            stagingStore.stageIntent(stagingKey, newerIntent);
+          if (
+            stagedWorktreeIntentRevision(stagingKey) ===
+            rejectedPending.restoreWorktreeStagingRevision
+          ) {
+            stagingStore.setIntent(
+              stagingKey,
+              rejectedPending.restoreWorktreeIntent,
+            );
           }
         }
         set((state) => {
@@ -1501,6 +1506,16 @@ export function createChatSessionStore(
           deliveryPolicy: "auto",
           worktreeIntent,
         };
+        // Consume before dispatch so the pending action captures precisely the
+        // revision it may later restore. A synchronous action rejection cannot
+        // race ahead of this transition.
+        const stagingStore = useWorktreeIntentStagingStore.getState();
+        let restoreWorktreeStagingRevision: number | null = null;
+        if (worktreeIntent !== null) {
+          stagingStore.clear(stagedKey);
+          restoreWorktreeStagingRevision =
+            stagedWorktreeIntentRevision(stagedKey);
+        }
         const sentClientActionId = sendAction({
           set,
           get,
@@ -1513,6 +1528,7 @@ export function createChatSessionStore(
             sender,
             settings,
             restoreWorktreeIntent: worktreeIntent,
+            restoreWorktreeStagingRevision,
             createdAt: Date.now(),
           },
           // Echo the user message optimistically so it paints INSTANTLY on send -
@@ -1536,7 +1552,12 @@ export function createChatSessionStore(
               }
             : null,
         });
-        if (sentClientActionId === null) return null;
+        if (sentClientActionId === null) {
+          if (worktreeIntent !== null) {
+            stagingStore.setIntent(stagedKey, worktreeIntent);
+          }
+          return null;
+        }
         const optimisticQueuedItem = optimisticQueuedItemForSend({
           state: get(),
           clientActionId,
@@ -1560,7 +1581,6 @@ export function createChatSessionStore(
           useWorktreeIntentMemoryStore
             .getState()
             .setEpicIntent(options.epicId, worktreeIntent, Date.now());
-          useWorktreeIntentStagingStore.getState().clear(stagedKey);
           get().refreshMissingWorktreePaths([]);
         }
         return { clientActionId: sentClientActionId, messageId };
@@ -1612,6 +1632,7 @@ export function createChatSessionStore(
             sender: input.sender,
             settings: input.settings,
             restoreWorktreeIntent: null,
+            restoreWorktreeStagingRevision: null,
             createdAt: Date.now(),
           },
           pendingUserMessage: {
@@ -1686,6 +1707,7 @@ export function createChatSessionStore(
             sender: null,
             settings: null,
             restoreWorktreeIntent: null,
+            restoreWorktreeStagingRevision: null,
             createdAt: Date.now(),
           },
           pendingUserMessage: null,
@@ -1742,6 +1764,7 @@ export function createChatSessionStore(
             sender: null,
             settings: null,
             restoreWorktreeIntent: null,
+            restoreWorktreeStagingRevision: null,
             createdAt: Date.now(),
           },
           pendingUserMessage: null,
@@ -2247,6 +2270,7 @@ function basicPending(
     sender: null,
     settings: null,
     restoreWorktreeIntent: null,
+    restoreWorktreeStagingRevision: null,
     createdAt: Date.now(),
   };
 }

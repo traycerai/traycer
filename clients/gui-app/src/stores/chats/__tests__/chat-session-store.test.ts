@@ -714,6 +714,60 @@ describe("createChatSessionStore", () => {
     ).toEqual(intent);
   });
 
+  it("does not restore a rejected worktree intent after a newer explicit clear", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    useWorktreeIntentStagingStore.getState().stageIntent(key, {
+      entries: [
+        {
+          kind: "local",
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+        },
+      ],
+    });
+
+    harness.handle.store
+      .getState()
+      .sendMessage(CONTENT, { type: "user", userId: OWNER_ID }, SETTINGS);
+    const frame = harness.sent.at(-1);
+    if (frame === undefined || frame.kind !== "send") {
+      throw new Error("Expected send frame");
+    }
+
+    // The send consumed this slot. Clearing the now-empty slot is a deliberate
+    // newer choice to send without a workspace selection on retry.
+    useWorktreeIntentStagingStore.getState().clear(key);
+
+    callbacks.onActionAck({
+      kind: "actionAck",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      clientActionId: frame.clientActionId,
+      action: "send",
+      status: "rejected",
+      reason: "Stop the active chat run before rebinding its worktree.",
+      code: "WORKTREE_CREATE_FAILED",
+      backgroundStopTaskIds: [],
+    });
+
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toBeUndefined();
+  });
+
   it("refuses chat send while staged worktree metadata is unresolved", () => {
     const harness = createHarness();
     emitSnapshot(harness.callbacks(), "owner");

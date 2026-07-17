@@ -50,6 +50,7 @@ function createPendingAction(
     sender: isSendOrEdit ? SENDER : null,
     settings: isSendOrEdit ? SETTINGS : null,
     restoreWorktreeIntent: null,
+    restoreWorktreeStagingRevision: null,
     createdAt: 1000,
     connectionEpoch: 0,
   };
@@ -144,6 +145,7 @@ describe("chat-queue-reconciler", () => {
         sender: SENDER,
         settings: SETTINGS,
         restoreWorktreeIntent: null,
+        restoreWorktreeStagingRevision: null,
         createdAt: 1000,
         connectionEpoch: 0,
       };
@@ -200,6 +202,7 @@ describe("chat-queue-reconciler", () => {
         sender: SENDER,
         settings: SETTINGS,
         restoreWorktreeIntent: null,
+        restoreWorktreeStagingRevision: null,
         createdAt: 1000,
         connectionEpoch: 0,
       };
@@ -355,6 +358,7 @@ describe("chat-queue-reconciler", () => {
         sender: SENDER,
         settings: SETTINGS,
         restoreWorktreeIntent: null,
+        restoreWorktreeStagingRevision: null,
         createdAt: 1000,
         connectionEpoch: 0,
       };
@@ -438,6 +442,7 @@ describe("chat-queue-reconciler", () => {
         sender: SENDER,
         settings: SETTINGS,
         restoreWorktreeIntent: null,
+        restoreWorktreeStagingRevision: null,
         createdAt: 1000,
         connectionEpoch: 0,
       };
