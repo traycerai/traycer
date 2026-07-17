@@ -18,6 +18,10 @@ const CHAT_REGISTRY = getChatSessionRegistry();
 
 export type EpicActivityStatus = "idle" | "turn" | "background";
 
+/**
+ * Aggregates this epic's live chat sessions into the activity tier rendered
+ * by task-level surfaces. A turn wins over background work across chats.
+ */
 export function useEpicActivityStatus(
   epicId: string | null,
 ): EpicActivityStatus {
@@ -39,6 +43,10 @@ export function useEpicActivityStatus(
   );
 }
 
+/**
+ * Reads session activity first, then conservatively treats an unresolved
+ * awareness signal as a turn while its chat subscription catches up.
+ */
 function getEpicChatSessionActivity(
   epicId: string | null,
   activeAgentIds: ReadonlySet<string>,
@@ -64,6 +72,7 @@ function getEpicChatSessionActivity(
   return hasBackgroundActivity ? "background" : "idle";
 }
 
+/** Subscribes only to live chats belonging to this epic. */
 function subscribeEpicChatSessionActivity(
   epicId: string | null,
   liveAgentIds: ReadonlySet<string>,
@@ -101,6 +110,7 @@ function subscribeEpicChatSessionActivity(
   };
 }
 
+/** Projects the chat session's indicator tier for task-level aggregation. */
 function chatSessionActivity(state: ChatSessionState): ChatActivityIndicator {
   return chatActivityIndicator(state);
 }
