@@ -5,4 +5,5 @@ export const worktreeMutationKeys = {
   retrySetup: () => ["worktree.retrySetup"] as const,
   delete: () => ["worktree.delete"] as const,
   setRepoScripts: () => ["worktree.setRepoScripts"] as const,
+  refreshListing: () => ["worktree.listAllForHost", "forceRefresh"] as const,
 };
