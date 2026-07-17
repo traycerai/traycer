@@ -605,7 +605,10 @@ function LandingTerminalPanelBody(props: {
 }): ReactNode {
   if (props.availability === "unknown") {
     return (
-      <div className="flex min-h-0 flex-1 items-center justify-center p-6 text-center text-ui-sm text-muted-foreground">
+      <div
+        role="status"
+        className="flex min-h-0 flex-1 items-center justify-center p-6 text-center text-ui-sm text-muted-foreground"
+      >
         Connecting to the selected host…
       </div>
     );

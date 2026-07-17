@@ -276,9 +276,9 @@ describe("<LandingTerminalPanel />", () => {
 
     render(panelUi());
 
-    expect(
-      screen.getAllByText("Connecting to the selected host…"),
-    ).toHaveLength(1);
+    expect(screen.getByRole("status").textContent).toBe(
+      "Connecting to the selected host…",
+    );
     expect(screen.queryByText("Starting terminal…")).toBeNull();
   });
 
