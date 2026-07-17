@@ -14,6 +14,7 @@ import { type HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys, worktreeMutationKeys } from "@/lib/query-keys";
 import { isPerPathEnrichmentQueryKey } from "@/lib/query-keys/worktree-enrichment-keys";
 import { logPerfEvent } from "@/lib/perf/perf-telemetry";
+import { toastFromHostError } from "@/lib/host-error-toast";
 import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import {
@@ -195,12 +196,19 @@ export function useWorktreeListing(
       enabled,
     }),
   );
-  const refreshMutation = useMutation({
+  // `HostRpcError` error generic: the mutationFn only rejects via
+  // `client.request`, whose failures are always host RPC errors.
+  const refreshMutation = useMutation<
+    WorktreeListAllForHostResponseV14,
+    HostRpcError,
+    { readonly client: HostClient<HostRpcRegistry>; readonly hostId: string }
+  >({
     mutationKey: worktreeMutationKeys.refreshListing(),
-    mutationFn: (input: {
-      readonly client: HostClient<HostRpcRegistry>;
-      readonly hostId: string;
-    }) =>
+    // The Refresh button's only failure signal was the spinner stopping - the
+    // rejected promise is swallowed by useRefreshSpinner.
+    onError: (error) =>
+      toastFromHostError(error, "Couldn't refresh worktrees."),
+    mutationFn: (input) =>
       input.client.request("worktree.listAllForHost", {
         includeActivity: false,
         activityPaths: null,
