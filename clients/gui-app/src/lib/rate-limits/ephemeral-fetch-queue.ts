@@ -342,7 +342,16 @@ function enqueueRateLimitFetchBatchForScope(
         // `staleTime: 0` is load-bearing: `fetchQuery` inherits the app
         // QueryClient's GLOBAL `staleTime` default (60s in `query-client.ts`)
         // and otherwise serves still-fresh cache without fetching at all.
-        return queryClient.fetchQuery({ queryKey, queryFn, staleTime: 0 });
+        return queryClient.fetchQuery({
+          queryKey,
+          queryFn,
+          staleTime: 0,
+          // Some managed-profile entries are filled by the app-level queue
+          // before any surface observes them, so the observer-level Infinity
+          // in `providerRateLimitQueryOptions` cannot protect those entries.
+          // Keep them until a later fetch replaces them with verified state.
+          gcTime: Infinity,
+        });
       }
 
       return runFetch;
