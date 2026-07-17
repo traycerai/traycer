@@ -1,6 +1,7 @@
 import type { AccountContext } from "@traycer/protocol/common/schemas";
 import type { RequestOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { ResolveArtifactByPathRequest } from "@traycer/protocol/host/epic/unary-schemas";
+import type { WorkspaceReadFileRequest } from "@traycer/protocol/host/workspace/unary-schemas";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework";
 
@@ -35,6 +36,22 @@ export const hostQueryKeys = {
     hostQueryKeys.method<HostRpcRegistry, "epic.resolveArtifactByPath">(
       hostId,
       "epic.resolveArtifactByPath",
+      params,
+    ),
+  /**
+   * Named alias for the imperative `workspace.readFile` existence probe a
+   * relative chat markdown link fires per candidate root - keyed on
+   * `{ workspacePath, filePath, maxBytes }` so the probe (small `maxBytes`)
+   * and the preview tile's full read (large `maxBytes`) never collide on the
+   * same cache slot. Delegates to the generic `method` builder (CL-10).
+   */
+  readWorkspaceFile: (
+    hostId: string | null,
+    params: WorkspaceReadFileRequest,
+  ) =>
+    hostQueryKeys.method<HostRpcRegistry, "workspace.readFile">(
+      hostId,
+      "workspace.readFile",
       params,
     ),
   /**

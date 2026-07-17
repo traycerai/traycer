@@ -69,6 +69,20 @@ interface LinkTargetBase {
   readonly attrs: Readonly<Record<string, unknown>>;
   readonly anchor: VirtualElement;
   readonly yBookmark: YRangeBookmark | null;
+  /**
+   * Document position this target visually anchors to - the caret's own
+   * position for a caret trigger, or wherever `posAtCoords` resolved the
+   * pointer for a hover trigger (clamped into `range`). `rangeAnchor` re-reads
+   * `coordsAtPos` of THIS position live on every floating-ui reposition
+   * (`autoUpdate`, which fires on scroll/resize), so the anchor never goes
+   * stale - unlike a frozen viewport pixel point, a ProseMirror document
+   * position is scroll-independent and always resolves to wherever that
+   * character currently renders. Re-mapped through each transaction (locally
+   * via `transaction.mapping`, or across remote edits via `yBookmark`) so it
+   * keeps tracking the SAME character rather than resetting to the link's
+   * start.
+   */
+  readonly anchorDocPosition: number;
 }
 
 interface EditLinkTarget extends LinkTargetBase {
@@ -85,6 +99,12 @@ type LinkTarget = EditLinkTarget | CreateLinkTarget;
 interface YRangeBookmark {
   readonly from: Y.RelativePosition;
   readonly to: Y.RelativePosition;
+  readonly anchor: Y.RelativePosition;
+}
+
+interface ResolvedYBookmark {
+  readonly range: Range;
+  readonly anchor: number;
 }
 
 interface YSyncState {
@@ -111,22 +131,79 @@ function linkElementAtRange(editor: Editor, range: Range): HTMLElement {
   return element?.closest<HTMLElement>("a[data-link-href]") ?? editor.view.dom;
 }
 
+/**
+ * Resolves the ProseMirror document position under viewport coordinates
+ * (`event.clientX`/`clientY`), falling back to `fallback` when the point
+ * doesn't land inside the document (rare - e.g. a coordinate right at a
+ * scrollbar edge). Called ONCE at hover-entry: the returned position is a
+ * STABLE document identity, unlike the raw pixel coordinates, so capturing it
+ * early and re-resolving its on-screen rect later (via `coordsAtPos` in
+ * `rangeAnchor`) never goes stale across a scroll.
+ */
+function pointerDocPosition(
+  editor: Editor,
+  event: PointerEvent,
+  fallback: number,
+): number {
+  const result = editor.view.posAtCoords({
+    left: event.clientX,
+    top: event.clientY,
+  });
+  return result === null ? fallback : result.pos;
+}
+
+function clampToRange(position: number, range: Range): number {
+  return Math.min(Math.max(position, range.from), range.to);
+}
+
+/**
+ * The `coordsAtPos` side to resolve `position` on: `range.to` is the
+ * end-EXCLUSIVE boundary of the mark, so the default positive side (biased
+ * toward the character AFTER the position) would report coordinates for
+ * whatever follows the link - at a line-wrap boundary, that's the start of
+ * the NEXT visual line, landing the card a line low. Every other position
+ * (including `range.from`, the boundary BEFORE the mark's first character)
+ * wants the default positive side.
+ */
+function anchorSide(position: number, range: Range): number {
+  return position === range.to ? -1 : 1;
+}
+
+/**
+ * Builds the floating-ui reference for a link target, anchored to a single
+ * ProseMirror document position re-resolved LIVE on every call via
+ * `coordsAtPos`.
+ *
+ * Anchoring must resolve to a SINGLE visual line, never a box spanning
+ * several: a link (or a create-mode selection) that wraps across lines, or
+ * sits inside a table cell, exposes multiple client rects. Unioning
+ * `coordsAtPos(range.from)`/`coordsAtPos(range.to)` - an earlier approach -
+ * builds a box enclosing every fragment, so `placement: "top-start"` lands
+ * the card above the topmost line at the leftmost edge, which can be far from
+ * the line the pointer is actually over. Because `coordsAtPos` is invoked
+ * FRESH every time floating-ui's `autoUpdate` calls this (scroll, resize,
+ * mutation), the anchor also can't go stale the way a frozen viewport pixel
+ * point could - there's no cached rect to invalidate. `side` carries the
+ * endpoint bias from `anchorSide` so a boundary position resolves to the
+ * correct side of the wrap.
+ */
 function rangeAnchor(
   editor: Editor,
-  range: Range,
   contextElement: HTMLElement,
+  position: number,
+  side: number,
 ): VirtualElement {
   return {
     contextElement,
     getBoundingClientRect: () => {
       if (editor.isDestroyed) return new DOMRect();
-      const start = editor.view.coordsAtPos(range.from);
-      const end = editor.view.coordsAtPos(range.to);
-      const left = Math.min(start.left, end.left);
-      const right = Math.max(start.right, end.right);
-      const top = Math.min(start.top, end.top);
-      const bottom = Math.max(start.bottom, end.bottom);
-      return new DOMRect(left, top, right - left, bottom - top);
+      const coords = editor.view.coordsAtPos(position, side);
+      return new DOMRect(
+        coords.left,
+        coords.top,
+        Math.max(coords.right - coords.left, 0),
+        coords.bottom - coords.top,
+      );
     },
   };
 }
@@ -174,7 +251,11 @@ function typedRelativePosition(
   return relativePosition;
 }
 
-function createYBookmark(editor: Editor, range: Range): YRangeBookmark | null {
+function createYBookmark(
+  editor: Editor,
+  range: Range,
+  anchorPositionValue: number,
+): YRangeBookmark | null {
   const syncState = ySyncState(editor);
   if (syncState === null) return null;
   return {
@@ -188,13 +269,18 @@ function createYBookmark(editor: Editor, range: Range): YRangeBookmark | null {
       syncState.type,
       syncState.binding.mapping,
     ),
+    anchor: typedRelativePosition(
+      anchorPositionValue,
+      syncState.type,
+      syncState.binding.mapping,
+    ),
   };
 }
 
 function resolveYBookmark(
   editor: Editor,
   bookmark: YRangeBookmark,
-): Range | null {
+): ResolvedYBookmark | null {
   const syncState = ySyncState(editor);
   if (syncState === null) return null;
   const from = relativePositionToAbsolutePosition(
@@ -209,15 +295,26 @@ function resolveYBookmark(
     bookmark.to,
     syncState.binding.mapping,
   );
-  if (from === null || to === null || from >= to) return null;
-  return { from, to };
+  const anchor = relativePositionToAbsolutePosition(
+    syncState.doc,
+    syncState.type,
+    bookmark.anchor,
+    syncState.binding.mapping,
+  );
+  if (from === null || to === null || anchor === null || from >= to) {
+    return null;
+  }
+  return { range: { from, to }, anchor };
 }
 
 function linkTargetAtPosition(
   editor: Editor,
   position: number,
-  trigger: "hover" | "caret",
-  contextElement: HTMLElement | null,
+  options: {
+    readonly trigger: "hover" | "caret";
+    readonly contextElement: HTMLElement | null;
+    readonly anchorDocPosition: number | null;
+  },
 ): EditLinkTarget | null {
   const safePosition = Math.max(
     0,
@@ -231,17 +328,28 @@ function linkTargetAtPosition(
   const mark = markAtRange(editor, range);
   const href = typeof mark?.attrs.href === "string" ? mark.attrs.href : "";
   if (mark === null || href.length === 0) return null;
-  const liveContext = contextElement ?? linkElementAtRange(editor, range);
+  const liveContext =
+    options.contextElement ?? linkElementAtRange(editor, range);
+  const anchorDocPosition = clampToRange(
+    options.anchorDocPosition ?? safePosition,
+    range,
+  );
   return {
     range,
     href,
     text: editor.state.doc.textBetween(range.from, range.to),
     identityText: editor.state.doc.textBetween(range.from, range.to),
     attrs: mark.attrs,
-    anchor: rangeAnchor(editor, range, liveContext),
+    anchor: rangeAnchor(
+      editor,
+      liveContext,
+      anchorDocPosition,
+      anchorSide(anchorDocPosition, range),
+    ),
     mode: "edit",
-    trigger,
-    yBookmark: createYBookmark(editor, range),
+    trigger: options.trigger,
+    yBookmark: createYBookmark(editor, range, anchorDocPosition),
+    anchorDocPosition,
   };
 }
 
@@ -263,13 +371,20 @@ function refreshCreateTarget(
   editor: Editor,
   target: CreateLinkTarget,
   mappedRange: Range,
+  mappedAnchor: number,
 ): LinkTarget | null {
   if (!isSingleTextblockLinkRange(editor, mappedRange)) return null;
   return {
     ...target,
     range: mappedRange,
     text: editor.state.doc.textBetween(mappedRange.from, mappedRange.to),
-    anchor: rangeAnchor(editor, mappedRange, editor.view.dom),
+    anchorDocPosition: mappedAnchor,
+    anchor: rangeAnchor(
+      editor,
+      editor.view.dom,
+      mappedAnchor,
+      anchorSide(mappedAnchor, mappedRange),
+    ),
   };
 }
 
@@ -277,6 +392,7 @@ function refreshEditTarget(
   editor: Editor,
   target: EditLinkTarget,
   mappedRange: Range,
+  mappedAnchor: number,
 ): LinkTarget | null {
   const { from, to } = mappedRange;
   const linkType = editor.schema.marks.link;
@@ -305,10 +421,12 @@ function refreshEditTarget(
     attrs: mark.attrs,
     text: mappedText,
     identityText: mappedText,
+    anchorDocPosition: mappedAnchor,
     anchor: rangeAnchor(
       editor,
-      mappedRange,
       linkElementAtRange(editor, mappedRange),
+      mappedAnchor,
+      anchorSide(mappedAnchor, mappedRange),
     ),
   };
 }
@@ -318,28 +436,63 @@ function refreshMappedTarget(
   target: LinkTarget,
   transaction: Transaction,
 ): LinkTarget | null {
-  const yRange =
+  const yResolved =
     target.yBookmark === null
       ? null
       : resolveYBookmark(editor, target.yBookmark);
-  if (target.yBookmark !== null && yRange === null) return null;
+  if (target.yBookmark !== null && yResolved === null) return null;
   const mappedFrom =
-    yRange?.from ?? transaction.mapping.map(target.range.from, 1);
-  const mappedTo = yRange?.to ?? transaction.mapping.map(target.range.to, -1);
+    yResolved?.range.from ?? transaction.mapping.map(target.range.from, 1);
+  const mappedTo =
+    yResolved?.range.to ?? transaction.mapping.map(target.range.to, -1);
   if (mappedFrom >= mappedTo) return null;
   const mappedRange = { from: mappedFrom, to: mappedTo };
+  const mappedAnchor = clampToRange(
+    yResolved?.anchor ?? transaction.mapping.map(target.anchorDocPosition, 1),
+    mappedRange,
+  );
   if (target.mode === "create") {
-    return refreshCreateTarget(editor, target, mappedRange);
+    return refreshCreateTarget(editor, target, mappedRange, mappedAnchor);
   }
-  return refreshEditTarget(editor, target, mappedRange);
+  return refreshEditTarget(editor, target, mappedRange, mappedAnchor);
+}
+
+/**
+ * Moves the anchor to `position` (the caret's new spot, still within
+ * `target.range`) without touching `href`/`text`/`identityText` or any of
+ * the dirty-edit-field bookkeeping the caller owns - unlike `open`, this
+ * must not reset an in-progress edit just because the caret moved to a
+ * different visual fragment of the same wrapped link.
+ */
+function refreshCaretAnchor(
+  editor: Editor,
+  target: EditLinkTarget,
+  position: number,
+): EditLinkTarget {
+  return {
+    ...target,
+    anchorDocPosition: position,
+    anchor: rangeAnchor(
+      editor,
+      linkElementAtRange(editor, target.range),
+      position,
+      anchorSide(position, target.range),
+    ),
+    yBookmark: createYBookmark(editor, target.range, position),
+  };
 }
 
 function createTargetFromSelection(editor: Editor): LinkTarget | null {
   const { from, to } = editor.state.selection;
+  const caretOptions = {
+    trigger: "caret" as const,
+    contextElement: null,
+    anchorDocPosition: null,
+  };
   if (from === to) {
-    return linkTargetAtPosition(editor, from, "caret", null);
+    return linkTargetAtPosition(editor, from, caretOptions);
   }
-  const existing = linkTargetAtPosition(editor, from, "caret", null);
+  const existing = linkTargetAtPosition(editor, from, caretOptions);
   if (
     existing !== null &&
     existing.range.from <= from &&
@@ -355,9 +508,15 @@ function createTargetFromSelection(editor: Editor): LinkTarget | null {
     text: editor.state.doc.textBetween(from, to),
     identityText: editor.state.doc.textBetween(from, to),
     attrs: {},
-    anchor: rangeAnchor(editor, range, editor.view.dom),
+    anchor: rangeAnchor(
+      editor,
+      editor.view.dom,
+      range.from,
+      anchorSide(range.from, range),
+    ),
     mode: "create",
-    yBookmark: createYBookmark(editor, range),
+    yBookmark: createYBookmark(editor, range, range.from),
+    anchorDocPosition: range.from,
   };
 }
 
@@ -603,16 +762,26 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
     const anchor = linkAnchor(event.target);
     if (anchor === null) return;
     cancelShow();
+    const fallbackPosition = anchorPosition(editor, anchor);
+    // Captured at hover-entry so the card anchors to the character the
+    // pointer actually entered through, even if the link itself spans
+    // several visual lines (a wrapped link) by the time the show delay
+    // elapses - a document position stays valid across that delay, unlike a
+    // frozen viewport pixel point.
+    const anchorDocPosition = pointerDocPosition(
+      editor,
+      event,
+      fallbackPosition,
+    );
     showTimerRef.current = window.setTimeout(() => {
       showTimerRef.current = null;
       if (!anchor.isConnected) return;
       if (!editor.state.selection.empty) return;
-      const nextTarget = linkTargetAtPosition(
-        editor,
-        anchorPosition(editor, anchor),
-        "hover",
-        anchor,
-      );
+      const nextTarget = linkTargetAtPosition(editor, fallbackPosition, {
+        trigger: "hover",
+        contextElement: anchor,
+        anchorDocPosition,
+      });
       if (nextTarget !== null) open(nextTarget);
     }, HOVER_SHOW_DELAY_MS);
   });
@@ -722,8 +891,7 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
     const nextTarget = linkTargetAtPosition(
       editor,
       anchorPosition(editor, anchor),
-      "caret",
-      anchor,
+      { trigger: "caret", contextElement: anchor, anchorDocPosition: null },
     );
     if (nextTarget === null) return;
     const current = targetRef.current;
@@ -747,8 +915,7 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
       const nextTarget = linkTargetAtPosition(
         editor,
         editor.state.selection.from,
-        "caret",
-        null,
+        { trigger: "caret", contextElement: null, anchorDocPosition: null },
       );
       if (nextTarget !== null) {
         open(nextTarget);
@@ -768,6 +935,14 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
       }
       const position = editor.state.selection.from;
       if (current !== null && rangeContainsPosition(current.range, position)) {
+        // The caret moved to a different visual fragment of the SAME
+        // wrapped link (still inside current.range): keep the open target
+        // (don't reset href/text/dirty-edit state via `open`), but refresh
+        // where it anchors so the card follows the caret across the wrap
+        // instead of staying pinned to the position it first opened at.
+        if (position !== current.anchorDocPosition) {
+          setLiveTarget(refreshCaretAnchor(editor, current, position));
+        }
         return;
       }
       const expectedPosition = expectedCaretPositionRef.current;
@@ -776,7 +951,11 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
         return;
       }
       expectedCaretPositionRef.current = null;
-      const nextTarget = linkTargetAtPosition(editor, position, "caret", null);
+      const nextTarget = linkTargetAtPosition(editor, position, {
+        trigger: "caret",
+        contextElement: null,
+        anchorDocPosition: null,
+      });
       if (nextTarget === null) {
         if (current !== null) close();
         return;

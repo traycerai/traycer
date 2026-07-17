@@ -632,6 +632,7 @@ function TabChromeBackground({
     >
       <TabCap side="left" fill={fill} borderColor={borderColor} />
       <span
+        data-testid="tab-chrome-center"
         className={cn("-mx-px h-full flex-1", borderColor && "border-t")}
         style={{ backgroundColor: fill, borderTopColor: borderColor }}
       />
@@ -639,7 +640,8 @@ function TabChromeBackground({
       {coversBaseline ? (
         <span
           aria-hidden
-          className="absolute inset-x-0 -bottom-px h-px"
+          data-testid="tab-baseline-cover"
+          className="absolute inset-x-0 bottom-0 z-0 h-px"
           style={{ backgroundColor: fill }}
         />
       ) : null}
@@ -662,21 +664,24 @@ function TabCap({
       : "M 0 0 L 5 0 C 9.4 0 12 2.8 12 7 L 12 32 C 12 36.8 15.2 40 20 40 L 0 40 Z";
   const outline =
     side === "left"
-      ? "M 0 40 C 4.8 40 8 36.8 8 32 L 8 7 C 8 2.8 10.6 0 15 0 L 20 0"
-      : "M 0 0 L 5 0 C 9.4 0 12 2.8 12 7 L 12 32 C 12 36.8 15.2 40 20 40";
+      ? "M -2 39.5 L 0 39.5 C 4.8 39.5 8 36.8 8 32 L 8 7 C 8 2.8 10.6 0 15 0 L 20 0"
+      : "M 0 0 L 5 0 C 9.4 0 12 2.8 12 7 L 12 32 C 12 36.8 15.2 39.5 20 39.5 L 22 39.5";
   return (
     <svg
+      data-testid={`tab-cap-${side}`}
       viewBox="0 0 20 40"
       preserveAspectRatio="none"
-      className="h-full w-5 shrink-0"
+      className="relative z-10 h-full w-5 shrink-0 overflow-visible"
     >
       <path d={d} fill={fill} />
       {borderColor ? (
         <path
+          data-testid={`tab-cap-outline-${side}`}
           d={outline}
           fill="none"
           stroke={borderColor}
           strokeWidth="1"
+          strokeLinecap="square"
           vectorEffect="non-scaling-stroke"
         />
       ) : null}

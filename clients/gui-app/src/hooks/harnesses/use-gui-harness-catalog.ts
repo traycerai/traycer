@@ -247,6 +247,11 @@ export function useGuiHarnessModelsQuery(
       // reaped server - every time the user merely switched back to a composer
       // with an aged cache.
       staleTime: Infinity,
+      // Going inactive (for example while the host is temporarily unavailable)
+      // must only detach the observer, not discard the last verified catalog.
+      // A successful later listModels response replaces this cache entry and
+      // is the authority for models that no longer exist.
+      gcTime: Infinity,
     },
   });
 }
@@ -318,6 +323,9 @@ export function useGuiHarnessCatalog(
       // TanStack's no-data path ignores staleTime - so this only suppresses
       // re-pulling harnesses we already hold.
       staleTime: Infinity,
+      // Match the standalone model-query contract above: inactivity may mark
+      // the catalog stale, but cannot garbage-collect the last verified list.
+      gcTime: Infinity,
     },
   });
 

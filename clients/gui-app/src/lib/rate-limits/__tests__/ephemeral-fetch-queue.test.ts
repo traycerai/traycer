@@ -92,6 +92,7 @@ describe("ephemeral-fetch-queue", () => {
   });
   afterEach(() => {
     __resetRateLimitQueueForTests();
+    vi.useRealTimers();
   });
 
   it("serializes concurrent enqueues across providers - only one request is ever in flight (guardrail 1)", async () => {
@@ -314,6 +315,31 @@ describe("ephemeral-fetch-queue", () => {
       lastGoodAt: null,
       lastFailureAt: null,
     });
+  });
+
+  it("keeps an inactive rate-limit entry after invalidation instead of garbage-collecting it", async () => {
+    vi.useFakeTimers();
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { gcTime: 50, retry: false } },
+    });
+    const request = vi.fn<RateLimitQueueRequestFn>(() =>
+      Promise.resolve(response()),
+    );
+    configureRateLimitQueue({ hostId: HOST_ID, queryClient, request });
+
+    await enqueueRateLimitFetch("codex", DEFAULT_ACCOUNT_CONTEXT, {
+      force: true,
+      profileId: null,
+    });
+    const queryKey = keyFor("codex");
+    await queryClient.invalidateQueries({ queryKey, refetchType: "none" });
+
+    expect(queryClient.getQueryState(queryKey)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryData(queryKey)).toBeDefined();
+
+    await vi.advanceTimersByTimeAsync(51);
+
+    expect(queryClient.getQueryData(queryKey)).toBeDefined();
   });
 
   it("force: false no-ops when cached data is still within the freshness floor, force: true bypasses it", async () => {
