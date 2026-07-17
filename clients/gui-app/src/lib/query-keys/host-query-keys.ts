@@ -83,11 +83,10 @@ export const hostQueryKeys = {
     taskIds: readonly string[],
   ) =>
     [
-      ...hostQueryKeys.method<HostRpcRegistry, typeof EPIC_TASK_CONTEXTS_METHOD>(
-        hostId,
-        EPIC_TASK_CONTEXTS_METHOD,
-        { taskIds: [...taskIds] },
-      ),
+      ...hostQueryKeys.method<
+        HostRpcRegistry,
+        typeof EPIC_TASK_CONTEXTS_METHOD
+      >(hostId, EPIC_TASK_CONTEXTS_METHOD, { taskIds: [...taskIds] }),
       userId,
     ] as const,
 };
