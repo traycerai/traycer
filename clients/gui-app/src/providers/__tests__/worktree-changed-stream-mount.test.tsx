@@ -11,7 +11,7 @@ import { useWorktreeListing } from "@/components/settings/panels/worktrees-listi
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { createAppQueryClient } from "@/lib/query-client";
-import { invalidateWorktreeChangedCaches } from "@/providers/worktree-changed-stream-mount";
+import { invalidateWorktreeChangedCaches } from "@/lib/worktree/invalidate-worktree-changed-caches";
 
 afterEach(() => {
   cleanup();

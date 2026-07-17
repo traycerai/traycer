@@ -1,14 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
-import {
-  buildStreamManifest,
-  splitStreamManifest,
-} from "@traycer/protocol/framework/stream-compat";
-import {
-  RELEASED_STREAM_FLOOR_METHOD_NAMES,
-  streamFloorMethodNamesForRegistry,
-} from "@traycer/protocol/host/released-floor";
+import { buildStreamManifest } from "@traycer/protocol/framework/stream-compat";
 import {
   defineStreamRpcContract,
   defineVersionedStreamRpcRegistry,
@@ -235,16 +228,9 @@ function streamOpenAck(
   manifest: Record<string, { major: number; minor: number }>,
   capabilities: readonly string[] | undefined,
 ): Record<string, unknown> {
-  const floor = new Set(streamFloorMethodNamesForRegistry(manifest));
-  const manifestEntries = Object.entries(manifest);
   return {
     kind: "openAck",
-    manifest: Object.fromEntries(
-      manifestEntries.filter(([method]) => floor.has(method)),
-    ),
-    optionalManifest: Object.fromEntries(
-      manifestEntries.filter(([method]) => !floor.has(method)),
-    ),
+    manifest,
     ...(capabilities === undefined ? {} : { capabilities }),
   };
 }
@@ -302,12 +288,10 @@ describe("WsStreamClient", () => {
     // full-manifest check: `canBridgeStream` trusts an older peer receiving a
     // newer minor unconditionally (additive minors), so it never poisons an
     // unrelated method's open handshake the way the old major bump once did.
-    const channels = splitStreamManifest(
-      hostStreamRpcRegistry,
-      RELEASED_STREAM_FLOOR_METHOD_NAMES,
+    expect(openFrame.manifest).toEqual(
+      buildStreamManifest(hostStreamRpcRegistry),
     );
-    expect(openFrame.manifest).toEqual(channels.manifest);
-    expect(openFrame.optionalManifest).toEqual(channels.optionalManifest);
+    expect(openFrame).not.toHaveProperty("optionalManifest");
 
     stub.fireText(
       streamOpenAck(buildStreamManifest(hostStreamRpcRegistry), undefined),
@@ -327,7 +311,7 @@ describe("WsStreamClient", () => {
     session.close();
   });
 
-  it("rejects an incompatible released-floor method even when subscribing elsewhere", async () => {
+  it("subscribes to a compatible method even when an unrelated method has major skew", async () => {
     const { factory, sockets } = makeFactory();
     const client = makeClient({
       factory,
@@ -353,7 +337,12 @@ describe("WsStreamClient", () => {
     stub.fireText(streamOpenAck(skewedManifest, undefined));
 
     expect(stub.textSent).toHaveLength(2);
-    expect(parseText(stub.textSent[1]).kind).toBe("fatalError");
+    expect(parseText(stub.textSent[1])).toEqual({
+      kind: "subscribe",
+      method: "epic.subscribe",
+      schemaVersion: { major: 1, minor: 0 },
+      params: { epicId: "epic-1" },
+    });
 
     session.close();
   });
@@ -377,12 +366,10 @@ describe("WsStreamClient", () => {
 
     sockets[0].socket.fireOpen();
     const openFrame = parseText(sockets[0].socket.textSent[0]);
-    const channels = splitStreamManifest(
-      hostStreamRpcRegistry,
-      RELEASED_STREAM_FLOOR_METHOD_NAMES,
+    expect(openFrame.manifest).toEqual(
+      buildStreamManifest(hostStreamRpcRegistry),
     );
-    expect(openFrame.manifest).toEqual(channels.manifest);
-    expect(openFrame.optionalManifest).toEqual(channels.optionalManifest);
+    expect(openFrame).not.toHaveProperty("optionalManifest");
 
     session.close();
   });
@@ -405,19 +392,21 @@ describe("WsStreamClient", () => {
     stub.fireOpen();
 
     const openFrame = parseText(stub.textSent[0]);
-    const channels = splitStreamManifest(
-      hostStreamRpcRegistry,
-      RELEASED_STREAM_FLOOR_METHOD_NAMES,
+    expect(openFrame.manifest).toEqual(
+      buildStreamManifest(hostStreamRpcRegistry),
     );
-    expect(openFrame.manifest).toEqual(channels.manifest);
-    expect(openFrame.optionalManifest).toEqual(channels.optionalManifest);
+    expect(openFrame).not.toHaveProperty("optionalManifest");
 
     // Shipped stream hosts do not run a fatal open-time manifest check. They
     // acknowledge the intersection of their manifest with the client's legacy
     // advertised entries, without an optional channel.
     stub.fireText({
       kind: "openAck",
-      manifest: channels.manifest,
+      manifest: {
+        "epic.subscribe": buildStreamManifest(hostStreamRpcRegistry)[
+          "epic.subscribe"
+        ],
+      },
     });
 
     expect(parseText(stub.textSent[1])).toEqual({
@@ -427,104 +416,6 @@ describe("WsStreamClient", () => {
       params: { epicId: "epic-1" },
     });
 
-    session.close();
-  });
-
-  it("connects to an old peer without optionalManifest but does not subscribe worktree.changed", async () => {
-    const { factory, sockets } = makeFactory();
-    const client = makeClient({
-      factory,
-      authToken: "token-abc",
-      pingIntervalMs: 25_000,
-      pongTimeoutMs: 50_000,
-      initialBackoffMs: 10,
-      maxBackoffMs: 1_000,
-    });
-    const session = client.subscribe("worktree.changed", {});
-    await flush();
-    const stub = sockets[0].socket;
-    stub.fireOpen();
-    const channels = splitStreamManifest(
-      hostStreamRpcRegistry,
-      RELEASED_STREAM_FLOOR_METHOD_NAMES,
-    );
-
-    stub.fireText({ kind: "openAck", manifest: channels.manifest });
-
-    expect(parseText(stub.textSent[1]).kind).toBe("fatalError");
-    expect(
-      stub.textSent.some((frame) => parseText(frame).kind === "subscribe"),
-    ).toBe(false);
-    session.close();
-  });
-
-  it("re-probes an unsupported optional method after the host endpoint reconnects", async () => {
-    const { factory, sockets } = makeFactory();
-    const client = makeClient({
-      factory,
-      authToken: "token-abc",
-      pingIntervalMs: 25_000,
-      pongTimeoutMs: 50_000,
-      initialBackoffMs: 10,
-      maxBackoffMs: 1_000,
-    });
-    const oldSession = client.subscribe("worktree.changed", {});
-    await flush();
-    sockets[0].socket.fireOpen();
-    const channels = splitStreamManifest(
-      hostStreamRpcRegistry,
-      RELEASED_STREAM_FLOOR_METHOD_NAMES,
-    );
-    sockets[0].socket.fireText({
-      kind: "openAck",
-      manifest: channels.manifest,
-    });
-    expect(client.getMethodSupport("worktree.changed")).toBe("unsupported");
-
-    client.reconnectAll("host-endpoint-change");
-    expect(client.getMethodSupport("worktree.changed")).toBe("unknown");
-    const upgradedSession = client.subscribe("worktree.changed", {});
-    await flush();
-    expect(sockets).toHaveLength(2);
-    sockets[1].socket.fireOpen();
-    sockets[1].socket.fireText(
-      streamOpenAck(buildStreamManifest(hostStreamRpcRegistry), undefined),
-    );
-
-    expect(client.getMethodSupport("worktree.changed")).toBe("supported");
-    expect(parseText(sockets[1].socket.textSent[1])).toMatchObject({
-      kind: "subscribe",
-      method: "worktree.changed",
-    });
-    oldSession.close();
-    upgradedSession.close();
-  });
-
-  it("subscribes worktree.changed when both peers advertise it optionally", async () => {
-    const { factory, sockets } = makeFactory();
-    const client = makeClient({
-      factory,
-      authToken: "token-abc",
-      pingIntervalMs: 25_000,
-      pongTimeoutMs: 50_000,
-      initialBackoffMs: 10,
-      maxBackoffMs: 1_000,
-    });
-    const session = client.subscribe("worktree.changed", {});
-    await flush();
-    const stub = sockets[0].socket;
-    stub.fireOpen();
-
-    stub.fireText(
-      streamOpenAck(buildStreamManifest(hostStreamRpcRegistry), undefined),
-    );
-
-    expect(parseText(stub.textSent[1])).toEqual({
-      kind: "subscribe",
-      method: "worktree.changed",
-      schemaVersion: { major: 1, minor: 0 },
-      params: {},
-    });
     session.close();
   });
 

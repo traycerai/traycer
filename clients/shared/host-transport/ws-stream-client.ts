@@ -4,12 +4,9 @@ import type {
   VersionedStreamRpcRegistry,
 } from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
-  checkStreamCompatibility,
+  buildStreamManifest,
   checkStreamMethodCompatibility,
-  splitStreamManifest,
 } from "@traycer/protocol/framework/stream-compat";
-import { mergeConnectionManifests } from "@traycer/protocol/framework/capability-manifest";
-import { streamFloorMethodNamesForRegistry } from "@traycer/protocol/host/released-floor";
 import {
   extractBearerForOpenFrame,
   MissingBearerTokenForOpenFrameError,
@@ -347,10 +344,6 @@ export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
     if (this.closed) {
       return;
     }
-    // An optional method rejected by an older host has no owned session left to
-    // reconnect. Reset that cached verdict so an endpoint replacement / host
-    // upgrade can make its consumer mount and probe the method again.
-    this.resetUnsupportedMethodSupport();
     // Wake-recovery trace (piped to the desktop log via the renderer-console
     // bridge): proves the wake signal arrived and how many sessions re-dialed.
     console.debug(
@@ -358,20 +351,6 @@ export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
     );
     for (const session of Array.from(this.ownedSessions)) {
       session.forceReconnect(reason);
-    }
-  }
-
-  private resetUnsupportedMethodSupport(): void {
-    let changed = false;
-    for (const [method, support] of this.methodSupport) {
-      if (support !== "unsupported") continue;
-      this.methodSupport.set(method, "unknown");
-      this.methodSchemaVersions.delete(method);
-      changed = true;
-    }
-    if (!changed) return;
-    for (const listener of Array.from(this.methodSupportListeners)) {
-      listener();
     }
   }
 
@@ -723,15 +702,11 @@ class StreamSession<
       this.onTransportDrop();
       return;
     }
-    const manifest = splitStreamManifest(
-      this.config.registry,
-      streamFloorMethodNamesForRegistry(this.config.registry),
-    );
+    const manifest = buildStreamManifest(this.config.registry);
     const openFrame: ClientStreamOpenFrame = {
       kind: "open",
       token,
-      manifest: manifest.manifest,
-      optionalManifest: manifest.optionalManifest,
+      manifest,
     };
     if (!this.sendControlText(socket, openFrame)) {
       this.onSendFailure(socket);
@@ -872,27 +847,11 @@ class StreamSession<
       STREAM_CAPABILITY_CREDENTIAL_UPDATE,
     );
 
-    const myManifest = splitStreamManifest(
-      this.config.registry,
-      streamFloorMethodNamesForRegistry(this.config.registry),
-    );
-    const floorCompat = checkStreamCompatibility(
-      this.config.registry,
-      myManifest.manifest,
-      ackParse.data.manifest,
-      "client",
-    );
-    const theirManifest = mergeConnectionManifests(
-      ackParse.data.manifest,
-      ackParse.data.optionalManifest,
-    );
-    const mergedMyManifest = mergeConnectionManifests(
-      myManifest.manifest,
-      myManifest.optionalManifest,
-    );
+    const myManifest = buildStreamManifest(this.config.registry);
+    const theirManifest = ackParse.data.manifest;
     const compat = checkStreamMethodCompatibility(
       this.config.registry,
-      mergedMyManifest,
+      myManifest,
       theirManifest,
       "client",
       this.config.method,
@@ -903,16 +862,11 @@ class StreamSession<
       return;
     }
 
-    const incompatibility = !floorCompat.ok
-      ? floorCompat.details
-      : !compat.ok
-        ? compat.details
-        : null;
-    if (incompatibility !== null) {
+    if (!compat.ok) {
       this.config.onMethodSupport(this.config.method, "unsupported", null);
       const terminalFrame: ClientStreamFatalErrorFrame = {
         kind: "fatalError",
-        details: incompatibility,
+        details: compat.details,
       };
       this.sendControlText(socket, terminalFrame);
       if (!this.disposeSession()) {
@@ -922,7 +876,7 @@ class StreamSession<
       this.teardownSocket(1000, "mirror-incompatible");
       this.transitionTo("closed", {
         kind: "fatalError",
-        details: incompatibility,
+        details: compat.details,
       });
       return;
     }
@@ -930,7 +884,7 @@ class StreamSession<
     const prepared = prepareStreamSubscribeRequest(
       this.config.registry,
       this.config.method,
-      mergedMyManifest[this.config.method],
+      myManifest[this.config.method],
       theirManifest[this.config.method],
       this.config.params,
     );

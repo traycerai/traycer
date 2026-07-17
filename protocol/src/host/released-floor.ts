@@ -116,36 +116,3 @@ export const RELEASED_FLOOR_METHOD_NAMES: readonly string[] = [
   "worktree.setEntryMode",
   "worktree.setRepoScripts",
 ];
-
-/**
- * Every stream method released before optional-manifest negotiation. Keep this
- * floor stable: new stream method names belong in `optionalManifest` so older
- * peers can connect without advertising or selecting them.
- */
-export const RELEASED_STREAM_FLOOR_METHOD_NAMES: readonly string[] = [
-  "epic.subscribe",
-  "chat.subscribe",
-  "notifications.subscribe",
-  "host.notifications.subscribe",
-  "terminal.subscribe",
-  "git.subscribeStatus",
-  "resources.subscribe",
-  "agent.inbox.subscribe",
-  "migration.run",
-  "worktree.deleteByPath",
-  "speech.dictate",
-];
-
-const OPTIONAL_STREAM_METHOD_NAMES: readonly string[] = ["worktree.changed"];
-
-/**
- * Returns the required channel for a concrete registry. Test/embedded
- * registries may carry fixture methods that predate optional negotiation; only
- * explicitly additive production methods are removed from their floor.
- */
-export function streamFloorMethodNamesForRegistry(
-  registry: Readonly<Record<string, unknown>>,
-): readonly string[] {
-  const optional = new Set(OPTIONAL_STREAM_METHOD_NAMES);
-  return Object.keys(registry).filter((method) => !optional.has(method));
-}

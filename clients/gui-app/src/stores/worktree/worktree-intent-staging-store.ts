@@ -239,9 +239,9 @@ export const useWorktreeIntentStagingStore =
               };
               delete suspendedWorkspacePathsByKey[id];
               return { intentByKey: next, suspendedWorkspacePathsByKey };
-            } else {
-              next[id] = intent;
             }
+            next[id] = intent;
+
             return { intentByKey: next };
           }),
         unstageEntry: (key, workspacePath) =>

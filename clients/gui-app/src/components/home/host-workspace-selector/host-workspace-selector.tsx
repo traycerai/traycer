@@ -1153,6 +1153,33 @@ function removeDisabledReasonFor(
 }
 
 /**
+ * A row's facts are pending while the listing query's first fetch is in
+ * flight, and also once it lands but the host has not resolved that row yet
+ * (`resolvedAt === null` - cache-served schema defaults, not disk truth).
+ */
+function isRowMetadataPending(
+  metadataPending: boolean,
+  resolvedAt: number | null,
+): boolean {
+  return metadataPending || resolvedAt === null;
+}
+
+/**
+ * An unresolved row (`resolvedAt === null`) is served from cache before the
+ * host has verified it, so mode switching stays disabled until the facts the
+ * switch depends on land.
+ */
+function modeDisabledReasonFor(
+  isOwnerActive: boolean,
+  activeRunNotice: string,
+  metadataPending: boolean,
+): string | null {
+  if (isOwnerActive) return activeRunNotice;
+  if (metadataPending) return "Waiting for the host to verify this folder.";
+  return null;
+}
+
+/**
  * Hover preview of every linked folder, themed like the standard tooltip:
  * `repo · branch` over the full path (left-truncated so the tail stays
  * readable), with a copy-path button to the right of the path. The path is
@@ -1372,6 +1399,18 @@ function InEpicSurface(props: InEpicSurfaceProps) {
         ]),
       ),
     [metadataQuery.data],
+  );
+  /**
+   * Rows the host has actually resolved. Listing reads are served from the
+   * host's cache, so an unresolved row (`resolvedAt === null`) carries schema
+   * defaults rather than disk truth - seeding a default worktree intent from
+   * one would stage a decision made on a guess. Unresolved rows stay out of
+   * this view entirely and re-enter once the host resolves them.
+   */
+  const resolvedSummariesByPath = useMemo(
+    () =>
+      new Map([...summariesByPath].filter(([, ws]) => ws.resolvedAt !== null)),
+    [summariesByPath],
   );
   // `isLoading` (not `isPending`): a disabled query — empty binding, so no paths
   // to fetch — is `isPending` in v5 but never actually loading, so guard on the
@@ -1610,9 +1649,8 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     const pending = pendingDefaultPathsRef.current;
     if (pending === null || pending.size === 0) return;
     for (const path of [...pending]) {
-      const summary = summariesByPath.get(path) ?? null;
-      if (summary === null) continue; // metadata not loaded yet - wait
-      if (summary.resolvedAt === null) continue; // schema defaults are not disk truth
+      const summary = resolvedSummariesByPath.get(path) ?? null;
+      if (summary === null) continue; // unresolved or not loaded yet - wait
       pending.delete(path);
       if (!summary.isGitRepo) continue;
       if (stagedEntryByPath.has(path)) continue;
@@ -1637,7 +1675,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       }
     }
   }, [
-    summariesByPath,
+    resolvedSummariesByPath,
     stagedEntryByPath,
     surface.binding,
     getFolderIntent,
@@ -1858,7 +1896,10 @@ function InEpicSurface(props: InEpicSurfaceProps) {
           defaultBranchByPath[ws.workspacePath] ?? "";
         const currentBranch = branchForSummary(ws);
         const otherWorktrees = ws.worktrees.filter((w) => !w.isMain);
-        const rowMetadataPending = metadataPending || ws.resolvedAt === null;
+        const rowMetadataPending = isRowMetadataPending(
+          metadataPending,
+          ws.resolvedAt,
+        );
         const rowIsGitRepo = ws.resolvedAt !== null && ws.isGitRepo;
         const branchLabel = workspaceRunBranchLabel({
           mode: currentMode,
@@ -1894,11 +1935,11 @@ function InEpicSurface(props: InEpicSurfaceProps) {
           makePrimaryDisabledReason: null,
           hostClient: props.hostClient,
           modeDisabled: activeRunLocksBinding || rowMetadataPending,
-          modeDisabledReason: activeRunLocksBinding
-            ? activeRunNotice
-            : rowMetadataPending
-              ? "Waiting for the host to verify this folder."
-              : null,
+          modeDisabledReason: modeDisabledReasonFor(
+            activeRunLocksBinding,
+            activeRunNotice,
+            rowMetadataPending,
+          ),
           removeDisabled: activeRunLocksBinding || removePending,
           removeDisabledReason: removeDisabledReasonFor(
             activeRunLocksBinding,

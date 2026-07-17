@@ -131,15 +131,6 @@ describe("capability manifest helpers", () => {
       "optional.method": { major: 1, minor: 0 },
     });
   });
-
-  it("refuses to merge a method advertised in both channels", () => {
-    expect(() =>
-      mergeConnectionManifests(
-        { "floor.method": { major: 1, minor: 0 } },
-        { "floor.method": { major: 2, minor: 0 } },
-      ),
-    ).toThrow("Method floor.method cannot appear in both manifest channels");
-  });
 });
 
 describe("floor-aware RPC registry validation", () => {
