@@ -11,7 +11,7 @@
     "clean:main": "rimraf dist/main dist/packages dist/protocol dist/clients",
     "compile": "tsc --noEmit -p tsconfig.json",
     "build:main": "bun run clean:main && bun scripts/build-main-bundle.cjs",
-    "build:renderer": "vite build --config vite.renderer.config.ts",
+    "build:renderer": "vite build --config vite.renderer.config.ts && bun scripts/assert-single-instance-deps.cjs",
     "build:app": "bun run clean && bun run build:main && bun run build:renderer",
     "prepack:check-cli": "bun scripts/prepack/check-cli-resource.cjs",
     "prepack:check-icons": "bun scripts/prepack/check-bundle-icons.cjs",
