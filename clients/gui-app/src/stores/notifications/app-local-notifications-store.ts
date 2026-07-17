@@ -8,6 +8,11 @@ import { notificationPayloadBelongsToEntity } from "@/lib/notifications";
 import { appLocalNotificationsKey, basePersistOptions } from "@/lib/persist";
 import type { HostNotificationsEntityRef } from "@traycer/protocol/host/notifications/contracts";
 
+type TerminalNotificationTarget = Extract<
+  NotificationPayload,
+  { readonly kind: "terminal" }
+>;
+
 export const APP_LOCAL_NOTIFICATIONS_ROW_CAP = 200;
 
 /**
@@ -262,8 +267,7 @@ export const useAppLocalNotificationsStore = createAppLocalNotificationsStore(
 export function emitTerminalClosedNotification(input: {
   readonly instanceId: string;
   readonly hostLabel: string;
-  readonly epicId: string;
-  readonly chatId: string;
+  readonly target: TerminalNotificationTarget;
 }): void {
   const message = `Terminal closed: host "${input.hostLabel}" is unreachable.`;
   useAppLocalNotificationsStore.getState().upsert({
@@ -272,11 +276,7 @@ export function emitTerminalClosedNotification(input: {
     readAt: null,
     kind: "terminal.closed",
     sourceRef: input.instanceId,
-    payload: {
-      kind: "chat",
-      epicId: input.epicId,
-      chatId: input.chatId,
-    },
+    payload: input.target,
     message,
     detail: "The terminal is bound to that host and cannot migrate.",
   });
@@ -284,8 +284,7 @@ export function emitTerminalClosedNotification(input: {
 
 export function emitTerminalCrashedNotification(input: {
   readonly instanceId: string;
-  readonly epicId: string;
-  readonly chatId: string;
+  readonly target: TerminalNotificationTarget;
   readonly cause: "exit" | "recovery-exhausted";
 }): void {
   const isRecoveryExhausted = input.cause === "recovery-exhausted";
@@ -299,11 +298,7 @@ export function emitTerminalCrashedNotification(input: {
     readAt: null,
     kind: "terminal.crashed",
     sourceRef: input.instanceId,
-    payload: {
-      kind: "chat",
-      epicId: input.epicId,
-      chatId: input.chatId,
-    },
+    payload: input.target,
     message: isRecoveryExhausted
       ? "Terminal connection could not be recovered."
       : "Terminal exited unexpectedly.",
