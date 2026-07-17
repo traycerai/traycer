@@ -14,7 +14,12 @@ import { useArtifactFolderChain } from "@/lib/epic-selectors";
 import { useHostClient } from "@/lib/host";
 import { isAbsolutePath } from "@/lib/path/cross-platform-path";
 import { isBrowsable } from "@/lib/worktree/worktree-row-browsable";
-import { resolveArtifactRelativeLinkPath } from "@/markdown/links/resolve-artifact-relative-link";
+import { artifactEpicIdFromLinkPath } from "@/markdown/links/artifact-link-path";
+import {
+  isArtifactFolderHref,
+  resolveArtifactRelativeLinkPath,
+} from "@/markdown/links/resolve-artifact-relative-link";
+import { EPIC_ARTIFACT_INDEX_FILENAME } from "@traycer/protocol/common/artifact-path";
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 
@@ -23,12 +28,41 @@ export interface ArtifactLinkOpener {
   readonly isExternalPending: boolean;
 }
 
+function withArtifactIndexSuffix(path: string): string {
+  if (path.endsWith(`/${EPIC_ARTIFACT_INDEX_FILENAME}`)) return path;
+  return `${path.endsWith("/") ? path : `${path}/`}${EPIC_ARTIFACT_INDEX_FILENAME}`;
+}
+
+/**
+ * A directory-shaped absolute artifact href (no explicit `/index.md`
+ * suffix) is canonicalized the same way a relative one already is - only
+ * when appending the suffix would make the result structurally match the
+ * artifact-path marker, so an unrelated absolute directory reference (a
+ * plain workspace folder) is never mangled.
+ */
+function canonicalizeAbsoluteArtifactHref(path: string): string {
+  if (artifactEpicIdFromLinkPath(path) !== null) return path;
+  const withSuffix = withArtifactIndexSuffix(path);
+  return artifactEpicIdFromLinkPath(withSuffix) !== null ? withSuffix : path;
+}
+
+/**
+ * Resolves an artifact-editor-authored href to the path `openFile` should
+ * act on: an absolute href is canonicalized (directory -> index.md) and
+ * passed through; a RELATIVE href that navigates the artifact folder tree
+ * (`isArtifactFolderHref`) is rewritten against `selfFolderChain`; anything
+ * else (a relative href with a non-index.md file extension, e.g.
+ * `../src/main.ts`) is left UNCHANGED so `openFile`'s existing relative-path
+ * branch resolves it as a normal workspace file instead of coercing it into
+ * `name/index.md`.
+ */
 function resolveArtifactLinkPath(
   epicId: string,
   selfFolderChain: readonly string[] | null,
   path: string,
 ): string | null {
-  if (isAbsolutePath(path)) return path;
+  if (isAbsolutePath(path)) return canonicalizeAbsoluteArtifactHref(path);
+  if (!isArtifactFolderHref(path)) return path;
   if (selfFolderChain === null) return null;
   return resolveArtifactRelativeLinkPath(epicId, selfFolderChain, path);
 }
@@ -102,6 +136,7 @@ export function useArtifactLinkOpener(args: {
       epicHandle,
       queryClient,
       client,
+      workspaceClient: tabHostClient,
       navigate,
       previewTileInTab,
     });
@@ -114,6 +149,7 @@ export function useArtifactLinkOpener(args: {
     navigate,
     previewTileInTab,
     queryClient,
+    tabHostClient,
     tabHostId,
     workspaceRoots,
   ]);

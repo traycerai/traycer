@@ -55,7 +55,12 @@ const mocks = vi.hoisted(() => ({
     }> | null
   >(),
   fetchWorkspaceFileExists:
-    vi.fn<(args: { readonly workspacePath: string }) => Promise<boolean>>(),
+    vi.fn<
+      (args: {
+        readonly workspacePath: string;
+        readonly client: { readonly request: unknown };
+      }) => Promise<boolean>
+    >(),
 }));
 
 vi.mock("@/lib/host/resolve-artifact-by-path", () => ({
@@ -108,8 +113,10 @@ vi.mock(
 );
 
 vi.mock("@/lib/host/probe-workspace-file-exists", () => ({
-  fetchWorkspaceFileExists: (args: { readonly workspacePath: string }) =>
-    mocks.fetchWorkspaceFileExists(args),
+  fetchWorkspaceFileExists: (args: {
+    readonly workspacePath: string;
+    readonly client: { readonly request: unknown };
+  }) => mocks.fetchWorkspaceFileExists(args),
 }));
 
 let pendingCancel: (() => void) | null = null;
@@ -117,6 +124,13 @@ let disposed = false;
 let clickToken = 0;
 const previewTileInTab = vi.fn();
 const onAsyncFailure = vi.fn();
+
+// Distinct sentinel object identities (not `{} as never` each time) so a test
+// can assert WHICH client a call actually received - `client` (bound to the
+// active/default host) and `workspaceClient` (bound to the chat tab's own
+// host) must never be interchangeable.
+const DEFAULT_CLIENT = { id: "default-client" } as never;
+const WORKSPACE_CLIENT = { id: "workspace-client" } as never;
 
 function makeDeps(overrides: Partial<ChatLinkPolicyDeps>): ChatLinkPolicyDeps {
   return {
@@ -128,7 +142,8 @@ function makeDeps(overrides: Partial<ChatLinkPolicyDeps>): ChatLinkPolicyDeps {
     // The builder only forwards these opaquely; the mocked modules ignore them.
     epicHandle: { store: { getState: vi.fn(), subscribe: vi.fn() } } as never,
     queryClient: {} as never,
-    client: {} as never,
+    client: DEFAULT_CLIENT,
+    workspaceClient: WORKSPACE_CLIENT,
     navigate: (() => undefined) as never,
     previewTileInTab,
     ...overrides,
@@ -215,6 +230,10 @@ describe("buildChatLinkPolicy", () => {
         hostId: CHAT_HOST_ID,
         workspacePath: "/repo",
         filePath: "src/app.ts",
+        // Bound to the CHAT TAB's own host, not the app-wide default client -
+        // a tab pinned to a different host than the active one must probe ITS
+        // OWN filesystem, not whatever host `client` happens to be connected to.
+        client: WORKSPACE_CLIENT,
       }),
     );
     expect(previewTileInTab).toHaveBeenCalledWith(TAB_ID, {
@@ -222,6 +241,35 @@ describe("buildChatLinkPolicy", () => {
       workspacePath: "/repo",
       filePath: "src/app.ts",
     });
+  });
+
+  it("probes the tab-scoped workspace client even when it differs from the app-wide default host client", async () => {
+    // A chat tab bound to a DIFFERENT host than the app's active one: the
+    // existence probe must still go through `workspaceClient`, never `client`
+    // (which is bound to `activeHostId`, a different physical host here).
+    const run = buildChatLinkPolicy(
+      makeDeps({ hostId: CHAT_HOST_ID, activeHostId: ACTIVE_HOST_ID }),
+    );
+    run(fileLink({ path: "src/app.ts" }), lifecycle);
+    await flush();
+
+    const [args] = mocks.fetchWorkspaceFileExists.mock.calls.at(-1) ?? [];
+    expect(args?.client).toBe(WORKSPACE_CLIENT);
+    expect(args?.client).not.toBe(DEFAULT_CLIENT);
+  });
+
+  it("reports a click failure for a relative link without probing when the tab-scoped workspace client hasn't resolved yet", async () => {
+    const run = buildChatLinkPolicy(makeDeps({ workspaceClient: null }));
+
+    expect(run(fileLink({ path: "src/app.ts" }), lifecycle)).toBe(true);
+    await flush();
+
+    expect(
+      mocks.candidateWorkspaceFileRefsForRelativeLinkPath,
+    ).not.toHaveBeenCalled();
+    expect(mocks.fetchWorkspaceFileExists).not.toHaveBeenCalled();
+    expect(previewTileInTab).not.toHaveBeenCalled();
+    expect(onAsyncFailure).toHaveBeenCalledTimes(1);
   });
 
   it("records a reveal target before opening when the link carries a line", async () => {
@@ -293,6 +341,33 @@ describe("buildChatLinkPolicy", () => {
     });
   });
 
+  it("opens the first root's hit immediately, without waiting on a still-pending lower-priority root", async () => {
+    // Root 0 settles true right away; root 1 never settles within this test.
+    // No later root can ever outrank root 0, so the open must not wait for it.
+    mocks.candidateWorkspaceFileRefsForRelativeLinkPath.mockReturnValue([
+      { id: "root-a-content", workspacePath: "/repo-a", filePath: "app.ts" },
+      { id: "root-b-content", workspacePath: "/repo-b", filePath: "app.ts" },
+    ]);
+    mocks.fetchWorkspaceFileExists.mockImplementation(
+      (args: { readonly workspacePath: string }) =>
+        args.workspacePath === "/repo-a"
+          ? Promise.resolve(true)
+          : new Promise<boolean>(() => undefined),
+    );
+    const run = buildChatLinkPolicy(
+      makeDeps({ workspaceRoots: ["/repo-a", "/repo-b"] }),
+    );
+
+    run(fileLink({ path: "app.ts" }), lifecycle);
+    await flush();
+
+    expect(previewTileInTab).toHaveBeenCalledWith(TAB_ID, {
+      id: "root-a-content",
+      workspacePath: "/repo-a",
+      filePath: "app.ts",
+    });
+  });
+
   it("reports a click failure when no bound root has the relative file", async () => {
     mocks.fetchWorkspaceFileExists.mockResolvedValue(false);
     const run = buildChatLinkPolicy(makeDeps({}));
@@ -304,16 +379,37 @@ describe("buildChatLinkPolicy", () => {
     expect(onAsyncFailure).toHaveBeenCalledTimes(1);
   });
 
-  it("reports a click failure for a directory-shaped relative href without probing", async () => {
-    mocks.candidateWorkspaceFileRefsForRelativeLinkPath.mockReturnValue(null);
+  it("opens a directory-shaped relative href by probing its canonical index.md candidate", async () => {
+    // A trailing-separator href resolves to the directory's `index.md`, not a
+    // rejection - `candidateWorkspaceFileRefsForRelativeLinkPath` builds that
+    // candidate itself (see workspace-file-link-ref.test.ts); this level only
+    // verifies the policy probes and opens whatever candidate it returns.
+    mocks.candidateWorkspaceFileRefsForRelativeLinkPath.mockReturnValue([
+      {
+        id: "dir-index-content",
+        workspacePath: "/repo",
+        filePath: "sub-dir/index.md",
+      },
+    ]);
     const run = buildChatLinkPolicy(makeDeps({}));
 
     run(fileLink({ path: "sub-dir/" }), lifecycle);
     await flush();
 
-    expect(mocks.fetchWorkspaceFileExists).not.toHaveBeenCalled();
-    expect(previewTileInTab).not.toHaveBeenCalled();
-    expect(onAsyncFailure).toHaveBeenCalledTimes(1);
+    expect(
+      mocks.candidateWorkspaceFileRefsForRelativeLinkPath,
+    ).toHaveBeenCalledWith(CHAT_HOST_ID, ["/repo"], "sub-dir/");
+    expect(mocks.fetchWorkspaceFileExists).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspacePath: "/repo",
+        filePath: "sub-dir/index.md",
+      }),
+    );
+    expect(previewTileInTab).toHaveBeenCalledWith(TAB_ID, {
+      id: "dir-index-content",
+      workspacePath: "/repo",
+      filePath: "sub-dir/index.md",
+    });
   });
 
   it("reports a click failure for a relative link without probing when there is no bound host", async () => {

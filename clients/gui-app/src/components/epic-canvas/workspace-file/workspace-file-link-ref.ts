@@ -10,8 +10,10 @@ import {
   getDirname,
   isAbsolutePath,
   isWindowsLikePath,
+  joinPath,
   normalizePath,
   pathComparisonKey,
+  resolveAbsolutePath,
 } from "@/lib/path/cross-platform-path";
 import type { WorkspaceFileRef } from "@/stores/epics/canvas/types";
 import { workspaceFileRefFromTreePath } from "./workspace-file-ref";
@@ -93,22 +95,55 @@ export function workspaceFileRefFromLinkPath(
   );
 }
 
+/** The directory-href convention: a href naming a directory opens ITS `index.md`. */
+const DIRECTORY_INDEX_FILENAME = "index.md";
+
 /**
- * Builds one candidate `WorkspaceFileRef` per bound root for a RELATIVE chat
- * markdown link path, in root order. Unlike an absolute path (whose longest-
- * matching bound root is deterministic via prefix match), a relative path is
- * ambiguous across multiple roots that may be unrelated siblings on disk - the
- * caller probes each candidate for existence (host RPC, at click time; see
- * `resolveAndOpenRelativeWorkspaceFile`) and opens the first hit.
+ * Builds the ordered list of relative targets to probe for `normalized` (a
+ * link path already trimmed + `normalizePath`d): the direct file first (skipped
+ * for a trailing-separator href, which unambiguously names a directory), then
+ * that same path's `index.md` as a directory fallback - `workspace.readFile`
+ * cannot distinguish "missing" from "is a directory" (`content: null` either
+ * way), so a plain `content === null` on the direct probe can't by itself
+ * decide whether the directory fallback applies; probing both and letting
+ * root-major, target-minor order pick the winner sidesteps that ambiguity.
+ */
+function relativeLinkTargets(
+  trimmedHref: string,
+  normalized: string,
+): readonly string[] {
+  const directoryIndex = joinPath(normalized, DIRECTORY_INDEX_FILENAME);
+  return hasTrailingSeparator(trimmedHref)
+    ? [directoryIndex]
+    : [normalized, directoryIndex];
+}
+
+/**
+ * Builds one candidate `WorkspaceFileRef` per (root, target) pair for a
+ * RELATIVE chat markdown link path, flattened in ROOT-MAJOR, target-minor
+ * priority order - i.e. every candidate for root 0 (direct file, then its
+ * `index.md`) before any candidate for root 1. Unlike an absolute path (whose
+ * longest-matching bound root is deterministic via prefix match), a relative
+ * path is ambiguous across multiple roots that may be unrelated siblings on
+ * disk - the caller probes each candidate for existence (host RPC, at click
+ * time; see `resolveAndOpenRelativeWorkspaceFile`), preserving this priority
+ * order so the first-BY-ORDER hit wins regardless of which probe settles
+ * first.
  *
- * Unlike `workspaceFileRefFromLinkPath`'s relative branch, a `..`-escaping
- * path is NOT rejected here: `workspace.readFile` enforces containment within
- * the SUPPLIED root itself, so an out-of-bounds candidate simply fails its own
- * existence probe rather than needing a client-side reject up front.
+ * A `..`-escaping href (`normalized` starts with `../`, or is exactly `..`)
+ * is resolved CLIENT-SIDE into a canonical absolute target per root, then
+ * addressed via `workspaceFileRefFromAbsoluteFilePath`'s single-file
+ * synthesized root (`{ workspacePath: dirname, filePath: basename }`) -
+ * `workspace.readFile` enforces containment within its SUPPLIED
+ * `workspacePath`, so a candidate built as `{ workspacePath: root, filePath:
+ * "../sibling/file.ts" }` would always fail the host's guard even when the
+ * resolved absolute file is perfectly readable. An in-root target keeps the
+ * existing root-relative candidate (`{ workspacePath: root, filePath:
+ * target }`) unchanged.
  *
- * Returns `null` for an empty/directory-shaped/degenerate path, an absolute
- * path (the caller routes those through `workspaceFileRefFromLinkPath`
- * instead), or when no roots are bound.
+ * Returns `null` for an empty/degenerate/`.`-only path, an absolute path (the
+ * caller routes those through `workspaceFileRefFromLinkPath` instead), or
+ * when no roots are bound.
  */
 export function candidateWorkspaceFileRefsForRelativeLinkPath(
   hostId: string,
@@ -117,7 +152,6 @@ export function candidateWorkspaceFileRefsForRelativeLinkPath(
 ): ReadonlyArray<WorkspaceFileRef> | null {
   const trimmed = linkPath.trim();
   if (trimmed.length === 0 || roots.length === 0) return null;
-  if (hasTrailingSeparator(trimmed)) return null;
   const normalized = normalizePath(trimmed);
   if (
     normalized.length === 0 ||
@@ -126,12 +160,24 @@ export function candidateWorkspaceFileRefsForRelativeLinkPath(
   ) {
     return null;
   }
-  const basename = getBasename(normalized);
-  const refs = roots
-    .map((root) =>
-      workspaceFileRefFromTreePath(hostId, root, normalized, basename),
-    )
-    .filter((ref): ref is WorkspaceFileRef => ref !== null);
+  const escapesRoot = normalized === ".." || normalized.startsWith("../");
+  const targets = relativeLinkTargets(trimmed, normalized);
+  const refs = roots.flatMap((root) =>
+    targets.flatMap((target) => {
+      const ref = escapesRoot
+        ? workspaceFileRefFromAbsoluteFilePath(
+            hostId,
+            resolveAbsolutePath(root, target),
+          )
+        : workspaceFileRefFromTreePath(
+            hostId,
+            root,
+            target,
+            getBasename(target),
+          );
+      return ref === null ? [] : [ref];
+    }),
+  );
   return refs.length === 0 ? null : refs;
 }
 
@@ -140,14 +186,18 @@ export function candidateWorkspaceFileRefsForRelativeLinkPath(
  * workspace root, by treating the file's own directory as the workspace root
  * (`{ workspacePath: dirname, filePath: basename }`). This is the deliberate,
  * intentional re-introduction of the synthesized-root behavior CL-1 removed,
- * scoped by its single caller (the chat link policy) to NON-artifact links so a
- * user can open any file the agent emits. Returns `null` for a non-absolute or
- * degenerate path.
+ * scoped to NON-artifact links so a user can open any file the agent emits.
+ * Returns `null` for a non-absolute or degenerate path.
+ *
+ * Two callers: the chat link policy for an out-of-root ABSOLUTE link, and
+ * `candidateWorkspaceFileRefsForRelativeLinkPath` for a RELATIVE link resolved
+ * (client-side, against a bound root) into an absolute path that escapes that
+ * root via `../`.
  *
  * HOST DEPENDENCY (load-bearing): this works only because `workspace.readFile`
  * validates the target stays within the SUPPLIED `workspacePath` WITHOUT checking
  * that the directory is a bound root. Hardening `workspace.readFile` to reject
- * non-bound-root workspaces would make every read produced here fail — that
+ * non-bound-root workspaces would make every read produced here fail - that
  * hardening and this helper are mutually exclusive as written; migrate this path
  * to a dedicated validated absolute-file read before doing it.
  */

@@ -21,6 +21,25 @@ export function getDirname(path: string): string {
   return directory === "." ? "" : directory;
 }
 
+/** Joins path segments and normalizes the result (POSIX-style, no filesystem access). */
+export function joinPath(...segments: readonly string[]): string {
+  const nonEmpty = segments.filter((segment) => segment.length > 0);
+  return nonEmpty.length === 0 ? "." : normalizePath(nonEmpty.join("/"));
+}
+
+/**
+ * Resolves `relativePath` against `basePath` into a normalized absolute path
+ * (POSIX-style string manipulation only, no filesystem access). `basePath`
+ * must already be absolute; the result may land outside it when
+ * `relativePath` contains enough `../` segments to escape.
+ */
+export function resolveAbsolutePath(
+  basePath: string,
+  relativePath: string,
+): string {
+  return normalizePath(`${basePath}/${relativePath}`);
+}
+
 export function isAbsolutePath(path: string): boolean {
   return patheIsAbsolute(path);
 }

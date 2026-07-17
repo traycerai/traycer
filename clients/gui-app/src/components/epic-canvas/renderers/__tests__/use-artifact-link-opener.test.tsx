@@ -124,6 +124,7 @@ describe("useArtifactLinkOpener", () => {
     expect(mocks.buildPolicy).toHaveBeenCalledWith(
       expect.objectContaining({
         client: mocks.defaultClient,
+        workspaceClient: mocks.tabClient,
         hostId: "tab-host",
         activeHostId: "default-host",
         workspaceRoots: ["/tab/repo"],
@@ -424,6 +425,86 @@ describe("useArtifactLinkOpener", () => {
 
     expect(mocks.runPolicy).toHaveBeenCalledWith(
       expect.objectContaining({ path: "/artifact/index.md" }),
+      expect.anything(),
+    );
+  });
+
+  it("canonicalizes a directory-shaped absolute artifact href to its index.md, the same way a relative one already is", () => {
+    mocks.folderChain.mockReturnValue(null);
+    const { result } = renderHook(
+      () =>
+        useArtifactLinkOpener({
+          epicId: "epic-1",
+          artifactId: "artifact-1",
+          viewTabId: "tab-1",
+        }),
+      { wrapper: QueryWrapper },
+    );
+
+    result.current.openLink({
+      kind: "file",
+      path: "/Users/me/.traycer/epics/epic-1/artifacts/some-spec/",
+      line: null,
+      col: null,
+    });
+
+    expect(mocks.runPolicy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: "/Users/me/.traycer/epics/epic-1/artifacts/some-spec/index.md",
+      }),
+      expect.anything(),
+    );
+  });
+
+  it("does not mangle an absolute directory href that isn't artifact-shaped", () => {
+    mocks.folderChain.mockReturnValue(null);
+    const { result } = renderHook(
+      () =>
+        useArtifactLinkOpener({
+          epicId: "epic-1",
+          artifactId: "artifact-1",
+          viewTabId: "tab-1",
+        }),
+      { wrapper: QueryWrapper },
+    );
+
+    result.current.openLink({
+      kind: "file",
+      path: "/repo/src/",
+      line: null,
+      col: null,
+    });
+
+    expect(mocks.runPolicy).toHaveBeenCalledWith(
+      expect.objectContaining({ path: "/repo/src/" }),
+      expect.anything(),
+    );
+  });
+
+  it("passes a relative href with a non-index.md file extension through unchanged, instead of coercing it into an artifact folder", () => {
+    mocks.folderChain.mockReturnValue(["ticket-breakdown", "01-something"]);
+    const { result } = renderHook(
+      () =>
+        useArtifactLinkOpener({
+          epicId: "epic-1",
+          artifactId: "artifact-1",
+          viewTabId: "tab-1",
+        }),
+      { wrapper: QueryWrapper },
+    );
+
+    result.current.openLink({
+      kind: "file",
+      path: "../src/main.ts",
+      line: null,
+      col: null,
+    });
+
+    // Not rewritten into "…/src/main.ts/index.md" - left as the ORIGINAL
+    // relative href so the shared policy's relative-workspace-file branch
+    // resolves it as a normal file, not an artifact-folder reference.
+    expect(mocks.runPolicy).toHaveBeenCalledWith(
+      expect.objectContaining({ path: "../src/main.ts" }),
       expect.anything(),
     );
   });

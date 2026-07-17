@@ -49,12 +49,6 @@ function trackEditor(editor: Editor): Editor {
   return editor;
 }
 
-function makeDOMRectList(rects: readonly DOMRect[]): DOMRectList {
-  return Object.assign(rects.slice(), {
-    item: (index: number): DOMRect | null => rects[index] ?? null,
-  });
-}
-
 function makeEditor(content: Content): Editor {
   return trackEditor(
     new Editor({
@@ -417,39 +411,7 @@ describe("ArtifactLinkPopover", () => {
     expect(screen.queryByRole("dialog", { name: "Link preview" })).toBeNull();
   });
 
-  it("anchors the hover card to the client rect the pointer is inside, not a union of a wrapped link's rects", async () => {
-    vi.useFakeTimers();
-    const editor = makeEditor(`${LINK_CONTENT}<p>Elsewhere</p>`);
-    editor.commands.setTextSelection(editor.state.doc.content.size - 2);
-    renderPopover(editor, true);
-    await act(() => vi.advanceTimersByTimeAsync(0));
-    const anchor = editor.view.dom.querySelector("a");
-    if (anchor === null) throw new Error("Expected anchor");
-
-    const firstLineRect = {
-      left: 0,
-      top: 100,
-      right: 50,
-      bottom: 120,
-      width: 50,
-      height: 20,
-    } as DOMRect;
-    const secondLineRect = {
-      left: 0,
-      top: 130,
-      right: 30,
-      bottom: 150,
-      width: 30,
-      height: 20,
-    } as DOMRect;
-    vi.spyOn(anchor, "getClientRects").mockReturnValue(
-      makeDOMRectList([firstLineRect, secondLineRect]),
-    );
-
-    fireEvent.pointerOver(anchor, { clientX: 15, clientY: 140 });
-    await act(() => vi.advanceTimersByTimeAsync(300));
-
-    expect(screen.getByRole("dialog", { name: "Link preview" })).not.toBeNull();
+  function lastAnchorRect() {
     const computePosition = vi.mocked(floatingUi.computePosition);
     const call = computePosition.mock.calls.at(-1);
     if (call === undefined) throw new Error("Expected a computePosition call");
@@ -460,79 +422,103 @@ describe("ArtifactLinkPopover", () => {
     ) {
       throw new Error("Expected a virtual element reference");
     }
+    return anchorArg.getBoundingClientRect();
+  }
 
-    expect(anchorArg.getBoundingClientRect()).toEqual(secondLineRect);
+  it("anchors the hover card to the document position the pointer resolves to, not the link's start", async () => {
+    vi.useFakeTimers();
+    const editor = makeEditor(`${LINK_CONTENT}<p>Elsewhere</p>`);
+    editor.commands.setTextSelection(editor.state.doc.content.size - 2);
+    renderPopover(editor, true);
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    const anchor = editor.view.dom.querySelector("a");
+    if (anchor === null) throw new Error("Expected anchor");
+
+    // "Example" spans positions 1-8; the pointer enters mid-word, resolving
+    // (via posAtCoords) to position 5 - distinct from the link's range.from
+    // (1) that the pre-fix implementation always anchored to.
+    vi.spyOn(editor.view, "posAtCoords").mockReturnValue({ pos: 5, inside: 5 });
+    fireEvent.pointerOver(anchor, { clientX: 15, clientY: 140 });
+    await act(() => vi.advanceTimersByTimeAsync(300));
+
+    expect(screen.getByRole("dialog", { name: "Link preview" })).not.toBeNull();
+    // trackEditor's coordsAtPos stub returns `left: position * 10`, so
+    // anchoring to the resolved pointer position (5) yields left = 50.
+    expect(lastAnchorRect().left).toBe(50);
   });
 
-  it("falls back to the caret position (not a span across both endpoints) when there is no pointer trigger", async () => {
+  it("anchors a wrapped link's hover card to the specific visual line the pointer resolves to, not a box spanning both lines", async () => {
+    vi.useFakeTimers();
     const editor = makeEditor(`${LINK_CONTENT}<p>Elsewhere</p>`);
-    setCaretAndRender(editor, false);
+    // JSDOM has no real layout engine, so a genuine line-wrap can't be
+    // rendered; this pins two divergent coordsAtPos rects for positions
+    // within the SAME link the way a real wrapped line would, so the test
+    // still exercises the position-resolution codepath (posAtCoords ->
+    // coordsAtPos) rather than an array-matching shortcut.
+    vi.spyOn(editor.view, "coordsAtPos").mockImplementation((position) => ({
+      left: position < 5 ? position * 10 : (position - 5) * 10,
+      right: position < 5 ? position * 10 + 5 : (position - 5) * 10 + 5,
+      top: position < 5 ? 100 : 130,
+      bottom: position < 5 ? 120 : 150,
+    }));
+    editor.commands.setTextSelection(editor.state.doc.content.size - 2);
+    renderPopover(editor, true);
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    const anchor = editor.view.dom.querySelector("a");
+    if (anchor === null) throw new Error("Expected anchor");
+
+    vi.spyOn(editor.view, "posAtCoords").mockReturnValue({ pos: 6, inside: 6 });
+    fireEvent.pointerOver(anchor, { clientX: 15, clientY: 140 });
+    await act(() => vi.advanceTimersByTimeAsync(300));
+
+    expect(screen.getByRole("dialog", { name: "Link preview" })).not.toBeNull();
+    const rect = lastAnchorRect();
+    expect(rect.top).toBe(130);
+    expect(rect.bottom).toBe(150);
+  });
+
+  it("keeps the hover anchor live across a scroll that happens during the show delay", async () => {
+    vi.useFakeTimers();
+    const editor = makeEditor(`${LINK_CONTENT}<p>Elsewhere</p>`);
+    let scrollOffset = 0;
+    vi.spyOn(editor.view, "coordsAtPos").mockImplementation((position) => ({
+      left: position * 10,
+      right: position * 10 + 5,
+      top: 160 - scrollOffset,
+      bottom: 170 - scrollOffset,
+    }));
+    editor.commands.setTextSelection(editor.state.doc.content.size - 2);
+    renderPopover(editor, true);
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    const anchor = editor.view.dom.querySelector("a");
+    if (anchor === null) throw new Error("Expected anchor");
+
+    vi.spyOn(editor.view, "posAtCoords").mockReturnValue({ pos: 4, inside: 4 });
+    fireEvent.pointerOver(anchor, { clientX: 15, clientY: 140 });
+
+    // The scroll happens WHILE the 300ms show delay is still pending - a
+    // frozen viewport pixel point captured at pointer-over time would still
+    // reflect the pre-scroll position once the card finally opens.
+    scrollOffset = 30;
+    fireEvent.scroll(window);
+    await act(() => vi.advanceTimersByTimeAsync(300));
+
+    expect(screen.getByRole("dialog", { name: "Link preview" })).not.toBeNull();
+    expect(lastAnchorRect().top).toBe(130);
+  });
+
+  it("anchors the caret-triggered card to the caret's own position, not the link's start", async () => {
+    const editor = makeEditor(`${LINK_CONTENT}<p>Elsewhere</p>`);
+    // "Example" spans positions 1-8; place the caret at 4, distinct from the
+    // link's range.from (1) that the pre-fix implementation always anchored
+    // to regardless of the caret's actual position within the link.
+    editor.commands.setTextSelection(4);
+    renderPopover(editor, false);
 
     await screen.findByRole("dialog", { name: "Link preview" });
-    const computePosition = vi.mocked(floatingUi.computePosition);
-    const call = computePosition.mock.calls.at(-1);
-    if (call === undefined) throw new Error("Expected a computePosition call");
-    const [anchorArg] = call;
-    if (
-      typeof anchorArg === "function" ||
-      !("getBoundingClientRect" in anchorArg)
-    ) {
-      throw new Error("Expected a virtual element reference");
-    }
-
-    const rect = anchorArg.getBoundingClientRect();
-    // trackEditor's coordsAtPos stub returns { top: 10, bottom: 20 } for every
-    // position, so a caret-triggered anchor must resolve to that single-line
-    // box rather than unioning coordsAtPos(range.from) with coordsAtPos(range.to).
-    expect(rect.top).toBe(10);
-    expect(rect.bottom).toBe(20);
-  });
-
-  it("falls back to the coordsAtPos box when a hover pointerPoint matches none of the anchor's client rects", async () => {
-    vi.useFakeTimers();
-    const editor = makeEditor(`${LINK_CONTENT}<p>Elsewhere</p>`);
-    editor.commands.setTextSelection(editor.state.doc.content.size - 2);
-    renderPopover(editor, true);
-    await act(() => vi.advanceTimersByTimeAsync(0));
-    const anchor = editor.view.dom.querySelector("a");
-    if (anchor === null) throw new Error("Expected anchor");
-
-    // Stale/non-matching rects, e.g. after a scroll: the pointer's coordinates
-    // at pointerover time land nowhere inside them.
-    const staleRect = {
-      left: 500,
-      top: 500,
-      right: 550,
-      bottom: 520,
-      width: 50,
-      height: 20,
-    } as DOMRect;
-    vi.spyOn(anchor, "getClientRects").mockReturnValue(
-      makeDOMRectList([staleRect]),
-    );
-
-    fireEvent.pointerOver(anchor, { clientX: 15, clientY: 140 });
-    await act(() => vi.advanceTimersByTimeAsync(300));
-
-    expect(screen.getByRole("dialog", { name: "Link preview" })).not.toBeNull();
-    const computePosition = vi.mocked(floatingUi.computePosition);
-    const call = computePosition.mock.calls.at(-1);
-    if (call === undefined) throw new Error("Expected a computePosition call");
-    const [anchorArg] = call;
-    if (
-      typeof anchorArg === "function" ||
-      !("getBoundingClientRect" in anchorArg)
-    ) {
-      throw new Error("Expected a virtual element reference");
-    }
-
-    const rect = anchorArg.getBoundingClientRect();
-    // trackEditor's coordsAtPos stub returns { top: 10, bottom: 20 } for every
-    // position, so the fallback must resolve to that single-line box, not the
-    // mocked (non-matching) rect and not an empty DOMRect().
-    expect(rect.top).toBe(10);
-    expect(rect.bottom).toBe(20);
-    expect(rect).not.toEqual(staleRect);
+    // trackEditor's coordsAtPos stub returns `left: position * 10`, so
+    // anchoring to the caret's own position (4) yields left = 40.
+    expect(lastAnchorRect().left).toBe(40);
   });
 
   it("promotes the compact hover preview to an autosaving editor", async () => {

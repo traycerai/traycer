@@ -43,7 +43,25 @@ export interface ChatLinkPolicyDeps {
   readonly openEpicId: string;
   readonly epicHandle: OpenEpicStoreHandle;
   readonly queryClient: QueryClient;
+  /**
+   * Client for the ARTIFACT-resolve RPC, bound to `activeHostId` (the
+   * app-wide default host - epics are listed from it and the resolved
+   * artifact tab is stamped with it, matching sidebar artifact opens).
+   */
   readonly client: HostClient<HostRpcRegistry>;
+  /**
+   * Client for a RELATIVE plain-file link's existence probes, bound to
+   * `hostId` (the chat tab's OWN host) - NOT `client`. `hostId` only scopes
+   * the query KEY; `client.request(...)` always sends over whatever
+   * connection the client itself is bound to. A tab pinned to a different
+   * host than the app's active one must probe ITS OWN filesystem through a
+   * client actually connected to that host, or the probe silently checks the
+   * wrong machine while the opened ref is stamped with the tab's `hostId`.
+   * `null` while the tab-scoped client hasn't resolved yet - a relative-link
+   * click fails fast (the existing failure toast) rather than falling back to
+   * `client`.
+   */
+  readonly workspaceClient: HostClient<HostRpcRegistry> | null;
   readonly navigate: UseNavigateResult<string>;
   readonly previewTileInTab: (tabId: string, node: EpicCanvasTileRef) => void;
 }
@@ -332,17 +350,64 @@ interface RelativeWorkspaceFileTarget {
 }
 
 /**
+ * Resolves as soon as the priority order can be DECIDED without waiting for
+ * every probe: the winning index is the first `true` that has no still-
+ * pending candidate before it (an earlier candidate's eventual `true` would
+ * always outrank a later one, so a later `true` can't be trusted until every
+ * earlier index is known). Resolves `-1` once every candidate has settled
+ * `false`. A lower-priority probe still pending after the winner is decided
+ * is left to settle on its own; its result is simply never read.
+ */
+function firstEagerlyTrueIndex(
+  probes: ReadonlyArray<Promise<boolean>>,
+): Promise<number> {
+  if (probes.length === 0) return Promise.resolve(-1);
+  return new Promise((resolve) => {
+    const results: Array<boolean | undefined> = probes.map(() => undefined);
+    let decided = false;
+    const tryDecide = (): void => {
+      if (decided) return;
+      const firstPendingIndex = results.findIndex((r) => r === undefined);
+      const firstTrueIndex = results.findIndex((r) => r === true);
+      const decidedTrue =
+        firstTrueIndex !== -1 &&
+        (firstPendingIndex === -1 || firstTrueIndex < firstPendingIndex);
+      if (decidedTrue) {
+        decided = true;
+        resolve(firstTrueIndex);
+        return;
+      }
+      if (firstPendingIndex === -1) {
+        decided = true;
+        resolve(-1);
+      }
+    };
+    probes.forEach((probe, index) => {
+      void probe.then((value) => {
+        results[index] = value;
+        tryDecide();
+      });
+    });
+  });
+}
+
+/**
  * Resolves a RELATIVE plain-file link against every one of the chat's bound
  * roots and opens the first one that actually exists. Roots may be unrelated
  * sibling worktrees on disk, so - unlike an absolute path's deterministic
  * longest-prefix match - the right root can't be picked by string matching
  * alone; each candidate is probed via `workspace.readFile` (existence-only,
- * `maxBytes: 1`) at click time, run concurrently, and the first-BY-ROOT-ORDER
- * hit wins regardless of which probe settles first.
+ * `maxBytes: 1`) THROUGH `deps.workspaceClient` (the chat's OWN bound host,
+ * not the app-wide `deps.client`) at click time, run concurrently, and the
+ * first-BY-PRIORITY-ORDER hit wins as soon as it's decided (`firstEagerlyTrueIndex`)
+ * - a fast root-0 hit opens immediately rather than waiting on a slow
+ * lower-priority root that can no longer change the outcome.
  *
  * Mirrors `resolveAndOpenArtifactLink`'s lifecycle guards: a torn-down tab or
  * a superseding later click drops this resolve silently; finding no existing
- * candidate reports `onAsyncFailure` (the click-failure toast).
+ * candidate reports `onAsyncFailure` (the click-failure toast). A `null`
+ * `hostId` or not-yet-resolved `workspaceClient` fails the same way - there is
+ * no host to probe against.
  */
 function resolveAndOpenRelativeWorkspaceFile(
   deps: ChatLinkPolicyDeps,
@@ -350,11 +415,12 @@ function resolveAndOpenRelativeWorkspaceFile(
   link: MarkdownFileLink,
   target: RelativeWorkspaceFileTarget,
 ): Promise<void> {
-  if (deps.hostId === null) {
+  if (deps.hostId === null || deps.workspaceClient === null) {
     lifecycle.onAsyncFailure();
     return Promise.resolve();
   }
   const hostId = deps.hostId;
+  const workspaceClient = deps.workspaceClient;
   const candidates = candidateWorkspaceFileRefsForRelativeLinkPath(
     hostId,
     deps.workspaceRoots,
@@ -364,24 +430,22 @@ function resolveAndOpenRelativeWorkspaceFile(
     lifecycle.onAsyncFailure();
     return Promise.resolve();
   }
-  return Promise.all(
-    candidates.map((ref) =>
-      fetchWorkspaceFileExists({
-        queryClient: deps.queryClient,
-        client: deps.client,
-        hostId,
-        workspacePath: ref.workspacePath,
-        filePath: ref.filePath,
-      }),
-    ),
-  ).then((existsByCandidate) => {
+  const probes = candidates.map((ref) =>
+    fetchWorkspaceFileExists({
+      queryClient: deps.queryClient,
+      client: workspaceClient,
+      hostId,
+      workspacePath: ref.workspacePath,
+      filePath: ref.filePath,
+    }),
+  );
+  return firstEagerlyTrueIndex(probes).then((winningIndex) => {
     if (lifecycle.isDisposed()) return;
     if (!lifecycle.isCurrent(target.clickToken)) return;
-    const firstExistingIndex = existsByCandidate.indexOf(true);
-    if (firstExistingIndex === -1) {
+    if (winningIndex === -1) {
       lifecycle.onAsyncFailure();
       return;
     }
-    openWorkspaceFileRef(deps, link, candidates[firstExistingIndex]);
+    openWorkspaceFileRef(deps, link, candidates[winningIndex]);
   });
 }

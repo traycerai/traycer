@@ -28,6 +28,14 @@ export interface FetchWorkspaceFileExistsArgs {
  * `workspacePath` (a relative link's multi-root probe treats this as "this
  * root has the file" and opens it), `false` otherwise - including a
  * transport rejection, so one unreachable root can't fail the whole probe.
+ *
+ * A "missing" result is evicted immediately (mirroring
+ * `fetchResolveArtifactByPath`'s null eviction) rather than cached fresh: a
+ * click-time existence probe exists specifically to catch a file the agent
+ * JUST created, and a positive-staleTime miss would keep re-clicks failing
+ * silently until the window expired. A "found" result keeps the 5s window -
+ * an existing file's presence is stable enough to collapse a double-click
+ * without a second RPC.
  */
 export async function fetchWorkspaceFileExists(
   args: FetchWorkspaceFileExistsArgs,
@@ -46,6 +54,10 @@ export async function fetchWorkspaceFileExists(
       queryFn: request,
       staleTime: 5_000,
     })
-    .then((response) => response.content !== null)
+    .then((response) => {
+      const exists = response.content !== null;
+      if (!exists) args.queryClient.removeQueries({ queryKey });
+      return exists;
+    })
     .catch(() => false);
 }

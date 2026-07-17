@@ -926,15 +926,18 @@ export function useDescendantIds(nodeId: string): readonly string[] {
  * somewhere in the chain). Feeds `resolveArtifactRelativeLinkPath` so a
  * relative markdown link authored inside this artifact can be rewritten into
  * the same artifact-shaped path the absolute-link flow already resolves.
+ *
+ * Selected via `useShallow` (a plain array of primitive strings) rather than
+ * subscribing to the raw `tree`/`artifacts` slices directly: those slices get
+ * a fresh top-level identity on ANY artifact edit anywhere in the epic, which
+ * would otherwise re-render every link consumer even when THIS artifact's own
+ * chain is unchanged.
  */
 export function useArtifactFolderChain(
   artifactId: string,
 ): readonly string[] | null {
-  const tree = useEpicTreeIndex();
-  const artifacts = useEpicStore((s) => s.artifacts);
-  return useMemo(
-    () => artifactFolderChain(tree, artifacts, artifactId),
-    [tree, artifacts, artifactId],
+  return useEpicStore(
+    useShallow((s) => artifactFolderChain(s.tree, s.artifacts, artifactId)),
   );
 }
 

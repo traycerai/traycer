@@ -76,4 +76,38 @@ describe("fetchWorkspaceFileExists", () => {
       fetchWorkspaceFileExists(makeArgs(queryClient, request)),
     ).resolves.toBe(false);
   });
+
+  it("re-probes a file that was missing on an earlier click instead of serving a cached miss", async () => {
+    // A click-time existence probe exists specifically to catch a file the
+    // agent just created after an earlier failed click - a positive staleTime
+    // on a MISS would keep re-clicks failing silently until the window
+    // expired, so a miss must be evicted immediately (unlike a HIT, which
+    // keeps its 5s window to collapse a double-click).
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const request = vi.fn<ReadFileRequest>();
+    request.mockResolvedValueOnce({
+      workspacePath: "/repo",
+      filePath: "src/app.ts",
+      content: null,
+      truncated: false,
+      error: "not found",
+    });
+    request.mockResolvedValueOnce({
+      workspacePath: "/repo",
+      filePath: "src/app.ts",
+      content: "x",
+      truncated: true,
+      error: null,
+    });
+
+    expect(await fetchWorkspaceFileExists(makeArgs(queryClient, request))).toBe(
+      false,
+    );
+    expect(await fetchWorkspaceFileExists(makeArgs(queryClient, request))).toBe(
+      true,
+    );
+    expect(request).toHaveBeenCalledTimes(2);
+  });
 });

@@ -31,6 +31,8 @@ const EPIC_HANDLE = { store: { getState: vi.fn(), subscribe: vi.fn() } };
 
 const mocks = vi.hoisted(() => ({
   request: vi.fn<(method: string, payload: unknown) => Promise<unknown>>(),
+  workspaceRequest:
+    vi.fn<(method: string, payload: unknown) => Promise<unknown>>(),
   navigate: vi.fn(),
   resolveArtifactByPath:
     vi.fn<
@@ -71,6 +73,14 @@ vi.mock("@tanstack/react-router", () => ({
 
 vi.mock("@/lib/host", () => ({
   useHostClient: () => ({ request: mocks.request }),
+}));
+
+// Distinct from `useHostClient`'s default-host client - a relative-link
+// existence probe must go through THIS one (bound to the chat tab's OWN
+// `hostId` prop), never the default, so tests can tell them apart by which
+// mock request fn actually gets invoked.
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => ({ request: mocks.workspaceRequest }),
 }));
 
 vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
@@ -130,6 +140,7 @@ beforeEach(() => {
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useWorkspaceFileRevealStore.setState({ targetsByKey: {} }, true);
   mocks.request.mockReset();
+  mocks.workspaceRequest.mockReset();
   mocks.navigate.mockReset();
   mocks.resolveArtifactByPath.mockReset();
   mocks.openProjectedSidebarNodeInTabWhenAvailable.mockReset();
@@ -533,6 +544,86 @@ describe("ChatMarkdownLinkProvider", () => {
       );
     });
     expect(mocks.resolveArtifactByPath).not.toHaveBeenCalled();
+  });
+
+  it("probes the chat tab's own host, not the app-wide active host, for a relative link's existence", async () => {
+    // The chat tab is bound to HOST_ID; `useReactiveActiveHostId` is mocked to
+    // a DIFFERENT host (ACTIVE_HOST_ID). The existence probe must go through
+    // the tab-scoped client (`useHostClientForHostId`), never the default one
+    // `useHostClient` resolves for the active host.
+    const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic 1");
+    renderProvider(
+      tabId,
+      <LinkButton
+        label="Open app"
+        link={{ path: "src/app.ts", line: null, col: null, isDirectory: false }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open app" }));
+
+    await waitFor(() => {
+      expect(mocks.workspaceFileExists).toHaveBeenCalled();
+    });
+    const [args] = mocks.workspaceFileExists.mock.calls.at(-1) ?? [];
+    const client = (args as { readonly client: { readonly request: unknown } })
+      .client;
+    expect(client.request).toBe(mocks.workspaceRequest);
+    expect(client.request).not.toBe(mocks.request);
+  });
+
+  it("opens a parent-escaping relative link end-to-end via its resolved absolute target", async () => {
+    // Real (unmocked) `candidateWorkspaceFileRefsForRelativeLinkPath` +
+    // `firstEagerlyTrueIndex` racing - only the RPC (`fetchWorkspaceFileExists`)
+    // is mocked, defaulting every candidate to "exists". `../sibling/app.ts`
+    // resolved against the bound root `/repo` escapes it, so the opened ref
+    // must be the client-side-resolved absolute target, not a rejected
+    // `{ workspacePath: "/repo", filePath: "../sibling/app.ts" }` candidate.
+    const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic 1");
+    renderProvider(
+      tabId,
+      <LinkButton
+        label="Open sibling"
+        link={{
+          path: "../sibling/app.ts",
+          line: null,
+          col: null,
+          isDirectory: false,
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open sibling" }));
+
+    await waitFor(() => {
+      expect(requirePreviewTileContentId(tabId)).toBe(
+        workspaceFileTabId(HOST_ID, "/sibling", "app.ts"),
+      );
+    });
+  });
+
+  it("opens a directory-shaped relative link end-to-end at its index.md", async () => {
+    const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic 1");
+    renderProvider(
+      tabId,
+      <LinkButton
+        label="Open dir"
+        link={{
+          path: "sub-dir/",
+          line: null,
+          col: null,
+          isDirectory: false,
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open dir" }));
+
+    await waitFor(() => {
+      expect(requirePreviewTileContentId(tabId)).toBe(
+        workspaceFileTabId(HOST_ID, "/repo", "sub-dir/index.md"),
+      );
+    });
   });
 
   it("records a reveal target on the file content id when a line is present, then opens the preview", async () => {
