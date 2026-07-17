@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -209,6 +209,7 @@ function modelsResponse(count: number): ListGuiAgentModelsResponse {
 
 interface CatalogFixture {
   readonly Wrapper: (props: { readonly children: ReactNode }) => ReactNode;
+  readonly queryClient: QueryClient;
 }
 
 function createCatalogFixture(
@@ -241,7 +242,7 @@ function createCatalogFixture(
       {props.children}
     </QueryClientProvider>
   );
-  return { Wrapper };
+  return { Wrapper, queryClient };
 }
 
 describe("useGuiHarnessModelsQuery (interval removal regression)", () => {
@@ -280,6 +281,48 @@ describe("useGuiHarnessModelsQuery (interval removal regression)", () => {
       await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
     });
     expect(callCount).toBe(1);
+  });
+
+  it("keeps an inactive invalidated model catalog cached past TanStack's default GC window", async () => {
+    vi.useFakeTimers();
+    const fixture = createCatalogFixture({
+      "agent.gui.listModels": () => modelsResponse(2),
+    });
+
+    const hook = renderHook(
+      () =>
+        useGuiHarnessModelsQuery("opencode", null, {
+          enabled: true,
+          subscribed: true,
+        }),
+      { wrapper: fixture.Wrapper },
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    hook.unmount();
+
+    const modelQuery = fixture.queryClient
+      .getQueryCache()
+      .getAll()
+      .find((query) => query.queryKey.includes("agent.gui.listModels"));
+    if (modelQuery === undefined) {
+      throw new Error("Expected the model catalog query to be cached");
+    }
+    expect(modelQuery.state.data).toEqual(modelsResponse(2));
+    await fixture.queryClient.invalidateQueries({
+      queryKey: modelQuery.queryKey,
+      refetchType: "none",
+    });
+    expect(modelQuery.state.isInvalidated).toBe(true);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6 * 60 * 1000);
+    });
+
+    expect(fixture.queryClient.getQueryData(modelQuery.queryKey)).toEqual(
+      modelsResponse(2),
+    );
   });
 
   it("produces zero background requests past the 15-minute mark when the model fetch persistently fails", async () => {
@@ -352,6 +395,45 @@ describe("useGuiHarnessCatalog (batched interval removal regression)", () => {
       await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
     });
     expect(callCount).toBe(1);
+  });
+
+  it("keeps an inactive batched model catalog cached past TanStack's default GC window", async () => {
+    vi.useFakeTimers();
+    const fixture = createCatalogFixture({
+      "agent.gui.listHarnesses": () => ({ harnesses: harnesses(["opencode"]) }),
+      "agent.gui.listModels": () => modelsResponse(1),
+    });
+
+    const hook = renderHook(
+      () => useGuiHarnessCatalog(null, { enabled: true, subscribed: true }),
+      { wrapper: fixture.Wrapper },
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    hook.unmount();
+
+    const modelQuery = fixture.queryClient
+      .getQueryCache()
+      .getAll()
+      .find((query) => query.queryKey.includes("agent.gui.listModels"));
+    if (modelQuery === undefined) {
+      throw new Error("Expected the batched model catalog query to be cached");
+    }
+    expect(modelQuery.state.data).toEqual(modelsResponse(1));
+    await fixture.queryClient.invalidateQueries({
+      queryKey: modelQuery.queryKey,
+      refetchType: "none",
+    });
+    expect(modelQuery.state.isInvalidated).toBe(true);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6 * 60 * 1000);
+    });
+
+    expect(fixture.queryClient.getQueryData(modelQuery.queryKey)).toEqual(
+      modelsResponse(1),
+    );
   });
 
   it("produces zero batched background requests past the 15-minute mark when a harness's model fetch persistently fails", async () => {
