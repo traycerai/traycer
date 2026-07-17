@@ -1991,6 +1991,11 @@ function InEpicSurface(props: InEpicSurfaceProps) {
                   // path would pin the pending-defaults guard and block
                   // Update's resume forever.
                   pendingDefaultPathsRef.current?.delete(ws.workspacePath);
+                  // And if metadata DID resolve first, the seeding effect may
+                  // already have staged a default worktree intent for this
+                  // path - unstage it, or the next Update would call
+                  // worktree.create for a folder no longer in the binding.
+                  unstageWorktreeEntry(stagedKey, ws.workspacePath);
                   if (surface.kind === "terminal-agent") {
                     markBindingDirtyWithoutResume([ws.workspacePath]);
                     return;
@@ -2011,6 +2016,8 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       markBindingDirtyWithoutResume,
       pendingBranchByPath,
       pendingRemovePaths,
+      stagedKey,
+      unstageWorktreeEntry,
       props.hostClient,
       removeBindingEntryMutation,
       stagedEntryByPath,
