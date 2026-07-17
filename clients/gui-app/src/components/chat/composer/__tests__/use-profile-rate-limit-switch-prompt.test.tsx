@@ -344,6 +344,51 @@ describe("useProfileRateLimitSwitchPrompt", () => {
     expect(visiblePrompt(result.current).warningKey).not.toBe(firstWarningKey);
   });
 
+  it("resurfaces a dismissed warning when the selectable destination set changes, independent of severity", () => {
+    const source = profile({
+      profileId: "ambient",
+      kind: "ambient",
+      label: "Company",
+      rateLimitStatus: "near_limit",
+      authenticated: true,
+    });
+    const first = profile({
+      profileId: "first",
+      kind: "managed",
+      label: "First",
+      rateLimitStatus: "ok",
+      authenticated: true,
+    });
+    const second = profile({
+      profileId: "second",
+      kind: "managed",
+      label: "Second",
+      rateLimitStatus: "ok",
+      authenticated: true,
+    });
+    mocks.providers = [claudeState([source, first])];
+    const { result, rerender } = currentPrompt(null);
+    expect(result.current.kind).toBe("visible");
+    if (result.current.kind !== "visible") return;
+    const firstWarningKey = result.current.warningKey;
+    act(() => result.current.dismiss());
+    expect(result.current.kind).toBe("hidden");
+
+    // Same severity, same destination set: stays dismissed.
+    mocks.providers = [claudeState([source, first])];
+    rerender();
+    expect(result.current.kind).toBe("hidden");
+
+    // Severity unchanged; the selectable destination set gained "second".
+    // The warning must resurface with a new key even though severity
+    // never moved.
+    mocks.providers = [claudeState([source, first, second])];
+    rerender();
+    const resurfaced = visiblePrompt(result.current);
+    expect(resurfaced.severity).toBe("near_limit");
+    expect(resurfaced.warningKey).not.toBe(firstWarningKey);
+  });
+
   it("shares dismissal across hook instances for the same warning", () => {
     mocks.providers = [
       claudeState([

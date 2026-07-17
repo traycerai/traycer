@@ -461,7 +461,19 @@ function ProfileRateLimitMenuContent({
         if (isProfileUsageSidecarTarget(event.target)) event.preventDefault();
       }}
       onKeyDownCapture={(event) => {
-        if (PREVIEW_NAVIGATION_KEYS.has(event.key)) onKeyboardNavigation();
+        if (!PREVIEW_NAVIGATION_KEYS.has(event.key)) return;
+        onKeyboardNavigation();
+        // A single-row menu auto-focuses its only item on open, so Radix's
+        // roving focus group wraps back onto the already-active item and
+        // never calls `.focus()` again - no second `focus` event ever
+        // fires to drive the usual onFocus-triggered preview. Detect that
+        // degenerate case here and preview the sole row directly instead
+        // of waiting on a focus event that will never come.
+        if (rows.length !== 1) return;
+        const activeElement = document.activeElement;
+        if (activeElement instanceof HTMLElement) {
+          onPreview(rows[0].profile, activeElement);
+        }
       }}
       onKeyDown={(event) =>
         handleUsageMenuKeyDown(

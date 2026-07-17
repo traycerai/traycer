@@ -479,11 +479,13 @@ describe("rate-limit banner task-wide switch", () => {
       screen.getByRole("button", { name: "Choose another profile" }),
     );
     const row = screen.getByRole("menuitem", { name: /Fresh profile/ });
-    fireEvent.focus(row);
+    // Real focus, matching Radix's genuine auto-focus-on-open: with a
+    // single row, focus never moves again, so no further `focus` event
+    // ever fires (see the production fix this test pins).
+    row.focus();
     expect(screen.queryByRole("complementary")).toBeNull();
 
-    fireEvent.keyDown(screen.getByRole("menu"), { key: "ArrowDown" });
-    fireEvent.focus(row);
+    fireEvent.keyDown(row, { key: "ArrowDown" });
 
     expect(
       screen.getByRole("complementary", {
