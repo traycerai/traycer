@@ -19,7 +19,7 @@ import type {
   WorktreeBranch,
   WorktreeIntent,
   WorktreeFolderIntent,
-  WorktreeWorkspaceSummary,
+  WorktreeWorkspaceSummaryV13,
 } from "@traycer/protocol/host/worktree-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
@@ -157,7 +157,7 @@ type BoundOwnerSurface = {
 const EMPTY_BINDING_ENTRIES: ReadonlyArray<WorktreeBindingEntry> = [];
 
 /**
- * Binding-entry → `WorktreeWorkspaceSummary` fallback, rendered for a row until
+ * Binding-entry → `WorktreeWorkspaceSummaryV13` fallback, rendered for a row until
  * `worktree.listByWorkspacePaths` returns the authoritative disk metadata. Git
  * details are inferred from the entry; the row shows a loading affordance
  * (`metadataPending`) while the real query is in flight, so this guess is never
@@ -166,7 +166,7 @@ const EMPTY_BINDING_ENTRIES: ReadonlyArray<WorktreeBindingEntry> = [];
  */
 function workspaceSummaryFromBindingEntry(
   entry: WorktreeBindingEntry,
-): WorktreeWorkspaceSummary {
+): WorktreeWorkspaceSummaryV13 {
   const worktrees =
     entry.worktreePath === null
       ? []
@@ -186,6 +186,7 @@ function workspaceSummaryFromBindingEntry(
     mainBranch: entry.mode === "local" ? entry.branch : null,
     worktrees,
     scripts: null,
+    resolvedAt: null,
   };
 }
 
@@ -480,19 +481,23 @@ function HomeWorkspaceRows(props: {
     },
   );
   const summariesByPath = useMemo<
-    ReadonlyMap<string, WorktreeWorkspaceSummary>
+    ReadonlyMap<string, WorktreeWorkspaceSummaryV13>
   >(() => {
-    const map = new Map<string, WorktreeWorkspaceSummary>();
+    const map = new Map<string, WorktreeWorkspaceSummaryV13>();
     for (const ws of summariesQuery.data?.workspaces ?? []) {
       map.set(ws.workspacePath, ws);
     }
     return map;
   }, [summariesQuery.data]);
-  const gitSummaries = useMemo<ReadonlyArray<WorktreeWorkspaceSummary>>(
+  const gitSummaries = useMemo<ReadonlyArray<WorktreeWorkspaceSummaryV13>>(
     () =>
       resolvedFolders.flatMap((entry) => {
         const summary = summaryForResolvedFolder(entry, summariesByPath);
-        return summary !== null && summary.isGitRepo ? [summary] : [];
+        return summary !== null &&
+          summary.resolvedAt !== null &&
+          summary.isGitRepo
+          ? [summary]
+          : [];
       }),
     [resolvedFolders, summariesByPath],
   );
@@ -573,8 +578,6 @@ function HomeWorkspaceRows(props: {
   >({
     client: activeHostClient,
     cacheKeyIdentity: undefined,
-    // No fetch directive: send the cache-identity params verbatim.
-    toRequestParams: undefined,
     requests: branchValidationPaths.map((workspacePath) => ({
       method: "worktree.listBranches",
       params: { workspacePath, includeRemote: true },
@@ -917,7 +920,7 @@ function workspaceRunItemForResolvedFolder(input: {
     intent: WorktreeFolderIntent,
     timestamp: number,
   ) => void;
-  readonly summariesByPath: ReadonlyMap<string, WorktreeWorkspaceSummary>;
+  readonly summariesByPath: ReadonlyMap<string, WorktreeWorkspaceSummaryV13>;
   readonly workspaceSource: HomeWorkspaceSource;
 }): WorkspaceRunItem {
   const summary = summaryForResolvedFolder(input.entry, input.summariesByPath);
@@ -939,7 +942,8 @@ function workspaceRunItemForResolvedFolder(input: {
     input.workspaceSource.capturedIntent,
     input.entry.path,
   );
-  const isGitRepo = summary?.isGitRepo ?? false;
+  const metadataResolved = summary !== null && summary.resolvedAt !== null;
+  const isGitRepo = metadataResolved && summary.isGitRepo;
   const capturedEntry = supportedCapturedEntryForSummary(
     capturedEntryForPath,
     isGitRepo,
@@ -969,7 +973,9 @@ function workspaceRunItemForResolvedFolder(input: {
     displayName: input.entry.name,
     displayPath: input.entry.path,
     unresolved: false,
-    metadataPending: summary === null && input.isFetchingSummaries,
+    metadataPending:
+      (summary === null && input.isFetchingSummaries) ||
+      (summary !== null && summary.resolvedAt === null),
     missing: false,
     isGitRepo,
     mode,
@@ -984,8 +990,10 @@ function workspaceRunItemForResolvedFolder(input: {
     makePrimaryDisabled: false,
     makePrimaryDisabledReason: null,
     hostClient: input.activeHostClient,
-    modeDisabled: false,
-    modeDisabledReason: null,
+    modeDisabled: !metadataResolved,
+    modeDisabledReason: metadataResolved
+      ? null
+      : "Waiting for the host to verify this folder.",
     removeDisabled: false,
     removeDisabledReason: null,
     removePending: false,
@@ -1024,7 +1032,7 @@ function workspaceRunItemForUnresolvedFolder(input: {
   readonly isFetchingSummaries: boolean;
   readonly onLocate: () => void;
   readonly resolvedPrimaryPath: string | null;
-  readonly summary: WorktreeWorkspaceSummary | null;
+  readonly summary: WorktreeWorkspaceSummaryV13 | null;
   readonly workspaceSource: HomeWorkspaceSource;
 }): WorkspaceRunItem | null {
   if (input.summary !== null) return null;
@@ -1086,7 +1094,7 @@ function emitHomeRowMode(input: {
   readonly isPrimary: boolean;
   readonly mode: WorkspaceRunMode;
   readonly nextMode: WorkspaceRunMode;
-  readonly summary: WorktreeWorkspaceSummary | null;
+  readonly summary: WorktreeWorkspaceSummaryV13 | null;
   readonly workspacePath: string;
 }): void {
   if (
@@ -1108,7 +1116,10 @@ function emitHomeRowMode(input: {
       workspacePath: input.workspacePath,
       repoIdentifier: input.summary?.repoIdentifier ?? null,
       isPrimary: input.isPrimary,
-      isGitRepo: input.summary?.isGitRepo ?? false,
+      isGitRepo:
+        input.summary !== null &&
+        input.summary.resolvedAt !== null &&
+        input.summary.isGitRepo,
       currentBranch: input.currentBranch,
       defaultNewBranchName: input.defaultNewBranchName,
     }),
@@ -1133,7 +1144,7 @@ function removeDisabledReasonFor(
 function unresolvedWorkspaceRunItem(input: {
   readonly path: string;
   readonly name: string;
-  readonly repoIdentifier: WorktreeWorkspaceSummary["repoIdentifier"];
+  readonly repoIdentifier: WorktreeWorkspaceSummaryV13["repoIdentifier"];
   readonly isPrimary: boolean;
   readonly onLocate: () => void;
   readonly onMakePrimary: () => void;
@@ -1176,7 +1187,7 @@ function unresolvedWorkspaceRunItem(input: {
 function pendingWorkspaceRunItem(input: {
   readonly path: string;
   readonly name: string;
-  readonly repoIdentifier: WorktreeWorkspaceSummary["repoIdentifier"];
+  readonly repoIdentifier: WorktreeWorkspaceSummaryV13["repoIdentifier"];
   readonly hostClient: HostClient<HostRpcRegistry> | null;
   readonly isPrimary: boolean;
   readonly onRemove: () => void;
@@ -1215,8 +1226,8 @@ function pendingWorkspaceRunItem(input: {
 
 function summaryForResolvedFolder(
   entry: ResolvedFolder,
-  summariesByPath: ReadonlyMap<string, WorktreeWorkspaceSummary>,
-): WorktreeWorkspaceSummary | null {
+  summariesByPath: ReadonlyMap<string, WorktreeWorkspaceSummaryV13>,
+): WorktreeWorkspaceSummaryV13 | null {
   const summary = summariesByPath.get(entry.path) ?? null;
   if (summary === null) return null;
   const repoIdentifier = repoIdentifierForResolvedFolder(entry);
@@ -1226,12 +1237,12 @@ function summaryForResolvedFolder(
 
 function repoIdentifierForResolvedFolder(
   entry: ResolvedFolder,
-): WorktreeWorkspaceSummary["repoIdentifier"] {
+): WorktreeWorkspaceSummaryV13["repoIdentifier"] {
   return entry.kind === "local-only" ? null : entry.repoIdentifier;
 }
 
 function branchForSummary(
-  summary: WorktreeWorkspaceSummary | null,
+  summary: WorktreeWorkspaceSummaryV13 | null,
 ): string | null {
   if (summary === null) return null;
   const mainEntry = summary.worktrees.find((w) => w.isMain) ?? null;
@@ -1348,7 +1359,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   // to fetch — is `isPending` in v5 but never actually loading, so guard on the
   // active first fetch only.
   const metadataPending = props.hostClient !== null && metadataQuery.isLoading;
-  const workspaces = useMemo<ReadonlyArray<WorktreeWorkspaceSummary>>(
+  const workspaces = useMemo<ReadonlyArray<WorktreeWorkspaceSummaryV13>>(
     () =>
       bindingEntries.map(
         (entry) =>
@@ -1412,7 +1423,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     return map;
   }, [stagedIntent]);
   const gitWorkspaces = useMemo(
-    () => workspaces.filter((ws) => ws.isGitRepo),
+    () => workspaces.filter((ws) => ws.resolvedAt !== null && ws.isGitRepo),
     [workspaces],
   );
   const defaultBranchByPath = useMemo(
@@ -1542,6 +1553,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     for (const path of [...pending]) {
       const summary = summariesByPath.get(path) ?? null;
       if (summary === null) continue; // metadata not loaded yet - wait
+      if (summary.resolvedAt === null) continue; // schema defaults are not disk truth
       pending.delete(path);
       if (!summary.isGitRepo) continue;
       if (stagedEntryByPath.has(path)) continue;
@@ -1678,8 +1690,9 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   // applied together on the explicit "Update" — no edit resumes the PTY on its
   // own.
   const emitForFolder = useCallback(
-    (ws: WorktreeWorkspaceSummary) =>
+    (ws: WorktreeWorkspaceSummaryV13) =>
       (intent: WorktreeFolderIntent): void => {
+        if (ws.resolvedAt === null) return;
         if (intent.kind !== "local") {
           Analytics.getInstance().track(AnalyticsEvent.WorktreeSelected, {
             source: "direct_ui",
@@ -1786,6 +1799,8 @@ function InEpicSurface(props: InEpicSurfaceProps) {
           defaultBranchByPath[ws.workspacePath] ?? "";
         const currentBranch = branchForSummary(ws);
         const otherWorktrees = ws.worktrees.filter((w) => !w.isMain);
+        const rowMetadataPending = metadataPending || ws.resolvedAt === null;
+        const rowIsGitRepo = ws.resolvedAt !== null && ws.isGitRepo;
         const branchLabel = workspaceRunBranchLabel({
           mode: currentMode,
           currentBranch,
@@ -1798,9 +1813,9 @@ function InEpicSurface(props: InEpicSurfaceProps) {
           displayName: workspaceFolderName(ws.workspacePath),
           displayPath: ws.workspacePath,
           unresolved: false,
-          metadataPending,
+          metadataPending: rowMetadataPending,
           missing: visibleMissingWorktreePaths.includes(ws.workspacePath),
-          isGitRepo: ws.isGitRepo,
+          isGitRepo: rowIsGitRepo,
           mode: currentMode,
           branchLabel:
             currentMode === "local"
@@ -1819,8 +1834,12 @@ function InEpicSurface(props: InEpicSurfaceProps) {
           makePrimaryDisabled: false,
           makePrimaryDisabledReason: null,
           hostClient: props.hostClient,
-          modeDisabled: activeRunLocksBinding,
-          modeDisabledReason: activeRunLocksBinding ? activeRunNotice : null,
+          modeDisabled: activeRunLocksBinding || rowMetadataPending,
+          modeDisabledReason: activeRunLocksBinding
+            ? activeRunNotice
+            : rowMetadataPending
+              ? "Waiting for the host to verify this folder."
+              : null,
           removeDisabled: activeRunLocksBinding || removePending,
           removeDisabledReason: removeDisabledReasonFor(
             activeRunLocksBinding,
@@ -1830,6 +1849,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
           onEmit: emit,
           onMakePrimary: () => undefined,
           onSelectMode: (nextMode) => {
+            if (ws.resolvedAt === null) return;
             if (!locationSelectionChanges(nextMode, currentIntent, currentMode))
               return;
             if (nextMode === "local") {

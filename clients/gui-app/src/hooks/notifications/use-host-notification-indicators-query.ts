@@ -58,8 +58,6 @@ export function useHostNotificationIndicators(
       userId === null
         ? undefined
         : notificationsQueryKeys.indicatorIdentity(userId),
-    // No fetch directive: send the cache-identity params verbatim.
-    toRequestParams: undefined,
     options: { enabled: args.enabled && userId !== null },
     combine: (results) => ({
       data: mergeIndicatorResponses(results),

@@ -257,8 +257,6 @@ export function useHeaderRateLimitBars(
   >({
     client,
     cacheKeyIdentity: undefined,
-    // No fetch directive: send the cache-identity params verbatim.
-    toRequestParams: undefined,
     requests: glyphProviders.map((target) => {
       const { method, params } = providerRateLimitQueryOptions(
         target.providerId,

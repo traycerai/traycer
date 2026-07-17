@@ -121,8 +121,6 @@ export function useProfileUsageComparison({
   >({
     client: target.client,
     cacheKeyIdentity: undefined,
-    // No fetch directive: send the cache-identity params verbatim.
-    toRequestParams: undefined,
     requests,
     options: PASSIVE_PROVIDER_RATE_LIMIT_OPTIONS,
     mapResponse: mapResponseToProviderRateLimitEnvelope,

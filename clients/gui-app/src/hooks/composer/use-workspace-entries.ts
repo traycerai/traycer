@@ -27,8 +27,6 @@ export function useWorkspaceEntries(
   const queries = useHostQueries<HostRpcRegistry, WorkspaceMentionMethod>({
     client: params.client,
     cacheKeyIdentity: undefined,
-    // No fetch directive: send the cache-identity params verbatim.
-    toRequestParams: undefined,
     requests: params.requests,
     options: { staleTime: 30_000, placeholderData: keepPreviousData },
   });

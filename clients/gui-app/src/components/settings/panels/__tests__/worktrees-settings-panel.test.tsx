@@ -18,7 +18,7 @@ import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtur
 import { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import type { WorktreeDeleteStreamCallbacks } from "@traycer-clients/shared/host-transport/worktree-delete-stream-client";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/index";
+import type { WorktreeHostEntryV14 } from "@traycer/protocol/host/index";
 import type {
   WorktreeEntryScripts,
   WorktreeSubmoduleMergeFactV12,
@@ -29,10 +29,6 @@ import {
 } from "@traycer/protocol/host/registry";
 import { WorktreesList } from "@/components/settings/panels/worktrees-settings-panel";
 import { useWorktreeListing } from "@/components/settings/panels/worktrees-listing-query";
-import {
-  isWorktreeForceRefreshing,
-  withWorktreeForceRefresh,
-} from "@/components/settings/panels/worktrees-force-refresh";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { __resetWorktreeDeleteRunForTests } from "@/components/settings/panels/use-worktree-delete-run";
 import { hostQueryKeys } from "@/lib/query-keys";
@@ -226,12 +222,12 @@ type WorktreeSubmoduleMergeFactInput = Omit<
   >;
 
 function entry(
-  over: Partial<Omit<WorktreeHostEntryV12, "submodules">> & {
+  over: Partial<Omit<WorktreeHostEntryV14, "submodules">> & {
     worktreePath: string;
     branch: string;
     submodules?: readonly WorktreeSubmoduleMergeFactInput[];
   },
-): WorktreeHostEntryV12 {
+): WorktreeHostEntryV14 {
   const { submodules, ...rest } = over;
   return {
     repoLabel: "acme/app",
@@ -257,11 +253,12 @@ function entry(
         unmergedCommitSubjects: submodule.unmergedCommitSubjects ?? null,
       })) ?? [],
     atBaseCommit: false,
+    resolvedAt: 1,
     ...rest,
   };
 }
 
-const WORKTREES: WorktreeHostEntryV12[] = [
+const WORKTREES: WorktreeHostEntryV14[] = [
   entry({
     worktreePath: "/wt/clean",
     branch: "feat-clean",
@@ -310,17 +307,17 @@ afterEach(() => {
 // entry) - the default the behavioural tests want, so tiers classify immediately.
 // Tests that exercise the pending/lazy path pass their own partial overlay.
 function fullyEnriched(
-  worktrees: readonly WorktreeHostEntryV12[],
-): ReadonlyMap<string, WorktreeHostEntryV12> {
+  worktrees: readonly WorktreeHostEntryV14[],
+): ReadonlyMap<string, WorktreeHostEntryV14> {
   return new Map(worktrees.map((entry) => [entry.worktreePath, entry]));
 }
 
 function renderList(args: {
   readonly hostId: string;
   readonly queryClient: QueryClient;
-  readonly worktrees: readonly WorktreeHostEntryV12[];
+  readonly worktrees: readonly WorktreeHostEntryV14[];
   readonly enrichedByPath:
-    ReadonlyMap<string, WorktreeHostEntryV12> | undefined;
+    ReadonlyMap<string, WorktreeHostEntryV14> | undefined;
   readonly erroredPaths: ReadonlySet<string> | undefined;
   readonly seededPaths: ReadonlySet<string> | undefined;
   readonly onVisiblePathsChange:
@@ -531,17 +528,10 @@ describe("useWorktreeListing", () => {
     });
     expect(requests).toEqual([{ forceRefresh: false }]);
 
-    // Exactly what the toolbar's Refresh button runs (worktrees-settings-panel).
+    // Exactly what the toolbar's Refresh button runs (worktrees-settings-panel):
+    // one awaited resolve-now request, with no global force window.
     await act(async () => {
-      await withWorktreeForceRefresh(mockLocalHostEntry.hostId, () =>
-        queryClient.invalidateQueries({
-          queryKey: hostQueryKeys.methodScope(
-            mockLocalHostEntry.hostId,
-            "worktree.listAllForHost",
-          ),
-          refetchType: "active",
-        }),
-      );
+      await result.current.refresh();
     });
 
     expect(requests).toEqual([{ forceRefresh: false }, { forceRefresh: true }]);
@@ -552,8 +542,6 @@ describe("useWorktreeListing", () => {
         "fresh",
       ]);
     });
-    // And the window is closed again: a later poll is back to cached reads.
-    expect(isWorktreeForceRefreshing(mockLocalHostEntry.hostId)).toBe(false);
   });
 
   it("flags a truncated list as partial instead of hiding the failed page", async () => {
@@ -645,6 +633,42 @@ describe("WorktreesList delete flow", () => {
       name: /in use by an active chat or agent/i,
     });
     expect(busyButton.hasAttribute("disabled")).toBe(true);
+  });
+
+  it("renders unresolved rows as checking and excludes them from destructive selection", () => {
+    const unresolved = entry({
+      worktreePath: "/wt/unresolved",
+      branch: "feat-unresolved",
+      // These schema-safe defaults would otherwise classify as clean enough
+      // to select. resolvedAt is the authoritative fail-closed gate.
+      resolvedAt: null,
+      inUse: false,
+      uncommittedCount: 0,
+      gitRemovable: true,
+    });
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [unresolved],
+      enrichedByPath: fullyEnriched([unresolved]),
+      erroredPaths: undefined,
+      seededPaths: undefined,
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
+    });
+
+    screen.getByTestId("worktree-tier-pill-pending-spinner");
+    screen.getByText("Waiting for host verification…");
+    expect(
+      screen
+        .getByRole("checkbox", { name: "Select worktree feat-unresolved" })
+        .getAttribute("aria-disabled"),
+    ).toBe("true");
+    expect(
+      screen
+        .getByRole("button", { name: /status is still being checked/i })
+        .hasAttribute("disabled"),
+    ).toBe(true);
   });
 
   it("gates delete on live data: a snapshot-seeded row keeps its restored tier but is not deletable", () => {
@@ -1782,7 +1806,7 @@ describe("WorktreesList confirm-time re-check", () => {
     toastMock.messages = [];
   });
 
-  function merged(path: string, branch: string): WorktreeHostEntryV12 {
+  function merged(path: string, branch: string): WorktreeHostEntryV14 {
     return entry({
       worktreePath: path,
       branch,
@@ -1792,7 +1816,7 @@ describe("WorktreesList confirm-time re-check", () => {
 
   function renderWith(
     queryClient: QueryClient,
-    worktrees: readonly WorktreeHostEntryV12[],
+    worktrees: readonly WorktreeHostEntryV14[],
   ) {
     return (
       <QueryClientProvider client={queryClient}>
@@ -1881,7 +1905,7 @@ describe("WorktreesList confirm-time re-check", () => {
     expect(streamMock.paths).toEqual(["/wt/merged"]);
   });
 
-  function atBase(path: string, branch: string): WorktreeHostEntryV12 {
+  function atBase(path: string, branch: string): WorktreeHostEntryV14 {
     return entry({ worktreePath: path, branch, atBaseCommit: true });
   }
 
@@ -3116,8 +3140,8 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
   });
 
   function listElement(args: {
-    readonly worktrees: readonly WorktreeHostEntryV12[];
-    readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV12>;
+    readonly worktrees: readonly WorktreeHostEntryV14[];
+    readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV14>;
     readonly erroredPaths: ReadonlySet<string> | undefined;
     readonly onVisiblePathsChange:
       ((paths: readonly string[]) => void) | undefined;
@@ -3141,7 +3165,7 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
     );
   }
 
-  function manyWorktrees(count: number): WorktreeHostEntryV12[] {
+  function manyWorktrees(count: number): WorktreeHostEntryV14[] {
     return Array.from({ length: count }, (_unused, index) =>
       entry({
         worktreePath: `/wt/w${index}`,
@@ -3453,8 +3477,8 @@ describe("WorktreesList status-aware delete safety", () => {
   // `pendingDeleteTargets`) instead of remounting the whole subtree.
   function statusAwareElement(args: {
     readonly queryClient: QueryClient;
-    readonly worktrees: readonly WorktreeHostEntryV12[];
-    readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV12>;
+    readonly worktrees: readonly WorktreeHostEntryV14[];
+    readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV14>;
     readonly erroredPaths: ReadonlySet<string>;
   }): ReactNode {
     return (
@@ -3790,7 +3814,7 @@ describe("WorktreesList PR-number search", () => {
   // every row (see `worktree-setup-orchestrator`'s base shape). PR facts do not
   // exist here - they only arrive on the enrichment overlay below. Building the
   // fixture this way is what makes the un-enriched cases honest.
-  const PR_BASE: readonly WorktreeHostEntryV12[] = [
+  const PR_BASE: readonly WorktreeHostEntryV14[] = [
     entry({ worktreePath: "/wt/super-pr", branch: "feat-super-pr" }),
     entry({ worktreePath: "/wt/sub-pr", branch: "feat-sub-pr" }),
     entry({ worktreePath: "/wt/no-pr", branch: "feat-no-pr" }),
@@ -3798,7 +3822,7 @@ describe("WorktreesList PR-number search", () => {
 
   // What those rows resolve to once probed: a superproject PR, a submodule-only
   // PR, and a row that genuinely has none.
-  const PR_ENRICHED: readonly WorktreeHostEntryV12[] = [
+  const PR_ENRICHED: readonly WorktreeHostEntryV14[] = [
     entry({
       worktreePath: "/wt/super-pr",
       branch: "feat-super-pr",
@@ -3828,7 +3852,7 @@ describe("WorktreesList PR-number search", () => {
   // The overlay with the named paths held back - i.e. still awaiting their probe.
   function enrichedExcept(
     unprobedPaths: readonly string[],
-  ): ReadonlyMap<string, WorktreeHostEntryV12> {
+  ): ReadonlyMap<string, WorktreeHostEntryV14> {
     return new Map(
       PR_ENRICHED.filter(
         (worktree) => !unprobedPaths.includes(worktree.worktreePath),
@@ -3844,7 +3868,7 @@ describe("WorktreesList PR-number search", () => {
   }
 
   function renderPrList(args: {
-    readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV12>;
+    readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV14>;
     readonly erroredPaths: ReadonlySet<string> | undefined;
   }): void {
     renderList({

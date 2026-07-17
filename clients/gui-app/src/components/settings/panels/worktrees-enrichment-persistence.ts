@@ -21,7 +21,7 @@
 import { z } from "zod";
 import {
   worktreeHostEntrySchemaV12,
-  type WorktreeHostEntryV12,
+  type WorktreeHostEntryV14,
 } from "@traycer/protocol/host/worktree-schemas";
 import {
   persistKey,
@@ -44,21 +44,27 @@ export const WORKTREE_ACTIVITY_CACHE_MAX_ENTRIES = 1_000;
 // snapshot whose shape no longer parses (older app, protocol evolution,
 // corrupt disk state) is discarded wholesale - a cold open, never a
 // malformed seed.
+const persistedWorktreeHostEntrySchema = worktreeHostEntrySchemaV12.extend({
+  // Snapshots written before listAllForHost@1.4 had no freshness marker.
+  // Restore them fail-closed as unresolved until a live host response lands.
+  resolvedAt: z.number().nonnegative().nullable().default(null),
+});
+
 const worktreeSnapshotSchema = z.object({
   version: z.literal(WORKTREE_ACTIVITY_CACHE_VERSION),
   savedAt: z.number(),
-  entries: z.array(worktreeHostEntrySchemaV12),
+  entries: z.array(persistedWorktreeHostEntrySchema),
 });
 
 export interface WorktreeActivitySnapshot {
   readonly savedAt: number;
-  readonly entries: readonly WorktreeHostEntryV12[];
+  readonly entries: readonly WorktreeHostEntryV14[];
 }
 
 // Only fully-warm entries are worth seeding: `prState === null` on any leg
 // means "not yet probed" - restoring it would render the same "Checking…"
 // state a cold open shows, then consume a revalidation probe anyway.
-function worktreeEntryIsWarm(entry: WorktreeHostEntryV12): boolean {
+function worktreeEntryIsWarm(entry: WorktreeHostEntryV14): boolean {
   return (
     entry.prState !== null &&
     entry.submodules.every((submodule) => submodule.prState !== null)
@@ -110,7 +116,7 @@ let persistWriteFailureLogged = false;
  */
 function writeSnapshotAt(
   key: string,
-  entries: readonly WorktreeHostEntryV12[],
+  entries: readonly WorktreeHostEntryV14[],
   now: number,
 ): void {
   const capped = entries.slice(0, WORKTREE_ACTIVITY_CACHE_MAX_ENTRIES);
@@ -151,7 +157,7 @@ export function readWorktreeActivitySnapshot(
 export function persistWorktreeActivitySnapshot(args: {
   readonly hostId: string;
   readonly worktreePaths: readonly string[];
-  readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV12>;
+  readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV14>;
   readonly now: number;
 }): void {
   const entries = args.worktreePaths.flatMap((path) => {
@@ -179,7 +185,7 @@ export function readWorktreeListingSnapshot(
  */
 export function persistWorktreeListingSnapshot(args: {
   readonly hostId: string;
-  readonly entries: readonly WorktreeHostEntryV12[];
+  readonly entries: readonly WorktreeHostEntryV14[];
   readonly now: number;
 }): void {
   writeSnapshotAt(worktreeListingCacheKey(args.hostId), args.entries, args.now);

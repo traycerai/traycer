@@ -26,27 +26,6 @@ export interface HostRequestSpec<
   readonly params: RequestOfMethod<Registry, Method>;
 }
 
-/**
- * Maps a request's cache-identity `params` to the params actually sent on the
- * wire, evaluated at FETCH time rather than render time.
- *
- * The inverse of `cacheKeyIdentity`: that adds identity which is never sent,
- * this sends fields which are never identity. Use it for FETCH DIRECTIVES -
- * fields that steer how the host serves a request without changing WHICH
- * resource is being requested (e.g. `worktree.listAllForHost`'s
- * `forceRefresh`). Putting such a field in `params` would fork a second cache
- * entry, so the refreshed data would never reach the view reading the first.
- *
- * `undefined` sends `params` verbatim, which is what every caller with no
- * directive wants.
- */
-export type HostRequestParamsMapper<
-  Registry extends VersionedRpcRegistry,
-  Method extends keyof Registry & string,
-> = (
-  params: RequestOfMethod<Registry, Method>,
-) => RequestOfMethod<Registry, Method>;
-
 export interface UseHostQueriesOptions<
   Registry extends VersionedRpcRegistry,
   Method extends keyof Registry & string,
@@ -58,9 +37,6 @@ export interface UseHostQueriesOptions<
    * this for renderer-local dimensions such as the authenticated user.
    */
   readonly cacheKeyIdentity: string | undefined;
-  /** See {@link HostRequestParamsMapper}. `undefined` sends `params` as-is. */
-  readonly toRequestParams:
-    HostRequestParamsMapper<Registry, Method> | undefined;
   readonly options: Pick<
     UseQueryOptions<
       ResponseOfMethod<Registry, Method>,
@@ -120,9 +96,6 @@ export interface UseHostQueriesWithResponseMapOptions<
   readonly client: HostClient<Registry> | null;
   readonly requests: ReadonlyArray<HostRequestSpec<Registry, Method>>;
   readonly cacheKeyIdentity: string | undefined;
-  /** See {@link HostRequestParamsMapper}. `undefined` sends `params` as-is. */
-  readonly toRequestParams:
-    HostRequestParamsMapper<Registry, Method> | undefined;
   readonly options: Pick<
     UseQueryOptions<TData, HostRpcError, TData>,
     "staleTime" | "enabled" | "gcTime" | "refetchInterval" | "placeholderData"
@@ -204,15 +177,7 @@ export function useHostQueriesWithResponseMap<
           hostClientUnavailableError(request.method),
         );
       }
-      // Resolved HERE, not at render time: a fetch directive (see
-      // `HostRequestParamsMapper`) must reflect the state at the moment the
-      // fetch starts - a render-time snapshot would miss a refresh window
-      // that opened after the last render.
-      const requestParams =
-        args.toRequestParams === undefined
-          ? request.params
-          : args.toRequestParams(request.params);
-      const response = await client.request(request.method, requestParams);
+      const response = await client.request(request.method, request.params);
       return mapResponse({ response, queryClient, queryKey });
     };
     return queryOptions<TData, HostRpcError, TData>({
