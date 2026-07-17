@@ -6,15 +6,22 @@ import {
 import { getChatSessionRegistry } from "@/lib/registries/chat-session-registry";
 import { reconcileStoreSubscriptions } from "@/lib/registries/reconcile-store-subscriptions";
 import {
-  isChatRunInProgress,
   type ChatSessionState,
   type ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
+import {
+  chatActivityIndicator,
+  type ChatActivityIndicator,
+} from "@/components/epic-canvas/renderers/chat-tile-session-state";
 
 const CHAT_REGISTRY = getChatSessionRegistry();
 
-export type EpicActivityStatus = "idle" | "running";
+export type EpicActivityStatus = "idle" | "turn" | "background";
 
+/**
+ * Aggregates this epic's live chat sessions into the activity tier rendered
+ * by task-level surfaces. A turn wins over background work across chats.
+ */
 export function useEpicActivityStatus(
   epicId: string | null,
 ): EpicActivityStatus {
@@ -26,35 +33,46 @@ export function useEpicActivityStatus(
     [epicId, liveAgentIds],
   );
   const getLocalChatActivity = useCallback(
-    () => getEpicChatSessionActivity(epicId, liveAgentIds),
-    [epicId, liveAgentIds],
+    () => getEpicChatSessionActivity(epicId, activeAgentIds, liveAgentIds),
+    [activeAgentIds, epicId, liveAgentIds],
   );
-  const localChatActivity = useSyncExternalStore(
+  return useSyncExternalStore(
     subscribeLocalChatActivity,
     getLocalChatActivity,
     () => "idle" as const,
   );
-  return hasLiveActiveAgent(activeAgentIds, liveAgentIds) ||
-    localChatActivity === "running"
-    ? "running"
-    : "idle";
 }
 
+/**
+ * Reads session activity first, then conservatively treats an unresolved
+ * awareness signal as a turn while its chat subscription catches up.
+ */
 function getEpicChatSessionActivity(
   epicId: string | null,
+  activeAgentIds: ReadonlySet<string>,
   liveAgentIds: ReadonlySet<string>,
 ): EpicActivityStatus {
   if (epicId === null) return "idle";
-  let hasRunningChat = false;
+  let hasBackgroundActivity = false;
+  const locallyResolvedAgentIds = new Set<string>();
   for (const handle of CHAT_REGISTRY.listHandles()) {
     if (handle.epicId !== epicId) continue;
     if (!liveAgentIds.has(handle.chatId)) continue;
     const activity = chatSessionActivity(handle.store.getState());
-    if (activity === "running") hasRunningChat = true;
+    if (activity === "turn") return "turn";
+    if (activity === "background") {
+      hasBackgroundActivity = true;
+      locallyResolvedAgentIds.add(handle.chatId);
+    }
   }
-  return hasRunningChat ? "running" : "idle";
+  const hasUnresolvedActiveAgent = [...activeAgentIds].some(
+    (id) => liveAgentIds.has(id) && !locallyResolvedAgentIds.has(id),
+  );
+  if (hasUnresolvedActiveAgent) return "turn";
+  return hasBackgroundActivity ? "background" : "idle";
 }
 
+/** Subscribes only to live chats belonging to this epic. */
 function subscribeEpicChatSessionActivity(
   epicId: string | null,
   liveAgentIds: ReadonlySet<string>,
@@ -92,15 +110,9 @@ function subscribeEpicChatSessionActivity(
   };
 }
 
-function chatSessionActivity(state: ChatSessionState): EpicActivityStatus {
-  return isChatRunInProgress(state.runStatus) ? "running" : "idle";
-}
-
-function hasLiveActiveAgent(
-  activeAgentIds: ReadonlySet<string>,
-  liveAgentIds: ReadonlySet<string>,
-): boolean {
-  return [...activeAgentIds].some((id) => liveAgentIds.has(id));
+/** Projects the chat session's indicator tier for task-level aggregation. */
+function chatSessionActivity(state: ChatSessionState): ChatActivityIndicator {
+  return chatActivityIndicator(state);
 }
 
 function noopUnsubscribe(): void {}
