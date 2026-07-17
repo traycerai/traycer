@@ -32,7 +32,6 @@ import {
   agentSummarySchemaV30,
   sendAgentMessageRequestSchema,
   sendAgentMessageResponseSchema,
-  sendAgentMessageResponseSchemaV11,
   stopAgentRequestSchema,
   stopAgentResponseSchema,
 } from "@traycer/protocol/host/agent/shared";
@@ -428,34 +427,6 @@ export const agentSendMessageV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: sendAgentMessageRequestSchema,
   responseSchema: sendAgentMessageResponseSchema,
-});
-
-/**
- * `agent.sendMessage@1.1` - response additionally returns `deliveryId` and
- * `deliveryGuarantee` (`tracked-v2` | `legacy-best-effort`). Request is
- * unchanged from `@1.0`.
- */
-export const agentSendMessageV11 = defineRpcContract({
-  method: "agent.sendMessage",
-  schemaVersion: { major: 1, minor: 1 } as const,
-  requestSchema: sendAgentMessageRequestSchema,
-  responseSchema: sendAgentMessageResponseSchemaV11,
-});
-
-// A v1.0 response has no delivery tracking. Upgrade fabricates honest
-// legacy-best-effort defaults and never invents a tracked delivery id.
-export const agentSendMessageUpgradeV10ToV11 = defineUpgradePath<
-  typeof agentSendMessageV10,
-  typeof agentSendMessageV11
->({
-  from: agentSendMessageV10.schemaVersion,
-  to: agentSendMessageV11.schemaVersion,
-  upgradeRequest: (request) => request,
-  upgradeResponse: (response) => ({
-    ...response,
-    deliveryId: null,
-    deliveryGuarantee: "legacy-best-effort",
-  }),
 });
 
 export const agentGetTranscriptV10 = defineRpcContract({

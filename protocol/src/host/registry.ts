@@ -34,8 +34,6 @@ import {
   agentSelectionGuideGlobalResetV10,
   agentSelectionGuideGlobalSetV10,
   agentSendMessageV10,
-  agentSendMessageV11,
-  agentSendMessageUpgradeV10ToV11,
   agentStopV10,
 } from "@traycer/protocol/host/agent/contracts";
 import {
@@ -45,10 +43,7 @@ import {
 } from "@traycer/protocol/host/agent/profiles";
 import {
   agentInboxReadV10,
-  agentInboxReadV11,
-  agentInboxReadUpgradeV10ToV11,
   agentInboxSubscribeV10,
-  agentInboxSubscribeV11,
 } from "@traycer/protocol/host/agent/inbox";
 import {
   agentGuiGetPlanV10,
@@ -78,8 +73,6 @@ import {
 import {
   agentTuiGenerateTitleV10,
   agentTuiTurnEndedV10,
-  agentTuiTurnEndedV11,
-  agentTuiTurnEndedUpgradeV10ToV11,
   agentTuiListHarnessesV10,
   agentTuiPrepareLaunchV10,
   agentTuiRecordActivityV10,
@@ -2199,15 +2192,11 @@ const HOST_RPC_REGISTRY_DEFINITION = {
   },
   "agent.tui.turnEnded": {
     1: {
-      latestMinor: 1,
+      latestMinor: 0,
       versions: {
         0: {
           contract: agentTuiTurnEndedV10,
           upgradeFromPreviousVersion: null,
-        },
-        1: {
-          contract: agentTuiTurnEndedV11,
-          upgradeFromPreviousVersion: agentTuiTurnEndedUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -2386,15 +2375,11 @@ const HOST_RPC_REGISTRY_DEFINITION = {
   },
   "agent.sendMessage": {
     1: {
-      latestMinor: 1,
+      latestMinor: 0,
       versions: {
         0: {
           contract: agentSendMessageV10,
           upgradeFromPreviousVersion: null,
-        },
-        1: {
-          contract: agentSendMessageV11,
-          upgradeFromPreviousVersion: agentSendMessageUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -2414,15 +2399,11 @@ const HOST_RPC_REGISTRY_DEFINITION = {
   },
   "agent.inbox.read": {
     1: {
-      latestMinor: 1,
+      latestMinor: 0,
       versions: {
         0: {
           contract: agentInboxReadV10,
           upgradeFromPreviousVersion: null,
-        },
-        1: {
-          contract: agentInboxReadV11,
-          upgradeFromPreviousVersion: agentInboxReadUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -3931,13 +3912,10 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
   },
   "agent.inbox.subscribe": {
     1: {
-      latestMinor: 1,
+      latestMinor: 0,
       versions: {
         0: {
           contract: agentInboxSubscribeV10,
-        },
-        1: {
-          contract: agentInboxSubscribeV11,
         },
       },
     },

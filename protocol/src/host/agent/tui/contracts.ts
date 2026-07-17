@@ -13,9 +13,7 @@ import {
   recordTuiAgentActivityRequestSchemaV11,
   recordTuiAgentActivityResponseSchema,
   tuiAgentTurnEndedRequestSchema,
-  tuiAgentTurnEndedRequestSchemaV11,
   tuiAgentTurnEndedResponseSchema,
-  tuiAgentTurnEndedResponseSchemaV11,
 } from "@traycer/protocol/host/agent/tui/unary-schemas";
 
 // ─── TUI-surface catalog + launch (`agent.tui.*`) ─────────────────────────
@@ -46,39 +44,6 @@ export const agentTuiTurnEndedV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: tuiAgentTurnEndedRequestSchema,
   responseSchema: tuiAgentTurnEndedResponseSchema,
-});
-
-/**
- * `agent.tui.turnEnded@1.1` - request carries session/transcript/leaf inputs
- * for causal service proof and epoch replay identity; response returns the
- * accepted leaf UUID for idempotent replay.
- */
-export const agentTuiTurnEndedV11 = defineRpcContract({
-  method: "agent.tui.turnEnded",
-  schemaVersion: { major: 1, minor: 1 } as const,
-  requestSchema: tuiAgentTurnEndedRequestSchemaV11,
-  responseSchema: tuiAgentTurnEndedResponseSchemaV11,
-});
-
-// A v1.0 request carries none of the proof/replay inputs. Upgrade fabricates
-// null defaults (nothing observed / no prior leaf). A v1.0 response has no
-// accepted leaf UUID.
-export const agentTuiTurnEndedUpgradeV10ToV11 = defineUpgradePath<
-  typeof agentTuiTurnEndedV10,
-  typeof agentTuiTurnEndedV11
->({
-  from: agentTuiTurnEndedV10.schemaVersion,
-  to: agentTuiTurnEndedV11.schemaVersion,
-  upgradeRequest: (request) => ({
-    ...request,
-    observedHarnessSessionId: null,
-    transcriptPath: null,
-    previouslyReportedLeafUuid: null,
-  }),
-  upgradeResponse: (response) => ({
-    ...response,
-    acceptedLeafUuid: null,
-  }),
 });
 
 export const agentTuiRecordActivityV10 = defineRpcContract({
