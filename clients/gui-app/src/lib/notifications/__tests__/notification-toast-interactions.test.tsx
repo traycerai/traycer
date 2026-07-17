@@ -18,7 +18,7 @@ vi.mock("next-themes", () => ({
   useTheme: () => ({ theme: "dark" }),
 }));
 
-const notification: MergedNotificationRow = {
+const NOTIFICATION: MergedNotificationRow = {
   feedId: "host:n-1",
   source: "host",
   sourceId: "n-1",
@@ -51,7 +51,7 @@ describe("notification toast interactions", () => {
     render(<Toaster />);
 
     act(() => {
-      displayNotificationRows([notification], {
+      displayNotificationRows([NOTIFICATION], {
         showNotification: vi.fn(() => Promise.resolve()),
         playChime: vi.fn(),
         onToastClick,
@@ -68,10 +68,10 @@ describe("notification toast interactions", () => {
     fireEvent.click(toastSurface);
 
     expect(onToastClick).toHaveBeenCalledOnce();
-    expect(onToastClick).toHaveBeenCalledWith(notification, expect.any(Number));
+    expect(onToastClick).toHaveBeenCalledWith(NOTIFICATION, expect.any(Number));
     const activatedAt = onToastClick.mock.calls[0]?.[1];
     expect(activatedAt).toBeGreaterThanOrEqual(beforeClick);
-    expect(activatedAt).not.toBe(notification.createdAt);
+    expect(activatedAt).not.toBe(NOTIFICATION.createdAt);
   });
 
   it("does not activate when the close control is clicked", async () => {
@@ -79,7 +79,7 @@ describe("notification toast interactions", () => {
     render(<Toaster />);
 
     act(() => {
-      displayNotificationRows([notification], {
+      displayNotificationRows([NOTIFICATION], {
         showNotification: vi.fn(() => Promise.resolve()),
         playChime: vi.fn(),
         onToastClick,
