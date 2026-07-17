@@ -1501,6 +1501,7 @@ describe("createChatSessionStore", () => {
   });
 
   it("refuses edit and resend while staged worktree metadata is unresolved", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
     useWorktreeIntentMemoryStore.getState().resetForTests();
     const harness = createHarness();
     emitSnapshot(harness.callbacks(), "owner");
