@@ -232,15 +232,44 @@ const workflowBackgroundItemSchema = z.object({
   agentsFinished: z.number().nullable().default(null),
 });
 
-export const backgroundItemKindSchema = z.enum([
+// ─── Frozen `chat.subscribe@1.3` background-item shapes (pre-`mcp`) ────────
+//
+// `1.4` adds the `mcp` kind below. A released ≤1.3 peer must never observe
+// it - the host degrades `mcp` items to `command` for those lines - and these
+// frozen schemas keep the `1.3` frames parsing only shapes a real 1.3 peer
+// could produce. Do not add `1.4`-only kinds here.
+export const backgroundItemKindSchemaV13 = z.enum([
   ...backgroundItemKindSchemaV12.options,
   "workflow",
+]);
+export const backgroundItemSchemaV13 = z.discriminatedUnion("kind", [
+  ...backgroundItemSchemaV12.def.options,
+  workflowBackgroundItemSchema,
+]);
+
+// One currently-running MCP background item (`chat.subscribe@1.4`) - an MCP
+// tool call the CLI moved to the background after it outlived the
+// auto-background threshold (CLI 2.1.212+, `task_started` with task_type
+// "mcp_task"). Unlike a `command` row there is no shell command line to echo:
+// `serverName`/`toolName` carry the MCP identity (split from
+// `mcp__<server>__<tool>`) so the renderer can title the row and give MCP
+// work its own presentation instead of a pseudo-command one.
+const mcpBackgroundItemSchema = z.object({
+  ...backgroundItemBaseFields,
+  kind: z.literal("mcp"),
+  serverName: z.string(),
+  toolName: z.string(),
+});
+
+export const backgroundItemKindSchema = z.enum([
+  ...backgroundItemKindSchemaV13.options,
+  "mcp",
 ]);
 export type BackgroundItemKind = z.infer<typeof backgroundItemKindSchema>;
 
 export const backgroundItemSchema = z.discriminatedUnion("kind", [
-  ...backgroundItemSchemaV12.def.options,
-  workflowBackgroundItemSchema,
+  ...backgroundItemSchemaV13.def.options,
+  mcpBackgroundItemSchema,
 ]);
 export type BackgroundItem = z.infer<typeof backgroundItemSchema>;
 
@@ -1378,7 +1407,7 @@ const chatSnapshotSchemaV13 = z.object({
   missingWorktreePaths: z.array(z.string()),
   pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
   accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
-  backgroundItems: z.array(backgroundItemSchema).optional(),
+  backgroundItems: z.array(backgroundItemSchemaV13).optional(),
   turnInProgress: z.boolean().optional(),
 });
 
@@ -1389,9 +1418,23 @@ const chatSubscribeSnapshotServerFrameSchemaV13 = z.object({
   snapshot: chatSnapshotSchemaV13,
 });
 
+// `turnStateChanged` carries no sender, so `1.3` originally reused the live
+// frame - until `1.4` added the `mcp` background-item kind, which rides this
+// broadcast too. Pinned with the pre-`mcp` item union so the released `1.3`
+// line cannot observe the new kind.
+const chatSubscribeTurnStateChangedServerFrameSchemaV13 = z.object({
+  kind: z.literal("turnStateChanged"),
+  ...textFrameFields,
+  ...chatReferenceFields,
+  runStatus: chatRunStatusSchema,
+  activeTurn: chatActiveTurnSchema.nullable(),
+  backgroundItems: z.array(backgroundItemSchemaV13).optional(),
+  turnInProgress: z.boolean().optional(),
+});
+
 const chatSubscribeServerFrameSchemaV13 = z.discriminatedUnion("kind", [
   chatSubscribeSnapshotServerFrameSchemaV13,
-  chatSubscribeTurnStateChangedServerFrameSchema,
+  chatSubscribeTurnStateChangedServerFrameSchemaV13,
   ...chatSubscribeSharedServerFrameSchemasPreInReplyTo,
 ]);
 
@@ -1403,12 +1446,14 @@ export const chatSubscribeV13 = defineStreamRpcContract({
   clientFrameSchema: chatSubscribeClientFrameSchema,
 });
 
-// ─── Live `chat.subscribe@1.4` contract (adds `inReplyTo` to senders) ───────
+// ─── Live `chat.subscribe@1.4` contract (`inReplyTo` + `mcp` items) ─────────
 //
 // The live serverFrame carries `inReplyTo` on every agent sender (user-message,
-// assistant, queue item, event `actor`, steer). Older peers negotiate ≤1.3 and
-// receive the frozen frames above, which strip the key. The client frame is
-// identical to `1.3` (`inReplyTo` is host→client only).
+// assistant, queue item, event `actor`, steer) and the `mcp` background-item
+// kind (CLI auto-backgrounded MCP tool calls). Older peers negotiate ≤1.3 and
+// receive the frozen frames above, which strip the key and never carry `mcp`
+// items (the host degrades them to `command`). The client frame is identical
+// to `1.3` (`inReplyTo` is host→client only).
 
 export const chatSubscribeV14 = defineStreamRpcContract({
   method: "chat.subscribe",
