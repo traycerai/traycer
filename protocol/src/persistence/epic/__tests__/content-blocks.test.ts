@@ -375,6 +375,7 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
           summary: "ran",
           blockId: "",
           outputFile: null,
+          mcp: null,
         },
       ],
       wakeTriggers: undefined,
@@ -408,6 +409,7 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
         summary: "s",
         blockId: "",
         outputFile: null,
+        mcp: null,
       },
     ]);
     expect("wakeTriggers" in parsed).toBe(false);
@@ -438,6 +440,7 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
       summary: "woke",
       blockId: "",
       outputFile: null,
+      mcp: null,
     });
     expect("wakeTriggers" in parsed).toBe(false);
   });
@@ -475,6 +478,7 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
           summary: "woke",
           blockId: "",
           outputFile: null,
+          mcp: null,
         },
       ],
     };
@@ -498,6 +502,7 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
           summary: "done",
           blockId: "sub-block",
           outputFile: null,
+          mcp: null,
         },
         {
           kind: "wakeup",
@@ -506,6 +511,7 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
           summary: "woke",
           blockId: "",
           outputFile: null,
+          mcp: null,
         },
       ],
     };
@@ -532,6 +538,7 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
           summary: "woke",
           blockId: "",
           outputFile: null,
+          mcp: null,
         },
       ],
     };
@@ -550,6 +557,7 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
           summary: "woke",
           blockId: "",
           outputFile: null,
+          mcp: null,
         },
       ],
     };

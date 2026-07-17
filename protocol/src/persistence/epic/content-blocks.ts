@@ -565,6 +565,17 @@ export const autonomousResumeTriggerSchema = z.object({
   summary: z.string(),
   blockId: z.string().default(""),
   outputFile: autonomousResumeOutputFileSchema.nullable().default(null),
+  // Structured identity of an auto-backgrounded MCP tool call (CLI 2.1.212+).
+  // Deliberately NOT a new `kind` enum value: `kind` stays `"command"` for
+  // these triggers because an unknown enum value fails the WHOLE chat's
+  // `safeParse` on an older host, while an unknown defaulted key is silently
+  // stripped (the same constraint that forced `wakeTriggers` out of `triggers`
+  // above). Renderers prefer this identity when present and fall back to the
+  // command presentation when absent/stripped.
+  mcp: z
+    .object({ serverName: z.string(), toolName: z.string() })
+    .nullable()
+    .default(null),
 });
 export type AutonomousResumeTrigger = z.infer<
   typeof autonomousResumeTriggerSchema
@@ -653,7 +664,11 @@ export function decodeAutonomousResumeBlock(
     triggers: [
       ...rest.triggers,
       ...wakeTriggers.map(
-        (wake): AutonomousResumeTrigger => ({ ...wake, kind: "wakeup" }),
+        (wake): AutonomousResumeTrigger => ({
+          ...wake,
+          kind: "wakeup",
+          mcp: null,
+        }),
       ),
     ],
   };
@@ -676,7 +691,10 @@ export function encodeAutonomousResumeBlock(
   const triggers = domain.triggers.filter((trigger) => !isWakeupTrigger(trigger));
   const wakeTriggers = domain.triggers
     .filter(isWakeupTrigger)
-    .map(({ kind: _kind, ...wake }): AutonomousResumeWakeTrigger => wake);
+    .map(
+      ({ kind: _kind, mcp: _mcp, ...wake }): AutonomousResumeWakeTrigger =>
+        wake,
+    );
   return { ...domain, triggers, wakeTriggers };
 }
 

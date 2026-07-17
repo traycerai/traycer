@@ -259,6 +259,10 @@ const mcpBackgroundItemSchema = z.object({
   kind: z.literal("mcp"),
   serverName: z.string(),
   toolName: z.string(),
+  // Epoch ms of the promotion moment (the CLI's `task_started`), anchoring the
+  // row's live elapsed counter. Nullable-defaulted so a frame from a host that
+  // predates the field still parses; the renderer hides the counter on null.
+  startedAt: z.number().nullable().default(null),
 });
 
 export const backgroundItemKindSchema = z.enum([

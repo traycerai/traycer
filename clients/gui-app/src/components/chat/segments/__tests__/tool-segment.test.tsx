@@ -328,6 +328,68 @@ describe("<ToolSegment /> input rendering", () => {
     expect(screen.queryByText(/"pattern":/)).toBeNull();
   });
 
+  it("labels a backgrounded MCP call's output as Result and pretty-prints JSON", () => {
+    render(
+      <ToolSegment
+        headerFindUnitId={null}
+        id="mcp-bg-tool-1"
+        toolName="mcp__probe__slow_op"
+        {...inputProps("mcp__probe__slow_op", {})}
+        error={null}
+        agentMessageSend={null}
+        isStreaming={false}
+        endState={null}
+        stopped={false}
+        progress={null}
+        backgroundOutput={{
+          stdout: '{"answer":42,"items":[1,2]}',
+          stderr: "",
+          truncated: false,
+        }}
+        backgroundTask
+        startedAt={0}
+        durationMs={null}
+        variant="card"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /slow_op/ }));
+    expect(screen.getByText("Result")).toBeTruthy();
+    expect(screen.queryByText("Output")).toBeNull();
+    // Re-indented JSON, not the single-line tail.
+    expect(screen.getByText(/"answer": 42/)).toBeTruthy();
+  });
+
+  it("keeps non-JSON MCP background output verbatim under the Result label", () => {
+    render(
+      <ToolSegment
+        headerFindUnitId={null}
+        id="mcp-bg-tool-2"
+        toolName="mcp__probe__slow_op"
+        {...inputProps("mcp__probe__slow_op", {})}
+        error={null}
+        agentMessageSend={null}
+        isStreaming={false}
+        endState={null}
+        stopped={false}
+        progress={null}
+        backgroundOutput={{
+          stdout: "plain text result",
+          stderr: "",
+          truncated: false,
+        }}
+        backgroundTask
+        startedAt={0}
+        durationMs={null}
+        variant="card"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /slow_op/ }));
+    expect(screen.getByText("Result")).toBeTruthy();
+    expect(screen.getByText("plain text result")).toBeTruthy();
+  });
+
   it("renders a self-describing call as a non-expandable header (no toggle)", () => {
     render(
       <ToolSegment

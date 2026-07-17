@@ -96,6 +96,7 @@ interface ToolSegmentBodyProps {
   readonly error: string | null;
   readonly hasError: boolean;
   readonly backgroundOutput: BackgroundTaskOutput | null;
+  readonly toolName: string;
 }
 
 type ReceiverNode = ArtifactProjection | ChatProjection | TuiAgentProjection;
@@ -327,6 +328,7 @@ function GenericToolSegment(props: ToolSegmentProps) {
       error={isStopped ? null : error}
       hasError={hasError}
       backgroundOutput={backgroundOutput}
+      toolName={toolName}
     />
   ) : null;
 
@@ -467,6 +469,7 @@ function runningToolLine(
 }
 
 function ToolSegmentBody(props: ToolSegmentBodyProps) {
+  const isMcpTool = props.toolName.startsWith("mcp__");
   const backgroundStdout = props.backgroundOutput?.stdout ?? "";
   const backgroundStderr = props.backgroundOutput?.stderr ?? "";
   return (
@@ -475,7 +478,12 @@ function ToolSegmentBody(props: ToolSegmentBodyProps) {
         <ToolInputPanel detail={props.expandDetail} />
       ) : null}
       <BackgroundOutputPanels
-        stdout={backgroundStdout}
+        stdout={
+          isMcpTool
+            ? mcpResultDisplayContent(backgroundStdout)
+            : backgroundStdout
+        }
+        stdoutLabel={isMcpTool ? "Result" : "Output"}
         stderr={backgroundStderr}
         truncated={props.backgroundOutput?.truncated === true}
       />
@@ -496,8 +504,25 @@ function ToolSegmentBody(props: ToolSegmentBodyProps) {
   );
 }
 
+// A backgrounded MCP call's captured output is the tool's result payload, not
+// shell output. When the tail parses as a JSON object/array, re-indent it so
+// the panel shows structure instead of a single wrapped line; anything else
+// (plain text, or a tail truncated mid-document) renders verbatim.
+function mcpResultDisplayContent(stdout: string): string {
+  const trimmed = stdout.trim();
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return stdout;
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (typeof parsed !== "object" || parsed === null) return stdout;
+    return JSON.stringify(parsed, null, 2);
+  } catch {
+    return stdout;
+  }
+}
+
 function BackgroundOutputPanels(props: {
   readonly stdout: string;
+  readonly stdoutLabel: string;
   readonly stderr: string;
   readonly truncated: boolean;
 }) {
@@ -505,7 +530,7 @@ function BackgroundOutputPanels(props: {
     <>
       {props.stdout.length > 0 ? (
         <SegmentPanel
-          label="Output"
+          label={props.stdoutLabel}
           copyValue={props.stdout}
           tone="default"
           bodyChrome="framed"
