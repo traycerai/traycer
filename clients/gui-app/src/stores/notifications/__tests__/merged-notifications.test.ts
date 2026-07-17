@@ -74,6 +74,7 @@ function appLocalEntry(
     payload: { kind: "chat", epicId: "epic-1", chatId: "chat-1" },
     message: "Worktree setup failed",
     detail: null,
+    displayedUpdatedAt: null,
   };
 }
 

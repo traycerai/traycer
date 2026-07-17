@@ -2,6 +2,8 @@ export {
   PERSIST_PREFIX,
   PERSIST_STORES,
   STORE_KEYS,
+  appLocalNotificationDisplayReceiptKey,
+  appLocalNotificationDisplayReceiptPrefix,
   appLocalNotificationsKey,
   composerHarnessMemoryKey,
   composerRunSettingsKey,

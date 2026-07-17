@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   PERSIST_STORES,
+  appLocalNotificationDisplayReceiptKey,
+  appLocalNotificationDisplayReceiptPrefix,
   appLocalNotificationsKey,
   composerHarnessMemoryKey,
   composerRunSettingsKey,
@@ -145,6 +147,21 @@ describe("persist key builders — output-preserving against current source", ()
     );
     expect(worktreeListingCacheKey("host-1")).toBe(
       "traycer-gui-app:worktree-listing-cache:host-1",
+    );
+  });
+
+  it("scopes app-local display receipts by user and exact row version", () => {
+    expect(appLocalNotificationDisplayReceiptPrefix("user-1")).toBe(
+      "traycer-gui-app:app-local-notification-display-receipt:user-1",
+    );
+    expect(
+      appLocalNotificationDisplayReceiptKey({
+        userId: "user-1",
+        notificationId: "host.error:transport",
+        updatedAt: 42,
+      }),
+    ).toBe(
+      "traycer-gui-app:app-local-notification-display-receipt:user-1:host.error%3Atransport:42",
     );
   });
 
