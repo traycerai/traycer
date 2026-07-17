@@ -4,7 +4,10 @@ import { createJSONStorage, persist } from "zustand/middleware";
 import { v4 as uuidv4 } from "uuid";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type { NotificationPayload } from "@/lib/notifications";
-import { notificationPayloadBelongsToEntity } from "@/lib/notifications";
+import {
+  notificationPayloadBelongsToEntity,
+  parseNotificationPayload,
+} from "@/lib/notifications";
 import { appLocalNotificationsKey, basePersistOptions } from "@/lib/persist";
 import type { HostNotificationsEntityRef } from "@traycer/protocol/host/notifications/contracts";
 import { clearAppLocalDisplayReceipts } from "@/lib/notifications/app-local-display-receipts";
@@ -27,7 +30,6 @@ export const APP_LOCAL_RESURFACE_COOLDOWN_MS = 5 * 60_000;
 export type AppLocalNotificationKind =
   | "terminal.closed"
   | "terminal.crashed"
-  | "worktree.setup.failed"
   | "stream.transport.error"
   | "host.error";
 
@@ -130,6 +132,94 @@ function pendingDisplayEntry(
   entry: AppLocalNotificationInput,
 ): AppLocalNotificationEntry {
   return { ...entry, displayedUpdatedAt: null };
+}
+
+type AppLocalNotificationsPersistedState = Pick<
+  AppLocalNotificationsState,
+  "byId" | "orderedIds" | "unreadCount"
+>;
+
+/**
+ * v1 -> v2 migration. Workspace failures now live in the host-owned durable
+ * feed, so retaining their old localStorage rows would duplicate the migrated
+ * notification after upgrade. Rebuild the persisted projection while dropping
+ * only that retired kind; malformed legacy rows are discarded defensively.
+ */
+export function migrateAppLocalNotificationsPersistedState(
+  persisted: unknown,
+): AppLocalNotificationsPersistedState {
+  if (!isRecord(persisted) || !isRecord(persisted.byId)) {
+    return { byId: {}, orderedIds: [], unreadCount: 0 };
+  }
+  const byId = Object.fromEntries(
+    Object.entries(persisted.byId)
+      .map(([id, value]) => parsePersistedAppLocalEntry(id, value))
+      .filter((entry): entry is AppLocalNotificationEntry => entry !== null)
+      .map((entry) => [entry.id, entry]),
+  );
+  const projection = projectAppLocalNotifications(byId);
+  return {
+    byId,
+    orderedIds: projection.orderedIds,
+    unreadCount: projection.unreadCount,
+  };
+}
+
+function parsePersistedAppLocalEntry(
+  id: string,
+  value: unknown,
+): AppLocalNotificationEntry | null {
+  if (!isRecord(value) || !isAppLocalNotificationKind(value.kind)) {
+    return null;
+  }
+  if (
+    typeof value.updatedAt !== "number" ||
+    !Number.isFinite(value.updatedAt) ||
+    (value.readAt !== null &&
+      (typeof value.readAt !== "number" || !Number.isFinite(value.readAt))) ||
+    (value.sourceRef !== null && typeof value.sourceRef !== "string") ||
+    typeof value.message !== "string" ||
+    (value.detail !== null && typeof value.detail !== "string") ||
+    !isPersistedDisplayReceipt(value.displayedUpdatedAt)
+  ) {
+    return null;
+  }
+  return {
+    id,
+    updatedAt: value.updatedAt,
+    readAt: value.readAt,
+    kind: value.kind,
+    sourceRef: value.sourceRef,
+    payload: parseNotificationPayload(value.payload),
+    message: value.message,
+    detail: value.detail,
+    displayedUpdatedAt: value.displayedUpdatedAt,
+  };
+}
+
+function isPersistedDisplayReceipt(
+  value: unknown,
+): value is number | null | undefined {
+  return (
+    value === undefined ||
+    value === null ||
+    (typeof value === "number" && Number.isFinite(value))
+  );
+}
+
+function isAppLocalNotificationKind(
+  value: unknown,
+): value is AppLocalNotificationKind {
+  return (
+    value === "terminal.closed" ||
+    value === "terminal.crashed" ||
+    value === "stream.transport.error" ||
+    value === "host.error"
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object";
 }
 
 export function createAppLocalNotificationsStore(initialName: string) {
@@ -335,12 +425,15 @@ export function createAppLocalNotificationsStore(initialName: string) {
       }),
       {
         ...basePersistOptions(initialName),
+        version: 2,
         storage: createJSONStorage(() => window.localStorage),
         partialize: (state) => ({
           byId: state.byId,
           orderedIds: state.orderedIds,
           unreadCount: state.unreadCount,
         }),
+        migrate: (persisted) =>
+          migrateAppLocalNotificationsPersistedState(persisted),
       },
     ),
   );
@@ -391,27 +484,6 @@ export function emitTerminalCrashedNotification(input: {
     detail: isRecoveryExhausted
       ? "Reconnect manually to try again."
       : "The terminal process ended with an error.",
-  });
-}
-
-export function emitWorktreeSetupFailedNotification(input: {
-  readonly eventId: string;
-  readonly epicId: string;
-  readonly chatId: string;
-}): void {
-  useAppLocalNotificationsStore.getState().upsert({
-    id: `worktree.setup.failed:${input.eventId}`,
-    updatedAt: Date.now(),
-    readAt: null,
-    kind: "worktree.setup.failed",
-    sourceRef: input.eventId,
-    payload: {
-      kind: "chat",
-      epicId: input.epicId,
-      chatId: input.chatId,
-    },
-    message: "Worktree setup failed before the first message could run.",
-    detail: null,
   });
 }
 

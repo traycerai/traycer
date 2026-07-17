@@ -4,14 +4,14 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ActiveHostWorkspaceControls } from "../host-workspace-selector";
-import type { WorktreeWorkspaceSummary } from "@traycer/protocol/host/worktree-schemas";
+import type { WorktreeWorkspaceSummaryV13 } from "@traycer/protocol/host/worktree-schemas";
 import type { ResolvedFolder } from "@/lib/workspace/resolved-folder";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 interface MockSummariesQuery {
   readonly data:
     | {
-        readonly workspaces: readonly WorktreeWorkspaceSummary[];
+        readonly workspaces: readonly WorktreeWorkspaceSummaryV13[];
       }
     | undefined;
   readonly isFetching: boolean;
@@ -78,7 +78,7 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-const GIT_SUMMARY: WorktreeWorkspaceSummary = {
+const GIT_SUMMARY: WorktreeWorkspaceSummaryV13 = {
   workspacePath: "/workspace/app",
   isGitRepo: true,
   repoIdentifier: { owner: "acme", repo: "app" },
@@ -93,15 +93,17 @@ const GIT_SUMMARY: WorktreeWorkspaceSummary = {
     },
   ],
   scripts: null,
+  resolvedAt: 1,
 };
 
-const NON_GIT_SUMMARY: WorktreeWorkspaceSummary = {
+const NON_GIT_SUMMARY: WorktreeWorkspaceSummaryV13 = {
   workspacePath: "/workspace/app",
   isGitRepo: false,
   repoIdentifier: null,
   mainBranch: null,
   worktrees: [],
   scripts: null,
+  resolvedAt: 1,
 };
 
 vi.mock("@/components/ui/select", () => ({
@@ -352,6 +354,36 @@ describe("landing workspace summary empty state", () => {
       "Loading folder metadata",
     );
     expect(screen.queryByText("Unavailable")).toBeNull();
+
+    queryClient.clear();
+  });
+
+  it("keeps create and import affordances disabled while a schema-safe row is unresolved", () => {
+    mocks.resolvedWorkspace.current = {
+      folders: [
+        {
+          kind: "resolved",
+          path: "/workspace/app",
+          name: "app",
+          repoIdentifier: { owner: "acme", repo: "app" },
+        },
+      ],
+    };
+    mocks.summariesQuery.current = {
+      data: {
+        workspaces: [{ ...GIT_SUMMARY, resolvedAt: null }],
+      },
+      isFetching: false,
+      isPending: false,
+      isLoading: false,
+    };
+
+    const queryClient = renderControl("stacked");
+
+    expect(screen.getByTestId("folder-row-loading").textContent).toContain(
+      "Loading folder metadata",
+    );
+    expect(screen.queryByTestId("folder-location-trigger")).toBeNull();
 
     queryClient.clear();
   });

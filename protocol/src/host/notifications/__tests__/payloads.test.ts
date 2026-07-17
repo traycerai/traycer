@@ -55,6 +55,24 @@ describe("parseKnownHostNotificationPayload", () => {
         outcome: "errored",
       }),
     ).toMatchObject({ kind: "agent_stalled", reason: "provider_buffering" });
+    expect(
+      parseKnownHostNotificationPayload({
+        kind: "workspace_operation_failed",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        chatTitle: "Deploy checkout fix",
+        taskTitle: "Checkout notifications",
+        operation: "setup",
+        title: "Workspace setup failed",
+        message: "Setup exited with code 1.",
+        setupExitCode: 1,
+        outcome: "errored",
+      }),
+    ).toMatchObject({
+      kind: "workspace_operation_failed",
+      operation: "setup",
+      setupExitCode: 1,
+    });
     expect(parseKnownHostNotificationPayload(APPROVAL)).toMatchObject({
       kind: "approval",
       approvalId: "approval-1",
@@ -204,6 +222,22 @@ describe("parseKnownHostNotificationPayloadForKind", () => {
     expect(
       parseKnownHostNotificationPayloadForKind("approval.requested", APPROVAL),
     ).toMatchObject({ kind: "approval" });
+    expect(
+      parseKnownHostNotificationPayloadForKind("workspace.operation.failed", {
+        kind: "workspace_operation_failed",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        chatTitle: "Deploy checkout fix",
+        taskTitle: "Checkout notifications",
+        operation: "provision",
+        title: "Worktree creation failed",
+        message: "Couldn't create worktree.",
+        outcome: "errored",
+      }),
+    ).toMatchObject({
+      kind: "workspace_operation_failed",
+      operation: "provision",
+    });
   });
 
   // Cross-kind corruption: a valid payload shape under the WRONG notification
@@ -224,6 +258,12 @@ describe("parseKnownHostNotificationPayloadForKind", () => {
     ).toBeNull();
     expect(
       parseKnownHostNotificationPayloadForKind("interview.requested", APPROVAL),
+    ).toBeNull();
+    expect(
+      parseKnownHostNotificationPayloadForKind(
+        "workspace.operation.failed",
+        APPROVAL,
+      ),
     ).toBeNull();
   });
 });

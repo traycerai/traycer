@@ -3,15 +3,18 @@ import {
   type InfiniteData,
   infiniteQueryOptions,
   useInfiniteQuery,
+  useMutation,
   useQueryClient,
 } from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/index";
-import type { WorktreeListAllForHostResponseV12 } from "@traycer/protocol/host/worktree-schemas";
+import type { WorktreeHostEntryV14 } from "@traycer/protocol/host/index";
+import type { WorktreeListAllForHostResponseV14 } from "@traycer/protocol/host/worktree-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { type HostRpcRegistry } from "@/lib/host";
-import { hostQueryKeys } from "@/lib/query-keys";
+import { hostQueryKeys, worktreeMutationKeys } from "@/lib/query-keys";
+import { isPerPathEnrichmentQueryKey } from "@/lib/query-keys/worktree-enrichment-keys";
 import { logPerfEvent } from "@/lib/perf/perf-telemetry";
+import { toastFromHostError } from "@/lib/host-error-toast";
 import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import {
@@ -24,13 +27,17 @@ import {
 } from "@/components/settings/panels/worktrees-enrichment-persistence";
 
 export const SETTINGS_WORKTREE_LIST_PAGE_LIMIT = 32;
+// The listing's cache IDENTITY. `forceRefresh` is pinned to its canonical
+// `false` here and never varies: it is a fetch directive, so a forced refetch
+// must land in this same entry rather than fork a second one.
 const SETTINGS_WORKTREE_LIST_BASE_PARAMS = {
   includeActivity: false,
   activityPaths: null,
   cursor: null,
   limit: SETTINGS_WORKTREE_LIST_PAGE_LIMIT,
+  forceRefresh: false,
 } as const;
-const EMPTY_WORKTREES: readonly WorktreeHostEntryV12[] = [];
+const EMPTY_WORKTREES: readonly WorktreeHostEntryV14[] = [];
 // Debounce for the warm-open listing snapshot writes, mirroring the activity
 // snapshot's cadence: pages settle in bursts, so wait for a quiet window.
 const WORKTREE_LISTING_PERSIST_DEBOUNCE_MS = 1_500;
@@ -58,9 +65,9 @@ export function listingQueryKeyFor(hostId: string | null): readonly unknown[] {
 // mid-reconcile. A shrunken live list simply stops early (stale tail pages are
 // dropped); a grown one continues through the auto-advance effect.
 function seededListingData(
-  entries: readonly WorktreeHostEntryV12[],
-): InfiniteData<WorktreeListAllForHostResponseV12, string | null> {
-  const pages: WorktreeListAllForHostResponseV12[] = [];
+  entries: readonly WorktreeHostEntryV14[],
+): InfiniteData<WorktreeListAllForHostResponseV14, string | null> {
+  const pages: WorktreeListAllForHostResponseV14[] = [];
   const pageParams: Array<string | null> = [];
   for (
     let start = 0;
@@ -88,7 +95,7 @@ export function useWorktreeListing(
   client: HostClient<HostRpcRegistry> | null,
   reachable: boolean,
 ): {
-  readonly worktrees: readonly WorktreeHostEntryV12[];
+  readonly worktrees: readonly WorktreeHostEntryV14[];
   readonly isPending: boolean;
   readonly isError: boolean;
   readonly errorMessage: string | null;
@@ -136,11 +143,11 @@ export function useWorktreeListing(
     const key = listingQueryKeyFor(hostId);
     const state =
       queryClient.getQueryState<
-        InfiniteData<WorktreeListAllForHostResponseV12, string | null>
+        InfiniteData<WorktreeListAllForHostResponseV14, string | null>
       >(key);
     if (state?.data !== undefined) return;
     queryClient.setQueryData<
-      InfiniteData<WorktreeListAllForHostResponseV12, string | null>
+      InfiniteData<WorktreeListAllForHostResponseV14, string | null>
     >(key, seededListingData(snapshot.entries), {
       updatedAt: snapshot.savedAt,
     });
@@ -152,15 +159,14 @@ export function useWorktreeListing(
     pageParam,
   }: {
     readonly pageParam: string | null;
-  }): Promise<WorktreeListAllForHostResponseV12> => {
+  }): Promise<WorktreeListAllForHostResponseV14> => {
     if (client === null) {
       throw hostClientUnavailableError("worktree.listAllForHost");
     }
     return client.request("worktree.listAllForHost", {
-      includeActivity: false,
-      activityPaths: null,
+      ...SETTINGS_WORKTREE_LIST_BASE_PARAMS,
       cursor: pageParam,
-      limit: SETTINGS_WORKTREE_LIST_PAGE_LIMIT,
+      forceRefresh: false,
     });
   };
   const {
@@ -174,13 +180,12 @@ export function useWorktreeListing(
     isFetchingNextPage,
     isPending,
     isSuccess,
-    refetch,
     status,
   } = useInfiniteQuery(
     infiniteQueryOptions<
-      WorktreeListAllForHostResponseV12,
+      WorktreeListAllForHostResponseV14,
       HostRpcError,
-      InfiniteData<WorktreeListAllForHostResponseV12, string | null>,
+      InfiniteData<WorktreeListAllForHostResponseV14, string | null>,
       readonly unknown[],
       string | null
     >({
@@ -191,6 +196,49 @@ export function useWorktreeListing(
       enabled,
     }),
   );
+  // `HostRpcError` error generic: the mutationFn only rejects via
+  // `client.request`, whose failures are always host RPC errors.
+  const refreshMutation = useMutation<
+    WorktreeListAllForHostResponseV14,
+    HostRpcError,
+    { readonly client: HostClient<HostRpcRegistry>; readonly hostId: string }
+  >({
+    mutationKey: worktreeMutationKeys.refreshListing(),
+    // The Refresh button's only failure signal was the spinner stopping - the
+    // rejected promise is swallowed by useRefreshSpinner.
+    onError: (error) =>
+      toastFromHostError(error, "Couldn't refresh worktrees."),
+    mutationFn: (input) =>
+      input.client.request("worktree.listAllForHost", {
+        includeActivity: false,
+        activityPaths: null,
+        cursor: null,
+        limit: null,
+        forceRefresh: true,
+      }),
+    onSuccess: (response, input) => {
+      queryClient.setQueryData<
+        InfiniteData<WorktreeListAllForHostResponseV14, string | null>
+      >(listingQueryKeyFor(input.hostId), {
+        pages: [response],
+        pageParams: [null],
+      });
+      // The forced listing re-resolves the BASE rows, so every cached overlay
+      // is now older than its base row and `acceptedEnrichedByPath` rejects it
+      // - the rows read "Checking..." until something re-probes them. Nothing
+      // would: the overlays keep their keys, so they are neither invalidated
+      // nor sweep candidates. Without this the Refresh button strands every
+      // on-screen row, permanently on a host that lacks `worktree.changed`.
+      void queryClient.invalidateQueries({
+        queryKey: hostQueryKeys.methodScope(
+          input.hostId,
+          "worktree.listAllForHost",
+        ),
+        refetchType: "active",
+        predicate: (query) => isPerPathEnrichmentQueryKey(query.queryKey),
+      });
+    },
+  });
   useEffect(() => {
     if (!enabled) return;
     if (!hasNextPage) return;
@@ -275,8 +323,18 @@ export function useWorktreeListing(
     errorMessage: error?.message ?? null,
     isEmpty: isSuccess && !hasNextPage && worktrees.length === 0,
     isPartial: isError && hasLoadedData,
-    refresh: () => refetch(),
+    refresh: () => {
+      if (client === null || readiness.hostId === null) {
+        return Promise.reject(
+          hostClientUnavailableError("worktree.listAllForHost"),
+        );
+      }
+      return refreshMutation.mutateAsync({
+        client,
+        hostId: readiness.hostId,
+      });
+    },
     retryPartial: () => fetchNextPage(),
-    refreshing: isFetching,
+    refreshing: isFetching || refreshMutation.isPending,
   };
 }

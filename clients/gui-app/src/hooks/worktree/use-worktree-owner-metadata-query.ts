@@ -72,6 +72,9 @@ export function useWorktreeOwnerMetadata(args: {
       activityPaths: worktreePaths,
       cursor: null,
       limit: null,
+      // A background read: serve the host's TTL-cached view. Only the
+      // Settings toolbar's explicit Refresh forces a disk recompute.
+      forceRefresh: false,
     },
     options: { enabled: args.enabled && worktreePaths.length > 0 },
   });

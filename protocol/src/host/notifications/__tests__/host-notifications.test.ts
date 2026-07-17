@@ -57,6 +57,24 @@ const STOPPED_ENTRY = {
   },
 };
 
+const WORKSPACE_OPERATION_FAILED_ENTRY = {
+  ...STOPPED_ENTRY,
+  id: "notification-3",
+  kind: "workspace.operation.failed" as const,
+  sourceRef: "setup-event-1",
+  payload: {
+    kind: "workspace_operation_failed",
+    epicId: "epic-1",
+    chatId: "chat-1",
+    chatTitle: "Deploy checkout fix",
+    taskTitle: "Checkout notifications",
+    operation: "setup",
+    title: "Workspace setup failed",
+    message: "Setup exited with code 1.",
+    outcome: "errored" as const,
+  },
+};
+
 describe("flat host notification entry schema", () => {
   it("parses complete needs-action and failure entries", () => {
     expect(hostNotificationEntrySchema.parse(APPROVAL_ENTRY)).toEqual(
@@ -65,6 +83,9 @@ describe("flat host notification entry schema", () => {
     expect(hostNotificationEntrySchema.parse(STOPPED_ENTRY)).toEqual(
       STOPPED_ENTRY,
     );
+    expect(
+      hostNotificationEntrySchema.parse(WORKSPACE_OPERATION_FAILED_ENTRY),
+    ).toEqual(WORKSPACE_OPERATION_FAILED_ENTRY);
   });
 
   it("requires unresolved-state metadata on needs-action rows", () => {
@@ -92,6 +113,19 @@ describe("flat host notification entry schema", () => {
         kind: "agent.stalled",
         outcome: null,
         payload: { agentId: "agent-1", reason: "provider_throttle" },
+      }),
+    ).toThrow();
+  });
+
+  it("keeps workspace failures aligned with the persisted errored outcome", () => {
+    expect(
+      hostNotificationEntrySchema.parse(WORKSPACE_OPERATION_FAILED_ENTRY)
+        .outcome,
+    ).toBe("errored");
+    expect(() =>
+      hostNotificationEntrySchema.parse({
+        ...WORKSPACE_OPERATION_FAILED_ENTRY,
+        outcome: null,
       }),
     ).toThrow();
   });
