@@ -158,6 +158,7 @@ describe("useTaskDeleteWorktreeCandidates", () => {
         activityPaths: null,
         cursor: null,
         limit: 8,
+        forceRefresh: false,
       },
     );
     expect(mockHostClient.request).toHaveBeenNthCalledWith(
@@ -168,6 +169,7 @@ describe("useTaskDeleteWorktreeCandidates", () => {
         activityPaths: null,
         cursor: "/wt/a",
         limit: 8,
+        forceRefresh: false,
       },
     );
   });
@@ -224,6 +226,7 @@ describe("useTaskDeleteWorktreeCandidates", () => {
         activityPaths: null,
         cursor: null,
         limit: 8,
+        forceRefresh: false,
       },
     );
   });
@@ -264,6 +267,9 @@ describe("useTaskDeleteWorktreeCandidates", () => {
           activityPaths: null,
           cursor: null,
           limit: 8,
+          // Must mirror the hook's cache identity exactly - the directive is
+          // pinned to `false` in the key and never varies.
+          forceRefresh: false,
         },
       ),
       { worktrees: [entry({ worktreePath: "/wt/a" })], nextCursor: null },

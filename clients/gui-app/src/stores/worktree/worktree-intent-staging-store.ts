@@ -153,6 +153,15 @@ interface WorktreeIntentStagingStore {
   // Values are possibly-undefined: most keys have nothing staged, and indexing
   // a missing key must narrow to `undefined` at the call sites.
   readonly intentByKey: Readonly<Record<string, WorktreeIntent | undefined>>;
+  readonly suspendedWorkspacePathsByKey: Readonly<
+    Record<string, readonly string[] | undefined>
+  >;
+  /**
+   * Monotonic local edit sequence for each staging slot. It is deliberately
+   * not persisted: it only distinguishes edits made while an action is in
+   * flight in this renderer session.
+   */
+  readonly revisionByKey: Readonly<Record<string, number | undefined>>;
   /** Merge one folder's intent into the staged intent for `key`. */
   readonly stageEntry: (
     key: WorktreeStagingKey,
@@ -183,8 +192,23 @@ interface WorktreeIntentStagingStore {
     workspacePath: string,
     scripts: WorktreeEntryScripts | null,
   ) => void;
+  /** Fail-closed metadata paths whose staged create/import cannot execute. */
+  readonly setSuspendedWorkspacePaths: (
+    key: WorktreeStagingKey,
+    workspacePaths: readonly string[],
+  ) => void;
   readonly clear: (key: WorktreeStagingKey) => void;
   readonly resetForTests: () => void;
+}
+
+function incrementStagingRevision(
+  revisionByKey: Readonly<Record<string, number | undefined>>,
+  id: string,
+): Readonly<Record<string, number | undefined>> {
+  return {
+    ...revisionByKey,
+    [id]: (revisionByKey[id] ?? 0) + 1,
+  };
 }
 
 export const useWorktreeIntentStagingStore =
@@ -192,6 +216,8 @@ export const useWorktreeIntentStagingStore =
     persist(
       (set) => ({
         intentByKey: {},
+        suspendedWorkspacePathsByKey: {},
+        revisionByKey: {},
         stageEntry: (key, entry) =>
           set((state) => {
             const id = worktreeStagingKeyString(key);
@@ -201,6 +227,7 @@ export const useWorktreeIntentStagingStore =
                 ...state.intentByKey,
                 [id]: mergeWorktreeIntentEntry(existing, entry),
               },
+              revisionByKey: incrementStagingRevision(state.revisionByKey, id),
             };
           }),
         stageIntent: (key, intent) =>
@@ -211,19 +238,36 @@ export const useWorktreeIntentStagingStore =
               (acc, entry) => mergeWorktreeIntentEntry(acc, entry),
               existing ?? { entries: [] },
             );
-            return { intentByKey: { ...state.intentByKey, [id]: merged } };
+            return {
+              intentByKey: { ...state.intentByKey, [id]: merged },
+              revisionByKey: incrementStagingRevision(state.revisionByKey, id),
+            };
           }),
         setIntent: (key, intent) =>
           set((state) => {
             const id = worktreeStagingKeyString(key);
             const next = { ...state.intentByKey };
             if (intent === null || intent.entries.length === 0) {
-              if (!(id in next)) return state;
               delete next[id];
-            } else {
-              next[id] = intent;
+              const suspendedWorkspacePathsByKey = {
+                ...state.suspendedWorkspacePathsByKey,
+              };
+              delete suspendedWorkspacePathsByKey[id];
+              return {
+                intentByKey: next,
+                suspendedWorkspacePathsByKey,
+                revisionByKey: incrementStagingRevision(
+                  state.revisionByKey,
+                  id,
+                ),
+              };
             }
-            return { intentByKey: next };
+            next[id] = intent;
+
+            return {
+              intentByKey: next,
+              revisionByKey: incrementStagingRevision(state.revisionByKey, id),
+            };
           }),
         unstageEntry: (key, workspacePath) =>
           set((state) => {
@@ -238,12 +282,31 @@ export const useWorktreeIntentStagingStore =
               return state;
             }
             const intentByKey = { ...state.intentByKey };
+            const suspendedWorkspacePathsByKey = {
+              ...state.suspendedWorkspacePathsByKey,
+            };
             if (next === null) {
               delete intentByKey[id];
+              delete suspendedWorkspacePathsByKey[id];
             } else {
               intentByKey[id] = next;
+              const suspended = suspendedWorkspacePathsByKey[id];
+              if (suspended !== undefined) {
+                const remaining = suspended.filter(
+                  (path) => path !== workspacePath,
+                );
+                if (remaining.length === 0) {
+                  delete suspendedWorkspacePathsByKey[id];
+                } else {
+                  suspendedWorkspacePathsByKey[id] = remaining;
+                }
+              }
             }
-            return { intentByKey };
+            return {
+              intentByKey,
+              suspendedWorkspacePathsByKey,
+              revisionByKey: incrementStagingRevision(state.revisionByKey, id),
+            };
           }),
         stageScripts: (key, workspacePath, scripts) =>
           set((state) => {
@@ -257,17 +320,54 @@ export const useWorktreeIntentStagingStore =
             if (next === existing) return state;
             return {
               intentByKey: { ...state.intentByKey, [id]: next ?? undefined },
+              revisionByKey: incrementStagingRevision(state.revisionByKey, id),
             };
+          }),
+        setSuspendedWorkspacePaths: (key, workspacePaths) =>
+          set((state) => {
+            const id = worktreeStagingKeyString(key);
+            const nextPaths = [...new Set(workspacePaths)].sort();
+            const current = state.suspendedWorkspacePathsByKey[id] ?? [];
+            if (
+              current.length === nextPaths.length &&
+              current.every((path, index) => path === nextPaths[index])
+            ) {
+              return state;
+            }
+            const suspendedWorkspacePathsByKey = {
+              ...state.suspendedWorkspacePathsByKey,
+            };
+            if (nextPaths.length === 0) {
+              delete suspendedWorkspacePathsByKey[id];
+            } else {
+              suspendedWorkspacePathsByKey[id] = nextPaths;
+            }
+            return { suspendedWorkspacePathsByKey };
           }),
         clear: (key) =>
           set((state) => {
             const id = worktreeStagingKeyString(key);
-            if (!(id in state.intentByKey)) return state;
             const next = { ...state.intentByKey };
             delete next[id];
-            return { intentByKey: next };
+            const suspendedWorkspacePathsByKey = {
+              ...state.suspendedWorkspacePathsByKey,
+            };
+            delete suspendedWorkspacePathsByKey[id];
+            return {
+              intentByKey: next,
+              suspendedWorkspacePathsByKey,
+              // An explicit clear after a send consumes the slot is still a
+              // newer user choice. Record it so a rejected send cannot put the
+              // old selection back.
+              revisionByKey: incrementStagingRevision(state.revisionByKey, id),
+            };
           }),
-        resetForTests: () => set({ intentByKey: {} }),
+        resetForTests: () =>
+          set({
+            intentByKey: {},
+            suspendedWorkspacePathsByKey: {},
+            revisionByKey: {},
+          }),
       }),
       {
         ...basePersistOptions(worktreeIntentStagingKey(null)),
@@ -287,6 +387,35 @@ export function readStagedWorktreeIntent(
     useWorktreeIntentStagingStore.getState().intentByKey[
       worktreeStagingKeyString(key)
     ] ?? null
+  );
+}
+
+/**
+ * Current in-memory edit sequence for a staging slot. Used to make rejected
+ * action restoration conditional on no newer selection (including a clear).
+ */
+export function stagedWorktreeIntentRevision(key: WorktreeStagingKey): number {
+  return (
+    useWorktreeIntentStagingStore.getState().revisionByKey[
+      worktreeStagingKeyString(key)
+    ] ?? 0
+  );
+}
+
+/** True when unresolved host metadata blocks a staged create/import action. */
+export function stagedWorktreeIntentIsSuspended(
+  key: WorktreeStagingKey,
+): boolean {
+  const state = useWorktreeIntentStagingStore.getState();
+  const id = worktreeStagingKeyString(key);
+  const intent = state.intentByKey[id];
+  const suspendedPaths = state.suspendedWorkspacePathsByKey[id];
+  if (intent === undefined || suspendedPaths === undefined) {
+    return false;
+  }
+  const suspended = new Set(suspendedPaths);
+  return intent.entries.some(
+    (entry) => entry.kind !== "local" && suspended.has(entry.workspacePath),
   );
 }
 

@@ -24,6 +24,7 @@ export type HostNotificationFilter = z.infer<
 export const hostNotificationKindSchema = z.enum([
   "agent.stopped",
   "agent.stalled",
+  "workspace.operation.failed",
   "approval.requested",
   "interview.requested",
 ]);
@@ -96,6 +97,12 @@ export const hostNotificationEntrySchema = z.discriminatedUnion("kind", [
   z.object({
     ...hostNotificationEntryBaseFields,
     kind: z.literal("agent.stalled"),
+    outcome: z.literal("errored"),
+    payload: hostNotificationPayloadSchema,
+  }),
+  z.object({
+    ...hostNotificationEntryBaseFields,
+    kind: z.literal("workspace.operation.failed"),
     outcome: z.literal("errored"),
     payload: hostNotificationPayloadSchema,
   }),

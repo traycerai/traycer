@@ -34,6 +34,9 @@ export function useTaskWorktreeMetadata(
       activityPaths: null,
       cursor: null,
       limit: null,
+      // A background read: serve the host's TTL-cached view. Only the
+      // Settings toolbar's explicit Refresh forces a disk recompute.
+      forceRefresh: false,
     },
     options: { enabled: epicIds.length > 0 },
   });
@@ -59,6 +62,8 @@ export function useTaskWorktreeMetadata(
       activityPaths: ownedPaths,
       cursor: null,
       limit: null,
+      // Background read - see the base query above.
+      forceRefresh: false,
     },
     options: { enabled: ownedPaths.length > 0 },
   });

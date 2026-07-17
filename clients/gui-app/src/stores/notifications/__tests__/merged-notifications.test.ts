@@ -69,11 +69,12 @@ function appLocalEntry(
     id,
     updatedAt,
     readAt,
-    kind: "worktree.setup.failed",
+    kind: "stream.transport.error",
     sourceRef: id,
     payload: { kind: "chat", epicId: "epic-1", chatId: "chat-1" },
-    message: "Worktree setup failed",
+    message: "Chat stream closed unexpectedly",
     detail: null,
+    displayedUpdatedAt: null,
   };
 }
 
@@ -176,6 +177,23 @@ describe("merged notifications feed", () => {
         outcome: "errored",
       },
     };
+    const workspaceFailure: HostNotificationEntry = {
+      ...base,
+      kind: "workspace.operation.failed",
+      severity: "failure",
+      outcome: "errored",
+      payload: {
+        kind: "workspace_operation_failed",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        chatTitle: "Deploy checkout fix",
+        taskTitle: "Checkout notifications",
+        operation: "provision",
+        title: "Worktree creation failed",
+        message: "Couldn't create worktree.",
+        outcome: "errored",
+      },
+    };
     const interview: HostNotificationEntry = {
       ...base,
       kind: "interview.requested",
@@ -203,6 +221,11 @@ describe("merged notifications feed", () => {
     expect(rowFromHostEntry(stalled)).toMatchObject({
       title: "Checkout notifications",
       body: "Deploy checkout fix • Provider is taking longer than expected",
+    });
+    expect(rowFromHostEntry(workspaceFailure)).toMatchObject({
+      title: "Checkout notifications",
+      body: "Deploy checkout fix • Worktree creation failed",
+      payload: { kind: "chat", epicId: "epic-1", chatId: "chat-1" },
     });
     expect(rowFromHostEntry(interview)).toMatchObject({
       title: "Checkout notifications",
@@ -383,11 +406,11 @@ describe("merged notifications feed", () => {
       sourceId: "setup",
       createdAt: 10,
       readAt: null,
-      title: "Worktree setup failed",
+      title: "Chat stream closed unexpectedly",
       body: "Traycer notification",
       payload: { kind: "chat", epicId: "epic-1", chatId: "chat-1" },
       hostKind: null,
-      appLocalKind: "worktree.setup.failed",
+      appLocalKind: "stream.transport.error",
       globalEntry: null,
       severity: "failure",
       outcome: null,

@@ -837,6 +837,23 @@ describe("chat.subscribe@1.3 client frames", () => {
         agentMode: "epic",
       },
       accountContext: { type: "PERSONAL" },
+      worktreeIntent: {
+        entries: [
+          {
+            kind: "worktree",
+            workspacePath: "/repo",
+            repoIdentifier: null,
+            isPrimary: true,
+            branch: {
+              type: "new",
+              name: "edited-first-message",
+              source: "main",
+              carryUncommittedChanges: false,
+            },
+            scripts: null,
+          },
+        ],
+      },
       revertFileChanges: false,
     });
 
@@ -844,6 +861,13 @@ describe("chat.subscribe@1.3 client frames", () => {
       kind: "editUserMessage",
       targetMessageId: "message-2",
       messageId: "message-3",
+      worktreeIntent: {
+        entries: [
+          {
+            branch: { name: "edited-first-message" },
+          },
+        ],
+      },
       revertFileChanges: false,
     });
   });

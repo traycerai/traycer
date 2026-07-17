@@ -1,12 +1,17 @@
 import "../../../../__tests__/test-browser-apis";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { appLocalNotificationsKey } from "@/lib/persist";
+import {
+  hasAppLocalDisplayReceipt,
+  recordAppLocalDisplayReceipt,
+} from "@/lib/notifications/app-local-display-receipts";
 import {
   APP_LOCAL_NOTIFICATIONS_ROW_CAP,
   __resetAppLocalNotificationsStoreForTests,
   createAppLocalNotificationsStore,
   emitTerminalClosedNotification,
   emitTerminalCrashedNotification,
+  migrateAppLocalNotificationsPersistedState,
   type AppLocalNotificationEntry,
   useAppLocalNotificationsStore,
 } from "@/stores/notifications/app-local-notifications-store";
@@ -20,11 +25,12 @@ function entry(
     id,
     updatedAt,
     readAt,
-    kind: "worktree.setup.failed",
+    kind: "stream.transport.error",
     sourceRef: id,
     payload: { kind: "chat", epicId: "epic-1", chatId: "chat-1" },
     message: `Message ${id}`,
     detail: null,
+    displayedUpdatedAt: null,
   };
 }
 
@@ -32,6 +38,26 @@ describe("app-local notifications store", () => {
   beforeEach(() => {
     window.localStorage.clear();
     __resetAppLocalNotificationsStoreForTests();
+  });
+
+  it("removes retired worktree setup rows during the v2 migration", () => {
+    expect(
+      migrateAppLocalNotificationsPersistedState({
+        byId: {
+          retired: {
+            ...entry("retired", 10, null),
+            kind: "worktree.setup.failed",
+          },
+          retained: entry("retained", 20, null),
+        },
+        orderedIds: ["retained", "retired"],
+        unreadCount: 2,
+      }),
+    ).toEqual({
+      byId: { retained: entry("retained", 20, null) },
+      orderedIds: ["retained"],
+      unreadCount: 1,
+    });
   });
 
   it("persists entries across store re-create", () => {
@@ -47,6 +73,70 @@ describe("app-local notifications store", () => {
     expect(second.getState().orderedIds).toEqual(["persisted"]);
     expect(second.getState().byId.persisted.message).toBe("Message persisted");
     expect(second.getState().unreadCount).toBe(1);
+  });
+
+  it("persists display receipts independently from read state", () => {
+    const key = appLocalNotificationsKey("user-a");
+    const first = createAppLocalNotificationsStore(key);
+    first.getState().activateIdentity("user-a");
+    first.getState().upsert(entry("displayed", 10, null));
+
+    first.getState().markAsDisplayed("displayed", 10);
+
+    const second = createAppLocalNotificationsStore(key);
+    expect(second.getState().byId.displayed.readAt).toBeNull();
+    expect(second.getState().byId.displayed.displayedUpdatedAt).toBe(10);
+  });
+
+  it("cannot lose the monotonic receipt when a stale window writes another row", () => {
+    const key = appLocalNotificationsKey("user-a");
+    const seed = createAppLocalNotificationsStore(key);
+    seed.getState().activateIdentity("user-a");
+    seed.getState().upsert(entry("target", 10, null));
+    const firstWindow = createAppLocalNotificationsStore(key);
+    const staleWindow = createAppLocalNotificationsStore(key);
+    firstWindow.getState().activateIdentity("user-a");
+    staleWindow.getState().activateIdentity("user-a");
+    const version = {
+      userId: "user-a",
+      notificationId: "target",
+      updatedAt: 10,
+    };
+
+    firstWindow.getState().markAsDisplayed("target", 10);
+    recordAppLocalDisplayReceipt(version);
+    staleWindow.getState().upsert(entry("unrelated", 20, null));
+
+    const reloaded = createAppLocalNotificationsStore(key);
+    expect(reloaded.getState().byId.target.displayedUpdatedAt).toBeNull();
+    expect(hasAppLocalDisplayReceipt(version)).toBe(true);
+  });
+
+  it("treats legacy unread rows without a receipt as already displayed", () => {
+    const key = appLocalNotificationsKey("user-a");
+    const persisted = {
+      ...entry("legacy-unread", 10, null),
+      displayedUpdatedAt: undefined,
+    };
+    window.localStorage.setItem(
+      key,
+      JSON.stringify({
+        state: {
+          byId: { [persisted.id]: persisted },
+          orderedIds: [persisted.id],
+          unreadCount: 1,
+        },
+        version: 1,
+      }),
+    );
+
+    const store = createAppLocalNotificationsStore(key);
+
+    expect(store.getState().orderedIds).toEqual([persisted.id]);
+    expect(store.getState().unreadCount).toBe(1);
+    expect(
+      store.getState().byId[persisted.id].displayedUpdatedAt,
+    ).toBeUndefined();
   });
 
   it("does not write entries before an identity is active", () => {
@@ -196,6 +286,14 @@ describe("app-local notifications store", () => {
     useAppLocalNotificationsStore
       .getState()
       .markAsRead("terminal.closed:terminal-instance", 123);
+    const firstUpdatedAt =
+      useAppLocalNotificationsStore.getState().byId[
+        "terminal.closed:terminal-instance"
+      ].updatedAt;
+    useAppLocalNotificationsStore
+      .getState()
+      .markAsDisplayed("terminal.closed:terminal-instance", firstUpdatedAt);
+    const now = vi.spyOn(Date, "now").mockReturnValue(firstUpdatedAt + 1);
 
     emitTerminalClosedNotification({
       instanceId: "terminal-instance",
@@ -209,13 +307,16 @@ describe("app-local notifications store", () => {
         tileInstanceId: "terminal-instance",
       },
     });
+    now.mockRestore();
 
     expect(
       useAppLocalNotificationsStore.getState().byId[
         "terminal.closed:terminal-instance"
       ],
     ).toMatchObject({
+      updatedAt: firstUpdatedAt + 1,
       readAt: 123,
+      displayedUpdatedAt: firstUpdatedAt,
       payload: {
         kind: "terminal",
         tabId: "view-tab-2",

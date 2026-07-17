@@ -70,6 +70,9 @@ export function WorkspaceFolderRows(props: {
       activityPaths: null,
       cursor: null,
       limit: null,
+      // A background read: serve the host's TTL-cached view. Only the
+      // Settings toolbar's explicit Refresh forces a disk recompute.
+      forceRefresh: false,
     },
     options: { enabled: hasAnyWorktrees && !props.readOnly },
   });

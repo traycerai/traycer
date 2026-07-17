@@ -523,6 +523,7 @@ function getRowMeta(row: MergedNotificationRow): EventMeta {
         tone: DONE_TONE,
       };
     case "agent.stalled":
+    case "workspace.operation.failed":
       return {
         icon: CircleAlert,
         tone: DANGER_TONE,

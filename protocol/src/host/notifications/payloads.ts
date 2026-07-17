@@ -1,15 +1,18 @@
 /**
  * Semantic payload schemas for `HostNotifications.json_data` — the single
- * source of truth for what host producers write into a notification row's
- * payload and what consumers (renderer presentation/navigation, webhook
- * projection, retitle convergence) may rely on.
+ * source of truth for what consumers (renderer presentation/navigation,
+ * webhook projection) may rely on once a row's payload is complete.
  *
- * These schemas are a SECOND-STAGE parse, never a transport gate. The wire
- * entry (`hostNotificationEntrySchema`) and SQLite persistence keep the
- * payload an open record on purpose: rows outlive code in both directions
- * (upgrades read old rows, downgrades read future rows), so the
- * compatibility boundary must accept unknown shapes and let consumers
- * degrade per row instead of dropping or failing a frame.
+ * These schemas describe the POST-ENRICHMENT consumer contract, not the
+ * persisted shape: a host may persist an ID-only partial (titles omitted,
+ * joined in from a host-local title index at read time) and enrich it into
+ * one of these shapes before it reaches a strict consumer. They are a
+ * SECOND-STAGE parse, never a transport gate — the wire entry
+ * (`hostNotificationEntrySchema`) and SQLite persistence keep the payload an
+ * open record on purpose: rows outlive code in both directions (upgrades
+ * read old rows, downgrades read future rows), so the compatibility
+ * boundary must accept unknown shapes and let consumers degrade per row
+ * instead of dropping or failing a frame.
  *
  * EVOLUTION RULE (additive-only):
  *   - never rename or retype an existing field;
@@ -152,6 +155,33 @@ export type HostNotificationAgentStalledPayload = z.infer<
   typeof hostNotificationAgentStalledPayloadSchema
 >;
 
+/**
+ * `workspace.operation.failed` payload. `operation` stays open so a newer host
+ * can add workspace lifecycle operations without making an older renderer drop
+ * the row's typed chat navigation and generic failure presentation.
+ */
+export const hostNotificationWorkspaceOperationFailedPayloadSchema = z
+  .object({
+    kind: z.literal("workspace_operation_failed"),
+    epicId: idSchema,
+    chatId: idSchema,
+    chatTitle: z.string(),
+    taskTitle: z.string(),
+    operation: idSchema,
+    title: z.string(),
+    message: z.string(),
+    workspacePath: z.string().optional(),
+    worktreePath: z.string().optional(),
+    branch: z.string().optional(),
+    setupExitCode: z.number().int().nullable().optional(),
+    terminalSessionId: z.string().optional(),
+    outcome: z.literal("errored"),
+  })
+  .catchall(z.unknown());
+export type HostNotificationWorkspaceOperationFailedPayload = z.infer<
+  typeof hostNotificationWorkspaceOperationFailedPayloadSchema
+>;
+
 /** `approval.requested` payload. `chatTitle` carries the chat title. */
 export const hostNotificationApprovalPayloadSchema = z
   .object({
@@ -186,6 +216,7 @@ export const hostNotificationKnownPayloadSchema = z.discriminatedUnion("kind", [
   hostNotificationChatStoppedPayloadSchema,
   hostNotificationEpicStoppedPayloadSchema,
   hostNotificationAgentStalledPayloadSchema,
+  hostNotificationWorkspaceOperationFailedPayloadSchema,
   hostNotificationApprovalPayloadSchema,
   hostNotificationInterviewPayloadSchema,
 ]);
@@ -237,36 +268,11 @@ function payloadKindMatchesNotificationKind(
       return payloadKind === "chat" || payloadKind === "epic";
     case "agent.stalled":
       return payloadKind === "agent_stalled";
+    case "workspace.operation.failed":
+      return payloadKind === "workspace_operation_failed";
     case "approval.requested":
       return payloadKind === "approval";
     case "interview.requested":
       return payloadKind === "interview";
-  }
-}
-
-/**
- * The chat-title capability map, as an exhaustive function shared by payload
- * producers and the retitle convergence write: for each known payload kind,
- * returns the payload with its chat-title-bearing field replaced, or `null`
- * when the payload carries no chat title ("epic" rows name a terminal
- * agent) or already holds the given title (a no-op the caller must not
- * persist or emit). Adding a payload kind fails compilation here until the
- * new kind declares whether it carries a chat title.
- */
-export function hostNotificationPayloadWithChatTitle(
-  payload: HostNotificationKnownPayload,
-  chatTitle: string,
-): HostNotificationKnownPayload | null {
-  switch (payload.kind) {
-    case "approval":
-    case "interview":
-      return payload.chatTitle === chatTitle ? null : { ...payload, chatTitle };
-    case "chat":
-    case "agent_stalled":
-      return payload.agentName === chatTitle
-        ? null
-        : { ...payload, agentName: chatTitle };
-    case "epic":
-      return null;
   }
 }

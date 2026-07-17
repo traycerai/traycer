@@ -1,31 +1,19 @@
 import "../../../../../__tests__/test-browser-apis";
-import { cleanup, render, screen } from "@testing-library/react";
-import { useCallback, useState } from "react";
+import { cleanup, render, renderHook, screen } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type {
   ProviderCliState,
   ProviderId,
   ProviderProfile,
   ProviderProfileRateLimitStatus,
 } from "@traycer/protocol/host/provider-schemas";
+import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import { selectionFromChatRunSettings } from "@/lib/composer/chat-run-settings";
-
-/**
- * D6 (durability audit): "Pre-feature chat (null profileId everywhere) after
- * flag ON + managed profiles exist: stays ambient, zero prompts."
- *
- * A chat created before the profile feature existed has a persisted
- * `ChatRunSettings` blob with NO `profileId` KEY AT ALL (not `null` - the
- * field is structurally absent), because the type didn't have it yet. This
- * probes both halves: (1) the seed resolver treats "absent" the same as
- * "ambient", and (2) with the flag now on and 2 managed profiles present,
- * an otherwise-healthy ambient login produces zero new prompts/banners.
- */
+import { TooltipProvider } from "@/components/ui/tooltip";
 
 const mocks = vi.hoisted(() => ({
   providers: [] as ProviderCliState[],
-  refresh: vi.fn(() => Promise.resolve()),
 }));
 
 vi.mock("@/hooks/providers/use-tab-providers-list-query", () => ({
@@ -34,23 +22,17 @@ vi.mock("@/hooks/providers/use-tab-providers-list-query", () => ({
       ? { data: { providers: mocks.providers } }
       : { data: undefined },
 }));
-vi.mock("@/hooks/providers/use-tab-refresh-providers", () => ({
-  useTabRefreshProviders: () => mocks.refresh,
+vi.mock("@/hooks/rate-limits/use-profile-usage-presentation", () => ({
+  useProfileUsagePresentation: () => ({
+    isHostReady: true,
+    entries: new Map(),
+  }),
 }));
-vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
-  useTabHostId: () => "host-1",
-}));
-vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 import { useProviderReauthGate } from "../use-provider-reauth-gate";
 import { useProfileRateLimitSwitchPrompt } from "../use-profile-rate-limit-switch-prompt";
 import { ProfileRateLimitSwitchBanner } from "../profile-rate-limit-switch-banner";
 
-// A genuine legacy blob: parsed JSON that never had a `profileId` key,
-// exactly what an old serialized `ChatRunSettings` looks like at runtime
-// (TypeScript can't express "missing key" on a literal typed as
-// `ChatRunSettings`, so this goes through `JSON.parse` the same way the
-// real persisted-blob rehydration path does).
 function legacyChatRunSettingsBlob(): ChatRunSettings {
   const json = JSON.stringify({
     harnessId: "claude",
@@ -59,7 +41,6 @@ function legacyChatRunSettingsBlob(): ChatRunSettings {
     reasoningEffort: "high",
     serviceTier: null,
     agentMode: "regular",
-    // no `profileId` key here at all
   });
   return JSON.parse(json) as ChatRunSettings;
 }
@@ -85,8 +66,8 @@ function profile(
     usageUpdatedAt: null,
     rateLimitStatus,
     duplicateOfProfileId: null,
-    accentColor: null,
     ambientDriftNotice: null,
+    accentColor: null,
   };
 }
 
@@ -115,98 +96,131 @@ function claudeState(profiles: ProviderProfile[]): ProviderCliState {
   };
 }
 
-function PreFeatureComposerHarness({
-  seed,
-}: {
-  readonly seed: ChatRunSettings;
-}) {
-  const initialProfileId = selectionFromChatRunSettings(seed).profileId;
-  const [profileId, setProfileId] = useState<string | null>(initialProfileId);
-  // `authoritative: true` - this harness models the chat's OWN persisted
-  // settings (`chat.settings`), the authoritative seed, not a fallback.
+// Seeded from `selectionFromChatRunSettings` on a legacy (no `profileId`
+// key) blob, so the initial `profileId` state matches exactly what a
+// pre-feature chat resolves to on first render - mirrors
+// `ComposerProfileSwitchHarness` in
+// `profile-durability-d2-d3-rate-limit-switch.test.tsx`, the current
+// composer/store harness pattern for this banner.
+function PreFeatureComposerHarness() {
+  const [profileId, setProfileId] = useState<string | null>(
+    selectionFromChatRunSettings(legacyChatRunSettingsBlob()).profileId,
+  );
   const reauthGate = useProviderReauthGate(
     "claude",
     profileId,
     true,
     "authoritative",
   );
-  const rateLimitPrompt = useProfileRateLimitSwitchPrompt(
-    "claude",
-    profileId,
-    true,
-  );
-  const onSwitchProfile = useCallback((next: string | null) => {
-    setProfileId(next);
-  }, []);
-
+  const prompt = useProfileRateLimitSwitchPrompt("claude", profileId, true);
+  const visible = !reauthGate.signedOut && prompt.kind === "visible";
   return (
-    <div>
-      <div data-testid="profile-id">{profileId ?? "ambient"}</div>
-      <div data-testid="send-blocked">{String(reauthGate.signedOut)}</div>
-      <div data-testid="banner-visible">
-        {String(!reauthGate.signedOut && rateLimitPrompt.limited)}
+    <TooltipProvider delayDuration={0}>
+      <div>
+        <div data-testid="profile-id">{profileId ?? "ambient"}</div>
+        <div data-testid="send-blocked">{String(reauthGate.signedOut)}</div>
+        <div data-testid="banner-visible">{String(visible)}</div>
+        {visible ? (
+          <ProfileRateLimitSwitchBanner
+            harnessId="claude"
+            providerId={prompt.providerId}
+            severity={prompt.severity}
+            current={prompt.current}
+            profiles={prompt.profiles}
+            destinations={prompt.destinations}
+            primaryTarget={prompt.primaryTarget}
+            runTargetHostId={null}
+            onSwitchProfile={setProfileId}
+            affectedChatCount={1}
+            onSwitchProfileForTask={() => undefined}
+            onDismiss={prompt.dismiss}
+          />
+        ) : null}
       </div>
-      {!reauthGate.signedOut && rateLimitPrompt.limited ? (
-        <ProfileRateLimitSwitchBanner
-          harnessId="claude"
-          hardLimited={rateLimitPrompt.hardLimited}
-          current={rateLimitPrompt.current}
-          alternatives={rateLimitPrompt.alternatives}
-          onSwitchProfile={onSwitchProfile}
-          affectedChatCount={1}
-          onSwitchProfileForTask={() => undefined}
-          onDismiss={rateLimitPrompt.dismiss}
-        />
-      ) : null}
-    </div>
+    </TooltipProvider>
   );
 }
 
-describe("D6: pre-feature chat + flag-on multi-profile state", () => {
+describe("D6: pre-feature chat + multi-profile state", () => {
   beforeEach(() => {
     mocks.providers = [];
   });
-  afterEach(() => {
-    cleanup();
+  afterEach(cleanup);
+
+  it("resolves an absent profileId key to the ambient profile", () => {
+    expect(
+      selectionFromChatRunSettings(legacyChatRunSettingsBlob()).profileId,
+    ).toBeNull();
   });
 
-  it("selectionFromChatRunSettings resolves an absent profileId key to ambient (null), not undefined", () => {
-    const selection = selectionFromChatRunSettings(legacyChatRunSettingsBlob());
-    expect(selection.profileId).toBeNull();
-  });
-
-  it("a pre-feature chat with a healthy ambient login shows zero prompts/banners even with 2 managed profiles present", () => {
+  it("keeps a healthy ambient pre-feature chat hidden despite managed profiles", () => {
     mocks.providers = [
       claudeState([
         profile("ambient", "ambient", "Terminal account", "ok"),
-        profile("work-uuid", "managed", "Work", "ok"),
-        profile("personal-uuid", "managed", "Personal", "near_limit"),
+        profile("work", "managed", "Work", "ok"),
+        profile("personal", "managed", "Personal", "near_limit"),
       ]),
     ];
-    render(<PreFeatureComposerHarness seed={legacyChatRunSettingsBlob()} />);
+    const { result } = renderHook(() =>
+      useProfileRateLimitSwitchPrompt(
+        "claude",
+        selectionFromChatRunSettings(legacyChatRunSettingsBlob()).profileId,
+        true,
+      ),
+    );
+    expect(result.current.kind).toBe("hidden");
+  });
+
+  it("applies the warning uniformly when the ambient profile is limited", () => {
+    mocks.providers = [
+      claudeState([
+        profile("ambient", "ambient", "Terminal account", "hard_limit"),
+        profile("work", "managed", "Work", "ok"),
+      ]),
+    ];
+    const { result } = renderHook(() =>
+      useProfileRateLimitSwitchPrompt(
+        "claude",
+        selectionFromChatRunSettings(legacyChatRunSettingsBlob()).profileId,
+        true,
+      ),
+    );
+    expect(result.current.kind).toBe("visible");
+  });
+
+  it("integrated: a pre-feature chat with a healthy ambient login renders zero prompts/banners even with 2 managed profiles present", () => {
+    mocks.providers = [
+      claudeState([
+        profile("ambient", "ambient", "Terminal account", "ok"),
+        profile("work", "managed", "Work", "ok"),
+        profile("personal", "managed", "Personal", "near_limit"),
+      ]),
+    ];
+    render(<PreFeatureComposerHarness />);
 
     expect(screen.getByTestId("profile-id").textContent).toBe("ambient");
     expect(screen.getByTestId("send-blocked").textContent).toBe("false");
     expect(screen.getByTestId("banner-visible").textContent).toBe("false");
-    expect(
-      screen.queryByRole("button", { name: /Continue this session on/ }),
-    ).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Switch to/ })).toBeNull();
   });
 
-  it("documents intended behavior (not a bug): the feature applies uniformly, so a rate-limited AMBIENT login on a pre-feature chat DOES surface the same switch banner a managed profile would get", () => {
+  it("integrated: a rate-limited ambient login on a pre-feature chat renders the same switch banner a managed profile would get", () => {
     mocks.providers = [
       claudeState([
         profile("ambient", "ambient", "Terminal account", "hard_limit"),
-        profile("work-uuid", "managed", "Work", "ok"),
+        profile("work", "managed", "Work", "ok"),
       ]),
     ];
-    render(<PreFeatureComposerHarness seed={legacyChatRunSettingsBlob()} />);
+    render(<PreFeatureComposerHarness />);
 
     expect(screen.getByTestId("profile-id").textContent).toBe("ambient");
-    // This is expected, not a regression: a pre-feature chat is
-    // indistinguishable from a "chat committed to the ambient login" once
-    // resolved, and ambient's own rate-limit state is real - the multi-
-    // profile feature does not special-case "this chat predates profiles".
+    // Expected, not a regression: a pre-feature chat is indistinguishable
+    // from a chat committed to the ambient login once resolved, and
+    // ambient's own rate-limit state is real - the multi-profile feature
+    // does not special-case "this chat predates profiles".
     expect(screen.getByTestId("banner-visible").textContent).toBe("true");
+    expect(
+      screen.getByRole("button", { name: "Switch to Work" }),
+    ).toBeDefined();
   });
 });

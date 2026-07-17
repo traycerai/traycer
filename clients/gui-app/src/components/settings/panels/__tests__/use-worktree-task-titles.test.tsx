@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/index";
+import type { WorktreeHostEntryV14 } from "@traycer/protocol/host/index";
 import type {
   GetTaskContextsResponse,
   ListTaskLight,
@@ -50,7 +50,7 @@ function makeWrapper(
 function worktreeWithOwners(
   path: string,
   epicIds: readonly string[],
-): WorktreeHostEntryV12 {
+): WorktreeHostEntryV14 {
   return {
     worktreePath: path,
     branch: "feat",
@@ -75,6 +75,7 @@ function worktreeWithOwners(
     mergedHeadShaMatches: false,
     submodules: [],
     atBaseCommit: false,
+    resolvedAt: null,
   };
 }
 

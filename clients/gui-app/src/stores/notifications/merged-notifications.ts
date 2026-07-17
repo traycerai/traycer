@@ -521,6 +521,8 @@ function navigationPayloadFromKnown(
       };
     case "agent_stalled":
       return { kind: "chat", epicId: known.epicId, chatId: known.chatId };
+    case "workspace_operation_failed":
+      return { kind: "chat", epicId: known.epicId, chatId: known.chatId };
     case "epic":
       return { kind: "epic", epicId: known.epicId };
     case "approval":
@@ -558,15 +560,8 @@ function hostNotificationPresentation(
     entry.kind,
     entry.payload,
   );
-  const agentName =
-    known === null ? null : nonEmptyTitle(knownAgentName(known));
-  const chatTitle =
-    known === null ? null : nonEmptyTitle(knownChatTitle(known));
-  const taskTitle = known === null ? null : nonEmptyTitle(known.taskTitle);
-  const title = taskTitle ?? chatTitle ?? agentName ?? "Task";
-  const chatContext =
-    chatTitle !== null && chatTitle !== title ? chatTitle : "Chat";
-  const isTerminalAgent = known !== null && known.kind === "epic";
+  const { agentName, title, chatContext, isTerminalAgent } =
+    knownPresentationContext(known);
   switch (entry.kind) {
     case "agent.stopped": {
       const context = notificationContext(agentName, title, isTerminalAgent);
@@ -582,11 +577,31 @@ function hostNotificationPresentation(
         title,
         body: `${notificationContext(agentName, title, isTerminalAgent)} • ${agentStalledStatus(known)}`,
       };
+    case "workspace.operation.failed":
+      return {
+        title,
+        body: `${chatContext} • ${workspaceOperationFailedStatus(known)}`,
+      };
     case "approval.requested":
       return { title, body: `${chatContext} • Approval requested` };
     case "interview.requested":
       return { title, body: `${chatContext} • Question waiting` };
   }
+}
+
+function knownPresentationContext(known: HostNotificationKnownPayload | null) {
+  const agentName =
+    known === null ? null : nonEmptyTitle(knownAgentName(known));
+  const chatTitle =
+    known === null ? null : nonEmptyTitle(knownChatTitle(known));
+  const taskTitle = known === null ? null : nonEmptyTitle(known.taskTitle);
+  const title = taskTitle ?? chatTitle ?? agentName ?? "Task";
+  return {
+    agentName,
+    title,
+    chatContext: chatTitle !== null && chatTitle !== title ? chatTitle : "Chat",
+    isTerminalAgent: known?.kind === "epic",
+  };
 }
 
 function knownAgentName(payload: HostNotificationKnownPayload): string | null {
@@ -597,6 +612,7 @@ function knownAgentName(payload: HostNotificationKnownPayload): string | null {
       return payload.agentName;
     case "approval":
     case "interview":
+    case "workspace_operation_failed":
       return null;
   }
 }
@@ -605,6 +621,7 @@ function knownChatTitle(payload: HostNotificationKnownPayload): string | null {
   switch (payload.kind) {
     case "approval":
     case "interview":
+    case "workspace_operation_failed":
       return payload.chatTitle;
     case "chat":
     case "epic":
@@ -626,6 +643,7 @@ function knownStoppedReason(
     case "agent_stalled":
     case "approval":
     case "interview":
+    case "workspace_operation_failed":
       return null;
   }
 }
@@ -642,6 +660,7 @@ function knownProviderId(
     case "agent_stalled":
     case "approval":
     case "interview":
+    case "workspace_operation_failed":
       return null;
   }
 }
@@ -727,6 +746,17 @@ function agentStalledStatus(
     default:
       return "Stalled";
   }
+}
+
+function workspaceOperationFailedStatus(
+  payload: HostNotificationKnownPayload | null,
+): string {
+  if (payload?.kind !== "workspace_operation_failed") {
+    return "Workspace operation failed";
+  }
+  if (payload.operation === "provision") return "Worktree creation failed";
+  if (payload.operation === "setup") return "Workspace setup failed";
+  return "Workspace operation failed";
 }
 
 function notificationContext(

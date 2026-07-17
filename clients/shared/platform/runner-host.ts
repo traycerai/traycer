@@ -685,6 +685,7 @@ export interface INotificationHost {
     body: string,
     payload: unknown,
     replaceKey: string | null,
+    deliveryKey: string | null,
   ): Promise<void>;
   onClick(handler: (payload: unknown) => void): Disposable;
 }

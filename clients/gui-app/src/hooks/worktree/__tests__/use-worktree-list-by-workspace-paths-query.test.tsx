@@ -6,7 +6,7 @@ import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
-import type { WorktreeWorkspaceSummary } from "@traycer/protocol/host/worktree-schemas";
+import type { WorktreeWorkspaceSummaryV13 } from "@traycer/protocol/host/worktree-schemas";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { useWorktreeListByWorkspacePathsForClient } from "@/hooks/worktree/use-worktree-list-by-workspace-paths-query";
@@ -75,13 +75,13 @@ describe("useWorktreeListByWorkspacePathsForClient", () => {
 
 function workspacePathsOf(
   data:
-    | { readonly workspaces: ReadonlyArray<WorktreeWorkspaceSummary> }
+    | { readonly workspaces: ReadonlyArray<WorktreeWorkspaceSummaryV13> }
     | undefined,
 ): ReadonlyArray<string> {
   return (data?.workspaces ?? []).map((workspace) => workspace.workspacePath);
 }
 
-function workspaceSummary(workspacePath: string): WorktreeWorkspaceSummary {
+function workspaceSummary(workspacePath: string): WorktreeWorkspaceSummaryV13 {
   return {
     workspacePath,
     isGitRepo: false,
@@ -89,6 +89,7 @@ function workspaceSummary(workspacePath: string): WorktreeWorkspaceSummary {
     mainBranch: null,
     worktrees: [],
     scripts: null,
+    resolvedAt: 1,
   };
 }
 
