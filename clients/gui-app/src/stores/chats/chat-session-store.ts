@@ -1612,6 +1612,14 @@ export function createChatSessionStore(
       editUserMessage: (input) => {
         const clientActionId = uuidv4();
         const messageId = uuidv4();
+        const stagedKey: WorktreeStagingKey = {
+          surface: "owner",
+          epicId: options.epicId,
+          ownerKind: "chat",
+          ownerId: options.chatId,
+        };
+        if (stagedWorktreeIntentIsSuspended(stagedKey)) return null;
+        const worktreeIntent = readStagedWorktreeIntent(stagedKey);
         const frame: ChatOwnerActionFrame = {
           kind: "editUserMessage",
           hasBinaryPayload: false,
@@ -1624,6 +1632,7 @@ export function createChatSessionStore(
           sender: input.sender,
           settings: input.settings,
           accountContext: useAccountContextStore.getState().accountContext,
+          worktreeIntent,
           revertFileChanges: input.revertFileChanges,
           revertArtifacts: input.revertArtifacts,
         };
@@ -1643,6 +1652,13 @@ export function createChatSessionStore(
           pendingUserMessage: null,
         });
         if (sentClientActionId === null) return null;
+        if (worktreeIntent !== null) {
+          useWorktreeIntentMemoryStore
+            .getState()
+            .setEpicIntent(options.epicId, worktreeIntent, Date.now());
+          useWorktreeIntentStagingStore.getState().clear(stagedKey);
+          get().refreshMissingWorktreePaths([]);
+        }
         return { clientActionId: sentClientActionId, messageId };
       },
       revertFileChanges: (fromMessageId, filePaths, revertArtifacts) => {

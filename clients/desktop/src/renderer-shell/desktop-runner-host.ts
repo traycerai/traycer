@@ -153,6 +153,7 @@ export interface DesktopPreloadBridge {
       body: string,
       payload: unknown,
       replaceKey: string | null,
+      deliveryKey: string | null,
     ): Promise<void>;
     onClick(handler: (payload: unknown) => void): { dispose: () => void };
   };
@@ -619,8 +620,14 @@ export class DesktopRunnerHost implements IRunnerHost {
     };
 
     this.notifications = {
-      show: (title, body, payload, replaceKey) =>
-        this.bridge.notifications.show(title, body, payload, replaceKey),
+      show: (title, body, payload, replaceKey, deliveryKey) =>
+        this.bridge.notifications.show(
+          title,
+          body,
+          payload,
+          replaceKey,
+          deliveryKey,
+        ),
       onClick: (handler) =>
         toDisposable(this.bridge.notifications.onClick(handler)),
     };
