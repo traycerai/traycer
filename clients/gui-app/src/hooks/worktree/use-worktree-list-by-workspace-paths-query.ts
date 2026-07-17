@@ -23,7 +23,13 @@ export function useWorktreeListByWorkspacePathsForClient(
     method: "worktree.listByWorkspacePaths",
     // This summary-listing path never previews ref scripts; the per-ref read is a
     // separate point-read (see worktree-scripts-dialog). v1.1 requires the field.
-    params: { workspacePaths: [...args.workspacePaths], scriptRefs: [] },
+    // `forceRefresh: false` (v1.2): a background read serves the host's
+    // TTL-cached view; only an explicit user refresh forces a disk recompute.
+    params: {
+      workspacePaths: [...args.workspacePaths],
+      scriptRefs: [],
+      forceRefresh: false,
+    },
     options: {
       enabled: args.enabled && args.workspacePaths.length > 0,
       // The path set is part of the query key, so adding/removing a folder

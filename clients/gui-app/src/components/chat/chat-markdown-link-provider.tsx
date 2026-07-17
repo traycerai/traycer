@@ -3,6 +3,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
+import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostClient } from "@/lib/host";
 import { useOpenEpicId } from "@/lib/epic-selectors";
 import {
@@ -48,6 +49,10 @@ export function ChatMarkdownLinkProvider({
   );
   const queryClient = useQueryClient();
   const client = useHostClient();
+  // Bound to `hostId` (this chat tab's OWN host), NOT the app-wide default -
+  // relative-link existence probes must hit the tab's own filesystem even
+  // when the tab is pinned to a different host than the active one.
+  const workspaceClient = useHostClientForHostId(hostId);
   const navigate = useNavigate();
   const activeHostId = useReactiveActiveHostId();
   const openEpicId = useOpenEpicId();
@@ -92,6 +97,7 @@ export function ChatMarkdownLinkProvider({
         epicHandle,
         queryClient,
         client,
+        workspaceClient,
         navigate,
         previewTileInTab,
       }),
@@ -105,6 +111,7 @@ export function ChatMarkdownLinkProvider({
       previewTileInTab,
       queryClient,
       tabId,
+      workspaceClient,
       workspaceRoots,
     ],
   );

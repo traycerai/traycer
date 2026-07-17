@@ -85,6 +85,7 @@ export class MockRunnerHost implements IRunnerHost {
     readonly body: string;
     readonly payload: unknown;
     readonly replaceKey: string | null;
+    readonly deliveryKey: string | null;
   }> = [];
   readonly secureStorageEntries: Map<string, string> = new Map();
   readonly tokenStoreEntries: Map<string, StoredAuthTokens> = new Map();
@@ -253,8 +254,15 @@ export class MockRunnerHost implements IRunnerHost {
       body: string,
       payload: unknown,
       replaceKey: string | null,
+      deliveryKey: string | null,
     ): Promise<void> => {
-      this.notificationsSent.push({ title, body, payload, replaceKey });
+      this.notificationsSent.push({
+        title,
+        body,
+        payload,
+        replaceKey,
+        deliveryKey,
+      });
     },
     onClick: (handler: (payload: unknown) => void): Disposable => {
       this.notificationClickHandlers.add(handler);

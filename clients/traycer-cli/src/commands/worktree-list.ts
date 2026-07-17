@@ -1,8 +1,8 @@
 import {
-  worktreeListAllForHostRequestSchemaV12,
-  worktreeListAllForHostResponseSchemaV12,
+  worktreeListAllForHostRequestSchemaV14,
+  worktreeListAllForHostResponseSchemaV14,
 } from "@traycer/protocol/host";
-import type { WorktreeHostEntryV12 } from "@traycer/protocol/host";
+import type { WorktreeHostEntryV14 } from "@traycer/protocol/host";
 import {
   WORKTREE_TIER_LABEL,
   classifyWorktreeTier,
@@ -30,7 +30,7 @@ const DEFAULT_WORKTREE_LIST_PAGE_LIMIT = 32;
  * feed the greens, so classifying unprobed entries would misread every worktree
  * as Review. Null mirrors the probe-skipped semantics of the other fields.
  */
-export type WorktreeListRow = WorktreeHostEntryV12 & {
+export type WorktreeListRow = WorktreeHostEntryV14 & {
   readonly tier: WorktreeTier | null;
 };
 
@@ -51,7 +51,7 @@ interface WorktreeListPage {
 
 /**
  * `traycer worktree list` - host-wide listing of every Traycer-managed
- * worktree under `~/.traycer/worktrees/`. Calls `worktree.listAllForHost@1.2`;
+ * worktree under `~/.traycer/worktrees/`. Calls `worktree.listAllForHost@1.4`;
  * the canonical (latest) request carries `includeActivity`, so a v1.0 host is
  * bridged up transparently (enriched fields default to empty `owners` / `null`
  * timestamps). Human mode renders a scannable table; `--json` hands the
@@ -127,18 +127,21 @@ async function requestWorktreeListPage(
   cursor: string | null,
   limit: number | null,
 ): Promise<WorktreeListPage> {
-  const request = parseUserInput(worktreeListAllForHostRequestSchemaV12, {
+  const request = parseUserInput(worktreeListAllForHostRequestSchemaV14, {
     includeActivity,
     // The CLI is a paged-listing caller, never a GUI per-selection probe.
     activityPaths: null,
     cursor,
     limit,
+    // CLI invocations are one-shot accuracy reads, so each page deliberately
+    // awaits resolve-now instead of inheriting the GUI's cache-only poll path.
+    forceRefresh: true,
   });
   const result = await toAgentCliError(
     callHostRpc("worktree.listAllForHost", request),
   );
   const parsed = parseHostResponse(
-    worktreeListAllForHostResponseSchemaV12,
+    worktreeListAllForHostResponseSchemaV14,
     result,
   );
   return {

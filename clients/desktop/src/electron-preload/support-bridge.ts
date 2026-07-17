@@ -26,6 +26,7 @@ export interface SupportBridgeSurface {
       body: string,
       payload: unknown,
       replaceKey: string | null,
+      deliveryKey: string | null,
     ): Promise<void>;
     onClick(handler: Listener<unknown>): Disposable;
   };
@@ -65,13 +66,14 @@ export function buildSupportBridge(): SupportBridgeSurface {
       ipcRenderer.invoke(RunnerHostInvoke.openMicrophoneSettings),
 
     notifications: {
-      show: (title, body, payload, replaceKey) =>
+      show: (title, body, payload, replaceKey, deliveryKey) =>
         ipcRenderer.invoke(
           RunnerHostInvoke.notificationShow,
           title,
           body,
           payload,
           replaceKey,
+          deliveryKey,
         ),
       onClick: (handler) =>
         subscribe<unknown>(RunnerHostEvent.notificationClick, handler),

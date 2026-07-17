@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { WorktreeHostEntryV12 } from "@traycer/protocol/host";
+import type { WorktreeHostEntryV14 } from "@traycer/protocol/host";
 import type { WorktreeTier } from "@traycer-clients/shared/worktree/classify-worktree";
 import {
   buildWorktreeListCommand,
@@ -31,7 +31,7 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-function entry(overrides: Partial<WorktreeHostEntryV12>): WorktreeHostEntryV12 {
+function entry(overrides: Partial<WorktreeHostEntryV14>): WorktreeHostEntryV14 {
   return {
     worktreePath: "/Users/dev/.traycer/worktrees/acme__web/feature-x",
     repoLabel: "acme/web",
@@ -51,12 +51,13 @@ function entry(overrides: Partial<WorktreeHostEntryV12>): WorktreeHostEntryV12 {
     mergedHeadShaMatches: false,
     submodules: [],
     atBaseCommit: false,
+    resolvedAt: 1,
     ...overrides,
   };
 }
 
 function row(
-  overrides: Partial<WorktreeHostEntryV12>,
+  overrides: Partial<WorktreeHostEntryV14>,
   tier: WorktreeTier | null,
 ): WorktreeListRow {
   return { ...entry(overrides), tier };
@@ -202,6 +203,7 @@ describe("buildWorktreeListCommand", () => {
       activityPaths: null,
       cursor: null,
       limit: 32,
+      forceRefresh: true,
     });
     expect(result.data).toEqual({
       worktrees: [{ ...entry({}), tier: "review" }],
@@ -252,6 +254,7 @@ describe("buildWorktreeListCommand", () => {
       activityPaths: null,
       cursor: null,
       limit: 32,
+      forceRefresh: true,
     });
     expect(result.data).toEqual({
       worktrees: [
@@ -290,12 +293,14 @@ describe("buildWorktreeListCommand", () => {
       activityPaths: null,
       cursor: null,
       limit: 32,
+      forceRefresh: true,
     });
     expect(rpcMock).toHaveBeenNthCalledWith(2, "worktree.listAllForHost", {
       includeActivity: true,
       activityPaths: null,
       cursor: first.worktreePath,
       limit: 32,
+      forceRefresh: true,
     });
     expect(result.data).toEqual({
       worktrees: [
@@ -325,6 +330,7 @@ describe("buildWorktreeListCommand", () => {
       activityPaths: null,
       cursor: "/Users/dev/.traycer/worktrees/acme__web/feature-x",
       limit: 7,
+      forceRefresh: true,
     });
     expect(result.data).toEqual({
       worktrees: [{ ...entry({}), tier: "review" }],
@@ -364,12 +370,14 @@ describe("buildWorktreeListCommand", () => {
       activityPaths: null,
       cursor: startCursor,
       limit: 32,
+      forceRefresh: true,
     });
     expect(rpcMock).toHaveBeenNthCalledWith(2, "worktree.listAllForHost", {
       includeActivity: true,
       activityPaths: null,
       cursor: first.worktreePath,
       limit: 32,
+      forceRefresh: true,
     });
     expect(result.data).toEqual({
       worktrees: [

@@ -1,4 +1,4 @@
-import { useMemo, useState, type RefObject } from "react";
+import { useMemo, type RefObject } from "react";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type {
   ProviderId,
@@ -8,16 +8,10 @@ import {
   ProfileDropdown,
   type ProfileDropdownShortcutHint,
 } from "@/components/providers/profile-dropdown";
-import {
-  projectComparisonEntry,
-  scopeProfileUsageRefreshStatus,
-  type ProfileDropdownUsageEntry,
-  type ProfileDropdownUsagePresentation,
-} from "@/components/providers/profile-dropdown-usage";
-import { useProfileUsageComparison } from "@/hooks/rate-limits/use-profile-usage-comparison";
+import type { ProfileDropdownUsagePresentation } from "@/components/providers/profile-dropdown-usage";
+import { useProfileUsagePresentation } from "@/hooks/rate-limits/use-profile-usage-presentation";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
-import { useSampledNow } from "@/lib/relative-time";
 import { guiHarnessIdToProviderId } from "@/lib/provider-ordering";
 import { profileCommitId } from "@/components/providers/provider-profile-model";
 
@@ -81,55 +75,11 @@ function ProfileUsagePickerProfileDropdown({
     runTargetClient,
     runTargetProvidersQuery.data,
   ]);
-  const comparison = useProfileUsageComparison({
+  const usagePresentation = useProfileUsagePresentation({
     runTargetHostId: props.runTargetHostId,
     providerId,
     profiles: usageProfiles,
   });
-  const now = useSampledNow();
-  const [pendingRefreshKeys, setPendingRefreshKeys] = useState<
-    ReadonlySet<string>
-  >(() => new Set());
-  const entries = useMemo(() => {
-    const projected = new Map<string | null, ProfileDropdownUsageEntry>();
-    comparison.entries.forEach((entry, profileId) => {
-      const refreshKey = JSON.stringify([providerId, profileId]);
-      const refresh = async (): Promise<void> => {
-        setPendingRefreshKeys((current) => {
-          const next = new Set(current);
-          next.add(refreshKey);
-          return next;
-        });
-        await entry.refresh().finally(() => {
-          setPendingRefreshKeys((current) => {
-            if (!current.has(refreshKey)) return current;
-            const next = new Set(current);
-            next.delete(refreshKey);
-            return next;
-          });
-        });
-      };
-      projected.set(
-        profileId,
-        projectComparisonEntry(
-          {
-            ...entry,
-            refreshStatus: scopeProfileUsageRefreshStatus(
-              entry.refreshStatus,
-              pendingRefreshKeys.has(refreshKey),
-            ),
-            refresh,
-          },
-          now,
-        ),
-      );
-    });
-    return projected;
-  }, [comparison.entries, now, pendingRefreshKeys, providerId]);
-  const usagePresentation = useMemo<ProfileDropdownUsagePresentation>(
-    () => ({ isHostReady: comparison.isReady, entries }),
-    [comparison.isReady, entries],
-  );
 
   return (
     <PickerProfileDropdownView
