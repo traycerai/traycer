@@ -3,12 +3,15 @@ import { log } from "./app/logger";
 
 export const NOTIFICATION_REPLACE_TTL_MS = 60_000;
 const MAX_REPLACEABLE_NOTIFICATIONS = 100;
+const MAX_DELIVERED_NOTIFICATION_KEYS = 5_000;
 const replaceableNotifications = new Map<string, Notification>();
+const deliveredNotificationKeys = new Set<string>();
 
 export interface NativeNotificationOptions {
   readonly title: string;
   readonly body: string;
   readonly replaceKey: string | null;
+  readonly deliveryKey: string | null;
   readonly onClick: (() => void) | null;
 }
 
@@ -20,8 +23,15 @@ export interface NativeNotificationOptions {
 export function showNativeNotification(
   options: NativeNotificationOptions,
 ): void {
+  if (
+    options.deliveryKey !== null &&
+    deliveredNotificationKeys.has(options.deliveryKey)
+  ) {
+    return;
+  }
   if (!Notification.isSupported()) {
     log.warn("[notifications] not supported on this platform");
+    rememberDeliveredNotificationKey(options.deliveryKey);
     return;
   }
 
@@ -54,6 +64,19 @@ export function showNativeNotification(
     notification.on("click", options.onClick);
   }
   notification.show();
+  rememberDeliveredNotificationKey(options.deliveryKey);
+}
+
+function rememberDeliveredNotificationKey(deliveryKey: string | null): void {
+  if (deliveryKey === null || deliveredNotificationKeys.has(deliveryKey)) {
+    return;
+  }
+  while (deliveredNotificationKeys.size >= MAX_DELIVERED_NOTIFICATION_KEYS) {
+    const oldest = deliveredNotificationKeys.values().next();
+    if (oldest.done) return;
+    deliveredNotificationKeys.delete(oldest.value);
+  }
+  deliveredNotificationKeys.add(deliveryKey);
 }
 
 /**
@@ -94,6 +117,7 @@ export function showSimpleNotification(
     title,
     body,
     replaceKey: null,
+    deliveryKey: null,
     onClick,
   });
 }

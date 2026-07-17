@@ -10,6 +10,7 @@ import {
 } from "@/lib/notifications";
 import { appLocalNotificationsKey, basePersistOptions } from "@/lib/persist";
 import type { HostNotificationsEntityRef } from "@traycer/protocol/host/notifications/contracts";
+import { clearAppLocalDisplayReceipts } from "@/lib/notifications/app-local-display-receipts";
 
 type TerminalNotificationTarget = Extract<
   NotificationPayload,
@@ -32,7 +33,7 @@ export type AppLocalNotificationKind =
   | "stream.transport.error"
   | "host.error";
 
-export interface AppLocalNotificationEntry {
+export interface AppLocalNotificationInput {
   readonly id: string;
   readonly updatedAt: number;
   readonly readAt: number | null;
@@ -41,6 +42,17 @@ export interface AppLocalNotificationEntry {
   readonly payload: NotificationPayload | null;
   readonly message: string;
   readonly detail: string | null;
+}
+
+export interface AppLocalNotificationEntry extends AppLocalNotificationInput {
+  /**
+   * `null` means this row still needs a renderer display. A matching timestamp
+   * is the row-local projection of the separate monotonic display receipt.
+   * Legacy persisted rows have no field and therefore read as `undefined`;
+   * they predate receipts and are treated as already displayed so an upgrade
+   * cannot replay an unread backlog.
+   */
+  readonly displayedUpdatedAt: number | null | undefined;
 }
 
 interface AppLocalNotificationsProjection {
@@ -56,10 +68,10 @@ export interface AppLocalNotificationsState {
 
   activateIdentity: (userId: string) => void;
   deactivateIdentity: () => void;
-  upsert: (entry: AppLocalNotificationEntry) => void;
-  upsertReplacing: (entry: AppLocalNotificationEntry) => void;
+  upsert: (entry: AppLocalNotificationInput) => void;
+  upsertReplacing: (entry: AppLocalNotificationInput) => void;
   upsertReplacingPreservingReadState: (
-    entry: AppLocalNotificationEntry,
+    entry: AppLocalNotificationInput,
   ) => void;
   markAsRead: (id: string, readAt: number) => void;
   markEntityAsRead: (
@@ -67,6 +79,7 @@ export interface AppLocalNotificationsState {
     readAt: number,
   ) => void;
   markAllAsRead: (readAt: number) => void;
+  markAsDisplayed: (id: string, updatedAt: number) => void;
   clearAll: () => void;
   resetForTests: () => void;
 }
@@ -115,6 +128,12 @@ function cappedAppLocalEntries(
   );
 }
 
+function pendingDisplayEntry(
+  entry: AppLocalNotificationInput,
+): AppLocalNotificationEntry {
+  return { ...entry, displayedUpdatedAt: null };
+}
+
 type AppLocalNotificationsPersistedState = Pick<
   AppLocalNotificationsState,
   "byId" | "orderedIds" | "unreadCount"
@@ -160,7 +179,8 @@ function parsePersistedAppLocalEntry(
       (typeof value.readAt !== "number" || !Number.isFinite(value.readAt))) ||
     (value.sourceRef !== null && typeof value.sourceRef !== "string") ||
     typeof value.message !== "string" ||
-    (value.detail !== null && typeof value.detail !== "string")
+    (value.detail !== null && typeof value.detail !== "string") ||
+    !isPersistedDisplayReceipt(value.displayedUpdatedAt)
   ) {
     return null;
   }
@@ -173,7 +193,18 @@ function parsePersistedAppLocalEntry(
     payload: parseNotificationPayload(value.payload),
     message: value.message,
     detail: value.detail,
+    displayedUpdatedAt: value.displayedUpdatedAt,
   };
+}
+
+function isPersistedDisplayReceipt(
+  value: unknown,
+): value is number | null | undefined {
+  return (
+    value === undefined ||
+    value === null ||
+    (typeof value === "number" && Number.isFinite(value))
+  );
 }
 
 function isAppLocalNotificationKind(
@@ -209,9 +240,10 @@ export function createAppLocalNotificationsStore(initialName: string) {
           if (get().activeUserId === null) return;
           if (Object.hasOwn(get().byId, entry.id)) return;
           set((state) => {
+            const pendingEntry = pendingDisplayEntry(entry);
             const byId = cappedAppLocalEntries({
               ...state.byId,
-              [entry.id]: entry,
+              [pendingEntry.id]: pendingEntry,
             });
             const projection = projectAppLocalNotifications(byId);
             return {
@@ -234,6 +266,7 @@ export function createAppLocalNotificationsStore(initialName: string) {
         upsertReplacing: (entry) => {
           if (get().activeUserId === null) return;
           set((state) => {
+            const pendingEntry = pendingDisplayEntry(entry);
             const existing = Object.hasOwn(state.byId, entry.id)
               ? state.byId[entry.id]
               : null;
@@ -242,11 +275,24 @@ export function createAppLocalNotificationsStore(initialName: string) {
               existing.readAt !== null &&
               entry.updatedAt - existing.readAt <
                 APP_LOCAL_RESURFACE_COOLDOWN_MS;
+            let replacement = pendingEntry;
+            if (existing !== null) {
+              const preservesDisplay =
+                existing.displayedUpdatedAt !== null &&
+                (existing.readAt === null || acknowledged);
+              replacement = {
+                ...pendingEntry,
+                displayedUpdatedAt: preservesDisplay
+                  ? pendingEntry.updatedAt
+                  : null,
+              };
+              if (acknowledged) {
+                replacement = { ...replacement, readAt: existing.readAt };
+              }
+            }
             const byId = cappedAppLocalEntries({
               ...state.byId,
-              [entry.id]: acknowledged
-                ? { ...entry, readAt: existing.readAt }
-                : entry,
+              [pendingEntry.id]: replacement,
             });
             const projection = projectAppLocalNotifications(byId);
             return {
@@ -260,15 +306,21 @@ export function createAppLocalNotificationsStore(initialName: string) {
         upsertReplacingPreservingReadState: (entry) => {
           if (get().activeUserId === null) return;
           set((state) => {
+            const pendingEntry = pendingDisplayEntry(entry);
             const existing = Object.hasOwn(state.byId, entry.id)
               ? state.byId[entry.id]
               : null;
+            let replacement = pendingEntry;
+            if (existing !== null) {
+              replacement = {
+                ...pendingEntry,
+                readAt: existing.readAt,
+                displayedUpdatedAt: existing.displayedUpdatedAt,
+              };
+            }
             const byId = cappedAppLocalEntries({
               ...state.byId,
-              [entry.id]:
-                existing === null
-                  ? entry
-                  : { ...entry, readAt: existing.readAt },
+              [pendingEntry.id]: replacement,
             });
             const projection = projectAppLocalNotifications(byId);
             return {
@@ -341,8 +393,25 @@ export function createAppLocalNotificationsStore(initialName: string) {
           });
         },
 
+        markAsDisplayed: (id, updatedAt) => {
+          set((state) => {
+            if (!Object.hasOwn(state.byId, id)) return state;
+            const entry = state.byId[id];
+            if (entry.updatedAt !== updatedAt) return state;
+            if (entry.displayedUpdatedAt === updatedAt) return state;
+            return {
+              byId: {
+                ...state.byId,
+                [id]: { ...entry, displayedUpdatedAt: updatedAt },
+              },
+            };
+          });
+        },
+
         clearAll: () => {
-          if (get().activeUserId === null) return;
+          const activeUserId = get().activeUserId;
+          if (activeUserId === null) return;
+          clearAppLocalDisplayReceipts(activeUserId);
           set({ byId: {}, orderedIds: [], unreadCount: 0 });
         },
 
