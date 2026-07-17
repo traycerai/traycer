@@ -491,9 +491,13 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
         files.length === 0
           ? Promise.resolve([] as readonly string[])
           : runnerHost.fileDrops.resolveDroppedFilePaths(files);
-      void resolvedFilePaths
-        .then((paths) => {
-          pastePaths([...paths, ...fileUrlPaths]);
+      const stableUrlPaths =
+        fileUrlPaths.length === 0
+          ? Promise.resolve([] as readonly string[])
+          : runnerHost.fileDrops.copyDroppedFilePaths(fileUrlPaths);
+      void Promise.all([resolvedFilePaths, stableUrlPaths])
+        .then(([paths, urlPaths]) => {
+          pastePaths([...paths, ...urlPaths]);
         })
         .catch(() => undefined);
     },
