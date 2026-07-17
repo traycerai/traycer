@@ -1618,6 +1618,7 @@ export function createChatSessionStore(
           ownerKind: "chat",
           ownerId: options.chatId,
         };
+        if (stagedWorktreeIntentIsSuspended(stagedKey)) return null;
         const worktreeIntent = readStagedWorktreeIntent(stagedKey);
         const frame: ChatOwnerActionFrame = {
           kind: "editUserMessage",
