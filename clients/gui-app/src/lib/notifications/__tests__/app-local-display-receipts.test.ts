@@ -20,6 +20,13 @@ function version(
   return { userId, notificationId, updatedAt };
 }
 
+function receiptKeysForUser(userId: string): ReadonlyArray<string> {
+  const prefix = `traycer-gui-app:app-local-notification-display-receipt:${userId}:`;
+  return Array.from({ length: window.localStorage.length }, (_, index) =>
+    window.localStorage.key(index),
+  ).filter((key): key is string => key !== null && key.startsWith(prefix));
+}
+
 describe("app-local display receipts", () => {
   beforeEach(() => {
     window.localStorage.clear();
@@ -74,11 +81,8 @@ describe("app-local display receipts", () => {
 
     const exactPrefix =
       "traycer-gui-app:app-local-notification-display-receipt:user-1:recurring:";
-    const exactKeys = Array.from(
-      { length: window.localStorage.length },
-      (_, index) => window.localStorage.key(index),
-    ).filter(
-      (key): key is string => key !== null && key.startsWith(exactPrefix),
+    const exactKeys = receiptKeysForUser("user-1").filter((key) =>
+      key.startsWith(exactPrefix),
     );
     expect(exactKeys).toHaveLength(APP_LOCAL_DISPLAY_RECEIPT_VERSION_CAP);
     expect(hasAppLocalDisplayReceipt(version("user-1", "recurring", 1))).toBe(
@@ -118,9 +122,15 @@ describe("app-local display receipts", () => {
       );
     }
 
+    expect(receiptKeysForUser("user-1")).toHaveLength(
+      APP_LOCAL_DISPLAY_RECEIPT_NOTIFICATION_CAP,
+    );
     expect(
       hasAppLocalDisplayReceipt(version("user-1", "notification-0", 1)),
     ).toBe(false);
+    expect(
+      hasAppLocalDisplayReceipt(version("user-1", "notification-1", 2)),
+    ).toBe(true);
     expect(
       hasAppLocalDisplayReceipt(
         version(
