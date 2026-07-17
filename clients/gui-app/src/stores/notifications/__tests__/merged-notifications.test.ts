@@ -74,6 +74,7 @@ function appLocalEntry(
     payload: { kind: "chat", epicId: "epic-1", chatId: "chat-1" },
     message: "Chat stream closed unexpectedly",
     detail: null,
+    displayedUpdatedAt: null,
   };
 }
 

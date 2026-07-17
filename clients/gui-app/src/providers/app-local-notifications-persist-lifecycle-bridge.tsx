@@ -10,6 +10,7 @@ import {
   retargetPersistedStore,
 } from "@/lib/persist/zustand-persist-lifecycle";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
+import { clearAppLocalDisplayReceipts } from "@/lib/notifications/app-local-display-receipts";
 
 export interface AppLocalNotificationsPersistLifecycleBridgeProps {
   readonly children: ReactNode;
@@ -39,6 +40,10 @@ export function AppLocalNotificationsPersistLifecycleBridge(
         useAppLocalNotificationsStore.getState().deactivateIdentity();
       }
       return;
+    }
+    const activeUserId = useAppLocalNotificationsStore.getState().activeUserId;
+    if (activeUserId !== null) {
+      clearAppLocalDisplayReceipts(activeUserId);
     }
     clearAndResetPersistedStore({
       store: useAppLocalNotificationsStore,

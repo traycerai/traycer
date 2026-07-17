@@ -57,6 +57,31 @@ export const openEpicKey = (identity: string | null, epicId: string): string =>
 export const appLocalNotificationsKey = (userId: string | null): string =>
   scopedPersistKey("app-local-notifications", scopeBucket(userId));
 
+export const appLocalNotificationDisplayReceiptPrefix = (
+  userId: string,
+): string =>
+  scopedPersistKey(
+    "app-local-notification-display-receipt",
+    encodeURIComponent(userId),
+  );
+
+export const appLocalNotificationDisplayReceiptNotificationPrefix = (input: {
+  readonly userId: string;
+  readonly notificationId: string;
+}): string =>
+  scopedPersistKey(
+    "app-local-notification-display-receipt",
+    encodeURIComponent(input.userId),
+    encodeURIComponent(input.notificationId),
+  );
+
+export const appLocalNotificationDisplayReceiptKey = (input: {
+  readonly userId: string;
+  readonly notificationId: string;
+  readonly updatedAt: number;
+}): string =>
+  `${appLocalNotificationDisplayReceiptNotificationPrefix(input)}:${String(input.updatedAt)}`;
+
 // Host-scoped (not identity-scoped): the worktrees panel's warm-open snapshot
 // of per-path activity entries (worktrees-enrichment-persistence.ts). A host
 // id is always non-empty, so no `scopeBucket` collapse applies.
@@ -187,6 +212,14 @@ export const PERSIST_STORES = [
     camelName: "deletedEpicEventsChannel",
     leaf: "deleted-epic-events:v1",
     kind: "channel",
+  },
+  // One monotonic key per displayed app-local notification version. Separate
+  // keys prevent an unrelated full-snapshot Zustand write in another window
+  // from erasing a receipt.
+  {
+    camelName: "appLocalNotificationDisplayReceipt",
+    leaf: "app-local-notification-display-receipt",
+    kind: "scoped",
   },
   // `worktree-activity-cache:<hostId>` — the worktrees panel's warm-open
   // TanStack snapshot (worktrees-enrichment-persistence.ts), host-scoped.
