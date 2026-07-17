@@ -452,10 +452,11 @@ export const hostNotificationsIndicatorState = defineRpcContract({
 });
 
 /**
- * `host.notificationHooks.*@1.0` - read-only status/test surface for the
- * host's file-configured notification hooks (Claude Code-style: the hooks
- * themselves are configured ONLY by hand-editing the host's
- * `notification-hooks.json`; these methods never write configuration).
+ * `host.notificationHooks.*@1.0` - status, test, and whole-file save surface
+ * for the host's notification hooks. The host's `notification-hooks.json`
+ * stays the single source of truth and remains hand-editable; `save` rewrites
+ * that file from the client's full hook list (last write wins - the form and
+ * hand-edits are two equal editors over one file).
  *
  * `configPath` is the one deliberate filesystem-path disclosure on this
  * surface: it is the user's own hand-editable config file location, not a

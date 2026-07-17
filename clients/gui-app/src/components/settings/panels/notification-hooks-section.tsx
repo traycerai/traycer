@@ -334,7 +334,7 @@ function HookRow(props: {
           type="button"
           variant="outline"
           size="sm"
-          disabled={!hook.enabled || testingThisHook}
+          disabled={!hook.enabled || testHook.isPending}
           onClick={() => {
             testHook.mutate(
               { hookId: hook.id },

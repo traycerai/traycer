@@ -6,6 +6,7 @@ import {
   HOOK_SEVERITIES,
   type HookDraft,
 } from "@/components/settings/panels/notification-hook-draft";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -220,6 +221,13 @@ export function NotificationHookEditorDialog(props: {
                 props.onSave(draftToHook(draft));
               }}
             >
+              {props.saving ? (
+                <AgentSpinningDots
+                  className={undefined}
+                  testId={undefined}
+                  variant={undefined}
+                />
+              ) : null}
               Save hook
             </Button>
           </div>
