@@ -56,6 +56,9 @@ export interface AppLocalNotificationsState {
   deactivateIdentity: () => void;
   upsert: (entry: AppLocalNotificationEntry) => void;
   upsertReplacing: (entry: AppLocalNotificationEntry) => void;
+  upsertReplacingPreservingReadState: (
+    entry: AppLocalNotificationEntry,
+  ) => void;
   markAsRead: (id: string, readAt: number) => void;
   markEntityAsRead: (
     entity: HostNotificationsEntityRef,
@@ -176,6 +179,28 @@ export function createAppLocalNotificationsStore(initialName: string) {
           });
         },
 
+        upsertReplacingPreservingReadState: (entry) => {
+          if (get().activeUserId === null) return;
+          set((state) => {
+            const existing = Object.hasOwn(state.byId, entry.id)
+              ? state.byId[entry.id]
+              : null;
+            const byId = cappedAppLocalEntries({
+              ...state.byId,
+              [entry.id]:
+                existing === null
+                  ? entry
+                  : { ...entry, readAt: existing.readAt },
+            });
+            const projection = projectAppLocalNotifications(byId);
+            return {
+              byId,
+              orderedIds: projection.orderedIds,
+              unreadCount: projection.unreadCount,
+            };
+          });
+        },
+
         markAsRead: (id, readAt) => {
           if (get().activeUserId === null) return;
           set((state) => {
@@ -270,7 +295,7 @@ export function emitTerminalClosedNotification(input: {
   readonly target: TerminalNotificationTarget;
 }): void {
   const message = `Terminal closed: host "${input.hostLabel}" is unreachable.`;
-  useAppLocalNotificationsStore.getState().upsert({
+  useAppLocalNotificationsStore.getState().upsertReplacingPreservingReadState({
     id: `terminal.closed:${input.instanceId}`,
     updatedAt: Date.now(),
     readAt: null,

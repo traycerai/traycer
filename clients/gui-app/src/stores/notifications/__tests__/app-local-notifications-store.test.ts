@@ -178,6 +178,52 @@ describe("app-local notifications store", () => {
     });
   });
 
+  it("refreshes a terminal-closed entry's target after the terminal moves", () => {
+    useAppLocalNotificationsStore.getState().activateIdentity("user-a");
+
+    emitTerminalClosedNotification({
+      instanceId: "terminal-instance",
+      hostLabel: "MacBook",
+      target: {
+        kind: "terminal",
+        epicId: "epic-1",
+        terminalId: "terminal-tile-1",
+        tabId: "view-tab-1",
+        paneId: "pane-1",
+        tileInstanceId: "terminal-instance",
+      },
+    });
+    useAppLocalNotificationsStore
+      .getState()
+      .markAsRead("terminal.closed:terminal-instance", 123);
+
+    emitTerminalClosedNotification({
+      instanceId: "terminal-instance",
+      hostLabel: "MacBook",
+      target: {
+        kind: "terminal",
+        epicId: "epic-1",
+        terminalId: "terminal-tile-1",
+        tabId: "view-tab-2",
+        paneId: "pane-2",
+        tileInstanceId: "terminal-instance",
+      },
+    });
+
+    expect(
+      useAppLocalNotificationsStore.getState().byId[
+        "terminal.closed:terminal-instance"
+      ],
+    ).toMatchObject({
+      readAt: 123,
+      payload: {
+        kind: "terminal",
+        tabId: "view-tab-2",
+        paneId: "pane-2",
+      },
+    });
+  });
+
   it("keeps successive terminal deaths as distinct entity-addressable rows", () => {
     useAppLocalNotificationsStore.getState().activateIdentity("user-a");
 
