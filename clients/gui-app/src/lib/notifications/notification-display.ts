@@ -17,7 +17,10 @@ import { readFocusedHostNotificationPresenceEntity } from "@/lib/notifications/n
 export interface NotificationDisplayTarget {
   readonly showNotification: NotificationShow;
   readonly playChime: () => void;
-  readonly onToastClick: (row: MergedNotificationRow) => void;
+  readonly onToastClick: (
+    row: MergedNotificationRow,
+    activatedAt: number,
+  ) => void;
 }
 
 export function displayNotificationRows(
@@ -40,54 +43,38 @@ export function displayNotificationRows(
   } catch {
     // The feed remains authoritative; a failed native toast is non-critical.
   }
-  if (content.row.payload === null) {
-    toast(content.title, {
-      description: content.body,
-      id: content.replaceKey,
-    });
-  } else {
-    toast.custom(
-      (id) =>
+  const isActionable = content.row.payload !== null;
+  const toastTitle = isActionable
+    ? createElement(
+        "button",
+        {
+          type: "button",
+          "aria-label": `${content.title} ${content.body}`,
+          "data-notification-toast-action": "",
+          className: "min-w-0 text-left",
+          onClick: () => {
+            target.onToastClick(content.row, Date.now());
+          },
+        },
         createElement(
-          "div",
+          "span",
+          { className: "block font-medium leading-normal" },
+          content.title,
+        ),
+        createElement(
+          "span",
           {
             className:
-              "flex w-[var(--width)] items-start gap-2 rounded-[var(--radius)] border border-border bg-popover p-4 text-popover-foreground shadow-md",
+              "mt-0.5 block text-sm leading-snug text-muted-foreground",
           },
-          createElement(
-            "button",
-            {
-              type: "button",
-              className: "min-w-0 flex-1 text-left",
-              onClick: () => target.onToastClick(content.row),
-            },
-            createElement(
-              "div",
-              { className: "font-medium leading-normal" },
-              content.title,
-            ),
-            createElement(
-              "div",
-              {
-                className: "mt-0.5 text-sm leading-snug text-muted-foreground",
-              },
-              content.body,
-            ),
-          ),
-          createElement(
-            "button",
-            {
-              type: "button",
-              "aria-label": "Close toast",
-              className: "text-muted-foreground hover:text-foreground",
-              onClick: () => toast.dismiss(id),
-            },
-            "×",
-          ),
+          content.body,
         ),
-      { id: content.replaceKey },
-    );
-  }
+      )
+    : content.title;
+  toast(toastTitle, {
+    description: isActionable ? undefined : content.body,
+    id: content.replaceKey,
+  });
   target.playChime();
 }
 
@@ -194,6 +181,7 @@ function hostEntityReplaceKey(
       return `host:chat:${payload.chatId}`;
     case "artifact":
     case "epic":
+    case "terminal":
       return epicReplaceKey(payload.epicId);
     case "session":
       return null;

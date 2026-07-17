@@ -1836,6 +1836,7 @@ describe("createChatSessionStore", () => {
       startedAt: 2,
       processedCount: 1,
       totalCount: 2,
+      connectionEpoch: 0,
     });
 
     callbacks.onRestoreCompleted({
@@ -3767,5 +3768,178 @@ describe("in-flight block finalization on stop / steer", () => {
       },
     });
     expect(liveToolStatus(harness)).toBe("interrupted");
+  });
+});
+
+// Non-message pendings (stop / approvalDecision / restoreCheckpoint /
+// background stops) are cleared only by their actionAck - which dies with a
+// dropped connection. The authoritative post-reconnect snapshot must settle
+// them so their controls re-enable and the action can be re-issued; the
+// disconnect event itself must settle nothing.
+describe("non-message pendings across a missed-ack reconnect", () => {
+  function pendingActionKinds(harness: Harness): string[] {
+    return Object.values(harness.handle.store.getState().pendingActions).map(
+      (pending) => pending.action,
+    );
+  }
+
+  it("clears stop/approval/restore pendings on the post-reconnect snapshot and allows re-issuing", () => {
+    const harness = createHarness();
+    emitSnapshot(harness.callbacks(), "owner");
+    const store = harness.handle.store;
+
+    expect(store.getState().stopTurn()).not.toBeNull();
+    expect(
+      store.getState().approvalDecision("approval-1", { approved: true }),
+    ).not.toBeNull();
+    expect(
+      store.getState().restoreCheckpoint("checkpoint-1", false),
+    ).not.toBeNull();
+    expect(pendingActionKinds(harness)).toEqual([
+      "stop",
+      "approvalDecision",
+      "restoreCheckpoint",
+    ]);
+
+    // The connection drops before any ack arrives; the drop itself settles
+    // NOTHING (a transient wobble must not cancel in-flight actions).
+    harness.callbacks().onConnectionStatus("reconnecting", null);
+    expect(pendingActionKinds(harness)).toEqual([
+      "stop",
+      "approvalDecision",
+      "restoreCheckpoint",
+    ]);
+
+    // The reconnect snapshot is the authority: the lost acks can never
+    // arrive, so the pendings clear and the controls re-enable.
+    emitSnapshot(harness.callbacks(), "owner");
+    expect(store.getState().pendingActions).toEqual({});
+
+    // Re-issuing after the reconnect works (nothing is wedged).
+    expect(store.getState().stopTurn()).not.toBeNull();
+    expect(pendingActionKinds(harness)).toEqual(["stop"]);
+  });
+
+  it("clears a stale editUserMessage pending whose ack was lost across a reconnect", () => {
+    const harness = createHarness();
+    emitSnapshot(harness.callbacks(), "owner");
+    const store = harness.handle.store;
+
+    // An edit's fresh messageId only appears in the snapshot if the host
+    // applied it, and it has no composer-restoration path - so a lost frame
+    // would previously wedge the edit affordances forever.
+    expect(
+      store.getState().editUserMessage({
+        targetMessageId: "msg-1",
+        content: { type: "doc", content: [] },
+        sender: { type: "user", userId: OWNER_ID },
+        settings: SETTINGS,
+        revertFileChanges: false,
+        revertArtifacts: false,
+      }),
+    ).not.toBeNull();
+    expect(pendingActionKinds(harness)).toEqual(["editUserMessage"]);
+
+    harness.callbacks().onConnectionStatus("reconnecting", null);
+    // The reconnect snapshot does not contain the edit (never applied).
+    emitSnapshot(harness.callbacks(), "owner");
+    expect(store.getState().pendingActions).toEqual({});
+  });
+
+  it("keeps a pending dispatched on the CURRENT connection when its own snapshot arrives", () => {
+    const harness = createHarness();
+    emitSnapshot(harness.callbacks(), "owner");
+
+    // Reconnect first, then act on the NEW connection before its snapshot
+    // lands - that pending's ack is still live and must survive the sweep.
+    harness.callbacks().onConnectionStatus("reconnecting", null);
+    harness.callbacks().onConnectionStatus("open", null);
+    expect(harness.handle.store.getState().stopTurn()).not.toBeNull();
+
+    emitSnapshot(harness.callbacks(), "owner");
+    expect(pendingActionKinds(harness)).toEqual(["stop"]);
+  });
+
+  it("makes a background stop whose frame died with the connection retryable, keeping ack-accepted stops disabled", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const runningTasks: BackgroundItem[] = [
+      {
+        taskId: "task-lost",
+        kind: "command",
+        title: "sleep 60",
+        blockId: "tool-1",
+        parentTaskId: null,
+        scheduledFor: null,
+      },
+      {
+        taskId: "task-accepted",
+        kind: "command",
+        title: "sleep 90",
+        blockId: "tool-2",
+        parentTaskId: null,
+        scheduledFor: null,
+      },
+    ];
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      backgroundItems: runningTasks,
+    });
+    const store = harness.handle.store;
+
+    // One stop gets its ack before the drop; the other's frame/ack is lost.
+    expect(store.getState().stopBackgroundItem("task-accepted")).not.toBeNull();
+    acceptLastAction(harness);
+    expect(store.getState().stopBackgroundItem("task-lost")).not.toBeNull();
+
+    // Both tasks are still running when the reconnect snapshot arrives.
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      backgroundItems: runningTasks,
+    });
+
+    // The lost stop is retryable again; the host-confirmed stop stays
+    // disabled until its task actually terminates.
+    expect(Object.keys(store.getState().pendingBackgroundStops)).toEqual([
+      "task-accepted",
+    ]);
+    expect(store.getState().stopBackgroundItem("task-lost")).not.toBeNull();
+    expect(store.getState().stopBackgroundItem("task-accepted")).toBeNull();
+  });
+
+  it("clears a restore slot stranded in-flight by a drop, but not one on the live connection", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    callbacks.onRestoreStarted({
+      kind: "restoreStarted",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      checkpointId: "turn-1",
+      restoringUserId: OWNER_ID,
+      restoringHostId: "host-1",
+      startedAt: 2,
+    });
+
+    // A snapshot on the SAME connection leaves the live restore alone.
+    emitSnapshot(callbacks, "owner");
+    expect(harness.handle.store.getState().restore?.kind).toBe("in-flight");
+
+    // After a drop, its restoreCompleted can never arrive - the reconnect
+    // snapshot clears the stranded slot instead of spinning forever.
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+    expect(harness.handle.store.getState().restore).toBeNull();
   });
 });

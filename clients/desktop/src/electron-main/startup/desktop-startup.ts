@@ -31,6 +31,7 @@ import {
   QUIT_HOST_UPDATE_TIMEOUT_MS,
 } from "../host/host-auto-update";
 import { isHostRemovedByUser } from "../host/host-removal-state";
+import { runUpdateInstallQuitSequence } from "./update-install-quit";
 import { RunnerIpcBridge } from "../ipc/register-runner-ipc";
 import {
   checkForUpdatesAfterResume,
@@ -123,6 +124,8 @@ import {
 } from "../config/desktop-config";
 import { installHostWakeRecovery } from "./host-wake-recovery";
 import { startHostHealthMonitor } from "../host/host-health-monitor";
+import { startPendingLoginItemRevisionMonitor } from "../host/pending-login-item-revision-monitor";
+import { hostManagesHostLoginItem } from "../app/host-login-item";
 import { DESKTOP_APP_NAME } from "../../config";
 
 // Per-window fresh-snapshot query budget during `before-quit`. Each renderer,
@@ -595,6 +598,32 @@ function runDeferred(state: BootState, services: AppServices): void {
     state.bridge?.disposeFns.push(() => healthMonitor.dispose());
   });
 
+  // macOS-only: guarantees a busy-preserved install's pending LaunchAgent
+  // revision (see `desktop-install-cloud.js`'s marker + `host-ensure-ipc.ts`'s
+  // `applyPendingLoginItemRevisionIfIdle`) gets applied within this running
+  // session once the host goes idle, not only at the next relaunch - the
+  // renderer's ensure fast path only gets one shot at it per app launch.
+  // Gated on `hostManagesHostLoginItem()` since a non-macOS build, a dev
+  // build, or a build without the in-bundle plist never has SMAppService
+  // registration (or a marker) to refresh in the first place.
+  if (process.platform === "darwin") {
+    void hostReady.then(async () => {
+      const bridge = state.bridge;
+      if (bridge === null) return;
+      if (!(await hostManagesHostLoginItem())) return;
+      const revisionMonitor = startPendingLoginItemRevisionMonitor({
+        bridge,
+        intervalMs: undefined,
+        environment: undefined,
+        hasPendingRevision: undefined,
+        canReach: undefined,
+        isRefreshQuarantined: undefined,
+        runEnsure: undefined,
+      });
+      state.bridge?.disposeFns.push(() => revisionMonitor.dispose());
+    });
+  }
+
   void timed("deferred", "registry-probe", async () => {
     // `force: true` - matches the app's own `checkForUpdatesNow` on launch
     // (app/updater.ts): always a real probe, never a cache read, so a
@@ -780,9 +809,9 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
 
   const flushShellState = async (): Promise<void> => {
     await Promise.all([
-      services.desktopStateStore.flush().catch((err) => {
-        log.warn("[desktop] desktop-state flush failed", err);
-      }),
+      // No .catch: the store's write chain never rejects (persist failures
+      // are retried once, then surrendered with an error log inside it).
+      services.desktopStateStore.flush(),
       services.windowGeometryPersistence.flushLatest().catch((err) => {
         log.warn("[desktop] window-geometry flush failed", err);
       }),
@@ -836,46 +865,45 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
         return;
       }
       // First pass: attempt a coordinated, idle-gated host update before the
-      // desktop swaps its own bytes, then re-quit. Fail-open - a busy host,
-      // failure, or the bounded CLI timeout all fall through to the quit, with
-      // the next-launch reconcile as the guaranteed fallback. The host update
-      // runs as a subprocess that would die with us, so we must hold the quit
-      // until it settles rather than racing it.
+      // desktop swaps its own bytes, drain the renderer's freshest per-window
+      // projection into the state store, then re-quit. Fail-open at every
+      // step - a busy host, failure, or the bounded CLI timeout all fall
+      // through to the quit, with the next-launch reconcile as the guaranteed
+      // fallback. The host update runs as a subprocess that would die with
+      // us, so we must hold the quit until it settles rather than racing it.
       quitTimeHostUpdateStarted = true;
       event.preventDefault();
       log.info(
         "[desktop] before-quit - install pending; attempting idle host update first",
       );
-      void reconcileHostAutoUpdate(
-        "quit-install",
-        defaultHostAutoUpdateDeps(
-          services.host,
-          QUIT_HOST_UPDATE_TIMEOUT_MS,
-          // The host was discovered long ago - no need to wait at quit time.
-          () => Promise.resolve(),
-          services.bridge,
-        ),
-      )
-        .then((outcome) =>
-          log.info("[host-auto-update] quit reconcile complete", { outcome }),
-        )
-        .catch((err) =>
-          log.warn("[host-auto-update] quit reconcile threw", err),
-        )
-        .finally(() => {
-          // If `quitAndInstall` failed in the meantime (e.g. read-only volume),
-          // `isInstallingUpdate()` is now false and the failure was surfaced as
-          // an error - don't quit out from under the user; let them read it and
-          // retry. Only the still-pending install proceeds to quit.
-          if (!isInstallingUpdate()) {
-            log.info(
-              "[desktop] before-quit - install failed during reconcile, staying open",
-            );
-            services.quitState.resetQuitting();
-            return;
-          }
-          authorizeQuitAfterFlush();
-        });
+      void runUpdateInstallQuitSequence({
+        reconcileHostUpdate: () =>
+          reconcileHostAutoUpdate(
+            "quit-install",
+            defaultHostAutoUpdateDeps(
+              services.host,
+              QUIT_HOST_UPDATE_TIMEOUT_MS,
+              // The host was discovered long ago - no need to wait at quit
+              // time.
+              () => Promise.resolve(),
+              services.bridge,
+            ),
+          ),
+        isInstallPending: isInstallingUpdate,
+        drainRendererProjection: () =>
+          activeBridge.requestFreshUnsyncedSnapshot(
+            QUIT_FRESH_UNSYNCED_SNAPSHOT_TIMEOUT_MS,
+          ),
+        authorizeQuitAfterFlush,
+        stayOpen: () => {
+          // Re-arm the first-pass sequence: leaving the flag set would make
+          // the NEXT Restart-to-install take the second-pass shortcut above,
+          // skipping the host reconcile, the renderer drain, AND the shell
+          // flush for that quit.
+          quitTimeHostUpdateStarted = false;
+          services.quitState.resetQuitting();
+        },
+      });
       return;
     }
 

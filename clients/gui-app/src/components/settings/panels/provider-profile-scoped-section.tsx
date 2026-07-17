@@ -56,6 +56,20 @@ import {
 
 type ProviderId = ProviderCliState["providerId"];
 
+const TERMINAL_PROFILE_REMOVE_DISABLED_REASON =
+  "This profile uses your default CLI login and cannot be removed.";
+
+const PROFILE_REMOVE_PRESENTATION = {
+  ambient: {
+    ariaLabel: `Remove profile. ${TERMINAL_PROFILE_REMOVE_DISABLED_REASON}`,
+    disabledReason: TERMINAL_PROFILE_REMOVE_DISABLED_REASON,
+  },
+  managed: {
+    ariaLabel: "Remove profile",
+    disabledReason: null,
+  },
+} as const;
+
 // Stable module-level reference (not a fresh closure per render) - Settings
 // has no picker leader scope, so every row opts out of the shortcut hint.
 function noProfileShortcutHint(): ProfileDropdownShortcutHint | null {
@@ -451,6 +465,9 @@ function ProfileEditDialog({
   const changed =
     trimmedLabel !== committedLabel || accentColor !== committedAccentColor;
   const invalid = trimmedLabel.length === 0;
+  const removeProfilePresentation = PROFILE_REMOVE_PRESENTATION[profile.kind];
+  const removeProfileDisabledReason = removeProfilePresentation.disabledReason;
+  const isTerminalProfile = removeProfileDisabledReason !== null;
 
   const commitProfile = (onSuccess: () => void): void => {
     if (savePending || invalid) return;
@@ -590,21 +607,34 @@ function ProfileEditDialog({
             }
           >
             <div className="flex w-full flex-wrap items-center justify-between gap-2">
-              {profile.kind === "managed" ? (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  disabled={removeProfile.isPending || savePending}
-                  onClick={requestRemove}
-                  className="text-ui-sm text-destructive"
+              <TooltipWrapper
+                label={removeProfileDisabledReason}
+                side="top"
+                sideOffset={6}
+                align="start"
+              >
+                <span
+                  className="inline-flex"
+                  title={removeProfileDisabledReason ?? undefined}
                 >
-                  <Trash2 className="size-3.5" />
-                  Remove profile
-                </Button>
-              ) : (
-                <span />
-              )}
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    aria-label={removeProfilePresentation.ariaLabel}
+                    disabled={
+                      isTerminalProfile ||
+                      removeProfile.isPending ||
+                      savePending
+                    }
+                    onClick={requestRemove}
+                    className="text-ui-sm text-destructive"
+                  >
+                    <Trash2 className="size-3.5" />
+                    Remove profile
+                  </Button>
+                </span>
+              </TooltipWrapper>
               <div className="flex items-center gap-2">
                 <Button
                   type="button"

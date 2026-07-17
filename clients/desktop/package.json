@@ -25,7 +25,8 @@
     "lint": "eslint . --cache --fix --max-warnings 0",
     "format": "bun x prettier --write .",
     "test": "vitest run",
-    "test:resolution": "VITE_DESKTOP_LOCAL_STORAGE_KEY=traycer-resolution-test-local-storage-key bun run build:app && bun scripts/resolution/run-resolution-matrix.cjs"
+    "test:resolution": "VITE_DESKTOP_LOCAL_STORAGE_KEY=traycer-resolution-test-local-storage-key bun run build:app && bun scripts/resolution/run-resolution-matrix.cjs",
+    "test:packaging": "vitest run --config vitest.config.packaging.ts"
   },
   "dependencies": {
     "@sentry/browser": "catalog:",
@@ -77,6 +78,7 @@
       "buildResources": "resources/bundle",
       "output": "release"
     },
+    "afterPack": "scripts/prepack/inject-host-launch-agent.cjs",
     "files": [
       "dist/**/*",
       "package.json",

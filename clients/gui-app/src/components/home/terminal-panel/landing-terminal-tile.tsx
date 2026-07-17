@@ -177,7 +177,14 @@ function LandingTerminalTileLive(props: {
             onWriterReady={handleWriter}
             shouldFocusOnActivePane={active}
             findTargetId={null}
-            keepAlive={false}
+            // Mirrors the registry's linger rule: while the session is live its
+            // handle outlives this unmount (tab switch away from the landing
+            // page), and the store's writer keeps pointing at this engine - so
+            // the engine must survive too, or a return within the linger
+            // window would reattach a blank terminal (the host snapshot was
+            // already consumed). The registry follower disposes the engine
+            // when the lingering handle is finally evicted.
+            keepAlive={status !== "exited"}
           />
         </Suspense>
       </div>

@@ -1,5 +1,14 @@
 import { EventEmitter } from "node:events";
 import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
   afterAll,
   afterEach,
   beforeAll,
@@ -91,6 +100,33 @@ vi.mock("../../../config", () => ({
   isDevBuild: false,
 }));
 
+// `registerHostLoginItem` re-checks the removed-by-user sentinel inside the
+// locked section (so a register queued behind an uninstall's unregister can
+// never resurrect the login item). The real module reads a JSON store under
+// Electron's `userData` path - stub the leaf boolean probe instead.
+const isHostRemovedByUserMock = vi.fn<() => Promise<boolean>>();
+vi.mock("../../host/host-removal-state", () => ({
+  isHostRemovedByUser: () => isHostRemovedByUserMock(),
+}));
+
+// Marker-path seam: the REAL `getHostFsLayout` resolves under
+// `os.homedir()`. An earlier revision of this file sandboxed that with a
+// `process.env.HOME` override, which only holds when the runtime consults
+// $HOME - node's `os.homedir()` does, Bun's does NOT - so a Bun-driven run
+// of this suite would have pointed `registerHostLoginItem`'s real `rm` at
+// the developer's actual `~/.traycer` marker. Mock the layout seam itself
+// so no runtime's homedir semantics are in the trust chain at all. Only
+// `getHostFsLayout` is stubbed; `labelForEnvironment` (module-init time)
+// stays real.
+vi.mock("../../host/host-paths", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../host/host-paths")>();
+  return {
+    ...actual,
+    getHostFsLayout: (environment: string) =>
+      buildTestHostFsLayout(environment),
+  };
+});
+
 interface FakeChildHandle {
   readonly child: EventEmitter & { kill: (signal: string) => boolean };
   readonly killCalls: ReadonlyArray<string>;
@@ -120,8 +156,55 @@ function makeFakeChild(): FakeChildHandle {
 }
 
 // Imported AFTER the mocks so module-init evaluates against them.
-const { registerHostLoginItem, readHostLoginItemStatus, runLaunchctlBootout } =
-  await import("../host-login-item");
+const {
+  registerHostLoginItem,
+  readHostLoginItemStatus,
+  runLaunchctlBootout,
+  hasPendingLoginItemRevision,
+} = await import("../host-login-item");
+
+// `registerHostLoginItem` clears the pending-login-item-revision marker via
+// `getHostFsLayout(config.environment)` (config is mocked to "production"
+// above). The layout is mocked (see the `host-paths` vi.mock rationale) to
+// resolve under this per-test temp dir, so the real marker-file assertions
+// below (and `registerHostLoginItem`'s real `rm` call) can never touch the
+// invoking user's actual `~/.traycer` under ANY runtime.
+let workHome: string;
+
+function pendingRevisionMarkerPath(): string {
+  return join(workHome, ".traycer", "host", "pending-login-item-revision.json");
+}
+
+function buildTestHostFsLayout(environment: string): {
+  rootDir: string;
+  pidMetadataFile: string;
+  logFile: string;
+  installDir: string;
+  installRecordFile: string;
+  pendingLoginItemRevisionFile: string;
+  environment: string;
+} {
+  const rootDir = join(workHome, ".traycer", "host");
+  return {
+    rootDir,
+    pidMetadataFile: join(rootDir, "pid.json"),
+    logFile: join(rootDir, "host.log"),
+    installDir: join(rootDir, "install"),
+    installRecordFile: join(rootDir, "install", "install.json"),
+    pendingLoginItemRevisionFile: pendingRevisionMarkerPath(),
+    environment,
+  };
+}
+
+function writePendingRevisionMarker(): void {
+  const dir = join(workHome, ".traycer", "host");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    pendingRevisionMarkerPath(),
+    JSON.stringify({ pending: true }),
+    "utf8",
+  );
+}
 
 beforeEach(() => {
   // `mockReset` (not `mockClear`) so persistent implementations set
@@ -132,10 +215,13 @@ beforeEach(() => {
   // fall back to that stale value once its one-shots are consumed.
   setLoginItemSettings.mockReset();
   getLoginItemSettings.mockReset();
+  isHostRemovedByUserMock.mockReset().mockResolvedValue(false);
+  workHome = mkdtempSync(join(tmpdir(), "traycer-host-login-item-"));
 });
 
 afterEach(() => {
   vi.useRealTimers();
+  rmSync(workHome, { recursive: true, force: true });
 });
 
 describe("registerHostLoginItem", () => {
@@ -145,7 +231,7 @@ describe("registerHostLoginItem", () => {
     getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" });
     getLoginItemSettings.mockReturnValueOnce({ status: "enabled" });
 
-    const status = await registerHostLoginItem();
+    const status = await registerHostLoginItem(undefined);
 
     expect(setLoginItemSettings).toHaveBeenCalledTimes(2);
     expect(setLoginItemSettings.mock.calls[0]?.[0]).toMatchObject({
@@ -161,7 +247,9 @@ describe("registerHostLoginItem", () => {
     getLoginItemSettings.mockReturnValueOnce({ status: "enabled" });
     getLoginItemSettings.mockReturnValueOnce({ status: "requires-approval" });
 
-    await expect(registerHostLoginItem()).resolves.toBe("requires-approval");
+    await expect(registerHostLoginItem(undefined)).resolves.toBe(
+      "requires-approval",
+    );
   });
 
   it("normalizes unknown / missing `status` values to `not-registered` so callers fail closed instead of treating an unknown state as success", async () => {
@@ -169,7 +257,9 @@ describe("registerHostLoginItem", () => {
     // an unknown shape so the BTM-commit poll exhausts its deadline.
     getLoginItemSettings.mockReturnValue({ status: "something-new" });
 
-    await expect(registerHostLoginItem()).resolves.toBe("not-registered");
+    await expect(registerHostLoginItem(undefined)).resolves.toBe(
+      "not-registered",
+    );
   });
 
   it("retries the post-register status read for the BTM-commit lag - a transient `not-registered` immediately followed by `enabled` resolves to `enabled` instead of failing closed", async () => {
@@ -181,7 +271,7 @@ describe("registerHostLoginItem", () => {
     getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" }); // retry 2
     getLoginItemSettings.mockReturnValueOnce({ status: "enabled" }); // committed
 
-    await expect(registerHostLoginItem()).resolves.toBe("enabled");
+    await expect(registerHostLoginItem(undefined)).resolves.toBe("enabled");
   });
 
   it("surfaces `not-registered` instead of throwing when `setLoginItemSettings` itself throws - the boundary catch keeps Electron API errors from poisoning the renderer", async () => {
@@ -191,7 +281,48 @@ describe("registerHostLoginItem", () => {
     // No getLoginItemSettings mock needed - the throw on the first
     // setLoginItemSettings short-circuits before any status read.
 
-    await expect(registerHostLoginItem()).resolves.toBe("not-registered");
+    await expect(registerHostLoginItem(undefined)).resolves.toBe(
+      "not-registered",
+    );
+  });
+
+  it("refuses the whole cycle with `removed-by-user` when the removal sentinel is set - no SMAppService mutation runs at all", async () => {
+    // The sentinel is re-read inside the locked section, so a register that
+    // queued behind an uninstall's unregister sees the removal and cannot
+    // re-create the BTM login item ("Remove Traycer" must stay removed).
+    isHostRemovedByUserMock.mockResolvedValue(true);
+
+    await expect(registerHostLoginItem(undefined)).resolves.toBe(
+      "removed-by-user",
+    );
+    expect(setLoginItemSettings).not.toHaveBeenCalled();
+    expect(getLoginItemSettings).not.toHaveBeenCalled();
+  });
+
+  it("refuses the cycle with `deferred-busy` when the caller's revalidation guard fails once the cycle is dequeued - no SMAppService mutation runs, exactly like the removed-by-user refusal", async () => {
+    // Proves the fix for the "revalidate the idle gate after acquiring the
+    // lock" finding: a caller's own busy-check can go stale while queued
+    // behind another cycle on the shared registration lock, so the guard is
+    // re-run INSIDE the locked section, immediately before the bootout that
+    // would otherwise kill a host that picked up work while queued.
+    const revalidate = vi.fn().mockResolvedValue(false);
+
+    await expect(registerHostLoginItem(revalidate)).resolves.toBe(
+      "deferred-busy",
+    );
+    expect(revalidate).toHaveBeenCalledTimes(1);
+    expect(setLoginItemSettings).not.toHaveBeenCalled();
+    expect(getLoginItemSettings).not.toHaveBeenCalled();
+  });
+
+  it("proceeds with the cycle when the revalidation guard passes", async () => {
+    const revalidate = vi.fn().mockResolvedValue(true);
+    getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" });
+    getLoginItemSettings.mockReturnValueOnce({ status: "enabled" });
+
+    await expect(registerHostLoginItem(revalidate)).resolves.toBe("enabled");
+    expect(revalidate).toHaveBeenCalledTimes(1);
+    expect(setLoginItemSettings).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -289,5 +420,72 @@ describe("readHostLoginItemStatus", () => {
     });
 
     expect(readHostLoginItemStatus()).toBe("not-registered");
+  });
+});
+
+// Ticket packaging-smappservice-activation (issue #287 descriptor-hardening
+// review, Finding 3): a busy/indeterminate `desktop-install-cloud.js`
+// install leaves a `pending-login-item-revision.json` marker (see
+// `host-paths.ts:getHostFsLayout`'s doc comment for the full cross-repo
+// contract) so the ensure fast path can apply the refreshed LaunchAgent
+// registration once the host goes idle. `registerHostLoginItem` must only
+// resolve that marker when the cycle actually lands on `enabled` - any
+// other terminal status (denied approval, SMAppService refusing to
+// register) must leave it in place so a later cycle keeps retrying.
+describe("registerHostLoginItem - pending LaunchAgent revision marker", () => {
+  it("clears the marker when the register cycle ends enabled", async () => {
+    writePendingRevisionMarker();
+    getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" });
+    getLoginItemSettings.mockReturnValueOnce({ status: "enabled" });
+
+    const status = await registerHostLoginItem(undefined);
+
+    expect(status).toBe("enabled");
+    expect(existsSync(pendingRevisionMarkerPath())).toBe(false);
+  });
+
+  it("leaves the marker in place when the register cycle ends requires-approval", async () => {
+    writePendingRevisionMarker();
+    getLoginItemSettings.mockReturnValueOnce({ status: "enabled" });
+    getLoginItemSettings.mockReturnValueOnce({ status: "requires-approval" });
+
+    const status = await registerHostLoginItem(undefined);
+
+    expect(status).toBe("requires-approval");
+    expect(existsSync(pendingRevisionMarkerPath())).toBe(true);
+  });
+
+  it("leaves the marker in place when the register cycle ends not-registered (SMAppService refused)", async () => {
+    writePendingRevisionMarker();
+    // Every status read stays `not-registered` - the BTM-commit poll
+    // exhausts its deadline and the cycle fails closed.
+    getLoginItemSettings.mockReturnValue({ status: "not-registered" });
+
+    const status = await registerHostLoginItem(undefined);
+
+    expect(status).toBe("not-registered");
+    expect(existsSync(pendingRevisionMarkerPath())).toBe(true);
+  });
+
+  it("is a no-op when no marker was ever written", async () => {
+    getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" });
+    getLoginItemSettings.mockReturnValueOnce({ status: "enabled" });
+
+    const status = await registerHostLoginItem(undefined);
+
+    expect(status).toBe("enabled");
+    expect(existsSync(pendingRevisionMarkerPath())).toBe(false);
+  });
+});
+
+describe("hasPendingLoginItemRevision", () => {
+  it("reports true only while the marker file exists on disk for the given environment", async () => {
+    await expect(hasPendingLoginItemRevision("production")).resolves.toBe(
+      false,
+    );
+
+    writePendingRevisionMarker();
+
+    await expect(hasPendingLoginItemRevision("production")).resolves.toBe(true);
   });
 });

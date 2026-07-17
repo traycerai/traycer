@@ -29,7 +29,10 @@ export function notificationEntityFromPayload(
   const record = payload;
   const epicId = readNonEmptyString(record.epicId);
   if (epicId === null) return null;
-  const chatId = readNonEmptyString(record.chatId);
+  const chatId =
+    record.kind === "terminal"
+      ? readNonEmptyString(record.terminalId)
+      : readNonEmptyString(record.chatId);
   return chatId === null ? { epicId } : { epicId, chatId };
 }
 

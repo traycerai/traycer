@@ -185,6 +185,7 @@ function assistantMessage(input: {
     settings: null,
     createdAt: 1,
     completedAt: null,
+    stopped: null,
     persistentMessageId: null,
     senderLabel: null,
     assistantMeta: null,

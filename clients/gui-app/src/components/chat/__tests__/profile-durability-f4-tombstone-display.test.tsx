@@ -113,6 +113,7 @@ function plainUserMessage(sessionAnchor: ChatSessionAnchor): ChatMessageModel {
     settings: null,
     createdAt: 1,
     completedAt: null,
+    stopped: null,
     persistentMessageId: "message-1",
     senderLabel: "You",
     assistantMeta: null,

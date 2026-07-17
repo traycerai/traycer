@@ -13,8 +13,10 @@ import {
   streamCliWithProgress,
 } from "./host-management-ipc";
 import { getHostFsLayout } from "../host/host-paths";
+import type { Environment } from "../host/host-paths";
 import { isHostRemovedByUser } from "../host/host-removal-state";
 import {
+  hasPendingLoginItemRevision,
   hostManagesHostLoginItem,
   readHostLoginItemStatus,
   registerHostLoginItem,
@@ -63,32 +65,55 @@ export function registerHostEnsureIpc(bridge: RunnerIpcBridge): void {
       // into the invoke args; default false so a normal ensure keeps the busy
       // check.
       const force = optionalBoolean(raw, "force");
-      // Coalesce only identical (same-force) concurrent ensures. A Force must
-      // never be served by an in-flight non-force ensure (#6) - that would
-      // silently drop `--force`. Wait for any different-force op to settle, then
-      // run ours, so two installs never race.
-      if (inFlight !== null && inFlightForce === force) {
-        return inFlight;
-      }
-      while (inFlight !== null) {
-        try {
-          await inFlight;
-        } catch {
-          // The in-flight op's failure belongs to its own caller; re-evaluate.
-        }
-      }
-      const run = ensureHost(bridge, operationId, force);
-      inFlight = run;
-      inFlightForce = force;
-      try {
-        return await run;
-      } finally {
-        if (inFlight === run) {
-          inFlight = null;
-        }
-      }
+      return runEnsureHost(bridge, operationId, force);
     },
   );
+}
+
+/**
+ * Coalesced entry point for `ensureHost`, factored out of the IPC handler so
+ * a second caller can share the exact same in-flight slot: the pending-
+ * LaunchAgent-revision monitor (`pending-login-item-revision-monitor.ts`)
+ * invokes this too, rather than copying the `registerHostLoginItem` /
+ * `waitForHostReady` sequence into its own unguarded call site. That keeps a
+ * monitor-triggered SMAppService register cycle from ever running
+ * concurrently with a renderer-triggered one - whichever caller gets here
+ * first wins the slot; the other either shares its result (same `force`) or
+ * waits for it to settle before starting its own. The registration helper
+ * itself additionally serializes this ensure path with `respawnHost`.
+ */
+export async function runEnsureHost(
+  bridge: RunnerIpcBridge,
+  operationId: string,
+  force: boolean,
+): Promise<HostEnsureIpcResult> {
+  // Coalesce only identical (same-force) concurrent ensures. A Force must
+  // never be served by an in-flight non-force ensure (#6) - that would
+  // silently drop `--force`. Wait for any different-force op to settle, then
+  // run ours, so two installs never race. Re-check on every iteration (not
+  // just once before the loop) so two same-force callers who both queue
+  // behind a different-force in-flight op share ONE cycle instead of each
+  // starting their own once the in-flight op settles.
+  while (inFlight !== null) {
+    if (inFlightForce === force) {
+      return inFlight;
+    }
+    try {
+      await inFlight;
+    } catch {
+      // The in-flight op's failure belongs to its own caller; re-evaluate.
+    }
+  }
+  const run = ensureHost(bridge, operationId, force);
+  inFlight = run;
+  inFlightForce = force;
+  try {
+    return await run;
+  } finally {
+    if (inFlight === run) {
+      inFlight = null;
+    }
+  }
 }
 
 async function ensureHost(
@@ -108,6 +133,15 @@ async function ensureHost(
     return { action: "removed", running: false, version: null };
   }
 
+  // When this is a macOS .app build that ships the in-bundle LaunchAgent
+  // plist, the desktop owns the macOS login-item registration via
+  // SMAppService (the only path that yields a polished "Traycer" + icon
+  // row attributed to the app). In that case the CLI installs the host
+  // BYTES only (`--no-service-register`) and we register/start the login
+  // item afterwards. Otherwise (non-macOS, or no in-bundle plist) the CLI
+  // registers the service itself.
+  const hostOwnsLoginItem = await hostManagesHostLoginItem();
+
   // Fast path - the persistent service is already up from a prior launch and
   // reachable. We do NOT gate on a build-stamp match: a host on a different
   // version may still be protocol-compatible, and the renderer negotiates that
@@ -125,6 +159,15 @@ async function ensureHost(
     serviceStatus.listenUrl !== null
   ) {
     if (await canReachHostWebsocketUrl(serviceStatus.listenUrl)) {
+      const refreshed = await applyPendingLoginItemRevisionIfIdle(
+        environment,
+        hostOwnsLoginItem,
+        serviceStatus.listenUrl,
+        prePid,
+      );
+      if (refreshed !== null) {
+        return refreshed;
+      }
       // Publish the reachable host into the lifecycle before returning.
       // This probe is private to the ensure flow - it does NOT update
       // `HostLifecycle.currentSnapshot` - and the watcher edge that should
@@ -144,15 +187,6 @@ async function ensureHost(
       { listenUrl: serviceStatus.listenUrl },
     );
   }
-
-  // When this is a macOS .app build that ships the in-bundle LaunchAgent
-  // plist, the desktop owns the macOS login-item registration via
-  // SMAppService (the only path that yields a polished "Traycer" + icon
-  // row attributed to the app). In that case the CLI installs the host
-  // BYTES only (`--no-service-register`) and we register/start the login
-  // item afterwards. Otherwise (non-macOS, or no in-bundle plist) the CLI
-  // registers the service itself.
-  const hostOwnsLoginItem = await hostManagesHostLoginItem();
 
   // No `--environment` (the CLI resolves its slot from config.environment).
   //
@@ -253,7 +287,29 @@ async function ensureHost(
   // poll below times out against an empty `host.log`. See
   // `host-login-item.ts:registerHostLoginItem` for the full rationale.
   if (hostOwnsLoginItem) {
-    const loginItemStatus = await registerHostLoginItem();
+    // Pre-flight, only when a host was running at ensure start: `requires-
+    // approval` means the user has the login item toggled off in System
+    // Settings. The register cycle cannot flip that toggle back - it would
+    // land on `requires-approval` again - but its leading bootout WOULD
+    // kill the still-running host first. Surface the same approval error
+    // the post-cycle check would, without the kill. With nothing running
+    // there is nothing to protect, so the cycle proceeds (and reports the
+    // approval state itself if it persists).
+    if (prePid !== null && readHostLoginItemStatus() === "requires-approval") {
+      throw new Error(approvalRequiredMessage());
+    }
+    // No revalidation guard here (unlike the pending-revision fast path
+    // below): this call follows a full CLI provisioning round-trip, and the
+    // busy re-check a few lines up already surfaces a host that became busy
+    // before reaching this point. Scoped out for now - see PR discussion.
+    const loginItemStatus = await registerHostLoginItem(undefined);
+    if (loginItemStatus === "removed-by-user") {
+      // The user hit "Remove Traycer" while this ensure was in flight; the
+      // locked register cycle refused to resurrect the login item. Mirror
+      // the entry check's result so the renderer shows the removed surface.
+      log.info("[host-ensure] skipped - host removed by user mid-ensure");
+      return { action: "removed", running: false, version: null };
+    }
     if (loginItemStatus === "requires-approval") {
       throw new Error(approvalRequiredMessage());
     }
@@ -317,6 +373,130 @@ async function ensureHost(
   // "Bound host is offline" until an app restart.
   await bridge.options.host.reloadSnapshotFromDisk();
   return { action: "provisioned", running: true, version: readiness.version };
+}
+
+// Session quarantine for the fast-path refresh. Set when the refresh is
+// known to be pointless (or worse) for the rest of this process:
+//   - a cycle RAN and still did not land `enabled` - its leading bootout
+//     already killed the running host once, and retrying (the monitor ticks
+//     every 30s) would kill a revived host again for the same terminal
+//     outcome;
+//   - the pre-flight read `requires-approval` - only the user flipping the
+//     System Settings toggle resolves that, and per the monitor's own
+//     doctrine such states are not retried within a session.
+// The marker stays on disk either way, so the next launch's single ensure
+// attempt gets its shot once whatever blocked the cycle is resolved. The
+// pending-revision monitor consults this via the exported getter and stops
+// ticking for the session - without that, a quarantined fast path makes
+// every ensure RESOLVE `already-ready`, the monitor's failure budget never
+// increments, and it would churn a no-op ensure every 30s forever.
+let pendingRevisionRefreshQuarantined = false;
+
+export function isPendingRevisionRefreshQuarantined(): boolean {
+  return pendingRevisionRefreshQuarantined;
+}
+
+/** Test-only: module state would otherwise leak across test cases. */
+export function resetPendingRevisionQuarantineForTests(): void {
+  pendingRevisionRefreshQuarantined = false;
+}
+
+// A busy/indeterminate `desktop-install-cloud.js` update preserves the
+// running host instead of booting it out, so its LaunchAgent keeps the
+// launchd registration it had before the bundle swap - the freshly written
+// plist (e.g. a new descriptor limit) sits inert until something re-runs the
+// SMAppService cycle. The installer marks this with a pending-revision file
+// (see `getHostFsLayout`'s doc comment); this is the fast path's chance to
+// apply it, but ONLY once the host reports idle - the whole point of the
+// installer preserving it was to not interrupt in-progress work, and this
+// restart would do exactly that if run while busy. Returns the ensure
+// result to return to the caller when a refresh (successful or not needed)
+// was handled here, or `null` to fall through to the normal already-ready
+// return unchanged.
+async function applyPendingLoginItemRevisionIfIdle(
+  environment: Environment,
+  hostOwnsLoginItem: boolean,
+  listenUrl: string,
+  prePid: number | null,
+): Promise<HostEnsureIpcResult | null> {
+  if (!hostOwnsLoginItem) return null;
+  if (pendingRevisionRefreshQuarantined) return null;
+  if (!(await hasPendingLoginItemRevision(environment))) return null;
+  if (await probeHostActivityBusy(listenUrl)) {
+    log.debug(
+      "[host-ensure] pending LaunchAgent revision deferred - host busy",
+    );
+    return null;
+  }
+  // Pre-flight: with the login item toggled off in System Settings the
+  // cycle is guaranteed futile (only the user can re-enable it) AND
+  // destructive (its leading bootout kills the healthy host we just probed).
+  // Skip AND quarantine for the session: retrying every 30s cannot help
+  // (the toggle is the user's alone) and would only churn; the marker
+  // survives for the next launch, which runs after any re-enable anyway.
+  if (readHostLoginItemStatus() === "requires-approval") {
+    pendingRevisionRefreshQuarantined = true;
+    log.warn(
+      "[host-ensure] pending LaunchAgent revision quarantined for this session - login item requires approval in System Settings; the marker will be retried at the next launch",
+    );
+    return null;
+  }
+  log.info(
+    "[host-ensure] host idle with a pending LaunchAgent revision - refreshing SMAppService registration",
+  );
+  // The busy probe above can go stale while this cycle waits its turn on
+  // the shared registration lock (a concurrent `respawnHost` or another
+  // ensure can be mid-cycle right now) - re-check right before the bootout
+  // actually runs, so a host that picked up real work while queued isn't
+  // killed anyway.
+  const status = await registerHostLoginItem(
+    async () => !(await probeHostActivityBusy(listenUrl)),
+  );
+  if (status === "removed-by-user") {
+    log.info("[host-ensure] skipped - host removed by user mid-ensure");
+    return { action: "removed", running: false, version: null };
+  }
+  if (status === "deferred-busy") {
+    log.debug(
+      "[host-ensure] pending LaunchAgent revision deferred - host became busy while queued behind another registration cycle",
+    );
+    return null;
+  }
+  if (status === "requires-approval") {
+    pendingRevisionRefreshQuarantined = true;
+    throw new Error(approvalRequiredMessage());
+  }
+  if (status !== "enabled") {
+    pendingRevisionRefreshQuarantined = true;
+    log.warn(
+      "[host-ensure] pending LaunchAgent revision refresh did not enable the agent",
+      { status },
+    );
+    throw new Error(
+      `The host's macOS login item could not be enabled (status: ${status}). Open Doctor or run 'traycer host doctor' to recover.`,
+    );
+  }
+  const pidPath = getHostFsLayout(environment).pidMetadataFile;
+  const readiness = await waitForHostReady(
+    HOST_READY_TIMEOUT_MS,
+    pidPath,
+    HOST_READY_POLL_MS,
+    prePid,
+  );
+  if (!readiness.ready) {
+    log.warn(
+      "[host-ensure] host did not become reachable after applying a pending LaunchAgent revision",
+      { reason: readiness.reason },
+    );
+    throw new Error(
+      `The host's background service was refreshed but did not become reachable in time (${readiness.reason}). Open Doctor or run 'traycer host doctor' to recover.`,
+    );
+  }
+  log.info("[host-ensure] pending LaunchAgent revision applied", {
+    version: readiness.version,
+    pid: readiness.pid,
+  });
+  return { action: "already-ready", running: true, version: readiness.version };
 }
 
 // Keep a running-but-busy host instead of restarting it: surface it so the

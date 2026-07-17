@@ -97,6 +97,29 @@ export function isBareModifierEvent(event: KeyboardEvent): boolean {
   return BARE_MODIFIER_CODES.has(event.code);
 }
 
+/** Cmd+Home/End on macOS, Ctrl+Home/End on Windows/Linux. */
+export function isPlatformModifiedBoundaryKey(event: KeyboardEvent): boolean {
+  return (
+    (event.key === "Home" || event.key === "End") &&
+    (isMac()
+      ? event.metaKey && !event.ctrlKey
+      : event.ctrlKey && !event.metaKey) &&
+    !event.altKey &&
+    !event.shiftKey
+  );
+}
+
+/** Unmodified Home/End. */
+export function isPlainBoundaryKey(event: KeyboardEvent): boolean {
+  return (
+    (event.key === "Home" || event.key === "End") &&
+    !event.metaKey &&
+    !event.ctrlKey &&
+    !event.altKey &&
+    !event.shiftKey
+  );
+}
+
 export function parseChordFromEvent(event: KeyboardEvent): ChordParts | null {
   if (isBareModifierEvent(event)) return null;
   const key = normalizeCode(event.code);

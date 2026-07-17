@@ -49,6 +49,7 @@ function layoutIn(dir: string): HostFsLayout {
     logFile: join(dir, "host.log"),
     installDir: join(dir, "install"),
     installRecordFile: join(dir, "install", "install.json"),
+    pendingLoginItemRevisionFile: join(dir, "pending-login-item-revision.json"),
     environment: "production" as const,
   };
 }

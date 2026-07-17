@@ -1218,8 +1218,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     const memory = useComposerHarnessMemoryStore.getState();
     expect(memory.lastModelByHarness.codex).toBe("saved-model");
     expect(
-      memory.resolveModelSelection("codex", null, "saved-model")
-        .reasoningEffort,
+      memory.resolveModelSelection("codex", "saved-model").reasoningEffort,
     ).toBe("high");
   });
 

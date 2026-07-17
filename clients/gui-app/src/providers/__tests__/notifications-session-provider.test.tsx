@@ -1,7 +1,14 @@
 import "../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  waitFor,
+} from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
@@ -73,6 +80,7 @@ vi.mock("@/hooks/notifications/use-notifications", () => ({
 }));
 
 import { NotificationsSessionProvider } from "@/providers/notifications-session-provider";
+import { Toaster } from "@/components/ui/sonner";
 import { __setNotificationsStreamFactoryForTests } from "@/providers/notifications-stream-factory-override";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
@@ -92,6 +100,7 @@ import { makeOpenableNodeRef } from "@/stores/epics/canvas/types";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
 import { selectNotificationIndicatorState } from "@/stores/notifications/notification-indicator-state";
+import { useNotificationEventsStore } from "@/stores/notifications/notification-events-store";
 
 interface ControlledStream {
   closeCount: number;
@@ -101,6 +110,7 @@ class MockStreamSession implements IStreamSession {
   private serverFrameHandler: ServerFrameHandler | null = null;
   private statusChangeHandler: StatusChangeHandler | null = null;
   readonly clientFrames: HostNotificationsSubscribeClientFrame[] = [];
+  closeCount = 0;
 
   sendClientFrame(envelope: StreamFrameEnvelope): void {
     this.clientFrames.push(
@@ -116,7 +126,9 @@ class MockStreamSession implements IStreamSession {
     this.statusChangeHandler = handler;
   }
 
-  close(): void {}
+  close(): void {
+    this.closeCount += 1;
+  }
 
   emitServerFrame(envelope: StreamFrameEnvelope): void {
     this.serverFrameHandler?.(envelope, null);
@@ -129,6 +141,7 @@ class MockStreamSession implements IStreamSession {
 
 class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
   readonly session = new MockStreamSession();
+  readonly subscribedMethods: string[] = [];
 
   constructor() {
     super({
@@ -151,9 +164,10 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
   }
 
   override subscribe<Method extends keyof HostStreamRpcRegistry & string>(
-    _method: Method,
+    method: Method,
     _params: ParamsOf<HostStreamRpcRegistry, Method>,
   ): IStreamSession {
+    this.subscribedMethods.push(method);
     return this.session;
   }
 }
@@ -232,8 +246,11 @@ function hostEntry(input: {
     epicId: input.epicId,
     chatId: input.chatId,
     payload: {
+      kind: "chat",
       epicId: input.epicId,
       chatId: input.chatId,
+      agentName: "Chat",
+      taskTitle: "Task",
       outcome: "completed",
     },
   };
@@ -366,6 +383,7 @@ describe("<NotificationsSessionProvider />", () => {
     __resetNotificationsStoreForTests();
     __resetHostNotificationsStoreForTests();
     useAppLocalNotificationsStore.getState().resetForTests();
+    useNotificationEventsStore.getState().clear();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     __setNotificationsStreamFactoryForTests(null);
     resetAuth("signed-out", null);
@@ -376,10 +394,59 @@ describe("<NotificationsSessionProvider />", () => {
     __resetNotificationsStoreForTests();
     __resetHostNotificationsStoreForTests();
     useAppLocalNotificationsStore.getState().resetForTests();
+    useNotificationEventsStore.getState().clear();
+    toast.dismiss();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     __setNotificationsStreamFactoryForTests(null);
     resetAuth("signed-out", null);
     vi.restoreAllMocks();
+  });
+
+  it("hands host toast clicks to the router-bound notification bridge", async () => {
+    const { streamClient } = await renderHostNotificationsProvider();
+    render(<Toaster />);
+
+    act(() => {
+      streamClient.session.emitServerFrame({
+        kind: "channelEmission",
+        hasBinaryPayload: false,
+        emissionId: "emission-chat-click",
+        channelId: "renderer",
+        severity: "done",
+        rows: [
+          hostEntry({
+            id: "done-chat-click",
+            epicId: "epic-chat-click",
+            chatId: "chat-click",
+            severity: "done",
+          }),
+        ],
+        reason: "new",
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        document.querySelector("[data-notification-toast-action]"),
+      ).not.toBeNull();
+    });
+    const action = document.querySelector<HTMLElement>(
+      "[data-notification-toast-action]",
+    );
+    if (action === null) throw new Error("expected actionable host toast");
+
+    const beforeClick = Date.now();
+    fireEvent.click(action);
+
+    const notificationEvent =
+      useNotificationEventsStore.getState().notificationEvent;
+    expect(notificationEvent?.payload).toEqual({
+      kind: "chat",
+      epicId: "epic-chat-click",
+      chatId: "chat-click",
+    });
+    expect(notificationEvent?.openPopover).toBe(false);
+    expect(notificationEvent?.receivedAt).toBeGreaterThanOrEqual(beforeClick);
   });
 
   it("reopens the stream and resets the local replica on signed-in user switches", async () => {
@@ -485,6 +552,73 @@ describe("<NotificationsSessionProvider />", () => {
       expect(streams[0].closeCount).toBe(1);
       expect(useNotificationsStore.getState().entries).toEqual([]);
     });
+  });
+
+  it("rebinds both notification streams to a replaced stream client without resetting the replica", async () => {
+    const markReadCalls: Array<HostNotificationsMarkReadRequest> = [];
+    const firstClient = new MockWsStreamClient();
+    const queryClient = new QueryClient();
+    hostState.id = mockLocalHostEntry.hostId;
+    hostState.client = createHostClient(markReadCalls);
+    streamState.client = firstClient;
+    useAppLocalNotificationsStore
+      .getState()
+      .activateIdentity("alice@example.com");
+
+    const view = render(
+      <QueryClientProvider client={queryClient}>
+        <NotificationsSessionProvider>
+          <div />
+        </NotificationsSessionProvider>
+      </QueryClientProvider>,
+    );
+
+    act(() => {
+      resetAuth("signed-in", "alice@example.com");
+    });
+
+    await waitFor(() => {
+      expect(firstClient.session.clientFrames).toHaveLength(1);
+    });
+    expect([...firstClient.subscribedMethods].sort()).toEqual([
+      "host.notifications.subscribe",
+      "notifications.subscribe",
+    ]);
+
+    act(() => {
+      appendEntry(invitedEntry("n-1", "epic-alpha"));
+    });
+    await waitFor(() => {
+      expect(useNotificationsStore.getState().entries).toHaveLength(1);
+    });
+
+    // Same host + same user: ONLY the stream client is replaced - the
+    // app-wide liveness rebuild after the old client was closed underneath
+    // the provider. Both notification streams must rebind to the new client
+    // (the old client's sessions are dead), and the replica must survive.
+    const secondClient = new MockWsStreamClient();
+    act(() => {
+      streamState.client = secondClient;
+      view.rerender(
+        <QueryClientProvider client={queryClient}>
+          <NotificationsSessionProvider>
+            <div />
+          </NotificationsSessionProvider>
+        </QueryClientProvider>,
+      );
+    });
+
+    await waitFor(() => {
+      expect(secondClient.session.clientFrames).toHaveLength(1);
+    });
+    expect([...secondClient.subscribedMethods].sort()).toEqual([
+      "host.notifications.subscribe",
+      "notifications.subscribe",
+    ]);
+    // Both streams shared `firstClient.session` in this mock, so both old
+    // sessions closing is observed as two closes on that shared session.
+    expect(firstClient.session.closeCount).toBe(2);
+    expect(useNotificationsStore.getState().entries).toHaveLength(1);
   });
 
   it("consumes an active entity once when a done row is present", async () => {
@@ -731,8 +865,14 @@ describe("<NotificationsSessionProvider />", () => {
     act(() => {
       emitTerminalCrashedNotification({
         instanceId: "terminal-a-instance",
-        epicId: "epic-a",
-        chatId: "terminal-a",
+        target: {
+          kind: "terminal",
+          epicId: "epic-a",
+          terminalId: "terminal-a",
+          tabId: "view-tab-a",
+          paneId: "pane-a",
+          tileInstanceId: "terminal-a-instance",
+        },
         cause: "exit",
       });
     });
@@ -763,8 +903,14 @@ describe("<NotificationsSessionProvider />", () => {
     act(() => {
       emitTerminalCrashedNotification({
         instanceId: "terminal-b-instance",
-        epicId: "epic-a",
-        chatId: "terminal-b",
+        target: {
+          kind: "terminal",
+          epicId: "epic-a",
+          terminalId: "terminal-b",
+          tabId: "view-tab-a",
+          paneId: "pane-a",
+          tileInstanceId: "terminal-b-instance",
+        },
         cause: "exit",
       });
     });

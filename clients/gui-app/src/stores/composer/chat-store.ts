@@ -467,6 +467,42 @@ export interface AssistantTurnMeta {
   readonly costUsd: number | null;
 }
 
+/**
+ * Present when the user (or a cascaded `agent.stop`) ended this turn via the
+ * persisted `turn.stopped` chat event, rather than the turn finishing
+ * naturally. Drives the "Stopped · Nm Xs" elapsed-footer variant and its
+ * tooltip detail. Stamped only on the completed turn's last assistant row
+ * (mirrors `completedAt`); `null` for every other terminal outcome - a
+ * natural completion (`turn.completed`) or an interruption (`turn.interrupted`,
+ * e.g. a steer-restart). Determined solely by which event landed, not by the
+ * turn's segment content: a stopped turn whose last segment happens to be an
+ * `error` block still gets this stamped (a mid-turn failure doesn't change
+ * why the turn actually ended).
+ */
+export interface ChatMessageStoppedInfo {
+  readonly stoppedAt: number;
+  readonly reason: string | null;
+  /**
+   * Whether the TURN (not necessarily this specific row) produced any
+   * visible output before it was stopped. A split turn's stamped row is
+   * sometimes a content-less boundary marker synthesized after a trailing
+   * steer bubble - its own `segments` are empty even though an earlier row
+   * in the same turn has real content. `false` drives "Stopped before
+   * responding" (the turn truly never produced anything); `true` drives the
+   * full "Stopped · Nm Xs" footer even on a row with no segments of its own.
+   */
+  readonly turnHadOutput: boolean;
+  /**
+   * The turn's assistant reply text, aggregated across every row of the
+   * turn (not just this one) via the same join `collectAssistantReplyText`
+   * uses. A content-less boundary row's own segments can never supply
+   * copyable text, so the elapsed footer's copy button reads this instead
+   * of the row-local text whenever the row itself is empty - see
+   * `AssistantMessageBody`. Empty string when the turn produced no text.
+   */
+  readonly turnReplyText: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: ChatMessageRole;
@@ -482,6 +518,8 @@ export interface ChatMessage {
    * `null` for user rows, pending rows, and in-progress assistant turns.
    */
   completedAt: number | null;
+  /** See `ChatMessageStoppedInfo`. */
+  stopped: ChatMessageStoppedInfo | null;
   /**
    * User-wait time already accumulated during this assistant turn. The
    * assistant timer subtracts this so it measures agent work rather than time
@@ -545,6 +583,7 @@ export const useChatStore = create<ChatStore>((set) => ({
         settings: input.settings,
         createdAt: Date.now(),
         completedAt: null,
+        stopped: null,
         persistentMessageId: null,
         senderLabel: null,
         assistantMeta: null,

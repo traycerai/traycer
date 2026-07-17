@@ -69,6 +69,8 @@ export interface ChatLinkLifecycle {
   readonly beginClick: () => number;
   /** Whether `token` is still the latest click (not yet superseded). */
   readonly isCurrent: (token: number) => boolean;
+  /** Reports an async artifact resolve/fallback that produced no open. */
+  readonly onAsyncFailure: () => void;
 }
 
 /** Synchronous boolean handler markdown anchors call for a file-shaped link. */
@@ -173,7 +175,9 @@ function resolveAndOpenArtifactLink(
       // latest click (latest-click-wins).
       if (!lifecycle.isCurrent(clickToken)) return;
       if (artifact === null) {
-        openChatWorkspaceFilePreview(deps, lifecycle, link, false);
+        if (!openChatWorkspaceFilePreview(deps, lifecycle, link, false)) {
+          lifecycle.onAsyncFailure();
+        }
         return;
       }
       if (artifactEpicId === deps.openEpicId) {
@@ -201,7 +205,11 @@ function resolveAndOpenArtifactLink(
             // cancel-on-unmount won't open into a dead tab.
             onUnavailable: () => {
               lifecycle.setPendingProjectedOpenCancel(null);
-              openChatWorkspaceFilePreview(deps, lifecycle, link, false);
+              if (lifecycle.isDisposed()) return;
+              if (!lifecycle.isCurrent(clickToken)) return;
+              if (!openChatWorkspaceFilePreview(deps, lifecycle, link, false)) {
+                lifecycle.onAsyncFailure();
+              }
             },
             onCleanup: null,
           }),
@@ -236,7 +244,9 @@ function resolveAndOpenArtifactLink(
       // Transport error on an artifact-shaped link: keep the safe no-op (D5) —
       // out-of-root synthesis stays disabled, so a missing artifact does not
       // open a raw / error tile.
-      openChatWorkspaceFilePreview(deps, lifecycle, link, false);
+      if (!openChatWorkspaceFilePreview(deps, lifecycle, link, false)) {
+        lifecycle.onAsyncFailure();
+      }
     });
 }
 

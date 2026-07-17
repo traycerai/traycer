@@ -437,6 +437,7 @@ function agentMessage(content: string): ChatMessageModel {
     settings: null,
     createdAt: 1,
     completedAt: null,
+    stopped: null,
     persistentMessageId: "message-1",
     senderLabel: "Review Agent",
     assistantMeta: null,
