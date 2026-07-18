@@ -5,6 +5,7 @@ import {
   useQueryClient,
   type QueryClient,
 } from "@tanstack/react-query";
+import { withHostRpcErrorBoundary } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { GitListChangedFilesResponseV11 } from "@traycer/protocol/host";
 import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
@@ -312,7 +313,7 @@ export function useGitListChangedFilesWithSubmodules(args: {
   // the cache key: it is transport identity, not data identity. Wrapped in
   // the generation-aware rich-slot request: a response that raced a newer
   // stream write (ownership flipping mid-flight) is dropped, not written.
-  const request = createRichSlotRequest({
+  const richSlotRequest = createRichSlotRequest({
     queryClient,
     hostId,
     runningDir: runningDir ?? "",
@@ -333,6 +334,16 @@ export function useGitListChangedFilesWithSubmodules(args: {
       });
     },
   });
+  // Boundary-wrapped: the rich-slot wrapper's own throws are already
+  // `HostRpcError`s, but the declared error generic must also survive bugs in
+  // the request/arbitration path itself. Stays a NAMED queryFn so `client`
+  // (transport identity, not data identity) remains out of the cache key.
+  const request = (context: {
+    readonly signal: AbortSignal;
+  }): Promise<GitListChangedFilesResponseV11> =>
+    withHostRpcErrorBoundary("git.listChangedFiles", () =>
+      richSlotRequest(context),
+    );
 
   const query = useQuery(
     queryOptions<

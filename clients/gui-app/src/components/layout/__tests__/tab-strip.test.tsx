@@ -530,12 +530,15 @@ describe("<TabStrip />", () => {
     const router = buildRouter("/epics/e-a/e-a");
     render(<RouterProvider router={router} />);
 
-    expect(
-      await screen.findByTestId(`header-tab-background-activity-${EPIC_A.id}`),
-    ).toBeDefined();
+    const backgroundIcon = await screen.findByTestId(
+      `header-tab-background-activity-${EPIC_A.id}`,
+    );
+    expect(backgroundIcon.getAttribute("class")).toContain(
+      "lucide-calendar-clock",
+    );
     expect(screen.queryByTestId(`header-tab-activity-${EPIC_A.id}`)).toBeNull();
     expect(
-      screen.queryByTitle("Background tasks running — task idle"),
+      screen.queryByTitle("Background activity — agent idle"),
     ).not.toBeNull();
   });
 

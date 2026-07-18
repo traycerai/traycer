@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { queryOptions, useQuery } from "@tanstack/react-query";
+import { withHostRpcErrorBoundary } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   WorktreeBranchStatus,
@@ -108,13 +109,19 @@ export function useTaskDeleteWorktreeCandidates(
         "worktree.listAllForHost exceeded the maximum pagination page count",
       );
     };
+  // Boundary-wrapped: the pagination guards above throw bare `Error`s, which
+  // must not leak through the declared `HostRpcError` generic. Stays a NAMED
+  // queryFn so the closure is not mistaken for missing cache identity.
+  const fetchWorktreePagesNormalized =
+    (): Promise<WorktreeListAllForHostResponseV14> =>
+      withHostRpcErrorBoundary("worktree.listAllForHost", fetchWorktreePages);
   const { data, isError } = useQuery(
     queryOptions<WorktreeListAllForHostResponseV14, HostRpcError>({
       queryKey: hostQueryKeys.method<
         HostRpcRegistry,
         "worktree.listAllForHost"
       >(readiness.hostId, "worktree.listAllForHost", queryParams),
-      queryFn: fetchWorktreePages,
+      queryFn: fetchWorktreePagesNormalized,
       enabled: deletedEpicIds !== null && readiness.isReady,
       retry: false,
     }),
