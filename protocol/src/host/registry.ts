@@ -255,6 +255,7 @@ import {
   worktreeSetRepoScriptsResponseSchema,
   worktreeGetBindingRequestSchema,
   worktreeGetBindingResponseSchema,
+  LEGACY_HOST_RESOLVED_AT,
 } from "@traycer/protocol/host/worktree-schemas";
 import {
   snapshotsClearLocalSnapshotsRequestSchema,
@@ -475,6 +476,11 @@ export const worktreeListByWorkspacePathsV13 = defineRpcContract({
   responseSchema: worktreeListByWorkspacePathsResponseSchemaV13,
 });
 
+// A v1.2 host predates `resolvedAt` and never emits one, so its rows bridge to
+// the resolved sentinel (NOT `null`): its summaries are authoritative, and
+// stamping `null` would strand every folder as perpetually pending in the home
+// workspace selector (non-selectable, no git eligibility). See
+// LEGACY_HOST_RESOLVED_AT.
 export const worktreeListByWorkspacePathsUpgradeV12ToV13 = defineUpgradePath<
   typeof worktreeListByWorkspacePathsV12,
   typeof worktreeListByWorkspacePathsV13
@@ -486,7 +492,7 @@ export const worktreeListByWorkspacePathsUpgradeV12ToV13 = defineUpgradePath<
     ...response,
     workspaces: response.workspaces.map((workspace) => ({
       ...workspace,
-      resolvedAt: null,
+      resolvedAt: LEGACY_HOST_RESOLVED_AT,
     })),
   }),
 });
@@ -685,6 +691,12 @@ export const worktreeListAllForHostV14 = defineRpcContract({
   responseSchema: worktreeListAllForHostResponseSchemaV14,
 });
 
+// A v1.3 host predates `resolvedAt` and never emits one, so its rows bridge to
+// the resolved sentinel (NOT `null`): stamping `null` would strand every
+// worktree in the settings panel as perpetually "checking" - non-selectable,
+// non-deletable, no enrichment ever accepted by the staleness merge. Every row
+// from the legacy host shares the same sentinel, so that merge's timestamp
+// comparison degrades to a no-op accept. See LEGACY_HOST_RESOLVED_AT.
 export const worktreeListAllForHostUpgradeV13ToV14 = defineUpgradePath<
   typeof worktreeListAllForHostV13,
   typeof worktreeListAllForHostV14
@@ -696,7 +708,7 @@ export const worktreeListAllForHostUpgradeV13ToV14 = defineUpgradePath<
     ...response,
     worktrees: response.worktrees.map((worktree) => ({
       ...worktree,
-      resolvedAt: null,
+      resolvedAt: LEGACY_HOST_RESOLVED_AT,
     })),
   }),
 });
