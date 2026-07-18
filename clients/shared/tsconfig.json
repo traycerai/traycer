@@ -14,7 +14,7 @@
     "isolatedModules": true,
     "noEmit": true,
     "paths": {
-      "@traycer-clients/shared/*": ["."],
+      "@traycer-clients/shared/*": ["./*"],
       "@traycer/protocol/utils/*": ["../../protocol/utils/*"],
       "@traycer/protocol/*": ["../../protocol/src/*"]
     }

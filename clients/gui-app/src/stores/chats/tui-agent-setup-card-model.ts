@@ -85,6 +85,11 @@ function toSetupCardWorkspace(entry: WorktreeBindingEntry): SetupCardWorkspace {
     terminalSessionId: entry.setupTerminalSessionId,
     worktreePath: entry.worktreePath,
     branch: entry.branch,
+    // Binding entries carry no failure reason or attempted intent - those live
+    // on the chat's `setup.failed` events, which this binding-derived model
+    // never sees. Script failures here surface the exit code + terminal.
+    errorMessage: null,
+    retryFolderIntent: null,
   };
 }
 
