@@ -37,6 +37,11 @@ import { usePickAndAddWorkspaceFolders } from "@/components/home/host-workspace-
 import type { WorktreeStagingKey } from "@/stores/worktree/worktree-intent-staging-store";
 import { workspaceMutationKeys } from "@/lib/query-keys";
 import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
+import { focusActiveComposer } from "@/lib/composer/composer-focus-registry";
+import {
+  clearPendingTerminalFocus,
+  focusTerminalInstance,
+} from "@/lib/terminals/terminal-focus-registry";
 import { cn } from "@/lib/utils";
 import {
   DEFAULT_LANDING_TERMINAL_PANEL_WIDTH_FRACTION,
@@ -116,18 +121,111 @@ export function LandingTerminalPanel(
   const [maximized, setMaximized] = useState(false);
   const [reconciledHostId, setReconciledHostId] = useState<string | null>(null);
 
-  const createTerminalTab = useCallback(() => {
-    if (activeHostId === null || primaryWorkspacePath === null) return;
-    if (availability !== "supported") return;
+  // "This open gesture has not landed on the pinned folder yet." Armed on the
+  // closed->open transition, fulfilled by the first reconciliation pass that
+  // settles while open (against the folder pinned at THAT moment), and
+  // cancelled by collapse or by any manual panel interaction - once the user
+  // activates, creates, or closes a tab themselves, a late-settling pass (for
+  // example after the host recovers) must not yank them off their choice.
+  const panelOpenIntentRef = useRef(false);
+
+  const createTerminalTab = useCallback((): string | null => {
+    if (activeHostId === null || primaryWorkspacePath === null) return null;
+    if (availability !== "supported") return null;
+    const instanceId = `landing-terminal-${uuidv4()}`;
     addTab({
-      instanceId: `landing-terminal-${uuidv4()}`,
+      instanceId,
       sessionId: `landing-term-${uuidv4()}`,
       hostId: activeHostId,
       cwd: primaryWorkspacePath,
       name: workspaceFolderName(primaryWorkspacePath),
       titleSource: "default",
     });
+    return instanceId;
   }, [activeHostId, addTab, availability, primaryWorkspacePath]);
+
+  // A user-gesture create keeps the keyboard with the panel: the focus request
+  // parks in the registry until the new tile's xterm engine mounts.
+  const createTerminalTabFocused = useCallback(() => {
+    panelOpenIntentRef.current = false;
+    const instanceId = createTerminalTab();
+    if (instanceId !== null) focusTerminalInstance(instanceId);
+  }, [createTerminalTab]);
+
+  const activateTerminalTab = useCallback(
+    (instanceId: string) => {
+      panelOpenIntentRef.current = false;
+      activateTab(instanceId);
+      focusTerminalInstance(instanceId);
+    },
+    [activateTab],
+  );
+
+  // Focus follows the open/collapse *transition*, never the mount: a landing
+  // page that mounts with the panel already open (new tab, tab switch back)
+  // must leave focus with the composer. Opening also arms the pinned-folder
+  // intent that reconciliation consumes once the host's session list settles.
+  const prevPanelOpenRef = useRef(panelOpen);
+  useEffect(() => {
+    const wasOpen = prevPanelOpenRef.current;
+    prevPanelOpenRef.current = panelOpen;
+    if (wasOpen === panelOpen) return;
+    if (panelOpen) {
+      panelOpenIntentRef.current = true;
+      const activeInstanceId =
+        useLandingTerminalStore.getState().activeInstanceId;
+      if (activeInstanceId !== null) focusTerminalInstance(activeInstanceId);
+      return;
+    }
+    // Every collapse path converges on this store transition: the chord, the
+    // header button, closing the last tab, close-all, and a shell exiting.
+    // All of them should hand the keyboard back to the composer.
+    panelOpenIntentRef.current = false;
+    clearPendingTerminalFocus();
+    focusActiveComposer();
+  }, [panelOpen]);
+  useEffect(
+    () => () => {
+      clearPendingTerminalFocus();
+    },
+    [],
+  );
+
+  // Runs after every settled reconciliation pass (the reconciliation key
+  // includes the open/closed bit, so every panel-open transition lands here).
+  // Empty panels auto-spawn in the pinned folder; a gesture-opened panel
+  // additionally re-targets the pinned folder: reuse a terminal already
+  // running there, otherwise spawn a fresh one, and focus it either way.
+  const handleReconciliationSettled = useCallback(() => {
+    const state = useLandingTerminalStore.getState();
+    const openIntent = panelOpenIntentRef.current;
+    panelOpenIntentRef.current = false;
+    if (!state.panelOpen || primaryWorkspacePath === null) return;
+    if (state.tabs.length === 0) {
+      const created = createTerminalTab();
+      if (openIntent && created !== null) focusTerminalInstance(created);
+      return;
+    }
+    if (!openIntent || activeHostId === null) return;
+    const matchesPinnedFolder = (tab: LandingTerminalTabRef): boolean =>
+      tab.hostId === activeHostId && tab.cwd === primaryWorkspacePath;
+    const activeTab = state.tabs.find(
+      (tab) => tab.instanceId === state.activeInstanceId,
+    );
+    const target =
+      activeTab !== undefined && matchesPinnedFolder(activeTab)
+        ? activeTab
+        : state.tabs.find(matchesPinnedFolder);
+    if (target === undefined) {
+      const created = createTerminalTab();
+      if (created !== null) focusTerminalInstance(created);
+      return;
+    }
+    if (target.instanceId !== state.activeInstanceId) {
+      state.activateTab(target.instanceId);
+    }
+    focusTerminalInstance(target.instanceId);
+  }, [activeHostId, createTerminalTab, primaryWorkspacePath]);
 
   useLandingTerminalReconciliation({
     activeHostId,
@@ -135,18 +233,26 @@ export function LandingTerminalPanel(
     panelOpen,
     primaryWorkspacePath,
     client: defaultClient,
-    createTerminalTab,
     killTerminal: killTerminalAsync,
     onReconciled: setReconciledHostId,
+    onSettled: handleReconciliationSettled,
   });
 
   const closeTerminalTab = useCallback(
     (tab: LandingTerminalTabRef) => {
+      panelOpenIntentRef.current = false;
       // `closeTab` is the atomic tombstone-first durable write. Dispatch the
       // host mutation only after that state transition has completed.
       const closed = closeTab(tab.instanceId);
       if (closed === null) return;
       killTerminal({ hostId: closed.hostId, sessionId: closed.sessionId });
+      // Closing a non-last tab promotes a surviving neighbor - keep the
+      // keyboard with the panel. The last-tab case collapses the panel, and
+      // the open-transition effect hands focus back to the composer instead.
+      const state = useLandingTerminalStore.getState();
+      if (state.panelOpen && state.activeInstanceId !== null) {
+        focusTerminalInstance(state.activeInstanceId);
+      }
     },
     [closeTab, killTerminal],
   );
@@ -205,8 +311,8 @@ export function LandingTerminalPanel(
       onOpenPanel={openPanel}
       onToggleMaximized={() => setMaximized((value) => !value)}
       onSetPanelWidthFraction={setPanelWidthFraction}
-      onCreateTerminal={createTerminalTab}
-      onActivateTab={activateTab}
+      onCreateTerminal={createTerminalTabFocused}
+      onActivateTab={activateTerminalTab}
       onCloseTab={closeTerminalTab}
       onCloseAllTabs={closeAllTerminalTabs}
       onRenameTab={renameTab}

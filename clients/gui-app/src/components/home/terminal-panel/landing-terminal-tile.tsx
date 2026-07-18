@@ -120,7 +120,6 @@ function LandingTerminalTileBootstrap(
     <LandingTerminalTileLive
       handle={bootstrap.handle}
       tab={props.tab}
-      active={props.active}
       onExited={removeExitedTab}
     />
   );
@@ -129,10 +128,9 @@ function LandingTerminalTileBootstrap(
 function LandingTerminalTileLive(props: {
   readonly handle: TerminalSessionStoreHandle;
   readonly tab: LandingTerminalTabRef;
-  readonly active: boolean;
   readonly onExited: (instanceId: string) => void;
 }): ReactNode {
-  const { handle, tab, active, onExited } = props;
+  const { handle, tab, onExited } = props;
   const status = useStore(handle.store, (state) => state.status);
   const effectiveCols = useStore(handle.store, (state) => state.effectiveCols);
   const effectiveRows = useStore(handle.store, (state) => state.effectiveRows);
@@ -175,7 +173,12 @@ function LandingTerminalTileLive(props: {
             onUserInput={handleInput}
             onContainerResize={handleResize}
             onWriterReady={handleWriter}
-            shouldFocusOnActivePane={active}
+            // Landing tiles stay mounted while the panel is collapsed, so a
+            // visibility-driven focus grab would fire on every landing-page
+            // mount (new tab, tab switch back) and steal the composer's focus.
+            // Focus moves here only through explicit gestures, routed via the
+            // terminal-focus registry by the panel.
+            shouldFocusOnActivePane={false}
             findTargetId={null}
             // Mirrors the registry's linger rule: while the session is live its
             // handle outlives this unmount (tab switch away from the landing

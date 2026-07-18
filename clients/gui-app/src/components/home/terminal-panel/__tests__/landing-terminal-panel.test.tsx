@@ -10,6 +10,11 @@ import {
 } from "@testing-library/react";
 import type { CanonicalTerminalSessionInfo } from "@traycer/protocol/host/terminal/unary-schemas";
 import { useLandingTerminalStore } from "@/stores/home/landing-terminal-store";
+import { registerComposerFocus } from "@/lib/composer/composer-focus-registry";
+import {
+  registerTerminalFocus,
+  resetTerminalFocusRegistryForTests,
+} from "@/lib/terminals/terminal-focus-registry";
 import {
   dispatchAction,
   matchDigitAction,
@@ -175,8 +180,31 @@ function leaderDigitEvent(code: string): KeyboardEvent {
   return new KeyboardEvent("keydown", { code, metaKey: true });
 }
 
+/**
+ * Resolves every deferred `fetchQuery` a reconciliation generation issues,
+ * repeatedly: a generation only calls `fetchQuery` after an internal await, so
+ * a single splice would race it and leave the live generation hanging. Each
+ * pass yields a macrotask so continuations (including newly started
+ * generations) run before the next drain.
+ */
+async function drainDeferredListFetches(
+  resolvers: Array<(value: unknown) => void>,
+): Promise<void> {
+  await act(async () => {
+    for (let pass = 0; pass < 10; pass += 1) {
+      resolvers.splice(0).forEach((resolve) => {
+        resolve({ sessions: [] });
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  });
+}
+
 describe("<LandingTerminalPanel />", () => {
+  const focusCleanups: Array<() => void> = [];
+
   beforeEach(() => {
+    resetTerminalFocusRegistryForTests();
     mocks.activeHostId = null;
     mocks.probeData = undefined;
     mocks.freshProbeData = undefined;
@@ -197,6 +225,9 @@ describe("<LandingTerminalPanel />", () => {
 
   afterEach(() => {
     cleanup();
+    focusCleanups.forEach((unregister) => unregister());
+    focusCleanups.length = 0;
+    resetTerminalFocusRegistryForTests();
     useLandingTerminalStore.getState().resetForTests();
     setSystemTabModalApi(null);
   });
@@ -690,5 +721,323 @@ describe("<LandingTerminalPanel />", () => {
     expect(matchDigitAction(leaderDigitEvent("Digit1"))).toBeNull();
     expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
     expect(mocks.kill).not.toHaveBeenCalled();
+  });
+
+  it("moves focus into the active terminal on expand and back to the composer on collapse", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = { sessions: [] };
+    mocks.freshProbeData = mocks.probeData;
+    useLandingTerminalStore.getState().setPanelOpen(true);
+    render(panelUi());
+    const router = fakeKeybindingRouter();
+
+    await waitFor(() => {
+      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+    });
+    const tab = useLandingTerminalStore.getState().tabs[0];
+    const terminalFocus = vi.fn();
+    const composerFocus = vi.fn();
+    focusCleanups.push(registerTerminalFocus(tab.instanceId, terminalFocus));
+    focusCleanups.push(registerComposerFocus(composerFocus, true));
+
+    act(() => {
+      dispatchAction("app.terminal.toggle", router);
+    });
+    expect(useLandingTerminalStore.getState().panelOpen).toBe(false);
+    await waitFor(() => {
+      expect(composerFocus).toHaveBeenCalled();
+    });
+    expect(terminalFocus).not.toHaveBeenCalled();
+
+    act(() => {
+      dispatchAction("app.terminal.toggle", router);
+    });
+    await waitFor(() => {
+      expect(terminalFocus).toHaveBeenCalled();
+    });
+  });
+
+  it("does not steal focus from the composer when mounting with the panel already open", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = { sessions: [] };
+    mocks.freshProbeData = mocks.probeData;
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "tab-1",
+      sessionId: "session-1",
+      hostId: "host-a",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+    });
+    useLandingTerminalStore.getState().setPanelOpen(true);
+    const terminalFocus = vi.fn();
+    focusCleanups.push(registerTerminalFocus("tab-1", terminalFocus));
+
+    render(panelUi());
+
+    // Let the mount-time reconciliation generation settle fully, including
+    // any deferred focus fulfilment the registry might have scheduled.
+    await waitFor(() => {
+      expect(mocks.queryClient.fetchQuery).toHaveBeenCalledTimes(1);
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(terminalFocus).not.toHaveBeenCalled();
+  });
+
+  it("parks the focus request for a terminal spawned by expanding an empty panel", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = { sessions: [] };
+    mocks.freshProbeData = mocks.probeData;
+    render(panelUi());
+    const router = fakeKeybindingRouter();
+
+    act(() => {
+      dispatchAction("app.terminal.toggle", router);
+    });
+    await waitFor(() => {
+      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+    });
+    const created = useLandingTerminalStore.getState().tabs[0];
+
+    // The auto-spawned tile's engine registers after the create - the parked
+    // request must fire exactly then, not get lost.
+    const terminalFocus = vi.fn();
+    focusCleanups.push(
+      registerTerminalFocus(created.instanceId, terminalFocus),
+    );
+    await waitFor(() => {
+      expect(terminalFocus).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("fulfils tab-activation focus only after the commit, never synchronously", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = { sessions: [] };
+    mocks.freshProbeData = mocks.probeData;
+    useLandingTerminalStore.getState().setPanelOpen(true);
+    render(panelUi());
+
+    await waitFor(() => {
+      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+    });
+    fireEvent.click(screen.getByTestId("landing-terminal-new-tab"));
+    await waitFor(() => {
+      expect(useLandingTerminalStore.getState().tabs).toHaveLength(2);
+    });
+    const [first] = useLandingTerminalStore.getState().tabs;
+    const firstFocus = vi.fn();
+    focusCleanups.push(registerTerminalFocus(first.instanceId, firstFocus));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    firstFocus.mockClear();
+
+    // At click time the target tile's wrapper is still `invisible` (React has
+    // not committed the active flip), and a browser rejects focus on hidden
+    // elements without retrying - so the registry must defer fulfilment past
+    // the commit instead of invoking the callback inside the click handler.
+    fireEvent.click(
+      screen.getByTestId(`landing-terminal-tab-${first.instanceId}`),
+    );
+    expect(firstFocus).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(firstFocus).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("an unfulfilled open intent lands on the folder pinned at settle time", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = { sessions: [] };
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "tab-1",
+      sessionId: "session-1",
+      hostId: "host-a",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+    });
+    const resolvers: Array<(value: unknown) => void> = [];
+    mocks.queryClient.fetchQuery.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    const view = render(panelUi());
+    const router = fakeKeybindingRouter();
+
+    // Expand while the list fetch is still in flight, then repoint the pinned
+    // folder before anything settles. The open gesture was never fulfilled,
+    // so the surviving generation honors it against the folder pinned NOW -
+    // nothing had landed yet, so nothing is disrupted.
+    act(() => {
+      dispatchAction("app.terminal.toggle", router);
+    });
+    mocks.primaryWorkspacePath = "/workspace/other";
+    view.rerender(panelUi());
+    await drainDeferredListFetches(resolvers);
+
+    await waitFor(() => {
+      expect(useLandingTerminalStore.getState().tabs).toHaveLength(2);
+    });
+    const spawned = useLandingTerminalStore
+      .getState()
+      .tabs.find((tab) => tab.instanceId !== "tab-1");
+    expect(spawned?.cwd).toBe("/workspace/other");
+    expect(useLandingTerminalStore.getState().activeInstanceId).toBe(
+      spawned?.instanceId,
+    );
+  });
+
+  it("cancels the open intent once the user interacts with the panel", async () => {
+    mocks.activeHostId = "host-a";
+    // Pinned folder has no matching terminal, so an uncancelled intent would
+    // spawn there on settle.
+    mocks.primaryWorkspacePath = "/workspace/other";
+    mocks.probeData = { sessions: [] };
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "tab-1",
+      sessionId: "session-1",
+      hostId: "host-a",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+    });
+    const resolvers: Array<(value: unknown) => void> = [];
+    mocks.queryClient.fetchQuery.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    render(panelUi());
+    const router = fakeKeybindingRouter();
+
+    act(() => {
+      dispatchAction("app.terminal.toggle", router);
+    });
+    // The user picks a tab themselves while the list fetch is still pending -
+    // a late-settling pass must not yank them off that choice or spawn.
+    fireEvent.click(screen.getByTestId("landing-terminal-tab-tab-1"));
+    await drainDeferredListFetches(resolvers);
+
+    expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+    expect(useLandingTerminalStore.getState().activeInstanceId).toBe("tab-1");
+  });
+
+  it("hands focus to the composer when closing the last tab collapses the panel", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = { sessions: [] };
+    mocks.freshProbeData = mocks.probeData;
+    useLandingTerminalStore.getState().setPanelOpen(true);
+    render(panelUi());
+    const router = fakeKeybindingRouter();
+
+    await waitFor(() => {
+      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+    });
+    const composerFocus = vi.fn();
+    focusCleanups.push(registerComposerFocus(composerFocus, true));
+
+    act(() => {
+      dispatchAction("tab.close", router);
+    });
+    await waitFor(() => {
+      expect(useLandingTerminalStore.getState().panelOpen).toBe(false);
+      expect(composerFocus).toHaveBeenCalled();
+    });
+  });
+
+  it("reopens onto the pinned folder: spawns there when no terminal matches, reuses one that does", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = { sessions: [] };
+    mocks.freshProbeData = mocks.probeData;
+    useLandingTerminalStore.getState().setPanelOpen(true);
+    const view = render(panelUi());
+    const router = fakeKeybindingRouter();
+
+    await waitFor(() => {
+      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+    });
+    const first = useLandingTerminalStore.getState().tabs[0];
+    expect(first.cwd).toBe("/workspace/project");
+
+    // Collapse, repoint the composer's pinned folder, re-expand: the panel
+    // must land on a terminal running in the new folder - here by spawning
+    // one, since none matches - while the old terminal stays as a tab.
+    act(() => {
+      dispatchAction("app.terminal.toggle", router);
+    });
+    mocks.primaryWorkspacePath = "/workspace/other";
+    view.rerender(panelUi());
+    act(() => {
+      dispatchAction("app.terminal.toggle", router);
+    });
+    await waitFor(() => {
+      expect(useLandingTerminalStore.getState().tabs).toHaveLength(2);
+    });
+    const second = useLandingTerminalStore
+      .getState()
+      .tabs.find((tab) => tab.instanceId !== first.instanceId);
+    expect(second?.cwd).toBe("/workspace/other");
+    expect(useLandingTerminalStore.getState().activeInstanceId).toBe(
+      second?.instanceId,
+    );
+
+    // Collapse, repoint back to the original folder, re-expand: the still-
+    // running matching terminal is reused instead of spawning a third.
+    act(() => {
+      dispatchAction("app.terminal.toggle", router);
+    });
+    mocks.primaryWorkspacePath = "/workspace/project";
+    view.rerender(panelUi());
+    act(() => {
+      dispatchAction("app.terminal.toggle", router);
+    });
+    await waitFor(() => {
+      expect(useLandingTerminalStore.getState().activeInstanceId).toBe(
+        first.instanceId,
+      );
+    });
+    expect(useLandingTerminalStore.getState().tabs).toHaveLength(2);
+  });
+
+  it("leaves the open panel alone when the pinned folder changes without a reopen", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = { sessions: [] };
+    mocks.freshProbeData = mocks.probeData;
+    useLandingTerminalStore.getState().setPanelOpen(true);
+    const view = render(panelUi());
+
+    await waitFor(() => {
+      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+    });
+    const first = useLandingTerminalStore.getState().tabs[0];
+
+    mocks.primaryWorkspacePath = "/workspace/other";
+    view.rerender(panelUi());
+
+    // The folder change re-runs reconciliation; it must not spawn or switch
+    // while the panel stays open - only a reopen re-targets the pinned folder.
+    await waitFor(() => {
+      expect(mocks.queryClient.fetchQuery).toHaveBeenCalledTimes(2);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+    expect(useLandingTerminalStore.getState().activeInstanceId).toBe(
+      first.instanceId,
+    );
   });
 });
