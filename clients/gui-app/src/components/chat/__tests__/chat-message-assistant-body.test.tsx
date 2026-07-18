@@ -14,6 +14,7 @@ import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-exp
 import { AssistantMessageBody } from "@/components/chat/chat-message-assistant-body";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type {
+  AssistantTurnMeta,
   ChatMessageRunState,
   ChatMessageStoppedInfo,
   MessageSegment,
@@ -89,12 +90,24 @@ const STOPPED_NO_OUTPUT: ChatMessageStoppedInfo = {
   turnReplyText: "",
 };
 
+const META: AssistantTurnMeta = {
+  provider: "claude",
+  providerLabel: "Claude Code",
+  profileLabel: "Work",
+  modelLabel: "Claude Sonnet 4",
+  reasoningEffort: "high",
+  reasoningEffortLabel: "High",
+  serviceTier: null,
+  costUsd: null,
+};
+
 interface BodyPropsOverrides {
   readonly segments?: ReadonlyArray<MessageSegment>;
   readonly runState?: ChatMessageRunState | null;
   readonly createdAt?: number;
   readonly completedAt?: number | null;
   readonly stopped?: ChatMessageStoppedInfo | null;
+  readonly meta?: AssistantTurnMeta | null;
 }
 
 function bodyProps(overrides: BodyPropsOverrides) {
@@ -108,7 +121,7 @@ function bodyProps(overrides: BodyPropsOverrides) {
     pausedSinceMs: null,
     completedAt: overrides.completedAt ?? null,
     stopped: overrides.stopped ?? null,
-    meta: null,
+    meta: overrides.meta ?? null,
     nextStepActions: null,
     forkAction: null,
   };
@@ -304,5 +317,28 @@ describe("AssistantMessageBody stopped turn rendering", () => {
       ).toBeGreaterThan(0);
     });
     expect(screen.getAllByText("Stopped").length).toBeGreaterThan(0);
+  });
+
+  it("shows the turn's profile snapshot in the elapsed footer tooltip", async () => {
+    const user = userEvent.setup();
+    render(
+      <AssistantMessageBody
+        {...bodyProps({
+          segments: [TEXT_SEGMENT],
+          createdAt: 0,
+          completedAt: 5_000,
+          meta: META,
+        })}
+      />,
+    );
+
+    const footer = screen.getByTestId("assistant-elapsed-footer");
+    await user.tab();
+    expect(document.activeElement).toBe(footer);
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Profile").length).toBeGreaterThan(0);
+    });
+    expect(screen.getAllByText("Work").length).toBeGreaterThan(0);
   });
 });
