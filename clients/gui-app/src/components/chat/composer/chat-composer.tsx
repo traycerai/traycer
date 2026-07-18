@@ -388,6 +388,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
               providerId={reauthBanner.providerId}
               state={reauthGate.state}
               reason={reauthBanner.reason}
+              profileId={reauthGate.profileId}
               profileLabel={reauthGate.profileLabel}
               onContinueOnAmbient={
                 reauthBanner.reason === "provider_unauthenticated"

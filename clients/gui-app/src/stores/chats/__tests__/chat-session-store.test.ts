@@ -33,6 +33,11 @@ import {
   type WorktreeStagingKey,
 } from "@/stores/worktree/worktree-intent-staging-store";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
+import { interviewDraftKey } from "@/lib/persist";
+import {
+  readInterviewDraftSnapshot,
+  useInterviewDraftStore,
+} from "@/stores/composer/interview-draft-store";
 import { isOptimisticQueuedItem } from "@/stores/chats/optimistic-queue";
 import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
 
@@ -378,8 +383,11 @@ describe("createChatSessionStore", () => {
   // The worktree intent staging store is a module-global Zustand store; a test
   // that leaves a staged (or restored-on-reject) intent behind would make later
   // tests order-dependent. Reset it after every test so each starts clean.
+  // Interview drafts share the same module-global risk across lifecycle tests.
   afterEach(() => {
     useWorktreeIntentStagingStore.getState().resetForTests();
+    useInterviewDraftStore.setState({ draftsByChat: {} });
+    window.localStorage.clear();
   });
 
   it("clears a running chat when the stream closes", () => {
@@ -2250,6 +2258,416 @@ describe("createChatSessionStore", () => {
     expect(harness.handle.store.getState().pendingInterviews).toEqual([
       { blockId: "question-answer", requestedAt: 2 },
     ]);
+  });
+
+  it("clears the interview draft on host interviewAnswered", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const blockId = "question-draft-answered";
+
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      pendingInterviews: [{ blockId, requestedAt: 2 }],
+    });
+
+    useInterviewDraftStore.getState().saveDraft(CHAT_ID, blockId, {
+      pageIndex: 0,
+      answers: [{ selected: ["Alpha"], otherText: "", otherSelected: false }],
+    });
+    expect(
+      useInterviewDraftStore.getState().draftsByChat[CHAT_ID]?.[blockId],
+    ).toBeDefined();
+
+    callbacks.onInterviewAnswered({
+      kind: "interviewAnswered",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId,
+      answers: [],
+      resolvedAt: 4,
+    });
+
+    expect(
+      useInterviewDraftStore.getState().draftsByChat[CHAT_ID],
+    ).toBeUndefined();
+    expect(harness.handle.store.getState().pendingInterviews).toEqual([]);
+  });
+
+  it("clears the interview draft on host interviewErrored", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const blockId = "question-draft-errored";
+
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      pendingInterviews: [{ blockId, requestedAt: 2 }],
+    });
+
+    useInterviewDraftStore.getState().saveDraft(CHAT_ID, blockId, {
+      pageIndex: 1,
+      answers: [
+        { selected: [], otherText: "skip me later", otherSelected: true },
+      ],
+    });
+    expect(
+      useInterviewDraftStore.getState().draftsByChat[CHAT_ID]?.[blockId],
+    ).toBeDefined();
+
+    callbacks.onInterviewErrored({
+      kind: "interviewErrored",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId,
+      reason: "Skipped by user",
+      resolvedAt: 5,
+    });
+
+    expect(
+      useInterviewDraftStore.getState().draftsByChat[CHAT_ID],
+    ).toBeUndefined();
+    expect(harness.handle.store.getState().pendingInterviews).toEqual([]);
+  });
+
+  it("does not clear the interview draft when an interview action is rejected", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const blockId = "question-draft-rejected";
+
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      pendingInterviews: [{ blockId, requestedAt: 2 }],
+    });
+
+    const draft = {
+      pageIndex: 0,
+      answers: [{ selected: ["Retry"], otherText: "", otherSelected: false }],
+    };
+    useInterviewDraftStore.getState().saveDraft(CHAT_ID, blockId, draft);
+
+    const answerActionId = harness.handle.store
+      .getState()
+      .interviewAnswer(blockId, []);
+    if (answerActionId === null) {
+      throw new Error("expected sent interviewAnswer action");
+    }
+
+    callbacks.onActionAck({
+      kind: "actionAck",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      clientActionId: answerActionId,
+      action: "interviewAnswer",
+      status: "rejected",
+      reason: "Interview answer rejected.",
+      code: "INTERVIEW_REJECTED",
+      backgroundStopTaskIds: [],
+    });
+
+    expect(harness.handle.store.getState().pendingInterviews).toEqual([
+      { blockId, requestedAt: 2 },
+    ]);
+    expect(
+      useInterviewDraftStore.getState().draftsByChat[CHAT_ID]?.[blockId],
+    ).toEqual(draft);
+  });
+
+  it("refuses a second interviewAnswer while the first is still in flight", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const blockId = "question-double-dispatch";
+
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      pendingInterviews: [{ blockId, requestedAt: 2 }],
+    });
+
+    const firstId = harness.handle.store
+      .getState()
+      .interviewAnswer(blockId, []);
+    const secondId = harness.handle.store
+      .getState()
+      .interviewAnswer(blockId, []);
+
+    expect(firstId).not.toBeNull();
+    expect(secondId).toBe(firstId);
+    expect(
+      harness.sent.filter((frame) => frame.kind === "interviewAnswer"),
+    ).toHaveLength(1);
+    const pendingInterviewActions = Object.values(
+      harness.handle.store.getState().pendingActions,
+    ).filter((action) => action.interviewBlockId === blockId);
+    expect(pendingInterviewActions).toHaveLength(1);
+    expect(pendingInterviewActions[0]?.clientActionId).toBe(firstId);
+  });
+
+  it("allows a new interviewAnswer after a rejected ack and retains the draft", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const blockId = "question-reject-retry";
+    const draft = {
+      pageIndex: 0,
+      answers: [{ selected: ["Retry"], otherText: "", otherSelected: false }],
+    };
+
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      pendingInterviews: [{ blockId, requestedAt: 2 }],
+    });
+    useInterviewDraftStore.getState().saveDraft(CHAT_ID, blockId, draft);
+
+    const firstId = harness.handle.store
+      .getState()
+      .interviewAnswer(blockId, []);
+    if (firstId === null) {
+      throw new Error("expected first interviewAnswer action");
+    }
+
+    callbacks.onActionAck({
+      kind: "actionAck",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      clientActionId: firstId,
+      action: "interviewAnswer",
+      status: "rejected",
+      reason: "Interview answer rejected.",
+      code: "INTERVIEW_REJECTED",
+      backgroundStopTaskIds: [],
+    });
+
+    expect(
+      harness.handle.store.getState().pendingActions[firstId],
+    ).toBeUndefined();
+    expect(
+      Object.values(harness.handle.store.getState().pendingActions).some(
+        (action) => action.interviewBlockId === blockId,
+      ),
+    ).toBe(false);
+    expect(harness.handle.store.getState().pendingInterviews).toEqual([
+      { blockId, requestedAt: 2 },
+    ]);
+    expect(readInterviewDraftSnapshot(CHAT_ID, blockId)).toEqual(draft);
+
+    const retryId = harness.handle.store
+      .getState()
+      .interviewAnswer(blockId, []);
+    expect(retryId).not.toBeNull();
+    expect(retryId).not.toBe(firstId);
+    expect(
+      harness.sent.filter((frame) => frame.kind === "interviewAnswer"),
+    ).toHaveLength(2);
+    expect(
+      harness.handle.store.getState().pendingActions[retryId ?? ""],
+    ).toMatchObject({
+      action: "interviewAnswer",
+      interviewBlockId: blockId,
+    });
+  });
+
+  it("drops pending and accepted interview actions on interviewAnswered", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const blockId = "question-resolve-actions";
+
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      pendingInterviews: [{ blockId, requestedAt: 2 }],
+    });
+    useInterviewDraftStore.getState().saveDraft(CHAT_ID, blockId, {
+      pageIndex: 0,
+      answers: [{ selected: ["Done"], otherText: "", otherSelected: false }],
+    });
+
+    const actionId = harness.handle.store
+      .getState()
+      .interviewAnswer(blockId, []);
+    if (actionId === null) {
+      throw new Error("expected interviewAnswer action");
+    }
+    expect(
+      harness.handle.store.getState().pendingActions[actionId],
+    ).toBeDefined();
+
+    callbacks.onInterviewAnswered({
+      kind: "interviewAnswered",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId,
+      answers: [],
+      resolvedAt: 4,
+    });
+
+    expect(harness.handle.store.getState().pendingInterviews).toEqual([]);
+    expect(
+      harness.handle.store.getState().pendingActions[actionId],
+    ).toBeUndefined();
+    expect(
+      Object.values(harness.handle.store.getState().pendingActions).some(
+        (action) => action.interviewBlockId === blockId,
+      ),
+    ).toBe(false);
+    expect(
+      Object.values(harness.handle.store.getState().acceptedActions).some(
+        (action) => action.interviewBlockId === blockId,
+      ),
+    ).toBe(false);
+    expect(readInterviewDraftSnapshot(CHAT_ID, blockId)).toBeNull();
+  });
+
+  it("drops pending and accepted interview actions on interviewErrored", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const blockId = "question-error-actions";
+
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      pendingInterviews: [{ blockId, requestedAt: 2 }],
+    });
+    useInterviewDraftStore.getState().saveDraft(CHAT_ID, blockId, {
+      pageIndex: 0,
+      answers: [{ selected: [], otherText: "skip", otherSelected: true }],
+    });
+
+    const actionId = harness.handle.store
+      .getState()
+      .interviewError(blockId, "Skipped by user");
+    if (actionId === null) {
+      throw new Error("expected interviewError action");
+    }
+
+    callbacks.onInterviewErrored({
+      kind: "interviewErrored",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId,
+      reason: "Skipped by user",
+      resolvedAt: 5,
+    });
+
+    expect(harness.handle.store.getState().pendingInterviews).toEqual([]);
+    expect(
+      harness.handle.store.getState().pendingActions[actionId],
+    ).toBeUndefined();
+    expect(
+      Object.values(harness.handle.store.getState().acceptedActions).some(
+        (action) => action.interviewBlockId === blockId,
+      ),
+    ).toBe(false);
+    expect(readInterviewDraftSnapshot(CHAT_ID, blockId)).toBeNull();
+  });
+
+  it("prunes orphan interview drafts on the first snapshot", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const keepBlock = "question-keep";
+    const dropBlock = "question-drop";
+    const keepDraft = {
+      pageIndex: 0,
+      answers: [{ selected: ["Keep"], otherText: "", otherSelected: false }],
+    };
+    const dropDraft = {
+      pageIndex: 1,
+      answers: [{ selected: ["Drop"], otherText: "", otherSelected: false }],
+    };
+
+    useInterviewDraftStore.getState().saveDraft(CHAT_ID, keepBlock, keepDraft);
+    useInterviewDraftStore.getState().saveDraft(CHAT_ID, dropBlock, dropDraft);
+
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      pendingInterviews: [{ blockId: keepBlock, requestedAt: 2 }],
+    });
+
+    expect(readInterviewDraftSnapshot(CHAT_ID, keepBlock)).toEqual(keepDraft);
+    expect(readInterviewDraftSnapshot(CHAT_ID, dropBlock)).toBeNull();
+    expect(
+      window.localStorage.getItem(interviewDraftKey(CHAT_ID, keepBlock)),
+    ).not.toBeNull();
+    expect(
+      window.localStorage.getItem(interviewDraftKey(CHAT_ID, dropBlock)),
+    ).toBeNull();
+  });
+
+  it("prunes orphan interview drafts on a later reconnect snapshot", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const keepBlock = "question-keep-later";
+    const dropBlock = "question-drop-later";
+    const keepDraft = {
+      pageIndex: 0,
+      answers: [{ selected: ["Keep"], otherText: "", otherSelected: false }],
+    };
+    const dropDraft = {
+      pageIndex: 0,
+      answers: [{ selected: ["Drop"], otherText: "", otherSelected: false }],
+    };
+
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      pendingInterviews: [
+        { blockId: keepBlock, requestedAt: 2 },
+        { blockId: dropBlock, requestedAt: 3 },
+      ],
+    });
+    useInterviewDraftStore.getState().saveDraft(CHAT_ID, keepBlock, keepDraft);
+    useInterviewDraftStore.getState().saveDraft(CHAT_ID, dropBlock, dropDraft);
+
+    // Reconnect snapshot: only keepBlock is still pending.
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      pendingInterviews: [{ blockId: keepBlock, requestedAt: 2 }],
+    });
+
+    expect(readInterviewDraftSnapshot(CHAT_ID, keepBlock)).toEqual(keepDraft);
+    expect(readInterviewDraftSnapshot(CHAT_ID, dropBlock)).toBeNull();
+    expect(
+      window.localStorage.getItem(interviewDraftKey(CHAT_ID, dropBlock)),
+    ).toBeNull();
   });
 
   it("tracks checkpoint restore action and lifecycle frames", () => {
