@@ -60,7 +60,15 @@ import { RouterProvider } from "@tanstack/react-router";
 import type { RemoteHostFetcher } from "@traycer-clients/shared/host-client/remote-fetcher";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { LazyMotion, domMax } from "motion/react";
-import { useMemo, type ReactNode } from "react";
+import { lazy, Suspense, useMemo, type ReactNode } from "react";
+
+const ReactQueryDevtools = import.meta.env.DEV
+  ? lazy(() =>
+      import("@tanstack/react-query-devtools").then((module) => ({
+        default: module.ReactQueryDevtools,
+      })),
+    )
+  : null;
 
 export interface TraycerAppProps {
   readonly runnerHost: IRunnerHost;
@@ -146,6 +154,11 @@ export function TraycerApp(props: TraycerAppProps): ReactNode {
                 </KeybindingProvider>
               </TooltipProvider>
             </ThemeProvider>
+            {ReactQueryDevtools === null ? null : (
+              <Suspense fallback={null}>
+                <ReactQueryDevtools initialIsOpen={false} />
+              </Suspense>
+            )}
           </QueryClientProvider>
         </WindowsBridgeProvider>
       </LazyMotion>

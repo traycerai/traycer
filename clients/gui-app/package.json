@@ -112,6 +112,7 @@
   "devDependencies": {
     "@tanstack/eslint-plugin-query": "catalog:",
     "@tanstack/eslint-plugin-router": "catalog:",
+    "@tanstack/react-query-devtools": "catalog:",
     "@testing-library/react": "catalog:",
     "@testing-library/user-event": "catalog:",
     "@types/culori": "catalog:",
