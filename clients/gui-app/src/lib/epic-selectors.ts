@@ -32,7 +32,10 @@ import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import type { WorktreeBindingOwnerKind } from "@traycer/protocol/host/worktree-schemas";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
-import { AGENT_WORKING_AWARENESS_FIELD } from "@traycer/protocol/host/epic/subscribe";
+import {
+  AGENT_WORKING_AWARENESS_FIELD,
+  AGENT_WORKING_TURN_AWARENESS_FIELD,
+} from "@traycer/protocol/host/epic/subscribe";
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -701,6 +704,24 @@ const activeAgentIdsCache = new WeakMap<
   Awareness,
   { readonly ids: ReadonlySet<string>; readonly key: string }
 >();
+
+/**
+ * Live-activity tier of a working agent, as published by its host. See
+ * {@link AGENT_WORKING_TURN_AWARENESS_FIELD}: hosts that do not publish the
+ * turn field leave their agents' tier unknown, which reads as `"turn"`.
+ */
+export type AgentActivityTier = "turn" | "background";
+
+const EMPTY_AGENT_ACTIVITY_TIERS: ReadonlyMap<string, AgentActivityTier> =
+  new Map<string, AgentActivityTier>();
+
+const agentActivityTiersCache = new WeakMap<
+  Awareness,
+  {
+    readonly tiers: ReadonlyMap<string, AgentActivityTier>;
+    readonly key: string;
+  }
+>();
 const registeredLiveAgentIdsCache = new WeakMap<
   OpenEpicStoreHandle,
   { readonly ids: ReadonlySet<string>; readonly key: string }
@@ -726,6 +747,54 @@ function activeAgentIdsSnapshot(awareness: Awareness): ReadonlySet<string> {
   const entry = { ids, key };
   activeAgentIdsCache.set(awareness, entry);
   return entry.ids;
+}
+
+/**
+ * Same union as {@link activeAgentIdsSnapshot}, but resolving each working
+ * agent to its {@link AgentActivityTier}.
+ *
+ * The turn field is read PER AWARENESS ENTRY (one entry per host) because its
+ * presence is per-host, and mixed shapes are the steady state rather than a
+ * rollout window - see `AGENT_WORKING_TURN_AWARENESS_FIELD`. A host that omits
+ * it has not classified its agents, so they stay `"turn"` (the conservative
+ * pre-existing reading); a host that publishes it is authoritative, so its
+ * working ids absent from that list are genuinely background-only.
+ *
+ * `"turn"` wins when the same agent appears under two hosts. Returns the prior
+ * Map ref while membership AND tiers are unchanged so `useSyncExternalStore`
+ * sees a referentially-stable snapshot.
+ */
+function agentActivityTiersSnapshot(
+  awareness: Awareness,
+): ReadonlyMap<string, AgentActivityTier> {
+  const tiers = new Map<string, AgentActivityTier>();
+  for (const state of awareness.getStates().values()) {
+    const working: unknown = state[AGENT_WORKING_AWARENESS_FIELD];
+    if (!Array.isArray(working)) continue;
+    const turnField: unknown = state[AGENT_WORKING_TURN_AWARENESS_FIELD];
+    const turnIds = Array.isArray(turnField)
+      ? new Set(
+          (turnField as readonly unknown[]).filter(
+            (id): id is string => typeof id === "string",
+          ),
+        )
+      : null;
+    for (const id of working as readonly unknown[]) {
+      if (typeof id !== "string") continue;
+      const tier: AgentActivityTier =
+        turnIds === null || turnIds.has(id) ? "turn" : "background";
+      if (tier === "turn" || !tiers.has(id)) tiers.set(id, tier);
+    }
+  }
+  const key = [...tiers.entries()]
+    .map(([id, tier]) => `${id}:${tier}`)
+    .sort()
+    .join(" ");
+  const cached = agentActivityTiersCache.get(awareness);
+  if (cached !== undefined && cached.key === key) return cached.tiers;
+  const entry = { tiers, key };
+  agentActivityTiersCache.set(awareness, entry);
+  return entry.tiers;
 }
 
 /**
@@ -755,6 +824,38 @@ export function useEpicActiveAgentIds(): ReadonlySet<string> {
     subscribe,
     getSnapshot,
     () => EMPTY_ACTIVE_AGENT_IDS,
+  );
+}
+
+/**
+ * {@link useEpicActiveAgentIds} with each working agent resolved to its
+ * {@link AgentActivityTier}. Prefer this when the caller distinguishes an
+ * active turn from background-only work; the id set alone cannot.
+ */
+export function useEpicAgentActivityTiers(): ReadonlyMap<
+  string,
+  AgentActivityTier
+> {
+  const handle = useOpenEpicHandle();
+  useStore(handle.store, (s) => s.bindingVersion); // re-resolve on replica swap
+  const awareness = handle.awareness;
+  const subscribe = useMemo(
+    () => (onChange: () => void) => {
+      awareness.on("change", onChange);
+      return () => {
+        awareness.off("change", onChange);
+      };
+    },
+    [awareness],
+  );
+  const getSnapshot = useMemo(
+    () => () => agentActivityTiersSnapshot(awareness),
+    [awareness],
+  );
+  return useSyncExternalStore(
+    subscribe,
+    getSnapshot,
+    () => EMPTY_AGENT_ACTIVITY_TIERS,
   );
 }
 
@@ -798,6 +899,54 @@ export function useRegisteredEpicActiveAgentIds(
     subscribe,
     getSnapshot,
     () => EMPTY_ACTIVE_AGENT_IDS,
+  );
+}
+
+/**
+ * {@link useRegisteredEpicActiveAgentIds} with each working agent resolved to
+ * its {@link AgentActivityTier}, for surfaces that run outside the open-epic
+ * provider (epic tabs, the epic list).
+ */
+export function useRegisteredEpicAgentActivityTiers(
+  epicId: string | null,
+): ReadonlyMap<string, AgentActivityTier> {
+  const registry = getOpenEpicRegistry();
+  const handle = useSyncExternalStore(
+    (listener) => registry.subscribe(listener),
+    () => (epicId === null ? null : registry.peek(epicId)),
+    () => null,
+  );
+  useSyncExternalStore(
+    (listener) =>
+      handle?.store.subscribe((state, prev) => {
+        if (state.bindingVersion === prev.bindingVersion) return;
+        listener();
+      }) ?? noopSubscribe,
+    () => handle?.store.getState().bindingVersion ?? 0,
+    () => 0,
+  );
+  const awareness = handle?.awareness ?? null;
+  const subscribe = useMemo(
+    () => (onChange: () => void) => {
+      if (awareness === null) return noopUnsubscribe;
+      awareness.on("change", onChange);
+      return () => {
+        awareness.off("change", onChange);
+      };
+    },
+    [awareness],
+  );
+  const getSnapshot = useMemo(
+    () => () =>
+      awareness === null
+        ? EMPTY_AGENT_ACTIVITY_TIERS
+        : agentActivityTiersSnapshot(awareness),
+    [awareness],
+  );
+  return useSyncExternalStore(
+    subscribe,
+    getSnapshot,
+    () => EMPTY_AGENT_ACTIVITY_TIERS,
   );
 }
 
