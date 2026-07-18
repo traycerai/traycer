@@ -9,6 +9,7 @@ import type {
   GitGetFileDiffResponse,
   GitStage,
 } from "@traycer/protocol/host";
+import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
 import { useHostClient } from "@/lib/host";
 import { gitQueryKeys } from "@/lib/query-keys/git-query-keys";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
@@ -57,7 +58,9 @@ export function useGitGetFileDiffQuery(args: {
         // but a defensive runtime guard is retained against future refactors.
         // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
         if (!client) {
-          throw new Error("Host client unavailable");
+          // A `HostRpcError` (not a bare Error): this query publicly declares
+          // that error type and UI surfaces read `.code`.
+          throw hostClientUnavailableError("git.getFileDiff");
         }
         const request: GitGetFileDiffRequest = {
           hostId: args.hostId ?? "",
