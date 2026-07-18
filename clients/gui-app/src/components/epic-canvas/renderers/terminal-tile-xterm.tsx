@@ -48,6 +48,7 @@ import {
   useVisiblePaneValue,
 } from "@/components/epic-tabs/pane-visibility-context";
 import { markTerminalLoad } from "@/lib/perf/terminal-load-perf";
+import { registerTerminalFocus } from "@/lib/terminals/terminal-focus-registry";
 import {
   acquireXtermHost,
   releaseXtermHost,
@@ -397,6 +398,17 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
     theme,
   });
   useActiveTerminalFocus(termRef, props.shouldFocusOnActivePane);
+  // Imperative focus bridge. Surfaces whose reveal is not a pane-visibility
+  // flip (the landing panel expanding around an always-mounted tile, or a tab
+  // created before its engine exists) focus through the registry instead of
+  // `shouldFocusOnActivePane`.
+  useEffect(
+    () =>
+      registerTerminalFocus(props.instanceId, () => {
+        termRef.current?.focus();
+      }),
+    [props.instanceId],
+  );
 
   const pastePaths = useCallback((paths: readonly string[]): void => {
     const input = terminalPathInput(uniquePaths(paths));
