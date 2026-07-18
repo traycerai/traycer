@@ -151,6 +151,7 @@ export function useTerminalTileBootstrap(
   // subscribe); `measureTimedOut` unblocks the bootstrap when no probe ever
   // reports. `gridReady` is the gate the create effect and the session-handle
   // enable both honor.
+  const enabled = input.enabled ?? true;
   const [measuredGrid, setMeasuredGrid] = useState<{
     readonly cols: number;
     readonly rows: number;
@@ -160,15 +161,26 @@ export function useTerminalTileBootstrap(
     if (cols <= 0 || rows <= 0) return;
     setMeasuredGrid({ cols, rows });
   }, []);
+  // The bounded wait only ARMS while the bootstrap may actually proceed. A
+  // TUI tile disables the bootstrap until its agent record projects and the
+  // tile renders no probe in that state, so a timer running from mount would
+  // expire during a slow projection and let the create dispatch at the
+  // fallback grid before the freshly-mounted probe ever reports - exactly
+  // the wrong-sized spawn this machinery exists to prevent. An expiry that
+  // DID fire (while enabled) latches: the agent tile's `enabled` goes false
+  // again once the prepare mutation leaves idle, and un-readying the grid at
+  // that point would strand the timeout-fallback flow mid-bootstrap.
   useEffect(() => {
+    if (!enabled) return;
     if (measuredGrid !== null) return;
+    if (measureTimedOut) return;
     const timer = window.setTimeout(() => {
       setMeasureTimedOut(true);
     }, MEASURE_GRID_TIMEOUT_MS);
     return () => {
       window.clearTimeout(timer);
     };
-  }, [measuredGrid]);
+  }, [enabled, measuredGrid, measureTimedOut]);
   const gridReady = measuredGrid !== null || measureTimedOut;
 
   // The last SETTLED list's verdict on the session, kept stable across
@@ -247,7 +259,6 @@ export function useTerminalTileBootstrap(
   // `prepareLaunch.isIdle`, which the prepare itself flips), leaving the
   // tile stuck on "Starting terminal session…".
   const hasDispatchedRef = useRef(false);
-  const enabled = input.enabled ?? true;
   const createIsIdle = create.isIdle;
   const preparePayload = input.preparePayload;
   useEffect(() => {

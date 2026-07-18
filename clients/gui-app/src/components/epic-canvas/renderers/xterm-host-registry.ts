@@ -224,24 +224,31 @@ function cancelPendingDisposal(instanceId: string): void {
  * engine's writer, and the reopened tile's mount reattaches it with
  * scrollback intact. MUST run BEFORE the session-registry rekey: that rekey
  * notifies the engine follower, which disposes any engine whose instance id
- * is no longer a session-registry member. No-op when no engine is cached
- * (tab closed before the xterm chunk ever mounted) or the new id is taken.
+ * is no longer a session-registry member. Returns whether the caller may
+ * proceed with that handle rekey: true when the engine moved or none was
+ * cached (tab closed before the xterm chunk ever mounted); false when the
+ * move is refused - source engine still mounted by a live host, or the
+ * target id already holds an engine - in which case the handle must stay
+ * keyed with its engine.
  */
 export function rekeyXtermHost(
   oldInstanceId: string,
   newInstanceId: string,
-): void {
+): boolean {
   const entry = entries.get(oldInstanceId);
-  if (entry === undefined) return;
-  if (entries.has(newInstanceId)) return;
+  // No engine to move: trivially consistent - the caller may proceed with
+  // the session-handle rekey (the engine never existed or was disposed).
+  if (entry === undefined) return true;
+  // A host still renders the source engine (e.g. a concurrent second reopen
+  // of the same session racing this one's probe): moving it would strand the
+  // mount refcount and let that host's cleanup release a key it no longer
+  // owns. Refuse; the caller must not split the handle from its engine.
+  if (isMounted(oldInstanceId)) return false;
+  if (entries.has(newInstanceId)) return false;
   cancelPendingDisposal(oldInstanceId);
   entries.delete(oldInstanceId);
   entries.set(newInstanceId, entry);
-  const mounts = mountCounts.get(oldInstanceId);
-  if (mounts !== undefined) {
-    mountCounts.delete(oldInstanceId);
-    mountCounts.set(newInstanceId, mounts);
-  }
+  return true;
 }
 
 /**
@@ -269,7 +276,13 @@ export function adoptWarmSessionInstance(
   const registry = getTerminalSessionRegistry();
   const oldInstanceId = registry.findAdoptableInstanceId(sessionId, instanceId);
   if (oldInstanceId === null) return;
-  rekeyXtermHost(oldInstanceId, instanceId);
+  // The handle may only move together with its engine - the warm store's
+  // writer streams into that engine, so rekeying the handle after a refused
+  // engine move (source still mounted, or the target id already has an
+  // engine) would split the pair and orphan the scrollback. When the engine
+  // move is refused, leave everything keyed as-is; this tab proceeds as a
+  // fresh subscriber and the warm entry stays reachable for its own owner.
+  if (!rekeyXtermHost(oldInstanceId, instanceId)) return;
   registry.rekeyLeaseFreeEntry(oldInstanceId, instanceId);
 }
 

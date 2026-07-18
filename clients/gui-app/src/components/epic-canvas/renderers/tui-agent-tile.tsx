@@ -710,11 +710,16 @@ function TerminalAgentBody(props: TerminalAgentBodyProps): React.ReactNode {
     // into the live terminal never flickers between placeholder strings. The
     // measurement probe mounts the persistent xterm engine beneath it (both
     // fill the same relative box) so the container's grid is measured before
-    // the subscribe is dispatched - see `TerminalGridMeasureProbe`.
+    // the subscribe is dispatched - see `TerminalGridMeasureProbe`. Probe
+    // first, skeleton in an overlay after: the probe's container is
+    // `absolute inset-0`, so in-flow content preceding it would be painted
+    // over.
     return (
       <>
-        <TerminalLoadingSkeleton />
         {props.measureProbe}
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+          <TerminalLoadingSkeleton />
+        </div>
       </>
     );
   }
