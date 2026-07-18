@@ -250,6 +250,12 @@ function OptionRow(props: OptionRowProps) {
           selected
             ? "border-border bg-muted/70 text-foreground shadow-sm"
             : "text-muted-foreground hover:border-border/70 hover:bg-muted/40 hover:text-foreground",
+          // The overlay button below is transparent (no visible pixels of its
+          // own), so a `disabled:` class on it has nothing to dim. Apply the
+          // disabled look to this visible container instead, and stop it from
+          // matching `:hover` (a disabled sibling button doesn't stop mouse
+          // hover on this div) so the row doesn't look interactive.
+          disabled && "pointer-events-none opacity-60",
         )}
       >
         <button
@@ -258,7 +264,7 @@ function OptionRow(props: OptionRowProps) {
           aria-pressed={selected}
           aria-label={ariaLabel}
           disabled={disabled}
-          className="absolute inset-0 z-0 rounded-md outline-none focus-visible:ring-3 focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-60"
+          className="absolute inset-0 z-0 rounded-md outline-none focus-visible:ring-3 focus-visible:ring-ring/40"
         />
         <span className="pointer-events-none relative z-10 min-w-0 truncate font-medium text-foreground/90">
           {label}
