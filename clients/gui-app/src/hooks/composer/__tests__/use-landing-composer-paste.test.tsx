@@ -20,7 +20,11 @@ vi.mock("@/lib/composer/landing-image-gc", async (importActual) => {
     await importActual<typeof import("@/lib/composer/landing-image-gc")>();
   return {
     ...actual,
-    scheduleLandingImageReconcile: vi.fn(actual.scheduleLandingImageReconcile),
+    // A no-op stub, not a call-through: the real scheduler starts a 250ms
+    // timer that later calls the real `reconcile()`, which would otherwise
+    // escape this test's boundary and run against a later test's IDB mock
+    // state. Only call presence is asserted here.
+    scheduleLandingImageReconcile: vi.fn(() => undefined),
   };
 });
 
