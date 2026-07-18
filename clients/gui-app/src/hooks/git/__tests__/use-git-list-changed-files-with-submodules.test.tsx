@@ -8,7 +8,11 @@ import {
   type Mock,
 } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  CancelledError,
+  QueryClient,
+  QueryClientProvider,
+} from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import React from "react";
@@ -379,6 +383,52 @@ describe("useGitListChangedFilesWithSubmodules", () => {
     await waitFor(() =>
       expect(result.current.data?.fingerprint).toBe("fallback-value"),
     );
+  });
+
+  it("keeps an initial fallback cancellation in the loading state until the stream fills the slot", async () => {
+    const request = clientForHost("h").request;
+    request.mockImplementationOnce(() => new Promise(() => undefined));
+    const streamClient = streamState.client;
+    if (streamClient === null) throw new Error("Stream client missing");
+    const richKey = gitQueryKeys.listChangedFilesWithSubmodules(
+      "h",
+      "/repo",
+      false,
+    );
+
+    const { result } = renderHook(
+      () =>
+        useGitListChangedFilesWithSubmodules({
+          hostId: "h",
+          runningDir: "/repo",
+          ignoreWhitespace: false,
+          enabled: true,
+          changeToken: null,
+        }),
+      { wrapper },
+    );
+
+    await waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+
+    streamClient.version = { major: 1, minor: 1 };
+    streamClient.notifySupportChanged();
+
+    await waitFor(() =>
+      expect(queryClient.getQueryState(richKey)?.error).toBeInstanceOf(
+        CancelledError,
+      ),
+    );
+    expect(result.current.data).toBeNull();
+    expect(result.current.error).toBeNull();
+    expect(result.current.isPending).toBe(true);
+
+    queryClient.setQueryData(richKey, snapshot("stream-value"));
+
+    await waitFor(() =>
+      expect(result.current.data?.fingerprint).toBe("stream-value"),
+    );
+    expect(result.current.error).toBeNull();
+    expect(result.current.isPending).toBe(false);
   });
 
   it("forces a unary refetch when fallback mounts over a stream-owned rich cache", async () => {
