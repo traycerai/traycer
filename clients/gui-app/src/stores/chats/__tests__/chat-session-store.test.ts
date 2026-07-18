@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   ChatEvent,
@@ -375,6 +375,13 @@ function persistedUserMessage(
 }
 
 describe("createChatSessionStore", () => {
+  // The worktree intent staging store is a module-global Zustand store; a test
+  // that leaves a staged (or restored-on-reject) intent behind would make later
+  // tests order-dependent. Reset it after every test so each starts clean.
+  afterEach(() => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+  });
+
   it("clears a running chat when the stream closes", () => {
     const harness = createHarness();
 
@@ -789,6 +796,77 @@ describe("createChatSessionStore", () => {
 
     // The rejected edit puts the selection back, so the chip reflects the
     // worktree the user chose rather than silently reverting to the binding.
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toEqual(intent);
+  });
+
+  it("restores a staged worktree intent when a pending edit is swept after reconnect", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [persistedUserMessage("msg-original")],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    const intent: WorktreeIntent = {
+      entries: [
+        {
+          kind: "worktree",
+          scripts: null,
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+          branch: {
+            type: "new",
+            name: "feat",
+            source: "main",
+            carryUncommittedChanges: false,
+          },
+        },
+      ],
+    };
+    useWorktreeIntentStagingStore.getState().stageIntent(key, intent);
+
+    const result = harness.handle.store.getState().editUserMessage({
+      targetMessageId: "msg-original",
+      content: CONTENT,
+      sender: { type: "user", userId: OWNER_ID },
+      settings: SETTINGS,
+      revertFileChanges: false,
+      revertArtifacts: false,
+    });
+    expect(result).not.toBeNull();
+    // Dispatch consumed the slot.
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toBeUndefined();
+
+    // Connection drops before the ack (epoch bumps), then a fresh snapshot
+    // arrives with the edit still un-acked: the stale pending is swept, and the
+    // sweep restores its staged intent instead of leaving the slot cleared for
+    // the next resend to run against the prior binding.
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [persistedUserMessage("msg-original")],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
     expect(
       useWorktreeIntentStagingStore.getState().intentByKey[
         worktreeStagingKeyString(key)
