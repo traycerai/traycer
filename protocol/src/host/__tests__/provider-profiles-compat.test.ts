@@ -124,7 +124,8 @@ describe("legacy (pre-profile) persisted artifacts parse with profile defaults",
       claudeMessageUuid: "uuid-1",
       createdAt: 0,
     };
-    const parsedClaude = claudeChatSessionAnchorSchema.parse(legacyClaudeAnchor);
+    const parsedClaude =
+      claudeChatSessionAnchorSchema.parse(legacyClaudeAnchor);
     expect(parsedClaude.profileId).toBeNull();
     expect(parsedClaude.labelSnapshot).toBeNull();
     expect(parsedClaude.accountUuid).toBeNull();
@@ -218,6 +219,38 @@ describe("ProviderCliState.profiles[] downgrade to v1.0", () => {
     });
     expect(state.profiles[0].duplicateOfProfileId).toBeNull();
     expect(state.profiles[0].ambientDriftNotice).toBeNull();
+    // Same old-host guard as the two fields above: a build that predates
+    // rateLimitLimitedScopes yields null (profile-level fallback in the GUI).
+    expect(state.profiles[0].rateLimitLimitedScopes).toBeNull();
+  });
+
+  it("degrades a malformed rateLimitLimitedScopes to null without dropping the profile", () => {
+    const state = providerCliStateSchema.parse({
+      ...providerState("claude-code"),
+      profiles: [
+        {
+          profileId: "profile-1",
+          kind: "managed" as const,
+          authType: "oauth" as const,
+          label: "Work",
+          auth: {
+            status: "authenticated" as const,
+            badgeText: null,
+            label: null,
+            detail: null,
+          },
+          identity: null,
+          usageUpdatedAt: null,
+          // A newer host's severity vocabulary grew a value this client's
+          // frozen enum doesn't know - the whole field must degrade to null
+          // (profile-level fallback) instead of wiping the profile via the
+          // array-level `.catch([])` on `profiles`.
+          rateLimitLimitedScopes: [{ family: "Fable", severity: "soft_limit" }],
+        },
+      ],
+    });
+    expect(state.profiles).toHaveLength(1);
+    expect(state.profiles[0].rateLimitLimitedScopes).toBeNull();
   });
 
   it("degrades an out-of-palette reusedTombstone.accentColor to null without dropping the profile or the profiles array", () => {
@@ -448,9 +481,7 @@ describe("provider.* mutation major-2 lines predate profiles[]", () => {
     expect(downgraded.ok).toBe(true);
     if (!downgraded.ok) return;
     expect(downgraded.value.state).not.toHaveProperty("profiles");
-    expect(JSON.stringify(downgraded.value)).not.toContain(
-      "work@example.com",
-    );
+    expect(JSON.stringify(downgraded.value)).not.toContain("work@example.com");
   });
 });
 

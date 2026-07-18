@@ -386,6 +386,19 @@ export type ProviderProfileAccentColor = z.infer<
   typeof providerProfileAccentColorSchema
 >;
 
+// One near/at-limit rate-limit window on a profile, annotated with the model
+// family it gates. `family` is a provider-reported token - "opus", "sonnet",
+// or a model-scoped bucket's display name ("Fable") - matched by the GUI
+// against the selected model's slug/label; `null` means a shared window that
+// gates every model.
+export const providerProfileRateLimitScopeSchema = z.object({
+  family: z.string().nullable(),
+  severity: z.enum(["near_limit", "hard_limit"]),
+});
+export type ProviderProfileRateLimitScope = z.infer<
+  typeof providerProfileRateLimitScopeSchema
+>;
+
 export const providerProfileSchema = z.object({
   profileId: z.string(),
   kind: providerProfileKindSchema,
@@ -402,6 +415,17 @@ export const providerProfileSchema = z.object({
   usageUpdatedAt: z.number().nullable(),
   // `.catch("unknown")` tolerates old host builds that predate this field.
   rateLimitStatus: providerProfileRateLimitStatusSchema.catch("unknown"),
+  // The windows behind `rateLimitStatus`, per model family (see the scope
+  // schema above), so the composer can scope its switch prompt to the selected
+  // model instead of warning profile-wide. `null` = no per-scope data: an old
+  // host build that predates this field (via `.catch(null)`, same guard as
+  // `accentColor`) or a profile whose gauge has never been read / has gone
+  // stale - consumers fall back to the profile-level `rateLimitStatus`. An
+  // empty array means "read fine, nothing limited".
+  rateLimitLimitedScopes: z
+    .array(providerProfileRateLimitScopeSchema)
+    .nullable()
+    .catch(null),
   // Set when this profile's resolved identity (accountUuid, or email
   // fallback) matches another active profile of the same provider (including
   // ambient) - the id of that other profile. Duplicates are warned, never
