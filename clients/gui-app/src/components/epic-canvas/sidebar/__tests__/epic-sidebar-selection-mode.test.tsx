@@ -1168,6 +1168,7 @@ describe("chat descendant status rollup", () => {
     testState.records = [];
     testState.indicatorChats = {};
     testState.activeAgentIds = new Set<string>();
+    testState.chatFilterOrigin = "all";
   });
 
   function seedNestedChatTree(): void {
@@ -1366,6 +1367,55 @@ describe("chat descendant status rollup", () => {
     expect(
       screen.queryByTestId("chat-descendant-status-done-chat-root"),
     ).toBeNull();
+  });
+
+  it("ranks interview above approval, both outranked by failure", () => {
+    seedNestedChatTree();
+    testState.indicatorChats = {
+      "chat-child": indicator({ pendingApproval: true }),
+      "chat-grandchild": indicator({ pendingInterview: true }),
+    };
+
+    const view = render(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+    expect(
+      screen.getByTestId("chat-descendant-status-interview-chat-root"),
+    ).toBeTruthy();
+
+    testState.indicatorChats = {
+      ...testState.indicatorChats,
+      "chat-child": indicator({ unreadFailure: true }),
+    };
+    view.rerender(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+    expect(
+      screen.queryByTestId("chat-descendant-status-interview-chat-root"),
+    ).toBeNull();
+    expect(
+      screen.getByTestId("chat-descendant-status-failure-chat-root"),
+    ).toBeTruthy();
+  });
+
+  it("excludes a filter-hidden subtree from the rollup while keeping a visible descendant's status", () => {
+    seedNestedChatTree();
+    // GUI-only origin filter hides the terminal-agent descendant entirely -
+    // its active-run state must not leak into the rollup as "running" - while
+    // the chat subtree (still reachable under the filter) keeps surfacing.
+    testState.chatFilterOrigin = "gui";
+    testState.activeAgentIds = new Set(["agent-child"]);
+    testState.indicatorChats = {
+      "chat-grandchild": indicator({ unreadFailure: true }),
+    };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+    expect(
+      screen.queryByTestId("chat-descendant-status-running-chat-root"),
+    ).toBeNull();
+    expect(
+      screen.getByTestId("chat-descendant-status-failure-chat-root"),
+    ).toBeTruthy();
   });
 });
 

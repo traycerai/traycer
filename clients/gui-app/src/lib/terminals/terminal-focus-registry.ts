@@ -56,6 +56,14 @@ export function registerTerminalFocus(
 
 export function focusTerminalInstance(instanceId: string): void {
   if (!focusCallbacks.has(instanceId)) {
+    // A still-scheduled fulfilment for an earlier request must not fire once
+    // a newer, not-yet-mounted instance has been requested - last-wins covers
+    // parked requests too.
+    scheduledInstanceId = null;
+    if (scheduledTimer !== null) {
+      window.clearTimeout(scheduledTimer);
+      scheduledTimer = null;
+    }
     pendingInstanceId = instanceId;
     return;
   }
