@@ -838,7 +838,9 @@ export const worktreeHostEntrySchemaV11 = worktreeHostEntrySchema.extend({
   // `mergedIntoDefault` is the REQUIRED safety floor (HEAD contained in default
   // ⇒ deleting loses nothing); the reflog-no-`commit` guard only splits the
   // LABEL (an untouched worktree reads "At base commit" instead of "Merged").
-  // The pure client classifier greens "At base commit" on this boolean alone.
+  // The pure client normally labels this "At base commit"; it promotes the row
+  // to "Landed" when an owned submodule differs from its pinned gitlink and is
+  // proven merged. An unproven owned submodule still forces Review.
   // FAILS CLOSED: an unknown reflog (`null`) is NOT at-base. `false` whenever
   // unproven: dirty, HEAD not contained in default, an authored-commit reflog
   // entry, or `includeActivity` false (the probes are gated).
