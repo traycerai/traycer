@@ -104,10 +104,14 @@ export function ProviderProfileReauthPanel({
     <div className="flex flex-col gap-3 rounded-lg border border-border/60 bg-muted/20 p-3">
       <div>
         <div className="text-ui-sm font-medium text-foreground">
-          Switching account
+          {profile.auth.status === "unauthenticated"
+            ? "Signing in"
+            : "Switching account"}
         </div>
         <p className="mt-0.5 text-ui-xs text-muted-foreground">
-          The profile name and color will not change.
+          {profile.auth.status === "unauthenticated"
+            ? "Reconnect this profile. Its name and color will not change."
+            : "The profile name and color will not change."}
         </p>
       </div>
 
