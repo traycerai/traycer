@@ -640,6 +640,36 @@ function appendErrorNotice(
   ];
 }
 
+/**
+ * Re-stage the worktree intent a `send`/`editUserMessage` pending captured,
+ * unless the user has staged a newer selection since (revision guard). Shared
+ * by the rejection ack and the reconnect sweep: an edit dropped before its ack
+ * (connection lost mid-flight) never runs the rejection path, so without this
+ * its staged selection would stay cleared and the next resend would silently
+ * run against the prior binding - the exact silent-local-run the restore exists
+ * to prevent.
+ */
+function restoreStagedWorktreeIntentForPending(
+  pending: PendingChatAction,
+  stagingKey: WorktreeStagingKey,
+): void {
+  if (
+    pending.restoreWorktreeIntent === null ||
+    pending.restoreWorktreeStagingRevision === null
+  ) {
+    return;
+  }
+  if (
+    stagedWorktreeIntentRevision(stagingKey) !==
+    pending.restoreWorktreeStagingRevision
+  ) {
+    return;
+  }
+  useWorktreeIntentStagingStore
+    .getState()
+    .setIntent(stagingKey, pending.restoreWorktreeIntent);
+}
+
 export function createChatSessionStore(
   options: ChatSessionStoreOptions,
 ): ChatSessionStoreHandle {
@@ -767,6 +797,34 @@ export function createChatSessionStore(
           return;
         }
         flushBlockDeltas();
+        // Pendings dispatched on an earlier connection never see their ack, so
+        // the snapshot drops them (below). Computed here, before the set, so a
+        // swept `editUserMessage` gets its staged worktree intent restored the
+        // same way a rejected one does - the drop otherwise leaves the slot
+        // cleared and the next resend runs against the prior binding. Reads
+        // `get()` (no pendingActions mutation happens before the set), so it
+        // sees the same state the updater will.
+        const sweep = sweepStalePendingActions(
+          get().pendingActions,
+          connectionEpoch,
+        );
+        if (sweep.sweptActionIds.size > 0) {
+          const stagingKey: WorktreeStagingKey = {
+            surface: "owner",
+            epicId: options.epicId,
+            ownerKind: "chat",
+            ownerId: options.chatId,
+          };
+          // Every swept id came from this same `pendingActions` snapshot, so
+          // the lookup is always present.
+          const sweptPendings = get().pendingActions;
+          sweep.sweptActionIds.forEach((sweptId) => {
+            restoreStagedWorktreeIntentForPending(
+              sweptPendings[sweptId],
+              stagingKey,
+            );
+          });
+        }
         set((state) => {
           const previousTurnId = snapshotPreviousTurnId(
             state.activeTurn,
@@ -783,14 +841,11 @@ export function createChatSessionStore(
           const now = Date.now();
           // This snapshot is the authority for everything a lost connection
           // left in limbo: pendings dispatched on an earlier connection will
-          // never see their ack, so drop them here (controls re-enable; the
-          // user can re-issue against the state the snapshot shows). Message
-          // sends stay - `reconcileSnapshotChange` settles those by messageId
-          // with composer restoration.
-          const sweep = sweepStalePendingActions(
-            state.pendingActions,
-            connectionEpoch,
-          );
+          // never see their ack, so drop them (via `sweep`, computed above so
+          // swept edits restore their staged worktree intent). Controls
+          // re-enable; the user can re-issue against the state the snapshot
+          // shows. Message sends stay - `reconcileSnapshotChange` settles those
+          // by messageId with composer restoration.
           const pending = reconcileSnapshotChange({
             pendingActions: sweep.pendingActions,
             pendingUserMessages: state.pendingUserMessages,
@@ -905,27 +960,13 @@ export function createChatSessionStore(
           frame.status === "rejected"
             ? pendingActionForId(get().pendingActions, frame.clientActionId)
             : null;
-        if (
-          rejectedPending !== null &&
-          rejectedPending.restoreWorktreeIntent !== null &&
-          rejectedPending.restoreWorktreeStagingRevision !== null
-        ) {
-          const stagingKey: WorktreeStagingKey = {
+        if (rejectedPending !== null) {
+          restoreStagedWorktreeIntentForPending(rejectedPending, {
             surface: "owner",
             epicId: options.epicId,
             ownerKind: "chat",
             ownerId: options.chatId,
-          };
-          const stagingStore = useWorktreeIntentStagingStore.getState();
-          if (
-            stagedWorktreeIntentRevision(stagingKey) ===
-            rejectedPending.restoreWorktreeStagingRevision
-          ) {
-            stagingStore.setIntent(
-              stagingKey,
-              rejectedPending.restoreWorktreeIntent,
-            );
-          }
+          });
         }
         set((state) => {
           const pending = pendingActionForId(
@@ -1695,6 +1736,20 @@ export function createChatSessionStore(
           revertFileChanges: input.revertFileChanges,
           revertArtifacts: input.revertArtifacts,
         };
+        // Consume before dispatch, exactly like `sendMessage`: the pending
+        // action captures the staging revision it may later restore, so a
+        // rejected edit (e.g. the staged worktree failed to materialize) puts
+        // the selection back unless the user re-picked meanwhile. Without
+        // this, the folder chip silently reverts to the prior binding and the
+        // next resend runs there - the silent-local-run the reject exists to
+        // prevent.
+        const stagingStore = useWorktreeIntentStagingStore.getState();
+        let restoreWorktreeStagingRevision: number | null = null;
+        if (worktreeIntent !== null) {
+          stagingStore.clear(stagedKey);
+          restoreWorktreeStagingRevision =
+            stagedWorktreeIntentRevision(stagedKey);
+        }
         const sentClientActionId = sendAction({
           set,
           get,
@@ -1706,18 +1761,22 @@ export function createChatSessionStore(
             restoreContent: null,
             sender: null,
             settings: null,
-            restoreWorktreeIntent: null,
-            restoreWorktreeStagingRevision: null,
+            restoreWorktreeIntent: worktreeIntent,
+            restoreWorktreeStagingRevision,
             createdAt: Date.now(),
           },
           pendingUserMessage: null,
         });
-        if (sentClientActionId === null) return null;
+        if (sentClientActionId === null) {
+          if (worktreeIntent !== null) {
+            stagingStore.setIntent(stagedKey, worktreeIntent);
+          }
+          return null;
+        }
         if (worktreeIntent !== null) {
           useWorktreeIntentMemoryStore
             .getState()
             .setEpicIntent(options.epicId, worktreeIntent, Date.now());
-          useWorktreeIntentStagingStore.getState().clear(stagedKey);
           get().refreshMissingWorktreePaths([]);
         }
         return { clientActionId: sentClientActionId, messageId };

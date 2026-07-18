@@ -53,12 +53,26 @@ function retryableUnauthorizedError(): HostRpcError {
   });
 }
 
+// These tests drive only the unary `request` path; the wrapper routes the two
+// methods independently. Stub the long-poll variant with a throwing mock rather
+// than a bare `vi.fn()` (which resolves `undefined`) so an accidental route of
+// `request` through it fails loudly instead of silently passing on an invalid
+// result.
+function uncalledLongPoll() {
+  return vi.fn(() => {
+    throw new Error(
+      "requestWithResponseTimeout must not be called by these unary-path tests",
+    );
+  });
+}
+
 describe("createAuthAwareMessenger", () => {
   it("passes results through without revalidating on success", async () => {
     const revalidate = vi.fn();
     const auth: AuthRevalidator = { revalidateCurrentContext: revalidate };
     const inner: IHostMessenger<Registry> = {
       request: vi.fn().mockResolvedValue(undefined),
+      requestWithResponseTimeout: uncalledLongPoll(),
     };
 
     const wrapped = createAuthAwareMessenger(inner, auth, null);
@@ -72,6 +86,7 @@ describe("createAuthAwareMessenger", () => {
     const auth: AuthRevalidator = { revalidateCurrentContext: revalidate };
     const inner: IHostMessenger<Registry> = {
       request: vi.fn().mockRejectedValue(unauthorizedError()),
+      requestWithResponseTimeout: uncalledLongPoll(),
     };
 
     const wrapped = createAuthAwareMessenger(inner, auth, null);
@@ -88,6 +103,7 @@ describe("createAuthAwareMessenger", () => {
     const original = retryableUnauthorizedError();
     const inner: IHostMessenger<Registry> = {
       request: vi.fn().mockRejectedValue(original),
+      requestWithResponseTimeout: uncalledLongPoll(),
     };
 
     const wrapped = createAuthAwareMessenger(inner, auth, null);
@@ -104,6 +120,7 @@ describe("createAuthAwareMessenger", () => {
     const original = unauthorizedError();
     const inner: IHostMessenger<Registry> = {
       request: vi.fn().mockRejectedValue(original),
+      requestWithResponseTimeout: uncalledLongPoll(),
     };
     const auth: AuthRevalidator = {
       revalidateCurrentContext: vi
@@ -127,6 +144,7 @@ describe("createAuthAwareMessenger", () => {
     const auth: AuthRevalidator = { revalidateCurrentContext: revalidate };
     const inner: IHostMessenger<Registry> = {
       request: vi.fn().mockRejectedValue(rpcError()),
+      requestWithResponseTimeout: uncalledLongPoll(),
     };
 
     const wrapped = createAuthAwareMessenger(inner, auth, null);
@@ -141,7 +159,10 @@ describe("createAuthAwareMessenger", () => {
     const request = vi.fn();
     request.mockRejectedValueOnce(unauthorizedError());
     request.mockResolvedValueOnce(undefined);
-    const inner: IHostMessenger<Registry> = { request };
+    const inner: IHostMessenger<Registry> = {
+      request,
+      requestWithResponseTimeout: uncalledLongPoll(),
+    };
     const revalidate = vi.fn().mockImplementation(() => {
       lease.rotate("fresh");
       return Promise.resolve();
@@ -160,6 +181,7 @@ describe("createAuthAwareMessenger", () => {
     const lease = new MutableBearerLease("stale", "u1");
     const inner: IHostMessenger<Registry> = {
       request: vi.fn().mockRejectedValue(unauthorizedError()),
+      requestWithResponseTimeout: uncalledLongPoll(),
     };
     // refresh failed → lease unchanged, so no retry.
     const revalidate = vi.fn().mockResolvedValue(undefined);

@@ -19,3 +19,14 @@ export function readMetadataNumber(
   const value = metadata[key];
   return typeof value === "number" ? value : null;
 }
+
+/**
+ * Raw metadata value for structured payloads (objects the caller validates
+ * with a schema - e.g. the `folderIntent` a `setup.failed` event carries).
+ * Returns `undefined` when the event has no metadata or the key is absent.
+ */
+export function readMetadataValue(event: ChatEvent, key: string): unknown {
+  const metadata = event.metadata;
+  if (metadata === null) return undefined;
+  return metadata[key];
+}

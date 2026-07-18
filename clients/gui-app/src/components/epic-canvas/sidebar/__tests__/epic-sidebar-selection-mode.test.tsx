@@ -65,6 +65,7 @@ interface TestState {
   records: readonly TestRecord[];
   indicatorChats: Readonly<Record<string, TestIndicatorState>>;
   activeAgentIds: ReadonlySet<string>;
+  activityTierById: Map<string, "turn" | "background">;
   permissionRole: "owner" | "editor" | "viewer" | null;
   rowHostId: string | null;
   rowHostEntry: unknown;
@@ -104,6 +105,7 @@ const testState = vi.hoisted<TestState>(() => ({
   records: [],
   indicatorChats: {},
   activeAgentIds: new Set<string>(),
+  activityTierById: new Map<string, "turn" | "background">(),
   permissionRole: "owner",
   rowHostId: "host-1",
   rowHostEntry: { hostId: "host-1" },
@@ -411,6 +413,16 @@ vi.mock("@/lib/epic-selectors", () => ({
   useChildIds: (parentId: string) =>
     testState.tree.childrenByParent[parentId] ?? [],
   useEpicActiveAgentIds: () => testState.activeAgentIds,
+  // Awareness reports a tier per working agent. An agent whose host did not
+  // classify it reads as "turn", so tests that only set `activeAgentIds` keep
+  // their pre-tier behaviour.
+  useEpicAgentActivityTiers: () =>
+    new Map(
+      [...testState.activeAgentIds].map((id) => [
+        id,
+        testState.activityTierById.get(id) ?? "turn",
+      ]),
+    ),
   useEpicArtifact: (artifactId: string | null) => {
     if (artifactId === null) return null;
     const node = testState.tree.nodeById[artifactId];
@@ -548,6 +560,7 @@ describe("epic sidebar selection mode", () => {
     testState.records = [];
     testState.indicatorChats = {};
     testState.activeAgentIds = new Set<string>();
+    testState.activityTierById = new Map();
     testState.permissionRole = "owner";
     testState.rowHostId = "host-1";
     testState.rowHostEntry = { hostId: "host-1" };
@@ -1168,6 +1181,7 @@ describe("chat descendant status rollup", () => {
     testState.records = [];
     testState.indicatorChats = {};
     testState.activeAgentIds = new Set<string>();
+    testState.activityTierById = new Map();
     testState.chatFilterOrigin = "all";
   });
 
@@ -1334,6 +1348,7 @@ describe("chat descendant status rollup", () => {
 
     // Equal tiers: the tie goes to the parent's own (solid) presentation.
     testState.activeAgentIds = new Set<string>();
+    testState.activityTierById = new Map();
     testState.indicatorChats = {
       "chat-root": indicator({ pendingApproval: true }),
       "chat-grandchild": indicator({ pendingApproval: true }),
@@ -1345,6 +1360,71 @@ describe("chat descendant status rollup", () => {
       screen.queryByTestId("chat-descendant-status-approval-chat-root"),
     ).toBeNull();
     expect(screen.getByTestId("chat-sidebar-spinner")).toBeTruthy();
+  });
+
+  it("distinguishes a background-only descendant from one mid-turn", () => {
+    seedNestedChatTree();
+    // The grandchild is non-idle, but only because a background task
+    // (run_in_background / Monitor / a scheduled wakeup) is keeping it alive -
+    // the agent itself is not executing. Before the awareness tier existed
+    // this was indistinguishable from a live turn.
+    testState.activeAgentIds = new Set(["chat-grandchild"]);
+    testState.activityTierById = new Map([["chat-grandchild", "background"]]);
+
+    const view = render(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+    expect(
+      screen.getByTestId("chat-descendant-status-background-chat-root"),
+    ).toBeTruthy();
+    expect(
+      screen.queryByTestId("chat-descendant-status-running-chat-root"),
+    ).toBeNull();
+
+    // Same descendant, now genuinely mid-turn: the busier tier takes the slot.
+    testState.activityTierById = new Map([["chat-grandchild", "turn"]]);
+    view.rerender(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+    expect(
+      screen.getByTestId("chat-descendant-status-running-chat-root"),
+    ).toBeTruthy();
+    expect(
+      screen.queryByTestId("chat-descendant-status-background-chat-root"),
+    ).toBeNull();
+  });
+
+  it("ranks a descendant's turn above a descendant's background work", () => {
+    seedNestedChatTree();
+    testState.activeAgentIds = new Set(["chat-child", "chat-grandchild"]);
+    testState.activityTierById = new Map([
+      ["chat-child", "background"],
+      ["chat-grandchild", "turn"],
+    ]);
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+    const icon = screen.getByTestId("chat-descendant-status-running-chat-root");
+    expect(icon).toBeTruthy();
+    // The tooltip breaks the aggregate down across both tiers.
+    expect(icon.getAttribute("title")).toContain("1 running");
+    expect(icon.getAttribute("title")).toContain("1 in background");
+  });
+
+  it("lets a descendant's turn outrank the parent's own background work", () => {
+    seedNestedChatTree();
+    // Parent is non-idle but only in background; a hidden descendant is
+    // actually mid-turn, so the busier nested tier must win the slot rather
+    // than being masked by the parent's own (lower) tier.
+    testState.activeAgentIds = new Set(["chat-root", "chat-grandchild"]);
+    testState.activityTierById = new Map([
+      ["chat-root", "background"],
+      ["chat-grandchild", "turn"],
+    ]);
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+    expect(
+      screen.getByTestId("chat-descendant-status-running-chat-root"),
+    ).toBeTruthy();
   });
 
   it("shows an unread-done rollup and nothing when descendants are idle", () => {
