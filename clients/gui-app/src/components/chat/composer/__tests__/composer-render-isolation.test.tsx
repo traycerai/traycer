@@ -54,6 +54,7 @@ function Harness({
         isActive={false}
         disabled={false}
         slashProviderId="claude"
+        hasPastedImageBytes={null}
         stabilizeImageAttachmentCaret={stabilizeImageAttachmentCaret}
         onSnapshot={() => undefined}
         onSubmit={() => undefined}

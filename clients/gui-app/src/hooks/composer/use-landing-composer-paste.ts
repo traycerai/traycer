@@ -34,6 +34,7 @@ import {
  */
 async function landingImageAttrsFromFiles(
   files: ReadonlyArray<File>,
+  signal: AbortSignal,
 ): Promise<ImageAttachmentAttrs[]> {
   const accepted = collectImages(files, () => {
     Analytics.getInstance().track(AnalyticsEvent.AttachmentRejected, {
@@ -59,8 +60,11 @@ async function landingImageAttrsFromFiles(
   }
   return Promise.all(
     accepted.map(async (file) => {
+      signal.throwIfAborted();
       const bytes = new Uint8Array(await file.arrayBuffer());
+      signal.throwIfAborted();
       const hash = await putImage(bytes);
+      signal.throwIfAborted();
       return {
         id: uuidv4(),
         fileName: file.name || "image",
@@ -76,8 +80,8 @@ export function useLandingComposerPaste(editorRef: {
   readonly current: ComposerPasteEditorHandle | null;
 }): UseComposerPasteResult {
   const onFiles = useCallback(
-    (files: ReadonlyArray<File>) => {
-      void landingImageAttrsFromFiles(files)
+    (files: ReadonlyArray<File>, signal: AbortSignal) =>
+      landingImageAttrsFromFiles(files, signal)
         .then((attrs) => {
           if (attrs.length === 0) return;
           const handle = editorRef.current;
@@ -103,6 +107,7 @@ export function useLandingComposerPaste(editorRef: {
             surface: "draft",
             blocker: analyticsBlockerFromError(error),
           });
+          if (signal.aborted) return;
           // A failed ingest (e.g. one image of a multi-image paste failed to hash
           // or store) inserts nothing, but earlier images may already be stored —
           // now orphaned. Surface the failure and schedule a reconcile to reclaim
@@ -120,8 +125,7 @@ export function useLandingComposerPaste(editorRef: {
             },
           );
           scheduleLandingImageReconcile();
-        });
-    },
+        }),
     [editorRef],
   );
   return useComposerPasteEvents(onFiles);

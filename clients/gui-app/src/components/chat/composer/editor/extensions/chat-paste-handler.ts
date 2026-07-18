@@ -1,5 +1,6 @@
 import { Extension } from "@tiptap/core";
-import { Plugin, PluginKey, type EditorState } from "@tiptap/pm/state";
+import { Plugin, type EditorState } from "@tiptap/pm/state";
+import type { EditorView } from "@tiptap/pm/view";
 import {
   DOMParser as ProseMirrorDOMParser,
   Fragment,
@@ -15,7 +16,10 @@ import { normalizeSliceSoftBreaks } from "@/lib/composer/normalize-soft-breaks";
 import {
   parseLeadingSlashCommand,
   slashCommandParagraph,
+  stringValue,
 } from "@/lib/composer/tiptap-json-content";
+import { sliceToDocJson } from "@/lib/editor/prosemirror-json";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
 import {
   isLeadingRange,
@@ -23,11 +27,11 @@ import {
 } from "./slash-command-extension";
 import type { ComposerPickerStore } from "../../picker/composer-picker-store";
 
-const chatPasteHandlerKey = new PluginKey("composer-chat-paste-handler");
 const BOLD_MARK = { type: "bold" };
 
 export interface ChatPasteHandlerDeps {
   readonly pickerStore: ComposerPickerStore;
+  readonly getHasPastedImageBytes: () => ((hash: string) => boolean) | null;
 }
 
 export function createChatPasteHandler(deps: ChatPasteHandlerDeps) {
@@ -36,9 +40,30 @@ export function createChatPasteHandler(deps: ChatPasteHandlerDeps) {
 
     addProseMirrorPlugins() {
       const { editor } = this;
+      const pasteWithValidatedImages = (
+        view: EditorView,
+        content: JsonContent,
+      ): boolean => {
+        const hashes = hashOnlyImageHashes(content);
+        const hasPastedImageBytes = deps.getHasPastedImageBytes();
+        if (hashes.length === 0 || hasPastedImageBytes === null) {
+          return pasteComposerContent(view, content);
+        }
+        const availableHashes = new Set(
+          hashes.filter((hash) => hasPastedImageBytes(hash)),
+        );
+        const filtered = filterUnavailablePastedImages(
+          content,
+          availableHashes,
+        );
+        const pasted = pasteComposerContent(view, filtered.content);
+        if (filtered.removedCount > 0) {
+          showUnavailablePastedImageToast(filtered.removedCount);
+        }
+        return pasted;
+      };
       return [
         new Plugin({
-          key: chatPasteHandlerKey,
           props: {
             handlePaste(view, event) {
               const clipboardData = event.clipboardData;
@@ -49,16 +74,7 @@ export function createChatPasteHandler(deps: ChatPasteHandlerDeps) {
               const composerContent =
                 readComposerContentFromClipboardData(clipboardData);
               if (composerContent !== null) {
-                const slice = composerContentSlice(
-                  view.state.schema,
-                  composerContent,
-                );
-                if (slice === null) return false;
-                const tr = view.state.tr.replaceSelection(
-                  normalizeSliceSoftBreaks(slice, view.state.schema),
-                );
-                view.dispatch(tr.scrollIntoView());
-                return true;
+                return pasteWithValidatedImages(view, composerContent);
               }
 
               const html = clipboardData.getData("text/html");
@@ -69,12 +85,20 @@ export function createChatPasteHandler(deps: ChatPasteHandlerDeps) {
                 const parser = ProseMirrorDOMParser.fromSchema(
                   view.state.schema,
                 );
-                const slice = parser.parseSlice(sanitized, {
-                  preserveWhitespace: false,
-                });
-                const tr = view.state.tr.replaceSelection(
-                  normalizeSliceSoftBreaks(slice, view.state.schema),
+                const slice = normalizeSliceSoftBreaks(
+                  parser.parseSlice(sanitized, {
+                    preserveWhitespace: false,
+                  }),
+                  view.state.schema,
                 );
+                const htmlContent = sliceToDocJson(slice);
+                if (
+                  htmlContent !== null &&
+                  hashOnlyImageHashes(htmlContent).length > 0
+                ) {
+                  return pasteWithValidatedImages(view, htmlContent);
+                }
+                const tr = view.state.tr.replaceSelection(slice);
                 view.dispatch(tr.scrollIntoView());
                 return true;
               }
@@ -128,6 +152,104 @@ export function createChatPasteHandler(deps: ChatPasteHandlerDeps) {
       ];
     },
   });
+}
+
+function pasteComposerContent(view: EditorView, content: JsonContent): boolean {
+  const slice = composerContentSlice(view.state.schema, content);
+  if (slice === null) return false;
+  const tr = view.state.tr.replaceSelection(
+    normalizeSliceSoftBreaks(slice, view.state.schema),
+  );
+  view.dispatch(tr.scrollIntoView());
+  return true;
+}
+
+function hashOnlyImageHashes(content: JsonContent): string[] {
+  const hashes = new Set<string>();
+  collectHashOnlyImageHashes(content, hashes);
+  return Array.from(hashes);
+}
+
+function collectHashOnlyImageHashes(
+  node: JsonContent,
+  hashes: Set<string>,
+): void {
+  if (node.type === "imageAttachment") {
+    const hash = stringValue(node.attrs?.hash);
+    const b64content = stringValue(node.attrs?.b64content);
+    if (hash !== null && b64content === null) hashes.add(hash);
+    return;
+  }
+  node.content?.forEach((child) => collectHashOnlyImageHashes(child, hashes));
+}
+
+interface FilteredPastedImageContent {
+  readonly content: JsonContent;
+  readonly removedCount: number;
+}
+
+interface FilteredPastedImageNode {
+  readonly node: JsonContent | null;
+  readonly removedCount: number;
+}
+
+function filterUnavailablePastedImages(
+  content: JsonContent,
+  availableHashes: ReadonlySet<string>,
+): FilteredPastedImageContent {
+  const filtered = filterUnavailablePastedImageNode(content, availableHashes);
+  return {
+    content: filtered.node ?? { type: "doc", content: [] },
+    removedCount: filtered.removedCount,
+  };
+}
+
+function filterUnavailablePastedImageNode(
+  node: JsonContent,
+  availableHashes: ReadonlySet<string>,
+): FilteredPastedImageNode {
+  if (node.type === "imageAttachment") {
+    const hash = stringValue(node.attrs?.hash);
+    const b64content = stringValue(node.attrs?.b64content);
+    if (hash !== null && b64content === null && !availableHashes.has(hash)) {
+      return { node: null, removedCount: 1 };
+    }
+    return { node, removedCount: 0 };
+  }
+  if (node.content === undefined) return { node, removedCount: 0 };
+  const filteredChildren = node.content.map((child) =>
+    filterUnavailablePastedImageNode(child, availableHashes),
+  );
+  const children = filteredChildren.flatMap((child) =>
+    child.node === null ? [] : [child.node],
+  );
+  const removedCount = filteredChildren.reduce(
+    (count, child) => count + child.removedCount,
+    0,
+  );
+  if (node.type === "attachmentGroup" && children.length === 0) {
+    return { node: null, removedCount };
+  }
+  return { node: { ...node, content: children }, removedCount };
+}
+
+function showUnavailablePastedImageToast(removedCount: number): void {
+  const plural = removedCount === 1 ? "image" : "images";
+  const verb = removedCount === 1 ? "was" : "were";
+  reportableErrorToast(
+    removedCount === 1
+      ? "Pasted image unavailable"
+      : "Some pasted images are unavailable",
+    {
+      description: `${removedCount} ${plural} could not be found in this composer and ${verb} removed.`,
+    },
+    {
+      title: "Pasted image unavailable",
+      message: null,
+      code: null,
+      source: "Chat composer",
+    },
+  );
 }
 
 function composerMarkdownContentSlice(

@@ -1,12 +1,14 @@
 import { ArrowUp, Square } from "lucide-react";
-import { memo, useCallback } from "react";
+import { memo, useCallback, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import type { ChatActiveTurn } from "@traycer/protocol/host/agent/gui/subscribe";
 import { cn } from "@/lib/utils";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 
 interface ComposerSendButtonProps {
   canSubmit: boolean;
+  attachmentPending: boolean;
   onSubmit: () => void;
   activeTurnStatus: ChatActiveTurn["status"] | null;
   stopDisabled: boolean;
@@ -22,6 +24,7 @@ interface ComposerSendButtonProps {
 function ComposerSendButtonImpl(props: ComposerSendButtonProps) {
   const {
     canSubmit,
+    attachmentPending,
     onSubmit,
     activeTurnStatus,
     stopDisabled,
@@ -32,7 +35,10 @@ function ComposerSendButtonImpl(props: ComposerSendButtonProps) {
   const disabled = stopMode
     ? stopDisabled || onStopTurn === null
     : !canSubmit || disabledHint !== null;
-  const label = composerSendButtonLabel(activeTurnStatus);
+  const label =
+    attachmentPending && !stopMode
+      ? "Preparing attachments"
+      : composerSendButtonLabel(activeTurnStatus);
   // Hint mode (e.g. no workspace) marks the button `aria-disabled` rather than
   // using the `disabled` attribute, so it stays focusable and the styled
   // TooltipWrapper's hint is reachable by hover and keyboard focus (a native
@@ -68,11 +74,7 @@ function ComposerSendButtonImpl(props: ComposerSendButtonProps) {
       data-testid={stopMode ? "chat-stop-button" : undefined}
       className={buttonClassName}
     >
-      {stopMode ? (
-        <Square className="size-3.5 fill-current" />
-      ) : (
-        <ArrowUp className="size-4" />
-      )}
+      {composerSendButtonIcon(attachmentPending, stopMode)}
     </Button>
   );
 
@@ -91,6 +93,23 @@ function ComposerSendButtonImpl(props: ComposerSendButtonProps) {
 }
 
 export const ComposerSendButton = memo(ComposerSendButtonImpl);
+
+function composerSendButtonIcon(
+  attachmentPending: boolean,
+  stopMode: boolean,
+): ReactNode {
+  if (attachmentPending && !stopMode) {
+    return (
+      <AgentSpinningDots
+        className="text-current"
+        testId="composer-attachment-pending"
+        variant={undefined}
+      />
+    );
+  }
+  if (stopMode) return <Square className="size-3.5 fill-current" />;
+  return <ArrowUp className="size-4" />;
+}
 
 function composerSendButtonLabel(
   activeTurnStatus: ChatActiveTurn["status"] | null,
