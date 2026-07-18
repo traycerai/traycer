@@ -1132,6 +1132,14 @@ describe("<ProviderReauthBanner />", () => {
       fireEvent.click(
         screen.getByRole("button", { name: "Manage in Settings" }),
       );
+      expect(useProvidersFocusStore.getState()).toEqual(
+        expect.objectContaining({
+          focusHarnessId: "claude",
+          focusHostId: "host-1",
+          focusProfileId: "removed-profile",
+          startSignIn: false,
+        }),
+      );
       expect(mocks.openSettings).toHaveBeenCalledWith({
         section: "providers",
         resetToGeneral: false,

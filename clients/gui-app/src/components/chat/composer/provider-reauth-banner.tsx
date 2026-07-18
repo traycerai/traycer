@@ -117,11 +117,12 @@ function ProfileUnavailableBanner({
       : `"${profileLabel ?? providerLabel}" is signed out.`;
   const { openSettings } = useSystemTabModalActions();
   const openProviderSettings = (): void => {
-    if (reason === "profile_unauthenticated" && profileId !== null) {
-      useProvidersFocusStore.getState().setProfileSignInFocus({
+    if (profileId !== null) {
+      useProvidersFocusStore.getState().setProfileFocus({
         harnessId: providerIdToGuiHarnessId(providerId),
         hostId,
         profileId,
+        startSignIn: reason === "profile_unauthenticated",
       });
     } else {
       useProvidersFocusStore

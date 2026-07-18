@@ -3546,10 +3546,11 @@ describe("<ProvidersSettingsPanel />", () => {
         },
       ],
     };
-    useProvidersFocusStore.getState().setProfileSignInFocus({
+    useProvidersFocusStore.getState().setProfileFocus({
       harnessId: "claude",
       hostId: "local",
       profileId: "work-profile",
+      startSignIn: true,
     });
 
     render(
@@ -3559,14 +3560,17 @@ describe("<ProvidersSettingsPanel />", () => {
     );
 
     expect(
-      document
-        .querySelector('button[aria-label="Claude Code"]')
-        ?.getAttribute("data-active"),
+      screen
+        .getByRole("button", { name: "Claude Code", hidden: true })
+        .getAttribute("data-active"),
     ).toBe("true");
     expect(
-      document
-        .querySelector('button[role="menuitem"][aria-label="Work, Signed out"]')
-        ?.getAttribute("aria-current"),
+      screen
+        .getByRole("menuitem", {
+          name: "Work, Signed out",
+          hidden: true,
+        })
+        .getAttribute("aria-current"),
     ).toBe("true");
     expect(
       screen.getByRole("dialog", { name: "Sign in to Work" }),

@@ -4,17 +4,18 @@ import type { GuiHarnessId } from "@traycer/protocol/host/index";
 interface ProvidersFocusState {
   // The host/provider/profile intent to consume the next time Providers
   // settings mounts. Simple entry points only set `focusHarnessId`; profile
-  // re-auth entry points also identify the tab host and request that the
-  // selected profile's sign-in flow start immediately.
+  // entry points also identify the tab host and can request that the selected
+  // profile's sign-in flow start immediately.
   readonly focusHarnessId: GuiHarnessId | null;
   readonly focusHostId: string | null;
   readonly focusProfileId: string | null;
   readonly startSignIn: boolean;
   setFocusHarnessId: (harnessId: GuiHarnessId) => void;
-  setProfileSignInFocus: (input: {
+  setProfileFocus: (input: {
     readonly harnessId: GuiHarnessId;
     readonly hostId: string;
     readonly profileId: string;
+    readonly startSignIn: boolean;
   }) => void;
   clearFocusHarnessId: () => void;
 }
@@ -31,12 +32,12 @@ export const useProvidersFocusStore = create<ProvidersFocusState>((set) => ({
       focusProfileId: null,
       startSignIn: false,
     }),
-  setProfileSignInFocus: ({ harnessId, hostId, profileId }) =>
+  setProfileFocus: ({ harnessId, hostId, profileId, startSignIn }) =>
     set({
       focusHarnessId: harnessId,
       focusHostId: hostId,
       focusProfileId: profileId,
-      startSignIn: true,
+      startSignIn,
     }),
   clearFocusHarnessId: () =>
     set({
