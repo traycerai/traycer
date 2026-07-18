@@ -249,13 +249,21 @@ function OptionRow(props: OptionRowProps) {
           "relative flex w-full items-center gap-2 rounded-md border border-transparent bg-muted/25 px-2 py-1.5 transition-colors",
           selected
             ? "border-border bg-muted/70 text-foreground shadow-sm"
-            : "text-muted-foreground hover:border-border/70 hover:bg-muted/40 hover:text-foreground",
-          // The overlay button below is transparent (no visible pixels of its
-          // own), so a `disabled:` class on it has nothing to dim. Apply the
-          // disabled look to this visible container instead, and stop it from
-          // matching `:hover` (a disabled sibling button doesn't stop mouse
-          // hover on this div) so the row doesn't look interactive.
-          disabled && "pointer-events-none opacity-60",
+            : "text-muted-foreground",
+          // `hover:*` matches an ancestor whenever ANY hit-tested descendant
+          // is hovered - including through this row's own `pointer-events:
+          // none` state, since `InfoHint` deliberately keeps `pointer-events-
+          // auto` so its tooltip stays usable. So hovering the info icon
+          // alone would still light up the row unless these classes are
+          // omitted outright while disabled; `pointer-events-none` here
+          // can't suppress that.
+          !disabled &&
+            !selected &&
+            "hover:border-border/70 hover:bg-muted/40 hover:text-foreground",
+          // The overlay button below is transparent (no visible pixels of
+          // its own), so a `disabled:` class on it has nothing to dim. Apply
+          // the disabled look to this visible container instead.
+          disabled && "opacity-60",
         )}
       >
         <button
