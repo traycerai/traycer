@@ -165,6 +165,8 @@ import {
 } from "lucide-react";
 import { GitDiffPanelBodyLive } from "@/components/epic-canvas/git-diff/git-diff-panel-body-live";
 import { GitDiffPanelActions } from "@/components/epic-canvas/git-diff/git-diff-panel-actions";
+import { PrPanelBody } from "@/components/epic-canvas/pr/pr-panel-body";
+import { PrPanelActions } from "@/components/epic-canvas/pr/pr-panel-actions";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
@@ -382,6 +384,14 @@ const PANEL_SLOTS_BY_ID: Readonly<Record<LeftPanelId, LeftPanelModeSlots>> = {
     live: {
       Body: GitDiffPanelBody,
       Actions: GitDiffPanelActions,
+      Subtitle: null,
+    },
+    loading: emptyLoadingSlots(GenericLoadingPanelBody),
+  },
+  "pull-requests": {
+    live: {
+      Body: PrPanelBody,
+      Actions: PrPanelActions,
       Subtitle: null,
     },
     loading: emptyLoadingSlots(GenericLoadingPanelBody),

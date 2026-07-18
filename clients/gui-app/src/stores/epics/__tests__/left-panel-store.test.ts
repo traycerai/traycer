@@ -84,6 +84,7 @@ const SPLIT_PANEL_GROUPS: ReadonlyArray<LeftPanelGroup> = [
   { panelIds: ["artifacts"] },
   { panelIds: ["terminals"] },
   { panelIds: ["git-diff"] },
+  { panelIds: ["pull-requests"] },
   { panelIds: ["file-tree"] },
   { panelIds: ["sharing"] },
   { panelIds: ["comments"] },
@@ -155,6 +156,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["chats", "artifacts"] },
       { panelIds: ["terminals"] },
       { panelIds: ["git-diff"] },
+      { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
       { panelIds: ["sharing"] },
       { panelIds: ["comments"] },
@@ -337,6 +339,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["chats"] },
       { panelIds: ["terminals"] },
       { panelIds: ["git-diff"] },
+      { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
       { panelIds: ["sharing"] },
       { panelIds: ["comments"] },
@@ -349,6 +352,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["comments"] },
       { panelIds: ["terminals"] },
       { panelIds: ["git-diff"] },
+      { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
       { panelIds: ["sharing"] },
     ]);
@@ -361,6 +365,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["chats", "artifacts"] },
       { panelIds: ["terminals"] },
       { panelIds: ["git-diff"] },
+      { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
       { panelIds: ["sharing"] },
       { panelIds: ["comments"] },
@@ -377,6 +382,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["chats", "artifacts"] },
       { panelIds: ["terminals"] },
       { panelIds: ["git-diff"] },
+      { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
       { panelIds: ["sharing"] },
       { panelIds: ["comments"] },
@@ -395,6 +401,7 @@ describe("useLeftPanelStore", () => {
         [
           { panelIds: ["chats", "artifacts"] },
           { panelIds: ["git-diff"] },
+          { panelIds: ["pull-requests"] },
           { panelIds: ["file-tree"] },
           { panelIds: ["comments"] },
         ],
@@ -405,6 +412,7 @@ describe("useLeftPanelStore", () => {
     ).toEqual([
       { panelIds: ["chats", "file-tree", "artifacts"] },
       { panelIds: ["git-diff"] },
+      { panelIds: ["pull-requests"] },
       { panelIds: ["comments"] },
       { panelIds: ["terminals"] },
       { panelIds: ["sharing"] },
@@ -417,6 +425,7 @@ describe("useLeftPanelStore", () => {
         [
           { panelIds: ["chats", "artifacts"] },
           { panelIds: ["git-diff"] },
+          { panelIds: ["pull-requests"] },
           { panelIds: ["file-tree"] },
           { panelIds: ["comments"] },
         ],
@@ -426,6 +435,7 @@ describe("useLeftPanelStore", () => {
       ),
     ).toEqual([
       { panelIds: ["chats", "artifacts", "git-diff"] },
+      { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
       { panelIds: ["comments"] },
       { panelIds: ["terminals"] },
@@ -446,6 +456,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["comments"] },
       { panelIds: ["terminals"] },
       { panelIds: ["git-diff"] },
+      { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
       { panelIds: ["sharing"] },
     ]);
@@ -466,6 +477,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["chats"] },
       { panelIds: ["terminals"] },
       { panelIds: ["git-diff"] },
+      { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
       { panelIds: ["sharing"] },
       { panelIds: ["artifacts"] },
@@ -499,6 +511,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["terminals"] },
       { panelIds: ["artifacts"] },
       { panelIds: ["git-diff"] },
+      { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
       { panelIds: ["sharing"] },
     ]);
@@ -517,6 +530,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["comments"] },
       { panelIds: ["terminals"] },
       { panelIds: ["git-diff"] },
+      { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
       { panelIds: ["sharing"] },
     ]);
@@ -533,6 +547,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["comments"] },
       { panelIds: ["terminals"] },
       { panelIds: ["git-diff"] },
+      { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
       { panelIds: ["sharing"] },
       { panelIds: ["chats"] },
@@ -553,6 +568,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["comments"] },
       { panelIds: ["terminals"] },
       { panelIds: ["git-diff"] },
+      { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
       { panelIds: ["sharing"] },
     ]);
@@ -569,6 +585,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["comments"] },
       { panelIds: ["terminals"] },
       { panelIds: ["git-diff"] },
+      { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
       { panelIds: ["sharing"] },
     ]);
@@ -586,6 +603,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["comments", "artifacts"] },
       { panelIds: ["terminals"] },
       { panelIds: ["git-diff"] },
+      { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
       { panelIds: ["sharing"] },
     ]);
@@ -624,6 +642,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["terminals"] },
       { panelIds: ["artifacts"] },
       { panelIds: ["git-diff"] },
+      { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
       { panelIds: ["sharing"] },
     ]);

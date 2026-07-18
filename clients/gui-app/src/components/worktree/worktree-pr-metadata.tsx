@@ -14,28 +14,9 @@ import { RunnerHostContext } from "@/providers/runner-host-context";
 import {
   ownerWorkspaceMetadataItems,
   worktreePrReferences,
-  type WorktreeDisplayedPrState,
+  PR_PILL_CLASS,
   type WorktreePrReference,
 } from "@/components/worktree/worktree-pr-metadata-model";
-
-/**
- * The one theme-aware PR-pill palette, used wherever a pill renders: the Epic
- * history list (page background) and the chat/owner hover preview (the
- * `bg-popover` hover-preview card). Both are normal, non-inverted surfaces, so
- * a single palette covers them.
- *
- * The light text is `-800`, not `-700`: over the pill's own 10% tint, `-700`
- * drops to 3.23:1 (green) on Tokyo Night light, whose surfaces are the darkest
- * of the light presets. `-800` clears 4.5:1 across every preset and surface;
- * dark `-300` already does. See worktree-pr-metadata.test.tsx's matrix.
- */
-const PR_PILL_CLASS: Record<WorktreeDisplayedPrState, string> = {
-  open: "border-green-600/30 bg-green-500/10 text-green-800 dark:border-green-400/30 dark:text-green-300",
-  closed:
-    "border-red-600/25 bg-red-500/10 text-red-800 dark:border-red-400/25 dark:text-red-300",
-  merged:
-    "border-purple-600/30 bg-purple-500/10 text-purple-800 dark:border-purple-400/30 dark:text-purple-300",
-};
 
 export function WorktreePrPills(props: {
   readonly worktrees: readonly WorktreeHostEntryV12[];

@@ -261,6 +261,7 @@ describe("<EpicLeftPanelRail />", () => {
       "epic-rail-terminals",
       "epic-rail-panel-drop-line",
       "epic-rail-git-diff",
+      "epic-rail-pull-requests",
       "epic-rail-file-tree",
       "epic-rail-sharing",
     ]);

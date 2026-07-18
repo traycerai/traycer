@@ -212,6 +212,10 @@ import {
   gitSubscribeStatusV10,
   gitSubscribeStatusV11,
 } from "@traycer/protocol/host/git-contracts";
+import {
+  prSubscribeListForEpicV10,
+  prSubscribeDetailV10,
+} from "@traycer/protocol/host/pr-contracts";
 import { defineRpcContract } from "@traycer/protocol/framework/index";
 import {
   worktreeCreateRequestSchema,
@@ -3976,7 +3980,8 @@ export type HostRpcRegistry = typeof hostRpcRegistry;
  * `chat.subscribe@1.3`, `notifications.subscribe@1.0`,
  * `terminal.subscribe@1.0`, `git.subscribeStatus@1.1`,
  * `resources.subscribe@1.0`, `agent.inbox.subscribe@1.0`,
- * `speech.dictate@1.0`, and
+ * `speech.dictate@1.0`, `pr.subscribeListForEpic@1.0`,
+ * `pr.subscribeDetail@1.0`, and
  * `migration.run@1.0` are negotiated from this registry. Later minors within
  * the same major line must be
  * additive; later majors must carry a real breaking change and ship without a
@@ -4147,6 +4152,26 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
       versions: {
         0: {
           contract: speechDictateV10,
+        },
+      },
+    },
+  },
+  "pr.subscribeListForEpic": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: prSubscribeListForEpicV10,
+        },
+      },
+    },
+  },
+  "pr.subscribeDetail": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: prSubscribeDetailV10,
         },
       },
     },

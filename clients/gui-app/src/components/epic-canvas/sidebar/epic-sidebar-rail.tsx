@@ -38,6 +38,11 @@ import {
   type LeftPanelMetadataDefinition,
 } from "@/components/epic-canvas/sidebar/left-panel-registry";
 import { useEpicArtifact } from "@/lib/epic-selectors";
+import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import {
+  selectPrHasChangedDot,
+  usePrSeenFactsStore,
+} from "@/stores/epics/pr-seen-facts-store";
 import { type LucideIcon } from "lucide-react";
 
 export type RailOrientation = "vertical" | "horizontal";
@@ -230,6 +235,7 @@ function EpicLeftPanelRailContent(props: EpicLeftPanelRailContentProps) {
           return (
             <Fragment key={group.primaryPanel.id}>
               <RailGroupButton
+                epicId={epicId}
                 panelIds={group.panelIds}
                 primaryPanel={group.primaryPanel}
                 orientation={orientation}
@@ -306,6 +312,7 @@ function RailPanelDropLine(props: { readonly orientation: RailOrientation }) {
 }
 
 interface RailGroupButtonProps {
+  readonly epicId: string;
   readonly panelIds: ReadonlyArray<LeftPanelId>;
   readonly primaryPanel: LeftPanelMetadataDefinition;
   readonly orientation: RailOrientation;
@@ -315,8 +322,15 @@ interface RailGroupButtonProps {
 }
 
 function RailGroupButton(props: RailGroupButtonProps) {
-  const { panelIds, primaryPanel, orientation, active, onClick, dropPosition } =
-    props;
+  const {
+    epicId,
+    panelIds,
+    primaryPanel,
+    orientation,
+    active,
+    onClick,
+    dropPosition,
+  } = props;
   const dragData = useMemo<EpicCanvasLeftPanelRailDragData>(
     () => ({
       kind: LEFT_PANEL_RAIL_ITEM_DND_TYPE,
@@ -349,6 +363,12 @@ function RailGroupButton(props: RailGroupButtonProps) {
     [dragRef, dropRef],
   );
 
+  const hostId = useReactiveActiveHostId();
+  const prChangedDot = usePrSeenFactsStore(
+    selectPrHasChangedDot(hostId, epicId),
+  );
+  const showChangedDot = panelIds.includes("pull-requests") && prChangedDot;
+
   return (
     <RailButton
       buttonRef={setButtonRef}
@@ -364,6 +384,7 @@ function RailGroupButton(props: RailGroupButtonProps) {
       dropPosition={dropPosition}
       testId={`epic-rail-${primaryPanel.id}`}
       onClick={onClick}
+      showChangedDot={showChangedDot}
     />
   );
 }
@@ -380,6 +401,7 @@ interface RailButtonProps {
   readonly dropPosition: "combine" | null;
   readonly testId: string;
   readonly onClick: () => void;
+  readonly showChangedDot: boolean;
 }
 
 function RailButton(props: RailButtonProps) {
@@ -395,6 +417,7 @@ function RailButton(props: RailButtonProps) {
     dropPosition,
     testId,
     onClick,
+    showChangedDot,
   } = props;
   const Icon = icons[0] ?? getPanelDefinition("chats").icon;
   const activeClass =
@@ -420,6 +443,7 @@ function RailButton(props: RailButtonProps) {
         aria-label={label}
         aria-current={active}
         data-testid={testId}
+        data-pr-changed-dot={showChangedDot ? "true" : "false"}
         onClick={onClick}
         className={cn(
           "relative size-9 rounded-md text-muted-foreground hover:text-foreground",
@@ -441,6 +465,13 @@ function RailButton(props: RailButtonProps) {
               glow={false}
               className={activeIndicatorClass}
               testId={undefined}
+            />
+          ) : null}
+          {showChangedDot ? (
+            <span
+              aria-hidden
+              data-testid="pr-changed-dot"
+              className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-primary"
             />
           ) : null}
         </span>

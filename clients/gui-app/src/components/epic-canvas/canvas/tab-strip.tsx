@@ -12,6 +12,7 @@ import { useDraggable, useDroppable } from "@dnd-kit/core";
 import {
   FileDiff,
   FilePlus,
+  GitPullRequest,
   SplitSquareHorizontal,
   SplitSquareVertical,
   X,
@@ -56,6 +57,7 @@ import {
   isDiffTileRef,
   isGitDiffTileRef,
   isOpenableEpicNodeKind,
+  isPrDetailTileRef,
 } from "@/stores/epics/canvas/types";
 import { useIsActivePane, useTabActivation } from "@/stores/epics/canvas/store";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
@@ -891,6 +893,11 @@ function TabIcon(props: {
 }): ReactNode {
   if (isDiffTileRef(props.tab)) {
     return <FileDiff className="size-3.5 shrink-0 text-muted-foreground" />;
+  }
+  if (isPrDetailTileRef(props.tab)) {
+    return (
+      <GitPullRequest className="size-3.5 shrink-0 text-muted-foreground" />
+    );
   }
   if (isBlankTileRef(props.tab)) {
     return <FilePlus className="size-3.5 shrink-0 text-muted-foreground" />;

@@ -9,6 +9,7 @@ describe("epic left panel registry", () => {
       "terminals",
       "artifacts",
       "git-diff",
+      "pull-requests",
       "file-tree",
       "sharing",
       "comments",

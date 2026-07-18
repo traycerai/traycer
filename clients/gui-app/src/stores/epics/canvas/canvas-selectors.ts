@@ -9,14 +9,13 @@ import { useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { EpicNodeRecord } from "@/lib/artifacts/node-display";
 import {
-  WORKSPACE_FILE_TAB_KIND,
-  isDiffTileRef,
   type EpicCanvasTileRef,
   type EpicCanvasState,
   type EpicViewTab,
   type TileLayoutNode,
   type TilePane,
 } from "./types";
+import { isTileRefRecordBacked } from "./tile-schema";
 import { findPaneById } from "./tile-tree";
 import { EMPTY_CANVAS } from "./canvas-state";
 import { findPaneTabByContentId } from "./actions";
@@ -132,8 +131,12 @@ export function makeSelectActiveEpicArtifactId(tabId: string | undefined) {
     if (pane === null || pane.activeTabId === null) return null;
     const active = canvas.tilesByInstanceId[pane.activeTabId];
     if (active === undefined) return null;
-    if (active.type === WORKSPACE_FILE_TAB_KIND) return null;
-    if (isDiffTileRef(active)) return null;
+    // Only record-backed tiles are resolvable artifacts. Renderer-only tiles -
+    // workspace file, git-diff, and PR detail - carry synthetic ids that cannot
+    // be restored from artifact records, so they must never become the
+    // persisted `lastFocusedArtifactId` (route sync writes whatever this
+    // returns). `isTileRefRecordBacked` covers all three and any future one.
+    if (!isTileRefRecordBacked(active)) return null;
     return active.id;
   };
 }

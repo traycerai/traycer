@@ -2,6 +2,7 @@ import {
   Files,
   FolderTree,
   GitBranch,
+  GitPullRequest,
   MessageSquareText,
   MessagesSquare,
   Terminal,
@@ -52,6 +53,12 @@ export const LEFT_PANEL_DEFINITIONS: ReadonlyArray<LeftPanelMetadataDefinition> 
       id: "git-diff",
       title: "Git Diff",
       icon: GitBranch,
+      isVisible: () => true,
+    },
+    {
+      id: "pull-requests",
+      title: "Pull Requests",
+      icon: GitPullRequest,
       isVisible: () => true,
     },
     {

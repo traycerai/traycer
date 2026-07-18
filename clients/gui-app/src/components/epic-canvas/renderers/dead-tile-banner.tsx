@@ -137,6 +137,44 @@ export function GitDiffDeadTileBanner(
 }
 
 /**
+ * PR detail tiles subscribe through their OWN bound host's client
+ * (`useHostStreamClientFor`), never the app's active host - so unlike
+ * `GitDiffDeadTileBanner` there is no "inactive" reason, only "the bound
+ * host itself is unreachable." The heavy PR cache lives on that host, so
+ * nothing can render until it returns.
+ */
+export interface PrDetailDeadTileBannerProps {
+  readonly hostLabel: string;
+  readonly testId: string;
+}
+
+export function PrDetailDeadTileBanner(
+  props: PrDetailDeadTileBannerProps,
+): ReactNode {
+  return (
+    <div
+      className="flex h-full w-full flex-col items-center justify-center gap-3 bg-canvas px-6 text-center text-ui-sm text-muted-foreground"
+      data-testid={props.testId}
+    >
+      <p className="max-w-md">
+        This pull request is on host &quot;{props.hostLabel}&quot;, which is
+        currently unreachable. It will load once that host is back.
+      </p>
+      <ReportIssueAction
+        context={createReportIssueContext({
+          title: "Pull request is unavailable",
+          message: "The PR tile's bound host is unavailable.",
+          code: null,
+          source: "Pull request",
+        })}
+        presentation="text"
+        className={undefined}
+      />
+    </div>
+  );
+}
+
+/**
  * Snapshot diff tiles re-read their before/after content live from a chat
  * session. When that source is gone - the chat was deleted, the edit's blocks
  * were pruned/edited away, or the file dropped out of the cumulative set - the
