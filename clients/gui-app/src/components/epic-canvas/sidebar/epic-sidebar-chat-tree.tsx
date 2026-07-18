@@ -40,6 +40,7 @@ import {
   INTERVIEW_TONE,
   type IndicatorTone,
 } from "@/components/notifications/notification-indicator-tones";
+import { BackgroundActivityGlyph } from "@/components/notifications/background-activity-glyph";
 import {
   selectNotificationIndicatorState,
   type NotificationIndicatorState,
@@ -1712,16 +1713,15 @@ function NestedChatStatusIcon(props: {
 function NestedChatStatusGlyph(props: {
   readonly kind: ChatDescendantStatusKind;
 }): ReactNode {
-  if (props.kind === "running" || props.kind === "background") {
-    // Same busy-vs-bounce split the per-chat indicator uses for the two
-    // activity tiers, so a nested spinner reads identically to a direct one.
+  if (props.kind === "background") {
+    return <BackgroundActivityGlyph testId={undefined} />;
+  }
+  if (props.kind === "running") {
     return (
       <AgentSpinningDots
-        className={
-          props.kind === "running" ? "text-current" : "text-muted-foreground"
-        }
+        className="text-current"
         testId={undefined}
-        variant={props.kind === "running" ? undefined : "bounce"}
+        variant={undefined}
       />
     );
   }

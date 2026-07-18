@@ -17,6 +17,7 @@ export interface ResolvedWorkspaceFoldersQueryResult {
   readonly folders: ReadonlyArray<ResolvedFolder>;
   readonly isLoading: boolean;
   readonly isFetching: boolean;
+  readonly isError: boolean;
 }
 
 export interface WorkspaceFoldersSource {
@@ -80,6 +81,11 @@ export function useResolvedWorkspaceFolders(
     params: queryParams,
     options: {
       enabled: repoIdentifiers.length > 0,
+      // Resolution gates submit. A transient failure must have a recovery
+      // trigger short of reloading the app, even though app-wide queries opt
+      // out of focus/reconnect refetches by default.
+      refetchOnWindowFocus: "always",
+      refetchOnReconnect: "always",
     },
   });
 
@@ -108,14 +114,24 @@ export function useResolvedWorkspaceFolders(
     [folderInfos, resolvedByKey],
   );
 
-  return useMemo(
-    () => ({
+  return useMemo(() => {
+    const isError = query.isError;
+    return {
       folders: resolved,
-      isLoading: query.isLoading,
+      // A readiness-disabled query with repo-backed folders has not checked
+      // the host yet. Treat it as checking, not as a confirmed missing row.
+      isLoading:
+        repoIdentifiers.length > 0 && query.data === undefined && !isError,
       isFetching: query.isFetching,
-    }),
-    [resolved, query.isLoading, query.isFetching],
-  );
+      isError,
+    };
+  }, [
+    resolved,
+    repoIdentifiers.length,
+    query.data,
+    query.isError,
+    query.isFetching,
+  ]);
 }
 
 function projectFolder(

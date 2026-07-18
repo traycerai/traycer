@@ -474,7 +474,6 @@ function TabLeadingIcon(props: {
       className="text-muted-foreground"
       style={undefined}
       runningTitle="Task activity in progress"
-      backgroundRunningTitle="Background tasks running — task idle"
       defaultIcon={defaultIcon}
       statusPresentation="message"
     />

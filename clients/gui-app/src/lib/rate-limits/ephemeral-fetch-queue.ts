@@ -1,5 +1,6 @@
 import type { QueryClient } from "@tanstack/react-query";
 import type { AccountContext } from "@traycer/protocol/common/schemas";
+import { withHostRpcErrorBoundary } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { RequestOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import { queryKeys } from "@/lib/query-keys";
@@ -313,25 +314,29 @@ function enqueueRateLimitFetchBatchForScope(
       // Named request fn (not an inline closure in `queryFn`) so the host-scoped
       // key stays the sole cache identity - `request` is stable module state, not
       // a key input, and inlining it would trip the query plugin's exhaustive-deps
-      // check (mirrors `resolve-artifact-by-path.ts`).
-      async function queryFn(): Promise<ProviderRateLimitEnvelope> {
-        const response = await request(
-          hostId,
-          "host.getRateLimitUsage",
-          params,
-        );
-        const envelope = mapResponseToProviderRateLimitEnvelope({
-          response,
-          queryClient,
-          queryKey,
+      // check (mirrors `resolve-artifact-by-path.ts`). Boundary-wrapped: this
+      // writes the same cache slot the `HostRpcError`-typed provider observers
+      // read, so mapper/cool-down throws must not leak a foreign error shape.
+      function queryFn(): Promise<ProviderRateLimitEnvelope> {
+        return withHostRpcErrorBoundary("host.getRateLimitUsage", async () => {
+          const response = await request(
+            hostId,
+            "host.getRateLimitUsage",
+            params,
+          );
+          const envelope = mapResponseToProviderRateLimitEnvelope({
+            response,
+            queryClient,
+            queryKey,
+          });
+          applyCooldownPolicy(
+            hostId,
+            target.providerId,
+            target.profileId,
+            envelope,
+          );
+          return envelope;
         });
-        applyCooldownPolicy(
-          hostId,
-          target.providerId,
-          target.profileId,
-          envelope,
-        );
-        return envelope;
       }
 
       function runFetch(): Promise<ProviderRateLimitEnvelope | undefined> {

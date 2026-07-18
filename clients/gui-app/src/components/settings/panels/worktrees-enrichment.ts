@@ -14,6 +14,7 @@ import {
   type QueryKey,
 } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { withHostRpcErrorBoundary } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { WorktreeHostEntryV14 } from "@traycer/protocol/host/index";
 import type { WorktreeListAllForHostResponseV14 } from "@traycer/protocol/host/worktree-schemas";
 import { type HostRpcRegistry } from "@/lib/host";
@@ -155,8 +156,13 @@ function sweepEnrichmentFetchOptions(
   client: HostClient<HostRpcRegistry>,
   path: string,
 ) {
+  // Boundary-wrapped: the sweep and the `useHostQueries` observer leg share
+  // this key, so a sweep failure must store the same `HostRpcError` shape the
+  // observer's error generic declares.
   const fetcher = () =>
-    client.request("worktree.listAllForHost", perPathEnrichmentParams(path));
+    withHostRpcErrorBoundary("worktree.listAllForHost", () =>
+      client.request("worktree.listAllForHost", perPathEnrichmentParams(path)),
+    );
   return queryOptions({
     queryKey: perPathEnrichmentQueryKey(hostId, path),
     queryFn: fetcher,

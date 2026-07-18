@@ -156,7 +156,6 @@ function ChatProgressPresentation(props: {
       className={icon.className}
       style={icon.style}
       runningTitle="Chat in progress"
-      backgroundRunningTitle="Background tasks running — chat idle"
       defaultIcon={idleIcon}
       statusPresentation="message"
     />

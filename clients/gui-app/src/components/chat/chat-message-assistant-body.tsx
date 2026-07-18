@@ -470,12 +470,12 @@ function AssistantForkButton({
 }
 
 /**
- * Hover content for the elapsed-footer info icon: provider, model, reasoning
- * effort, and fast mode (only when enabled), plus - for a user-stopped turn -
- * the stop time and reason from the `turn.stopped` event. Mirrors the
- * context-usage chip's label/value row layout so the two tooltips read
- * consistently. Either section is optional; `AssistantElapsedFooter` only
- * renders this tooltip at all when at least one is present.
+ * Hover content for the elapsed-footer info icon: provider, profile, model,
+ * reasoning effort, and fast mode (only when enabled), plus - for a
+ * user-stopped turn - the stop time and reason from the `turn.stopped` event.
+ * Mirrors the context-usage chip's label/value row layout so the two tooltips
+ * read consistently. Either section is optional; `AssistantElapsedFooter`
+ * only renders this tooltip at all when at least one is present.
  */
 function AssistantMetaTooltip({
   meta,
@@ -496,6 +496,9 @@ function AssistantMetaTooltip({
             Agent
           </div>
           <AssistantMetaRow label="Provider" value={meta.providerLabel} />
+          {meta.profileLabel === null ? null : (
+            <AssistantMetaRow label="Profile" value={meta.profileLabel} />
+          )}
           {meta.modelLabel === null ? null : (
             <AssistantMetaRow label="Model" value={meta.modelLabel} />
           )}

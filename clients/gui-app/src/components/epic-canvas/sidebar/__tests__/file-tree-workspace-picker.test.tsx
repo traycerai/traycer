@@ -6,13 +6,13 @@ import {
   screen,
   within,
 } from "@testing-library/react";
-import type { WorktreeBindingSelectorRow } from "@traycer/protocol/host";
+import type { WorktreeBindingSelectorRowV12 } from "@traycer/protocol/host";
 import { FileTreeWorkspacePicker } from "../file-tree-workspace-picker";
 
 const selectById = vi.fn();
 
 interface ListQueryStub {
-  readonly data: { readonly rows: WorktreeBindingSelectorRow[] } | undefined;
+  readonly data: { readonly rows: WorktreeBindingSelectorRowV12[] } | undefined;
   readonly isPending: boolean;
   readonly isError: boolean;
 }
@@ -48,7 +48,7 @@ vi.mock("@/lib/host", () => ({
   useHostBinding: () => ({ directory: { selectById } }),
 }));
 
-function makeRows(): WorktreeBindingSelectorRow[] {
+function makeRows(): WorktreeBindingSelectorRowV12[] {
   return [
     {
       hostId: "host-1",
@@ -64,6 +64,7 @@ function makeRows(): WorktreeBindingSelectorRow[] {
       setupState: "not_required",
       disabledReason: null,
       sources: [],
+      isGitResolvePending: false,
     },
     {
       hostId: "host-1",
@@ -79,6 +80,7 @@ function makeRows(): WorktreeBindingSelectorRow[] {
       setupState: "not_required",
       disabledReason: null,
       sources: [],
+      isGitResolvePending: false,
     },
   ];
 }
@@ -91,7 +93,7 @@ function stubLoadedWorkspaces(): void {
   };
 }
 
-function makeNonGitRow(): WorktreeBindingSelectorRow {
+function makeNonGitRow(): WorktreeBindingSelectorRowV12 {
   return {
     hostId: "host-1",
     runningDir: "/work/notes",
@@ -106,6 +108,7 @@ function makeNonGitRow(): WorktreeBindingSelectorRow {
     setupState: "not_required",
     disabledReason: null,
     sources: [],
+    isGitResolvePending: false,
   };
 }
 
@@ -244,6 +247,59 @@ describe("<FileTreeWorkspacePicker />", () => {
     fireEvent.click(screen.getByRole("option", { name: /notes.*detached/i }));
 
     expect(onSelectPath).toHaveBeenCalledWith("/work/notes");
+  });
+
+  // A cold worktree row the host marks `isGitResolvePending` (its
+  // `missing_worktree_path` derives from an unverified `isGitRepo: false`, not
+  // disk truth) must read as "checking", not "missing". A cold LOCAL row never
+  // needed git facts to be browsable, so it stays selectable.
+  it("renders an unverified worktree row as checking instead of missing, keeping cold local rows browsable", () => {
+    const onSelectPath = vi.fn();
+    const coldWorktree: WorktreeBindingSelectorRowV12 = {
+      ...makeRows()[1],
+      isGitRepo: false,
+      disabledReason: "missing_worktree_path",
+      isGitResolvePending: true,
+    };
+    const coldLocal: WorktreeBindingSelectorRowV12 = {
+      ...makeNonGitRow(),
+      isGitResolvePending: true,
+    };
+    listQuery.current = {
+      data: { rows: [coldWorktree, coldLocal] },
+      isPending: false,
+      isError: false,
+    };
+    openPicker(null, onSelectPath);
+
+    const worktreeOption = screen.getByRole("option", { name: /feature-x/i });
+    expect(within(worktreeOption).getByText("checking")).toBeDefined();
+    expect(within(worktreeOption).queryByText("missing")).toBeNull();
+    fireEvent.click(worktreeOption);
+    expect(onSelectPath).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("option", { name: /notes.*detached/i }));
+    expect(onSelectPath).toHaveBeenCalledWith("/work/notes");
+  });
+
+  // Once the host RESOLVES the worktree as gone, "missing" is a fact again.
+  it("keeps the destructive missing badge for a resolved missing worktree", () => {
+    const missingWorktree: WorktreeBindingSelectorRowV12 = {
+      ...makeRows()[1],
+      isGitRepo: false,
+      disabledReason: "missing_worktree_path",
+      isGitResolvePending: false,
+    };
+    listQuery.current = {
+      data: { rows: [missingWorktree] },
+      isPending: false,
+      isError: false,
+    };
+    openPicker(null, () => undefined);
+
+    const worktreeOption = screen.getByRole("option", { name: /feature-x/i });
+    expect(within(worktreeOption).getByText("missing")).toBeDefined();
+    expect(within(worktreeOption).queryByText("checking")).toBeNull();
   });
 
   it("swaps the bound host without selecting a folder when a host row is clicked", () => {

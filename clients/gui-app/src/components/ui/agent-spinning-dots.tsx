@@ -307,11 +307,6 @@ const AGENT_SPINNER_PRESETS: AgentSpinnerPresets = {
     intervalMs: 80,
     widthCh: 1,
   },
-  bounce: {
-    frames: ["⠁", "⠂", "⠄", "⡀", "⠄", "⠂"],
-    intervalMs: 120,
-    widthCh: 1,
-  },
   dots_circle: {
     frames: ["⢎ ", "⠎⠁", "⠊⠑", "⠈⠱", " ⡱", "⢀⡰", "⢄⡠", "⢆⡀"],
     intervalMs: 80,

@@ -8,8 +8,9 @@ import {
   type UseQueryResult,
 } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { withHostRpcErrorBoundary } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
+  HostRpcError,
   RequestOfMethod,
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -171,15 +172,19 @@ export function useHostQueriesWithResponseMap<
       ),
       ...(args.cacheKeyIdentity === undefined ? [] : [args.cacheKeyIdentity]),
     ];
-    const fetcher = async (): Promise<TData> => {
-      if (client === null) {
-        return Promise.reject<TData>(
-          hostClientUnavailableError(request.method),
-        );
-      }
-      const response = await client.request(request.method, request.params);
-      return mapResponse({ response, queryClient, queryKey });
-    };
+    // Boundary-wrapped like `useHostQueryWithResponseMap`'s request: the
+    // declared `HostRpcError` generic must hold even when the caller's
+    // `mapResponse` throws.
+    const fetcher = (): Promise<TData> =>
+      withHostRpcErrorBoundary(request.method, async () => {
+        if (client === null) {
+          return Promise.reject<TData>(
+            hostClientUnavailableError(request.method),
+          );
+        }
+        const response = await client.request(request.method, request.params);
+        return mapResponse({ response, queryClient, queryKey });
+      });
     return queryOptions<TData, HostRpcError, TData>({
       ...(options ?? {}),
       queryKey,

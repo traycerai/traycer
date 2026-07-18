@@ -104,6 +104,29 @@ describe("rateLimitScopeAffectsModel", () => {
       true,
     );
   });
+
+  it("does not match through provider-generic tokens", () => {
+    // "Claude Opus" must not gate a Fable model just because every Claude
+    // slug contains "claude" - that would both over-warn and wrongly reject
+    // healthy destinations.
+    expect(
+      rateLimitScopeAffectsModel(
+        "Claude Opus",
+        model("claude-fable-5[1m]", "Fable"),
+      ),
+    ).toBe(false);
+    expect(
+      rateLimitScopeAffectsModel(
+        "Claude Opus",
+        model("claude-opus-4-7", "Claude Opus 4.7"),
+      ),
+    ).toBe(true);
+    // A family that is ONLY generic tokens cannot be judged - errs toward
+    // matching, same as the no-alphabetic-token guard.
+    expect(
+      rateLimitScopeAffectsModel("Claude", model("opus[1m]", "Opus")),
+    ).toBe(true);
+  });
 });
 
 describe("rateLimitSeverityTier", () => {

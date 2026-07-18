@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, renderHook } from "@testing-library/react";
-import type { WorktreeBindingSelectorRow } from "@traycer/protocol/host";
+import type { WorktreeBindingSelectorRowV12 } from "@traycer/protocol/host";
 import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
 import type { CommandContext, CommandItem } from "@/lib/commands/types";
 import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
@@ -56,8 +56,9 @@ const terminalBindingsMock = vi.hoisted(() => ({
       setupState: "not_required",
       disabledReason: null,
       sources: [],
+      isGitResolvePending: false,
     },
-  ] satisfies WorktreeBindingSelectorRow[],
+  ] satisfies WorktreeBindingSelectorRowV12[],
 }));
 
 function chat(id: string, title: string): ChatProjection {
