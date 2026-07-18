@@ -1695,6 +1695,20 @@ export function createChatSessionStore(
           revertFileChanges: input.revertFileChanges,
           revertArtifacts: input.revertArtifacts,
         };
+        // Consume before dispatch, exactly like `sendMessage`: the pending
+        // action captures the staging revision it may later restore, so a
+        // rejected edit (e.g. the staged worktree failed to materialize) puts
+        // the selection back unless the user re-picked meanwhile. Without
+        // this, the folder chip silently reverts to the prior binding and the
+        // next resend runs there - the silent-local-run the reject exists to
+        // prevent.
+        const stagingStore = useWorktreeIntentStagingStore.getState();
+        let restoreWorktreeStagingRevision: number | null = null;
+        if (worktreeIntent !== null) {
+          stagingStore.clear(stagedKey);
+          restoreWorktreeStagingRevision =
+            stagedWorktreeIntentRevision(stagedKey);
+        }
         const sentClientActionId = sendAction({
           set,
           get,
@@ -1706,18 +1720,22 @@ export function createChatSessionStore(
             restoreContent: null,
             sender: null,
             settings: null,
-            restoreWorktreeIntent: null,
-            restoreWorktreeStagingRevision: null,
+            restoreWorktreeIntent: worktreeIntent,
+            restoreWorktreeStagingRevision,
             createdAt: Date.now(),
           },
           pendingUserMessage: null,
         });
-        if (sentClientActionId === null) return null;
+        if (sentClientActionId === null) {
+          if (worktreeIntent !== null) {
+            stagingStore.setIntent(stagedKey, worktreeIntent);
+          }
+          return null;
+        }
         if (worktreeIntent !== null) {
           useWorktreeIntentMemoryStore
             .getState()
             .setEpicIntent(options.epicId, worktreeIntent, Date.now());
-          useWorktreeIntentStagingStore.getState().clear(stagedKey);
           get().refreshMissingWorktreePaths([]);
         }
         return { clientActionId: sentClientActionId, messageId };
