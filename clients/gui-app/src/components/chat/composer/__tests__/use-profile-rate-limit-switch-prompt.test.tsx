@@ -592,7 +592,9 @@ describe("useProfileRateLimitSwitchPrompt", () => {
         ]),
       ];
       rerender({ selectedModel: FABLE });
-      expect(result.current.kind).toBe("visible");
+      const resurfaced = visiblePrompt(result.current);
+      expect(resurfaced.severity).toBe("hard_limit");
+      expect(resurfaced.limitedFamilies).toEqual(["Fable 5"]);
     });
 
     it("keeps a Fable-scoped dismissal from suppressing a later shared-window warning", () => {
