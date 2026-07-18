@@ -546,10 +546,12 @@ function RateLimitPopoverResizeSurface({
       Math.max(1, maxHeightPx),
       Math.max(1, drag.startHeightPx + heightDelta),
     );
-    drag.moved = widthDelta !== 0 || heightDelta !== 0;
     event.currentTarget.style.width = `${drag.latestWidthPx}px`;
     event.currentTarget.style.height = `${drag.latestHeightPx}px`;
     const measured = event.currentTarget.getBoundingClientRect();
+    drag.moved =
+      measured.width !== drag.startWidthPx ||
+      measured.height !== drag.startHeightPx;
     const offsetDeltaXPx = resizeFromLeft
       ? drag.startWidthPx - measured.width
       : 0;

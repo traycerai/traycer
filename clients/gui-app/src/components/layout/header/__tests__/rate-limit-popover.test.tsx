@@ -888,6 +888,34 @@ describe("<RateLimitPopover /> rail", () => {
     }
   });
 
+  it("does not commit a drag clamped to the starting dimensions", () => {
+    const widthSpy = vi
+      .spyOn(document.documentElement, "clientWidth", "get")
+      .mockReturnValue(592);
+    const heightSpy = vi
+      .spyOn(document.documentElement, "clientHeight", "get")
+      .mockReturnValue(600);
+    try {
+      const surface = renderCodexPopover();
+      const geometry = mockRadixResizeGeometry(surface, 480, 360);
+
+      dragResize(surface, "e", 15, { x: 100, y: 0 });
+      expect(surface.getBoundingClientRect().width).toBe(480);
+
+      endResize(surface, "pointerup", 15, { x: 100, y: 0 });
+
+      expect(surface.style.width).toBe("");
+      expect(surface.style.height).toBe("");
+      expect(geometry.positionWrapper.style.transform).toBe(
+        geometry.initialTransform,
+      );
+      expect(useRateLimitPopoverStore.getState().size).toBeNull();
+    } finally {
+      widthSpy.mockRestore();
+      heightSpy.mockRestore();
+    }
+  });
+
   it.each(["pointercancel", "lostpointercapture"] as const)(
     "rolls back an interrupted drag on %s",
     (eventType) => {
