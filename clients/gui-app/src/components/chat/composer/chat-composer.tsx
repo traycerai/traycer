@@ -255,6 +255,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
       rateLimitPrompt.primaryTarget !== null,
     harnessId,
     profileId,
+    selectedModel,
     epicId: currentEpicId,
     chatId: taskId,
   });

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import type { ModelOption } from "@/components/home/data/landing-options";
 import {
+  effectiveProfileRateLimitSeverity,
   rateLimitScopeAffectsModel,
   rateLimitSeverityTier,
 } from "../rate-limit-scope-match";
@@ -20,6 +22,33 @@ function model(slug: string, label: string): ModelOption {
     metadata: {},
   };
 }
+
+function profile(
+  rateLimitStatus: ProviderProfile["rateLimitStatus"],
+  rateLimitLimitedScopes: ProviderProfile["rateLimitLimitedScopes"],
+): ProviderProfile {
+  return {
+    profileId: "p",
+    kind: "managed",
+    authType: "oauth",
+    label: "P",
+    auth: {
+      status: "authenticated",
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    identity: null,
+    usageUpdatedAt: null,
+    rateLimitStatus,
+    rateLimitLimitedScopes,
+    duplicateOfProfileId: null,
+    accentColor: null,
+    ambientDriftNotice: null,
+  };
+}
+
+const OPUS = model("opus[1m]", "Opus");
 
 describe("rateLimitScopeAffectsModel", () => {
   it("treats a shared (null-family) scope as gating every model", () => {
@@ -85,5 +114,67 @@ describe("rateLimitSeverityTier", () => {
     expect(rateLimitSeverityTier("near_limit")).toBeLessThan(
       rateLimitSeverityTier("hard_limit"),
     );
+  });
+});
+
+describe("effectiveProfileRateLimitSeverity", () => {
+  it("falls back to the profile-level status when per-scope data is absent", () => {
+    expect(
+      effectiveProfileRateLimitSeverity(profile("near_limit", null), OPUS),
+    ).toBe("near_limit");
+    expect(
+      effectiveProfileRateLimitSeverity(profile("hard_limit", null), OPUS),
+    ).toBe("hard_limit");
+    expect(
+      effectiveProfileRateLimitSeverity(profile("ok", null), OPUS),
+    ).toBeNull();
+    expect(
+      effectiveProfileRateLimitSeverity(profile("unknown", null), OPUS),
+    ).toBeNull();
+  });
+
+  it("falls back to the profile-level status when no model is resolved", () => {
+    expect(
+      effectiveProfileRateLimitSeverity(
+        profile("hard_limit", [{ family: "Fable", severity: "hard_limit" }]),
+        null,
+      ),
+    ).toBe("hard_limit");
+  });
+
+  it("returns null when scopes exist but none gate the selected model", () => {
+    expect(
+      effectiveProfileRateLimitSeverity(
+        profile("near_limit", [{ family: "Fable", severity: "near_limit" }]),
+        OPUS,
+      ),
+    ).toBeNull();
+  });
+
+  it("returns null for an empty scope list even when the profile enum is limited", () => {
+    expect(
+      effectiveProfileRateLimitSeverity(profile("near_limit", []), OPUS),
+    ).toBeNull();
+  });
+
+  it("reduces matching scopes to the worst severity", () => {
+    expect(
+      effectiveProfileRateLimitSeverity(
+        profile("hard_limit", [
+          { family: null, severity: "near_limit" },
+          { family: "opus", severity: "hard_limit" },
+        ]),
+        OPUS,
+      ),
+    ).toBe("hard_limit");
+    expect(
+      effectiveProfileRateLimitSeverity(
+        profile("near_limit", [
+          { family: null, severity: "near_limit" },
+          { family: "sonnet", severity: "hard_limit" },
+        ]),
+        OPUS,
+      ),
+    ).toBe("near_limit");
   });
 });
