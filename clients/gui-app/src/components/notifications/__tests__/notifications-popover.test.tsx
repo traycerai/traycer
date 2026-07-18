@@ -515,22 +515,9 @@ describe("NotificationsPopover click routing", () => {
   });
 
   it("expands overflowing notification text inline", async () => {
-    const scrollHeight = Object.getOwnPropertyDescriptor(
-      HTMLElement.prototype,
-      "scrollHeight",
+    const restoreDimensions = mockElementDimensions((_element, dimension) =>
+      dimension === "scrollHeight" ? 48 : 24,
     );
-    const clientHeight = Object.getOwnPropertyDescriptor(
-      HTMLElement.prototype,
-      "clientHeight",
-    );
-    Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
-      configurable: true,
-      get: () => 48,
-    });
-    Object.defineProperty(HTMLElement.prototype, "clientHeight", {
-      configurable: true,
-      get: () => 24,
-    });
 
     try {
       useHostNotificationsStore.getState().replaceFromSnapshot(
@@ -584,24 +571,7 @@ describe("NotificationsPopover click routing", () => {
       expect(notificationTitle.className).toContain("line-clamp-2");
       expect(notificationBody.className).toContain("line-clamp-2");
     } finally {
-      if (scrollHeight === undefined) {
-        Reflect.deleteProperty(HTMLElement.prototype, "scrollHeight");
-      } else {
-        Object.defineProperty(
-          HTMLElement.prototype,
-          "scrollHeight",
-          scrollHeight,
-        );
-      }
-      if (clientHeight === undefined) {
-        Reflect.deleteProperty(HTMLElement.prototype, "clientHeight");
-      } else {
-        Object.defineProperty(
-          HTMLElement.prototype,
-          "clientHeight",
-          clientHeight,
-        );
-      }
+      restoreDimensions();
     }
   });
 
