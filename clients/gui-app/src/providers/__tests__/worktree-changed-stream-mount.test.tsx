@@ -88,8 +88,8 @@ it("refetches a changed worktree event into the active canonical cache entry wit
 
   act(() => {
     invalidateWorktreeChangedCaches(queryClient, mockLocalHostEntry.hostId, {
-      kind: "worktreePath",
-      worktreePath: "/wt/app",
+      root: false,
+      worktreePaths: new Set(["/wt/app"]),
     });
   });
 
@@ -130,8 +130,8 @@ it("invalidates only the named path's enrichment overlay on a worktreePath event
   const other = seedOverlay(queryClient, "/wt/other");
 
   invalidateWorktreeChangedCaches(queryClient, mockLocalHostEntry.hostId, {
-    kind: "worktreePath",
-    worktreePath: "/wt/app",
+    root: false,
+    worktreePaths: new Set(["/wt/app"]),
   });
 
   expect(queryClient.getQueryState(named)?.isInvalidated).toBe(true);
@@ -146,8 +146,8 @@ it("invalidates every enrichment overlay on a root event", () => {
   const other = seedOverlay(queryClient, "/wt/other");
 
   invalidateWorktreeChangedCaches(queryClient, mockLocalHostEntry.hostId, {
-    kind: "root",
-    root: "/repo",
+    root: true,
+    worktreePaths: new Set(),
   });
 
   expect(queryClient.getQueryState(named)?.isInvalidated).toBe(true);
