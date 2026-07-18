@@ -1374,9 +1374,14 @@ describe("chat descendant status rollup", () => {
     const view = render(
       <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
     );
+    const backgroundIcon = screen.getByTestId(
+      "chat-descendant-status-background-chat-root",
+    );
+    expect(backgroundIcon).toBeTruthy();
+    expect(backgroundIcon.getAttribute("class")).toContain("opacity-60");
     expect(
-      screen.getByTestId("chat-descendant-status-background-chat-root"),
-    ).toBeTruthy();
+      backgroundIcon.querySelector(".lucide-calendar-clock"),
+    ).not.toBeNull();
     expect(
       screen.queryByTestId("chat-descendant-status-running-chat-root"),
     ).toBeNull();

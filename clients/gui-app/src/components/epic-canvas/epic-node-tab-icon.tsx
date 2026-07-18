@@ -117,7 +117,6 @@ function TerminalNodeTabIcon(props: {
       className={undefined}
       style={undefined}
       runningTitle=""
-      backgroundRunningTitle={undefined}
       defaultIcon={props.defaultIcon}
       statusPresentation="spinner"
     />
