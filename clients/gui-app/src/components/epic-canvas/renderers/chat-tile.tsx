@@ -1209,6 +1209,23 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       ),
     [hostPendingInterviewIds, renderedMessages],
   );
+  // Block IDs whose answer/skip action is still in flight or accepted-but-
+  // unresolved. Recomputes only when actions change (not per streaming token),
+  // and yields a stable `false` whenever no interview is pending, so the
+  // composer memo below never churns during normal streaming.
+  const interviewActionBlockIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const action of Object.values(state.pendingActions)) {
+      if (action.interviewBlockId !== null) ids.add(action.interviewBlockId);
+    }
+    for (const action of Object.values(state.acceptedActions)) {
+      if (action.interviewBlockId !== null) ids.add(action.interviewBlockId);
+    }
+    return ids;
+  }, [state.pendingActions, state.acceptedActions]);
+  const interviewBusy =
+    pendingInterview !== null &&
+    interviewActionBlockIds.has(pendingInterview.blockId);
   const showCompletedRestoreToast = useCallback(() => {
     if (state.restore === null || state.restore.kind !== "completed") return;
     showRestoreResultToast(state.restore.results);
@@ -1530,12 +1547,14 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   const lowerInterview = useMemo(
     () => ({
       pending: pendingInterview,
+      isBusy: interviewBusy,
       onAnswer: handleInterviewAnswer,
       onError: handleInterviewError,
       onFork: forkFromPendingInterview,
     }),
     [
       pendingInterview,
+      interviewBusy,
       handleInterviewAnswer,
       handleInterviewError,
       forkFromPendingInterview,

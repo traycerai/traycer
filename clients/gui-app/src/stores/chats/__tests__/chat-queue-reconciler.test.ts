@@ -45,6 +45,7 @@ function createPendingAction(
   return {
     clientActionId,
     action,
+    interviewBlockId: null,
     messageId,
     restoreContent: isSendOrEdit ? CONTENT : null,
     sender: isSendOrEdit ? SENDER : null,
@@ -140,6 +141,7 @@ describe("chat-queue-reconciler", () => {
       const action2: PendingChatAction = {
         clientActionId: "action-2",
         action: "send",
+        interviewBlockId: null,
         messageId: "msg-2",
         restoreContent: CONTENT_2,
         sender: SENDER,
@@ -197,6 +199,7 @@ describe("chat-queue-reconciler", () => {
       const action2: PendingChatAction = {
         clientActionId: "action-2",
         action: "send",
+        interviewBlockId: null,
         messageId: "msg-2",
         restoreContent: CONTENT_2,
         sender: SENDER,
@@ -353,6 +356,7 @@ describe("chat-queue-reconciler", () => {
       const action2: PendingChatAction = {
         clientActionId: "action-2",
         action: "send",
+        interviewBlockId: null,
         messageId: "msg-2",
         restoreContent: CONTENT_2,
         sender: SENDER,
@@ -437,6 +441,7 @@ describe("chat-queue-reconciler", () => {
       const pendingAction: PendingChatAction = {
         clientActionId: "action-1",
         action: "send",
+        interviewBlockId: null,
         messageId: "msg-1",
         restoreContent: null, // null restore content
         sender: SENDER,

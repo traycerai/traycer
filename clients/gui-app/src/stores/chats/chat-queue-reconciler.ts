@@ -369,6 +369,7 @@ export function addAcceptedAction(
       [pending.clientActionId]: {
         clientActionId: pending.clientActionId,
         action: pending.action,
+        interviewBlockId: pending.interviewBlockId,
         messageId: pending.messageId,
         acceptedAt: now,
         restoreContent: pending.restoreContent,

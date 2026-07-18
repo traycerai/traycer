@@ -82,6 +82,22 @@ export const appLocalNotificationDisplayReceiptKey = (input: {
 }): string =>
   `${appLocalNotificationDisplayReceiptNotificationPrefix(input)}:${String(input.updatedAt)}`;
 
+// Interview answer drafts persist ONE localStorage key per (chatId, blockId)
+// instead of a single full-snapshot Zustand blob. Separate keys prevent a
+// full-map write from one window (or a stale store context) from erasing an
+// unrelated chat's draft persisted by another window — the same isolation the
+// app-local display receipts above rely on. Both segments are percent-encoded so
+// a `:` inside an id can never split the key.
+export const interviewDraftKeyPrefix = (): string =>
+  `${persistKey("interview-drafts")}:`;
+
+export const interviewDraftKey = (chatId: string, blockId: string): string =>
+  scopedPersistKey(
+    "interview-drafts",
+    encodeURIComponent(chatId),
+    encodeURIComponent(blockId),
+  );
+
 // Host-scoped (not identity-scoped): the worktrees panel's warm-open snapshot
 // of per-path activity entries (worktrees-enrichment-persistence.ts). A host
 // id is always non-empty, so no `scopeBucket` collapse applies.
@@ -152,6 +168,15 @@ export const PERSIST_STORES = [
   { camelName: "onboarding", leaf: "onboarding", kind: "static" },
   { camelName: "commandPalette", leaf: "command-palette", kind: "static" },
   { camelName: "composerDraft", leaf: "composer-drafts", kind: "static" },
+  // Enumerated under the `interview-drafts` leaf, but persisted as one key per
+  // (chatId, blockId) — `interview-drafts:{encChatId}:{encBlockId}` — for
+  // cross-window isolation (see `interviewDraftKey`). The `traycer-gui-app:`
+  // prefix sweep in `wipe.ts` still clears every per-draft key.
+  {
+    camelName: "interviewDraft",
+    leaf: "interview-drafts",
+    kind: "static",
+  },
   {
     camelName: "artifactReadState",
     leaf: "artifact-read-state",
