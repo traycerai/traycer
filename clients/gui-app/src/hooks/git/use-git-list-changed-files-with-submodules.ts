@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
 import {
+  CancelledError,
   queryOptions,
   useQuery,
   useQueryClient,
@@ -386,6 +387,14 @@ export function useGitListChangedFilesWithSubmodules(args: {
     lastTokenRef,
   });
 
+  // TanStack's non-reverting cancellation publishes its internal
+  // `CancelledError` into the query state. That cancellation is expected
+  // control flow during the fallback -> stream ownership handoff, not a host
+  // failure: the first rich stream frame will fill this same slot. Keep the
+  // public result inside its `HostRpcError | null` contract and let consumers
+  // render their loading state while that frame is still in flight.
+  const error = query.error instanceof CancelledError ? null : query.error;
+
   // Refetch when the parent subscription reports a change (FALLBACK state
   // only - `enabled` is false under stream ownership). The ref stores the
   // full source identity alongside the token so a host/worktree/whitespace
@@ -439,9 +448,9 @@ export function useGitListChangedFilesWithSubmodules(args: {
       hostId,
       runningDir,
       hasData: query.data !== undefined,
-      hasError: query.error !== null,
+      hasError: error !== null,
     }),
-    error: query.error ?? null,
+    error,
   };
 }
 
