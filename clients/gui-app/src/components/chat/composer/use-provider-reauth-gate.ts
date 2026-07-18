@@ -56,6 +56,7 @@ export type ProviderReauthReason =
 
 export interface ProviderReauthGate {
   readonly providerId: ProviderId | null;
+  readonly profileId: string | null;
   readonly state: ProviderCliState | null;
   readonly signedOut: boolean;
   readonly reason: ProviderReauthReason | null;
@@ -240,5 +241,5 @@ export function useProviderReauthGate(
     }
   }, [providerUnauthenticated, authStatus, providerId]);
 
-  return { providerId, state, signedOut, reason, profileLabel };
+  return { providerId, profileId, state, signedOut, reason, profileLabel };
 }

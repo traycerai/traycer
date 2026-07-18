@@ -113,6 +113,7 @@ function renderSection(
           hostId="host-1"
           isSelectedHostLocal
           canAddProfile
+          startInReauth={false}
           failedAttempt={null}
           onAddProfile={() => undefined}
           onDismissFailedAttempt={() => undefined}
