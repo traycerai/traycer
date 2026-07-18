@@ -308,7 +308,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
               side="left"
             />
             <TabChrome isActive={isActive} />
-            <span className="relative flex min-w-0 flex-1 items-center justify-center gap-1.5 outline-none">
+            <span className="relative z-20 flex min-w-0 flex-1 items-center justify-center gap-1.5 outline-none">
               <TabLeadingIcon
                 icon={tab.icon}
                 titleGenerationPending={titleGenerationPending}
