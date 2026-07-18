@@ -1117,6 +1117,38 @@ export type WorktreeListBindingsForEpicResponseV11 = z.infer<
   typeof worktreeListBindingsForEpicResponseSchemaV11
 >;
 
+/**
+ * `worktree.listBindingsForEpic` v1.2 row. `isGitResolvePending` is the host's
+ * single authoritative signal that this row's git facts (`isGitRepo`, and the
+ * `missing_worktree_path` reason derived from it) are an unverified placeholder
+ * the host is still resolving - pickers render such rows as pending ("checking")
+ * instead of dead. The host computes it where it derives the reason, so the
+ * client reads one boolean instead of re-deriving which reasons are
+ * git-derived. `false` for every genuine (setup-state, resolved) row. Bridged
+ * up from a v1.1 host as `false` for every row: a pre-v1.2 host has no pending
+ * concept, so its answer is authoritative and must not read as perpetually
+ * pending (there is no non-null timestamp coming to clear it).
+ */
+export const worktreeBindingSelectorRowSchemaV12 =
+  worktreeBindingSelectorRowSchema.extend({
+    isGitResolvePending: z.boolean(),
+  });
+export type WorktreeBindingSelectorRowV12 = z.infer<
+  typeof worktreeBindingSelectorRowSchemaV12
+>;
+
+/**
+ * `worktree.listBindingsForEpic` v1.2 response. Unchanged from v1.1 except
+ * for the per-row `isGitResolvePending` marker.
+ */
+export const worktreeListBindingsForEpicResponseSchemaV12 =
+  worktreeListBindingsForEpicResponseSchemaV11.extend({
+    rows: z.array(worktreeBindingSelectorRowSchemaV12),
+  });
+export type WorktreeListBindingsForEpicResponseV12 = z.infer<
+  typeof worktreeListBindingsForEpicResponseSchemaV12
+>;
+
 export const worktreeSetRepoScriptsRequestSchema = z.object({
   epicId: z.string(),
   workspacePath: z.string(),

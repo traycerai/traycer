@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import type { WorktreeBindingSelectorRow } from "@traycer/protocol/host";
+import type { WorktreeBindingSelectorRowV12 } from "@traycer/protocol/host";
 import type { GitSubmoduleSummary } from "@/lib/git/git-repo-tree";
 import {
   buildGitDiffRepoSwitcherModel,
@@ -14,8 +14,8 @@ import {
 } from "../git-diff-repo-switcher";
 
 function row(
-  overrides: Partial<WorktreeBindingSelectorRow>,
-): WorktreeBindingSelectorRow {
+  overrides: Partial<WorktreeBindingSelectorRowV12>,
+): WorktreeBindingSelectorRowV12 {
   return {
     hostId: "host-1",
     runningDir: "/repo",
@@ -30,6 +30,7 @@ function row(
     setupState: "not_required",
     disabledReason: null,
     sources: [],
+    isGitResolvePending: false,
     ...overrides,
   };
 }
@@ -138,7 +139,7 @@ function referenceOnlySubmodules(): ReadonlyArray<GitSubmoduleSummary> {
 function DropdownHarness(props: {
   readonly selected: GitDiffRepoSelection;
   readonly submodules: ReadonlyArray<GitSubmoduleSummary>;
-  readonly onSelectRoot: (row: WorktreeBindingSelectorRow) => void;
+  readonly onSelectRoot: (row: WorktreeBindingSelectorRowV12) => void;
 }) {
   const [query, setQuery] = useState("");
   const model = buildGitDiffRepoSwitcherModel({
