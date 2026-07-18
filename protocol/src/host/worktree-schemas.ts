@@ -368,9 +368,35 @@ export type WorktreeListByWorkspacePathsRequestV13 =
   WorktreeListByWorkspacePathsRequestV12;
 
 /**
+ * The `resolvedAt` a version-bridge stamps for a row coming from a host that
+ * predates `resolvedAt` entirely (a v1.2 `listByWorkspacePaths` / v1.3
+ * `listAllForHost` peer). Such a host has already returned its authoritative
+ * answer and will NEVER emit a real timestamp to clear a `null`, so bridging
+ * these rows to `null` (the "not yet derived" sentinel) strands them as
+ * perpetually pending - non-selectable folders, no git eligibility, endless
+ * "checking". Stamping this resolved sentinel instead lets clients treat the
+ * legacy host's facts as authoritative.
+ *
+ * The value is a small POSITIVE number, deliberately, for two reasons:
+ *  - The only timestamp math over `resolvedAt` compares two rows FROM THE SAME
+ *    METHOD AND HOST (the settings staleness merge,
+ *    `enriched.resolvedAt >= base.resolvedAt`); a legacy host bridges every one
+ *    of its rows to this same constant, so the comparison degrades to a no-op
+ *    accept - exactly the pre-`resolvedAt` behavior. A real host's timestamps
+ *    (`Date.now()`, ~1e12) never collide with it, and no consumer computes an
+ *    age from `resolvedAt`.
+ *  - It is truthy, so it reads as "resolved" under a `!resolvedAt` check too,
+ *    not just the `=== null` checks consumers use today - `0` would regress the
+ *    moment any consumer switched to a falsy check.
+ */
+export const LEGACY_HOST_RESOLVED_AT = 1;
+
+/**
  * `worktree.listByWorkspacePaths` v1.3 summary. `null` means the host has not
  * derived this row yet; clients must not treat schema-safe fallback facts as
- * authoritative until a non-null timestamp arrives.
+ * authoritative until a non-null timestamp arrives. A row bridged up from a
+ * pre-`resolvedAt` host instead carries {@link LEGACY_HOST_RESOLVED_AT} - that
+ * host's answer is authoritative, not pending.
  */
 export const worktreeWorkspaceSummarySchemaV13 =
   worktreeWorkspaceSummarySchema.extend({

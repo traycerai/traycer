@@ -14,6 +14,7 @@ import {
 } from "@traycer/protocol/framework/index";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import {
+  LEGACY_HOST_RESOLVED_AT,
   worktreeBindingEntrySchema,
   worktreeBranchStatusSchema,
   worktreeHostEntrySchema,
@@ -707,7 +708,7 @@ describe("worktree.listAllForHost v1.0 <-> v1.2 negotiation", () => {
     );
   });
 
-  it("upgrades v1.3 to v1.4 with an unresolved timestamp", () => {
+  it("upgrades v1.3 to v1.4 stamping the legacy-host resolved sentinel (not null)", () => {
     const request = {
       includeActivity: false,
       activityPaths: null,
@@ -742,10 +743,14 @@ describe("worktree.listAllForHost v1.0 <-> v1.2 negotiation", () => {
       V14,
       response,
     );
-    expect(upgraded.worktrees[0].resolvedAt).toBeNull();
+    // NEW CLIENT + OLD HOST: a v1.3 host has no `resolvedAt` and never sends
+    // one, so bridging to `null` would strand its rows perpetually "checking".
+    // The resolved sentinel keeps them authoritative.
+    expect(upgraded.worktrees[0].resolvedAt).toBe(LEGACY_HOST_RESOLVED_AT);
     expect(worktreeListAllForHostResponseSchemaV14.parse(upgraded)).toEqual(
       upgraded,
     );
+    // OLD CLIENT + NEW HOST: a v1.3 caller strips the field it never knew.
     expect(
       worktreeListAllForHostResponseSchemaV13.parse(upgraded).worktrees[0],
     ).not.toHaveProperty("resolvedAt");
@@ -811,7 +816,7 @@ describe("worktree.listByWorkspacePaths v1.1 <-> v1.2 negotiation", () => {
     ).toThrow();
   });
 
-  it("upgrades v1.2 to v1.3 with unresolved timestamps and strips them for v1.2", () => {
+  it("upgrades v1.2 to v1.3 stamping the legacy-host resolved sentinel and strips it for v1.2", () => {
     const request = {
       workspacePaths: ["/Users/dev/acme/web"],
       scriptRefs: [],
@@ -843,10 +848,14 @@ describe("worktree.listByWorkspacePaths v1.1 <-> v1.2 negotiation", () => {
       V13,
       response,
     );
-    expect(upgraded.workspaces[0].resolvedAt).toBeNull();
+    // NEW CLIENT + OLD HOST: a v1.2 host never sends `resolvedAt`; the resolved
+    // sentinel (not `null`) keeps its summaries authoritative so the home
+    // workspace selector does not strand every folder as perpetually pending.
+    expect(upgraded.workspaces[0].resolvedAt).toBe(LEGACY_HOST_RESOLVED_AT);
     expect(
       worktreeListByWorkspacePathsResponseSchemaV13.parse(upgraded),
     ).toEqual(upgraded);
+    // OLD CLIENT + NEW HOST: a v1.2 caller strips the field it never knew.
     expect(
       worktreeListByWorkspacePathsResponseSchemaV12.parse(upgraded)
         .workspaces[0],
