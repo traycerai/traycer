@@ -46,6 +46,7 @@ function claudeStateWithoutProfile(): ProviderCliState {
     identity: null,
     usageUpdatedAt: null,
     rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,

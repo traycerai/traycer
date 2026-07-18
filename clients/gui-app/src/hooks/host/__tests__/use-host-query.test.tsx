@@ -9,7 +9,11 @@ import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messen
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
-import { useHostMutation, useHostQuery } from "@/hooks/host/use-host-query";
+import {
+  useHostMutation,
+  useHostQuery,
+  useHostQueryWithResponseMap,
+} from "@/hooks/host/use-host-query";
 
 describe("useHostQuery auth readiness", () => {
   afterEach(() => {
@@ -156,6 +160,179 @@ describe("useHostQuery auth readiness", () => {
       message: "Host client unavailable",
       fatalDetails: null,
     });
+  });
+});
+
+// The `HostRpcError` error generic on these hooks is an unchecked assertion:
+// TypeScript cannot type a promise's rejection channel, so a bare throw
+// anywhere inside the queryFn/mutationFn would reach `.code`-reading
+// consumers as a foreign shape (the git diff white-screen). These tests pin
+// the boundary that makes the declared type true by construction.
+describe("host query/mutation HostRpcError boundary", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("normalizes a bare throw from mapResponse into a HostRpcError", async () => {
+    const fixture = createHostQueryFixture();
+    fixture.client.bind(mockLocalHostEntry);
+    fixture.client.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "tok-1",
+      }),
+    );
+
+    const rendered = renderHook(
+      () =>
+        useHostQueryWithResponseMap({
+          cacheKeyIdentity: undefined,
+          client: fixture.client,
+          method: "host.status",
+          params: {},
+          options: null,
+          mapResponse: () => {
+            throw new TypeError("mapResponse exploded");
+          },
+        }),
+      { wrapper: fixture.Wrapper },
+    );
+
+    await waitFor(() => {
+      expect(rendered.result.current.error).not.toBeNull();
+    });
+    expect(rendered.result.current.error).toBeInstanceOf(HostRpcError);
+    expect(rendered.result.current.error).toMatchObject({
+      code: "RPC_ERROR",
+      method: "host.status",
+      message: "mapResponse exploded",
+      fatalDetails: null,
+    });
+  });
+
+  it("normalizes a bare throw from mapVariables into a HostRpcError", async () => {
+    const fixture = createHostQueryFixture();
+    fixture.client.bind(mockLocalHostEntry);
+    fixture.client.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "tok-1",
+      }),
+    );
+
+    const rendered = renderHook(
+      () =>
+        useHostMutation({
+          client: fixture.client,
+          method: "host.status",
+          options: null,
+          mapVariables: () => {
+            throw new Error("mapVariables exploded");
+          },
+        }),
+      { wrapper: fixture.Wrapper },
+    );
+
+    let caught: unknown;
+    await act(async () => {
+      try {
+        await rendered.result.current.mutateAsync({});
+      } catch (error) {
+        caught = error;
+      }
+    });
+
+    expect(caught).toBeInstanceOf(HostRpcError);
+    expect(caught).toMatchObject({
+      code: "RPC_ERROR",
+      method: "host.status",
+      message: "mapVariables exploded",
+      fatalDetails: null,
+    });
+  });
+
+  it("normalizes a bare throw from a caller-supplied select into a HostRpcError", async () => {
+    const fixture = createHostQueryFixture();
+    fixture.client.bind(mockLocalHostEntry);
+    fixture.client.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "tok-1",
+      }),
+    );
+
+    const rendered = renderHook(
+      () =>
+        useHostQuery({
+          cacheKeyIdentity: undefined,
+          client: fixture.client,
+          method: "host.status",
+          params: {},
+          options: {
+            select: () => {
+              throw new TypeError("select exploded");
+            },
+          },
+        }),
+      { wrapper: fixture.Wrapper },
+    );
+
+    await waitFor(() => {
+      expect(rendered.result.current.error).not.toBeNull();
+    });
+    expect(rendered.result.current.error).toBeInstanceOf(HostRpcError);
+    expect(rendered.result.current.error).toMatchObject({
+      code: "RPC_ERROR",
+      method: "host.status",
+      message: "select exploded",
+    });
+  });
+
+  it("normalizes a bare throw from onMutate into a HostRpcError", async () => {
+    const fixture = createHostQueryFixture();
+    fixture.client.bind(mockLocalHostEntry);
+    fixture.client.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "tok-1",
+      }),
+    );
+
+    let onErrorReceived: unknown;
+    const rendered = renderHook(
+      () =>
+        useHostMutation({
+          client: fixture.client,
+          method: "host.status",
+          options: {
+            onMutate: () => {
+              throw new TypeError("onMutate exploded");
+            },
+            onError: (error) => {
+              onErrorReceived = error;
+            },
+          },
+          mapVariables: () => ({}),
+        }),
+      { wrapper: fixture.Wrapper },
+    );
+
+    let caught: unknown;
+    await act(async () => {
+      try {
+        await rendered.result.current.mutateAsync({});
+      } catch (error) {
+        caught = error;
+      }
+    });
+
+    expect(caught).toBeInstanceOf(HostRpcError);
+    expect(caught).toMatchObject({
+      code: "RPC_ERROR",
+      method: "host.status",
+      message: "onMutate exploded",
+    });
+    expect(onErrorReceived).toBeInstanceOf(HostRpcError);
   });
 });
 

@@ -1,5 +1,6 @@
 import { useCallback } from "react";
 import { queryOptions, useQueryClient } from "@tanstack/react-query";
+import { withHostRpcErrorBoundary } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { GitListChangedFilesResponseV11 } from "@traycer/protocol/host";
 import { useHostClientFor } from "@/hooks/host/use-host-client-for";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
@@ -45,7 +46,7 @@ export function useGitSubmoduleSnapshotRefresh(args: {
       rootRunningDir,
       ignoreWhitespace,
     );
-    const request = createRichSlotRequest({
+    const richSlotRequest = createRichSlotRequest({
       queryClient,
       hostId,
       runningDir: rootRunningDir,
@@ -58,6 +59,15 @@ export function useGitSubmoduleSnapshotRefresh(args: {
           includeSubmodules: true,
         }),
     });
+    // Boundary-wrapped: a rejection here lands in the SAME query slot the
+    // passive hook publicly types as `HostRpcError`, so it must never carry a
+    // foreign error shape to the panel's `.code`-reading error states.
+    const request = (context: {
+      readonly signal: AbortSignal;
+    }): Promise<GitListChangedFilesResponseV11> =>
+      withHostRpcErrorBoundary("git.listChangedFiles", () =>
+        richSlotRequest(context),
+      );
     // Cancel any fetch already in flight for this key first: `fetchQuery`
     // otherwise JOINS an existing in-flight promise instead of starting a
     // fresh request, so a click while an earlier fetch is hung would silently

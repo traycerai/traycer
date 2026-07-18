@@ -37,6 +37,7 @@ function profile(
     identity: null,
     usageUpdatedAt: null,
     rateLimitStatus,
+    rateLimitLimitedScopes: null,
     duplicateOfProfileId: null,
     ambientDriftNotice: null,
     accentColor: null,
@@ -67,6 +68,7 @@ describe("F4: hostile profile labels in the rate-limit banner", () => {
             harnessId="claude"
             providerId="claude-code"
             severity="hard_limit"
+            limitedFamilies={[]}
             current={current}
             profiles={[current, target]}
             destinations={[destination]}

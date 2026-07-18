@@ -381,6 +381,7 @@ function providerProfile(input: {
     },
     usageUpdatedAt: input.usageUpdatedAt,
     rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,

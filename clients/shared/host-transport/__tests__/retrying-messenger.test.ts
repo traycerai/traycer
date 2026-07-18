@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import {
   defineRpcContract,
@@ -62,8 +62,14 @@ function fakeInner(outcomes: ReadonlyArray<HostRpcError>): {
   calls: () => number;
 } {
   let call = 0;
-  const messenger: IHostMessenger<typeof testRegistry> = {
-    request(method, params) {
+  // Written as a `vi.fn()` rather than a hand-rolled `request<Method>(…)`
+  // method: the interface promises `ResponseOfMethod<Registry, Method>` for an
+  // unresolved `Method`, which a concrete `{ echoed }` literal cannot satisfy
+  // (the real wrapper only type-checks because it *delegates*, preserving the
+  // type parameter). The mock stays loosely typed and assignable.
+  const request = vi
+    .fn()
+    .mockImplementation((method: string, params: { message: string }) => {
       const index = call;
       call += 1;
       const outcome = outcomes[index];
@@ -72,7 +78,12 @@ function fakeInner(outcomes: ReadonlyArray<HostRpcError>): {
       }
       void method;
       return Promise.resolve({ echoed: params.message.toUpperCase() });
-    },
+    });
+  const messenger: IHostMessenger<typeof testRegistry> = {
+    request,
+    // The retry wrapper drives both paths through the same `runWithRetries`,
+    // so the long-poll variant shares this mock (and its call counter).
+    requestWithResponseTimeout: request,
   };
   return { messenger, calls: () => call };
 }

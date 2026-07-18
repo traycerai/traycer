@@ -226,11 +226,14 @@ function ChatComposerImpl(props: ChatComposerProps) {
     seedSource.kind,
   );
   const sendBlocked = sendDisabled === true || reauthGate.signedOut;
+  const selectedModel = useStore(toolbarStore, (s) => s.selectedModel);
   // Rate-limit switch prompt: purely informational + user-confirmed, so it
-  // never blocks send the way the reauth gate does.
+  // never blocks send the way the reauth gate does. Scoped to the selected
+  // model - a limit gating only another model family stays silent here.
   const rateLimitPrompt = useProfileRateLimitSwitchPrompt(
     harnessId,
     profileId,
+    selectedModel,
     isActive,
   );
   // Keeps the switch prompt's own `providers.list` read converging with a
@@ -252,10 +255,10 @@ function ChatComposerImpl(props: ChatComposerProps) {
       rateLimitPrompt.primaryTarget !== null,
     harnessId,
     profileId,
+    selectedModel,
     epicId: currentEpicId,
     chatId: taskId,
   });
-  const selectedModel = useStore(toolbarStore, (s) => s.selectedModel);
   const imagesUnsupported = imageAttachmentsUnsupported(
     draftHasImages,
     selectedModel,
@@ -349,6 +352,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
                   harnessId={harnessId}
                   providerId={rateLimitPrompt.providerId}
                   severity={rateLimitPrompt.severity}
+                  limitedFamilies={rateLimitPrompt.limitedFamilies}
                   current={rateLimitPrompt.current}
                   profiles={rateLimitPrompt.profiles}
                   destinations={rateLimitPrompt.destinations}
