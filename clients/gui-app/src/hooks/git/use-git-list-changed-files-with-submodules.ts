@@ -7,6 +7,7 @@ import {
 } from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { GitListChangedFilesResponseV11 } from "@traycer/protocol/host";
+import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
 import { useHostClientFor } from "@/hooks/host/use-host-client-for";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
@@ -318,7 +319,11 @@ export function useGitListChangedFilesWithSubmodules(args: {
     ignoreWhitespace,
     request: async (): Promise<GitListChangedFilesResponseV11> => {
       if (client === null || hostId === null || runningDir === null) {
-        return Promise.reject(new Error("Host client unavailable"));
+        // A `HostRpcError` (not a bare Error): consuming hooks publicly
+        // declare that error type and UI surfaces read `.code`.
+        return Promise.reject(
+          hostClientUnavailableError("git.listChangedFiles"),
+        );
       }
       return client.request("git.listChangedFiles", {
         hostId,

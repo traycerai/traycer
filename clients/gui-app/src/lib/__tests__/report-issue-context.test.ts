@@ -32,4 +32,23 @@ describe("createReportIssueContext", () => {
     expect(context.code).toBeNull();
     expect(context.source).toBeNull();
   });
+
+  it("treats undefined values as absent instead of crashing", () => {
+    // Regression: `.code` read off an error whose declared type lied (a bare
+    // `Error` surfaced through a TanStack generic) is `undefined`, not `null`.
+    // The old null-only guard crashed the git diff view on `.replace`.
+    expect(
+      createReportIssueContext({
+        title: "Diff loading error",
+        message: undefined,
+        code: undefined,
+        source: undefined,
+      }),
+    ).toEqual({
+      title: "Diff loading error",
+      message: null,
+      code: null,
+      source: null,
+    });
+  });
 });
