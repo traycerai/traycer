@@ -20,7 +20,7 @@ import type { GitListChangedFilesWithSubmodulesResult } from "@/hooks/git/use-gi
 import type { GitPanelSelectedRepo } from "@/stores/epics/git-panel-store";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { SelectedRepoChanges } from "../selected-repo-changes";
-import { expectModuleHeaderTooltip } from "./git-module-header-test-utils";
+import { expectModuleHeaderPreview } from "./git-module-header-test-utils";
 
 vi.mock("../file-list", () => ({
   FileList: (props: {
@@ -289,7 +289,7 @@ describe("<SelectedRepoChanges /> module groups", () => {
     expect(
       screen.getByTestId("git-module-group-submodule-traycer"),
     ).toBeDefined();
-    await expectModuleHeaderTooltip(
+    await expectModuleHeaderPreview(
       screen.getByTestId("git-module-header-traycer"),
       "pinned commit out of date",
     );
@@ -372,7 +372,7 @@ describe("<SelectedRepoChanges /> module groups", () => {
       ),
     });
 
-    await expectModuleHeaderTooltip(
+    await expectModuleHeaderPreview(
       screen.getByTestId("git-module-header-traycer"),
       "pinned commit out of date",
     );
@@ -403,11 +403,11 @@ describe("<SelectedRepoChanges /> module groups", () => {
     ).toBeDefined();
     const header = screen.getByTestId("git-module-header-traycer");
     expect(header.getAttribute("aria-label")).toContain("details unavailable");
-    const tooltipText = await expectModuleHeaderTooltip(
+    const previewText = await expectModuleHeaderPreview(
       header,
       "details unavailable",
     );
-    expect(tooltipText.match(/Status:/g)).toHaveLength(1);
+    expect(previewText.match(/Status:/g)).toHaveLength(1);
     expect(screen.queryByText("details unavailable")).toBeNull();
     expect(header.querySelectorAll(".lucide-triangle-alert")).toHaveLength(1);
     expect(

@@ -25,7 +25,7 @@ import {
 } from "@/stores/epics/git-panel-store";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { GitDiffPanelBodyLive } from "../git-diff-panel-body-live";
-import { expectModuleHeaderTooltip } from "./git-module-header-test-utils";
+import { expectModuleHeaderPreview } from "./git-module-header-test-utils";
 
 const testState = vi.hoisted(() => ({
   rows: [] as WorktreeBindingSelectorRow[],
@@ -498,7 +498,7 @@ describe("<GitDiffPanelBodyLive /> workspace switcher integration", () => {
     expect(
       screen.getByTestId("git-module-group-submodule-traycer"),
     ).toBeDefined();
-    await expectModuleHeaderTooltip(
+    await expectModuleHeaderPreview(
       screen.getByTestId("git-module-header-traycer"),
       "pinned commit out of date",
     );
