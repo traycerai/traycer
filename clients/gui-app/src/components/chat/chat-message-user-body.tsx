@@ -780,7 +780,7 @@ function InlineUserMessageEditor({
           Cancel
         </MessageActionButton>
         <MessageActionButton
-          label={attachmentPending ? "Preparing attachments" : "Send edit"}
+          label="Send edit"
           variant="default"
           size="default"
           tooltip

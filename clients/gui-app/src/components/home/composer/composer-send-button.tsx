@@ -35,10 +35,7 @@ function ComposerSendButtonImpl(props: ComposerSendButtonProps) {
   const disabled = stopMode
     ? stopDisabled || onStopTurn === null
     : !canSubmit || disabledHint !== null;
-  const label =
-    attachmentPending && !stopMode
-      ? "Preparing attachments"
-      : composerSendButtonLabel(activeTurnStatus);
+  const label = composerSendButtonLabel(activeTurnStatus);
   // Hint mode (e.g. no workspace) marks the button `aria-disabled` rather than
   // using the `disabled` attribute, so it stays focusable and the styled
   // TooltipWrapper's hint is reachable by hover and keyboard focus (a native

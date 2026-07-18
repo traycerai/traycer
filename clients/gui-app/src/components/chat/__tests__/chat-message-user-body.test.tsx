@@ -403,9 +403,7 @@ describe("<UserMessageBody /> agent messages", () => {
       ]),
     });
 
-    const send = screen.getByRole("button", {
-      name: "Preparing attachments",
-    });
+    const send = screen.getByRole("button", { name: "Send edit" });
     expect(send.getAttribute("disabled")).not.toBeNull();
     fireEvent.click(send);
     expect(onSubmit).not.toHaveBeenCalled();

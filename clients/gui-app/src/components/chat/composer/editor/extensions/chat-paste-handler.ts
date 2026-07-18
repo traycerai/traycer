@@ -40,18 +40,27 @@ export function createChatPasteHandler(deps: ChatPasteHandlerDeps) {
 
     addProseMirrorPlugins() {
       const { editor } = this;
+      // `dispatchUnchanged` inserts the caller's original, structurally-open
+      // paste content when nothing needs to be stripped - only an actual
+      // strip forces the JSON round-trip through `pasteComposerContent`
+      // (always a closed 0/0 slice), which would otherwise needlessly flatten
+      // an inline HTML paste's open slice into a new block.
       const pasteWithValidatedImages = (
         view: EditorView,
         content: JsonContent,
+        dispatchUnchanged: () => boolean,
       ): boolean => {
         const hashes = hashOnlyImageHashes(content);
         const hasPastedImageBytes = deps.getHasPastedImageBytes();
         if (hashes.length === 0 || hasPastedImageBytes === null) {
-          return pasteComposerContent(view, content);
+          return dispatchUnchanged();
         }
         const availableHashes = new Set(
           hashes.filter((hash) => hasPastedImageBytes(hash)),
         );
+        if (availableHashes.size === hashes.length) {
+          return dispatchUnchanged();
+        }
         const filtered = filterUnavailablePastedImages(
           content,
           availableHashes,
@@ -74,7 +83,9 @@ export function createChatPasteHandler(deps: ChatPasteHandlerDeps) {
               const composerContent =
                 readComposerContentFromClipboardData(clipboardData);
               if (composerContent !== null) {
-                return pasteWithValidatedImages(view, composerContent);
+                return pasteWithValidatedImages(view, composerContent, () =>
+                  pasteComposerContent(view, composerContent),
+                );
               }
 
               const html = clipboardData.getData("text/html");
@@ -91,16 +102,23 @@ export function createChatPasteHandler(deps: ChatPasteHandlerDeps) {
                   }),
                   view.state.schema,
                 );
+                const dispatchOriginalSlice = (): boolean => {
+                  const tr = view.state.tr.replaceSelection(slice);
+                  view.dispatch(tr.scrollIntoView());
+                  return true;
+                };
                 const htmlContent = sliceToDocJson(slice);
                 if (
                   htmlContent !== null &&
                   hashOnlyImageHashes(htmlContent).length > 0
                 ) {
-                  return pasteWithValidatedImages(view, htmlContent);
+                  return pasteWithValidatedImages(
+                    view,
+                    htmlContent,
+                    dispatchOriginalSlice,
+                  );
                 }
-                const tr = view.state.tr.replaceSelection(slice);
-                view.dispatch(tr.scrollIntoView());
-                return true;
+                return dispatchOriginalSlice();
               }
 
               const text = clipboardData.getData("text/plain");

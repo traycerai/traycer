@@ -20,9 +20,7 @@ describe("ComposerSendButton attachment preparation", () => {
     );
 
     expect(
-      screen
-        .getByRole("button", { name: "Preparing attachments" })
-        .getAttribute("disabled"),
+      screen.getByRole("button", { name: "Send" }).getAttribute("disabled"),
     ).not.toBeNull();
     expect(screen.getByTestId("composer-attachment-pending")).toBeTruthy();
   });

@@ -260,6 +260,56 @@ describe("composer rich clipboard paste", () => {
     expect(mocks.reportableErrorToast).toHaveBeenCalledTimes(1);
   });
 
+  it("merges an available hash-only image pasted as inline editor HTML into the surrounding paragraph instead of splitting it", () => {
+    const source = makeEditor(KNOWN_SLASH_NAMES);
+    source.commands.setContent(
+      hashOnlyImageContentWithText("same-epic-hash", "suffix"),
+    );
+    // Serialize just the paragraph's own (inline) content - not the doc-level
+    // fragment - so the wrapper carries no block wrapper, mirroring a real
+    // mid-paragraph copy rather than a whole-paragraph one.
+    const wrapper = document.createElement("div");
+    wrapper.appendChild(
+      DOMSerializer.fromSchema(source.schema).serializeFragment(
+        source.state.doc.firstChild?.content ?? source.state.doc.content,
+      ),
+    );
+    const hasBytes = vi.fn((hash: string) => hash === "same-epic-hash");
+    const destination = makeEditorWithPastedImagePresence(
+      KNOWN_SLASH_NAMES,
+      hasBytes,
+      () => undefined,
+    );
+    destination.commands.setContent({
+      type: "doc",
+      content: [
+        { type: "paragraph", content: [{ type: "text", text: "prefix " }] },
+      ],
+    });
+    destination.commands.setTextSelection(
+      destination.state.doc.content.size - 1,
+    );
+
+    fireEvent.paste(destination.view.dom, {
+      clipboardData: {
+        files: [],
+        items: [],
+        types: ["text/html"],
+        getData: (type: string) =>
+          type === "text/html" ? wrapper.innerHTML : "",
+      },
+    });
+
+    expect(hasBytes).toHaveBeenCalledWith("same-epic-hash");
+    // Nothing needed stripping, so the original (open) slice is dispatched
+    // unchanged - merging into the SAME paragraph as "prefix" rather than the
+    // JSON round-trip's closed 0/0 slice splitting it into a new block.
+    expect(destination.state.doc.childCount).toBe(1);
+    expect(collectImageIds(destination)).toEqual(["pasted-image"]);
+    expect(destination.state.doc.textContent).toBe("prefix suffix");
+    expect(mocks.reportableErrorToast).not.toHaveBeenCalled();
+  });
+
   it("leaves landing-composer rich pastes unvalidated", () => {
     const editor = makeEditor(KNOWN_SLASH_NAMES);
 

@@ -107,23 +107,26 @@ export function useLandingComposerPaste(editorRef: {
             surface: "draft",
             blocker: analyticsBlockerFromError(error),
           });
-          if (signal.aborted) return;
-          // A failed ingest (e.g. one image of a multi-image paste failed to hash
-          // or store) inserts nothing, but earlier images may already be stored —
-          // now orphaned. Surface the failure and schedule a reconcile to reclaim
-          // them (their session entries keep the bytes safe until it runs).
-          reportableErrorToast(
-            "Couldn't attach the image.",
-            {
-              description: "Please try adding it again.",
-            },
-            {
-              title: "Could not attach image",
-              message: null,
-              code: null,
-              source: "Chat composer",
-            },
-          );
+          // A failed or aborted ingest (e.g. one image of a multi-image paste
+          // failed to hash/store, or the composer unmounted mid-flight)
+          // inserts nothing, but earlier images may already be stored - now
+          // orphaned. Schedule a reconcile to reclaim them (their session
+          // entries keep the bytes safe until it runs) regardless of cause;
+          // only the user-facing failure toast is abort-specific.
+          if (!signal.aborted) {
+            reportableErrorToast(
+              "Couldn't attach the image.",
+              {
+                description: "Please try adding it again.",
+              },
+              {
+                title: "Could not attach image",
+                message: null,
+                code: null,
+                source: "Chat composer",
+              },
+            );
+          }
           scheduleLandingImageReconcile();
         }),
     [editorRef],
