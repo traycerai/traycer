@@ -1,10 +1,4 @@
-import {
-  useMutation,
-  useQueryClient,
-  type UseMutationResult,
-} from "@tanstack/react-query";
-import { withHostRpcErrorBoundary } from "@traycer-clients/shared/host-transport/host-messenger";
-import { withHostMutationLifecycleBoundary } from "@/hooks/host/use-host-query";
+import { useQueryClient, type UseMutationResult } from "@tanstack/react-query";
 import type {
   HostRpcError,
   RequestOfMethod,
@@ -12,7 +6,7 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
-import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
+import { useHostMutation } from "@/hooks/host/use-host-query";
 import { hostQueryKeys, worktreeMutationKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
@@ -38,7 +32,8 @@ const SET_REPO_SCRIPTS_INVALIDATIONS: ReadonlyArray<
  * page and in an epic.
  *
  * A `null` client makes the mutation a rejecting no-op, matching the other
- * `*For` worktree hooks.
+ * `*For` worktree hooks - `useHostMutation`'s own `client === null` guard
+ * covers it.
  */
 export function useWorktreeSetRepoScriptsFor(
   client: HostClient<HostRpcRegistry> | null,
@@ -49,23 +44,16 @@ export function useWorktreeSetRepoScriptsFor(
   SetRepoScriptsMutationContext
 > {
   const queryClient = useQueryClient();
-  return useMutation<
-    ResponseOfMethod<HostRpcRegistry, "worktree.setRepoScripts">,
-    HostRpcError,
-    RequestOfMethod<HostRpcRegistry, "worktree.setRepoScripts">,
+  return useHostMutation<
+    HostRpcRegistry,
+    "worktree.setRepoScripts",
     SetRepoScriptsMutationContext
-  >(
-    withHostMutationLifecycleBoundary("worktree.setRepoScripts", {
+  >({
+    client,
+    method: "worktree.setRepoScripts",
+    mapVariables: (variables) => variables,
+    options: {
       mutationKey: worktreeMutationKeys.setRepoScripts(),
-      mutationFn: (variables) =>
-        withHostRpcErrorBoundary("worktree.setRepoScripts", () => {
-          if (client === null) {
-            return Promise.reject<
-              ResponseOfMethod<HostRpcRegistry, "worktree.setRepoScripts">
-            >(hostClientUnavailableError("worktree.setRepoScripts"));
-          }
-          return client.request("worktree.setRepoScripts", variables);
-        }),
       onMutate: () => ({
         hostId: client === null ? null : client.getActiveHostId(),
       }),
@@ -87,6 +75,6 @@ export function useWorktreeSetRepoScriptsFor(
       },
       onError: (error) =>
         toastFromHostError(error, "Couldn't save environment."),
-    }),
-  );
+    },
+  });
 }

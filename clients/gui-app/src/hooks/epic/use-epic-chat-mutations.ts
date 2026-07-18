@@ -1,6 +1,5 @@
 import {
   QueryClient,
-  useMutation,
   useQueryClient,
   type UseMutationOptions,
   type UseMutationResult,
@@ -14,14 +13,8 @@ import type {
   UpdateChatRunSettingsResponse,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import {
-  HostRpcError,
-  withHostRpcErrorBoundary,
-} from "@traycer-clients/shared/host-transport/host-messenger";
-import {
-  useHostMutation,
-  withHostMutationLifecycleBoundary,
-} from "@/hooks/host/use-host-query";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { useHostMutation } from "@/hooks/host/use-host-query";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
@@ -120,9 +113,12 @@ export function useEpicCreateChatForHost(): UseMutationResult<
  * row's OWN host) and the hook stamps that client's host id onto the new
  * chat, rather than the app-wide active host. `null` client (offline /
  * directory unresolved) rejects through the mutation error channel so the
- * caller can disable the affordance. `useEpicCreateChatForHost` is the
- * tab-scoped wrapper over this; row child-create passes the row's host
- * client.
+ * caller can disable the affordance - `useHostMutation`'s own `client ===
+ * null` guard covers that case; only the second-stage "client resolved but
+ * host identity unset" check lives in `mapVariables` here (also normalized
+ * to `HostRpcError` by `useHostMutation`'s boundary). `useEpicCreateChatForHost`
+ * is the tab-scoped wrapper over this; row child-create passes the row's
+ * host client.
  */
 export function useEpicCreateChatForHostClient(
   client: HostClient<HostRpcRegistry> | null,
@@ -133,46 +129,29 @@ export function useEpicCreateChatForHostClient(
   CreateChatMutationContext
 > {
   const queryClient = useQueryClient();
-  return useMutation<
-    CreateChatResponse,
-    HostRpcError,
-    CreateChatMutationInput,
-    CreateChatMutationContext
-  >(
-    withHostMutationLifecycleBoundary<
-      CreateChatResponse,
-      CreateChatMutationInput,
-      CreateChatMutationContext
-    >("epic.createChat", {
+  return useHostMutation<
+    HostRpcRegistry,
+    "epic.createChat",
+    CreateChatMutationContext,
+    CreateChatMutationInput
+  >({
+    client,
+    method: "epic.createChat",
+    mapVariables: (params) => {
+      const hostId = client?.getActiveHostId() ?? null;
+      if (hostId === null) {
+        throw new HostRpcError({
+          code: "RPC_ERROR",
+          message: "Tab host identity unavailable - cannot stamp hostId.",
+          requestId: "client-pre-flight",
+          method: "epic.createChat",
+          fatalDetails: null,
+        });
+      }
+      return { ...params, hostId };
+    },
+    options: {
       mutationKey: epicMutationKeys.createChat(),
-      mutationFn: (params) =>
-        withHostRpcErrorBoundary("epic.createChat", () => {
-          if (client === null) {
-            return Promise.reject<CreateChatResponse>(
-              new HostRpcError({
-                code: "RPC_ERROR",
-                message:
-                  "Host client unavailable - directory not resolved or signed out.",
-                requestId: "client-pre-flight",
-                method: "epic.createChat",
-                fatalDetails: null,
-              }),
-            );
-          }
-          const hostId = client.getActiveHostId();
-          if (hostId === null) {
-            return Promise.reject<CreateChatResponse>(
-              new HostRpcError({
-                code: "RPC_ERROR",
-                message: "Tab host identity unavailable - cannot stamp hostId.",
-                requestId: "client-pre-flight",
-                method: "epic.createChat",
-                fatalDetails: null,
-              }),
-            );
-          }
-          return client.request("epic.createChat", { ...params, hostId });
-        }),
       onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
       onSuccess: (_data, _params, ctx) => {
         invalidateBindingsForEpic(queryClient, ctx.hostId);
@@ -180,8 +159,8 @@ export function useEpicCreateChatForHostClient(
       onError: (error) => {
         toastFromHostError(error, "Couldn't create chat.");
       },
-    }),
-  );
+    },
+  });
 }
 
 function invalidateBindingsForEpic(
@@ -213,28 +192,18 @@ export function useEpicUpdateChatRunSettings(): UseMutationResult<
   UpdateChatRunSettingsRequest
 > {
   const client = useTabHostClient();
-  return useMutation<
-    UpdateChatRunSettingsResponse,
-    HostRpcError,
+  return useHostMutation<
+    HostRpcRegistry,
+    "epic.updateChatRunSettings",
+    unknown,
     UpdateChatRunSettingsRequest
   >({
-    mutationKey: epicMutationKeys.updateChatRunSettings(),
-    mutationFn: (params) =>
-      withHostRpcErrorBoundary("epic.updateChatRunSettings", () => {
-        if (client === null) {
-          return Promise.reject<UpdateChatRunSettingsResponse>(
-            new HostRpcError({
-              code: "RPC_ERROR",
-              message:
-                "Host client unavailable - directory not resolved or signed out.",
-              requestId: "client-pre-flight",
-              method: "epic.updateChatRunSettings",
-              fatalDetails: null,
-            }),
-          );
-        }
-        return client.request("epic.updateChatRunSettings", params);
-      }),
+    client,
+    method: "epic.updateChatRunSettings",
+    mapVariables: (variables) => variables,
+    options: {
+      mutationKey: epicMutationKeys.updateChatRunSettings(),
+    },
   });
 }
 
