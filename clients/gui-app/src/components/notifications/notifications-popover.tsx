@@ -351,6 +351,7 @@ function useNotificationTextOverflow(
   const [isOverflowing, setIsOverflowing] = useState(false);
   const title = row === null ? null : row.title;
   const body = row === null ? null : row.body;
+  const readAt = row === null ? null : row.readAt;
 
   useLayoutEffect(() => {
     if (isExpanded) return;
@@ -371,7 +372,7 @@ function useNotificationTextOverflow(
     observer.observe(bodyElement);
     check();
     return () => observer.disconnect();
-  }, [body, isExpanded, title]);
+  }, [body, isExpanded, readAt, title]);
 
   return { bodyRef, isOverflowing, titleRef };
 }
@@ -483,8 +484,8 @@ function NotificationRow(props: NotificationRowProps) {
             ref={bodyRef}
             data-testid="notification-body"
             className={cn(
-              "text-ui-sm leading-snug",
-              isExpanded ? "whitespace-pre-wrap break-words" : "line-clamp-2",
+              "break-words text-ui-sm leading-snug",
+              isExpanded ? "whitespace-pre-wrap" : "line-clamp-2",
               isRead ? "text-muted-foreground/80" : "text-foreground/80",
             )}
           >

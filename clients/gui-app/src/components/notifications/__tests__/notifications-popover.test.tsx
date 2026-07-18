@@ -563,6 +563,7 @@ describe("NotificationsPopover click routing", () => {
       expect(notificationTitle.className).toContain("line-clamp-2");
       expect(notificationTitle.className).toContain("font-semibold");
       expect(notificationBody.className).toContain("line-clamp-2");
+      expect(notificationBody.className).toContain("break-words");
       expect(notificationBody.className).not.toContain("truncate");
 
       const expand = within(completed).getByRole("button", {
