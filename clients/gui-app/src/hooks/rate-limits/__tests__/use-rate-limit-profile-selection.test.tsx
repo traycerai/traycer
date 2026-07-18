@@ -71,6 +71,7 @@ function profile(
     },
     usageUpdatedAt: null,
     rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
