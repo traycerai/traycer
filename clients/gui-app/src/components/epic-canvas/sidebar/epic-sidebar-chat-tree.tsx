@@ -93,6 +93,8 @@ import {
 import {
   useAncestorIds,
   useEpicActiveAgentIds,
+  useEpicAgentActivityTiers,
+  type AgentActivityTier,
   useEpicArtifactRecords,
   useEpicConnectionStatus,
   useEpicNodeHostId,
@@ -179,7 +181,7 @@ const noopToggleSelection = (_id: string): void => undefined;
 const noopRowAction = (): void => undefined;
 
 type ChatDescendantStatusKind =
-  "failure" | "interview" | "approval" | "running" | "done";
+  "failure" | "interview" | "approval" | "running" | "background" | "done";
 
 /**
  * One shared urgency ladder for a collapsed parent's icon slot: the parent's
@@ -187,14 +189,54 @@ type ChatDescendantStatusKind =
  * and the higher one owns the slot (ties go to the parent, so solid always
  * beats muted). Mirrors the order `NotificationIndicatorIcon` resolves a
  * single chat's simultaneous states.
+ *
+ * `running` (an agent turn) outranks `background` (a `run_in_background` task
+ * / subagent / Monitor / scheduled wakeup keeping a session non-idle while the
+ * agent itself is idle), matching the turn-over-background precedence the
+ * per-chat indicator already uses. Both still outrank `done`, so any live work
+ * beats a finished-but-unread one.
  */
 const CHAT_STATUS_RANKS: Record<ChatDescendantStatusKind, number> = {
-  failure: 5,
-  interview: 4,
-  approval: 3,
-  running: 2,
+  failure: 6,
+  interview: 5,
+  approval: 4,
+  running: 3,
+  background: 2,
   done: 1,
 };
+
+/** {@link CHAT_STATUS_RANKS} most-urgent first, for picking a rollup's kind. */
+const CHAT_STATUS_ORDER: ReadonlyArray<ChatDescendantStatusKind> = [
+  "failure",
+  "interview",
+  "approval",
+  "running",
+  "background",
+  "done",
+];
+
+/** The ladder kind an activity tier occupies. */
+function activityTierKind(tier: AgentActivityTier): ChatDescendantStatusKind {
+  return tier === "turn" ? "running" : "background";
+}
+
+/**
+ * The single tier a descendant chat is counted under - its own highest. The
+ * attention precedence goes through the shared `attentionTone`, so
+ * failure > interview > approval lives in exactly one place.
+ */
+function chatDescendantKind(
+  indicatorState: NotificationIndicatorState,
+  tier: AgentActivityTier | undefined,
+): ChatDescendantStatusKind | null {
+  const tone = attentionTone(indicatorState);
+  if (tone === FAILURE_TONE) return "failure";
+  if (tone === INTERVIEW_TONE) return "interview";
+  if (tone === APPROVAL_TONE) return "approval";
+  if (tier !== undefined) return activityTierKind(tier);
+  if (indicatorState.unreadDone) return "done";
+  return null;
+}
 
 /**
  * Rollup over a collapsed parent's hidden chat descendants: the
@@ -208,6 +250,7 @@ interface ChatDescendantStatusRollup {
   readonly interviewCount: number;
   readonly approvalCount: number;
   readonly runningCount: number;
+  readonly backgroundCount: number;
   readonly doneCount: number;
 }
 
@@ -286,46 +329,48 @@ function useChatDescendantStatus(args: {
     () => collectDescendantChatIds(nodeId, tree, visibleIds),
     [nodeId, tree, visibleIds],
   );
-  const activeAgentIds = useEpicActiveAgentIds();
+  const activityTiers = useEpicAgentActivityTiers();
   const indicators = useContext(NotificationIndicatorsContext);
   return useAppLocalNotificationsStore(
     useShallow((state): ChatDescendantStatusRollup | null => {
       if (descendants === EMPTY_CHAT_DESCENDANT_IDS) return null;
-      let failureCount = 0;
-      let interviewCount = 0;
-      let approvalCount = 0;
-      let runningCount = 0;
-      let doneCount = 0;
+      const counts: Record<ChatDescendantStatusKind, number> = {
+        failure: 0,
+        interview: 0,
+        approval: 0,
+        running: 0,
+        background: 0,
+        done: 0,
+      };
       for (const chatId of descendants.chatIds) {
         const indicatorState = selectNotificationIndicatorState(
           state,
           { epicId, chatId },
           indicators,
         );
-        const tone = attentionTone(indicatorState);
-        if (tone === FAILURE_TONE) failureCount += 1;
-        else if (tone === INTERVIEW_TONE) interviewCount += 1;
-        else if (tone === APPROVAL_TONE) approvalCount += 1;
-        else if (activeAgentIds.has(chatId)) runningCount += 1;
-        else if (indicatorState.unreadDone) doneCount += 1;
+        const kind = chatDescendantKind(
+          indicatorState,
+          activityTiers.get(chatId),
+        );
+        if (kind !== null) counts[kind] += 1;
       }
       for (const agentId of descendants.agentIds) {
-        if (activeAgentIds.has(agentId)) runningCount += 1;
+        // Terminal-agent descendants contribute only activity - epic-wide
+        // awareness is their sole status authority.
+        const tier = activityTiers.get(agentId);
+        if (tier !== undefined) counts[activityTierKind(tier)] += 1;
       }
-      let kind: ChatDescendantStatusKind | null = null;
-      if (failureCount > 0) kind = "failure";
-      else if (interviewCount > 0) kind = "interview";
-      else if (approvalCount > 0) kind = "approval";
-      else if (runningCount > 0) kind = "running";
-      else if (doneCount > 0) kind = "done";
+      const kind =
+        CHAT_STATUS_ORDER.find((candidate) => counts[candidate] > 0) ?? null;
       if (kind === null) return null;
       return {
         kind,
-        failureCount,
-        interviewCount,
-        approvalCount,
-        runningCount,
-        doneCount,
+        failureCount: counts.failure,
+        interviewCount: counts.interview,
+        approvalCount: counts.approval,
+        runningCount: counts.running,
+        backgroundCount: counts.background,
+        doneCount: counts.done,
       };
     }),
   );
@@ -1546,7 +1591,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
 // variant cannot drift from the per-row icon; "running" stays local because
 // it is an activity tier, not a notification state.
 const CHAT_DESCENDANT_STATUS_TONES: Record<
-  Exclude<ChatDescendantStatusKind, "running">,
+  Exclude<ChatDescendantStatusKind, "running" | "background">,
   IndicatorTone
 > = {
   failure: FAILURE_TONE,
@@ -1556,20 +1601,22 @@ const CHAT_DESCENDANT_STATUS_TONES: Record<
 };
 
 /**
- * The parent's own tier on the shared ladder. `selfActive` is the epic-wide
- * activity bit - the same authority the per-row icon falls back to for an
- * unopened chat; the handle-refined turn/background split does not matter here
- * because both tiers rank as "running".
+ * The parent's own tier on the shared ladder. `selfTier` is the host-published
+ * activity tier from epic awareness - the same authority the per-row icon
+ * falls back to for an unopened chat, now carrying the turn/background split
+ * so a parent doing only background work cannot outrank a descendant that is
+ * genuinely mid-turn.
  */
 function chatSelfStatusRank(
   state: NotificationIndicatorState,
-  selfActive: boolean,
+  selfTier: AgentActivityTier | undefined,
 ): number {
   const tone = attentionTone(state);
   if (tone === FAILURE_TONE) return CHAT_STATUS_RANKS.failure;
   if (tone === INTERVIEW_TONE) return CHAT_STATUS_RANKS.interview;
   if (tone === APPROVAL_TONE) return CHAT_STATUS_RANKS.approval;
-  if (selfActive) return CHAT_STATUS_RANKS.running;
+  if (selfTier === "turn") return CHAT_STATUS_RANKS.running;
+  if (selfTier === "background") return CHAT_STATUS_RANKS.background;
   if (state.unreadDone) return CHAT_STATUS_RANKS.done;
   return 0;
 }
@@ -1589,6 +1636,9 @@ function nestedChatStatusSummary(rollup: ChatDescendantStatusRollup): string {
     parts.push(`${rollup.approvalCount} waiting for approval`);
   }
   if (rollup.runningCount > 0) parts.push(`${rollup.runningCount} running`);
+  if (rollup.backgroundCount > 0) {
+    parts.push(`${rollup.backgroundCount} in background`);
+  }
   if (rollup.doneCount > 0) parts.push(`${rollup.doneCount} completed`);
   return `Nested: ${parts.join(" · ")}`;
 }
@@ -1610,19 +1660,22 @@ const ChatSidebarNodeIconWithNestedStatus = memo(
       epicId: props.epicId,
       nodeId: props.nodeId,
     });
-    const activeAgentIds = useEpicActiveAgentIds();
+    const activityTiers = useEpicAgentActivityTiers();
     const selfIndicator = useSurfaceNotificationIndicatorState({
       epicId: props.epicId,
       chatId: props.nodeId,
     });
     if (rollup !== null) {
-      const selfActive = activeAgentIds.has(props.nodeId);
+      const selfTier = activityTiers.get(props.nodeId);
       // Terminal-agent parents have no notification states of their own -
       // activity is their only tier (their indicator entry is always empty).
-      const agentSelfRank = selfActive ? CHAT_STATUS_RANKS.running : 0;
+      const agentSelfRank =
+        selfTier === undefined
+          ? 0
+          : CHAT_STATUS_RANKS[activityTierKind(selfTier)];
       const selfRank =
         props.artifactType === "chat"
-          ? chatSelfStatusRank(selfIndicator, selfActive)
+          ? chatSelfStatusRank(selfIndicator, selfTier)
           : agentSelfRank;
       if (CHAT_STATUS_RANKS[rollup.kind] > selfRank) {
         return <NestedChatStatusIcon nodeId={props.nodeId} rollup={rollup} />;
@@ -1659,12 +1712,16 @@ function NestedChatStatusIcon(props: {
 function NestedChatStatusGlyph(props: {
   readonly kind: ChatDescendantStatusKind;
 }): ReactNode {
-  if (props.kind === "running") {
+  if (props.kind === "running" || props.kind === "background") {
+    // Same busy-vs-bounce split the per-chat indicator uses for the two
+    // activity tiers, so a nested spinner reads identically to a direct one.
     return (
       <AgentSpinningDots
-        className="text-current"
+        className={
+          props.kind === "running" ? "text-current" : "text-muted-foreground"
+        }
         testId={undefined}
-        variant={undefined}
+        variant={props.kind === "running" ? undefined : "bounce"}
       />
     );
   }
