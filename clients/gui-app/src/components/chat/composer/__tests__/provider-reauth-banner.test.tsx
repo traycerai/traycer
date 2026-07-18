@@ -266,6 +266,12 @@ function claudeState(
   };
 }
 
+function codexState(
+  loginCapability: ProviderLoginCapability | null,
+): ProviderCliState {
+  return { ...claudeState(loginCapability), providerId: "codex" };
+}
+
 function cursorState(): ProviderCliState {
   return {
     providerId: "cursor",
@@ -1157,6 +1163,34 @@ describe("<ProviderReauthBanner />", () => {
           focusHarnessId: "claude",
           focusHostId: "host-1",
           focusProfileId: "work-profile",
+          startSignIn: true,
+        }),
+      );
+      expect(mocks.openSettings).toHaveBeenCalledWith({
+        section: "providers",
+        resetToGeneral: false,
+      });
+    });
+
+    it("opens the exact signed-out Codex profile in Settings", () => {
+      render(
+        <ProviderReauthBanner
+          providerId="codex"
+          state={codexState(CLAUDE_CAP)}
+          reason="profile_unauthenticated"
+          profileId="codex-work-profile"
+          profileLabel="Codex Work"
+          onContinueOnAmbient={vi.fn()}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+      expect(useProvidersFocusStore.getState()).toEqual(
+        expect.objectContaining({
+          focusHarnessId: "codex",
+          focusHostId: "host-1",
+          focusProfileId: "codex-work-profile",
           startSignIn: true,
         }),
       );
