@@ -70,6 +70,14 @@ export function useWorkspaceFolderActionsForClient(
     options: {
       mutationKey: workspaceMutationKeys.prepareFolders(),
       onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
+      onSuccess: async (_result, _variables, context) => {
+        await queryClient.invalidateQueries({
+          queryKey: hostQueryKeys.methodScope(
+            context.hostId,
+            "workspace.resolvePathsByRepoIdentifiers",
+          ),
+        });
+      },
       // No success toast: added folders appear immediately in the picker rows.
       onError: (error) => {
         reportableErrorToast(
