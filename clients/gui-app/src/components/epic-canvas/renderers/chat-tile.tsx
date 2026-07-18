@@ -1213,16 +1213,18 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   // unresolved. Recomputes only when actions change (not per streaming token),
   // and yields a stable `false` whenever no interview is pending, so the
   // composer memo below never churns during normal streaming.
-  const interviewActionBlockIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const action of Object.values(state.pendingActions)) {
-      if (action.interviewBlockId !== null) ids.add(action.interviewBlockId);
-    }
-    for (const action of Object.values(state.acceptedActions)) {
-      if (action.interviewBlockId !== null) ids.add(action.interviewBlockId);
-    }
-    return ids;
-  }, [state.pendingActions, state.acceptedActions]);
+  const interviewActionBlockIds = useMemo(
+    () =>
+      new Set(
+        [
+          ...Object.values(state.pendingActions),
+          ...Object.values(state.acceptedActions),
+        ]
+          .map((action) => action.interviewBlockId)
+          .filter((blockId): blockId is string => blockId !== null),
+      ),
+    [state.pendingActions, state.acceptedActions],
+  );
   const interviewBusy =
     pendingInterview !== null &&
     interviewActionBlockIds.has(pendingInterview.blockId);

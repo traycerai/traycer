@@ -1,5 +1,9 @@
 import { create } from "zustand";
-import { appLogger, describeLogError } from "@/lib/logger";
+import {
+  appLogger,
+  describeLogError,
+  describeLogErrorSummary,
+} from "@/lib/logger";
 import { interviewDraftKey, interviewDraftKeyPrefix } from "@/lib/persist";
 
 export interface StoredInterviewDraftAnswer {
@@ -107,12 +111,15 @@ export function selectInterviewDraft(
 // map below mirrors these keys for in-memory reads and cross-pane subscription.
 
 function parseStoredDraftJson(raw: string): StoredInterviewDraft | null {
-  // Boundary: raw storage bytes are untrusted and can be malformed JSON.
+  // Boundary: raw storage bytes are untrusted and can be malformed JSON. A
+  // JSON.parse SyntaxError can echo a fragment of the offending input, and
+  // that input is the user's own persisted interview answer text - use the
+  // content-free summary (name + message length only), never the raw error.
   try {
     return parseStoredDraft(JSON.parse(raw));
   } catch (error) {
     appLogger.warn("[interview-draft] persisted draft JSON parse failed", {
-      error: describeLogError(error),
+      error: describeLogErrorSummary(error),
     });
     return null;
   }
@@ -138,6 +145,47 @@ function storageKeys(): ReadonlyArray<string> {
 
 function readAllStoredDrafts(): StoredInterviewDraftsByChat {
   if (typeof window === "undefined") return {};
+  // Boundary: a disabled or inaccessible store (hardened embed, revoked
+  // storage permission, private-mode quirks, ...) can throw on enumeration.
+  // This runs at store construction (module init) and on every cross-window
+  // storage event, so an uncaught throw here would crash the app before the
+  // empty-state fallback below is ever reached.
+  try {
+    return readAllStoredDraftsUnguarded();
+  } catch (error) {
+    appLogger.warn(
+      "[interview-draft] localStorage access failed during hydration",
+      { error: describeLogError(error) },
+    );
+    return {};
+  }
+}
+
+// The block IDs actually persisted for `chatId`, read directly from
+// localStorage rather than the in-memory mirror: a cross-window write can
+// land in storage before its `storage` event reaches this window's map, so a
+// prune driven only by the mirror can miss it (see `pruneChatDrafts`).
+function persistedBlockIdsForChat(chatId: string): ReadonlyArray<string> {
+  if (typeof window === "undefined") return [];
+  try {
+    const chatPrefix = `${interviewDraftKeyPrefix()}${encodeURIComponent(chatId)}:`;
+    const blockIds: string[] = [];
+    for (const key of storageKeys()) {
+      if (!key.startsWith(chatPrefix)) continue;
+      const blockId = safeDecode(key.slice(chatPrefix.length));
+      if (blockId !== null) blockIds.push(blockId);
+    }
+    return blockIds;
+  } catch (error) {
+    appLogger.warn(
+      "[interview-draft] localStorage access failed while pruning",
+      { error: describeLogError(error) },
+    );
+    return [];
+  }
+}
+
+function readAllStoredDraftsUnguarded(): StoredInterviewDraftsByChat {
   const prefix = interviewDraftKeyPrefix();
   // Build in Maps (arbitrary string keys, no prototype chain), then materialize
   // via Object.fromEntries so even a `"__proto__"` id lands as an OWN property.
@@ -237,6 +285,15 @@ export const useInterviewDraftStore = create<InterviewDraftStore>()((set) => ({
     });
   },
   pruneChatDrafts: (chatId, keepBlockIds) => {
+    // Prune every PERSISTED key for this chat, not just the in-memory
+    // mirror: a cross-window write can exist in localStorage before its
+    // storage event updates `draftsByChat`, and this authoritative snapshot
+    // must still be able to remove it - otherwise the delayed event later
+    // rehydrates a draft for an interview that already resolved. This runs
+    // even when the chat has no in-memory entry yet.
+    persistedBlockIdsForChat(chatId)
+      .filter((blockId) => !keepBlockIds.has(blockId))
+      .forEach((blockId) => removeStoredDraft(chatId, blockId));
     set((state) => {
       const chatDrafts = ownValue(state.draftsByChat, chatId);
       if (chatDrafts === undefined) return state;
@@ -244,9 +301,6 @@ export const useInterviewDraftStore = create<InterviewDraftStore>()((set) => ({
         keepBlockIds.has(blockId),
       );
       if (keptEntries.length === Object.keys(chatDrafts).length) return state;
-      Object.keys(chatDrafts)
-        .filter((blockId) => !keepBlockIds.has(blockId))
-        .forEach((blockId) => removeStoredDraft(chatId, blockId));
       const otherChatEntries = Object.entries(state.draftsByChat).filter(
         ([candidateChatId]) => candidateChatId !== chatId,
       );

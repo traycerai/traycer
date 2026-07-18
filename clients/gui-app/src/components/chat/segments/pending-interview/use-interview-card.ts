@@ -116,6 +116,16 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
 
   const containerRef = useRef<HTMLElement | null>(null);
   const advanceTimerRef = useRef<number | null>(null);
+  // The single-select advance timer (~110ms) closes over `submitDrafts`/
+  // `navigate` from the render that scheduled it, which in turn closed over
+  // that render's `isBusy`. If another live view sends an action before the
+  // timer fires, this render's `isBusy` guard inside those functions is
+  // already stale. Track the latest value in a ref so the timer can re-check
+  // it at fire time instead of trusting its own scheduling-time snapshot.
+  const latestIsBusyRef = useRef(isBusy);
+  useEffect(() => {
+    latestIsBusyRef.current = isBusy;
+  }, [isBusy]);
 
   const drafts = useMemo(
     () =>
@@ -273,6 +283,14 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
     clearAdvanceTimer();
     advanceTimerRef.current = window.setTimeout(() => {
       advanceTimerRef.current = null;
+      // Re-check busy state at fire time: another live view may have sent an
+      // action during the highlight window, making this scheduling-time
+      // snapshot stale. Submitting or advancing now would mutate state (or
+      // double-dispatch) while busy.
+      if (latestIsBusyRef.current) {
+        setPendingLabel(null);
+        return;
+      }
       // Re-derive from the LATEST canonical row at fire time. A duplicate view
       // may have changed this answer or the page during the highlight window.
       const latest = readCanonicalState();

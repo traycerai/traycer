@@ -339,6 +339,56 @@ describe("PendingInterviewCard keyboard navigation", () => {
     ).toBeDefined();
   });
 
+  it("refocuses the answer field when a rejection clears the busy gate", () => {
+    vi.useFakeTimers();
+    try {
+      const questions = [singleSelect("free", "Describe it", [])];
+      const view = render(
+        <TooltipProvider>
+          {cardElement({
+            chatId: "chat-1",
+            blockId: "interview-1",
+            questions: questions,
+            isBusy: true,
+            onSubmit: vi.fn(() => "action-1"),
+            onSkip: null,
+            onFork: null,
+          })}
+        </TooltipProvider>,
+      );
+      act(() => {
+        vi.runAllTimers();
+      });
+      screen.getByLabelText<HTMLTextAreaElement>("Interview answer").blur();
+
+      // Rejected ack clears busy; the field must regain focus so the user
+      // can retype without an extra click - a disabled field cannot take
+      // focus, so this only works if the ref re-runs once busy clears.
+      view.rerender(
+        <TooltipProvider>
+          {cardElement({
+            chatId: "chat-1",
+            blockId: "interview-1",
+            questions: questions,
+            isBusy: false,
+            onSubmit: vi.fn(),
+            onSkip: null,
+            onFork: null,
+          })}
+        </TooltipProvider>,
+      );
+      act(() => {
+        vi.runAllTimers();
+      });
+
+      expect(document.activeElement).toBe(
+        screen.getByLabelText("Interview answer"),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("locks every affordance while isBusy", () => {
     const onSubmit = vi.fn(() => "action-1");
     const onSkip = vi.fn(() => "skip-1");
@@ -632,6 +682,55 @@ describe("PendingInterviewCard keyboard navigation", () => {
     }
   });
 
+  it("does not submit or advance when another action makes the interview busy before the timer fires", () => {
+    vi.useFakeTimers();
+    try {
+      const onSubmit = vi.fn(() => "action-1");
+      const questions = [
+        singleSelect("only", "Only question?", ["Alpha", "Beta"]),
+      ];
+      const view = render(
+        <TooltipProvider>
+          {cardElement({
+            chatId: "chat-1",
+            blockId: "interview-1",
+            questions: questions,
+            isBusy: false,
+            onSubmit: onSubmit,
+            onSkip: null,
+            onFork: null,
+          })}
+        </TooltipProvider>,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "1. Alpha" }));
+      // Another live view's Submit/Skip is accepted before this timer fires:
+      // the parent flips isBusy for the block. The scheduling-time
+      // `submitDrafts` closure captured `isBusy: false` and would otherwise
+      // still fire.
+      view.rerender(
+        <TooltipProvider>
+          {cardElement({
+            chatId: "chat-1",
+            blockId: "interview-1",
+            questions: questions,
+            isBusy: true,
+            onSubmit: onSubmit,
+            onSkip: null,
+            onFork: null,
+          })}
+        </TooltipProvider>,
+      );
+      act(() => {
+        vi.advanceTimersByTime(ADVANCE_MS);
+      });
+
+      expect(onSubmit).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not stale-submit when a duplicate view navigates off the last question during the timer", () => {
     vi.useFakeTimers();
     try {
@@ -795,6 +894,38 @@ describe("PendingInterviewCard keyboard navigation", () => {
     fireEvent.click(screen.getByRole("button", { name: "Previous question" }));
     expect(
       screen.getByRole("button", { name: "1. Alpha", pressed: true }),
+    ).toBeTruthy();
+  });
+
+  it("enforces single-select mutual exclusivity when a stored answer has both a selected option and Other", () => {
+    const questions = [singleSelect("q1", "Pick one", ["Alpha", "Beta"])];
+    const draft = {
+      pageIndex: 0,
+      answers: [
+        {
+          // A malformed/legacy stored answer: both a selected option and
+          // Other are set for a single-select question.
+          selected: ["Alpha"],
+          otherText: "custom",
+          otherSelected: true,
+        },
+      ],
+    };
+    window.localStorage.setItem(
+      interviewDraftKey("chat-1", "interview-1"),
+      JSON.stringify(draft),
+    );
+    useInterviewDraftStore.setState({ draftsByChat: {} });
+    rehydrateInterviewDraftsFromStorage();
+
+    renderCard(questions, vi.fn(), null);
+
+    // Other wins: the option must not also read as selected.
+    expect(
+      screen.getByLabelText<HTMLTextAreaElement>("Other answer").value,
+    ).toBe("custom");
+    expect(
+      screen.getByRole("button", { name: "1. Alpha", pressed: false }),
     ).toBeTruthy();
   });
 

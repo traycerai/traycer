@@ -84,13 +84,17 @@ export function QuestionPage(props: QuestionPageProps) {
   // otherwise steal focus before this runs (see useInterviewCard).
   const focusFieldIfActive = useCallback(
     (node: HTMLInputElement | HTMLTextAreaElement | null) => {
-      if (!isActive || node === null) return;
+      if (!isActive || disabled || node === null) return;
       const frame = window.requestAnimationFrame(() => {
         node.focus({ preventScroll: true });
       });
       return () => window.cancelAnimationFrame(frame);
     },
-    [isActive],
+    // `disabled` is a dependency (not just a guard) so the ref re-runs and
+    // restores focus when a rejected action clears the busy gate: a disabled
+    // field cannot take focus, and a callback ref only re-fires when its
+    // identity changes, not merely when the prop it reads changes.
+    [disabled, isActive],
   );
 
   // A question with no options is pure free-text: a single textarea that

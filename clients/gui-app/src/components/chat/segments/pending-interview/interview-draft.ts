@@ -42,8 +42,18 @@ export function draftFromStoredAnswer(
   if (stored === undefined) return emptyDraft();
   const optionLabels = new Set(question.options.map((option) => option.label));
   const selected = stored.selected.filter((label) => optionLabels.has(label));
+  // Enforce single-select mutual exclusivity on restore: a stored answer can
+  // carry both `selected` and `otherSelected: true` (e.g. hand-edited
+  // localStorage, or an older draft written before this invariant existed),
+  // and restoring both would violate single-select semantics.
+  const normalizedSelected =
+    !question.multiSelect && stored.otherSelected ? [] : selected;
   return {
-    selected: new Set(question.multiSelect ? selected : selected.slice(0, 1)),
+    selected: new Set(
+      question.multiSelect
+        ? normalizedSelected
+        : normalizedSelected.slice(0, 1),
+    ),
     otherText: stored.otherText,
     otherSelected: stored.otherSelected,
   };
