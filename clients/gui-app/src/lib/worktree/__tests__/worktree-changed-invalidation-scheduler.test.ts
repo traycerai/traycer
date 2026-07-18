@@ -58,10 +58,10 @@ describe("createWorktreeChangedInvalidationScheduler", () => {
 
     // Events every 100ms - each resets the 300ms trailing edge, so only the
     // 1s maxWait bound produces the flush.
-    for (let i = 0; i < 12; i += 1) {
+    Array.from({ length: 12 }).forEach((_, i) => {
       scheduler.push({ kind: "worktreePath", worktreePath: `/wt/${i}` });
       vi.advanceTimersByTime(100);
-    }
+    });
     expect(flushes).toHaveLength(1);
     expect(flushes[0].worktreePaths.size).toBeGreaterThanOrEqual(10);
 
