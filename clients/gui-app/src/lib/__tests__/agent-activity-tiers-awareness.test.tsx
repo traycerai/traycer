@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { renderHook } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import {
   AGENT_WORKING_AWARENESS_FIELD,
   AGENT_WORKING_TURN_AWARENESS_FIELD,
@@ -21,29 +21,60 @@ type HostEntry = {
   readonly turn: unknown;
 };
 
-function buildEpicHandle(entries: readonly HostEntry[]): OpenEpicStoreHandle {
+function awarenessStates(
+  entries: readonly HostEntry[],
+): Map<number, Record<string, unknown>> {
+  return new Map<number, Record<string, unknown>>(
+    entries.map((entry, index) => [
+      index,
+      entry.turn === undefined
+        ? { [AGENT_WORKING_AWARENESS_FIELD]: entry.working }
+        : {
+            [AGENT_WORKING_AWARENESS_FIELD]: entry.working,
+            [AGENT_WORKING_TURN_AWARENESS_FIELD]: entry.turn,
+          },
+    ]),
+  );
+}
+
+/**
+ * A real emitter, not a no-op stub: `on`/`off` register listeners and
+ * `publish` fires them, so a test can mutate awareness and assert the hook
+ * re-subscribes, recomputes, and re-renders - covering the subscription wiring
+ * and not just the first snapshot.
+ */
+function buildAwarenessEmitter(initial: readonly HostEntry[]) {
+  const listeners = new Set<() => void>();
+  let states = awarenessStates(initial);
+  let onCalls = 0;
+  let offCalls = 0;
+  return {
+    awareness: {
+      getStates: () => states,
+      on: (_event: string, listener: () => void) => {
+        onCalls += 1;
+        listeners.add(listener);
+      },
+      off: (_event: string, listener: () => void) => {
+        offCalls += 1;
+        listeners.delete(listener);
+      },
+    },
+    publish: (next: readonly HostEntry[]) => {
+      states = awarenessStates(next);
+      for (const listener of listeners) listener();
+    },
+    subscribeBalance: () => ({ onCalls, offCalls }),
+  };
+}
+
+function buildEpicHandle(awareness: unknown): OpenEpicStoreHandle {
   const state = { bindingVersion: 0 };
   const storeCallable = (_selector: unknown): unknown => state;
   const storeBase: unknown = Object.assign(storeCallable, {
     getState: () => state as never,
     subscribe: () => () => undefined,
   });
-  const awareness = {
-    getStates: () =>
-      new Map<number, Record<string, unknown>>(
-        entries.map((entry, index) => [
-          index,
-          entry.turn === undefined
-            ? { [AGENT_WORKING_AWARENESS_FIELD]: entry.working }
-            : {
-                [AGENT_WORKING_AWARENESS_FIELD]: entry.working,
-                [AGENT_WORKING_TURN_AWARENESS_FIELD]: entry.turn,
-              },
-        ]),
-      ),
-    on: () => undefined,
-    off: () => undefined,
-  };
   return {
     epicId: EPIC_ID,
     userId: null,
@@ -57,10 +88,14 @@ function buildEpicHandle(entries: readonly HostEntry[]): OpenEpicStoreHandle {
 }
 
 function renderTiers(entries: readonly HostEntry[]) {
+  const emitter = buildAwarenessEmitter(entries);
   __getOpenEpicRegistryForTests().acquire(EPIC_ID, () =>
-    buildEpicHandle(entries),
+    buildEpicHandle(emitter.awareness),
   );
-  return renderHook(() => useRegisteredEpicAgentActivityTiers(EPIC_ID));
+  return {
+    ...renderHook(() => useRegisteredEpicAgentActivityTiers(EPIC_ID)),
+    emitter,
+  };
 }
 
 afterEach(() => {
@@ -131,5 +166,40 @@ describe("agent activity tiers from awareness", () => {
     ]);
     expect(result.current.size).toBe(1);
     expect(result.current.get("a")).toBe("turn");
+  });
+
+  it("re-renders with the new tier when awareness changes", () => {
+    // Drives the real subscription path: the hook must re-read the snapshot on
+    // an awareness "change" event, not just on first render.
+    const { result, emitter } = renderTiers([{ working: ["a"], turn: ["a"] }]);
+    expect(result.current.get("a")).toBe("turn");
+
+    // The turn ends but a background task keeps the agent working.
+    act(() => {
+      emitter.publish([{ working: ["a"], turn: [] }]);
+    });
+    expect(result.current.get("a")).toBe("background");
+
+    // The agent goes fully idle.
+    act(() => {
+      emitter.publish([{ working: [], turn: [] }]);
+    });
+    expect(result.current.has("a")).toBe(false);
+  });
+
+  it("keeps the same Map ref when a change leaves tiers untouched", () => {
+    // Ref stability is what lets useSyncExternalStore bail the re-render; an
+    // unrelated awareness event must not churn every consumer.
+    const { result, emitter } = renderTiers([{ working: ["a"], turn: ["a"] }]);
+    const first = result.current;
+    act(() => {
+      emitter.publish([{ working: ["a"], turn: ["a"] }]);
+    });
+    expect(result.current).toBe(first);
+  });
+
+  it("subscribes to awareness while mounted", () => {
+    const { emitter } = renderTiers([{ working: ["a"], turn: ["a"] }]);
+    expect(emitter.subscribeBalance().onCalls).toBeGreaterThan(0);
   });
 });

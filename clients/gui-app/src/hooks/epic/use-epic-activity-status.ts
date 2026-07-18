@@ -51,12 +51,20 @@ export function useEpicActivityStatus(
  * live agents for {@link useEpicActivityStatus}, or a node's descendant ids
  * for {@link useSubtreeChatActivityTier}.
  *
- * An open chat session is authoritative for its own tier (it has the full
- * snapshot). Everything else - a chat that was never opened, or one whose warm
- * session was evicted - is resolved from `activityTiers`, which reports
- * `"turn"` for any host that does not classify its agents. That keeps the
- * pre-existing conservative reading intact against an older host while letting
- * a newer one report background-only work accurately.
+ * An open chat session is authoritative for its own tier ONLY when it reads
+ * some activity - a local `"turn"`/`"background"` is never overridden by
+ * awareness, so the two tiers can't be re-conflated. A session reading idle is
+ * deliberately NOT treated as resolved: it still defers to awareness, which
+ * backfills the brief subscription-gap window where a genuinely running chat's
+ * store has not received its first snapshot yet (same rule as the per-chat icon
+ * in `chat-progress-icon.tsx`). Stale awareness is handled by `candidateIds`
+ * liveness, not by local idle.
+ *
+ * Everything else - a chat that was never opened, or one whose warm session was
+ * evicted - is resolved from `activityTiers`, which reports `"turn"` for any
+ * host that does not classify its agents. That keeps the pre-existing
+ * conservative reading intact against an older host while letting a newer one
+ * report background-only work accurately.
  */
 function getChatSessionActivity(
   epicId: string | null,
