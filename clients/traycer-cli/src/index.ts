@@ -1320,7 +1320,7 @@ function registerAgentCommands(program: Command): void {
       )
       .option(
         "--response-id <id>",
-        "Close an open thread - this send is the final reply",
+        "Close an open thread - one reply answers every message received on it",
       ),
     (opts) =>
       buildAgentSendCommand({

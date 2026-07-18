@@ -603,13 +603,14 @@ describe("<EpicsListPanel />", () => {
     testState.activityByEpicId.set("epic-from-history", "background");
     renderPanel("embedded", "/");
 
+    const backgroundIcon = await screen.findByTestId(
+      "epics-list-row-background-activity-epic-from-history",
+    );
+    expect(backgroundIcon.getAttribute("class")).toContain(
+      "lucide-calendar-clock",
+    );
     expect(
-      await screen.findByTestId(
-        "epics-list-row-background-activity-epic-from-history",
-      ),
-    ).toBeDefined();
-    expect(
-      screen.queryByTitle("Background tasks running — task idle"),
+      screen.queryByTitle("Background activity — agent idle"),
     ).not.toBeNull();
   });
 

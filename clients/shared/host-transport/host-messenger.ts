@@ -135,6 +135,44 @@ export function classifyHostRequestFailure(error: unknown): HostRequestFailure {
 }
 
 /**
+ * Totalizes an arbitrary rejection into a `HostRpcError`. TypeScript cannot
+ * type a promise's rejection channel, so every `HostRpcError`-declared error
+ * generic (TanStack queries/mutations, hook result interfaces) is an
+ * unchecked assertion - a bare `Error` slipping through it crashes `.code` /
+ * `.fatalDetails` consumers at runtime. Passing a rejection through this
+ * function is what makes those declarations true by construction.
+ */
+export function toHostRpcError(error: unknown, method: string): HostRpcError {
+  if (error instanceof HostRpcError) return error;
+  return new HostRpcError({
+    code: "RPC_ERROR",
+    message:
+      error instanceof Error ? error.message : "Unknown host request failure",
+    requestId: "client-normalized",
+    method,
+    fatalDetails: null,
+  });
+}
+
+/**
+ * Runs `run` and re-throws any rejection normalized via `toHostRpcError`.
+ * Wrap the entire body of a queryFn/mutationFn whose error type is declared
+ * as `HostRpcError`, so bugs and bare throws anywhere inside (response
+ * mapping, pagination guards, transient-client resolution) can never leak a
+ * foreign error shape to `.code`-reading consumers.
+ */
+export async function withHostRpcErrorBoundary<T>(
+  method: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    throw toHostRpcError(error, method);
+  }
+}
+
+/**
  * A `HostRpcError` whose cause is the transport itself - no host bound, a
  * dropped or unopenable WebSocket, a dial or frame timeout - rather than the
  * host rejecting the operation. The host either never saw the request or

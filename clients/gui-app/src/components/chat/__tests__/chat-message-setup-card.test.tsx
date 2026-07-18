@@ -59,6 +59,8 @@ const SETUP_MODEL: SetupCardViewModel = {
       terminalSessionId: "term-1",
       worktreePath: "/worktrees/repo/feature",
       branch: "feature",
+      errorMessage: null,
+      retryFolderIntent: null,
     },
   ],
   createdAt: 1500,

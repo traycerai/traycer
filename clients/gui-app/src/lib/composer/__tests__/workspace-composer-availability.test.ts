@@ -8,6 +8,7 @@ import {
   NO_BOUND_WORKSPACE_FOLDER_HINT,
   NO_WORKSPACE_FOLDER_HINT,
   UNRESOLVED_WORKSPACE_FOLDER_HINT,
+  WORKSPACE_FOLDER_CHECK_FAILED_HINT,
   WORKSPACE_COMPOSER_READY,
   deriveResolvedWorkspaceAvailability,
   deriveWorktreeBindingWorkspaceAvailability,
@@ -19,14 +20,14 @@ import type { ResolvedFolder } from "@/lib/workspace/resolved-folder";
 
 describe("deriveResolvedWorkspaceAvailability", () => {
   it("keeps composer submit checking while empty folders are still resolving", () => {
-    expect(deriveResolvedWorkspaceAvailability([], true)).toEqual({
+    expect(deriveResolvedWorkspaceAvailability([], true, false)).toEqual({
       status: "checking",
       disabledHint: CHECKING_WORKSPACE_FOLDER_HINT,
     });
   });
 
   it("blocks once resolving finishes with no folders", () => {
-    expect(deriveResolvedWorkspaceAvailability([], false)).toEqual({
+    expect(deriveResolvedWorkspaceAvailability([], false, false)).toEqual({
       status: "blocked",
       disabledHint: NO_WORKSPACE_FOLDER_HINT,
     });
@@ -36,6 +37,7 @@ describe("deriveResolvedWorkspaceAvailability", () => {
     expect(
       deriveResolvedWorkspaceAvailability(
         [unresolvedFolder("/Users/me/missing")],
+        false,
         false,
       ),
     ).toEqual({
@@ -47,8 +49,22 @@ describe("deriveResolvedWorkspaceAvailability", () => {
       deriveResolvedWorkspaceAvailability(
         [localOnlyFolder("/Users/me/project")],
         false,
+        false,
       ),
     ).toEqual(WORKSPACE_COMPOSER_READY);
+  });
+
+  it("distinguishes a failed host check from a confirmed missing folder", () => {
+    expect(
+      deriveResolvedWorkspaceAvailability(
+        [unresolvedFolder("/Users/me/project")],
+        false,
+        true,
+      ),
+    ).toEqual({
+      status: "blocked",
+      disabledHint: WORKSPACE_FOLDER_CHECK_FAILED_HINT,
+    });
   });
 });
 

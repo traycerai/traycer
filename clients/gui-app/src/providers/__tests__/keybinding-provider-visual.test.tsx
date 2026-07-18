@@ -159,6 +159,7 @@ function testProfile(profileId: string, label: string): ProviderProfile {
     identity: null,
     usageUpdatedAt: null,
     rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
     duplicateOfProfileId: null,
     ambientDriftNotice: null,
     accentColor: null,

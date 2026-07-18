@@ -58,6 +58,7 @@ function profile(
     identity: null,
     usageUpdatedAt: null,
     rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
     duplicateOfProfileId: null,
     ambientDriftNotice: null,
     accentColor: null,
@@ -205,14 +206,17 @@ describe("useProfileUsagePresentation", () => {
 
     const neverChecked = profile("p-never", "managed", "Never", {
       rateLimitStatus: "ok",
+      rateLimitLimitedScopes: null,
       usageUpdatedAt: null,
     });
     const semanticOnly = profile("p-semantic", "managed", "Semantic", {
       rateLimitStatus: "near_limit",
+      rateLimitLimitedScopes: null,
       usageUpdatedAt: Date.now(),
     });
     const freshProfile = profile("p-fresh", "managed", "Fresh", {
       rateLimitStatus: "ok",
+      rateLimitLimitedScopes: null,
       usageUpdatedAt: Date.now(),
     });
 
