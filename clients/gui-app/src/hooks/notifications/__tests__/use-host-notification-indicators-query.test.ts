@@ -161,14 +161,27 @@ describe("useHostNotificationIndicators recovery", () => {
     expect(result.current.error).not.toBeNull();
     expect(result.current.data.epics["epic-a"].unreadDone).toBe(true);
 
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+      await flushQueryNotifications();
+    });
+    expect(requestCount.value).toBe(3);
+    expect(result.current.error).not.toBeNull();
+    expect(result.current.data.epics["epic-a"].unreadDone).toBe(true);
+
     responseMode.value = "clear";
     await act(async () => {
       await vi.advanceTimersByTimeAsync(30_000);
       await flushQueryNotifications();
     });
-
-    expect(requestCount.value).toBe(3);
+    expect(requestCount.value).toBe(4);
     expect(result.current.error).toBeNull();
     expect(result.current.data.epics).toEqual({});
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+      await flushQueryNotifications();
+    });
+    expect(requestCount.value).toBe(4);
   });
 });
