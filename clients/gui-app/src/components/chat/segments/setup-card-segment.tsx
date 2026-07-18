@@ -446,8 +446,10 @@ function WorkspaceSetupDetail(
         </li>
       </ol>
       {entry.state === "failed" && entry.errorMessage !== null ? (
+        // `role="alert"` announces the provisioning failure to assistive tech
+        // when it appears, and gives the message an accessible query handle.
         <p
-          data-testid="setup-card-error-message"
+          role="alert"
           className="m-0 whitespace-pre-wrap break-words pl-6 text-ui-sm text-destructive"
         >
           {entry.errorMessage}

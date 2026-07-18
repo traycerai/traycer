@@ -818,12 +818,12 @@ export function createChatSessionStore(
           // Every swept id came from this same `pendingActions` snapshot, so
           // the lookup is always present.
           const sweptPendings = get().pendingActions;
-          for (const sweptId of sweep.sweptActionIds) {
+          sweep.sweptActionIds.forEach((sweptId) => {
             restoreStagedWorktreeIntentForPending(
               sweptPendings[sweptId],
               stagingKey,
             );
-          }
+          });
         }
         set((state) => {
           const previousTurnId = snapshotPreviousTurnId(

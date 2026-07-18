@@ -377,7 +377,7 @@ describe("<SetupCardSegment /> single-repo dropdown (two steps)", () => {
       ]),
     );
 
-    expect(screen.getByTestId("setup-card-error-message").textContent).toBe(
+    expect(screen.getByRole("alert").textContent).toBe(
       "fatal: a branch named 'traycer/x' already exists",
     );
   });
