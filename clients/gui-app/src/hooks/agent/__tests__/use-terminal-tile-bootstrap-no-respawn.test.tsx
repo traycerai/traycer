@@ -8,7 +8,7 @@ import {
   vi,
   type Mock,
 } from "vitest";
-import { cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
@@ -68,9 +68,17 @@ vi.mock("@/hooks/terminal/use-terminal-create-mutation", () => ({
 }));
 
 // The session handle resolution is irrelevant to the create gate; stub it.
-vi.mock("@/lib/registries/terminal-session-registry", () => ({
-  useTerminalSessionHandle: () => null,
-}));
+vi.mock(
+  "@/lib/registries/terminal-session-registry",
+  async (importOriginal) => ({
+    // Keep the real registry surface (the bootstrap's warm-handle adoption
+    // reads it; against an empty registry it no-ops) and stub only the handle.
+    ...(await importOriginal<
+      typeof import("@/lib/registries/terminal-session-registry")
+    >()),
+    useTerminalSessionHandle: () => null,
+  }),
+);
 
 import { useTerminalTileBootstrap } from "../use-terminal-tile-bootstrap";
 
@@ -152,15 +160,26 @@ describe("useTerminalTileBootstrap create gate", () => {
     // Fresh tile (or host-restart resilience): no host record at all.
     mockList.data = { sessions: [] };
 
-    runBootstrap("terminal");
+    const { result } = runBootstrap("terminal");
+    // Measure-before-subscribe: the create is held until the probe reports.
+    act(() => {
+      result.current.reportMeasuredGrid(120, 40);
+    });
 
     await waitFor(() => {
       expect(mockCreate.mutate).toHaveBeenCalledTimes(1);
     });
     const [request] = mockCreate.mutate.mock.calls[0] as [
-      { readonly desiredSessionId: string },
+      {
+        readonly desiredSessionId: string;
+        readonly cols: number;
+        readonly rows: number;
+      },
     ];
     expect(request.desiredSessionId).toBe("term-1");
+    // The PTY spawns at the measured grid, not the 80x24 defaults.
+    expect(request.cols).toBe(120);
+    expect(request.rows).toBe(40);
   });
 
   it("DOES re-create an exited terminal-agent (stable id, reopen restarts)", async () => {
@@ -177,7 +196,10 @@ describe("useTerminalTileBootstrap create gate", () => {
       ],
     };
 
-    runBootstrap("terminal-agent");
+    const { result } = runBootstrap("terminal-agent");
+    act(() => {
+      result.current.reportMeasuredGrid(120, 40);
+    });
 
     await waitFor(() => {
       expect(mockCreate.mutate).toHaveBeenCalledTimes(1);

@@ -24,6 +24,7 @@ import type {
   TerminalSessionStoreHandle,
 } from "@/stores/terminals/terminal-session-store";
 import { TerminalLoadingSkeleton } from "./terminal-loading-skeleton";
+import { TerminalGridMeasureProbe } from "./terminal-grid-measure-probe";
 import { TerminalDeadTileBanner } from "./dead-tile-banner";
 import { TerminalConnectionOverlay } from "./terminal-connection-overlay";
 import { resolveTerminalOverlayState } from "./terminal-connection-overlay-state";
@@ -271,12 +272,27 @@ function TerminalTileLive(
   }
 
   if (bootstrap.handle === null) {
+    // The starting state occupies the SAME layout box the live terminal will
+    // (outer column + relative flex-1), so the measurement probe underneath
+    // measures the real grid before the create/subscribe are dispatched -
+    // see `TerminalGridMeasureProbe`. The status text overlays it.
     return (
       <div
-        className="flex h-full w-full items-center justify-center bg-canvas text-ui-sm text-muted-foreground"
+        className="flex h-full w-full min-h-0 flex-col bg-canvas"
         data-testid={`terminal-tile-${props.tileId}`}
       >
-        Starting terminal session…
+        <div className="relative min-h-0 flex-1">
+          <TerminalGridMeasureProbe
+            sessionId={sessionId}
+            instanceId={instanceId}
+            tileKind="terminal"
+            chrome="padded"
+            onMeasured={bootstrap.reportMeasuredGrid}
+          />
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-ui-sm text-muted-foreground">
+            Starting terminal session…
+          </div>
+        </div>
       </div>
     );
   }

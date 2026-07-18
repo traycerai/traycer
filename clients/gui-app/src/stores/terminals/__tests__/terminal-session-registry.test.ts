@@ -289,4 +289,76 @@ describe("TerminalSessionRegistry", () => {
     expect(owned.closeCount()).toBe(0);
     expect(registry.get("terminal-1")).toBe(owned.handle);
   });
+
+  it("adopts a closed tab's lease-free warm agent handle under a reopened tab's fresh instance id", () => {
+    const registry = new TerminalSessionRegistry();
+    const owned = createHandle("terminal-agent");
+
+    registry.acquire("tab-1", () => owned.handle);
+    // Tab closed: the running agent's handle is kept warm, lease-free.
+    registry.release("tab-1");
+
+    // Reopen mints a fresh tab instance id; the warm handle is adoptable.
+    expect(registry.findAdoptableInstanceId("terminal-1", "tab-2")).toBe(
+      "tab-1",
+    );
+    expect(registry.rekeyLeaseFreeEntry("tab-1", "tab-2")).toBe(true);
+    expect(registry.get("tab-1")).toBeNull();
+    expect(registry.get("tab-2")).toBe(owned.handle);
+    expect(owned.closeCount()).toBe(0);
+
+    // The reopened tile's acquire revives the SAME handle - no new stream.
+    const reacquired = registry.acquire("tab-2", () => {
+      throw new Error("must reuse the adopted handle");
+    });
+    expect(reacquired).toBe(owned.handle);
+  });
+
+  it("does not adopt a session another live tab still holds (split view)", () => {
+    const registry = new TerminalSessionRegistry();
+    const owned = createHandle("terminal-agent");
+
+    registry.acquire("tab-1", () => owned.handle);
+
+    expect(registry.findAdoptableInstanceId("terminal-1", "tab-2")).toBeNull();
+    expect(registry.rekeyLeaseFreeEntry("tab-1", "tab-2")).toBe(false);
+    expect(registry.get("tab-1")).toBe(owned.handle);
+  });
+
+  it("evicts an adopted handle under its NEW instance id when the session exits", () => {
+    const registry = new TerminalSessionRegistry();
+    const owned = createHandle("terminal-agent");
+
+    registry.acquire("tab-1", () => owned.handle);
+    registry.release("tab-1");
+    registry.rekeyLeaseFreeEntry("tab-1", "tab-2");
+
+    // The defunct watcher must target the rekeyed entry: with the old
+    // subscription (closure over "tab-1") the exit would evict nothing and
+    // the dead handle would stay warm forever.
+    owned.callbacks().onExit({
+      kind: "exit",
+      hasBinaryPayload: false,
+      sessionId: "terminal-1",
+      exitCode: 0,
+    });
+
+    expect(owned.closeCount()).toBe(1);
+    expect(registry.get("tab-2")).toBeNull();
+  });
+
+  it("re-parks a rekeyed lingering plain terminal so it still expires", () => {
+    const registry = new TerminalSessionRegistry();
+    const owned = createHandle("terminal");
+
+    registry.acquire("tab-1", () => owned.handle);
+    registry.release("tab-1");
+    registry.rekeyLeaseFreeEntry("tab-1", "tab-2");
+
+    // Adoption whose acquire never lands must not leave the plain terminal
+    // warm forever - the linger clock re-arms under the new id.
+    vi.advanceTimersByTime(PLAIN_TERMINAL_RELEASE_LINGER_MS);
+    expect(owned.closeCount()).toBe(1);
+    expect(registry.get("tab-2")).toBeNull();
+  });
 });
