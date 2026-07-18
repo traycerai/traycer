@@ -558,6 +558,45 @@ describe("useProfileRateLimitSwitchPrompt", () => {
       expect(result.current.kind).toBe("hidden");
     });
 
+    it("names only the families at the effective severity and resurfaces when severity moves between the same families", () => {
+      const mixed = {
+        ...fableLimited,
+        rateLimitStatus: "hard_limit" as const,
+        rateLimitLimitedScopes: [
+          { family: "Fable", severity: "hard_limit" as const },
+          { family: "Fable 5", severity: "near_limit" as const },
+        ],
+      };
+      mocks.providers = [claudeState([mixed, healthy])];
+      const { result, rerender } = currentPromptForModel(null, FABLE);
+      const prompt = visiblePrompt(result.current);
+      expect(prompt.severity).toBe("hard_limit");
+      // The near-limit "Fable 5" scope matches the model too, but the
+      // hard-limit banner must not name it.
+      expect(prompt.limitedFamilies).toEqual(["Fable"]);
+      act(() => prompt.dismiss());
+      expect(result.current.kind).toBe("hidden");
+
+      // Same families, same overall severity - but the hard limit moved from
+      // "Fable" to "Fable 5". The per-scope severity in the key resurfaces it.
+      mocks.providers = [
+        claudeState([
+          {
+            ...mixed,
+            rateLimitLimitedScopes: [
+              { family: "Fable", severity: "near_limit" as const },
+              { family: "Fable 5", severity: "hard_limit" as const },
+            ],
+          },
+          healthy,
+        ]),
+      ];
+      rerender({ selectedModel: FABLE });
+      const resurfaced = visiblePrompt(result.current);
+      expect(resurfaced.severity).toBe("hard_limit");
+      expect(resurfaced.limitedFamilies).toEqual(["Fable 5"]);
+    });
+
     it("keeps a Fable-scoped dismissal from suppressing a later shared-window warning", () => {
       mocks.providers = [claudeState([fableLimited, healthy])];
       const { result, rerender } = currentPromptForModel(null, FABLE);
