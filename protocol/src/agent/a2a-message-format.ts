@@ -37,7 +37,8 @@ export function formatAgentMessage(input: FormatAgentMessageInput): string {
 
 function formatGuiAgentMessage(input: FormatAgentMessageInput): string {
   const replyLine = input.reply.expectsReply
-    ? `[traycer:agent-message] A reply is expected. Use the traycer_send_message tool to reply with responseId="${input.reply.responseId}".`
+    ? `[traycer:agent-message] A reply is expected. Use the traycer_send_message tool to reply with responseId="${input.reply.responseId}".
+[traycer:agent-message] The responseId names this sender's thread, not this single message: follow-up messages may arrive with the same responseId, and one reply with it answers everything on the thread. Only a reply carrying the responseId completes the request — a fresh message does not.`
     : "[traycer:agent-message] No reply is required.";
 
   return `[traycer:agent-message] from ${formatAgentMessageSenderLabel(input.sender)}
@@ -56,6 +57,7 @@ function formatCliAgentMessage(input: FormatAgentMessageInput): string {
     return `
 ${header}
 [traycer inbox] a reply is expected — reply with: traycer agent send --to ${input.sender.agentId} --response-id ${input.reply.responseId} --message "<your reply>"
+[traycer inbox] the response id names this sender's thread, not this single message — follow-ups may arrive with the same id and one reply with it answers them all; only a reply sent with --response-id completes the request
 
 ${input.body}
 [traycer inbox] ─── end of message ───

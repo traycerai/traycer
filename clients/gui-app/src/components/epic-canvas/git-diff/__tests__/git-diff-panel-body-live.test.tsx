@@ -6,6 +6,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type {
@@ -13,7 +14,7 @@ import type {
   GitListChangedFilesResponseV11,
   SubmoduleChangeset,
   SubmodulePointer,
-  WorktreeBindingSelectorRow,
+  WorktreeBindingSelectorRowV12,
 } from "@traycer/protocol/host";
 import type { HostRpcRegistry } from "@/lib/host";
 import { gitQueryKeys } from "@/lib/query-keys/git-query-keys";
@@ -28,7 +29,7 @@ import { GitDiffPanelBodyLive } from "../git-diff-panel-body-live";
 import { expectModuleHeaderPreview } from "./git-module-header-test-utils";
 
 const testState = vi.hoisted(() => ({
-  rows: [] as WorktreeBindingSelectorRow[],
+  rows: [] as WorktreeBindingSelectorRowV12[],
   snapshots: new Map<string, GitListChangedFilesResponseV11>(),
   capabilities: new Map<
     string,
@@ -178,8 +179,8 @@ const cleanPointer: SubmodulePointer = {
 };
 
 function row(
-  overrides: Partial<WorktreeBindingSelectorRow>,
-): WorktreeBindingSelectorRow {
+  overrides: Partial<WorktreeBindingSelectorRowV12>,
+): WorktreeBindingSelectorRowV12 {
   return {
     hostId: "host-1",
     runningDir: "/repo",
@@ -194,6 +195,7 @@ function row(
     setupState: "not_required",
     disabledReason: null,
     sources: [],
+    isGitResolvePending: false,
     ...overrides,
   };
 }
@@ -817,5 +819,78 @@ describe("<GitDiffPanelBodyLive /> workspace switcher integration", () => {
         Node.DOCUMENT_POSITION_FOLLOWING,
       ),
     ).toBe(true);
+  });
+
+  // Rows the host marks `isGitResolvePending` (its cold view still resolving)
+  // are pending, not dead: the panel keeps its loading skeleton - the host
+  // sweep's `worktree.changed` push settles it - instead of the "No git
+  // workspaces available" dead end.
+  it("keeps the loading skeleton while every row's git facts are unverified", () => {
+    testState.rows = [
+      row({
+        runningDir: "/wt/cold",
+        workspacePath: "/repo",
+        worktreePath: "/wt/cold",
+        mode: "worktree",
+        isGitRepo: false,
+        disabledReason: "missing_worktree_path",
+        isGitResolvePending: true,
+      }),
+    ];
+    renderPanel(rootSelected);
+
+    expect(screen.getByTestId("diff-loading-skeleton")).toBeDefined();
+    expect(screen.queryByText("No git workspaces available")).toBeNull();
+  });
+
+  it("keeps the dead empty state when every non-git row is a resolved fact", () => {
+    testState.rows = [
+      row({
+        isGitRepo: false,
+        repoIdentifier: null,
+        branch: null,
+        isGitResolvePending: false,
+      }),
+    ];
+    renderPanel(rootSelected);
+
+    expect(screen.getByText("No git workspaces available")).toBeDefined();
+    expect(screen.queryByTestId("diff-loading-skeleton")).toBeNull();
+  });
+
+  it("renders an unverified row as a muted checking badge in the switcher", () => {
+    testState.rows = [
+      row({}),
+      row({
+        runningDir: "/cold",
+        workspacePath: "/cold",
+        repoIdentifier: null,
+        branch: null,
+        isGitRepo: false,
+        isPrimary: false,
+        isGitResolvePending: true,
+      }),
+      row({
+        runningDir: "/notes",
+        workspacePath: "/notes",
+        repoIdentifier: null,
+        branch: null,
+        isGitRepo: false,
+        isPrimary: false,
+        isGitResolvePending: false,
+      }),
+    ];
+    renderPanel(rootSelected);
+    openSwitcher();
+
+    const pendingOption = screen.getByTestId(
+      "git-diff-repo-switcher-root-cold",
+    );
+    expect(within(pendingOption).getByText("checking")).toBeDefined();
+    expect(pendingOption.getAttribute("aria-disabled")).toBe("true");
+    const resolvedOption = screen.getByTestId(
+      "git-diff-repo-switcher-root-notes",
+    );
+    expect(within(resolvedOption).getByText("not git")).toBeDefined();
   });
 });

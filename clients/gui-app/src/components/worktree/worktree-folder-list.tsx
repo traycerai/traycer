@@ -1,6 +1,8 @@
 import { useEffect, useRef } from "react";
 import type { ReactNode } from "react";
-import type { WorktreeBindingSelectorRow } from "@traycer/protocol/host";
+import type { WorktreeBindingSelectorRowV12 } from "@traycer/protocol/host";
+import { WorktreeRowDisabledBadge } from "@/components/worktree/worktree-row-disabled-badge";
+import type { WorktreeFolderRowBadge } from "@/lib/worktree/worktree-folder-disabled-reason";
 import {
   Command,
   CommandEmpty,
@@ -9,7 +11,6 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
-import { Badge } from "@/components/ui/badge";
 import { DropdownMenuLabel } from "@/components/ui/dropdown-menu";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
 import { formatGitWorktreeLabel } from "@/lib/git/worktree-label";
@@ -23,11 +24,18 @@ import { worktreeRowKey } from "@/lib/worktree/worktree-row-key";
  * per-row filesystem path (`secondaryLabel`).
  */
 export interface WorktreeFolderListProps {
-  readonly rows: ReadonlyArray<WorktreeBindingSelectorRow>;
-  readonly selectedRow: WorktreeBindingSelectorRow | null;
-  readonly secondaryLabel: (row: WorktreeBindingSelectorRow) => string;
-  readonly disabledLabel: (row: WorktreeBindingSelectorRow) => string | null;
-  readonly onSelect: (row: WorktreeBindingSelectorRow) => void;
+  readonly rows: ReadonlyArray<WorktreeBindingSelectorRowV12>;
+  readonly selectedRow: WorktreeBindingSelectorRowV12 | null;
+  readonly secondaryLabel: (row: WorktreeBindingSelectorRowV12) => string;
+  /**
+   * Badge for a non-selectable row; `pending: true` renders muted with a
+   * spinner (unverified facts, converging), otherwise destructive (a real
+   * disabled reason).
+   */
+  readonly disabledBadge: (
+    row: WorktreeBindingSelectorRowV12,
+  ) => WorktreeFolderRowBadge | null;
+  readonly onSelect: (row: WorktreeBindingSelectorRowV12) => void;
   /**
    * Focus the search input when the list mounts. Because the list mounts only
    * after the bindings query resolves, this grabs focus even when the list
@@ -80,8 +88,8 @@ export function WorktreeFolderList(props: WorktreeFolderListProps): ReactNode {
             {props.rows.map((row) => {
               const label = formatGitWorktreeLabel(row);
               const secondary = props.secondaryLabel(row);
-              const disabledReason = props.disabledLabel(row);
-              const disabled = disabledReason !== null;
+              const badge = props.disabledBadge(row);
+              const disabled = badge !== null;
               const selected =
                 selectedRowKey !== null &&
                 worktreeRowKey(row) === selectedRowKey;
@@ -110,11 +118,12 @@ export function WorktreeFolderList(props: WorktreeFolderListProps): ReactNode {
                       {secondary}
                     </StartTruncatedText>
                   </div>
-                  {disabled ? (
-                    <Badge variant="destructive" className="shrink-0">
-                      {disabledReason}
-                    </Badge>
-                  ) : null}
+                  {badge === null ? null : (
+                    <WorktreeRowDisabledBadge
+                      label={badge.label}
+                      pending={badge.pending}
+                    />
+                  )}
                 </CommandItem>
               );
             })}
