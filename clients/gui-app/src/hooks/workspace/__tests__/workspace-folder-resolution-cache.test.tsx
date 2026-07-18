@@ -8,6 +8,7 @@ import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/moc
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import type { WorkspaceResolvePathsByRepoIdentifiersResponse } from "@traycer/protocol/host/workspace/unary-schemas";
 import { useResolvedWorkspaceFolders } from "@/hooks/workspace/use-resolved-workspace-folders-query";
 import { useWorkspaceFolderActionsForClient } from "@/hooks/workspace/use-workspace-folder-actions";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
@@ -27,7 +28,11 @@ afterEach(() => {
 
 describe("workspace folder resolution cache", () => {
   it("refetches a stale unresolved mapping after preparing the folder", async () => {
-    const fixture = createFixture(0);
+    const fixture = createFixture({
+      failedResolveRequests: new Set(),
+      holdFirstResolution: false,
+      startsResolved: false,
+    });
     const source = workspaceSource(fixture);
     const rendered = renderHook(
       () => ({
@@ -60,8 +65,59 @@ describe("workspace folder resolution cache", () => {
     expect(fixture.resolveRequestCount()).toBe(2);
   });
 
+  it("supersedes an in-flight stale resolution after preparing the folder", async () => {
+    const fixture = createFixture({
+      failedResolveRequests: new Set(),
+      holdFirstResolution: true,
+      startsResolved: false,
+    });
+    const source = workspaceSource(fixture);
+    const rendered = renderHook(
+      () => ({
+        resolved: useResolvedWorkspaceFolders(source, fixture.client),
+        actions: useWorkspaceFolderActionsForClient(fixture.client),
+      }),
+      { wrapper: fixture.Wrapper },
+    );
+
+    await waitFor(() => {
+      expect(fixture.resolveRequestCount()).toBe(1);
+    });
+
+    let mutation = Promise.resolve();
+    act(() => {
+      mutation = rendered.result.current.actions.prepareFoldersMutation
+        .mutateAsync({ folderPaths: [fixture.workspacePath] })
+        .then(() => undefined);
+    });
+
+    await waitFor(() => {
+      expect(fixture.resolveRequestCount()).toBe(2);
+      expect(rendered.result.current.resolved.folders).toEqual([
+        expect.objectContaining({
+          kind: "resolved",
+          path: fixture.workspacePath,
+        }),
+      ]);
+    });
+
+    fixture.releaseFirstResolution();
+    await act(async () => mutation);
+
+    expect(rendered.result.current.resolved.folders).toEqual([
+      expect.objectContaining({
+        kind: "resolved",
+        path: fixture.workspacePath,
+      }),
+    ]);
+  });
+
   it("distinguishes a failed check and recovers on app focus", async () => {
-    const fixture = createFixture(1);
+    const fixture = createFixture({
+      failedResolveRequests: new Set([1]),
+      holdFirstResolution: false,
+      startsResolved: true,
+    });
     const source = workspaceSource(fixture);
     const rendered = renderHook(
       () => {
@@ -97,14 +153,63 @@ describe("workspace folder resolution cache", () => {
       ]);
     });
   });
+
+  it("blocks when refreshing a cached resolution fails", async () => {
+    const fixture = createFixture({
+      failedResolveRequests: new Set([2]),
+      holdFirstResolution: false,
+      startsResolved: true,
+    });
+    const source = workspaceSource(fixture);
+    const rendered = renderHook(
+      () => {
+        const resolved = useResolvedWorkspaceFolders(source, fixture.client);
+        return {
+          resolved,
+          availability: deriveFolderlessAllowedWorkspaceAvailability(
+            resolved.folders,
+            resolved.isLoading,
+            resolved.isError,
+          ),
+        };
+      },
+      { wrapper: fixture.Wrapper },
+    );
+
+    await waitFor(() => {
+      expect(rendered.result.current.resolved.folders).toEqual([
+        expect.objectContaining({ kind: "resolved" }),
+      ]);
+    });
+
+    act(() => {
+      focusManager.setFocused(false);
+      focusManager.setFocused(true);
+    });
+
+    await waitFor(() => {
+      expect(rendered.result.current.resolved.isError).toBe(true);
+    });
+    expect(rendered.result.current.availability).toEqual({
+      status: "blocked",
+      disabledHint: WORKSPACE_FOLDER_CHECK_FAILED_HINT,
+    });
+  });
 });
 
 interface WorkspaceFixture {
   readonly client: HostClient<HostRpcRegistry>;
   readonly repoIdentifier: { readonly owner: string; readonly repo: string };
   readonly workspacePath: string;
+  readonly releaseFirstResolution: () => void;
   readonly resolveRequestCount: () => number;
   readonly Wrapper: (props: { readonly children: ReactNode }) => ReactNode;
+}
+
+interface WorkspaceFixtureOptions {
+  readonly failedResolveRequests: ReadonlySet<number>;
+  readonly holdFirstResolution: boolean;
+  readonly startsResolved: boolean;
 }
 
 function workspaceSource(fixture: WorkspaceFixture) {
@@ -120,21 +225,21 @@ function workspaceSource(fixture: WorkspaceFixture) {
   };
 }
 
-function createFixture(resolveFailures: number): WorkspaceFixture {
+function createFixture(options: WorkspaceFixtureOptions): WorkspaceFixture {
   const queryClient = createAppQueryClient();
-  if (resolveFailures > 0) {
-    // MockHostMessenger preserves the wire error but not its subclass. Match
-    // production's no-query-retry policy for RetryableTransportError here.
-    queryClient.setQueryDefaults(
-      hostQueryKeys.methodScope(
-        mockLocalHostEntry.hostId,
-        "workspace.resolvePathsByRepoIdentifiers",
-      ),
-      { retry: false },
-    );
-  }
+  // MockHostMessenger preserves the wire error but not its subclass. Match
+  // production's no-query-retry policy for RetryableTransportError here.
+  queryClient.setQueryDefaults(
+    hostQueryKeys.methodScope(
+      mockLocalHostEntry.hostId,
+      "workspace.resolvePathsByRepoIdentifiers",
+    ),
+    { retry: false },
+  );
   const repoIdentifier = { owner: "traycerai", repo: "traycer" };
   const workspacePath = "/workspace/traycer";
+  const firstResolution =
+    Promise.withResolvers<WorkspaceResolvePathsByRepoIdentifiersResponse>();
   let prepared = false;
   let resolveRequests = 0;
   const messenger = new MockHostMessenger<HostRpcRegistry>({
@@ -143,7 +248,7 @@ function createFixture(resolveFailures: number): WorkspaceFixture {
     handlers: {
       "workspace.resolvePathsByRepoIdentifiers": () => {
         resolveRequests += 1;
-        if (resolveRequests <= resolveFailures) {
+        if (options.failedResolveRequests.has(resolveRequests)) {
           throw new RetryableTransportError({
             code: "RPC_ERROR",
             message: "Host temporarily unavailable",
@@ -152,9 +257,12 @@ function createFixture(resolveFailures: number): WorkspaceFixture {
             fatalDetails: null,
           });
         }
+        if (resolveRequests === 1 && options.holdFirstResolution) {
+          return firstResolution.promise;
+        }
         return {
           mappings:
-            prepared || resolveFailures > 0
+            prepared || options.startsResolved
               ? [{ repoIdentifier, workspacePath }]
               : [],
         };
@@ -204,6 +312,7 @@ function createFixture(resolveFailures: number): WorkspaceFixture {
     client,
     repoIdentifier,
     workspacePath,
+    releaseFirstResolution: () => firstResolution.resolve({ mappings: [] }),
     resolveRequestCount: () => resolveRequests,
     Wrapper,
   };

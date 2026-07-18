@@ -84,8 +84,8 @@ export function useResolvedWorkspaceFolders(
       // Resolution gates submit. A transient failure must have a recovery
       // trigger short of reloading the app, even though app-wide queries opt
       // out of focus/reconnect refetches by default.
-      refetchOnWindowFocus: true,
-      refetchOnReconnect: true,
+      refetchOnWindowFocus: "always",
+      refetchOnReconnect: "always",
     },
   });
 
@@ -115,7 +115,7 @@ export function useResolvedWorkspaceFolders(
   );
 
   return useMemo(() => {
-    const isError = query.isError && query.data === undefined;
+    const isError = query.isError;
     return {
       folders: resolved,
       // A readiness-disabled query with repo-backed folders has not checked
