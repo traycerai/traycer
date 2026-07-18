@@ -1321,7 +1321,6 @@ function HistoryRowLeadingIcon(props: { readonly item: HistoryItem }) {
       className="text-muted-foreground group-hover/list-row:text-foreground"
       style={undefined}
       runningTitle="Task activity in progress"
-      backgroundRunningTitle="Background tasks running — task idle"
       defaultIcon={
         <Layers className="size-4 shrink-0 text-muted-foreground group-hover/list-row:text-foreground" />
       }

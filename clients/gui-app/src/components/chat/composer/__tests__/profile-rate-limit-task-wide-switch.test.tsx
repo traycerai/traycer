@@ -48,6 +48,7 @@ function profile(
     identity: null,
     usageUpdatedAt: null,
     rateLimitStatus,
+    rateLimitLimitedScopes: null,
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
@@ -132,6 +133,7 @@ function renderBanner(input: {
         harnessId="claude"
         providerId="claude-code"
         severity="hard_limit"
+        limitedFamilies={[]}
         current={CURRENT}
         profiles={profiles}
         destinations={destinations}

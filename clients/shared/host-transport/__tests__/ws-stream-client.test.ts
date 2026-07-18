@@ -1749,7 +1749,13 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
     const session = client.subscribe("epic.subscribe", { epicId: "e1" });
     session.onStatusChange((status) => statuses.push(status));
 
-    const driveFatal = async (frame: typeof UNAUTHORIZED_FATAL) => {
+    // Both fixtures are `as const`, so their `details.reason` (and the
+    // retryable variant's extra `retryable` flag) are literal types: this
+    // helper drives BOTH, and typing it as only the UNAUTHORIZED shape rejects
+    // the transient interlude the test is specifically about.
+    const driveFatal = async (
+      frame: typeof UNAUTHORIZED_FATAL | typeof RETRYABLE_FATAL,
+    ) => {
       const socket = sockets[sockets.length - 1].socket;
       socket.fireOpen();
       socket.fireText(frame);

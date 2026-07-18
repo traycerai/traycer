@@ -1,6 +1,6 @@
 import { type CSSProperties, type ReactNode } from "react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import type { AgentSpinnerVariant } from "@/components/ui/agent-spinner-variant";
+import { BackgroundActivityGlyph } from "@/components/notifications/background-activity-glyph";
 import {
   attentionTone,
   DONE_TONE,
@@ -8,6 +8,8 @@ import {
 } from "@/components/notifications/notification-indicator-tones";
 import type { NotificationIndicatorState } from "@/stores/notifications/notification-indicator-state";
 import { cn } from "@/lib/utils";
+
+const BACKGROUND_ACTIVITY_TITLE = "Background activity — agent idle";
 
 /**
  * Live-activity tier for the running slot. `"turn"` is the agent actually
@@ -28,13 +30,6 @@ interface NotificationIndicatorIconProps {
   readonly className: string | undefined;
   readonly style: CSSProperties | undefined;
   readonly runningTitle: string;
-  /**
-   * Tooltip/label for the `"background"` running tier. `undefined` is valid
-   * for consumers whose activity signal is binary and never passes
-   * `"background"`; if the tier does render without one, the turn title is
-   * reused rather than showing an untitled indicator.
-   */
-  readonly backgroundRunningTitle: string | undefined;
   readonly defaultIcon: ReactNode;
   readonly statusPresentation: "message" | "spinner";
 }
@@ -54,27 +49,22 @@ export function NotificationIndicatorIcon(
   }
   if (props.running === "turn") {
     return (
-      <IndicatorSpan
-        indicatorProps={props}
-        title={props.runningTitle}
-        dotsClassName="text-current"
-        variant={undefined}
-        testId={`${props.testIdPrefix}-activity-${props.subjectId}`}
-      />
+      <IndicatorSpan indicatorProps={props} title={props.runningTitle}>
+        <AgentSpinningDots
+          className="text-current"
+          testId={`${props.testIdPrefix}-activity-${props.subjectId}`}
+          variant={undefined}
+        />
+      </IndicatorSpan>
     );
   }
   if (props.running === "background") {
     return (
-      <IndicatorSpan
-        indicatorProps={props}
-        title={props.backgroundRunningTitle ?? props.runningTitle}
-        dotsClassName="text-muted-foreground"
-        // A slow single-dot bounce, deliberately distinct from the busy
-        // multi-dot turn spin: "something is ticking over" rather than
-        // "the agent is working".
-        variant="bounce"
-        testId={`${props.testIdPrefix}-background-activity-${props.subjectId}`}
-      />
+      <IndicatorSpan indicatorProps={props} title={BACKGROUND_ACTIVITY_TITLE}>
+        <BackgroundActivityGlyph
+          testId={`${props.testIdPrefix}-background-activity-${props.subjectId}`}
+        />
+      </IndicatorSpan>
     );
   }
   if (props.state.unreadDone) {
@@ -147,9 +137,7 @@ function IndicatorDot(props: {
 function IndicatorSpan(props: {
   readonly indicatorProps: NotificationIndicatorIconProps;
   readonly title: string;
-  readonly dotsClassName: string;
-  readonly variant: AgentSpinnerVariant | undefined;
-  readonly testId: string;
+  readonly children: ReactNode;
 }): ReactNode {
   return (
     <span
@@ -162,11 +150,7 @@ function IndicatorSpan(props: {
       style={props.indicatorProps.style}
       title={props.title}
     >
-      <AgentSpinningDots
-        className={cn(props.dotsClassName)}
-        testId={props.testId}
-        variant={props.variant}
-      />
+      {props.children}
     </span>
   );
 }

@@ -85,6 +85,8 @@ describe("buildTuiAgentSetupCardModel", () => {
       terminalSessionId: "setup-term-1",
       worktreePath: "/home/me/repo-wt",
       branch: "feat/x",
+      errorMessage: null,
+      retryFolderIntent: null,
     });
   });
 

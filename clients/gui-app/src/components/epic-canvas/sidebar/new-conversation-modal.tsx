@@ -546,8 +546,13 @@ function NewConversationModalBody(props: {
       deriveFolderlessAllowedWorkspaceAvailability(
         resolvedWorkspace.folders,
         resolvedWorkspace.isLoading,
+        resolvedWorkspace.isError,
       ),
-    [resolvedWorkspace.folders, resolvedWorkspace.isLoading],
+    [
+      resolvedWorkspace.folders,
+      resolvedWorkspace.isLoading,
+      resolvedWorkspace.isError,
+    ],
   );
   const workspaceCanStart = workspaceComposerCanStart(workspaceAvailability);
   const draftWorkspaceFolderCount = draftWorkspace.folders.length;

@@ -48,6 +48,9 @@ interface ProfileRateLimitSwitchBannerProps {
   readonly harnessId: GuiHarnessId;
   readonly providerId: ProviderId;
   readonly severity: ProfileRateLimitSeverity;
+  /** Model families named by the limits behind this warning; empty when the
+   * warning is profile-wide (a shared window, or no per-scope data). */
+  readonly limitedFamilies: ReadonlyArray<string>;
   readonly current: ProviderProfile;
   readonly profiles: ReadonlyArray<ProviderProfile>;
   readonly destinations: ReadonlyArray<ProfileRateLimitDestination>;
@@ -97,6 +100,12 @@ const PREVIEW_NAVIGATION_KEYS = new Set([
 
 function switchLabel(profile: ProviderProfile): string {
   return `Switch to ${profileDisplayLabel(profile)}`;
+}
+
+/** "Fable " / "Fable, Opus " qualifier for the banner line; empty when the
+ * warning is profile-wide. Trailing space keeps the caller's template flat. */
+function familyQualifier(limitedFamilies: ReadonlyArray<string>): string {
+  return limitedFamilies.length === 0 ? "" : `${limitedFamilies.join(", ")} `;
 }
 
 function profileMenuRows(
@@ -235,8 +244,8 @@ export function ProfileRateLimitSwitchBanner(
             />
             <span>
               {props.severity === "hard_limit"
-                ? "has reached its rate limit."
-                : "is running low on usage."}
+                ? `has reached its ${familyQualifier(props.limitedFamilies)}rate limit.`
+                : `is running low on ${familyQualifier(props.limitedFamilies)}usage.`}
             </span>
             {readOnly ? (
               <span className="text-muted-foreground">

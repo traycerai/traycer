@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useSyncExternalStore } from "react";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
+import type { ModelOption } from "@/components/home/data/landing-options";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useEpicUpdateChatRunSettings } from "@/hooks/epic/use-epic-chat-mutations";
 import { enqueuePersistChatRunSettings } from "@/lib/chats/chat-run-settings-write-queue";
@@ -37,6 +38,33 @@ export interface TaskProfileRateLimitSwitch {
 const NO_AFFECTED: ReadonlyArray<AffectedTaskChat> = [];
 
 /**
+ * Whether a sibling chat's persisted settings make it eligible for a task-wide
+ * switch off the limited profile. Beyond the same harness + limited profile,
+ * the sibling must use the SAME model as the composer that owns the banner:
+ * the destination was validated as strictly better only for that model
+ * (`useProfileRateLimitSwitchPrompt`'s `selectedModel`), so the guarantee
+ * transfers only to same-model chats. A differently-modeled sibling could
+ * otherwise be moved to a profile that is equal or worse for ITS model.
+ * `selectedModelSlug` is `null` when the composer's model is unresolved
+ * (catalog still loading); no persisted sibling matches a null slug, so
+ * task-wide switching is conservatively withheld until the model resolves.
+ */
+export function taskChatInheritsProfileSwitch(
+  settings: ChatRunSettings,
+  criteria: {
+    readonly harnessId: GuiHarnessId;
+    readonly profileId: string | null;
+    readonly selectedModelSlug: string | null;
+  },
+): boolean {
+  return (
+    settings.harnessId === criteria.harnessId &&
+    (settings.profileId ?? null) === criteria.profileId &&
+    settings.model === criteria.selectedModelSlug
+  );
+}
+
+/**
  * Task-wide counterpart of the composer's rate-limit switch prompt: finds the
  * sibling chats of this task that are pinned to the SAME limited profile so
  * the banner can offer "switch all N chats in this task", not just the
@@ -49,10 +77,15 @@ export function useTaskProfileRateLimitSwitch(input: {
   readonly enabled: boolean;
   readonly harnessId: GuiHarnessId;
   readonly profileId: string | null;
+  /** The composer's selected model, or `null` when unresolved. Gates which
+   * siblings inherit the switch - see `taskChatInheritsProfileSwitch`. */
+  readonly selectedModel: ModelOption | null;
   readonly epicId: string | null;
   readonly chatId: string;
 }): TaskProfileRateLimitSwitch {
-  const { enabled, harnessId, profileId, epicId, chatId } = input;
+  const { enabled, harnessId, profileId, selectedModel, epicId, chatId } =
+    input;
+  const selectedModelSlug = selectedModel?.slug ?? null;
   const tabHostId = useTabHostId();
   const epicHandle = useMaybeOpenEpicHandle();
   // Gated on `enabled` (not just `epicHandle`): every mounted composer in the
@@ -82,14 +115,25 @@ export function useTaskProfileRateLimitSwitch(input: {
         const settings = chat.settings;
         if (
           settings === null ||
-          settings.harnessId !== harnessId ||
-          (settings.profileId ?? null) !== profileId
+          !taskChatInheritsProfileSwitch(settings, {
+            harnessId,
+            profileId,
+            selectedModelSlug,
+          })
         ) {
           return [];
         }
         return [{ chatId: chat.id, settings }];
       });
-  }, [enabled, chats, epicId, tabHostId, harnessId, profileId]);
+  }, [
+    enabled,
+    chats,
+    epicId,
+    tabHostId,
+    harnessId,
+    profileId,
+    selectedModelSlug,
+  ]);
 
   // The current chat always counts (its composer holds the limited profile
   // even when its persisted record lags, e.g. never-sent or pre-capability

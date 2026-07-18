@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
 import {
+  CancelledError,
   queryOptions,
   useQuery,
   useQueryClient,
   type QueryClient,
 } from "@tanstack/react-query";
+import { withHostRpcErrorBoundary } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { GitListChangedFilesResponseV11 } from "@traycer/protocol/host";
 import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
@@ -312,7 +314,7 @@ export function useGitListChangedFilesWithSubmodules(args: {
   // the cache key: it is transport identity, not data identity. Wrapped in
   // the generation-aware rich-slot request: a response that raced a newer
   // stream write (ownership flipping mid-flight) is dropped, not written.
-  const request = createRichSlotRequest({
+  const richSlotRequest = createRichSlotRequest({
     queryClient,
     hostId,
     runningDir: runningDir ?? "",
@@ -333,6 +335,16 @@ export function useGitListChangedFilesWithSubmodules(args: {
       });
     },
   });
+  // Boundary-wrapped: the rich-slot wrapper's own throws are already
+  // `HostRpcError`s, but the declared error generic must also survive bugs in
+  // the request/arbitration path itself. Stays a NAMED queryFn so `client`
+  // (transport identity, not data identity) remains out of the cache key.
+  const request = (context: {
+    readonly signal: AbortSignal;
+  }): Promise<GitListChangedFilesResponseV11> =>
+    withHostRpcErrorBoundary("git.listChangedFiles", () =>
+      richSlotRequest(context),
+    );
 
   const query = useQuery(
     queryOptions<
@@ -374,6 +386,14 @@ export function useGitListChangedFilesWithSubmodules(args: {
     refetch,
     lastTokenRef,
   });
+
+  // TanStack's non-reverting cancellation publishes its internal
+  // `CancelledError` into the query state. That cancellation is expected
+  // control flow during the fallback -> stream ownership handoff, not a host
+  // failure: the first rich stream frame will fill this same slot. Keep the
+  // public result inside its `HostRpcError | null` contract and let consumers
+  // render their loading state while that frame is still in flight.
+  const error = query.error instanceof CancelledError ? null : query.error;
 
   // Refetch when the parent subscription reports a change (FALLBACK state
   // only - `enabled` is false under stream ownership). The ref stores the
@@ -428,9 +448,9 @@ export function useGitListChangedFilesWithSubmodules(args: {
       hostId,
       runningDir,
       hasData: query.data !== undefined,
-      hasError: query.error !== null,
+      hasError: error !== null,
     }),
-    error: query.error ?? null,
+    error,
   };
 }
 

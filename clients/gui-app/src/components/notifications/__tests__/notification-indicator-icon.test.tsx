@@ -123,7 +123,6 @@ describe("<NotificationIndicatorIcon />", () => {
         className={undefined}
         style={undefined}
         runningTitle="Task activity in progress"
-        backgroundRunningTitle={undefined}
         defaultIcon={<span data-testid="default-icon" />}
         statusPresentation="message"
       />,
@@ -135,18 +134,18 @@ describe("<NotificationIndicatorIcon />", () => {
     renderIcon(DEFAULT_STATE, "background");
 
     expect(
-      screen.getByRole("status", { name: "Background tasks running" }),
+      screen.getByRole("status", {
+        name: "Background activity — agent idle",
+      }),
     ).toBeDefined();
     expect(
       screen.queryByRole("status", { name: "Task activity in progress" }),
     ).toBeNull();
-    // Class assertion needs the inner spinner node, which carries the tier's
-    // muted styling; the role query above owns the presence contract.
-    expect(
-      screen
-        .getByTestId("indicator-background-activity-subject-1")
-        .getAttribute("class"),
-    ).toContain("text-muted-foreground");
+    const glyph = screen.getByTestId("indicator-background-activity-subject-1");
+    expect(glyph.tagName).toBe("svg");
+    expect(glyph.getAttribute("class")).toContain("lucide-calendar-clock");
+    expect(glyph.getAttribute("class")).toContain("size-3.5");
+    expect(glyph.getAttribute("class")).toContain("text-muted-foreground");
   });
 
   it("renders status icons ahead of the background tier", () => {
@@ -156,7 +155,9 @@ describe("<NotificationIndicatorIcon />", () => {
       screen.getByRole("status", { name: "Task waiting for your approval" }),
     ).toBeDefined();
     expect(
-      screen.queryByRole("status", { name: "Background tasks running" }),
+      screen.queryByRole("status", {
+        name: "Background activity — agent idle",
+      }),
     ).toBeNull();
   });
 
@@ -222,7 +223,6 @@ function renderIconContent(
       className={undefined}
       style={undefined}
       runningTitle="Task activity in progress"
-      backgroundRunningTitle="Background tasks running"
       defaultIcon={<span data-testid="default-icon" />}
       statusPresentation="message"
     />

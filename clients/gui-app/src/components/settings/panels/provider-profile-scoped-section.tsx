@@ -4,6 +4,7 @@ import {
   ChevronRight,
   Eye,
   EyeOff,
+  LogIn,
   Plus,
   RefreshCw,
   Settings2,
@@ -90,6 +91,7 @@ interface ProviderProfileScopedSectionProps {
   readonly hostId: string | null;
   readonly isSelectedHostLocal: boolean;
   readonly canAddProfile: boolean;
+  readonly startInReauth: boolean;
   readonly failedAttempt: FailedProviderProfileAttempt | null;
   readonly onAddProfile: () => void;
   readonly onDismissFailedAttempt: () => void;
@@ -122,6 +124,7 @@ export function ProviderProfileScopedSection(
     hostId,
     isSelectedHostLocal,
     canAddProfile,
+    startInReauth,
     failedAttempt,
     onAddProfile,
     onDismissFailedAttempt,
@@ -132,8 +135,11 @@ export function ProviderProfileScopedSection(
   const [dismissedDriftKeys, setDismissedDriftKeys] = useState<
     readonly string[]
   >([]);
-  const [editProfileOpen, setEditProfileOpen] = useState(false);
+  const [editProfileOpen, setEditProfileOpen] = useState(startInReauth);
   const [editSessionId, setEditSessionId] = useState(0);
+  const [editIntent, setEditIntent] = useState<"manage" | "sign-in">(
+    startInReauth ? "sign-in" : "manage",
+  );
 
   if (profiles.length === 0) return null;
 
@@ -158,6 +164,13 @@ export function ProviderProfileScopedSection(
   };
 
   const openProfileEditor = (): void => {
+    setEditIntent("manage");
+    setEditSessionId((current) => current + 1);
+    setEditProfileOpen(true);
+  };
+
+  const openProfileSignIn = (): void => {
+    setEditIntent("sign-in");
     setEditSessionId((current) => current + 1);
     setEditProfileOpen(true);
   };
@@ -206,6 +219,23 @@ export function ProviderProfileScopedSection(
             key={selectedProfile.profileId}
             profile={selectedProfile}
           />
+          {selectedProfile.auth.status === "unauthenticated" ? (
+            <Button
+              type="button"
+              size="xs"
+              variant="secondary"
+              disabled={!canAddProfile}
+              title={
+                canAddProfile
+                  ? undefined
+                  : "Sign in requires a local host with browser sign-in available."
+              }
+              onClick={openProfileSignIn}
+            >
+              <LogIn data-icon="inline-start" />
+              Sign in
+            </Button>
+          ) : null}
           <TooltipWrapper
             label="Change the profile name and accent color, sign in again, or remove this profile."
             side="bottom"
@@ -292,6 +322,7 @@ export function ProviderProfileScopedSection(
         profile={selectedProfile}
         profiles={profiles}
         canOauth={canAddProfile}
+        startInReauth={editIntent === "sign-in"}
         open={editProfileOpen}
         onOpenChange={setEditProfileOpen}
         remainingProfilesAfterRemoval={orderedProfiles.filter(
@@ -425,11 +456,28 @@ function ProfileEditErrors({
   );
 }
 
+function profileEditDialogCopy(
+  profile: ProviderProfile,
+  startInReauth: boolean,
+) {
+  if (startInReauth) {
+    return {
+      title: `Sign in to ${profileDisplayLabel(profile)}`,
+      description: "Reconnect this profile without changing its name or color.",
+    };
+  }
+  return {
+    title: "Edit profile",
+    description: `Update how ${profileDisplayLabel(profile)} appears and which account it uses.`,
+  };
+}
+
 function ProfileEditDialog({
   state,
   profile,
   profiles,
   canOauth,
+  startInReauth,
   open,
   onOpenChange,
   remainingProfilesAfterRemoval,
@@ -439,6 +487,7 @@ function ProfileEditDialog({
   readonly profile: ProviderProfile;
   readonly profiles: readonly ProviderProfile[];
   readonly canOauth: boolean;
+  readonly startInReauth: boolean;
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
   /** The provider's other profiles, ordered - what stays once `profile` is
@@ -452,7 +501,7 @@ function ProfileEditDialog({
   const removeProfile = useRemoveProviderProfile();
   const renameProfile = useRenameProviderProfile();
   const recolorProfile = useRecolorProviderProfile();
-  const [switchingAccount, setSwitchingAccount] = useState(false);
+  const [switchingAccount, setSwitchingAccount] = useState(startInReauth);
   const [confirmRemoveOpen, setConfirmRemoveOpen] = useState(false);
   const [label, setLabel] = useState(profile.label);
   const [committedLabel, setCommittedLabel] = useState(profile.label);
@@ -468,6 +517,7 @@ function ProfileEditDialog({
   const removeProfilePresentation = PROFILE_REMOVE_PRESENTATION[profile.kind];
   const removeProfileDisabledReason = removeProfilePresentation.disabledReason;
   const isTerminalProfile = removeProfileDisabledReason !== null;
+  const dialogCopy = profileEditDialogCopy(profile, startInReauth);
 
   const commitProfile = (onSuccess: () => void): void => {
     if (savePending || invalid) return;
@@ -537,11 +587,10 @@ function ProfileEditDialog({
         >
           <DialogHeader className="gap-1.5 px-5 pt-5 pr-12 pb-4">
             <DialogTitle className="text-ui font-semibold leading-snug">
-              Edit profile
+              {dialogCopy.title}
             </DialogTitle>
             <DialogDescription className="text-ui-sm leading-relaxed text-muted-foreground">
-              Update how {profileDisplayLabel(profile)} appears and which
-              account it uses.
+              {dialogCopy.description}
             </DialogDescription>
           </DialogHeader>
 

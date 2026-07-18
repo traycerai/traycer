@@ -14,8 +14,9 @@ const EPIC_ID = "epic-1";
 const CHAT_ID = "chat-1";
 const TEST_ID = "chat-progress";
 const RUNNING_TEST_ID = `${TEST_ID}-activity-${CHAT_ID}`;
+const BACKGROUND_TEST_ID = `${TEST_ID}-background-activity-${CHAT_ID}`;
 const TURN_RUNNING_LABEL = "Chat in progress";
-const BACKGROUND_RUNNING_LABEL = "Background tasks running — chat idle";
+const BACKGROUND_RUNNING_LABEL = "Background activity — agent idle";
 
 const MONITOR_ITEM = {
   taskId: "task-1",
@@ -156,6 +157,9 @@ describe("<ChatProgressIcon />", () => {
     expect(
       screen.getByRole("status", { name: BACKGROUND_RUNNING_LABEL }),
     ).toBeDefined();
+    expect(
+      screen.getByTestId(BACKGROUND_TEST_ID).getAttribute("class"),
+    ).toContain("lucide-calendar-clock");
     expect(
       screen.queryByRole("status", { name: TURN_RUNNING_LABEL }),
     ).toBeNull();
