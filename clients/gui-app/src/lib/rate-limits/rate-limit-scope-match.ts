@@ -10,24 +10,32 @@ function matchTokens(value: string): ReadonlyArray<string> {
     .filter((token) => token.length > 0);
 }
 
+// Provider-generic tokens carry no model-family information: they appear both
+// in family names ("Claude Opus") and in every model slug of the provider
+// (`claude-fable-5[1m]`), so matching through them would gate every model.
+// Stripped from the FAMILY side only - a family that is nothing but generic
+// tokens falls through to the err-toward-matching path below.
+const PROVIDER_GENERIC_TOKENS = new Set(["claude", "anthropic"]);
+
 /**
  * Whether a limited scope's `family` gates `model`. `null` is a shared window
  * that gates every model. Otherwise both sides tokenize on non-alphanumerics
- * and the scope matches when ANY alphabetic family token appears among the
+ * and the scope matches when ANY informative family token appears among the
  * model's slug/label tokens ("Fable" -> `claude-fable-5[1m]`, "opus" ->
- * `opus[1m]`). Purely numeric family tokens are version noise that would
- * cross-match unrelated models, so they are ignored; a family with no
- * alphabetic token at all cannot be judged and errs toward matching - every
- * uncertain path here fails toward SHOWING the warning, never hiding a real
- * one.
+ * `opus[1m]`, "Claude Opus" -> `claude-opus-4-7` but NOT
+ * `claude-fable-5[1m]`). Purely numeric family tokens are version noise and
+ * provider-generic tokens ("claude") match every model of the provider, so
+ * both are ignored; a family with no informative token left cannot be judged
+ * and errs toward matching - every uncertain path here fails toward SHOWING
+ * the warning, never hiding a real one.
  */
 export function rateLimitScopeAffectsModel(
   family: string | null,
   model: ModelOption,
 ): boolean {
   if (family === null) return true;
-  const familyTokens = matchTokens(family).filter((token) =>
-    /[a-z]/.test(token),
+  const familyTokens = matchTokens(family).filter(
+    (token) => /[a-z]/.test(token) && !PROVIDER_GENERIC_TOKENS.has(token),
   );
   if (familyTokens.length === 0) return true;
   const modelTokens = new Set([

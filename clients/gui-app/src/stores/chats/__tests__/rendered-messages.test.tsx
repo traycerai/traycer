@@ -4,6 +4,7 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   AgentSender,
   ChatEvent,
+  ChatSessionAnchor,
   Message,
   UserMessageSender,
 } from "@traycer/protocol/persistence/epic/schemas";
@@ -100,6 +101,29 @@ function userMessageAt(
   timestamp: number,
 ): Extract<Message, { role: "user" }> {
   return { ...userMessage(messageId), timestamp };
+}
+
+function claudeSessionAnchor(
+  profileId: string | null,
+  labelSnapshot: string | null,
+): ChatSessionAnchor {
+  return {
+    profileId,
+    labelSnapshot,
+    accountUuid: null,
+    accentColor: null,
+    harnessId: "claude",
+    hostId: "host-1",
+    sessionId: "session-1",
+    sessionWorkspaceSnapshot: {
+      workspaceKind: "session-snapshot",
+      primaryWorkspace: "/repo",
+      secondaryWorkspaces: [],
+    },
+    claudeMessageUuid: "claude-message-1",
+    createdAt: 1000,
+    coveredUntilMessageId: null,
+  };
 }
 
 function steerRequestedQueueItem(
@@ -878,12 +902,85 @@ describe("useRenderedMessages", () => {
     expect(result.current[0]?.assistantMeta).toEqual({
       provider: "claude",
       providerLabel: "Claude Code",
+      profileLabel: null,
       modelLabel: null,
       reasoningEffort: "high",
       reasoningEffortLabel: "Resolved high",
       serviceTier: "priority",
       costUsd: null,
     });
+  });
+
+  it("threads the provider-session profile snapshot onto its assistant turns", () => {
+    const anchoredUser = {
+      ...userMessage("profile-user"),
+      sessionAnchor: claudeSessionAnchor("work-profile", "Work"),
+    };
+    const continuationUser = userMessageAt("continuation-user", 3000);
+    const { result } = renderHook(() =>
+      useRenderedMessages(
+        {
+          messages: [
+            anchoredUser,
+            assistantMessage("turn-profile-1", 2000),
+            continuationUser,
+            assistantMessage("turn-profile-2", 4000),
+          ],
+          events: [],
+          pendingUserMessages: [],
+          liveAssistantMessage: null,
+          activeTurn: null,
+          runStatus: "idle",
+          ...BINDING,
+        },
+        displayContext,
+      ),
+    );
+
+    const assistantRows = result.current.filter(
+      (message) => message.role === "assistant",
+    );
+    expect(
+      assistantRows.map((message) => message.assistantMeta?.profileLabel),
+    ).toEqual(["Work", "Work"]);
+  });
+
+  it("shows the initiating profile on the active turn before output starts", () => {
+    const initiatingUser = {
+      ...userMessage("active-profile-user"),
+      sessionAnchor: claudeSessionAnchor("work-profile", "Work"),
+    };
+    const { result } = renderHook(() =>
+      useRenderedMessages(
+        {
+          messages: [initiatingUser],
+          events: [],
+          pendingUserMessages: [],
+          liveAssistantMessage: null,
+          activeTurn: {
+            turnId: "turn-active-profile",
+            status: "starting",
+            harnessId: "claude",
+            model: "claude-sonnet-4-5",
+            reasoningEffort: "high",
+            serviceTier: null,
+            agentMode: "regular",
+            profileId: "work-profile",
+            userMessageId: initiatingUser.messageId,
+            startedAt: 2000,
+            updatedAt: 2000,
+          },
+          runStatus: "running",
+          ...BINDING,
+        },
+        displayContext,
+      ),
+    );
+
+    expect(
+      result.current.find((message) => message.role === "assistant")
+        ?.assistantMeta?.profileLabel,
+    ).toBe("Work");
   });
 
   it("threads the turn's cost onto assistantMeta for the completion footer", () => {
