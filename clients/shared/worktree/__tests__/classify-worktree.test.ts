@@ -328,12 +328,36 @@ describe("classifyWorktreeTier - precedence truth table (first match wins)", () 
       tier: "merged",
     },
     {
-      name: "submodule proven via local ancestry does not block → at-base-commit",
+      name: "at-base + authored submodule proven via merged PR → merged",
+      entry: entry({
+        atBaseCommit: true,
+        submodules: [
+          subFact({ prState: "merged", mergedHeadShaMatches: true }),
+        ],
+      }),
+      tier: "merged",
+    },
+    {
+      name: "at-base + authored submodule proven via local ancestry → merged",
       entry: entry({
         atBaseCommit: true,
         submodules: [subFact({ mergedIntoDefault: true })],
       }),
-      tier: "at-base-commit",
+      tier: "merged",
+    },
+    {
+      name: "at-base + any authored landed submodule → merged when siblings are at-pin",
+      entry: entry({
+        atBaseCommit: true,
+        submodules: [
+          subFact({ mergedIntoDefault: true }),
+          subFact({
+            repoIdentifier: { owner: "acme", repo: "unchanged" },
+            atPinnedCommit: true,
+          }),
+        ],
+      }),
+      tier: "merged",
     },
     {
       name: "submodule proven at its pinned gitlink does not block → at-base-commit",
@@ -342,6 +366,42 @@ describe("classifyWorktreeTier - precedence truth table (first match wins)", () 
         submodules: [subFact({ atPinnedCommit: true })],
       }),
       tier: "at-base-commit",
+    },
+    {
+      name: "at-pin overrides merged proof for authored-work promotion → at-base-commit",
+      entry: entry({
+        atBaseCommit: true,
+        submodules: [
+          subFact({
+            prState: "merged",
+            mergedHeadShaMatches: true,
+            atPinnedCommit: true,
+          }),
+        ],
+      }),
+      tier: "at-base-commit",
+    },
+    {
+      name: "dirty gate blocks authored-submodule promotion → review",
+      entry: entry({
+        uncommittedCount: 1,
+        atBaseCommit: true,
+        submodules: [
+          subFact({ prState: "merged", mergedHeadShaMatches: true }),
+        ],
+      }),
+      tier: "review",
+    },
+    {
+      name: "one unproven sibling blocks authored-submodule promotion → review",
+      entry: entry({
+        atBaseCommit: true,
+        submodules: [
+          subFact({ prState: "merged", mergedHeadShaMatches: true }),
+          subFact({ repoIdentifier: { owner: "acme", repo: "unmerged" } }),
+        ],
+      }),
+      tier: "review",
     },
     {
       name: "submodule atPinnedCommit false proves nothing by itself → review",
@@ -459,6 +519,19 @@ describe("classifyWorktreeTier - precedence truth table (first match wins)", () 
     expect(atBase.tier).toBe("at-base-commit");
     expect(atBase.label).toBe("At base commit");
     expect(atBase.facts).toContain("clean");
+
+    const submoduleLanded = classifyWorktree(
+      entry({
+        atBaseCommit: true,
+        submodules: [
+          subFact({ prState: "merged", mergedHeadShaMatches: true }),
+        ],
+      }),
+    );
+    expect(submoduleLanded.tier).toBe("merged");
+    expect(submoduleLanded.label).toBe("Landed");
+    expect(submoduleLanded.prFacts).toContain("submodule acme/lib landed");
+    expect(submoduleLanded.nonPrFacts).toContain("clean");
 
     const dirty = classifyWorktree(entry({ uncommittedCount: 3 }));
     expect(dirty.tier).toBe("review");
