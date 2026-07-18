@@ -60,10 +60,7 @@ import {
   resolveRateLimitProfileId,
   type RateLimitProfileSelection,
 } from "@/hooks/rate-limits/use-rate-limit-profile-selection";
-import {
-  enqueueRateLimitFetch,
-  enqueueRateLimitFetchBatch,
-} from "@/lib/rate-limits/ephemeral-fetch-queue";
+import { enqueueRateLimitFetchBatch } from "@/lib/rate-limits/ephemeral-fetch-queue";
 import {
   formatUnavailableReason,
   resolvePopoverProviderRateLimitState,
@@ -120,7 +117,162 @@ type RailTabDescriptor =
 const PERSONAL_ACCOUNT_CONTEXT: AccountContext = { type: "PERSONAL" };
 
 const POPOVER_SURFACE_CLASS_NAME =
-  "w-[min(92vw,30rem)] min-w-[min(92vw,20rem,var(--radix-popover-content-available-width))] max-w-[var(--radix-popover-content-available-width)] max-h-[var(--radix-popover-content-available-height)] resize overflow-hidden";
+  "relative w-[min(92vw,30rem)] min-w-[min(92vw,20rem,var(--radix-popover-content-available-width))] max-w-[var(--radix-popover-content-available-width)] max-h-[var(--radix-popover-content-available-height)] overflow-hidden";
+
+type RateLimitPopoverResizeDirection =
+  "n" | "ne" | "e" | "se" | "s" | "sw" | "w" | "nw";
+
+interface RateLimitPopoverPositionLock {
+  readonly wrapperElement: HTMLElement;
+  offsetXPx: number;
+  offsetYPx: number;
+  readonly setOffset: (xPx: number, yPx: number) => void;
+  readonly restore: () => void;
+}
+
+interface RateLimitPopoverViewportBounds {
+  readonly rightPx: number;
+  readonly bottomPx: number;
+}
+
+interface RateLimitPopoverResizeDrag {
+  readonly pointerId: number;
+  readonly direction: RateLimitPopoverResizeDirection;
+  readonly startClientX: number;
+  readonly startClientY: number;
+  readonly startLeftPx: number;
+  readonly startTopPx: number;
+  readonly startRightPx: number;
+  readonly startBottomPx: number;
+  readonly startWidthPx: number;
+  readonly startHeightPx: number;
+  readonly viewportRightPx: number;
+  readonly viewportBottomPx: number;
+  readonly positionLock: RateLimitPopoverPositionLock;
+  readonly restorePositionOnCancel: boolean;
+  readonly startPositionOffsetXPx: number;
+  readonly startPositionOffsetYPx: number;
+  readonly previousInlineWidth: string;
+  readonly previousInlineHeight: string;
+  latestWidthPx: number;
+  latestHeightPx: number;
+  moved: boolean;
+}
+
+const RATE_LIMIT_POPOVER_RESIZE_DIRECTIONS = [
+  "n",
+  "ne",
+  "e",
+  "se",
+  "s",
+  "sw",
+  "w",
+  "nw",
+] as const;
+
+function isRateLimitPopoverResizeDirection(
+  value: string | undefined,
+): value is RateLimitPopoverResizeDirection {
+  return RATE_LIMIT_POPOVER_RESIZE_DIRECTIONS.some(
+    (direction) => direction === value,
+  );
+}
+
+const RATE_LIMIT_POPOVER_RESIZE_HANDLE_CLASS_NAMES = {
+  n: "absolute inset-x-3 top-0 z-20 h-2 cursor-n-resize touch-none",
+  ne: "absolute top-0 right-0 z-30 size-3 cursor-ne-resize touch-none",
+  e: "absolute inset-y-3 right-0 z-20 w-2 cursor-e-resize touch-none",
+  se: "absolute right-0 bottom-0 z-30 size-3 cursor-se-resize touch-none",
+  s: "absolute inset-x-3 bottom-0 z-20 h-2 cursor-s-resize touch-none",
+  sw: "absolute bottom-0 left-0 z-30 size-3 cursor-sw-resize touch-none",
+  w: "absolute inset-y-3 left-0 z-20 w-2 cursor-w-resize touch-none",
+  nw: "absolute top-0 left-0 z-30 size-3 cursor-nw-resize touch-none",
+} satisfies Record<RateLimitPopoverResizeDirection, string>;
+
+const RATE_LIMIT_POPOVER_COLLISION_PADDING_PX = 12;
+
+// Radix owns the floating wrapper's transform and rewrites it whenever content
+// size changes. Lock that transform for the rest of this popover opening so a
+// resize can move the exact active edge without Radix re-anchoring underneath
+// the pointer. The observer only restores one expected transform; it never
+// derives another offset from the moved element, avoiding a feedback loop.
+function createRateLimitPopoverPositionLock(
+  wrapperElement: HTMLElement,
+): RateLimitPopoverPositionLock {
+  const originalTransform = wrapperElement.style.transform;
+  const originalTransformPriority =
+    wrapperElement.style.getPropertyPriority("transform");
+  let expectedTransform = originalTransform;
+  let restored = false;
+  const applyExpectedTransform = (): void => {
+    if (restored) return;
+    if (
+      wrapperElement.style.transform === expectedTransform &&
+      wrapperElement.style.getPropertyPriority("transform") === "important"
+    ) {
+      return;
+    }
+    wrapperElement.style.setProperty(
+      "transform",
+      expectedTransform,
+      "important",
+    );
+  };
+  const observer = new MutationObserver(applyExpectedTransform);
+  const positionLock: RateLimitPopoverPositionLock = {
+    wrapperElement,
+    offsetXPx: 0,
+    offsetYPx: 0,
+    setOffset: (xPx, yPx) => {
+      positionLock.offsetXPx = xPx;
+      positionLock.offsetYPx = yPx;
+      const offsetTransform = `translate(${xPx}px, ${yPx}px)`;
+      expectedTransform =
+        originalTransform === "" || originalTransform === "none"
+          ? offsetTransform
+          : `${originalTransform} ${offsetTransform}`;
+      applyExpectedTransform();
+    },
+    restore: () => {
+      if (restored) return;
+      restored = true;
+      observer.disconnect();
+      if (originalTransform === "") {
+        wrapperElement.style.removeProperty("transform");
+        return;
+      }
+      wrapperElement.style.setProperty(
+        "transform",
+        originalTransform,
+        originalTransformPriority,
+      );
+    },
+  };
+  observer.observe(wrapperElement, {
+    attributes: true,
+    attributeFilter: ["style"],
+  });
+  applyExpectedTransform();
+  return positionLock;
+}
+
+function rateLimitPopoverViewportBounds(
+  surface: HTMLDivElement,
+  rect: DOMRect,
+): RateLimitPopoverViewportBounds {
+  const ownerDocument = surface.ownerDocument;
+  const win = ownerDocument.defaultView;
+  const viewportWidth =
+    ownerDocument.documentElement.clientWidth || win?.innerWidth || rect.right;
+  const viewportHeight =
+    ownerDocument.documentElement.clientHeight ||
+    win?.innerHeight ||
+    rect.bottom;
+  return {
+    rightPx: viewportWidth - RATE_LIMIT_POPOVER_COLLISION_PADDING_PX,
+    bottomPx: viewportHeight - RATE_LIMIT_POPOVER_COLLISION_PADDING_PX,
+  };
+}
 
 type RateLimitPopoverSurfaceVariant = "content" | "empty";
 
@@ -239,7 +391,7 @@ export function RateLimitPopover({
       side="bottom"
       align="end"
       sideOffset={8}
-      collisionPadding={12}
+      collisionPadding={RATE_LIMIT_POPOVER_COLLISION_PADDING_PX}
       role="dialog"
       aria-label="Usage limits"
       className="w-fit max-w-[var(--radix-popover-content-available-width)] max-h-[var(--radix-popover-content-available-height)] gap-0 overflow-hidden rounded-xl p-0"
@@ -272,9 +424,9 @@ export function RateLimitPopover({
 }
 
 /**
- * Viewport-bounded, two-axis CSS resize surface. The browser owns live drag
- * frames and writes the resulting inline dimensions; pointer release commits
- * that measured size once so subsequent opens restore it.
+ * Viewport-bounded resize surface with OS-style hit areas on every edge and
+ * corner. Drag frames mutate inline dimensions directly, while pointer release
+ * commits the final measured size once so subsequent opens restore it.
  */
 function RateLimitPopoverResizeSurface({
   variant,
@@ -285,49 +437,170 @@ function RateLimitPopoverResizeSurface({
 }): ReactNode {
   const size = useRateLimitPopoverStore((state) => state.size);
   const setSize = useRateLimitPopoverStore((state) => state.setSize);
-  const surfaceRef = useRef<HTMLDivElement | null>(null);
-  const commitResizedDimensions = (
-    event: ReactPointerEvent<HTMLDivElement>,
-  ): void => {
-    if (event.target !== event.currentTarget) return;
-    const { width, height } = event.currentTarget.getBoundingClientRect();
-    if (width <= 0 || height <= 0) return;
-    setSize({ widthPx: width, heightPx: height });
-  };
-  useEffect(() => {
-    const surface = surfaceRef.current;
-    if (surface === null) return;
-    const win = surface.ownerDocument.defaultView;
-    if (win === null) return;
+  const dragRef = useRef<RateLimitPopoverResizeDrag | null>(null);
+  const positionLockRef = useRef<RateLimitPopoverPositionLock | null>(null);
+  useEffect(
+    () => () => {
+      positionLockRef.current?.restore();
+    },
+    [],
+  );
 
-    let initialized = false;
-    let applyTimer: number | null = null;
-    const applyMeasuredSize = (): void => {
-      const { width, height } = surface.getBoundingClientRect();
-      if (width <= 0 || height <= 0) return;
-      surface.style.width = `${width}px`;
-      surface.style.height = `${height}px`;
+  const startResize = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    if (event.button !== 0 || dragRef.current !== null) return;
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    const direction = target.dataset.resizeDirection;
+    if (!isRateLimitPopoverResizeDirection(direction)) return;
+
+    const surface = event.currentTarget;
+    const positionWrapper = surface.closest<HTMLElement>(
+      "[data-radix-popper-content-wrapper]",
+    );
+    if (positionWrapper === null) return;
+    const rect = surface.getBoundingClientRect();
+    const { width, height } = rect;
+    if (width <= 0 || height <= 0) return;
+    const viewportBounds = rateLimitPopoverViewportBounds(surface, rect);
+    event.preventDefault();
+    event.stopPropagation();
+    surface.setPointerCapture(event.pointerId);
+    const existingPositionLock = positionLockRef.current;
+    const restorePositionOnCancel =
+      existingPositionLock === null ||
+      existingPositionLock.wrapperElement !== positionWrapper;
+    if (
+      existingPositionLock !== null &&
+      existingPositionLock.wrapperElement !== positionWrapper
+    ) {
+      existingPositionLock.restore();
+    }
+    const positionLock = restorePositionOnCancel
+      ? createRateLimitPopoverPositionLock(positionWrapper)
+      : existingPositionLock;
+    positionLockRef.current = positionLock;
+    const drag: RateLimitPopoverResizeDrag = {
+      pointerId: event.pointerId,
+      direction,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startLeftPx: rect.left,
+      startTopPx: rect.top,
+      startRightPx: rect.right,
+      startBottomPx: rect.bottom,
+      startWidthPx: width,
+      startHeightPx: height,
+      viewportRightPx: viewportBounds.rightPx,
+      viewportBottomPx: viewportBounds.bottomPx,
+      positionLock,
+      restorePositionOnCancel,
+      startPositionOffsetXPx: positionLock.offsetXPx,
+      startPositionOffsetYPx: positionLock.offsetYPx,
+      previousInlineWidth: surface.style.width,
+      previousInlineHeight: surface.style.height,
+      latestWidthPx: width,
+      latestHeightPx: height,
+      moved: false,
     };
-    const observer = new ResizeObserver(() => {
-      if (!initialized) {
-        initialized = true;
-        return;
+    dragRef.current = drag;
+    // Freeze both axes at their computed dimensions before the first drag frame;
+    // otherwise a content reflow can change the untouched axis mid-drag.
+    surface.style.width = `${width}px`;
+    surface.style.height = `${height}px`;
+  };
+
+  const resizeDuringDrag = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    const drag = dragRef.current;
+    if (drag === null || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    const deltaX = event.clientX - drag.startClientX;
+    const deltaY = event.clientY - drag.startClientY;
+    const resizeFromLeft = drag.direction.includes("w");
+    const resizeFromRight = drag.direction.includes("e");
+    const resizeFromTop = drag.direction.includes("n");
+    const resizeFromBottom = drag.direction.includes("s");
+    let widthDelta = 0;
+    if (resizeFromLeft) widthDelta = -deltaX;
+    else if (resizeFromRight) widthDelta = deltaX;
+    let heightDelta = 0;
+    if (resizeFromTop) heightDelta = -deltaY;
+    else if (resizeFromBottom) heightDelta = deltaY;
+    let maxWidthPx = drag.startWidthPx;
+    if (resizeFromLeft) {
+      maxWidthPx = drag.startRightPx - RATE_LIMIT_POPOVER_COLLISION_PADDING_PX;
+    } else if (resizeFromRight) {
+      maxWidthPx = drag.viewportRightPx - drag.startLeftPx;
+    }
+    let maxHeightPx = drag.startHeightPx;
+    if (resizeFromTop) {
+      maxHeightPx =
+        drag.startBottomPx - RATE_LIMIT_POPOVER_COLLISION_PADDING_PX;
+    } else if (resizeFromBottom) {
+      maxHeightPx = drag.viewportBottomPx - drag.startTopPx;
+    }
+    drag.latestWidthPx = Math.min(
+      Math.max(1, maxWidthPx),
+      Math.max(1, drag.startWidthPx + widthDelta),
+    );
+    drag.latestHeightPx = Math.min(
+      Math.max(1, maxHeightPx),
+      Math.max(1, drag.startHeightPx + heightDelta),
+    );
+    drag.moved = widthDelta !== 0 || heightDelta !== 0;
+    event.currentTarget.style.width = `${drag.latestWidthPx}px`;
+    event.currentTarget.style.height = `${drag.latestHeightPx}px`;
+    const measured = event.currentTarget.getBoundingClientRect();
+    const offsetDeltaXPx = resizeFromLeft
+      ? drag.startWidthPx - measured.width
+      : 0;
+    const offsetDeltaYPx = resizeFromTop
+      ? drag.startHeightPx - measured.height
+      : 0;
+    drag.positionLock.setOffset(
+      drag.startPositionOffsetXPx + offsetDeltaXPx,
+      drag.startPositionOffsetYPx + offsetDeltaYPx,
+    );
+  };
+
+  const finishResize = (
+    event: ReactPointerEvent<HTMLDivElement>,
+    commit: boolean,
+  ): void => {
+    const drag = dragRef.current;
+    if (drag === null || drag.pointerId !== event.pointerId) return;
+    dragRef.current = null;
+    const surface = event.currentTarget;
+    if (surface.hasPointerCapture(event.pointerId)) {
+      surface.releasePointerCapture(event.pointerId);
+    }
+    if (!commit || !drag.moved) {
+      surface.style.width = drag.previousInlineWidth;
+      surface.style.height = drag.previousInlineHeight;
+      if (drag.restorePositionOnCancel) {
+        drag.positionLock.restore();
+        if (positionLockRef.current === drag.positionLock) {
+          positionLockRef.current = null;
+        }
+      } else {
+        drag.positionLock.setOffset(
+          drag.startPositionOffsetXPx,
+          drag.startPositionOffsetYPx,
+        );
       }
-      if (applyTimer !== null) win.clearTimeout(applyTimer);
-      applyTimer = win.setTimeout(applyMeasuredSize, 100);
-    });
-    observer.observe(surface);
-    return () => {
-      observer.disconnect();
-      if (applyTimer === null) return;
-      win.clearTimeout(applyTimer);
-      applyMeasuredSize();
-    };
-  }, []);
+      return;
+    }
+
+    const measured = surface.getBoundingClientRect();
+    const widthPx = measured.width > 0 ? measured.width : drag.latestWidthPx;
+    const heightPx =
+      measured.height > 0 ? measured.height : drag.latestHeightPx;
+    surface.style.width = `${widthPx}px`;
+    surface.style.height = `${heightPx}px`;
+    setSize({ widthPx, heightPx });
+  };
 
   return (
     <div
-      ref={surfaceRef}
       data-testid="rate-limit-popover-resize-surface"
       className={cn(
         POPOVER_SURFACE_CLASS_NAME,
@@ -340,9 +613,22 @@ function RateLimitPopoverResizeSurface({
           ? undefined
           : { width: size.widthPx, height: size.heightPx }
       }
-      onPointerUp={commitResizedDimensions}
+      onPointerDown={startResize}
+      onPointerMove={resizeDuringDrag}
+      onPointerUp={(event) => finishResize(event, true)}
+      onPointerCancel={(event) => finishResize(event, false)}
+      onLostPointerCapture={(event) => finishResize(event, false)}
     >
       {children}
+      {RATE_LIMIT_POPOVER_RESIZE_DIRECTIONS.map((direction) => (
+        <div
+          key={direction}
+          aria-hidden="true"
+          data-resize-direction={direction}
+          data-testid={`rate-limit-popover-resize-${direction}`}
+          className={RATE_LIMIT_POPOVER_RESIZE_HANDLE_CLASS_NAMES[direction]}
+        />
+      ))}
     </div>
   );
 }
@@ -1059,12 +1345,14 @@ function ProfileRateLimitProviderBlock({
 
   const refresh = (): Promise<void> => {
     if (lane === "ephemeralProcess") {
-      targets.forEach((target) => {
-        void enqueueRateLimitFetch(providerId, DEFAULT_ACCOUNT_CONTEXT, {
-          force: true,
+      void enqueueRateLimitFetchBatch(
+        targets.map((target) => ({
+          providerId,
+          accountContext: DEFAULT_ACCOUNT_CONTEXT,
           profileId: target.profileId,
-        });
-      });
+        })),
+        { force: true },
+      );
       return Promise.resolve();
     }
     targets.forEach((target) => {
