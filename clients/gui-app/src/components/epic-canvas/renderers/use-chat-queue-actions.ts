@@ -256,12 +256,16 @@ export function useChatQueueActions(
       // settings. Exclude the item open for editing (it commits on submit); the
       // store also skips no-op updates and when there are no pending items.
       chatActions.restampQueuedItemSettings(settings, activeEditingQueueItemId);
-      // Read the live turn at call time (see steerQueuedItemNow): closing over the
-      // per-snapshot `state.activeTurn` object would re-create this callback every
-      // streamed token → lowerComposer → composerModel churn → composer re-render.
+      // Both live-turn forwards below read store state at call time (see
+      // steerQueuedItemNow): closing over per-snapshot objects would
+      // re-create this callback every streamed token → lowerComposer →
+      // composerModel churn → composer re-render. Both gate on `runStatus`
+      // rather than `activeTurn`: the pre-spawn window they target begins at
+      // accept, before an activeTurn is broadcast, and the host honors both
+      // updates through that whole window (`turnActivating` onward).
       if (
-        handle.store.getState().activeTurn !== null &&
-        permissionModeChanged
+        permissionModeChanged &&
+        isChatRunInProgress(handle.store.getState().runStatus)
       ) {
         chatActions.updateActivePermissionMode(settings.permissionMode);
       }
@@ -269,9 +273,7 @@ export function useChatQueueActions(
       // update above): a same-harness profile change while a run is in
       // progress is forwarded so a turn still parked on worktree setup
       // adopts the switched profile before it spawns, instead of erroring
-      // on the rate-limited profile the user just moved off. Gated on
-      // `runStatus` (not `activeTurn`): the parked pre-spawn window this
-      // targets begins at accept, before an activeTurn is broadcast. A
+      // on the rate-limited profile the user just moved off. A
       // cross-harness change is NOT a profile switch (profile ids are
       // harness-scoped) - the full tuple on the next send covers it.
       if (
