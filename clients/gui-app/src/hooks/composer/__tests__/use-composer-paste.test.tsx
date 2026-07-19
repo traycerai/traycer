@@ -14,6 +14,7 @@ import {
   useComposerPaste,
   useComposerPasteAdapter,
   IMAGE_READ_TIMEOUT_MS,
+  type ComposerFilePathIngestArgs,
   type UseComposerPasteResult,
 } from "@/hooks/composer/use-composer-paste";
 import type { ImageAttachmentAttrs } from "@/components/chat/composer/editor/extensions/image-attachment-extension";
@@ -24,6 +25,20 @@ vi.mock("sonner", () => ({
     error: vi.fn(),
   },
 }));
+
+// NOTE(compile-stopgap): this file is slated for a full rewrite covering the
+// new file-path paste/drop behavior (mixed paste, folders, URI-only, partial
+// failure, web fallback). These constants only keep the OLD assertions
+// (which predate that behavior) compiling against the new required
+// `useComposerPasteAdapter`/`useComposerPaste` params in the meantime.
+const TEST_FILE_PATHS: ComposerFilePathIngestArgs = {
+  fileDrops: {
+    resolveDroppedFilePaths: () => Promise.resolve([]),
+    copyDroppedFilePaths: (paths) => Promise.resolve([...paths]),
+  },
+  mentionRoots: [],
+  insertPaths: () => undefined,
+};
 
 afterEach(() => {
   cleanup();
@@ -38,7 +53,9 @@ describe("useComposerPasteAdapter - attachImageFiles", () => {
     const insert = vi.fn(
       (_attrs: ReadonlyArray<ImageAttachmentAttrs>): number => 1,
     );
-    const { result } = renderHook(() => useComposerPasteAdapter(insert));
+    const { result } = renderHook(() =>
+      useComposerPasteAdapter(insert, TEST_FILE_PATHS),
+    );
 
     attachImageFiles(result.current, [
       new File(["pending"], "pending.png", { type: "image/png" }),
@@ -58,7 +75,9 @@ describe("useComposerPasteAdapter - attachImageFiles", () => {
     const insert = vi.fn(
       (_attrs: ReadonlyArray<ImageAttachmentAttrs>): number => 1,
     );
-    const { result } = renderHook(() => useComposerPasteAdapter(insert));
+    const { result } = renderHook(() =>
+      useComposerPasteAdapter(insert, TEST_FILE_PATHS),
+    );
 
     attachImageFiles(result.current, [
       new File(["broken"], "broken.png", { type: "image/png" }),
@@ -81,7 +100,9 @@ describe("useComposerPasteAdapter - attachImageFiles", () => {
     const insert = vi.fn(
       (_attrs: ReadonlyArray<ImageAttachmentAttrs>): number => 1,
     );
-    const { result } = renderHook(() => useComposerPasteAdapter(insert));
+    const { result } = renderHook(() =>
+      useComposerPasteAdapter(insert, TEST_FILE_PATHS),
+    );
 
     attachImageFiles(result.current, [
       new File(["stuck"], "stuck.png", { type: "image/png" }),
@@ -108,7 +129,7 @@ describe("useComposerPasteAdapter - attachImageFiles", () => {
       (_attrs: ReadonlyArray<ImageAttachmentAttrs>): number => 1,
     );
     const { result, unmount } = renderHook(() =>
-      useComposerPasteAdapter(insert),
+      useComposerPasteAdapter(insert, TEST_FILE_PATHS),
     );
 
     attachImageFiles(result.current, [
@@ -131,7 +152,7 @@ describe("useComposerPasteAdapter - attachImageFiles", () => {
       useComposerPasteAdapter((attrs) => {
         inserted.push([...attrs]);
         return attrs.length;
-      }),
+      }, TEST_FILE_PATHS),
     );
     const imageFile = new File(["hello"], "sample.png", {
       type: "image/png",
@@ -160,7 +181,7 @@ describe("useComposerPasteAdapter - attachImageFiles", () => {
       useComposerPasteAdapter((attrs) => {
         inserted.push([...attrs]);
         return attrs.length;
-      }),
+      }, TEST_FILE_PATHS),
     );
     const png = new File(["png-bytes"], "shot.png", { type: "image/png" });
     const pdf = new File(["pdf-bytes"], "doc.pdf", { type: "application/pdf" });
@@ -182,7 +203,7 @@ describe("useComposerPasteAdapter - attachImageFiles", () => {
       useComposerPasteAdapter((attrs) => {
         inserted.push([...attrs]);
         return attrs.length;
-      }),
+      }, TEST_FILE_PATHS),
     );
     const oversized = makeOversizedImage("big.png");
 
@@ -210,7 +231,7 @@ describe("useComposerPasteAdapter - attachImageFiles", () => {
       useComposerPasteAdapter((attrs) => {
         inserted.push([...attrs]);
         return attrs.length;
-      }),
+      }, TEST_FILE_PATHS),
     );
 
     attachImageFiles(result.current, []);
@@ -222,7 +243,7 @@ describe("useComposerPasteAdapter - attachImageFiles", () => {
   it("returns a stable attachImageFiles reference across renders", () => {
     const onInsert = (_attrs: ReadonlyArray<ImageAttachmentAttrs>): number => 0;
     const { result, rerender } = renderHook(() =>
-      useComposerPasteAdapter(onInsert),
+      useComposerPasteAdapter(onInsert, TEST_FILE_PATHS),
     );
     const first = result.current.attachImageFiles;
     rerender();
@@ -234,7 +255,9 @@ describe("useComposerPasteAdapter - attachImageFiles", () => {
     const insert = vi.fn(
       (_attrs: ReadonlyArray<ImageAttachmentAttrs>): number => 0,
     );
-    const { result } = renderHook(() => useComposerPasteAdapter(insert));
+    const { result } = renderHook(() =>
+      useComposerPasteAdapter(insert, TEST_FILE_PATHS),
+    );
     const imageFile = new File(["hello"], "sample.png", {
       type: "image/png",
     });
@@ -254,13 +277,21 @@ describe("useComposerPasteAdapter - attachImageFiles", () => {
     const editorRef: {
       current: {
         insertImageAttachments: typeof insertImageAttachments;
+        insertPathSpans: () => void;
         isReady: () => boolean;
         focus: () => void;
       } | null;
     } = {
-      current: { insertImageAttachments, isReady: () => true, focus: vi.fn() },
+      current: {
+        insertImageAttachments,
+        insertPathSpans: vi.fn(),
+        isReady: () => true,
+        focus: vi.fn(),
+      },
     };
-    const { result } = renderHook(() => useComposerPaste(editorRef));
+    const { result } = renderHook(() =>
+      useComposerPaste(editorRef, TEST_FILE_PATHS.fileDrops, []),
+    );
     const imageFile = new File(["hello"], "sample.png", {
       type: "image/png",
     });
@@ -284,11 +315,14 @@ describe("useComposerPasteAdapter - attachImageFiles", () => {
     const editorRef = {
       current: {
         insertImageAttachments,
+        insertPathSpans: vi.fn(),
         isReady: () => false,
         focus: vi.fn(),
       },
     };
-    const { result } = renderHook(() => useComposerPaste(editorRef));
+    const { result } = renderHook(() =>
+      useComposerPaste(editorRef, TEST_FILE_PATHS.fileDrops, []),
+    );
 
     attachImageFiles(result.current, [
       new File(["hello"], "sample.png", { type: "image/png" }),
@@ -455,7 +489,7 @@ function PasteHarness(props: { readonly inserted: ImageAttachmentAttrs[][] }) {
   const handlers = useComposerPasteAdapter((attrs) => {
     props.inserted.push([...attrs]);
     return attrs.length;
-  });
+  }, TEST_FILE_PATHS);
   return (
     <div
       data-testid="paste-zone"

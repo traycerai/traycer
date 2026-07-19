@@ -36,6 +36,16 @@ const attachmentMocks = vi.hoisted(() => ({
   hasBytes: vi.fn(() => true),
 }));
 
+vi.mock("@/providers/use-runner-host", () => ({
+  useRunnerHost: () => ({
+    fileDrops: {
+      resolveDroppedFilePaths: () => Promise.resolve([]),
+      copyDroppedFilePaths: (paths: readonly string[]) =>
+        Promise.resolve(paths),
+    },
+  }),
+}));
+
 function render(ui: ReactNode) {
   return rtlRender(
     <ChatExpansionTestProviders tileInstanceId="user-body-test-tile">

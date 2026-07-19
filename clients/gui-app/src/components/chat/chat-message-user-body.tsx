@@ -78,6 +78,7 @@ import type { ProviderId } from "@/components/home/data/landing-options";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { useComposerPaste } from "@/hooks/composer/use-composer-paste";
 import { useEpicAttachmentBytesPresence } from "@/lib/attachments/use-attachment-blob-src";
+import { useRunnerHost } from "@/providers/use-runner-host";
 
 const NOOP: () => void = () => undefined;
 
@@ -596,8 +597,9 @@ function InlineUserMessageEditor({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const focusFrameRef = useRef<number | null>(null);
   const visibilityFrameRef = useRef<number | null>(null);
+  const runnerHost = useRunnerHost();
   const { onPaste, onDrop, onDragOver, attachImageFiles, isIngestingImages } =
-    useComposerPaste(editorRef);
+    useComposerPaste(editorRef, runnerHost.fileDrops, editing.mentionRoots);
   const attachmentPending = isIngestingImages;
 
   // Without this, the picker opens empty - nothing writes items into the store.

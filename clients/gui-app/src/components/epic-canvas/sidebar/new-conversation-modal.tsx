@@ -46,6 +46,7 @@ import {
   mentionRootsFromWorktreeIntent,
   useWorkspaceMentionRoots,
 } from "@/hooks/composer/use-workspace-mention-roots";
+import { useRunnerHost } from "@/providers/use-runner-host";
 import { useEpicCreateChat } from "@/hooks/epic/use-epic-chat-mutations";
 import { useResolvedWorkspaceFolders } from "@/hooks/workspace/use-resolved-workspace-folders-query";
 import {
@@ -559,7 +560,8 @@ export function NewConversationModalBody(props: {
   );
   const workspaceCanStart = workspaceComposerCanStart(workspaceAvailability);
   const draftWorkspaceFolderCount = draftWorkspace.folders.length;
-  const paste = useComposerPaste(editorRef);
+  const runnerHost = useRunnerHost();
+  const paste = useComposerPaste(editorRef, runnerHost.fileDrops, mentionRoots);
   const attachmentPending = paste.isIngestingImages;
   const canSubmit =
     canMutate &&

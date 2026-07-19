@@ -85,6 +85,16 @@ vi.mock("@/hooks/use-epic-store", () => ({
   }),
 }));
 
+vi.mock("@/providers/use-runner-host", () => ({
+  useRunnerHost: () => ({
+    fileDrops: {
+      resolveDroppedFilePaths: () => Promise.resolve([]),
+      copyDroppedFilePaths: (paths: readonly string[]) =>
+        Promise.resolve(paths),
+    },
+  }),
+}));
+
 vi.mock("@/hooks/composer/use-composer-paste", () => ({
   useComposerPaste: () => ({
     onPaste: vi.fn(),
@@ -256,6 +266,7 @@ function editorHandle(): ComposerPromptEditorHandle {
     clear: () => undefined,
     setContent: () => undefined,
     insertImageAttachments: () => undefined,
+    insertPathSpans: () => undefined,
     removeImageAttachmentById: () => undefined,
     insertDictatedText: () => undefined,
     dismissActiveSuggestion: () => false,

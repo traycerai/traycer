@@ -18,6 +18,7 @@ import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { useComposerPaste } from "@/hooks/composer/use-composer-paste";
 import { useComposerDictation } from "@/hooks/composer/use-composer-dictation";
 import { useWorkspaceMentionRoots } from "@/hooks/composer/use-workspace-mention-roots";
+import { useRunnerHost } from "@/providers/use-runner-host";
 import { ComposerShell } from "@/components/home/composer/composer-shell";
 import { ComposerWorkspaceRow } from "@/components/home/composer/composer-workspace-mode-row";
 import type { ModelOption } from "@/components/home/data/landing-options";
@@ -144,6 +145,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     mentionRoots,
     fallbackToGlobalMentionRoots,
   );
+  const runnerHost = useRunnerHost();
   const hostClient = useTabHostClient();
   const tabHostId = useTabHostId();
   const workspaceBlocked = !workspaceComposerCanStart(workspaceAvailability);
@@ -285,7 +287,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     attachImageFiles,
     isDraggingFiles,
     isIngestingImages,
-  } = useComposerPaste(editorRef);
+  } = useComposerPaste(editorRef, runnerHost.fileDrops, resolvedMentionRoots);
   const attachmentPending = isIngestingImages;
 
   const submitDraft = useChatComposerSubmit({

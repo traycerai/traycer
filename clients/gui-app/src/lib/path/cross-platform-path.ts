@@ -119,3 +119,49 @@ export function isWindowsLikePath(path: string): boolean {
     WINDOWS_UNC_PATH_PATTERN.test(normalized)
   );
 }
+
+/**
+ * Relativizes `path` against the most specific (longest) root in `roots`
+ * that contains it, mirroring the file-mention convention: when bound roots
+ * overlap (e.g. `/repo` and `/repo/sub`), the longest matching root wins.
+ * Returns a normalized POSIX-style relative path, or `null` when `path` is
+ * not under any root, or equals a root itself (a directory, not a file
+ * under it).
+ */
+export function relativizeToWorkspaceRoot(
+  roots: ReadonlyArray<string>,
+  path: string,
+): string | null {
+  const best = roots.reduce<{
+    readonly root: string;
+    readonly relative: string;
+  } | null>((acc, root) => {
+    const relative = stripRootPrefix(root, path);
+    if (relative === null) return acc;
+    if (
+      acc === null ||
+      normalizePath(root).length > normalizePath(acc.root).length
+    ) {
+      return { root, relative };
+    }
+    return acc;
+  }, null);
+  if (best === null || best.relative.length === 0) return null;
+  return best.relative;
+}
+
+function stripRootPrefix(root: string, path: string): string | null {
+  const normalizedRoot = normalizePath(root);
+  const normalizedPath = normalizePath(path);
+  const caseInsensitive =
+    isWindowsLikePath(normalizedRoot) || isWindowsLikePath(normalizedPath);
+  const rootKey = pathComparisonKey(normalizedRoot, caseInsensitive);
+  const pathKey = pathComparisonKey(normalizedPath, caseInsensitive);
+  if (pathKey === rootKey) return "";
+  const prefixKey = rootKey.endsWith("/") ? rootKey : `${rootKey}/`;
+  if (!pathKey.startsWith(prefixKey)) return null;
+  const prefix = normalizedRoot.endsWith("/")
+    ? normalizedRoot
+    : `${normalizedRoot}/`;
+  return normalizedPath.slice(prefix.length);
+}

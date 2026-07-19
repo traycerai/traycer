@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 
 import type { ImageAttachmentAttrs } from "@/components/chat/composer/editor/extensions/image-attachment-extension";
+import type { IFileDropHost } from "@traycer-clients/shared/platform/runner-host";
 import type { ComposerPasteEditorHandle } from "@/hooks/composer/use-composer-paste";
 import { useLandingComposerPaste } from "@/hooks/composer/use-landing-composer-paste";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
@@ -71,6 +72,17 @@ afterEach(() => {
   cleanup();
 });
 
+// NOTE(compile-stopgap): this file is slated for a full rewrite covering the
+// new file-path paste/drop behavior (mixed paste, folders, URI-only, partial
+// failure, web fallback). These constants only keep the OLD assertions
+// (which predate that behavior) compiling against the new required
+// `useLandingComposerPaste` params in the meantime.
+const TEST_FILE_DROPS: IFileDropHost = {
+  resolveDroppedFilePaths: () => Promise.resolve([]),
+  copyDroppedFilePaths: (paths) => Promise.resolve([...paths]),
+};
+const TEST_MENTION_ROOTS: ReadonlyArray<string> = [];
+
 function makeHandle(inserted: ImageAttachmentAttrs[][]): {
   readonly handle: ComposerPasteEditorHandle;
   readonly focusCalls: { count: number };
@@ -79,6 +91,7 @@ function makeHandle(inserted: ImageAttachmentAttrs[][]): {
   const handle: ComposerPasteEditorHandle = {
     isReady: () => true,
     insertImageAttachments: (attrs) => inserted.push([...attrs]),
+    insertPathSpans: () => undefined,
     focus: () => {
       focusCalls.count += 1;
     },
@@ -95,10 +108,13 @@ describe("useLandingComposerPaste", () => {
         isReady: () => false,
         insertImageAttachments: (attrs: ReadonlyArray<ImageAttachmentAttrs>) =>
           inserted.push([...attrs]),
+        insertPathSpans: () => undefined,
         focus: () => undefined,
       },
     };
-    const { result } = renderHook(() => useLandingComposerPaste(editorRef));
+    const { result } = renderHook(() =>
+      useLandingComposerPaste(editorRef, TEST_FILE_DROPS, TEST_MENTION_ROOTS),
+    );
 
     act(() => {
       result.current.attachImageFiles([
@@ -120,7 +136,9 @@ describe("useLandingComposerPaste", () => {
     const inserted: ImageAttachmentAttrs[][] = [];
     const { handle, focusCalls } = makeHandle(inserted);
     const editorRef = { current: handle };
-    const { result } = renderHook(() => useLandingComposerPaste(editorRef));
+    const { result } = renderHook(() =>
+      useLandingComposerPaste(editorRef, TEST_FILE_DROPS, TEST_MENTION_ROOTS),
+    );
 
     const file = new File(["hello"], "shot.png", { type: "image/png" });
     act(() => {
@@ -154,7 +172,9 @@ describe("useLandingComposerPaste", () => {
     const inserted: ImageAttachmentAttrs[][] = [];
     const { handle } = makeHandle(inserted);
     const editorRef = { current: handle };
-    const { result } = renderHook(() => useLandingComposerPaste(editorRef));
+    const { result } = renderHook(() =>
+      useLandingComposerPaste(editorRef, TEST_FILE_DROPS, TEST_MENTION_ROOTS),
+    );
 
     const first = new File(["same"], "a.png", { type: "image/png" });
     const second = new File(["same"], "b.png", { type: "image/png" });
@@ -178,7 +198,9 @@ describe("useLandingComposerPaste", () => {
     const inserted: ImageAttachmentAttrs[][] = [];
     const { handle } = makeHandle(inserted);
     const editorRef = { current: handle };
-    const { result } = renderHook(() => useLandingComposerPaste(editorRef));
+    const { result } = renderHook(() =>
+      useLandingComposerPaste(editorRef, TEST_FILE_DROPS, TEST_MENTION_ROOTS),
+    );
 
     const png = new File(["img"], "shot.png", { type: "image/png" });
     const pdf = new File(["doc"], "doc.pdf", { type: "application/pdf" });
@@ -196,7 +218,9 @@ describe("useLandingComposerPaste", () => {
     const inserted: ImageAttachmentAttrs[][] = [];
     const { handle } = makeHandle(inserted);
     const editorRef = { current: handle };
-    const { result } = renderHook(() => useLandingComposerPaste(editorRef));
+    const { result } = renderHook(() =>
+      useLandingComposerPaste(editorRef, TEST_FILE_DROPS, TEST_MENTION_ROOTS),
+    );
 
     // Force `putImage` (its `sha256Hex`) to reject so the whole ingest rejects —
     // the partial-paste failure path. The `.catch` must surface a toast (and
@@ -237,7 +261,7 @@ describe("useLandingComposerPaste", () => {
     );
 
     const { result, unmount } = renderHook(() =>
-      useLandingComposerPaste(editorRef),
+      useLandingComposerPaste(editorRef, TEST_FILE_DROPS, TEST_MENTION_ROOTS),
     );
     const file = new File(["hello"], "shot.png", { type: "image/png" });
     act(() => {
@@ -264,7 +288,9 @@ describe("useLandingComposerPaste", () => {
     const inserted: ImageAttachmentAttrs[][] = [];
     const { handle } = makeHandle(inserted);
     const editorRef = { current: handle };
-    const { result } = renderHook(() => useLandingComposerPaste(editorRef));
+    const { result } = renderHook(() =>
+      useLandingComposerPaste(editorRef, TEST_FILE_DROPS, TEST_MENTION_ROOTS),
+    );
 
     const oversized = new File(["x"], "big.png", { type: "image/png" });
     Object.defineProperty(oversized, "size", { value: 10 * 1024 * 1024 });

@@ -1,5 +1,6 @@
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import { v4 as uuidv4 } from "uuid";
+import type { IFileDropHost } from "@traycer-clients/shared/platform/runner-host";
 
 import type { ImageAttachmentAttrs } from "@/components/chat/composer/editor/extensions/image-attachment-extension";
 import {
@@ -76,9 +77,26 @@ async function landingImageAttrsFromFiles(
   );
 }
 
-export function useLandingComposerPaste(editorRef: {
-  readonly current: ComposerPasteEditorHandle | null;
-}): UseComposerPasteResult {
+export function useLandingComposerPaste(
+  editorRef: {
+    readonly current: ComposerPasteEditorHandle | null;
+  },
+  fileDrops: IFileDropHost,
+  mentionRoots: ReadonlyArray<string>,
+): UseComposerPasteResult {
+  const insertPaths = useCallback(
+    (paths: ReadonlyArray<string>) => {
+      const handle = editorRef.current;
+      if (handle === null || !handle.isReady()) return;
+      handle.insertPathSpans(paths);
+      handle.focus();
+    },
+    [editorRef],
+  );
+  const filePaths = useMemo(
+    () => ({ fileDrops, mentionRoots, insertPaths }),
+    [fileDrops, mentionRoots, insertPaths],
+  );
   const onFiles = useCallback(
     (files: ReadonlyArray<File>, signal: AbortSignal) =>
       landingImageAttrsFromFiles(files, signal)
@@ -131,5 +149,5 @@ export function useLandingComposerPaste(editorRef: {
         }),
     [editorRef],
   );
-  return useComposerPasteEvents(onFiles);
+  return useComposerPasteEvents(onFiles, filePaths);
 }

@@ -24,7 +24,10 @@ import { normalizeComposerContentWithSelection } from "@/lib/composer/composer-c
 import { buildComposerExtensions } from "./editor/editor-config";
 import { mentionSuggestionPluginKey } from "./editor/extensions/mention-extension";
 import { slashSuggestionPluginKey } from "./editor/extensions/slash-command-extension";
-import { insertImageAttachmentsCommand } from "@/hooks/composer/use-composer-paste";
+import {
+  insertImageAttachmentsCommand,
+  insertPathSpansCommand,
+} from "@/hooks/composer/use-composer-paste";
 import type { ImageAttachmentAttrs } from "./editor/extensions/image-attachment-extension";
 import type { ComposerPickerStore } from "./picker/composer-picker-store";
 
@@ -50,6 +53,12 @@ export interface ComposerPromptEditorHandle {
   readonly insertImageAttachments: (
     attrs: ReadonlyArray<ImageAttachmentAttrs>,
   ) => void;
+  /**
+   * Insert each resolved file/folder path as its own inline-code span at the
+   * caret (space-separated, trailing plain space) - the pasted-file-path
+   * counterpart to `insertImageAttachments`.
+   */
+  readonly insertPathSpans: (paths: ReadonlyArray<string>) => void;
   readonly removeImageAttachmentById: (id: string) => void;
   /**
    * Insert a finalized dictation segment at the caret (with a trailing space
@@ -334,6 +343,14 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     [editor, stabilizeImageAttachmentCaret],
   );
 
+  const insertPathSpans = useCallback(
+    (paths: ReadonlyArray<string>) => {
+      if (editor === null) return;
+      insertPathSpansCommand(editor, paths);
+    },
+    [editor],
+  );
+
   const removeImageAttachmentById = useCallback(
     (id: string) => {
       if (editor === null) return;
@@ -397,6 +414,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
       clear,
       setContent,
       insertImageAttachments,
+      insertPathSpans,
       removeImageAttachmentById,
       insertDictatedText,
       dismissActiveSuggestion,
@@ -408,6 +426,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
       focusAtEnd,
       getJSON,
       insertImageAttachments,
+      insertPathSpans,
       insertDictatedText,
       isEmpty,
       isReady,

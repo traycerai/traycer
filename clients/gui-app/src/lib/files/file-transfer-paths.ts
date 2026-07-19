@@ -1,0 +1,142 @@
+import type { IFileDropHost } from "@traycer-clients/shared/platform/runner-host";
+
+/**
+ * True when `dataTransfer` carries a file-like payload: real `File` items, or
+ * a URI-only flavor a source without a `File` object still exposes (macOS
+ * `public.file-url`, the standard `text/uri-list`). Shared by every
+ * paste/drop surface (terminal, composer) so URI-only clipboards get the same
+ * detection as a real Finder drag.
+ */
+export function dataTransferHasFiles(dataTransfer: DataTransfer): boolean {
+  const types = Array.from(dataTransfer.types);
+  return (
+    types.includes("Files") ||
+    types.includes("text/uri-list") ||
+    types.includes("public.file-url") ||
+    dataTransferItems(dataTransfer).some((item) => item.kind === "file")
+  );
+}
+
+export function collectDroppedFiles(
+  dataTransfer: DataTransfer,
+): readonly File[] {
+  const files = Array.from(dataTransfer.files);
+  if (files.length > 0) return files;
+  return dataTransferItems(dataTransfer).flatMap((item) => {
+    if (item.kind !== "file") return [];
+    const file = item.getAsFile();
+    return file === null ? [] : [file];
+  });
+}
+
+/**
+ * Resolves every file-like entry in `dataTransfer` to a durable on-disk path,
+ * merging real `File` objects (via `fileDrops.resolveDroppedFilePaths`) with
+ * URI-only entries (via `fileDrops.copyDroppedFilePaths`). File URLs are a
+ * fallback for sources that expose no `File` object - notably macOS
+ * screenshot thumbnails. Their backing file can disappear after either a drag
+ * or paste, so copy it into an app-managed temporary location before
+ * insertion. Real Finder files can carry a duplicate URI list; favor their
+ * original path rather than a copied one. Returns `null` when `dataTransfer`
+ * carries no file-like payload at all.
+ */
+export function resolveFileTransferPaths(
+  dataTransfer: DataTransfer,
+  fileDrops: IFileDropHost,
+): Promise<readonly string[]> | null {
+  const files = collectDroppedFiles(dataTransfer);
+  const fileUrlPaths =
+    files.length === 0 ? collectDroppedFileUrlPaths(dataTransfer) : [];
+  if (files.length === 0 && fileUrlPaths.length === 0) return null;
+  const resolvedFilePaths =
+    files.length === 0
+      ? Promise.resolve([] as readonly string[])
+      : fileDrops.resolveDroppedFilePaths(files);
+  const stableUrlPaths =
+    fileUrlPaths.length === 0
+      ? Promise.resolve([] as readonly string[])
+      : fileDrops.copyDroppedFilePaths(fileUrlPaths);
+  return Promise.all([resolvedFilePaths, stableUrlPaths]).then(
+    ([paths, urlPaths]) => [...paths, ...urlPaths],
+  );
+}
+
+export function collectDroppedFileUrlPaths(
+  dataTransfer: DataTransfer,
+): readonly string[] {
+  const uriList = readDataTransferData(dataTransfer, "text/uri-list");
+  const publicFileUrl = readDataTransferData(dataTransfer, "public.file-url");
+  return uniquePaths(
+    [...parseFileUriList(uriList), fileUriToPath(publicFileUrl)].filter(
+      isNonNullString,
+    ),
+  );
+}
+
+function readDataTransferData(
+  dataTransfer: DataTransfer,
+  type: string,
+): string {
+  try {
+    return dataTransfer.getData(type);
+  } catch {
+    return "";
+  }
+}
+
+function dataTransferItems(
+  dataTransfer: DataTransfer,
+): readonly DataTransferItem[] {
+  const indexedItems = Array.from(dataTransfer.items).filter(
+    isDataTransferItem,
+  );
+  if (indexedItems.length === dataTransfer.items.length) return indexedItems;
+  return Array.from({ length: dataTransfer.items.length }, (_value, index) => {
+    return dataTransfer.items[index];
+  }).filter(isDataTransferItem);
+}
+
+function isDataTransferItem(
+  value: DataTransferItem | null | undefined,
+): value is DataTransferItem {
+  return value !== null && value !== undefined;
+}
+
+function parseFileUriList(value: string): readonly string[] {
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith("#"))
+    .map(fileUriToPath)
+    .filter(isNonNullString);
+}
+
+function fileUriToPath(value: string): string | null {
+  if (!value.startsWith("file://")) return null;
+  const withoutScheme = value.slice("file://".length);
+  const slashIndex = withoutScheme.indexOf("/");
+  if (slashIndex === -1) return null;
+  const host = withoutScheme.slice(0, slashIndex);
+  const rawPath = withoutScheme.slice(slashIndex);
+  const path = decodeFileUriPath(rawPath);
+  if (path === null) return null;
+  if (/^\/[A-Za-z]:\//.test(path)) return path.slice(1);
+  if (host.length === 0 || host === "localhost") return path;
+  return `//${host}${path}`;
+}
+
+function decodeFileUriPath(value: string): string | null {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return null;
+  }
+}
+
+function isNonNullString(value: string | null): value is string {
+  return value !== null;
+}
+
+export function uniquePaths(paths: readonly string[]): readonly string[] {
+  return Array.from(new Set(paths.filter((path) => path.length > 0)));
+}

@@ -39,6 +39,7 @@ function fakeHandle(ready: boolean) {
     clear: () => undefined,
     setContent,
     insertImageAttachments: () => undefined,
+    insertPathSpans: () => undefined,
     removeImageAttachmentById: () => undefined,
     insertDictatedText: () => undefined,
     dismissActiveSuggestion: () => false,

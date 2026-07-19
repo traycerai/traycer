@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ClipboardEvent,
@@ -8,6 +9,7 @@ import {
 } from "react";
 import type { Editor } from "@tiptap/core";
 import { v4 as uuidv4 } from "uuid";
+import type { IFileDropHost } from "@traycer-clients/shared/platform/runner-host";
 
 import type { ImageAttachmentAttrs } from "@/components/chat/composer/editor/extensions/image-attachment-extension";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
@@ -16,6 +18,16 @@ import {
   AnalyticsEvent,
   analyticsBlockerFromError,
 } from "@/lib/analytics";
+import {
+  collectDroppedFileUrlPaths,
+  collectDroppedFiles,
+  dataTransferHasFiles,
+  uniquePaths,
+} from "@/lib/files/file-transfer-paths";
+import {
+  getBasename,
+  relativizeToWorkspaceRoot,
+} from "@/lib/path/cross-platform-path";
 
 export const IMAGE_MIME_PREFIX = "image/";
 export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
@@ -149,19 +161,150 @@ export interface UseComposerPasteResult {
   isIngestingImages: boolean;
 }
 
-function dataTransferHasFiles(event: DragEvent<HTMLElement>): boolean {
-  return Array.from(event.dataTransfer.types).includes("Files");
+/**
+ * Non-image paste/drop ingest: resolves every non-image file (and any
+ * URI-only clipboard/drop entry) to a real path and inserts each as its own
+ * inline-code span. Runner-host-dependent (`fileDrops`) and relativization-
+ * dependent (`mentionRoots`) - threaded in explicitly by each surface rather
+ * than read from context here, so this stays trivially testable without a
+ * `<RunnerHostProvider>`.
+ */
+export interface ComposerFilePathIngestArgs {
+  readonly fileDrops: IFileDropHost;
+  readonly mentionRoots: ReadonlyArray<string>;
+  readonly insertPaths: (paths: ReadonlyArray<string>) => void;
+}
+
+function isNonImageFile(file: File): boolean {
+  return !file.type.startsWith(IMAGE_MIME_PREFIX);
+}
+
+interface FilePathResolution {
+  readonly name: string;
+  readonly path: string | null;
+}
+
+function resolutionFromPaths(
+  name: string,
+  resolved: readonly string[],
+): FilePathResolution {
+  const path = resolved.at(0);
+  return { name, path: path !== undefined && path.length > 0 ? path : null };
 }
 
 /**
- * Drag/drop/paste plumbing shared by every composer surface. The ingest itself
+ * Resolves one file/URL entry at a time (rather than a single batched call)
+ * so a failure on one item never sinks the rest, and so the failure can be
+ * attributed back to its source name for the partial-failure toast -
+ * `IFileDropHost`'s batched result carries no such correlation.
+ */
+async function resolveFileToPath(
+  file: File,
+  fileDrops: IFileDropHost,
+): Promise<FilePathResolution> {
+  const name = file.name.length > 0 ? file.name : "file";
+  try {
+    const resolved = await fileDrops.resolveDroppedFilePaths([file]);
+    return resolutionFromPaths(name, resolved);
+  } catch {
+    return { name, path: null };
+  }
+}
+
+async function resolveUrlPathToPath(
+  urlPath: string,
+  fileDrops: IFileDropHost,
+): Promise<FilePathResolution> {
+  const basename = getBasename(urlPath);
+  const name = basename.length > 0 ? basename : urlPath;
+  try {
+    const resolved = await fileDrops.copyDroppedFilePaths([urlPath]);
+    return resolutionFromPaths(name, resolved);
+  } catch {
+    return { name, path: null };
+  }
+}
+
+function displayPathForInsertion(
+  path: string,
+  mentionRoots: ReadonlyArray<string>,
+): string {
+  return relativizeToWorkspaceRoot(mentionRoots, path) ?? path;
+}
+
+function showFilePathResolutionToast(
+  resolvedCount: number,
+  failedNames: ReadonlyArray<string>,
+): void {
+  if (failedNames.length === 0) return;
+  if (resolvedCount === 0) {
+    reportableErrorToast(
+      "Couldn't resolve file path",
+      {
+        description: "This surface can't read a real file path from the paste.",
+      },
+      {
+        title: "Could not resolve file path",
+        message: null,
+        code: null,
+        source: "Chat composer",
+      },
+    );
+    return;
+  }
+  const plural = failedNames.length === 1 ? "file" : "files";
+  reportableErrorToast(
+    `Couldn't add ${failedNames.length} ${plural}`,
+    { description: failedNames.join(", ") },
+    {
+      title: "Could not resolve file path",
+      message: null,
+      code: null,
+      source: "Chat composer",
+    },
+  );
+}
+
+async function resolveAndInsertFilePaths(
+  files: ReadonlyArray<File>,
+  fileUrlPaths: ReadonlyArray<string>,
+  filePaths: ComposerFilePathIngestArgs,
+): Promise<void> {
+  if (files.length === 0 && fileUrlPaths.length === 0) return;
+  const results = await Promise.all([
+    ...files.map((file) => resolveFileToPath(file, filePaths.fileDrops)),
+    ...fileUrlPaths.map((urlPath) =>
+      resolveUrlPathToPath(urlPath, filePaths.fileDrops),
+    ),
+  ]);
+  const resolvedPaths = uniquePaths(
+    results.flatMap((result) => (result.path === null ? [] : [result.path])),
+  );
+  const failedNames = results
+    .filter((result) => result.path === null)
+    .map((result) => result.name);
+  if (resolvedPaths.length > 0) {
+    filePaths.insertPaths(
+      resolvedPaths.map((path) =>
+        displayPathForInsertion(path, filePaths.mentionRoots),
+      ),
+    );
+  }
+  showFilePathResolutionToast(resolvedPaths.length, failedNames);
+}
+
+/**
+ * Drag/drop/paste plumbing shared by every composer surface. The image ingest
  * (base64 vs hash-only) is delegated to `onFiles`, which receives the raw file
  * list (image filtering + the 5MB cap belong to the ingest via `collectImages`).
  * Surfaces wrap this with their own ingest: `useComposerPasteAdapter` (base64)
  * for chat / new-conversation, `useLandingComposerPaste` (hash-only) for landing.
+ * Non-image file/URL entries always resolve through `filePaths`, identically
+ * across every surface (see `resolveAndInsertFilePaths`).
  */
 export function useComposerPasteEvents(
   onFiles: (files: ReadonlyArray<File>, signal: AbortSignal) => Promise<void>,
+  filePaths: ComposerFilePathIngestArgs,
 ): UseComposerPasteResult {
   const [dragDepth, setDragDepth] = useState(0);
   const [pendingImageCount, setPendingImageCount] = useState(0);
@@ -193,10 +336,16 @@ export function useComposerPasteEvents(
     [onFiles],
   );
 
+  const attachFilePaths = useCallback(
+    (files: ReadonlyArray<File>, fileUrlPaths: ReadonlyArray<string>) => {
+      void resolveAndInsertFilePaths(files, fileUrlPaths, filePaths);
+    },
+    [filePaths],
+  );
+
   const onPaste = useCallback(
     (event: ClipboardEvent<HTMLElement>) => {
       const items = event.clipboardData.items;
-      if (items.length === 0) return;
       const files: File[] = [];
       for (let i = 0; i < items.length; i += 1) {
         const item = items[i];
@@ -204,22 +353,30 @@ export function useComposerPasteEvents(
         const file = item.getAsFile();
         if (file) files.push(file);
       }
-      if (files.length === 0) return;
+      if (files.length === 0 && !dataTransferHasFiles(event.clipboardData)) {
+        return;
+      }
       event.preventDefault();
-      attachImageFiles(files);
+      if (files.length > 0) attachImageFiles(files);
+      const nonImageFiles = files.filter(isNonImageFile);
+      const fileUrlPaths =
+        files.length === 0
+          ? collectDroppedFileUrlPaths(event.clipboardData)
+          : [];
+      attachFilePaths(nonImageFiles, fileUrlPaths);
     },
-    [attachImageFiles],
+    [attachFilePaths, attachImageFiles],
   );
 
   const onDragOver = useCallback((event: DragEvent<HTMLElement>) => {
-    if (!dataTransferHasFiles(event)) return;
+    if (!dataTransferHasFiles(event.dataTransfer)) return;
     event.preventDefault();
     event.stopPropagation();
     event.dataTransfer.dropEffect = "copy";
   }, []);
 
   const onDragEnter = useCallback((event: DragEvent<HTMLElement>) => {
-    if (!dataTransferHasFiles(event)) return;
+    if (!dataTransferHasFiles(event.dataTransfer)) return;
     event.preventDefault();
     event.stopPropagation();
     setDragDepth((depth) => depth + 1);
@@ -233,13 +390,20 @@ export function useComposerPasteEvents(
 
   const onDrop = useCallback(
     (event: DragEvent<HTMLElement>) => {
-      if (!dataTransferHasFiles(event)) return;
+      if (!dataTransferHasFiles(event.dataTransfer)) return;
       event.preventDefault();
       event.stopPropagation();
       setDragDepth(0);
-      attachImageFiles(Array.from(event.dataTransfer.files));
+      const files = collectDroppedFiles(event.dataTransfer);
+      if (files.length > 0) attachImageFiles(files);
+      const nonImageFiles = files.filter(isNonImageFile);
+      const fileUrlPaths =
+        files.length === 0
+          ? collectDroppedFileUrlPaths(event.dataTransfer)
+          : [];
+      attachFilePaths(nonImageFiles, fileUrlPaths);
     },
-    [attachImageFiles],
+    [attachFilePaths, attachImageFiles],
   );
 
   return {
@@ -261,6 +425,7 @@ export function useComposerPasteEvents(
  */
 export function useComposerPasteAdapter(
   insertAttrs: (attrs: ReadonlyArray<ImageAttachmentAttrs>) => number,
+  filePaths: ComposerFilePathIngestArgs,
 ): UseComposerPasteResult {
   const onFiles = useCallback(
     (files: ReadonlyArray<File>, signal: AbortSignal) =>
@@ -301,7 +466,7 @@ export function useComposerPasteAdapter(
         }),
     [insertAttrs],
   );
-  return useComposerPasteEvents(onFiles);
+  return useComposerPasteEvents(onFiles, filePaths);
 }
 
 export interface ComposerPasteEditorHandle {
@@ -309,12 +474,17 @@ export interface ComposerPasteEditorHandle {
   readonly insertImageAttachments: (
     attrs: ReadonlyArray<ImageAttachmentAttrs>,
   ) => void;
+  readonly insertPathSpans: (paths: ReadonlyArray<string>) => void;
   readonly focus: () => void;
 }
 
-export function useComposerPaste(editorRef: {
-  readonly current: ComposerPasteEditorHandle | null;
-}): UseComposerPasteResult {
+export function useComposerPaste(
+  editorRef: {
+    readonly current: ComposerPasteEditorHandle | null;
+  },
+  fileDrops: IFileDropHost,
+  mentionRoots: ReadonlyArray<string>,
+): UseComposerPasteResult {
   const insertAttrs = useCallback(
     (attrs: ReadonlyArray<ImageAttachmentAttrs>): number => {
       const handle = editorRef.current;
@@ -325,7 +495,20 @@ export function useComposerPaste(editorRef: {
     },
     [editorRef],
   );
-  return useComposerPasteAdapter(insertAttrs);
+  const insertPaths = useCallback(
+    (paths: ReadonlyArray<string>) => {
+      const handle = editorRef.current;
+      if (handle === null || !handle.isReady()) return;
+      handle.insertPathSpans(paths);
+      handle.focus();
+    },
+    [editorRef],
+  );
+  const filePaths = useMemo(
+    () => ({ fileDrops, mentionRoots, insertPaths }),
+    [fileDrops, mentionRoots, insertPaths],
+  );
+  return useComposerPasteAdapter(insertAttrs, filePaths);
 }
 
 export function insertImageAttachmentsCommand(
@@ -342,6 +525,26 @@ export function insertImageAttachmentsCommand(
   if (stabilizeCaretBoundary) {
     stabilizeTerminalImageAttachmentCaret(editor);
   }
+}
+
+/**
+ * Inserts each resolved path as its own inline-code span, space-separated on
+ * one line, followed by a trailing PLAIN space so the caret lands past the
+ * code mark - continued typing resumes as prose rather than extending the
+ * last path. `unsetMark` clears the code mark from stored marks as a second,
+ * explicit guarantee alongside the plain trailing character.
+ */
+export function insertPathSpansCommand(
+  editor: Editor,
+  paths: ReadonlyArray<string>,
+): void {
+  if (paths.length === 0) return;
+  const content = paths.flatMap((path, index) => {
+    const span = { type: "text", text: path, marks: [{ type: "code" }] };
+    return index === 0 ? [span] : [{ type: "text", text: " " }, span];
+  });
+  content.push({ type: "text", text: " " });
+  editor.chain().insertContent(content).unsetMark("code").run();
 }
 
 function stabilizeTerminalImageAttachmentCaret(editor: Editor): void {
