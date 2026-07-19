@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   stageHostInstallSourceMock: vi.fn(),
   commitHostInstallSourceMock: vi.fn(),
   discardStagedHostInstallSourceMock: vi.fn(),
+  currentInstallPlatformMock: vi.fn(),
   createServiceInstallLifecycleMock: vi.fn(),
   createBytesOnlyInstallLifecycleMock: vi.fn(),
   createServiceControllerMock: vi.fn(),
@@ -42,6 +43,7 @@ vi.mock("../../installer", () => ({
     mocks.callOrder.push("discard");
     return mocks.discardStagedHostInstallSourceMock(...callArgs);
   },
+  currentInstallPlatform: mocks.currentInstallPlatformMock,
 }));
 
 vi.mock("../../service/install-lifecycle", () => ({
@@ -208,6 +210,7 @@ describe("buildHostInstallCommand", () => {
       environment: "production",
       devSlot: null,
     });
+    mocks.currentInstallPlatformMock.mockReturnValue("darwin");
   });
 
   afterEach(() => {
@@ -281,6 +284,19 @@ describe("buildHostInstallCommand", () => {
     expect(bytesOnlyLifecycle.afterSwap).not.toHaveBeenCalled();
     // No service action is reported - activation remains a separate step.
     expect(result.data).toMatchObject({ serviceLifecycle: null });
+  });
+
+  it("rejects --no-service-register on Windows before staging or touching a live host", async () => {
+    mocks.currentInstallPlatformMock.mockReturnValue("win32");
+
+    await expect(
+      buildHostInstallCommand(baseArgs({ noServiceRegister: true }))(fakeCtx()),
+    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.INVALID_ARGUMENT });
+
+    expect(mocks.stageHostInstallSourceMock).not.toHaveBeenCalled();
+    expect(mocks.commitHostInstallSourceMock).not.toHaveBeenCalled();
+    expect(mocks.createServiceInstallLifecycleMock).not.toHaveBeenCalled();
+    expect(mocks.createBytesOnlyInstallLifecycleMock).not.toHaveBeenCalled();
   });
 
   it("passes the enableLinger/allowSelfInvocation bootstrap payload when --no-service-register is NOT set", async () => {

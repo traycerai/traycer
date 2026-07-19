@@ -463,4 +463,24 @@ describe("commitHostInstallSource - reconcile runs BEFORE the commit (Finding 2)
       "binary-2.0.0",
     );
   });
+
+  it("cleans the staged source when pre-commit reconciliation throws", async () => {
+    // A present but malformed install record makes the first reconcile throw
+    // before `commitInstallFromSource` begins. The staged tree still belongs
+    // to this call and must be cleaned by commitHostInstallSource's finally.
+    mkdirSync(installDirFor(ENV), { recursive: true });
+    writeFileSync(join(installDirFor(ENV), "install.json"), "not-json");
+    const staged = freshStagedSource("2.0.0");
+
+    await expect(
+      commitHostInstallSource({
+        environment: ENV,
+        staged,
+        onProgress: () => {},
+        lifecycle: null,
+      }),
+    ).rejects.toMatchObject({ code: "E_HOST_INSTALL_RECORD_INVALID" });
+
+    expect(existsSync(staged.stagingDir)).toBe(false);
+  });
 });

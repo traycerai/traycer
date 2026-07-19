@@ -13,9 +13,9 @@ import {
 // forever - the lock holder stays positively alive, so ticket-1's
 // hardened stale-lock breaking correctly refuses to break it, and every
 // other host mutation wedges until a human kills the process by hand.
-// This forces a REAL probe binary (not a mocked error shape) to hang past
-// the bound, so it exercises the actual `timeout` wiring on
-// `execFileAsync` rather than just our own error-classification logic.
+// This forces a REAL TERM-ignoring probe binary (not a mocked error shape)
+// to hang past the bound, proving the SIGKILL escalation rather than merely
+// `execFile`'s soft SIGTERM timeout wiring.
 describe.skipIf(process.platform === "win32")(
   "killConflictingPortOwner - bounded probe timeout (Finding 7)",
   () => {
@@ -25,11 +25,14 @@ describe.skipIf(process.platform === "win32")(
     beforeEach(() => {
       binDir = mkdtempSync(join(tmpdir(), "traycer-free-port-hang-test-"));
       // Stands in for the real `lsof` - PATH is prepended with `binDir`
-      // below so `execFileAsync("lsof", ...)` resolves to this script
-      // instead of the system binary. It never exits on its own; only
-      // `PORT_PROBE_TIMEOUT_MS`'s SIGTERM ends it.
+      // below so the probe resolves to this script instead of the system
+      // binary. It deliberately ignores SIGTERM, so only the hard SIGKILL
+      // escalation can release the CLI lock.
       const fakeLsof = join(binDir, "lsof");
-      writeFileSync(fakeLsof, "#!/bin/sh\nsleep 60\n");
+      writeFileSync(
+        fakeLsof,
+        "#!/bin/sh\ntrap '' TERM\nwhile true; do /bin/sleep 1; done\n",
+      );
       chmodSync(fakeLsof, 0o755);
       originalPath = process.env.PATH;
       process.env.PATH = `${binDir}:${originalPath ?? ""}`;
@@ -57,16 +60,13 @@ describe.skipIf(process.platform === "win32")(
           details: { probe: "timeout" },
         });
         const elapsedMs = Date.now() - start;
-        // Bounded, not indefinite: comfortably above PORT_PROBE_TIMEOUT_MS
-        // (the real bound that must fire) but far short of the fake
-        // lsof's 60s sleep - reverting the `timeout` option on
-        // `execFileAsync` would make this assertion (and the whole test,
-        // via its own timeout below) fail instead of silently hanging the
-        // suite.
+        // Bounded, not indefinite: the TERM-ignoring fixture proves the
+        // SIGKILL escalation settles the promise shortly after the soft
+        // deadline, instead of waiting for its infinite loop.
         expect(elapsedMs).toBeGreaterThanOrEqual(PORT_PROBE_TIMEOUT_MS);
-        expect(elapsedMs).toBeLessThan(PORT_PROBE_TIMEOUT_MS + 10_000);
+        expect(elapsedMs).toBeLessThan(PORT_PROBE_TIMEOUT_MS + 3_000);
       },
-      PORT_PROBE_TIMEOUT_MS + 15_000,
+      PORT_PROBE_TIMEOUT_MS + 5_000,
     );
   },
 );

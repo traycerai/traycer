@@ -112,8 +112,16 @@ export function buildWorktreeListCommand(
 
 export function parseWorktreeListLimit(value: string | null): number | null {
   if (value === null) return null;
-  const limit = Number(value);
-  if (Number.isSafeInteger(limit) && limit > 0) return limit;
+  if (!/^[1-9]\d*$/.test(value)) {
+    throw cliError({
+      code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+      message: "traycer worktree list: --limit must be a positive integer.",
+      details: { limit: value },
+      exitCode: 1,
+    });
+  }
+  const limit = Number.parseInt(value, 10);
+  if (Number.isSafeInteger(limit)) return limit;
   throw cliError({
     code: CLI_ERROR_CODES.INVALID_ARGUMENT,
     message: "traycer worktree list: --limit must be a positive integer.",

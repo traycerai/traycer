@@ -328,8 +328,8 @@ export async function commitHostInstallSource(
 ): Promise<CommitHostInstallSourceResult> {
   const logger = createCliLogger(opts.environment);
   let swapped = false;
-  await reconcileHostStage(opts.environment);
   try {
+    await reconcileHostStage(opts.environment);
     const { record, previous } = await commitInstallFromSource({
       environment: opts.environment,
       sourceDir: opts.staged.stagingDir,

@@ -11,13 +11,20 @@ type Environment = "dev" | "production";
 let sandboxRoot = "";
 
 function hostHomeFor(environment: Environment): string {
-  return join(sandboxRoot, "host", environment);
+  const hostRoot = join(sandboxRoot, ".traycer", "host");
+  return environment === "production" ? hostRoot : join(hostRoot, environment);
 }
 function installDirFor(environment: Environment): string {
   return join(hostHomeFor(environment), "install");
 }
 function pidMetadataPathFor(environment: Environment): string {
   return join(hostHomeFor(environment), "pid.json");
+}
+function cliLockPathFor(environment: Environment): string {
+  const cliRoot = join(sandboxRoot, ".traycer", "cli");
+  const cliHome =
+    environment === "production" ? cliRoot : join(cliRoot, environment);
+  return join(cliHome, ".lock");
 }
 
 // `store/paths` computes `TRAYCER_HOME` from `os.homedir()` once at module
@@ -48,6 +55,7 @@ vi.mock("../../store/paths", async () => {
       join(installDirFor(environment), "install.json"),
     hostPidMetadataPath: (environment: Environment) =>
       pidMetadataPathFor(environment),
+    cliLockPath: (environment: Environment) => cliLockPathFor(environment),
     ensureHostHomeDir: async (environment: Environment) => {
       mkdirSync(hostHomeFor(environment), { recursive: true });
     },
@@ -58,14 +66,23 @@ vi.mock("../../store/paths", async () => {
 });
 
 import { stampRuntime } from "../stamp-runtime";
+import { buildHostInstallCommand } from "../../commands/host-install";
+import { noopLogger } from "../../logger";
 import {
   readHostInstallRecord,
   writeHostInstallRecord,
   type HostInstallRecord,
 } from "../../manifest/host-install";
-import { readProcessStartTimeMs } from "../../store/process-identity";
+import {
+  __setProcessStartTimeReaderForTest,
+  readProcessStartTimeMs,
+} from "../../store/process-identity";
+import type { CommandContext, CommandResult } from "../../runner/runner";
 
-const ENV: Environment = "production";
+// The worker invokes the source CLI, whose baked source environment is dev.
+// Keep the parent on that same environment so both genuine command paths
+// address the exact sandboxed install record.
+const ENV: Environment = "dev";
 
 async function writeInstall(
   overrides: Partial<HostInstallRecord>,
@@ -120,6 +137,45 @@ function generationFor(record: HostInstallRecord): string {
     archiveSha256: record.archiveSha256,
     version: record.version,
   });
+}
+
+function commandContext(): CommandContext {
+  return {
+    runtime: {
+      json: true,
+      quiet: true,
+      noProgress: true,
+      noBootstrap: true,
+      nonInteractive: true,
+      environment: ENV,
+      logger: noopLogger,
+    },
+    output: {
+      progress: () => {},
+      human: () => {},
+      humanRequired: () => {},
+      emitResult: () => {},
+      emitError: () => {},
+    },
+    progress: () => {},
+  };
+}
+
+function installGenerationFromCommandResult(result: CommandResult): string {
+  if (
+    result.data === null ||
+    typeof result.data !== "object" ||
+    !("installGeneration" in result.data) ||
+    typeof result.data.installGeneration !== "string"
+  ) {
+    throw new Error("host install command returned no install generation");
+  }
+  return result.data.installGeneration;
+}
+
+function writeLocalHostSource(path: string): void {
+  mkdirSync(path, { recursive: true });
+  writeFileSync(join(path, "traycer-host"), "test host binary");
 }
 
 describe("stampRuntime", () => {
@@ -318,7 +374,7 @@ describe.skipIf(process.platform === "win32")(
       readonly pid: number;
       readonly startedAt: string;
     }> {
-      const proc = spawn("sleep", ["5"]);
+      const proc = spawn("sleep", ["30"]);
       child = proc;
       const pid = await new Promise<number>((resolve, reject) => {
         proc.once("spawn", () => {
@@ -335,6 +391,10 @@ describe.skipIf(process.platform === "win32")(
         throw new Error("could not read the spawned process's start time");
       }
       return { pid, startedAt: new Date(startedAtMs).toISOString() };
+    }
+
+    function wait(ms: number): Promise<void> {
+      return new Promise((resolve) => setTimeout(resolve, ms));
     }
 
     it("stamps runtimeVersion on a full match (null stamp + generation + live pid evidence)", async () => {
@@ -357,6 +417,61 @@ describe.skipIf(process.platform === "win32")(
       });
       const stored = await readHostInstallRecord(ENV);
       expect(stored?.runtimeVersion).toBe(pid.version);
+    });
+
+    it("stamps when pid.json is published more than five seconds after the process started", async () => {
+      const installed = await writeInstall({});
+      const live = await spawnLiveProcess();
+      // A host may take a while to bind and publish readiness. This is the
+      // timestamp domain pid.json owns, and deliberately differs from the
+      // OS process-start value by more than the old 5s identity tolerance.
+      await wait(6_000);
+      const pid = writePid({
+        pid: live.pid,
+        startedAt: new Date().toISOString(),
+      });
+
+      const result = await stampRuntime({
+        environment: ENV,
+        expectedInstallGeneration: generationFor(installed),
+        observedPid: pid.pid,
+        observedStartedAt: pid.startedAt,
+        observedRuntimeVersion: pid.version,
+      });
+
+      expect(result.outcome).toBe("stamped");
+      expect((await readHostInstallRecord(ENV))?.runtimeVersion).toBe(
+        pid.version,
+      );
+    }, 10_000);
+
+    it("rejects a live recycled PID whose OS start is after the observed publication", async () => {
+      const installed = await writeInstall({});
+      const live = await spawnLiveProcess();
+      const pid = writePid({
+        pid: live.pid,
+        startedAt: new Date().toISOString(),
+      });
+      const publishedAtMs = Date.parse(pid.startedAt);
+      const previousReader = __setProcessStartTimeReaderForTest(
+        () => publishedAtMs + 10_000,
+      );
+
+      try {
+        await expect(
+          stampRuntime({
+            environment: ENV,
+            expectedInstallGeneration: generationFor(installed),
+            observedPid: pid.pid,
+            observedStartedAt: pid.startedAt,
+            observedRuntimeVersion: pid.version,
+          }),
+        ).resolves.toEqual({ outcome: "superseded", reason: "pid-not-live" });
+      } finally {
+        __setProcessStartTimeReaderForTest(previousReader);
+      }
+
+      expect((await readHostInstallRecord(ENV))?.runtimeVersion).toBeNull();
     });
 
     it("covers the legacy-tuple fingerprint path (no installId)", async () => {
@@ -413,15 +528,10 @@ describe.skipIf(process.platform === "win32")(
 // sequential in-process writes can't reveal anything a single-threaded
 // test couldn't already guarantee by ordering its own calls - it's not a
 // genuine race. This spawns a REAL separate OS process
-// (`fixtures/stamp-runtime-terminal-install-worker.ts`) that performs a
-// terminal install through the exact production write path
-// (`writeHostInstallRecordAt`, the same one `installer/install.ts`'s
-// commit uses) between the moment a caller's command would have attested
-// install A's generation and the moment it calls `stampRuntime` - proving
-// the CAS uses the ATTESTED generation captured before the race window,
-// never a post-race disk re-read, and that install B's own debt survives
-// untouched. `bun run` matches `store/__tests__/fixtures/cli-lock-
-// worker.ts`'s own two-process convention.
+// (`fixtures/stamp-runtime-terminal-install-worker.ts`) that invokes the
+// real terminal `host install --no-service-register` command between the
+// moment command A returns its attested generation and the stamp call. This
+// proves the CAS consumes the command result, never a post-race disk reread.
 describe.skipIf(process.platform === "win32")(
   "stampRuntime - genuine two-process attested-generation CAS race (Finding 5)",
   () => {
@@ -442,18 +552,15 @@ describe.skipIf(process.platform === "win32")(
       "stamp-runtime-terminal-install-worker.ts",
     );
 
-    function spawnTerminalInstallWorker(overrides: {
-      readonly installId: string;
-      readonly version: string;
-      readonly installedAt: string;
-    }): ChildProcessWithoutNullStreams {
+    function spawnTerminalInstallWorker(
+      sourcePath: string,
+    ): ChildProcessWithoutNullStreams {
       return spawn("bun", ["run", workerScript], {
         env: {
           ...process.env,
-          WORKER_INSTALL_DIR: installDirFor(ENV),
-          WORKER_INSTALL_ID: overrides.installId,
-          WORKER_VERSION: overrides.version,
-          WORKER_INSTALLED_AT: overrides.installedAt,
+          WORKER_CLI_ROOT: join(__dirname, "..", "..", ".."),
+          WORKER_HOME: sandboxRoot,
+          WORKER_SOURCE_PATH: sourcePath,
         },
       });
     }
@@ -467,21 +574,33 @@ describe.skipIf(process.platform === "win32")(
     }
 
     it("a real terminal install landing in a separate OS process between the attested generation and the stamp call is superseded, never stamped onto the interloper's record", async () => {
-      // The controller's cycle: install A lands, its command attests A's
-      // generation and returns it to the caller - captured here exactly
-      // as the caller would hold onto it.
-      const installA = await writeInstall({ installId: "install-a" });
+      // The controller's cycle: a real command A lands an install and
+      // returns its generation. Capture that return value exactly as the
+      // caller does; computing it from a fixture would not exercise the
+      // attestation boundary this race protects.
+      mkdirSync(join(sandboxRoot, ".traycer", "cli", ENV), {
+        recursive: true,
+      });
+      const sourceA = join(sandboxRoot, "source-a");
+      writeLocalHostSource(sourceA);
+      const commandAResult = await buildHostInstallCommand({
+        versionRequest: "latest",
+        fromPath: sourceA,
+        enableLinger: true,
+        allowSelfInvocation: false,
+        noServiceRegister: true,
+        ifIdle: false,
+      })(commandContext());
       const pid = writePid({});
-      const expectedGenerationFromA = generationFor(installA);
+      const expectedGenerationFromA =
+        installGenerationFromCommandResult(commandAResult);
 
       // Before the caller gets to call stampRuntime, a REAL separate
       // process performs a terminal bytes-only install - install B -
       // landing via actual cross-process filesystem writes.
-      const worker = spawnTerminalInstallWorker({
-        installId: "install-b",
-        version: "3.0.0",
-        installedAt: "2026-01-02T00:00:00.000Z",
-      });
+      const sourceB = join(sandboxRoot, "source-b");
+      writeLocalHostSource(sourceB);
+      const worker = spawnTerminalInstallWorker(sourceB);
       const exitCode = await waitForExit(worker);
       expect(exitCode).toBe(0);
 
@@ -503,7 +622,7 @@ describe.skipIf(process.platform === "win32")(
       // Install B's own debt survives untouched - A's stale readiness
       // observation was never stamped onto it.
       const stored = await readHostInstallRecord(ENV);
-      expect(stored?.installId).toBe("install-b");
+      expect(stored?.source).toEqual({ kind: "local-file", value: sourceB });
       expect(stored?.runtimeVersion).toBeNull();
     });
   },

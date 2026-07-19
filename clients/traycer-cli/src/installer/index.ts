@@ -9,6 +9,7 @@ export type {
 } from "./install";
 export {
   commitHostInstallSource,
+  currentInstallPlatform,
   discardStagedHostInstallSource,
   installHost,
   stageHostInstallSource,

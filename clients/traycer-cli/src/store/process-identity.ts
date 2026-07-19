@@ -77,6 +77,17 @@ export function isProcessAlive(pid: number): boolean {
   return probeProcessLiveness(pid) !== "dead";
 }
 
+// Read a live process's OS start time without applying identity-token
+// equality semantics. Consumers that compare this value with a timestamp
+// published by a different system (for example pid.json readiness metadata)
+// need an ordering check, not `verifyProcessIdentity`'s same-process
+// tolerance. A failed liveness or start-time probe remains inconclusive.
+export function readLiveProcessStartTimeMs(pid: number): number | null {
+  return probeProcessLiveness(pid) === "alive"
+    ? processStartTimeReader(pid)
+    : null;
+}
+
 // ---- Identity (pid + process-start-time) ---------------------------------
 
 export interface ProcessIdentityToken {

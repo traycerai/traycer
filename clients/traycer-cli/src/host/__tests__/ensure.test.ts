@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   stageHostInstallSourceMock: vi.fn(),
   commitHostInstallSourceMock: vi.fn(),
   discardStagedHostInstallSourceMock: vi.fn(),
+  currentInstallPlatformMock: vi.fn(),
   resolveBundledHostArchiveMock: vi.fn(),
   readHostInstallRecordMock: vi.fn(),
   resolveServiceCliInvocationMock: vi.fn(),
@@ -42,6 +43,7 @@ vi.mock("../../installer", () => ({
     mocks.callOrder.push("discard");
     return mocks.discardStagedHostInstallSourceMock(...callArgs);
   },
+  currentInstallPlatform: mocks.currentInstallPlatformMock,
 }));
 
 vi.mock("../../installer/bundled-host", () => ({
@@ -198,6 +200,7 @@ beforeEach(() => {
     installGeneration: "id:install-1.6.0",
   });
   assertHostNotBusyMock.mockResolvedValue(undefined);
+  mocks.currentInstallPlatformMock.mockReturnValue("darwin");
 });
 
 afterEach(() => {
@@ -205,6 +208,19 @@ afterEach(() => {
 });
 
 describe("ensureHost", () => {
+  it("rejects --no-service-register on Windows before inspecting or stopping a live host", async () => {
+    mocks.currentInstallPlatformMock.mockReturnValue("win32");
+
+    await expect(
+      ensureHost(makeOpts({ noServiceRegister: true })),
+    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.INVALID_ARGUMENT });
+
+    expect(readHostInstallRecordMock).not.toHaveBeenCalled();
+    expect(createServiceControllerMock).not.toHaveBeenCalled();
+    expect(stageHostInstallSourceMock).not.toHaveBeenCalled();
+    expect(commitHostInstallSourceMock).not.toHaveBeenCalled();
+  });
+
   it("fast no-op when installed + registered + running (no lock, no install)", async () => {
     readHostInstallRecordMock.mockResolvedValue({ version: "1.5.0" });
     const controller = makeController("running");

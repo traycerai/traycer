@@ -465,17 +465,6 @@ async function commitInstall(
   };
 }
 
-function buildBytesOnlyInstallLifecycle(
-  controller: ServiceController,
-  label: ServiceLabel,
-): InstallHostLifecycle {
-  return {
-    beforeSwap: (): Promise<void> =>
-      process.platform === "win32" ? controller.stop(label) : Promise.resolve(),
-    afterSwap: (): Promise<void> => Promise.resolve(),
-  };
-}
-
 async function runServiceRegister(
   opts: ProvisionHostOptions,
   controller: ServiceController,

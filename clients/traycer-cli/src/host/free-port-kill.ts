@@ -1,8 +1,5 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { spawn, type ChildProcess } from "node:child_process";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
-
-const execFileAsync = promisify(execFile);
 
 // Bounded timeout for the `lsof`/`netstat` ownership probes below. Both now
 // run entirely inside `cli-lock` (Tech Plan, "Lifecycle lock coverage") -
@@ -14,6 +11,7 @@ const execFileAsync = promisify(execFile);
 // sub-100ms) while still bounding the worst case to something a caller
 // waiting on `cli-lock` can tolerate.
 export const PORT_PROBE_TIMEOUT_MS = 5_000;
+const PORT_PROBE_KILL_GRACE_MS = 500;
 
 // Shared by `host free-port-and-restart` and `host free-port` (Host
 // Update Layer Redesign Tech Plan, "Lifecycle lock coverage") - the
@@ -128,20 +126,116 @@ async function pidOwnsPort(pid: number, port: number): Promise<PortOwnership> {
   return posixPidOwnsPort(pid, port);
 }
 
-// Narrow `execFileAsync` rejections to the shape Node uses for spawn
-// failures. The `code` field on ENOENT is a string ("ENOENT") whereas
-// the `code` field on a non-zero process exit is a number; `signal` is
-// populated only when the child was killed by a signal. `killed` is
-// Node's own marker that ITS `timeout` option (not an external SIGTERM)
-// is what ended the child - the one unambiguous way to tell "the probe
-// hung past `PORT_PROBE_TIMEOUT_MS`" apart from "the probe exited
-// abnormally for some other reason."
+// Narrow probe-process failures to the one shape callers need. The `code`
+// field on ENOENT is a string ("ENOENT") whereas a non-zero process exit
+// carries a number. `killed` is set only by the hard deadline below.
 interface ExecFileError {
   readonly code: string | number | undefined;
   readonly signal: string | undefined;
   readonly stdout: string | undefined;
   readonly stderr: string | undefined;
   readonly killed: boolean;
+}
+
+interface ProbeExecutionResult {
+  readonly stdout: string;
+}
+
+function terminateProbeProcessTree(
+  child: ChildProcess,
+  signal: NodeJS.Signals,
+): void {
+  if (child.pid === undefined) return;
+  if (process.platform === "win32") {
+    child.kill(signal);
+    return;
+  }
+  // Probes run in their own POSIX process group, so this also reaps helper
+  // children a compromised shell wrapper may have left behind.
+  try {
+    process.kill(-child.pid, signal);
+  } catch {
+    child.kill(signal);
+  }
+}
+
+function executePortProbe(
+  command: string,
+  args: readonly string[],
+): Promise<ProbeExecutionResult> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      detached: process.platform !== "win32",
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    let stdout = "";
+    let stderr = "";
+    let timedOut = false;
+    let settled = false;
+    let timeoutTimer: NodeJS.Timeout | null = null;
+    let killTimer: NodeJS.Timeout | null = null;
+
+    const clearTimers = (): void => {
+      if (timeoutTimer !== null) clearTimeout(timeoutTimer);
+      if (killTimer !== null) clearTimeout(killTimer);
+      timeoutTimer = null;
+      killTimer = null;
+    };
+    const settle = (result: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimers();
+      result();
+    };
+    const timeoutError = (): ExecFileError => ({
+      code: undefined,
+      signal: "SIGKILL",
+      stdout,
+      stderr,
+      killed: true,
+    });
+
+    child.stdout?.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr?.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.once("error", (err) => {
+      settle(() => reject(err));
+    });
+    child.once("close", (code, signal) => {
+      if (timedOut) {
+        settle(() => reject(timeoutError()));
+        return;
+      }
+      if (code === 0) {
+        settle(() => resolve({ stdout }));
+        return;
+      }
+      settle(() =>
+        reject({
+          code: code ?? undefined,
+          signal: signal ?? undefined,
+          stdout,
+          stderr,
+          killed: false,
+        } satisfies ExecFileError),
+      );
+    });
+    timeoutTimer = setTimeout(() => {
+      timedOut = true;
+      terminateProbeProcessTree(child, "SIGTERM");
+      // `execFile`'s built-in timeout only sends SIGTERM and then waits for
+      // normal exit. A TERM-ignoring probe would therefore hold cli-lock
+      // forever. Escalate and settle at a hard deadline instead.
+      killTimer = setTimeout(() => {
+        terminateProbeProcessTree(child, "SIGKILL");
+        settle(() => reject(timeoutError()));
+      }, PORT_PROBE_KILL_GRACE_MS);
+    }, PORT_PROBE_TIMEOUT_MS);
+  });
 }
 
 function readExecFileError(err: unknown): ExecFileError {
@@ -172,18 +266,18 @@ async function posixPidOwnsPort(
 ): Promise<PortOwnership> {
   let stdout: string;
   try {
-    const result = await execFileAsync(
-      "lsof",
-      ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fpn"],
-      { encoding: "utf8", timeout: PORT_PROBE_TIMEOUT_MS },
-    );
+    const result = await executePortProbe("lsof", [
+      "-nP",
+      `-iTCP:${port}`,
+      "-sTCP:LISTEN",
+      "-Fpn",
+    ]);
     stdout = result.stdout;
   } catch (err) {
     const info = readExecFileError(err);
-    // `killed` (Node's own timeout marker, not an external SIGTERM) means
-    // `lsof` hung past `PORT_PROBE_TIMEOUT_MS` and Node force-killed it -
-    // a conservative "could not determine", checked before the ENOENT/
-    // no-listener heuristics below so a hang can never be misread as
+    // `killed` marks our hard deadline: `lsof` exceeded
+    // `PORT_PROBE_TIMEOUT_MS` and was escalated to SIGKILL. Check it before
+    // the ENOENT/no-listener heuristics so a hang can never be misread as
     // either of those.
     if (info.killed) {
       return { owns: false, actualPid: null, probe: "timeout" };
@@ -236,10 +330,7 @@ async function netstatListenersForProto(proto: "TCP" | "TCPv6"): Promise<{
   readonly timedOut: boolean;
 }> {
   try {
-    const { stdout } = await execFileAsync("netstat", ["-ano", "-p", proto], {
-      encoding: "utf8",
-      timeout: PORT_PROBE_TIMEOUT_MS,
-    });
+    const { stdout } = await executePortProbe("netstat", ["-ano", "-p", proto]);
     return { stdout, available: true, timedOut: false };
   } catch (err) {
     const info = readExecFileError(err);

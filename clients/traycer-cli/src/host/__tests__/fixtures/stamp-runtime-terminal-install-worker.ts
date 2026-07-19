@@ -1,43 +1,52 @@
-import { writeHostInstallRecordAt } from "../../../manifest/host-install";
+import { spawn } from "node:child_process";
 
 // Worker process for the genuine two-process attested-generation CAS race
 // test in `stamp-runtime.test.ts` (ticket-2 review round 1, Finding 5).
 // Spawned as a real, separate OS process (via `bun run`) so "a terminal
-// install lands between the command's returned attested generation and
-// the stamp call" is exercised through actual cross-process filesystem
-// writes - via `writeHostInstallRecordAt`, the SAME production write path
-// `installer/install.ts`'s commit uses - not an in-process second write
-// that a single-threaded test could trivially sequence either way without
-// proving anything about the real race.
+// install lands between the command's returned attested generation and the
+// stamp call" exercises the actual terminal command, not a direct record
+// writer that could bypass command-result attestation behavior.
 async function main(): Promise<void> {
-  const installDir = process.env.WORKER_INSTALL_DIR;
-  const installId = process.env.WORKER_INSTALL_ID;
-  const version = process.env.WORKER_VERSION;
-  const installedAt = process.env.WORKER_INSTALLED_AT;
-  if (
-    installDir === undefined ||
-    installId === undefined ||
-    version === undefined ||
-    installedAt === undefined
-  ) {
+  const cliRoot = process.env.WORKER_CLI_ROOT;
+  const home = process.env.WORKER_HOME;
+  const sourcePath = process.env.WORKER_SOURCE_PATH;
+  if (cliRoot === undefined || home === undefined || sourcePath === undefined) {
     throw new Error(
-      "stamp-runtime-terminal-install-worker: WORKER_INSTALL_DIR, WORKER_INSTALL_ID, WORKER_VERSION, and WORKER_INSTALLED_AT are required",
+      "stamp-runtime-terminal-install-worker: WORKER_CLI_ROOT, WORKER_HOME, and WORKER_SOURCE_PATH are required",
     );
   }
-  await writeHostInstallRecordAt(installDir, {
-    installId,
-    version,
-    runtimeVersion: null,
-    platform: "darwin",
-    arch: "arm64",
-    installedAt,
-    source: { kind: "registry", value: version },
-    archiveSha256: "b".repeat(64),
-    signatureVerifiedAt: installedAt,
-    signatureKeyId: "test-key",
-    sizeBytes: 1,
-    executablePath: `${installDir}/traycer-host`,
+  const exitCode = await new Promise<number | null>((resolve, reject) => {
+    const child = spawn(
+      "bun",
+      [
+        "run",
+        "src/index.ts",
+        "host",
+        "install",
+        "--from",
+        sourcePath,
+        "--no-service-register",
+        "--json",
+        "--no-progress",
+      ],
+      {
+        cwd: cliRoot,
+        env: {
+          ...process.env,
+          HOME: home,
+          USERPROFILE: home,
+          TRAYCER_NONINTERACTIVE: "1",
+        },
+      },
+    );
+    child.once("error", reject);
+    child.once("exit", (code) => resolve(code));
   });
+  if (exitCode !== 0) {
+    throw new Error(
+      `stamp-runtime-terminal-install-worker: host install exited ${String(exitCode)}`,
+    );
+  }
 }
 
 main()

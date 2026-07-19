@@ -1,10 +1,12 @@
 import {
   commitHostInstallSource,
+  currentInstallPlatform,
   discardStagedHostInstallSource,
   stageHostInstallSource,
   type InstallSourceArg,
 } from "../installer";
 import { assertHostNotBusy } from "../host/busy-check";
+import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import {
   createServiceController,
@@ -73,6 +75,15 @@ export interface HostInstallArgs {
 
 export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
   return async (ctx): Promise<CommandResult> => {
+    if (args.noServiceRegister && currentInstallPlatform() === "win32") {
+      throw cliError({
+        code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+        message:
+          "host install: --no-service-register is not supported on Windows",
+        details: { environment: ctx.runtime.environment },
+        exitCode: 1,
+      });
+    }
     ctx.runtime.logger.info("Host install command started", {
       environment: ctx.runtime.environment,
       sourceKind: args.fromPath !== null ? "local-file" : "registry",
