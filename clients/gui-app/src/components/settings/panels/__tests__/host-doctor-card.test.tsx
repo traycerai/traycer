@@ -184,7 +184,7 @@ describe("HostDoctorCard pending CLI upgrade", () => {
     });
     renderCard(makeHostWithManagement(management));
 
-    const fixButton = await screen.findByRole("button", {
+    const fixButton = await screen.findByRole<HTMLButtonElement>("button", {
       name: /Free port \+ restart/i,
     });
     fireEvent.click(fixButton);
@@ -218,6 +218,10 @@ describe("HostDoctorCard pending CLI upgrade", () => {
     // fix, `isPending` kept this dialog open with Cancel/Esc disabled for the
     // entire restart budget.
     expect(screen.queryByRole("dialog")).toBeNull();
+    expect(fixButton.disabled).toBe(true);
+    fireEvent.click(fixButton);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(freePortAndRestart).toHaveBeenCalledTimes(1);
   });
 
   it("allows Free Port + Restart when PID and process name are unknown", async () => {

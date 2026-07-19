@@ -222,7 +222,9 @@ function HostDoctorCardInner(props: HostDoctorCardInnerProps) {
       recurrence={recurrenceModel.recurrence}
       reportFetching={reportFetching}
       fixPendingCode={fixMutation.isPending ? fixMutation.variables.code : null}
-      externalOperationActive={sharedOperationActive}
+      externalOperationActive={
+        sharedOperationActive || freePortMutation.isPending
+      }
       freePortPrompt={freePortPrompt}
       freePortPending={freePortMutation.isPending}
       onFix={handleFix}
