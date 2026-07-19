@@ -159,7 +159,7 @@ describe("<ChatProgressIcon />", () => {
     ).toBeDefined();
     expect(
       screen.getByTestId(BACKGROUND_TEST_ID).getAttribute("class"),
-    ).toContain("lucide-calendar-clock");
+    ).toContain("lucide-message-square-clock");
     expect(
       screen.queryByRole("status", { name: TURN_RUNNING_LABEL }),
     ).toBeNull();
