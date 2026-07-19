@@ -353,6 +353,21 @@ async function trackHostOperation<T>(
   }
 }
 
+/**
+ * Runs a host lifecycle action through the same process-wide single-flight
+ * guard and status publisher used by streaming CLI operations. Callers whose
+ * underlying operation owns its own progress/readiness flow (for example the
+ * native-menu respawn path) do not need to manufacture NDJSON progress events.
+ */
+export function runTrackedHostOperation<T>(
+  bridge: RunnerIpcBridge,
+  kind: HostOperationKind,
+  operationId: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  return trackHostOperation(bridge, kind, operationId, () => run());
+}
+
 export function streamCliWithProgress(
   args: readonly string[],
   operationId: string,
