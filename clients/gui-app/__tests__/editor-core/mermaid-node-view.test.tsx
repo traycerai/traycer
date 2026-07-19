@@ -12,6 +12,7 @@ import { EditorContent, EditorContext } from "@tiptap/react";
 import * as Y from "yjs";
 import { Awareness } from "y-protocols/awareness";
 import { buildArtifactExtensions, deriveCollabUser } from "@/editor-core";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { saveBlobToDisk } from "@/lib/files/save-blob-to-disk";
 
 // The download path lives in a shared lib module; mock it on its own.
@@ -37,6 +38,7 @@ vi.mock("@/editor-core/nodes/mermaid/mermaid-service", () => {
       .mockResolvedValue(new Blob(["mock-png"], { type: "image/png" })),
     subscribeMermaidTheme: vi.fn().mockReturnValue(() => undefined),
     getMermaidThemeVersion: vi.fn().mockReturnValue(0),
+    getSvgIntrinsicSize: vi.fn().mockReturnValue({ width: 10, height: 10 }),
     deriveMermaidAriaLabel: (code: string): string => {
       const firstLine = code
         .split("\n")
@@ -108,11 +110,13 @@ function makeQueryClient() {
 function renderMermaidEditor(editor: Editor) {
   const queryClient = makeQueryClient();
   render(
-    <QueryClientProvider client={queryClient}>
-      <EditorContext.Provider value={{ editor }}>
-        <EditorContent editor={editor} />
-      </EditorContext.Provider>
-    </QueryClientProvider>,
+    <TooltipProvider>
+      <QueryClientProvider client={queryClient}>
+        <EditorContext.Provider value={{ editor }}>
+          <EditorContent editor={editor} />
+        </EditorContext.Provider>
+      </QueryClientProvider>
+    </TooltipProvider>,
   );
   return queryClient;
 }
@@ -139,10 +143,28 @@ describe("MermaidNodeView", () => {
       editable: true,
     });
     renderMermaidEditor(editor);
-    const region = await screen.findByRole("img", { name: /graph TD/ });
-    await waitFor(() => {
-      expect(region.querySelector("svg")).not.toBeNull();
+    const diagram = await screen.findByRole("button", {
+      name: /expand diagram: graph TD/i,
     });
+    await waitFor(() => {
+      expect(diagram.querySelector("svg")).not.toBeNull();
+    });
+    editor.destroy();
+  });
+
+  it("opens the fullscreen preview by clicking the rendered diagram", async () => {
+    const editor = mountMermaidEditor({
+      code: "graph TD\n  A --> B",
+      editable: true,
+    });
+    renderMermaidEditor(editor);
+
+    const diagram = await screen.findByRole("button", {
+      name: /expand diagram: graph TD/i,
+    });
+    fireEvent.click(diagram);
+
+    expect(await screen.findByRole("dialog")).toBeTruthy();
     editor.destroy();
   });
 
@@ -161,6 +183,7 @@ describe("MermaidNodeView", () => {
     expect(
       await screen.findByRole("button", { name: /edit source/i }),
     ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /fullscreen/i })).toBeNull();
     editor.destroy();
   });
 
@@ -212,9 +235,11 @@ describe("MermaidNodeView", () => {
     const download = await screen.findByRole("button", {
       name: /download png/i,
     });
-    const region = await screen.findByRole("img", { name: /graph TD/ });
+    const diagram = await screen.findByRole("button", {
+      name: /expand diagram: graph TD/i,
+    });
     await waitFor(() => {
-      expect(region.querySelector("svg")).not.toBeNull();
+      expect(diagram.querySelector("svg")).not.toBeNull();
       expect((download as HTMLButtonElement).disabled).toBe(false);
     });
 
