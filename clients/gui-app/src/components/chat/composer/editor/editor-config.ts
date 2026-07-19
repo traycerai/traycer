@@ -24,6 +24,7 @@ export interface BuildComposerExtensionsArgs {
   readonly placeholder: string;
   readonly onSubmit: { readonly current: () => void };
   readonly slashProviderId: GuiHarnessId;
+  readonly getHasPastedImageBytes: () => ((hash: string) => boolean) | null;
 }
 
 // Blockquote is button-only (T5): the composer schema stays blockquote-valid
@@ -74,7 +75,10 @@ export function buildComposerExtensions(
       onSubmit: args.onSubmit,
       pickerStore: args.pickerStore,
     }),
-    createChatPasteHandler({ pickerStore: args.pickerStore }),
+    createChatPasteHandler({
+      pickerStore: args.pickerStore,
+      getHasPastedImageBytes: args.getHasPastedImageBytes,
+    }),
     // Cmd+C / Cmd+X -> structured plain text (list markers, mentions, slash
     // commands) instead of ProseMirror's default blank-line-joined textContent.
     ChatCopySerializer,

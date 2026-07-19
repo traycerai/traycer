@@ -11,10 +11,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 
 import {
+  useComposerPaste,
   useComposerPasteAdapter,
+  IMAGE_READ_TIMEOUT_MS,
   type UseComposerPasteResult,
 } from "@/hooks/composer/use-composer-paste";
 import type { ImageAttachmentAttrs } from "@/components/chat/composer/editor/extensions/image-attachment-extension";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 vi.mock("sonner", () => ({
   toast: {
@@ -25,14 +28,109 @@ vi.mock("sonner", () => ({
 afterEach(() => {
   cleanup();
   vi.mocked(toast.error).mockClear();
+  vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 describe("useComposerPasteAdapter - attachImageFiles", () => {
+  it("exposes ingestion as pending until the FileReader settles", async () => {
+    const delayedReader = installDelayedFileReader();
+    const insert = vi.fn(
+      (_attrs: ReadonlyArray<ImageAttachmentAttrs>): number => 1,
+    );
+    const { result } = renderHook(() => useComposerPasteAdapter(insert));
+
+    attachImageFiles(result.current, [
+      new File(["pending"], "pending.png", { type: "image/png" }),
+    ]);
+
+    expect(result.current.isIngestingImages).toBe(true);
+    expect(insert).not.toHaveBeenCalled();
+    delayedReader.resolveNext("data:image/png;base64,cGVuZGluZw==");
+    await waitFor(() => {
+      expect(result.current.isIngestingImages).toBe(false);
+    });
+    expect(insert).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases the gate and reports a FileReader rejection", async () => {
+    const delayedReader = installDelayedFileReader();
+    const insert = vi.fn(
+      (_attrs: ReadonlyArray<ImageAttachmentAttrs>): number => 1,
+    );
+    const { result } = renderHook(() => useComposerPasteAdapter(insert));
+
+    attachImageFiles(result.current, [
+      new File(["broken"], "broken.png", { type: "image/png" }),
+    ]);
+    delayedReader.rejectNext();
+
+    await waitFor(() => {
+      expect(result.current.isIngestingImages).toBe(false);
+    });
+    expect(insert).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledWith(
+      "Couldn't attach the image.",
+      expect.objectContaining({ description: "Please try adding it again." }),
+    );
+  });
+
+  it("times out a non-settling FileReader and releases the gate", async () => {
+    vi.useFakeTimers();
+    installDelayedFileReader();
+    const insert = vi.fn(
+      (_attrs: ReadonlyArray<ImageAttachmentAttrs>): number => 1,
+    );
+    const { result } = renderHook(() => useComposerPasteAdapter(insert));
+
+    attachImageFiles(result.current, [
+      new File(["stuck"], "stuck.png", { type: "image/png" }),
+    ]);
+    expect(result.current.isIngestingImages).toBe(true);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(IMAGE_READ_TIMEOUT_MS);
+    });
+
+    expect(result.current.isIngestingImages).toBe(false);
+    expect(insert).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledWith(
+      "Couldn't attach the image.",
+      expect.objectContaining({ description: "Please try adding it again." }),
+    );
+  });
+
+  it("aborts an in-flight FileReader on unmount without showing a toast", async () => {
+    installDelayedFileReader();
+    const abort = vi
+      .spyOn(FileReader.prototype, "abort")
+      .mockImplementation(() => undefined);
+    const insert = vi.fn(
+      (_attrs: ReadonlyArray<ImageAttachmentAttrs>): number => 1,
+    );
+    const { result, unmount } = renderHook(() =>
+      useComposerPasteAdapter(insert),
+    );
+
+    attachImageFiles(result.current, [
+      new File(["pending"], "pending.png", { type: "image/png" }),
+    ]);
+    expect(result.current.isIngestingImages).toBe(true);
+    unmount();
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+    });
+
+    expect(abort).toHaveBeenCalledTimes(1);
+    expect(insert).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
   it("converts picker-selected image files into image attachment attrs", async () => {
     const inserted: ImageAttachmentAttrs[][] = [];
     const { result } = renderHook(() =>
       useComposerPasteAdapter((attrs) => {
         inserted.push([...attrs]);
+        return attrs.length;
       }),
     );
     const imageFile = new File(["hello"], "sample.png", {
@@ -61,6 +159,7 @@ describe("useComposerPasteAdapter - attachImageFiles", () => {
     const { result } = renderHook(() =>
       useComposerPasteAdapter((attrs) => {
         inserted.push([...attrs]);
+        return attrs.length;
       }),
     );
     const png = new File(["png-bytes"], "shot.png", { type: "image/png" });
@@ -82,6 +181,7 @@ describe("useComposerPasteAdapter - attachImageFiles", () => {
     const { result } = renderHook(() =>
       useComposerPasteAdapter((attrs) => {
         inserted.push([...attrs]);
+        return attrs.length;
       }),
     );
     const oversized = makeOversizedImage("big.png");
@@ -109,6 +209,7 @@ describe("useComposerPasteAdapter - attachImageFiles", () => {
     const { result } = renderHook(() =>
       useComposerPasteAdapter((attrs) => {
         inserted.push([...attrs]);
+        return attrs.length;
       }),
     );
 
@@ -119,14 +220,88 @@ describe("useComposerPasteAdapter - attachImageFiles", () => {
   });
 
   it("returns a stable attachImageFiles reference across renders", () => {
-    const onInsert = (_attrs: ReadonlyArray<ImageAttachmentAttrs>): void =>
-      undefined;
+    const onInsert = (_attrs: ReadonlyArray<ImageAttachmentAttrs>): number => 0;
     const { result, rerender } = renderHook(() =>
       useComposerPasteAdapter(onInsert),
     );
     const first = result.current.attachImageFiles;
     rerender();
     expect(result.current.attachImageFiles).toBe(first);
+  });
+
+  it("does not report an attachment when the live editor rejects insertion", async () => {
+    const track = vi.spyOn(Analytics.getInstance(), "track");
+    const insert = vi.fn(
+      (_attrs: ReadonlyArray<ImageAttachmentAttrs>): number => 0,
+    );
+    const { result } = renderHook(() => useComposerPasteAdapter(insert));
+    const imageFile = new File(["hello"], "sample.png", {
+      type: "image/png",
+    });
+
+    attachImageFiles(result.current, [imageFile]);
+
+    await waitFor(() => expect(insert).toHaveBeenCalledOnce());
+    expect(track).not.toHaveBeenCalledWith(
+      AnalyticsEvent.AttachmentAdded,
+      expect.anything(),
+    );
+  });
+
+  it("does not report an attachment when the editor ref disappears during conversion", async () => {
+    const track = vi.spyOn(Analytics.getInstance(), "track");
+    const insertImageAttachments = vi.fn();
+    const editorRef: {
+      current: {
+        insertImageAttachments: typeof insertImageAttachments;
+        isReady: () => boolean;
+        focus: () => void;
+      } | null;
+    } = {
+      current: { insertImageAttachments, isReady: () => true, focus: vi.fn() },
+    };
+    const { result } = renderHook(() => useComposerPaste(editorRef));
+    const imageFile = new File(["hello"], "sample.png", {
+      type: "image/png",
+    });
+
+    attachImageFiles(result.current, [imageFile]);
+    editorRef.current = null;
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(insertImageAttachments).not.toHaveBeenCalled();
+    expect(track).not.toHaveBeenCalledWith(
+      AnalyticsEvent.AttachmentAdded,
+      expect.anything(),
+    );
+  });
+
+  it("does not report an attachment when a non-null editor is not ready", async () => {
+    const track = vi.spyOn(Analytics.getInstance(), "track");
+    const insertImageAttachments = vi.fn();
+    const editorRef = {
+      current: {
+        insertImageAttachments,
+        isReady: () => false,
+        focus: vi.fn(),
+      },
+    };
+    const { result } = renderHook(() => useComposerPaste(editorRef));
+
+    attachImageFiles(result.current, [
+      new File(["hello"], "sample.png", { type: "image/png" }),
+    ]);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(insertImageAttachments).not.toHaveBeenCalled();
+    expect(track).not.toHaveBeenCalledWith(
+      AnalyticsEvent.AttachmentAdded,
+      expect.anything(),
+    );
   });
 });
 
@@ -241,6 +416,37 @@ function attachImageFiles(
   });
 }
 
+interface DelayedFileReaderControl {
+  readonly resolveNext: (dataUrl: string) => void;
+  readonly rejectNext: () => void;
+}
+
+function installDelayedFileReader(): DelayedFileReaderControl {
+  const pending: FileReader[] = [];
+  vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(function (
+    this: FileReader,
+    _blob: Blob,
+  ) {
+    pending.push(this);
+  });
+  return {
+    resolveNext: (dataUrl) => {
+      const reader = pending.shift();
+      if (reader === undefined) throw new Error("expected pending file read");
+      Object.defineProperty(reader, "result", {
+        configurable: true,
+        value: dataUrl,
+      });
+      reader.dispatchEvent(new ProgressEvent("load"));
+    },
+    rejectNext: () => {
+      const reader = pending.shift();
+      if (reader === undefined) throw new Error("expected pending file read");
+      reader.dispatchEvent(new ProgressEvent("error"));
+    },
+  };
+}
+
 function renderHarness(inserted: ImageAttachmentAttrs[][]) {
   return render(<PasteHarness inserted={inserted} />);
 }
@@ -248,6 +454,7 @@ function renderHarness(inserted: ImageAttachmentAttrs[][]) {
 function PasteHarness(props: { readonly inserted: ImageAttachmentAttrs[][] }) {
   const handlers = useComposerPasteAdapter((attrs) => {
     props.inserted.push([...attrs]);
+    return attrs.length;
   });
   return (
     <div

@@ -33,6 +33,11 @@ import { ScrollToBottomChip } from "@/components/chat/scroll-to-bottom-chip";
 import type { NextStepActionHandler } from "@/components/chat/segments/next-steps-action-group";
 import { useAnimationFrameThrottle } from "@/hooks/use-animation-frame-throttle";
 import { cn } from "@/lib/utils";
+import {
+  isPlainBoundaryKey,
+  isPlatformModifiedBoundaryKey,
+} from "@/lib/keybindings/chord";
+import { isMac } from "@/lib/keybindings/platform";
 import { VIRTUOSO_MESSAGE_LIST_LICENSE_KEY } from "@/lib/virtuoso-license";
 import type { ScrollRestorationAdapter } from "@/hooks/scroll/scroll-restoration-adapter";
 import { useScrollRestoration } from "@/hooks/scroll/use-scroll-restoration";
@@ -65,7 +70,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type KeyboardEventHandler,
   type PointerEventHandler,
   type TouchEventHandler,
   type WheelEventHandler,
@@ -117,6 +121,57 @@ const INCREASE_VIEWPORT_BY_PX = 320;
 const SCROLLBAR_POINTER_HIT_SLOP_PX = 24;
 const TOUCH_SCROLL_DIRECTION_THRESHOLD_PX = 4;
 const EMPTY_BACKGROUND_TOOL_BLOCK_IDS: ReadonlySet<string> = new Set();
+
+type ChatKeyboardScrollAction = "page-up" | "page-down" | "top" | "bottom";
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  return (
+    target instanceof HTMLElement &&
+    (target.tagName === "TEXTAREA" ||
+      target.tagName === "INPUT" ||
+      target.isContentEditable)
+  );
+}
+
+function chatKeyboardScrollAction(
+  event: globalThis.KeyboardEvent,
+): ChatKeyboardScrollAction | null {
+  if (event.key === "PageUp") return "page-up";
+  if (event.key === "PageDown") return "page-down";
+  // Plain Home/End scroll the transcript. On macOS they scroll even from the
+  // composer (Cocoa editors never use them for caret movement - that's
+  // Cmd+arrows); elsewhere an editable target keeps them for line navigation
+  // and the modified chord (Ctrl+Home/End) is the always-available form.
+  const boundary =
+    isPlatformModifiedBoundaryKey(event) ||
+    (isPlainBoundaryKey(event) && (isMac() || !isEditableTarget(event.target)));
+  if (!boundary) return null;
+  return event.key === "Home" ? "top" : "bottom";
+}
+
+function applyChatKeyboardScroll(
+  scroller: HTMLElement,
+  action: ChatKeyboardScrollAction,
+): void {
+  const maxScrollTop = Math.max(
+    0,
+    scroller.scrollHeight - scroller.clientHeight,
+  );
+  if (action === "top") {
+    scroller.scrollTop = 0;
+    return;
+  }
+  if (action === "bottom") {
+    scroller.scrollTop = maxScrollTop;
+    return;
+  }
+  const delta =
+    action === "page-up" ? -scroller.clientHeight : scroller.clientHeight;
+  scroller.scrollTop = Math.min(
+    maxScrollTop,
+    Math.max(0, scroller.scrollTop + delta),
+  );
+}
 
 function segmentContainsBlockId(
   segment: MessageSegment,
@@ -587,28 +642,68 @@ function ChatMessagesInner(props: ChatMessagesProps) {
     [markDownwardUserGesture, unpinFromUserGesture],
   );
 
-  const handleKeyDownCapture = useCallback<
-    KeyboardEventHandler<HTMLDivElement>
-  >(
-    (event) => {
-      if (
-        event.key === "ArrowUp" ||
-        event.key === "PageUp" ||
-        event.key === "Home"
-      ) {
+  const handleKeyDownCapture = useCallback(
+    (event: globalThis.KeyboardEvent): void => {
+      const scroller = virtuosoRef.current?.scrollerElement();
+      if (scroller === null || scroller === undefined) return;
+      const scrollAction = chatKeyboardScrollAction(event);
+      if (scrollAction !== null) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (scrollAction === "page-up" || scrollAction === "top") {
+          unpinFromUserGesture();
+        } else {
+          markDownwardUserGesture();
+        }
+        applyChatKeyboardScroll(scroller, scrollAction);
+        return;
+      }
+      const targetInsideScroller =
+        event.target instanceof Node && scroller.contains(event.target);
+      if (!targetInsideScroller) return;
+      if (event.key === "ArrowUp" || event.key === "Home") {
         unpinFromUserGesture();
         return;
       }
-      if (
-        event.key === "ArrowDown" ||
-        event.key === "PageDown" ||
-        event.key === "End"
-      ) {
+      if (event.key === "ArrowDown" || event.key === "End") {
         markDownwardUserGesture();
       }
     },
     [markDownwardUserGesture, unpinFromUserGesture],
   );
+
+  // The composer is a sibling of the transcript, and clicking the non-focusable
+  // transcript leaves the key event rooted above the tile - on `body` or on
+  // canvas chrome like the pane tab layer / tab-group root (the canvas focus
+  // management parks focus there). Listen at `window` so the active chat can
+  // claim navigation keys from those states: a target that CONTAINS the tile
+  // means no more-specific widget owns the keys. Events rooted in a sibling
+  // subtree (another pane's tile, a dialog, the sidebar) are never claimed.
+  useLayoutEffect(() => {
+    const tile = transcriptContainerRef.current?.closest(
+      "[data-chat-keyboard-scroll-scope]",
+    );
+    if (!(tile instanceof HTMLElement)) return;
+    const handleWindowKeyDown = (event: globalThis.KeyboardEvent): void => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      const targetInsideTile = tile.contains(target);
+      const targetIsTileAncestor = target.contains(tile);
+      if (
+        !targetInsideTile &&
+        !(tile.dataset.active === "true" && targetIsTileAncestor)
+      ) {
+        return;
+      }
+      handleKeyDownCapture(event);
+    };
+    window.addEventListener("keydown", handleWindowKeyDown, { capture: true });
+    return () => {
+      window.removeEventListener("keydown", handleWindowKeyDown, {
+        capture: true,
+      });
+    };
+  }, [handleKeyDownCapture]);
 
   const handlePointerDownCapture = useCallback<
     PointerEventHandler<HTMLDivElement>
@@ -800,7 +895,6 @@ function ChatMessagesInner(props: ChatMessagesProps) {
                 data-testid="chat-messages-scroll"
                 onScroll={handleScroll}
                 onWheelCapture={handleWheelCapture}
-                onKeyDownCapture={handleKeyDownCapture}
                 onPointerDownCapture={handlePointerDownCapture}
                 onPointerUpCapture={handlePointerUpCapture}
                 onPointerCancelCapture={handlePointerUpCapture}

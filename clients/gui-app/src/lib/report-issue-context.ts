@@ -14,9 +14,9 @@ export interface ReportIssueContext {
  */
 export function createReportIssueContext(input: {
   readonly title: string;
-  readonly message: string | null;
-  readonly code: string | null;
-  readonly source: string | null;
+  readonly message: string | null | undefined;
+  readonly code: string | null | undefined;
+  readonly source: string | null | undefined;
 }): ReportIssueContext {
   return {
     title: normalizeReportContextValue(input.title) ?? "Traycer error",
@@ -26,8 +26,14 @@ export function createReportIssueContext(input: {
   };
 }
 
-function normalizeReportContextValue(value: string | null): string | null {
-  if (value === null) return null;
+// Total over `undefined` as well as `null`: callers routinely feed `.code`
+// off error objects whose declared type (e.g. `HostRpcError`) is a TanStack
+// generic promise, not a runtime guarantee - a bare `Error` leaking through
+// that seam made this helper crash the whole view.
+function normalizeReportContextValue(
+  value: string | null | undefined,
+): string | null {
+  if (value === null || value === undefined) return null;
   const normalized = value.replace(/\s+/g, " ").trim();
   if (normalized.length === 0) return null;
   if (normalized.length <= MAX_REPORT_CONTEXT_LENGTH) return normalized;

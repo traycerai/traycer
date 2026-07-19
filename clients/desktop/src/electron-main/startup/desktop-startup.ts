@@ -31,6 +31,7 @@ import {
   QUIT_HOST_UPDATE_TIMEOUT_MS,
 } from "../host/host-auto-update";
 import { isHostRemovedByUser } from "../host/host-removal-state";
+import { runUpdateInstallQuitSequence } from "./update-install-quit";
 import { RunnerIpcBridge } from "../ipc/register-runner-ipc";
 import {
   checkForUpdatesAfterResume,
@@ -80,6 +81,8 @@ import {
   installProcessGoneListeners,
   logGpuInfo,
 } from "../app/crash-reporter";
+import { suppressWslKernelCoreDumps } from "../app/core-dump-guard";
+import { pruneStaleCrashDumps } from "../app/crash-dump-prune";
 import { startRendererMemorySampler } from "../app/diagnostics";
 import {
   configureAppUserModelId,
@@ -123,6 +126,8 @@ import {
 } from "../config/desktop-config";
 import { installHostWakeRecovery } from "./host-wake-recovery";
 import { startHostHealthMonitor } from "../host/host-health-monitor";
+import { startPendingLoginItemRevisionMonitor } from "../host/pending-login-item-revision-monitor";
+import { hostManagesHostLoginItem } from "../app/host-login-item";
 import { DESKTOP_APP_NAME } from "../../config";
 
 // Per-window fresh-snapshot query budget during `before-quit`. Each renderer,
@@ -228,13 +233,15 @@ async function timed(
 // Pre-ready: command-line switches, scheme registration, hardware
 // acceleration toggle, V8 heap, and crash collection all run before
 // Chromium initializes. These are synchronous in-process Electron calls
-// (the one sync filesystem read - the GPU preference - is documented as the
-// required pre-`whenReady` exception in app/gpu-acceleration.ts).
+// (two documented sync-filesystem exceptions: the GPU preference read in
+// app/gpu-acceleration.ts and the memory-backed /proc write in
+// app/core-dump-guard.ts, which must land before Chromium spawns children).
 function runPreReady(state: BootState): void {
   trimUnusedChromiumFeatures();
   configureV8HeapSize();
   applyHardwareAccelerationPreference();
   registerAppScheme();
+  suppressWslKernelCoreDumps();
   initCrashReporter();
   installGlobalErrorHandlers();
   installProcessGoneListeners();
@@ -270,6 +277,7 @@ async function runOnReady(state: BootState): Promise<void> {
     timed("on-ready", "download-observer", () => installDownloadObserver()),
     timed("on-ready", "preconnect", () => preconnectTraycerHosts()),
     timed("on-ready", "gpu-info", () => logGpuInfo()),
+    timed("on-ready", "crash-dump-prune", () => pruneStaleCrashDumps()),
   ]);
 }
 
@@ -571,25 +579,53 @@ function runDeferred(state: BootState, services: AppServices): void {
     return services.host.bootstrap();
   });
 
-  // Windows-only watchdog for a host that dies without rewriting pid.json
-  // (external kill/crash): the pid-file watcher never fires for those, and
-  // the Scheduled Task cannot restart-on-failure (its hidden-launcher action
-  // detaches the host and exits, so the task completes long before the host
-  // can die). On macOS/Linux the service manager itself supervises the host
-  // (launchd KeepAlive / systemd Restart) and respawns it within seconds -
-  // a desktop-side watchdog there would be redundant at best and, on macOS,
-  // could auto-fire the SMAppService re-register cycle. Started after
-  // bootstrap so the initial 60s readiness wait can't register as an outage.
-  if (process.platform === "win32") {
-    void hostReady.then(() => {
-      const healthMonitor = startHostHealthMonitor({
-        host: services.host,
+  // All-platform watchdog for a host that dies without rewriting pid.json
+  // (external kill/crash): the pid-file watcher never fires for those, so the
+  // cached snapshot stays "reachable" against a dead endpoint forever. On
+  // Windows it also owns auto-respawn (the Scheduled Task cannot
+  // restart-on-failure - its hidden-launcher action detaches the host and
+  // exits, so the task completes long before the host can die). On
+  // macOS/Linux the service manager (launchd KeepAlive / systemd Restart)
+  // respawns crashes itself, but the SUPERVISOR cannot fix the desktop's
+  // stale snapshot when the respawned host binds a new port and the watcher
+  // edge is missed - the monitor's reload-first convergence covers exactly
+  // that, and only falls back to `respawnHost` when the disk still names an
+  // unreachable host. Started after bootstrap so the initial 60s readiness
+  // wait can't register as an outage.
+  void hostReady.then(() => {
+    const healthMonitor = startHostHealthMonitor({
+      host: services.host,
+      intervalMs: undefined,
+      probe: undefined,
+      readMetadata: undefined,
+      respawn: undefined,
+    });
+    state.bridge?.disposeFns.push(() => healthMonitor.dispose());
+  });
+
+  // macOS-only: guarantees a busy-preserved install's pending LaunchAgent
+  // revision (see `desktop-install-cloud.js`'s marker + `host-ensure-ipc.ts`'s
+  // `applyPendingLoginItemRevisionIfIdle`) gets applied within this running
+  // session once the host goes idle, not only at the next relaunch - the
+  // renderer's ensure fast path only gets one shot at it per app launch.
+  // Gated on `hostManagesHostLoginItem()` since a non-macOS build, a dev
+  // build, or a build without the in-bundle plist never has SMAppService
+  // registration (or a marker) to refresh in the first place.
+  if (process.platform === "darwin") {
+    void hostReady.then(async () => {
+      const bridge = state.bridge;
+      if (bridge === null) return;
+      if (!(await hostManagesHostLoginItem())) return;
+      const revisionMonitor = startPendingLoginItemRevisionMonitor({
+        bridge,
         intervalMs: undefined,
-        probe: undefined,
-        readMetadata: undefined,
-        respawn: undefined,
+        environment: undefined,
+        hasPendingRevision: undefined,
+        canReach: undefined,
+        isRefreshQuarantined: undefined,
+        runEnsure: undefined,
       });
-      state.bridge?.disposeFns.push(() => healthMonitor.dispose());
+      state.bridge?.disposeFns.push(() => revisionMonitor.dispose());
     });
   }
 
@@ -778,9 +814,9 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
 
   const flushShellState = async (): Promise<void> => {
     await Promise.all([
-      services.desktopStateStore.flush().catch((err) => {
-        log.warn("[desktop] desktop-state flush failed", err);
-      }),
+      // No .catch: the store's write chain never rejects (persist failures
+      // are retried once, then surrendered with an error log inside it).
+      services.desktopStateStore.flush(),
       services.windowGeometryPersistence.flushLatest().catch((err) => {
         log.warn("[desktop] window-geometry flush failed", err);
       }),
@@ -834,46 +870,45 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
         return;
       }
       // First pass: attempt a coordinated, idle-gated host update before the
-      // desktop swaps its own bytes, then re-quit. Fail-open - a busy host,
-      // failure, or the bounded CLI timeout all fall through to the quit, with
-      // the next-launch reconcile as the guaranteed fallback. The host update
-      // runs as a subprocess that would die with us, so we must hold the quit
-      // until it settles rather than racing it.
+      // desktop swaps its own bytes, drain the renderer's freshest per-window
+      // projection into the state store, then re-quit. Fail-open at every
+      // step - a busy host, failure, or the bounded CLI timeout all fall
+      // through to the quit, with the next-launch reconcile as the guaranteed
+      // fallback. The host update runs as a subprocess that would die with
+      // us, so we must hold the quit until it settles rather than racing it.
       quitTimeHostUpdateStarted = true;
       event.preventDefault();
       log.info(
         "[desktop] before-quit - install pending; attempting idle host update first",
       );
-      void reconcileHostAutoUpdate(
-        "quit-install",
-        defaultHostAutoUpdateDeps(
-          services.host,
-          QUIT_HOST_UPDATE_TIMEOUT_MS,
-          // The host was discovered long ago - no need to wait at quit time.
-          () => Promise.resolve(),
-          services.bridge,
-        ),
-      )
-        .then((outcome) =>
-          log.info("[host-auto-update] quit reconcile complete", { outcome }),
-        )
-        .catch((err) =>
-          log.warn("[host-auto-update] quit reconcile threw", err),
-        )
-        .finally(() => {
-          // If `quitAndInstall` failed in the meantime (e.g. read-only volume),
-          // `isInstallingUpdate()` is now false and the failure was surfaced as
-          // an error - don't quit out from under the user; let them read it and
-          // retry. Only the still-pending install proceeds to quit.
-          if (!isInstallingUpdate()) {
-            log.info(
-              "[desktop] before-quit - install failed during reconcile, staying open",
-            );
-            services.quitState.resetQuitting();
-            return;
-          }
-          authorizeQuitAfterFlush();
-        });
+      void runUpdateInstallQuitSequence({
+        reconcileHostUpdate: () =>
+          reconcileHostAutoUpdate(
+            "quit-install",
+            defaultHostAutoUpdateDeps(
+              services.host,
+              QUIT_HOST_UPDATE_TIMEOUT_MS,
+              // The host was discovered long ago - no need to wait at quit
+              // time.
+              () => Promise.resolve(),
+              services.bridge,
+            ),
+          ),
+        isInstallPending: isInstallingUpdate,
+        drainRendererProjection: () =>
+          activeBridge.requestFreshUnsyncedSnapshot(
+            QUIT_FRESH_UNSYNCED_SNAPSHOT_TIMEOUT_MS,
+          ),
+        authorizeQuitAfterFlush,
+        stayOpen: () => {
+          // Re-arm the first-pass sequence: leaving the flag set would make
+          // the NEXT Restart-to-install take the second-pass shortcut above,
+          // skipping the host reconcile, the renderer drain, AND the shell
+          // flush for that quit.
+          quitTimeHostUpdateStarted = false;
+          services.quitState.resetQuitting();
+        },
+      });
       return;
     }
 

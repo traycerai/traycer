@@ -307,11 +307,6 @@ const AGENT_SPINNER_PRESETS: AgentSpinnerPresets = {
     intervalMs: 80,
     widthCh: 1,
   },
-  bounce: {
-    frames: ["⠁", "⠂", "⠄", "⡀", "⠄", "⠂"],
-    intervalMs: 120,
-    widthCh: 1,
-  },
   dots_circle: {
     frames: ["⢎ ", "⠎⠁", "⠊⠑", "⠈⠱", " ⡱", "⢀⡰", "⢄⡠", "⢆⡀"],
     intervalMs: 80,
@@ -641,7 +636,11 @@ export function AgentSpinningDots(props: AgentSpinningDotsProps) {
       data-testid={props.testId}
       aria-hidden="true"
       className={cn(
-        "inline-flex h-3.5 min-w-3.5 shrink-0 items-center justify-center whitespace-pre font-mono text-code leading-none tabular-nums",
+        // `font-normal` is load-bearing on macOS: the mono stack has no braille
+        // coverage, and an inherited 500 (active tab / Button `font-medium`)
+        // makes Chromium's fallback pick the hollow-grid "Apple Braille
+        // Outline" faces instead of the filled-dot regular face.
+        "inline-flex h-3.5 min-w-3.5 shrink-0 items-center justify-center whitespace-pre font-mono text-code font-normal leading-none tabular-nums",
         props.className,
       )}
       style={{ width: `${preset.widthCh}ch` }}

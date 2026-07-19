@@ -6,25 +6,44 @@ import { GitDiffPanelActions } from "../git-diff-panel-actions";
 import { useGitPanelStore } from "@/stores/epics/git-panel-store";
 import { DEFAULT_DIFF_VIEWER_PREFERENCES } from "@/lib/diff/diff-viewer-preferences";
 import { useSettingsStore } from "@/stores/settings/settings-store";
-import { gitQueryKeys } from "@/lib/query-keys/git-query-keys";
 import { TooltipProvider } from "@/components/ui/tooltip";
+
+interface RefreshHookArgs {
+  readonly hostId: string | null;
+  readonly rootRunningDir: string | null;
+  readonly ignoreWhitespace: boolean;
+}
+
+const testState = vi.hoisted(() => ({
+  refresh: vi.fn<() => Promise<void>>(),
+  refreshArgs: [] as RefreshHookArgs[],
+}));
+
+vi.mock("@/hooks/git/use-git-submodule-snapshot-refresh", () => ({
+  useGitSubmoduleSnapshotRefresh: (args: RefreshHookArgs) => {
+    testState.refreshArgs.push(args);
+    return testState.refresh;
+  },
+}));
 
 function setup() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
-  const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
   const wrapper = ({ children }: { readonly children: ReactNode }) => (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider delayDuration={0}>{children}</TooltipProvider>
     </QueryClientProvider>
   );
-  return { invalidateSpy, wrapper };
+  return { wrapper };
 }
 
 describe("<GitDiffPanelActions />", () => {
   beforeEach(() => {
     cleanup();
+    testState.refresh.mockReset();
+    testState.refresh.mockResolvedValue(undefined);
+    testState.refreshArgs = [];
     useGitPanelStore.setState({ stateByEpicId: {} });
     useSettingsStore.setState({
       diffViewerPreferences: DEFAULT_DIFF_VIEWER_PREFERENCES,
@@ -80,19 +99,13 @@ describe("<GitDiffPanelActions />", () => {
     );
   });
 
-  it("invalidates the active root's nested snapshot on refresh", () => {
-    const { invalidateSpy, wrapper } = setup();
+  it("refreshes the active root's nested snapshot slot", () => {
+    const { wrapper } = setup();
     render(<GitDiffPanelActions epicId="epic-1" tabId="tab-1" />, { wrapper });
 
     fireEvent.click(screen.getByTestId("git-diff-panel-refresh"));
 
-    expect(invalidateSpy).toHaveBeenCalledWith({
-      queryKey: gitQueryKeys.listChangedFilesWithSubmodules(
-        "host-1",
-        "/repo",
-        false,
-      ),
-    });
+    expect(testState.refresh).toHaveBeenCalledTimes(1);
   });
 
   it("refresh honors the global whitespace preference in the slot key", () => {
@@ -100,17 +113,16 @@ describe("<GitDiffPanelActions />", () => {
       ...DEFAULT_DIFF_VIEWER_PREFERENCES,
       ignoreWhitespace: true,
     });
-    const { invalidateSpy, wrapper } = setup();
+    const { wrapper } = setup();
     render(<GitDiffPanelActions epicId="epic-1" tabId="tab-1" />, { wrapper });
 
     fireEvent.click(screen.getByTestId("git-diff-panel-refresh"));
 
-    expect(invalidateSpy).toHaveBeenCalledWith({
-      queryKey: gitQueryKeys.listChangedFilesWithSubmodules(
-        "host-1",
-        "/repo",
-        true,
-      ),
+    expect(testState.refresh).toHaveBeenCalledTimes(1);
+    expect(testState.refreshArgs.at(-1)).toEqual({
+      hostId: "host-1",
+      rootRunningDir: "/repo",
+      ignoreWhitespace: true,
     });
   });
 });

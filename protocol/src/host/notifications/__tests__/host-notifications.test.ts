@@ -24,6 +24,8 @@ const APPROVAL_ENTRY = {
   updatedAt: 1_700_000_000_000,
   readAt: null,
   resolvedAt: null,
+  epicId: "epic-1",
+  chatId: "chat-1",
   kind: "approval.requested" as const,
   sourceRef: "approval-1",
   severity: "needs_action" as const,
@@ -39,6 +41,8 @@ const STOPPED_ENTRY = {
   id: "notification-2",
   updatedAt: 1_700_000_000_010,
   readAt: null,
+  epicId: "epic-1",
+  chatId: "chat-1",
   kind: "agent.stopped" as const,
   sourceRef: "agent-1",
   severity: "failure" as const,
@@ -53,6 +57,24 @@ const STOPPED_ENTRY = {
   },
 };
 
+const WORKSPACE_OPERATION_FAILED_ENTRY = {
+  ...STOPPED_ENTRY,
+  id: "notification-3",
+  kind: "workspace.operation.failed" as const,
+  sourceRef: "setup-event-1",
+  payload: {
+    kind: "workspace_operation_failed",
+    epicId: "epic-1",
+    chatId: "chat-1",
+    chatTitle: "Deploy checkout fix",
+    taskTitle: "Checkout notifications",
+    operation: "setup",
+    title: "Workspace setup failed",
+    message: "Setup exited with code 1.",
+    outcome: "errored" as const,
+  },
+};
+
 describe("flat host notification entry schema", () => {
   it("parses complete needs-action and failure entries", () => {
     expect(hostNotificationEntrySchema.parse(APPROVAL_ENTRY)).toEqual(
@@ -61,6 +83,9 @@ describe("flat host notification entry schema", () => {
     expect(hostNotificationEntrySchema.parse(STOPPED_ENTRY)).toEqual(
       STOPPED_ENTRY,
     );
+    expect(
+      hostNotificationEntrySchema.parse(WORKSPACE_OPERATION_FAILED_ENTRY),
+    ).toEqual(WORKSPACE_OPERATION_FAILED_ENTRY);
   });
 
   it("requires unresolved-state metadata on needs-action rows", () => {
@@ -88,6 +113,19 @@ describe("flat host notification entry schema", () => {
         kind: "agent.stalled",
         outcome: null,
         payload: { agentId: "agent-1", reason: "provider_throttle" },
+      }),
+    ).toThrow();
+  });
+
+  it("keeps workspace failures aligned with the persisted errored outcome", () => {
+    expect(
+      hostNotificationEntrySchema.parse(WORKSPACE_OPERATION_FAILED_ENTRY)
+        .outcome,
+    ).toBe("errored");
+    expect(() =>
+      hostNotificationEntrySchema.parse({
+        ...WORKSPACE_OPERATION_FAILED_ENTRY,
+        outcome: null,
       }),
     ).toThrow();
   });
@@ -162,7 +200,8 @@ describe("host.notifications.indicatorState@1.0", () => {
       hostNotificationsIndicatorState.responseSchema.parse({
         epics: {
           "epic-1": {
-            pendingPrompt: true,
+            pendingApproval: true,
+            pendingInterview: false,
             unreadFailure: false,
             unreadDone: false,
           },
@@ -179,6 +218,21 @@ describe("host.notifications.indicatorState@1.0", () => {
         chatIds: [],
       }),
     ).toThrow();
+  });
+
+  it("rejects the unreleased pendingPrompt response shape", () => {
+    expect(
+      hostNotificationsIndicatorState.responseSchema.safeParse({
+        epics: {
+          "epic-1": {
+            pendingPrompt: true,
+            unreadFailure: false,
+            unreadDone: false,
+          },
+        },
+        chats: {},
+      }).success,
+    ).toBe(false);
   });
 });
 

@@ -103,7 +103,7 @@ import {
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { cloneChatOnHostSwitch } from "@/lib/commands/actions/clone-chat-on-host-switch";
 import { enqueuePersistChatRunSettings } from "@/lib/chats/chat-run-settings-write-queue";
-import { ChatDeadTileBanner } from "./dead-tile-banner";
+import { ChatDeadTileBanner, ChatHostStartingBanner } from "./dead-tile-banner";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { flattenCollaborators } from "@/hooks/epics/use-epic-collaborators-query";
@@ -265,17 +265,32 @@ export function ChatTile(props: ChatTileProps) {
   // the host runtime. Mount it only when the banner is actually
   // shown so the live render path does not pay the subscription cost
   // (and tests that omit the host runtime provider stay green).
-  const deadTileBanner =
-    reachability.status === "unreachable" ? (
-      <ChatDeadTileBannerContainer
-        epicId={epicId}
-        tabId={viewTabId}
-        chatId={node.id}
-        sourceHostId={tabHostId}
-        hostLabel={reachability.hostLabel}
-        testId={`chat-dead-tile-${node.id}`}
-      />
-    ) : null;
+  const deadTileBanner = (() => {
+    if (reachability.status === "unreachable") {
+      return (
+        <ChatDeadTileBannerContainer
+          epicId={epicId}
+          tabId={viewTabId}
+          chatId={node.id}
+          sourceHostId={tabHostId}
+          hostLabel={reachability.hostLabel}
+          testId={`chat-dead-tile-${node.id}`}
+        />
+      );
+    }
+    if (reachability.status === "host-starting") {
+      // The local host hasn't published yet (boot/ensure/wake). Never offer
+      // Clone here - the bound host is most likely this machine, seconds
+      // from converging; cloning would fork a healthy thread.
+      return (
+        <ChatHostStartingBanner
+          className={undefined}
+          testId={`chat-host-starting-${node.id}`}
+        />
+      );
+    }
+    return null;
+  })();
 
   if (handle === null) {
     return (
@@ -634,6 +649,8 @@ function ChatTileSessionView(props: ChatTileSessionViewProps) {
         <div
           data-testid="chat-tile"
           data-node-id={view.node.id}
+          data-chat-keyboard-scroll-scope=""
+          data-active={props.isActive ? "true" : "false"}
           className="flex h-full min-h-0 flex-col"
         >
           <ChatSessionMessagesSurface
@@ -1192,6 +1209,25 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       ),
     [hostPendingInterviewIds, renderedMessages],
   );
+  // Block IDs whose answer/skip action is still in flight or accepted-but-
+  // unresolved. Recomputes only when actions change (not per streaming token),
+  // and yields a stable `false` whenever no interview is pending, so the
+  // composer memo below never churns during normal streaming.
+  const interviewActionBlockIds = useMemo(
+    () =>
+      new Set(
+        [
+          ...Object.values(state.pendingActions),
+          ...Object.values(state.acceptedActions),
+        ]
+          .map((action) => action.interviewBlockId)
+          .filter((blockId): blockId is string => blockId !== null),
+      ),
+    [state.pendingActions, state.acceptedActions],
+  );
+  const interviewBusy =
+    pendingInterview !== null &&
+    interviewActionBlockIds.has(pendingInterview.blockId);
   const showCompletedRestoreToast = useCallback(() => {
     if (state.restore === null || state.restore.kind !== "completed") return;
     showRestoreResultToast(state.restore.results);
@@ -1513,12 +1549,14 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   const lowerInterview = useMemo(
     () => ({
       pending: pendingInterview,
+      isBusy: interviewBusy,
       onAnswer: handleInterviewAnswer,
       onError: handleInterviewError,
       onFork: forkFromPendingInterview,
     }),
     [
       pendingInterview,
+      interviewBusy,
       handleInterviewAnswer,
       handleInterviewError,
       forkFromPendingInterview,

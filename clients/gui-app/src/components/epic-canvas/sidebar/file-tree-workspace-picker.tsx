@@ -15,7 +15,7 @@
  * `[epicId, hostId]` so multi-host users keep distinct selections.
  */
 import { useMemo, useState } from "react";
-import type { WorktreeBindingSelectorRow } from "@traycer/protocol/host";
+import type { WorktreeBindingSelectorRowV12 } from "@traycer/protocol/host";
 import { useWorktreeListBindingsForEpic } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
 import { WorktreeFolderListBody } from "@/components/worktree/worktree-folder-list-body";
 import { WorktreePickerHostSection } from "@/components/worktree/worktree-picker-host-section";
@@ -90,7 +90,7 @@ interface SelectedWorkspaceRoot {
 }
 
 function selectedWorkspaceRoot(
-  rows: ReadonlyArray<WorktreeBindingSelectorRow>,
+  rows: ReadonlyArray<WorktreeBindingSelectorRowV12>,
   selectedPath: string | null,
 ): SelectedWorkspaceRoot | null {
   if (selectedPath === null) return null;

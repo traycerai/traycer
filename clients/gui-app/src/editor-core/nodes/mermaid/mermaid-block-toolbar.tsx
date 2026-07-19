@@ -1,4 +1,4 @@
-import { Copy, Download, Maximize2, Pencil, X } from "lucide-react";
+import { Copy, Download, Pencil, X } from "lucide-react";
 import { ToolbarButton } from "../../toolbar/toolbar-button";
 import { BlockFloatingToolbar } from "../shared/block-floating-toolbar";
 
@@ -8,9 +8,7 @@ export interface MermaidBlockToolbarProps {
   readonly onToggleEdit: () => void;
   readonly onCopyCode: () => void;
   readonly onDownloadPng: () => void;
-  readonly onOpenFullscreen: () => void;
   readonly downloadDisabled: boolean;
-  readonly fullscreenDisabled: boolean;
 }
 
 /**
@@ -26,9 +24,7 @@ export function MermaidBlockToolbar(props: MermaidBlockToolbarProps) {
     onToggleEdit,
     onCopyCode,
     onDownloadPng,
-    onOpenFullscreen,
     downloadDisabled,
-    fullscreenDisabled,
   } = props;
 
   return (
@@ -48,14 +44,6 @@ export function MermaidBlockToolbar(props: MermaidBlockToolbarProps) {
           className="tc-editor-toolbar-button"
         />
       ) : null}
-      <ToolbarButton
-        icon={<Maximize2 className="size-4" aria-hidden="true" />}
-        label="Fullscreen"
-        active={false}
-        disabled={fullscreenDisabled}
-        onClick={onOpenFullscreen}
-        className="tc-editor-toolbar-button"
-      />
       <ToolbarButton
         icon={<Copy className="size-4" aria-hidden="true" />}
         label="Copy code"

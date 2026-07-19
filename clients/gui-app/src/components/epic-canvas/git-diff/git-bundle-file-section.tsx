@@ -17,7 +17,8 @@ import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { DiffViewerPreferences } from "@/lib/diff/diff-viewer-preferences";
 import { useOpenEpicId } from "@/lib/epic-selectors";
-import { makeGitFileDiffTileForFile } from "@/lib/git/git-diff-tile";
+import { getBasename } from "@/lib/path/cross-platform-path";
+import { workspaceFileRefFromTreePath } from "@/components/epic-canvas/workspace-file/workspace-file-ref";
 import { BUNDLE_INLINE_LINE_THRESHOLD } from "@/lib/git/bundle-thresholds";
 import { NO_HIGHLIGHT } from "@/lib/git/path-highlight";
 import { useBundleDiffFindRegistrationContext } from "@/components/diff/bundle-diff-find-registration-hooks";
@@ -64,11 +65,13 @@ export function BundleFileSection(props: BundleFileSectionProps): ReactNode {
   const isLarge = totalChangedLines > BUNDLE_INLINE_LINE_THRESHOLD;
 
   const handleOpenFileTile = useCallback(() => {
-    const tile = makeGitFileDiffTileForFile({
-      hostId: props.node.hostId,
-      runningDir: props.node.diff.runningDir,
-      file: props.file,
-    });
+    const tile = workspaceFileRefFromTreePath(
+      props.node.hostId,
+      props.node.diff.runningDir,
+      props.file.path,
+      getBasename(props.file.path),
+    );
+    if (tile === null) return;
     navigateNested(epicId, props.viewTabId, () =>
       prepareOpenTileInTabFocusTarget(props.viewTabId, tile),
     );
@@ -76,7 +79,7 @@ export function BundleFileSection(props: BundleFileSectionProps): ReactNode {
     epicId,
     navigateNested,
     prepareOpenTileInTabFocusTarget,
-    props.file,
+    props.file.path,
     props.node.hostId,
     props.node.diff.runningDir,
     props.viewTabId,

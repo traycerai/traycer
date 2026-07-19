@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -50,6 +50,7 @@ import {
   isCurrentHostWebsocketUrl,
   PRODUCTION_LABEL,
   readPidMetadata,
+  readPidMetadataState,
 } from "../host-lifecycle";
 import { DEV_LABEL } from "../host-paths";
 import { config } from "../../../config";
@@ -104,6 +105,87 @@ describe("readPidMetadata", () => {
   });
 });
 
+// Review finding 4: the retry ladder must distinguish a CONFIRMED-absent file
+// (deliberate stop → clear the ladder) from a present-but-indeterminate read (a
+// partial write / transient error → keep retrying). Collapsing both to `null`
+// let a coalesced watcher edge that landed mid-write silently clear the ladder.
+describe("readPidMetadataState", () => {
+  it("reports `absent` only for a missing file (ENOENT)", async () => {
+    const state = await readPidMetadataState(
+      join(tmpdir(), "definitely-not-here.json"),
+    );
+    expect(state.kind).toBe("absent");
+  });
+
+  // A non-ENOENT read failure (EISDIR here - deterministic regardless of
+  // root/CI, unlike a chmod-based EACCES) must classify as `indeterminate`,
+  // never `absent`. If every read error collapsed to `absent`, a transient
+  // EACCES/EIO on a present file would clear the retry ladder exactly like a
+  // deliberate stop - the bug this discrimination exists to prevent.
+  it("reports `indeterminate` for a non-ENOENT read failure", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lifecycle-pidstate-"));
+    const path = join(dir, "pid.json");
+    // A directory at the pid.json path: readFile throws EISDIR, not ENOENT.
+    await mkdir(path);
+    try {
+      const state = await readPidMetadataState(path);
+      expect(state.kind).toBe("indeterminate");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports `indeterminate` for a partially-written (invalid JSON) file", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lifecycle-pidstate-"));
+    const path = join(dir, "pid.json");
+    // A torn write: the host had only flushed the opening bytes.
+    await writeFile(path, '{"hostId":"test-host","websocket', "utf8");
+    try {
+      const state = await readPidMetadataState(path);
+      expect(state.kind).toBe("indeterminate");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports `indeterminate` for valid JSON of the wrong shape", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lifecycle-pidstate-"));
+    const path = join(dir, "pid.json");
+    await writeFile(path, JSON.stringify({ hostId: "x" }), "utf8");
+    try {
+      const state = await readPidMetadataState(path);
+      expect(state.kind).toBe("indeterminate");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports `parsed` with the snapshot for a complete file", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lifecycle-pidstate-"));
+    const path = join(dir, "pid.json");
+    await writeFile(
+      path,
+      JSON.stringify({
+        hostId: "test-host",
+        websocketUrl: "ws://127.0.0.1:55555/rpc",
+        version: "0.0.0",
+        pid: 12345,
+      }),
+      "utf8",
+    );
+    try {
+      const state = await readPidMetadataState(path);
+      expect(state.kind).toBe("parsed");
+      if (state.kind === "parsed") {
+        expect(state.snapshot.hostId).toBe("test-host");
+        expect(state.snapshot.pid).toBe(12345);
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 // Directly exercises the real TCP probe that `HostLifecycle` uses by default
 // (`reachabilityProbe: undefined`). Deterministic - a single listener for the
 // reachable case, an immediate ECONNREFUSED on a freed port for the
@@ -145,6 +227,10 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
+      pendingLoginItemRevisionFile: join(
+        dir,
+        "pending-login-item-revision.json",
+      ),
       environment: "production" as const,
     };
     const { server, port } = await listenOnEphemeralPort();
@@ -193,6 +279,10 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
+      pendingLoginItemRevisionFile: join(
+        dir,
+        "pending-login-item-revision.json",
+      ),
       environment: "production" as const,
     };
     const lifecycle = new HostLifecycle({
@@ -235,6 +325,10 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
+      pendingLoginItemRevisionFile: join(
+        dir,
+        "pending-login-item-revision.json",
+      ),
       environment: "dev" as const,
     };
     const { server, port } = await listenOnEphemeralPort();
@@ -287,6 +381,10 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
+      pendingLoginItemRevisionFile: join(
+        dir,
+        "pending-login-item-revision.json",
+      ),
       environment: "production" as const,
     };
     const { server, port } = await listenOnEphemeralPort();
@@ -331,6 +429,10 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
+      pendingLoginItemRevisionFile: join(
+        dir,
+        "pending-login-item-revision.json",
+      ),
       environment: "dev" as const,
     };
     const { server, port } = await listenOnEphemeralPort();
@@ -377,6 +479,10 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
+      pendingLoginItemRevisionFile: join(
+        dir,
+        "pending-login-item-revision.json",
+      ),
       environment: "production" as const,
     };
     await writeFile(
@@ -422,6 +528,10 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
+      pendingLoginItemRevisionFile: join(
+        dir,
+        "pending-login-item-revision.json",
+      ),
       environment: "production" as const,
     };
     await writeFile(
@@ -466,6 +576,10 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
+      pendingLoginItemRevisionFile: join(
+        dir,
+        "pending-login-item-revision.json",
+      ),
       environment: "production" as const,
     };
     const websocketUrl = "ws://127.0.0.1:54321/rpc";
@@ -526,6 +640,10 @@ describe("HostLifecycle.getServiceStatus", () => {
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
+      pendingLoginItemRevisionFile: join(
+        dir,
+        "pending-login-item-revision.json",
+      ),
       environment: "production" as const,
     };
     await writeFile(
@@ -574,6 +692,8 @@ describe("HostLifecycle.respawn (CLI subprocess)", () => {
           logFile: "/tmp/no-such-dir/host.log",
           installDir: "/tmp/no-such-dir/install",
           installRecordFile: "/tmp/no-such-dir/install/install.json",
+          pendingLoginItemRevisionFile:
+            "/tmp/no-such-dir/pending-login-item-revision.json",
           environment,
         },
         bundledBinaryPath: null,

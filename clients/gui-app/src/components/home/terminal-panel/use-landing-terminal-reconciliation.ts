@@ -2,6 +2,7 @@ import { queryOptions, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { toHostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
 import {
@@ -41,11 +42,11 @@ function abortableRequest<Value>(
       },
       (error: unknown) => {
         signal.removeEventListener("abort", onAbort);
-        reject(
-          error instanceof Error
-            ? error
-            : new Error("Landing terminal list request failed"),
-        );
+        // Normalized, not passed through raw: this queryFn writes the same
+        // `terminal.list` cache slot that `useTerminalListFor` types as
+        // `HostRpcError`. The abort path above stays a DOMException so
+        // TanStack's cancellation handling is untouched.
+        reject(toHostRpcError(error, "terminal.list"));
       },
     );
   });
@@ -57,11 +58,17 @@ interface LandingTerminalReconciliationArgs {
   readonly panelOpen: boolean;
   readonly primaryWorkspacePath: string | null;
   readonly client: HostClient<HostRpcRegistry>;
-  readonly createTerminalTab: () => void;
   readonly killTerminal: (
     variables: LandingTerminalKillVariables,
   ) => Promise<unknown>;
   readonly onReconciled: (hostId: string) => void;
+  /**
+   * Runs after a reconciliation generation has fully applied (store updated,
+   * host id published). The panel owns what happens next - auto-spawning into
+   * an empty panel and honoring a pending open-gesture's pinned-folder intent -
+   * so those decisions always act on reconciled truth, never a stale cache.
+   */
+  readonly onSettled: () => void;
 }
 
 function landingTerminalListQueryOptions(client: HostClient<HostRpcRegistry>) {
@@ -100,9 +107,9 @@ export function useLandingTerminalReconciliation(
     panelOpen,
     primaryWorkspacePath,
     client,
-    createTerminalTab,
     killTerminal,
     onReconciled,
+    onSettled,
   } = args;
   const queryClient = useQueryClient();
   const [connectionEpoch, setConnectionEpoch] = useState(0);
@@ -216,15 +223,7 @@ export function useLandingTerminalReconciliation(
         reconciliation.collapseWhenEmpty,
       );
       onReconciled(activeHostId);
-
-      const reconciledState = useLandingTerminalStore.getState();
-      if (
-        reconciledState.panelOpen &&
-        reconciledState.tabs.length === 0 &&
-        primaryWorkspacePath !== null
-      ) {
-        createTerminalTab();
-      }
+      onSettled();
     })();
 
     return () => {
@@ -240,9 +239,9 @@ export function useLandingTerminalReconciliation(
     availability,
     client,
     connectionEpoch,
-    createTerminalTab,
     killTerminal,
     onReconciled,
+    onSettled,
     panelOpen,
     primaryWorkspacePath,
     queryClient,

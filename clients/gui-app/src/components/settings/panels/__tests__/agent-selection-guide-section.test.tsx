@@ -7,6 +7,8 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { StrictMode, act } from "react";
+import { syntaxTree } from "@codemirror/language";
+import { EditorView } from "@uiw/react-codemirror";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type Deferred<T> = {
@@ -69,6 +71,33 @@ function strictPanel() {
   );
 }
 
+function getCodeMirrorView(element: HTMLElement): EditorView {
+  const view = EditorView.findFromDOM(element);
+  if (view === null) throw new Error("Expected a CodeMirror editor element");
+  return view;
+}
+
+function readMarkdown(element: HTMLElement): string {
+  return getCodeMirrorView(element).state.doc.toString();
+}
+
+function replaceMarkdown(element: HTMLElement, markdown: string): void {
+  act(() => {
+    const view = getCodeMirrorView(element);
+    view.dispatch({
+      changes: { from: 0, to: view.state.doc.length, insert: markdown },
+    });
+  });
+}
+
+function blurCodeMirror(element: HTMLElement): void {
+  const content = element.querySelector(".cm-content");
+  if (!(content instanceof HTMLElement)) {
+    throw new Error("Expected CodeMirror content to render");
+  }
+  fireEvent.blur(content);
+}
+
 describe("AgentSelectionGuideSection", () => {
   beforeEach(() => {
     guideMocks.queryData = {
@@ -95,14 +124,12 @@ describe("AgentSelectionGuideSection", () => {
 
   it("updates generated defaults without clobbering the active editor draft", async () => {
     const { rerender } = renderPanel();
-    const editor = screen.getByTestId<HTMLTextAreaElement>(
-      "agents-selection-guide-input",
-    );
+    const editor = screen.getByTestId("agents-selection-guide-input");
     const revert = screen.getByTestId<HTMLButtonElement>(
       "agents-selection-guide-revert",
     );
 
-    expect(editor.value).toBe("claude guide");
+    expect(readMarkdown(editor)).toBe("claude guide");
     expect(revert.disabled).toBe(true);
 
     guideMocks.queryData = {
@@ -112,96 +139,59 @@ describe("AgentSelectionGuideSection", () => {
     rerender(strictPanel());
 
     await waitFor(() => {
-      expect(editor.value).toBe("claude guide");
+      expect(readMarkdown(editor)).toBe("claude guide");
       expect(revert.disabled).toBe(false);
     });
     expect(guideMocks.setGlobalMutateAsync).not.toHaveBeenCalled();
     expect(guideMocks.resetGlobalMutateAsync).not.toHaveBeenCalled();
   });
 
-  it("keeps the opening height stable and allows vertical resizing", () => {
-    renderPanel();
-    const editor = screen.getByTestId<HTMLTextAreaElement>(
-      "agents-selection-guide-input",
-    );
-
-    expect(editor.className).toContain("field-sizing-fixed");
-    expect(editor.className).not.toContain("field-sizing-content");
-    expect(editor.className).toContain("h-[min(32vh,16rem)]");
-    expect(editor.className).toContain("resize-y");
-    expect(editor.className).not.toContain("max-h-[min(32vh,16rem)]");
-  });
-
-  it("caps resizing at the settings viewport without shrinking below the opening height", () => {
-    let scrollBottom = 800;
-    const bodyBottom = 500;
-    const openingHeight = 256;
-    let resizeCallback: ResizeObserverCallback | null = null;
-    const resizeObserver: ResizeObserver = {
-      observe(): void {},
-      unobserve(): void {},
-      disconnect(): void {},
+  it("renders Markdown source with line numbers at full height", () => {
+    guideMocks.queryData = {
+      content: "# Choose an agent\n\n- Match the task",
+      generatedDefaultContent: "# Choose an agent\n\n- Match the task",
     };
-
-    class BoundaryResizeObserver implements ResizeObserver {
-      constructor(callback: ResizeObserverCallback) {
-        resizeCallback = callback;
-      }
-
-      observe(): void {}
-      unobserve(): void {}
-      disconnect(): void {}
-    }
-
-    vi.stubGlobal("ResizeObserver", BoundaryResizeObserver);
-    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
-      function (this: HTMLElement) {
-        if (this.getAttribute("data-testid") === "settings-scroll-viewport") {
-          return new DOMRect(0, 0, 100, scrollBottom);
-        }
-        if (this.hasAttribute("data-settings-panel-body")) {
-          return new DOMRect(0, 0, 100, bodyBottom);
-        }
-        if (this instanceof HTMLTextAreaElement) {
-          return new DOMRect(0, 0, 100, openingHeight);
-        }
-        return new DOMRect();
-      },
-    );
-
     render(
       <StrictMode>
-        <div
-          data-testid="settings-scroll-viewport"
-          style={{ overflowY: "auto" }}
-        >
-          <AgentsSettingsPanel />
-        </div>
+        <AgentsSettingsPanel />
       </StrictMode>,
     );
-
-    const editor = screen.getByRole<HTMLTextAreaElement>("textbox", {
-      name: "Global agent selection instructions",
-    });
-    const panelShell = editor.closest("[data-settings-panel-shell]");
-    if (!(panelShell instanceof HTMLElement)) {
-      throw new Error("Expected the editor to render inside a settings shell");
+    const editor = screen.getByTestId("agents-selection-guide-input");
+    const editorShell = editor.closest(
+      "[data-agent-selection-guide-editor-shell]",
+    );
+    if (!(editorShell instanceof HTMLElement)) {
+      throw new Error("Expected the editor shell to render");
     }
-    panelShell.style.paddingBottom = "40px";
+    const panelShell = editor.closest("[data-settings-panel-shell]");
+    const panelBody = editor.closest("[data-settings-panel-body]");
+    if (!(panelShell instanceof HTMLElement)) {
+      throw new Error("Expected the settings panel shell to render");
+    }
+    if (!(panelBody instanceof HTMLElement)) {
+      throw new Error("Expected the settings panel body to render");
+    }
 
-    const emitResize = (): void => {
-      if (resizeCallback === null) {
-        throw new Error("Expected the resize observer to be active");
-      }
-      resizeCallback([], resizeObserver);
-    };
-
-    act(emitResize);
-    expect(editor.style.maxHeight).toBe("516px");
-
-    scrollBottom = 300;
-    act(emitResize);
-    expect(editor.style.maxHeight).toBe("256px");
+    const editorView = getCodeMirrorView(editor);
+    expect(editorView.state.doc.toString()).toBe(
+      "# Choose an agent\n\n- Match the task",
+    );
+    expect(
+      syntaxTree(editorView.state).topNode.getChild("ATXHeading1"),
+    ).not.toBeNull();
+    expect(
+      screen.getByRole("textbox", {
+        name: "Global agent selection instructions",
+      }),
+    ).toBeTruthy();
+    expect(editor.querySelector(".cm-lineNumbers")).not.toBeNull();
+    expect(editor.className).toContain("h-full");
+    expect(editorShell.className).toContain("flex-1");
+    expect(panelShell.className).toContain("h-full");
+    expect(panelBody.className).toContain("flex-1");
+    expect(
+      screen.queryByRole("heading", { name: "Choose an agent" }),
+    ).toBeNull();
   });
 
   it("reverts through the host reset API instead of sending generated content back", async () => {
@@ -216,8 +206,7 @@ describe("AgentSelectionGuideSection", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByTestId<HTMLTextAreaElement>("agents-selection-guide-input")
-          .value,
+        readMarkdown(screen.getByTestId("agents-selection-guide-input")),
       ).toBe("codex guide");
     });
     expect(guideMocks.resetGlobalMutateAsync).toHaveBeenCalledWith({});
@@ -237,20 +226,18 @@ describe("AgentSelectionGuideSection", () => {
       .mockReturnValueOnce(first.promise)
       .mockReturnValueOnce(second.promise);
     renderPanel();
-    const editor = screen.getByTestId<HTMLTextAreaElement>(
-      "agents-selection-guide-input",
-    );
+    const editor = screen.getByTestId("agents-selection-guide-input");
 
-    fireEvent.change(editor, { target: { value: "first edit" } });
-    fireEvent.blur(editor);
+    replaceMarkdown(editor, "first edit");
+    blurCodeMirror(editor);
 
     expect(guideMocks.setGlobalMutateAsync).toHaveBeenCalledTimes(1);
     expect(guideMocks.setGlobalMutateAsync).toHaveBeenLastCalledWith({
       content: "first edit",
     });
 
-    fireEvent.change(editor, { target: { value: "second edit" } });
-    fireEvent.blur(editor);
+    replaceMarkdown(editor, "second edit");
+    blurCodeMirror(editor);
 
     expect(guideMocks.setGlobalMutateAsync).toHaveBeenCalledTimes(1);
 

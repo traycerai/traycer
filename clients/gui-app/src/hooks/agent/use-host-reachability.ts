@@ -2,7 +2,8 @@ import { useMemo } from "react";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { isUnknownHost } from "@/lib/host/constants";
 
-export type HostReachabilityStatus = "checking" | "reachable" | "unreachable";
+export type HostReachabilityStatus =
+  "checking" | "reachable" | "unreachable" | "host-starting";
 
 export interface HostReachability {
   readonly status: HostReachabilityStatus;
@@ -25,6 +26,11 @@ export interface HostReachability {
  * created before per-tile binding existed, or transient pre-binding
  * states) report "reachable" so they continue to render against
  * whichever host the renderer is currently using.
+ *
+ * "unreachable" is reserved for a directory that HAS entries but not the
+ * bound host (foreign machine, past identity, or a host marked
+ * unavailable). A resolved-but-EMPTY directory reports "host-starting"
+ * instead - the local host simply hasn't published yet.
  */
 export function useHostReachability(hostId: string): HostReachability {
   const list = useHostDirectoryList();
@@ -41,6 +47,16 @@ export function useHostReachability(hostId: string): HostReachability {
     }
     if (isUnknownHost(hostId)) {
       return { status: "reachable", hostLabel: hostId };
+    }
+    // An EMPTY directory means this machine's own host has not published
+    // yet (boot, ensure/respawn in progress, post-wake re-probe) - the
+    // directory only ever contains the local host today (remote discovery
+    // is a stub). No bound host's fate is knowable in that state, so it is
+    // "host-starting", never a per-tab death: the 2026-07-14 incident
+    // rendered every chat as "Bound host is offline" + Clone CTA (and
+    // terminals as "permanently closed") from exactly this window.
+    if (list.data.length === 0) {
+      return { status: "host-starting", hostLabel: hostId };
     }
     const entry = list.data.find((e) => e.hostId === hostId);
     if (entry === undefined) {

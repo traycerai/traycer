@@ -21,5 +21,9 @@ export function useTerminalKill(): UseMutationResult<
   RequestOfMethod<HostRpcRegistry, "terminal.kill">,
   KillTerminalMutationContext
 > {
-  return useTerminalKillFor(useHostClient(), "Couldn't close the terminal.");
+  return useTerminalKillFor(
+    useHostClient(),
+    "Couldn't close the terminal.",
+    true,
+  );
 }

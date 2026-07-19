@@ -11,7 +11,7 @@
     "clean:main": "rimraf dist/main dist/packages dist/protocol dist/clients",
     "compile": "tsc --noEmit -p tsconfig.json",
     "build:main": "bun run clean:main && bun scripts/build-main-bundle.cjs",
-    "build:renderer": "vite build --config vite.renderer.config.ts",
+    "build:renderer": "vite build --config vite.renderer.config.ts && bun scripts/assert-single-instance-deps.cjs",
     "build:app": "bun run clean && bun run build:main && bun run build:renderer",
     "prepack:check-cli": "bun scripts/prepack/check-cli-resource.cjs",
     "prepack:check-icons": "bun scripts/prepack/check-bundle-icons.cjs",
@@ -25,7 +25,8 @@
     "lint": "eslint . --cache --fix --max-warnings 0",
     "format": "bun x prettier --write .",
     "test": "vitest run",
-    "test:resolution": "VITE_DESKTOP_LOCAL_STORAGE_KEY=traycer-resolution-test-local-storage-key bun run build:app && bun scripts/resolution/run-resolution-matrix.cjs"
+    "test:resolution": "VITE_DESKTOP_LOCAL_STORAGE_KEY=traycer-resolution-test-local-storage-key bun run build:app && bun scripts/resolution/run-resolution-matrix.cjs",
+    "test:packaging": "vitest run --config vitest.config.packaging.ts"
   },
   "dependencies": {
     "@sentry/browser": "catalog:",
@@ -77,6 +78,7 @@
       "buildResources": "resources/bundle",
       "output": "release"
     },
+    "afterPack": "scripts/prepack/inject-host-launch-agent.cjs",
     "files": [
       "dist/**/*",
       "package.json",
@@ -228,5 +230,5 @@
     "name": "Traycer AI",
     "email": "support@traycer.ai"
   },
-  "license": "Apache-2.0"
+  "license": "MIT"
 }

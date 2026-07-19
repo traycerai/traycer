@@ -13,14 +13,15 @@ import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
 // The harness id set is a superset of the provider-CLI id set (it also carries
 // `traycer`, which has no provider-CLI login). Only CLI harnesses gate. Grok,
-// Qwen, Kiro, Kimi, Droid, Copilot, and Kilo Code are GUI-only (not in the TUI map)
-// but DO gate through their CLI login providers, mirroring the host's
+// Cursor, Grok, Qwen, Kiro, Kimi, Droid, Copilot, and Kilo Code are GUI-only
+// (not in the TUI map) but DO gate through their providers, mirroring the host's
 // `harnessIdToProviderId`. Exported so other harness->provider derivations
 // (e.g. the chat provider rate-limit selector) share this single mapping.
 export function providerIdForHarness(
   harnessId: GuiHarnessId,
 ): ProviderId | null {
   if (harnessId === "traycer") return null;
+  if (harnessId === "cursor") return "cursor";
   if (harnessId === "openrouter") return "openrouter";
   if (harnessId === "grok") return "grok";
   if (harnessId === "qwen") return "qwen";
@@ -56,6 +57,7 @@ export type ProviderReauthReason =
 
 export interface ProviderReauthGate {
   readonly providerId: ProviderId | null;
+  readonly profileId: string | null;
   readonly state: ProviderCliState | null;
   readonly signedOut: boolean;
   readonly reason: ProviderReauthReason | null;
@@ -240,5 +242,5 @@ export function useProviderReauthGate(
     }
   }, [providerUnauthenticated, authStatus, providerId]);
 
-  return { providerId, state, signedOut, reason, profileLabel };
+  return { providerId, profileId, state, signedOut, reason, profileLabel };
 }

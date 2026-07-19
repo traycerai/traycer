@@ -37,11 +37,12 @@ export function RootComponent() {
           HostReadyGate so they keep working while the page is gated on host
           readiness (the "Setting up Traycer Host…" screen). The menu command
           listener routes native menu items; the dialog host renders
-          host-independent About/Logs dialogs. Both only depend on the runner
-          host + auth + local stores, all
-          available without a ready host. */}
+          host-independent About/Logs dialogs; notification emission drains
+          app-local persisted rows. All only depend on the runner host + auth +
+          local stores, which are available without a ready host. */}
       <MenuCommandListener />
       <DesktopDialogHost />
+      <NotificationEmissionController />
       {/* Everything host-dependent stays BEHIND the gate, preserving the exact
           mount timing it had when the gate wrapped the whole RouterProvider -
           these bridges + the page only mount once the host is reachable (or the
@@ -49,7 +50,6 @@ export function RootComponent() {
       <HostReadyGate>
         <HostTrayCommandListener />
         <PreventSleepController />
-        <NotificationEmissionController />
         <TrayOpenEpicBridge />
         <NotificationFocusBridge />
         <DeepLinkTabSync />

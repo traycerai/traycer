@@ -45,13 +45,19 @@ discovered from `LocalHostSnapshot`.
   bundled-CLI signing verification), `assets/` (tray-icon generator).
 - `resources/host/` - Empty placeholder kept solely because `package.json`'s
   `build.extraResources` still references the path. Desktop **never** bundles a
-  host binary, host runtime, developer Node binary, host wrapper, or service
-  plist; host lifecycle is fully owned by the Traycer CLI subprocess, and the
-  host itself is provisioned as a signed release binary - it is not shipped
-  inside Desktop. The `extraResources` filter is restricted to `README.md` +
-  `.gitkeep`. No live `src/` code reads from this directory, and the removed
-  symbols `resolveHostBinaryPath` / `TRAYCER_HOST_BINARY` no longer exist
-  anywhere in this workspace.
+  host binary, host runtime, or developer Node binary; host lifecycle is fully
+  owned by the Traycer CLI subprocess, and the host itself is provisioned as a
+  signed release binary - it is not shipped inside Desktop. The one exception
+  is macOS **production** packaging: `scripts/prepack/inject-host-launch-agent.cjs`
+  (electron-builder `afterPack`; no `afterSign` - electron-builder's own
+  signing pass already deep-signs the injected helper) stages a helper `.app`
+  wrapping the bundled CLI plus an SMAppService LaunchAgent plist (`BundleProgram`, relative
+  path, `NumberOfFiles = 8192`) into the bundle so Login Items attribution and
+  the host's descriptor limit work out of the box; unstamped/dev builds no-op.
+  The `extraResources` filter is restricted to `README.md` + `.gitkeep`. No live
+  `src/` code reads from this directory, and the removed symbols
+  `resolveHostBinaryPath` / `TRAYCER_HOST_BINARY` no longer exist anywhere in
+  this workspace.
 - `resources/cli/` - Bundled Traycer CLI staging directory. The CLI ships as a
   single-file Node SEA per `<platform>-<arch>`. CI release workflows stage the
   CLI binary into `resources/cli/<platform>-<arch>/traycer[.exe]`;

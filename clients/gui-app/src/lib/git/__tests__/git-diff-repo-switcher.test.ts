@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { WorktreeBindingSelectorRow } from "@traycer/protocol/host";
+import type { WorktreeBindingSelectorRowV12 } from "@traycer/protocol/host";
 import type { GitSubmoduleSummary } from "@/lib/git/git-repo-tree";
 import {
   buildGitDiffRepoSwitcherModel,
@@ -8,8 +8,8 @@ import {
 } from "../git-diff-repo-switcher";
 
 function row(
-  overrides: Partial<WorktreeBindingSelectorRow>,
-): WorktreeBindingSelectorRow {
+  overrides: Partial<WorktreeBindingSelectorRowV12>,
+): WorktreeBindingSelectorRowV12 {
   return {
     hostId: "host-1",
     runningDir: "/repo",
@@ -24,6 +24,7 @@ function row(
     setupState: "not_required",
     disabledReason: null,
     sources: [],
+    isGitResolvePending: false,
     ...overrides,
   };
 }
@@ -55,7 +56,7 @@ function selection(
 }
 
 function rootInput(args: {
-  readonly row: WorktreeBindingSelectorRow;
+  readonly row: WorktreeBindingSelectorRowV12;
   readonly fileChangeCount: number | null;
   readonly moduleChangeCount: number | null;
 }): GitDiffRepoSwitcherRootInput {
@@ -427,6 +428,64 @@ describe("buildGitDiffRepoSwitcherModel", () => {
     expect(model.rows.map((item) => item.disabledLabel)).toEqual([
       "failed",
       "not git",
+    ]);
+  });
+
+  // The host's `isGitResolvePending` flag drives the render: a pending row
+  // reads as "checking"; a resolved non-git row reads "not git"; a real
+  // setup-state reason keeps its label even if (defensively) marked pending.
+  it("renders a pending row as checking, resolved rows by their real label", () => {
+    const model = buildGitDiffRepoSwitcherModel({
+      roots: [
+        rootInput({
+          row: row({
+            runningDir: "/cold",
+            workspacePath: "/cold",
+            repoIdentifier: null,
+            branch: null,
+            isGitRepo: false,
+            isGitResolvePending: true,
+          }),
+          fileChangeCount: null,
+          moduleChangeCount: null,
+        }),
+        rootInput({
+          row: row({
+            runningDir: "/notes",
+            workspacePath: "/notes",
+            repoIdentifier: null,
+            branch: null,
+            isGitRepo: false,
+            isGitResolvePending: false,
+          }),
+          fileChangeCount: null,
+          moduleChangeCount: null,
+        }),
+        rootInput({
+          row: row({
+            runningDir: "/setup-failed",
+            repoIdentifier: { owner: "acme", repo: "setup-failed" },
+            disabledReason: "setup_failed",
+            isGitResolvePending: false,
+          }),
+          fileChangeCount: null,
+          moduleChangeCount: null,
+        }),
+      ],
+      activeRootSubmodules: [],
+      selected: null,
+      searchQuery: "",
+    });
+
+    expect(
+      model.rows.map((item) => ({
+        disabledLabel: item.disabledLabel,
+        pending: item.pending,
+      })),
+    ).toEqual([
+      { disabledLabel: "checking", pending: true },
+      { disabledLabel: "not git", pending: false },
+      { disabledLabel: "failed", pending: false },
     ]);
   });
 });

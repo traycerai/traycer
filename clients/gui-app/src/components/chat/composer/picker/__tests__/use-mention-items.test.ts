@@ -149,6 +149,7 @@ function artifact(
     id,
     kind,
     title: fields.title,
+    folderName: "",
     parentId: null,
     artifactRoomId: null,
     createdAt: 0,

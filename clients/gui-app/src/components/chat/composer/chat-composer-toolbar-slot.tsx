@@ -15,6 +15,7 @@ interface ChatComposerToolbarSlotProps {
   readonly store: ComposerToolbarStore;
   readonly onAttachImages: (files: ReadonlyArray<File>) => void;
   readonly canSubmit: boolean;
+  readonly attachmentPending: boolean;
   readonly onSubmit: () => void;
   readonly activeTurnStatus: ChatActiveTurn["status"] | null;
   readonly hasPendingApprovals: boolean;
@@ -27,6 +28,7 @@ interface ChatComposerToolbarSlotProps {
   /** The host "Create new profile" creates on - see `HarnessModelPicker`'s
    *  prop of the same name. */
   readonly createProfileHostId: string | null;
+  readonly runTargetHostId: string | null;
 }
 
 interface ChatComposerToolbarSlotViewProps extends ChatComposerToolbarSlotProps {
@@ -73,6 +75,7 @@ function ChatComposerToolbarSlotView(props: ChatComposerToolbarSlotViewProps) {
       showNextTurnPermissionNote={props.showNextTurnPermissionNote}
       showAgentModeTooltip={false}
       canSubmit={props.canSubmit}
+      attachmentPending={props.attachmentPending}
       onSubmit={props.onSubmit}
       activeTurnStatus={props.activeTurnStatus}
       stopDisabled={props.stopDisabled}
@@ -82,6 +85,7 @@ function ChatComposerToolbarSlotView(props: ChatComposerToolbarSlotViewProps) {
       dictationPreparing={props.dictationPreparing}
       settingsLocked={props.settingsLocked}
       createProfileHostId={props.createProfileHostId}
+      runTargetHostId={props.runTargetHostId}
     />
   );
 }

@@ -6,4 +6,6 @@ export const notificationsMutationKeys = {
   clearAll: () => ["notifications.clearAll"] as const,
   loadMore: () => ["notifications.loadMore"] as const,
   setConfig: () => ["host.notifications.setConfig"] as const,
+  testHook: () => ["host.notificationHooks.test"] as const,
+  saveHooks: () => ["host.notificationHooks.save"] as const,
 };

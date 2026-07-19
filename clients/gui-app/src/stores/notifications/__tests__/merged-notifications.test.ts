@@ -30,9 +30,14 @@ function hostEntry(
     severity: "needs_action",
     outcome: null,
     resolvedAt: null,
+    epicId: "epic-1",
+    chatId: "chat-1",
     payload: {
+      kind: "approval",
       epicId: "epic-1",
       chatId: "chat-1",
+      chatTitle: "Deploy checkout fix",
+      taskTitle: "Checkout notifications",
       approvalId: "approval-1",
     },
   };
@@ -64,11 +69,12 @@ function appLocalEntry(
     id,
     updatedAt,
     readAt,
-    kind: "worktree.setup.failed",
+    kind: "stream.transport.error",
     sourceRef: id,
     payload: { kind: "chat", epicId: "epic-1", chatId: "chat-1" },
-    message: "Worktree setup failed",
+    message: "Chat stream closed unexpectedly",
     detail: null,
+    displayedUpdatedAt: null,
   };
 }
 
@@ -122,6 +128,8 @@ describe("merged notifications feed", () => {
       updatedAt: 10,
       readAt: null,
       sourceRef: "agent-1",
+      epicId: "epic-1",
+      chatId: "chat-1",
     } as const;
     const stopped: HostNotificationEntry = {
       ...base,
@@ -129,6 +137,7 @@ describe("merged notifications feed", () => {
       severity: "done",
       outcome: "completed",
       payload: {
+        kind: "chat",
         epicId: "epic-1",
         chatId: "chat-1",
         agentName: "Deploy checkout fix",
@@ -142,6 +151,7 @@ describe("merged notifications feed", () => {
       severity: "failure",
       outcome: "errored",
       payload: {
+        kind: "chat",
         epicId: "epic-1",
         chatId: "chat-1",
         agentName: "Deploy checkout fix",
@@ -156,10 +166,32 @@ describe("merged notifications feed", () => {
       severity: "failure",
       outcome: "errored",
       payload: {
+        kind: "agent_stalled",
         epicId: "epic-1",
         chatId: "chat-1",
+        agentId: "chat-1",
         agentName: "Deploy checkout fix",
         taskTitle: "Checkout notifications",
+        reason: "provider_buffering",
+        title: "Provider is buffering",
+        outcome: "errored",
+      },
+    };
+    const workspaceFailure: HostNotificationEntry = {
+      ...base,
+      kind: "workspace.operation.failed",
+      severity: "failure",
+      outcome: "errored",
+      payload: {
+        kind: "workspace_operation_failed",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        chatTitle: "Deploy checkout fix",
+        taskTitle: "Checkout notifications",
+        operation: "provision",
+        title: "Worktree creation failed",
+        message: "Couldn't create worktree.",
+        outcome: "errored",
       },
     };
     const interview: HostNotificationEntry = {
@@ -169,10 +201,12 @@ describe("merged notifications feed", () => {
       outcome: null,
       resolvedAt: null,
       payload: {
+        kind: "interview",
         epicId: "epic-1",
         chatId: "chat-1",
         chatTitle: "Deploy checkout fix",
         taskTitle: "Checkout notifications",
+        interviewBlockId: "block-1",
       },
     };
 
@@ -186,7 +220,12 @@ describe("merged notifications feed", () => {
     });
     expect(rowFromHostEntry(stalled)).toMatchObject({
       title: "Checkout notifications",
-      body: "Deploy checkout fix • Stalled",
+      body: "Deploy checkout fix • Provider is taking longer than expected",
+    });
+    expect(rowFromHostEntry(workspaceFailure)).toMatchObject({
+      title: "Checkout notifications",
+      body: "Deploy checkout fix • Worktree creation failed",
+      payload: { kind: "chat", epicId: "epic-1", chatId: "chat-1" },
     });
     expect(rowFromHostEntry(interview)).toMatchObject({
       title: "Checkout notifications",
@@ -194,26 +233,169 @@ describe("merged notifications feed", () => {
     });
   });
 
-  it("does not display UUID placeholders from legacy host payloads", () => {
-    const interview: HostNotificationEntry = {
-      id: "legacy-interview",
+  it("renders safe semantic failure copy without exposing raw messages", () => {
+    const base = {
+      id: "notification-semantic",
       updatedAt: 10,
       readAt: null,
-      sourceRef: "interview-1",
-      kind: "interview.requested",
+      sourceRef: "agent-1",
+      epicId: "epic-1",
+      chatId: "chat-1",
+      kind: "agent.stopped",
+      severity: "failure",
+      outcome: "errored",
+    } as const;
+    const entry = (
+      reason: string | undefined,
+      code: string,
+      providerId: string | undefined,
+    ): HostNotificationEntry => ({
+      ...base,
+      payload: {
+        kind: "chat",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        agentName: "Debug notifications",
+        taskTitle: "Notification errors",
+        outcome: "errored",
+        code,
+        message: "raw /Users/alice/private-path and provider output",
+        reason,
+        providerId,
+      },
+    });
+
+    expect(
+      rowFromHostEntry(entry("auth", "auth", "claude-code")),
+    ).toMatchObject({
+      body: "Debug notifications • Claude Code is signed out. Reconnect to continue.",
+    });
+    expect(
+      rowFromHostEntry(entry("rate_limit", "future-code", "claude-code")),
+    ).toMatchObject({
+      body: "Debug notifications • Claude Code rate limit reached",
+    });
+    expect(
+      rowFromHostEntry(entry("future-reason", "future-code", undefined)),
+    ).toMatchObject({
+      body: "Debug notifications • Failed",
+    });
+    expect(rowFromHostEntry(entry(undefined, "auth", undefined))).toMatchObject(
+      {
+        body: "Debug notifications • Provider is signed out. Reconnect to continue.",
+      },
+    );
+    expect(
+      rowFromHostEntry(entry("auth", "auth", "future-provider")),
+    ).toMatchObject({
+      body: "Debug notifications • Provider is signed out. Reconnect to continue.",
+    });
+    expect(
+      rowFromHostEntry(entry(undefined, "MISSING_API_KEY", "claude-code")),
+    ).toMatchObject({
+      body: "Debug notifications • Failed",
+    });
+  });
+
+  it("presents known typed payloads and degrades unknown ones generically", () => {
+    const base = {
+      id: "notification-typed",
+      updatedAt: 10,
+      readAt: null,
+      sourceRef: "chat-1",
+      epicId: "epic-1",
+      chatId: "chat-1",
+    } as const;
+    // A fully typed payload from a current host: presentation and the
+    // navigation deep-link both come from the second-stage semantic parse.
+    const typed: HostNotificationEntry = {
+      ...base,
+      kind: "agent.stopped",
+      severity: "done",
+      outcome: "completed",
+      payload: {
+        kind: "chat",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        agentName: "Deploy checkout fix",
+        taskTitle: "Checkout notifications",
+        outcome: "completed",
+      },
+    };
+    expect(rowFromHostEntry(typed)).toMatchObject({
+      title: "Checkout notifications",
+      body: "Deploy checkout fix • Done",
+      payload: { kind: "chat", epicId: "epic-1", chatId: "chat-1" },
+    });
+
+    // A payload kind from a NEWER host: unknown here, so the row renders
+    // generically with no deep-link - it must never vanish or crash
+    // presentation.
+    const futureShape: HostNotificationEntry = {
+      ...base,
+      id: "notification-future",
+      kind: "agent.stopped",
+      severity: "done",
+      outcome: "completed",
+      payload: {
+        kind: "future_shape",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        taskTitle: "Checkout notifications",
+        outcome: "completed",
+      },
+    };
+    expect(rowFromHostEntry(futureShape)).toMatchObject({
+      title: "Task",
+      body: "Chat • Done",
+      payload: null,
+    });
+
+    // Cross-kind corruption: a well-formed payload under the WRONG row kind
+    // must not mint contradictory copy or a deep-link.
+    const crossKind: HostNotificationEntry = {
+      ...base,
+      id: "notification-cross-kind",
+      kind: "approval.requested",
       severity: "needs_action",
       outcome: null,
       resolvedAt: null,
       payload: {
+        kind: "chat",
         epicId: "epic-1",
-        chatId: "40694091-7647-44a6-856a-54d3fd620412",
-        chatTitle: "Chat 40694091-7647-44a6-856a-54d3fd620412",
+        chatId: "chat-1",
+        agentName: "Deploy checkout fix",
+        taskTitle: "Checkout notifications",
+        outcome: "completed",
       },
     };
-
-    expect(rowFromHostEntry(interview)).toMatchObject({
+    expect(rowFromHostEntry(crossKind)).toMatchObject({
       title: "Task",
-      body: "Chat • Question waiting",
+      body: "Chat • Approval requested",
+      payload: null,
+    });
+
+    // Wrongly-typed display fields fail the semantic parse and degrade the
+    // same way.
+    const malformed: HostNotificationEntry = {
+      ...base,
+      id: "notification-malformed",
+      kind: "agent.stopped",
+      severity: "done",
+      outcome: "completed",
+      payload: {
+        kind: "chat",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        agentName: 42,
+        taskTitle: null,
+        outcome: "completed",
+      },
+    };
+    expect(rowFromHostEntry(malformed)).toMatchObject({
+      title: "Task",
+      body: "Chat • Done",
+      payload: null,
     });
   });
 
@@ -224,11 +406,11 @@ describe("merged notifications feed", () => {
       sourceId: "setup",
       createdAt: 10,
       readAt: null,
-      title: "Worktree setup failed",
+      title: "Chat stream closed unexpectedly",
       body: "Traycer notification",
       payload: { kind: "chat", epicId: "epic-1", chatId: "chat-1" },
       hostKind: null,
-      appLocalKind: "worktree.setup.failed",
+      appLocalKind: "stream.transport.error",
       globalEntry: null,
       severity: "failure",
       outcome: null,

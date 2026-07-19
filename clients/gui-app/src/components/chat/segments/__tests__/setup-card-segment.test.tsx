@@ -18,6 +18,7 @@ import {
 
 const focusTerminal = vi.hoisted(() => vi.fn());
 const retryMutate = vi.hoisted(() => vi.fn());
+const createMutate = vi.hoisted(() => vi.fn());
 // `value === undefined` models the "liveness not yet known" window (the query
 // has not settled); an array models a settled `terminal.list` response.
 const terminalSessions = vi.hoisted<{
@@ -58,6 +59,13 @@ vi.mock("@/hooks/worktree/use-worktree-retry-setup-mutation", () => ({
   },
 }));
 
+vi.mock("@/hooks/worktree/use-worktree-create-mutation", () => ({
+  useWorktreeCreateForClient: () => ({
+    mutate: createMutate,
+    isPending: false,
+  }),
+}));
+
 // Contract guard: the state union is exactly these five. If it drifts,
 // `Exclude<...>` stops resolving to `never` and `bun run compile` fails.
 type UnexpectedStates = Exclude<
@@ -81,6 +89,8 @@ function workspace(
     terminalSessionId: "term-1",
     worktreePath: "/worktrees/repo/feature",
     branch: "feature",
+    errorMessage: null,
+    retryFolderIntent: null,
     ...overrides,
   };
 }
@@ -122,6 +132,7 @@ function expand() {
 beforeEach(() => {
   focusTerminal.mockReset();
   retryMutate.mockReset();
+  createMutate.mockReset();
   terminalSessions.value = undefined;
   tabClient.value = {};
   retryClientArg.value = "unset";
@@ -318,6 +329,57 @@ describe("<SetupCardSegment /> single-repo dropdown (two steps)", () => {
       ownerKind: "chat",
       workspacePath: "/repo",
     });
+  });
+
+  it("re-provisions a provision failure via worktree.create, not retrySetup", () => {
+    const folderIntent = {
+      kind: "worktree" as const,
+      workspacePath: "/repo",
+      repoIdentifier: null,
+      isPrimary: true,
+      branch: {
+        type: "new" as const,
+        name: "traycer/fresh-fox",
+        source: "main",
+        carryUncommittedChanges: false,
+      },
+      scripts: null,
+    };
+    renderCard(
+      viewModel("failed", [
+        workspace({
+          state: "failed",
+          worktreePath: null,
+          errorMessage: "fatal: could not create work tree dir",
+          retryFolderIntent: folderIntent,
+        }),
+      ]),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry setup" }));
+    expect(createMutate).toHaveBeenCalledWith({
+      epicId: EPIC_ID,
+      ownerId: OWNER_ID,
+      ownerKind: "chat",
+      entries: [folderIntent],
+    });
+    expect(retryMutate).not.toHaveBeenCalled();
+  });
+
+  it("renders the provision failure reason on the failed card", () => {
+    renderCard(
+      viewModel("failed", [
+        workspace({
+          state: "failed",
+          worktreePath: null,
+          errorMessage: "fatal: a branch named 'traycer/x' already exists",
+        }),
+      ]),
+    );
+
+    expect(screen.getByRole("alert").textContent).toBe(
+      "fatal: a branch named 'traycer/x' already exists",
+    );
   });
 
   it("offers Retry on a cancelled setup after expand", () => {

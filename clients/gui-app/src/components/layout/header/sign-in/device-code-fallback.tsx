@@ -14,6 +14,7 @@ export function DeviceCodeFallback(props: {
 }) {
   return (
     <Collapsible
+      defaultOpen
       className={cn(
         "overflow-hidden rounded-md border",
         props.isHero

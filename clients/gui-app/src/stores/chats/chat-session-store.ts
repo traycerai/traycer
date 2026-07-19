@@ -3,6 +3,7 @@ import {
   pruneAcceptedActions,
   reconcileQueueChange,
   reconcileSnapshotChange,
+  sweepStalePendingActions,
   withoutPendingAction,
 } from "@/stores/chats/chat-queue-reconciler";
 import {
@@ -18,8 +19,11 @@ import type {
 } from "@/stores/chats/stream-flush-coordinator";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
+import { useInterviewDraftStore } from "@/stores/composer/interview-draft-store";
 import {
   readStagedWorktreeIntent,
+  stagedWorktreeIntentRevision,
+  stagedWorktreeIntentIsSuspended,
   useWorktreeIntentStagingStore,
   type WorktreeStagingKey,
 } from "@/stores/worktree/worktree-intent-staging-store";
@@ -59,7 +63,10 @@ import type {
   ChatRunStatus,
   ChatSubscribeClientFrame,
 } from "@traycer/protocol/host/agent/gui/subscribe";
-import type { WorktreeBinding } from "@traycer/protocol/host/worktree-schemas";
+import type {
+  WorktreeBinding,
+  WorktreeIntent,
+} from "@traycer/protocol/host/worktree-schemas";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type { RestoreResultEntry } from "@traycer/protocol/persistence/epic/checkpoint-manifests";
 import type {
@@ -96,7 +103,7 @@ type SendActionInput = {
   readonly set: ChatSessionSetState;
   readonly get: ChatSessionGetState;
   readonly frame: ChatOwnerActionFrame;
-  readonly pending: PendingChatAction;
+  readonly pending: PendingChatActionSeed;
   readonly pendingUserMessage: PendingUserMessage | null;
 };
 
@@ -112,12 +119,46 @@ export interface PendingUserMessage {
 export interface PendingChatAction {
   readonly clientActionId: string;
   readonly action: ChatOwnerActionFrame["kind"];
+  // For `interviewAnswer` / `interviewError`, the interview block this action
+  // targets; `null` for every other action. Lets the UI gate exactly the card
+  // whose answer/skip is in flight (or accepted-but-unresolved) rather than all
+  // interviews, and lets lifecycle resolution drop this block's stale actions.
+  readonly interviewBlockId: string | null;
   readonly messageId: string | null;
   readonly restoreContent: JsonContent | null;
   readonly sender: UserMessageSender | null;
   readonly settings: ChatRunSettings | null;
+  /**
+   * Workspace selection consumed when a send goes on the wire. A rejected
+   * send restores it to the owner's staging slot together with the composer
+   * content, so retrying cannot silently fall back to the prior binding.
+   */
+  readonly restoreWorktreeIntent: WorktreeIntent | null;
+  /**
+   * Staging revision immediately after the send consumes its selection. A
+   * rejection restores only when the user has made no newer picker choice.
+   */
+  readonly restoreWorktreeStagingRevision: number | null;
   readonly createdAt: number;
+  /**
+   * The connection epoch the action's frame was dispatched on (stamped by
+   * `sendAction`). An epoch older than the one that produced the current
+   * authoritative snapshot means the frame's ack can never arrive (frames
+   * and acks are fire-and-forget per connection), so snapshot reconciliation
+   * drops such non-message pendings instead of leaving their controls
+   * disabled forever. Only `send` is excluded - it reconciles by messageId
+   * with composer restoration. A stale `editUserMessage` is swept (its
+   * applied edit still shows in the snapshot's messages either way; only
+   * its accepted-action bookkeeping entry is skipped).
+   */
+  readonly connectionEpoch: number;
 }
+
+/**
+ * A pending action as its creator builds it - `sendAction` stamps the
+ * `connectionEpoch` centrally at dispatch time.
+ */
+export type PendingChatActionSeed = Omit<PendingChatAction, "connectionEpoch">;
 
 export interface FailedSendRestorationState {
   readonly clientActionId: string;
@@ -166,6 +207,10 @@ export interface EditUserMessageInput {
 export interface AcceptedChatAction {
   readonly clientActionId: string;
   readonly action: ChatOwnerActionFrame["kind"];
+  // Carried over from the originating `PendingChatAction` so an accepted-but-
+  // unresolved interview answer/skip keeps gating its card. `null` for every
+  // non-interview action.
+  readonly interviewBlockId: string | null;
   readonly messageId: string | null;
   readonly acceptedAt: number;
   /**
@@ -203,6 +248,16 @@ export type ChatRestoreSlot =
       readonly restoringUserId: string;
       readonly restoringHostId: string;
       readonly startedAt: number;
+      /**
+       * Connection epoch the `restoreStarted` frame arrived on. The slot is
+       * frame-driven with no snapshot representation, so an in-flight slot
+       * whose `restoreCompleted` was lost to a drop would spin forever; the
+       * first authoritative snapshot of a NEWER connection clears such a
+       * stale slot instead. Trade-off: progress frames refine only an
+       * existing slot, so a restore genuinely still running re-surfaces only
+       * at its `restoreCompleted` (progress shown until then is lost).
+       */
+      readonly connectionEpoch: number;
     }
   | {
       readonly kind: "progressing";
@@ -212,6 +267,8 @@ export type ChatRestoreSlot =
       readonly startedAt: number;
       readonly processedCount: number;
       readonly totalCount: number;
+      /** See the `in-flight` variant. */
+      readonly connectionEpoch: number;
     }
   | {
       readonly kind: "completed";
@@ -593,6 +650,36 @@ function appendErrorNotice(
   ];
 }
 
+/**
+ * Re-stage the worktree intent a `send`/`editUserMessage` pending captured,
+ * unless the user has staged a newer selection since (revision guard). Shared
+ * by the rejection ack and the reconnect sweep: an edit dropped before its ack
+ * (connection lost mid-flight) never runs the rejection path, so without this
+ * its staged selection would stay cleared and the next resend would silently
+ * run against the prior binding - the exact silent-local-run the restore exists
+ * to prevent.
+ */
+function restoreStagedWorktreeIntentForPending(
+  pending: PendingChatAction,
+  stagingKey: WorktreeStagingKey,
+): void {
+  if (
+    pending.restoreWorktreeIntent === null ||
+    pending.restoreWorktreeStagingRevision === null
+  ) {
+    return;
+  }
+  if (
+    stagedWorktreeIntentRevision(stagingKey) !==
+    pending.restoreWorktreeStagingRevision
+  ) {
+    return;
+  }
+  useWorktreeIntentStagingStore
+    .getState()
+    .setIntent(stagingKey, pending.restoreWorktreeIntent);
+}
+
 export function createChatSessionStore(
   options: ChatSessionStoreOptions,
 ): ChatSessionStoreHandle {
@@ -602,6 +689,13 @@ export function createChatSessionStore(
   // delta buffer lives; read by the handle's surface-visibility rollup.
   let flushLease: StreamFlushLease | null = null;
   let activeStreamGeneration = 0;
+  // Bumped whenever the connection the pendings were dispatched on is gone: a
+  // transport `reconnecting`/`closed` status, or a stream-client replacement
+  // (`retry`). Pending actions are stamped with this at dispatch, and the
+  // next authoritative snapshot drops non-message pendings from an older
+  // epoch - their ack can never arrive. Never acted on at the connection
+  // event itself: a wobble that reconnects cancels nothing by itself.
+  let connectionEpoch = 0;
   const surfaceVisibility = new Map<string, boolean>();
 
   const pushSurfaceVisibility = (): void => {
@@ -624,10 +718,11 @@ export function createChatSessionStore(
     const client = streamClient;
     if (client === null) return null;
     const nextPendingUser = input.pendingUserMessage;
+    const pending: PendingChatAction = { ...input.pending, connectionEpoch };
     input.set((state) => ({
       pendingActions: {
         ...state.pendingActions,
-        [input.pending.clientActionId]: input.pending,
+        [pending.clientActionId]: pending,
       },
       // Dedupe by `messageId` so a real send for an already-seeded optimistic
       // message replaces the seed in place instead of rendering it twice.
@@ -650,6 +745,9 @@ export function createChatSessionStore(
     const client = streamClient;
     streamClient = null;
     activeStreamGeneration += 1;
+    // A replaced client is a new connection - the old one's `closed` status
+    // event is suppressed by the generation guard, so bump here too.
+    connectionEpoch += 1;
     client.close();
   };
 
@@ -709,6 +807,34 @@ export function createChatSessionStore(
           return;
         }
         flushBlockDeltas();
+        // Pendings dispatched on an earlier connection never see their ack, so
+        // the snapshot drops them (below). Computed here, before the set, so a
+        // swept `editUserMessage` gets its staged worktree intent restored the
+        // same way a rejected one does - the drop otherwise leaves the slot
+        // cleared and the next resend runs against the prior binding. Reads
+        // `get()` (no pendingActions mutation happens before the set), so it
+        // sees the same state the updater will.
+        const sweep = sweepStalePendingActions(
+          get().pendingActions,
+          connectionEpoch,
+        );
+        if (sweep.sweptActionIds.size > 0) {
+          const stagingKey: WorktreeStagingKey = {
+            surface: "owner",
+            epicId: options.epicId,
+            ownerKind: "chat",
+            ownerId: options.chatId,
+          };
+          // Every swept id came from this same `pendingActions` snapshot, so
+          // the lookup is always present.
+          const sweptPendings = get().pendingActions;
+          sweep.sweptActionIds.forEach((sweptId) => {
+            restoreStagedWorktreeIntentForPending(
+              sweptPendings[sweptId],
+              stagingKey,
+            );
+          });
+        }
         set((state) => {
           const previousTurnId = snapshotPreviousTurnId(
             state.activeTurn,
@@ -723,8 +849,15 @@ export function createChatSessionStore(
             },
           );
           const now = Date.now();
+          // This snapshot is the authority for everything a lost connection
+          // left in limbo: pendings dispatched on an earlier connection will
+          // never see their ack, so drop them (via `sweep`, computed above so
+          // swept edits restore their staged worktree intent). Controls
+          // re-enable; the user can re-issue against the state the snapshot
+          // shows. Message sends stay - `reconcileSnapshotChange` settles those
+          // by messageId with composer restoration.
           const pending = reconcileSnapshotChange({
-            pendingActions: state.pendingActions,
+            pendingActions: sweep.pendingActions,
             pendingUserMessages: state.pendingUserMessages,
             messages,
             queue: frame.snapshot.queue,
@@ -767,15 +900,28 @@ export function createChatSessionStore(
             backgroundItems: frame.snapshot.backgroundItems,
             // Drop per-item stops whose task has left the running-only list
             // (its terminal landed) and clear the stop-all flag once nothing
-            // is left running, so settled rows never stay disabled.
+            // is left running, so settled rows never stay disabled. A stop
+            // whose FRAME died with a dropped connection never terminates its
+            // task, so also drop entries whose generic pending was just swept
+            // (same clientActionId) - an ack-ACCEPTED stop has no generic
+            // pending left and correctly stays disabled until its terminal.
             pendingBackgroundStops: reconcileBackgroundStops(
-              state.pendingBackgroundStops,
+              withoutBackgroundStopsForActions(
+                state.pendingBackgroundStops,
+                sweep.sweptActionIds,
+              ),
               frame.snapshot.backgroundItems,
             ),
-            pendingBackgroundStopAll: reconcileBackgroundStopAll(
-              state.pendingBackgroundStopAll,
-              frame.snapshot.backgroundItems,
-            ),
+            pendingBackgroundStopAll:
+              state.pendingBackgroundStopAll !== null &&
+              sweep.sweptActionIds.has(
+                state.pendingBackgroundStopAll.clientActionId,
+              )
+                ? null
+                : reconcileBackgroundStopAll(
+                    state.pendingBackgroundStopAll,
+                    frame.snapshot.backgroundItems,
+                  ),
             pendingActions: pending.pendingActions,
             acceptedActions: pruneAcceptedActions(
               {
@@ -786,6 +932,7 @@ export function createChatSessionStore(
             ),
             pendingUserMessages: pending.pendingUserMessages,
             failedSendRestoration: pending.failedSendRestoration,
+            restore: sweepStaleRestoreSlot(state.restore, connectionEpoch),
             snapshotLoaded: true,
             worktreeBinding: frame.snapshot.worktreeBinding,
             missingWorktreePaths: frame.snapshot.missingWorktreePaths,
@@ -805,6 +952,21 @@ export function createChatSessionStore(
             liveTurnUsage: null,
           };
         });
+        // This snapshot is authoritative for which interviews are still
+        // pending, so any stored draft whose block has left the set is an
+        // orphan (its interview resolved, possibly while this window was
+        // offline). Prune those keys; currently-pending drafts survive. Runs on
+        // every snapshot, so cold start and reconnect both reap orphans.
+        useInterviewDraftStore
+          .getState()
+          .pruneChatDrafts(
+            options.chatId,
+            new Set(
+              frame.snapshot.pendingInterviews.map(
+                (interview) => interview.blockId,
+              ),
+            ),
+          );
       },
       onWorktreeStateChanged: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
@@ -818,6 +980,18 @@ export function createChatSessionStore(
       onActionAck: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
           return;
+        }
+        const rejectedPending =
+          frame.status === "rejected"
+            ? pendingActionForId(get().pendingActions, frame.clientActionId)
+            : null;
+        if (rejectedPending !== null) {
+          restoreStagedWorktreeIntentForPending(rejectedPending, {
+            surface: "owner",
+            epicId: options.epicId,
+            ownerKind: "chat",
+            ownerId: options.chatId,
+          });
         }
         set((state) => {
           const pending = pendingActionForId(
@@ -1075,9 +1249,24 @@ export function createChatSessionStore(
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
           return;
         }
+        // Authoritative resolution boundary: the host accepted the answer, so
+        // the retained draft is now safe to discard (the card unmounts as the
+        // interview leaves the pending set). Also drop this block's pending/
+        // accepted actions so their busy gate can never outlive the interview.
+        useInterviewDraftStore
+          .getState()
+          .clearDraft(frame.chatId, frame.blockId);
         set((state) => ({
           pendingInterviews: withoutPendingInterview(
             state.pendingInterviews,
+            frame.blockId,
+          ),
+          pendingActions: withoutInterviewActionsForBlock(
+            state.pendingActions,
+            frame.blockId,
+          ),
+          acceptedActions: withoutInterviewActionsForBlock(
+            state.acceptedActions,
             frame.blockId,
           ),
         }));
@@ -1086,9 +1275,23 @@ export function createChatSessionStore(
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
           return;
         }
+        // The interview is resolved (skipped/errored) authoritatively; drop the
+        // retained draft and this block's actions on the same lifecycle
+        // boundary as an accepted answer.
+        useInterviewDraftStore
+          .getState()
+          .clearDraft(frame.chatId, frame.blockId);
         set((state) => ({
           pendingInterviews: withoutPendingInterview(
             state.pendingInterviews,
+            frame.blockId,
+          ),
+          pendingActions: withoutInterviewActionsForBlock(
+            state.pendingActions,
+            frame.blockId,
+          ),
+          acceptedActions: withoutInterviewActionsForBlock(
+            state.acceptedActions,
             frame.blockId,
           ),
         }));
@@ -1114,6 +1317,7 @@ export function createChatSessionStore(
             restoringUserId: frame.restoringUserId,
             restoringHostId: frame.restoringHostId,
             startedAt: frame.startedAt,
+            connectionEpoch,
           },
         });
       },
@@ -1142,6 +1346,10 @@ export function createChatSessionStore(
               startedAt: prev.startedAt,
               processedCount: frame.processedCount,
               totalCount: frame.totalCount,
+              // A progress frame is live proof the restore is still running
+              // on THIS connection - refresh the stamp so the next snapshot
+              // does not clear an actively-progressing slot.
+              connectionEpoch,
             },
           };
         });
@@ -1169,6 +1377,12 @@ export function createChatSessionStore(
       },
       onConnectionStatus: (status, reason) => {
         if (disposed) return;
+        if (status === "reconnecting" || status === "closed") {
+          // Frames dispatched on the lost connection can no longer be
+          // answered. Only stamps get older here - nothing is cancelled
+          // until an authoritative post-reconnect snapshot arrives.
+          connectionEpoch += 1;
+        }
         set((state) => {
           // Capture a fatal close so the tile can show the host's reason
           // (e.g. CHAT_INVALID) instead of spinning forever. A non-fatal close
@@ -1371,6 +1585,7 @@ export function createChatSessionStore(
           ownerKind: "chat",
           ownerId: options.chatId,
         };
+        if (stagedWorktreeIntentIsSuspended(stagedKey)) return null;
         const worktreeIntent = readStagedWorktreeIntent(stagedKey);
         const frame: ChatOwnerActionFrame = {
           kind: "send",
@@ -1386,6 +1601,16 @@ export function createChatSessionStore(
           deliveryPolicy: "auto",
           worktreeIntent,
         };
+        // Consume before dispatch so the pending action captures precisely the
+        // revision it may later restore. A synchronous action rejection cannot
+        // race ahead of this transition.
+        const stagingStore = useWorktreeIntentStagingStore.getState();
+        let restoreWorktreeStagingRevision: number | null = null;
+        if (worktreeIntent !== null) {
+          stagingStore.clear(stagedKey);
+          restoreWorktreeStagingRevision =
+            stagedWorktreeIntentRevision(stagedKey);
+        }
         const sentClientActionId = sendAction({
           set,
           get,
@@ -1393,10 +1618,13 @@ export function createChatSessionStore(
           pending: {
             clientActionId,
             action: "send",
+            interviewBlockId: null,
             messageId,
             restoreContent: content,
             sender,
             settings,
+            restoreWorktreeIntent: worktreeIntent,
+            restoreWorktreeStagingRevision,
             createdAt: Date.now(),
           },
           // Echo the user message optimistically so it paints INSTANTLY on send -
@@ -1420,7 +1648,12 @@ export function createChatSessionStore(
               }
             : null,
         });
-        if (sentClientActionId === null) return null;
+        if (sentClientActionId === null) {
+          if (worktreeIntent !== null) {
+            stagingStore.setIntent(stagedKey, worktreeIntent);
+          }
+          return null;
+        }
         const optimisticQueuedItem = optimisticQueuedItemForSend({
           state: get(),
           clientActionId,
@@ -1444,7 +1677,6 @@ export function createChatSessionStore(
           useWorktreeIntentMemoryStore
             .getState()
             .setEpicIntent(options.epicId, worktreeIntent, Date.now());
-          useWorktreeIntentStagingStore.getState().clear(stagedKey);
           get().refreshMissingWorktreePaths([]);
         }
         return { clientActionId: sentClientActionId, messageId };
@@ -1491,10 +1723,13 @@ export function createChatSessionStore(
           pending: {
             clientActionId: input.clientActionId,
             action: "send",
+            interviewBlockId: null,
             messageId: input.messageId,
             restoreContent: input.content,
             sender: input.sender,
             settings: input.settings,
+            restoreWorktreeIntent: null,
+            restoreWorktreeStagingRevision: null,
             createdAt: Date.now(),
           },
           pendingUserMessage: {
@@ -1533,6 +1768,14 @@ export function createChatSessionStore(
       editUserMessage: (input) => {
         const clientActionId = uuidv4();
         const messageId = uuidv4();
+        const stagedKey: WorktreeStagingKey = {
+          surface: "owner",
+          epicId: options.epicId,
+          ownerKind: "chat",
+          ownerId: options.chatId,
+        };
+        if (stagedWorktreeIntentIsSuspended(stagedKey)) return null;
+        const worktreeIntent = readStagedWorktreeIntent(stagedKey);
         const frame: ChatOwnerActionFrame = {
           kind: "editUserMessage",
           hasBinaryPayload: false,
@@ -1545,9 +1788,24 @@ export function createChatSessionStore(
           sender: input.sender,
           settings: input.settings,
           accountContext: useAccountContextStore.getState().accountContext,
+          worktreeIntent,
           revertFileChanges: input.revertFileChanges,
           revertArtifacts: input.revertArtifacts,
         };
+        // Consume before dispatch, exactly like `sendMessage`: the pending
+        // action captures the staging revision it may later restore, so a
+        // rejected edit (e.g. the staged worktree failed to materialize) puts
+        // the selection back unless the user re-picked meanwhile. Without
+        // this, the folder chip silently reverts to the prior binding and the
+        // next resend runs there - the silent-local-run the reject exists to
+        // prevent.
+        const stagingStore = useWorktreeIntentStagingStore.getState();
+        let restoreWorktreeStagingRevision: number | null = null;
+        if (worktreeIntent !== null) {
+          stagingStore.clear(stagedKey);
+          restoreWorktreeStagingRevision =
+            stagedWorktreeIntentRevision(stagedKey);
+        }
         const sentClientActionId = sendAction({
           set,
           get,
@@ -1555,15 +1813,29 @@ export function createChatSessionStore(
           pending: {
             clientActionId,
             action: "editUserMessage",
+            interviewBlockId: null,
             messageId,
             restoreContent: null,
             sender: null,
             settings: null,
+            restoreWorktreeIntent: worktreeIntent,
+            restoreWorktreeStagingRevision,
             createdAt: Date.now(),
           },
           pendingUserMessage: null,
         });
-        if (sentClientActionId === null) return null;
+        if (sentClientActionId === null) {
+          if (worktreeIntent !== null) {
+            stagingStore.setIntent(stagedKey, worktreeIntent);
+          }
+          return null;
+        }
+        if (worktreeIntent !== null) {
+          useWorktreeIntentMemoryStore
+            .getState()
+            .setEpicIntent(options.epicId, worktreeIntent, Date.now());
+          get().refreshMissingWorktreePaths([]);
+        }
         return { clientActionId: sentClientActionId, messageId };
       },
       revertFileChanges: (fromMessageId, filePaths, revertArtifacts) => {
@@ -1603,10 +1875,13 @@ export function createChatSessionStore(
           pending: {
             clientActionId,
             action: "stop",
+            interviewBlockId: null,
             messageId: null,
             restoreContent: null,
             sender: null,
             settings: null,
+            restoreWorktreeIntent: null,
+            restoreWorktreeStagingRevision: null,
             createdAt: Date.now(),
           },
           pendingUserMessage: null,
@@ -1938,6 +2213,11 @@ export function createChatSessionStore(
         });
       },
       interviewAnswer: (blockId, answers) => {
+        // Defense-in-depth against a duplicate store dispatch: the UI already
+        // gates on the busy state, but never send a second answer/skip for a
+        // block whose action is still in flight or accepted-but-unresolved.
+        const existing = existingInterviewActionId(get(), blockId);
+        if (existing !== null) return existing;
         const clientActionId = uuidv4();
         const frame: ChatOwnerActionFrame = {
           kind: "interviewAnswer",
@@ -1952,12 +2232,17 @@ export function createChatSessionStore(
           set,
           get,
           frame,
-          pending: basicPending(clientActionId, "interviewAnswer"),
+          pending: {
+            ...basicPending(clientActionId, "interviewAnswer"),
+            interviewBlockId: blockId,
+          },
           pendingUserMessage: null,
         });
         return sentClientActionId;
       },
       interviewError: (blockId, reason) => {
+        const existing = existingInterviewActionId(get(), blockId);
+        if (existing !== null) return existing;
         const clientActionId = uuidv4();
         const frame: ChatOwnerActionFrame = {
           kind: "interviewError",
@@ -1972,7 +2257,10 @@ export function createChatSessionStore(
           set,
           get,
           frame,
-          pending: basicPending(clientActionId, "interviewError"),
+          pending: {
+            ...basicPending(clientActionId, "interviewError"),
+            interviewBlockId: blockId,
+          },
           pendingUserMessage: null,
         });
         return sentClientActionId;
@@ -2103,16 +2391,91 @@ function isUnauthorizedClose(
 function basicPending(
   clientActionId: string,
   action: ChatOwnerActionFrame["kind"],
-): PendingChatAction {
+): PendingChatActionSeed {
   return {
     clientActionId,
     action,
+    interviewBlockId: null,
     messageId: null,
     restoreContent: null,
     sender: null,
     settings: null,
+    restoreWorktreeIntent: null,
+    restoreWorktreeStagingRevision: null,
     createdAt: Date.now(),
   };
+}
+
+// The client action id of an in-flight (pending) or accepted-but-unresolved
+// interview action for `blockId`, or null. Used both to refuse a duplicate
+// dispatch and to derive the UI busy gate for that block's card.
+function existingInterviewActionId(
+  state: ChatSessionState,
+  blockId: string,
+): string | null {
+  const pending = Object.values(state.pendingActions).find(
+    (action) => action.interviewBlockId === blockId,
+  );
+  if (pending !== undefined) return pending.clientActionId;
+  const accepted = Object.values(state.acceptedActions).find(
+    (action) => action.interviewBlockId === blockId,
+  );
+  return accepted?.clientActionId ?? null;
+}
+
+// Drop every pending/accepted action targeting `blockId`'s interview. Called
+// when the host authoritatively resolves the interview so a lingering
+// accepted-but-unacked entry can never keep a later card gated. Returns the
+// same reference when nothing matches so zustand skips a redundant notify.
+function withoutInterviewActionsForBlock<
+  T extends { readonly interviewBlockId: string | null },
+>(
+  actions: Readonly<Record<string, T>>,
+  blockId: string,
+): Readonly<Record<string, T>> {
+  const entries = Object.entries(actions).filter(
+    ([, action]) => action.interviewBlockId !== blockId,
+  );
+  if (entries.length === Object.keys(actions).length) return actions;
+  return Object.fromEntries(entries);
+}
+
+/**
+ * Drops per-task background-stop entries whose stop frame's generic pending
+ * was swept as stale (the frame/ack died with a dropped connection, so the
+ * task will never terminate on its account). Keyed by the shared
+ * `clientActionId` both records carry.
+ */
+function withoutBackgroundStopsForActions(
+  pendingStops: Readonly<Record<string, string>>,
+  sweptActionIds: ReadonlySet<string>,
+): Readonly<Record<string, string>> {
+  if (sweptActionIds.size === 0) return pendingStops;
+  const entries = Object.entries(pendingStops).filter(
+    ([, clientActionId]) => !sweptActionIds.has(clientActionId),
+  );
+  if (entries.length === Object.keys(pendingStops).length) {
+    return pendingStops;
+  }
+  return Object.fromEntries(entries);
+}
+
+/**
+ * Clears a frame-driven restore slot that a lost connection stranded: an
+ * in-flight/progressing slot stamped on an older connection than the
+ * authoritative snapshot would otherwise show "restoring" forever, because
+ * its `restoreCompleted` died with the dropped stream. A restore that is
+ * genuinely still running re-surfaces at its `restoreCompleted` (which sets
+ * the slot unconditionally); progress frames only refine an existing slot,
+ * so intermediate progress after the clear is not re-shown - an accepted
+ * trade-off against the forever-spinner.
+ */
+function sweepStaleRestoreSlot(
+  slot: ChatRestoreSlot | null,
+  connectionEpoch: number,
+): ChatRestoreSlot | null {
+  if (slot === null || slot.kind === "completed") return slot;
+  return slot.connectionEpoch < connectionEpoch ? null : slot;
 }
 
 function pendingActionForId(
@@ -2507,6 +2870,80 @@ function assistantMessageOwnsBlock(message: Message, blockId: string): boolean {
   );
 }
 
+// Applies a block event to the frozen pre-split row of the active turn that
+// owns it, when a steer split left that block still streaming there. A child
+// event whose parent lives in such a row follows its parent (the accumulator
+// creates it beside the parent). The sibling scan runs only when the active
+// row does not own the block (a block's first event, or a carryover event).
+// The row's timestamp is deliberately NOT advanced: the frozen row keeps its
+// split-time position semantics (mirrors the host's carryover writer and the
+// detached writer). Returns null when the event is not a carryover (caller
+// falls through to active-row routing).
+function applySteerSplitCarryoverEvent(
+  state: ChatSessionState,
+  assistantIndex: number,
+  event: RuntimeEvent,
+): Partial<ChatSessionState> | null {
+  if (assistantIndex < 0) return null;
+  const active = state.messages[assistantIndex];
+  if (active.role !== "assistant" || !("blockId" in event)) return null;
+  if (assistantMessageOwnsBlock(active, event.blockId)) return null;
+  const siblingIndex = earlierSameTurnRowOwningEventBlock(
+    state.messages,
+    assistantIndex,
+    active.turnId ?? null,
+    event,
+  );
+  if (siblingIndex < 0) return null;
+  const sibling = state.messages[siblingIndex];
+  if (sibling.role !== "assistant") return null;
+  const content = accumulateTurnContent(
+    { blocks: sibling.blocks, blocksVersion: sibling.blocksVersion ?? 0 },
+    event,
+  );
+  if (content.blocks === sibling.blocks) return {};
+  const next = state.messages.slice();
+  next[siblingIndex] = {
+    ...sibling,
+    blocks: content.blocks,
+    ...(sibling.blocksVersion === undefined
+      ? {}
+      : { blocksVersion: content.blocksVersion }),
+  };
+  return { messages: next };
+}
+
+// Finds the EARLIER assistant row of the same turn that owns this event's
+// block (or its parent block) - the frozen pre-split row a steer split left
+// behind while the block was still streaming. Restricted to same-turn rows so
+// a provider blockId reused across turns (e.g. a resumed agent) can never
+// resurrect an unrelated old row. Returns -1 when no sibling owns it.
+function earlierSameTurnRowOwningEventBlock(
+  messages: ReadonlyArray<Message>,
+  activeIndex: number,
+  turnId: string | null,
+  event: RuntimeEvent,
+): number {
+  if (turnId === null || !("blockId" in event)) return -1;
+  const parentBlockId =
+    "parentBlockId" in event && typeof event.parentBlockId === "string"
+      ? event.parentBlockId
+      : null;
+  for (let index = activeIndex - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    // Steered user rows sit between split siblings: skip, don't stop.
+    if (message.role !== "assistant" || message.turnId !== turnId) continue;
+    if (
+      assistantMessageOwnsBlock(message, event.blockId) ||
+      (parentBlockId !== null &&
+        assistantMessageOwnsBlock(message, parentBlockId))
+    ) {
+      return index;
+    }
+  }
+  return -1;
+}
+
 // Apply a detached backgrounded-subagent event to the SETTLED message that owns
 // its card (its spawning turn already ended), so the card keeps updating instead
 // of being dropped (no active turn) or mis-applied to a later turn's row. Returns
@@ -2582,6 +3019,18 @@ function applyContentBlockDelta(
     // no-op) instead.
     if (detachedTarget.mandatory) return state;
   }
+  // Steer-split carryover: a block that was still STREAMING when a steered
+  // user message split the turn lives in an EARLIER assistant row of the SAME
+  // turn (the split freezes that row and continues in a fresh one). Route the
+  // block's later events - deltas, completion - to the row that owns it, so
+  // the block completes in place above the steer bubble instead of
+  // re-materializing as a duplicate in the continuation row.
+  const carryoverRouted = applySteerSplitCarryoverEvent(
+    state,
+    assistantIndex,
+    event,
+  );
+  if (carryoverRouted !== null) return carryoverRouted;
   if (assistantIndex >= 0) {
     const target = state.messages[assistantIndex];
     if (target.role !== "assistant") {
@@ -2865,6 +3314,7 @@ function liveAssistantForActiveTurn(
       // Live assistant turns never participate in inter-agent broker
       // threads; replies are meaningful only on `role: "user"` agent senders.
       reply: { expectsReply: false },
+      inReplyTo: null,
     },
     blocks: [],
     startedAt: activeTurn.startedAt,

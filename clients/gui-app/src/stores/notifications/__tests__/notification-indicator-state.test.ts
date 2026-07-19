@@ -15,6 +15,7 @@ describe("notification indicator state", () => {
             payload: { kind: "chat", epicId: "epic-1", chatId: "chat-1" },
             message: "Terminal closed",
             detail: null,
+            displayedUpdatedAt: null,
           },
         },
       },
@@ -24,7 +25,8 @@ describe("notification indicator state", () => {
         chats: {
           "chat-1": {
             unreadFailure: false,
-            pendingPrompt: true,
+            pendingApproval: true,
+            pendingInterview: false,
             unreadDone: true,
           },
         },
@@ -33,7 +35,8 @@ describe("notification indicator state", () => {
 
     expect(state).toEqual({
       unreadFailure: true,
-      pendingPrompt: true,
+      pendingApproval: true,
+      pendingInterview: false,
       unreadDone: true,
     });
   });
@@ -51,6 +54,7 @@ describe("notification indicator state", () => {
             payload: { kind: "chat", epicId: "epic-1", chatId: "chat-1" },
             message: "Terminal closed",
             detail: null,
+            displayedUpdatedAt: null,
           },
         },
       },

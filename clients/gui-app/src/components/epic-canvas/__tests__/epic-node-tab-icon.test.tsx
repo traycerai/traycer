@@ -30,8 +30,14 @@ describe("<EpicNodeTabIcon /> terminal indicator", () => {
     useAppLocalNotificationsStore.getState().activateIdentity("user-1");
     emitTerminalCrashedNotification({
       instanceId: TERMINAL_NODE.instanceId,
-      epicId: "epic-1",
-      chatId: TERMINAL_NODE.id,
+      target: {
+        kind: "terminal",
+        epicId: "epic-1",
+        terminalId: TERMINAL_NODE.id,
+        tabId: "view-tab-1",
+        paneId: "pane-1",
+        tileInstanceId: TERMINAL_NODE.instanceId,
+      },
       cause: "exit",
     });
 
@@ -40,7 +46,9 @@ describe("<EpicNodeTabIcon /> terminal indicator", () => {
     const indicator = screen.getByRole("status", {
       name: "Task needs attention",
     });
-    expect(indicator.firstElementChild?.className).toContain("text-red-500");
+    expect(indicator.firstElementChild?.className).toContain(
+      "text-destructive",
+    );
     expect(indicator.textContent).toBe("⠿");
 
     act(() => {
@@ -66,6 +74,7 @@ function renderTerminalTabIcon(): void {
         epicId="epic-1"
         variant="live"
         className="size-3.5 shrink-0"
+        defaultIcon={undefined}
       />
     </NotificationIndicatorsProvider>,
   );

@@ -9,6 +9,10 @@ import {
   useAppLocalNotificationsStore,
   type AppLocalNotificationEntry,
 } from "@/stores/notifications/app-local-notifications-store";
+import {
+  hasAppLocalDisplayReceipt,
+  recordAppLocalDisplayReceipt,
+} from "@/lib/notifications/app-local-display-receipts";
 
 function entry(id: string): AppLocalNotificationEntry {
   return {
@@ -20,6 +24,7 @@ function entry(id: string): AppLocalNotificationEntry {
     payload: { kind: "chat", epicId: "epic-1", chatId: id },
     message: id,
     detail: null,
+    displayedUpdatedAt: null,
   };
 }
 
@@ -114,6 +119,12 @@ describe("<AppLocalNotificationsPersistLifecycleBridge />", () => {
 
   it("clears the current user bucket on sign-out and deactivates writes", async () => {
     persistSnapshot("user-a", [entry("alice")]);
+    const receipt = {
+      userId: "user-a",
+      notificationId: "alice",
+      updatedAt: 1,
+    };
+    recordAppLocalDisplayReceipt(receipt);
 
     render(
       <AppLocalNotificationsPersistLifecycleBridge>
@@ -141,6 +152,7 @@ describe("<AppLocalNotificationsPersistLifecycleBridge />", () => {
       ).toBe(null);
       expect(useAppLocalNotificationsStore.getState().activeUserId).toBeNull();
       expect(useAppLocalNotificationsStore.getState().orderedIds).toEqual([]);
+      expect(hasAppLocalDisplayReceipt(receipt)).toBe(false);
     });
 
     useAppLocalNotificationsStore.getState().upsert(entry("ignored"));

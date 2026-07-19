@@ -109,10 +109,6 @@ function makeSetConfigRequest(): SetConfigRequest {
     matrix: makeNotificationConfig().matrix,
     channels: {
       renderer: {},
-      webhook: {
-        url: "https://hooks.example.com/traycer",
-        signingSecret: { kind: "leaveUnchanged" },
-      },
       email: {
         host: "smtp.example.com",
         port: 587,
@@ -129,32 +125,23 @@ function makeNotificationConfig(): NotificationConfig {
     matrix: {
       info: {
         renderer: true,
-        webhook: false,
         email: false,
       },
       needs_action: {
         renderer: true,
-        webhook: true,
         email: true,
       },
       failure: {
         renderer: true,
-        webhook: true,
         email: true,
       },
       done: {
         renderer: true,
-        webhook: false,
         email: false,
       },
     },
     channels: {
       renderer: {
-        lastError: null,
-      },
-      webhook: {
-        url: "https://hooks.example.com/traycer",
-        credentialConfigured: true,
         lastError: null,
       },
       email: {

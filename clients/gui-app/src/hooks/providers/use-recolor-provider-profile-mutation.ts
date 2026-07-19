@@ -9,9 +9,18 @@ import type { ProviderProfileAccentColor } from "@traycer/protocol/host/provider
 import type { HostRpcRegistry } from "@/lib/host";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { useHostClient } from "@/lib/host";
-import { PROVIDER_INVALIDATIONS } from "@/hooks/providers/invalidations";
 import { hostQueryKeys, providersMutationKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
+
+// Recoloring a profile only changes the accent color echoed back in
+// `providers.list`. It can't flip a provider's or profile's availability, so -
+// unlike the other provider mutations - it does not refresh the GUI/TUI
+// harness selectors or the agent-selection-guide default (those re-probe live
+// availability, which is expensive; see `useProvidersSetTerminalAgentArgs`
+// for the precedent).
+const RECOLOR_PROFILE_INVALIDATIONS: ReadonlyArray<
+  keyof HostRpcRegistry & string
+> = ["providers.list"];
 
 export interface RecolorProviderProfileRequest {
   readonly providerId: RequestOfMethod<
@@ -61,7 +70,7 @@ export function useRecolorProviderProfileForClient(
       onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
       onSuccess: (_data, _variables, context) => {
         if (context.hostId === null) return;
-        for (const method of PROVIDER_INVALIDATIONS) {
+        for (const method of RECOLOR_PROFILE_INVALIDATIONS) {
           void queryClient.invalidateQueries({
             queryKey: hostQueryKeys.methodScope(context.hostId, method),
           });

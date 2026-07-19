@@ -1,7 +1,8 @@
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname } from "node:path";
 import { readHostPidMetadata } from "../../host/pid-metadata";
+import { createCliLogger } from "../../logger";
 import { CLI_ERROR_CODES, cliError } from "../../runner/errors";
 import { isProcessAlive } from "../../store/cli-lock";
 import type { CliInvocation } from "../cli-binary";
@@ -54,7 +55,7 @@ export function createMacosController(
   return {
     install: (options) => installService(options, run),
     uninstall: (options) => uninstallService(options, run),
-    status: (label) => statusService(label),
+    status: (label) => statusService(label, run),
     stop: (label) => stopService(label, run),
     start: (label) => startService(label, run),
     restart: (label) => restartService(label, run),
@@ -72,6 +73,24 @@ async function installService(
   // the host out of launchd's throttled Background band - it does
   // latency-sensitive RPC work and being CPU/IO-throttled (and pinned to
   // efficiency cores on Apple Silicon) starved the event loop on open.
+  const guiTarget = guiDomain();
+  const serviceTarget = `${guiTarget}/${options.label.id}`;
+  // Refuse to take over a label Desktop already owns via SMAppService.
+  // A stale `~/Library/LaunchAgents/<label>.plist` can coexist with an
+  // in-bundle SMAppService load of the same label; bootout/bootstrap of
+  // the raw path would corrupt BTM / CDHash state that Desktop manages.
+  const ownership = await inspectLaunchdOwnership(serviceTarget, run);
+  if (ownership.kind === "smappservice") {
+    throw cliError({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      message: `service install: label '${options.label.id}' is owned by SMAppService (loaded from ${ownership.path}); the CLI must not bootout/bootstrap this label. Desktop owns registration on .app builds (host ensure --no-service-register).`,
+      details: {
+        label: options.label.id,
+        loadedPath: ownership.path,
+      },
+      exitCode: 1,
+    });
+  }
   const manifestPath = serviceManifestPath(options.label);
   await mkdir(dirname(manifestPath), { recursive: true });
   await writeFile(
@@ -79,8 +98,6 @@ async function installService(
     buildPlist({ label: options.label, cli: options.cli }),
     "utf8",
   );
-  const guiTarget = guiDomain();
-  const serviceTarget = `${guiTarget}/${options.label.id}`;
   // Reload pattern: only `bootout` when there is actually an existing
   // registration to remove, then bootstrap the freshly-written plist.
   // launchctl's `bootstrap` rejects a re-load with mixed error shapes -
@@ -108,7 +125,7 @@ async function installService(
   // `isBenignBootstrapFailure` below stays as defence-in-depth for the
   // race where another process re-bootstraps between our probe and our
   // bootstrap call.
-  if (await isServiceLoaded(serviceTarget, run)) {
+  if (ownership.kind !== "not-loaded") {
     await run("launchctl", ["bootout", serviceTarget], {
       env: undefined,
       cwd: undefined,
@@ -128,15 +145,16 @@ async function installService(
   // `-k`: the plist sets `ThrottleInterval: 10`, so force-killing a
   // healthy host would make launchd block the respawn ~10s. Version
   // swaps that genuinely need a fresh process go through the install
-  // lifecycle's explicit stop-before-swap / restart-after-swap
-  // (service/install-lifecycle.ts), not this register step.
+  // lifecycle's explicit stop-before-swap / re-register-after-swap
+  // (service/install-lifecycle.ts), not this register step alone.
   //
   // Ticket a849b064: launchctl is run with `tolerateNonZeroExit: false`
   // so genuine failures (permission denied, malformed plist, missing
   // program, etc.) surface as `SERVICE_INSTALL_FAILED` / `SERVICE_CONTROL_FAILED`
   // instead of being silently swallowed. The only failure mode we still
-  // tolerate is the *idempotent* "service already bootstrapped" case,
-  // which launchd reports with a recognizable stderr message + exit code.
+  // classify as recoverable is the racey "service already bootstrapped"
+  // case - and recovery is a full bootout → bootstrap reload against the
+  // freshly written plist, never a bare kickstart of launchd's cache.
   // Doctor and first-launch readiness both rely on this signal to drive
   // recovery cards, so the previous blanket tolerance was masking real
   // bugs (the user saw a clean install + later a host-not-ready
@@ -157,9 +175,18 @@ async function installService(
         exitCode: 1,
       });
     }
-    // Already-loaded is fine - the agent's plist on disk has been
-    // refreshed by the writeFile above; the kickstart below ensures it
-    // is running against the new manifest.
+    // Already-loaded after our probe/bootout means another process
+    // re-bootstrapped (or bootout did not fully clear) between steps.
+    // Kickstart would only run the *cached* definition and leave the
+    // regenerated SoftResourceLimits / ProgramArguments inactive - so
+    // retry a full reload against the on-disk plist instead.
+    await reloadRegisteredService({
+      labelId: options.label.id,
+      guiTarget,
+      serviceTarget,
+      manifestPath,
+      run,
+    });
   }
   try {
     await run("launchctl", ["kickstart", `${guiTarget}/${options.label.id}`], {
@@ -182,38 +209,199 @@ async function installService(
   }
 }
 
-// Probe whether an agent with this label is currently bootstrapped in the
-// gui domain. `launchctl print <target>` exits 0 when loaded, non-zero
-// when not. We tolerate non-zero (treat as "not loaded") so a fresh
-// install bypasses bootout entirely - only existing registrations get
-// torn down and recreated. Genuine launchctl unavailability (binary
-// missing, etc.) would manifest later in bootstrap with a clearer error.
-async function isServiceLoaded(
+interface ReloadRegisteredServiceOptions {
+  readonly labelId: string;
+  readonly guiTarget: string;
+  readonly serviceTarget: string;
+  readonly manifestPath: string;
+  readonly run: ProcessRunner;
+}
+
+// Force launchd to drop and re-read the agent definition from disk.
+// Used when bootstrap reports "already loaded" after we already wrote
+// a new plist - kickstart alone does not apply that file.
+async function reloadRegisteredService(
+  options: ReloadRegisteredServiceOptions,
+): Promise<void> {
+  // The competing registrar that won the race this reload exists to fix
+  // may be Desktop's SMAppService, not another CLI process - re-probe
+  // ownership right before mutating. Booting out an SMAppService-owned job
+  // would corrupt the BTM state Desktop manages, exactly what
+  // `installService`'s own upfront refusal exists to prevent.
+  const raceOwnership = await inspectLaunchdOwnership(
+    options.serviceTarget,
+    options.run,
+  );
+  if (raceOwnership.kind === "smappservice") {
+    throw cliError({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      message: `service install: label '${options.labelId}' was taken over by SMAppService (loaded from ${raceOwnership.path}) during the reload race; the CLI must not bootout/bootstrap this label. Desktop owns registration on .app builds.`,
+      details: { label: options.labelId, loadedPath: raceOwnership.path },
+      exitCode: 1,
+    });
+  }
+  try {
+    await options.run("launchctl", ["bootout", options.serviceTarget], {
+      env: undefined,
+      cwd: undefined,
+      timeoutMs: 10_000,
+      tolerateNonZeroExit: false,
+    });
+  } catch (cause) {
+    // Race may have cleared the job between the failed bootstrap and
+    // this bootout; treat "not loaded" as success and continue to
+    // bootstrap the fresh file. Real bootout failures must surface.
+    if (!isBenignBootoutFailure(cause)) {
+      throw cliError({
+        code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+        message: `launchctl bootout failed for ${options.labelId} while recovering from bootstrap race: ${describeCause(cause)}`,
+        details: {
+          label: options.labelId,
+          cause: describeCause(cause),
+        },
+        exitCode: 1,
+      });
+    }
+  }
+  try {
+    await options.run(
+      "launchctl",
+      ["bootstrap", options.guiTarget, options.manifestPath],
+      {
+        env: undefined,
+        cwd: undefined,
+        timeoutMs: 10_000,
+        tolerateNonZeroExit: false,
+      },
+    );
+  } catch (cause) {
+    // A second "already loaded" after our own explicit bootout means a
+    // concurrent registrar won the reload race - and it bootstrapped the
+    // same freshly regenerated on-disk plist this process just wrote (every
+    // path that bootstraps this label rewrites the manifest first). The
+    // loaded definition is therefore current, not the stale pre-rewrite
+    // cache this reload exists to evict: treat it as success and let the
+    // caller's kickstart run the winner's definition. Reporting
+    // SERVICE_INSTALL_FAILED here failed a healthy install for losing a
+    // benign race.
+    //
+    // But the winner of THIS race could also be Desktop's SMAppService
+    // grabbing the label in the window between our own bootout and this
+    // bootstrap attempt - re-verify before accepting the failure as benign,
+    // since kickstart-ing "the winner's definition" would otherwise
+    // kickstart Desktop's SMAppService-owned job.
+    if (isBenignBootstrapFailure(cause)) {
+      const postRaceOwnership = await inspectLaunchdOwnership(
+        options.serviceTarget,
+        options.run,
+      );
+      if (postRaceOwnership.kind === "smappservice") {
+        throw cliError({
+          code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+          message: `service install: label '${options.labelId}' was taken over by SMAppService (loaded from ${postRaceOwnership.path}) after the CLI's own bootout; the CLI's install did not complete. Desktop now owns this label.`,
+          details: {
+            label: options.labelId,
+            loadedPath: postRaceOwnership.path,
+          },
+          exitCode: 1,
+        });
+      }
+      return;
+    }
+    // A genuine second-bootstrap failure leaves the label fully
+    // deregistered (the bootout above already succeeded) - launchd has no
+    // atomic reload, so this window is inherent. Fail closed with the
+    // explicit error rather than kickstart a definition we know is gone.
+    throw cliError({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      message: `launchctl bootstrap failed for ${options.labelId} after reload retry; the previous registration was booted out, so the service is now unregistered until 'traycer host service install' succeeds: ${describeCause(cause)}`,
+      details: {
+        label: options.labelId,
+        cause: describeCause(cause),
+      },
+      exitCode: 1,
+    });
+  }
+}
+
+// Ownership of a launchd label from the CLI's point of view.
+//
+// Desktop .app builds register the same reverse-DNS label via SMAppService
+// against the *in-bundle* LaunchAgent
+// (`<App>.app/Contents/Library/LaunchAgents/<label>.plist`). The CLI owns
+// the raw user-domain path (`~/Library/LaunchAgents/<label>.plist`). When
+// both exist, status used to treat the raw file as "CLI registered" and
+// host update reloaded it - bootouting the SMAppService-managed job.
+type LaunchdOwnership =
+  | { readonly kind: "not-loaded" }
+  | { readonly kind: "smappservice"; readonly path: string }
+  | { readonly kind: "cli-or-other"; readonly path: string | null };
+
+// Probe launchd for who currently owns this label. `launchctl print`
+// exits 0 when loaded and includes `path = <plist>`; non-zero means not
+// loaded. Tolerate non-zero so a fresh install skips bootout. Genuine
+// launchctl unavailability surfaces later at bootstrap with a clearer
+// error.
+//
+// Point-in-time by design: this reads what launchd has LOADED right now.
+// With Desktop's login item disabled (requires-approval) or BTM unloaded,
+// the label reads `not-loaded` even though an SMAppService registration
+// record exists - a stale raw `~/Library/LaunchAgents` plist can then
+// re-register here and recreate the dual-registration collision when the
+// user re-enables the login item. Detecting the unloaded-record case would
+// need SMAppService itself (only callable from inside the .app), so the
+// CLI accepts this edge; Desktop's own register cycle (bootout first)
+// self-heals it on its next ensure.
+async function inspectLaunchdOwnership(
   serviceTarget: string,
   run: ProcessRunner,
-): Promise<boolean> {
+): Promise<LaunchdOwnership> {
   const result = await run("launchctl", ["print", serviceTarget], {
     env: undefined,
     cwd: undefined,
     timeoutMs: 10_000,
     tolerateNonZeroExit: true,
   });
-  return result.exitCode === 0;
+  if (result.exitCode !== 0) {
+    return { kind: "not-loaded" };
+  }
+  const path = parseLaunchctlPrintPath(`${result.stdout}\n${result.stderr}`);
+  if (path !== null && isSmAppServiceLaunchAgentPath(path)) {
+    return { kind: "smappservice", path };
+  }
+  return { kind: "cli-or-other", path };
 }
 
-// launchctl returns ENOENT / "Service is already loaded" / "Bootstrap
-// failed: 37: ... (already loaded)" when the agent is already
-// registered. We classify these as benign because the writeFile above
-// has just overwritten the plist on disk and the upcoming
-// `kickstart -k` will force a fresh spawn - net effect is the same as
-// a clean install. Everything else (permission denied, malformed plist,
-// missing program, ...) must surface as a real failure.
+// SMAppService agent plists live at
+// `<Something>.app/Contents/Library/LaunchAgents/<name>.plist` (see
+// desktop `host-login-item.ts` / packaging). The CLI-owned path is always
+// under `~/Library/LaunchAgents/`.
+function isSmAppServiceLaunchAgentPath(plistPath: string): boolean {
+  return /\/[^/]+\.app\/Contents\/Library\/LaunchAgents\//i.test(plistPath);
+}
+
+// Extract `path = ...` from `launchctl print` output. Format is stable
+// enough across recent macOS releases; missing path is treated as
+// non-SMAppService (fail open to CLI ownership for CLI-managed installs).
+function parseLaunchctlPrintPath(printOutput: string): string | null {
+  const match = printOutput.match(/^\s*path\s*=\s*(.+?)\s*$/m);
+  if (match === null) return null;
+  const raw = match[1];
+  if (raw === undefined || raw.length === 0) return null;
+  return raw;
+}
+
+// launchctl returns "Service is already loaded" / "Bootstrap failed:
+// 37: ... (already loaded)" when the agent is already registered. We
+// classify these as *recoverable races* (not success): the caller must
+// bootout + bootstrap the on-disk plist before kickstart, because
+// kickstart alone runs launchd's cached definition. Everything else
+// (permission denied, malformed plist, missing program, ...) surfaces
+// as a real failure immediately.
 //
 // Detection is intentionally string-shape-tolerant rather than exit-code-
 // pinned: launchctl has changed exit codes between macOS releases and
-// the stderr line is the more stable signal. Exit-code 37 is included
-// as a corroborating hint because it's what `launchctl bootstrap`
-// historically returns for EEXIST.
+// the stderr line is the more stable signal.
 function isBenignBootstrapFailure(cause: unknown): boolean {
   if (!(cause instanceof ProcessRunError)) return false;
   const haystack = `${cause.stderr}\n${cause.stdout}`.toLowerCase();
@@ -232,6 +420,28 @@ async function uninstallService(
   run: ProcessRunner,
 ): Promise<void> {
   const serviceTarget = `${guiDomain()}/${options.label.id}`;
+  // Deliberate asymmetry with `installService`'s SMAppService refusal: the
+  // refusal exists because bootout + bootstrap of the RAW plist would
+  // corrupt / dual-register the BTM state Desktop manages. Uninstall only
+  // removes - bootout is the strongest teardown the CLI has (and on macOS
+  // 26+ it is exactly what flushes the BTM entry), and refusing here would
+  // strand users whose .app is already gone with an un-removable agent.
+  // Desktop's own in-app uninstall unregisters SMAppService BEFORE invoking
+  // this, so it never hits this branch. What the CLI cannot do is drop the
+  // SMAppService *record* on macOS <= 25 - warn so the leftover login item
+  // (which can respawn the host at next login) is not a silent surprise.
+  //
+  // The probe is advisory only: a launchctl that hangs or cannot spawn must
+  // never block a removal, so probe failures read as "not loaded".
+  const ownership = await inspectLaunchdOwnership(serviceTarget, run).catch(
+    (): LaunchdOwnership => ({ kind: "not-loaded" }),
+  );
+  if (ownership.kind === "smappservice") {
+    createCliLogger(options.label.environment).warn(
+      "Service uninstall: label is registered by Traycer Desktop's login item (SMAppService); booting it out now, but macOS may keep the login-item record. If the host reappears at next login, remove Traycer in the Desktop app or System Settings -> Login Items.",
+      { label: options.label.id, loadedPath: ownership.path },
+    );
+  }
   try {
     await run("launchctl", ["bootout", "--wait", serviceTarget], {
       env: undefined,
@@ -264,7 +474,30 @@ function isBenignBootoutFailure(cause: unknown): boolean {
   );
 }
 
-async function statusService(label: ServiceLabel): Promise<ServiceStatus> {
+async function statusService(
+  label: ServiceLabel,
+  run: ProcessRunner,
+): Promise<ServiceStatus> {
+  // SMAppService-owned loads of this label are not CLI-managed, even when a
+  // stale raw LaunchAgents plist still exists on disk from a prior
+  // CLI-managed install. Reporting the dedicated `externally-managed` state
+  // (NOT `not-installed`) does two things at once: install-lifecycle /
+  // provisioning still stay away from the reload path (stop +
+  // bootout/bootstrap) against Desktop's BTM registration, and
+  // auto-bootstrap / doctor see that a registration exists - `not-installed`
+  // here used to make every `traycer login` on a Desktop-managed machine
+  // select "service repair" and run straight into `installService`'s
+  // SMAppService refusal.
+  const serviceTarget = `${guiDomain()}/${label.id}`;
+  const ownership = await inspectLaunchdOwnership(serviceTarget, run);
+  if (ownership.kind === "smappservice") {
+    return {
+      state: "externally-managed",
+      version: null,
+      listenUrl: null,
+      pid: null,
+    };
+  }
   const manifestExists = await fileExists(serviceManifestPath(label));
   if (!manifestExists) {
     return statusNotInstalled();
@@ -423,6 +656,9 @@ interface BuildPlistOptions {
 // install-time PATH is unusual.
 const SYSTEM_PATH_FLOOR =
   "/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin";
+// Keep in lockstep with the in-app SMAppService plist generator in the
+// internal repository's scripts/desktop-install-cloud.js.
+const HOST_SOFT_FILE_DESCRIPTOR_LIMIT = 8_192;
 
 /**
  * The PATH to bake into the host's LaunchAgent. launchd would otherwise
@@ -482,6 +718,11 @@ ${programArgsXml}
   <integer>10</integer>
   <key>ProcessType</key>
   <string>Standard</string>
+  <key>SoftResourceLimits</key>
+  <dict>
+    <key>NumberOfFiles</key>
+    <integer>${HOST_SOFT_FILE_DESCRIPTOR_LIMIT}</integer>
+  </dict>
   <key>EnvironmentVariables</key>
   <dict>
     <key>HOME</key>
@@ -496,4 +737,65 @@ ${programArgsXml}
 `;
 }
 
-export { buildPlist as buildLaunchAgentPlist };
+/**
+ * Read the CLI invocation the currently registered macOS LaunchAgent plist
+ * points at, or `null` when there is no readable/parsable manifest or its
+ * command no longer exists on disk.
+ *
+ * Used by `host update`'s existing-registration re-register: the update
+ * regenerates the plist to apply definition changes (SoftResourceLimits,
+ * env), but it must not silently REPOINT `ProgramArguments` at whatever
+ * `resolveServiceCliInvocation` currently prefers - a brew/manual user who
+ * once ran Desktop's setup has a stale staged `~/.traycer/cli` binary that
+ * would win resolution over the brew binary their plist actually invokes.
+ * Preserving the registered command keeps `host update`'s historical "never
+ * repoints the service" contract while still refreshing the definition.
+ *
+ * Only ever parses a plist this module's `buildPlist` wrote, so the shape
+ * is known: `ProgramArguments` = [command, ...leadingArgs, "host", "start"].
+ */
+async function readRegisteredCliInvocation(
+  label: ServiceLabel,
+): Promise<CliInvocation | null> {
+  let xml: string;
+  try {
+    xml = await readFile(serviceManifestPath(label), "utf8");
+  } catch {
+    return null;
+  }
+  const arrayMatch = xml.match(
+    /<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/,
+  );
+  if (arrayMatch === null) return null;
+  const body = arrayMatch[1];
+  if (body === undefined) return null;
+  const args = [...body.matchAll(/<string>([\s\S]*?)<\/string>/g)]
+    .map((m) => m[1])
+    .filter((value): value is string => value !== undefined)
+    .map(unescapeXml);
+  if (args.length < 3) return null;
+  if (args[args.length - 2] !== "host" || args[args.length - 1] !== "start") {
+    return null;
+  }
+  const command = args[0];
+  if (command === undefined || !(await fileExists(command))) return null;
+  return { command, args: args.slice(1, -2) };
+}
+
+// Inverse of `escapeXml`'s five replacements (`&amp;` last so a literal
+// `&lt;` round-trips instead of double-decoding).
+function unescapeXml(value: string): string {
+  return value
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&");
+}
+
+export {
+  buildPlist as buildLaunchAgentPlist,
+  isSmAppServiceLaunchAgentPath,
+  parseLaunchctlPrintPath,
+  readRegisteredCliInvocation,
+};

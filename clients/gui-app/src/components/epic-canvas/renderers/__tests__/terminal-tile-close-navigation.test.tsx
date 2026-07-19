@@ -94,10 +94,14 @@ vi.mock("@/lib/perf/terminal-load-perf", () => ({
 }));
 
 vi.mock("@/lib/analytics", () => ({
-  AnalyticsEvent: { TerminalOpened: "TerminalOpened" },
+  AnalyticsEvent: {
+    TerminalOpened: "TerminalOpened",
+    TabClosed: "TabClosed",
+  },
   Analytics: {
     getInstance: () => ({ track: vi.fn() }),
   },
+  analyticsTargetForCanvasTileType: () => null,
 }));
 
 import { TerminalTile } from "../terminal-tile";

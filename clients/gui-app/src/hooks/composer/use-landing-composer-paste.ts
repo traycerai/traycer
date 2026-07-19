@@ -14,6 +14,11 @@ import {
   scheduleLandingImageReconcile,
 } from "@/lib/composer/landing-image-gc";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import {
+  Analytics,
+  AnalyticsEvent,
+  analyticsBlockerFromError,
+} from "@/lib/analytics";
 
 /**
  * Landing-composer paste/drop ingest. Unlike the shared base64 adapter
@@ -29,8 +34,15 @@ import { reportableErrorToast } from "@/lib/reportable-error-toast";
  */
 async function landingImageAttrsFromFiles(
   files: ReadonlyArray<File>,
+  signal: AbortSignal,
 ): Promise<ImageAttachmentAttrs[]> {
-  const accepted = collectImages(files);
+  const accepted = collectImages(files, () => {
+    Analytics.getInstance().track(AnalyticsEvent.AttachmentRejected, {
+      kind: "image",
+      surface: "draft",
+      blocker: "invalid_input",
+    });
+  });
   if (accepted.length === 0) return [];
   // Make room (evict oldest inactive drafts) before storing bytes; a paste that
   // can't fit even after eviction is blocked here (toast shown by the budget).
@@ -38,11 +50,21 @@ async function landingImageAttrsFromFiles(
     (sum, file) => sum + (file.size > 0 ? file.size : 0),
     0,
   );
-  if (!reserveLandingImageBudget(incomingBytes)) return [];
+  if (!reserveLandingImageBudget(incomingBytes)) {
+    Analytics.getInstance().track(AnalyticsEvent.AttachmentRejected, {
+      kind: "image",
+      surface: "draft",
+      blocker: "rate_limit",
+    });
+    return [];
+  }
   return Promise.all(
     accepted.map(async (file) => {
+      signal.throwIfAborted();
       const bytes = new Uint8Array(await file.arrayBuffer());
+      signal.throwIfAborted();
       const hash = await putImage(bytes);
+      signal.throwIfAborted();
       return {
         id: uuidv4(),
         fileName: file.name || "image",
@@ -58,35 +80,55 @@ export function useLandingComposerPaste(editorRef: {
   readonly current: ComposerPasteEditorHandle | null;
 }): UseComposerPasteResult {
   const onFiles = useCallback(
-    (files: ReadonlyArray<File>) => {
-      void landingImageAttrsFromFiles(files)
+    (files: ReadonlyArray<File>, signal: AbortSignal) =>
+      landingImageAttrsFromFiles(files, signal)
         .then((attrs) => {
           if (attrs.length === 0) return;
           const handle = editorRef.current;
-          if (handle === null) return;
+          if (handle === null || !handle.isReady()) {
+            // Stored bytes for these images are now orphaned - the same
+            // situation as a failed ingest below - so reclaim them the same
+            // way (their session entries keep the bytes safe until it runs).
+            scheduleLandingImageReconcile();
+            return;
+          }
           handle.insertImageAttachments(attrs);
           handle.focus();
+          attrs.forEach(() => {
+            Analytics.getInstance().track(AnalyticsEvent.AttachmentAdded, {
+              kind: "image",
+              surface: "draft",
+            });
+          });
         })
-        .catch(() => {
-          // A failed ingest (e.g. one image of a multi-image paste failed to hash
-          // or store) inserts nothing, but earlier images may already be stored —
-          // now orphaned. Surface the failure and schedule a reconcile to reclaim
-          // them (their session entries keep the bytes safe until it runs).
-          reportableErrorToast(
-            "Couldn't attach the image.",
-            {
-              description: "Please try adding it again.",
-            },
-            {
-              title: "Could not attach image",
-              message: null,
-              code: null,
-              source: "Chat composer",
-            },
-          );
+        .catch((error: unknown) => {
+          Analytics.getInstance().track(AnalyticsEvent.AttachmentRejected, {
+            kind: "image",
+            surface: "draft",
+            blocker: analyticsBlockerFromError(error),
+          });
+          // A failed or aborted ingest (e.g. one image of a multi-image paste
+          // failed to hash/store, or the composer unmounted mid-flight)
+          // inserts nothing, but earlier images may already be stored - now
+          // orphaned. Schedule a reconcile to reclaim them (their session
+          // entries keep the bytes safe until it runs) regardless of cause;
+          // only the user-facing failure toast is abort-specific.
+          if (!signal.aborted) {
+            reportableErrorToast(
+              "Couldn't attach the image.",
+              {
+                description: "Please try adding it again.",
+              },
+              {
+                title: "Could not attach image",
+                message: null,
+                code: null,
+                source: "Chat composer",
+              },
+            );
+          }
           scheduleLandingImageReconcile();
-        });
-    },
+        }),
     [editorRef],
   );
   return useComposerPasteEvents(onFiles);

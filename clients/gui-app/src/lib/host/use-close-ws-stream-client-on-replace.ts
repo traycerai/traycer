@@ -26,7 +26,7 @@ export function useCloseWsStreamClientOnReplace(
     lifecycleTokenRef.current += 1;
     const previousClient = currentClientRef.current;
     if (previousClient !== null && previousClient !== client) {
-      previousClient.close();
+      previousClient.close("replaced-by-owner");
     }
     currentClientRef.current = client;
     return () => {
@@ -40,7 +40,7 @@ export function useCloseWsStreamClientOnReplace(
         if (currentClientRef.current !== closingClient) {
           return;
         }
-        closingClient?.close();
+        closingClient?.close("owner-unmounted");
         currentClientRef.current = null;
       });
     };

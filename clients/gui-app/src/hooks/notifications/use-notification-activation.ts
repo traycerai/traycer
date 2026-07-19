@@ -89,6 +89,8 @@ function getNotificationPreflightEpicId(
       return payload.epicId;
     case "chat":
       return payload.epicId;
+    case "terminal":
+      return payload.epicId;
     case "session":
       return null;
   }

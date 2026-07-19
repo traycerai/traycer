@@ -10,3 +10,7 @@ node_modules/
 # match arch directories specifically so the explanatory placeholders
 # in `resources/cli/` itself (`.gitkeep`, `README.md`) stay tracked.
 resources/cli/*/
+# Temp fixture dirs created (and normally cleaned up) by the
+# inject-host-launch-agent tests under scripts/prepack/__tests__/ and
+# scripts/prepack/__integration_tests__/.
+.tmp-*/

@@ -12,6 +12,8 @@ interface TooltipWrapperProps {
   readonly side: "top" | "right" | "bottom" | "left";
   readonly sideOffset: number | undefined;
   readonly align: "start" | "center" | "end" | undefined;
+  readonly open?: boolean;
+  readonly onOpenChange?: (open: boolean) => void;
 }
 
 // Transparent wrapper: when `label` is empty/null, behaves as a Radix Slot so
@@ -26,12 +28,21 @@ interface TooltipWrapperProps {
 // (`onClick`, `onPointerDown`, `ref`, etc.). The rest-spread forwards those
 // to the inner Slot/TooltipTrigger so they reach the real interactive element.
 export function TooltipWrapper(props: TooltipWrapperProps) {
-  const { children, label, side, sideOffset, align, ...rest } = props;
+  const {
+    children,
+    label,
+    side,
+    sideOffset,
+    align,
+    open,
+    onOpenChange,
+    ...rest
+  } = props;
   if (label === null || (typeof label === "string" && label.length === 0)) {
     return <Slot.Root {...rest}>{children}</Slot.Root>;
   }
   return (
-    <Tooltip>
+    <Tooltip open={open} onOpenChange={onOpenChange}>
       <TooltipTrigger asChild {...rest}>
         {children}
       </TooltipTrigger>

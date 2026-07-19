@@ -47,6 +47,7 @@ export const ACTION_IDS = [
   "app.palette.open",
   "app.terminal.toggle",
   "app.terminal.new",
+  "app.terminal.maximize",
   "app.zoom.in",
   "app.zoom.out",
   "app.zoom.reset",
@@ -106,7 +107,7 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     id: "tab.switch.byDigit",
     label: "Switch tab by number",
     description:
-      "Hold the primary leader modifier and press 1-9 to jump to that tab in the active Epic group.",
+      "Hold the primary leader modifier and press 1-9 to jump to that tab in the active Epic group, or in the start page's terminal panel.",
     category: "tabs",
     kind: "digit",
     defaultChord: "mod",
@@ -156,7 +157,7 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     id: "tab.new",
     label: "New tab",
     description:
-      "Open a new blank tab in the active group; the inline opener is focused so you can pick what to open.",
+      "Open a new blank tab in the active group; the inline opener is focused so you can pick what to open. On the start page, opens a new terminal tab instead.",
     category: "tabs",
     kind: "chord",
     defaultChord: "mod+t",
@@ -165,7 +166,7 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     id: "tab.close",
     label: "Close tab",
     description:
-      "Close the active tab. On the last tab in a non-root group, the group collapses and the sibling absorbs.",
+      "Close the active tab. On the last tab in a non-root group, the group collapses and the sibling absorbs. On the start page, closes the active terminal tab.",
     category: "tabs",
     kind: "chord",
     defaultChord: "mod+w",
@@ -193,7 +194,7 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     id: "tab.close-all",
     label: "Close all tabs in group",
     description:
-      "Close every tab in the focused group. Non-root groups collapse afterwards.",
+      "Close every tab in the focused group. Non-root groups collapse afterwards. On the start page, closes every terminal tab.",
     category: "tabs",
     kind: "chord",
     // ⌘⇧⌥W - the "close" W family; all three modifiers signal the widest scope.
@@ -202,7 +203,8 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
   "tab.next": {
     id: "tab.next",
     label: "Next tab",
-    description: "Activate the next tab in the focused group.",
+    description:
+      "Activate the next tab in the focused group, or in the start page's terminal panel.",
     category: "tabs",
     kind: "chord",
     defaultChord: "mod+]",
@@ -210,7 +212,8 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
   "tab.prev": {
     id: "tab.prev",
     label: "Previous tab",
-    description: "Activate the previous tab in the focused group.",
+    description:
+      "Activate the previous tab in the focused group, or in the start page's terminal panel.",
     category: "tabs",
     kind: "chord",
     defaultChord: "mod+[",
@@ -351,6 +354,17 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     category: "app",
     kind: "chord",
     defaultChord: "mod+shift+j",
+  },
+  "app.terminal.maximize": {
+    id: "app.terminal.maximize",
+    label: "Maximize terminal panel",
+    description:
+      "Toggle the start page's terminal panel between maximized and its docked width, revealing the panel if it is collapsed.",
+    category: "app",
+    kind: "chord",
+    // ⌘⌥J extends the ⌘J terminal family; ⌥ marks the layout variant, the
+    // same convention as ⌘⌥W (close others) and ⌘⌥F (find and replace).
+    defaultChord: "mod+alt+j",
   },
   "app.zoom.in": {
     id: "app.zoom.in",

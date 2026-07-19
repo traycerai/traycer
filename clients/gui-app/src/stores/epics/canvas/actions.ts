@@ -1312,6 +1312,32 @@ export function renameArtifact(
   );
 }
 
+/**
+ * Refresh the persisted `name` snapshot of every terminal tile bound to
+ * (hostId, sessionId) after a successful host rename. The snapshot is the
+ * restart-recovery fallback only - live rendering reads the host's
+ * `terminal.list` rows - so this runs post-success, never optimistically.
+ * Matched by content id AND host binding: session ids are only unique per
+ * host, so a bare id match could rename another host's tile.
+ */
+export function renameTerminalTiles(
+  state: EpicCanvasState,
+  hostId: string,
+  sessionId: string,
+  name: string,
+): EpicCanvasState {
+  return updateTilesWhere(
+    state,
+    (ref) =>
+      ref.type === "terminal" && ref.id === sessionId && ref.hostId === hostId,
+    (ref) => {
+      if (ref.type !== "terminal") return ref;
+      if (ref.name === name && ref.titleSource === "manual") return ref;
+      return { ...ref, name, titleSource: "manual" };
+    },
+  );
+}
+
 export function updateGitDiffTileView(
   state: EpicCanvasState,
   tileId: string,

@@ -3,6 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { Switch } from "@/components/ui/switch";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 export function VoiceSettingsSection(): ReactNode {
   const { voiceInputEnabled, setVoiceInputEnabled } = useSettingsStore(
@@ -19,7 +20,15 @@ export function VoiceSettingsSection(): ReactNode {
       control={
         <Switch
           checked={voiceInputEnabled}
-          onCheckedChange={setVoiceInputEnabled}
+          onCheckedChange={(enabled) => {
+            Analytics.getInstance().track(
+              enabled
+                ? AnalyticsEvent.VoiceEnabled
+                : AnalyticsEvent.VoiceDisabled,
+              { source: "direct_ui" },
+            );
+            setVoiceInputEnabled(enabled);
+          }}
           aria-label="Voice input"
         />
       }

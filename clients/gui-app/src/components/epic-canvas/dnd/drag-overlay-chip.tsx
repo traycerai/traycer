@@ -22,6 +22,7 @@ import type { HeaderTabDragData } from "@/components/layout/tabs/header-tab-dnd"
 import {
   isBlankTileRef,
   isDiffTileRef,
+  isGitDiffTileRef,
   type BlankTileRef,
   type EpicCanvasTileRef,
   type EpicNodeRef,
@@ -29,9 +30,15 @@ import {
   type SnapshotDiffTileRef,
 } from "@/stores/epics/canvas/types";
 import { cn } from "@/lib/utils";
+import {
+  gitBundleGroupLabel,
+  gitDiffRepositoryContextLabel,
+  gitStageLabel,
+} from "@/lib/git/git-diff-tile";
+import { getBasename } from "@/lib/path/cross-platform-path";
 
 const CHIP_CLASS =
-  "pointer-events-none flex h-9 max-w-56 cursor-grabbing select-none items-center gap-1.5 rounded-md border border-canvas-border/80 bg-canvas px-3 text-ui-sm text-canvas-foreground shadow-lg";
+  "pointer-events-none flex h-9 w-max max-w-[min(80vw,24rem)] cursor-grabbing select-none items-center gap-1.5 rounded-md border border-canvas-border/80 bg-canvas px-3 text-ui-sm text-canvas-foreground shadow-lg";
 
 const CHIP_MOTION = {
   initial: { opacity: 0, scale: 0.96, y: 2 },
@@ -150,6 +157,7 @@ function ArtifactNodeDragOverlay(props: {
         epicId={props.epicId}
         variant="static"
         className="size-3.5 shrink-0"
+        defaultIcon={undefined}
       />
       <span className="min-w-0 truncate font-medium">{props.node.name}</span>
     </m.div>
@@ -159,10 +167,52 @@ function ArtifactNodeDragOverlay(props: {
 function DiffTileDragOverlay(props: {
   readonly node: GitDiffTileRef | SnapshotDiffTileRef;
 }) {
+  if (isGitDiffTileRef(props.node)) {
+    return <GitDiffTileDragOverlay node={props.node} />;
+  }
   return (
     <m.div {...CHIP_MOTION} className={cn(CHIP_CLASS)}>
       <FileDiff className="size-3.5 shrink-0 text-muted-foreground" />
       <span className="min-w-0 truncate font-medium">{props.node.name}</span>
+    </m.div>
+  );
+}
+
+function GitDiffTileDragOverlay(props: { readonly node: GitDiffTileRef }) {
+  const scopeLabel =
+    props.node.diff.kind === "bundle"
+      ? gitBundleGroupLabel(props.node.diff.bundleGroup)
+      : gitStageLabel(props.node.diff.stage);
+  let subjectLabel = getBasename(props.node.diff.runningDir);
+  if (props.node.diff.kind === "file") {
+    subjectLabel = getBasename(props.node.diff.filePath);
+  } else if (props.node.repositoryContext !== null) {
+    subjectLabel = gitDiffRepositoryContextLabel(props.node.repositoryContext);
+  }
+
+  return (
+    <m.div
+      {...CHIP_MOTION}
+      aria-label={`${scopeLabel}: ${subjectLabel}`}
+      className={cn(CHIP_CLASS)}
+      data-testid="git-diff-drag-overlay"
+    >
+      <FileDiff className="size-3.5 shrink-0 text-primary" />
+      <span
+        className="shrink-0 font-medium"
+        data-testid="git-diff-drag-overlay-scope"
+      >
+        {scopeLabel}
+      </span>
+      <span aria-hidden="true" className="text-muted-foreground/70">
+        ·
+      </span>
+      <span
+        className="min-w-0 truncate text-muted-foreground"
+        data-testid="git-diff-drag-overlay-subject"
+      >
+        {subjectLabel}
+      </span>
     </m.div>
   );
 }

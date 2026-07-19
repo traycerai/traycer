@@ -443,6 +443,32 @@ afterEach(() => {
 });
 
 describe("ResourceMonitorPopover", () => {
+  it("defaults to tab order when the popover opens", () => {
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(projection({ owners: [owner({})] }));
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    const sortTrigger = screen.getByRole("button", {
+      name: "Sort resource rows",
+    });
+    expect(sortTrigger.textContent).toContain("Tab order");
+
+    fireEvent.pointerDown(sortTrigger, {
+      button: 0,
+      ctrlKey: false,
+      pointerType: "mouse",
+    });
+    expect(
+      screen
+        .getByRole("menuitemradio", { name: "Tab order" })
+        .getAttribute("aria-checked"),
+    ).toBe("true");
+  });
+
   it("uses the live chat title when the persisted owner name is untitled", async () => {
     liveArtifactTitleMock.title = "Generated chat title";
     canvasMock.state.artifactTreeByEpicId["epic-1"][0] = {
@@ -811,7 +837,6 @@ describe("ResourceMonitorPopover", () => {
     ).toBeNull();
     expect(screen.queryByText("/bin/sh")).toBeNull();
     expect(screen.queryByText("make")).toBeNull();
-    expect(screen.getByText("2 open terminals")).not.toBeNull();
     expect(screen.queryByText(/terminal processes/)).toBeNull();
 
     fireEvent.click(
@@ -1203,6 +1228,11 @@ describe("ResourceMonitorPopover", () => {
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Sort resource rows" }),
+      { button: 0, ctrlKey: false, pointerType: "mouse" },
+    );
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Memory" }));
     fireEvent.click(
       screen.getByRole("button", { name: "Expand process tree" }),
     );
@@ -1216,7 +1246,7 @@ describe("ResourceMonitorPopover", () => {
       ).not.toBe(0);
     };
 
-    // Default memory sort: beta's 205 MB subtree outranks alpha's 10 MB.
+    // Memory sort: beta's 205 MB subtree outranks alpha's 10 MB.
     expectBefore("beta (1 sub-process)", "alpha");
 
     fireEvent.pointerDown(
@@ -1269,10 +1299,22 @@ describe("ResourceMonitorPopover", () => {
     const renderer = await screen.findByText("Renderer");
     const main = screen.getByText("Main");
 
-    // Default memory sort: the renderer (300 KB) outweighs the main
-    // process (100 KB), so the hardcoded Main-first order must not win.
+    // Tab order has no process-group meaning, so the fixed Main-first order is
+    // kept when the popover opens.
     expect(
-      renderer.compareDocumentPosition(main) & Node.DOCUMENT_POSITION_FOLLOWING,
+      main.compareDocumentPosition(renderer) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
+
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Sort resource rows" }),
+      { button: 0, ctrlKey: false, pointerType: "mouse" },
+    );
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Memory" }));
+    expect(
+      screen
+        .getByText("Renderer")
+        .compareDocumentPosition(screen.getByText("Main")) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
     ).not.toBe(0);
 
     fireEvent.pointerDown(
@@ -1365,7 +1407,6 @@ describe("ResourceMonitorPopover", () => {
     expect(screen.getByText("Terminal Alpha")).not.toBeNull();
     expect(screen.getByText("idle-shell")).not.toBeNull();
     expect(screen.queryByText("/usr/bin/idle-zsh")).toBeNull();
-    expect(screen.getByText("2 open terminals")).not.toBeNull();
     expect(screen.getAllByText("89%").length).toBeGreaterThan(0);
     expect(screen.getAllByText("1000 MB").length).toBeGreaterThan(0);
   });

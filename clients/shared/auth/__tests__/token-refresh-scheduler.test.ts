@@ -158,13 +158,13 @@ describe("createProactiveRefreshScheduler", () => {
   it("does not re-arm when stopped while a refresh is in flight", async () => {
     const clock = makeFakeClock();
     const token: string = tokenExpiringAtMs(4 * HOUR_MS);
-    let resolveRefresh: (() => void) | null = null;
-    const revalidate = vi.fn(
-      () =>
-        new Promise<void>((resolve) => {
-          resolveRefresh = resolve;
-        }),
-    );
+    // Held open so the refresh can be suspended mid-flight, then settled after
+    // `stop()`. A `let resolve … = null` captured inside the executor is not
+    // narrowed by control-flow analysis (the assignment happens in a callback),
+    // so calling it later reads as `never`; `withResolvers` keeps the resolver
+    // plainly typed and callable.
+    const refresh = Promise.withResolvers<void>();
+    const revalidate = vi.fn(() => refresh.promise);
 
     const scheduler = createProactiveRefreshScheduler<number>({
       getToken: () => token,
@@ -186,7 +186,7 @@ describe("createProactiveRefreshScheduler", () => {
     // Stop mid-flight, then let the refresh settle: the post-await `stopped`
     // guard must suppress the re-arm so no timer is left scheduled.
     scheduler.stop();
-    resolveRefresh?.();
+    refresh.resolve();
     for (let i = 0; i < 8; i++) {
       await Promise.resolve();
     }

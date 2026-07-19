@@ -163,6 +163,7 @@ const GIT_DIFF_TILE = makeGitFileDiffTile({
   runningDir: "/repo",
   filePath: "src/app.ts",
   stage: "unstaged",
+  repositoryContext: null,
 });
 const TERMINAL_TILE = {
   id: "term-1",

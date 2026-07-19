@@ -13,7 +13,10 @@ import {
 } from "@/components/home/data/landing-options";
 import { useSurfaceActivity } from "@/components/home/composer/surface-activity-hooks";
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
-import { commitSelection } from "@/stores/composer/commit-selection";
+import {
+  commitProfileSelection,
+  commitSelection,
+} from "@/stores/composer/commit-selection";
 import {
   harnessCatalogEntryNeedsRefresh,
   useDefaultHostClient,
@@ -135,6 +138,9 @@ interface HarnessModelPickerProps {
    * runs turns on a different one (the tab-host-binding rule).
    */
   createProfileHostId: string | null;
+  /** The exact host where the next run executes. This is explicit so usage
+   *  comparison can never silently fall back to the renderer-default host. */
+  runTargetHostId: string | null;
 }
 
 function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
@@ -146,6 +152,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     disabled,
     registerActivation,
     createProfileHostId,
+    runTargetHostId,
   } = props;
   const activityEnabled = useSurfaceActivity();
   const selection = useStore(store, (s) => s.selection);
@@ -589,10 +596,9 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         return;
       }
       // Commit the picked model through the memory-aware funnel (restores that
-      // (harness, profile, model)'s remembered effort/tier, or the model's
-      // defaults). Selecting a model keeps the picker open; it only closes on
-      // an outside click / escape (handled by Popover's onOpenChange ->
-      // closeOnly).
+      // (provider, model)'s remembered effort/tier, or the model's defaults).
+      // Selecting a model keeps the picker open; it only closes on an outside
+      // click / escape (handled by Popover's onOpenChange -> closeOnly).
       commitSelection(store, row.harnessId, row.value, activePanelProfileId);
     },
     [activePanelProfileId, closeOnly, disabled, store],
@@ -640,7 +646,18 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       // Mirrors `handleRailEntryChange`'s lock rule: while a fork lock is
       // active the strip stays interactive for the locked provider only.
       if (lockedHarnessId !== null && providerId !== lockedHarnessId) return;
-      commitSelection(store, providerId, null, profileId);
+      // Same-provider profile changes only replace the credential, preserving
+      // the user's configured model, reasoning effort, and tier. The provider
+      // can differ after browsing a degraded rail entry without committing it,
+      // or when this globally retained create-profile callback resolves after
+      // another control changed the selection. In that case preserve the old
+      // provider-switch behavior and restore the target provider's remembered
+      // settings instead of pairing its profile with the current provider.
+      if (store.getState().selection.harnessId === providerId) {
+        commitProfileSelection(store, profileId);
+      } else {
+        commitSelection(store, providerId, null, profileId);
+      }
       setActiveRailEntry(providerId, profileId);
     },
     [lockedHarnessId, setActiveRailEntry, store],
@@ -808,6 +825,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         reasoningFooter={reasoningFooter}
         serviceTierFooter={serviceTierFooter}
         createProfileHostId={createProfileHostId}
+        runTargetHostId={runTargetHostId}
         createProfileDisabled={createProfileGate.disabled}
         createProfileDisabledReason={createProfileGate.reason}
       />
@@ -905,11 +923,8 @@ function modelPickerSelectionSummary(
   return `${label} · Thinking ${reasoningLabel}`;
 }
 
-// Restrict to harnesses whose adapter advertises a TUI surface. This is the
-// runtime capability (`modes`), not the schema id: Cursor is a TUI harness at
-// the schema level but its adapter currently advertises only `gui`, so it stays
-// hidden from the terminal launcher until the CLI ships - and reappears on its
-// own once the host starts advertising `tui`, with no code change here.
+// Restrict to harnesses whose adapter advertises a TUI surface. Runtime
+// capability (`modes`) is the source of truth for the terminal launcher.
 function isTuiCapable(harness: HarnessOption): boolean {
   return harness.modes.includes("tui");
 }

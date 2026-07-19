@@ -1,78 +1,113 @@
 import { type CSSProperties, type ReactNode } from "react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { BackgroundActivityGlyph } from "@/components/notifications/background-activity-glyph";
+import {
+  attentionTone,
+  DONE_TONE,
+  type IndicatorTone,
+} from "@/components/notifications/notification-indicator-tones";
 import type { NotificationIndicatorState } from "@/stores/notifications/notification-indicator-state";
 import { cn } from "@/lib/utils";
 
+const BACKGROUND_ACTIVITY_TITLE = "Background activity — agent idle";
+
+/**
+ * Live-activity tier for the running slot. `"turn"` is the agent actually
+ * processing (an active or activating turn — the busy spinner); `"background"`
+ * is background-only work (Monitor / `run_in_background` / a scheduled
+ * wakeup) keeping the chat non-idle while the agent itself is NOT running —
+ * rendered calmer and muted so the two are distinguishable at a glance.
+ * Callers resolve the tier (turn wins when both are happening); this
+ * component only presents it.
+ */
+export type IndicatorRunningKind = "turn" | "background" | false;
+
 interface NotificationIndicatorIconProps {
   readonly state: NotificationIndicatorState;
-  readonly running: boolean;
+  readonly running: IndicatorRunningKind;
   readonly subjectId: string;
   readonly testIdPrefix: string;
   readonly className: string | undefined;
   readonly style: CSSProperties | undefined;
   readonly runningTitle: string;
   readonly defaultIcon: ReactNode;
+  readonly statusPresentation: "message" | "spinner";
 }
 
 /**
- * The single renderer presentation for notification dots. Notification state
- * deliberately wins over live activity: errors first, then unresolved prompts,
- * followed by the session-backed running spinner and unread completion.
+ * The single renderer for notification status icons. Notification state wins
+ * over live activity: errors first, then unresolved prompts, followed by the
+ * session-backed running indicator (turn spinner, or the muted background
+ * variant) and unread completion.
  */
 export function NotificationIndicatorIcon(
   props: NotificationIndicatorIconProps,
 ): ReactNode {
   const tone = attentionTone(props.state);
   if (tone !== null) {
-    return <IndicatorDot tone={tone} indicatorProps={props} />;
+    return <IndicatorTonePresentation tone={tone} indicatorProps={props} />;
   }
-  if (props.running) {
+  if (props.running === "turn") {
     return (
-      <IndicatorSpan
-        indicatorProps={props}
-        title={props.runningTitle}
-        dotsClassName="text-current"
-        testId={`${props.testIdPrefix}-activity-${props.subjectId}`}
-        variant={undefined}
-      />
+      <IndicatorSpan indicatorProps={props} title={props.runningTitle}>
+        <AgentSpinningDots
+          className="text-current"
+          testId={`${props.testIdPrefix}-activity-${props.subjectId}`}
+          variant={undefined}
+        />
+      </IndicatorSpan>
+    );
+  }
+  if (props.running === "background") {
+    return (
+      <IndicatorSpan indicatorProps={props} title={BACKGROUND_ACTIVITY_TITLE}>
+        <BackgroundActivityGlyph
+          testId={`${props.testIdPrefix}-background-activity-${props.subjectId}`}
+        />
+      </IndicatorSpan>
     );
   }
   if (props.state.unreadDone) {
-    return <IndicatorDot tone={DONE_TONE} indicatorProps={props} />;
+    return (
+      <IndicatorTonePresentation tone={DONE_TONE} indicatorProps={props} />
+    );
   }
   return props.defaultIcon;
 }
 
-interface IndicatorTone {
-  readonly testId: "failure" | "prompt" | "done";
-  readonly title: string;
-  readonly className: string;
+function IndicatorTonePresentation(props: {
+  readonly tone: IndicatorTone;
+  readonly indicatorProps: NotificationIndicatorIconProps;
+}): ReactNode {
+  if (props.indicatorProps.statusPresentation === "message") {
+    return <IndicatorStatus {...props} />;
+  }
+  return <IndicatorDot {...props} />;
 }
 
-const DONE_TONE: IndicatorTone = {
-  testId: "done",
-  title: "Task completed",
-  className: "text-blue-500 dark:text-blue-400",
-};
-
-function attentionTone(
-  state: NotificationIndicatorState,
-): IndicatorTone | null {
-  if (state.unreadFailure) {
-    return {
-      testId: "failure",
-      title: "Task needs attention",
-      className: "text-red-500 dark:text-red-400",
-    };
-  }
-  if (state.pendingPrompt) {
-    return {
-      testId: "prompt",
-      title: "Task waiting for your response",
-      className: "text-amber-500 dark:text-amber-400",
-    };
-  }
-  return null;
+function IndicatorStatus(props: {
+  readonly tone: IndicatorTone;
+  readonly indicatorProps: NotificationIndicatorIconProps;
+}): ReactNode {
+  const Icon = props.tone.Icon;
+  return (
+    <span
+      role="status"
+      aria-label={props.tone.title}
+      className={cn(
+        "inline-flex size-3.5 shrink-0 items-center justify-center",
+        props.indicatorProps.className,
+      )}
+      style={props.indicatorProps.style}
+      title={props.tone.title}
+    >
+      <Icon
+        aria-hidden
+        className={cn("size-3.5", props.tone.className)}
+        data-testid={`${props.indicatorProps.testIdPrefix}-${props.tone.testId}-${props.indicatorProps.subjectId}`}
+      />
+    </span>
+  );
 }
 
 function IndicatorDot(props: {
@@ -80,22 +115,29 @@ function IndicatorDot(props: {
   readonly indicatorProps: NotificationIndicatorIconProps;
 }): ReactNode {
   return (
-    <IndicatorSpan
-      indicatorProps={props.indicatorProps}
+    <span
+      role="status"
+      aria-label={props.tone.title}
+      className={cn(
+        "inline-flex size-3.5 shrink-0 items-center justify-center",
+        props.indicatorProps.className,
+      )}
+      style={props.indicatorProps.style}
       title={props.tone.title}
-      dotsClassName={props.tone.className}
-      testId={`${props.indicatorProps.testIdPrefix}-${props.tone.testId}-${props.indicatorProps.subjectId}`}
-      variant="static"
-    />
+    >
+      <AgentSpinningDots
+        className={props.tone.className}
+        testId={`${props.indicatorProps.testIdPrefix}-${props.tone.testId}-${props.indicatorProps.subjectId}`}
+        variant="static"
+      />
+    </span>
   );
 }
 
 function IndicatorSpan(props: {
   readonly indicatorProps: NotificationIndicatorIconProps;
   readonly title: string;
-  readonly dotsClassName: string;
-  readonly testId: string;
-  readonly variant: "static" | undefined;
+  readonly children: ReactNode;
 }): ReactNode {
   return (
     <span
@@ -108,11 +150,7 @@ function IndicatorSpan(props: {
       style={props.indicatorProps.style}
       title={props.title}
     >
-      <AgentSpinningDots
-        className={cn(props.dotsClassName)}
-        testId={props.testId}
-        variant={props.variant}
-      />
+      {props.children}
     </span>
   );
 }

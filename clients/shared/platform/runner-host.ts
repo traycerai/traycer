@@ -685,6 +685,7 @@ export interface INotificationHost {
     body: string,
     payload: unknown,
     replaceKey: string | null,
+    deliveryKey: string | null,
   ): Promise<void>;
   onClick(handler: (payload: unknown) => void): Disposable;
 }
@@ -803,7 +804,8 @@ export interface HostInstallResult {
   readonly sizeBytes: number;
   readonly previousVersion: string | null;
   readonly serviceLifecycle: {
-    readonly priorServiceState: "running" | "stopped" | "not-installed";
+    readonly priorServiceState:
+      "running" | "stopped" | "not-installed" | "externally-managed";
     readonly stoppedBeforeSwap: boolean;
     readonly postSwapAction: "install" | "restart" | "start" | "none";
     readonly postSwapError: string | null;
