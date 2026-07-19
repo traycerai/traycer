@@ -500,7 +500,11 @@ function createTargetFromSelection(editor: Editor): LinkTarget | null {
     anchorDocPosition: null,
   };
   if (from === to) {
-    return linkTargetAtPosition(editor, from, caretOptions);
+    // Cmd/Ctrl+K (and the BubbleMenu Link action) on a caret inside an
+    // existing link is the keyboard edit affordance: open the form directly
+    // rather than the compact read preview that caret/hover use.
+    const existing = linkTargetAtPosition(editor, from, caretOptions);
+    return existing === null ? null : { ...existing, editing: true };
   }
   const existing = linkTargetAtPosition(editor, from, caretOptions);
   if (
@@ -725,7 +729,12 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
       cancelHide();
       hrefDirtyRef.current = false;
       textDirtyRef.current = false;
+      // Cmd/Ctrl+K and create-mode opens are not promoted-from-read edits, so
+      // Escape dismisses rather than reverting to a read card.
       revertTriggerRef.current = null;
+      if (nextTarget.mode === "edit" && nextTarget.editing) {
+        focusEditUrlRef.current = true;
+      }
       setLiveTarget(nextTarget);
       setHref(nextTarget.href);
       setDisplayText(nextTarget.text);

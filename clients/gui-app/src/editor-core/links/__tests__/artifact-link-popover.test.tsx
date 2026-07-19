@@ -786,6 +786,26 @@ describe("ArtifactLinkPopover", () => {
     ).not.toBeNull();
   });
 
+  it("opens Cmd/Ctrl+K on a caret inside an existing link directly in edit mode", async () => {
+    const editor = makeEditor(LINK_CONTENT);
+    editor.commands.setTextSelection(2);
+    renderPopover(editor, true);
+    await screen.findByRole("dialog", { name: "Link preview" });
+
+    fireEvent.keyDown(editor.view.dom, { key: "k", ctrlKey: true });
+
+    const url = await screen.findByRole<HTMLInputElement>("textbox", {
+      name: "Link URL",
+    });
+    expect(url.value).toBe("https://example.com");
+    expect(document.activeElement).toBe(url);
+    expect(screen.queryByRole("dialog", { name: "Link preview" })).toBeNull();
+
+    fireEvent.keyDown(url, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Edit link" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "Link preview" })).toBeNull();
+  });
+
   it("commits once when focus leaves the whole card after visiting both fields", async () => {
     const editor = makeEditor("<p>Create me</p>");
     editor.commands.setTextSelection({ from: 1, to: 7 });
