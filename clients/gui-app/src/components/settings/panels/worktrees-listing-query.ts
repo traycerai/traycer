@@ -119,6 +119,13 @@ export function useWorktreeListing(
    */
   readonly retryPartial: () => Promise<unknown>;
   readonly refreshing: boolean;
+  /**
+   * When the listing data was last written: a live fetch's wall-clock stamp,
+   * or the snapshot's own save time while the warm-open seed is still what's
+   * showing. `null` until any data exists. Drives the toolbar's
+   * "Updated Xm ago" label under the manual-refresh model.
+   */
+  readonly lastUpdatedAt: number | null;
 } {
   const readiness = useReactiveHostReadiness(client);
   const enabled = reachable && client !== null && readiness.isReady;
@@ -153,6 +160,11 @@ export function useWorktreeListing(
     >(key, seededListingData(snapshot.entries), {
       updatedAt: snapshot.savedAt,
     });
+    // Under `staleTime: Infinity` a seed would otherwise read as fresh
+    // forever. The snapshot is ANOTHER session's truth, so mark it
+    // invalidated: the observer reconciles it against the host exactly once
+    // (on enable), and only live data earned this session sticks.
+    void queryClient.invalidateQueries({ queryKey: key });
     logPerfEvent("worktree.listing_restore", {
       restoredCount: snapshot.entries.length,
     });
@@ -174,6 +186,7 @@ export function useWorktreeListing(
     });
   const {
     data,
+    dataUpdatedAt,
     error,
     fetchNextPage,
     fetchStatus,
@@ -197,6 +210,12 @@ export function useWorktreeListing(
       initialPageParam: null,
       getNextPageParam: (lastPage) => lastPage.nextCursor,
       enabled,
+      // Manual-refresh model: the listing never expires on its own. The host
+      // pushes `worktree.changed` only on real mutations now (no periodic
+      // sweep), so freshness is owned by the Refresh button + invalidation;
+      // the toolbar surfaces `lastUpdatedAt` so staleness is visible instead
+      // of silently refetched.
+      staleTime: Infinity,
     }),
   );
   const refreshMutation = useMutation<
@@ -341,5 +360,6 @@ export function useWorktreeListing(
     },
     retryPartial: () => fetchNextPage(),
     refreshing: isFetching || refreshMutation.isPending,
+    lastUpdatedAt: dataUpdatedAt === 0 ? null : dataUpdatedAt,
   };
 }

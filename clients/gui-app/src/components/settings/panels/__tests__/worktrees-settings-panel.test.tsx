@@ -391,6 +391,7 @@ function testToolbarProps() {
     onRefresh: vi.fn(),
     refreshing: false,
     canRefresh: true,
+    lastUpdatedAt: null,
   };
 }
 
