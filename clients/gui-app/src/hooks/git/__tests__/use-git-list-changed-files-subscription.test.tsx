@@ -31,6 +31,7 @@ import { __resetRichSlotOrderingForTesting } from "@/lib/git/git-rich-slot-order
 import {
   useGitListChangedFilesSubscription,
   __resetSubscriptionsForTesting,
+  type GitListChangedFilesSubscriptionResult,
 } from "../use-git-list-changed-files-subscription";
 
 // Mock stream session for testing.
@@ -147,6 +148,72 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
   notifySupportChanged(): void {
     this.supportListeners.forEach((listener) => listener());
   }
+}
+
+function makeSwappableStreamWrapper(
+  queryClient: QueryClient,
+  initialStreamClient: WsStreamClient<HostStreamRpcRegistry>,
+) {
+  const holder: { current: WsStreamClient<HostStreamRpcRegistry> } = {
+    current: initialStreamClient,
+  };
+  const wrapper = ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={queryClient}>
+      <StreamRuntimeContext.Provider value={{ wsStreamClient: holder.current }}>
+        {children}
+      </StreamRuntimeContext.Provider>
+    </QueryClientProvider>
+  );
+  return { wrapper, holder };
+}
+
+// Shared "swap the context to a fresh replacement client, then prove it takes
+// over the subscription and delivers a snapshot without surfacing an error"
+// flow used by the replacement-recovery tests below.
+async function swapToReplacementClientAndAssertHeadSha(
+  holder: { current: WsStreamClient<HostStreamRpcRegistry> },
+  rerender: () => void,
+  result: { readonly current: GitListChangedFilesSubscriptionResult },
+  headSha: string,
+) {
+  const replacementClient = new MockWsStreamClient();
+  holder.current = replacementClient;
+  rerender();
+
+  await waitFor(() => {
+    expect(replacementClient.subscribeCallCount).toBe(1);
+  });
+  const replacementSession = replacementClient.getSession(
+    "git.subscribeStatus",
+    {
+      hostId: "host1",
+      runningDir: "/repo",
+      ignoreWhitespace: false,
+    },
+  );
+  if (replacementSession === undefined) {
+    throw new Error("Replacement session should exist");
+  }
+  replacementSession.emitFrame(
+    {
+      type: "snapshot",
+      runningDir: "/repo",
+      headSha,
+      branch: "main",
+      files: [],
+      fingerprint: `${headSha}-fingerprint`,
+      repoMode: "normal",
+      repoState: { kind: "clean" },
+      pollStartedAtMs: 1_000,
+    },
+    null,
+  );
+
+  await waitFor(() => {
+    expect(result.current.data?.headSha).toBe(headSha);
+  });
+  expect(result.current.error).toBeNull();
+  expect(result.current.isPending).toBe(false);
 }
 
 describe("useGitListChangedFilesSubscription", () => {
@@ -665,13 +732,9 @@ describe("useGitListChangedFilesSubscription", () => {
     const warnSpy = vi
       .spyOn(console, "warn")
       .mockImplementation(() => undefined);
-    let streamClient: WsStreamClient<HostStreamRpcRegistry> = closedClient;
-    const closedWrapper = ({ children }: { children: ReactNode }) => (
-      <QueryClientProvider client={queryClient}>
-        <StreamRuntimeContext.Provider value={{ wsStreamClient: streamClient }}>
-          {children}
-        </StreamRuntimeContext.Provider>
-      </QueryClientProvider>
+    const { wrapper, holder } = makeSwappableStreamWrapper(
+      queryClient,
+      closedClient,
     );
 
     const { result, rerender } = renderHook(
@@ -682,63 +745,27 @@ describe("useGitListChangedFilesSubscription", () => {
           ignoreWhitespace: false,
           enabled: true,
         }),
-      { wrapper: closedWrapper },
+      { wrapper },
     );
 
     expect(result.current.error).toBeNull();
     expect(result.current.isPending).toBe(true);
     expect(warnSpy).not.toHaveBeenCalled();
 
-    const replacementClient = new MockWsStreamClient();
-    streamClient = replacementClient;
-    rerender();
-
-    await waitFor(() => {
-      expect(replacementClient.subscribeCallCount).toBe(1);
-    });
-    const replacementSession = replacementClient.getSession(
-      "git.subscribeStatus",
-      {
-        hostId: "host1",
-        runningDir: "/repo",
-        ignoreWhitespace: false,
-      },
+    await swapToReplacementClientAndAssertHeadSha(
+      holder,
+      rerender,
+      result,
+      "replacement-head",
     );
-    if (replacementSession === undefined) {
-      throw new Error("Replacement session should exist");
-    }
-    replacementSession.emitFrame(
-      {
-        type: "snapshot",
-        runningDir: "/repo",
-        headSha: "replacement-head",
-        branch: "main",
-        files: [],
-        fingerprint: "replacement-fingerprint",
-        repoMode: "normal",
-        repoState: { kind: "clean" },
-        pollStartedAtMs: 1_000,
-      },
-      null,
-    );
-
-    await waitFor(() => {
-      expect(result.current.data?.headSha).toBe("replacement-head");
-    });
-    expect(result.current.error).toBeNull();
-    expect(result.current.isPending).toBe(false);
     warnSpy.mockRestore();
   });
 
   it("detaches when the live client closes underneath and rebinds to a replacement", async () => {
     const liveClient = new MockWsStreamClient();
-    let streamClient: WsStreamClient<HostStreamRpcRegistry> = liveClient;
-    const swappableWrapper = ({ children }: { children: ReactNode }) => (
-      <QueryClientProvider client={queryClient}>
-        <StreamRuntimeContext.Provider value={{ wsStreamClient: streamClient }}>
-          {children}
-        </StreamRuntimeContext.Provider>
-      </QueryClientProvider>
+    const { wrapper, holder } = makeSwappableStreamWrapper(
+      queryClient,
+      liveClient,
     );
 
     const { result, rerender } = renderHook(
@@ -749,7 +776,7 @@ describe("useGitListChangedFilesSubscription", () => {
           ignoreWhitespace: false,
           enabled: true,
         }),
-      { wrapper: swappableWrapper },
+      { wrapper },
     );
 
     await waitFor(() => {
@@ -796,43 +823,12 @@ describe("useGitListChangedFilesSubscription", () => {
     expect(result.current.error).toBeNull();
 
     // A replacement client reaches context (the provider's liveness rebuild).
-    const replacementClient = new MockWsStreamClient();
-    streamClient = replacementClient;
-    rerender();
-
-    await waitFor(() => {
-      expect(replacementClient.subscribeCallCount).toBe(1);
-    });
-    const replacementSession = replacementClient.getSession(
-      "git.subscribeStatus",
-      {
-        hostId: "host1",
-        runningDir: "/repo",
-        ignoreWhitespace: false,
-      },
+    await swapToReplacementClientAndAssertHeadSha(
+      holder,
+      rerender,
+      result,
+      "replacement-head",
     );
-    if (replacementSession === undefined) {
-      throw new Error("Replacement session should exist");
-    }
-    replacementSession.emitFrame(
-      {
-        type: "snapshot",
-        runningDir: "/repo",
-        headSha: "replacement-head",
-        branch: "main",
-        files: [],
-        fingerprint: "replacement-fingerprint",
-        repoMode: "normal",
-        repoState: { kind: "clean" },
-        pollStartedAtMs: 2_000,
-      },
-      null,
-    );
-
-    await waitFor(() => {
-      expect(result.current.data?.headSha).toBe("replacement-head");
-    });
-    expect(result.current.error).toBeNull();
   });
 
   it("a rebuilt stream client gets a fresh subscription (per-client keying)", async () => {
