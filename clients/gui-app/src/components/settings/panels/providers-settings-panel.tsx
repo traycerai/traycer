@@ -105,8 +105,13 @@ function hasPendingProviderProbe(
 ): boolean {
   return providers.some(
     (provider) =>
-      provider.authPending ||
-      provider.candidates.some((candidate) => candidate.versionPending),
+      // A disabled provider's probes are irrelevant (the host clears these
+      // flags for disabled providers at the wire boundary); don't render a
+      // stuck "checking…" for one, and stay correct against an older host that
+      // still surfaces the flags.
+      provider.enabled &&
+      (provider.authPending ||
+        provider.candidates.some((candidate) => candidate.versionPending)),
   );
 }
 
