@@ -710,6 +710,34 @@ describe("ArtifactLinkPopover", () => {
     expect(screen.queryByRole("dialog", { name: "Link preview" })).toBeNull();
   });
 
+  it("hides after Escape reverts a hover-promoted edit when the pointer already left", async () => {
+    vi.useFakeTimers();
+    const editor = makeEditor(`${LINK_CONTENT}<p>Elsewhere</p>`);
+    editor.commands.setTextSelection(editor.state.doc.content.size - 2);
+    renderPopover(editor, true);
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    const anchor = editor.view.dom.querySelector("a");
+    if (anchor === null) throw new Error("Expected anchor");
+
+    fireEvent.pointerOver(anchor);
+    await act(() => vi.advanceTimersByTimeAsync(300));
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    const editCard = screen.getByRole("dialog", { name: "Edit link" });
+    fireEvent.pointerLeave(editCard);
+    // Caret ownership during edit means leave does not arm hide.
+    await act(() => vi.advanceTimersByTimeAsync(100));
+    expect(screen.getByRole("dialog", { name: "Edit link" })).not.toBeNull();
+
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Link URL" }), {
+      key: "Escape",
+    });
+    expect(screen.getByRole("dialog", { name: "Link preview" })).not.toBeNull();
+    // Revert restores hover ownership and re-arms hide for the prior leave.
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    await act(() => vi.advanceTimersByTimeAsync(100));
+    expect(screen.queryByRole("dialog", { name: "Link preview" })).toBeNull();
+  });
+
   it("cancels a pending hover when selection changes before the delay", async () => {
     vi.useFakeTimers();
     const editor = makeEditor(`${LINK_CONTENT}<p>Other text</p>`);

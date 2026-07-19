@@ -743,6 +743,19 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
     [cancelHide, cancelShow, onOpenChange, setLiveTarget],
   );
 
+  const scheduleHoverHide = useCallback((): void => {
+    cancelHide();
+    const current = targetRef.current;
+    if (current?.mode !== "edit" || current.trigger !== "hover") return;
+    if (cardRef.current?.contains(document.activeElement)) return;
+    hideTimerRef.current = window.setTimeout(() => {
+      const liveTarget = targetRef.current;
+      if (liveTarget?.mode !== "edit" || liveTarget.trigger !== "hover") return;
+      if (cardRef.current?.contains(document.activeElement)) return;
+      close();
+    }, HOVER_HIDE_DELAY_MS);
+  }, [cancelHide, close]);
+
   const beginEditing = useCallback((): void => {
     const current = targetRef.current;
     if (!editable || current?.mode !== "edit") return;
@@ -762,7 +775,32 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
     const trigger = revertTriggerRef.current ?? current.trigger;
     revertTriggerRef.current = null;
     setLiveTarget({ ...current, trigger, editing: false });
-  }, [setLiveTarget]);
+    if (trigger !== "hover") return;
+    // Editing ran under caret ownership, so a pointer leave during the
+    // edit did not arm hide. After restoring hover ownership, re-check
+    // whether the pointer is still over the card/link; if not, arm the
+    // normal hover-hide path. Defer so the compact card commit can drop
+    // the edit-field focus that would otherwise suppress scheduleHoverHide.
+    queueMicrotask(() => {
+      const live = targetRef.current;
+      if (
+        live?.mode !== "edit" ||
+        live.trigger !== "hover" ||
+        live.editing ||
+        cardRef.current?.matches(":hover") === true
+      ) {
+        return;
+      }
+      const contextElement = live.anchor.contextElement;
+      if (
+        contextElement instanceof Element &&
+        contextElement.matches(":hover")
+      ) {
+        return;
+      }
+      scheduleHoverHide();
+    });
+  }, [scheduleHoverHide, setLiveTarget]);
 
   const expectCaretPosition = useCallback((position: number): void => {
     expectedCaretPositionRef.current = position;
@@ -785,19 +823,6 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
     },
     [openLink, openLinkPending],
   );
-
-  const scheduleHoverHide = useCallback((): void => {
-    cancelHide();
-    const current = targetRef.current;
-    if (current?.mode !== "edit" || current.trigger !== "hover") return;
-    if (cardRef.current?.contains(document.activeElement)) return;
-    hideTimerRef.current = window.setTimeout(() => {
-      const liveTarget = targetRef.current;
-      if (liveTarget?.mode !== "edit" || liveTarget.trigger !== "hover") return;
-      if (cardRef.current?.contains(document.activeElement)) return;
-      close();
-    }, HOVER_HIDE_DELAY_MS);
-  }, [cancelHide, close]);
 
   const handlePointerOver = useEffectEvent((event: PointerEvent): void => {
     if (!editor.state.selection.empty) return;
