@@ -138,7 +138,7 @@ describe("sweepOldTrash", () => {
     mocks.forceRmFailureForPath = asideDir;
 
     const logger = createCliLogger(ENV);
-    await sweepOldTrash(installDir, logger);
+    await sweepOldTrash(installDir, "install.json", logger);
 
     expect(existsSync(asideDir)).toBe(false);
     // Not restorable by a subsequent sweep either - nothing is left under

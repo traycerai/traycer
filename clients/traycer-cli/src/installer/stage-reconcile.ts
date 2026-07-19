@@ -158,7 +158,7 @@ async function sweepInstallTrashIfTargetExists(
 ): Promise<boolean> {
   const installDir = hostInstallDir(environment);
   if (!(await pathExists(installDir))) return false;
-  await sweepOldTrash(installDir, logger);
+  await sweepOldTrash(installDir, "install.json", logger);
   return true;
 }
 

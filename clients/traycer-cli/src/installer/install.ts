@@ -541,22 +541,28 @@ export async function commitInstallFromSource(
 // Sweep `<target>.old-*` siblings left behind by atomicSwap if the CLI
 // crashed between a successful rename-aside and the fire-and-forget
 // invalidation. Called from `atomicSwap` on entry (so a repeated
-// install/update keeps the floor clean) and from the uninstaller. Layered
-// invalidation (rename-to-`.dead-*` sibling -> sidecar-unlink -> recursive
-// removal -> accept-and-log residual) shared with `stage-reconcile.ts`'s
-// identical `staged.old-*` handling via `aside-dirs.ts` - see that module's
-// doc comment for the failure-mode rationale (a single "unlink sidecar, then
-// best-effort rm" pass could leave a fully intact, restorable aside behind
-// if both steps failed on the same directory). Best effort - a failed sweep
-// never aborts the surrounding operation.
+// install/update keeps the floor clean), from the uninstaller (for both
+// `install/` and, with `staged.json`, `staged/`), and from
+// `stage-reconcile.ts`. Layered invalidation (rename-to-`.dead-*` sibling
+// -> sidecar-unlink -> recursive removal -> accept-and-log residual)
+// shared with `stage-reconcile.ts`'s identical `staged.old-*` handling via
+// `aside-dirs.ts` - see that module's doc comment for the failure-mode
+// rationale (a single "unlink sidecar, then best-effort rm" pass could
+// leave a fully intact, restorable aside behind if both steps failed on
+// the same directory). `sidecarFilename` must match `target`'s own record
+// file (`install.json` for `install/`, `staged.json` for `staged/`) -
+// layer 2's unlink targets it by name, so the wrong name silently skips
+// straight to layer 3 instead of actually invalidating the record. Best
+// effort - a failed sweep never aborts the surrounding operation.
 export async function sweepOldTrash(
   target: string,
+  sidecarFilename: string,
   logger: ILogger,
 ): Promise<void> {
   const matches = await listAsideDirsNewestFirst(target, "old-");
   await Promise.all(
     matches.map((match) =>
-      invalidateAsideDir(target, match, "install.json", logger),
+      invalidateAsideDir(target, match, sidecarFilename, logger),
     ),
   );
   await sweepDeadAsideDirs(target);
@@ -743,7 +749,7 @@ async function atomicSwap(opts: AtomicSwapOptions): Promise<void> {
   // create another one. Doesn't block the swap on sweep success - if
   // the sweep fails we log via the surrounding flow's progress and
   // continue.
-  await sweepOldTrash(target, logger);
+  await sweepOldTrash(target, "install.json", logger);
 
   const targetExists = await access(target).then(
     () => true,
