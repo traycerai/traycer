@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
+  ChatActiveTurn,
   ChatQueuedItem,
   ChatRunSettings,
   ChatRunStatus,
@@ -91,7 +92,30 @@ function createHarness(): Harness {
   };
 }
 
-function emitSnapshot(harness: Harness, runStatus: ChatRunStatus): void {
+// A minimal running/stopping turn bound to `profileId` - the pre-spawn
+// override the empty-queue restamp forwards is keyed off the difference
+// between this and the incoming settings' profile.
+function activeTurnOnProfile(profileId: string | null): ChatActiveTurn {
+  return {
+    turnId: "turn-active",
+    status: "running",
+    harnessId: "claude",
+    model: "sonnet-4.5",
+    agentMode: "regular",
+    profileId,
+    userMessageId: "m-1",
+    startedAt: 1,
+    updatedAt: 1,
+    reasoningEffort: "high",
+    serviceTier: null,
+  };
+}
+
+function emitSnapshot(
+  harness: Harness,
+  runStatus: ChatRunStatus,
+  activeTurn: ChatActiveTurn | null,
+): void {
   harness.callbacks().onConnectionStatus("open", null);
   harness.callbacks().onSnapshot({
     kind: "snapshot",
@@ -117,7 +141,7 @@ function emitSnapshot(harness: Harness, runStatus: ChatRunStatus): void {
       access: { role: "owner", ownerUserId: OWNER_ID, canAct: true },
       queue: { status: "idle", items: [] },
       runStatus,
-      activeTurn: null,
+      activeTurn,
       pendingApprovals: [],
       pendingInterviews: [],
       worktreeBinding: null,
@@ -152,7 +176,7 @@ function queuedItem(
 describe("D1: queued messages + profile switch (restamp path)", () => {
   it("a same-harness/same-model profile-only switch restamps an already-queued message to the new profile", () => {
     const harness = createHarness();
-    emitSnapshot(harness, "idle");
+    emitSnapshot(harness, "idle", null);
 
     // One message is already queued on profile A.
     harness.callbacks().onQueueChanged({
@@ -184,7 +208,7 @@ describe("D1: queued messages + profile switch (restamp path)", () => {
 
   it("a no-op re-commit of the SAME profile still sends nothing (chatRunSettingsEqual correctly reports equal)", () => {
     const harness = createHarness();
-    emitSnapshot(harness, "idle");
+    emitSnapshot(harness, "idle", null);
 
     harness.callbacks().onQueueChanged({
       kind: "queueChanged",
@@ -206,7 +230,7 @@ describe("D1: queued messages + profile switch (restamp path)", () => {
 
   it("control: a harness/model change on top of the same profile DOES restamp (chatRunSettingsEqual still catches non-profile fields)", () => {
     const harness = createHarness();
-    emitSnapshot(harness, "idle");
+    emitSnapshot(harness, "idle", null);
 
     harness.callbacks().onQueueChanged({
       kind: "queueChanged",
@@ -237,7 +261,7 @@ describe("D1: queued messages + profile switch (restamp path)", () => {
 
   it("documents the mixed-queue contract: the GUI has no per-item scoping, only excludeQueueItemId - a profile-only item now trips the gate on its own, and a sibling with an unrelated field change rides along in the SAME frame", () => {
     const harness = createHarness();
-    emitSnapshot(harness, "idle");
+    emitSnapshot(harness, "idle", null);
 
     harness.callbacks().onQueueChanged({
       kind: "queueChanged",
@@ -278,26 +302,45 @@ describe("D1: queued messages + profile switch (restamp path)", () => {
     expect(frame.excludeQueueItemId).toBeNull();
   });
 
-  it("with an EMPTY queue, a profile switch during an in-progress run still sends the frame - the host stamps a pre-spawn profile override from it, so a turn parked on worktree setup adopts the switch", () => {
+  // `isChatRunInProgress` accepts both "running" and "stopping", so the
+  // empty-queue forward must hold for either accepted state.
+  for (const runStatus of ["running", "stopping"] as const) {
+    it(`with an EMPTY queue, a profile switch away from the active turn's profile during a ${runStatus} run still sends the frame - the host stamps a pre-spawn override from it, so a turn parked on worktree setup adopts the switch`, () => {
+      const harness = createHarness();
+      emitSnapshot(harness, runStatus, activeTurnOnProfile("profile-a"));
+
+      harness.handle.store
+        .getState()
+        .restampQueuedItemSettings(PROFILE_B_SETTINGS, null);
+
+      expect(harness.sent).toHaveLength(1);
+      const frame = harness.sent[0];
+      if (frame.kind !== "queueSettingsRestamp") {
+        throw new Error("Expected queueSettingsRestamp frame");
+      }
+      expect(frame.settings.profileId).toBe("profile-b");
+      expect(frame.excludeQueueItemId).toBeNull();
+    });
+  }
+
+  it("with an empty queue during a run, a NON-profile change (same profile as the active turn) sends nothing - there is no parked turn to redirect, only a permission/model edit", () => {
     const harness = createHarness();
-    emitSnapshot(harness, "running");
+    emitSnapshot(harness, "running", activeTurnOnProfile("profile-a"));
 
-    harness.handle.store
-      .getState()
-      .restampQueuedItemSettings(PROFILE_B_SETTINGS, null);
+    // Same profile as the active turn, only a non-profile field differs. This
+    // is the "changed permission/model mid-turn" case the chat-tile suite
+    // guards - it must not emit a queueSettingsRestamp.
+    harness.handle.store.getState().restampQueuedItemSettings(
+      { ...PROFILE_A_SETTINGS, permissionMode: "full_access" },
+      null,
+    );
 
-    expect(harness.sent).toHaveLength(1);
-    const frame = harness.sent[0];
-    if (frame.kind !== "queueSettingsRestamp") {
-      throw new Error("Expected queueSettingsRestamp frame");
-    }
-    expect(frame.settings.profileId).toBe("profile-b");
-    expect(frame.excludeQueueItemId).toBeNull();
+    expect(harness.sent).toHaveLength(0);
   });
 
   it("with an empty queue and no run in progress, a profile switch sends nothing - there is neither a queued item nor a pre-spawn turn the frame could move", () => {
     const harness = createHarness();
-    emitSnapshot(harness, "idle");
+    emitSnapshot(harness, "idle", null);
 
     harness.handle.store
       .getState()

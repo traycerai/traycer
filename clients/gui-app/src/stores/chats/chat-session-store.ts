@@ -2096,15 +2096,20 @@ export function createChatSessionStore(
             !chatRunSettingsEqual(item.settings, settings),
         );
         // With nothing queued the frame still matters while a run is in
-        // progress: the host stamps a pre-spawn profile override from it at
-        // frame intake, so a turn still parked on worktree setup adopts a
-        // profile switch instead of spawning on the profile the user just
-        // moved off. Idle with an empty queue there is nothing to restamp.
-        if (
-          pendingItems.length === 0 &&
-          !isChatRunInProgress(get().runStatus)
-        ) {
-          return;
+        // progress AND the new profile differs from the one the active turn is
+        // bound to: the host stamps a pre-spawn profile override from it at
+        // frame intake, so a turn still parked on worktree setup adopts the
+        // switch instead of spawning on the profile the user just moved off. A
+        // permission/model-only change (or a same-profile re-commit) has no
+        // parked turn to redirect here, and an idle empty queue has nothing to
+        // restamp, so neither sends.
+        if (pendingItems.length === 0) {
+          const activeTurn = get().activeTurn;
+          const forwardsProfileToActiveTurn =
+            activeTurn !== null &&
+            isChatRunInProgress(get().runStatus) &&
+            activeTurn.profileId !== settings.profileId;
+          if (!forwardsProfileToActiveTurn) return;
         }
         const clientActionId = uuidv4();
         const frame: ChatOwnerActionFrame = {

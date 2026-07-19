@@ -248,10 +248,10 @@ export function useChatQueueActions(
       persistChatRunSettings(settings);
       // Live-mirror: pending queued prompts always resolve the latest toolbar
       // settings. Exclude the item open for editing (it commits on submit); the
-      // store also skips no-op updates and only sends with an empty queue while
-      // a run is in progress - the host then stamps a pre-spawn profile
-      // override from the frame so a turn still parked on worktree setup
-      // adopts a profile switch instead of spawning on the switched-away one.
+      // store also skips no-op updates. With an empty queue it still forwards a
+      // profile switch while a run is in progress - the host stamps a pre-spawn
+      // override from the frame so a turn still parked on worktree setup adopts
+      // the new profile instead of spawning on the switched-away one.
       chatActions.restampQueuedItemSettings(settings, activeEditingQueueItemId);
       // Read the live turn at call time (see steerQueuedItemNow): closing over the
       // per-snapshot `state.activeTurn` object would re-create this callback every
