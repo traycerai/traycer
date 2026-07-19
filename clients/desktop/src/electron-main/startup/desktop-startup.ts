@@ -81,6 +81,8 @@ import {
   installProcessGoneListeners,
   logGpuInfo,
 } from "../app/crash-reporter";
+import { suppressWslKernelCoreDumps } from "../app/core-dump-guard";
+import { pruneStaleCrashDumps } from "../app/crash-dump-prune";
 import { startRendererMemorySampler } from "../app/diagnostics";
 import {
   configureAppUserModelId,
@@ -231,13 +233,15 @@ async function timed(
 // Pre-ready: command-line switches, scheme registration, hardware
 // acceleration toggle, V8 heap, and crash collection all run before
 // Chromium initializes. These are synchronous in-process Electron calls
-// (the one sync filesystem read - the GPU preference - is documented as the
-// required pre-`whenReady` exception in app/gpu-acceleration.ts).
+// (two documented sync-filesystem exceptions: the GPU preference read in
+// app/gpu-acceleration.ts and the memory-backed /proc write in
+// app/core-dump-guard.ts, which must land before Chromium spawns children).
 function runPreReady(state: BootState): void {
   trimUnusedChromiumFeatures();
   configureV8HeapSize();
   applyHardwareAccelerationPreference();
   registerAppScheme();
+  suppressWslKernelCoreDumps();
   initCrashReporter();
   installGlobalErrorHandlers();
   installProcessGoneListeners();
@@ -273,6 +277,7 @@ async function runOnReady(state: BootState): Promise<void> {
     timed("on-ready", "download-observer", () => installDownloadObserver()),
     timed("on-ready", "preconnect", () => preconnectTraycerHosts()),
     timed("on-ready", "gpu-info", () => logGpuInfo()),
+    timed("on-ready", "crash-dump-prune", () => pruneStaleCrashDumps()),
   ]);
 }
 
