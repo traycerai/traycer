@@ -81,7 +81,7 @@ const CHANNELS: ReadonlyArray<{
   {
     id: "renderer",
     label: "In-app",
-    description: "Native OS toast and chime from the Traycer app.",
+    description: "Host feed, badge, indicators, toast, and chime.",
   },
 ];
 
@@ -126,7 +126,7 @@ function NotificationsSettingsPanelContent(props: {
   return (
     <SettingsPanelShell
       title="Notifications"
-      description="Configure interruptions from Traycer. The bell feed always shows every notification, including collaboration updates; these controls only decide which events interrupt you."
+      description="Choose which host notifications Traycer creates. Disabled severities don't enter the bell feed or trigger notification hooks; collaboration updates remain independent."
     >
       {renderNotificationsSettingsContent(props.configQuery, props.setConfig)}
       <NotificationHooksSection
@@ -192,8 +192,8 @@ function NotificationMatrix(props: {
   return (
     <section className="space-y-4 px-5 py-5">
       <SectionHeading
-        title="Interruptions"
-        description="Choose which severities can interrupt you in each channel. Informational collaboration activity stays feed-only."
+        title="Host notifications"
+        description="Choose which severities the host generates for the Traycer app. Informational collaboration activity is managed separately."
         trailing={undefined}
       />
       <div className="overflow-x-auto">
@@ -228,7 +228,7 @@ function NotificationMatrix(props: {
                 <Switch
                   checked={matrixValue(props.config, severity.id, channel.id)}
                   disabled={props.setConfig.isPending || props.configIsFetching}
-                  aria-label={`${severity.label} ${channel.label} interruptions`}
+                  aria-label={`${severity.label} ${channel.label} notifications`}
                   data-testid={`notifications-matrix-${severity.id}-${channel.id}`}
                   onCheckedChange={(checked) => {
                     props.setConfig.mutate(
