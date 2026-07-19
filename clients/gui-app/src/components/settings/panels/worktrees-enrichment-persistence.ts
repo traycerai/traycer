@@ -71,6 +71,19 @@ function worktreeEntryIsWarm(entry: WorktreeHostEntryV14): boolean {
   );
 }
 
+/**
+ * Whether the host has actually derived this row's git facts.
+ * `resolvedAt === null` is the `unresolvedRow` SENTINEL a cold host answers
+ * with - unknown branch, `gitRemovable: false`, no owners - which the panel
+ * renders as "detached HEAD" / "Waiting for host verification…".
+ *
+ * Distinct from {@link worktreeEntryIsWarm}, which is about the (later) `gh`
+ * PR probe: a row can be fully resolved with its PR fact still warming.
+ */
+function worktreeEntryIsResolved(entry: WorktreeHostEntryV14): boolean {
+  return entry.resolvedAt !== null;
+}
+
 function parseSnapshot(raw: string): WorktreeActivitySnapshot | null {
   // Boundary catch: corrupt disk state must read as "no snapshot", never
   // throw into the panel's render path.
@@ -179,16 +192,38 @@ export function readWorktreeListingSnapshot(
 }
 
 /**
- * Writes the base-listing snapshot for `hostId`: every listed row (warm or
- * not), in listing order. The caller only persists COMPLETE listings (all
- * pages landed), so a restored row list is never a silently-truncated prefix.
+ * Writes the base-listing snapshot for `hostId`, in listing order. The caller
+ * only persists COMPLETE listings (all pages landed), so a restored row list is
+ * never a silently-truncated prefix.
+ *
+ * Membership comes from the incoming listing - a row absent there is proven
+ * gone and drops - but an UNRESOLVED incoming row never overwrites a resolved
+ * one already on disk. The base listing is deliberately non-spawning, so
+ * against a cold host it answers entirely in `unresolvedRow` sentinels; writing
+ * those through replaced a good snapshot with a fleet of "detached HEAD" rows
+ * that then restored on the next launch. Resolved data is only ever replaced by
+ * resolved data.
  */
 export function persistWorktreeListingSnapshot(args: {
   readonly hostId: string;
   readonly entries: readonly WorktreeHostEntryV14[];
   readonly now: number;
 }): void {
-  writeSnapshotAt(worktreeListingCacheKey(args.hostId), args.entries, args.now);
+  const key = worktreeListingCacheKey(args.hostId);
+  const previousByPath = new Map(
+    (readSnapshotAt(key, args.now)?.entries ?? []).map((entry) => [
+      entry.worktreePath,
+      entry,
+    ]),
+  );
+  const entries = args.entries.map((entry) => {
+    if (worktreeEntryIsResolved(entry)) return entry;
+    const previous = previousByPath.get(entry.worktreePath);
+    return previous !== undefined && worktreeEntryIsResolved(previous)
+      ? previous
+      : entry;
+  });
+  writeSnapshotAt(key, entries, args.now);
 }
 
 /**

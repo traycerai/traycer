@@ -30,6 +30,7 @@ function makeFixture(): {
       placeholder: "test",
       onSubmit: submitHolder,
       slashProviderId: "claude",
+      getHasPastedImageBytes: () => null,
     }),
     content: { type: "doc", content: [{ type: "paragraph" }] },
   });

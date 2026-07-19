@@ -379,6 +379,8 @@ export interface OpenEpicState {
     hash: string,
     signal: AbortSignal,
   ) => Promise<Uint8Array | null>;
+  /** Synchronously reports whether the root attachment map has this hash. */
+  hasAttachmentBytes: (hash: string) => boolean;
   /**
    * Returns the artifact-room-scoped Awareness instance hosting `artifactId`'s body
    * presence channel, or `null` when the artifactRoom is not currently `ready`.
@@ -1893,6 +1895,9 @@ export function createOpenEpicStore(
               bindAttachmentWaiter(waiter);
             });
           },
+
+          hasAttachmentBytes: (hash) =>
+            doc.getMap("attachments").get(hash) instanceof Uint8Array,
 
           getArtifactFragment: (artifactId) => {
             // Resolve the artifact's artifactRoom via root metadata, then look up
