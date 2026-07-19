@@ -2095,7 +2095,17 @@ export function createChatSessionStore(
             item.queueItemId !== excludeQueueItemId &&
             !chatRunSettingsEqual(item.settings, settings),
         );
-        if (pendingItems.length === 0) return;
+        // With nothing queued the frame still matters while a run is in
+        // progress: the host stamps a pre-spawn profile override from it at
+        // frame intake, so a turn still parked on worktree setup adopts a
+        // profile switch instead of spawning on the profile the user just
+        // moved off. Idle with an empty queue there is nothing to restamp.
+        if (
+          pendingItems.length === 0 &&
+          !isChatRunInProgress(get().runStatus)
+        ) {
+          return;
+        }
         const clientActionId = uuidv4();
         const frame: ChatOwnerActionFrame = {
           kind: "queueSettingsRestamp",

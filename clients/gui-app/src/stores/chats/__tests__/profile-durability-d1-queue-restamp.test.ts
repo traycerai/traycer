@@ -3,6 +3,7 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   ChatQueuedItem,
   ChatRunSettings,
+  ChatRunStatus,
   ChatSubscribeClientFrame,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
@@ -90,7 +91,7 @@ function createHarness(): Harness {
   };
 }
 
-function emitSnapshot(harness: Harness): void {
+function emitSnapshot(harness: Harness, runStatus: ChatRunStatus): void {
   harness.callbacks().onConnectionStatus("open", null);
   harness.callbacks().onSnapshot({
     kind: "snapshot",
@@ -115,7 +116,7 @@ function emitSnapshot(harness: Harness): void {
       },
       access: { role: "owner", ownerUserId: OWNER_ID, canAct: true },
       queue: { status: "idle", items: [] },
-      runStatus: "idle",
+      runStatus,
       activeTurn: null,
       pendingApprovals: [],
       pendingInterviews: [],
@@ -151,7 +152,7 @@ function queuedItem(
 describe("D1: queued messages + profile switch (restamp path)", () => {
   it("a same-harness/same-model profile-only switch restamps an already-queued message to the new profile", () => {
     const harness = createHarness();
-    emitSnapshot(harness);
+    emitSnapshot(harness, "idle");
 
     // One message is already queued on profile A.
     harness.callbacks().onQueueChanged({
@@ -183,7 +184,7 @@ describe("D1: queued messages + profile switch (restamp path)", () => {
 
   it("a no-op re-commit of the SAME profile still sends nothing (chatRunSettingsEqual correctly reports equal)", () => {
     const harness = createHarness();
-    emitSnapshot(harness);
+    emitSnapshot(harness, "idle");
 
     harness.callbacks().onQueueChanged({
       kind: "queueChanged",
@@ -205,7 +206,7 @@ describe("D1: queued messages + profile switch (restamp path)", () => {
 
   it("control: a harness/model change on top of the same profile DOES restamp (chatRunSettingsEqual still catches non-profile fields)", () => {
     const harness = createHarness();
-    emitSnapshot(harness);
+    emitSnapshot(harness, "idle");
 
     harness.callbacks().onQueueChanged({
       kind: "queueChanged",
@@ -236,7 +237,7 @@ describe("D1: queued messages + profile switch (restamp path)", () => {
 
   it("documents the mixed-queue contract: the GUI has no per-item scoping, only excludeQueueItemId - a profile-only item now trips the gate on its own, and a sibling with an unrelated field change rides along in the SAME frame", () => {
     const harness = createHarness();
-    emitSnapshot(harness);
+    emitSnapshot(harness, "idle");
 
     harness.callbacks().onQueueChanged({
       kind: "queueChanged",
@@ -275,5 +276,33 @@ describe("D1: queued messages + profile switch (restamp path)", () => {
     }
     expect(frame.settings).toEqual(PROFILE_B_SETTINGS);
     expect(frame.excludeQueueItemId).toBeNull();
+  });
+
+  it("with an EMPTY queue, a profile switch during an in-progress run still sends the frame - the host stamps a pre-spawn profile override from it, so a turn parked on worktree setup adopts the switch", () => {
+    const harness = createHarness();
+    emitSnapshot(harness, "running");
+
+    harness.handle.store
+      .getState()
+      .restampQueuedItemSettings(PROFILE_B_SETTINGS, null);
+
+    expect(harness.sent).toHaveLength(1);
+    const frame = harness.sent[0];
+    if (frame.kind !== "queueSettingsRestamp") {
+      throw new Error("Expected queueSettingsRestamp frame");
+    }
+    expect(frame.settings.profileId).toBe("profile-b");
+    expect(frame.excludeQueueItemId).toBeNull();
+  });
+
+  it("with an empty queue and no run in progress, a profile switch sends nothing - there is neither a queued item nor a pre-spawn turn the frame could move", () => {
+    const harness = createHarness();
+    emitSnapshot(harness, "idle");
+
+    harness.handle.store
+      .getState()
+      .restampQueuedItemSettings(PROFILE_B_SETTINGS, null);
+
+    expect(harness.sent).toHaveLength(0);
   });
 });
