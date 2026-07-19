@@ -236,7 +236,14 @@ function HostDoctorCardInner(props: HostDoctorCardInnerProps) {
       }}
       onConfirmFreePort={() => {
         if (freePortPrompt !== null) {
-          freePortMutation.mutate(freePortPrompt);
+          // Capture the destructive target, then close optimistically before
+          // starting the restart. This operation shares the platform-wide
+          // restart budget and can legitimately run for minutes; keeping the
+          // dialog tied to `isPending` would lock every dismissal path for
+          // that entire window.
+          const input = freePortPrompt;
+          setFreePortPrompt(null);
+          freePortMutation.mutate(input);
         }
       }}
     />

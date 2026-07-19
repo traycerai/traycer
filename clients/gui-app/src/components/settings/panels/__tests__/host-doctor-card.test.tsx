@@ -154,10 +154,9 @@ describe("HostDoctorCard pending CLI upgrade", () => {
     expect(screen.getByRole("button", { name: /Restart host/i })).toBeTruthy();
   });
 
-  it("opens the Free Port + Restart confirmation when PORT_CONFLICT carries process identity", async () => {
-    const freePortAndRestart = vi.fn((input: FreePortAndRestartInput) =>
-      Promise.resolve(input),
-    );
+  it("closes the Free Port + Restart confirmation while its restart is still pending", async () => {
+    const pendingRestart = Promise.withResolvers<FreePortAndRestartInput>();
+    const freePortAndRestart = vi.fn(() => pendingRestart.promise);
     const issue: HostDoctorIssue = {
       code: "PORT_CONFLICT",
       severity: "error",
@@ -215,6 +214,10 @@ describe("HostDoctorCard pending CLI upgrade", () => {
       pid: 4321,
       processName: "node",
     });
+    // The subprocess promise is intentionally unresolved here. Before the
+    // fix, `isPending` kept this dialog open with Cancel/Esc disabled for the
+    // entire restart budget.
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("allows Free Port + Restart when PID and process name are unknown", async () => {
