@@ -19,6 +19,7 @@ import type {
 } from "@/stores/chats/stream-flush-coordinator";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
+import { useInterviewDraftStore } from "@/stores/composer/interview-draft-store";
 import {
   readStagedWorktreeIntent,
   stagedWorktreeIntentRevision,
@@ -118,6 +119,11 @@ export interface PendingUserMessage {
 export interface PendingChatAction {
   readonly clientActionId: string;
   readonly action: ChatOwnerActionFrame["kind"];
+  // For `interviewAnswer` / `interviewError`, the interview block this action
+  // targets; `null` for every other action. Lets the UI gate exactly the card
+  // whose answer/skip is in flight (or accepted-but-unresolved) rather than all
+  // interviews, and lets lifecycle resolution drop this block's stale actions.
+  readonly interviewBlockId: string | null;
   readonly messageId: string | null;
   readonly restoreContent: JsonContent | null;
   readonly sender: UserMessageSender | null;
@@ -201,6 +207,10 @@ export interface EditUserMessageInput {
 export interface AcceptedChatAction {
   readonly clientActionId: string;
   readonly action: ChatOwnerActionFrame["kind"];
+  // Carried over from the originating `PendingChatAction` so an accepted-but-
+  // unresolved interview answer/skip keeps gating its card. `null` for every
+  // non-interview action.
+  readonly interviewBlockId: string | null;
   readonly messageId: string | null;
   readonly acceptedAt: number;
   /**
@@ -942,6 +952,21 @@ export function createChatSessionStore(
             liveTurnUsage: null,
           };
         });
+        // This snapshot is authoritative for which interviews are still
+        // pending, so any stored draft whose block has left the set is an
+        // orphan (its interview resolved, possibly while this window was
+        // offline). Prune those keys; currently-pending drafts survive. Runs on
+        // every snapshot, so cold start and reconnect both reap orphans.
+        useInterviewDraftStore
+          .getState()
+          .pruneChatDrafts(
+            options.chatId,
+            new Set(
+              frame.snapshot.pendingInterviews.map(
+                (interview) => interview.blockId,
+              ),
+            ),
+          );
       },
       onWorktreeStateChanged: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
@@ -1224,9 +1249,24 @@ export function createChatSessionStore(
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
           return;
         }
+        // Authoritative resolution boundary: the host accepted the answer, so
+        // the retained draft is now safe to discard (the card unmounts as the
+        // interview leaves the pending set). Also drop this block's pending/
+        // accepted actions so their busy gate can never outlive the interview.
+        useInterviewDraftStore
+          .getState()
+          .clearDraft(frame.chatId, frame.blockId);
         set((state) => ({
           pendingInterviews: withoutPendingInterview(
             state.pendingInterviews,
+            frame.blockId,
+          ),
+          pendingActions: withoutInterviewActionsForBlock(
+            state.pendingActions,
+            frame.blockId,
+          ),
+          acceptedActions: withoutInterviewActionsForBlock(
+            state.acceptedActions,
             frame.blockId,
           ),
         }));
@@ -1235,9 +1275,23 @@ export function createChatSessionStore(
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
           return;
         }
+        // The interview is resolved (skipped/errored) authoritatively; drop the
+        // retained draft and this block's actions on the same lifecycle
+        // boundary as an accepted answer.
+        useInterviewDraftStore
+          .getState()
+          .clearDraft(frame.chatId, frame.blockId);
         set((state) => ({
           pendingInterviews: withoutPendingInterview(
             state.pendingInterviews,
+            frame.blockId,
+          ),
+          pendingActions: withoutInterviewActionsForBlock(
+            state.pendingActions,
+            frame.blockId,
+          ),
+          acceptedActions: withoutInterviewActionsForBlock(
+            state.acceptedActions,
             frame.blockId,
           ),
         }));
@@ -1564,6 +1618,7 @@ export function createChatSessionStore(
           pending: {
             clientActionId,
             action: "send",
+            interviewBlockId: null,
             messageId,
             restoreContent: content,
             sender,
@@ -1668,6 +1723,7 @@ export function createChatSessionStore(
           pending: {
             clientActionId: input.clientActionId,
             action: "send",
+            interviewBlockId: null,
             messageId: input.messageId,
             restoreContent: input.content,
             sender: input.sender,
@@ -1757,6 +1813,7 @@ export function createChatSessionStore(
           pending: {
             clientActionId,
             action: "editUserMessage",
+            interviewBlockId: null,
             messageId,
             restoreContent: null,
             sender: null,
@@ -1818,6 +1875,7 @@ export function createChatSessionStore(
           pending: {
             clientActionId,
             action: "stop",
+            interviewBlockId: null,
             messageId: null,
             restoreContent: null,
             sender: null,
@@ -2155,6 +2213,11 @@ export function createChatSessionStore(
         });
       },
       interviewAnswer: (blockId, answers) => {
+        // Defense-in-depth against a duplicate store dispatch: the UI already
+        // gates on the busy state, but never send a second answer/skip for a
+        // block whose action is still in flight or accepted-but-unresolved.
+        const existing = existingInterviewActionId(get(), blockId);
+        if (existing !== null) return existing;
         const clientActionId = uuidv4();
         const frame: ChatOwnerActionFrame = {
           kind: "interviewAnswer",
@@ -2169,12 +2232,17 @@ export function createChatSessionStore(
           set,
           get,
           frame,
-          pending: basicPending(clientActionId, "interviewAnswer"),
+          pending: {
+            ...basicPending(clientActionId, "interviewAnswer"),
+            interviewBlockId: blockId,
+          },
           pendingUserMessage: null,
         });
         return sentClientActionId;
       },
       interviewError: (blockId, reason) => {
+        const existing = existingInterviewActionId(get(), blockId);
+        if (existing !== null) return existing;
         const clientActionId = uuidv4();
         const frame: ChatOwnerActionFrame = {
           kind: "interviewError",
@@ -2189,7 +2257,10 @@ export function createChatSessionStore(
           set,
           get,
           frame,
-          pending: basicPending(clientActionId, "interviewError"),
+          pending: {
+            ...basicPending(clientActionId, "interviewError"),
+            interviewBlockId: blockId,
+          },
           pendingUserMessage: null,
         });
         return sentClientActionId;
@@ -2324,6 +2395,7 @@ function basicPending(
   return {
     clientActionId,
     action,
+    interviewBlockId: null,
     messageId: null,
     restoreContent: null,
     sender: null,
@@ -2332,6 +2404,40 @@ function basicPending(
     restoreWorktreeStagingRevision: null,
     createdAt: Date.now(),
   };
+}
+
+// The client action id of an in-flight (pending) or accepted-but-unresolved
+// interview action for `blockId`, or null. Used both to refuse a duplicate
+// dispatch and to derive the UI busy gate for that block's card.
+function existingInterviewActionId(
+  state: ChatSessionState,
+  blockId: string,
+): string | null {
+  const pending = Object.values(state.pendingActions).find(
+    (action) => action.interviewBlockId === blockId,
+  );
+  if (pending !== undefined) return pending.clientActionId;
+  const accepted = Object.values(state.acceptedActions).find(
+    (action) => action.interviewBlockId === blockId,
+  );
+  return accepted?.clientActionId ?? null;
+}
+
+// Drop every pending/accepted action targeting `blockId`'s interview. Called
+// when the host authoritatively resolves the interview so a lingering
+// accepted-but-unacked entry can never keep a later card gated. Returns the
+// same reference when nothing matches so zustand skips a redundant notify.
+function withoutInterviewActionsForBlock<
+  T extends { readonly interviewBlockId: string | null },
+>(
+  actions: Readonly<Record<string, T>>,
+  blockId: string,
+): Readonly<Record<string, T>> {
+  const entries = Object.entries(actions).filter(
+    ([, action]) => action.interviewBlockId !== blockId,
+  );
+  if (entries.length === Object.keys(actions).length) return actions;
+  return Object.fromEntries(entries);
 }
 
 /**

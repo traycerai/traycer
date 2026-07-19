@@ -391,10 +391,12 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     `classify-worktree.ts`) naming a PROVEN fact, never a generic "Safe"
     label. **Merged**, **At base commit**, and **Unreferenced** are the three
     green tiers - each requires positive, host-validated proof (a merged PR at
-    the live HEAD or local ancestry into the default branch; never advanced
-    from the worktree's birth commit; or clean, fully pushed, and unreferenced
-    by any Task) - and are deliberately kept distinct rather than collapsed
-    into one badge. **Review** is the amber catch-all for anything unproven or
+    the live HEAD, local ancestry into the default branch, or authored owned-
+    submodule work proven landed from an otherwise at-base superproject; never
+    advanced from the worktree's birth commit with no landed authored submodule
+    work; or clean, fully pushed, and unreferenced by any Task) - and are
+    deliberately kept distinct rather than collapsed into one badge. **Review**
+    is the amber catch-all for anything unproven or
     with would-be-lost state (dirty, unpushed/local-only commits, a detached
     HEAD, an unmerged owned-submodule branch, or unverified branch status).
     **Orphaned** means git can't remove the worktree normally (missing/broken
