@@ -1,4 +1,4 @@
-import type { QueryClient } from "@tanstack/react-query";
+import type { Query, QueryClient } from "@tanstack/react-query";
 import type {
   GetTaskContextsResponse,
   ListTaskLight,
@@ -142,18 +142,12 @@ export function setEpicPinnedInCloudTaskCaches(
   epicId: string,
   pinned: boolean,
 ): void {
-  for (const [
-    queryKey,
-    response,
-  ] of queryClient.getQueriesData<ListTasksResponse>({
-    predicate: (query) =>
-      cloudEpicTasksQueryKeyMatchesScope(query.queryKey, scope),
-  })) {
-    if (response === undefined) continue;
-    const next = setEpicPinnedInCloudTasksResponse(response, epicId, pinned);
-    if (next === response) continue;
-    queryClient.setQueryData<ListTasksResponse>(queryKey, next);
-  }
+  patchMatchingQueries(
+    queryClient,
+    (query) => cloudEpicTasksQueryKeyMatchesScope(query.queryKey, scope),
+    (response: ListTasksResponse) =>
+      setEpicPinnedInCloudTasksResponse(response, epicId, pinned),
+  );
   setEpicPinnedInTaskContextsCaches(queryClient, scope, epicId, pinned);
 }
 
@@ -163,17 +157,26 @@ export function setEpicPinnedInTaskContextsCaches(
   epicId: string,
   pinned: boolean,
 ): void {
-  for (const [
-    queryKey,
-    response,
-  ] of queryClient.getQueriesData<GetTaskContextsResponse>({
-    predicate: (query) =>
-      epicTaskContextsQueryKeyMatchesScope(query.queryKey, scope),
+  patchMatchingQueries(
+    queryClient,
+    (query) => epicTaskContextsQueryKeyMatchesScope(query.queryKey, scope),
+    (response: GetTaskContextsResponse) =>
+      setEpicPinnedInTaskContextsResponse(response, epicId, pinned),
+  );
+}
+
+function patchMatchingQueries<TResponse>(
+  queryClient: QueryClient,
+  predicate: (query: Query) => boolean,
+  patch: (response: TResponse) => TResponse,
+): void {
+  for (const [queryKey, response] of queryClient.getQueriesData<TResponse>({
+    predicate,
   })) {
     if (response === undefined) continue;
-    const next = setEpicPinnedInTaskContextsResponse(response, epicId, pinned);
+    const next = patch(response);
     if (next === response) continue;
-    queryClient.setQueryData<GetTaskContextsResponse>(queryKey, next);
+    queryClient.setQueryData<TResponse>(queryKey, next);
   }
 }
 

@@ -101,8 +101,8 @@ const toastTestState = vi.hoisted(
   }),
 );
 
-vi.mock("@/hooks/epic/use-task-pinned-states", () => ({
-  useTaskPinnedStates: () => pinTestState.pinnedByEpicId,
+vi.mock("@/hooks/epic/use-epic-task-pinned-states-query", () => ({
+  useEpicTaskPinnedStates: () => pinTestState.pinnedByEpicId,
 }));
 
 vi.mock("@/hooks/epic/use-epic-set-pinned-mutation", () => ({

@@ -34,7 +34,7 @@ import {
   useEpicSetPinned,
   usePendingSetPinnedEpicIds,
 } from "@/hooks/epic/use-epic-set-pinned-mutation";
-import { useTaskPinnedStates } from "@/hooks/epic/use-task-pinned-states";
+import { useEpicTaskPinnedStates } from "@/hooks/epic/use-epic-task-pinned-states-query";
 
 export function TabStrip() {
   const hasHydrated = useWindowsBridgeHydrated();
@@ -74,7 +74,7 @@ function TabStripBody() {
     chatIds: [],
     enabled: indicatorEpicIds.length > 0,
   });
-  const taskPinnedStates = useTaskPinnedStates(indicatorEpicIds);
+  const taskPinnedStates = useEpicTaskPinnedStates(indicatorEpicIds);
   const pendingSetPinnedEpicIds = usePendingSetPinnedEpicIds();
   const { mutate: setEpicPinned } = useEpicSetPinned();
   const handleSetTaskPinned = useCallback(

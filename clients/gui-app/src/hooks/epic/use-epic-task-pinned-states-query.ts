@@ -12,7 +12,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 const EMPTY_TASK_PINNED_STATES: ReadonlyMap<string, boolean> = new Map();
 
 /** Reads personal History pin state for the exact set of open task tabs. */
-export function useTaskPinnedStates(
+export function useEpicTaskPinnedStates(
   epicIds: ReadonlyArray<string>,
 ): ReadonlyMap<string, boolean> {
   const client = useHostClient();
@@ -47,8 +47,10 @@ export function useTaskPinnedStates(
   });
 }
 
-function combineTaskPinnedStateResults(
-  results: Array<UseQueryResult<GetTaskContextsResponse, HostRpcError>>,
+export function combineTaskPinnedStateResults(
+  results: ReadonlyArray<
+    Pick<UseQueryResult<GetTaskContextsResponse, HostRpcError>, "data">
+  >,
 ): ReadonlyMap<string, boolean> {
   if (results.length === 0) return EMPTY_TASK_PINNED_STATES;
   const pinnedStates = new Map<string, boolean>();
@@ -64,7 +66,7 @@ function combineTaskPinnedStateResults(
   return pinnedStates;
 }
 
-function chunkTaskIds(
+export function chunkTaskIds(
   ids: ReadonlyArray<string>,
 ): ReadonlyArray<ReadonlyArray<string>> {
   return Array.from(
