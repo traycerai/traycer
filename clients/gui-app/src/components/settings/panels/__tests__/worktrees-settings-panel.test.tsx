@@ -10,6 +10,7 @@ import {
   within,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -346,6 +347,32 @@ function renderList(args: {
   );
 }
 
+// Renders the toolbar with explicit props (the `renderList` helper always
+// passes the null-timestamp default) so tests can exercise the freshness label.
+function renderListWithToolbar(toolbarProps: ToolbarTestProps): void {
+  const queryClient = new QueryClient();
+  const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
+    <QueryClientProvider client={queryClient}>
+      <TooltipProvider>{props.children}</TooltipProvider>
+    </QueryClientProvider>
+  );
+  render(
+    <Wrapper>
+      <WorktreesList
+        openStreamTransport={() => stubOpenStreamTransport()}
+        hostId="host-a"
+        worktrees={WORKTREES}
+        enrichedByPath={fullyEnriched(WORKTREES)}
+        erroredPaths={new Set()}
+        seededPaths={new Set()}
+        onVisiblePathsChange={vi.fn()}
+        taskTitlesByEpicId={new Map()}
+        toolbarProps={toolbarProps}
+      />
+    </Wrapper>,
+  );
+}
+
 function renderDefault(): void {
   renderList({
     hostId: "host-a",
@@ -383,7 +410,17 @@ function callbacksFor(path: string): WorktreeDeleteStreamCallbacks {
   return callbacks;
 }
 
-function testToolbarProps() {
+type ToolbarTestProps = {
+  hosts: readonly HostDirectoryEntry[];
+  value: string | null;
+  onChange: (hostId: string) => void;
+  onRefresh: () => Promise<unknown>;
+  refreshing: boolean;
+  canRefresh: boolean;
+  lastUpdatedAt: number | null;
+};
+
+function testToolbarProps(): ToolbarTestProps {
   return {
     hosts: [],
     value: null,
@@ -391,6 +428,7 @@ function testToolbarProps() {
     onRefresh: vi.fn(),
     refreshing: false,
     canRefresh: true,
+    lastUpdatedAt: null,
   };
 }
 
@@ -837,6 +875,29 @@ describe("WorktreesList delete flow", () => {
     expect(
       within(actionBar).getByTestId("worktrees-list-delete-selected").className,
     ).toContain("whitespace-nowrap");
+  });
+
+  it("shows the freshness label for a real timestamp and suppresses it while refreshing", () => {
+    // A non-null lastUpdatedAt renders the "Updated …" label; the null-timestamp
+    // fixtures elsewhere only cover its absence.
+    renderListWithToolbar({
+      ...testToolbarProps(),
+      lastUpdatedAt: Date.now() - 60_000,
+      refreshing: false,
+    });
+    const label = screen.getByTestId("worktrees-updated-ago");
+    expect(label.textContent).toMatch(/^Updated /);
+
+    cleanup();
+
+    // While a manual refresh is in flight the timestamp is suppressed (the
+    // spinning Refresh button stands in for it).
+    renderListWithToolbar({
+      ...testToolbarProps(),
+      lastUpdatedAt: Date.now() - 60_000,
+      refreshing: true,
+    });
+    expect(screen.queryByTestId("worktrees-updated-ago")).toBeNull();
   });
 
   it("selecting the first row does not insert a new top bar that shifts the list", () => {

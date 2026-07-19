@@ -11,7 +11,6 @@ import {
   queryOptions,
   useQueryClient,
   type QueryClient,
-  type QueryKey,
 } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { withHostRpcErrorBoundary } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -24,8 +23,15 @@ import {
   perPathEnrichmentQueryPath,
 } from "@/lib/query-keys/worktree-enrichment-keys";
 import { logPerfEvent } from "@/lib/perf/perf-telemetry";
-import { useHostQueries } from "@/hooks/host/use-host-queries";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
+import {
+  createWorktreeEnrichmentBatcher,
+  keepResolvedEnrichmentRows,
+  perPathEnrichmentQueryKey,
+  useBatchedEnrichmentQueries,
+  WORKTREE_ENRICHMENT_GC_MS,
+  type WorktreeEnrichmentBatcher,
+} from "@/components/settings/panels/worktrees-enrichment-batcher";
 import { useWorktreeEnrichSettlePerf } from "@/components/settings/panels/worktrees-settings-perf";
 import {
   persistWorktreeActivitySnapshot,
@@ -80,13 +86,6 @@ function coldRetryDelayMs(attempts: number): number {
 // viewport batch, so the host never sees more concurrent per-path probes than
 // a normal scroll would produce.
 const WORKTREE_SWEEP_CHUNK_SIZE = 8;
-// Both enrichment legs pin the same generous gcTime, well past TanStack's
-// 5-minute default: swept entries have no observers, so under the default they
-// would be garbage-collected while the panel sits open - each GC visibly
-// regresses its row to "Checking…" and the sweep would re-probe it, a slow,
-// pointless churn loop. Refresh (method-scope invalidation) remains the way
-// entries are re-probed deliberately.
-const WORKTREE_ENRICHMENT_GC_MS = 30 * 60_000;
 // Debounce for the warm-open snapshot writes: the cache fold's identity
 // changes on every relevant cache event (each settled probe), so writes wait
 // for a quiet window instead of serializing the fleet once per chunk while
@@ -108,21 +107,6 @@ interface SweepRetryState {
   readonly sawInvalidated: boolean;
 }
 
-// The per-path enrichment params, shared by the viewport observers and the
-// background sweep so both produce identical query keys - the cache fold and
-// TanStack's request dedupe both hinge on that identity. `forceRefresh` is
-// pinned to its canonical `false`: it is a fetch directive, so every automatic
-// enrichment/refetch lands in the same entry and remains a cache-only host read.
-function perPathEnrichmentParams(path: string) {
-  return {
-    includeActivity: true,
-    activityPaths: [path],
-    cursor: null,
-    limit: null,
-    forceRefresh: false,
-  };
-}
-
 // `prState === null` = "not yet probed" (distinct from `"none"` = probed, no
 // PR): the host served a stale/cold row and scheduled a background `gh` probe
 // whose result never re-emits; only a refetch picks the warmed fact up. A
@@ -139,38 +123,28 @@ function responseHasColdPrState(
   );
 }
 
-function perPathEnrichmentQueryKey(hostId: string, path: string): QueryKey {
-  return hostQueryKeys.method<HostRpcRegistry, "worktree.listAllForHost">(
-    hostId,
-    "worktree.listAllForHost",
-    perPathEnrichmentParams(path),
-  );
-}
-
 // The sweep's imperative fetch, mirroring the observer leg exactly (same key,
-// same request) so the two legs dedupe onto one in-flight query. As in
-// `useHostQueriesWithResponseMap`, the client stays OUT of the query key -
-// `hostId` already carries the cache identity; the client is transport.
+// same batched transport) so the two legs dedupe onto one in-flight query.
+// The client stays OUT of the query key - `hostId` already carries the cache
+// identity; the batcher is transport.
 function sweepEnrichmentFetchOptions(
   hostId: string,
-  client: HostClient<HostRpcRegistry>,
+  batcher: WorktreeEnrichmentBatcher,
   path: string,
 ) {
-  // Boundary-wrapped: the sweep and the `useHostQueries` observer leg share
-  // this key, so a sweep failure must store the same `HostRpcError` shape the
-  // observer's error generic declares.
-  const fetcher = () =>
-    withHostRpcErrorBoundary("worktree.listAllForHost", () =>
-      client.request("worktree.listAllForHost", perPathEnrichmentParams(path)),
-    );
+  // Rejections carry the `HostRpcError` shape the observer leg declares: the
+  // batcher wraps its wire call in the host-rpc error boundary. The batcher
+  // stays out of the query key (it is transport, like the client before it).
+  const fetcher = () => batcher.fetchPath(path);
   return queryOptions({
     queryKey: perPathEnrichmentQueryKey(hostId, path),
     queryFn: fetcher,
     // Sweep candidates are exactly the missing / invalidated / still-cold
-    // entries, so this must always hit the network - never be handed back the
-    // same cold row the app's 60s default staleTime considers fresh.
+    // entries, so this must always hit the network - never be handed back
+    // the same cold row a nonzero staleTime would consider fresh.
     staleTime: 0,
     gcTime: WORKTREE_ENRICHMENT_GC_MS,
+    structuralSharing: keepResolvedEnrichmentRows,
   });
 }
 
@@ -409,10 +383,12 @@ export function useCachedWorktreeEnrichment(
  * Per-viewport lazy enrichment. The base list paints instantly with cheap fields;
  * the expensive activity probes (git ahead/behind/merged, gh PR state, submodule
  * merge facts) are fetched ONLY for the worktree paths currently on screen. Each
- * on-screen path gets its OWN selection-mode `worktree.listAllForHost`
- * (`includeActivity: true`, `activityPaths: [path]`, `cursor: null`,
- * `limit: null`) query, so TanStack Query caches enrichment PER PATH: a path is
- * probed once, and scrolling back to it is a cache hit, never a refetch.
+ * on-screen path gets its OWN selection-mode `worktree.listAllForHost` query
+ * (keyed on `activityPaths: [path]`), so TanStack Query caches enrichment PER
+ * PATH: a path is probed once, and scrolling back to it is a cache hit, never a
+ * refetch. The WIRE is batched underneath: per-path fetches coalesce through
+ * {@link createWorktreeEnrichmentBatcher} into chunked `activityPaths` RPCs, so
+ * cache granularity stays per-path while dial count is ~paths/8.
  *
  * The reported on-screen set is debounced into `requestedPaths` (trailing edge),
  * so a fast scroll spins up one batch of per-path queries per settle window, not
@@ -503,22 +479,36 @@ export function useWorktreeActivityEnrichment(
     [],
   );
 
-  // One enrichment query per on-screen path - the cache identity is the path
-  // itself, so each worktree is probed exactly once and cached independently. This
-  // only DRIVES fetching; the overlay is read from the cache below.
-  const requests = useMemo(
+  // The shared wire transport for BOTH enrichment legs: per-path fetches
+  // coalesce into chunked `activityPaths` RPCs (see the batcher's doc), so an
+  // N-row open or refresh costs ~N/8 dials instead of N. Keyed on the bound
+  // client alone - host identity lives in the query keys.
+  const readiness = useReactiveHostReadiness(client);
+  const batcher = useMemo(
     () =>
-      requestedPaths.map((path) => ({
-        method: "worktree.listAllForHost" as const,
-        params: perPathEnrichmentParams(path),
-      })),
-    [requestedPaths],
+      client === null
+        ? null
+        : createWorktreeEnrichmentBatcher((paths) =>
+            withHostRpcErrorBoundary("worktree.listAllForHost", () =>
+              client.request("worktree.listAllForHost", {
+                includeActivity: true,
+                activityPaths: [...paths],
+                cursor: null,
+                limit: null,
+                forceRefresh: false,
+              }),
+            ),
+          ),
+    [client],
   );
-  const results = useHostQueries({
-    client,
-    cacheKeyIdentity: undefined,
-    requests,
-    options: { enabled: reachable, gcTime: WORKTREE_ENRICHMENT_GC_MS },
+  // One enrichment query per on-screen path - the cache identity is the path
+  // itself, so each worktree is probed exactly once and cached independently.
+  // This only DRIVES fetching; the overlay is read from the cache below.
+  const results = useBatchedEnrichmentQueries({
+    hostId: readiness.hostId,
+    paths: requestedPaths,
+    batcher,
+    enabled: reachable && client !== null && readiness.isReady,
   });
   const coldPrRefetchStateRef = useRef<Map<string, ColdPrRefetchState>>(
     new Map(),
@@ -684,12 +674,10 @@ export function useWorktreeActivityEnrichment(
   // The viewport drives the rows on screen; the sweep drives everything else.
   // Each pass fetches ONE chunk of paths that still need a probe (no cached
   // data, invalidated by a refresh, or landed cold) through
-  // `queryClient.fetchQuery` under the exact per-path keys the observers use,
-  // then bumps `sweepTick` on settle to schedule the next chunk. Keys are
-  // built from the client's OWN readiness (`readiness.hostId`), mirroring
-  // `useHostQueries`, so swept entries land in precisely the scope the fold
-  // and the observers read.
-  const readiness = useReactiveHostReadiness(client);
+  // `queryClient.fetchQuery` under the exact per-path keys the observers use
+  // - and through the same batcher, so a whole chunk is one wire call. Keys
+  // are built from the client's OWN readiness (`readiness.hostId`), so swept
+  // entries land in precisely the scope the fold and the observers read.
   const [sweepTick, bumpSweepTick] = useReducer((tick: number) => tick + 1, 0);
   const [seedTick, bumpSeedTick] = useReducer((tick: number) => tick + 1, 0);
   const seedsOutstandingRef = useRef(false);
@@ -749,7 +737,8 @@ export function useWorktreeActivityEnrichment(
     // gives the fold a fresh identity.
     void sweepTick;
     void enrichedByPath;
-    if (!reachable || client === null || !readiness.isReady) return;
+    if (!reachable || client === null || batcher === null) return;
+    if (!readiness.isReady) return;
     const sweepHostId = readiness.hostId;
     if (sweepHostId === null) return;
     // One chunk in flight at a time; its settle handler bumps `sweepTick`.
@@ -757,7 +746,7 @@ export function useWorktreeActivityEnrichment(
     // Visible rows first: while the viewport batch is fetching, hold the sweep
     // so the on-screen rows always win the host's attention.
     if (results.some((result) => result.isFetching)) return;
-    const boundClient = client;
+    const boundBatcher = batcher;
     const ledger = sweepLedgerRef.current;
     const now = Date.now();
     const { candidates, nextWakeAt } = selectSweepChunk({
@@ -800,7 +789,7 @@ export function useWorktreeActivityEnrichment(
     void Promise.allSettled(
       candidates.map((path) =>
         queryClient.fetchQuery(
-          sweepEnrichmentFetchOptions(sweepHostId, boundClient, path),
+          sweepEnrichmentFetchOptions(sweepHostId, boundBatcher, path),
         ),
       ),
     ).then((outcomes) => {
@@ -847,6 +836,7 @@ export function useWorktreeActivityEnrichment(
     results,
     enrichedByPath,
     client,
+    batcher,
     reachable,
     readiness.isReady,
     readiness.hostId,
