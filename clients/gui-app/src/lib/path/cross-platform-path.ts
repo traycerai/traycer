@@ -150,13 +150,43 @@ export function relativizeToWorkspaceRoot(
   return best.relative;
 }
 
+/**
+ * Splits on `/` only and resolves `.`/`..` segments without touching `\` -
+ * unlike `pathe`'s `normalize`, which folds `\` into `/` on every platform.
+ * POSIX paths may legally contain a literal backslash in a filename, so this
+ * is used in place of `normalizePath` whenever neither side of a comparison
+ * is Windows-like (drive-letter or UNC form).
+ */
+function normalizePosixPreservingBackslashes(path: string): string {
+  const isAbsolute = path.startsWith("/");
+  const segments: string[] = [];
+  for (const segment of path.split("/")) {
+    if (segment.length === 0 || segment === ".") continue;
+    if (segment === "..") {
+      if (segments.length > 0 && segments[segments.length - 1] !== "..") {
+        segments.pop();
+      } else if (!isAbsolute) {
+        segments.push(segment);
+      }
+      continue;
+    }
+    segments.push(segment);
+  }
+  const joined = segments.join("/");
+  if (isAbsolute) return `/${joined}`;
+  return joined.length > 0 ? joined : ".";
+}
+
 function stripRootPrefix(root: string, path: string): string | null {
-  const normalizedRoot = normalizePath(root);
-  const normalizedPath = normalizePath(path);
-  const caseInsensitive =
-    isWindowsLikePath(normalizedRoot) || isWindowsLikePath(normalizedPath);
-  const rootKey = pathComparisonKey(normalizedRoot, caseInsensitive);
-  const pathKey = pathComparisonKey(normalizedPath, caseInsensitive);
+  const windowsLike = isWindowsLikePath(root) || isWindowsLikePath(path);
+  const normalizedRoot = windowsLike
+    ? normalizePath(root)
+    : normalizePosixPreservingBackslashes(root);
+  const normalizedPath = windowsLike
+    ? normalizePath(path)
+    : normalizePosixPreservingBackslashes(path);
+  const rootKey = windowsLike ? normalizedRoot.toLowerCase() : normalizedRoot;
+  const pathKey = windowsLike ? normalizedPath.toLowerCase() : normalizedPath;
   if (pathKey === rootKey) return "";
   const prefixKey = rootKey.endsWith("/") ? rootKey : `${rootKey}/`;
   if (!pathKey.startsWith(prefixKey)) return null;

@@ -13,6 +13,7 @@ import { toast } from "sonner";
 import {
   useComposerPaste,
   useComposerPasteAdapter,
+  isAttachmentIngestPending,
   IMAGE_READ_TIMEOUT_MS,
   type ComposerFilePathIngestArgs,
   type UseComposerPasteResult,
@@ -36,7 +37,7 @@ const NOOP_FILE_PATHS: ComposerFilePathIngestArgs = {
     copyDroppedFilePaths: (paths) => Promise.resolve([...paths]),
   },
   mentionRoots: [],
-  insertPaths: () => undefined,
+  beginPathInsertion: () => null,
 };
 
 afterEach(() => {
@@ -282,14 +283,14 @@ describe("useComposerPasteAdapter - attachImageFiles", () => {
     const editorRef: {
       current: {
         insertImageAttachments: typeof insertImageAttachments;
-        insertPathSpans: () => void;
+        beginPathInsertion: () => null;
         isReady: () => boolean;
         focus: () => void;
       } | null;
     } = {
       current: {
         insertImageAttachments,
-        insertPathSpans: vi.fn(),
+        beginPathInsertion: () => null,
         isReady: () => true,
         focus: vi.fn(),
       },
@@ -320,7 +321,7 @@ describe("useComposerPasteAdapter - attachImageFiles", () => {
     const editorRef = {
       current: {
         insertImageAttachments,
-        insertPathSpans: vi.fn(),
+        beginPathInsertion: () => null,
         isReady: () => false,
         focus: vi.fn(),
       },
@@ -381,7 +382,10 @@ describe("useComposerPasteAdapter - onPaste", () => {
     const filePaths: ComposerFilePathIngestArgs = {
       fileDrops: makeFileDrops({ "notes.txt": ["/repo/notes.txt"] }, {}),
       mentionRoots: ["/repo"],
-      insertPaths,
+      beginPathInsertion: () => (paths: ReadonlyArray<string>) => {
+        if (paths.length > 0) insertPaths(paths);
+        return true;
+      },
     };
     renderHarness(inserted, filePaths);
     const txt = new File(["notes"], "notes.txt", { type: "text/plain" });
@@ -401,7 +405,10 @@ describe("useComposerPasteAdapter - onPaste", () => {
     const filePaths: ComposerFilePathIngestArgs = {
       fileDrops: makeFileDrops({ "doc.pdf": ["/repo/external/doc.pdf"] }, {}),
       mentionRoots: [],
-      insertPaths,
+      beginPathInsertion: () => (paths: ReadonlyArray<string>) => {
+        if (paths.length > 0) insertPaths(paths);
+        return true;
+      },
     };
     renderHarness(inserted, filePaths);
     const png = new File(["png-bytes"], "shot.png", { type: "image/png" });
@@ -423,7 +430,10 @@ describe("useComposerPasteAdapter - onPaste", () => {
     const filePaths: ComposerFilePathIngestArgs = {
       fileDrops: makeFileDrops({ "my-folder": ["/repo/my-folder"] }, {}),
       mentionRoots: ["/repo"],
-      insertPaths,
+      beginPathInsertion: () => (paths: ReadonlyArray<string>) => {
+        if (paths.length > 0) insertPaths(paths);
+        return true;
+      },
     };
     renderHarness(inserted, filePaths);
     const folder = new File([], "my-folder", { type: "" });
@@ -447,7 +457,10 @@ describe("useComposerPasteAdapter - onPaste", () => {
         { "/repo/external/report.pdf": ["/tmp/traycer-copy/report.pdf"] },
       ),
       mentionRoots: ["/repo"],
-      insertPaths,
+      beginPathInsertion: () => (paths: ReadonlyArray<string>) => {
+        if (paths.length > 0) insertPaths(paths);
+        return true;
+      },
     };
     renderHarness(inserted, filePaths);
 
@@ -476,7 +489,10 @@ describe("useComposerPasteAdapter - onPaste", () => {
     const filePaths: ComposerFilePathIngestArgs = {
       fileDrops,
       mentionRoots: ["/repo"],
-      insertPaths,
+      beginPathInsertion: () => (paths: ReadonlyArray<string>) => {
+        if (paths.length > 0) insertPaths(paths);
+        return true;
+      },
     };
     renderHarness(inserted, filePaths);
     const ok = new File(["ok"], "ok.txt", { type: "text/plain" });
@@ -502,7 +518,10 @@ describe("useComposerPasteAdapter - onPaste", () => {
       // Mirrors the non-Electron surface: resolveDroppedFilePaths always [].
       fileDrops: makeFileDrops({}, {}),
       mentionRoots: [],
-      insertPaths,
+      beginPathInsertion: () => (paths: ReadonlyArray<string>) => {
+        if (paths.length > 0) insertPaths(paths);
+        return true;
+      },
     };
     renderHarness(inserted, filePaths);
     const txt = new File(["notes"], "notes.txt", { type: "text/plain" });
@@ -535,7 +554,10 @@ describe("useComposerPasteAdapter - onPaste", () => {
         {},
       ),
       mentionRoots: ["/repo"],
-      insertPaths,
+      beginPathInsertion: () => (paths: ReadonlyArray<string>) => {
+        if (paths.length > 0) insertPaths(paths);
+        return true;
+      },
     };
     renderHarness(inserted, filePaths);
     const files = ["a.txt", "b.txt", "c.txt"].map(
@@ -553,6 +575,157 @@ describe("useComposerPasteAdapter - onPaste", () => {
       "nested/b.txt",
       "/elsewhere/c.txt",
     ]);
+  });
+
+  // Finding 5: collect via DataTransfer.files even when .items is empty.
+  it("picks up a pasted file from clipboardData.files when items is empty", async () => {
+    const inserted: ImageAttachmentAttrs[][] = [];
+    const insertPaths = vi.fn((_paths: ReadonlyArray<string>) => undefined);
+    const filePaths: ComposerFilePathIngestArgs = {
+      fileDrops: makeFileDrops({ "notes.txt": ["/repo/notes.txt"] }, {}),
+      mentionRoots: ["/repo"],
+      beginPathInsertion: () => (paths: ReadonlyArray<string>) => {
+        if (paths.length > 0) insertPaths(paths);
+        return true;
+      },
+    };
+    renderHarness(inserted, filePaths);
+    const txt = new File(["notes"], "notes.txt", { type: "text/plain" });
+
+    const zone = screen.getByTestId("paste-zone");
+    fireEvent.paste(zone, {
+      clipboardData: makeFilesOnlyNoItemsTransfer([txt]),
+    });
+
+    await waitFor(() => expect(insertPaths).toHaveBeenCalledOnce());
+    expect(insertPaths).toHaveBeenCalledWith(["notes.txt"]);
+  });
+
+  // Finding 8: files and uri-list are mutually exclusive inputs - when a
+  // File object is present, copyDroppedFilePaths is never consulted and the
+  // path inserts once (not doubled, not deduped away).
+  it("prefers File objects over uri-list/public.file-url for the same source and inserts once", async () => {
+    const inserted: ImageAttachmentAttrs[][] = [];
+    const insertPaths = vi.fn((_paths: ReadonlyArray<string>) => undefined);
+    const copyDroppedFilePaths = vi.fn((paths: readonly string[]) =>
+      Promise.resolve([...paths]),
+    );
+    const resolveDroppedFilePaths = vi.fn(() =>
+      Promise.resolve(["/repo/notes.txt"]),
+    );
+    const filePaths: ComposerFilePathIngestArgs = {
+      fileDrops: {
+        resolveDroppedFilePaths,
+        copyDroppedFilePaths,
+      },
+      mentionRoots: ["/repo"],
+      beginPathInsertion: () => (paths: ReadonlyArray<string>) => {
+        if (paths.length > 0) insertPaths(paths);
+        return true;
+      },
+    };
+    renderHarness(inserted, filePaths);
+    const file = new File(["notes"], "notes.txt", { type: "text/plain" });
+
+    const zone = screen.getByTestId("paste-zone");
+    fireEvent.paste(zone, {
+      clipboardData: makeFileAndUriListTransfer(file, "file:///repo/notes.txt"),
+    });
+
+    await waitFor(() => expect(insertPaths).toHaveBeenCalledOnce());
+    expect(insertPaths).toHaveBeenCalledWith(["notes.txt"]);
+    expect(resolveDroppedFilePaths).toHaveBeenCalledOnce();
+    expect(copyDroppedFilePaths).not.toHaveBeenCalled();
+  });
+});
+
+describe("useComposerPasteAdapter - isResolvingFilePaths / attachment pending", () => {
+  // Finding 3: pure-path resolution must gate submit via isResolvingFilePaths.
+  it("reports isResolvingFilePaths while a non-image file path is still resolving", async () => {
+    let resolvePaths: ((paths: readonly string[]) => void) | null = null;
+    const inserted: ImageAttachmentAttrs[][] = [];
+    const insertPaths = vi.fn((_paths: ReadonlyArray<string>) => undefined);
+    const filePaths: ComposerFilePathIngestArgs = {
+      fileDrops: {
+        resolveDroppedFilePaths: () =>
+          new Promise((resolve) => {
+            resolvePaths = resolve;
+          }),
+        copyDroppedFilePaths: (paths) => Promise.resolve([...paths]),
+      },
+      mentionRoots: ["/repo"],
+      beginPathInsertion: () => (paths: ReadonlyArray<string>) => {
+        if (paths.length > 0) insertPaths(paths);
+        return true;
+      },
+    };
+    render(<PasteStateHarness inserted={inserted} filePaths={filePaths} />);
+
+    const txt = new File(["notes"], "notes.txt", { type: "text/plain" });
+    fireEvent.paste(screen.getByTestId("paste-zone"), {
+      clipboardData: makeFileTransfer([txt]),
+    });
+
+    const zone = screen.getByTestId("paste-zone");
+    expect(zone.getAttribute("data-resolving")).toBe("true");
+    expect(
+      isAttachmentIngestPending({
+        isIngestingImages: zone.getAttribute("data-ingesting") === "true",
+        isResolvingFilePaths: zone.getAttribute("data-resolving") === "true",
+      }),
+    ).toBe(true);
+    expect(insertPaths).not.toHaveBeenCalled();
+
+    // Non-image paste still briefly touches the image pipeline (empty convert);
+    // wait for that to clear so the remaining pending flag is pure path work.
+    await waitFor(() => {
+      expect(zone.getAttribute("data-ingesting")).toBe("false");
+    });
+    expect(zone.getAttribute("data-resolving")).toBe("true");
+    expect(
+      isAttachmentIngestPending({
+        isIngestingImages: false,
+        isResolvingFilePaths: true,
+      }),
+    ).toBe(true);
+
+    await act(async () => {
+      resolvePaths?.(["/repo/notes.txt"]);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(zone.getAttribute("data-resolving")).toBe("false");
+    });
+    expect(
+      isAttachmentIngestPending({
+        isIngestingImages: zone.getAttribute("data-ingesting") === "true",
+        isResolvingFilePaths: zone.getAttribute("data-resolving") === "true",
+      }),
+    ).toBe(false);
+    expect(insertPaths).toHaveBeenCalledWith(["notes.txt"]);
+  });
+
+  it("isAttachmentIngestPending is true for either pipeline independently", () => {
+    expect(
+      isAttachmentIngestPending({
+        isIngestingImages: true,
+        isResolvingFilePaths: false,
+      }),
+    ).toBe(true);
+    expect(
+      isAttachmentIngestPending({
+        isIngestingImages: false,
+        isResolvingFilePaths: true,
+      }),
+    ).toBe(true);
+    expect(
+      isAttachmentIngestPending({
+        isIngestingImages: false,
+        isResolvingFilePaths: false,
+      }),
+    ).toBe(false);
   });
 });
 
@@ -575,7 +748,10 @@ describe("useComposerPasteAdapter - drag-and-drop", () => {
     const filePaths: ComposerFilePathIngestArgs = {
       fileDrops: makeFileDrops({ "doc.pdf": ["/repo/doc.pdf"] }, {}),
       mentionRoots: ["/repo"],
-      insertPaths,
+      beginPathInsertion: () => (paths: ReadonlyArray<string>) => {
+        if (paths.length > 0) insertPaths(paths);
+        return true;
+      },
     };
     renderHarness(inserted, filePaths);
 
@@ -604,7 +780,10 @@ describe("useComposerPasteAdapter - drag-and-drop", () => {
         {},
       ),
       mentionRoots: ["/repo"],
-      insertPaths,
+      beginPathInsertion: () => (paths: ReadonlyArray<string>) => {
+        if (paths.length > 0) insertPaths(paths);
+        return true;
+      },
     };
     renderHarness(inserted, filePaths);
     const folder = new File([], "dropped-folder", { type: "" });
@@ -625,7 +804,10 @@ describe("useComposerPasteAdapter - drag-and-drop", () => {
         { "/repo/screenshot.png": ["/tmp/traycer-copy/screenshot.png"] },
       ),
       mentionRoots: ["/repo"],
-      insertPaths,
+      beginPathInsertion: () => (paths: ReadonlyArray<string>) => {
+        if (paths.length > 0) insertPaths(paths);
+        return true;
+      },
     };
     renderHarness(inserted, filePaths);
 
@@ -745,6 +927,33 @@ function PasteHarness(props: {
   );
 }
 
+/** Like PasteHarness, but surfaces pending flags as data-attrs for assertions. */
+function PasteStateHarness({
+  inserted,
+  filePaths,
+}: {
+  readonly inserted: ImageAttachmentAttrs[][];
+  readonly filePaths: ComposerFilePathIngestArgs;
+}) {
+  const handlers = useComposerPasteAdapter((attrs) => {
+    inserted.push([...attrs]);
+    return attrs.length;
+  }, filePaths);
+  return (
+    <div
+      data-testid="paste-zone"
+      data-dragging={handlers.isDraggingFiles ? "true" : "false"}
+      data-ingesting={handlers.isIngestingImages ? "true" : "false"}
+      data-resolving={handlers.isResolvingFilePaths ? "true" : "false"}
+      onPaste={handlers.onPaste}
+      onDrop={handlers.onDrop}
+      onDragOver={handlers.onDragOver}
+      onDragEnter={handlers.onDragEnter}
+      onDragLeave={handlers.onDragLeave}
+    />
+  );
+}
+
 /**
  * A fake `IFileDropHost` that resolves per single-file / single-url calls
  * (mirroring how `resolveFileToPath`/`resolveUrlPathToPath` invoke it) by
@@ -820,6 +1029,31 @@ function makeStringOnlyTransfer(): FileTransferLike {
 
 function makeEmptyTransfer(types: ReadonlyArray<string>): FileTransferLike {
   return { files: [], types, items: [], getData: () => "" };
+}
+
+/** Files list populated, items empty - exercises collectDroppedFiles' files-first path. */
+function makeFilesOnlyNoItemsTransfer(
+  files: ReadonlyArray<File>,
+): FileTransferLike {
+  return {
+    files,
+    types: files.length > 0 ? ["Files"] : [],
+    items: [],
+    getData: () => "",
+  };
+}
+
+/** File object + uri-list + public.file-url for the same source (finding 8). */
+function makeFileAndUriListTransfer(file: File, uri: string): FileTransferLike {
+  return {
+    files: [file],
+    types: ["Files", "text/uri-list", "public.file-url"],
+    items: [{ kind: "file", getAsFile: () => file }],
+    getData: (type) => {
+      if (type === "text/uri-list" || type === "public.file-url") return uri;
+      return "";
+    },
+  };
 }
 
 function makeOversizedImage(name: string): File {

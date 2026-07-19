@@ -100,7 +100,13 @@ function makeHandle(
   const handle: ComposerPasteEditorHandle = {
     isReady: () => true,
     insertImageAttachments: (attrs) => inserted.push([...attrs]),
-    insertPathSpans: (paths) => insertedPaths.push([...paths]),
+    beginPathInsertion: () => (paths) => {
+      if (paths.length > 0) {
+        insertedPaths.push([...paths]);
+        focusCalls.count += 1;
+      }
+      return true;
+    },
     focus: () => {
       focusCalls.count += 1;
     },
@@ -214,7 +220,7 @@ describe("useLandingComposerPaste", () => {
         isReady: () => false,
         insertImageAttachments: (attrs: ReadonlyArray<ImageAttachmentAttrs>) =>
           inserted.push([...attrs]),
-        insertPathSpans: () => undefined,
+        beginPathInsertion: () => null,
         focus: () => undefined,
       },
     };

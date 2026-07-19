@@ -13,13 +13,14 @@ import {
   type Ref,
 } from "react";
 import { EditorContent, useEditor } from "@tiptap/react";
-import { Selection } from "@tiptap/pm/state";
+import { Selection, type Transaction } from "@tiptap/pm/state";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 
 import { cn } from "@/lib/utils";
 import { registerComposerFocus } from "@/lib/composer/composer-focus-registry";
 import { normalizeComposerContentWithSelection } from "@/lib/composer/composer-content-normalizer";
+import { dataTransferHasFiles } from "@/lib/files/file-transfer-paths";
 
 import { buildComposerExtensions } from "./editor/editor-config";
 import { mentionSuggestionPluginKey } from "./editor/extensions/mention-extension";
@@ -30,6 +31,13 @@ import {
 } from "@/hooks/composer/use-composer-paste";
 import type { ImageAttachmentAttrs } from "./editor/extensions/image-attachment-extension";
 import type { ComposerPickerStore } from "./picker/composer-picker-store";
+
+/**
+ * One-shot commit for a path-insertion job started by `beginPathInsertion`.
+ * Returns `true` if it inserted (or there was nothing to insert), `false` if
+ * the editor was torn down before the caller could commit.
+ */
+export type PathInsertionCommit = (paths: ReadonlyArray<string>) => boolean;
 
 export interface ComposerPromptEditorHandle {
   /**
@@ -54,11 +62,19 @@ export interface ComposerPromptEditorHandle {
     attrs: ReadonlyArray<ImageAttachmentAttrs>,
   ) => void;
   /**
-   * Insert each resolved file/folder path as its own inline-code span at the
-   * caret (space-separated, trailing plain space) - the pasted-file-path
-   * counterpart to `insertImageAttachments`.
+   * Starts a path-insertion job anchored to the caret position *right now*
+   * (not whenever the caller eventually has paths to insert - path
+   * resolution is asynchronous and the caret can move, or the editor can be
+   * torn down, before that happens). Returns `null` if the editor isn't
+   * ready. Otherwise returns a one-shot `commit` closure: call it with the
+   * resolved paths once available. `commit` maps the captured position
+   * forward through every transaction dispatched since (including ones from
+   * other concurrent jobs), inserts each path as its own inline-code span at
+   * that mapped position, and returns whether it actually inserted - `false`
+   * means the editor was destroyed in the meantime, so the caller should
+   * skip any accompanying user-facing feedback (e.g. a toast) too.
    */
-  readonly insertPathSpans: (paths: ReadonlyArray<string>) => void;
+  readonly beginPathInsertion: () => PathInsertionCommit | null;
   readonly removeImageAttachmentById: (id: string) => void;
   /**
    * Insert a finalized dictation segment at the caret (with a trailing space
@@ -316,8 +332,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
 
   const handleDrop = useCallback<DragEventHandler<HTMLElement>>(
     (event) => {
-      const hasFiles = Array.from(event.dataTransfer.types).includes("Files");
-      if (editor !== null && hasFiles) {
+      if (editor !== null && dataTransferHasFiles(event.dataTransfer)) {
         const dropPos = editor.view.posAtCoords({
           left: event.clientX,
           top: event.clientY,
@@ -343,13 +358,36 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     [editor, stabilizeImageAttachmentCaret],
   );
 
-  const insertPathSpans = useCallback(
-    (paths: ReadonlyArray<string>) => {
-      if (editor === null) return;
-      insertPathSpansCommand(editor, paths);
-    },
-    [editor],
-  );
+  const beginPathInsertion = useCallback((): PathInsertionCommit | null => {
+    if (editor === null || editor.isDestroyed) return null;
+    let position = editor.utils.createMappablePosition(
+      editor.state.selection.to,
+    );
+    const onTransaction = ({
+      transaction,
+      appendedTransactions,
+    }: {
+      readonly transaction: Transaction;
+      readonly appendedTransactions: Transaction[];
+    }): void => {
+      for (const tr of [transaction, ...appendedTransactions]) {
+        position = editor.utils.getUpdatedPosition(position, tr).position;
+      }
+    };
+    editor.on("transaction", onTransaction);
+    let settled = false;
+    return (paths: ReadonlyArray<string>): boolean => {
+      if (settled) return false;
+      settled = true;
+      editor.off("transaction", onTransaction);
+      if (editor.isDestroyed) return false;
+      if (paths.length > 0) {
+        insertPathSpansCommand(editor, paths, position.position);
+        editor.commands.focus();
+      }
+      return true;
+    };
+  }, [editor]);
 
   const removeImageAttachmentById = useCallback(
     (id: string) => {
@@ -414,19 +452,19 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
       clear,
       setContent,
       insertImageAttachments,
-      insertPathSpans,
+      beginPathInsertion,
       removeImageAttachmentById,
       insertDictatedText,
       dismissActiveSuggestion,
     }),
     [
+      beginPathInsertion,
       clear,
       dismissActiveSuggestion,
       focus,
       focusAtEnd,
       getJSON,
       insertImageAttachments,
-      insertPathSpans,
       insertDictatedText,
       isEmpty,
       isReady,

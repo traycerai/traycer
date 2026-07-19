@@ -108,4 +108,28 @@ describe("relativizeToWorkspaceRoot", () => {
   it("does not match a POSIX root case-insensitively", () => {
     expect(relativizeToWorkspaceRoot(["/Repo"], "/repo/src/app.ts")).toBeNull();
   });
+
+  // Finding 6: POSIX paths may legally contain a literal `\` in a filename.
+  // Strip/relativize must not treat that `\` as a separator (pathe's normalize
+  // would fold it into `/` and split the filename into nested segments).
+  it("preserves a literal backslash in a POSIX filename under a POSIX root", () => {
+    expect(relativizeToWorkspaceRoot(["/repo"], "/repo/foo\\bar.txt")).toBe(
+      "foo\\bar.txt",
+    );
+  });
+
+  it("still normalizes native-backslash Windows drive paths under a drive root", () => {
+    expect(
+      relativizeToWorkspaceRoot(["D:\\repo"], "D:\\repo\\src\\app.ts"),
+    ).toBe("src/app.ts");
+  });
+
+  it("still normalizes native-backslash UNC paths under a UNC root", () => {
+    expect(
+      relativizeToWorkspaceRoot(
+        ["\\\\server\\share"],
+        "\\\\server\\share\\src\\app.ts",
+      ),
+    ).toBe("src/app.ts");
+  });
 });

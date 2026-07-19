@@ -25,16 +25,17 @@ afterEach(() => {
 
 /**
  * Exercises `insertPathSpansCommand` (via `ComposerPromptEditorHandle.
- * insertPathSpans`) against the real TipTap editor / ProseMirror doc used by
- * every composer surface, rather than a mocked editor handle - a fully
- * mocked handle would hide real insertion-order, mark, and undo-step bugs.
+ * beginPathInsertion`'s commit closure) against the real TipTap editor /
+ * ProseMirror doc used by every composer surface, rather than a mocked
+ * editor handle - a fully mocked handle would hide real insertion-order,
+ * mark, and undo-step bugs.
  */
 describe("insertPathSpansCommand via the real composer editor", () => {
   it("inserts a single path as an inline-code span followed by a trailing plain space", async () => {
     const handleRef = await mountedHandle();
 
     act(() => {
-      handleRef.current?.insertPathSpans(["src/app.ts"]);
+      handleRef.current?.beginPathInsertion()?.(["src/app.ts"]);
     });
 
     expect(pathSpanRuns(handleRef.current)).toEqual([
@@ -49,7 +50,7 @@ describe("insertPathSpansCommand via the real composer editor", () => {
     const handleRef = await mountedHandle();
 
     act(() => {
-      handleRef.current?.insertPathSpans(["a.ts", "nested/b.ts"]);
+      handleRef.current?.beginPathInsertion()?.(["a.ts", "nested/b.ts"]);
     });
 
     expect(pathSpanRuns(handleRef.current)).toEqual([
@@ -68,7 +69,7 @@ describe("insertPathSpansCommand via the real composer editor", () => {
     const before = handleRef.current?.getJSON();
 
     act(() => {
-      handleRef.current?.insertPathSpans([]);
+      handleRef.current?.beginPathInsertion()?.([]);
     });
 
     expect(handleRef.current?.getJSON()).toEqual(before);
@@ -79,7 +80,7 @@ describe("insertPathSpansCommand via the real composer editor", () => {
     const before = handleRef.current?.getJSON();
 
     act(() => {
-      handleRef.current?.insertPathSpans(["a.ts", "b.ts"]);
+      handleRef.current?.beginPathInsertion()?.(["a.ts", "b.ts"]);
     });
     expect(handleRef.current?.isEmpty()).toBe(false);
 

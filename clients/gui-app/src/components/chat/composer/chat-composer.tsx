@@ -15,7 +15,10 @@ import type {
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 
-import { useComposerPaste } from "@/hooks/composer/use-composer-paste";
+import {
+  isAttachmentIngestPending,
+  useComposerPaste,
+} from "@/hooks/composer/use-composer-paste";
 import { useComposerDictation } from "@/hooks/composer/use-composer-dictation";
 import { useWorkspaceMentionRoots } from "@/hooks/composer/use-workspace-mention-roots";
 import { useRunnerHost } from "@/providers/use-runner-host";
@@ -287,8 +290,12 @@ function ChatComposerImpl(props: ChatComposerProps) {
     attachImageFiles,
     isDraggingFiles,
     isIngestingImages,
+    isResolvingFilePaths,
   } = useComposerPaste(editorRef, runnerHost.fileDrops, resolvedMentionRoots);
-  const attachmentPending = isIngestingImages;
+  const attachmentPending = isAttachmentIngestPending({
+    isIngestingImages,
+    isResolvingFilePaths,
+  });
 
   const submitDraft = useChatComposerSubmit({
     taskId,
