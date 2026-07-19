@@ -31,12 +31,11 @@ export { DEFAULT_AGENT_MODE, agentModeSchema, type AgentMode };
 // `TuiHarnessId extends HarnessId` are both true at the type level, so a
 // surface-narrow value passes everywhere a `HarnessId` is expected.
 //
-// Cursor supports BOTH surfaces at the schema level: the GUI chat tab drives
-// the `@cursor/sdk` agent runtime in local mode, and the TUI tab can launch the
-// `cursor-agent` CLI in a PTY. It is therefore listed in `harnessIdSchema` and
-// in BOTH `guiHarnessIdSchema` and `tuiHarnessIdSchema`. The TUI surface is
-// hidden in the renderer for now (the adapter advertises only the GUI mode via
-// `listGuiHarnesses`'s `modes` field) until the CLI reaches feature parity.
+// Cursor is retained in the TUI subset because it shipped in the v1 wire
+// contract and persisted TUI union. It is a reserved compatibility value until
+// the Cursor CLI reaches the minimum feature set required for product support;
+// runtime adapter surfaces and catalogs, not this schema, decide what users can
+// currently create or launch.
 export const harnessIdSchema = getRecordSchema(
   commonRecordRegistry,
   "harness-id",
@@ -520,8 +519,8 @@ export type ListHarnessModelsResponse = z.infer<
  * uuid-keyed map) so the wire shape lines up with `listEpicCollaborators`
  * and the rest of the `list*` family in this registry.
  *
- * `surface` lets a caller route to the right per-agent UI (e.g. fetch a
- * GUI chat transcript vs a TUI scrollback) without a second round-trip.
+ * `surface` lets a caller route to the right per-agent UI (e.g. a GUI chat
+ * interface vs a TUI terminal interface) without a second round-trip.
  * `isLocal` is the host's authoritative answer to "did I mint this
  * session?" - `hostId` equals the responding host's id. Cross-host
  * entries are returned for read-only enumeration; mutating RPCs
@@ -689,10 +688,11 @@ export type SendAgentMessageResponse = z.infer<
  * XML-tagged string so a sibling agent can read it without re-implementing
  * the discriminated `messageSchema` shape. For GUI agents the host
  * serializes the persisted `messageSchema` array (`<user>` / `<assistant>`
- * blocks); for TUI agents the host best-effort returns whatever
- * scrollback its PTY buffer holds. TUI scrollback is not persisted, so the
- * resolver errors when the target TUI session is not local and currently
- * present in this host's PTY manager.
+ * blocks); for supported TUI agents the host reads structured conversation
+ * history through the harness provider SDK. Provider history survives the PTY
+ * closing; there is deliberately no raw scrollback fallback. TUI transcript
+ * reads remain local to the agent's bound host because its provider session
+ * store and credentials are host-local.
  */
 export const getAgentTranscriptRequestSchema = z.object({
   epicId: z.string(),
