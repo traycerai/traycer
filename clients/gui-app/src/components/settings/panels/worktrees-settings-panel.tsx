@@ -588,7 +588,11 @@ function WorktreesBody(props: {
     value,
     onChange,
     onRefresh,
-    refreshing: listing.refreshing || enrichment.enriching,
+    // Only the explicit Refresh mutation locks the button - NOT enrichment.
+    // A cold fleet enriches for tens of seconds; gating on that stranded the
+    // manual escape hatch (and the "Updated Xm ago" label) for the whole
+    // convergence, which is exactly when the user most wants to re-pull.
+    refreshing: listing.isRefreshPending,
     canRefresh,
     lastUpdatedAt: listing.lastUpdatedAt,
   };

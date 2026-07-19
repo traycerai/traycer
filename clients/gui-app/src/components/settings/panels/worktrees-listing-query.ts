@@ -118,7 +118,13 @@ export function useWorktreeListing(
    * every already-landed page too.
    */
   readonly retryPartial: () => Promise<unknown>;
-  readonly refreshing: boolean;
+  /**
+   * True only while the user's explicit Refresh (the forced-listing mutation)
+   * is in flight - NOT during background page fetches or enrichment. The
+   * toolbar keys the Refresh button's disabled/spinner state off this, so it
+   * stays clickable while a cold fleet is still converging its rows.
+   */
+  readonly isRefreshPending: boolean;
   /**
    * When the listing data was last written: a live fetch's wall-clock stamp,
    * or the snapshot's own save time while the warm-open seed is still what's
@@ -192,7 +198,6 @@ export function useWorktreeListing(
     fetchStatus,
     hasNextPage,
     isError,
-    isFetching,
     isFetchingNextPage,
     isPending,
     isSuccess,
@@ -359,7 +364,7 @@ export function useWorktreeListing(
       });
     },
     retryPartial: () => fetchNextPage(),
-    refreshing: isFetching || refreshMutation.isPending,
+    isRefreshPending: refreshMutation.isPending,
     lastUpdatedAt: dataUpdatedAt === 0 ? null : dataUpdatedAt,
   };
 }

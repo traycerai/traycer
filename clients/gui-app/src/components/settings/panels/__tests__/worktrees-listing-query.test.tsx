@@ -283,7 +283,7 @@ describe("useWorktreeListing (warm-open listing snapshot)", () => {
     // only understands numeric offsets).
     await waitFor(() => {
       expect(result.current.worktrees).toHaveLength(PAGE_LIMIT + 8);
-      expect(result.current.refreshing).toBe(false);
+      expect(result.current.isRefreshPending).toBe(false);
     });
     expect(result.current.worktrees[PAGE_LIMIT + 7].worktreePath).toBe(
       `/wt/old-${String(PAGE_LIMIT + 7)}`,
@@ -387,6 +387,67 @@ describe("useWorktreeListing (warm-open listing snapshot)", () => {
   // it - the row reads "Checking...". The overlays keep their keys, so nothing
   // else re-probes them: without this invalidation the Refresh button strands
   // every on-screen row, permanently against a host with no `worktree.changed`.
+  it("isRefreshPending tracks the manual refresh mutation only, not background fetches", async () => {
+    // Regression: the toolbar keyed its Refresh button's disabled state off a
+    // signal that also went true during background/enrichment fetching, so a
+    // cold fleet still converging locked the button (and the "Updated" label)
+    // out for the whole convergence.
+    const live = [listedEntry("/wt/a", "main")];
+    // Two gates: one holds the mount-time background page, one holds the
+    // forced-refresh request, so each can be observed in flight.
+    let backgroundGate: { promise: Promise<void>; resolve: () => void } | null =
+      deferred();
+    let refreshGate: { promise: Promise<void>; resolve: () => void } | null =
+      null;
+    const fixture = createFixture(
+      () => live,
+      null,
+      async (cursor) => {
+        void cursor;
+        if (backgroundGate !== null) {
+          await backgroundGate.promise;
+          return;
+        }
+        if (refreshGate !== null) await refreshGate.promise;
+      },
+    );
+    const { result } = renderHook(
+      () => useWorktreeListing(fixture.client, true),
+      { wrapper: fixture.Wrapper },
+    );
+
+    // The initial page is still fetching in the background, but no manual
+    // refresh has been triggered - the button must stay live.
+    expect(result.current.isRefreshPending).toBe(false);
+    act(() => {
+      backgroundGate?.resolve();
+      backgroundGate = null;
+    });
+    await waitFor(() => {
+      expect(result.current.worktrees).toHaveLength(1);
+    });
+    expect(result.current.isRefreshPending).toBe(false);
+
+    // Only the explicit Refresh mutation flips it; held in flight so `true`
+    // is observable, then cleared on settle.
+    refreshGate = deferred();
+    let refreshDone: Promise<unknown> = Promise.resolve();
+    act(() => {
+      refreshDone = result.current.refresh();
+    });
+    await waitFor(() => {
+      expect(result.current.isRefreshPending).toBe(true);
+    });
+    await act(async () => {
+      refreshGate?.resolve();
+      refreshGate = null;
+      await refreshDone;
+    });
+    await waitFor(() => {
+      expect(result.current.isRefreshPending).toBe(false);
+    });
+  });
+
   it("invalidates the per-path enrichment overlays after a forced refresh", async () => {
     const live = [listedEntry("/wt/a", "main")];
     const fixture = createFixture(() => live, null, null);
