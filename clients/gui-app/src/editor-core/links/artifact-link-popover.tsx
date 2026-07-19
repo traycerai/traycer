@@ -850,10 +850,12 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
       const result = routeHref(rawHref);
       if (result !== "default") {
         // The click itself resolves the link (navigation or deliberate
-        // suppression), so a hover-show timer armed by the preceding
-        // `pointerover` must not fire afterwards and open a preview card
-        // for the link the user just clicked.
-        cancelShow();
+        // suppression). Drop any open card and any pending hover-show so a
+        // prior preview cannot linger after the user has already acted on a
+        // document link - including when they plain-click a different link
+        // while another card is open (mousedown suppression prevents the
+        // selection path from clearing it).
+        close();
       }
       if (result === "default") {
         const normalizedHref = rawHref.trim();

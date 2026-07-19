@@ -1452,6 +1452,37 @@ describe("ArtifactLinkPopover", () => {
     expect(screen.queryByRole("dialog", { name: "Edit link" })).toBeNull();
   });
 
+  it("closes an open card when a plain click navigates a different editable link", async () => {
+    vi.useFakeTimers();
+    const editor = makeEditor(
+      '<p><a href="https://example.com">Example</a> <a href="https://traycer.ai">Traycer</a></p>',
+    );
+    editor.commands.setTextSelection(editor.state.doc.content.size - 2);
+    const { openLink, onOpenChange } = renderPopover(editor, true);
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    const anchors = editor.view.dom.querySelectorAll("a");
+    if (anchors.length < 2) throw new Error("Expected two anchors");
+    const [first, second] = anchors;
+
+    fireEvent.pointerOver(first);
+    await act(() => vi.advanceTimersByTimeAsync(300));
+    expect(screen.getByRole("dialog", { name: "Link preview" })).not.toBeNull();
+    onOpenChange.mockClear();
+
+    fireEvent.mouseDown(second, { button: 0 });
+    fireEvent.mouseUp(second, { button: 0 });
+    fireEvent.click(second);
+
+    expect(openLink).toHaveBeenCalledTimes(1);
+    expect(openLink).toHaveBeenCalledWith({
+      kind: "external",
+      url: "https://traycer.ai",
+    });
+    expect(screen.queryByRole("dialog", { name: "Link preview" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "Edit link" })).toBeNull();
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
   it("navigates a plain editable click on a file link", () => {
     const editor = makeEditor({
       type: "doc",
