@@ -19,6 +19,21 @@ const { requestMock, rpcClientConstructorMock } = vi.hoisted(() => ({
   rpcClientConstructorMock: vi.fn(),
 }));
 
+const loggerMock = vi.hoisted(() => ({
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+}));
+
+// The transport tests assert errors directly. Persistent diagnostics are not
+// part of their contract and must not touch the live CLI log.
+vi.mock("../../logger", () => ({
+  createCliLogger: () => loggerMock,
+  errorFromUnknown: (value: unknown) =>
+    value instanceof Error ? value : new Error(String(value)),
+}));
+
 vi.mock("../../../../shared/host-transport/ws-rpc-client", () => ({
   WsRpcClient: class {
     constructor(options: unknown) {

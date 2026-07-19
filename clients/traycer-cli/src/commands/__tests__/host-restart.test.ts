@@ -71,6 +71,14 @@ vi.mock("../../store/cli-lock", async (importOriginal) => {
 
 import type { CommandContext } from "../../runner/runner";
 
+// `store/paths` binds its home root from `os.homedir()` at module load.
+// Keep the environment mutation below, but redirect `homedir()` too.
+const osHome = vi.hoisted(() => ({ current: "" }));
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return { ...actual, homedir: () => osHome.current || actual.tmpdir() };
+});
+
 const ORIGINAL_HOME = process.env.HOME;
 const ORIGINAL_USERPROFILE = process.env.USERPROFILE;
 let workHome: string;
@@ -105,6 +113,7 @@ function fakeCtx(): CommandContext {
 describe("buildHostRestartCommand", () => {
   beforeEach(() => {
     workHome = mkdtempSync(join(tmpdir(), "traycer-host-restart-cmd-test-"));
+    osHome.current = workHome;
     process.env.HOME = workHome;
     process.env.USERPROFILE = workHome;
     // `store/paths` captures `homedir()` once at module load - drop the

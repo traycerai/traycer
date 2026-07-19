@@ -11,6 +11,22 @@ import { Command } from "commander";
 import { buildProgram, extractActionPositionals } from "../index";
 import * as hostInstallModule from "../commands/host-install";
 
+const loggerMock = vi.hoisted(() => ({
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+}));
+
+// This test exercises the real runner through Commander. Its logger is not
+// part of the positional-forwarding contract, and must not append to a live
+// per-environment CLI log as a side effect.
+vi.mock("../logger", () => ({
+  createCliLogger: () => loggerMock,
+  errorFromUnknown: (value: unknown) =>
+    value instanceof Error ? value : new Error(String(value)),
+}));
+
 // `host install` accepts a registry version via the `--release`
 // flag (defaults to `latest`) or a local archive via `--from`; the
 // two are mutually exclusive. We pin two layers of behaviour:
