@@ -194,6 +194,7 @@ function makeEditor(): Editor {
       placeholder: "test",
       onSubmit: { current: () => undefined },
       slashProviderId: "claude",
+      getHasPastedImageBytes: () => null,
     }),
     content: { type: "doc", content: [{ type: "paragraph" }] },
   });

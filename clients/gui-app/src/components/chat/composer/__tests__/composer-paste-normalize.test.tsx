@@ -28,6 +28,7 @@ function makeEditor(): Editor {
       placeholder: "t",
       onSubmit: { current: () => {} },
       slashProviderId: "claude",
+      getHasPastedImageBytes: () => null,
     }),
     content: { type: "doc", content: [{ type: "paragraph" }] },
   });

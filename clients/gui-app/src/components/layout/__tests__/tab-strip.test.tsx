@@ -534,7 +534,7 @@ describe("<TabStrip />", () => {
       `header-tab-background-activity-${EPIC_A.id}`,
     );
     expect(backgroundIcon.getAttribute("class")).toContain(
-      "lucide-calendar-clock",
+      "lucide-message-square-clock",
     );
     expect(screen.queryByTestId(`header-tab-activity-${EPIC_A.id}`)).toBeNull();
     expect(

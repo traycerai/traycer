@@ -21,6 +21,7 @@ interface ChatComposerEditorSlotProps {
   readonly initialContent: JsonContent;
   readonly initialSelection: { from: number; to: number } | null;
   readonly slashProviderId: GuiHarnessId;
+  readonly hasPastedImageBytes: ((hash: string) => boolean) | null;
   readonly isActive: boolean;
   readonly onSnapshot: (
     content: JsonContent,
@@ -45,6 +46,7 @@ export function ChatComposerEditorSlot(props: ChatComposerEditorSlotProps) {
     initialContent,
     initialSelection,
     slashProviderId,
+    hasPastedImageBytes,
     isActive,
     onSnapshot,
     onSubmit,
@@ -61,6 +63,7 @@ export function ChatComposerEditorSlot(props: ChatComposerEditorSlotProps) {
       initialContent={initialContent}
       initialSelection={initialSelection}
       slashProviderId={slashProviderId}
+      hasPastedImageBytes={hasPastedImageBytes}
       isActive={isActive}
       disabled={false}
       placeholder={isNarrow ? NARROW_PLACEHOLDER : PLACEHOLDER}
