@@ -897,6 +897,112 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
     });
   });
 
+  describe("sentinel guard (cold-host clobber regression)", () => {
+    // A cold host answers reads it cannot derive with the `unresolvedRow`
+    // SENTINEL - `resolvedAt: null`, unknown branch, `gitRemovable: false` -
+    // which the panel renders as "detached HEAD" / "Waiting for host
+    // verification…". Caching those over good rows (and then persisting them)
+    // turned one cold read into a fleet of permanently-unknown rows.
+    function sentinelEntry(worktreePath: string): WorktreeHostEntryV14 {
+      return {
+        ...enrichedEntry(worktreePath, "feat-a"),
+        branch: null,
+        gitRemovable: false,
+        branchStatus: null,
+        resolvedAt: null,
+      };
+    }
+
+    it("keeps a resolved cached row when a later read answers with the sentinel", async () => {
+      const resolved: WorktreeHostEntryV14 = {
+        ...enrichedEntry("/wt/a", "feat-a"),
+        prState: "none",
+      };
+      const entriesByPath = new Map<string, WorktreeHostEntryV14>([
+        ["/wt/a", resolved],
+      ]);
+      const fixture = createFixture(
+        entriesByPath,
+        null,
+        null,
+        createAppQueryClient(),
+      );
+      const { result } = renderHook(
+        () =>
+          useWorktreeActivityEnrichment(fixture.client, true, HOST_ID, [
+            "/wt/a",
+          ]),
+        { wrapper: fixture.Wrapper },
+      );
+      await waitFor(() => {
+        expect(result.current.enrichedByPath.get("/wt/a")?.branch).toBe(
+          "feat-a",
+        );
+      });
+
+      // The host goes cold (restart) and now answers the sentinel. A refetch
+      // must NOT downgrade the resolved row we already hold.
+      entriesByPath.set("/wt/a", sentinelEntry("/wt/a"));
+      await act(async () => {
+        await fixture.queryClient.invalidateQueries({
+          queryKey: METHOD_SCOPE,
+          refetchType: "active",
+        });
+      });
+
+      expect(result.current.enrichedByPath.get("/wt/a")?.branch).toBe("feat-a");
+      expect(
+        result.current.enrichedByPath.get("/wt/a")?.resolvedAt,
+      ).not.toBeNull();
+    });
+
+    it("still accepts a resolved row that replaces another resolved row", async () => {
+      const first: WorktreeHostEntryV14 = {
+        ...enrichedEntry("/wt/a", "feat-a"),
+        prState: "none",
+      };
+      const renamed: WorktreeHostEntryV14 = {
+        ...enrichedEntry("/wt/a", "feat-renamed"),
+        prState: "none",
+      };
+      const entriesByPath = new Map<string, WorktreeHostEntryV14>([
+        ["/wt/a", first],
+      ]);
+      const fixture = createFixture(
+        entriesByPath,
+        null,
+        null,
+        createAppQueryClient(),
+      );
+      const { result } = renderHook(
+        () =>
+          useWorktreeActivityEnrichment(fixture.client, true, HOST_ID, [
+            "/wt/a",
+          ]),
+        { wrapper: fixture.Wrapper },
+      );
+      await waitFor(() => {
+        expect(result.current.enrichedByPath.get("/wt/a")?.branch).toBe(
+          "feat-a",
+        );
+      });
+
+      // Guard must not freeze the cache: resolved data still wins.
+      entriesByPath.set("/wt/a", renamed);
+      await act(async () => {
+        await fixture.queryClient.invalidateQueries({
+          queryKey: METHOD_SCOPE,
+          refetchType: "active",
+        });
+      });
+      await waitFor(() => {
+        expect(result.current.enrichedByPath.get("/wt/a")?.branch).toBe(
+          "feat-renamed",
+        );
+      });
+    });
+  });
+
   describe("overlay identity stability (render-churn regression)", () => {
     // Every distinct overlay identity fans out through the panel: merged rows,
     // task rollups, filters, and finally a re-render of EVERY worktree row

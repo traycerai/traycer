@@ -1,5 +1,6 @@
 import {
   queryOptions,
+  replaceEqualDeep,
   useQueries,
   type QueryKey,
   type UseQueryResult,
@@ -52,6 +53,72 @@ export function perPathEnrichmentQueryKey(
   );
 }
 
+// The minimal shape this guard reasons about. Rows are passed through BY
+// REFERENCE, so every other field survives untouched - narrowing here only
+// keeps the guard honest about what it actually inspects.
+type ResolvableRow = {
+  readonly worktreePath: string;
+  readonly resolvedAt: number | null;
+};
+
+function isResolvableResponse(
+  value: unknown,
+): value is { readonly worktrees: readonly ResolvableRow[] } {
+  if (value === null || typeof value !== "object") return false;
+  if (!("worktrees" in value)) return false;
+  const { worktrees } = value;
+  return (
+    Array.isArray(worktrees) &&
+    worktrees.every(
+      (row: unknown) =>
+        row !== null &&
+        typeof row === "object" &&
+        "worktreePath" in row &&
+        typeof row.worktreePath === "string" &&
+        "resolvedAt" in row &&
+        (row.resolvedAt === null || typeof row.resolvedAt === "number"),
+    )
+  );
+}
+
+/**
+ * Cache-write guard shared by both enrichment legs: a row the host answered
+ * UNRESOLVED (`resolvedAt === null` - the cold-host `unresolvedRow` sentinel,
+ * rendered as "detached HEAD" / "Waiting for host verification…") never
+ * replaces a resolved row already in cache.
+ *
+ * Resolved data is only ever replaced by resolved data; a row disappears only
+ * by leaving the base listing, which is the one thing that proves it is gone.
+ * Wired through TanStack's `structuralSharing` so it covers every write to
+ * these keys - the observer leg, the sweep's `fetchQuery`, and refetches -
+ * without each call site remembering to merge.
+ *
+ * Delegates to `replaceEqualDeep` (what TanStack's DEFAULT structural sharing
+ * does) rather than returning a fresh object: the enrichment fold keeps its Map
+ * identity only while equal refetches preserve row references, and losing that
+ * re-renders every row in the list on each probe.
+ */
+export function keepResolvedEnrichmentRows(
+  previous: unknown,
+  next: unknown,
+): unknown {
+  if (!isResolvableResponse(previous) || !isResolvableResponse(next)) {
+    return replaceEqualDeep(previous, next);
+  }
+  const previousByPath = new Map(
+    previous.worktrees.map((row) => [row.worktreePath, row]),
+  );
+  const worktrees = next.worktrees.map((row) => {
+    if (row.resolvedAt !== null) return row;
+    const prior = previousByPath.get(row.worktreePath);
+    return prior !== undefined && prior.resolvedAt !== null ? prior : row;
+  });
+  // Unconditionally rebuilt, then handed to `replaceEqualDeep`: when nothing
+  // was actually held back the result deep-equals `previous` and the previous
+  // reference comes straight back, so row identity survives an equal refetch.
+  return replaceEqualDeep(previous, { ...next, worktrees });
+}
+
 /**
  * Observer-leg fetch driver over the batched transport. Split out here (not
  * `useHostQueries`, the usual wrapper) because that wrapper hard-wires one
@@ -86,6 +153,7 @@ export function useBatchedEnrichmentQueries(args: {
         // cold-PR retry ledgers are the only re-probe paths.
         staleTime: Infinity,
         gcTime: WORKTREE_ENRICHMENT_GC_MS,
+        structuralSharing: keepResolvedEnrichmentRows,
       });
     }),
   });

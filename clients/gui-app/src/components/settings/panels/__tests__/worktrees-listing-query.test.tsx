@@ -124,6 +124,83 @@ function createFixture(
   return { client, Wrapper, queryClient };
 }
 
+describe("listing snapshot sentinel guard (cold-host clobber regression)", () => {
+  // The base listing is deliberately non-spawning, so against a cold host it
+  // answers entirely in `unresolvedRow` sentinels (`resolvedAt: null`, unknown
+  // branch). Persisting those replaced a good snapshot with a fleet of
+  // "detached HEAD" rows, which then restored on the next launch - the failure
+  // seen live, where all 54 rows went unknown and stayed that way.
+  function sentinelEntry(worktreePath: string): WorktreeHostEntryV14 {
+    return {
+      ...listedEntry(worktreePath, "feat"),
+      branch: null,
+      gitRemovable: false,
+      resolvedAt: null,
+    };
+  }
+
+  it("never lets unresolved rows overwrite resolved ones, but still drops de-listed rows", () => {
+    persistWorktreeListingSnapshot({
+      hostId: HOST_ID,
+      entries: [
+        listedEntry("/wt/a", "feat-a"),
+        listedEntry("/wt/b", "feat-b"),
+        listedEntry("/wt/gone", "feat-gone"),
+      ],
+      now: Date.now(),
+    });
+
+    // A cold-host listing: /wt/gone is genuinely absent, the rest are sentinels.
+    persistWorktreeListingSnapshot({
+      hostId: HOST_ID,
+      entries: [sentinelEntry("/wt/a"), sentinelEntry("/wt/b")],
+      now: Date.now(),
+    });
+
+    const snapshot = readWorktreeListingSnapshot(HOST_ID, Date.now());
+    // Membership follows the incoming listing - absence is the one proof of
+    // deletion - but the surviving rows keep their resolved facts.
+    expect(snapshot?.entries.map((entry) => entry.worktreePath)).toEqual([
+      "/wt/a",
+      "/wt/b",
+    ]);
+    expect(snapshot?.entries.map((entry) => entry.branch)).toEqual([
+      "feat-a",
+      "feat-b",
+    ]);
+  });
+
+  it("still lets resolved rows replace resolved rows", () => {
+    persistWorktreeListingSnapshot({
+      hostId: HOST_ID,
+      entries: [listedEntry("/wt/a", "feat-a")],
+      now: Date.now(),
+    });
+    persistWorktreeListingSnapshot({
+      hostId: HOST_ID,
+      entries: [listedEntry("/wt/a", "feat-renamed")],
+      now: Date.now(),
+    });
+
+    const snapshot = readWorktreeListingSnapshot(HOST_ID, Date.now());
+    expect(snapshot?.entries.map((entry) => entry.branch)).toEqual([
+      "feat-renamed",
+    ]);
+  });
+
+  it("seeds a first snapshot even when the host is cold", () => {
+    persistWorktreeListingSnapshot({
+      hostId: HOST_ID,
+      entries: [sentinelEntry("/wt/a")],
+      now: Date.now(),
+    });
+
+    const snapshot = readWorktreeListingSnapshot(HOST_ID, Date.now());
+    expect(snapshot?.entries).toHaveLength(1);
+    expect(snapshot?.entries[0]?.resolvedAt).toBeNull();
+  });
+});
+
 describe("useWorktreeListing (warm-open listing snapshot)", () => {
   it("paints the last run's rows before the first page lands, then reconciles to live truth", async () => {
     const restored = [

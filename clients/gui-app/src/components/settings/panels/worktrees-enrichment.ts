@@ -26,6 +26,7 @@ import { logPerfEvent } from "@/lib/perf/perf-telemetry";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import {
   createWorktreeEnrichmentBatcher,
+  keepResolvedEnrichmentRows,
   perPathEnrichmentQueryKey,
   useBatchedEnrichmentQueries,
   WORKTREE_ENRICHMENT_GC_MS,
@@ -143,6 +144,7 @@ function sweepEnrichmentFetchOptions(
     // the same cold row a nonzero staleTime would consider fresh.
     staleTime: 0,
     gcTime: WORKTREE_ENRICHMENT_GC_MS,
+    structuralSharing: keepResolvedEnrichmentRows,
   });
 }
 
