@@ -316,6 +316,339 @@ describe("composer path paste/drop integration (real editor)", () => {
     });
   });
 
+  // Round-2 finding 1: a mixed image+path paste must land as ONE transaction/
+  // undo group through beginAttachmentInsertion's unified commit, regardless
+  // of the order files appear in the clipboard, and even when an unrelated
+  // edit lands while the async image-convert/path-resolve legs are still
+  // pending.
+  describe("round-2 finding 1 - mixed paste stays one transaction under reorder / concurrent edits", () => {
+    it("reversing the clipboard's file order still lands a single undo group", async () => {
+      vi.useFakeTimers();
+
+      const pendingReaders: FileReader[] = [];
+      vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(
+        function (this: FileReader, _blob: Blob) {
+          pendingReaders.push(this);
+        },
+      );
+
+      let resolvePaths: ((paths: readonly string[]) => void) | null = null;
+      const fileDrops = makeFileDrops({
+        resolveDroppedFilePaths: () =>
+          new Promise((resolve) => {
+            resolvePaths = resolve;
+          }),
+        copyDroppedFilePaths: (paths) => Promise.resolve([...paths]),
+      });
+      const handleRef = await mountedHandle(fileDrops, {
+        mentionRoots: ["/repo"],
+      });
+      const before = handleRef.current?.getJSON();
+
+      const png = new File(["png-bytes"], "shot.png", { type: "image/png" });
+      const pdf = new File(["pdf-bytes"], "doc.pdf", {
+        type: "application/pdf",
+      });
+      // Doc-before-image file order in the clipboard (reversed from the
+      // finding-4 case above) - the resulting doc order (images before
+      // paths) is a fixed product decision, not derived from input order.
+      fireEvent.paste(screen.getByTestId("composer-editor"), {
+        clipboardData: makeFileTransfer([pdf, png]),
+      });
+
+      expect(pendingReaders.length).toBeGreaterThan(0);
+      await act(async () => {
+        const reader = pendingReaders.shift();
+        if (reader === undefined)
+          throw new Error("expected pending FileReader");
+        Object.defineProperty(reader, "result", {
+          configurable: true,
+          value: "data:image/png;base64,cG5n",
+        });
+        reader.dispatchEvent(new ProgressEvent("load"));
+        await flushMicrotasksRaw();
+      });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(600);
+      });
+
+      expect(resolvePaths).not.toBeNull();
+      await act(async () => {
+        resolvePaths?.(["/repo/doc.pdf"]);
+        await flushMicrotasksRaw();
+      });
+
+      expect(docHasImageAttachment(handleRef.current?.getJSON())).toBe(true);
+      expect(pathSpanTexts(handleRef.current)).toEqual(["doc.pdf"]);
+
+      fireEvent.keyDown(screen.getByTestId("composer-editor"), {
+        key: "z",
+        code: "KeyZ",
+        ctrlKey: true,
+      });
+
+      expect(handleRef.current?.getJSON()).toEqual(before);
+      expect(docHasImageAttachment(handleRef.current?.getJSON())).toBe(false);
+      expect(pathSpanTexts(handleRef.current)).toEqual([]);
+    });
+
+    it("an intervening edit during the pending window lands after the mixed content, and Undo reverts only the mixed commit", async () => {
+      vi.useFakeTimers();
+
+      const pendingReaders: FileReader[] = [];
+      vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(
+        function (this: FileReader, _blob: Blob) {
+          pendingReaders.push(this);
+        },
+      );
+
+      let resolvePaths: ((paths: readonly string[]) => void) | null = null;
+      const fileDrops = makeFileDrops({
+        resolveDroppedFilePaths: () =>
+          new Promise((resolve) => {
+            resolvePaths = resolve;
+          }),
+        copyDroppedFilePaths: (paths) => Promise.resolve([...paths]),
+      });
+      const handleRef = await mountedHandle(fileDrops, {
+        mentionRoots: ["/repo"],
+        initialContent: paragraphText("BASE"),
+        initialSelection: { from: 5, to: 5 },
+      });
+
+      const png = new File(["png-bytes"], "shot.png", { type: "image/png" });
+      const pdf = new File(["pdf-bytes"], "doc.pdf", {
+        type: "application/pdf",
+      });
+      fireEvent.paste(screen.getByTestId("composer-editor"), {
+        clipboardData: makeFileTransfer([png, pdf]),
+      });
+
+      // An unrelated edit lands (appended at the same caret, unfocused)
+      // while both async legs of the mixed paste are still pending.
+      act(() => {
+        handleRef.current?.insertDictatedText("EDIT");
+      });
+
+      expect(pendingReaders.length).toBeGreaterThan(0);
+      await act(async () => {
+        const reader = pendingReaders.shift();
+        if (reader === undefined)
+          throw new Error("expected pending FileReader");
+        Object.defineProperty(reader, "result", {
+          configurable: true,
+          value: "data:image/png;base64,cG5n",
+        });
+        reader.dispatchEvent(new ProgressEvent("load"));
+        await flushMicrotasksRaw();
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(600);
+      });
+
+      expect(resolvePaths).not.toBeNull();
+      await act(async () => {
+        resolvePaths?.(["/repo/doc.pdf"]);
+        await flushMicrotasksRaw();
+      });
+
+      const afterCommit = handleRef.current?.getJSON();
+      expect(docHasImageAttachment(afterCommit)).toBe(true);
+      expect(pathSpanTexts(handleRef.current)).toEqual(["doc.pdf"]);
+      const joined = textRuns(handleRef.current)
+        .map((run) => run.text)
+        .join("");
+      expect(joined).toContain("BASE");
+      expect(joined).toContain("EDIT");
+      // Mixed content stayed pinned to the original paste caret - ahead of
+      // the intervening edit, not after it.
+      expect(joined.indexOf("doc.pdf")).toBeLessThan(joined.indexOf("EDIT"));
+
+      // A single Undo reverts only the mixed commit's own transaction, not
+      // the earlier, unrelated edit (more than newGroupDelay apart).
+      fireEvent.keyDown(screen.getByTestId("composer-editor"), {
+        key: "z",
+        code: "KeyZ",
+        ctrlKey: true,
+      });
+
+      expect(docHasImageAttachment(handleRef.current?.getJSON())).toBe(false);
+      expect(pathSpanTexts(handleRef.current)).toEqual([]);
+      const afterUndo = textRuns(handleRef.current)
+        .map((run) => run.text)
+        .join("");
+      expect(afterUndo).toContain("BASE");
+      expect(afterUndo).toContain("EDIT");
+    });
+  });
+
+  // Round-2 finding 2: `beginAttachmentInsertion` captures the full selection
+  // range (not a right-biased point) and maps concurrent same-caret jobs by
+  // relative sequence, not a single fixed bias.
+  describe("round-2 finding 2 - full selection range capture and per-job anchor bias", () => {
+    it("replaces a non-collapsed selection instead of appending after it", async () => {
+      const fileDrops = makeFileDrops({
+        resolveDroppedFilePaths: () => Promise.resolve(["note.txt"]),
+        copyDroppedFilePaths: (paths) => Promise.resolve([...paths]),
+      });
+      const handleRef = await mountedHandle(fileDrops, {
+        mentionRoots: [],
+        initialContent: paragraphText("HELLO WORLD"),
+        initialSelection: { from: 7, to: 12 },
+      });
+
+      const file = new File(["x"], "note.txt", { type: "text/plain" });
+      fireEvent.paste(screen.getByTestId("composer-editor"), {
+        clipboardData: makeFileTransfer([file]),
+      });
+      await flushMicrotasks();
+
+      expect(pathSpanTexts(handleRef.current)).toEqual(["note.txt"]);
+      const joined = textRuns(handleRef.current)
+        .map((run) => run.text)
+        .join("");
+      expect(joined).not.toContain("WORLD");
+      expect(joined.startsWith("HELLO ")).toBe(true);
+    });
+
+    it("keeps a pending job's content before text typed at the same caret afterward", async () => {
+      let resolvePaths: ((paths: readonly string[]) => void) | null = null;
+      const fileDrops = makeFileDrops({
+        resolveDroppedFilePaths: () =>
+          new Promise((resolve) => {
+            resolvePaths = resolve;
+          }),
+        copyDroppedFilePaths: (paths) => Promise.resolve([...paths]),
+      });
+      const handleRef = await mountedHandle(fileDrops, {
+        mentionRoots: [],
+        initialContent: paragraphText("AB"),
+        initialSelection: { from: 3, to: 3 },
+      });
+
+      act(() => {
+        handleRef.current?.focus();
+      });
+
+      const file = new File(["x"], "mid.txt", { type: "text/plain" });
+      fireEvent.paste(screen.getByTestId("composer-editor"), {
+        clipboardData: makeFileTransfer([file]),
+      });
+
+      // Same-caret edit, typed while the job is still pending.
+      act(() => {
+        handleRef.current?.insertDictatedText("TYPED");
+      });
+
+      expect(resolvePaths).not.toBeNull();
+      await act(async () => {
+        resolvePaths?.(["mid.txt"]);
+        await flushMicrotasksRaw();
+      });
+
+      expect(pathSpanTexts(handleRef.current)).toEqual(["mid.txt"]);
+      const runs = textRuns(handleRef.current);
+      const pathIdx = runs.findIndex(
+        (run) => run.code && run.text === "mid.txt",
+      );
+      const typedIdx = runs.findIndex(
+        (run) => !run.code && run.text.includes("TYPED"),
+      );
+      expect(pathIdx).toBeGreaterThanOrEqual(0);
+      expect(typedIdx).toBeGreaterThan(pathIdx);
+    });
+
+    it("renders two concurrent jobs anchored at the same caret in paste order regardless of resolution order", async () => {
+      const resolvers: Array<(paths: readonly string[]) => void> = [];
+      const fileDrops = makeFileDrops({
+        resolveDroppedFilePaths: () =>
+          new Promise((resolve) => {
+            resolvers.push(resolve);
+          }),
+        copyDroppedFilePaths: (paths) => Promise.resolve([...paths]),
+      });
+      const handleRef = await mountedHandle(fileDrops, {
+        mentionRoots: ["/repo"],
+        initialContent: paragraphText("____"),
+        initialSelection: { from: 1, to: 1 },
+      });
+
+      const first = new File(["1"], "first.txt", { type: "text/plain" });
+      const second = new File(["2"], "second.txt", { type: "text/plain" });
+
+      // Both pastes land at the SAME caret - unlike the finding-2 concurrent
+      // test above (which moves the caret to the end before the second
+      // paste), nothing moves the selection in between.
+      fireEvent.paste(screen.getByTestId("composer-editor"), {
+        clipboardData: makeFileTransfer([first]),
+      });
+      fireEvent.paste(screen.getByTestId("composer-editor"), {
+        clipboardData: makeFileTransfer([second]),
+      });
+
+      expect(resolvers).toHaveLength(2);
+
+      // Resolve second (B) before first (A) - paste order must still win.
+      await act(async () => {
+        resolvers[1]?.(["/repo/second.txt"]);
+        await flushMicrotasksRaw();
+      });
+      await act(async () => {
+        resolvers[0]?.(["/repo/first.txt"]);
+        await flushMicrotasksRaw();
+      });
+
+      expect(pathSpanTexts(handleRef.current)).toEqual([
+        "first.txt",
+        "second.txt",
+      ]);
+      const runs = textRuns(handleRef.current);
+      const firstIdx = runs.findIndex(
+        (run) => run.code && run.text === "first.txt",
+      );
+      const secondIdx = runs.findIndex(
+        (run) => run.code && run.text === "second.txt",
+      );
+      expect(firstIdx).toBeGreaterThanOrEqual(0);
+      expect(secondIdx).toBeGreaterThan(firstIdx);
+    });
+  });
+
+  // Round-2 finding 3: `hasClaimableFileTransfer` parses URI content instead
+  // of trusting the `text/uri-list` type name alone, so an ordinary link
+  // paste isn't silently swallowed.
+  describe("round-2 finding 3 - ordinary link paste is not claimed as file-like", () => {
+    it("does not swallow an ordinary https:// link paste (text/uri-list + text/plain, no file:// entries)", async () => {
+      const resolveDroppedFilePaths = vi.fn(() => Promise.resolve([]));
+      const copyDroppedFilePaths = vi.fn((paths: readonly string[]) =>
+        Promise.resolve([...paths]),
+      );
+      const fileDrops = makeFileDrops({
+        resolveDroppedFilePaths,
+        copyDroppedFilePaths,
+      });
+      const handleRef = await mountedHandle(fileDrops, undefined);
+
+      fireEvent.paste(screen.getByTestId("composer-editor"), {
+        clipboardData: makeUriListPlainTransfer(
+          "https://example.com",
+          "https://example.com",
+        ),
+      });
+      await flushMicrotasks();
+
+      expect(resolveDroppedFilePaths).not.toHaveBeenCalled();
+      expect(copyDroppedFilePaths).not.toHaveBeenCalled();
+      expect(pathSpanTexts(handleRef.current)).toEqual([]);
+      const joined = textRuns(handleRef.current)
+        .map((run) => run.text)
+        .join("");
+      expect(joined).toContain("https://example.com");
+      expect(toast.error).not.toHaveBeenCalled();
+    });
+  });
+
   // Finding 7: commit after unmount must not insert or toast.
   describe("finding 7 - unmount liveness guard on path resolution", () => {
     it("does not insert or toast when path resolution settles after unmount", async () => {

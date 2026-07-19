@@ -506,7 +506,7 @@ function editorHandleForPrompt(prompt: string): ComposerPromptEditorHandle {
     clear: () => undefined,
     setContent: () => undefined,
     insertImageAttachments: () => undefined,
-    beginPathInsertion: () => null,
+    beginAttachmentInsertion: () => null,
     removeImageAttachmentById: () => undefined,
     insertDictatedText: () => undefined,
     dismissActiveSuggestion: () => false,

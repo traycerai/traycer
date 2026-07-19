@@ -6,13 +6,16 @@ import type { ImageAttachmentAttrs } from "@/components/chat/composer/editor/ext
 import {
   collectImages,
   useComposerPasteEvents,
+  type AttachmentInsertionCommit,
   type ComposerImageIngest,
   type ComposerPasteEditorHandle,
   type UseComposerPasteResult,
 } from "@/hooks/composer/use-composer-paste";
 import { putImage } from "@/lib/composer/landing-image-store";
 import {
+  releaseInFlightImageRoot,
   reserveLandingImageBudget,
+  retainInFlightImageRoot,
   scheduleLandingImageReconcile,
 } from "@/lib/composer/landing-image-gc";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
@@ -60,22 +63,35 @@ async function landingImageAttrsFromFiles(
     });
     return [];
   }
-  return Promise.all(
-    accepted.map(async (file) => {
-      signal.throwIfAborted();
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      signal.throwIfAborted();
-      const hash = await putImage(bytes);
-      signal.throwIfAborted();
-      return {
-        id: uuidv4(),
-        fileName: file.name || "image",
-        hash,
-        mimeType: file.type || "image/png",
-        size: file.size > 0 ? file.size : null,
-      } satisfies ImageAttachmentAttrs;
-    }),
-  );
+  // Retain each hash as an explicit GC root the moment its bytes are stored -
+  // insertion is coordinated centrally and may be withheld pending unrelated
+  // async work (a mixed image+path paste, see `runMixedIngest`), so a
+  // reconcile can otherwise run before the resulting node exists to protect
+  // it. `onSettled`/the catch below release every retain exactly once.
+  const retainedHashes: string[] = [];
+  try {
+    return await Promise.all(
+      accepted.map(async (file) => {
+        signal.throwIfAborted();
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        signal.throwIfAborted();
+        const hash = await putImage(bytes);
+        retainInFlightImageRoot(hash);
+        retainedHashes.push(hash);
+        signal.throwIfAborted();
+        return {
+          id: uuidv4(),
+          fileName: file.name || "image",
+          hash,
+          mimeType: file.type || "image/png",
+          size: file.size > 0 ? file.size : null,
+        } satisfies ImageAttachmentAttrs;
+      }),
+    );
+  } catch (error) {
+    retainedHashes.forEach(releaseInFlightImageRoot);
+    throw error;
+  }
 }
 
 export function useLandingComposerPaste(
@@ -85,15 +101,15 @@ export function useLandingComposerPaste(
   fileDrops: IFileDropHost,
   mentionRoots: ReadonlyArray<string>,
 ): UseComposerPasteResult {
-  const beginPathInsertion = useCallback(():
-    ((paths: ReadonlyArray<string>) => boolean) | null => {
-    const handle = editorRef.current;
-    if (handle === null || !handle.isReady()) return null;
-    return handle.beginPathInsertion();
-  }, [editorRef]);
+  const beginAttachmentInsertion =
+    useCallback((): AttachmentInsertionCommit | null => {
+      const handle = editorRef.current;
+      if (handle === null || !handle.isReady()) return null;
+      return handle.beginAttachmentInsertion();
+    }, [editorRef]);
   const filePaths = useMemo(
-    () => ({ fileDrops, mentionRoots, beginPathInsertion }),
-    [fileDrops, mentionRoots, beginPathInsertion],
+    () => ({ fileDrops, mentionRoots, beginAttachmentInsertion }),
+    [fileDrops, mentionRoots, beginAttachmentInsertion],
   );
   const insertAttrs = useCallback(
     (attrs: ReadonlyArray<ImageAttachmentAttrs>): number => {
@@ -108,7 +124,15 @@ export function useLandingComposerPaste(
   const imageIngest = useMemo(
     (): ComposerImageIngest => ({
       convert: landingImageAttrsFromFiles,
-      onSettled: (accepted, _converted) => {
+      onSettled: (accepted, converted) => {
+        // Release the in-flight root retained in `landingImageAttrsFromFiles`
+        // for every converted hash - by now either the node is inserted (a
+        // live root via editor content, see `accepted`) or it's orphaned
+        // (reclaimed by the reconcile scheduled just below). Both outcomes no
+        // longer need the explicit retain.
+        converted.forEach((attr) => {
+          if (attr.hash !== undefined) releaseInFlightImageRoot(attr.hash);
+        });
         if (accepted.length === 0) {
           // Stored bytes for `converted` are now orphaned - the editor
           // wasn't ready to accept them - so reclaim them the same way a

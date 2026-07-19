@@ -22,7 +22,11 @@ import {
   releaseSession,
   sessionObjectUrl,
 } from "@/lib/composer/landing-image-store";
-import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
+import {
+  markLandingDraftsReady,
+  reconcile,
+  scheduleLandingImageReconcile,
+} from "@/lib/composer/landing-image-gc";
 
 vi.mock("@/lib/composer/landing-image-gc", async (importActual) => {
   const actual =
@@ -100,13 +104,19 @@ function makeHandle(
   const handle: ComposerPasteEditorHandle = {
     isReady: () => true,
     insertImageAttachments: (attrs) => inserted.push([...attrs]),
-    beginPathInsertion: () => (paths) => {
-      if (paths.length > 0) {
-        insertedPaths.push([...paths]);
-        focusCalls.count += 1;
-      }
-      return true;
-    },
+    // A mixed paste lands its image attrs through THIS commit (alongside
+    // paths, in one call), not through `insertImageAttachments` above - that
+    // only runs for a pure-image paste. See `runMixedIngest`.
+    beginAttachmentInsertion:
+      () =>
+      ({ attrs, paths }) => {
+        if (attrs.length > 0 || paths.length > 0) {
+          if (attrs.length > 0) inserted.push([...attrs]);
+          if (paths.length > 0) insertedPaths.push([...paths]);
+          focusCalls.count += 1;
+        }
+        return true;
+      },
     focus: () => {
       focusCalls.count += 1;
     },
@@ -220,7 +230,7 @@ describe("useLandingComposerPaste", () => {
         isReady: () => false,
         insertImageAttachments: (attrs: ReadonlyArray<ImageAttachmentAttrs>) =>
           inserted.push([...attrs]),
-        beginPathInsertion: () => null,
+        beginAttachmentInsertion: () => null,
         focus: () => undefined,
       },
     };
@@ -628,5 +638,78 @@ describe("useLandingComposerPaste - onDrop path-span parity", () => {
       "nested/b.txt",
       "/elsewhere/c.txt",
     ]);
+  });
+});
+
+// Round-2 finding 4: mixed image+path ingest stores image bytes as soon as
+// they convert but withholds the insertion until the unrelated async path
+// resolution ALSO settles - widening the paste->insert window `landing-
+// image-gc` has to survive. Without `retainInFlightImageRoot`/
+// `releaseInFlightImageRoot`, a reconcile mid-wait releases the hash's
+// session protection, and a SECOND reconcile then deletes the still-pending
+// image's bytes before the mixed commit ever lands.
+describe("useLandingComposerPaste - in-flight image GC root during a mixed paste", () => {
+  it("keeps a mixed paste's image bytes alive across reconciles while path resolution is still pending", async () => {
+    markLandingDraftsReady();
+    const inserted: ImageAttachmentAttrs[][] = [];
+    const commits: {
+      readonly attrs: ReadonlyArray<ImageAttachmentAttrs>;
+      readonly paths: ReadonlyArray<string>;
+    }[] = [];
+    const handle: ComposerPasteEditorHandle = {
+      isReady: () => true,
+      insertImageAttachments: (attrs) => inserted.push([...attrs]),
+      beginAttachmentInsertion: () => (input) => {
+        commits.push(input);
+        return true;
+      },
+      focus: () => undefined,
+    };
+    const editorRef = { current: handle };
+
+    let resolvePdfPath: ((paths: readonly string[]) => void) | null = null;
+    const fileDrops: IFileDropHost = {
+      resolveDroppedFilePaths: (files) => {
+        const file = files.at(0);
+        if (file !== undefined && file.type.startsWith("image/")) {
+          return Promise.resolve([]);
+        }
+        return new Promise((resolve) => {
+          resolvePdfPath = resolve;
+        });
+      },
+      copyDroppedFilePaths: (paths) => Promise.resolve([...paths]),
+    };
+    renderLandingHarness(editorRef, fileDrops, ["/repo"]);
+
+    const png = new File(["png-bytes"], "shot.png", { type: "image/png" });
+    const pdf = new File(["pdf-bytes"], "doc.pdf", {
+      type: "application/pdf",
+    });
+    const zone = screen.getByTestId("paste-zone");
+    fireEvent.paste(zone, { clipboardData: makeFileTransfer([png, pdf]) });
+
+    await waitFor(async () => {
+      expect(await imageHashKeys()).toHaveLength(1);
+    });
+    const [hash] = await imageHashKeys();
+
+    // Path resolution is still pending - reconcile twice in a row (the
+    // reviewer's exact repro shape) and confirm the bytes survive both.
+    await reconcile();
+    expect(await getImageBytes(hash)).not.toBeUndefined();
+    await reconcile();
+    expect(await getImageBytes(hash)).not.toBeUndefined();
+
+    await act(async () => {
+      resolvePdfPath?.(["/repo/doc.pdf"]);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(commits).toHaveLength(1));
+    expect(commits[0].paths).toEqual(["doc.pdf"]);
+    expect(commits[0].attrs).toHaveLength(1);
+    expect(await getImageBytes(hash)).not.toBeUndefined();
   });
 });

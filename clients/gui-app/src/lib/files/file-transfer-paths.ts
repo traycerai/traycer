@@ -30,6 +30,23 @@ export function collectDroppedFiles(
 }
 
 /**
+ * True when `dataTransfer` carries a payload an owner should actually claim:
+ * real `File` items, or at least one URI entry that PARSES to a genuine
+ * `file://` path. Unlike `dataTransferHasFiles` (a type-name-only check,
+ * safe during `dragover`/`dragenter` where content isn't readable), this
+ * reads actual clipboard/drop content via `getData` - only call it from
+ * `paste`/`drop` handlers. A `text/uri-list` carrying just `https://` (or
+ * another non-file scheme - an ordinary link paste) must NOT be claimed:
+ * `text/uri-list` commonly accompanies an ordinary link paste (e.g. copying
+ * a URL from a browser), and claiming on the type name alone - regardless of
+ * what it actually contains - silently swallows that paste.
+ */
+export function hasClaimableFileTransfer(dataTransfer: DataTransfer): boolean {
+  if (collectDroppedFiles(dataTransfer).length > 0) return true;
+  return collectDroppedFileUrlPaths(dataTransfer).length > 0;
+}
+
+/**
  * Resolves every file-like entry in `dataTransfer` to a durable on-disk path,
  * merging real `File` objects (via `fileDrops.resolveDroppedFilePaths`) with
  * URI-only entries (via `fileDrops.copyDroppedFilePaths`). File URLs are a

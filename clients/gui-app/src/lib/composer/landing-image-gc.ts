@@ -103,8 +103,9 @@ function imageHashesOf(content: JsonContent): Set<string> {
 }
 
 /**
- * Every hash that must NOT be collected: union of all persisted drafts' content
- * and the live editor mirror. The session cache is handled separately (it
+ * Every hash that must NOT be collected: union of all persisted drafts'
+ * content, the live editor mirror, and any explicit in-flight root (see
+ * `retainInFlightImageRoot`). The session cache is handled separately (it
  * protects the paste→insert window but its entries are reclaimed once a hash
  * leaves the live roots).
  */
@@ -114,7 +115,47 @@ function computeLiveRoots(): Set<string> {
     for (const hash of imageHashesOf(draft.content)) roots.add(hash);
   }
   for (const hash of landingComposerLiveImageHashes()) roots.add(hash);
+  for (const hash of inFlightRoots.keys()) roots.add(hash);
   return roots;
+}
+
+// Explicit GC roots for bytes stored ahead of a still-pending insertion, keyed
+// by hash with a refcount (two concurrent jobs could retain the same hash).
+// Mixed image+path ingest (`runMixedIngest`) stores image bytes as soon as
+// they convert, but withholds inserting the resulting node until an
+// unrelated async path resolution ALSO settles - widening the old, effectively
+// instantaneous paste→insert window to an arbitrary file-drop round trip.
+// Neither `liveRoots` (drafts + live editor content) nor the session cache
+// alone survives that window: a reconcile mid-wait sees the hash outside
+// `liveRoots` and releases its session entry (session release is keyed off
+// `!liveRoots.has(hash)`, see `reconcile` below), and a SECOND reconcile then
+// deletes the now-unprotected IndexedDB bytes before the insertion lands.
+const inFlightRoots = new Map<string, number>();
+
+/**
+ * Marks `hash` as a GC root until released. Call once per hash immediately
+ * after its bytes are stored (`putImage` resolving), before any awaited work
+ * that could let a reconcile run before the resulting node is inserted.
+ */
+export function retainInFlightImageRoot(hash: string): void {
+  inFlightRoots.set(hash, (inFlightRoots.get(hash) ?? 0) + 1);
+}
+
+/**
+ * Releases one retain from `retainInFlightImageRoot`. Call exactly once per
+ * retain - on successful insertion (the hash is by then a live root via
+ * editor content, so this only drops the now-redundant explicit root) and on
+ * failure/abort (the stored-but-unreferenced bytes fall back to the normal
+ * orphan sweep).
+ */
+export function releaseInFlightImageRoot(hash: string): void {
+  const count = inFlightRoots.get(hash);
+  if (count === undefined) return;
+  if (count <= 1) {
+    inFlightRoots.delete(hash);
+    return;
+  }
+  inFlightRoots.set(hash, count - 1);
 }
 
 /**

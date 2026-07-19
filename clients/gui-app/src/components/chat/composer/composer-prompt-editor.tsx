@@ -20,24 +20,56 @@ import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { cn } from "@/lib/utils";
 import { registerComposerFocus } from "@/lib/composer/composer-focus-registry";
 import { normalizeComposerContentWithSelection } from "@/lib/composer/composer-content-normalizer";
-import { dataTransferHasFiles } from "@/lib/files/file-transfer-paths";
+import { hasClaimableFileTransfer } from "@/lib/files/file-transfer-paths";
 
 import { buildComposerExtensions } from "./editor/editor-config";
 import { mentionSuggestionPluginKey } from "./editor/extensions/mention-extension";
 import { slashSuggestionPluginKey } from "./editor/extensions/slash-command-extension";
 import {
+  ATTACHMENT_JOB_SEQUENCE_META,
+  insertAttachmentsCommand,
   insertImageAttachmentsCommand,
-  insertPathSpansCommand,
+  type AttachmentInsertionCommit,
 } from "@/hooks/composer/use-composer-paste";
 import type { ImageAttachmentAttrs } from "./editor/extensions/image-attachment-extension";
 import type { ComposerPickerStore } from "./picker/composer-picker-store";
 
+function attachmentJobSequenceFromTransaction(tr: Transaction): number | null {
+  const value: unknown = tr.getMeta(ATTACHMENT_JOB_SEQUENCE_META);
+  return typeof value === "number" ? value : null;
+}
+
 /**
- * One-shot commit for a path-insertion job started by `beginPathInsertion`.
- * Returns `true` if it inserted (or there was nothing to insert), `false` if
- * the editor was torn down before the caller could commit.
+ * Maps a tracked anchor through one transaction, choosing side association
+ * per SOURCE of that transaction:
+ * - An EARLIER-sequenced sibling attachment job's own commit (tagged via
+ *   `ATTACHMENT_JOB_SEQUENCE_META`, read back here): the anchor advances past
+ *   it (right association) - that sibling started before this job, so its
+ *   content belongs before this job's.
+ * - Everything else - ordinary edits (typing) and a LATER-sequenced sibling
+ *   that happens to commit first: the anchor stays pinned where it was (left
+ *   association), so that content lands AFTER this job's eventual insertion,
+ *   not before it.
+ *
+ * A single fixed association can't get both cases right at once (verified
+ * empirically - see the round-2 fix notes): right association alone renders
+ * concurrent same-caret jobs in resolution order instead of paste order,
+ * left association alone renders a paste's content after text typed at the
+ * same caret afterward. Choosing per-transaction, by relative sequence,
+ * gives paste-order rendering regardless of resolution order AND keeps a
+ * pending paste pinned ahead of later typing - without needing an explicit
+ * job queue.
  */
-export type PathInsertionCommit = (paths: ReadonlyArray<string>) => boolean;
+function mapAttachmentAnchor(
+  pos: number,
+  tr: Transaction,
+  ownSequence: number,
+): number {
+  const siblingSequence = attachmentJobSequenceFromTransaction(tr);
+  const isEarlierSibling =
+    siblingSequence !== null && siblingSequence < ownSequence;
+  return tr.mapping.map(pos, isEarlierSibling ? 1 : -1);
+}
 
 export interface ComposerPromptEditorHandle {
   /**
@@ -62,19 +94,25 @@ export interface ComposerPromptEditorHandle {
     attrs: ReadonlyArray<ImageAttachmentAttrs>,
   ) => void;
   /**
-   * Starts a path-insertion job anchored to the caret position *right now*
-   * (not whenever the caller eventually has paths to insert - path
-   * resolution is asynchronous and the caret can move, or the editor can be
-   * torn down, before that happens). Returns `null` if the editor isn't
-   * ready. Otherwise returns a one-shot `commit` closure: call it with the
-   * resolved paths once available. `commit` maps the captured position
-   * forward through every transaction dispatched since (including ones from
-   * other concurrent jobs), inserts each path as its own inline-code span at
-   * that mapped position, and returns whether it actually inserted - `false`
-   * means the editor was destroyed in the meantime, so the caller should
-   * skip any accompanying user-facing feedback (e.g. a toast) too.
+   * Starts an attachment-insertion job anchored to the selection *right now*
+   * (not whenever the caller eventually has image attrs and/or paths to
+   * insert - both resolve asynchronously and the selection can move, or the
+   * editor can be torn down, before that happens). Returns `null` if the
+   * editor isn't ready. Otherwise returns a one-shot `commit` closure: call
+   * it once with the image attrs and/or resolved paths once available -
+   * whichever a caller has (a pure-path job passes `attrs: []`; a mixed
+   * image+path job passes both, landing them as ONE transaction/undo group
+   * against this SAME captured editor/bookmark, never split across two
+   * separate commits). `commit` maps the captured selection range forward
+   * through every transaction dispatched since (including ones from other
+   * concurrent jobs, via per-transaction association - see
+   * `mapAttachmentAnchor`), replaces that mapped range (matching normal
+   * paste-over-selection semantics), and returns whether it actually
+   * inserted - `false` means the editor was destroyed in the meantime, so
+   * the caller should skip any accompanying user-facing feedback (e.g. a
+   * toast) too.
    */
-  readonly beginPathInsertion: () => PathInsertionCommit | null;
+  readonly beginAttachmentInsertion: () => AttachmentInsertionCommit | null;
   readonly removeImageAttachmentById: (id: string) => void;
   /**
    * Insert a finalized dictation segment at the caret (with a trailing space
@@ -332,7 +370,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
 
   const handleDrop = useCallback<DragEventHandler<HTMLElement>>(
     (event) => {
-      if (editor !== null && dataTransferHasFiles(event.dataTransfer)) {
+      if (editor !== null && hasClaimableFileTransfer(event.dataTransfer)) {
         const dropPos = editor.view.posAtCoords({
           left: event.clientX,
           top: event.clientY,
@@ -358,36 +396,47 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     [editor, stabilizeImageAttachmentCaret],
   );
 
-  const beginPathInsertion = useCallback((): PathInsertionCommit | null => {
-    if (editor === null || editor.isDestroyed) return null;
-    let position = editor.utils.createMappablePosition(
-      editor.state.selection.to,
-    );
-    const onTransaction = ({
-      transaction,
-      appendedTransactions,
-    }: {
-      readonly transaction: Transaction;
-      readonly appendedTransactions: Transaction[];
-    }): void => {
-      for (const tr of [transaction, ...appendedTransactions]) {
-        position = editor.utils.getUpdatedPosition(position, tr).position;
-      }
-    };
-    editor.on("transaction", onTransaction);
-    let settled = false;
-    return (paths: ReadonlyArray<string>): boolean => {
-      if (settled) return false;
-      settled = true;
-      editor.off("transaction", onTransaction);
-      if (editor.isDestroyed) return false;
-      if (paths.length > 0) {
-        insertPathSpansCommand(editor, paths, position.position);
-        editor.commands.focus();
-      }
-      return true;
-    };
-  }, [editor]);
+  const attachmentJobSequenceRef = useRef(0);
+
+  const beginAttachmentInsertion =
+    useCallback((): AttachmentInsertionCommit | null => {
+      if (editor === null || editor.isDestroyed) return null;
+      const sequence = attachmentJobSequenceRef.current++;
+      const { from, to } = editor.state.selection;
+      let mappedFrom = from;
+      let mappedTo = to;
+      const onTransaction = ({
+        transaction,
+        appendedTransactions,
+      }: {
+        readonly transaction: Transaction;
+        readonly appendedTransactions: Transaction[];
+      }): void => {
+        for (const tr of [transaction, ...appendedTransactions]) {
+          mappedFrom = mapAttachmentAnchor(mappedFrom, tr, sequence);
+          mappedTo = mapAttachmentAnchor(mappedTo, tr, sequence);
+        }
+      };
+      editor.on("transaction", onTransaction);
+      let settled = false;
+      return ({ attrs, paths }): boolean => {
+        if (settled) return false;
+        settled = true;
+        editor.off("transaction", onTransaction);
+        if (editor.isDestroyed) return false;
+        if (attrs.length > 0 || paths.length > 0) {
+          insertAttachmentsCommand(editor, {
+            attrs,
+            paths,
+            range: { from: mappedFrom, to: mappedTo },
+            sequence,
+            stabilizeCaretBoundary: stabilizeImageAttachmentCaret,
+          });
+          editor.commands.focus();
+        }
+        return true;
+      };
+    }, [editor, stabilizeImageAttachmentCaret]);
 
   const removeImageAttachmentById = useCallback(
     (id: string) => {
@@ -452,13 +501,13 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
       clear,
       setContent,
       insertImageAttachments,
-      beginPathInsertion,
+      beginAttachmentInsertion,
       removeImageAttachmentById,
       insertDictatedText,
       dismissActiveSuggestion,
     }),
     [
-      beginPathInsertion,
+      beginAttachmentInsertion,
       clear,
       dismissActiveSuggestion,
       focus,
