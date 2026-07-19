@@ -1380,7 +1380,7 @@ describe("chat descendant status rollup", () => {
     expect(backgroundIcon).toBeTruthy();
     expect(backgroundIcon.getAttribute("class")).toContain("opacity-60");
     expect(
-      backgroundIcon.querySelector(".lucide-calendar-clock"),
+      backgroundIcon.querySelector(".lucide-message-square-clock"),
     ).not.toBeNull();
     expect(
       screen.queryByTestId("chat-descendant-status-running-chat-root"),

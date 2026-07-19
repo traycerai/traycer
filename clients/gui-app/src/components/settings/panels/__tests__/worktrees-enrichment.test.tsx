@@ -34,6 +34,11 @@ afterEach(() => {
 const HOST_ID = mockLocalHostEntry.hostId;
 // Slightly over the hook's internal 80ms report debounce.
 const WORKTREE_DEBOUNCE_SETTLE_MS = 120;
+// Under fake timers the batcher's coalescing window arms only once the query
+// actually mounts - i.e. during the act() flush AFTER an advance - so a fetch
+// needs one more act-sized advance to hit the wire. Comfortably above the
+// batcher's 25ms window.
+const WORKTREE_BATCH_FLUSH_MS = 50;
 // Passed as `worktreePaths` where a test exercises only the viewport
 // machinery - an empty denominator keeps the background sweep inert.
 const NO_SWEEP_PATHS: readonly string[] = [];
@@ -239,11 +244,15 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
     entriesByPath: ReadonlyMap<string, WorktreeHostEntryV14>,
     onPathRequest: ((path: string) => void) | null,
     // Awaited per requested path before the response resolves - lets a test
-    // hold probes in flight to observe concurrency/dedupe. `null` = respond
-    // immediately (no extra microtask boundary for the sync-handler tests).
+    // hold probes in flight to observe dedupe. `null` = respond immediately
+    // (no extra microtask boundary for the sync-handler tests).
     requestGate: ((path: string) => Promise<void>) | null,
     queryClient: QueryClient,
   ) {
+    // One entry per WIRE call, carrying the batched `activityPaths` it asked
+    // for - the chunking assertions read this (per-path counts stay on
+    // `onPathRequest`).
+    const wireRequests: Array<readonly string[]> = [];
     const client = new HostClient<HostRpcRegistry>({
       registry: hostRpcRegistry,
       invalidator: createHostQueryInvalidator(queryClient),
@@ -252,12 +261,14 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
         requestId: () => "req-1",
         handlers: {
           "worktree.listAllForHost": async (params) => {
-            // Per-path enrichment: return the enriched entry for each requested
-            // path (the panel always requests exactly one path per query).
+            // Batched enrichment: the panel coalesces per-path queries into
+            // chunked `activityPaths` calls; return the enriched entry for
+            // each requested path.
             const paths =
               "activityPaths" in params && params.activityPaths !== null
                 ? params.activityPaths
                 : [];
+            wireRequests.push([...paths]);
             const worktrees: WorktreeHostEntryV14[] = [];
             for (const path of paths) {
               // Snapshot the entry BEFORE the callbacks, so a callback that
@@ -282,7 +293,7 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
         {props.children}
       </QueryClientProvider>
     );
-    return { client, Wrapper, queryClient };
+    return { client, Wrapper, queryClient, wireRequests };
   }
 
   it("enriches a reported window, then keeps it enriched after the window shrinks", async () => {
@@ -410,6 +421,9 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
       result.current.reportVisiblePaths(["/wt/a"]);
       await vi.advanceTimersByTimeAsync(WORKTREE_DEBOUNCE_SETTLE_MS);
     });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(WORKTREE_BATCH_FLUSH_MS);
+    });
     expect(requests).toHaveLength(1);
 
     await act(async () => {
@@ -489,6 +503,9 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
       result.current.reportVisiblePaths(["/wt/a"]);
       await vi.advanceTimersByTimeAsync(WORKTREE_DEBOUNCE_SETTLE_MS);
     });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(WORKTREE_BATCH_FLUSH_MS);
+    });
     expect(requests).toHaveLength(1);
 
     await act(async () => {
@@ -536,6 +553,9 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
       result.current.reportVisiblePaths(["/wt/a"]);
       await vi.advanceTimersByTimeAsync(WORKTREE_DEBOUNCE_SETTLE_MS);
     });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(WORKTREE_BATCH_FLUSH_MS);
+    });
     expect(requests).toHaveLength(1);
 
     // Exponential backoff (750ms, 1.5s, 3s, 6s, 12s, then 20s flat), budgeted
@@ -580,18 +600,13 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
         paths.map((path, i) => [path, warmEntry(path, `feat-${i}`)]),
       );
       const requests: string[] = [];
-      let inFlight = 0;
-      let maxInFlight = 0;
       const fixture = createFixture(
         entriesByPath,
         (path) => {
           requests.push(path);
         },
         async () => {
-          inFlight += 1;
-          maxInFlight = Math.max(maxInFlight, inFlight);
           await new Promise((resolve) => setTimeout(resolve, 5));
-          inFlight -= 1;
         },
         createAppQueryClient(),
       );
@@ -607,10 +622,14 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
       });
       // Every path probed exactly once…
       expect([...requests].sort()).toEqual([...paths].sort());
-      // …never more than one chunk's worth of probes in flight at a time, and
-      // genuinely chunked (concurrent within a chunk, not serialized).
-      expect(maxInFlight).toBeLessThanOrEqual(8);
-      expect(maxInFlight).toBeGreaterThan(1);
+      // …and the wire is genuinely batched: each sweep chunk rides ONE
+      // `activityPaths` call bounded at the chunk size - 20 paths is exactly
+      // ceil(20/8) = 3 calls, never a per-path fan-out or a whole-list call.
+      expect(fixture.wireRequests).toHaveLength(3);
+      for (const call of fixture.wireRequests) {
+        expect(call.length).toBeLessThanOrEqual(8);
+      }
+      expect(fixture.wireRequests.some((call) => call.length > 1)).toBe(true);
     });
 
     it("probes a path exactly once when the sweep and the viewport race for it", async () => {
@@ -675,16 +694,20 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
         { wrapper: fixture.Wrapper },
       );
 
-      // The mount-time sweep chunk fires without any visible-paths report.
+      // The mount-time sweep chunk fires without any visible-paths report
+      // (one advance to let the batcher's coalescing window flush).
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(WORKTREE_BATCH_FLUSH_MS);
       });
       expect(requests).toHaveLength(1);
 
       // Cold → the sweep's exponential backoff re-probes it (first retry
-      // after 750ms).
+      // after 750ms; the re-probe's batch window flushes on its own advance).
       await act(async () => {
         await vi.advanceTimersByTimeAsync(1_000);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(WORKTREE_BATCH_FLUSH_MS);
       });
       expect(requests).toHaveLength(2);
       expect(result.current.enrichedByPath.get("/wt/a")?.prState).toBe("none");
@@ -718,7 +741,7 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
       );
 
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(WORKTREE_BATCH_FLUSH_MS);
       });
       expect(requests).toHaveLength(1);
 
@@ -735,6 +758,10 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
         await act(async () => {
           await vi.advanceTimersByTimeAsync(step.advanceMs);
         });
+        // Each re-probe's batch window flushes on its own advance.
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(WORKTREE_BATCH_FLUSH_MS);
+        });
         expect(requests).toHaveLength(step.expectedCount);
       }
 
@@ -747,6 +774,9 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
           await vi.advanceTimersByTimeAsync(15_000);
         });
       }
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(WORKTREE_BATCH_FLUSH_MS);
+      });
       expect(requests).toHaveLength(10);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(60_000);
@@ -760,18 +790,13 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
         paths.map((path, i) => [path, warmEntry(path, `feat-${i}`)]),
       );
       const requests: string[] = [];
-      let inFlight = 0;
-      let maxInFlight = 0;
       const fixture = createFixture(
         entriesByPath,
         (path) => {
           requests.push(path);
         },
         async () => {
-          inFlight += 1;
-          maxInFlight = Math.max(maxInFlight, inFlight);
           await new Promise((resolve) => setTimeout(resolve, 5));
-          inFlight -= 1;
         },
         createAppQueryClient(),
       );
@@ -784,15 +809,14 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
         expect(result.current.enrichedByPath.size).toBe(12);
       });
       expect(requests).toHaveLength(12);
-      maxInFlight = 0;
+      const wireCallsBeforeRefresh = fixture.wireRequests.length;
 
       // A refresh invalidates the method scope with `refetchType: "active"`
       // (mirroring `WorktreesBody.onRefresh`). The swept entries have no
       // observers, so nothing refetches directly - only the sweep can pick
       // them back up, woken by the invalidation cache event. The re-sweep must
       // be the same bounded chunk walk, never a whole-list fan-out: every path
-      // re-probed exactly once, and never more than one chunk's worth of
-      // probes in flight.
+      // re-probed exactly once, riding chunk-sized batched wire calls.
       await act(async () => {
         await fixture.queryClient.invalidateQueries({
           queryKey: METHOD_SCOPE,
@@ -803,8 +827,12 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
         expect(requests).toHaveLength(24);
       });
       expect([...requests.slice(12)].sort()).toEqual([...paths].sort());
-      expect(maxInFlight).toBeLessThanOrEqual(8);
-      expect(maxInFlight).toBeGreaterThan(1);
+      const resweepCalls = fixture.wireRequests.slice(wireCallsBeforeRefresh);
+      expect(resweepCalls).toHaveLength(2); // ceil(12/8)
+      for (const call of resweepCalls) {
+        expect(call.length).toBeLessThanOrEqual(8);
+      }
+      expect(resweepCalls.some((call) => call.length > 1)).toBe(true);
     });
 
     it("keeps a permanently rejecting refresh bounded (regression: isInvalidated persists across failed refetches)", async () => {
@@ -831,7 +859,7 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
         { wrapper: fixture.Wrapper },
       );
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(WORKTREE_BATCH_FLUSH_MS);
       });
       expect(requests).toHaveLength(1);
 
@@ -866,6 +894,124 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
         await vi.advanceTimersByTimeAsync(60_000);
       });
       expect(requests).toHaveLength(settled);
+    });
+  });
+
+  describe("sentinel guard (cold-host clobber regression)", () => {
+    // A cold host answers reads it cannot derive with the `unresolvedRow`
+    // SENTINEL - `resolvedAt: null`, unknown branch, `gitRemovable: false` -
+    // which the panel renders as "detached HEAD" / "Waiting for host
+    // verification…". Caching those over good rows (and then persisting them)
+    // turned one cold read into a fleet of permanently-unknown rows.
+    function sentinelEntry(worktreePath: string): WorktreeHostEntryV14 {
+      return {
+        ...enrichedEntry(worktreePath, "feat-a"),
+        branch: null,
+        gitRemovable: false,
+        branchStatus: null,
+        resolvedAt: null,
+      };
+    }
+
+    it("keeps a resolved cached row when a later read answers with the sentinel", async () => {
+      const resolved: WorktreeHostEntryV14 = {
+        ...enrichedEntry("/wt/a", "feat-a"),
+        prState: "none",
+      };
+      const entriesByPath = new Map<string, WorktreeHostEntryV14>([
+        ["/wt/a", resolved],
+      ]);
+      // Count host reads so we can prove the sentinel refetch actually landed.
+      // The guard's whole job is to leave the cached data UNCHANGED, so a
+      // `waitFor` on the data cannot tell "guard preserved the row" apart from
+      // "the refetch never happened" - only the request count can.
+      const requests: string[] = [];
+      const fixture = createFixture(
+        entriesByPath,
+        (path) => requests.push(path),
+        null,
+        createAppQueryClient(),
+      );
+      const { result } = renderHook(
+        () =>
+          useWorktreeActivityEnrichment(fixture.client, true, HOST_ID, [
+            "/wt/a",
+          ]),
+        { wrapper: fixture.Wrapper },
+      );
+      await waitFor(() => {
+        expect(result.current.enrichedByPath.get("/wt/a")?.branch).toBe(
+          "feat-a",
+        );
+      });
+      const requestsBeforeSentinel = requests.length;
+
+      // The host goes cold (restart) and now answers the sentinel. Invalidation
+      // re-arms the sweep, which re-probes the row through the batcher.
+      entriesByPath.set("/wt/a", sentinelEntry("/wt/a"));
+      await act(async () => {
+        await fixture.queryClient.invalidateQueries({
+          queryKey: METHOD_SCOPE,
+          refetchType: "active",
+        });
+      });
+      // The sentinel response must actually land before the assertion, or the
+      // test would pass trivially on stale cache without exercising the guard.
+      await waitFor(() => {
+        expect(requests.length).toBeGreaterThan(requestsBeforeSentinel);
+      });
+
+      // Guard kept the resolved row despite the sentinel refetch landing.
+      expect(result.current.enrichedByPath.get("/wt/a")?.branch).toBe("feat-a");
+      expect(
+        result.current.enrichedByPath.get("/wt/a")?.resolvedAt,
+      ).not.toBeNull();
+    });
+
+    it("still accepts a resolved row that replaces another resolved row", async () => {
+      const first: WorktreeHostEntryV14 = {
+        ...enrichedEntry("/wt/a", "feat-a"),
+        prState: "none",
+      };
+      const renamed: WorktreeHostEntryV14 = {
+        ...enrichedEntry("/wt/a", "feat-renamed"),
+        prState: "none",
+      };
+      const entriesByPath = new Map<string, WorktreeHostEntryV14>([
+        ["/wt/a", first],
+      ]);
+      const fixture = createFixture(
+        entriesByPath,
+        null,
+        null,
+        createAppQueryClient(),
+      );
+      const { result } = renderHook(
+        () =>
+          useWorktreeActivityEnrichment(fixture.client, true, HOST_ID, [
+            "/wt/a",
+          ]),
+        { wrapper: fixture.Wrapper },
+      );
+      await waitFor(() => {
+        expect(result.current.enrichedByPath.get("/wt/a")?.branch).toBe(
+          "feat-a",
+        );
+      });
+
+      // Guard must not freeze the cache: resolved data still wins.
+      entriesByPath.set("/wt/a", renamed);
+      await act(async () => {
+        await fixture.queryClient.invalidateQueries({
+          queryKey: METHOD_SCOPE,
+          refetchType: "active",
+        });
+      });
+      await waitFor(() => {
+        expect(result.current.enrichedByPath.get("/wt/a")?.branch).toBe(
+          "feat-renamed",
+        );
+      });
     });
   });
 
