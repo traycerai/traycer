@@ -179,6 +179,56 @@ describe("composer path paste/drop integration (real editor)", () => {
       expect(joined.indexOf("mid.txt")).toBeLessThan(joined.indexOf("BBBB"));
       expect(joined.indexOf("BBBB")).toBeLessThan(joined.indexOf("ZZZ"));
     });
+
+    it("keeps a deferred path before same-caret typing through undo and redo", async () => {
+      let resolvePaths: ((paths: readonly string[]) => void) | null = null;
+      const fileDrops = makeFileDrops({
+        resolveDroppedFilePaths: () =>
+          new Promise((resolve) => {
+            resolvePaths = resolve;
+          }),
+        copyDroppedFilePaths: (paths) => Promise.resolve([...paths]),
+      });
+      const handleRef = await mountedHandle(fileDrops, {
+        mentionRoots: ["/repo"],
+        initialContent: paragraphText("AB"),
+        initialSelection: { from: 3, to: 3 },
+      });
+      const editor = screen.getByTestId("composer-editor");
+      act(() => {
+        handleRef.current?.focus();
+      });
+
+      fireEvent.paste(editor, {
+        clipboardData: makeFileTransfer([
+          new File(["x"], "mid.txt", { type: "text/plain" }),
+        ]),
+      });
+      act(() => {
+        handleRef.current?.insertDictatedText("NEW");
+      });
+
+      fireEvent.keyDown(editor, { key: "z", code: "KeyZ", ctrlKey: true });
+      fireEvent.keyDown(editor, {
+        key: "z",
+        code: "KeyZ",
+        ctrlKey: true,
+        shiftKey: true,
+      });
+
+      expect(resolvePaths).not.toBeNull();
+      await act(async () => {
+        resolvePaths?.(["/repo/mid.txt"]);
+        await flushMicrotasksRaw();
+      });
+
+      expect(pathSpanTexts(handleRef.current)).toEqual(["mid.txt"]);
+      const joined = textRuns(handleRef.current)
+        .map((run) => run.text)
+        .join("");
+      expect(joined.indexOf("AB")).toBeLessThan(joined.indexOf("mid.txt"));
+      expect(joined.indexOf("mid.txt")).toBeLessThan(joined.indexOf("NEW"));
+    });
   });
   // Round-2 finding 3: `hasClaimableFileTransfer` parses URI content instead
   // of trusting the `text/uri-list` type name alone, so an ordinary link

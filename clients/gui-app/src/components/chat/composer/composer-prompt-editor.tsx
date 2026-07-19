@@ -355,7 +355,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
       readonly appendedTransactions: Transaction[];
     }): void => {
       [transaction, ...appendedTransactions].forEach((tr) => {
-        position = tr.mapping.map(position);
+        position = tr.mapping.map(position, -1);
       });
     };
     editor.on("transaction", onTransaction);
