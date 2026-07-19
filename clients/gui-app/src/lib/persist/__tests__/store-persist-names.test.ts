@@ -49,7 +49,7 @@ interface StorePersistHandle {
 const STORE_PERSIST_NAME_CASES: ReadonlyArray<
   [label: string, store: StorePersistHandle, expectedName: string]
 > = [
-  // ── 17 static singletons ─────────────────────────────────────────────────
+  // ── Static singletons ────────────────────────────────────────────────────
   [
     "useCommandPaletteStore",
     useCommandPaletteStore,
@@ -60,6 +60,11 @@ const STORE_PERSIST_NAME_CASES: ReadonlyArray<
     useComposerDraftStore,
     "traycer-gui-app:composer-drafts",
   ],
+  // NOTE: useInterviewDraftStore is intentionally absent. It no longer uses the
+  // zustand `persist` middleware (so it has no `.persist.getOptions().name`): it
+  // persists one localStorage key per (chatId, blockId) via `interviewDraftKey`
+  // for cross-window isolation — the same reason the app-local display-receipt
+  // store is not listed here.
   [
     "useArtifactReadStateStore",
     useArtifactReadStateStore,
@@ -108,7 +113,7 @@ const STORE_PERSIST_NAME_CASES: ReadonlyArray<
     "traycer-gui-app:workspace-folders",
   ],
 
-  // ── 6 scoped singletons (initial `anon` bucket at construction) ───────────
+  // ── Scoped singletons (initial `anon` bucket at construction) ─────────────
   [
     "useComposerRunSettingsStore",
     useComposerRunSettingsStore,

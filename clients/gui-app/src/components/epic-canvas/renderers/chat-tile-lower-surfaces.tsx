@@ -76,6 +76,10 @@ export interface ChatLowerTurnState {
 
 export interface ChatLowerInterviewState {
   readonly pending: PendingInterviewView | null;
+  // True while an answer/skip for the pending block is in flight or accepted
+  // but unresolved (derived from the chat session's pending/accepted actions).
+  // Gates the card so the same action cannot be double-sent.
+  readonly isBusy: boolean;
   readonly onAnswer: (
     blockId: string,
     answers: ReadonlyArray<InterviewAnswer>,
@@ -404,13 +408,15 @@ function ComposerSurface(props: {
     return (
       <ComposerSlotShell topSpacing={layout.topSpacing} bottomSpacing="normal">
         <PendingInterviewCard
-          key={model.interview.pending.blockId}
+          key={`${model.composer.nodeId}:${model.interview.pending.blockId}`}
+          chatId={model.composer.nodeId}
           blockId={model.interview.pending.blockId}
           toolName={model.interview.pending.toolName}
           title={model.interview.pending.title}
           description={model.interview.pending.description}
           questions={model.interview.pending.questions}
           isActive={model.composer.isActive}
+          isBusy={model.interview.isBusy}
           onSubmit={model.access.canAct ? model.interview.onAnswer : null}
           onSkip={model.access.canAct ? model.interview.onError : null}
           onFork={model.access.canAct ? model.interview.onFork : null}
