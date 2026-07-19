@@ -449,6 +449,7 @@ describe.skipIf(process.platform === "win32")(
     }, 10_000);
 
     it("accepts a start exactly at the bounded publication allowance", async () => {
+      expect(PROCESS_START_PUBLICATION_ALLOWANCE_MS).toBe(1_250);
       const installed = await writeInstall({});
       const live = await spawnLiveProcess();
       const pid = writePid({
@@ -457,7 +458,7 @@ describe.skipIf(process.platform === "win32")(
       });
       const publishedAtMs = Date.parse(pid.startedAt);
       const previousReader = __setProcessStartTimeReaderForTest(
-        () => publishedAtMs + PROCESS_START_PUBLICATION_ALLOWANCE_MS,
+        () => publishedAtMs + 1_250,
       );
 
       try {
@@ -480,6 +481,7 @@ describe.skipIf(process.platform === "win32")(
     });
 
     it("rejects a start one millisecond beyond the publication allowance", async () => {
+      expect(PROCESS_START_PUBLICATION_ALLOWANCE_MS).toBe(1_250);
       const installed = await writeInstall({});
       const live = await spawnLiveProcess();
       const pid = writePid({
@@ -488,7 +490,7 @@ describe.skipIf(process.platform === "win32")(
       });
       const publishedAtMs = Date.parse(pid.startedAt);
       const previousReader = __setProcessStartTimeReaderForTest(
-        () => publishedAtMs + PROCESS_START_PUBLICATION_ALLOWANCE_MS + 1,
+        () => publishedAtMs + 1_251,
       );
 
       try {
@@ -508,32 +510,48 @@ describe.skipIf(process.platform === "win32")(
       expect((await readHostInstallRecord(ENV))?.runtimeVersion).toBeNull();
     });
 
-    it("rejects a live PID against a stale publication timestamp using the real OS-start reader", async () => {
+    it("rejects a live PID against a stale publication timestamp across 400 real OS-start reads", async () => {
       const installed = await writeInstall({});
       const live = await spawnLiveProcess();
-      const processStartedAtMs = readProcessStartTimeMs(live.pid);
-      if (processStartedAtMs === null) {
-        throw new Error("could not reread the spawned process's start time");
-      }
-      const pid = writePid({
-        pid: live.pid,
-        startedAt: new Date(
-          processStartedAtMs - PROCESS_START_PUBLICATION_ALLOWANCE_MS - 1,
-        ).toISOString(),
-      });
+      await Array.from({ length: 400 }).reduce(
+        async (previous): Promise<void> => {
+          await previous;
+          const processStartedAtMs = readProcessStartTimeMs(live.pid);
+          if (processStartedAtMs === null) {
+            throw new Error(
+              "could not reread the spawned process's start time",
+            );
+          }
+          const pid = writePid({
+            pid: live.pid,
+            // Five seconds beyond the allowance keeps this real-reader
+            // regression far from ps's one-second rollover quantum; the
+            // synthetic cases above exclusively own the exact boundary.
+            startedAt: new Date(
+              processStartedAtMs -
+                PROCESS_START_PUBLICATION_ALLOWANCE_MS -
+                5_000,
+            ).toISOString(),
+          });
 
-      await expect(
-        stampRuntime({
-          environment: ENV,
-          expectedInstallGeneration: generationFor(installed),
-          observedPid: pid.pid,
-          observedStartedAt: pid.startedAt,
-          observedRuntimeVersion: pid.version,
-        }),
-      ).resolves.toEqual({ outcome: "superseded", reason: "pid-not-live" });
+          await expect(
+            stampRuntime({
+              environment: ENV,
+              expectedInstallGeneration: generationFor(installed),
+              observedPid: pid.pid,
+              observedStartedAt: pid.startedAt,
+              observedRuntimeVersion: pid.version,
+            }),
+          ).resolves.toEqual({
+            outcome: "superseded",
+            reason: "pid-not-live",
+          });
+        },
+        Promise.resolve(),
+      );
 
       expect((await readHostInstallRecord(ENV))?.runtimeVersion).toBeNull();
-    });
+    }, 60_000);
 
     it("covers the legacy-tuple fingerprint path (no installId)", async () => {
       const installed = await writeInstall({ installId: null });
