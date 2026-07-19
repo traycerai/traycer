@@ -6,16 +6,14 @@ import type { ImageAttachmentAttrs } from "@/components/chat/composer/editor/ext
 import {
   collectImages,
   useComposerPasteEvents,
-  type AttachmentInsertionCommit,
   type ComposerImageIngest,
   type ComposerPasteEditorHandle,
+  type PathInsertionCommit,
   type UseComposerPasteResult,
 } from "@/hooks/composer/use-composer-paste";
 import { putImage } from "@/lib/composer/landing-image-store";
 import {
-  releaseInFlightImageRoot,
   reserveLandingImageBudget,
-  retainInFlightImageRoot,
   scheduleLandingImageReconcile,
 } from "@/lib/composer/landing-image-gc";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
@@ -63,17 +61,12 @@ async function landingImageAttrsFromFiles(
     });
     return [];
   }
-  // Each task owns its own retain lease. Waiting for every task to settle on
-  // failure is deliberate: a sibling can put+retain after another file has
-  // rejected, and every such late lease must be released before this ingest
-  // reports failure (the same ordering applies to abort/unmount).
-  const results = await Promise.allSettled(
+  return Promise.all(
     accepted.map(async (file) => {
       signal.throwIfAborted();
       const bytes = new Uint8Array(await file.arrayBuffer());
       signal.throwIfAborted();
       const hash = await putImage(bytes);
-      retainInFlightImageRoot(hash);
       signal.throwIfAborted();
       return {
         id: uuidv4(),
@@ -84,18 +77,6 @@ async function landingImageAttrsFromFiles(
       } satisfies ImageAttachmentAttrs;
     }),
   );
-  const failure = results.find((result) => result.status === "rejected");
-  if (failure !== undefined) {
-    results.forEach((result) => {
-      if (result.status === "fulfilled") {
-        releaseInFlightImageRoot(result.value.hash);
-      }
-    });
-    throw failure.reason;
-  }
-  return results.flatMap((result) =>
-    result.status === "fulfilled" ? [result.value] : [],
-  );
 }
 
 export function useLandingComposerPaste(
@@ -105,15 +86,14 @@ export function useLandingComposerPaste(
   fileDrops: IFileDropHost,
   mentionRoots: ReadonlyArray<string>,
 ): UseComposerPasteResult {
-  const beginAttachmentInsertion =
-    useCallback((): AttachmentInsertionCommit | null => {
-      const handle = editorRef.current;
-      if (handle === null || !handle.isReady()) return null;
-      return handle.beginAttachmentInsertion();
-    }, [editorRef]);
+  const beginPathInsertion = useCallback((): PathInsertionCommit | null => {
+    const handle = editorRef.current;
+    if (handle === null || !handle.isReady()) return null;
+    return handle.beginPathInsertion();
+  }, [editorRef]);
   const filePaths = useMemo(
-    () => ({ fileDrops, mentionRoots, beginAttachmentInsertion }),
-    [fileDrops, mentionRoots, beginAttachmentInsertion],
+    () => ({ fileDrops, mentionRoots, beginPathInsertion }),
+    [fileDrops, mentionRoots, beginPathInsertion],
   );
   const insertAttrs = useCallback(
     (attrs: ReadonlyArray<ImageAttachmentAttrs>): number => {
@@ -128,20 +108,10 @@ export function useLandingComposerPaste(
   const imageIngest = useMemo(
     (): ComposerImageIngest => ({
       convert: landingImageAttrsFromFiles,
-      onSettled: (accepted, converted) => {
-        // Release the in-flight root retained in `landingImageAttrsFromFiles`
-        // for every converted hash - by now either the node is inserted (a
-        // live root via editor content, see `accepted`) or it's orphaned
-        // (reclaimed by the reconcile scheduled just below). Both outcomes no
-        // longer need the explicit retain.
-        converted.forEach((attr) => {
-          if (attr.hash !== undefined) releaseInFlightImageRoot(attr.hash);
-        });
+      onSettled: (accepted) => {
         if (accepted.length === 0) {
-          // Stored bytes for `converted` are now orphaned - the editor
-          // wasn't ready to accept them - so reclaim them the same way a
-          // failed ingest does below (their session entries keep the bytes
-          // safe until the reconcile runs).
+          // The editor was unavailable after conversion, so this image has no
+          // live node and can be reclaimed by the normal sweep.
           scheduleLandingImageReconcile();
           return;
         }
@@ -158,12 +128,8 @@ export function useLandingComposerPaste(
           surface: "draft",
           blocker: analyticsBlockerFromError(error),
         });
-        // A failed or aborted ingest (e.g. one image of a multi-image paste
-        // failed to hash/store, or the composer unmounted mid-flight)
-        // inserts nothing, but earlier images may already be stored - now
-        // orphaned. Schedule a reconcile to reclaim them (their session
-        // entries keep the bytes safe until it runs) regardless of cause;
-        // only the user-facing failure toast is abort-specific.
+        // A failed or aborted conversion can leave stored bytes without a
+        // node, so schedule the normal orphan sweep in either case.
         if (!aborted) {
           reportableErrorToast(
             "Couldn't attach the image.",

@@ -25,7 +25,7 @@ afterEach(() => {
 
 /**
  * Exercises `insertPathSpansCommand` (via `ComposerPromptEditorHandle.
- * beginAttachmentInsertion`'s commit closure) against the real TipTap editor /
+ * beginPathInsertion`'s commit closure) against the real TipTap editor /
  * ProseMirror doc used by every composer surface, rather than a mocked
  * editor handle - a fully mocked handle would hide real insertion-order,
  * mark, and undo-step bugs.
@@ -35,10 +35,7 @@ describe("insertPathSpansCommand via the real composer editor", () => {
     const handleRef = await mountedHandle();
 
     act(() => {
-      handleRef.current?.beginAttachmentInsertion()?.({
-        attrs: [],
-        paths: ["src/app.ts"],
-      });
+      handleRef.current?.beginPathInsertion()?.(["src/app.ts"]);
     });
 
     expect(pathSpanRuns(handleRef.current)).toEqual([
@@ -53,10 +50,7 @@ describe("insertPathSpansCommand via the real composer editor", () => {
     const handleRef = await mountedHandle();
 
     act(() => {
-      handleRef.current?.beginAttachmentInsertion()?.({
-        attrs: [],
-        paths: ["a.ts", "nested/b.ts"],
-      });
+      handleRef.current?.beginPathInsertion()?.(["a.ts", "nested/b.ts"]);
     });
 
     expect(pathSpanRuns(handleRef.current)).toEqual([
@@ -75,7 +69,7 @@ describe("insertPathSpansCommand via the real composer editor", () => {
     const before = handleRef.current?.getJSON();
 
     act(() => {
-      handleRef.current?.beginAttachmentInsertion()?.({ attrs: [], paths: [] });
+      handleRef.current?.beginPathInsertion()?.([]);
     });
 
     expect(handleRef.current?.getJSON()).toEqual(before);
@@ -86,10 +80,7 @@ describe("insertPathSpansCommand via the real composer editor", () => {
     const before = handleRef.current?.getJSON();
 
     act(() => {
-      handleRef.current?.beginAttachmentInsertion()?.({
-        attrs: [],
-        paths: ["a.ts", "b.ts"],
-      });
+      handleRef.current?.beginPathInsertion()?.(["a.ts", "b.ts"]);
     });
     expect(handleRef.current?.isEmpty()).toBe(false);
 

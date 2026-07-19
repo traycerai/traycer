@@ -1,5 +1,10 @@
 import type { IFileDropHost } from "@traycer-clients/shared/platform/runner-host";
 
+export interface FileTransferEntries {
+  readonly files: readonly File[];
+  readonly fileUrlPaths: readonly string[];
+}
+
 /**
  * True when `dataTransfer` carries a file-like payload: real `File` items, or
  * a URI-only flavor a source without a `File` object still exposes (macOS
@@ -42,8 +47,24 @@ export function collectDroppedFiles(
  * what it actually contains - silently swallows that paste.
  */
 export function hasClaimableFileTransfer(dataTransfer: DataTransfer): boolean {
-  if (collectDroppedFiles(dataTransfer).length > 0) return true;
-  return collectDroppedFileUrlPaths(dataTransfer).length > 0;
+  const { files, fileUrlPaths } = collectFileTransferEntries(dataTransfer);
+  return files.length > 0 || fileUrlPaths.length > 0;
+}
+
+/**
+ * Returns the file-like payload a surface should process. A real `File` is
+ * authoritative: Finder and VS Code often include a duplicate URI flavor,
+ * while URI paths are only needed for sources that expose no File object.
+ */
+export function collectFileTransferEntries(
+  dataTransfer: DataTransfer,
+): FileTransferEntries {
+  const files = collectDroppedFiles(dataTransfer);
+  return {
+    files,
+    fileUrlPaths:
+      files.length === 0 ? collectDroppedFileUrlPaths(dataTransfer) : [],
+  };
 }
 
 /**
@@ -61,9 +82,7 @@ export function resolveFileTransferPaths(
   dataTransfer: DataTransfer,
   fileDrops: IFileDropHost,
 ): Promise<readonly string[]> | null {
-  const files = collectDroppedFiles(dataTransfer);
-  const fileUrlPaths =
-    files.length === 0 ? collectDroppedFileUrlPaths(dataTransfer) : [];
+  const { files, fileUrlPaths } = collectFileTransferEntries(dataTransfer);
   if (files.length === 0 && fileUrlPaths.length === 0) return null;
   const resolvedFilePaths =
     files.length === 0

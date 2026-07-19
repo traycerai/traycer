@@ -20,15 +20,12 @@ import {
   analyticsBlockerFromError,
 } from "@/lib/analytics";
 import {
-  collectDroppedFileUrlPaths,
-  collectDroppedFiles,
+  collectFileTransferEntries,
   dataTransferHasFiles,
   hasClaimableFileTransfer,
 } from "@/lib/files/file-transfer-paths";
 import {
   getBasename,
-  isWindowsLikePath,
-  pathComparisonKey,
   relativizeToWorkspaceRoot,
 } from "@/lib/path/cross-platform-path";
 
@@ -39,8 +36,7 @@ export const IMAGE_READ_TIMEOUT_MS = 15_000;
  * Bound on a single file/URL's `fileDrops` round trip. Without this, a
  * stalled host IPC call never settles `resolveFilePaths`'s `Promise.all`,
  * which permanently gates submit (`isResolvingFilePaths` never clears) and
- * leaks the caret-tracking transaction listener registered by
- * `beginAttachmentInsertion` for the mounted editor's lifetime.
+ * keeps the path-insertion job pending indefinitely.
  */
 export const FILE_PATH_RESOLUTION_TIMEOUT_MS = 20_000;
 
@@ -197,9 +193,7 @@ function base64PayloadFromDataUrl(dataUrl: string): string {
 
 /**
  * Converts raw files to image attachment attrs (base64 vs hash-only differs
- * per surface) without inserting them - insertion is coordinated centrally
- * by `useComposerPasteEvents` so a mixed image+path paste can land both as
- * one grouped edit (see `runMixedIngest`). `onSettled` receives the attrs
+ * per surface) without inserting them. `onSettled` receives the attrs
  * that were actually accepted by the editor alongside every attr that was
  * successfully converted (accepted can be a strict subset, e.g. when the
  * editor isn't ready) - each surface's own bookkeeping (analytics, orphaned-
@@ -255,10 +249,8 @@ export interface UseComposerPasteResult {
 }
 
 /**
- * Whether a composer surface should hold submission open - either pipeline
- * (image ingest or file-path resolution) can still land content, either as
- * two independent pastes or as one mixed paste coordinated by
- * `runMixedIngest`.
+ * Whether a composer surface should hold submission open while either ingest
+ * pipeline can still land content.
  */
 export function isAttachmentIngestPending(
   paste: Pick<
@@ -269,22 +261,8 @@ export function isAttachmentIngestPending(
   return paste.isIngestingImages || paste.isResolvingFilePaths;
 }
 
-/**
- * What a single attachment-insertion commit lands: image attrs, path spans,
- * or both (a mixed paste). Bundled into one input so a mixed paste's images
- * and paths ALWAYS land through the SAME commit - one captured editor/
- * bookmark, one transaction, one undo group. See
- * `ComposerPromptEditorHandle.beginAttachmentInsertion` for the full
- * contract.
- */
-export interface AttachmentInsertionInput {
-  readonly attrs: ReadonlyArray<ImageAttachmentAttrs>;
-  readonly paths: ReadonlyArray<string>;
-}
-
-export type AttachmentInsertionCommit = (
-  input: AttachmentInsertionInput,
-) => boolean;
+/** Commits resolved paths at the position captured when the paste began. */
+export type PathInsertionCommit = (paths: ReadonlyArray<string>) => boolean;
 
 /**
  * Non-image paste/drop ingest: resolves every non-image file (and any
@@ -298,14 +276,13 @@ export interface ComposerFilePathIngestArgs {
   readonly fileDrops: IFileDropHost;
   readonly mentionRoots: ReadonlyArray<string>;
   /**
-   * Starts an attachment-insertion job anchored to the caret *now* (called
+   * Starts a path-insertion job anchored to the caret now (called
    * synchronously from `onPaste`/`onDrop`, before any async resolution
-   * begins), returning a one-shot commit to call once the image attrs and/or
-   * paths are ready - or `null` if the editor isn't ready to start one at
-   * all. See `ComposerPromptEditorHandle.beginAttachmentInsertion` for the
-   * full contract.
+   * begins), returning a one-shot commit to call once paths are ready - or
+   * `null` if the editor isn't ready to start one at all. See
+   * `ComposerPromptEditorHandle.beginPathInsertion` for the full contract.
    */
-  readonly beginAttachmentInsertion: () => AttachmentInsertionCommit | null;
+  readonly beginPathInsertion: () => PathInsertionCommit | null;
 }
 
 function isNonImageFile(file: File): boolean {
@@ -416,44 +393,13 @@ async function resolveFilePaths(
   fileUrlPaths: ReadonlyArray<string>,
   fileDrops: IFileDropHost,
 ): Promise<ResolvedFilePaths> {
-  // Resolve image Files only when a URI source is present to correlate. A
-  // normal image-only or mixed image+document paste keeps the existing image
-  // ingest's host-call footprint; their non-image inputs are the only paths
-  // that can be inserted.
-  const filesRequiringResolution =
-    fileUrlPaths.length === 0 ? files.filter(isNonImageFile) : files;
-  const fileResults = await Promise.all(
-    filesRequiringResolution.map((file) =>
-      resolveFileToPath(file, fileDrops),
+  const [fileResults, urlResults] = await Promise.all([
+    Promise.all(files.map((file) => resolveFileToPath(file, fileDrops))),
+    Promise.all(
+      fileUrlPaths.map((urlPath) => resolveUrlPathToPath(urlPath, fileDrops)),
     ),
-  );
-  // A Finder transfer can carry a real File alongside its file:// source. The
-  // URI path is copied to a newly named temp file, so comparing *resolved*
-  // outputs would not identify the pair. Compare source paths before copying
-  // instead, including image Files: an image File + URI alias must keep the
-  // existing image-only behavior. If the File could not resolve, leave the
-  // URI eligible as the durability fallback.
-  const fileSourcePaths = fileResults.flatMap((result) =>
-    result.path === null ? [] : [result.path],
-  );
-  const uriPathsToMaterialize = fileUrlPaths.filter(
-    (urlPath) =>
-      !fileSourcePaths.some((filePath) =>
-        pathsHaveSameSourceIdentity(filePath, urlPath),
-      ),
-  );
-  const urlResults = await Promise.all(
-    uriPathsToMaterialize.map((urlPath) =>
-      resolveUrlPathToPath(urlPath, fileDrops),
-    ),
-  );
-  const results = [
-    ...fileResults.filter((_, index) => {
-      const file = filesRequiringResolution.at(index);
-      return file !== undefined && isNonImageFile(file);
-    }),
-    ...urlResults,
-  ];
+  ]);
+  const results = [...fileResults, ...urlResults];
   const resolvedPaths = results.flatMap((result) =>
     result.path === null ? [] : [result.path],
   );
@@ -463,20 +409,11 @@ async function resolveFilePaths(
   return { resolvedPaths, failedNames };
 }
 
-function pathsHaveSameSourceIdentity(left: string, right: string): boolean {
-  const caseInsensitive =
-    isWindowsLikePath(left) || isWindowsLikePath(right);
-  return (
-    pathComparisonKey(left, caseInsensitive) ===
-    pathComparisonKey(right, caseInsensitive)
-  );
-}
-
 async function resolveAndInsertFilePaths(
   files: ReadonlyArray<File>,
   fileUrlPaths: ReadonlyArray<string>,
   filePaths: ComposerFilePathIngestArgs,
-  commit: AttachmentInsertionCommit,
+  commit: PathInsertionCommit,
 ): Promise<void> {
   const { resolvedPaths, failedNames } = await resolveFilePaths(
     files,
@@ -490,83 +427,8 @@ async function resolveAndInsertFilePaths(
   // replaced) while this resolution was in flight - skip both the insertion
   // it already skipped internally and the toast, since there's no longer a
   // composer surface for either to land on.
-  if (!commit({ attrs: [], paths: displayPaths })) return;
+  if (!commit(displayPaths)) return;
   showFilePathResolutionToast(resolvedPaths.length, failedNames);
-}
-
-/**
- * Coordinates a MIXED paste (image files alongside non-image files/paths in
- * the same clipboard/drop) as one grouped edit: both conversions run
- * concurrently, and neither lands until BOTH have settled, at which point
- * image attrs and path spans are handed to ONE `commit` call together - the
- * SAME captured editor/bookmark, ONE ProseMirror transaction. Committing
- * independently (a separate image-insertion call against "whatever the
- * editor ref currently points at" and a separate path commit against the
- * captured bookmark) risks landing far enough apart in time that ProseMirror's
- * history plugin (`newGroupDelay`, 500ms by default) starts a new undo group
- * for the second one - so a single Undo only reverts part of the paste - and
- * risks a torn-down/replaced editor accepting one half but not the other.
- */
-interface MixedIngestInput {
-  readonly files: ReadonlyArray<File>;
-  readonly fileUrlPaths: ReadonlyArray<string>;
-  readonly signal: AbortSignal;
-}
-
-interface MixedIngestContext {
-  readonly imageIngest: ComposerImageIngest;
-  readonly filePaths: ComposerFilePathIngestArgs;
-  readonly commit: AttachmentInsertionCommit;
-}
-
-async function runMixedIngest(
-  input: MixedIngestInput,
-  ctx: MixedIngestContext,
-): Promise<void> {
-  const { files, fileUrlPaths, signal } = input;
-  const { imageIngest, filePaths, commit } = ctx;
-  const [imageResult, pathResult] = await Promise.all([
-    imageIngest.convert(files, signal).then(
-      (
-        converted,
-      ): {
-        readonly ok: true;
-        readonly converted: ReadonlyArray<ImageAttachmentAttrs>;
-      } => ({
-        ok: true,
-        converted,
-      }),
-      (error: unknown): { readonly ok: false; readonly error: unknown } => ({
-        ok: false,
-        error,
-      }),
-    ),
-    resolveFilePaths(files, fileUrlPaths, filePaths.fileDrops),
-  ]);
-
-  const converted: ReadonlyArray<ImageAttachmentAttrs> = imageResult.ok
-    ? imageResult.converted
-    : [];
-  const displayPaths = pathResult.resolvedPaths.map((path) =>
-    displayPathForInsertion(path, filePaths.mentionRoots),
-  );
-  // Nothing to commit (e.g. every file was oversized/unresolvable) - `live`
-  // stays true so the caller's bookkeeping proceeds as normal, matching
-  // `commit`'s own "nothing to insert" no-op contract.
-  const live =
-    converted.length === 0 && displayPaths.length === 0
-      ? true
-      : commit({ attrs: converted, paths: displayPaths });
-  const accepted = live ? converted : [];
-
-  if (converted.length > 0) imageIngest.onSettled(accepted, converted);
-  if (!imageResult.ok)
-    imageIngest.onRejected(imageResult.error, signal.aborted);
-  if (!live) return;
-  showFilePathResolutionToast(
-    pathResult.resolvedPaths.length,
-    pathResult.failedNames,
-  );
 }
 
 /**
@@ -575,10 +437,8 @@ async function runMixedIngest(
  * filtering + the 5MB cap belong to the ingest via `collectImages`. Surfaces
  * wrap this with their own ingest: `useComposerPasteAdapter` (base64) for
  * chat / new-conversation, `useLandingComposerPaste` (hash-only) for landing.
- * Non-image file/URL entries always resolve through `filePaths`, identically
- * across every surface (see `resolveAndInsertFilePaths`). A paste/drop that
- * carries BOTH kinds routes through `runMixedIngest` instead of the two
- * independent paths below, so they land as one grouped edit.
+ * Non-image file/URL entries resolve through `filePaths`, while images keep
+ * their existing independent ingest behavior.
  */
 export function useComposerPasteEvents(
   imageIngest: ComposerImageIngest,
@@ -628,9 +488,7 @@ export function useComposerPasteEvents(
   const attachFilePaths = useCallback(
     (files: ReadonlyArray<File>, fileUrlPaths: ReadonlyArray<string>) => {
       if (files.length === 0 && fileUrlPaths.length === 0) return;
-      // Anchors the job to the caret *now*, synchronously, before the async
-      // resolution below starts - see `beginAttachmentInsertion`'s contract.
-      const commit = filePaths.beginAttachmentInsertion();
+      const commit = filePaths.beginPathInsertion();
       if (commit === null) return;
       setPendingPathCount((count) => count + 1);
       void resolveAndInsertFilePaths(
@@ -646,55 +504,22 @@ export function useComposerPasteEvents(
     [filePaths],
   );
 
-  const attachMixed = useCallback(
-    (
-      files: ReadonlyArray<File>,
-      fileUrlPaths: ReadonlyArray<string>,
-    ) => {
-      const commit = filePaths.beginAttachmentInsertion();
-      if (commit === null) {
-        // No live editor to anchor the job to at all - fall back to the
-        // independent image path rather than dropping the images too.
-        attachImageFiles(files);
-        return;
-      }
-      trackPendingImageJob((signal) =>
-        runMixedIngest(
-          { files, fileUrlPaths, signal },
-          { imageIngest, filePaths, commit },
-        ),
-      );
-    },
-    [attachImageFiles, filePaths, imageIngest, trackPendingImageJob],
-  );
-
   const dispatchFileTransfer = useCallback(
     (files: ReadonlyArray<File>, fileUrlPaths: ReadonlyArray<string>) => {
-      const hasImageFiles = files.some((file) => !isNonImageFile(file));
       const nonImageFiles = files.filter(isNonImageFile);
-      const hasPaths = nonImageFiles.length > 0 || fileUrlPaths.length > 0;
-      if (hasImageFiles && hasPaths) {
-        attachMixed(files, fileUrlPaths);
-        return;
-      }
       if (files.length > 0) attachImageFiles(files);
       attachFilePaths(nonImageFiles, fileUrlPaths);
     },
-    [attachFilePaths, attachImageFiles, attachMixed],
+    [attachFilePaths, attachImageFiles],
   );
 
   const onPaste = useCallback(
     (event: ClipboardEvent<HTMLElement>) => {
       if (!hasClaimableFileTransfer(event.clipboardData)) return;
       event.preventDefault();
-      const files = collectDroppedFiles(event.clipboardData);
-      // Collected as a UNION with `files` (not gated on `files.length === 0`)
-      // - a DataTransfer can carry a real File alongside a text/uri-list/
-      // public.file-url entry for the SAME source, or additional distinct
-      // URI entries alongside a File for a different one. Cross-flavor
-      // aliases of the same source are suppressed after resolution, once
-      // both sides' resolved paths are known (see `resolveFilePaths`).
-      const fileUrlPaths = collectDroppedFileUrlPaths(event.clipboardData);
+      const { files, fileUrlPaths } = collectFileTransferEntries(
+        event.clipboardData,
+      );
       dispatchFileTransfer(files, fileUrlPaths);
     },
     [dispatchFileTransfer],
@@ -731,9 +556,9 @@ export function useComposerPasteEvents(
       if (!hasClaimableFileTransfer(event.dataTransfer)) return;
       event.preventDefault();
       event.stopPropagation();
-      const files = collectDroppedFiles(event.dataTransfer);
-      // Union with `files` - see the matching comment in `onPaste`.
-      const fileUrlPaths = collectDroppedFileUrlPaths(event.dataTransfer);
+      const { files, fileUrlPaths } = collectFileTransferEntries(
+        event.dataTransfer,
+      );
       dispatchFileTransfer(files, fileUrlPaths);
     },
     [dispatchFileTransfer],
@@ -803,7 +628,7 @@ export interface ComposerPasteEditorHandle {
   readonly insertImageAttachments: (
     attrs: ReadonlyArray<ImageAttachmentAttrs>,
   ) => void;
-  readonly beginAttachmentInsertion: () => AttachmentInsertionCommit | null;
+  readonly beginPathInsertion: () => PathInsertionCommit | null;
   readonly focus: () => void;
 }
 
@@ -824,15 +649,14 @@ export function useComposerPaste(
     },
     [editorRef],
   );
-  const beginAttachmentInsertion =
-    useCallback((): AttachmentInsertionCommit | null => {
-      const handle = editorRef.current;
-      if (handle === null || !handle.isReady()) return null;
-      return handle.beginAttachmentInsertion();
-    }, [editorRef]);
+  const beginPathInsertion = useCallback((): PathInsertionCommit | null => {
+    const handle = editorRef.current;
+    if (handle === null || !handle.isReady()) return null;
+    return handle.beginPathInsertion();
+  }, [editorRef]);
   const filePaths = useMemo(
-    () => ({ fileDrops, mentionRoots, beginAttachmentInsertion }),
-    [fileDrops, mentionRoots, beginAttachmentInsertion],
+    () => ({ fileDrops, mentionRoots, beginPathInsertion }),
+    [fileDrops, mentionRoots, beginPathInsertion],
   );
   return useComposerPasteAdapter(insertAttrs, filePaths);
 }
@@ -853,18 +677,6 @@ export function insertImageAttachmentsCommand(
   }
 }
 
-/**
- * Transaction meta key tagging an attachment-insertion commit's own
- * transaction with the sequence number `beginAttachmentInsertion` assigned
- * it. Sibling jobs anchored at the same caret read this back (see
- * `mapAttachmentAnchor` in `composer-prompt-editor.tsx`) to decide, per
- * observed transaction, whether their own tracked anchor should advance past
- * it (an earlier-sequenced sibling's content) or stay pinned before it
- * (everything else) - what makes concurrent same-caret jobs render in paste
- * order regardless of resolution order.
- */
-export const ATTACHMENT_JOB_SEQUENCE_META = "composerAttachmentJobSequence";
-
 function pathSpansContent(paths: ReadonlyArray<string>): Array<{
   readonly type: string;
   readonly text: string;
@@ -878,60 +690,31 @@ function pathSpansContent(paths: ReadonlyArray<string>): Array<{
   return content;
 }
 
-export interface InsertAttachmentsCommandInput {
-  readonly attrs: ReadonlyArray<ImageAttachmentAttrs>;
+export interface InsertPathSpansCommandInput {
   readonly paths: ReadonlyArray<string>;
-  readonly range: { readonly from: number; readonly to: number };
-  readonly sequence: number;
-  readonly stabilizeCaretBoundary: boolean;
+  readonly position: number;
 }
 
 /**
- * Inserts image attrs and/or resolved paths as ONE ProseMirror transaction
- * (one undo group), at an explicit `range` (rather than "wherever the
- * selection currently is") because both resolve asynchronously - by the time
- * this runs, the caret/selection the user pasted at may have moved. Callers
- * map a range captured at paste/drop time forward through any intervening
- * transactions (see `ComposerPromptEditorHandle.beginAttachmentInsertion`)
- * before calling this. A non-collapsed range is replaced first, matching
- * normal paste-over-selection semantics. Images land before paths (this
- * ordering is an accepted product decision, not itself under test); each
- * path is its own inline-code span, space-separated, with a trailing PLAIN
- * space so the caret lands past the code mark - continued typing resumes as
- * prose rather than extending the last path. `unsetMark` clears the code
- * mark from stored marks as a second, explicit guarantee alongside the plain
- * trailing character.
+ * Inserts resolved paths in one history group at a mapped caret position.
+ * Each path is its own inline-code span, separated by plain spaces, followed
+ * by a plain trailing space so continued typing resumes outside the code mark.
  */
-export function insertAttachmentsCommand(
+export function insertPathSpansCommand(
   editor: Editor,
-  input: InsertAttachmentsCommandInput,
+  input: InsertPathSpansCommandInput,
 ): void {
-  const { attrs, paths, range, sequence, stabilizeCaretBoundary } = input;
-  if (attrs.length === 0 && paths.length === 0) return;
-  // History's 500ms grouping would otherwise fold this deferred commit into
-  // typing that landed at the same caret while resolution was pending. Close
-  // both boundaries: this transaction starts a fresh group, and the no-op
-  // transaction below prevents immediately-following typing from joining it.
-  let chain = editor.chain().command(({ tr }) => {
-    closeHistory(tr);
-    return true;
-  }).setTextSelection(range);
-  if (range.from !== range.to) chain = chain.deleteSelection();
-  for (const attr of attrs) {
-    chain = chain.insertImageAttachment(attr);
-  }
-  if (paths.length > 0) {
-    chain = chain.insertContent(pathSpansContent(paths)).unsetMark("code");
-  }
-  chain
+  const { paths, position } = input;
+  if (paths.length === 0) return;
+  let chain = editor
+    .chain()
     .command(({ tr }) => {
-      tr.setMeta(ATTACHMENT_JOB_SEQUENCE_META, sequence);
+      closeHistory(tr);
       return true;
     })
-    .run();
-  if (attrs.length > 0 && paths.length === 0 && stabilizeCaretBoundary) {
-    stabilizeTerminalImageAttachmentCaret(editor);
-  }
+    .setTextSelection(position);
+  chain = chain.insertContent(pathSpansContent(paths)).unsetMark("code");
+  chain.run();
   editor.view.dispatch(closeHistory(editor.state.tr));
 }
 

@@ -20,14 +20,9 @@ import {
   getImageBytes,
   imageHashKeys,
   releaseSession,
-  sessionHashKeys,
   sessionObjectUrl,
 } from "@/lib/composer/landing-image-store";
-import {
-  markLandingDraftsReady,
-  reconcile,
-  scheduleLandingImageReconcile,
-} from "@/lib/composer/landing-image-gc";
+import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
 
 vi.mock("@/lib/composer/landing-image-gc", async (importActual) => {
   const actual =
@@ -73,10 +68,13 @@ let urlCounter = 0;
 beforeEach(async () => {
   URL.createObjectURL = vi.fn(() => `blob:mock/${++urlCounter}`);
   URL.revokeObjectURL = vi.fn();
-  for (const hash of await imageHashKeys()) {
-    await deleteImage(hash);
-    releaseSession(hash);
-  }
+  const hashes = await imageHashKeys();
+  await Promise.all(
+    hashes.map(async (hash) => {
+      await deleteImage(hash);
+      releaseSession(hash);
+    }),
+  );
   vi.mocked(toast.error).mockClear();
   vi.mocked(scheduleLandingImageReconcile).mockClear();
 });
@@ -105,19 +103,14 @@ function makeHandle(
   const handle: ComposerPasteEditorHandle = {
     isReady: () => true,
     insertImageAttachments: (attrs) => inserted.push([...attrs]),
-    // A mixed paste lands its image attrs through THIS commit (alongside
-    // paths, in one call), not through `insertImageAttachments` above - that
-    // only runs for a pure-image paste. See `runMixedIngest`.
-    beginAttachmentInsertion:
-      () =>
-      ({ attrs, paths }) => {
-        if (attrs.length > 0 || paths.length > 0) {
-          if (attrs.length > 0) inserted.push([...attrs]);
-          if (paths.length > 0) insertedPaths.push([...paths]);
-          focusCalls.count += 1;
-        }
-        return true;
-      },
+    // Paths commit independently of image insertion (A1: mixed may be 2 undo steps).
+    beginPathInsertion: () => (paths) => {
+      if (paths.length > 0) {
+        insertedPaths.push([...paths]);
+        focusCalls.count += 1;
+      }
+      return true;
+    },
     focus: () => {
       focusCalls.count += 1;
     },
@@ -231,7 +224,7 @@ describe("useLandingComposerPaste", () => {
         isReady: () => false,
         insertImageAttachments: (attrs: ReadonlyArray<ImageAttachmentAttrs>) =>
           inserted.push([...attrs]),
-        beginAttachmentInsertion: () => null,
+        beginPathInsertion: () => null,
         focus: () => undefined,
       },
     };
@@ -639,175 +632,5 @@ describe("useLandingComposerPaste - onDrop path-span parity", () => {
       "nested/b.txt",
       "/elsewhere/c.txt",
     ]);
-  });
-});
-
-// Round-2 finding 4: mixed image+path ingest stores image bytes as soon as
-// they convert but withholds the insertion until the unrelated async path
-// resolution ALSO settles - widening the paste->insert window `landing-
-// image-gc` has to survive. Without `retainInFlightImageRoot`/
-// `releaseInFlightImageRoot`, a reconcile mid-wait releases the hash's
-// session protection, and a SECOND reconcile then deletes the still-pending
-// image's bytes before the mixed commit ever lands.
-describe("useLandingComposerPaste - in-flight image GC root during a mixed paste", () => {
-  it("keeps a mixed paste's image bytes alive across reconciles while path resolution is still pending", async () => {
-    markLandingDraftsReady();
-    const inserted: ImageAttachmentAttrs[][] = [];
-    const commits: {
-      readonly attrs: ReadonlyArray<ImageAttachmentAttrs>;
-      readonly paths: ReadonlyArray<string>;
-    }[] = [];
-    const handle: ComposerPasteEditorHandle = {
-      isReady: () => true,
-      insertImageAttachments: (attrs) => inserted.push([...attrs]),
-      beginAttachmentInsertion: () => (input) => {
-        commits.push(input);
-        return true;
-      },
-      focus: () => undefined,
-    };
-    const editorRef = { current: handle };
-
-    let resolvePdfPath: ((paths: readonly string[]) => void) | null = null;
-    const fileDrops: IFileDropHost = {
-      resolveDroppedFilePaths: (files) => {
-        const file = files.at(0);
-        if (file !== undefined && file.type.startsWith("image/")) {
-          return Promise.resolve([]);
-        }
-        return new Promise((resolve) => {
-          resolvePdfPath = resolve;
-        });
-      },
-      copyDroppedFilePaths: (paths) => Promise.resolve([...paths]),
-    };
-    renderLandingHarness(editorRef, fileDrops, ["/repo"]);
-
-    const png = new File(["png-bytes"], "shot.png", { type: "image/png" });
-    const pdf = new File(["pdf-bytes"], "doc.pdf", {
-      type: "application/pdf",
-    });
-    const zone = screen.getByTestId("paste-zone");
-    fireEvent.paste(zone, { clipboardData: makeFileTransfer([png, pdf]) });
-
-    await waitFor(async () => {
-      expect(await imageHashKeys()).toHaveLength(1);
-    });
-    const [hash] = await imageHashKeys();
-
-    // Path resolution is still pending - reconcile twice in a row (the
-    // reviewer's exact repro shape) and confirm the bytes survive both.
-    await reconcile();
-    expect(await getImageBytes(hash)).not.toBeUndefined();
-    await reconcile();
-    expect(await getImageBytes(hash)).not.toBeUndefined();
-
-    await act(async () => {
-      resolvePdfPath?.(["/repo/doc.pdf"]);
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    await waitFor(() => expect(commits).toHaveLength(1));
-    expect(commits[0].paths).toEqual(["doc.pdf"]);
-    expect(commits[0].attrs).toHaveLength(1);
-    expect(await getImageBytes(hash)).not.toBeUndefined();
-  });
-});
-
-// Round-3: `Promise.allSettled` + per-task retain leases. One sibling can
-// fail before slower siblings finish put+retain; those late leases must
-// still be released on the failure path so two reconciles reclaim
-// session/bytes (including when siblings share a content hash / refcount).
-describe("useLandingComposerPaste - sibling image failure releases late retain leases", () => {
-  it("reclaims session and bytes after one image fails before slow duplicate-hash siblings settle", async () => {
-    markLandingDraftsReady();
-    const inserted: ImageAttachmentAttrs[][] = [];
-    const { handle } = makeHandle(inserted, []);
-    const editorRef = { current: handle };
-    const { result } = renderHook(() =>
-      useLandingComposerPaste(editorRef, NOOP_FILE_DROPS, NO_MENTION_ROOTS),
-    );
-
-    const failing = new File(["same-bytes"], "fail.png", {
-      type: "image/png",
-    });
-    const slowA = new File(["same-bytes"], "slow-a.png", {
-      type: "image/png",
-    });
-    const slowB = new File(["same-bytes"], "slow-b.png", {
-      type: "image/png",
-    });
-
-    const releaseGates: Array<() => void> = [];
-    const originalArrayBuffer = File.prototype.arrayBuffer;
-    const arrayBufferSpy = vi
-      .spyOn(File.prototype, "arrayBuffer")
-      .mockImplementation(function (this: File) {
-        if (this.name === "fail.png") {
-          return Promise.reject(new Error("read failed"));
-        }
-        if (this.name === "slow-a.png" || this.name === "slow-b.png") {
-          return new Promise<ArrayBuffer>((resolve, reject) => {
-            releaseGates.push(() => {
-              originalArrayBuffer
-                .call(this)
-                .then(resolve, reject);
-            });
-          });
-        }
-        return originalArrayBuffer.call(this);
-      });
-
-    act(() => {
-      result.current.attachImageFiles([failing, slowA, slowB]);
-    });
-
-    // Failure path has already rejected its read; slow siblings are still
-    // gated. Nothing inserted yet.
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    expect(inserted).toHaveLength(0);
-    expect(releaseGates).toHaveLength(2);
-
-    // Settle both slow siblings - identical content → one hash, two retains.
-    await act(async () => {
-      for (const release of releaseGates) release();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    await waitFor(() => {
-      expect(toast.error).toHaveBeenCalledWith("Couldn't attach the image.", {
-        description: "Please try adding it again.",
-      });
-    });
-    expect(inserted).toHaveLength(0);
-
-    // Bytes were stored (and session-seeded) by the slow siblings before the
-    // failure path released every late retain lease.
-    await waitFor(async () => {
-      expect(await imageHashKeys()).toHaveLength(1);
-    });
-    const [hash] = await imageHashKeys();
-    expect(await getImageBytes(hash)).not.toBeUndefined();
-
-    // First reconcile: hash is no longer an in-flight root, so the session
-    // entry is released. Second reconcile: without session protection the
-    // orphaned IDB bytes are deleted. Two steps cover the refcount release
-    // path for the duplicate-hash retains.
-    await reconcile();
-    expect(sessionHashKeys()).not.toContain(hash);
-    // Bytes may still be present until the second pass (session was the
-    // delete-root on the first pass).
-    await reconcile();
-    expect(await getImageBytes(hash)).toBeUndefined();
-    expect(await imageHashKeys()).toHaveLength(0);
-    expect(sessionObjectUrl(hash)).toBeNull();
-
-    arrayBufferSpy.mockRestore();
   });
 });
