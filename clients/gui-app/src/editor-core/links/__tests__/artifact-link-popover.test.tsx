@@ -687,6 +687,29 @@ describe("ArtifactLinkPopover", () => {
     expect(screen.queryByRole("dialog", { name: "Edit link" })).toBeNull();
   });
 
+  it("keeps hover ownership when Escape reverts a hover-promoted edit, so pointer leave still hides the card", async () => {
+    vi.useFakeTimers();
+    const editor = makeEditor(`${LINK_CONTENT}<p>Elsewhere</p>`);
+    editor.commands.setTextSelection(editor.state.doc.content.size - 2);
+    renderPopover(editor, true);
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    const anchor = editor.view.dom.querySelector("a");
+    if (anchor === null) throw new Error("Expected anchor");
+
+    fireEvent.pointerOver(anchor);
+    await act(() => vi.advanceTimersByTimeAsync(300));
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Link URL" }), {
+      key: "Escape",
+    });
+
+    const preview = screen.getByRole("dialog", { name: "Link preview" });
+    fireEvent.pointerLeave(preview);
+    await act(() => vi.advanceTimersByTimeAsync(100));
+
+    expect(screen.queryByRole("dialog", { name: "Link preview" })).toBeNull();
+  });
+
   it("cancels a pending hover when selection changes before the delay", async () => {
     vi.useFakeTimers();
     const editor = makeEditor(`${LINK_CONTENT}<p>Other text</p>`);
@@ -1406,6 +1429,27 @@ describe("ArtifactLinkPopover", () => {
       url: "https://example.com",
     });
     expect(screen.queryByRole("dialog", { name: "Link preview" })).toBeNull();
+  });
+
+  it("cancels a pending hover-show when a plain click navigates the link first", async () => {
+    vi.useFakeTimers();
+    const editor = makeEditor(`${LINK_CONTENT}<p>Elsewhere</p>`);
+    editor.commands.setTextSelection(editor.state.doc.content.size - 2);
+    const { openLink } = renderPopover(editor, true);
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    const anchor = editor.view.dom.querySelector("a");
+    if (anchor === null) throw new Error("Expected anchor");
+
+    fireEvent.pointerOver(anchor);
+    await act(() => vi.advanceTimersByTimeAsync(100));
+    fireEvent.mouseDown(anchor, { button: 0 });
+    fireEvent.mouseUp(anchor, { button: 0 });
+    fireEvent.click(anchor);
+    expect(openLink).toHaveBeenCalledTimes(1);
+
+    await act(() => vi.advanceTimersByTimeAsync(1_000));
+    expect(screen.queryByRole("dialog", { name: "Link preview" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "Edit link" })).toBeNull();
   });
 
   it("navigates a plain editable click on a file link", () => {

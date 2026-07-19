@@ -667,7 +667,14 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
   const textDirtyRef = useRef(false);
   const expectedCaretPositionRef = useRef<number | null>(null);
   const focusEditUrlRef = useRef(false);
-  const revertibleEditRef = useRef(false);
+  // The trigger the current edit promotion started from, captured by
+  // `beginEditing` so Escape can revert the card to a read state that keeps
+  // its original ownership: a hover-opened card must return to
+  // `trigger: "hover"` (so `scheduleHoverHide` still closes it on pointer
+  // leave) even though editing itself runs under caret ownership. `null`
+  // means the open editor was not promoted from a read card (create mode or
+  // Cmd+K on an existing link), so Escape dismisses instead of reverting.
+  const revertTriggerRef = useRef<"hover" | "caret" | null>(null);
   const cardRef = useRef<HTMLDivElement | null>(null);
   const urlInputRef = useRef<HTMLInputElement | null>(null);
   const showTimerRef = useRef<number | null>(null);
@@ -718,7 +725,7 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
       cancelHide();
       hrefDirtyRef.current = false;
       textDirtyRef.current = false;
-      revertibleEditRef.current = false;
+      revertTriggerRef.current = null;
       setLiveTarget(nextTarget);
       setHref(nextTarget.href);
       setDisplayText(nextTarget.text);
@@ -732,7 +739,7 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
     if (!editable || current?.mode !== "edit") return;
     cancelHide();
     focusEditUrlRef.current = true;
-    revertibleEditRef.current = true;
+    revertTriggerRef.current = current.trigger;
     setLiveTarget({ ...current, trigger: "caret", editing: true });
   }, [cancelHide, editable, setLiveTarget]);
 
@@ -743,7 +750,9 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
     textDirtyRef.current = false;
     setHref(current.href);
     setDisplayText(current.text);
-    setLiveTarget({ ...current, editing: false });
+    const trigger = revertTriggerRef.current ?? current.trigger;
+    revertTriggerRef.current = null;
+    setLiveTarget({ ...current, trigger, editing: false });
   }, [setLiveTarget]);
 
   const expectCaretPosition = useCallback((position: number): void => {
@@ -831,11 +840,21 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
       if (rawHref === null) return;
       // Plain and modifier clicks route identically now: a navigable href
       // (external/file) always drives the opener via `routeHref` below; a
-      // non-navigable href (hash, unclassified schemes) falls through as
-      // "default" and, outside the editable+modifier+hash carve-out just
-      // below, does nothing - letting ProseMirror's own mousedown handling
-      // (unblocked by `handleMouseDown` for those hrefs) place the caret.
+      // hash or empty href falls through as "default" and, outside the
+      // editable+modifier+hash carve-out just below, does nothing - letting
+      // ProseMirror's own mousedown handling (unblocked by `handleMouseDown`
+      // for those hrefs) place the caret. An `ignore`-classified href
+      // (unrecognized scheme) is deliberately suppressed instead: clicks
+      // neither navigate nor move the caret, and the link stays reachable
+      // for editing through the hover card.
       const result = routeHref(rawHref);
+      if (result !== "default") {
+        // The click itself resolves the link (navigation or deliberate
+        // suppression), so a hover-show timer armed by the preceding
+        // `pointerover` must not fire afterwards and open a preview card
+        // for the link the user just clicked.
+        cancelShow();
+      }
       if (result === "default") {
         const normalizedHref = rawHref.trim();
         if (
@@ -1070,7 +1089,7 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
     if (
       current?.mode === "edit" &&
       current.editing &&
-      revertibleEditRef.current
+      revertTriggerRef.current !== null
     ) {
       revertDraft();
       return;
