@@ -30,6 +30,7 @@ import type {
   HostDoctorIssue,
   HostDoctorReport,
   FreePortAndRestartInput,
+  HostOperationStatus,
   IHostManagement,
 } from "@traycer-clients/shared/platform/runner-host";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
@@ -73,6 +74,22 @@ function HostDoctorCardInner(props: HostDoctorCardInnerProps) {
   );
   const [freePortPrompt, setFreePortPrompt] =
     useState<FreePortAndRestartInput | null>(null);
+
+  // Same cross-surface single-flight signal Settings → Host reads (Ticket:
+  // host-update-race-conditions) - a tracked restart/install/update started
+  // from ANOTHER surface must gate Doctor's fix actions too, since a Doctor
+  // fix racing a tracked restart-class operation interleaves two independent
+  // stop/kill/start sequences (worst on Windows, where one can kill the
+  // other's freshly started host).
+  const { data: operationStatus } = useQuery(
+    queryOptions<HostOperationStatus | null>({
+      queryKey: runnerQueryKeys.hostOperationStatus(management),
+      queryFn: () => management.getOperationStatus(),
+      staleTime: Infinity,
+    }),
+  );
+  const sharedOperationActive =
+    operationStatus !== undefined && operationStatus !== null;
 
   const {
     data: report,
@@ -208,6 +225,7 @@ function HostDoctorCardInner(props: HostDoctorCardInnerProps) {
       recurrence={recurrenceModel.recurrence}
       reportFetching={reportFetching}
       fixPendingCode={fixMutation.isPending ? fixMutation.variables.code : null}
+      externalOperationActive={sharedOperationActive}
       freePortPrompt={freePortPrompt}
       freePortPending={freePortMutation.isPending}
       onFix={handleFix}

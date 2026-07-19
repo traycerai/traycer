@@ -118,6 +118,63 @@ describe("respawnHost - non-host-owned-login-item path", () => {
     expect(registerHostLoginItem).not.toHaveBeenCalled();
     expect(waitForHostReady).not.toHaveBeenCalled();
   });
+
+  // The dialog-hang RCA's "swallowed respawn failure" defect: `respawn()`
+  // used to resolve even when the underlying CLI restart failed, so the
+  // renderer toasted success for a dead host. Pin that a rejecting
+  // `host.respawn()` propagates all the way through `respawnHost()`.
+  it("propagates a rejecting host.respawn(), and clears `inFlight` afterward so a subsequent call re-runs rather than replaying the stale result", async () => {
+    const host = new FakeHost();
+    hostManagesHostLoginItem.mockResolvedValue(false);
+    let shouldFail = true;
+    host.respawn = vi.fn(async () => {
+      host.respawnCalls += 1;
+      if (shouldFail) {
+        throw new Error("traycer host restart failed");
+      }
+    });
+
+    await expect(respawnHost(host)).rejects.toThrow(
+      "traycer host restart failed",
+    );
+    expect(host.respawnCalls).toBe(1);
+
+    // A retry after the rejection must actually re-run `host.respawn()` -
+    // if `inFlight` were left set (or cleared only on the success path),
+    // this second call would hang forever or short-circuit without ever
+    // calling `respawn()` again.
+    shouldFail = false;
+    await expect(respawnHost(host)).resolves.toBeUndefined();
+    expect(host.respawnCalls).toBe(2);
+  });
+
+  // Two callers racing the same in-flight (and ultimately failing) respawn
+  // must both observe the rejection - not one rejecting while the other
+  // hangs or silently resolves - and the dedup must still only run the
+  // underlying respawn once.
+  it("dedups two concurrent callers against the same failing in-flight respawn - both observe the rejection, only one respawn() call happens", async () => {
+    const host = new FakeHost();
+    hostManagesHostLoginItem.mockResolvedValue(false);
+    host.respawn = vi.fn(async () => {
+      host.respawnCalls += 1;
+      throw new Error("host stayed down");
+    });
+
+    const first = respawnHost(host);
+    const second = respawnHost(host);
+
+    await expect(first).rejects.toThrow("host stayed down");
+    await expect(second).rejects.toThrow("host stayed down");
+    expect(host.respawnCalls).toBe(1);
+
+    // `inFlight` cleared after the shared rejection - a subsequent call
+    // re-runs rather than being wedged behind a stale in-flight guard.
+    host.respawn = vi.fn(async () => {
+      host.respawnCalls += 1;
+    });
+    await expect(respawnHost(host)).resolves.toBeUndefined();
+    expect(host.respawnCalls).toBe(2);
+  });
 });
 
 describe("respawnHost - host-owned login item path", () => {

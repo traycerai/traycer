@@ -13,6 +13,7 @@ import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import type {
   HostDoctorIssue,
   HostDoctorReport,
+  HostOperationStatus,
   FreePortAndRestartInput,
   IHostManagement,
   IRunnerHost,
@@ -33,6 +34,7 @@ interface ManagementOverrides {
   readonly freePortAndRestart?: (
     input: FreePortAndRestartInput,
   ) => Promise<FreePortAndRestartInput>;
+  readonly getOperationStatus?: () => Promise<HostOperationStatus | null>;
 }
 
 function makeManagement(overrides: ManagementOverrides): IHostManagement {
@@ -56,7 +58,8 @@ function makeManagement(overrides: ManagementOverrides): IHostManagement {
     ensureHost: vi.fn(notImplemented("ensureHost")),
     deregisterService: vi.fn(notImplemented("deregisterService")),
     registryCheck: vi.fn(notImplemented("registryCheck")),
-    getOperationStatus: vi.fn(() => Promise.resolve(null)),
+    getOperationStatus:
+      overrides.getOperationStatus ?? vi.fn(() => Promise.resolve(null)),
     freePortAndRestart:
       overrides.freePortAndRestart ?? vi.fn((input) => Promise.resolve(input)),
     cliManifest: vi.fn(() => Promise.resolve(null)),
@@ -358,5 +361,43 @@ describe("HostDoctorCard pending CLI upgrade", () => {
     await waitFor(() => {
       expect(restartHost).toHaveBeenCalledTimes(1);
     });
+  });
+
+  // Review follow-up finding: Doctor's fix actions (including Free Port +
+  // Restart) must respect the same cross-surface operation-status signal
+  // Settings → Host reads, since a Doctor fix racing a tracked
+  // restart/install/update elsewhere interleaves two independent
+  // stop/kill/start sequences.
+  it("disables fix buttons while a tracked host operation is active elsewhere", async () => {
+    const restartHost = vi.fn(() => Promise.resolve());
+    const activeStatus: HostOperationStatus = {
+      operationId: "op-elsewhere",
+      kind: "install",
+      stage: null,
+      percent: null,
+      bytes: null,
+      totalBytes: null,
+      message: null,
+      startedAt: "2026-05-15T00:00:00Z",
+    };
+    const management = makeManagement({
+      runDoctor: () =>
+        Promise.resolve<HostDoctorReport>({
+          issues: [pendingUpgradeIssue()],
+          ranAt: "2026-05-15T00:00:00Z",
+        }),
+      restartHost,
+      getOperationStatus: () => Promise.resolve(activeStatus),
+    });
+    renderCard(makeHostWithManagement(management));
+
+    const button = await screen.findByRole<HTMLButtonElement>("button", {
+      name: /Restart host/i,
+    });
+    await waitFor(() => {
+      expect(button.disabled).toBe(true);
+    });
+    fireEvent.click(button);
+    expect(restartHost).not.toHaveBeenCalled();
   });
 });

@@ -305,7 +305,6 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
     mutationKey: runnerMutationKeys.hostRestart(),
     mutationFn: () => management.restartHost(),
     onSuccess: () => {
-      setRestartConfirmOpen(false);
       toast.success("Host restart requested");
       void queryClient.invalidateQueries({
         queryKey: runnerQueryKeys.hostInstalledRecord(management),
@@ -313,7 +312,6 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
       invalidate();
     },
     onError: (err) => {
-      setRestartConfirmOpen(false);
       toastFromRunnerError(err, "Couldn't restart host");
     },
   });
@@ -400,6 +398,11 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
     (operationStatus !== undefined &&
       operationStatus !== null &&
       operationStatus.kind === "register-service");
+  const restartPending =
+    restartMutation.isPending ||
+    (operationStatus !== undefined &&
+      operationStatus !== null &&
+      operationStatus.kind === "restart");
 
   const status = deriveStatus(localHost, installedRecord);
   const statusPending = status === undefined;
@@ -444,7 +447,7 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
         pending={statusPending}
         anyPending={anyPending}
         installPending={installPending}
-        restartPending={restartMutation.isPending}
+        restartPending={restartPending}
         onInstall={() => installMutation.mutate(null)}
         onRestart={() => setRestartConfirmOpen(true)}
         onOpenDoctor={() => setDoctorOpen(true)}
@@ -455,7 +458,14 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
           if (!open) setRestartConfirmOpen(false);
         }}
         isPending={restartMutation.isPending}
-        onConfirm={() => restartMutation.mutate()}
+        onConfirm={() => {
+          // Close optimistically instead of waiting for onSuccess/onError -
+          // the mutation can legitimately run tens of seconds, and holding
+          // the dialog open+locked for that whole window is what made it
+          // read as "stuck". Progress/failure still surface via toast.
+          setRestartConfirmOpen(false);
+          restartMutation.mutate();
+        }}
       />
       {status?.state === "not-installed" ? null : (
         <UpdatesRow

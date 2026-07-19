@@ -5,6 +5,12 @@ import {
   readHostPidMetadata,
   removeHostPidMetadata,
 } from "../../host/pid-metadata";
+import {
+  WINDOWS_PROCESS_SCAN_TIMEOUT_MS,
+  WINDOWS_SCHTASKS_END_TIMEOUT_MS,
+  WINDOWS_SCHTASKS_RUN_TIMEOUT_MS,
+  WINDOWS_TASKKILL_TIMEOUT_MS,
+} from "@traycer/protocol/host/lifecycle-constants";
 import { CLI_ERROR_CODES, cliError } from "../../runner/errors";
 import { isProcessAlive } from "../../store/cli-lock";
 import type { CliInvocation } from "../cli-binary";
@@ -156,7 +162,7 @@ async function stopService(
   await run("schtasks", ["/End", "/TN", windowsTaskName(label)], {
     env: undefined,
     cwd: undefined,
-    timeoutMs: 30_000,
+    timeoutMs: WINDOWS_SCHTASKS_END_TIMEOUT_MS,
     tolerateNonZeroExit: true,
   });
   await killHostProcessTree(label, run);
@@ -191,7 +197,7 @@ async function killHostProcessTree(
       run("taskkill", ["/T", "/F", "/PID", String(pid)], {
         env: undefined,
         cwd: undefined,
-        timeoutMs: 30_000,
+        timeoutMs: WINDOWS_TASKKILL_TIMEOUT_MS,
         tolerateNonZeroExit: true,
       }).catch(() => undefined),
     ),
@@ -203,7 +209,7 @@ async function startService(label: ServiceLabel): Promise<void> {
     await runCommand("schtasks", ["/Run", "/TN", windowsTaskName(label)], {
       env: undefined,
       cwd: undefined,
-      timeoutMs: 30_000,
+      timeoutMs: WINDOWS_SCHTASKS_RUN_TIMEOUT_MS,
       tolerateNonZeroExit: false,
     });
   } catch (cause) {
@@ -224,7 +230,7 @@ async function restartService(
   await run("schtasks", ["/End", "/TN", taskName], {
     env: undefined,
     cwd: undefined,
-    timeoutMs: 30_000,
+    timeoutMs: WINDOWS_SCHTASKS_END_TIMEOUT_MS,
     tolerateNonZeroExit: true,
   });
   // Reap the orphaned host tree before re-running, otherwise the old node keeps
@@ -234,7 +240,7 @@ async function restartService(
     await run("schtasks", ["/Run", "/TN", taskName], {
       env: undefined,
       cwd: undefined,
-      timeoutMs: 30_000,
+      timeoutMs: WINDOWS_SCHTASKS_RUN_TIMEOUT_MS,
       tolerateNonZeroExit: false,
     });
   } catch (cause) {
@@ -280,7 +286,7 @@ async function findSlotProcessIds(
       {
         env: undefined,
         cwd: undefined,
-        timeoutMs: 10_000,
+        timeoutMs: WINDOWS_PROCESS_SCAN_TIMEOUT_MS,
         tolerateNonZeroExit: true,
       },
     );
