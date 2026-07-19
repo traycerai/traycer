@@ -13,6 +13,7 @@ import type {
   HostInstalledRecord,
   HostLogsTailResult,
   HostNameSettings,
+  HostOperationKind,
   HostOperationStatus,
   HostProgressEvent,
   HostRegistryUpdateState,
@@ -262,6 +263,28 @@ function isHostRegistryUpdateState(
   );
 }
 
+// `Record<HostOperationKind, true>` requires a key for every member of the
+// union - if `HostOperationKind` ever gains a member without a matching key
+// added here, this object literal fails to compile instead of silently
+// dropping that kind's broadcasts at runtime (the exact bug: `restart` and
+// `free-port-and-restart` were added to the shared type without updating
+// this preload's validation, so `onOperationStatus` rejected main's
+// broadcasts for them before they ever reached the query cache).
+const HOST_OPERATION_KINDS: Record<HostOperationKind, true> = {
+  install: true,
+  update: true,
+  "register-service": true,
+  ensure: true,
+  restart: true,
+  "free-port-and-restart": true,
+};
+
+function isHostOperationKind(value: unknown): value is HostOperationKind {
+  return (
+    typeof value === "string" && Object.hasOwn(HOST_OPERATION_KINDS, value)
+  );
+}
+
 function isHostOperationStatusOrNull(
   value: unknown,
 ): value is HostOperationStatus | null {
@@ -275,10 +298,7 @@ function isHostOperationStatusOrNull(
   const message = candidate.message;
   return (
     typeof candidate.operationId === "string" &&
-    (candidate.kind === "install" ||
-      candidate.kind === "update" ||
-      candidate.kind === "register-service" ||
-      candidate.kind === "ensure") &&
+    isHostOperationKind(candidate.kind) &&
     (typeof stage === "string" || stage === null) &&
     (typeof percent === "number" || percent === null) &&
     (typeof bytes === "number" || bytes === null) &&

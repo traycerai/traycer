@@ -240,16 +240,17 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     Traycer has no API key field. The enable toggle remains a real gate:
     disabling it hides the Traycer harness from the new-chat picker and blocks
     runs like any other provider.
-- `Notifications` Host-side notification interruption controls. The severity ×
-  channel grid gates only interruptive delivery (`In-app`, `Webhook`); the bell
-  feed remains complete, and informational collaboration activity is feed-only.
+- `Notifications` Host-side notification generation controls. The `In-app`
+  column gates durable host-row creation before anything enters the bell feed,
+  unread count, tab indicators, delivery channels, or notification hooks.
+  Collaboration and app-local notifications are independent. Notification
+  hooks are configured separately below the grid and further filter generated
+  rows by severity.
   Backed by `host.notifications.getConfig` /
   `host.notifications.setConfig` through host-scoped TanStack Query hooks.
-  Webhook signing secrets are write-only: the host returns only
-  configured/error state, and saves send `set`, `clear`, or `leaveUnchanged`
-  secret writes. The protocol still carries forward-compatible email config,
-  but this panel round-trips it untouched instead of exposing an inactive email
-  delivery surface.
+  The protocol still carries forward-compatible email config, but this panel
+  round-trips it untouched instead of exposing an inactive email delivery
+  surface.
 - `Agents` Editor for the **global** agent selection guide
   (`~/.traycer/agent-selection-guide.md`) - the instructions Traycer agents read
   to decide which child agents to spawn (harness / model / reasoning effort) for

@@ -11,6 +11,7 @@ import {
   TraycerCliError,
   type NdjsonEvent,
 } from "../cli/traycer-cli";
+import { HOST_RESTART_SUBPROCESS_TIMEOUT_MS } from "@traycer/protocol/host/lifecycle-constants";
 import {
   RunnerHostEvent,
   RunnerHostInvoke,
@@ -350,6 +351,21 @@ async function trackHostOperation<T>(
     // leaves every surface permanently disabled.
     setHostOperationStatus(bridge, null);
   }
+}
+
+/**
+ * Runs a host lifecycle action through the same process-wide single-flight
+ * guard and status publisher used by streaming CLI operations. Callers whose
+ * underlying operation owns its own progress/readiness flow (for example the
+ * native-menu respawn path) do not need to manufacture NDJSON progress events.
+ */
+export function runTrackedHostOperation<T>(
+  bridge: RunnerIpcBridge,
+  kind: HostOperationKind,
+  operationId: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  return trackHostOperation(bridge, kind, operationId, () => run());
 }
 
 export function streamCliWithProgress(
@@ -1102,7 +1118,23 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
   });
 
   bridge.handleInvoke(RunnerHostInvoke.traycerHostRestart, async () => {
-    await runTraycerCliJson<unknown>(["host", "restart", "--json"]);
+    // `runTraycerCliJson`'s 10s default is shorter than the CLI's stop-grace
+    // (32s) - a slow-draining host would get SIGKILLed between `stop` and
+    // `start`, leaving it down. Route through `trackHostOperation` (like
+    // install/update/register-service) instead of calling
+    // `streamTraycerCliJson` directly with a no-op event sink: a bare
+    // no-op sink left `HostOperationStatus` null during a restart, so a
+    // second Settings window showed no banner and could launch a competing
+    // restart that lost on `cli-lock` with a spurious error. Routing through
+    // the canonical seam gets the shared restart budget, the cross-window
+    // single-flight guard, and the progress banner for free.
+    await streamCliWithProgress(
+      ["host", "restart"],
+      randomUUID(),
+      "restart",
+      HOST_RESTART_SUBPROCESS_TIMEOUT_MS,
+      bridge,
+    );
   });
 
   bridge.handleInvoke(
@@ -1220,7 +1252,28 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
       const args = ["host", "free-port-and-restart"];
       if (pid !== null) args.push("--pid", String(pid));
       if (port !== null) args.push("--port", String(port));
-      const data = await runTraycerCliJson<unknown>(args);
+      // Same class of bug as `traycerHostRestart` (review finding 3): this
+      // command SIGTERMs the confirmed foreign process and then awaits a
+      // platform service restart with the same 10-100s deadlines - the 10s
+      // `runTraycerCliJson` default can kill the CLI after the foreign
+      // process is gone but before the host restart finishes, leaving a
+      // dead process, a failed Doctor action, and possibly no host.
+      //
+      // Routed through `trackHostOperation` too (review follow-up finding):
+      // neither `host restart` nor the hidden `host free-port-and-restart`
+      // CLI command takes the CLI's own file lock (`withCliLock`), so
+      // `trackHostOperation`'s single-flight guard is the ONLY same-process
+      // protection against two restart-class subprocesses interleaving
+      // their stop/kill/start sequences - a tracked restart racing an
+      // untracked free-port-and-restart could kill the other's freshly
+      // started host, worst on Windows.
+      const data = await streamCliWithProgress(
+        args,
+        randomUUID(),
+        "free-port-and-restart",
+        HOST_RESTART_SUBPROCESS_TIMEOUT_MS,
+        bridge,
+      );
       return projectFreePortAndRestartResult(data, {
         port: port ?? 0,
         pid,
