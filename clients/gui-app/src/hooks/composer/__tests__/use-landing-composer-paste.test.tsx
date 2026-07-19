@@ -13,6 +13,20 @@ import {
   releaseSession,
   sessionObjectUrl,
 } from "@/lib/composer/landing-image-store";
+import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
+
+vi.mock("@/lib/composer/landing-image-gc", async (importActual) => {
+  const actual =
+    await importActual<typeof import("@/lib/composer/landing-image-gc")>();
+  return {
+    ...actual,
+    // A no-op stub, not a call-through: the real scheduler starts a 250ms
+    // timer that later calls the real `reconcile()`, which would otherwise
+    // escape this test's boundary and run against a later test's IDB mock
+    // state. Only call presence is asserted here.
+    scheduleLandingImageReconcile: vi.fn(() => undefined),
+  };
+});
 
 // In-memory stand-in for idb-keyval so `putImage` can persist + read back bytes
 // without a real IndexedDB. Mirrors the landing-image-store unit test.
@@ -50,6 +64,7 @@ beforeEach(async () => {
     releaseSession(hash);
   }
   vi.mocked(toast.error).mockClear();
+  vi.mocked(scheduleLandingImageReconcile).mockClear();
 });
 
 afterEach(() => {
@@ -201,6 +216,46 @@ describe("useLandingComposerPaste", () => {
       });
     });
     expect(inserted).toHaveLength(0);
+
+    digestSpy.mockRestore();
+  });
+
+  it("schedules a reconcile but suppresses the toast when the composer unmounts mid-ingest", async () => {
+    const inserted: ImageAttachmentAttrs[][] = [];
+    const { handle } = makeHandle(inserted);
+    const editorRef = { current: handle };
+
+    // Hold `putImage`'s hash step open so bytes can be aborted-away between
+    // the (already-persisted) hash write and the node insertion - mirrors
+    // unmounting/navigating away while a paste is still in flight.
+    let resolveDigest: (() => void) | null = null;
+    const digestSpy = vi.spyOn(crypto.subtle, "digest").mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveDigest = () => resolve(new ArrayBuffer(32));
+        }),
+    );
+
+    const { result, unmount } = renderHook(() =>
+      useLandingComposerPaste(editorRef),
+    );
+    const file = new File(["hello"], "shot.png", { type: "image/png" });
+    act(() => {
+      result.current.attachImageFiles([file]);
+    });
+
+    await waitFor(() => expect(resolveDigest).not.toBeNull());
+    unmount();
+
+    await act(async () => {
+      resolveDigest?.();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(inserted).toHaveLength(0);
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(scheduleLandingImageReconcile).toHaveBeenCalled();
 
     digestSpy.mockRestore();
   });

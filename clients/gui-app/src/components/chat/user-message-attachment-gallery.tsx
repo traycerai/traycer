@@ -1,4 +1,5 @@
 import { useMemo, type ReactNode } from "react";
+import { ImageOff } from "lucide-react";
 
 import {
   Dialog,
@@ -6,7 +7,10 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { useAttachmentBlobSrc } from "@/lib/attachments/use-attachment-blob-src";
+import {
+  type AttachmentBlobSrcState,
+  useAttachmentBlobSrc,
+} from "@/lib/attachments/use-attachment-blob-src";
 import {
   buildImageAttachmentDisplayLabels,
   fallbackImageAttachmentDisplayLabel,
@@ -76,10 +80,13 @@ function imageAttachmentRenderKey(attachment: ImageAttachment): string {
 /**
  * Resolves the image source: persisted images (`hash`) stream their bytes from
  * the epic doc's attachments map into a shared blob URL via the content-addressed
- * cache; draft/optimistic images render their inline `dataUrl` directly. Returns
- * null while a persisted image's blob is still loading.
+ * cache; draft/optimistic images render their inline `dataUrl` directly. A
+ * persisted hash transitions from loading to unavailable after its sync grace
+ * period while remaining able to recover when bytes arrive later.
  */
-function useImageAttachmentSrc(attachment: ImageAttachment): string | null {
+function useImageAttachmentSrc(
+  attachment: ImageAttachment,
+): AttachmentBlobSrcState {
   return useAttachmentBlobSrc(
     attachment.hash,
     attachment.mediaType,
@@ -98,13 +105,72 @@ function ImageAttachmentThumb({
   const label =
     displayLabel ??
     fallbackImageAttachmentDisplayLabel({ id: "fallback", fileName: alt });
-  const src = useImageAttachmentSrc(attachment);
+  const image = useImageAttachmentSrc(attachment);
+  const triggerAriaLabel =
+    image.status === "unavailable"
+      ? `Open ${label.ariaLabel} (image unavailable)`
+      : `Open ${label.ariaLabel}`;
+  let thumbnail: ReactNode;
+  if (image.status === "loading") {
+    thumbnail = (
+      <div className="size-full animate-pulse bg-muted/60" aria-hidden />
+    );
+  } else if (image.status === "unavailable") {
+    thumbnail = (
+      <div
+        className="flex size-full items-center justify-center bg-muted/60 text-muted-foreground"
+        data-user-message-image-unavailable
+        aria-hidden
+      >
+        <ImageOff className="size-4" />
+      </div>
+    );
+  } else {
+    thumbnail = (
+      <img
+        src={image.src}
+        alt={alt}
+        className="size-full object-cover transition-transform group-hover:scale-[1.02]"
+        draggable={false}
+      />
+    );
+  }
+
+  let dialogBody: ReactNode;
+  if (image.status === "loading") {
+    dialogBody = (
+      <div
+        className="aspect-video w-full animate-pulse rounded-lg bg-muted/60"
+        aria-hidden
+      />
+    );
+  } else if (image.status === "unavailable") {
+    dialogBody = (
+      <div
+        className="flex aspect-video w-full flex-col items-center justify-center gap-2 rounded-lg bg-muted/40 px-4 py-8 text-center text-muted-foreground"
+        role="status"
+      >
+        <ImageOff className="size-8" aria-hidden />
+        <p className="text-ui-sm">Image unavailable</p>
+      </div>
+    );
+  } else {
+    dialogBody = (
+      <img
+        src={image.src}
+        alt={alt}
+        className="block max-h-[min(90vh,52rem)] w-full rounded-lg object-contain"
+        draggable={false}
+      />
+    );
+  }
+
   return (
     <Dialog>
       <DialogTrigger asChild>
         <button
           type="button"
-          aria-label={`Open ${label.ariaLabel}`}
+          aria-label={triggerAriaLabel}
           title={label.title}
           className="group relative size-12 overflow-hidden rounded-md border border-border/70 bg-muted/40 outline-none transition-colors hover:border-foreground/40 focus-visible:ring-2 focus-visible:ring-ring"
         >
@@ -114,16 +180,7 @@ function ImageAttachmentThumb({
           >
             {label.badgeLabel}
           </span>
-          {src === null ? (
-            <div className="size-full animate-pulse bg-muted/60" aria-hidden />
-          ) : (
-            <img
-              src={src}
-              alt={alt}
-              className="size-full object-cover transition-transform group-hover:scale-[1.02]"
-              draggable={false}
-            />
-          )}
+          {thumbnail}
         </button>
       </DialogTrigger>
       <DialogContent
@@ -131,19 +188,7 @@ function ImageAttachmentThumb({
         showCloseButton
       >
         <DialogTitle className="sr-only">{alt}</DialogTitle>
-        {src === null ? (
-          <div
-            className="aspect-video w-full animate-pulse rounded-lg bg-muted/60"
-            aria-hidden
-          />
-        ) : (
-          <img
-            src={src}
-            alt={alt}
-            className="block max-h-[min(90vh,52rem)] w-full rounded-lg object-contain"
-            draggable={false}
-          />
-        )}
+        {dialogBody}
       </DialogContent>
     </Dialog>
   );

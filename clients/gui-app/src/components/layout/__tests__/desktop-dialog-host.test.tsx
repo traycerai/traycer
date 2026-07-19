@@ -372,6 +372,7 @@ function createDirtyEpicHandle(
     reparentArtifact: () => false,
     setEpicTitle: () => false,
     readAttachmentBytes: () => Promise.resolve(null),
+    hasAttachmentBytes: () => false,
     getArtifactFragment: () => null,
     getArtifactBodyAwareness: () => null,
     getArtifactBodyAvailability: () => "unavailable",
