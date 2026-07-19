@@ -157,18 +157,16 @@ function extractPrompt(
     if (!parsed.success) return null;
     return parsed.data.prompt.trim().length === 0 ? null : parsed.data.prompt;
   }
-  if (harness === "opencode") {
-    const parsed = opencodeHookSchema.safeParse(payload);
-    if (!parsed.success) return null;
-    const text = parsed.data.output.parts
-      .flatMap((part) => {
-        const r = opencodeTextPartSchema.safeParse(part);
-        return r.success ? [r.data.text] : [];
-      })
-      .join("");
-    return text.trim().length === 0 ? null : text;
-  }
-  // Cursor TUI exists in the schema but ships no hook payload contract
-  // yet; treat as a quiet no-op rather than failing the hook.
-  return null;
+  // Cursor remains in the released TUI schema for compatibility but has no
+  // supported hook payload contract until its TUI surface ships.
+  if (harness === "cursor") return null;
+  const parsed = opencodeHookSchema.safeParse(payload);
+  if (!parsed.success) return null;
+  const text = parsed.data.output.parts
+    .flatMap((part) => {
+      const r = opencodeTextPartSchema.safeParse(part);
+      return r.success ? [r.data.text] : [];
+    })
+    .join("");
+  return text.trim().length === 0 ? null : text;
 }

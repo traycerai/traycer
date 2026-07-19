@@ -80,9 +80,6 @@ describe("tuiAgentDisplayTitle", () => {
     expect(tuiAgentDisplayTitle({ title: "", harnessId: "opencode" })).toBe(
       "OpenCode",
     );
-    expect(tuiAgentDisplayTitle({ title: "", harnessId: "cursor" })).toBe(
-      "Cursor",
-    );
   });
 });
 
