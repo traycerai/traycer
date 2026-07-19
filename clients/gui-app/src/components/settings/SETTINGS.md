@@ -179,8 +179,8 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     value if it changes underneath (refetch / another window) and stays editable
     while a save is in flight (writes are serialized host-side). Shown only for
     terminal-agent-capable providers - it checks `useGuiHarnessesQuery` for the
-    mapped harness (`HARNESS_ICON_ID`) advertising the `tui` `mode`, so it's
-    hidden for Cursor. Persisted as `terminalAgentArgs` in
+    mapped harness (`HARNESS_ICON_ID`) advertising the `tui` `mode`, so GUI-only
+    providers do not show it. Persisted as `terminalAgentArgs` in
     `provider-overrides.json` via `providers.setTerminalAgentArgs`
     (`useProvidersSetTerminalAgentArgs`, invalidates only `providers.list`). In
     `agent.tui.prepareLaunch` the host tokenizes the string and each harness
@@ -202,11 +202,9 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     `cursor-agent about` for provider auth because GUI chats use `@cursor/sdk`,
     not the CLI login session. Backed by `providers.setApiKey` /
     `providers.clearApiKey` (`useProvidersSetApiKey` /
-    `useProvidersClearApiKey`). Cursor is GUI-only in the UI for now - its
-    `cursor-agent` TUI surface is hidden until the CLI reaches feature parity
-    (the adapter advertises only the `gui` mode via `listGuiHarnesses`'s
-    `modes`) - so the Cursor row hides the CLI candidates table and shows only
-    the API-key section; the key drives the `@cursor/sdk` GUI chat surface.
+    `useProvidersClearApiKey`). Cursor is GUI-only, so its row hides the CLI
+    candidates table and shows only the API-key section; the key drives the
+    `@cursor/sdk` GUI chat surface.
   - **Traycer subscription + credits.** The Traycer provider detail leads with a
     `TraycerSubscriptionSection` card (always visible, not gated by the
     enable/disable toggle since it is account- not binary-level) showing the

@@ -76,6 +76,8 @@ export const guiHarnessIdSchema = z.enum([
 ]);
 export type GuiHarnessId = z.infer<typeof guiHarnessIdSchema>;
 
+// Cursor remains a reserved compatibility value: it shipped in this persisted
+// enum before the unfinished runtime surface was withdrawn from the product.
 export const tuiHarnessIdSchema = z.enum([
   "claude",
   "codex",
