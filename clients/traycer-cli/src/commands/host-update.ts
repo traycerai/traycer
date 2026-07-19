@@ -131,50 +131,54 @@ async function applyAndProjectLegacy(
   needsApply: boolean,
   onProgress: (info: ProgressInfo) => void,
 ): Promise<LegacyHostUpdateResult> {
-  try {
-    return await withCliLock(
-      {
-        environment,
-        reason: "host-update-apply",
-        waitMs: 30_000,
-        pollIntervalMs: 100,
-      },
-      async () => {
-        if (!needsApply) {
-          return projectNoOp(await requireInstalled(environment));
-        }
-        const outcome = await applyHost({
+  return withCliLock(
+    {
+      environment,
+      reason: "host-update-apply",
+      waitMs: 30_000,
+      pollIntervalMs: 100,
+    },
+    async () => {
+      if (!needsApply) {
+        return projectNoOp(await requireInstalled(environment));
+      }
+      let outcome: ApplyHostOutcome;
+      try {
+        outcome = await applyHost({
           environment,
           force,
           noService: false,
           onProgress,
         });
-        if (outcome.outcome === "no-op") {
-          // Still holding the same lock `applyHost` itself ran under
-          // (it assumes the caller holds `cli-lock`, never re-acquires)
-          // - this re-read observes exactly the state `applyHost` had
-          // internal access to but didn't return, not a fresh race.
-          return projectNoOp(await requireInstalled(environment));
+      } catch (err) {
+        if (err instanceof CliError && err.code === CLI_ERROR_CODES.HOST_BUSY) {
+          // The stage was left intact by `applyHost`'s own busy check (it
+          // runs before any commit) - read it HERE, still inside the same
+          // lock span `applyHost`'s busy decision was made under (never
+          // re-acquired), so the reported version can't have changed out
+          // from under the decision the way a read after this call's own
+          // lock release could. D6's "staged-version details in the error
+          // payload" contract needs this coherence, not just a value.
+          const staged = await readHostStagedRecord(environment);
+          throw cliError({
+            code: CLI_ERROR_CODES.HOST_BUSY,
+            message: err.message,
+            details: { stagedVersion: staged?.version ?? null },
+            exitCode: err.exitCode,
+          });
         }
-        return projectApplied(outcome);
-      },
-    );
-  } catch (err) {
-    if (err instanceof CliError && err.code === CLI_ERROR_CODES.HOST_BUSY) {
-      // The stage was left intact by `applyHost`'s own busy check (it runs
-      // before any commit) - re-read it (outside the lock this call just
-      // released; informational only, not a decision input) so D6's
-      // "staged-version details in the error payload" contract holds.
-      const staged = await readHostStagedRecord(environment);
-      throw cliError({
-        code: CLI_ERROR_CODES.HOST_BUSY,
-        message: err.message,
-        details: { stagedVersion: staged?.version ?? null },
-        exitCode: err.exitCode,
-      });
-    }
-    throw err;
-  }
+        throw err;
+      }
+      if (outcome.outcome === "no-op") {
+        // Still holding the same lock `applyHost` itself ran under
+        // (it assumes the caller holds `cli-lock`, never re-acquires)
+        // - this re-read observes exactly the state `applyHost` had
+        // internal access to but didn't return, not a fresh race.
+        return projectNoOp(await requireInstalled(environment));
+      }
+      return projectApplied(outcome);
+    },
+  );
 }
 
 async function requireInstalled(

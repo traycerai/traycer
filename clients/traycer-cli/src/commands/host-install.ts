@@ -6,8 +6,16 @@ import {
 } from "../installer";
 import { assertHostNotBusy } from "../host/busy-check";
 import type { CommandFn, CommandResult } from "../runner/runner";
-import { formatServiceLifecycleWarning } from "../service";
-import { createServiceInstallLifecycle } from "../service/install-lifecycle";
+import {
+  createServiceController,
+  formatServiceLifecycleWarning,
+  serviceLabelFor,
+} from "../service";
+import {
+  createBytesOnlyInstallLifecycle,
+  createServiceInstallLifecycle,
+  type ServiceInstallLifecycleHandle,
+} from "../service/install-lifecycle";
 import { withCliLock } from "../store/cli-lock";
 
 // `traycer host install <version|latest>` - registry path (NP-4) /
@@ -47,7 +55,11 @@ export interface HostInstallArgs {
   // Install the host bytes only; leave OS-service registration to the
   // host (mirrors `host ensure`'s flag) - the packaged-macOS pin path,
   // where Desktop owns registration via SMAppService. A null-runtime
-  // archive simply lands as `activationUnknown` debt.
+  // archive simply lands as `activationUnknown` debt. Truly bytes-only:
+  // no stop, no register/rewrite, no start, even when a service is
+  // already registered - `createServiceInstallLifecycle`'s `bootstrap:
+  // null` still rewrites and re-loads an EXISTING registration post-
+  // swap, which is not what this flag promises.
   readonly noServiceRegister: boolean;
   // Hidden, internal - the CLI-owned pin gate. After acquiring the
   // lock (download/extract already done outside it), immediately
@@ -88,17 +100,32 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
       recordVersionOverride: null,
     });
 
-    const handle = createServiceInstallLifecycle({
-      environment: ctx.runtime.environment,
-      bootstrap: args.noServiceRegister
-        ? null
-        : {
+    // `--no-service-register` must be truly bytes-only: no stop, no
+    // register/rewrite, no start - even when a service is already
+    // registered. `createServiceInstallLifecycle`'s `bootstrap: null`
+    // does not satisfy that (it still rewrites and re-loads an EXISTING
+    // registration post-swap), so this skips the service lifecycle
+    // entirely and uses the same bytes-only shape `host ensure` uses
+    // for `registerService: false`.
+    const handle: ServiceInstallLifecycleHandle | null = args.noServiceRegister
+      ? null
+      : createServiceInstallLifecycle({
+          environment: ctx.runtime.environment,
+          bootstrap: {
             enableLinger: args.enableLinger,
             allowSelfInvocation: args.allowSelfInvocation,
           },
-    });
+        });
+    const lifecycle =
+      handle !== null
+        ? handle.lifecycle
+        : createBytesOnlyInstallLifecycle(
+            createServiceController(),
+            serviceLabelFor(ctx.runtime.environment),
+          );
     ctx.runtime.logger.debug("Host install command lifecycle created", {
       environment: ctx.runtime.environment,
+      bytesOnly: handle === null,
     });
 
     let result;
@@ -118,7 +145,7 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
             environment: ctx.runtime.environment,
             staged,
             onProgress: (info) => ctx.progress(info),
-            lifecycle: handle.lifecycle,
+            lifecycle,
           });
         },
       );
@@ -136,15 +163,18 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
       environment: ctx.runtime.environment,
       version: result.record.version,
       previousVersion: result.previous?.version ?? null,
-      postSwapAction: handle.state.postSwapAction,
-      hasPostSwapError: handle.state.postSwapError !== null,
+      postSwapAction: handle !== null ? handle.state.postSwapAction : "none",
+      hasPostSwapError: handle !== null && handle.state.postSwapError !== null,
     });
-    const lifecycleData = {
-      priorServiceState: handle.state.priorState,
-      stoppedBeforeSwap: handle.state.stoppedBeforeSwap,
-      postSwapAction: handle.state.postSwapAction,
-      postSwapError: handle.state.postSwapError,
-    };
+    const lifecycleData =
+      handle !== null
+        ? {
+            priorServiceState: handle.state.priorState,
+            stoppedBeforeSwap: handle.state.stoppedBeforeSwap,
+            postSwapAction: handle.state.postSwapAction,
+            postSwapError: handle.state.postSwapError,
+          }
+        : null;
     return {
       data: {
         version: result.record.version,
@@ -159,7 +189,7 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
         installGeneration: result.installGeneration,
       },
       human:
-        handle.state.postSwapError !== null
+        handle !== null && handle.state.postSwapError !== null
           ? `installed host ${result.record.version} (executable=${result.record.executablePath}); ${formatServiceLifecycleWarning(handle.state.postSwapAction, handle.state.postSwapError)}`
           : `installed host ${result.record.version} (executable=${result.record.executablePath})`,
       exitCode: 0,

@@ -311,8 +311,16 @@ export interface CommitHostInstallSourceResult {
 
 // Phase 2: assumes the caller already holds `cli-lock` (matches
 // `commitInstallFromSource`'s existing contract - see `applyHost` for the
-// same "core assumes caller holds lock" pattern). Commits the pre-staged
-// source tree, then re-runs stage reconcile so an explicit install over a
+// same "core assumes caller holds lock" pattern). Reconciles BEFORE the
+// commit (mirrors `applyHost`'s own pre-reconcile call) - `atomicSwap`'s
+// entry sweep unconditionally invalidates any `install.old-*` trash before
+// it renames the new tree in, and if `install/` itself is ALSO missing
+// (a prior crash left neither a canonical install nor a yet-reconciled
+// aside), that sweep would destroy the only recovery copy before the new
+// rename even runs. Reconcile's step 1 (target-missing recovery) restores
+// a missing `install/` from the newest valid `.old-*` FIRST, so the entry
+// sweep only ever clears genuine litter. Then commits the pre-staged
+// source tree and re-runs stage reconcile so an explicit install over a
 // now-superseded `staged/` entry sweeps it (Tech Plan: "Install/ensure
 // re-run reconcile after a successful commit").
 export async function commitHostInstallSource(
@@ -320,6 +328,7 @@ export async function commitHostInstallSource(
 ): Promise<CommitHostInstallSourceResult> {
   const logger = createCliLogger(opts.environment);
   let swapped = false;
+  await reconcileHostStage(opts.environment);
   try {
     const { record, previous } = await commitInstallFromSource({
       environment: opts.environment,

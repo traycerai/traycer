@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   createServiceControllerMock: vi.fn(),
   serviceLabelForMock: vi.fn(),
   createServiceInstallLifecycleMock: vi.fn(),
+  createBytesOnlyInstallLifecycleMock: vi.fn(),
   withCliLockMock: vi.fn(),
   assertHostNotBusyMock: vi.fn(),
 }));
@@ -62,6 +63,7 @@ vi.mock("../../service/cli-binary", () => ({
 
 vi.mock("../../service/install-lifecycle", () => ({
   createServiceInstallLifecycle: mocks.createServiceInstallLifecycleMock,
+  createBytesOnlyInstallLifecycle: mocks.createBytesOnlyInstallLifecycleMock,
 }));
 
 vi.mock("../../store/cli-lock", () => ({
@@ -82,6 +84,7 @@ const {
   createServiceControllerMock,
   serviceLabelForMock,
   createServiceInstallLifecycleMock,
+  createBytesOnlyInstallLifecycleMock,
   withCliLockMock,
   assertHostNotBusyMock,
 } = mocks;
@@ -176,6 +179,10 @@ beforeEach(() => {
       postSwapError: null,
     },
     lifecycle: { beforeSwap: vi.fn(), afterSwap: vi.fn() },
+  }));
+  createBytesOnlyInstallLifecycleMock.mockImplementation(() => ({
+    beforeSwap: vi.fn(),
+    afterSwap: vi.fn(),
   }));
   stageHostInstallSourceMock.mockResolvedValue({
     stagingDir: "/tmp/staged",
@@ -431,6 +438,9 @@ describe("ensureHost", () => {
     expect(controller.install).not.toHaveBeenCalled();
     expect(controller.start).not.toHaveBeenCalled();
     expect(createServiceInstallLifecycleMock).not.toHaveBeenCalled();
+    // The bytes-only builder IS used - Windows still needs its `beforeSwap`
+    // to release stray file handles before the rename.
+    expect(createBytesOnlyInstallLifecycleMock).toHaveBeenCalledTimes(1);
     expect(result.serviceLifecycle).toBeNull();
   });
 

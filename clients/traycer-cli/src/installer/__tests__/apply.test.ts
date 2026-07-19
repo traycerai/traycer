@@ -3,6 +3,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -432,5 +433,71 @@ describe("applyHost", () => {
     expect(readFileSync(join(installDirFor(ENV), "traycer-host"), "utf8")).toBe(
       "binary",
     );
+  });
+
+  // Finding 10 (ticket-2 review round 1): `stage-reconcile.test.ts` already
+  // pins these two crash-boundary recoveries by calling `reconcileHostStage`
+  // directly - that proves the helper's own logic, but not that `applyHost`
+  // (the actual command entry point, which owns calling reconcile as its
+  // first step before touching anything else) genuinely wires it in and
+  // completes normally afterward. These two mirror those fixtures exactly,
+  // driven through `applyHost` end-to-end instead.
+  it("recovers install/ from a target-missing install.old-* aside via its own pre-reconcile, then applies normally (crash window: a prior rename-aside never followed by its commit)", async () => {
+    await writeInstall("1.0.0", {});
+    await writeStaged("2.0.0", {});
+    // Simulate the crash window between a PRIOR operation's rename-aside
+    // and its commit (installer/install.ts's atomicSwap pattern): install/
+    // was moved aside and never renamed back in.
+    const asideDir = `${installDirFor(ENV)}.old-${Date.now()}`;
+    renameSync(installDirFor(ENV), asideDir);
+    expect(existsSync(installDirFor(ENV))).toBe(false);
+
+    const result = await applyHost({
+      environment: ENV,
+      force: false,
+      noService: false,
+      onProgress: () => {},
+    });
+
+    // Pre-reconcile recovered install/ from the aside BEFORE applyHost's
+    // own "no install record" check, busy check, or commit ever ran - had
+    // it not, this would have thrown E_HOST_NOT_INSTALLED instead of
+    // completing the apply.
+    expect(result.outcome).toBe("applied");
+    if (result.outcome === "applied") {
+      expect(result.record.version).toBe("2.0.0");
+      expect(result.previous?.version).toBe("1.0.0");
+    }
+    expect(existsSync(installDirFor(ENV))).toBe(true);
+  });
+
+  it("sweeps install.old-* trash litter via its own pre-reconcile even when the apply itself is refused as busy and never reaches commit", async () => {
+    await writeInstall("1.0.0", {});
+    await writeStaged("2.0.0", {});
+    // Pure litter: install/ already exists (canonical), but a prior
+    // apply/install left its own trash aside behind uncleaned.
+    const staleTrash = `${installDirFor(ENV)}.old-${Date.now() - 1000}`;
+    mkdirSync(staleTrash, { recursive: true });
+    // Busy: applyHost throws AFTER its pre-reconcile step but BEFORE
+    // commit (`commitInstallFromSource`'s own `atomicSwap` - which
+    // ALSO unconditionally sweeps `install.old-*` on entry - never runs
+    // at all). Trash being gone here can only be pre-reconcile's own
+    // doing, not commit's redundant sweep riding along with a
+    // successful apply.
+    mocks.busyOverride = "busy";
+
+    await expect(
+      applyHost({
+        environment: ENV,
+        force: false,
+        noService: false,
+        onProgress: () => {},
+      }),
+    ).rejects.toMatchObject({ code: "E_HOST_BUSY" });
+
+    expect(existsSync(staleTrash)).toBe(false);
+    // The busy refusal only swept trash litter - the live stage itself
+    // is untouched (recovery table: busy -> stage kept).
+    expect(existsSync(stagedDirFor(ENV))).toBe(true);
   });
 });

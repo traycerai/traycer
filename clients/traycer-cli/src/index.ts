@@ -119,6 +119,17 @@ function expectRequiredPositional(
   });
 }
 
+// Strict positive-integer CLI arg parser: rejects anything that isn't a
+// clean run of decimal digits BEFORE parsing, so `Number.parseInt`'s
+// leading-prefix tolerance ("42junk" -> 42, "42.9" -> 42) and its silent
+// acceptance of "0" / negatives (both pass `Number.isFinite`) never
+// smuggle an invalid pid through as a plausible-looking integer.
+function parsePositiveIntegerArg(value: string): number | null {
+  if (!/^[1-9]\d*$/.test(value)) return null;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
 function withRunner(
   cmd: CommanderCommand,
   build: (
@@ -602,12 +613,13 @@ function registerHostCommands(program: Command): void {
       return async (ctx) => {
         const observedPid =
           typeof opts.observedPid === "string"
-            ? Number.parseInt(opts.observedPid, 10)
-            : NaN;
-        if (!Number.isFinite(observedPid)) {
+            ? parsePositiveIntegerArg(opts.observedPid)
+            : null;
+        if (observedPid === null) {
           throw cliError({
             code: CLI_ERROR_CODES.INVALID_ARGUMENT,
-            message: "host stamp-runtime: --observed-pid must be an integer",
+            message:
+              "host stamp-runtime: --observed-pid must be a positive whole number",
             details: { observedPid: opts.observedPid },
             exitCode: 1,
           });

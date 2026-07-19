@@ -104,6 +104,21 @@ vi.mock("../../host/busy-check", () => ({
   },
 }));
 
+// `process.env.HOME`/`USERPROFILE` mutation alone is not trustworthy under
+// `bun --bun`, which can honor its own startup home independently of a
+// runtime env mutation - the exact root cause of a prior incident where a
+// test's real `os.homedir()` resolved to the operator's actual home,
+// pointing `cliLockPath` at the REAL `~/.traycer/cli/.lock` and sending
+// genuine lock contention/break traffic at a live production CLI/host
+// (see commit 96fc9f47). Mocking `node:os.homedir()` directly makes the
+// sandbox authoritative regardless of Bun's own caching behavior; the env
+// mutation below is kept too since some code path may still read it.
+const osHome = vi.hoisted(() => ({ current: "" }));
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return { ...actual, homedir: () => osHome.current || actual.tmpdir() };
+});
+
 const ORIGINAL_HOME = process.env.HOME;
 const ORIGINAL_USERPROFILE = process.env.USERPROFILE;
 let workHome: string;
@@ -160,11 +175,12 @@ describe.skipIf(process.platform === "win32")(
   () => {
     beforeEach(() => {
       workHome = mkdtempSync(join(tmpdir(), "traycer-host-install-lock-test-"));
+      osHome.current = workHome;
       process.env.HOME = workHome;
       process.env.USERPROFILE = workHome;
       // `store/paths` captures `homedir()` once at module load - drop the
       // module cache so the dynamic imports below see this test's own
-      // tmp HOME, matching host-restart-lock.test.ts's pattern.
+      // tmp HOME (the mocked `node:os.homedir()` above, not the real one).
       vi.resetModules();
       mocks.stageCalls = [];
       mocks.commitCalls = [];

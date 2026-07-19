@@ -5,6 +5,7 @@ import {
   writeHostInstallRecord,
 } from "../manifest/host-install";
 import type { Environment } from "../runner/environment";
+import { verifyProcessIdentity } from "../store/process-identity";
 import { readHostPidMetadata } from "./pid-metadata";
 
 // `host stamp-runtime` (hidden, internal) - the guarded compare-and-set
@@ -43,7 +44,8 @@ export type StampRuntimeSupersededReason =
   | "runtime-already-stamped"
   | "generation-mismatch"
   | "no-live-host"
-  | "pid-evidence-mismatch";
+  | "pid-evidence-mismatch"
+  | "pid-not-live";
 
 export type StampRuntimeOutcome =
   | {
@@ -109,6 +111,31 @@ export async function stampRuntime(
       currentPid: pidMetadata.pid,
     });
     return { outcome: "superseded", reason: "pid-evidence-mismatch" };
+  }
+
+  // The static comparison above only proves pid.json still carries the
+  // SAME recorded values the caller observed - it says nothing about
+  // whether that process is still actually running. A crashed host that
+  // never cleaned up pid.json would satisfy every check above and still
+  // get its stale readiness observation stamped. Probe the OBSERVED pid's
+  // live identity (liveness + a FRESH OS-level start-time read compared
+  // against the observed startedAt, not pid.json's copy of it) and stamp
+  // only on positive "alive-same" evidence - "dead", "alive-different"
+  // (a recycled pid), and "indeterminate" (a probe failure) all fall back
+  // to the same conservative `superseded`, never treated as license to
+  // stamp.
+  const observedStartedAtMs = Date.parse(opts.observedStartedAt);
+  const identity = verifyProcessIdentity({
+    pid: opts.observedPid,
+    startedAtMs: Number.isNaN(observedStartedAtMs) ? null : observedStartedAtMs,
+  });
+  if (identity !== "alive-same") {
+    logger.info("Host stamp-runtime superseded - pid not live", {
+      environment: opts.environment,
+      observedPid: opts.observedPid,
+      identityVerdict: identity,
+    });
+    return { outcome: "superseded", reason: "pid-not-live" };
   }
 
   await writeHostInstallRecord(opts.environment, {

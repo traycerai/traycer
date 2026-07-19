@@ -538,6 +538,47 @@ describe("traycer CLI entrypoint registration", () => {
     expect(mocks.stampRuntimeCalls).toHaveLength(0);
   });
 
+  // Finding 9 (ticket-2 review round 1): `Number.parseInt` tolerates a
+  // leading-digit prefix and silently truncates/accepts values a real pid
+  // never is - each of these previously passed `Number.isFinite` and
+  // would have been forwarded as a plausible-looking pid.
+  it.each([
+    ["42junk", "a trailing non-digit suffix parseInt silently truncates"],
+    ["42.9", "a decimal parseInt silently truncates to 42"],
+    ["0", "pid 0 is never a real process"],
+    ["-5", "a negative number is never a real pid"],
+  ])(
+    "host stamp-runtime rejects --observed-pid %j (%s) with E_INVALID_ARGUMENT",
+    async (invalidPid) => {
+      mocks.stampRuntimeCalls.length = 0;
+
+      const program = buildProgram();
+      program.exitOverride();
+      let thrown: unknown = null;
+      try {
+        await program.parseAsync(
+          [
+            "host",
+            "stamp-runtime",
+            "--expected-install-generation",
+            "id:abc123",
+            "--observed-pid",
+            invalidPid,
+            "--observed-started-at",
+            "2026-01-01T00:05:00.000Z",
+            "--observed-runtime-version",
+            "2.0.0",
+          ],
+          { from: "user" },
+        );
+      } catch (err) {
+        thrown = err;
+      }
+      expect(thrown).toMatchObject({ code: "E_INVALID_ARGUMENT" });
+      expect(mocks.stampRuntimeCalls).toHaveLength(0);
+    },
+  );
+
   it("commander itself rejects host stamp-runtime when a required flag is missing", async () => {
     const program = buildProgram();
     program.exitOverride();

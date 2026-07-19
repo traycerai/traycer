@@ -20,7 +20,10 @@ import {
   type ServiceState,
 } from "../service";
 import { resolveServiceCliInvocation } from "../service/cli-binary";
-import { createServiceInstallLifecycle } from "../service/install-lifecycle";
+import {
+  createBytesOnlyInstallLifecycle,
+  createServiceInstallLifecycle,
+} from "../service/install-lifecycle";
 import { withCliLock } from "../store/cli-lock";
 import { assertHostNotBusy } from "./busy-check";
 
@@ -164,13 +167,7 @@ export async function provisionHost(
   // OUTSIDE cli-lock, into an owner-tokened temp - the same split `host
   // install` uses - so a long download never blocks a concurrent CLI/
   // Desktop operation. The prediction is re-verified against a locked
-  // re-read below. A lost prediction (state changes between the fast read
-  // and lock acquisition - only possible via a genuinely concurrent
-  // provisioning actor) falls back to staging inside the lock rather than
-  // adding retry machinery for what is, on a single-machine CLI, a
-  // vanishingly rare race; the far more common "predicted no-install, stays
-  // no-install" and "predicted install, stays install" paths never do
-  // network work while holding the lock.
+  // re-read below.
   const predictedInstall =
     opts.force ||
     !fast.installed ||
@@ -178,24 +175,48 @@ export async function provisionHost(
   const preStaged = predictedInstall
     ? await prepareInstallStage(opts, progress)
     : null;
-  let stagedConsumed = false;
 
+  return provisionUnderLock(opts, controller, label, progress, preStaged);
+}
+
+// A lost prediction ("no install needed" at the fast read, but the locked
+// re-read now selects the install branch - only possible via a genuinely
+// concurrent provisioning actor) must never fall back to staging INSIDE
+// cli-lock: staging is a network transfer, and the plan's no-transfer-in-
+// a-critical-section rule is absolute, not "vanishingly rare so it's fine
+// to bend once." So a lost prediction returns a `"need-stage"` signal from
+// the locked callback instead of staging there; the lock is released,
+// staging happens outside it (same as the initial prediction), and the
+// whole attempt retries with the freshly staged source - at most one
+// retry, since the retry's `preStaged` is never null, so `"need-stage"`
+// cannot recur.
+type ProvisionAttemptOutcome =
+  | { readonly kind: "result"; readonly result: HostProvisionResult }
+  | { readonly kind: "need-stage" };
+
+async function provisionUnderLock(
+  opts: ProvisionHostOptions,
+  controller: ServiceController,
+  label: ServiceLabel,
+  progress: (info: ProgressInfo) => void,
+  preStaged: StagedHostInstallSource | null,
+): Promise<HostProvisionResult> {
+  let stagedConsumed = false;
   opts.runtime.logger.debug("Host provisioning entering CLI lock", {
     environment: opts.runtime.environment,
     lockReason: opts.lockReason,
     force: opts.force,
     preStaged: preStaged !== null,
   });
-
   try {
-    return await withCliLock(
+    const outcome = await withCliLock(
       {
         environment: opts.runtime.environment,
         reason: opts.lockReason,
         waitMs: 30_000,
         pollIntervalMs: 100,
       },
-      async () => {
+      async (): Promise<ProvisionAttemptOutcome> => {
         // Re-read inside the lock so a caller that lost the race observes the
         // now-provisioned state and short-circuits instead of redundantly
         // downloading.
@@ -220,7 +241,7 @@ export async function provisionHost(
               running: state.running,
             },
           );
-          return noopResult(state);
+          return { kind: "result", result: noopResult(state) };
         }
         // Bytes present + at target with host-owned registration: there is
         // nothing to cycle, so no teardown and no busy check are needed.
@@ -238,7 +259,7 @@ export async function provisionHost(
               hasVersion: state.version !== null,
             },
           );
-          return noopResult(state);
+          return { kind: "result", result: noopResult(state) };
         }
         // Every remaining path replaces or cycles a LIVE host - reinstall
         // (forced, or bytes absent/stale), (re)register, or (re)start - so the
@@ -272,6 +293,13 @@ export async function provisionHost(
           !state.installed ||
           !versionSatisfied(state, opts.targetVersion)
         ) {
+          if (preStaged === null) {
+            opts.runtime.logger.debug(
+              "Host provisioning lost the fast-path prediction; releasing the lock to stage outside it",
+              { environment: opts.runtime.environment },
+            );
+            return { kind: "need-stage" };
+          }
           opts.runtime.logger.debug(
             "Host provisioning selected install branch",
             {
@@ -281,10 +309,17 @@ export async function provisionHost(
               versionSatisfied: versionSatisfied(state, opts.targetVersion),
             },
           );
-          const staged =
-            preStaged ?? (await prepareInstallStage(opts, progress));
           stagedConsumed = true;
-          return commitInstall(opts, controller, label, progress, staged);
+          return {
+            kind: "result",
+            result: await commitInstall(
+              opts,
+              controller,
+              label,
+              progress,
+              preStaged,
+            ),
+          };
         }
         if (!state.registered) {
           opts.runtime.logger.debug(
@@ -293,7 +328,10 @@ export async function provisionHost(
               environment: opts.runtime.environment,
             },
           );
-          return runServiceRegister(opts, controller, label, progress);
+          return {
+            kind: "result",
+            result: await runServiceRegister(opts, controller, label, progress),
+          };
         }
         // installed + registered + stopped → start.
         opts.runtime.logger.debug(
@@ -302,9 +340,20 @@ export async function provisionHost(
             environment: opts.runtime.environment,
           },
         );
-        return runStart(opts, controller, label, state, progress);
+        return {
+          kind: "result",
+          result: await runStart(opts, controller, label, state, progress),
+        };
       },
     );
+    if (outcome.kind === "result") {
+      return outcome.result;
+    }
+    // Lock released. Stage outside it (network transfer never runs inside
+    // cli-lock), then reacquire and retry - `preStaged` is non-null on this
+    // retry, so the callback above cannot select `"need-stage"` again.
+    const staged = await prepareInstallStage(opts, progress);
+    return provisionUnderLock(opts, controller, label, progress, staged);
   } finally {
     // Anything staged in anticipation of the install branch that the lock
     // callback never consumed (raced to noop/register/start, or an earlier
@@ -369,7 +418,7 @@ async function commitInstall(
   const lifecycle =
     handle !== null
       ? handle.lifecycle
-      : buildBytesOnlyInstallLifecycle(controller, label);
+      : createBytesOnlyInstallLifecycle(controller, label);
   opts.runtime.logger.debug("Host provisioning install lifecycle prepared", {
     environment: opts.runtime.environment,
     lifecycleEnabled: handle !== null,

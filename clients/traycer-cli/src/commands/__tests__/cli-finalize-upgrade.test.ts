@@ -17,10 +17,24 @@ const mocks = vi.hoisted(() => ({
   serviceStartThrows: null as Error | null,
   lockCalls: [] as Array<{ reason: string }>,
   lockThrows: null as Error | null,
+  // Cross-mock ordering timeline for the Finding 6 orchestration test
+  // (ticket-2 review round 1) - a SHARED array all three boundary mocks
+  // below push into, so a single assertion can pin their relative order
+  // (lock span must fully enclose finalize+start) instead of only each
+  // mock's own call count.
+  callOrder: [] as string[],
 }));
 
 vi.mock("../cli-upgrade", () => ({
-  finalizePendingCliUpgrade: async () => mocks.finalizeResult,
+  finalizePendingCliUpgrade: async () => {
+    // Stands in for the real fs-rename `finalizePendingCliUpgrade`
+    // performs when it resolves "finalised" - this suite mocks the call
+    // itself out (re-testing the real rename belongs to cli-upgrade.
+    // test.ts), but still marks WHEN it ran relative to the lock/service
+    // markers below.
+    mocks.callOrder.push("finalize-call");
+    return mocks.finalizeResult;
+  },
 }));
 
 vi.mock("../../service", async (importOriginal) => {
@@ -41,6 +55,7 @@ vi.mock("../../service", async (importOriginal) => {
       },
       start: async () => {
         mocks.controllerCalls.push("start");
+        mocks.callOrder.push("service-start");
         if (mocks.serviceStartThrows !== null) throw mocks.serviceStartThrows;
       },
       restart: async () => {
@@ -60,7 +75,12 @@ vi.mock("../../store/cli-lock", async (importOriginal) => {
     ): Promise<T> => {
       mocks.lockCalls.push({ reason: opts.reason });
       if (mocks.lockThrows !== null) throw mocks.lockThrows;
-      return fn();
+      mocks.callOrder.push("lock-enter");
+      try {
+        return await fn();
+      } finally {
+        mocks.callOrder.push("lock-exit");
+      }
     },
   };
 });
@@ -113,6 +133,7 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
     mocks.serviceStartThrows = null;
     mocks.lockCalls = [];
     mocks.lockThrows = null;
+    mocks.callOrder = [];
   });
 
   afterEach(() => {
@@ -160,6 +181,61 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
       livePath: "/opt/traycer/cli/traycer",
       serviceStartError: null,
     });
+  });
+
+  // Finding 6 (ticket-2 review round 1): no test in this repo executes the
+  // Windows finalize-helper's full real path (parent-exit wait -> staged-
+  // executable invocation -> real staged->live rename -> service start) -
+  // that's a genuine, currently-unclosed coverage gap, not a code bug the
+  // review found. A real end-to-end run needs an actual Windows machine
+  // (PowerShell + a live OS service); this repo's CI has no Windows test
+  // job for traycer-cli (`.github/workflows/test.yml` runs only
+  // ubuntu-latest + a macOS job scoped to desktop packaging - the sole
+  // `windows-latest` runner anywhere in this monorepo's workflows belongs
+  // to `release-desktop.yml`, which packages/signs the Electron installer,
+  // not the CLI test suite). Adding a `skipIf(win32)`-inverted test here
+  // would never actually run in this environment and would be fake
+  // coverage, so this suite does NOT add one - per the fixup ticket's own
+  // instruction, this is recorded as an honest residual instead:
+  //
+  //   RESIDUAL: the real Windows rename+start path
+  //   (`installer/install.ts`-analogous binary replace via
+  //   `tryReplaceLiveBinary`, then `ServiceController.start` on a live
+  //   Scheduled Task) is NOT exercised by any automated test. Verify
+  //   manually on Windows before a release that touches
+  //   `upgrade/finalize-helper.ts`, `commands/cli-finalize-upgrade.ts`, or
+  //   `commands/cli-upgrade.ts`'s `tryReplaceLiveBinary`: stage a CLI
+  //   upgrade, let a real `host restart` schedule the PowerShell helper,
+  //   confirm the parent CLI process exit is detected, the staged binary
+  //   becomes live, and the OS service starts successfully.
+  //
+  // What IS achievable and added below: an orchestration test that proves
+  // the platform-agnostic ordering contract `cli-finalize-upgrade.ts`
+  // itself owns - the swap (`finalize-call`, standing in for the real
+  // fs-rename) happens BEFORE the service start, and the `cli-lock` span
+  // (`lock-enter`/`lock-exit`) fully ENCLOSES both, with no release/
+  // reacquire gap in between. This runs on every platform this repo's CI
+  // actually has (Linux/macOS) and would catch an orchestration or lock-
+  // scope regression regardless of OS - it just can't stand in for a real
+  // Windows PowerShell + Scheduled Task run.
+  it("orchestration: cli-lock spans the whole rename-then-service-start sequence in order, never released in between", async () => {
+    mocks.finalizeResult = {
+      status: "finalised",
+      previousVersion: "1.4.0",
+      version: "1.5.0",
+      binaryPath: "/opt/traycer/cli/traycer",
+    };
+
+    const { cliFinalizeUpgradeCommand } =
+      await import("../cli-finalize-upgrade");
+    await cliFinalizeUpgradeCommand(fakeCtx());
+
+    expect(mocks.callOrder).toEqual([
+      "lock-enter",
+      "finalize-call",
+      "service-start",
+      "lock-exit",
+    ]);
   });
 
   it("on a finalised swap where the service fails to start, records serviceStartError in both the outcome and the marker", async () => {

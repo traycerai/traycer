@@ -36,6 +36,14 @@ const mocks = vi.hoisted(() => ({
   forceUnlinkFailureForPath: null as string | null,
   forceRmFailureForPath: null as string | null,
   forceRenameFailureForDestination: null as string | null,
+  // Finding-2 regression (reconcile-before-commit): the reconcile restore
+  // rename and atomicSwap's own swap-in rename can share the exact same
+  // destination (`install/`), so distinguishing "let the Nth call to this
+  // destination succeed, fail a LATER one" needs a call-index gate on top
+  // of the plain destination match above. `null` preserves every existing
+  // test's behavior (fail on every call to the matched destination).
+  forceRenameFailureForDestinationOnCall: null as number | null,
+  renameCallCountByDestination: new Map<string, number>(),
 }));
 
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -60,11 +68,18 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     },
     rename: async (from: PathLike, to: PathLike) => {
       if (to === mocks.forceRenameFailureForDestination) {
-        // A non-retryable code so `renameWithRetry` fails on the first
-        // attempt instead of spending ~2.5s retrying EBUSY/EPERM/etc.
-        throw Object.assign(new Error("simulated rename failure"), {
-          code: "EIO",
-        });
+        const toKey = String(to);
+        const callNumber =
+          (mocks.renameCallCountByDestination.get(toKey) ?? 0) + 1;
+        mocks.renameCallCountByDestination.set(toKey, callNumber);
+        const gate = mocks.forceRenameFailureForDestinationOnCall;
+        if (gate === null || callNumber === gate) {
+          // A non-retryable code so `renameWithRetry` fails on the first
+          // attempt instead of spending ~2.5s retrying EBUSY/EPERM/etc.
+          throw Object.assign(new Error("simulated rename failure"), {
+            code: "EIO",
+          });
+        }
       }
       return actual.rename(from, to);
     },
@@ -111,9 +126,13 @@ vi.mock("../../store/paths", async () => {
 });
 
 import {
+  commitHostInstallSource,
   commitInstallFromSource,
+  currentInstallArch,
+  currentInstallPlatform,
   installHost,
   sweepOldTrash,
+  type StagedHostInstallSource,
 } from "../install";
 import { readHostInstallRecord } from "../../manifest/host-install";
 import { createCliLogger } from "../../logger";
@@ -135,6 +154,8 @@ describe("sweepOldTrash", () => {
     mocks.forceUnlinkFailureForPath = null;
     mocks.forceRmFailureForPath = null;
     mocks.forceRenameFailureForDestination = null;
+    mocks.forceRenameFailureForDestinationOnCall = null;
+    mocks.renameCallCountByDestination.clear();
     rmSync(sandboxRoot, { recursive: true, force: true });
   });
 
@@ -176,6 +197,8 @@ describe("installHost", () => {
     mocks.forceUnlinkFailureForPath = null;
     mocks.forceRmFailureForPath = null;
     mocks.forceRenameFailureForDestination = null;
+    mocks.forceRenameFailureForDestinationOnCall = null;
+    mocks.renameCallCountByDestination.clear();
     rmSync(sandboxRoot, { recursive: true, force: true });
   });
 
@@ -244,6 +267,8 @@ describe("commitInstallFromSource", () => {
     mocks.forceUnlinkFailureForPath = null;
     mocks.forceRmFailureForPath = null;
     mocks.forceRenameFailureForDestination = null;
+    mocks.forceRenameFailureForDestinationOnCall = null;
+    mocks.renameCallCountByDestination.clear();
     rmSync(sandboxRoot, { recursive: true, force: true });
   });
 
@@ -317,5 +342,125 @@ describe("commitInstallFromSource", () => {
     ).rejects.toThrow();
 
     expect(committed).toBe(false);
+  });
+});
+
+describe("commitHostInstallSource - reconcile runs BEFORE the commit (Finding 2)", () => {
+  beforeEach(() => {
+    sandboxRoot = mkdtempSync(join(tmpdir(), "traycer-install-test-"));
+    osHome.current = sandboxRoot;
+  });
+
+  afterEach(() => {
+    mocks.forceUnlinkFailureForPath = null;
+    mocks.forceRmFailureForPath = null;
+    mocks.forceRenameFailureForDestination = null;
+    mocks.forceRenameFailureForDestinationOnCall = null;
+    mocks.renameCallCountByDestination.clear();
+    rmSync(sandboxRoot, { recursive: true, force: true });
+  });
+
+  function seedRecoverableAside(version: string): string {
+    // `install/` itself does NOT exist - only a valid `install.old-*`
+    // aside does. `validateInstallAsideCandidate` requires `executablePath`
+    // to resolve (relative to the FINAL install dir, not the aside's own
+    // path) to a file that actually exists in the aside.
+    const installDir = installDirFor(ENV);
+    const asideDir = `${installDir}.old-1000`;
+    mkdirSync(asideDir, { recursive: true });
+    writeFileSync(join(asideDir, "traycer-host"), `binary-${version}`);
+    writeFileSync(
+      join(asideDir, "install.json"),
+      JSON.stringify({
+        installId: `install-${version}`,
+        version,
+        runtimeVersion: null,
+        platform: currentInstallPlatform(),
+        arch: currentInstallArch(),
+        installedAt: "2026-01-01T00:00:00.000Z",
+        source: { kind: "local-file", value: version },
+        archiveSha256: null,
+        signatureVerifiedAt: "2026-01-01T00:00:00.000Z",
+        signatureKeyId: "local-file:unsigned",
+        sizeBytes: 0,
+        executablePath: join(installDir, "traycer-host"),
+      }),
+    );
+    return asideDir;
+  }
+
+  function freshStagedSource(version: string): StagedHostInstallSource {
+    const stagingDir = join(sandboxRoot, `fresh-staged-${version}`);
+    writeLocalHostSource(stagingDir, version);
+    return {
+      stagingDir,
+      archivePath: join(stagingDir, "archive.tar.gz"),
+      archiveIsTemporary: false,
+      executablePath: join(stagingDir, "traycer-host"),
+      version,
+      runtimeVersion: null,
+      source: { kind: "local-file", value: stagingDir },
+      archiveSha256: null,
+      signatureVerifiedAt: new Date().toISOString(),
+      signatureKeyId: "local-file:unsigned",
+      sizeBytes: 0,
+    };
+  }
+
+  it("restores a missing install/ from its .old-* aside before atomicSwap's entry sweep can destroy it, so a later swap failure still leaves a restorable install", async () => {
+    seedRecoverableAside("1.0.0");
+    expect(existsSync(installDirFor(ENV))).toBe(false);
+
+    // Let the FIRST rename onto `install/` succeed (reconcile's own
+    // target-missing recovery, restoring the aside) and force the SECOND
+    // one (atomicSwap's swap-in of the fresh staged tree) to fail - the
+    // exact "sweep already ran, then the new rename also failed" window
+    // Finding 2 closes. Verified by temporarily reverting the fix: WITHOUT
+    // it, `install/` is still missing when atomicSwap runs, so only ONE
+    // rename ever targets it (the swap-in) - this gate's "fail on call 2"
+    // never fires, the swap-in (call 1) succeeds using the fresh v2.0.0
+    // tree, and the promise resolves instead of rejecting, failing the
+    // assertion below. That divergence is itself the regression signal:
+    // reconcile not running first means the entry sweep silently destroyed
+    // the only recovery copy of v1.0.0 moments earlier with nothing to
+    // show for it - exactly the "sweep already ran, nothing left to roll
+    // back to" case Finding 2 requires never happen.
+    mocks.forceRenameFailureForDestination = installDirFor(ENV);
+    mocks.forceRenameFailureForDestinationOnCall = 2;
+
+    await expect(
+      commitHostInstallSource({
+        environment: ENV,
+        staged: freshStagedSource("2.0.0"),
+        onProgress: () => {},
+        lifecycle: null,
+      }),
+    ).rejects.toThrow();
+
+    // With reconcile running first, `install/` already existed (restored
+    // from the aside) when atomicSwap ran, so `targetExists === true`
+    // meant the failed swap-in (call 2) triggered atomicSwap's own
+    // rollback (`renameWithRetry(trash, target)`) - the recovered v1.0.0
+    // install survives rather than being lost.
+    expect(existsSync(installDirFor(ENV))).toBe(true);
+    expect(readFileSync(join(installDirFor(ENV), "traycer-host"), "utf8")).toBe(
+      "binary-1.0.0",
+    );
+    const record = await readHostInstallRecord(ENV);
+    expect(record?.version).toBe("1.0.0");
+  });
+
+  it("commits the fresh staged source normally when nothing needs recovering", async () => {
+    const result = await commitHostInstallSource({
+      environment: ENV,
+      staged: freshStagedSource("2.0.0"),
+      onProgress: () => {},
+      lifecycle: null,
+    });
+
+    expect(result.record.version).toBe("2.0.0");
+    expect(readFileSync(join(installDirFor(ENV), "traycer-host"), "utf8")).toBe(
+      "binary-2.0.0",
+    );
   });
 });

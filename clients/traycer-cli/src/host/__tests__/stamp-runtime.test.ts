@@ -1,3 +1,5 @@
+import { spawn } from "node:child_process";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -61,6 +63,7 @@ import {
   writeHostInstallRecord,
   type HostInstallRecord,
 } from "../../manifest/host-install";
+import { readProcessStartTimeMs } from "../../store/process-identity";
 
 const ENV: Environment = "production";
 
@@ -127,46 +130,6 @@ describe("stampRuntime", () => {
 
   afterEach(() => {
     rmSync(sandboxRoot, { recursive: true, force: true });
-  });
-
-  it("stamps runtimeVersion on a full match (null stamp + generation + live pid evidence)", async () => {
-    const installed = await writeInstall({});
-    const pid = writePid({});
-
-    const result = await stampRuntime({
-      environment: ENV,
-      expectedInstallGeneration: generationFor(installed),
-      observedPid: pid.pid,
-      observedStartedAt: pid.startedAt,
-      observedRuntimeVersion: pid.version,
-    });
-
-    expect(result).toEqual({
-      outcome: "stamped",
-      runtimeVersion: pid.version,
-      installGeneration: generationFor(installed),
-    });
-    const stored = await readHostInstallRecord(ENV);
-    expect(stored?.runtimeVersion).toBe(pid.version);
-  });
-
-  it("covers the legacy-tuple fingerprint path (no installId)", async () => {
-    const installed = await writeInstall({ installId: null });
-    const pid = writePid({});
-    const expectedGeneration = generationFor(installed);
-    expect(expectedGeneration.startsWith("legacy:")).toBe(true);
-
-    const result = await stampRuntime({
-      environment: ENV,
-      expectedInstallGeneration: expectedGeneration,
-      observedPid: pid.pid,
-      observedStartedAt: pid.startedAt,
-      observedRuntimeVersion: pid.version,
-    });
-
-    expect(result.outcome).toBe("stamped");
-    const stored = await readHostInstallRecord(ENV);
-    expect(stored?.runtimeVersion).toBe(pid.version);
   });
 
   it("superseded: no install record (uninstalled)", async () => {
@@ -323,3 +286,225 @@ describe("stampRuntime", () => {
     expect(stored).toEqual(installed);
   });
 });
+
+// Finding 3 (ticket-2 review round 1): the static pid.json comparison
+// above proves pid.json wasn't rewritten out from under the caller, but
+// says nothing about whether that pid is actually alive - a crashed host
+// that left pid.json behind would satisfy every check with a fabricated
+// pid (the pre-fix `writePid({})` default of 4242 is never a real
+// process). These tests spawn a REAL process so the new liveness probe
+// has genuine positive evidence to find - `sleep` has no Windows
+// equivalent fixture, matching `store/__tests__/process-identity.test.ts`'s
+// own convention of skipping this exact scenario there.
+describe.skipIf(process.platform === "win32")(
+  "stampRuntime - live pid probe (Finding 3)",
+  () => {
+    let child: ChildProcessWithoutNullStreams | null = null;
+
+    beforeEach(() => {
+      sandboxRoot = mkdtempSync(
+        join(tmpdir(), "traycer-stamp-runtime-live-test-"),
+      );
+      osHome.current = sandboxRoot;
+    });
+
+    afterEach(() => {
+      child?.kill();
+      child = null;
+      rmSync(sandboxRoot, { recursive: true, force: true });
+    });
+
+    async function spawnLiveProcess(): Promise<{
+      readonly pid: number;
+      readonly startedAt: string;
+    }> {
+      const proc = spawn("sleep", ["5"]);
+      child = proc;
+      const pid = await new Promise<number>((resolve, reject) => {
+        proc.once("spawn", () => {
+          if (proc.pid === undefined) {
+            reject(new Error("spawned sleep process has no pid"));
+            return;
+          }
+          resolve(proc.pid);
+        });
+        proc.once("error", reject);
+      });
+      const startedAtMs = readProcessStartTimeMs(pid);
+      if (startedAtMs === null) {
+        throw new Error("could not read the spawned process's start time");
+      }
+      return { pid, startedAt: new Date(startedAtMs).toISOString() };
+    }
+
+    it("stamps runtimeVersion on a full match (null stamp + generation + live pid evidence)", async () => {
+      const installed = await writeInstall({});
+      const live = await spawnLiveProcess();
+      const pid = writePid({ pid: live.pid, startedAt: live.startedAt });
+
+      const result = await stampRuntime({
+        environment: ENV,
+        expectedInstallGeneration: generationFor(installed),
+        observedPid: pid.pid,
+        observedStartedAt: pid.startedAt,
+        observedRuntimeVersion: pid.version,
+      });
+
+      expect(result).toEqual({
+        outcome: "stamped",
+        runtimeVersion: pid.version,
+        installGeneration: generationFor(installed),
+      });
+      const stored = await readHostInstallRecord(ENV);
+      expect(stored?.runtimeVersion).toBe(pid.version);
+    });
+
+    it("covers the legacy-tuple fingerprint path (no installId)", async () => {
+      const installed = await writeInstall({ installId: null });
+      const live = await spawnLiveProcess();
+      const pid = writePid({ pid: live.pid, startedAt: live.startedAt });
+      const expectedGeneration = generationFor(installed);
+      expect(expectedGeneration.startsWith("legacy:")).toBe(true);
+
+      const result = await stampRuntime({
+        environment: ENV,
+        expectedInstallGeneration: expectedGeneration,
+        observedPid: pid.pid,
+        observedStartedAt: pid.startedAt,
+        observedRuntimeVersion: pid.version,
+      });
+
+      expect(result.outcome).toBe("stamped");
+      const stored = await readHostInstallRecord(ENV);
+      expect(stored?.runtimeVersion).toBe(pid.version);
+    });
+
+    it("superseded: pid-not-live when pid.json matches statically but the process has exited (crashed host, stale pid.json)", async () => {
+      // The exact miss Finding 3 closes: every static check (generation,
+      // pid, startedAt, version) passes because pid.json was never
+      // cleaned up after the crash - only a genuine liveness probe can
+      // tell this apart from a real live host.
+      const installed = await writeInstall({});
+      const live = await spawnLiveProcess();
+      const pid = writePid({ pid: live.pid, startedAt: live.startedAt });
+      const exited = new Promise<void>((resolve) => {
+        child?.once("exit", () => resolve());
+      });
+      child?.kill();
+      await exited;
+
+      const result = await stampRuntime({
+        environment: ENV,
+        expectedInstallGeneration: generationFor(installed),
+        observedPid: pid.pid,
+        observedStartedAt: pid.startedAt,
+        observedRuntimeVersion: pid.version,
+      });
+
+      expect(result).toEqual({ outcome: "superseded", reason: "pid-not-live" });
+      const stored = await readHostInstallRecord(ENV);
+      expect(stored?.runtimeVersion).toBeNull();
+    });
+  },
+);
+
+// Finding 5 (ticket-2 review round 1): the in-process "generation
+// mismatch" test above proves the CAS logic itself is correct, but two
+// sequential in-process writes can't reveal anything a single-threaded
+// test couldn't already guarantee by ordering its own calls - it's not a
+// genuine race. This spawns a REAL separate OS process
+// (`fixtures/stamp-runtime-terminal-install-worker.ts`) that performs a
+// terminal install through the exact production write path
+// (`writeHostInstallRecordAt`, the same one `installer/install.ts`'s
+// commit uses) between the moment a caller's command would have attested
+// install A's generation and the moment it calls `stampRuntime` - proving
+// the CAS uses the ATTESTED generation captured before the race window,
+// never a post-race disk re-read, and that install B's own debt survives
+// untouched. `bun run` matches `store/__tests__/fixtures/cli-lock-
+// worker.ts`'s own two-process convention.
+describe.skipIf(process.platform === "win32")(
+  "stampRuntime - genuine two-process attested-generation CAS race (Finding 5)",
+  () => {
+    beforeEach(() => {
+      sandboxRoot = mkdtempSync(
+        join(tmpdir(), "traycer-stamp-runtime-cas-race-test-"),
+      );
+      osHome.current = sandboxRoot;
+    });
+
+    afterEach(() => {
+      rmSync(sandboxRoot, { recursive: true, force: true });
+    });
+
+    const workerScript = join(
+      __dirname,
+      "fixtures",
+      "stamp-runtime-terminal-install-worker.ts",
+    );
+
+    function spawnTerminalInstallWorker(overrides: {
+      readonly installId: string;
+      readonly version: string;
+      readonly installedAt: string;
+    }): ChildProcessWithoutNullStreams {
+      return spawn("bun", ["run", workerScript], {
+        env: {
+          ...process.env,
+          WORKER_INSTALL_DIR: installDirFor(ENV),
+          WORKER_INSTALL_ID: overrides.installId,
+          WORKER_VERSION: overrides.version,
+          WORKER_INSTALLED_AT: overrides.installedAt,
+        },
+      });
+    }
+
+    function waitForExit(
+      child: ChildProcessWithoutNullStreams,
+    ): Promise<number | null> {
+      return new Promise((resolve) => {
+        child.once("exit", (code) => resolve(code));
+      });
+    }
+
+    it("a real terminal install landing in a separate OS process between the attested generation and the stamp call is superseded, never stamped onto the interloper's record", async () => {
+      // The controller's cycle: install A lands, its command attests A's
+      // generation and returns it to the caller - captured here exactly
+      // as the caller would hold onto it.
+      const installA = await writeInstall({ installId: "install-a" });
+      const pid = writePid({});
+      const expectedGenerationFromA = generationFor(installA);
+
+      // Before the caller gets to call stampRuntime, a REAL separate
+      // process performs a terminal bytes-only install - install B -
+      // landing via actual cross-process filesystem writes.
+      const worker = spawnTerminalInstallWorker({
+        installId: "install-b",
+        version: "3.0.0",
+        installedAt: "2026-01-02T00:00:00.000Z",
+      });
+      const exitCode = await waitForExit(worker);
+      expect(exitCode).toBe(0);
+
+      // The caller calls stampRuntime with the generation it ATTESTED
+      // from A's own command result - never re-reading the disk after
+      // the race window.
+      const result = await stampRuntime({
+        environment: ENV,
+        expectedInstallGeneration: expectedGenerationFromA,
+        observedPid: pid.pid,
+        observedStartedAt: pid.startedAt,
+        observedRuntimeVersion: pid.version,
+      });
+
+      expect(result).toEqual({
+        outcome: "superseded",
+        reason: "generation-mismatch",
+      });
+      // Install B's own debt survives untouched - A's stale readiness
+      // observation was never stamped onto it.
+      const stored = await readHostInstallRecord(ENV);
+      expect(stored?.installId).toBe("install-b");
+      expect(stored?.runtimeVersion).toBeNull();
+    });
+  },
+);

@@ -25,6 +25,13 @@ const mocks = vi.hoisted(() => ({
   applyHostMock: vi.fn(),
   readHostStagedRecordMock: vi.fn(),
   readHostInstallRecordMock: vi.fn(),
+  // Cross-mock ordering timeline for the Finding 8 test below (ticket-2
+  // review round 1) - a SHARED array `withCliLock` and
+  // `readHostStagedRecord` both push into, so a single assertion can pin
+  // whether the staged-record read genuinely happened BEFORE lock-exit
+  // (inside the same lock span the busy decision was made under) rather
+  // than after it.
+  callOrder: [] as string[],
 }));
 
 vi.mock("../../installer/download-stage", () => ({
@@ -36,7 +43,12 @@ vi.mock("../../installer/apply", () => ({
 }));
 
 vi.mock("../../manifest/host-staged", () => ({
-  readHostStagedRecord: mocks.readHostStagedRecordMock,
+  readHostStagedRecord: async (
+    ...callArgs: Parameters<typeof mocks.readHostStagedRecordMock>
+  ) => {
+    mocks.callOrder.push("read-staged");
+    return mocks.readHostStagedRecordMock(...callArgs);
+  },
 }));
 
 vi.mock("../../manifest/host-install", () => ({
@@ -44,19 +56,25 @@ vi.mock("../../manifest/host-install", () => ({
 }));
 
 vi.mock("../../store/cli-lock", () => ({
-  withCliLock: (
+  withCliLock: async (
     _opts: unknown,
     fn: (handle: {
       path: string;
       metadata: Record<string, unknown>;
       release: () => Promise<void>;
     }) => Promise<unknown>,
-  ) =>
-    fn({
-      path: "/tmp/.lock",
-      metadata: {},
-      release: async () => {},
-    }),
+  ) => {
+    mocks.callOrder.push("lock-enter");
+    try {
+      return await fn({
+        path: "/tmp/.lock",
+        metadata: {},
+        release: async () => {},
+      });
+    } finally {
+      mocks.callOrder.push("lock-exit");
+    }
+  },
 }));
 
 import { buildHostUpdateCommand } from "../host-update";
@@ -208,6 +226,7 @@ describe("buildHostUpdateCommand composite", () => {
     // resetAllMocks (not clearAllMocks) so a mockResolvedValue/
     // mockRejectedValue configured in one test can't leak into the next.
     vi.resetAllMocks();
+    mocks.callOrder = [];
   });
 
   it("short-circuits with no apply call when already at latest, backfilling the legacy shape from a locked install-record read", async () => {
@@ -429,6 +448,47 @@ describe("buildHostUpdateCommand composite", () => {
       code: CLI_ERROR_CODES.HOST_BUSY,
       details: { stagedVersion: "2.0.0" },
     });
+  });
+
+  it("busy: reads the staged record INSIDE the apply lock span, never after it releases (Finding 8)", async () => {
+    mocks.downloadAndStageHostMock.mockResolvedValue({
+      outcome: "promoted",
+      stagedVersion: "2.0.0",
+      installedVersion: "1.0.0",
+    } satisfies HostDownloadOutcome);
+    mocks.applyHostMock.mockRejectedValue(
+      cliError({
+        code: CLI_ERROR_CODES.HOST_BUSY,
+        message: "The running host has work in progress",
+        details: null,
+        exitCode: 1,
+      }),
+    );
+    mocks.readHostStagedRecordMock.mockResolvedValue({
+      schemaVersion: 1,
+      version: "2.0.0",
+      runtimeVersion: null,
+      archiveSha256: null,
+      sizeBytes: 1,
+      source: { kind: "registry", value: "2.0.0" },
+      signatureKeyId: "test-key",
+      signatureVerifiedAt: "2026-01-01T00:00:00.000Z",
+      executablePath: "traycer-host",
+      platform: "darwin",
+      arch: "arm64",
+    });
+
+    const command = buildHostUpdateCommand({ force: false });
+    await expect(command(fakeCtx())).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_BUSY,
+      details: { stagedVersion: "2.0.0" },
+    });
+
+    // The read happens strictly BETWEEN lock-enter and lock-exit - the
+    // exact coherence guarantee Finding 8 requires (a read after
+    // lock-exit could observe a stage a different, now-unblocked actor
+    // already mutated).
+    expect(mocks.callOrder).toEqual(["lock-enter", "read-staged", "lock-exit"]);
   });
 
   it("propagates a non-busy applyHost error unchanged, without reading the staged record", async () => {

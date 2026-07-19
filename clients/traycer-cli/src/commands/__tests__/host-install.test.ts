@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // `host install` (Host Update Layer Redesign Tech Plan, "Lock-scope
 // restructure" + "--no-service-register" + "--if-idle"): stage/verify/
@@ -17,6 +17,9 @@ const mocks = vi.hoisted(() => ({
   commitHostInstallSourceMock: vi.fn(),
   discardStagedHostInstallSourceMock: vi.fn(),
   createServiceInstallLifecycleMock: vi.fn(),
+  createBytesOnlyInstallLifecycleMock: vi.fn(),
+  createServiceControllerMock: vi.fn(),
+  serviceLabelForMock: vi.fn(),
   assertHostNotBusyMock: vi.fn(),
 }));
 
@@ -43,7 +46,24 @@ vi.mock("../../installer", () => ({
 
 vi.mock("../../service/install-lifecycle", () => ({
   createServiceInstallLifecycle: mocks.createServiceInstallLifecycleMock,
+  createBytesOnlyInstallLifecycle: mocks.createBytesOnlyInstallLifecycleMock,
 }));
+
+// `createServiceController`/`serviceLabelFor` must be mocked here too, not
+// just `createServiceInstallLifecycle` - the bytes-only path
+// (`--no-service-register`) now calls them directly, and the REAL
+// `createServiceController()` builds a `createCliLogger` that does real
+// filesystem I/O against the operator's actual `~/.traycer` home. Leaving
+// this unmocked would run real disk writes from this suite. `formatService
+// LifecycleWarning` is kept genuine (pure string formatting, no I/O).
+vi.mock("../../service", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../service")>();
+  return {
+    ...actual,
+    createServiceController: mocks.createServiceControllerMock,
+    serviceLabelFor: mocks.serviceLabelForMock,
+  };
+});
 
 vi.mock("../../host/busy-check", () => ({
   assertHostNotBusy: (
@@ -169,6 +189,27 @@ function fakeCtx(): CommandContext {
 }
 
 describe("buildHostInstallCommand", () => {
+  beforeEach(() => {
+    // Default stand-ins so the bytes-only branch (which now calls these
+    // directly) never falls through to the real, side-effecting
+    // implementations. `resetAllMocks` in `afterEach` wipes these between
+    // tests, so they're re-applied here rather than once at module load.
+    mocks.createServiceControllerMock.mockReturnValue({
+      install: vi.fn(),
+      uninstall: vi.fn(),
+      status: vi.fn(),
+      stop: vi.fn(),
+      start: vi.fn(),
+      restart: vi.fn(),
+    });
+    mocks.serviceLabelForMock.mockReturnValue({
+      id: "ai.traycer.host",
+      displayName: "Traycer Host",
+      environment: "production",
+      devSlot: null,
+    });
+  });
+
   afterEach(() => {
     // resetAllMocks (not clearAllMocks) so a mockResolvedValue/
     // mockRejectedValue configured in one test can't leak into the next -
@@ -199,10 +240,19 @@ describe("buildHostInstallCommand", () => {
     ]);
   });
 
-  it("passes bootstrap: null to the service lifecycle when --no-service-register is set", async () => {
+  it("--no-service-register skips the service lifecycle entirely: no stop, no register, no start (Finding 4)", async () => {
+    // `createServiceInstallLifecycle`'s `bootstrap: null` still rewrites and
+    // re-loads an EXISTING OS registration post-swap (see `service/install-
+    // lifecycle.ts`'s `afterSwap`) - that is NOT the bytes-only contract
+    // `--no-service-register` promises. The fix skips that lifecycle
+    // entirely and uses the bytes-only builder instead.
+    const bytesOnlyLifecycle = {
+      beforeSwap: vi.fn(async () => {}),
+      afterSwap: vi.fn(async () => {}),
+    };
     mocks.stageHostInstallSourceMock.mockResolvedValue(sampleStaged());
-    mocks.createServiceInstallLifecycleMock.mockReturnValue(
-      sampleLifecycleHandle(),
+    mocks.createBytesOnlyInstallLifecycleMock.mockReturnValue(
+      bytesOnlyLifecycle,
     );
     mocks.commitHostInstallSourceMock.mockResolvedValue({
       record: sampleRecord("2.0.0"),
@@ -213,12 +263,24 @@ describe("buildHostInstallCommand", () => {
     const command = buildHostInstallCommand(
       baseArgs({ noServiceRegister: true }),
     );
-    await command(fakeCtx());
+    const result = await command(fakeCtx());
 
-    expect(mocks.createServiceInstallLifecycleMock).toHaveBeenCalledWith({
-      environment: "production",
-      bootstrap: null,
-    });
+    // The stop/register/rewrite/start-capable lifecycle is never built at
+    // all - not built-then-unused, never constructed.
+    expect(mocks.createServiceInstallLifecycleMock).not.toHaveBeenCalled();
+    expect(mocks.createBytesOnlyInstallLifecycleMock).toHaveBeenCalledTimes(1);
+    // The bytes-only lifecycle - not a `createServiceInstallLifecycle`
+    // handle's lifecycle - is what actually reaches the commit.
+    expect(mocks.commitHostInstallSourceMock).toHaveBeenCalledWith(
+      expect.objectContaining({ lifecycle: bytesOnlyLifecycle }),
+    );
+    // `commitHostInstallSource` (which owns invoking the hooks) is mocked
+    // here, so neither hook having fired proves nothing in the command
+    // layer itself calls stop/register/start directly.
+    expect(bytesOnlyLifecycle.beforeSwap).not.toHaveBeenCalled();
+    expect(bytesOnlyLifecycle.afterSwap).not.toHaveBeenCalled();
+    // No service action is reported - activation remains a separate step.
+    expect(result.data).toMatchObject({ serviceLifecycle: null });
   });
 
   it("passes the enableLinger/allowSelfInvocation bootstrap payload when --no-service-register is NOT set", async () => {
