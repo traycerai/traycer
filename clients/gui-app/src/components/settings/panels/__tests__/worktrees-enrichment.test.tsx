@@ -921,9 +921,14 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
       const entriesByPath = new Map<string, WorktreeHostEntryV14>([
         ["/wt/a", resolved],
       ]);
+      // Count host reads so we can prove the sentinel refetch actually landed.
+      // The guard's whole job is to leave the cached data UNCHANGED, so a
+      // `waitFor` on the data cannot tell "guard preserved the row" apart from
+      // "the refetch never happened" - only the request count can.
+      const requests: string[] = [];
       const fixture = createFixture(
         entriesByPath,
-        null,
+        (path) => requests.push(path),
         null,
         createAppQueryClient(),
       );
@@ -939,9 +944,10 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
           "feat-a",
         );
       });
+      const requestsBeforeSentinel = requests.length;
 
-      // The host goes cold (restart) and now answers the sentinel. A refetch
-      // must NOT downgrade the resolved row we already hold.
+      // The host goes cold (restart) and now answers the sentinel. Invalidation
+      // re-arms the sweep, which re-probes the row through the batcher.
       entriesByPath.set("/wt/a", sentinelEntry("/wt/a"));
       await act(async () => {
         await fixture.queryClient.invalidateQueries({
@@ -949,7 +955,13 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
           refetchType: "active",
         });
       });
+      // The sentinel response must actually land before the assertion, or the
+      // test would pass trivially on stale cache without exercising the guard.
+      await waitFor(() => {
+        expect(requests.length).toBeGreaterThan(requestsBeforeSentinel);
+      });
 
+      // Guard kept the resolved row despite the sentinel refetch landing.
       expect(result.current.enrichedByPath.get("/wt/a")?.branch).toBe("feat-a");
       expect(
         result.current.enrichedByPath.get("/wt/a")?.resolvedAt,
