@@ -187,10 +187,15 @@ export function LandingComposer(props: LandingComposerProps) {
     ],
   );
   const workspaceCanStart = workspaceComposerCanStart(workspaceAvailability);
-  const canSubmit = !isSubmitting && workspaceCanStart && hasSubmittableContent;
+  const paste = useLandingComposerPaste(editorRef);
+  const attachmentPending = paste.isIngestingImages;
+  const canSubmit =
+    !isSubmitting &&
+    !attachmentPending &&
+    workspaceCanStart &&
+    hasSubmittableContent;
 
   const actions = useLandingComposerActions();
-  const paste = useLandingComposerPaste(editorRef);
   const { dictationControl, dictationPreparing } = useComposerDictation({
     editorRef,
     isActive: chatComposerActive,
@@ -269,6 +274,7 @@ export function LandingComposer(props: LandingComposerProps) {
       initialSelection={initialSelection}
       canSubmit={canSubmit}
       isSubmitting={isSubmitting}
+      attachmentPending={attachmentPending}
       workspaceDisabledHint={workspaceAvailability.disabledHint}
       header={<div className="flex justify-end">{switcher}</div>}
       attachmentsStrip={
@@ -278,6 +284,7 @@ export function LandingComposer(props: LandingComposerProps) {
       dictationControl={dictationControl}
       dictationPreparing={dictationPreparing}
       paste={paste}
+      hasPastedImageBytes={null}
       onSubmit={handleSubmit}
       onStartTerminal={handleStartTerminal}
       onSnapshot={handleSnapshot}

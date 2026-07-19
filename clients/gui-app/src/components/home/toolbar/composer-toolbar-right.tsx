@@ -15,6 +15,7 @@ import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-st
 interface ComposerToolbarRightProps {
   store: ComposerToolbarStore;
   canSubmit: boolean;
+  attachmentPending: boolean;
   onSubmit: () => void;
   activeTurnStatus: ChatActiveTurn["status"] | null;
   stopDisabled: boolean;
@@ -35,6 +36,7 @@ function ComposerToolbarRightImpl(props: ComposerToolbarRightProps) {
   const {
     store,
     canSubmit,
+    attachmentPending,
     onSubmit,
     activeTurnStatus,
     stopDisabled,
@@ -75,6 +77,7 @@ function ComposerToolbarRightImpl(props: ComposerToolbarRightProps) {
       ) : null}
       <ComposerSendButton
         canSubmit={canSubmitResolved}
+        attachmentPending={attachmentPending}
         onSubmit={onSubmit}
         activeTurnStatus={activeTurnStatus}
         stopDisabled={stopDisabled}
