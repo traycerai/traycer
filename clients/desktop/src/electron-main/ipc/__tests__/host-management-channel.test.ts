@@ -100,6 +100,7 @@ function writeInstallRecord(
 interface RecordedCall {
   readonly kind: "run" | "stream";
   readonly args: readonly string[];
+  readonly timeoutMs: number | undefined;
 }
 
 interface FakeCli {
@@ -115,12 +116,18 @@ function installFakeCli(opts: {
   const calls: RecordedCall[] = [];
   vi.doMock("../../cli/traycer-cli", () => ({
     runTraycerCliJson: vi.fn((args: readonly string[]) => {
-      calls.push({ kind: "run", args: [...args] });
+      calls.push({ kind: "run", args: [...args], timeoutMs: undefined });
       return Promise.resolve(opts.runResult);
     }),
     streamTraycerCliJson: vi.fn(
-      ({ args }: { readonly args: readonly string[] }) => {
-        calls.push({ kind: "stream", args: [...args] });
+      ({
+        args,
+        timeoutMs,
+      }: {
+        readonly args: readonly string[];
+        readonly timeoutMs: number;
+      }) => {
+        calls.push({ kind: "stream", args: [...args], timeoutMs });
         return Promise.resolve({ data: opts.streamResult });
       },
     ),
@@ -681,7 +688,7 @@ function installFakeCliRejectingWithVerifyFailed(): {
   }
   vi.doMock("../../cli/traycer-cli", () => ({
     runTraycerCliJson: vi.fn((args: readonly string[]) => {
-      calls.push({ kind: "run", args: [...args] });
+      calls.push({ kind: "run", args: [...args], timeoutMs: undefined });
       return Promise.reject(
         new FakeTraycerCliError(
           "E_HOST_VERIFY_FAILED",
@@ -690,8 +697,14 @@ function installFakeCliRejectingWithVerifyFailed(): {
       );
     }),
     streamTraycerCliJson: vi.fn(
-      ({ args }: { readonly args: readonly string[] }) => {
-        calls.push({ kind: "stream", args: [...args] });
+      ({
+        args,
+        timeoutMs,
+      }: {
+        readonly args: readonly string[];
+        readonly timeoutMs: number;
+      }) => {
+        calls.push({ kind: "stream", args: [...args], timeoutMs });
         return Promise.resolve({ data: {} });
       },
     ),
@@ -789,18 +802,20 @@ function installFakeCliWithDeferredStream(): {
   let rejectStream: (err: unknown) => void = () => undefined;
   vi.doMock("../../cli/traycer-cli", () => ({
     runTraycerCliJson: vi.fn((args: readonly string[]) => {
-      calls.push({ kind: "run", args: [...args] });
+      calls.push({ kind: "run", args: [...args], timeoutMs: undefined });
       return Promise.resolve({});
     }),
     streamTraycerCliJson: vi.fn(
       ({
         args,
         onEvent,
+        timeoutMs,
       }: {
         readonly args: readonly string[];
         readonly onEvent: (event: unknown) => void;
+        readonly timeoutMs: number;
       }) => {
-        calls.push({ kind: "stream", args: [...args] });
+        calls.push({ kind: "stream", args: [...args], timeoutMs });
         return new Promise((resolve, reject) => {
           resolveStream = (data: unknown) => {
             onEvent({
@@ -1032,5 +1047,230 @@ describe("host-management IPC - single-flight guard on concurrent host mutations
     });
     await updatePromise;
     expect(await statusHandler(null, null)).toBeNull();
+  });
+});
+
+// Dialog-hang RCA finding 2: `traycerHostRestart` used to call
+// `runTraycerCliJson`, whose hardcoded 10s default is shorter than the CLI's
+// stop-grace (32s) - a slow-draining host got SIGKILLed between `stop` and
+// `start`, leaving it down. The fix routes this handler through
+// `streamTraycerCliJson` with the shared `HOST_RESTART_SUBPROCESS_TIMEOUT_MS`
+// budget instead.
+describe("host-management IPC - restart timeout budget", () => {
+  it("traycerHostRestart streams the CLI restart with the shared HOST_RESTART_SUBPROCESS_TIMEOUT_MS budget, not the 10s runTraycerCliJson default", async () => {
+    const fake = installFakeCli({ runResult: {}, streamResult: {} });
+    const mgmt = await import("../host-management-ipc");
+    mgmt.setActiveEnvironment("production");
+    const { RunnerHostInvoke } =
+      await import("../../../ipc-contracts/ipc-channels");
+    const { HOST_RESTART_SUBPROCESS_TIMEOUT_MS } =
+      await import("@traycer/protocol/host/lifecycle-constants");
+    const bridge = makeBridge();
+    mgmt.registerHostManagementIpc(bridge as never);
+
+    await bridge.handlers.get(RunnerHostInvoke.traycerHostRestart)!(null, null);
+
+    expect(fake.calls).toHaveLength(1);
+    expect(fake.calls[0]?.kind).toBe("stream");
+    expect(fake.calls[0]?.args).toEqual(["host", "restart"]);
+    expect(fake.calls[0]?.timeoutMs).toBe(HOST_RESTART_SUBPROCESS_TIMEOUT_MS);
+  });
+
+  it("keeps the restart budget comfortably above the macOS CLI's stop-grace so a slow drain can't regress into a mid-restart SIGKILL", async () => {
+    const {
+      HOST_RESTART_SUBPROCESS_TIMEOUT_MS,
+      SHUTDOWN_FORCE_EXIT_MS,
+      STOP_EXIT_GRACE_MARGIN_MS,
+    } = await import("@traycer/protocol/host/lifecycle-constants");
+    const stopGrace = SHUTDOWN_FORCE_EXIT_MS + STOP_EXIT_GRACE_MARGIN_MS;
+    // A budget merely equal to the stop-grace regresses to the original
+    // bug (SIGKILL lands the instant `stop` finishes, before `start` runs).
+    // Require real headroom above it, not just `>`.
+    expect(HOST_RESTART_SUBPROCESS_TIMEOUT_MS).toBeGreaterThanOrEqual(
+      stopGrace + 30_000,
+    );
+  });
+
+  // Review finding 1: a budget sized only for macOS's stop-grace can still
+  // SIGKILL a legitimate, slow-but-successful Windows restart mid-sequence -
+  // `schtasks /End` + the PowerShell process scan + `taskkill` + `schtasks
+  // /Run` can cumulatively take longer than the macOS-only 92s budget did.
+  it("keeps the restart budget comfortably above the Windows restart sequence's own worst case", async () => {
+    const {
+      HOST_RESTART_SUBPROCESS_TIMEOUT_MS,
+      WINDOWS_RESTART_SEQUENCE_TIMEOUT_MS,
+    } = await import("@traycer/protocol/host/lifecycle-constants");
+    // A budget merely equal to the Windows sequence's own worst case
+    // regresses to the same class of bug - SIGKILL lands the instant the
+    // sequence would have finished. Require real headroom above it.
+    expect(HOST_RESTART_SUBPROCESS_TIMEOUT_MS).toBeGreaterThanOrEqual(
+      WINDOWS_RESTART_SEQUENCE_TIMEOUT_MS + 15_000,
+    );
+  });
+
+  // Review finding 3: Doctor's "Free Port + Restart" also SIGTERMs a
+  // confirmed foreign process and then awaits a platform service restart
+  // with the same 10-100s deadlines, so it needs the same restart-safe
+  // budget as `traycerHostRestart` instead of the 10s `runTraycerCliJson`
+  // default it used to carry.
+  it("traycerFreePortAndRestart streams the CLI restart with the shared HOST_RESTART_SUBPROCESS_TIMEOUT_MS budget, not the 10s runTraycerCliJson default", async () => {
+    const fake = installFakeCli({ runResult: {}, streamResult: {} });
+    const mgmt = await import("../host-management-ipc");
+    mgmt.setActiveEnvironment("production");
+    const { RunnerHostInvoke } =
+      await import("../../../ipc-contracts/ipc-channels");
+    const { HOST_RESTART_SUBPROCESS_TIMEOUT_MS } =
+      await import("@traycer/protocol/host/lifecycle-constants");
+    const bridge = makeBridge();
+    mgmt.registerHostManagementIpc(bridge as never);
+
+    await bridge.handlers.get(RunnerHostInvoke.traycerFreePortAndRestart)!(
+      null,
+      { port: 7000, pid: 1234, processName: "rogue" },
+    );
+
+    expect(fake.calls).toHaveLength(1);
+    expect(fake.calls[0]?.kind).toBe("stream");
+    expect(fake.calls[0]?.args.slice(0, 2)).toEqual([
+      "host",
+      "free-port-and-restart",
+    ]);
+    expect(fake.calls[0]?.timeoutMs).toBe(HOST_RESTART_SUBPROCESS_TIMEOUT_MS);
+  });
+});
+
+// Review finding 4: `traycerHostRestart` used to call `streamTraycerCliJson`
+// directly with a no-op event sink, so `HostOperationStatus` stayed null
+// during a restart - a second Settings window showed no banner and could
+// launch a competing restart that lost on `cli-lock` with a spurious error.
+// The fix routes restart through the same `trackHostOperation` seam
+// install/update/register-service already use.
+describe("host-management IPC - restart routes through the canonical operation-status/single-flight guard", () => {
+  it("reports HostOperationStatus.kind === 'restart' while a restart is running and clears it back to null on settle", async () => {
+    const fake = installFakeCliWithDeferredStream();
+    const mgmt = await import("../host-management-ipc");
+    mgmt.setActiveEnvironment("production");
+    const { RunnerHostInvoke, RunnerHostEvent } =
+      await import("../../../ipc-contracts/ipc-channels");
+    const bridge = makeBridge();
+    mgmt.registerHostManagementIpc(bridge as never);
+
+    const statusHandler = bridge.handlers.get(
+      RunnerHostInvoke.traycerHostOperationStatusGet,
+    )!;
+    expect(await statusHandler(null, null)).toBeNull();
+
+    const restartPromise = bridge.handlers.get(
+      RunnerHostInvoke.traycerHostRestart,
+    )!(null, null);
+    await waitForStreamCallCount(fake, 1);
+
+    expect(await statusHandler(null, null)).toMatchObject({ kind: "restart" });
+    const statusCalls = () =>
+      bridge.fanOut.mock.calls.filter(
+        ([channel]) => channel === RunnerHostEvent.hostOperationStatusChange,
+      );
+    expect(statusCalls()[0]?.[1]).toMatchObject({
+      kind: "restart",
+      percent: null,
+    });
+
+    fake.resolveStream({});
+    await restartPromise;
+
+    expect(mgmt.getHostOperationStatus()).toBeNull();
+    expect(await statusHandler(null, null)).toBeNull();
+  });
+
+  it("rejects a second concurrent host operation while a restart is in flight, without spawning a second CLI subprocess", async () => {
+    const fake = installFakeCliWithDeferredStream();
+    const mgmt = await import("../host-management-ipc");
+    mgmt.setActiveEnvironment("production");
+    const { RunnerHostInvoke } =
+      await import("../../../ipc-contracts/ipc-channels");
+    const bridge = makeBridge();
+    mgmt.registerHostManagementIpc(bridge as never);
+
+    const restartPromise = bridge.handlers.get(
+      RunnerHostInvoke.traycerHostRestart,
+    )!(null, null);
+    await waitForStreamCallCount(fake, 1);
+
+    await expect(
+      bridge.handlers.get(RunnerHostInvoke.traycerHostUpdate)!(null, {
+        operationId: "op-update",
+      }),
+    ).rejects.toThrow(
+      /Another host operation \(restart\) is already in progress/i,
+    );
+
+    // Only ONE CLI subprocess was ever spawned - the second call never
+    // reached the CLI lock at all.
+    expect(fake.calls.filter((c) => c.kind === "stream")).toHaveLength(1);
+
+    fake.resolveStream({});
+    await restartPromise;
+  });
+
+  // Review follow-up finding: neither `host restart` nor the hidden
+  // `host free-port-and-restart` CLI command takes the CLI's own file lock
+  // (`withCliLock`), so `trackHostOperation` is the ONLY same-process
+  // protection against the two interleaving their stop/kill/start
+  // sequences. Both directions must be covered - either one racing the
+  // other must lose without spawning a second CLI subprocess.
+  it("rejects a concurrent traycerFreePortAndRestart while a tracked restart is in flight, without spawning a second CLI subprocess", async () => {
+    const fake = installFakeCliWithDeferredStream();
+    const mgmt = await import("../host-management-ipc");
+    mgmt.setActiveEnvironment("production");
+    const { RunnerHostInvoke } =
+      await import("../../../ipc-contracts/ipc-channels");
+    const bridge = makeBridge();
+    mgmt.registerHostManagementIpc(bridge as never);
+
+    const restartPromise = bridge.handlers.get(
+      RunnerHostInvoke.traycerHostRestart,
+    )!(null, null);
+    await waitForStreamCallCount(fake, 1);
+
+    await expect(
+      bridge.handlers.get(RunnerHostInvoke.traycerFreePortAndRestart)!(null, {
+        port: 7000,
+        pid: 1234,
+        processName: "rogue",
+      }),
+    ).rejects.toThrow(
+      /Another host operation \(restart\) is already in progress/i,
+    );
+
+    expect(fake.calls.filter((c) => c.kind === "stream")).toHaveLength(1);
+
+    fake.resolveStream({});
+    await restartPromise;
+  });
+
+  it("rejects a concurrent traycerHostRestart while a tracked free-port-and-restart is in flight, without spawning a second CLI subprocess", async () => {
+    const fake = installFakeCliWithDeferredStream();
+    const mgmt = await import("../host-management-ipc");
+    mgmt.setActiveEnvironment("production");
+    const { RunnerHostInvoke } =
+      await import("../../../ipc-contracts/ipc-channels");
+    const bridge = makeBridge();
+    mgmt.registerHostManagementIpc(bridge as never);
+
+    const freePortPromise = bridge.handlers.get(
+      RunnerHostInvoke.traycerFreePortAndRestart,
+    )!(null, { port: 7000, pid: 1234, processName: "rogue" });
+    await waitForStreamCallCount(fake, 1);
+
+    await expect(
+      bridge.handlers.get(RunnerHostInvoke.traycerHostRestart)!(null, null),
+    ).rejects.toThrow(
+      /Another host operation \(free-port-and-restart\) is already in progress/i,
+    );
+
+    expect(fake.calls.filter((c) => c.kind === "stream")).toHaveLength(1);
+
+    fake.resolveStream({});
+    await freePortPromise;
   });
 });

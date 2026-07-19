@@ -2466,6 +2466,60 @@ describe("RunnerIpcBridge", () => {
     bridge.dispose();
   });
 
+  it("tracks requestHostRespawn in the shared host-operation single-flight guard", async () => {
+    const mod = await import("../register-runner-ipc");
+    const host = new FakeHost();
+    const respawnStarted = Promise.withResolvers<void>();
+    const releaseRespawn = Promise.withResolvers<void>();
+    host.respawn = vi.fn(() => {
+      host.respawnCalls += 1;
+      respawnStarted.resolve();
+      return releaseRespawn.promise;
+    });
+    const bridge = new mod.RunnerIpcBridge({
+      host,
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      window: buildWindow(),
+    });
+    bridge.install();
+
+    const respawnHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.requestHostRespawn,
+    );
+    const statusHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.traycerHostOperationStatusGet,
+    );
+    const restartHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.traycerHostRestart,
+    );
+    if (
+      respawnHandler === undefined ||
+      statusHandler === undefined ||
+      restartHandler === undefined
+    ) {
+      throw new Error("host restart handlers missing");
+    }
+
+    const respawn = respawnHandler(bareEvent());
+    await respawnStarted.promise;
+
+    await expect(statusHandler(bareEvent())).resolves.toMatchObject({
+      kind: "restart",
+    });
+    await expect(restartHandler(bareEvent())).rejects.toThrow(
+      /Another host operation \(restart\) is already in progress/i,
+    );
+    expect(host.respawnCalls).toBe(1);
+
+    releaseRespawn.resolve();
+    await respawn;
+    await expect(statusHandler(bareEvent())).resolves.toBeNull();
+    bridge.dispose();
+  });
+
   it("serves authnBaseUrl synchronously via ipcMain.on", async () => {
     const mod = await import("../register-runner-ipc");
     const bridge = new mod.RunnerIpcBridge({

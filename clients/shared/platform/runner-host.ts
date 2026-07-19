@@ -766,7 +766,12 @@ export interface HostProgressEvent {
 }
 
 export type HostOperationKind =
-  "install" | "update" | "register-service" | "ensure";
+  | "install"
+  | "update"
+  | "register-service"
+  | "ensure"
+  | "restart"
+  | "free-port-and-restart";
 
 /**
  * Canonical cross-surface snapshot of the single host mutation currently

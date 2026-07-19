@@ -210,6 +210,10 @@ export function formatProgressKind(kind: HostOperationKind): string {
       return "Registering service";
     case "ensure":
       return "Setting up host";
+    case "restart":
+      return "Restarting host";
+    case "free-port-and-restart":
+      return "Freeing port and restarting host";
   }
 }
 
