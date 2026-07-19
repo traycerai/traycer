@@ -20,6 +20,7 @@ import {
   getImageBytes,
   imageHashKeys,
   releaseSession,
+  sessionHashKeys,
   sessionObjectUrl,
 } from "@/lib/composer/landing-image-store";
 import {
@@ -711,5 +712,102 @@ describe("useLandingComposerPaste - in-flight image GC root during a mixed paste
     expect(commits[0].paths).toEqual(["doc.pdf"]);
     expect(commits[0].attrs).toHaveLength(1);
     expect(await getImageBytes(hash)).not.toBeUndefined();
+  });
+});
+
+// Round-3: `Promise.allSettled` + per-task retain leases. One sibling can
+// fail before slower siblings finish put+retain; those late leases must
+// still be released on the failure path so two reconciles reclaim
+// session/bytes (including when siblings share a content hash / refcount).
+describe("useLandingComposerPaste - sibling image failure releases late retain leases", () => {
+  it("reclaims session and bytes after one image fails before slow duplicate-hash siblings settle", async () => {
+    markLandingDraftsReady();
+    const inserted: ImageAttachmentAttrs[][] = [];
+    const { handle } = makeHandle(inserted, []);
+    const editorRef = { current: handle };
+    const { result } = renderHook(() =>
+      useLandingComposerPaste(editorRef, NOOP_FILE_DROPS, NO_MENTION_ROOTS),
+    );
+
+    const failing = new File(["same-bytes"], "fail.png", {
+      type: "image/png",
+    });
+    const slowA = new File(["same-bytes"], "slow-a.png", {
+      type: "image/png",
+    });
+    const slowB = new File(["same-bytes"], "slow-b.png", {
+      type: "image/png",
+    });
+
+    const releaseGates: Array<() => void> = [];
+    const originalArrayBuffer = File.prototype.arrayBuffer;
+    const arrayBufferSpy = vi
+      .spyOn(File.prototype, "arrayBuffer")
+      .mockImplementation(function (this: File) {
+        if (this.name === "fail.png") {
+          return Promise.reject(new Error("read failed"));
+        }
+        if (this.name === "slow-a.png" || this.name === "slow-b.png") {
+          return new Promise<ArrayBuffer>((resolve, reject) => {
+            releaseGates.push(() => {
+              originalArrayBuffer
+                .call(this)
+                .then(resolve, reject);
+            });
+          });
+        }
+        return originalArrayBuffer.call(this);
+      });
+
+    act(() => {
+      result.current.attachImageFiles([failing, slowA, slowB]);
+    });
+
+    // Failure path has already rejected its read; slow siblings are still
+    // gated. Nothing inserted yet.
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(inserted).toHaveLength(0);
+    expect(releaseGates).toHaveLength(2);
+
+    // Settle both slow siblings - identical content → one hash, two retains.
+    await act(async () => {
+      for (const release of releaseGates) release();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith("Couldn't attach the image.", {
+        description: "Please try adding it again.",
+      });
+    });
+    expect(inserted).toHaveLength(0);
+
+    // Bytes were stored (and session-seeded) by the slow siblings before the
+    // failure path released every late retain lease.
+    await waitFor(async () => {
+      expect(await imageHashKeys()).toHaveLength(1);
+    });
+    const [hash] = await imageHashKeys();
+    expect(await getImageBytes(hash)).not.toBeUndefined();
+
+    // First reconcile: hash is no longer an in-flight root, so the session
+    // entry is released. Second reconcile: without session protection the
+    // orphaned IDB bytes are deleted. Two steps cover the refcount release
+    // path for the duplicate-hash retains.
+    await reconcile();
+    expect(sessionHashKeys()).not.toContain(hash);
+    // Bytes may still be present until the second pass (session was the
+    // delete-root on the first pass).
+    await reconcile();
+    expect(await getImageBytes(hash)).toBeUndefined();
+    expect(await imageHashKeys()).toHaveLength(0);
+    expect(sessionObjectUrl(hash)).toBeNull();
+
+    arrayBufferSpy.mockRestore();
   });
 });

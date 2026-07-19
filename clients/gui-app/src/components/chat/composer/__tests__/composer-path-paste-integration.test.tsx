@@ -10,6 +10,7 @@ import {
 } from "@testing-library/react";
 import { toast } from "sonner";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import { EditorView } from "@tiptap/pm/view";
 
 import {
   ComposerPromptEditor,
@@ -682,6 +683,241 @@ describe("composer path paste/drop integration (real editor)", () => {
       expect(screen.queryByTestId("composer-editor")).toBeNull();
     });
   });
+
+  // Round-3: non-collapsed selection that is replaced by typing while path
+  // resolution is still pending must not re-delete the typed content when
+  // the path finally lands - insert at the mapped original anchor as a
+  // collapsed point instead.
+  describe("round-3 - deferred noncollapsed selection replaced by typing", () => {
+    it("preserves typed replacement content and inserts the path at the stable original anchor", async () => {
+      const viewCapture = installEditorViewCapture();
+      try {
+        let resolvePaths: ((paths: readonly string[]) => void) | null = null;
+        const fileDrops = makeFileDrops({
+          resolveDroppedFilePaths: () =>
+            new Promise((resolve) => {
+              resolvePaths = resolve;
+            }),
+          copyDroppedFilePaths: (paths) => Promise.resolve([...paths]),
+        });
+        // "HELLO WORLD" with WORLD selected (positions 7..12 in a paragraph
+        // that starts at 1: H E L L O   W O R L D).
+        const handleRef = await mountedHandle(fileDrops, {
+          mentionRoots: ["/repo"],
+          initialContent: paragraphText("HELLO WORLD"),
+          initialSelection: { from: 7, to: 12 },
+        });
+
+        const file = new File(["x"], "note.txt", { type: "text/plain" });
+        fireEvent.paste(screen.getByTestId("composer-editor"), {
+          clipboardData: makeFileTransfer([file]),
+        });
+
+        // Real ProseMirror text input over the still-selected range while path
+        // resolve is pending - this is the lifecycle the collapsed-range
+        // fallback is meant to survive (not a whole-doc setContent).
+        act(() => {
+          typeOverSelection(viewCapture.getView(), "TYPED");
+        });
+
+        const mid = textRuns(handleRef.current)
+          .map((run) => run.text)
+          .join("");
+        expect(mid).toContain("TYPED");
+        expect(mid).not.toContain("WORLD");
+        expect(pathSpanTexts(handleRef.current)).toEqual([]);
+
+        expect(resolvePaths).not.toBeNull();
+        await act(async () => {
+          resolvePaths?.(["/repo/note.txt"]);
+          await flushMicrotasksRaw();
+        });
+
+        expect(pathSpanTexts(handleRef.current)).toEqual(["note.txt"]);
+        const joined = textRuns(handleRef.current)
+          .map((run) => run.text)
+          .join("");
+        // Typed replacement must still be present (not re-deleted by a stale
+        // non-collapsed range at commit time).
+        expect(joined).toContain("TYPED");
+        expect(joined).not.toContain("WORLD");
+        expect(joined).toContain("HELLO");
+        expect(joined).toContain("note.txt");
+      } finally {
+        viewCapture.restore();
+      }
+    });
+  });
+
+  // Round-3: closeHistory on both sides of an attachment commit isolates it
+  // from intervening typing even when both land inside history.newGroupDelay
+  // (no artificial 500ms gap). Existing >500ms coverage stays above.
+  describe("round-3 - attachment commit immediately after intervening typing has isolated undo", () => {
+    it("undoes only the deferred path commit when typing lands in the same history window", async () => {
+      let resolvePaths: ((paths: readonly string[]) => void) | null = null;
+      const fileDrops = makeFileDrops({
+        resolveDroppedFilePaths: () =>
+          new Promise((resolve) => {
+            resolvePaths = resolve;
+          }),
+        copyDroppedFilePaths: (paths) => Promise.resolve([...paths]),
+      });
+      const handleRef = await mountedHandle(fileDrops, {
+        mentionRoots: ["/repo"],
+        initialContent: paragraphText("BASE"),
+        initialSelection: { from: 5, to: 5 },
+      });
+
+      const file = new File(["x"], "late.txt", { type: "text/plain" });
+      fireEvent.paste(screen.getByTestId("composer-editor"), {
+        clipboardData: makeFileTransfer([file]),
+      });
+
+      // Intervening typing lands immediately (well under newGroupDelay).
+      act(() => {
+        handleRef.current?.insertDictatedText("EDIT");
+      });
+
+      expect(resolvePaths).not.toBeNull();
+      await act(async () => {
+        resolvePaths?.(["/repo/late.txt"]);
+        await flushMicrotasksRaw();
+      });
+
+      expect(pathSpanTexts(handleRef.current)).toEqual(["late.txt"]);
+      const afterCommit = textRuns(handleRef.current)
+        .map((run) => run.text)
+        .join("");
+      expect(afterCommit).toContain("BASE");
+      expect(afterCommit).toContain("EDIT");
+
+      // Single Undo reverts only the attachment commit, not the typing that
+      // landed while resolution was pending (isolated by closeHistory).
+      fireEvent.keyDown(screen.getByTestId("composer-editor"), {
+        key: "z",
+        code: "KeyZ",
+        ctrlKey: true,
+      });
+
+      expect(pathSpanTexts(handleRef.current)).toEqual([]);
+      const afterUndo = textRuns(handleRef.current)
+        .map((run) => run.text)
+        .join("");
+      expect(afterUndo).toContain("BASE");
+      expect(afterUndo).toContain("EDIT");
+    });
+  });
+
+  // Round-3: a later job that is still pending when Undo/Redo replays history
+  // is cancelled rather than applied in a guessed sibling order after the
+  // replay. Chosen semantics: only the already-committed job remains.
+  describe("round-3 - undo/redo while a sibling job is pending cancels the pending job", () => {
+    it("keeps only A after A commits, undo+redo while B is pending, then B resolves", async () => {
+      const resolvers: Array<(paths: readonly string[]) => void> = [];
+      const fileDrops = makeFileDrops({
+        resolveDroppedFilePaths: () =>
+          new Promise((resolve) => {
+            resolvers.push(resolve);
+          }),
+        copyDroppedFilePaths: (paths) => Promise.resolve([...paths]),
+      });
+      const handleRef = await mountedHandle(fileDrops, {
+        mentionRoots: ["/repo"],
+        initialContent: paragraphText("____"),
+        initialSelection: { from: 1, to: 1 },
+      });
+
+      const first = new File(["1"], "first.txt", { type: "text/plain" });
+      const second = new File(["2"], "second.txt", { type: "text/plain" });
+
+      fireEvent.paste(screen.getByTestId("composer-editor"), {
+        clipboardData: makeFileTransfer([first]),
+      });
+      fireEvent.paste(screen.getByTestId("composer-editor"), {
+        clipboardData: makeFileTransfer([second]),
+      });
+      expect(resolvers).toHaveLength(2);
+
+      // A commits while B is still pending.
+      await act(async () => {
+        resolvers[0]?.(["/repo/first.txt"]);
+        await flushMicrotasksRaw();
+      });
+      expect(pathSpanTexts(handleRef.current)).toEqual(["first.txt"]);
+
+      // History replay (undo then redo) while B is still in flight cancels B.
+      fireEvent.keyDown(screen.getByTestId("composer-editor"), {
+        key: "z",
+        code: "KeyZ",
+        ctrlKey: true,
+      });
+      expect(pathSpanTexts(handleRef.current)).toEqual([]);
+
+      fireEvent.keyDown(screen.getByTestId("composer-editor"), {
+        key: "z",
+        code: "KeyZ",
+        ctrlKey: true,
+        shiftKey: true,
+      });
+      expect(pathSpanTexts(handleRef.current)).toEqual(["first.txt"]);
+
+      // B resolves after the history replay - must not insert (no reversed
+      // order, no second path).
+      await act(async () => {
+        resolvers[1]?.(["/repo/second.txt"]);
+        await flushMicrotasksRaw();
+      });
+
+      expect(pathSpanTexts(handleRef.current)).toEqual(["first.txt"]);
+      expect(pathSpanTexts(handleRef.current)).not.toContain("second.txt");
+    });
+  });
+
+  // Round-3: https drag-enter may light the overlay (type-name only), but
+  // drop clears it and does not claim the transfer. Real editor confirms
+  // ordinary drop text is not doubled by a path-span pipeline.
+  describe("round-3 - https uri drag-enter/drop does not claim or double-insert", () => {
+    it("clears ownership on drop and inserts ordinary https text once without resolvers", async () => {
+      const resolveDroppedFilePaths = vi.fn(() => Promise.resolve([]));
+      const copyDroppedFilePaths = vi.fn((paths: readonly string[]) =>
+        Promise.resolve([...paths]),
+      );
+      const fileDrops = makeFileDrops({
+        resolveDroppedFilePaths,
+        copyDroppedFilePaths,
+      });
+      const handleRef = await mountedHandle(fileDrops, undefined);
+      const editor = screen.getByTestId("composer-editor");
+
+      fireEvent.dragEnter(editor, {
+        dataTransfer: makeEmptyTransfer(["text/uri-list"]),
+      });
+      // Overlay state lives on the paste hook; drop must still clear depth
+      // even when the payload is not claimable as a file path.
+      fireEvent.drop(editor, {
+        dataTransfer: makeHttpsUriDrop(
+          "https://example.com/doc",
+          "https://example.com/doc",
+        ),
+        clientX: 0,
+        clientY: 0,
+      });
+      await flushMicrotasks();
+
+      expect(resolveDroppedFilePaths).not.toHaveBeenCalled();
+      expect(copyDroppedFilePaths).not.toHaveBeenCalled();
+      expect(pathSpanTexts(handleRef.current)).toEqual([]);
+
+      const joined = textRuns(handleRef.current)
+        .map((run) => run.text)
+        .join("");
+      // At most one ordinary text insertion of the URL - never a path span
+      // and never a doubled plain+path pair from claiming the transfer.
+      const occurrences = joined.split("https://example.com/doc").length - 1;
+      expect(occurrences).toBeLessThanOrEqual(1);
+      expect(toast.error).not.toHaveBeenCalled();
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -858,6 +1094,23 @@ function makeFilesWithTextDrop(
   };
 }
 
+function makeEmptyTransfer(types: ReadonlyArray<string>): TransferLike {
+  return { files: [], types, items: [], getData: () => "" };
+}
+
+function makeHttpsUriDrop(uri: string, plain: string): TransferLike {
+  return {
+    files: [],
+    types: ["text/uri-list", "text/plain"],
+    items: [],
+    getData: (type) => {
+      if (type === "text/uri-list") return uri;
+      if (type === "text/plain") return plain;
+      return "";
+    },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Doc assertions
 // ---------------------------------------------------------------------------
@@ -942,4 +1195,42 @@ async function flushMicrotasksRaw(): Promise<void> {
   for (let i = 0; i < 10; i++) {
     await Promise.resolve();
   }
+}
+
+/**
+ * Capture the live ProseMirror EditorView by observing real dispatches.
+ * ComposerPromptEditor does not expose its TipTap editor on the handle, and
+ * ViewDesc has no back-edge to EditorView - so the only lifecycle-faithful
+ * seam for typing over a selection is the view itself.
+ */
+function installEditorViewCapture(): {
+  readonly getView: () => EditorView;
+  readonly restore: () => void;
+} {
+  let last: EditorView | null = null;
+  const originalDispatch = EditorView.prototype.dispatch;
+  const spy = vi
+    .spyOn(EditorView.prototype, "dispatch")
+    .mockImplementation(function (this: EditorView, tr) {
+      last = this;
+      return originalDispatch.call(this, tr);
+    });
+  return {
+    getView: () => {
+      if (last === null) {
+        throw new Error("expected a ProseMirror EditorView dispatch");
+      }
+      return last;
+    },
+    restore: () => {
+      spy.mockRestore();
+    },
+  };
+}
+
+function typeOverSelection(view: EditorView, value: string): void {
+  Array.from(value).forEach((char) => {
+    const { from, to } = view.state.selection;
+    view.dispatch(view.state.tr.insertText(char, from, to));
+  });
 }

@@ -623,11 +623,8 @@ describe("useComposerPasteAdapter - onPaste", () => {
     expect(insertPaths).toHaveBeenCalledWith(["notes.txt"]);
   });
 
-  // Finding 8 (round 2 revision): files and uri-list are now collected as a
-  // UNION (round-2 finding 3), so a uri-list entry aliasing a File is still
-  // resolved via `copyDroppedFilePaths` - but the alias is suppressed after
-  // resolution (see `resolveFilePaths`), keeping the File-derived path and
-  // inserting once (not doubled, not deduped away entirely).
+  // Files and uri-list are collected as a UNION, but an alias is identified
+  // from its source path before `copyDroppedFilePaths` materializes it.
   it("prefers the File-derived path over its own aliasing uri-list entry and inserts once", async () => {
     const inserted: ImageAttachmentAttrs[][] = [];
     const insertPaths = vi.fn((_paths: ReadonlyArray<string>) => undefined);
@@ -661,7 +658,7 @@ describe("useComposerPasteAdapter - onPaste", () => {
     await waitFor(() => expect(insertPaths).toHaveBeenCalledOnce());
     expect(insertPaths).toHaveBeenCalledWith(["notes.txt"]);
     expect(resolveDroppedFilePaths).toHaveBeenCalledOnce();
-    expect(copyDroppedFilePaths).toHaveBeenCalledOnce();
+    expect(copyDroppedFilePaths).not.toHaveBeenCalled();
   });
 
   // Round-2 finding 3: files and uri-list are collected as a UNION (not
@@ -710,7 +707,170 @@ describe("useComposerPasteAdapter - onPaste", () => {
       "/tmp/traycer-copy/other.txt",
     ]);
     expect(resolveDroppedFilePaths).toHaveBeenCalledOnce();
-    expect(copyDroppedFilePaths).toHaveBeenCalledTimes(2);
+    expect(copyDroppedFilePaths).toHaveBeenCalledOnce();
+  });
+
+  // Round-3: alias identity is the File's resolved *source* path, compared
+  // before `copyDroppedFilePaths` runs. A real URI copy returns a distinctly
+  // named temp path, so output-side equality would miss the alias pair.
+  it("suppresses a File+file:// alias even when a URI copy would return a distinctly named temp path", async () => {
+    const insertPaths = vi.fn((_paths: ReadonlyArray<string>) => undefined);
+    const resolveDroppedFilePaths = vi.fn(() =>
+      Promise.resolve(["/repo/notes.txt"]),
+    );
+    // Would return a different path if called - proving we match on source
+    // identity, not resolved outputs.
+    const copyDroppedFilePaths = vi.fn((_paths: readonly string[]) =>
+      Promise.resolve(["/tmp/traycer-copy/notes-9f3a2c.txt"]),
+    );
+    const filePaths: ComposerFilePathIngestArgs = {
+      fileDrops: {
+        resolveDroppedFilePaths,
+        copyDroppedFilePaths,
+      },
+      mentionRoots: ["/repo"],
+      beginAttachmentInsertion:
+        () =>
+        ({ paths }) => {
+          if (paths.length > 0) insertPaths(paths);
+          return true;
+        },
+    };
+    renderHarness([], filePaths);
+    const file = new File(["notes"], "notes.txt", { type: "text/plain" });
+
+    fireEvent.paste(screen.getByTestId("paste-zone"), {
+      clipboardData: makeFileAndUriListTransfer(file, "file:///repo/notes.txt"),
+    });
+
+    await waitFor(() => expect(insertPaths).toHaveBeenCalledOnce());
+    expect(insertPaths).toHaveBeenCalledWith(["notes.txt"]);
+    expect(resolveDroppedFilePaths).toHaveBeenCalledOnce();
+    expect(copyDroppedFilePaths).not.toHaveBeenCalled();
+  });
+
+  // Round-3: Windows drive paths compare case-insensitively after separator
+  // normalization, so a File resolve and a file:// URI for the same source
+  // still collapse to one insertion.
+  it("treats a Windows File path and a file:// URI with different case/separators as one alias", async () => {
+    const insertPaths = vi.fn((_paths: ReadonlyArray<string>) => undefined);
+    const resolveDroppedFilePaths = vi.fn(() =>
+      Promise.resolve(["C:\\Repo\\Notes.txt"]),
+    );
+    const copyDroppedFilePaths = vi.fn((_paths: readonly string[]) =>
+      Promise.resolve(["C:\\Users\\traycer\\AppData\\Local\\Temp\\Notes-abc.txt"]),
+    );
+    const filePaths: ComposerFilePathIngestArgs = {
+      fileDrops: {
+        resolveDroppedFilePaths,
+        copyDroppedFilePaths,
+      },
+      mentionRoots: ["C:\\Repo"],
+      beginAttachmentInsertion:
+        () =>
+        ({ paths }) => {
+          if (paths.length > 0) insertPaths(paths);
+          return true;
+        },
+    };
+    renderHarness([], filePaths);
+    const file = new File(["notes"], "Notes.txt", { type: "text/plain" });
+
+    fireEvent.paste(screen.getByTestId("paste-zone"), {
+      clipboardData: makeFileAndUriListTransfer(
+        file,
+        "file:///C:/repo/notes.txt",
+      ),
+    });
+
+    await waitFor(() => expect(insertPaths).toHaveBeenCalledOnce());
+    expect(insertPaths).toHaveBeenCalledWith(["Notes.txt"]);
+    expect(copyDroppedFilePaths).not.toHaveBeenCalled();
+  });
+
+  // Round-3: when the File cannot resolve, the matching URI remains eligible
+  // as the durability fallback and is still materialized via copy.
+  it("falls back to the URI copy when File resolve fails for a File+file:// pair", async () => {
+    const insertPaths = vi.fn((_paths: ReadonlyArray<string>) => undefined);
+    const resolveDroppedFilePaths = vi.fn(() => Promise.resolve([]));
+    const copyDroppedFilePaths = vi.fn((_paths: readonly string[]) =>
+      Promise.resolve(["/tmp/traycer-copy/notes-fallback.txt"]),
+    );
+    const filePaths: ComposerFilePathIngestArgs = {
+      fileDrops: {
+        resolveDroppedFilePaths,
+        copyDroppedFilePaths,
+      },
+      mentionRoots: ["/repo"],
+      beginAttachmentInsertion:
+        () =>
+        ({ paths }) => {
+          if (paths.length > 0) insertPaths(paths);
+          return true;
+        },
+    };
+    renderHarness([], filePaths);
+    const file = new File(["notes"], "notes.txt", { type: "text/plain" });
+
+    fireEvent.paste(screen.getByTestId("paste-zone"), {
+      clipboardData: makeFileAndUriListTransfer(file, "file:///repo/notes.txt"),
+    });
+
+    await waitFor(() => expect(insertPaths).toHaveBeenCalledOnce());
+    expect(insertPaths).toHaveBeenCalledWith([
+      "/tmp/traycer-copy/notes-fallback.txt",
+    ]);
+    expect(resolveDroppedFilePaths).toHaveBeenCalledOnce();
+    expect(copyDroppedFilePaths).toHaveBeenCalledOnce();
+    expect(copyDroppedFilePaths).toHaveBeenCalledWith(["/repo/notes.txt"]);
+  });
+
+  // Round-3: an image File paired with its own file:// alias must stay on
+  // the image-only path - no path span, and no URI materialization.
+  it("keeps image File+file:// alias as image attachment only (no path span)", async () => {
+    const inserted: ImageAttachmentAttrs[][] = [];
+    const insertPaths = vi.fn((_paths: ReadonlyArray<string>) => undefined);
+    const resolveDroppedFilePaths = vi.fn((files: readonly File[]) => {
+      const file = files.at(0);
+      if (file !== undefined && file.type.startsWith("image/")) {
+        return Promise.resolve(["/repo/shot.png"]);
+      }
+      return Promise.resolve([]);
+    });
+    const copyDroppedFilePaths = vi.fn((_paths: readonly string[]) =>
+      Promise.resolve(["/tmp/traycer-copy/shot-xyz.png"]),
+    );
+    const filePaths: ComposerFilePathIngestArgs = {
+      fileDrops: {
+        resolveDroppedFilePaths,
+        copyDroppedFilePaths,
+      },
+      mentionRoots: ["/repo"],
+      beginAttachmentInsertion:
+        () =>
+        ({ attrs, paths }) => {
+          if (attrs.length > 0) inserted.push([...attrs]);
+          if (paths.length > 0) insertPaths(paths);
+          return true;
+        },
+    };
+    renderHarness(inserted, filePaths);
+    const png = new File(["png-bytes"], "shot.png", { type: "image/png" });
+
+    fireEvent.paste(screen.getByTestId("paste-zone"), {
+      clipboardData: makeFileAndUriListTransfer(png, "file:///repo/shot.png"),
+    });
+
+    await waitFor(() => {
+      expect(inserted).toHaveLength(1);
+    });
+    expect(inserted[0]).toHaveLength(1);
+    expect(inserted[0][0].fileName).toBe("shot.png");
+    expect(insertPaths).not.toHaveBeenCalled();
+    // Image correlation still resolves the File so the URI alias can be
+    // suppressed without materializing a temp copy.
+    expect(resolveDroppedFilePaths).toHaveBeenCalled();
+    expect(copyDroppedFilePaths).not.toHaveBeenCalled();
   });
 });
 
@@ -988,6 +1148,49 @@ describe("useComposerPasteAdapter - drag-and-drop", () => {
       dataTransfer: makeEmptyTransfer(["text/plain"]),
     });
     expect(zone.getAttribute("data-dragging")).toBe("false");
+  });
+
+  // Round-3: drag-enter can only see type names, so an ordinary HTTPS URI
+  // lights the overlay; drop must clear it and refuse both resolvers.
+  it("clears the drag overlay on an https uri-list drop without calling either resolver", async () => {
+    const resolveDroppedFilePaths = vi.fn(() => Promise.resolve([]));
+    const copyDroppedFilePaths = vi.fn((paths: readonly string[]) =>
+      Promise.resolve([...paths]),
+    );
+    const insertPaths = vi.fn((_paths: ReadonlyArray<string>) => undefined);
+    const filePaths: ComposerFilePathIngestArgs = {
+      fileDrops: {
+        resolveDroppedFilePaths,
+        copyDroppedFilePaths,
+      },
+      mentionRoots: ["/repo"],
+      beginAttachmentInsertion:
+        () =>
+        ({ paths }) => {
+          if (paths.length > 0) insertPaths(paths);
+          return true;
+        },
+    };
+    renderHarness([], filePaths);
+    const zone = screen.getByTestId("paste-zone");
+
+    fireEvent.dragEnter(zone, {
+      dataTransfer: makeEmptyTransfer(["text/uri-list"]),
+    });
+    expect(zone.getAttribute("data-dragging")).toBe("true");
+
+    fireEvent.drop(zone, {
+      dataTransfer: makeUriListTransfer(["https://example.com/doc"]),
+    });
+
+    expect(zone.getAttribute("data-dragging")).toBe("false");
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(resolveDroppedFilePaths).not.toHaveBeenCalled();
+    expect(copyDroppedFilePaths).not.toHaveBeenCalled();
+    expect(insertPaths).not.toHaveBeenCalled();
   });
 });
 

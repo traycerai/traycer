@@ -13,6 +13,7 @@ import {
   type Ref,
 } from "react";
 import { EditorContent, useEditor } from "@tiptap/react";
+import { isHistoryTransaction } from "@tiptap/pm/history";
 import { Selection, type Transaction } from "@tiptap/pm/state";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
@@ -403,8 +404,11 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
       if (editor === null || editor.isDestroyed) return null;
       const sequence = attachmentJobSequenceRef.current++;
       const { from, to } = editor.state.selection;
+      const originalSelection = editor.state.doc.slice(from, to);
       let mappedFrom = from;
       let mappedTo = to;
+      let selectedContentWasReplaced = false;
+      let cancelledByHistoryReplay = false;
       const onTransaction = ({
         transaction,
         appendedTransactions,
@@ -413,8 +417,29 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
         readonly appendedTransactions: Transaction[];
       }): void => {
         for (const tr of [transaction, ...appendedTransactions]) {
-          mappedFrom = mapAttachmentAnchor(mappedFrom, tr, sequence);
-          mappedTo = mapAttachmentAnchor(mappedTo, tr, sequence);
+          // ProseMirror history replay does not preserve this feature's
+          // per-job sequence meta. Rather than let a stale pending job apply
+          // with a guessed sibling ordering after Undo/Redo, cancel jobs that
+          // predate that replay. The async result then settles harmlessly.
+          if (isHistoryTransaction(tr)) {
+            cancelledByHistoryReplay = true;
+            continue;
+          }
+          const nextMappedFrom = mapAttachmentAnchor(
+            mappedFrom,
+            tr,
+            sequence,
+          );
+          const nextMappedTo = mapAttachmentAnchor(mappedTo, tr, sequence);
+          if (
+            from !== to &&
+            (tr.mapping.mapResult(mappedFrom, -1).deleted ||
+              tr.mapping.mapResult(mappedTo, -1).deleted)
+          ) {
+            selectedContentWasReplaced = true;
+          }
+          mappedFrom = nextMappedFrom;
+          mappedTo = nextMappedTo;
         }
       };
       editor.on("transaction", onTransaction);
@@ -423,12 +448,19 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
         if (settled) return false;
         settled = true;
         editor.off("transaction", onTransaction);
-        if (editor.isDestroyed) return false;
+        if (editor.isDestroyed || cancelledByHistoryReplay) return false;
         if (attrs.length > 0 || paths.length > 0) {
+          const mappedSelection = editor.state.doc.slice(mappedFrom, mappedTo);
+          const range =
+            from !== to &&
+            !selectedContentWasReplaced &&
+            originalSelection.eq(mappedSelection)
+              ? { from: mappedFrom, to: mappedTo }
+              : { from: mappedFrom, to: mappedFrom };
           insertAttachmentsCommand(editor, {
             attrs,
             paths,
-            range: { from: mappedFrom, to: mappedTo },
+            range,
             sequence,
             stabilizeCaretBoundary: stabilizeImageAttachmentCaret,
           });

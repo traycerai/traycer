@@ -8,6 +8,7 @@ import {
   type DragEvent,
 } from "react";
 import type { Editor } from "@tiptap/core";
+import { closeHistory } from "@tiptap/pm/history";
 import { v4 as uuidv4 } from "uuid";
 import type { IFileDropHost } from "@traycer-clients/shared/platform/runner-host";
 
@@ -26,6 +27,8 @@ import {
 } from "@/lib/files/file-transfer-paths";
 import {
   getBasename,
+  isWindowsLikePath,
+  pathComparisonKey,
   relativizeToWorkspaceRoot,
 } from "@/lib/path/cross-platform-path";
 
@@ -413,29 +416,44 @@ async function resolveFilePaths(
   fileUrlPaths: ReadonlyArray<string>,
   fileDrops: IFileDropHost,
 ): Promise<ResolvedFilePaths> {
-  const [fileResults, urlResults] = await Promise.all([
-    Promise.all(files.map((file) => resolveFileToPath(file, fileDrops))),
-    Promise.all(
-      fileUrlPaths.map((urlPath) => resolveUrlPathToPath(urlPath, fileDrops)),
-    ),
-  ]);
-  // `files` and `fileUrlPaths` are collected as a UNION (a DataTransfer can
-  // carry both a real File and a text/uri-list/public.file-url entry for the
-  // SAME dragged/pasted source), so a URI entry that resolves to the same
-  // path as a File entry is a cross-flavor alias of it, not a distinct
-  // pasted item - drop it, keeping the File-derived resolution. Nothing else
-  // is deduped: decision 18 ("every resolved path inserts, no count cap")
-  // means two genuinely distinct File inputs that happen to resolve to the
-  // same path both still insert.
-  const fileResolvedPaths = new Set(
-    fileResults.flatMap((result) =>
-      result.path === null ? [] : [result.path],
+  // Resolve image Files only when a URI source is present to correlate. A
+  // normal image-only or mixed image+document paste keeps the existing image
+  // ingest's host-call footprint; their non-image inputs are the only paths
+  // that can be inserted.
+  const filesRequiringResolution =
+    fileUrlPaths.length === 0 ? files.filter(isNonImageFile) : files;
+  const fileResults = await Promise.all(
+    filesRequiringResolution.map((file) =>
+      resolveFileToPath(file, fileDrops),
     ),
   );
-  const dedupedUrlResults = urlResults.filter(
-    (result) => result.path === null || !fileResolvedPaths.has(result.path),
+  // A Finder transfer can carry a real File alongside its file:// source. The
+  // URI path is copied to a newly named temp file, so comparing *resolved*
+  // outputs would not identify the pair. Compare source paths before copying
+  // instead, including image Files: an image File + URI alias must keep the
+  // existing image-only behavior. If the File could not resolve, leave the
+  // URI eligible as the durability fallback.
+  const fileSourcePaths = fileResults.flatMap((result) =>
+    result.path === null ? [] : [result.path],
   );
-  const results = [...fileResults, ...dedupedUrlResults];
+  const uriPathsToMaterialize = fileUrlPaths.filter(
+    (urlPath) =>
+      !fileSourcePaths.some((filePath) =>
+        pathsHaveSameSourceIdentity(filePath, urlPath),
+      ),
+  );
+  const urlResults = await Promise.all(
+    uriPathsToMaterialize.map((urlPath) =>
+      resolveUrlPathToPath(urlPath, fileDrops),
+    ),
+  );
+  const results = [
+    ...fileResults.filter((_, index) => {
+      const file = filesRequiringResolution.at(index);
+      return file !== undefined && isNonImageFile(file);
+    }),
+    ...urlResults,
+  ];
   const resolvedPaths = results.flatMap((result) =>
     result.path === null ? [] : [result.path],
   );
@@ -443,6 +461,15 @@ async function resolveFilePaths(
     .filter((result) => result.path === null)
     .map((result) => result.name);
   return { resolvedPaths, failedNames };
+}
+
+function pathsHaveSameSourceIdentity(left: string, right: string): boolean {
+  const caseInsensitive =
+    isWindowsLikePath(left) || isWindowsLikePath(right);
+  return (
+    pathComparisonKey(left, caseInsensitive) ===
+    pathComparisonKey(right, caseInsensitive)
+  );
 }
 
 async function resolveAndInsertFilePaths(
@@ -482,7 +509,6 @@ async function resolveAndInsertFilePaths(
  */
 interface MixedIngestInput {
   readonly files: ReadonlyArray<File>;
-  readonly nonImageFiles: ReadonlyArray<File>;
   readonly fileUrlPaths: ReadonlyArray<string>;
   readonly signal: AbortSignal;
 }
@@ -497,7 +523,7 @@ async function runMixedIngest(
   input: MixedIngestInput,
   ctx: MixedIngestContext,
 ): Promise<void> {
-  const { files, nonImageFiles, fileUrlPaths, signal } = input;
+  const { files, fileUrlPaths, signal } = input;
   const { imageIngest, filePaths, commit } = ctx;
   const [imageResult, pathResult] = await Promise.all([
     imageIngest.convert(files, signal).then(
@@ -515,7 +541,7 @@ async function runMixedIngest(
         error,
       }),
     ),
-    resolveFilePaths(nonImageFiles, fileUrlPaths, filePaths.fileDrops),
+    resolveFilePaths(files, fileUrlPaths, filePaths.fileDrops),
   ]);
 
   const converted: ReadonlyArray<ImageAttachmentAttrs> = imageResult.ok
@@ -623,7 +649,6 @@ export function useComposerPasteEvents(
   const attachMixed = useCallback(
     (
       files: ReadonlyArray<File>,
-      nonImageFiles: ReadonlyArray<File>,
       fileUrlPaths: ReadonlyArray<string>,
     ) => {
       const commit = filePaths.beginAttachmentInsertion();
@@ -635,7 +660,7 @@ export function useComposerPasteEvents(
       }
       trackPendingImageJob((signal) =>
         runMixedIngest(
-          { files, nonImageFiles, fileUrlPaths, signal },
+          { files, fileUrlPaths, signal },
           { imageIngest, filePaths, commit },
         ),
       );
@@ -649,7 +674,7 @@ export function useComposerPasteEvents(
       const nonImageFiles = files.filter(isNonImageFile);
       const hasPaths = nonImageFiles.length > 0 || fileUrlPaths.length > 0;
       if (hasImageFiles && hasPaths) {
-        attachMixed(files, nonImageFiles, fileUrlPaths);
+        attachMixed(files, fileUrlPaths);
         return;
       }
       if (files.length > 0) attachImageFiles(files);
@@ -697,10 +722,15 @@ export function useComposerPasteEvents(
 
   const onDrop = useCallback(
     (event: DragEvent<HTMLElement>) => {
+      // Drag-enter can only inspect the transfer's type names, so an ordinary
+      // HTTPS URI is intentionally shown as potentially file-like until its
+      // payload is readable here. A drop does not reliably emit dragleave,
+      // therefore it must always clear the affordance before deciding whether
+      // this hook owns the content.
+      setDragDepth(0);
       if (!hasClaimableFileTransfer(event.dataTransfer)) return;
       event.preventDefault();
       event.stopPropagation();
-      setDragDepth(0);
       const files = collectDroppedFiles(event.dataTransfer);
       // Union with `files` - see the matching comment in `onPaste`.
       const fileUrlPaths = collectDroppedFileUrlPaths(event.dataTransfer);
@@ -878,7 +908,14 @@ export function insertAttachmentsCommand(
 ): void {
   const { attrs, paths, range, sequence, stabilizeCaretBoundary } = input;
   if (attrs.length === 0 && paths.length === 0) return;
-  let chain = editor.chain().setTextSelection(range);
+  // History's 500ms grouping would otherwise fold this deferred commit into
+  // typing that landed at the same caret while resolution was pending. Close
+  // both boundaries: this transaction starts a fresh group, and the no-op
+  // transaction below prevents immediately-following typing from joining it.
+  let chain = editor.chain().command(({ tr }) => {
+    closeHistory(tr);
+    return true;
+  }).setTextSelection(range);
   if (range.from !== range.to) chain = chain.deleteSelection();
   for (const attr of attrs) {
     chain = chain.insertImageAttachment(attr);
@@ -895,6 +932,7 @@ export function insertAttachmentsCommand(
   if (attrs.length > 0 && paths.length === 0 && stabilizeCaretBoundary) {
     stabilizeTerminalImageAttachmentCaret(editor);
   }
+  editor.view.dispatch(closeHistory(editor.state.tr));
 }
 
 function stabilizeTerminalImageAttachmentCaret(editor: Editor): void {

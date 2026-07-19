@@ -63,35 +63,39 @@ async function landingImageAttrsFromFiles(
     });
     return [];
   }
-  // Retain each hash as an explicit GC root the moment its bytes are stored -
-  // insertion is coordinated centrally and may be withheld pending unrelated
-  // async work (a mixed image+path paste, see `runMixedIngest`), so a
-  // reconcile can otherwise run before the resulting node exists to protect
-  // it. `onSettled`/the catch below release every retain exactly once.
-  const retainedHashes: string[] = [];
-  try {
-    return await Promise.all(
-      accepted.map(async (file) => {
-        signal.throwIfAborted();
-        const bytes = new Uint8Array(await file.arrayBuffer());
-        signal.throwIfAborted();
-        const hash = await putImage(bytes);
-        retainInFlightImageRoot(hash);
-        retainedHashes.push(hash);
-        signal.throwIfAborted();
-        return {
-          id: uuidv4(),
-          fileName: file.name || "image",
-          hash,
-          mimeType: file.type || "image/png",
-          size: file.size > 0 ? file.size : null,
-        } satisfies ImageAttachmentAttrs;
-      }),
-    );
-  } catch (error) {
-    retainedHashes.forEach(releaseInFlightImageRoot);
-    throw error;
+  // Each task owns its own retain lease. Waiting for every task to settle on
+  // failure is deliberate: a sibling can put+retain after another file has
+  // rejected, and every such late lease must be released before this ingest
+  // reports failure (the same ordering applies to abort/unmount).
+  const results = await Promise.allSettled(
+    accepted.map(async (file) => {
+      signal.throwIfAborted();
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      signal.throwIfAborted();
+      const hash = await putImage(bytes);
+      retainInFlightImageRoot(hash);
+      signal.throwIfAborted();
+      return {
+        id: uuidv4(),
+        fileName: file.name || "image",
+        hash,
+        mimeType: file.type || "image/png",
+        size: file.size > 0 ? file.size : null,
+      } satisfies ImageAttachmentAttrs;
+    }),
+  );
+  const failure = results.find((result) => result.status === "rejected");
+  if (failure !== undefined) {
+    results.forEach((result) => {
+      if (result.status === "fulfilled") {
+        releaseInFlightImageRoot(result.value.hash);
+      }
+    });
+    throw failure.reason;
   }
+  return results.flatMap((result) =>
+    result.status === "fulfilled" ? [result.value] : [],
+  );
 }
 
 export function useLandingComposerPaste(
