@@ -39,18 +39,24 @@ rewrites `tsconfig.build.json`'s extensionless relative specifiers (e.g.
 the published package works for both bundler consumers (host via esbuild, OSS
 clients via Vite/esbuild) and any future unbundled raw-Node-ESM consumer.
 
-## Two version systems — keep them separate
+## Three version systems — keep them separate
 
-This package participates in **two independent versioning schemes**. They are not
+This package participates in **three independent versioning schemes**. They are not
 the same number and must not be conflated:
 
-| System                                           | Where                                                         | Granularity    | Purpose                                                                           |
-| ------------------------------------------------ | ------------------------------------------------------------- | -------------- | --------------------------------------------------------------------------------- |
-| **npm semver**                                   | `package.json` `version`                                      | whole package  | Distribution. Which build of the contract a client/host depends on.               |
-| **per-method `{ major, minor }` schema version** | `src/framework/versioned-rpc.ts` (the versioned-RPC registry) | per RPC method | Handshake contract. What the client↔host handshake negotiates against at runtime. |
+| System                                               | Where                                                         | Granularity          | Purpose                                                                           |
+| ---------------------------------------------------- | ------------------------------------------------------------- | -------------------- | --------------------------------------------------------------------------------- |
+| **npm semver**                                       | `package.json` `version`                                      | whole package        | Distribution. Which build of the contract a client/host depends on.               |
+| **per-method `{ major, minor }` RPC schema version** | `src/framework/versioned-rpc.ts` (the versioned-RPC registry) | per RPC method       | Handshake contract. What the client↔host handshake negotiates against at runtime. |
+| **persistence `{ major, minor }` schema version**    | `src/persistence/registry.ts`                                 | per persisted record | Compatibility of on-disk and Yjs record shapes across readers and writers.        |
 
 The runtime handshake negotiates compatibility using the **per-method
 `{ major, minor }`** schema versions in the versioned-RPC registry — never the
 npm semver of the package. A patch bump to the npm version does not imply a
 schema change, and a schema change is gated by the registry's additivity rules
 independently of how the package is versioned for distribution.
+
+Persistence versions are negotiated and evolved separately from RPC versions.
+See [`src/persistence/COMPATIBILITY.md`](src/persistence/COMPATIBILITY.md) for
+the same-major rules, breaking-change policy, and frozen epic-schema review
+workflow.
