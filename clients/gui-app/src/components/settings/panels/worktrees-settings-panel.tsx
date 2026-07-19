@@ -268,6 +268,7 @@ function WorktreesToolbar(props: {
   readonly onRefresh: () => Promise<unknown>;
   readonly refreshing: boolean;
   readonly canRefresh: boolean;
+  readonly lastUpdatedAt: number | null;
   readonly selectionControls: ReactNode | null;
   readonly filterControls: ReactNode | null;
 }): ReactNode {
@@ -275,6 +276,7 @@ function WorktreesToolbar(props: {
     canRefresh,
     filterControls,
     hosts,
+    lastUpdatedAt,
     onChange,
     onRefresh,
     refreshing,
@@ -295,10 +297,13 @@ function WorktreesToolbar(props: {
       <div className="flex items-center justify-between gap-2">
         <HostSelect hosts={hosts} value={value} onChange={onChange} />
         <div
-          className="flex shrink-0 items-center gap-1"
+          className="flex shrink-0 items-center gap-2"
           data-testid="worktrees-toolbar-actions"
         >
           {selectionControls}
+          {refresh.refreshing ? null : (
+            <WorktreesUpdatedAgoLabel updatedAt={lastUpdatedAt} />
+          )}
           <Button
             type="button"
             variant="outline"
@@ -316,6 +321,35 @@ function WorktreesToolbar(props: {
       </div>
       {filterControls}
     </div>
+  );
+}
+
+/**
+ * "Updated Xm ago" beside the Refresh button. Under the manual-refresh model
+ * (listing `staleTime: Infinity`, no host freshness sweep) this is the only
+ * signal of how old the list is - a warm-open seed shows its snapshot-era
+ * save time, so a relaunch honestly reads as hours old until refreshed.
+ * Split into an outer null-gate and an inner hook caller so the shared 60s
+ * relative-time clock only re-renders this leaf, never the toolbar.
+ */
+function WorktreesUpdatedAgoLabel(props: {
+  readonly updatedAt: number | null;
+}): ReactNode {
+  if (props.updatedAt === null) return null;
+  return <WorktreesUpdatedAgoText updatedAt={props.updatedAt} />;
+}
+
+function WorktreesUpdatedAgoText(props: {
+  readonly updatedAt: number;
+}): ReactNode {
+  const ago = useRelativeTimestamp(props.updatedAt);
+  return (
+    <span
+      className="text-ui-xs whitespace-nowrap text-muted-foreground"
+      data-testid="worktrees-updated-ago"
+    >
+      Updated {ago}
+    </span>
   );
 }
 
@@ -554,8 +588,13 @@ function WorktreesBody(props: {
     value,
     onChange,
     onRefresh,
-    refreshing: listing.refreshing || enrichment.enriching,
+    // Only the explicit Refresh mutation locks the button - NOT enrichment.
+    // A cold fleet enriches for tens of seconds; gating on that stranded the
+    // manual escape hatch (and the "Updated Xm ago" label) for the whole
+    // convergence, which is exactly when the user most wants to re-pull.
+    refreshing: listing.isRefreshPending,
     canRefresh,
+    lastUpdatedAt: listing.lastUpdatedAt,
   };
 
   let content: ReactNode;
@@ -807,6 +846,7 @@ export function WorktreesList(props: {
     readonly onRefresh: () => Promise<unknown>;
     readonly refreshing: boolean;
     readonly canRefresh: boolean;
+    readonly lastUpdatedAt: number | null;
   };
 }): ReactNode {
   const {

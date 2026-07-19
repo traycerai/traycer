@@ -1,4 +1,4 @@
-import { CalendarClock } from "lucide-react";
+import { MessageSquareClock } from "@/components/notifications/message-square-clock";
 
 interface BackgroundActivityGlyphProps {
   readonly testId: string | undefined;
@@ -7,7 +7,7 @@ interface BackgroundActivityGlyphProps {
 /** Shared visual for confirmed background-only activity. */
 export function BackgroundActivityGlyph(props: BackgroundActivityGlyphProps) {
   return (
-    <CalendarClock
+    <MessageSquareClock
       aria-hidden
       className="size-3.5 text-muted-foreground"
       data-testid={props.testId}
