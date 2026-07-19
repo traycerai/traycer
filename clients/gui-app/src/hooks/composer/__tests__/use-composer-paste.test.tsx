@@ -18,6 +18,7 @@ import {
   type UseComposerPasteResult,
 } from "@/hooks/composer/use-composer-paste";
 import type { ImageAttachmentAttrs } from "@/components/chat/composer/editor/extensions/image-attachment-extension";
+import type { IFileDropHost } from "@traycer-clients/shared/platform/runner-host";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 vi.mock("sonner", () => ({
@@ -26,12 +27,10 @@ vi.mock("sonner", () => ({
   },
 }));
 
-// NOTE(compile-stopgap): this file is slated for a full rewrite covering the
-// new file-path paste/drop behavior (mixed paste, folders, URI-only, partial
-// failure, web fallback). These constants only keep the OLD assertions
-// (which predate that behavior) compiling against the new required
-// `useComposerPasteAdapter`/`useComposerPaste` params in the meantime.
-const TEST_FILE_PATHS: ComposerFilePathIngestArgs = {
+// Default fixture for tests that don't care about file-path resolution at
+// all (pure image-ingest coverage): every resolve/copy call comes back
+// empty, and inserted paths are discarded.
+const NOOP_FILE_PATHS: ComposerFilePathIngestArgs = {
   fileDrops: {
     resolveDroppedFilePaths: () => Promise.resolve([]),
     copyDroppedFilePaths: (paths) => Promise.resolve([...paths]),
@@ -54,7 +53,7 @@ describe("useComposerPasteAdapter - attachImageFiles", () => {
       (_attrs: ReadonlyArray<ImageAttachmentAttrs>): number => 1,
     );
     const { result } = renderHook(() =>
-      useComposerPasteAdapter(insert, TEST_FILE_PATHS),
+      useComposerPasteAdapter(insert, NOOP_FILE_PATHS),
     );
 
     attachImageFiles(result.current, [
@@ -76,7 +75,7 @@ describe("useComposerPasteAdapter - attachImageFiles", () => {
       (_attrs: ReadonlyArray<ImageAttachmentAttrs>): number => 1,
     );
     const { result } = renderHook(() =>
-      useComposerPasteAdapter(insert, TEST_FILE_PATHS),
+      useComposerPasteAdapter(insert, NOOP_FILE_PATHS),
     );
 
     attachImageFiles(result.current, [
@@ -101,7 +100,7 @@ describe("useComposerPasteAdapter - attachImageFiles", () => {
       (_attrs: ReadonlyArray<ImageAttachmentAttrs>): number => 1,
     );
     const { result } = renderHook(() =>
-      useComposerPasteAdapter(insert, TEST_FILE_PATHS),
+      useComposerPasteAdapter(insert, NOOP_FILE_PATHS),
     );
 
     attachImageFiles(result.current, [
@@ -129,7 +128,7 @@ describe("useComposerPasteAdapter - attachImageFiles", () => {
       (_attrs: ReadonlyArray<ImageAttachmentAttrs>): number => 1,
     );
     const { result, unmount } = renderHook(() =>
-      useComposerPasteAdapter(insert, TEST_FILE_PATHS),
+      useComposerPasteAdapter(insert, NOOP_FILE_PATHS),
     );
 
     attachImageFiles(result.current, [
@@ -152,7 +151,7 @@ describe("useComposerPasteAdapter - attachImageFiles", () => {
       useComposerPasteAdapter((attrs) => {
         inserted.push([...attrs]);
         return attrs.length;
-      }, TEST_FILE_PATHS),
+      }, NOOP_FILE_PATHS),
     );
     const imageFile = new File(["hello"], "sample.png", {
       type: "image/png",
@@ -175,13 +174,19 @@ describe("useComposerPasteAdapter - attachImageFiles", () => {
     expect(image.size).toBe(5);
   });
 
+  // `attachImageFiles` backs the image-only picker button (see
+  // `onAttachImages` in chat-composer.tsx), not the shared paste/drop path -
+  // it only ever calls the image ingest (`onFiles`), never
+  // `attachFilePaths`. A non-image file handed to it is therefore correctly
+  // dropped silently rather than turned into a path span; that only happens
+  // via `onPaste`/`onDrop`, covered below.
   it("drops non-image files and keeps only images from a mixed list", async () => {
     const inserted: ImageAttachmentAttrs[][] = [];
     const { result } = renderHook(() =>
       useComposerPasteAdapter((attrs) => {
         inserted.push([...attrs]);
         return attrs.length;
-      }, TEST_FILE_PATHS),
+      }, NOOP_FILE_PATHS),
     );
     const png = new File(["png-bytes"], "shot.png", { type: "image/png" });
     const pdf = new File(["pdf-bytes"], "doc.pdf", { type: "application/pdf" });
@@ -203,7 +208,7 @@ describe("useComposerPasteAdapter - attachImageFiles", () => {
       useComposerPasteAdapter((attrs) => {
         inserted.push([...attrs]);
         return attrs.length;
-      }, TEST_FILE_PATHS),
+      }, NOOP_FILE_PATHS),
     );
     const oversized = makeOversizedImage("big.png");
 
@@ -231,7 +236,7 @@ describe("useComposerPasteAdapter - attachImageFiles", () => {
       useComposerPasteAdapter((attrs) => {
         inserted.push([...attrs]);
         return attrs.length;
-      }, TEST_FILE_PATHS),
+      }, NOOP_FILE_PATHS),
     );
 
     attachImageFiles(result.current, []);
@@ -243,7 +248,7 @@ describe("useComposerPasteAdapter - attachImageFiles", () => {
   it("returns a stable attachImageFiles reference across renders", () => {
     const onInsert = (_attrs: ReadonlyArray<ImageAttachmentAttrs>): number => 0;
     const { result, rerender } = renderHook(() =>
-      useComposerPasteAdapter(onInsert, TEST_FILE_PATHS),
+      useComposerPasteAdapter(onInsert, NOOP_FILE_PATHS),
     );
     const first = result.current.attachImageFiles;
     rerender();
@@ -256,7 +261,7 @@ describe("useComposerPasteAdapter - attachImageFiles", () => {
       (_attrs: ReadonlyArray<ImageAttachmentAttrs>): number => 0,
     );
     const { result } = renderHook(() =>
-      useComposerPasteAdapter(insert, TEST_FILE_PATHS),
+      useComposerPasteAdapter(insert, NOOP_FILE_PATHS),
     );
     const imageFile = new File(["hello"], "sample.png", {
       type: "image/png",
@@ -290,7 +295,7 @@ describe("useComposerPasteAdapter - attachImageFiles", () => {
       },
     };
     const { result } = renderHook(() =>
-      useComposerPaste(editorRef, TEST_FILE_PATHS.fileDrops, []),
+      useComposerPaste(editorRef, NOOP_FILE_PATHS.fileDrops, []),
     );
     const imageFile = new File(["hello"], "sample.png", {
       type: "image/png",
@@ -321,7 +326,7 @@ describe("useComposerPasteAdapter - attachImageFiles", () => {
       },
     };
     const { result } = renderHook(() =>
-      useComposerPaste(editorRef, TEST_FILE_PATHS.fileDrops, []),
+      useComposerPaste(editorRef, NOOP_FILE_PATHS.fileDrops, []),
     );
 
     attachImageFiles(result.current, [
@@ -345,11 +350,11 @@ describe("useComposerPasteAdapter - onPaste", () => {
     const png = new File(["pasted"], "from-clipboard.png", {
       type: "image/png",
     });
-    renderHarness(inserted);
+    renderHarness(inserted, NOOP_FILE_PATHS);
 
     const zone = screen.getByTestId("paste-zone");
     fireEvent.paste(zone, {
-      clipboardData: makeClipboardData([{ kind: "file", file: png }]),
+      clipboardData: makeFileTransfer([png]),
     });
 
     await waitFor(() => {
@@ -360,42 +365,225 @@ describe("useComposerPasteAdapter - onPaste", () => {
 
   it("ignores clipboard events that contain only non-file items", () => {
     const inserted: ImageAttachmentAttrs[][] = [];
-    renderHarness(inserted);
+    renderHarness(inserted, NOOP_FILE_PATHS);
 
     const zone = screen.getByTestId("paste-zone");
     fireEvent.paste(zone, {
-      clipboardData: makeClipboardData([
-        { kind: "string", file: null },
-        { kind: "string", file: null },
-      ]),
+      clipboardData: makeStringOnlyTransfer(),
     });
 
     expect(inserted).toHaveLength(0);
+  });
+
+  it("resolves a pasted non-image file to a relativized path span", async () => {
+    const inserted: ImageAttachmentAttrs[][] = [];
+    const insertPaths = vi.fn((_paths: ReadonlyArray<string>) => undefined);
+    const filePaths: ComposerFilePathIngestArgs = {
+      fileDrops: makeFileDrops({ "notes.txt": ["/repo/notes.txt"] }, {}),
+      mentionRoots: ["/repo"],
+      insertPaths,
+    };
+    renderHarness(inserted, filePaths);
+    const txt = new File(["notes"], "notes.txt", { type: "text/plain" });
+
+    const zone = screen.getByTestId("paste-zone");
+    fireEvent.paste(zone, { clipboardData: makeFileTransfer([txt]) });
+
+    await waitFor(() => expect(insertPaths).toHaveBeenCalledOnce());
+    expect(insertPaths).toHaveBeenCalledWith(["notes.txt"]);
+    expect(inserted).toHaveLength(0);
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("mixes a pasted image and non-image file: the image attaches, the file becomes a path, nothing is dropped", async () => {
+    const inserted: ImageAttachmentAttrs[][] = [];
+    const insertPaths = vi.fn((_paths: ReadonlyArray<string>) => undefined);
+    const filePaths: ComposerFilePathIngestArgs = {
+      fileDrops: makeFileDrops({ "doc.pdf": ["/repo/external/doc.pdf"] }, {}),
+      mentionRoots: [],
+      insertPaths,
+    };
+    renderHarness(inserted, filePaths);
+    const png = new File(["png-bytes"], "shot.png", { type: "image/png" });
+    const pdf = new File(["pdf-bytes"], "doc.pdf", { type: "application/pdf" });
+
+    const zone = screen.getByTestId("paste-zone");
+    fireEvent.paste(zone, { clipboardData: makeFileTransfer([png, pdf]) });
+
+    await waitFor(() => expect(inserted).toHaveLength(1));
+    expect(inserted[0]).toHaveLength(1);
+    expect(inserted[0][0].fileName).toBe("shot.png");
+    await waitFor(() => expect(insertPaths).toHaveBeenCalledOnce());
+    expect(insertPaths).toHaveBeenCalledWith(["/repo/external/doc.pdf"]);
+  });
+
+  it("resolves a pasted folder (empty type/size) the same as a regular file", async () => {
+    const inserted: ImageAttachmentAttrs[][] = [];
+    const insertPaths = vi.fn((_paths: ReadonlyArray<string>) => undefined);
+    const filePaths: ComposerFilePathIngestArgs = {
+      fileDrops: makeFileDrops({ "my-folder": ["/repo/my-folder"] }, {}),
+      mentionRoots: ["/repo"],
+      insertPaths,
+    };
+    renderHarness(inserted, filePaths);
+    const folder = new File([], "my-folder", { type: "" });
+
+    const zone = screen.getByTestId("paste-zone");
+    fireEvent.paste(zone, { clipboardData: makeFileTransfer([folder]) });
+
+    await waitFor(() => expect(insertPaths).toHaveBeenCalledOnce());
+    expect(insertPaths).toHaveBeenCalledWith(["my-folder"]);
+    expect(inserted).toHaveLength(0);
+  });
+
+  it("resolves a URI-only clipboard entry (text/uri-list, no File object) via copyDroppedFilePaths", async () => {
+    const inserted: ImageAttachmentAttrs[][] = [];
+    const insertPaths = vi.fn((_paths: ReadonlyArray<string>) => undefined);
+    const filePaths: ComposerFilePathIngestArgs = {
+      fileDrops: makeFileDrops(
+        {},
+        // `fileUriToPath` strips the `file://` scheme before this is called,
+        // so the fake keys off the resolved filesystem path, not the URI.
+        { "/repo/external/report.pdf": ["/tmp/traycer-copy/report.pdf"] },
+      ),
+      mentionRoots: ["/repo"],
+      insertPaths,
+    };
+    renderHarness(inserted, filePaths);
+
+    const zone = screen.getByTestId("paste-zone");
+    fireEvent.paste(zone, {
+      clipboardData: makeUriListTransfer(["file:///repo/external/report.pdf"]),
+    });
+
+    await waitFor(() => expect(insertPaths).toHaveBeenCalledOnce());
+    // Outside every mention root (copied to an app-managed temp dir) -> absolute.
+    expect(insertPaths).toHaveBeenCalledWith(["/tmp/traycer-copy/report.pdf"]);
+    expect(inserted).toHaveLength(0);
+  });
+
+  it("keeps the successfully resolved file when a sibling paste fails, and names only the failure in the toast", async () => {
+    const inserted: ImageAttachmentAttrs[][] = [];
+    const insertPaths = vi.fn((_paths: ReadonlyArray<string>) => undefined);
+    const fileDrops: IFileDropHost = {
+      resolveDroppedFilePaths: (files) => {
+        const file = files.at(0);
+        if (file?.name === "ok.txt") return Promise.resolve(["/repo/ok.txt"]);
+        return Promise.reject(new Error("resolve failed"));
+      },
+      copyDroppedFilePaths: (paths) => Promise.resolve([...paths]),
+    };
+    const filePaths: ComposerFilePathIngestArgs = {
+      fileDrops,
+      mentionRoots: ["/repo"],
+      insertPaths,
+    };
+    renderHarness(inserted, filePaths);
+    const ok = new File(["ok"], "ok.txt", { type: "text/plain" });
+    const bad = new File(["bad"], "bad.txt", { type: "text/plain" });
+
+    const zone = screen.getByTestId("paste-zone");
+    fireEvent.paste(zone, { clipboardData: makeFileTransfer([ok, bad]) });
+
+    await waitFor(() => expect(insertPaths).toHaveBeenCalledOnce());
+    expect(insertPaths).toHaveBeenCalledWith(["ok.txt"]);
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith(
+        "Couldn't add 1 file",
+        expect.objectContaining({ description: "bad.txt" }),
+      );
+    });
+  });
+
+  it("inserts nothing and shows a generic toast when resolution yields no path (web fallback)", async () => {
+    const inserted: ImageAttachmentAttrs[][] = [];
+    const insertPaths = vi.fn((_paths: ReadonlyArray<string>) => undefined);
+    const filePaths: ComposerFilePathIngestArgs = {
+      // Mirrors the non-Electron surface: resolveDroppedFilePaths always [].
+      fileDrops: makeFileDrops({}, {}),
+      mentionRoots: [],
+      insertPaths,
+    };
+    renderHarness(inserted, filePaths);
+    const txt = new File(["notes"], "notes.txt", { type: "text/plain" });
+
+    const zone = screen.getByTestId("paste-zone");
+    fireEvent.paste(zone, { clipboardData: makeFileTransfer([txt]) });
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith(
+        "Couldn't resolve file path",
+        expect.objectContaining({
+          description:
+            "This surface can't read a real file path from the paste.",
+        }),
+      );
+    });
+    expect(insertPaths).not.toHaveBeenCalled();
+  });
+
+  it("inserts every resolved path from a multi-file paste as a single call", async () => {
+    const inserted: ImageAttachmentAttrs[][] = [];
+    const insertPaths = vi.fn((_paths: ReadonlyArray<string>) => undefined);
+    const filePaths: ComposerFilePathIngestArgs = {
+      fileDrops: makeFileDrops(
+        {
+          "a.txt": ["/repo/a.txt"],
+          "b.txt": ["/repo/nested/b.txt"],
+          "c.txt": ["/elsewhere/c.txt"],
+        },
+        {},
+      ),
+      mentionRoots: ["/repo"],
+      insertPaths,
+    };
+    renderHarness(inserted, filePaths);
+    const files = ["a.txt", "b.txt", "c.txt"].map(
+      (name) => new File([name], name, { type: "text/plain" }),
+    );
+
+    const zone = screen.getByTestId("paste-zone");
+    fireEvent.paste(zone, { clipboardData: makeFileTransfer(files) });
+
+    await waitFor(() => expect(insertPaths).toHaveBeenCalledOnce());
+    // Two under the mention root relativize to POSIX paths; the third, outside
+    // every root, keeps its absolute form - a single batched insertion call.
+    expect(insertPaths).toHaveBeenCalledWith([
+      "a.txt",
+      "nested/b.txt",
+      "/elsewhere/c.txt",
+    ]);
   });
 });
 
 describe("useComposerPasteAdapter - drag-and-drop", () => {
   it("ignores drop events that don't carry files", () => {
     const inserted: ImageAttachmentAttrs[][] = [];
-    renderHarness(inserted);
+    renderHarness(inserted, NOOP_FILE_PATHS);
 
     const zone = screen.getByTestId("paste-zone");
     fireEvent.drop(zone, {
-      dataTransfer: makeDataTransfer([], ["text/plain"]),
+      dataTransfer: makeEmptyTransfer(["text/plain"]),
     });
 
     expect(inserted).toHaveLength(0);
   });
 
-  it("inserts dropped image files and filters out non-images", async () => {
+  it("inserts a dropped image and turns the accompanying non-image file into a path span", async () => {
     const inserted: ImageAttachmentAttrs[][] = [];
-    renderHarness(inserted);
+    const insertPaths = vi.fn((_paths: ReadonlyArray<string>) => undefined);
+    const filePaths: ComposerFilePathIngestArgs = {
+      fileDrops: makeFileDrops({ "doc.pdf": ["/repo/doc.pdf"] }, {}),
+      mentionRoots: ["/repo"],
+      insertPaths,
+    };
+    renderHarness(inserted, filePaths);
 
     const png = new File(["dropped"], "drop.png", { type: "image/png" });
     const pdf = new File(["pdf"], "doc.pdf", { type: "application/pdf" });
     const zone = screen.getByTestId("paste-zone");
     fireEvent.drop(zone, {
-      dataTransfer: makeDataTransfer([png, pdf], ["Files"]),
+      dataTransfer: makeFileTransfer([png, pdf]),
     });
 
     await waitFor(() => {
@@ -403,39 +591,87 @@ describe("useComposerPasteAdapter - drag-and-drop", () => {
     });
     expect(inserted[0]).toHaveLength(1);
     expect(inserted[0][0].fileName).toBe("drop.png");
+    await waitFor(() => expect(insertPaths).toHaveBeenCalledOnce());
+    expect(insertPaths).toHaveBeenCalledWith(["doc.pdf"]);
+  });
+
+  it("resolves a dropped folder (empty type/size) the same as a regular file", async () => {
+    const inserted: ImageAttachmentAttrs[][] = [];
+    const insertPaths = vi.fn((_paths: ReadonlyArray<string>) => undefined);
+    const filePaths: ComposerFilePathIngestArgs = {
+      fileDrops: makeFileDrops(
+        { "dropped-folder": ["/repo/dropped-folder"] },
+        {},
+      ),
+      mentionRoots: ["/repo"],
+      insertPaths,
+    };
+    renderHarness(inserted, filePaths);
+    const folder = new File([], "dropped-folder", { type: "" });
+
+    const zone = screen.getByTestId("paste-zone");
+    fireEvent.drop(zone, { dataTransfer: makeFileTransfer([folder]) });
+
+    await waitFor(() => expect(insertPaths).toHaveBeenCalledOnce());
+    expect(insertPaths).toHaveBeenCalledWith(["dropped-folder"]);
+  });
+
+  it("resolves a URI-only drop (public.file-url, no File object) via copyDroppedFilePaths", async () => {
+    const inserted: ImageAttachmentAttrs[][] = [];
+    const insertPaths = vi.fn((_paths: ReadonlyArray<string>) => undefined);
+    const filePaths: ComposerFilePathIngestArgs = {
+      fileDrops: makeFileDrops(
+        {},
+        { "/repo/screenshot.png": ["/tmp/traycer-copy/screenshot.png"] },
+      ),
+      mentionRoots: ["/repo"],
+      insertPaths,
+    };
+    renderHarness(inserted, filePaths);
+
+    const zone = screen.getByTestId("paste-zone");
+    fireEvent.drop(zone, {
+      dataTransfer: makePublicFileUrlTransfer("file:///repo/screenshot.png"),
+    });
+
+    await waitFor(() => expect(insertPaths).toHaveBeenCalledOnce());
+    expect(insertPaths).toHaveBeenCalledWith([
+      "/tmp/traycer-copy/screenshot.png",
+    ]);
+    expect(inserted).toHaveLength(0);
   });
 
   it("tracks drag depth so the zone stays active across nested enters/leaves", () => {
     const inserted: ImageAttachmentAttrs[][] = [];
-    renderHarness(inserted);
+    renderHarness(inserted, NOOP_FILE_PATHS);
 
     const zone = screen.getByTestId("paste-zone");
     fireEvent.dragEnter(zone, {
-      dataTransfer: makeDataTransfer([], ["Files"]),
+      dataTransfer: makeEmptyTransfer(["Files"]),
     });
     expect(zone.getAttribute("data-dragging")).toBe("true");
 
     fireEvent.dragEnter(zone, {
-      dataTransfer: makeDataTransfer([], ["Files"]),
+      dataTransfer: makeEmptyTransfer(["Files"]),
     });
     fireEvent.dragLeave(zone, {
-      dataTransfer: makeDataTransfer([], ["Files"]),
+      dataTransfer: makeEmptyTransfer(["Files"]),
     });
     expect(zone.getAttribute("data-dragging")).toBe("true");
 
     fireEvent.dragLeave(zone, {
-      dataTransfer: makeDataTransfer([], ["Files"]),
+      dataTransfer: makeEmptyTransfer(["Files"]),
     });
     expect(zone.getAttribute("data-dragging")).toBe("false");
   });
 
   it("does not raise drag depth for non-file drags", () => {
     const inserted: ImageAttachmentAttrs[][] = [];
-    renderHarness(inserted);
+    renderHarness(inserted, NOOP_FILE_PATHS);
 
     const zone = screen.getByTestId("paste-zone");
     fireEvent.dragEnter(zone, {
-      dataTransfer: makeDataTransfer([], ["text/plain"]),
+      dataTransfer: makeEmptyTransfer(["text/plain"]),
     });
     expect(zone.getAttribute("data-dragging")).toBe("false");
   });
@@ -481,15 +717,21 @@ function installDelayedFileReader(): DelayedFileReaderControl {
   };
 }
 
-function renderHarness(inserted: ImageAttachmentAttrs[][]) {
-  return render(<PasteHarness inserted={inserted} />);
+function renderHarness(
+  inserted: ImageAttachmentAttrs[][],
+  filePaths: ComposerFilePathIngestArgs,
+) {
+  return render(<PasteHarness inserted={inserted} filePaths={filePaths} />);
 }
 
-function PasteHarness(props: { readonly inserted: ImageAttachmentAttrs[][] }) {
+function PasteHarness(props: {
+  readonly inserted: ImageAttachmentAttrs[][];
+  readonly filePaths: ComposerFilePathIngestArgs;
+}) {
   const handlers = useComposerPasteAdapter((attrs) => {
     props.inserted.push([...attrs]);
     return attrs.length;
-  }, TEST_FILE_PATHS);
+  }, props.filePaths);
   return (
     <div
       data-testid="paste-zone"
@@ -503,28 +745,81 @@ function PasteHarness(props: { readonly inserted: ImageAttachmentAttrs[][] }) {
   );
 }
 
-interface ClipboardItemSpec {
-  readonly kind: "file" | "string";
-  readonly file: File | null;
-}
-
-function makeClipboardData(specs: ReadonlyArray<ClipboardItemSpec>) {
-  const items = specs.map((spec) => ({
-    kind: spec.kind,
-    getAsFile: (): File | null => spec.file,
-  }));
+/**
+ * A fake `IFileDropHost` that resolves per single-file / single-url calls
+ * (mirroring how `resolveFileToPath`/`resolveUrlPathToPath` invoke it) by
+ * looking up the file name / url in the given maps. A name/url absent from
+ * its map resolves to `[]` (matches the real "couldn't resolve" contract).
+ */
+function makeFileDrops(
+  resolveByFileName: Readonly<Record<string, readonly string[]>>,
+  copyByUrlPath: Readonly<Record<string, readonly string[]>>,
+): IFileDropHost {
   return {
-    items: Object.assign(items, { length: items.length }),
-    files: [],
-    types: [],
+    resolveDroppedFilePaths: (files) => {
+      const file = files.at(0);
+      if (file === undefined) return Promise.resolve([]);
+      return Promise.resolve(resolveByFileName[file.name] ?? []);
+    },
+    copyDroppedFilePaths: (paths) => {
+      const urlPath = paths.at(0);
+      if (urlPath === undefined) return Promise.resolve([]);
+      return Promise.resolve(copyByUrlPath[urlPath] ?? []);
+    },
   };
 }
 
-function makeDataTransfer(
-  files: ReadonlyArray<File>,
-  types: ReadonlyArray<string>,
-) {
-  return { files, types, items: [] };
+interface FileTransferLike {
+  readonly files: ReadonlyArray<File>;
+  readonly types: ReadonlyArray<string>;
+  readonly items: ReadonlyArray<{
+    readonly kind: string;
+    getAsFile: () => File | null;
+  }>;
+  getData: (type: string) => string;
+}
+
+function makeFileTransfer(files: ReadonlyArray<File>): FileTransferLike {
+  return {
+    files,
+    types: files.length > 0 ? ["Files"] : [],
+    items: files.map((file) => ({ kind: "file", getAsFile: () => file })),
+    getData: () => "",
+  };
+}
+
+function makeUriListTransfer(uris: ReadonlyArray<string>): FileTransferLike {
+  return {
+    files: [],
+    types: ["text/uri-list"],
+    items: [],
+    getData: (type) => (type === "text/uri-list" ? uris.join("\n") : ""),
+  };
+}
+
+function makePublicFileUrlTransfer(url: string): FileTransferLike {
+  return {
+    files: [],
+    types: ["public.file-url"],
+    items: [],
+    getData: (type) => (type === "public.file-url" ? url : ""),
+  };
+}
+
+function makeStringOnlyTransfer(): FileTransferLike {
+  return {
+    files: [],
+    types: [],
+    items: [
+      { kind: "string", getAsFile: () => null },
+      { kind: "string", getAsFile: () => null },
+    ],
+    getData: () => "",
+  };
+}
+
+function makeEmptyTransfer(types: ReadonlyArray<string>): FileTransferLike {
+  return { files: [], types, items: [], getData: () => "" };
 }
 
 function makeOversizedImage(name: string): File {

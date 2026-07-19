@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { resolveAbsolutePath } from "@/lib/path/cross-platform-path";
+import {
+  relativizeToWorkspaceRoot,
+  resolveAbsolutePath,
+} from "@/lib/path/cross-platform-path";
 
 describe("resolveAbsolutePath", () => {
   it("resolves an ordinary escaping relative path within a POSIX base", () => {
@@ -58,5 +61,51 @@ describe("resolveAbsolutePath", () => {
     expect(resolveAbsolutePath("\\\\server/share\\nested", "../x.ts")).toBe(
       "//server/share/x.ts",
     );
+  });
+});
+
+describe("relativizeToWorkspaceRoot", () => {
+  it("relativizes a path under a single root to a POSIX-style relative path", () => {
+    expect(relativizeToWorkspaceRoot(["/repo"], "/repo/src/app.ts")).toBe(
+      "src/app.ts",
+    );
+  });
+
+  it("returns null for a path outside every root", () => {
+    expect(
+      relativizeToWorkspaceRoot(["/repo"], "/elsewhere/notes.txt"),
+    ).toBeNull();
+  });
+
+  it("returns null when the path equals a root itself (a directory, not a file under it)", () => {
+    expect(relativizeToWorkspaceRoot(["/repo"], "/repo")).toBeNull();
+  });
+
+  it("picks the longest (most specific) matching root when roots overlap", () => {
+    expect(
+      relativizeToWorkspaceRoot(
+        ["/repo", "/repo/packages/app"],
+        "/repo/packages/app/src/index.ts",
+      ),
+    ).toBe("src/index.ts");
+  });
+
+  it("is order-independent when picking the longest matching root", () => {
+    expect(
+      relativizeToWorkspaceRoot(
+        ["/repo/packages/app", "/repo"],
+        "/repo/packages/app/src/index.ts",
+      ),
+    ).toBe("src/index.ts");
+  });
+
+  it("matches a Windows root case-insensitively", () => {
+    expect(relativizeToWorkspaceRoot(["D:/Repo"], "d:/repo/src/app.ts")).toBe(
+      "src/app.ts",
+    );
+  });
+
+  it("does not match a POSIX root case-insensitively", () => {
+    expect(relativizeToWorkspaceRoot(["/Repo"], "/repo/src/app.ts")).toBeNull();
   });
 });
