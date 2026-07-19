@@ -130,7 +130,7 @@ describe("<NotificationIndicatorIcon />", () => {
     expect(screen.getByTestId("default-icon")).toBeDefined();
   });
 
-  it("renders the background tier muted and titled distinctly from the turn spinner", () => {
+  it("renders the background tier as a muted waiting chat distinct from the turn spinner", () => {
     renderIcon(DEFAULT_STATE, "background");
 
     expect(
@@ -143,7 +143,12 @@ describe("<NotificationIndicatorIcon />", () => {
     ).toBeNull();
     const glyph = screen.getByTestId("indicator-background-activity-subject-1");
     expect(glyph.tagName).toBe("svg");
-    expect(glyph.getAttribute("class")).toContain("lucide-calendar-clock");
+    expect(glyph.getAttribute("class")).toContain(
+      "lucide-message-square-clock",
+    );
+    expect(
+      glyph.querySelector('circle[cx="16"][cy="16"][r="6"]'),
+    ).not.toBeNull();
     expect(glyph.getAttribute("class")).toContain("size-3.5");
     expect(glyph.getAttribute("class")).toContain("text-muted-foreground");
   });

@@ -46,6 +46,7 @@ import {
   peekPreparedTerminalAgentLaunch,
 } from "@/stores/terminals/prepared-terminal-agent-launch-store";
 import { TerminalLoadingSkeleton } from "./terminal-loading-skeleton";
+import { TerminalGridMeasureProbe } from "./terminal-grid-measure-probe";
 import { TerminalDeadTileBanner } from "./dead-tile-banner";
 import { TerminalConnectionOverlay } from "./terminal-connection-overlay";
 import { resolveTerminalOverlayState } from "./terminal-connection-overlay-state";
@@ -591,6 +592,15 @@ function TuiAgentTileLive(
           isActive={props.isActive}
           recovery={props.recovery}
           onCrashExit={props.onCrashExit}
+          measureProbe={
+            <TerminalGridMeasureProbe
+              sessionId={sessionId}
+              instanceId={instanceId}
+              tileKind="terminal-agent"
+              chrome="padded"
+              onMeasured={bootstrap.reportMeasuredGrid}
+            />
+          }
         />
       </div>
     </TerminalAgentTileShell>
@@ -619,6 +629,8 @@ interface TerminalAgentBodyProps {
   readonly isRestartKillSuppressed: () => boolean;
   readonly recovery: TerminalSessionRecovery;
   readonly onCrashExit: () => void;
+  /** Pre-subscribe grid measurement probe, rendered in the loading state. */
+  readonly measureProbe: React.ReactNode;
 }
 
 function TerminalAgentBody(props: TerminalAgentBodyProps): React.ReactNode {
@@ -695,8 +707,21 @@ function TerminalAgentBody(props: TerminalAgentBodyProps): React.ReactNode {
   if (props.handle === null) {
     // One stable skeleton for the whole pre-ready window (preparing → starting
     // → xterm suspense all render `TerminalLoadingSkeleton`), so the transition
-    // into the live terminal never flickers between placeholder strings.
-    return <TerminalLoadingSkeleton />;
+    // into the live terminal never flickers between placeholder strings. The
+    // measurement probe mounts the persistent xterm engine beneath it (both
+    // fill the same relative box) so the container's grid is measured before
+    // the subscribe is dispatched - see `TerminalGridMeasureProbe`. Probe
+    // first, skeleton in an overlay after: the probe's container is
+    // `absolute inset-0`, so in-flow content preceding it would be painted
+    // over.
+    return (
+      <>
+        {props.measureProbe}
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+          <TerminalLoadingSkeleton />
+        </div>
+      </>
+    );
   }
 
   return (

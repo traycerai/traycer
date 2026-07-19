@@ -1,5 +1,7 @@
 import {
   useCallback,
+  useEffect,
+  useRef,
   useState,
   type ClipboardEvent,
   type DragEvent,
@@ -17,21 +19,55 @@ import {
 
 export const IMAGE_MIME_PREFIX = "image/";
 export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+export const IMAGE_READ_TIMEOUT_MS = 15_000;
 
-function readFileAsDataUrl(file: File): Promise<string> {
+function readFileAsDataUrl(file: File, signal: AbortSignal): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
+    let settled = false;
+    const cleanup = (): void => {
+      window.clearTimeout(timeout);
+      signal.removeEventListener("abort", abort);
+      reader.onerror = null;
+      reader.onload = null;
+      reader.onabort = null;
+    };
+    const fail = (error: Error): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+    const abort = (): void => {
+      reader.abort();
+      fail(new Error("Image read was cancelled"));
+    };
+    const timeout = window.setTimeout(() => {
+      reader.abort();
+      fail(new Error("Timed out while reading image"));
+    }, IMAGE_READ_TIMEOUT_MS);
     reader.onerror = () => {
-      reject(reader.error ?? new Error("Failed to read image"));
+      fail(reader.error ?? new Error("Failed to read image"));
+    };
+    reader.onabort = () => {
+      fail(new Error("Image read was cancelled"));
     };
     reader.onload = () => {
       const result = reader.result;
       if (typeof result !== "string") {
-        reject(new Error("Image reader returned non-string result"));
+        fail(new Error("Image reader returned non-string result"));
         return;
       }
+      if (settled) return;
+      settled = true;
+      cleanup();
       resolve(result);
     };
+    if (signal.aborted) {
+      abort();
+      return;
+    }
+    signal.addEventListener("abort", abort, { once: true });
     reader.readAsDataURL(file);
   });
 }
@@ -71,6 +107,7 @@ export function collectImages(
 
 async function filesToImageAttrs(
   files: ReadonlyArray<File>,
+  signal: AbortSignal,
 ): Promise<ImageAttachmentAttrs[]> {
   // This base64 ingest serves only chat / new-conversation surfaces.
   const accepted = collectImages(files, () => {
@@ -83,7 +120,7 @@ async function filesToImageAttrs(
   if (accepted.length === 0) return [];
   const results = await Promise.all(
     accepted.map(async (file) => {
-      const dataUrl = await readFileAsDataUrl(file);
+      const dataUrl = await readFileAsDataUrl(file, signal);
       return {
         id: uuidv4(),
         fileName: file.name || "image",
@@ -109,6 +146,7 @@ export interface UseComposerPasteResult {
   onDragLeave: (event: DragEvent<HTMLElement>) => void;
   attachImageFiles: (files: ReadonlyArray<File>) => void;
   isDraggingFiles: boolean;
+  isIngestingImages: boolean;
 }
 
 function dataTransferHasFiles(event: DragEvent<HTMLElement>): boolean {
@@ -123,14 +161,34 @@ function dataTransferHasFiles(event: DragEvent<HTMLElement>): boolean {
  * for chat / new-conversation, `useLandingComposerPaste` (hash-only) for landing.
  */
 export function useComposerPasteEvents(
-  onFiles: (files: ReadonlyArray<File>) => void,
+  onFiles: (files: ReadonlyArray<File>, signal: AbortSignal) => Promise<void>,
 ): UseComposerPasteResult {
   const [dragDepth, setDragDepth] = useState(0);
+  const [pendingImageCount, setPendingImageCount] = useState(0);
+  const activeRef = useRef(true);
+  const controllersRef = useRef(new Set<AbortController>());
+
+  useEffect(() => {
+    activeRef.current = true;
+    const controllers = controllersRef.current;
+    return () => {
+      activeRef.current = false;
+      controllers.forEach((controller) => controller.abort());
+      controllers.clear();
+    };
+  }, []);
 
   const attachImageFiles = useCallback(
     (files: ReadonlyArray<File>) => {
       if (files.length === 0) return;
-      onFiles(files);
+      const controller = new AbortController();
+      controllersRef.current.add(controller);
+      setPendingImageCount((count) => count + 1);
+      void onFiles(files, controller.signal).finally(() => {
+        controllersRef.current.delete(controller);
+        if (!activeRef.current) return;
+        setPendingImageCount((count) => Math.max(0, count - 1));
+      });
     },
     [onFiles],
   );
@@ -192,6 +250,7 @@ export function useComposerPasteEvents(
     onDragLeave,
     attachImageFiles,
     isDraggingFiles: dragDepth > 0,
+    isIngestingImages: pendingImageCount > 0,
   };
 }
 
@@ -204,8 +263,8 @@ export function useComposerPasteAdapter(
   insertAttrs: (attrs: ReadonlyArray<ImageAttachmentAttrs>) => number,
 ): UseComposerPasteResult {
   const onFiles = useCallback(
-    (files: ReadonlyArray<File>) => {
-      void filesToImageAttrs(files)
+    (files: ReadonlyArray<File>, signal: AbortSignal) =>
+      filesToImageAttrs(files, signal)
         .then((attrs) => {
           if (attrs.length > 0) {
             const acceptedCount = Math.min(
@@ -221,15 +280,25 @@ export function useComposerPasteAdapter(
           }
         })
         .catch((error: unknown) => {
-          // A FileReader failure previously surfaced only as an unhandled
-          // rejection; record it so chat rejections exist in the funnel.
           Analytics.getInstance().track(AnalyticsEvent.AttachmentRejected, {
             kind: "image",
             surface: "chat",
             blocker: analyticsBlockerFromError(error),
           });
-        });
-    },
+          if (signal.aborted) return;
+          reportableErrorToast(
+            "Couldn't attach the image.",
+            {
+              description: "Please try adding it again.",
+            },
+            {
+              title: "Could not attach image",
+              message: null,
+              code: null,
+              source: "Chat composer",
+            },
+          );
+        }),
     [insertAttrs],
   );
   return useComposerPasteEvents(onFiles);
