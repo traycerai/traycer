@@ -68,6 +68,7 @@ import type {
   WorktreeIntent,
 } from "@traycer/protocol/host/worktree-schemas";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
+import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type { RestoreResultEntry } from "@traycer/protocol/persistence/epic/checkpoint-manifests";
 import type {
   PermissionMode,
@@ -461,6 +462,19 @@ export interface ChatSessionState {
     settings: ChatRunSettings,
   ) => string | null;
   updateActivePermissionMode: (permissionMode: PermissionMode) => string | null;
+  /**
+   * Narrow in-flight profile switch, parallel to
+   * `updateActivePermissionMode`: tells the host the chat's CURRENT work
+   * should run on `profileId` (of `harnessId` - profile ids are
+   * harness-scoped). The host stamps a pre-spawn override from the frame at
+   * intake, so a turn still parked on worktree setup adopts the switch
+   * before it spawns. Deliberately not a whole-settings frame: model/harness
+   * never late-bind into an accepted turn.
+   */
+  updateActiveProfile: (
+    harnessId: GuiHarnessId,
+    profileId: string | null,
+  ) => string | null;
   // Live-mirror: atomically re-stamp every non-transient pending queued item
   // with the current toolbar settings so the host's stored copy stays current
   // for auto-send. Transient items (steer_requested/steering/injected) keep the
@@ -2095,22 +2109,7 @@ export function createChatSessionStore(
             item.queueItemId !== excludeQueueItemId &&
             !chatRunSettingsEqual(item.settings, settings),
         );
-        // With nothing queued the frame still matters while a run is in
-        // progress AND the new profile differs from the one the active turn is
-        // bound to: the host stamps a pre-spawn profile override from it at
-        // frame intake, so a turn still parked on worktree setup adopts the
-        // switch instead of spawning on the profile the user just moved off. A
-        // permission/model-only change (or a same-profile re-commit) has no
-        // parked turn to redirect here, and an idle empty queue has nothing to
-        // restamp, so neither sends.
-        if (pendingItems.length === 0) {
-          const activeTurn = get().activeTurn;
-          const forwardsProfileToActiveTurn =
-            activeTurn !== null &&
-            isChatRunInProgress(get().runStatus) &&
-            activeTurn.profileId !== settings.profileId;
-          if (!forwardsProfileToActiveTurn) return;
-        }
+        if (pendingItems.length === 0) return;
         const clientActionId = uuidv4();
         const frame: ChatOwnerActionFrame = {
           kind: "queueSettingsRestamp",
@@ -2167,6 +2166,25 @@ export function createChatSessionStore(
           get,
           frame,
           pending: basicPending(clientActionId, "activePermissionModeUpdate"),
+          pendingUserMessage: null,
+        });
+      },
+      updateActiveProfile: (harnessId, profileId) => {
+        const clientActionId = uuidv4();
+        const frame: ChatOwnerActionFrame = {
+          kind: "activeProfileUpdate",
+          hasBinaryPayload: false,
+          epicId: options.epicId,
+          chatId: options.chatId,
+          clientActionId,
+          harnessId,
+          profileId,
+        };
+        return sendAction({
+          set,
+          get,
+          frame,
+          pending: basicPending(clientActionId, "activeProfileUpdate"),
           pendingUserMessage: null,
         });
       },
