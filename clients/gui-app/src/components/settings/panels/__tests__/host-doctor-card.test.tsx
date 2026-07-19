@@ -403,4 +403,29 @@ describe("HostDoctorCard pending CLI upgrade", () => {
     fireEvent.click(button);
     expect(restartHost).not.toHaveBeenCalled();
   });
+
+  it("keeps fix buttons disabled until operation status resolves idle", async () => {
+    const operationStatus = Promise.withResolvers<HostOperationStatus | null>();
+    const restartHost = vi.fn(() => Promise.resolve());
+    const management = makeManagement({
+      runDoctor: () =>
+        Promise.resolve<HostDoctorReport>({
+          issues: [pendingUpgradeIssue()],
+          ranAt: "2026-05-15T00:00:00Z",
+        }),
+      restartHost,
+      getOperationStatus: () => operationStatus.promise,
+    });
+    renderCard(makeHostWithManagement(management));
+
+    const button = await screen.findByRole<HTMLButtonElement>("button", {
+      name: /Restart host/i,
+    });
+    expect(button.disabled).toBe(true);
+
+    operationStatus.resolve(null);
+    await waitFor(() => {
+      expect(button.disabled).toBe(false);
+    });
+  });
 });

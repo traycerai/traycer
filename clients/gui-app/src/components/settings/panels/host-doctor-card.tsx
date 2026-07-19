@@ -83,8 +83,10 @@ function HostDoctorCardInner(props: HostDoctorCardInnerProps) {
   // other's freshly started host).
   const { data: operationStatus } =
     useRunnerHostOperationStatusQuery(management);
-  const sharedOperationActive =
-    operationStatus !== undefined && operationStatus !== null;
+  // Fail closed while the initial status read is unresolved: `null` is the
+  // only authoritative idle state. Otherwise Doctor could briefly enable a
+  // destructive fix while another surface's operation is still being read.
+  const sharedOperationActive = operationStatus !== null;
 
   const {
     data: report,
