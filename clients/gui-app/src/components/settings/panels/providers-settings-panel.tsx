@@ -111,6 +111,7 @@ function hasPendingProviderProbe(
       // still surfaces the flags.
       provider.enabled &&
       (provider.authPending ||
+        provider.availabilityPending ||
         provider.candidates.some((candidate) => candidate.versionPending)),
   );
 }
