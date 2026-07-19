@@ -35,13 +35,24 @@ const mocks = vi.hoisted(() => ({
   lifecyclePostSwapAction: "restart" as
     "restart" | "start" | "install" | "none",
   lifecyclePostSwapError: null as string | null,
+  // `vi.mock` factories are hoisted above this file's own top-level `let
+  // sandboxRoot` - a direct reference there hits a TDZ `ReferenceError`,
+  // so the live sandbox value has to live in this hoisted object instead.
+  sandboxHome: "",
 }));
 
+// `store/paths` computes `TRAYCER_HOME` from `os.homedir()` once at module
+// load - any export the `store/paths` mock below leaves un-overridden
+// would otherwise resolve against the REAL production `~/.traycer`, not
+// this sandbox. `homedir` redirects `vi.importActual`'s fresh module
+// evaluation to the sandbox (falling back to the real tmpdir, never the
+// real home, before the first `beforeEach` has set `sandboxRoot`).
 vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
   return {
     ...actual,
     platform: () => mocks.platformOverride ?? actual.platform(),
+    homedir: () => mocks.sandboxHome || actual.tmpdir(),
   };
 });
 
@@ -174,6 +185,7 @@ async function writeStaged(
 describe("applyHost", () => {
   beforeEach(() => {
     sandboxRoot = mkdtempSync(join(tmpdir(), "traycer-apply-test-"));
+    mocks.sandboxHome = sandboxRoot;
   });
 
   afterEach(() => {

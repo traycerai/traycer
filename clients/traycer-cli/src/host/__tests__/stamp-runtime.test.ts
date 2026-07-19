@@ -18,6 +18,21 @@ function pidMetadataPathFor(environment: Environment): string {
   return join(hostHomeFor(environment), "pid.json");
 }
 
+// `store/paths` computes `TRAYCER_HOME` from `os.homedir()` once at module
+// load - any export this mock leaves un-overridden (falls through via
+// `...actual` below) would otherwise resolve against the REAL production
+// `~/.traycer`, not this sandbox. Redirect the `os` boundary itself so
+// `vi.importActual`'s fresh module evaluation picks up the sandbox
+// (falling back to the real tmpdir, never the real home, before the first
+// `beforeEach` has set it). `vi.mock` factories are hoisted above this
+// file's own top-level `let sandboxRoot` - a direct reference hits a TDZ
+// `ReferenceError`, so the live value has to live in `vi.hoisted` instead.
+const osHome = vi.hoisted(() => ({ current: "" }));
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return { ...actual, homedir: () => osHome.current || actual.tmpdir() };
+});
+
 vi.mock("../../store/paths", async () => {
   const actual =
     await vi.importActual<typeof import("../../store/paths")>(
@@ -107,6 +122,7 @@ function generationFor(record: HostInstallRecord): string {
 describe("stampRuntime", () => {
   beforeEach(() => {
     sandboxRoot = mkdtempSync(join(tmpdir(), "traycer-stamp-runtime-test-"));
+    osHome.current = sandboxRoot;
   });
 
   afterEach(() => {
