@@ -133,22 +133,25 @@ describe("host-management-bridge onOperationStatus", () => {
     subscription.dispose();
   });
 
-  it("rejects a malformed payload with an unrecognized kind", async () => {
-    vi.resetModules();
-    const { buildHostManagementBridge } =
-      await import("../host-management-bridge");
-    const bridge = buildHostManagementBridge();
-    const observed: (HostOperationStatus | null)[] = [];
-    const subscription = bridge.onOperationStatus((status) => {
-      observed.push(status);
-    });
+  it.each(["not-a-real-kind", "toString", "constructor"])(
+    "rejects a malformed payload with kind %s",
+    async (kind) => {
+      vi.resetModules();
+      const { buildHostManagementBridge } =
+        await import("../host-management-bridge");
+      const bridge = buildHostManagementBridge();
+      const observed: (HostOperationStatus | null)[] = [];
+      const subscription = bridge.onOperationStatus((status) => {
+        observed.push(status);
+      });
 
-    fakeElectron.emit(RunnerHostEvent.hostOperationStatusChange, {
-      ...makeStatus("install"),
-      kind: "not-a-real-kind",
-    });
+      fakeElectron.emit(RunnerHostEvent.hostOperationStatusChange, {
+        ...makeStatus("install"),
+        kind,
+      });
 
-    expect(observed).toEqual([]);
-    subscription.dispose();
-  });
+      expect(observed).toEqual([]);
+      subscription.dispose();
+    },
+  );
 });

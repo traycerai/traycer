@@ -26,11 +26,11 @@ import {
 } from "@/lib/query-keys/runner-mutation-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
 import { useRunnerHost } from "@/providers/use-runner-host";
+import { useRunnerHostOperationStatusQuery } from "@/hooks/runner/use-runner-host-operation-status-query";
 import type {
   HostDoctorIssue,
   HostDoctorReport,
   FreePortAndRestartInput,
-  HostOperationStatus,
   IHostManagement,
 } from "@traycer-clients/shared/platform/runner-host";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
@@ -81,13 +81,8 @@ function HostDoctorCardInner(props: HostDoctorCardInnerProps) {
   // fix racing a tracked restart-class operation interleaves two independent
   // stop/kill/start sequences (worst on Windows, where one can kill the
   // other's freshly started host).
-  const { data: operationStatus } = useQuery(
-    queryOptions<HostOperationStatus | null>({
-      queryKey: runnerQueryKeys.hostOperationStatus(management),
-      queryFn: () => management.getOperationStatus(),
-      staleTime: Infinity,
-    }),
-  );
+  const { data: operationStatus } =
+    useRunnerHostOperationStatusQuery(management);
   const sharedOperationActive =
     operationStatus !== undefined && operationStatus !== null;
 

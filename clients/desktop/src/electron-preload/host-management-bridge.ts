@@ -280,7 +280,9 @@ const HOST_OPERATION_KINDS: Record<HostOperationKind, true> = {
 };
 
 function isHostOperationKind(value: unknown): value is HostOperationKind {
-  return typeof value === "string" && value in HOST_OPERATION_KINDS;
+  return (
+    typeof value === "string" && Object.hasOwn(HOST_OPERATION_KINDS, value)
+  );
 }
 
 function isHostOperationStatusOrNull(

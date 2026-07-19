@@ -36,13 +36,13 @@ import {
 } from "@/lib/query-keys/runner-mutation-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
 import { useRunnerHost } from "@/providers/use-runner-host";
+import { useRunnerHostOperationStatusQuery } from "@/hooks/runner/use-runner-host-operation-status-query";
 import { useHostUpdateBannerStore } from "@/stores/settings/host-update-banner-store";
 import type {
   CliInstallManifestSnapshot,
   HostAvailableSnapshot,
   HostInstalledRecord,
   HostNameSettings,
-  HostOperationStatus,
   HostRegistryUpdateState,
   IHostManagement,
   IRunnerHost,
@@ -178,13 +178,8 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
   // auto-update reconciler) actually started the operation - so this panel no
   // longer needs its own per-mutation `onProgress` callback or local
   // `progress` state.
-  const { data: operationStatus } = useQuery(
-    queryOptions<HostOperationStatus | null>({
-      queryKey: runnerQueryKeys.hostOperationStatus(management),
-      queryFn: () => management.getOperationStatus(),
-      staleTime: Infinity,
-    }),
-  );
+  const { data: operationStatus } =
+    useRunnerHostOperationStatusQuery(management);
   const sharedOperationActive =
     operationStatus !== undefined && operationStatus !== null;
   const progress: HostProgressState | null =
