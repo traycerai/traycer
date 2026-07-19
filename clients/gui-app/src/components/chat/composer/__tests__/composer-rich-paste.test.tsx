@@ -310,6 +310,56 @@ describe("composer rich clipboard paste", () => {
     expect(mocks.reportableErrorToast).not.toHaveBeenCalled();
   });
 
+  it("keeps a stripped unavailable image's surviving text merged into the surrounding paragraph instead of splitting it", () => {
+    const source = makeEditor(KNOWN_SLASH_NAMES);
+    source.commands.setContent(
+      hashOnlyImageContentWithText("other-epic-hash", "suffix"),
+    );
+    // Same inline-only serialization as the merge case above - no block
+    // wrapper, mirroring a real mid-paragraph copy.
+    const wrapper = document.createElement("div");
+    wrapper.appendChild(
+      DOMSerializer.fromSchema(source.schema).serializeFragment(
+        source.state.doc.firstChild?.content ?? source.state.doc.content,
+      ),
+    );
+    const hasBytes = vi.fn(() => false);
+    const destination = makeEditorWithPastedImagePresence(
+      KNOWN_SLASH_NAMES,
+      hasBytes,
+      () => undefined,
+    );
+    destination.commands.setContent({
+      type: "doc",
+      content: [
+        { type: "paragraph", content: [{ type: "text", text: "prefix " }] },
+      ],
+    });
+    destination.commands.setTextSelection(
+      destination.state.doc.content.size - 1,
+    );
+
+    fireEvent.paste(destination.view.dom, {
+      clipboardData: {
+        files: [],
+        items: [],
+        types: ["text/html"],
+        getData: (type: string) =>
+          type === "text/html" ? wrapper.innerHTML : "",
+      },
+    });
+
+    expect(hasBytes).toHaveBeenCalledWith("other-epic-hash");
+    expect(collectImageIds(destination)).toEqual([]);
+    // The image was stripped, but the surviving text must still merge into
+    // the SAME paragraph as "prefix" - a JSON round-trip through
+    // `pasteComposerContent`'s closed 0/0 slice would instead split it into
+    // a second paragraph.
+    expect(destination.state.doc.childCount).toBe(1);
+    expect(destination.state.doc.textContent).toBe("prefix suffix");
+    expect(mocks.reportableErrorToast).toHaveBeenCalledTimes(1);
+  });
+
   it("leaves landing-composer rich pastes unvalidated", () => {
     const editor = makeEditor(KNOWN_SLASH_NAMES);
 

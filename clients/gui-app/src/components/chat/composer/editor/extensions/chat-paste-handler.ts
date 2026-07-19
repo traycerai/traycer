@@ -5,6 +5,7 @@ import {
   DOMParser as ProseMirrorDOMParser,
   Fragment,
   Slice,
+  type Node as ProseMirrorNode,
   type Schema,
 } from "@tiptap/pm/model";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -18,7 +19,6 @@ import {
   slashCommandParagraph,
   stringValue,
 } from "@/lib/composer/tiptap-json-content";
-import { sliceToDocJson } from "@/lib/editor/prosemirror-json";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
 import {
@@ -40,32 +40,63 @@ export function createChatPasteHandler(deps: ChatPasteHandlerDeps) {
 
     addProseMirrorPlugins() {
       const { editor } = this;
-      // `dispatchUnchanged` inserts the caller's original, structurally-open
-      // paste content when nothing needs to be stripped - only an actual
-      // strip forces the JSON round-trip through `pasteComposerContent`
-      // (always a closed 0/0 slice), which would otherwise needlessly flatten
-      // an inline HTML paste's open slice into a new block.
+      // The composer-content (JSON) clipboard flavor is a whole standalone
+      // copied-message doc, so both the no-strip and strip cases rebuild
+      // through `pasteComposerContent`'s closed 0/0 slice - there's no open
+      // slice to preserve for this flavor. The HTML clipboard flavor uses
+      // `pasteSliceWithValidatedImages` below instead, which strips directly
+      // against the parsed `Slice`'s `Fragment` so an inline paste's open
+      // boundaries survive a strip.
       const pasteWithValidatedImages = (
         view: EditorView,
         content: JsonContent,
-        dispatchUnchanged: () => boolean,
       ): boolean => {
         const hashes = hashOnlyImageHashes(content);
         const hasPastedImageBytes = deps.getHasPastedImageBytes();
         if (hashes.length === 0 || hasPastedImageBytes === null) {
-          return dispatchUnchanged();
+          return pasteComposerContent(view, content);
         }
         const availableHashes = new Set(
           hashes.filter((hash) => hasPastedImageBytes(hash)),
         );
         if (availableHashes.size === hashes.length) {
-          return dispatchUnchanged();
+          return pasteComposerContent(view, content);
         }
         const filtered = filterUnavailablePastedImages(
           content,
           availableHashes,
         );
         const pasted = pasteComposerContent(view, filtered.content);
+        if (filtered.removedCount > 0) {
+          showUnavailablePastedImageToast(filtered.removedCount);
+        }
+        return pasted;
+      };
+      const pasteSliceWithValidatedImages = (
+        view: EditorView,
+        slice: Slice,
+      ): boolean => {
+        const dispatchSlice = (sliceToDispatch: Slice): boolean => {
+          const tr = view.state.tr.replaceSelection(sliceToDispatch);
+          view.dispatch(tr.scrollIntoView());
+          return true;
+        };
+        const hashes = hashOnlyImageFragmentHashes(slice.content);
+        const hasPastedImageBytes = deps.getHasPastedImageBytes();
+        if (hashes.length === 0 || hasPastedImageBytes === null) {
+          return dispatchSlice(slice);
+        }
+        const availableHashes = new Set(
+          hashes.filter((hash) => hasPastedImageBytes(hash)),
+        );
+        if (availableHashes.size === hashes.length) {
+          return dispatchSlice(slice);
+        }
+        const filtered = filterUnavailablePastedImageSlice(
+          slice,
+          availableHashes,
+        );
+        const pasted = dispatchSlice(filtered.slice);
         if (filtered.removedCount > 0) {
           showUnavailablePastedImageToast(filtered.removedCount);
         }
@@ -83,9 +114,7 @@ export function createChatPasteHandler(deps: ChatPasteHandlerDeps) {
               const composerContent =
                 readComposerContentFromClipboardData(clipboardData);
               if (composerContent !== null) {
-                return pasteWithValidatedImages(view, composerContent, () =>
-                  pasteComposerContent(view, composerContent),
-                );
+                return pasteWithValidatedImages(view, composerContent);
               }
 
               const html = clipboardData.getData("text/html");
@@ -102,23 +131,7 @@ export function createChatPasteHandler(deps: ChatPasteHandlerDeps) {
                   }),
                   view.state.schema,
                 );
-                const dispatchOriginalSlice = (): boolean => {
-                  const tr = view.state.tr.replaceSelection(slice);
-                  view.dispatch(tr.scrollIntoView());
-                  return true;
-                };
-                const htmlContent = sliceToDocJson(slice);
-                if (
-                  htmlContent !== null &&
-                  hashOnlyImageHashes(htmlContent).length > 0
-                ) {
-                  return pasteWithValidatedImages(
-                    view,
-                    htmlContent,
-                    dispatchOriginalSlice,
-                  );
-                }
-                return dispatchOriginalSlice();
+                return pasteSliceWithValidatedImages(view, slice);
               }
 
               const text = clipboardData.getData("text/plain");
@@ -249,6 +262,94 @@ function filterUnavailablePastedImageNode(
     return { node: null, removedCount };
   }
   return { node: { ...node, content: children }, removedCount };
+}
+
+function hashOnlyImageFragmentHashes(fragment: Fragment): string[] {
+  const hashes = new Set<string>();
+  collectHashOnlyImageFragmentHashes(fragment, hashes);
+  return Array.from(hashes);
+}
+
+function collectHashOnlyImageFragmentHashes(
+  fragment: Fragment,
+  hashes: Set<string>,
+): void {
+  fragment.forEach((node) => {
+    if (node.type.name === "imageAttachment") {
+      const hash = stringValue(node.attrs.hash);
+      const b64content = stringValue(node.attrs.b64content);
+      if (hash !== null && b64content === null) hashes.add(hash);
+      return;
+    }
+    if (node.isLeaf) return;
+    collectHashOnlyImageFragmentHashes(node.content, hashes);
+  });
+}
+
+interface FilteredPastedImageSlice {
+  readonly slice: Slice;
+  readonly removedCount: number;
+}
+
+interface FilteredPastedImageFragment {
+  readonly fragment: Fragment;
+  readonly removedCount: number;
+}
+
+// Mirrors `filterUnavailablePastedImages`, but works on the ProseMirror
+// `Slice`/`Fragment` directly instead of round-tripping through JSON, so the
+// original slice's `openStart`/`openEnd` survive a strip. An inline atomic
+// `imageAttachment` node's removal never changes block-nesting depth, so
+// reusing the original open boundaries on the filtered fragment stays valid.
+function filterUnavailablePastedImageSlice(
+  slice: Slice,
+  availableHashes: ReadonlySet<string>,
+): FilteredPastedImageSlice {
+  const filtered = filterUnavailablePastedImageFragment(
+    slice.content,
+    availableHashes,
+  );
+  return {
+    slice: new Slice(filtered.fragment, slice.openStart, slice.openEnd),
+    removedCount: filtered.removedCount,
+  };
+}
+
+function filterUnavailablePastedImageFragment(
+  fragment: Fragment,
+  availableHashes: ReadonlySet<string>,
+): FilteredPastedImageFragment {
+  const children: ProseMirrorNode[] = [];
+  let removedCount = 0;
+  fragment.forEach((node) => {
+    if (node.type.name === "imageAttachment") {
+      const hash = stringValue(node.attrs.hash);
+      const b64content = stringValue(node.attrs.b64content);
+      if (hash !== null && b64content === null && !availableHashes.has(hash)) {
+        removedCount += 1;
+        return;
+      }
+      children.push(node);
+      return;
+    }
+    if (node.isLeaf) {
+      children.push(node);
+      return;
+    }
+    const filteredChild = filterUnavailablePastedImageFragment(
+      node.content,
+      availableHashes,
+    );
+    removedCount += filteredChild.removedCount;
+    if (
+      node.type.name === "attachmentGroup" &&
+      filteredChild.fragment.childCount === 0
+    ) {
+      return;
+    }
+    children.push(node.copy(filteredChild.fragment));
+  });
+  return { fragment: Fragment.fromArray(children), removedCount };
 }
 
 function showUnavailablePastedImageToast(removedCount: number): void {
