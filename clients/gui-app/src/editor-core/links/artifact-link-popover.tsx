@@ -679,6 +679,10 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
   // means the open editor was not promoted from a read card (create mode or
   // Cmd+K on an existing link), so Escape dismisses instead of reverting.
   const revertTriggerRef = useRef<"hover" | "caret" | null>(null);
+  // Tracks whether the pointer is over the open card or a document link so
+  // hover-hide re-arm after Escape can decide without relying on CSS :hover
+  // (unreliable under jsdom synthetic pointer events).
+  const pointerOverHoverSurfaceRef = useRef(false);
   const cardRef = useRef<HTMLDivElement | null>(null);
   const urlInputRef = useRef<HTMLInputElement | null>(null);
   const showTimerRef = useRef<number | null>(null);
@@ -718,6 +722,7 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
   const close = useCallback((): void => {
     cancelShow();
     cancelHide();
+    pointerOverHoverSurfaceRef.current = false;
     if (targetRef.current === null) return;
     setLiveTarget(null);
     onOpenChange(false);
@@ -777,24 +782,17 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
     setLiveTarget({ ...current, trigger, editing: false });
     if (trigger !== "hover") return;
     // Editing ran under caret ownership, so a pointer leave during the
-    // edit did not arm hide. After restoring hover ownership, re-check
-    // whether the pointer is still over the card/link; if not, arm the
-    // normal hover-hide path. Defer so the compact card commit can drop
-    // the edit-field focus that would otherwise suppress scheduleHoverHide.
+    // edit did not arm hide. After restoring hover ownership, re-arm the
+    // normal hide path when the pointer is already outside the card/link.
+    // Defer so the compact-card commit can drop edit-field focus that would
+    // otherwise suppress scheduleHoverHide via the activeElement gate.
     queueMicrotask(() => {
       const live = targetRef.current;
       if (
         live?.mode !== "edit" ||
         live.trigger !== "hover" ||
         live.editing ||
-        cardRef.current?.matches(":hover") === true
-      ) {
-        return;
-      }
-      const contextElement = live.anchor.contextElement;
-      if (
-        contextElement instanceof Element &&
-        contextElement.matches(":hover")
+        pointerOverHoverSurfaceRef.current
       ) {
         return;
       }
@@ -825,10 +823,11 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
   );
 
   const handlePointerOver = useEffectEvent((event: PointerEvent): void => {
+    const anchor = linkAnchor(event.target);
+    if (anchor !== null) pointerOverHoverSurfaceRef.current = true;
     if (!editor.state.selection.empty) return;
     if (targetRef.current !== null) return;
     if (cardRef.current?.contains(document.activeElement)) return;
-    const anchor = linkAnchor(event.target);
     if (anchor === null) return;
     cancelShow();
     const fallbackPosition = anchorPosition(editor, anchor);
@@ -859,6 +858,12 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
     const from = linkAnchor(event.target);
     const to = linkAnchor(event.relatedTarget);
     if (from !== null && from === to) return;
+    const related = event.relatedTarget;
+    if (related instanceof Node && cardRef.current?.contains(related)) {
+      pointerOverHoverSurfaceRef.current = true;
+    } else if (from !== null) {
+      pointerOverHoverSurfaceRef.current = false;
+    }
     cancelShow();
     scheduleHoverHide();
   });
@@ -1238,12 +1243,25 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
   useEffect(() => {
     const card = cardRef.current;
     if (target === null || card === null) return;
-    card.addEventListener("pointerenter", cancelHide);
-    card.addEventListener("pointerleave", scheduleHoverHide);
+    const handleCardPointerEnter = (): void => {
+      pointerOverHoverSurfaceRef.current = true;
+      cancelHide();
+    };
+    const handleCardPointerLeave = (event: PointerEvent): void => {
+      const related = event.relatedTarget;
+      if (related instanceof Node && linkAnchor(related) !== null) {
+        pointerOverHoverSurfaceRef.current = true;
+      } else {
+        pointerOverHoverSurfaceRef.current = false;
+      }
+      scheduleHoverHide();
+    };
+    card.addEventListener("pointerenter", handleCardPointerEnter);
+    card.addEventListener("pointerleave", handleCardPointerLeave);
     card.addEventListener("keydown", handleCardKeyDown);
     return () => {
-      card.removeEventListener("pointerenter", cancelHide);
-      card.removeEventListener("pointerleave", scheduleHoverHide);
+      card.removeEventListener("pointerenter", handleCardPointerEnter);
+      card.removeEventListener("pointerleave", handleCardPointerLeave);
       card.removeEventListener("keydown", handleCardKeyDown);
     };
   }, [cancelHide, scheduleHoverHide, target]);
@@ -1258,6 +1276,10 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
   const commit = useCallback((): void => {
     const current = targetRef.current;
     if (current === null || !editable) return;
+    // Read-state edit targets must not commit: Escape revert restores
+    // `editing: false` while the unmounting form can still emit blur with
+    // stale draft values from the pre-revert render.
+    if (current.mode === "edit" && !current.editing) return;
     const nextHref = href.trim();
     const nextText =
       displayText.trim().length === 0 && nextHref.length > 0

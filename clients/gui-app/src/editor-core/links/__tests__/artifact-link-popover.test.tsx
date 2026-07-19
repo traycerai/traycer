@@ -335,6 +335,34 @@ describe("ArtifactLinkPopover", () => {
     expect(documentTransaction).not.toHaveBeenCalled();
   });
 
+  it("does not commit a discarded draft when Escape unmount blur fires after revert", async () => {
+    const editor = makeEditor(LINK_CONTENT);
+    setCaretAndRender(editor, true);
+    await screen.findByRole("dialog", { name: "Link preview" });
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    const url = await screen.findByRole("textbox", { name: "Link URL" });
+    const form = screen.getByRole("form", { name: "Edit link" });
+    const before = editor.getHTML();
+    const documentTransaction = vi.fn();
+    editor.on("transaction", ({ transaction }) => {
+      if (transaction.docChanged) documentTransaction();
+    });
+
+    fireEvent.change(url, { target: { value: "https://changed.example" } });
+    fireEvent.keyDown(url, { key: "Escape" });
+    // Unmount focus cascade: the form can still emit blur after revertDraft
+    // restored the read preview and cleared editing.
+    fireEvent.blur(form, { relatedTarget: editor.view.dom });
+
+    expect(editor.getHTML()).toBe(before);
+    expect(documentTransaction).not.toHaveBeenCalled();
+    expect(
+      await screen.findByRole("button", {
+        name: "Open link: https://example.com",
+      }),
+    ).not.toBeNull();
+  });
+
   it("reverts read-state Escape even when the closing focus cascade blurs the field", async () => {
     const editor = makeEditor(LINK_CONTENT);
     setCaretAndRender(editor, true);
@@ -736,6 +764,30 @@ describe("ArtifactLinkPopover", () => {
     await act(() => vi.advanceTimersByTimeAsync(0));
     await act(() => vi.advanceTimersByTimeAsync(100));
     expect(screen.queryByRole("dialog", { name: "Link preview" })).toBeNull();
+  });
+
+  it("keeps the preview open when Escape reverts while the pointer is still over the card", async () => {
+    vi.useFakeTimers();
+    const editor = makeEditor(`${LINK_CONTENT}<p>Elsewhere</p>`);
+    editor.commands.setTextSelection(editor.state.doc.content.size - 2);
+    renderPopover(editor, true);
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    const anchor = editor.view.dom.querySelector("a");
+    if (anchor === null) throw new Error("Expected anchor");
+
+    fireEvent.pointerOver(anchor);
+    await act(() => vi.advanceTimersByTimeAsync(300));
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    const editCard = screen.getByRole("dialog", { name: "Edit link" });
+    fireEvent.pointerEnter(editCard);
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Link URL" }), {
+      key: "Escape",
+    });
+
+    expect(screen.getByRole("dialog", { name: "Link preview" })).not.toBeNull();
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    await act(() => vi.advanceTimersByTimeAsync(500));
+    expect(screen.getByRole("dialog", { name: "Link preview" })).not.toBeNull();
   });
 
   it("cancels a pending hover when selection changes before the delay", async () => {
