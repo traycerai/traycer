@@ -130,6 +130,11 @@ function parsePositiveIntegerArg(value: string): number | null {
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
+function parsePortArg(value: string): number | null {
+  const parsed = parsePositiveIntegerArg(value);
+  return parsed !== null && parsed <= 65_535 ? parsed : null;
+}
+
 function withRunner(
   cmd: CommanderCommand,
   build: (
@@ -724,9 +729,18 @@ function registerHostCommands(program: Command): void {
         "Stream new log lines as they are written (ignored with --json)",
       ),
     (opts) => {
-      const tailRaw =
-        typeof opts.tail === "string" ? Number.parseInt(opts.tail, 10) : 200;
-      const tailLines = Number.isFinite(tailRaw) && tailRaw > 0 ? tailRaw : 200;
+      const tailLines =
+        typeof opts.tail === "string"
+          ? parsePositiveIntegerArg(opts.tail)
+          : null;
+      if (tailLines === null) {
+        throw cliError({
+          code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+          message: "host logs: --tail must be a positive whole number",
+          details: { tail: opts.tail },
+          exitCode: 1,
+        });
+      }
       return buildHostLogsCommand({
         follow: opts.follow === true,
         tailLines,
@@ -743,13 +757,31 @@ function registerHostCommands(program: Command): void {
       .option("--pid <pid>", "PID of the conflicting process to terminate")
       .option("--port <port>", "Port the foreign process is bound to"),
     (opts) => {
-      const pidRaw =
-        typeof opts.pid === "string" ? Number.parseInt(opts.pid, 10) : null;
-      const portRaw =
-        typeof opts.port === "string" ? Number.parseInt(opts.port, 10) : null;
+      const pid =
+        typeof opts.pid === "string" ? parsePositiveIntegerArg(opts.pid) : null;
+      if (typeof opts.pid === "string" && pid === null) {
+        throw cliError({
+          code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+          message:
+            "host free-port-and-restart: --pid must be a positive whole number",
+          details: { pid: opts.pid },
+          exitCode: 1,
+        });
+      }
+      const port =
+        typeof opts.port === "string" ? parsePortArg(opts.port) : null;
+      if (typeof opts.port === "string" && port === null) {
+        throw cliError({
+          code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+          message:
+            "host free-port-and-restart: --port must be a whole number from 1 to 65535",
+          details: { port: opts.port },
+          exitCode: 1,
+        });
+      }
       return buildHostFreePortAndRestartCommand({
-        pid: pidRaw !== null && Number.isFinite(pidRaw) ? pidRaw : null,
-        port: portRaw !== null && Number.isFinite(portRaw) ? portRaw : null,
+        pid,
+        port,
       });
     },
   );
@@ -768,13 +800,16 @@ function registerHostCommands(program: Command): void {
     (opts) => {
       return async (ctx) => {
         const pid =
-          typeof opts.pid === "string" ? Number.parseInt(opts.pid, 10) : NaN;
+          typeof opts.pid === "string"
+            ? parsePositiveIntegerArg(opts.pid)
+            : null;
         const port =
-          typeof opts.port === "string" ? Number.parseInt(opts.port, 10) : NaN;
-        if (!Number.isFinite(pid) || !Number.isFinite(port)) {
+          typeof opts.port === "string" ? parsePortArg(opts.port) : null;
+        if (pid === null || port === null) {
           throw cliError({
             code: CLI_ERROR_CODES.INVALID_ARGUMENT,
-            message: "host free-port: --pid and --port must be integers",
+            message:
+              "host free-port: --pid must be a positive whole number and --port must be a whole number from 1 to 65535",
             details: { pid: opts.pid, port: opts.port },
             exitCode: 1,
           });

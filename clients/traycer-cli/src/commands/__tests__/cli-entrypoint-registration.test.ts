@@ -757,6 +757,116 @@ describe("traycer CLI entrypoint registration", () => {
     expect(thrown).not.toBeNull();
   });
 
+  // Same defect class as F9 (`host stamp-runtime --observed-pid`, above):
+  // `Number.parseInt` tolerates a leading-digit prefix and silently
+  // truncates/accepts values a real pid never is.
+  it.each([
+    ["42junk", "a trailing non-digit suffix parseInt silently truncates"],
+    ["42.9", "a decimal parseInt silently truncates to 42"],
+    ["0", "pid 0 is never a real process"],
+    ["-5", "a negative number is never a real pid"],
+  ])(
+    "host free-port rejects --pid %j (%s) with E_INVALID_ARGUMENT",
+    async (invalidPid) => {
+      mocks.freePortKillCalls.length = 0;
+
+      const program = buildProgram();
+      program.exitOverride();
+      let thrown: unknown = null;
+      try {
+        await program.parseAsync(
+          ["host", "free-port", "--pid", invalidPid, "--port", "51820"],
+          { from: "user" },
+        );
+      } catch (err) {
+        thrown = err;
+      }
+      expect(thrown).toMatchObject({ code: "E_INVALID_ARGUMENT" });
+      expect(mocks.freePortKillCalls).toHaveLength(0);
+    },
+  );
+
+  // Same defect class, plus the port-range bound: an out-of-range port
+  // silently coerced into a plausible-looking integer is exactly the
+  // "target the wrong process" failure this class of bug produces.
+  it.each([
+    ["42junk", "a trailing non-digit suffix parseInt silently truncates"],
+    ["70000", "a port above 65535 is never a real TCP/UDP port"],
+    ["0", "port 0 is never a real listening port"],
+    ["-5", "a negative number is never a real port"],
+  ])(
+    "host free-port rejects --port %j (%s) with E_INVALID_ARGUMENT",
+    async (invalidPort) => {
+      mocks.freePortKillCalls.length = 0;
+
+      const program = buildProgram();
+      program.exitOverride();
+      let thrown: unknown = null;
+      try {
+        await program.parseAsync(
+          ["host", "free-port", "--pid", "4242", "--port", invalidPort],
+          { from: "user" },
+        );
+      } catch (err) {
+        thrown = err;
+      }
+      expect(thrown).toMatchObject({ code: "E_INVALID_ARGUMENT" });
+      expect(mocks.freePortKillCalls).toHaveLength(0);
+    },
+  );
+
+  it("host free-port-and-restart rejects an explicitly invalid --pid with E_INVALID_ARGUMENT, never silently downgrading to restart-only", async () => {
+    const program = buildProgram();
+    program.exitOverride();
+    let thrown: unknown = null;
+    try {
+      await program.parseAsync(
+        ["host", "free-port-and-restart", "--pid", "42junk", "--port", "51820"],
+        { from: "user" },
+      );
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toMatchObject({ code: "E_INVALID_ARGUMENT" });
+  });
+
+  it("host free-port-and-restart rejects an out-of-range --port with E_INVALID_ARGUMENT", async () => {
+    const program = buildProgram();
+    program.exitOverride();
+    let thrown: unknown = null;
+    try {
+      await program.parseAsync(
+        ["host", "free-port-and-restart", "--pid", "4242", "--port", "70000"],
+        { from: "user" },
+      );
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toMatchObject({ code: "E_INVALID_ARGUMENT" });
+  });
+
+  it.each([
+    ["42junk", "a trailing non-digit suffix parseInt silently truncates"],
+    ["42.9", "a decimal parseInt silently truncates to 42"],
+    ["0", "zero trailing lines is not a valid tail count"],
+    ["-5", "a negative line count is never valid"],
+  ])(
+    "host logs rejects --tail %j (%s) with E_INVALID_ARGUMENT",
+    async (invalidTail) => {
+      const program = buildProgram();
+      program.exitOverride();
+      let thrown: unknown = null;
+      try {
+        await program.parseAsync(["host", "logs", "--tail", invalidTail], {
+          from: "user",
+        });
+      } catch (err) {
+        thrown = err;
+      }
+      expect(thrown).toMatchObject({ code: "E_INVALID_ARGUMENT" });
+    },
+  );
+
   it("cli finalize-upgrade is a hidden, internal-only command reachable from the CLI namespace", () => {
     // Structural check only - unlike the other hidden commands in this
     // file, `cli finalize-upgrade` genuinely touches the manifest/lock
