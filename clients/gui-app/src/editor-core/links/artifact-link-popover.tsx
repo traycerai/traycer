@@ -88,6 +88,15 @@ interface LinkTargetBase {
 interface EditLinkTarget extends LinkTargetBase {
   readonly mode: "edit";
   readonly trigger: "hover" | "caret";
+  /**
+   * Display substate for an already-open edit-mode target: `false` is the
+   * default READ state (text + URL shown read-only, with Open/Copy/Edit
+   * actions); `true` is the editable state (URL/text fields, Apply/Remove)
+   * reached via the card's Edit action. Both hover-open and caret-open start
+   * `false` - only `beginEditing` flips it to `true`, and reverting via
+   * Escape flips it back without closing the card.
+   */
+  readonly editing: boolean;
 }
 
 interface CreateLinkTarget extends LinkTargetBase {
@@ -348,6 +357,7 @@ function linkTargetAtPosition(
     ),
     mode: "edit",
     trigger: options.trigger,
+    editing: false,
     yBookmark: createYBookmark(editor, range, anchorDocPosition),
     anchorDocPosition,
   };
@@ -498,7 +508,7 @@ function createTargetFromSelection(editor: Editor): LinkTarget | null {
     existing.range.from <= from &&
     existing.range.to >= to
   ) {
-    return existing;
+    return { ...existing, editing: true };
   }
   const range = { from, to };
   if (!isSingleTextblockLinkRange(editor, range)) return null;
@@ -634,8 +644,11 @@ function LinkPreview(props: LinkPreviewProps) {
  * One trigger-aware floating surface for authored ProseMirror links.
  *
  * Viewer links participate in Tab order and activate with Enter. Editable
- * links deliberately use caret ownership instead: arrow/click navigation opens
- * this card, whose controls then provide the tabbable editing affordances.
+ * links deliberately use caret ownership instead: a plain or Cmd/Ctrl click
+ * navigates (matching a viewer click) without moving the caret, so this card
+ * only opens via hover or arrow-key caret entry - always starting in a
+ * read-only state with an Edit action that promotes it to the editable
+ * fields.
  */
 export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
   const {
@@ -654,6 +667,7 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
   const textDirtyRef = useRef(false);
   const expectedCaretPositionRef = useRef<number | null>(null);
   const focusEditUrlRef = useRef(false);
+  const revertibleEditRef = useRef(false);
   const cardRef = useRef<HTMLDivElement | null>(null);
   const urlInputRef = useRef<HTMLInputElement | null>(null);
   const showTimerRef = useRef<number | null>(null);
@@ -704,6 +718,7 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
       cancelHide();
       hrefDirtyRef.current = false;
       textDirtyRef.current = false;
+      revertibleEditRef.current = false;
       setLiveTarget(nextTarget);
       setHref(nextTarget.href);
       setDisplayText(nextTarget.text);
@@ -717,8 +732,19 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
     if (!editable || current?.mode !== "edit") return;
     cancelHide();
     focusEditUrlRef.current = true;
-    setLiveTarget({ ...current, trigger: "caret" });
+    revertibleEditRef.current = true;
+    setLiveTarget({ ...current, trigger: "caret", editing: true });
   }, [cancelHide, editable, setLiveTarget]);
+
+  const revertDraft = useCallback((): void => {
+    const current = targetRef.current;
+    if (current === null || current.mode !== "edit") return;
+    hrefDirtyRef.current = false;
+    textDirtyRef.current = false;
+    setHref(current.href);
+    setDisplayText(current.text);
+    setLiveTarget({ ...current, editing: false });
+  }, [setLiveTarget]);
 
   const expectCaretPosition = useCallback((position: number): void => {
     expectedCaretPositionRef.current = position;
@@ -803,10 +829,12 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
         anchorPosition(editor, anchor),
       );
       if (rawHref === null) return;
-      if (!routeAuxiliary && editable && !event.metaKey && !event.ctrlKey) {
-        if (classifyHref(rawHref).kind === "default") event.preventDefault();
-        return;
-      }
+      // Plain and modifier clicks route identically now: a navigable href
+      // (external/file) always drives the opener via `routeHref` below; a
+      // non-navigable href (hash, unclassified schemes) falls through as
+      // "default" and, outside the editable+modifier+hash carve-out just
+      // below, does nothing - letting ProseMirror's own mousedown handling
+      // (unblocked by `handleMouseDown` for those hrefs) place the caret.
       const result = routeHref(rawHref);
       if (result === "default") {
         const normalizedHref = rawHref.trim();
@@ -839,10 +867,16 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
   const handleMouseDown = useEffectEvent((event: MouseEvent): void => {
     const anchor = linkAnchor(event.target);
     if (anchor === null) return;
-    const modifierPrimary =
-      event.button === 0 && (event.metaKey || event.ctrlKey);
+    const primaryClick = event.button === 0;
+    const modifierPrimary = primaryClick && (event.metaKey || event.ctrlKey);
     const middleClick = event.button === 1;
-    if (!modifierPrimary && !middleClick) return;
+    // A plain (unmodified) primary click on an editable link now navigates
+    // just like a Cmd/Ctrl click, so it needs the SAME capture-phase
+    // caret-preservation: block ProseMirror's own bubble-phase mousedown
+    // handler from placing the caret before `routeAnchor` decides to open
+    // the link on `click`.
+    const plainEditableClick = editable && primaryClick && !modifierPrimary;
+    if (!modifierPrimary && !middleClick && !plainEditableClick) return;
     const rawHref = linkHrefAtPosition(editor, anchorPosition(editor, anchor));
     if (rawHref === null) return;
     const classified = classifyHref(rawHref);
@@ -1032,6 +1066,15 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
   const handleCardKeyDown = useEffectEvent((event: KeyboardEvent): void => {
     if (event.key !== "Escape") return;
     event.preventDefault();
+    const current = targetRef.current;
+    if (
+      current?.mode === "edit" &&
+      current.editing &&
+      revertibleEditRef.current
+    ) {
+      revertDraft();
+      return;
+    }
     dismissAndFocusEditor();
   });
 
@@ -1230,8 +1273,7 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
   const classifiedDraftHref = classifyHref(href);
   const unusualScheme =
     href.trim().length > 0 && classifiedDraftHref.kind === "ignore";
-  const compact =
-    target.mode === "edit" && (target.trigger === "hover" || !editable);
+  const compact = target.mode === "edit" && (!editable || !target.editing);
   const surfaceLabel = compact ? "Link preview" : "Edit link";
 
   const handleSurfaceBlur = (event: ReactFocusEvent<HTMLFormElement>): void => {
