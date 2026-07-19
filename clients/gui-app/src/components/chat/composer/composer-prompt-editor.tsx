@@ -3,6 +3,7 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -80,6 +81,7 @@ export interface ComposerPromptEditorProps {
   readonly isActive: boolean;
   readonly disabled: boolean;
   readonly slashProviderId: GuiHarnessId;
+  readonly hasPastedImageBytes: ((hash: string) => boolean) | null;
   readonly onSnapshot: (
     content: JsonContent,
     selection: { from: number; to: number },
@@ -101,6 +103,16 @@ export interface ComposerPromptEditorProps {
   readonly ref?: Ref<ComposerPromptEditorHandle>;
 }
 
+function usePastedImageBytesPresenceGetter(
+  hasPastedImageBytes: ((hash: string) => boolean) | null,
+): () => ((hash: string) => boolean) | null {
+  const latest = useRef(hasPastedImageBytes);
+  useLayoutEffect(() => {
+    latest.current = hasPastedImageBytes;
+  }, [hasPastedImageBytes]);
+  return useCallback(() => latest.current, []);
+}
+
 function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
   const {
     initialContent,
@@ -112,6 +124,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     isActive,
     disabled,
     slashProviderId,
+    hasPastedImageBytes,
     onSnapshot,
     onSubmit,
     onPaste,
@@ -153,7 +166,8 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
       },
     }),
   );
-
+  const getHasPastedImageBytes =
+    usePastedImageBytesPresenceGetter(hasPastedImageBytes);
   const extensions = useMemo(
     () =>
       buildComposerExtensions({
@@ -161,8 +175,15 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
         placeholder,
         onSubmit: stableSubmitHolder,
         slashProviderId,
+        getHasPastedImageBytes,
       }),
-    [pickerStore, placeholder, slashProviderId, stableSubmitHolder],
+    [
+      getHasPastedImageBytes,
+      pickerStore,
+      placeholder,
+      slashProviderId,
+      stableSubmitHolder,
+    ],
   );
 
   const editorAttributesObject = useMemo(
