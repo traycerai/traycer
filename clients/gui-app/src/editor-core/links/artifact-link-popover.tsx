@@ -870,6 +870,17 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
 
   const routeAnchor = useEffectEvent(
     (event: MouseEvent, routeAuxiliary: boolean): void => {
+      // Shift+click extends ProseMirror selection; never navigate from it on
+      // editable surfaces (Cmd/Ctrl+Shift still routes like a modifier click).
+      if (
+        editable &&
+        !routeAuxiliary &&
+        event.shiftKey &&
+        !event.metaKey &&
+        !event.ctrlKey
+      ) {
+        return;
+      }
       const anchor = linkAnchor(event.target);
       if (anchor === null) return;
       const rawHref = linkHrefAtPosition(
@@ -934,8 +945,9 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
     // just like a Cmd/Ctrl click, so it needs the SAME capture-phase
     // caret-preservation: block ProseMirror's own bubble-phase mousedown
     // handler from placing the caret before `routeAnchor` decides to open
-    // the link on `click`.
-    const plainEditableClick = editable && primaryClick && !modifierPrimary;
+    // the link on `click`. Shift+click is excluded so selection can extend.
+    const plainEditableClick =
+      editable && primaryClick && !modifierPrimary && !event.shiftKey;
     if (!modifierPrimary && !middleClick && !plainEditableClick) return;
     const rawHref = linkHrefAtPosition(editor, anchorPosition(editor, anchor));
     if (rawHref === null) return;

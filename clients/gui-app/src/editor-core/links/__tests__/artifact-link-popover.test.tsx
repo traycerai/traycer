@@ -1531,6 +1531,23 @@ describe("ArtifactLinkPopover", () => {
     expect(screen.queryByRole("dialog", { name: "Link preview" })).toBeNull();
   });
 
+  it("lets Shift+click extend selection on an editable link instead of navigating", () => {
+    const editor = makeEditor(LINK_CONTENT);
+    editor.commands.setTextSelection(1);
+    const { openLink } = renderPopover(editor, true);
+    const anchor = editor.view.dom.querySelector("a");
+    if (anchor === null) throw new Error("Expected anchor");
+
+    expect(fireEvent.mouseDown(anchor, { button: 0, shiftKey: true })).toBe(
+      true,
+    );
+    fireEvent.mouseUp(anchor, { button: 0, shiftKey: true });
+    fireEvent.click(anchor, { shiftKey: true });
+
+    expect(openLink).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog", { name: "Link preview" })).toBeNull();
+  });
+
   it("cancels a pending hover-show when a plain click navigates the link first", async () => {
     vi.useFakeTimers();
     const editor = makeEditor(`${LINK_CONTENT}<p>Elsewhere</p>`);
