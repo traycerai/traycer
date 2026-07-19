@@ -40,7 +40,18 @@ export type HostProvisionAction =
 export interface HostProvisionServiceLifecycle {
   readonly priorServiceState: ServiceState;
   readonly stoppedBeforeSwap: boolean;
-  readonly postSwapAction: "install" | "none";
+  // Wider than `service/install-lifecycle.ts`'s own
+  // `ServiceInstallLifecycleState.postSwapAction` (`"install" | "none"` -
+  // narrowed there because a binary swap must never plain start/restart a
+  // cached macOS launchd definition). The install branch's value here is
+  // still transitively constrained to that narrower set (it's copied
+  // straight from the lifecycle handle below), but `runServiceRegister`/
+  // `runStart` never touch a swap at all - `"install"` accurately reports
+  // a first-time register+start, and `"start"` accurately reports a plain
+  // start of an already-correctly-configured, already-registered service.
+  // Neither is the unsafe post-swap case the narrower type guards against;
+  // `"restart"` is omitted because nothing on this path ever produces it.
+  readonly postSwapAction: "start" | "install" | "none";
   readonly postSwapError: string | null;
 }
 

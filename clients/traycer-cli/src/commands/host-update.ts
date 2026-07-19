@@ -221,8 +221,28 @@ function projectApplied(
     serviceLifecycle:
       outcome.serviceLifecycle === null
         ? NO_SERVICE_ACTION_LIFECYCLE
-        : { ...outcome.serviceLifecycle, postSwapError: outcome.postSwapError },
+        : {
+            ...outcome.serviceLifecycle,
+            priorServiceState: toLegacyPriorServiceState(
+              outcome.serviceLifecycle.priorServiceState,
+            ),
+            postSwapError: outcome.postSwapError,
+          },
   };
+}
+
+// `LegacyHostUpdateServiceLifecycle` is a pinned, frozen wire shape (see
+// the module doc comment) - it must not silently grow to track new
+// `ServiceState` variants. `externally-managed` (macOS SMAppService-owned
+// label, added after this shape was pinned) has no legacy equivalent;
+// degrade it to `not-installed` exactly as Desktop's own
+// `projectInstallResult` reader already degrades any `priorServiceState`
+// value outside its own three-way union, so the projected wire value
+// matches what an old-CLI payload would already read as.
+function toLegacyPriorServiceState(
+  state: "running" | "stopped" | "not-installed" | "externally-managed",
+): "running" | "stopped" | "not-installed" {
+  return state === "externally-managed" ? "not-installed" : state;
 }
 
 function humanSummary(legacy: LegacyHostUpdateResult): string {

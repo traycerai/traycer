@@ -119,7 +119,7 @@ function sampleLifecycleHandle(): ServiceInstallLifecycleHandle {
     state: {
       priorState: "running",
       stoppedBeforeSwap: true,
-      postSwapAction: "restart",
+      postSwapAction: "install",
       postSwapError: null,
     },
     lifecycle: {
