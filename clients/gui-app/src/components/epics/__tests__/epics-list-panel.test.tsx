@@ -607,7 +607,7 @@ describe("<EpicsListPanel />", () => {
       "epics-list-row-background-activity-epic-from-history",
     );
     expect(backgroundIcon.getAttribute("class")).toContain(
-      "lucide-calendar-clock",
+      "lucide-message-square-clock",
     );
     expect(
       screen.queryByTitle("Background activity — agent idle"),
