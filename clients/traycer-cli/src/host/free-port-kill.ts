@@ -3,15 +3,18 @@ import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 
 // Bounded timeout for the `lsof`/`netstat` ownership probes below. Both now
 // run entirely inside `cli-lock` (Tech Plan, "Lifecycle lock coverage") -
-// an unbounded `execFileAsync` would let a wedged/hijacked probe binary
-// hold the lock indefinitely: the holder stays positively alive, so
+// an unbounded subprocess probe would let a wedged/hijacked binary hold the
+// lock indefinitely: the holder stays positively alive, so
 // ticket-1's hardened stale-lock breaking correctly refuses to break it,
 // and every other host mutation wedges until a human kills the process by
 // hand. 5s is generous for a local `lsof`/`netstat` invocation (normally
-// sub-100ms) while still bounding the worst case to something a caller
+// sub-100ms) while still bounding the time and captured-output cost a caller
 // waiting on `cli-lock` can tolerate.
 export const PORT_PROBE_TIMEOUT_MS = 5_000;
 const PORT_PROBE_KILL_GRACE_MS = 500;
+// Matches Node's execFile default maxBuffer. The time deadline cannot cap a
+// hostile probe's memory growth, so stdout and stderr share this byte budget.
+const PORT_PROBE_MAX_OUTPUT_BYTES = 1024 * 1024;
 
 // Shared by `host free-port-and-restart` and `host free-port` (Host
 // Update Layer Redesign Tech Plan, "Lifecycle lock coverage") - the
@@ -62,13 +65,15 @@ export async function killConflictingPortOwner(
   }
   const ownership = await pidOwnsPort(opts.pid, opts.port);
   if (!ownership.owns) {
-    // Disambiguate four failure modes that all surface as
+    // Disambiguate five failure modes that all surface as
     // !ownership.owns so the operator sees the actionable message:
     //   - probe="no-listener" - port has no listener; SIGTERMing the
     //     user-supplied pid would kill an unrelated process.
     //   - probe="timeout" - the probe binary hung past
     //     `PORT_PROBE_TIMEOUT_MS`; a conservative "could not determine",
     //     never a silent "no listener" or a silent "owns".
+    //   - probe="output-overflow" - the probe exceeded the bounded output
+    //     budget; refuse to act because its ownership result is incomplete.
     //   - probe="unsupported" - we couldn't verify (binary missing or
     //     unexpected error); refuse to act blind.
     //   - default - someone other than opts.pid is the listener.
@@ -77,11 +82,13 @@ export async function killConflictingPortOwner(
         ? `${opts.commandName}: port ${opts.port} has no listener; nothing to free`
         : ownership.probe === "timeout"
           ? `${opts.commandName}: could not verify pid ${opts.pid} owns port ${opts.port} (probe timed out after ${PORT_PROBE_TIMEOUT_MS}ms); refusing to kill blind`
-          : ownership.probe === "unsupported"
-            ? `${opts.commandName}: could not verify pid ${opts.pid} owns port ${opts.port} (probe unsupported on this host); refusing to kill blind`
-            : ownership.actualPid !== null
-              ? `${opts.commandName}: pid ${opts.pid} does not own port ${opts.port} (port ${opts.port} is held by pid ${ownership.actualPid})`
-              : `${opts.commandName}: pid ${opts.pid} does not own port ${opts.port} (no process holds the port)`;
+          : ownership.probe === "output-overflow"
+            ? `${opts.commandName}: could not verify pid ${opts.pid} owns port ${opts.port} (probe exceeded ${PORT_PROBE_MAX_OUTPUT_BYTES} output bytes); refusing to kill blind`
+            : ownership.probe === "unsupported"
+              ? `${opts.commandName}: could not verify pid ${opts.pid} owns port ${opts.port} (probe unsupported on this host); refusing to kill blind`
+              : ownership.actualPid !== null
+                ? `${opts.commandName}: pid ${opts.pid} does not own port ${opts.port} (port ${opts.port} is held by pid ${ownership.actualPid})`
+                : `${opts.commandName}: pid ${opts.pid} does not own port ${opts.port} (no process holds the port)`;
     throw cliError({
       code: CLI_ERROR_CODES.INVALID_ARGUMENT,
       message,
@@ -109,7 +116,12 @@ interface PortOwnership {
   readonly owns: boolean;
   readonly actualPid: number | null;
   readonly probe:
-    "lsof" | "netstat" | "unsupported" | "no-listener" | "timeout";
+    | "lsof"
+    | "netstat"
+    | "unsupported"
+    | "no-listener"
+    | "timeout"
+    | "output-overflow";
 }
 
 // Probe whether `pid` is the listener on `port`. POSIX uses `lsof -nP -iTCP:<port> -sTCP:LISTEN`;
@@ -135,6 +147,7 @@ interface ExecFileError {
   readonly stdout: string | undefined;
   readonly stderr: string | undefined;
   readonly killed: boolean;
+  readonly outputOverflow: boolean;
 }
 
 interface ProbeExecutionResult {
@@ -147,6 +160,8 @@ function terminateProbeProcessTree(
 ): void {
   if (child.pid === undefined) return;
   if (process.platform === "win32") {
+    // Windows netstat.exe does not fork. This intentionally terminates only
+    // the direct child; POSIX gets process-group teardown below for wrappers.
     child.kill(signal);
     return;
   }
@@ -171,6 +186,7 @@ function executePortProbe(
     });
     let stdout = "";
     let stderr = "";
+    let outputBytes = 0;
     let timedOut = false;
     let settled = false;
     let timeoutTimer: NodeJS.Timeout | null = null;
@@ -194,13 +210,40 @@ function executePortProbe(
       stdout,
       stderr,
       killed: true,
+      outputOverflow: false,
     });
 
+    const outputOverflowError = (): ExecFileError => ({
+      code: undefined,
+      signal: "SIGKILL",
+      stdout,
+      stderr,
+      killed: true,
+      outputOverflow: true,
+    });
+    const appendOutput = (
+      destination: "stdout" | "stderr",
+      chunk: Buffer,
+    ): void => {
+      if (settled) return;
+      outputBytes += chunk.length;
+      if (outputBytes > PORT_PROBE_MAX_OUTPUT_BYTES) {
+        terminateProbeProcessTree(child, "SIGKILL");
+        settle(() => reject(outputOverflowError()));
+        return;
+      }
+      if (destination === "stdout") {
+        stdout += chunk.toString();
+        return;
+      }
+      stderr += chunk.toString();
+    };
+
     child.stdout?.on("data", (chunk) => {
-      stdout += chunk.toString();
+      appendOutput("stdout", chunk);
     });
     child.stderr?.on("data", (chunk) => {
-      stderr += chunk.toString();
+      appendOutput("stderr", chunk);
     });
     child.once("error", (err) => {
       settle(() => reject(err));
@@ -221,6 +264,7 @@ function executePortProbe(
           stdout,
           stderr,
           killed: false,
+          outputOverflow: false,
         } satisfies ExecFileError),
       );
     });
@@ -246,6 +290,7 @@ function readExecFileError(err: unknown): ExecFileError {
       stdout: undefined,
       stderr: undefined,
       killed: false,
+      outputOverflow: false,
     };
   }
   const obj = err as Record<string, unknown>;
@@ -257,7 +302,9 @@ function readExecFileError(err: unknown): ExecFileError {
   const stdout = typeof obj.stdout === "string" ? obj.stdout : undefined;
   const stderr = typeof obj.stderr === "string" ? obj.stderr : undefined;
   const killed = typeof obj.killed === "boolean" ? obj.killed : false;
-  return { code, signal, stdout, stderr, killed };
+  const outputOverflow =
+    typeof obj.outputOverflow === "boolean" ? obj.outputOverflow : false;
+  return { code, signal, stdout, stderr, killed, outputOverflow };
 }
 
 async function posixPidOwnsPort(
@@ -275,6 +322,9 @@ async function posixPidOwnsPort(
     stdout = result.stdout;
   } catch (err) {
     const info = readExecFileError(err);
+    if (info.outputOverflow) {
+      return { owns: false, actualPid: null, probe: "output-overflow" };
+    }
     // `killed` marks our hard deadline: `lsof` exceeded
     // `PORT_PROBE_TIMEOUT_MS` and was escalated to SIGKILL. Check it before
     // the ENOENT/no-listener heuristics so a hang can never be misread as
@@ -328,12 +378,21 @@ async function netstatListenersForProto(proto: "TCP" | "TCPv6"): Promise<{
   readonly stdout: string;
   readonly available: boolean;
   readonly timedOut: boolean;
+  readonly outputOverflow: boolean;
 }> {
   try {
     const { stdout } = await executePortProbe("netstat", ["-ano", "-p", proto]);
-    return { stdout, available: true, timedOut: false };
+    return { stdout, available: true, timedOut: false, outputOverflow: false };
   } catch (err) {
     const info = readExecFileError(err);
+    if (info.outputOverflow) {
+      return {
+        stdout: "",
+        available: false,
+        timedOut: false,
+        outputOverflow: true,
+      };
+    }
     // A hang past `PORT_PROBE_TIMEOUT_MS` must never fall into the
     // "TCPv6 disabled" leniency below - that path silently treats the
     // proto as "ran, zero listeners", which would let a genuinely
@@ -342,10 +401,20 @@ async function netstatListenersForProto(proto: "TCP" | "TCPv6"): Promise<{
     // it distinctly so the caller returns a "could not determine", never
     // a silent success.
     if (info.killed) {
-      return { stdout: "", available: false, timedOut: true };
+      return {
+        stdout: "",
+        available: false,
+        timedOut: true,
+        outputOverflow: false,
+      };
     }
     if (info.code === "ENOENT") {
-      return { stdout: "", available: false, timedOut: false };
+      return {
+        stdout: "",
+        available: false,
+        timedOut: false,
+        outputOverflow: false,
+      };
     }
     // Some hosts disable TCPv6 entirely - `netstat -p TCPv6` exits
     // non-zero but TCP still works. Treat as "no data for this proto"
@@ -354,6 +423,7 @@ async function netstatListenersForProto(proto: "TCP" | "TCPv6"): Promise<{
       stdout: typeof info.stdout === "string" ? info.stdout : "",
       available: true,
       timedOut: false,
+      outputOverflow: false,
     };
   }
 }
@@ -364,6 +434,9 @@ async function windowsPidOwnsPort(
 ): Promise<PortOwnership> {
   const ipv4 = await netstatListenersForProto("TCP");
   const ipv6 = await netstatListenersForProto("TCPv6");
+  if (ipv4.outputOverflow || ipv6.outputOverflow) {
+    return { owns: false, actualPid: null, probe: "output-overflow" };
+  }
   if (ipv4.timedOut || ipv6.timedOut) {
     return { owns: false, actualPid: null, probe: "timeout" };
   }

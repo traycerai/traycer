@@ -3,7 +3,6 @@ import {
   commitHostInstallSource,
   discardStagedHostInstallSource,
   stageHostInstallSource,
-  type InstallHostLifecycle,
   type InstallSourceArg,
   type StagedHostInstallSource,
 } from "../installer";

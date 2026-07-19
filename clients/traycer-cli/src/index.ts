@@ -74,6 +74,7 @@ import { whoamiCommand } from "./commands/whoami";
 import { CLI_ERROR_CODES, cliError } from "./runner/errors";
 import { createCliLogger, errorFromUnknown, type ILogger } from "./logger";
 import { addRunnerFlags, extractRunnerFlags } from "./runner/commander-flags";
+import { parsePositiveIntegerArg } from "./runner/parse-positive-integer-arg";
 import { runCommand, type CommandFn } from "./runner/runner";
 import { readonlyEnv } from "./runner/runtime";
 
@@ -117,17 +118,6 @@ function expectRequiredPositional(
     details: null,
     exitCode: 1,
   });
-}
-
-// Strict positive-integer CLI arg parser: rejects anything that isn't a
-// clean run of decimal digits BEFORE parsing, so `Number.parseInt`'s
-// leading-prefix tolerance ("42junk" -> 42, "42.9" -> 42) and its silent
-// acceptance of "0" / negatives (both pass `Number.isFinite`) never
-// smuggle an invalid pid through as a plausible-looking integer.
-function parsePositiveIntegerArg(value: string): number | null {
-  if (!/^[1-9]\d*$/.test(value)) return null;
-  const parsed = Number.parseInt(value, 10);
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
 function parsePortArg(value: string): number | null {

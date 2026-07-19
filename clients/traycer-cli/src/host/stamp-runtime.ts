@@ -9,11 +9,19 @@ import { readLiveProcessStartTimeMs } from "../store/process-identity";
 import { readHostPidMetadata } from "./pid-metadata";
 
 // pid.json's `startedAt` is the time the host published readiness, not its OS
-// process-creation time. `ps` can round the latter by a second, so allow a
-// small clock/probe-resolution skew while preserving the ordering invariant:
-// the real publisher starts before it publishes, while a recycled PID starts
-// after the old publication timestamp.
-const PROCESS_START_PUBLICATION_SKEW_MS = 2_000;
+// process-creation time. On POSIX, `ps -o etime=` truncates elapsed time to
+// whole seconds; reconstructing a wall-clock start from that value can land
+// nearly 1s AFTER the real start. Keep a 250ms scheduling/read margin beyond
+// that known resolution limit.
+export const PROCESS_START_PUBLICATION_ALLOWANCE_MS = 1_250;
+
+// Deliberate residual, matching the ticket-1 break-lock availability trade:
+// a PID recycled onto a process that starts within this allowance after the
+// observed publication can be accepted and stamped. A zero allowance would
+// routinely false-supersede fast genuine publishers because of `ps`'s
+// truncation, stranding their records in activationUnknown. Closing the rare
+// false-accept requires a process-asserted instance token in pid.json, which
+// is a traycer-host format change and deliberately out of scope here.
 
 // `host stamp-runtime` (hidden, internal) - the guarded compare-and-set
 // that closes the `activationUnknown` debt (Host Update Layer Redesign
@@ -130,7 +138,7 @@ export async function stampRuntime(
   if (
     Number.isNaN(publishedAtMs) ||
     processStartedAtMs === null ||
-    processStartedAtMs > publishedAtMs + PROCESS_START_PUBLICATION_SKEW_MS
+    processStartedAtMs > publishedAtMs + PROCESS_START_PUBLICATION_ALLOWANCE_MS
   ) {
     logger.info("Host stamp-runtime superseded - pid not live", {
       environment: opts.environment,

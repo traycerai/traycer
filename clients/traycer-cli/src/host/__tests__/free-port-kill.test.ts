@@ -20,6 +20,7 @@ describe.skipIf(process.platform === "win32")(
   "killConflictingPortOwner - bounded probe timeout (Finding 7)",
   () => {
     let binDir: string;
+    let fakeLsof: string;
     let originalPath: string | undefined;
 
     beforeEach(() => {
@@ -28,7 +29,7 @@ describe.skipIf(process.platform === "win32")(
       // below so the probe resolves to this script instead of the system
       // binary. It deliberately ignores SIGTERM, so only the hard SIGKILL
       // escalation can release the CLI lock.
-      const fakeLsof = join(binDir, "lsof");
+      fakeLsof = join(binDir, "lsof");
       writeFileSync(
         fakeLsof,
         "#!/bin/sh\ntrap '' TERM\nwhile true; do /bin/sleep 1; done\n",
@@ -67,6 +68,27 @@ describe.skipIf(process.platform === "win32")(
         expect(elapsedMs).toBeLessThan(PORT_PROBE_TIMEOUT_MS + 3_000);
       },
       PORT_PROBE_TIMEOUT_MS + 5_000,
+    );
+
+    it(
+      "kills an unbounded-output probe at the output budget instead of growing memory until the deadline",
+      async () => {
+        writeFileSync(fakeLsof, "#!/bin/sh\nexec yes x\n");
+        const start = Date.now();
+
+        await expect(
+          killConflictingPortOwner({
+            pid: process.pid,
+            port: 65535,
+            commandName: "host free-port",
+          }),
+        ).rejects.toMatchObject({
+          details: { probe: "output-overflow" },
+        });
+
+        expect(Date.now() - start).toBeLessThan(PORT_PROBE_TIMEOUT_MS);
+      },
+      PORT_PROBE_TIMEOUT_MS,
     );
   },
 );

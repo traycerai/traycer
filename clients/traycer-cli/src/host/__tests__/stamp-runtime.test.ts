@@ -65,7 +65,10 @@ vi.mock("../../store/paths", async () => {
   };
 });
 
-import { stampRuntime } from "../stamp-runtime";
+import {
+  PROCESS_START_PUBLICATION_ALLOWANCE_MS,
+  stampRuntime,
+} from "../stamp-runtime";
 import { buildHostInstallCommand } from "../../commands/host-install";
 import { noopLogger } from "../../logger";
 import {
@@ -445,7 +448,7 @@ describe.skipIf(process.platform === "win32")(
       );
     }, 10_000);
 
-    it("rejects a live recycled PID whose OS start is after the observed publication", async () => {
+    it("accepts a start exactly at the bounded publication allowance", async () => {
       const installed = await writeInstall({});
       const live = await spawnLiveProcess();
       const pid = writePid({
@@ -454,7 +457,38 @@ describe.skipIf(process.platform === "win32")(
       });
       const publishedAtMs = Date.parse(pid.startedAt);
       const previousReader = __setProcessStartTimeReaderForTest(
-        () => publishedAtMs + 10_000,
+        () => publishedAtMs + PROCESS_START_PUBLICATION_ALLOWANCE_MS,
+      );
+
+      try {
+        await expect(
+          stampRuntime({
+            environment: ENV,
+            expectedInstallGeneration: generationFor(installed),
+            observedPid: pid.pid,
+            observedStartedAt: pid.startedAt,
+            observedRuntimeVersion: pid.version,
+          }),
+        ).resolves.toMatchObject({ outcome: "stamped" });
+      } finally {
+        __setProcessStartTimeReaderForTest(previousReader);
+      }
+
+      expect((await readHostInstallRecord(ENV))?.runtimeVersion).toBe(
+        pid.version,
+      );
+    });
+
+    it("rejects a start one millisecond beyond the publication allowance", async () => {
+      const installed = await writeInstall({});
+      const live = await spawnLiveProcess();
+      const pid = writePid({
+        pid: live.pid,
+        startedAt: new Date().toISOString(),
+      });
+      const publishedAtMs = Date.parse(pid.startedAt);
+      const previousReader = __setProcessStartTimeReaderForTest(
+        () => publishedAtMs + PROCESS_START_PUBLICATION_ALLOWANCE_MS + 1,
       );
 
       try {
@@ -470,6 +504,33 @@ describe.skipIf(process.platform === "win32")(
       } finally {
         __setProcessStartTimeReaderForTest(previousReader);
       }
+
+      expect((await readHostInstallRecord(ENV))?.runtimeVersion).toBeNull();
+    });
+
+    it("rejects a live PID against a stale publication timestamp using the real OS-start reader", async () => {
+      const installed = await writeInstall({});
+      const live = await spawnLiveProcess();
+      const processStartedAtMs = readProcessStartTimeMs(live.pid);
+      if (processStartedAtMs === null) {
+        throw new Error("could not reread the spawned process's start time");
+      }
+      const pid = writePid({
+        pid: live.pid,
+        startedAt: new Date(
+          processStartedAtMs - PROCESS_START_PUBLICATION_ALLOWANCE_MS - 1,
+        ).toISOString(),
+      });
+
+      await expect(
+        stampRuntime({
+          environment: ENV,
+          expectedInstallGeneration: generationFor(installed),
+          observedPid: pid.pid,
+          observedStartedAt: pid.startedAt,
+          observedRuntimeVersion: pid.version,
+        }),
+      ).resolves.toEqual({ outcome: "superseded", reason: "pid-not-live" });
 
       expect((await readHostInstallRecord(ENV))?.runtimeVersion).toBeNull();
     });
@@ -592,8 +653,17 @@ describe.skipIf(process.platform === "win32")(
         ifIdle: false,
       })(commandContext());
       const pid = writePid({});
-      const expectedGenerationFromA =
-        installGenerationFromCommandResult(commandAResult);
+      const recordA = await readHostInstallRecord(ENV);
+      if (recordA === null) {
+        throw new Error("command A did not write an install record");
+      }
+      const canonicalGenerationA = generationFor(recordA);
+      // This independently checks the command's returned attestation before
+      // B lands, but deliberately does not retain the result as stamp input.
+      // The consumer below must read from commandAResult only after the race.
+      expect(commandAResult.data).toMatchObject({
+        installGeneration: canonicalGenerationA,
+      });
 
       // Before the caller gets to call stampRuntime, a REAL separate
       // process performs a terminal bytes-only install - install B -
@@ -603,10 +673,18 @@ describe.skipIf(process.platform === "win32")(
       const worker = spawnTerminalInstallWorker(sourceB);
       const exitCode = await waitForExit(worker);
       expect(exitCode).toBe(0);
+      const recordB = await readHostInstallRecord(ENV);
+      if (recordB === null) {
+        throw new Error("command B did not write an install record");
+      }
+      expect(generationFor(recordB)).not.toBe(canonicalGenerationA);
 
       // The caller calls stampRuntime with the generation it ATTESTED
-      // from A's own command result - never re-reading the disk after
-      // the race window.
+      // from A's own command result only AFTER B landed - never a post-race
+      // disk read substituted for the command's attested value.
+      const expectedGenerationFromA =
+        installGenerationFromCommandResult(commandAResult);
+      expect(expectedGenerationFromA).toBe(canonicalGenerationA);
       const result = await stampRuntime({
         environment: ENV,
         expectedInstallGeneration: expectedGenerationFromA,
