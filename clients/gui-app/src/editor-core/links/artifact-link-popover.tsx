@@ -687,6 +687,9 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
   const urlInputRef = useRef<HTMLInputElement | null>(null);
   const showTimerRef = useRef<number | null>(null);
   const hideTimerRef = useRef<number | null>(null);
+  // Filled after `commit` is declared so `routeAnchor` can flush a dirty
+  // draft before close without reading commit before initialization.
+  const commitRef = useRef<() => void>(() => undefined);
   const fieldId = useId();
   const urlFieldId = `${fieldId}-url`;
   const displayFieldId = `${fieldId}-display`;
@@ -868,6 +871,20 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
     scheduleHoverHide();
   });
 
+  const dismissCardAfterRoutedClick = useEffectEvent((): void => {
+    // Drop any open card / pending hover-show after a handled click. If an
+    // editable form is open, mousedown suppression also prevented field blur,
+    // so commit the live draft first (blur-parity) rather than silently
+    // discarding via close(). Create mode always has a form; edit mode only
+    // when `editing`.
+    const current = targetRef.current;
+    if (current !== null && (current.mode !== "edit" || current.editing)) {
+      commitRef.current();
+      return;
+    }
+    close();
+  });
+
   const routeAnchor = useEffectEvent(
     (event: MouseEvent, routeAuxiliary: boolean): void => {
       // Shift+click extends ProseMirror selection; never navigate from it on
@@ -898,15 +915,6 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
       // neither navigate nor move the caret, and the link stays reachable
       // for editing through the hover card.
       const result = routeHref(rawHref);
-      if (result !== "default") {
-        // The click itself resolves the link (navigation or deliberate
-        // suppression). Drop any open card and any pending hover-show so a
-        // prior preview cannot linger after the user has already acted on a
-        // document link - including when they plain-click a different link
-        // while another card is open (mousedown suppression prevents the
-        // selection path from clearing it).
-        close();
-      }
       if (result === "default") {
         const normalizedHref = rawHref.trim();
         if (
@@ -921,6 +929,7 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
         }
         return;
       }
+      dismissCardAfterRoutedClick();
       event.preventDefault();
       event.stopPropagation();
     },
@@ -1340,6 +1349,10 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
     onOpenChange,
     setLiveTarget,
   ]);
+
+  useLayoutEffect(() => {
+    commitRef.current = commit;
+  }, [commit]);
 
   const remove = useCallback((): void => {
     const current = targetRef.current;

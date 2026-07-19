@@ -1600,6 +1600,36 @@ describe("ArtifactLinkPopover", () => {
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
+  it("commits a dirty edit before a plain click navigates a different link", async () => {
+    const editor = makeEditor(
+      '<p><a href="https://example.com">Example</a> <a href="https://traycer.ai">Traycer</a></p>',
+    );
+    editor.commands.setTextSelection(2);
+    const { openLink } = renderPopover(editor, true);
+    await screen.findByRole("dialog", { name: "Link preview" });
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    const url = await screen.findByRole("textbox", { name: "Link URL" });
+    fireEvent.change(url, { target: { value: "https://changed.example" } });
+
+    const anchors = editor.view.dom.querySelectorAll("a");
+    if (anchors.length < 2) throw new Error("Expected two anchors");
+    const second = anchors[1];
+
+    fireEvent.mouseDown(second, { button: 0 });
+    fireEvent.mouseUp(second, { button: 0 });
+    fireEvent.click(second);
+
+    expect(openLink).toHaveBeenCalledWith({
+      kind: "external",
+      url: "https://traycer.ai",
+    });
+    expect(editor.view.dom.querySelector("a")?.dataset.linkHref).toBe(
+      "https://changed.example",
+    );
+    expect(screen.queryByRole("dialog", { name: "Edit link" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "Link preview" })).toBeNull();
+  });
+
   it("navigates a plain editable click on a file link", () => {
     const editor = makeEditor({
       type: "doc",
