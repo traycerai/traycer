@@ -9,7 +9,7 @@ import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import type { QueryActivityOptions } from "@/hooks/harnesses/use-gui-harness-catalog";
 import {
   PROVIDERS_LIST_REFRESH_MS,
-  providersListRefetchInterval,
+  providersListRefetchIntervalForQuery,
 } from "@/hooks/providers/providers-list-refetch-interval";
 
 /**
@@ -36,8 +36,7 @@ export function useTabProvidersList(
       enabled: activity.enabled,
       subscribed: activity.subscribed,
       staleTime: PROVIDERS_LIST_REFRESH_MS,
-      refetchInterval: (query) =>
-        providersListRefetchInterval(query.state.data),
+      refetchInterval: (query) => providersListRefetchIntervalForQuery(query),
     },
   });
 }
