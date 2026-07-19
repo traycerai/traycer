@@ -91,6 +91,13 @@ interface TabItemProps {
   readonly canCloseOtherTabs: boolean;
   readonly onOpenInNewWindow: (tab: HeaderTab) => void;
   readonly canOpenInNewWindow: boolean;
+  readonly taskPinned: boolean | null;
+  readonly isTaskPinPending: boolean;
+  readonly onSetTaskPinned: (
+    epicId: string,
+    pinned: boolean,
+    displayName: string,
+  ) => void;
 }
 
 export const TabItem = memo(function TabItem(props: TabItemProps) {
@@ -107,6 +114,9 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
     canCloseOtherTabs,
     onOpenInNewWindow,
     canOpenInNewWindow,
+    taskPinned,
+    isTaskPinPending,
+    onSetTaskPinned,
   } = props;
   const {
     ref: dndRef,
@@ -268,6 +278,13 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
     },
     [cancelLongPress],
   );
+  const handleSetTaskPinned = useCallback(
+    (pinned: boolean) => {
+      if (tab.kind !== "epic") return;
+      onSetTaskPinned(tab.epicId, pinned, displayName);
+    },
+    [displayName, onSetTaskPinned, tab],
+  );
 
   const leaderBadge: LeaderBadge | null =
     modifier === null
@@ -361,10 +378,13 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
         canCloseOtherTabs={canCloseOtherTabs}
         canOpenInNewWindow={canOpenInNewWindow}
         canEditTitle={canEditTitle}
+        taskPinned={taskPinned}
+        isTaskPinPending={isTaskPinPending}
         onCloseOtherTabs={onCloseOtherTabs}
         onDuplicateTab={onDuplicateTab}
         onOpenInNewWindow={onOpenInNewWindow}
         onEditTitle={rename.startEditing}
+        onSetTaskPinned={handleSetTaskPinned}
       />
     </ContextMenu>
   );
