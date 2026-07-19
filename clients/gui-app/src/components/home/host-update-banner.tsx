@@ -14,11 +14,11 @@ import {
   runnerQueryKeys,
 } from "@/lib/query-keys/runner-mutation-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
+import { useRunnerHostOperationStatusQuery } from "@/hooks/runner/use-runner-host-operation-status-query";
 import { cn } from "@/lib/utils";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import type {
   HostInstallResult,
-  HostOperationStatus,
   HostRegistryUpdateState,
   IHostManagement,
 } from "@traycer-clients/shared/platform/runner-host";
@@ -96,15 +96,8 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
   // open window via the same query key, so the button here disables and
   // shows progress whether THIS banner, Settings, or the background
   // auto-update reconciler is the one actually driving the update.
-  // `staleTime: Infinity` because this is entirely event-sourced (pushed by
-  // `HostOperationStatusListener`), never polling-appropriate.
-  const { data: operationStatus } = useQuery(
-    queryOptions<HostOperationStatus | null>({
-      queryKey: runnerQueryKeys.hostOperationStatus(management),
-      queryFn: () => management.getOperationStatus(),
-      staleTime: Infinity,
-    }),
-  );
+  const { data: operationStatus } =
+    useRunnerHostOperationStatusQuery(management);
   const sharedOperationActive =
     operationStatus !== undefined && operationStatus !== null;
   const sharedPercent =
