@@ -293,13 +293,12 @@ export type MicrophoneAccessStatus = "granted" | "denied";
 export interface IFileDropHost {
   resolveDroppedFilePaths(files: readonly File[]): Promise<readonly string[]>;
   /**
-   * Copy dropped source paths into a stable, app-managed temp file and return
-   * the copied paths. Used for drops that expose only a `file://` URL with no
-   * `File` object (e.g. the macOS screenshot thumbnail), whose source file is
-   * ephemeral - the OS may reclaim it before the terminal program reads the
-   * pasted path. Copying at drop time, while the source still exists, yields a
-   * durable path. Implementations that cannot copy (or whose source is gone)
-   * return the original path so the caller is never worse off.
+   * Return durable paths for drops that expose only a `file://` URL with no
+   * `File` object. Stable workspace paths pass through unchanged. Known
+   * ephemeral sources (e.g. the macOS screenshot thumbnail staging path) are
+   * copied into an app-managed temp location before the OS can reclaim them.
+   * Implementations that cannot copy return the original path so the caller is
+   * never worse off.
    */
   copyDroppedFilePaths(paths: readonly string[]): Promise<readonly string[]>;
   /**

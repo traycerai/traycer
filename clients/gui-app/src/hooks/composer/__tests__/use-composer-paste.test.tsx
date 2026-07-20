@@ -881,13 +881,17 @@ describe("useComposerPasteAdapter - drag-and-drop", () => {
     expect(insertPaths).toHaveBeenCalledWith(["dropped-folder"]);
   });
 
-  it("resolves a URI-only drop (public.file-url, no File object) via copyDroppedFilePaths", async () => {
+  it("copies an ephemeral URI-only drop (public.file-url, no File object) to a durable path", async () => {
     const inserted: ImageAttachmentAttrs[][] = [];
     const insertPaths = vi.fn((_paths: ReadonlyArray<string>) => undefined);
     const filePaths: ComposerFilePathIngestArgs = {
       fileDrops: makeFileDrops(
         {},
-        { "/repo/screenshot.png": ["/tmp/traycer-copy/screenshot.png"] },
+        {
+          "/var/folders/x/TemporaryItems/screencaptureui_1/Screenshot.png": [
+            "/tmp/traycer-copy/screenshot.png",
+          ],
+        },
       ),
       mentionRoots: ["/repo"],
       beginPathInsertion: () => (paths) => {
@@ -899,7 +903,9 @@ describe("useComposerPasteAdapter - drag-and-drop", () => {
 
     const zone = screen.getByTestId("paste-zone");
     fireEvent.drop(zone, {
-      dataTransfer: makePublicFileUrlTransfer("file:///repo/screenshot.png"),
+      dataTransfer: makePublicFileUrlTransfer(
+        "file:///var/folders/x/TemporaryItems/screencaptureui_1/Screenshot.png",
+      ),
     });
 
     await waitFor(() => expect(insertPaths).toHaveBeenCalledOnce());

@@ -141,12 +141,11 @@ export function collectFileTransferEntries(
  * Resolves every file-like entry in `dataTransfer` to a durable on-disk path,
  * merging real `File` objects (via `fileDrops.resolveDroppedFilePaths`) with
  * URI-only entries (via `fileDrops.copyDroppedFilePaths`). File URLs are a
- * fallback for sources that expose no `File` object - notably macOS
- * screenshot thumbnails. Their backing file can disappear after either a drag
- * or paste, so copy it into an app-managed temporary location before
- * insertion. Real Finder files can carry a duplicate URI list; favor their
- * original path rather than a copied one. Returns `null` when `dataTransfer`
- * carries no file-like payload at all.
+ * fallback for sources that expose no `File` object. The host preserves stable
+ * paths and copies only known ephemeral sources (notably macOS screenshot
+ * thumbnails) into an app-managed temporary location. Real Finder files can
+ * carry a duplicate URI list; favor their original path. Returns `null` when
+ * `dataTransfer` carries no file-like payload at all.
  */
 export function resolveFileTransferPaths(
   dataTransfer: DataTransfer,
@@ -158,11 +157,11 @@ export function resolveFileTransferPaths(
     files.length === 0
       ? Promise.resolve([] as readonly string[])
       : fileDrops.resolveDroppedFilePaths(files);
-  const stableUrlPaths =
+  const durableUrlPaths =
     fileUrlPaths.length === 0
       ? Promise.resolve([] as readonly string[])
       : fileDrops.copyDroppedFilePaths(fileUrlPaths);
-  return Promise.all([resolvedFilePaths, stableUrlPaths]).then(
+  return Promise.all([resolvedFilePaths, durableUrlPaths]).then(
     ([paths, urlPaths]) => [...paths, ...urlPaths],
   );
 }

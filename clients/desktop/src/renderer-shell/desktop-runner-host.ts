@@ -892,9 +892,14 @@ function buildDesktopFileDrops(bridge: DesktopFileDropsBridge): IFileDropHost {
     copyDroppedFilePaths: async (
       paths: readonly string[],
     ): Promise<readonly string[]> => {
-      if (paths.length === 0) return [];
-      const copied = await bridge.copyTemporaryFiles(paths);
-      return copied.filter((path) => path.length > 0);
+      const resolved = await Promise.all(
+        paths.map(async (sourcePath) => {
+          if (!isEphemeralDropPath(sourcePath)) return sourcePath;
+          const copied = await bridge.copyTemporaryFiles([sourcePath]);
+          return copied.at(0) ?? sourcePath;
+        }),
+      );
+      return resolved.filter((path) => path.length > 0);
     },
     readNativeClipboardFilePaths: () => bridge.readNativeClipboardFilePaths(),
   };

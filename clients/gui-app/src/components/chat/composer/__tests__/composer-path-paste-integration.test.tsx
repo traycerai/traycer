@@ -133,15 +133,17 @@ describe("composer path paste/drop integration (real editor)", () => {
   // Finding 1: ProseMirror must not also insert text/plain for file-like
   // clipboards that carry a textual sibling (e.g. VS Code uri-list + plain).
   describe("finding 1 - file-like paste/drop ownership (no ProseMirror text race)", () => {
-    it("inserts a single path span for a text/uri-list + text/plain clipboard, not a plain-text duplicate", async () => {
-      const copyDroppedFilePaths = vi.fn(() =>
-        Promise.resolve(["/tmp/traycer-copy/notes.txt"]),
+    it("keeps a stable URI-only workspace path relative and avoids a plain-text duplicate", async () => {
+      const copyDroppedFilePaths = vi.fn((paths: readonly string[]) =>
+        Promise.resolve(paths),
       );
       const fileDrops = makeFileDrops({
         resolveDroppedFilePaths: () => Promise.resolve([]),
         copyDroppedFilePaths,
       });
-      const handleRef = await mountedHandle(fileDrops, undefined);
+      const handleRef = await mountedHandle(fileDrops, {
+        mentionRoots: ["/repo"],
+      });
 
       fireEvent.paste(screen.getByTestId("composer-editor"), {
         clipboardData: makeUriListPlainTransfer(
@@ -152,12 +154,10 @@ describe("composer path paste/drop integration (real editor)", () => {
       await flushMicrotasks();
 
       expect(copyDroppedFilePaths).toHaveBeenCalledOnce();
-      expect(pathSpanTexts(handleRef.current)).toEqual([
-        "/tmp/traycer-copy/notes.txt",
-      ]);
+      expect(pathSpanTexts(handleRef.current)).toEqual(["external/notes.txt"]);
       expect(plainTextOutsideCode(handleRef.current)).toEqual([" "]);
       expect(handleRef.current?.getJSON()).toEqual(
-        paragraphWithCodeSpan("/tmp/traycer-copy/notes.txt"),
+        paragraphWithCodeSpan("external/notes.txt"),
       );
     });
 
