@@ -129,6 +129,7 @@ import { startHostHealthMonitor } from "../host/host-health-monitor";
 import { startPendingLoginItemRevisionMonitor } from "../host/pending-login-item-revision-monitor";
 import { hostManagesHostLoginItem } from "../app/host-login-item";
 import { DESKTOP_APP_NAME } from "../../config";
+import { hydrateUpdatePreferences } from "../app/update-preferences";
 
 // Per-window fresh-snapshot query budget during `before-quit`. Each renderer,
 // on receiving `getFreshUnsyncedSnapshot`, first AWAITS its debounced per-window
@@ -278,6 +279,9 @@ async function runOnReady(state: BootState): Promise<void> {
     timed("on-ready", "preconnect", () => preconnectTraycerHosts()),
     timed("on-ready", "gpu-info", () => logGpuInfo()),
     timed("on-ready", "crash-dump-prune", () => pruneStaleCrashDumps()),
+    timed("on-ready", "update-preferences", () =>
+      hydrateUpdatePreferences().then(() => undefined),
+    ),
   ]);
 }
 
@@ -448,8 +452,8 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
     perWindowState,
     tray,
     zoomController: createdZoomController,
-    dispatchRendererCommand: (command) =>
-      bridge.dispatchMenuCommand(command) ?? false,
+    dispatchRendererCommand: (command, hostUpdateVersion) =>
+      bridge.dispatchMenuCommand(command, hostUpdateVersion) ?? false,
     checkForUpdates: () =>
       checkForUpdatesNow(config.isDev, "manual").then(() => undefined),
   });

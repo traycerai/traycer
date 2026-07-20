@@ -60,7 +60,7 @@ export function HostTrayCommandListener() {
       queryKey: runnerQueryKeys.hostAvailableVersionsScope(management),
     });
     void queryClient.invalidateQueries({
-      queryKey: runnerQueryKeys.hostRegistryUpdate(management),
+      queryKey: runnerQueryKeys.hostRegistryUpdateScope(management),
     });
     void queryClient.invalidateQueries({
       queryKey: runnerQueryKeys.hostInstalledRecord(management),

@@ -77,6 +77,7 @@ import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import type { ProviderId } from "@/components/home/data/landing-options";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { useComposerPaste } from "@/hooks/composer/use-composer-paste";
+import { useWorkspaceMentionRoots } from "@/hooks/composer/use-workspace-mention-roots";
 import { useEpicAttachmentBytesPresence } from "@/lib/attachments/use-attachment-blob-src";
 
 const NOOP: () => void = () => undefined;
@@ -590,6 +591,10 @@ function InlineUserMessageEditor({
 }): ReactNode {
   const [pickerStore] = useState(() => createComposerPickerStore());
   const hostClient = useTabHostClient();
+  const resolvedMentionRoots = useWorkspaceMentionRoots(
+    editing.mentionRoots,
+    editing.fallbackToGlobalMentionRoots,
+  );
   const editorRef = useRef<ComposerPromptEditorHandle | null>(null);
   const hasPastedImageBytes = useEpicAttachmentBytesPresence();
   const imageInputRef = useRef<HTMLInputElement | null>(null);
@@ -605,7 +610,7 @@ function InlineUserMessageEditor({
     pickerStore,
     hostClient,
     harnessId: editing.slashProviderId,
-    mentionRoots: editing.mentionRoots,
+    mentionRoots: resolvedMentionRoots,
     currentEpicId: editing.currentEpicId,
     // The inline editor mounts only while a message is being edited - active.
     isActive: true,

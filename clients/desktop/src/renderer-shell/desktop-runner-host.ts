@@ -215,6 +215,7 @@ export interface DesktopHostManagementBridge {
     readonly onProgress: ((event: HostProgressEvent) => void) | null;
   }): Promise<HostInstallResult>;
   updateHost(input: {
+    readonly expectedVersion: string | null;
     readonly onProgress: ((event: HostProgressEvent) => void) | null;
   }): Promise<HostInstallResult>;
   uninstallHost(input: { readonly all: boolean }): Promise<HostUninstallResult>;
@@ -432,6 +433,9 @@ export interface DesktopAppUpdatesBridge {
   getSnapshot(): Promise<DesktopAppUpdateSnapshot>;
   checkForUpdates(
     intent: DesktopAppUpdateCheckIntent,
+  ): Promise<DesktopAppUpdateSnapshot>;
+  setAllowPrerelease(
+    allowPrerelease: boolean,
   ): Promise<DesktopAppUpdateSnapshot>;
   downloadUpdate(): Promise<DesktopAppUpdateSnapshot>;
   installUpdate(): Promise<DesktopAppUpdateSnapshot>;

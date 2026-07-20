@@ -158,6 +158,11 @@ interface PreloadBridge {
     revealLog(target: unknown): Promise<unknown>;
     tailLog(input: unknown): Promise<unknown>;
   };
+  hostManagement: {
+    onRegistryUpdateState(handler: (state: unknown) => void): {
+      dispose: () => void;
+    };
+  };
 }
 
 interface LoadPreloadOptions {
@@ -671,5 +676,109 @@ describe("preload new-capability wiring", () => {
         email: "user@example.com",
       },
     });
+  });
+});
+
+// Cold-review #9: preload rejects registry-update payloads that lack a
+// boolean `includePreReleases` (query-key discriminator) so malformed/older
+// pushes cannot file under `undefined` and clobber the live channel key.
+describe("preload hostManagement registry-update-state guard", () => {
+  beforeEach(() => {
+    fakeElectron.reset();
+  });
+
+  afterEach(() => {
+    fakeElectron.reset();
+    vi.unstubAllGlobals();
+  });
+
+  function validRegistryState(
+    includePreReleases: boolean,
+  ): Record<string, unknown> {
+    return {
+      checkedAt: "2026-07-20T00:00:00.000Z",
+      latestVersion: "1.6.0-rc.1",
+      installedVersion: "1.4.2",
+      updateAvailable: true,
+      reachable: true,
+      errorMessage: null,
+      includePreReleases,
+    };
+  }
+
+  it("delivers HostRegistryUpdateState payloads with includePreReleases true and false", async () => {
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn: undefined,
+      sendSyncFn: undefined,
+    });
+
+    const observed: unknown[] = [];
+    const subscription = bridge.hostManagement.onRegistryUpdateState(
+      (state) => {
+        observed.push(state);
+      },
+    );
+
+    const withTrue = validRegistryState(true);
+    const withFalse = validRegistryState(false);
+    fakeElectron.emit(RunnerHostEvent.hostRegistryUpdateStateChange, withTrue);
+    fakeElectron.emit(RunnerHostEvent.hostRegistryUpdateStateChange, withFalse);
+
+    expect(observed).toEqual([withTrue, withFalse]);
+    subscription.dispose();
+    fakeElectron.emit(RunnerHostEvent.hostRegistryUpdateStateChange, withTrue);
+    expect(observed).toEqual([withTrue, withFalse]);
+  });
+
+  it("rejects payloads missing includePreReleases or with a non-boolean value", async () => {
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn: undefined,
+      sendSyncFn: undefined,
+    });
+
+    const observed: unknown[] = [];
+    const subscription = bridge.hostManagement.onRegistryUpdateState(
+      (state) => {
+        observed.push(state);
+      },
+    );
+
+    const missing = {
+      checkedAt: "2026-07-20T00:00:00.000Z",
+      latestVersion: "1.6.0-rc.1",
+      installedVersion: "1.4.2",
+      updateAvailable: true,
+      reachable: true,
+      errorMessage: null,
+    };
+    const nonBoolean = {
+      ...missing,
+      includePreReleases: "true",
+    };
+    const nullValue = {
+      ...missing,
+      includePreReleases: null,
+    };
+
+    fakeElectron.emit(RunnerHostEvent.hostRegistryUpdateStateChange, missing);
+    fakeElectron.emit(
+      RunnerHostEvent.hostRegistryUpdateStateChange,
+      nonBoolean,
+    );
+    fakeElectron.emit(RunnerHostEvent.hostRegistryUpdateStateChange, nullValue);
+
+    expect(observed).toEqual([]);
+    subscription.dispose();
+    fakeElectron.emit(
+      RunnerHostEvent.hostRegistryUpdateStateChange,
+      validRegistryState(true),
+    );
+    expect(observed).toEqual([]);
   });
 });

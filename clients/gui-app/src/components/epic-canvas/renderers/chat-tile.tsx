@@ -1270,6 +1270,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       currentComposerSettings,
       editSettings,
       mentionRoots,
+      fallbackToGlobalMentionRoots: !isFolderlessWorkspace,
       currentEpicId,
       node,
       chatTitle: projectedChatTitle ?? state.chat?.title ?? null,
