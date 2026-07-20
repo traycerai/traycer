@@ -12,8 +12,11 @@ const mocks = vi.hoisted(() => ({
   providers: [] as ProviderCliState[],
 }));
 
-vi.mock("@/hooks/providers/use-tab-providers-list-query", () => ({
-  useTabProvidersList: (activity: { enabled: boolean }) =>
+vi.mock("@/hooks/providers/use-providers-list-query", () => ({
+  useProvidersListForClient: (
+    _client: unknown,
+    activity: { enabled: boolean },
+  ) =>
     activity.enabled
       ? { data: { providers: mocks.providers } }
       : { data: undefined },
@@ -117,7 +120,13 @@ function claudeState(
 
 function currentPrompt(profileId: string | null) {
   return renderHook(() =>
-    useProfileRateLimitSwitchPrompt("claude", profileId, null, true),
+    useProfileRateLimitSwitchPrompt({
+      harnessId: "claude",
+      profileId,
+      selectedModel: null,
+      active: true,
+      client: null,
+    }),
   );
 }
 
@@ -127,12 +136,13 @@ function currentPromptForModel(
 ) {
   return renderHook(
     (props: { readonly selectedModel: ModelOption | null }) =>
-      useProfileRateLimitSwitchPrompt(
-        "claude",
+      useProfileRateLimitSwitchPrompt({
+        harnessId: "claude",
         profileId,
-        props.selectedModel,
-        true,
-      ),
+        selectedModel: props.selectedModel,
+        active: true,
+        client: null,
+      }),
     { initialProps: { selectedModel } },
   );
 }
@@ -211,7 +221,13 @@ describe("useProfileRateLimitSwitchPrompt", () => {
   ] as const)("returns hidden for %s", (_name, active, profiles, profileId) => {
     mocks.providers = profiles === null ? [] : [claudeState(profiles)];
     const { result } = renderHook(() =>
-      useProfileRateLimitSwitchPrompt("claude", profileId, null, active),
+      useProfileRateLimitSwitchPrompt({
+        harnessId: "claude",
+        profileId,
+        selectedModel: null,
+        active,
+        client: null,
+      }),
     );
     expect(result.current.kind).toBe("hidden");
   });
