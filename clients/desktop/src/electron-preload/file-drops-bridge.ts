@@ -12,6 +12,7 @@ export interface FileDropsBridgeSurface {
   getPathForFile(file: File): string;
   writeTemporaryFile(input: FileDropWriteTemporaryInput): Promise<string>;
   copyTemporaryFiles(paths: readonly string[]): Promise<readonly string[]>;
+  readNativeClipboardFilePaths(): Promise<readonly string[]>;
   saveFile(input: FileSaveInput): Promise<string | null>;
 }
 
@@ -27,6 +28,10 @@ export function buildFileDropsBridge(): FileDropsBridgeSurface {
       ipcRenderer.invoke(
         RunnerHostInvoke.fileDropCopyTemporary,
         paths,
+      ) as Promise<readonly string[]>,
+    readNativeClipboardFilePaths: () =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.fileDropReadNativeClipboardPaths,
       ) as Promise<readonly string[]>,
     saveFile: (input) =>
       ipcRenderer.invoke(RunnerHostInvoke.fileSave, input) as Promise<

@@ -89,6 +89,7 @@ afterEach(() => {
 const NOOP_FILE_DROPS: IFileDropHost = {
   resolveDroppedFilePaths: () => Promise.resolve([]),
   copyDroppedFilePaths: (paths) => Promise.resolve([...paths]),
+  readNativeClipboardFilePaths: () => Promise.resolve([]),
 };
 const NO_MENTION_ROOTS: ReadonlyArray<string> = [];
 
@@ -139,6 +140,7 @@ function makeFileDrops(
       if (urlPath === undefined) return Promise.resolve([]);
       return Promise.resolve(copyByUrlPath[urlPath] ?? []);
     },
+    readNativeClipboardFilePaths: () => Promise.resolve([]),
   };
 }
 
@@ -522,6 +524,7 @@ describe("useLandingComposerPaste - onPaste path-span parity", () => {
         return Promise.reject(new Error("resolve failed"));
       },
       copyDroppedFilePaths: (paths) => Promise.resolve([...paths]),
+      readNativeClipboardFilePaths: () => Promise.resolve([]),
     };
     renderLandingHarness(editorRef, fileDrops, ["/repo"]);
 

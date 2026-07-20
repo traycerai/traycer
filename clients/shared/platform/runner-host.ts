@@ -302,6 +302,12 @@ export interface IFileDropHost {
    * return the original path so the caller is never worse off.
    */
   copyDroppedFilePaths(paths: readonly string[]): Promise<readonly string[]>;
+  /**
+   * Reads file paths from the native clipboard formats that Chromium does not
+   * surface through `ClipboardEvent`. Callers only use this from a direct
+   * paste event whose DOM clipboard has no usable content.
+   */
+  readNativeClipboardFilePaths(): Promise<readonly string[]>;
 }
 
 /**

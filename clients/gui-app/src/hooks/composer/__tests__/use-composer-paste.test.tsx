@@ -36,6 +36,7 @@ const NOOP_FILE_PATHS: ComposerFilePathIngestArgs = {
   fileDrops: {
     resolveDroppedFilePaths: () => Promise.resolve([]),
     copyDroppedFilePaths: (paths) => Promise.resolve([...paths]),
+    readNativeClipboardFilePaths: () => Promise.resolve([]),
   },
   mentionRoots: [],
   beginPathInsertion: () => null,
@@ -486,6 +487,7 @@ describe("useComposerPasteAdapter - onPaste", () => {
         return Promise.reject(new Error("resolve failed"));
       },
       copyDroppedFilePaths: (paths) => Promise.resolve([...paths]),
+      readNativeClipboardFilePaths: () => Promise.resolve([]),
     };
     const filePaths: ComposerFilePathIngestArgs = {
       fileDrops,
@@ -617,6 +619,7 @@ describe("useComposerPasteAdapter - onPaste", () => {
       fileDrops: {
         resolveDroppedFilePaths,
         copyDroppedFilePaths,
+        readNativeClipboardFilePaths: () => Promise.resolve([]),
       },
       mentionRoots: ["/repo"],
       beginPathInsertion: () => (paths) => {
@@ -653,6 +656,7 @@ describe("useComposerPasteAdapter - onPaste", () => {
       fileDrops: {
         resolveDroppedFilePaths,
         copyDroppedFilePaths,
+        readNativeClipboardFilePaths: () => Promise.resolve([]),
       },
       mentionRoots: ["/repo"],
       beginPathInsertion: () => (paths) => {
@@ -693,6 +697,7 @@ describe("useComposerPasteAdapter - isResolvingFilePaths / attachment pending", 
             resolvePaths = resolve;
           }),
         copyDroppedFilePaths: (paths) => Promise.resolve([...paths]),
+        readNativeClipboardFilePaths: () => Promise.resolve([]),
       },
       mentionRoots: ["/repo"],
       beginPathInsertion: () => (paths) => {
@@ -758,6 +763,7 @@ describe("useComposerPasteAdapter - isResolvingFilePaths / attachment pending", 
       fileDrops: {
         resolveDroppedFilePaths: () => new Promise(() => undefined),
         copyDroppedFilePaths: (paths) => Promise.resolve([...paths]),
+        readNativeClipboardFilePaths: () => Promise.resolve([]),
       },
       mentionRoots: ["/repo"],
       beginPathInsertion: () => (paths) => {
@@ -972,6 +978,7 @@ describe("useComposerPasteAdapter - drag-and-drop", () => {
       fileDrops: {
         resolveDroppedFilePaths,
         copyDroppedFilePaths,
+        readNativeClipboardFilePaths: () => Promise.resolve([]),
       },
       mentionRoots: ["/repo"],
       beginPathInsertion: () => (paths) => {
@@ -1119,6 +1126,7 @@ function makeFileDrops(
       if (urlPath === undefined) return Promise.resolve([]);
       return Promise.resolve(copyByUrlPath[urlPath] ?? []);
     },
+    readNativeClipboardFilePaths: () => Promise.resolve([]),
   };
 }
 

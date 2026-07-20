@@ -200,6 +200,7 @@ export interface DesktopFileDropsBridge {
     readonly bytes: ArrayBuffer;
   }): Promise<string>;
   copyTemporaryFiles(paths: readonly string[]): Promise<readonly string[]>;
+  readNativeClipboardFilePaths(): Promise<readonly string[]>;
   saveFile(input: FileSaveInput): Promise<string | null>;
 }
 
@@ -891,5 +892,6 @@ function buildDesktopFileDrops(bridge: DesktopFileDropsBridge): IFileDropHost {
       const copied = await bridge.copyTemporaryFiles(paths);
       return copied.filter((path) => path.length > 0);
     },
+    readNativeClipboardFilePaths: () => bridge.readNativeClipboardFilePaths(),
   };
 }

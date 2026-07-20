@@ -17,6 +17,24 @@ export interface FileTransferDragMetadata {
   readonly items: ArrayLike<FileTransferDragItem | null | undefined>;
 }
 
+export interface FileTransferClipboardMetadata extends FileTransferDragMetadata {
+  readonly files: ArrayLike<File>;
+  getData(type: string): string;
+}
+
+interface FileTransferDataReader {
+  getData(type: string): string;
+}
+
+const USABLE_CLIPBOARD_TEXT_FLAVORS = [
+  "text/uri-list",
+  "public.file-url",
+  "text/html",
+  "text/plain",
+  "application/x-traycer-composer+json",
+  "web application/x-traycer-composer+json",
+] as const;
+
 /**
  * True when `dataTransfer` carries a file-like payload: real `File` items, or
  * a URI-only flavor a source without a `File` object still exposes (macOS
@@ -86,6 +104,24 @@ export function hasClaimableFileTransfer(dataTransfer: DataTransfer): boolean {
 }
 
 /**
+ * Native clipboard fallback is deliberately narrower than file-transfer
+ * ownership: any ordinary text, rich content, URI, or File item leaves the
+ * browser paste path untouched. This is only true for Chromium's empty DOM
+ * clipboard snapshot of native-only VS Code explorer copies.
+ */
+export function dataTransferHasUsableClipboardData(
+  dataTransfer: FileTransferClipboardMetadata,
+): boolean {
+  return (
+    Array.from(dataTransfer.files).length > 0 ||
+    fileTransferDragItems(dataTransfer).some((item) => item.kind === "file") ||
+    USABLE_CLIPBOARD_TEXT_FLAVORS.some(
+      (flavor) => readDataTransferData(dataTransfer, flavor).length > 0,
+    )
+  );
+}
+
+/**
  * Returns the file-like payload a surface should process. A real `File` is
  * authoritative: Finder and VS Code often include a duplicate URI flavor,
  * while URI paths are only needed for sources that expose no File object.
@@ -144,7 +180,7 @@ export function collectDroppedFileUrlPaths(
 }
 
 function readDataTransferData(
-  dataTransfer: DataTransfer,
+  dataTransfer: FileTransferDataReader,
   type: string,
 ): string {
   try {

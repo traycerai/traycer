@@ -45,6 +45,53 @@ afterEach(() => {
  * races, position mapping, undo grouping, and unmount liveness).
  */
 describe("composer path paste/drop integration (real editor)", () => {
+  describe("native-only clipboard fallback", () => {
+    it("inserts a native VS Code file path when the DOM clipboard is empty", async () => {
+      const readNativeClipboardFilePaths = vi.fn(() =>
+        Promise.resolve(["/repo/from-vscode.txt"]),
+      );
+      const fileDrops: IFileDropHost = {
+        resolveDroppedFilePaths: () => Promise.resolve([]),
+        copyDroppedFilePaths: (paths) => Promise.resolve([...paths]),
+        readNativeClipboardFilePaths,
+      };
+      const handleRef = await mountedHandle(fileDrops, {
+        mentionRoots: ["/repo"],
+      });
+
+      fireEvent.paste(screen.getByTestId("composer-editor"), {
+        clipboardData: makeEmptyTransfer([]),
+      });
+      await flushMicrotasks();
+
+      expect(readNativeClipboardFilePaths).toHaveBeenCalledOnce();
+      expect(pathSpanTexts(handleRef.current)).toEqual(["from-vscode.txt"]);
+    });
+
+    it("does not read native formats when the DOM exposes ordinary text", async () => {
+      const readNativeClipboardFilePaths = vi.fn(() =>
+        Promise.resolve(["/repo/from-vscode.txt"]),
+      );
+      const fileDrops: IFileDropHost = {
+        resolveDroppedFilePaths: () => Promise.resolve([]),
+        copyDroppedFilePaths: (paths) => Promise.resolve([...paths]),
+        readNativeClipboardFilePaths,
+      };
+      const handleRef = await mountedHandle(fileDrops, undefined);
+
+      fireEvent.paste(screen.getByTestId("composer-editor"), {
+        clipboardData: makeUriListPlainTransfer(
+          "https://example.com",
+          "https://example.com",
+        ),
+      });
+      await flushMicrotasks();
+
+      expect(readNativeClipboardFilePaths).not.toHaveBeenCalled();
+      expect(pathSpanTexts(handleRef.current)).toEqual([]);
+    });
+  });
+
   // Finding 1: ProseMirror must not also insert text/plain for file-like
   // clipboards that carry a textual sibling (e.g. VS Code uri-list + plain).
   describe("finding 1 - file-like paste/drop ownership (no ProseMirror text race)", () => {
@@ -468,7 +515,10 @@ function makeFileDrops(host: {
   readonly resolveDroppedFilePaths: IFileDropHost["resolveDroppedFilePaths"];
   readonly copyDroppedFilePaths: IFileDropHost["copyDroppedFilePaths"];
 }): IFileDropHost {
-  return host;
+  return {
+    ...host,
+    readNativeClipboardFilePaths: () => Promise.resolve([]),
+  };
 }
 
 function makeFileTransfer(files: ReadonlyArray<File>): TransferLike {

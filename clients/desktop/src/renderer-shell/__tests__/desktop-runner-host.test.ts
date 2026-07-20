@@ -155,6 +155,7 @@ function buildFakeBridge(
       },
       copyTemporaryFiles: async (paths) =>
         paths.map((path) => `/tmp/copied/${path.split("/").pop() ?? ""}`),
+      readNativeClipboardFilePaths: async () => [],
       saveFile: async (input) => {
         temporaryWrites.push(input);
         return input.name;

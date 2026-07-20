@@ -76,6 +76,9 @@ vi.mock("electron", () => ({
     encryptString: (_value: string): Buffer => Buffer.from("", "utf8"),
     decryptString: (_buf: Buffer): string => "",
   },
+  clipboard: {
+    readBuffer: vi.fn(() => Buffer.alloc(0)),
+  },
   shell: {
     openExternal: vi.fn(() => Promise.resolve()),
   },
@@ -596,6 +599,7 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.displayList,
         RunnerHostInvoke.fileDropWriteTemporary,
         RunnerHostInvoke.fileDropCopyTemporary,
+        RunnerHostInvoke.fileDropReadNativeClipboardPaths,
         RunnerHostInvoke.fileSave,
         RunnerHostInvoke.gpuAccelerationGet,
         RunnerHostInvoke.gpuAccelerationSet,

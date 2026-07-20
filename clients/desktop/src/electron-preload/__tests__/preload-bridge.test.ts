@@ -147,6 +147,7 @@ interface PreloadBridge {
     getPathForFile(file: File): string;
     writeTemporaryFile(input: unknown): Promise<string>;
     copyTemporaryFiles(paths: readonly string[]): Promise<readonly string[]>;
+    readNativeClipboardFilePaths(): Promise<readonly string[]>;
     saveFile(input: unknown): Promise<string | null>;
   };
   requestHostRespawn(): Promise<void>;
@@ -439,6 +440,11 @@ describe("preload new-capability wiring", () => {
         type: "image/png",
         bytes,
       },
+    );
+
+    await bridge.fileDrops.readNativeClipboardFilePaths();
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.fileDropReadNativeClipboardPaths,
     );
 
     await expect(

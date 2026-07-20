@@ -22,6 +22,7 @@ import {
 import {
   classifyFileTransferDrag,
   collectFileTransferEntries,
+  dataTransferHasUsableClipboardData,
   hasClaimableFileTransfer,
   type FileTransferDragOverlayVariant,
 } from "@/lib/files/file-transfer-paths";
@@ -443,6 +444,22 @@ async function resolveAndInsertFilePaths(
   showFilePathResolutionToast(resolvedPaths.length, failedNames);
 }
 
+async function resolveAndInsertNativeClipboardFilePaths(
+  filePaths: ComposerFilePathIngestArgs,
+  commit: PathInsertionCommit,
+): Promise<void> {
+  const resolvedPaths = await withResolutionTimeout(
+    filePaths.fileDrops.readNativeClipboardFilePaths(),
+    FILE_PATH_RESOLUTION_TIMEOUT_MS,
+    () => [] as readonly string[],
+  );
+  if (resolvedPaths.length === 0) return;
+  const displayPaths = resolvedPaths.map((path) =>
+    displayPathForInsertion(path, filePaths.mentionRoots),
+  );
+  commit(displayPaths);
+}
+
 /**
  * Drag/drop/paste plumbing shared by every composer surface. The image ingest
  * (base64 vs hash-only) is delegated to `imageIngest`/`insertAttrs`; image
@@ -518,6 +535,18 @@ export function useComposerPasteEvents(
     [filePaths],
   );
 
+  const attachNativeClipboardFilePaths = useCallback(() => {
+    const commit = filePaths.beginPathInsertion();
+    if (commit === null) return;
+    setPendingPathCount((count) => count + 1);
+    void resolveAndInsertNativeClipboardFilePaths(filePaths, commit).finally(
+      () => {
+        if (!activeRef.current) return;
+        setPendingPathCount((count) => Math.max(0, count - 1));
+      },
+    );
+  }, [filePaths]);
+
   const dispatchFileTransfer = useCallback(
     (files: ReadonlyArray<File>, fileUrlPaths: ReadonlyArray<string>) => {
       const nonImageFiles = files.filter(isNonImageFile);
@@ -529,14 +558,18 @@ export function useComposerPasteEvents(
 
   const onPaste = useCallback(
     (event: ClipboardEvent<HTMLElement>) => {
-      if (!hasClaimableFileTransfer(event.clipboardData)) return;
-      event.preventDefault();
-      const { files, fileUrlPaths } = collectFileTransferEntries(
-        event.clipboardData,
-      );
-      dispatchFileTransfer(files, fileUrlPaths);
+      if (hasClaimableFileTransfer(event.clipboardData)) {
+        event.preventDefault();
+        const { files, fileUrlPaths } = collectFileTransferEntries(
+          event.clipboardData,
+        );
+        dispatchFileTransfer(files, fileUrlPaths);
+        return;
+      }
+      if (dataTransferHasUsableClipboardData(event.clipboardData)) return;
+      attachNativeClipboardFilePaths();
     },
-    [dispatchFileTransfer],
+    [attachNativeClipboardFilePaths, dispatchFileTransfer],
   );
 
   const onDragOver = useCallback((event: DragEvent<HTMLElement>) => {
