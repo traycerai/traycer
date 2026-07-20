@@ -102,6 +102,7 @@ function usageEntry(
     profileId,
     refreshStatus: "idle",
     refresh,
+    ensureFresh: () => Promise.resolve(),
     projection: {
       kind: "detail",
       severity: "running_low",
@@ -138,6 +139,7 @@ function renderBanner(input: {
         profiles={profiles}
         destinations={destinations}
         primaryTarget={primaryTarget}
+        probeTarget={null}
         runTargetHostId={null}
         onSwitchProfile={input.onSwitchProfile}
         affectedChatCount={input.affectedChatCount}

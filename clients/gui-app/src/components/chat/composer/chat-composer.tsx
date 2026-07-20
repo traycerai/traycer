@@ -372,6 +372,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
                   profiles={rateLimitPrompt.profiles}
                   destinations={rateLimitPrompt.destinations}
                   primaryTarget={rateLimitPrompt.primaryTarget}
+                  probeTarget={rateLimitPrompt.probeTarget}
                   runTargetHostId={tabHostId}
                   onSwitchProfile={onSwitchProfile}
                   affectedChatCount={taskProfileSwitch.affectedChatCount}
