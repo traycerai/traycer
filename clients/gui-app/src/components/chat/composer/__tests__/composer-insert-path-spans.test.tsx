@@ -7,6 +7,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
 } from "@testing-library/react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
@@ -119,10 +120,9 @@ async function mountedHandle(): Promise<{
     current: null,
   };
   render(<Harness handleRef={handleRef} />);
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 0));
+  await waitFor(() => {
+    expect(handleRef.current?.isReady()).toBe(true);
   });
-  expect(handleRef.current).not.toBeNull();
   return handleRef;
 }
 
