@@ -17,8 +17,7 @@
  * genuinely tile-specific (binding chip, exit-code toast, agent-record
  * loading state, error-classification copy).
  */
-import { lazy, useCallback, useEffect, useRef } from "react";
-import { useOpenEpicId } from "@/lib/epic-selectors";
+import { lazy, useCallback, useEffect, useRef, useState } from "react";
 import {
   markTerminalLoad,
   markXtermChunkLoad,
@@ -28,13 +27,36 @@ import { useTerminalList } from "@/hooks/terminal/use-terminal-list-query";
 import { useHostClientFor } from "@/hooks/host/use-host-client-for";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useTerminalSessionHandle } from "@/lib/registries/terminal-session-registry";
+// Type-only for @xterm; importing it here does not pull the lazy `@xterm/*`
+// chunk into the eager bundle.
+import {
+  adoptWarmSessionInstance,
+  peekXtermHostGrid,
+  peekXtermHostGridForSession,
+} from "@/components/epic-canvas/renderers/xterm-host-registry";
 import type {
   TerminalReattachMode,
   TerminalSessionStoreHandle,
 } from "@/stores/terminals/terminal-session-store";
 import type { TuiHarnessId } from "@traycer/protocol/host/agent/shared";
+import type { TerminalScope } from "@traycer/protocol/host/terminal/unary-schemas";
+// Last-resort opening grid when the measurement probe never reported (its
+// chunk failed to load within the timeout, or the tile never mounted one) and
+// no kept-alive engine exists to peek. Everything downstream can still heal
+// from these via the engine's re-report machinery - they are the floor, not
+// the expected path.
 const TERMINAL_DEFAULT_COLS = 80;
 const TERMINAL_DEFAULT_ROWS = 24;
+/**
+ * Upper bound on how long the bootstrap holds `terminal.create` /
+ * `terminal.subscribe` waiting for the measurement probe's first report
+ * (measure-before-subscribe). The probe usually reports within one frame of
+ * the xterm chunk loading - far faster than the transport dial + prepare RPC
+ * it overlaps - so this ceiling only matters when the chunk load stalls or a
+ * caller never mounts a probe. On expiry the bootstrap proceeds with the
+ * best grid it can peek, which is the pre-measurement behavior.
+ */
+export const MEASURE_GRID_TIMEOUT_MS = 2_000;
 
 export const TerminalXtermHost = lazy(async () => {
   // Only the first terminal of a session downloads the ~150 KB `@xterm/*`
@@ -59,6 +81,8 @@ export interface TerminalCreatePayload {
 
 export interface UseTerminalTileBootstrapInput {
   readonly hostId: string;
+  /** Scope used for the list predicate and any terminal create request. */
+  readonly scope: TerminalScope;
   readonly sessionId: string;
   /**
    * Per-tab instance id. The session handle is registered under this so two
@@ -91,6 +115,8 @@ export interface UseTerminalTileBootstrapInput {
 
 export interface TerminalTileBootstrapResult {
   readonly hostHasSession: boolean | null;
+  /** A host-grace-window exit; callers must not treat it as a missing session. */
+  readonly hostSessionExited: boolean;
   readonly handle: TerminalSessionStoreHandle | null;
   readonly createIsError: boolean;
   readonly createIsSuccess: boolean;
@@ -99,16 +125,63 @@ export interface TerminalTileBootstrapResult {
     readonly code?: string;
   } | null;
   readonly retry: () => void;
+  /**
+   * Measure-before-subscribe: the tile's measurement probe (the persistent
+   * xterm engine mounted into the final layout box while the tile shows its
+   * loading state) reports the container's natural grid here. The bootstrap
+   * holds `terminal.create` / `terminal.subscribe` until the first report
+   * (bounded by {@link MEASURE_GRID_TIMEOUT_MS}), so the PTY spawns - and
+   * the reattach snapshot is serialized - at the real grid by construction
+   * instead of the 80x24 defaults. Later reports refresh the pending value
+   * (pane resized mid-bootstrap) but never re-dispatch.
+   */
+  readonly reportMeasuredGrid: (cols: number, rows: number) => void;
 }
 
 export function useTerminalTileBootstrap(
   input: UseTerminalTileBootstrapInput,
 ): TerminalTileBootstrapResult {
-  const epicId = useOpenEpicId();
   const hostEntry = useHostDirectoryEntry(input.hostId);
   const hostClient = useHostClientFor(hostEntry);
-  const list = useTerminalList(epicId, hostClient);
+  const list = useTerminalList(input.scope, hostClient);
   const create = useTerminalCreate(hostClient);
+
+  // Measure-before-subscribe state. `measuredGrid` holds the probe's latest
+  // report (last write wins - the freshest measurement should seed the
+  // subscribe); `measureTimedOut` unblocks the bootstrap when no probe ever
+  // reports. `gridReady` is the gate the create effect and the session-handle
+  // enable both honor.
+  const enabled = input.enabled ?? true;
+  const [measuredGrid, setMeasuredGrid] = useState<{
+    readonly cols: number;
+    readonly rows: number;
+  } | null>(null);
+  const [measureTimedOut, setMeasureTimedOut] = useState(false);
+  const reportMeasuredGrid = useCallback((cols: number, rows: number): void => {
+    if (cols <= 0 || rows <= 0) return;
+    setMeasuredGrid({ cols, rows });
+  }, []);
+  // The bounded wait only ARMS while the bootstrap may actually proceed. A
+  // TUI tile disables the bootstrap until its agent record projects and the
+  // tile renders no probe in that state, so a timer running from mount would
+  // expire during a slow projection and let the create dispatch at the
+  // fallback grid before the freshly-mounted probe ever reports - exactly
+  // the wrong-sized spawn this machinery exists to prevent. An expiry that
+  // DID fire (while enabled) latches: the agent tile's `enabled` goes false
+  // again once the prepare mutation leaves idle, and un-readying the grid at
+  // that point would strand the timeout-fallback flow mid-bootstrap.
+  useEffect(() => {
+    if (!enabled) return;
+    if (measuredGrid !== null) return;
+    if (measureTimedOut) return;
+    const timer = window.setTimeout(() => {
+      setMeasureTimedOut(true);
+    }, MEASURE_GRID_TIMEOUT_MS);
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [enabled, measuredGrid, measureTimedOut]);
+  const gridReady = measuredGrid !== null || measureTimedOut;
 
   // The last SETTLED list's verdict on the session, kept stable across
   // background refetches (TanStack keeps previous `data` while refetching).
@@ -186,7 +259,6 @@ export function useTerminalTileBootstrap(
   // `prepareLaunch.isIdle`, which the prepare itself flips), leaving the
   // tile stuck on "Starting terminal session…".
   const hasDispatchedRef = useRef(false);
-  const enabled = input.enabled ?? true;
   const createIsIdle = create.isIdle;
   const preparePayload = input.preparePayload;
   useEffect(() => {
@@ -195,6 +267,11 @@ export function useTerminalTileBootstrap(
     if (hostSessionExited) return; // PTY exited - close, do not respawn
     if (!enabled) return;
     if (hostHasSession === null) return; // list still loading
+    // Measure-before-subscribe: hold the create until the probe reported the
+    // container's natural grid (or the bounded wait expired), so the PTY
+    // spawns at the real size instead of a placeholder it must be resized
+    // away from.
+    if (!gridReady) return;
     if (!createIsIdle) return; // already mutating / done / errored
     if (hasDispatchedRef.current) return;
     hasDispatchedRef.current = true;
@@ -209,13 +286,22 @@ export function useTerminalTileBootstrap(
         // Payload resolved: for TUI tiles this is the end of the
         // `prepareLaunch` RPC; for plain terminals it is effectively instant.
         markTerminalLoad(input.sessionId, "prepare-done");
+        // Grid preference order: the probe's measurement of the final layout
+        // box (the by-construction correct value); else a revive-in-place
+        // (idle reap, binding restart) can peek this tab's kept-alive engine
+        // or - after a tab close+reopen minted a new instance id - any cached
+        // engine of the same session; else the last-resort defaults.
+        const openingGrid =
+          measuredGrid ??
+          peekXtermHostGrid(input.instanceId) ??
+          peekXtermHostGridForSession(input.sessionId);
         createMutateRef.current({
-          epicId,
+          scope: input.scope,
           sessionKind: input.sessionKind,
           tuiHarnessId: payload.tuiHarnessId,
           desiredSessionId: input.sessionId,
-          cols: TERMINAL_DEFAULT_COLS,
-          rows: TERMINAL_DEFAULT_ROWS,
+          cols: openingGrid !== null ? openingGrid.cols : TERMINAL_DEFAULT_COLS,
+          rows: openingGrid !== null ? openingGrid.rows : TERMINAL_DEFAULT_ROWS,
           cwd: payload.cwd,
           shellCommand: payload.shellCommand,
           shellArgs: payload.shellArgs === null ? null : [...payload.shellArgs],
@@ -232,8 +318,11 @@ export function useTerminalTileBootstrap(
     hostSessionExited,
     hostClient,
     createIsIdle,
-    epicId,
+    gridReady,
+    measuredGrid,
+    input.scope,
     input.sessionId,
+    input.instanceId,
     input.sessionKind,
     preparePayload,
   ]);
@@ -246,16 +335,35 @@ export function useTerminalTileBootstrap(
     : "fresh";
   const sessionReady = sessionListedRunning || create.isSuccess;
 
+  // Adopt the warm handle (and kept-alive engine) a closed tab of this
+  // session left behind, BEFORE the session-handle acquire below runs -
+  // effects fire in declaration order, so this one precedes the acquire
+  // effect inside `useTerminalSessionHandle` on the mount commit.
+  const adoptSessionId = input.sessionId;
+  const adoptInstanceId = input.instanceId;
+  useEffect(() => {
+    adoptWarmSessionInstance(adoptSessionId, adoptInstanceId);
+  }, [adoptSessionId, adoptInstanceId]);
+
+  // Grid preference mirrors the create effect's: probe measurement first,
+  // then engine peeks (render-time reads - the handle hook consumes these
+  // only at store creation via a ref, so they are exactly as fresh as the
+  // acquire that follows), then the defaults. The subscribe itself is held
+  // behind `gridReady`, so a measured value is normally present here.
+  const openingGrid =
+    measuredGrid ??
+    peekXtermHostGrid(input.instanceId) ??
+    peekXtermHostGridForSession(input.sessionId);
   const handle = useTerminalSessionHandle({
     hostId: input.hostId,
-    epicId,
+    scope: input.scope,
     sessionId: input.sessionId,
     instanceId: input.instanceId,
-    cols: TERMINAL_DEFAULT_COLS,
-    rows: TERMINAL_DEFAULT_ROWS,
+    cols: openingGrid !== null ? openingGrid.cols : TERMINAL_DEFAULT_COLS,
+    rows: openingGrid !== null ? openingGrid.rows : TERMINAL_DEFAULT_ROWS,
     reattachMode,
     kind: input.sessionKind,
-    enabled: sessionReady,
+    enabled: sessionReady && gridReady,
   });
 
   // The session store handle resolving marks the end of the bootstrap leg:
@@ -276,10 +384,12 @@ export function useTerminalTileBootstrap(
 
   return {
     hostHasSession,
+    hostSessionExited,
     handle,
     createIsError: create.isError,
     createIsSuccess: create.isSuccess,
     createError: create.error,
     retry,
+    reportMeasuredGrid,
   };
 }

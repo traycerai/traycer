@@ -12,6 +12,7 @@ import type { HeaderTab } from "@/stores/tabs/types";
 import { useTabCloseCommand } from "@/components/layout/tabs/use-tab-close-command";
 import { useNeighborTabPicker } from "@/components/layout/tabs/use-neighbor-tab-picker";
 import { useUnsyncedCloseDialog } from "@/components/layout/dialogs/use-unsynced-close-dialog";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 export interface CloseTabFlow {
   readonly requestCloseTab: (tab: HeaderTab) => void;
@@ -34,6 +35,11 @@ export function useCloseTabFlow(): CloseTabFlow {
       const captured = picker.capture(tab);
       const finalize = () => {
         closeTab(tab);
+        if (tab.kind === "epic") {
+          Analytics.getInstance().track(AnalyticsEvent.TabClosed, {
+            target: "task",
+          });
+        }
         picker.navigateToCaptured(captured);
       };
       if (dialog.promptOrConfirm(tab, finalize)) return;
@@ -52,6 +58,11 @@ export function useCloseTabFlow(): CloseTabFlow {
           continue;
         }
         closeTab(other);
+        if (other.kind === "epic") {
+          Analytics.getInstance().track(AnalyticsEvent.TabClosed, {
+            target: "task",
+          });
+        }
       }
       if (skipped.length > 0) {
         const detail =

@@ -12,9 +12,8 @@ export type AddFolderHandler = () => Promise<boolean>;
 
 /**
  * The flat one-folder-per-row renderer shared by both surfaces. The folders are
- * laid out as a single CSS grid so `folder · location · branch · ⚙` align into
- * columns across every row (each {@link FolderRow} is a `grid-cols-subgrid`
- * row); the "＋ Add folder" button sits left-aligned below. `trailingSlot` (the
+ * laid out in one shared grid: pin / folder / location / branch / actions.
+ * The "＋ Add folder" button sits left-aligned below. `trailingSlot` (the
  * device chip on landing, `null` in-epic) is pushed to the far right to match
  * the composer's alignment. All controls call the EXISTING item handlers — this
  * component never owns binding, staging, or mutation logic.
@@ -71,6 +70,9 @@ export function WorkspaceFolderRows(props: {
       activityPaths: null,
       cursor: null,
       limit: null,
+      // A background read: serve the host's TTL-cached view. Only the
+      // Settings toolbar's explicit Refresh forces a disk recompute.
+      forceRefresh: false,
     },
     options: { enabled: hasAnyWorktrees && !props.readOnly },
   });
@@ -139,14 +141,11 @@ export function WorkspaceFolderRows(props: {
       className="flex w-full min-w-0 items-start gap-3"
       data-testid="workspace-folder-rows"
     >
-      <div className="flex min-w-0 flex-col items-start gap-1.5">
-        {/* One grid for all folders so the folder / location / branch / ⚙ cells
-            align into columns. The Location track is `auto`: each control
-            reserves the widest label's width via an invisible ghost, so it's
-            static across mode switches yet snug (no excess). The Branch track
-            uses a fluid bounded width (branch names vary); short content leaves
-            trailing space with the chevron pinned right. */}
-        <div className="grid grid-cols-[auto_auto_minmax(8rem,clamp(9rem,18vw,11rem))_auto] items-center gap-x-2 gap-y-1.5">
+      <div className="flex min-w-0 flex-1 flex-col items-stretch gap-1.5">
+        <div
+          className="grid w-full min-w-0 grid-cols-[1.5rem_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.5fr)_auto] items-center gap-x-1.5 gap-y-1.5"
+          data-testid="workspace-folder-grid"
+        >
           {items.map((item) => (
             <FolderRow
               key={item.key}

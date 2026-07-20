@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import type { ImageAttachmentAttrs } from "@/components/chat/composer/editor/extensions/image-attachment-extension";
 import type { ComposerPasteEditorHandle } from "@/hooks/composer/use-composer-paste";
 import { useLandingComposerPaste } from "@/hooks/composer/use-landing-composer-paste";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import {
   deleteImage,
   getImageBytes,
@@ -12,6 +13,20 @@ import {
   releaseSession,
   sessionObjectUrl,
 } from "@/lib/composer/landing-image-store";
+import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
+
+vi.mock("@/lib/composer/landing-image-gc", async (importActual) => {
+  const actual =
+    await importActual<typeof import("@/lib/composer/landing-image-gc")>();
+  return {
+    ...actual,
+    // A no-op stub, not a call-through: the real scheduler starts a 250ms
+    // timer that later calls the real `reconcile()`, which would otherwise
+    // escape this test's boundary and run against a later test's IDB mock
+    // state. Only call presence is asserted here.
+    scheduleLandingImageReconcile: vi.fn(() => undefined),
+  };
+});
 
 // In-memory stand-in for idb-keyval so `putImage` can persist + read back bytes
 // without a real IndexedDB. Mirrors the landing-image-store unit test.
@@ -49,6 +64,7 @@ beforeEach(async () => {
     releaseSession(hash);
   }
   vi.mocked(toast.error).mockClear();
+  vi.mocked(scheduleLandingImageReconcile).mockClear();
 });
 
 afterEach(() => {
@@ -61,6 +77,7 @@ function makeHandle(inserted: ImageAttachmentAttrs[][]): {
 } {
   const focusCalls = { count: 0 };
   const handle: ComposerPasteEditorHandle = {
+    isReady: () => true,
     insertImageAttachments: (attrs) => inserted.push([...attrs]),
     focus: () => {
       focusCalls.count += 1;
@@ -70,6 +87,35 @@ function makeHandle(inserted: ImageAttachmentAttrs[][]): {
 }
 
 describe("useLandingComposerPaste", () => {
+  it("does not report an attachment when a non-null editor is not ready", async () => {
+    const inserted: ImageAttachmentAttrs[][] = [];
+    const track = vi.spyOn(Analytics.getInstance(), "track");
+    const editorRef = {
+      current: {
+        isReady: () => false,
+        insertImageAttachments: (attrs: ReadonlyArray<ImageAttachmentAttrs>) =>
+          inserted.push([...attrs]),
+        focus: () => undefined,
+      },
+    };
+    const { result } = renderHook(() => useLandingComposerPaste(editorRef));
+
+    act(() => {
+      result.current.attachImageFiles([
+        new File(["hello"], "not-ready.png", { type: "image/png" }),
+      ]);
+    });
+    await waitFor(async () => {
+      expect(await imageHashKeys()).toHaveLength(1);
+    });
+
+    expect(inserted).toEqual([]);
+    expect(track).not.toHaveBeenCalledWith(
+      AnalyticsEvent.AttachmentAdded,
+      expect.anything(),
+    );
+  });
+
   it("ingests an image as a hash-only node with bytes + a session object-URL", async () => {
     const inserted: ImageAttachmentAttrs[][] = [];
     const { handle, focusCalls } = makeHandle(inserted);
@@ -170,6 +216,46 @@ describe("useLandingComposerPaste", () => {
       });
     });
     expect(inserted).toHaveLength(0);
+
+    digestSpy.mockRestore();
+  });
+
+  it("schedules a reconcile but suppresses the toast when the composer unmounts mid-ingest", async () => {
+    const inserted: ImageAttachmentAttrs[][] = [];
+    const { handle } = makeHandle(inserted);
+    const editorRef = { current: handle };
+
+    // Hold `putImage`'s hash step open so bytes can be aborted-away between
+    // the (already-persisted) hash write and the node insertion - mirrors
+    // unmounting/navigating away while a paste is still in flight.
+    let resolveDigest: (() => void) | null = null;
+    const digestSpy = vi.spyOn(crypto.subtle, "digest").mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveDigest = () => resolve(new ArrayBuffer(32));
+        }),
+    );
+
+    const { result, unmount } = renderHook(() =>
+      useLandingComposerPaste(editorRef),
+    );
+    const file = new File(["hello"], "shot.png", { type: "image/png" });
+    act(() => {
+      result.current.attachImageFiles([file]);
+    });
+
+    await waitFor(() => expect(resolveDigest).not.toBeNull());
+    unmount();
+
+    await act(async () => {
+      resolveDigest?.();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(inserted).toHaveLength(0);
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(scheduleLandingImageReconcile).toHaveBeenCalled();
 
     digestSpy.mockRestore();
   });

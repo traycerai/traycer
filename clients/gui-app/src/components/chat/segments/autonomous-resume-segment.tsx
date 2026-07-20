@@ -54,7 +54,14 @@ function ResumeCompletionCard(props: {
   const { trigger } = props;
   const [open, setOpen] = useState(false);
 
-  const title = formatSingleLine(trigger.title, {
+  // An auto-backgrounded MCP call rides a "command" trigger (the kind enum is
+  // frozen for old-host chat parses); the structured identity is what marks it
+  // as MCP work, so prefer it over the CLI's freeform "server/tool" title.
+  const rawTitle =
+    trigger.mcp === null
+      ? trigger.title
+      : `${trigger.mcp.serverName} · ${trigger.mcp.toolName}`;
+  const title = formatSingleLine(rawTitle, {
     maxLength: 60,
     ellipsis: "…",
   });
@@ -136,7 +143,8 @@ function ResumeCompletionCardBody(props: {
 function resumeStatusTitle(trigger: AutonomousResumeTrigger): string {
   if (trigger.kind === "wakeup") return wakeupStatusTitle(trigger.status);
 
-  const noun = resumeKindTitle(trigger.kind);
+  const noun =
+    trigger.mcp === null ? resumeKindTitle(trigger.kind) : "MCP tool";
   switch (trigger.status) {
     case "completed":
       return `${noun} completed`;

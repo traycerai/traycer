@@ -10,6 +10,7 @@ import {
   within,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -18,7 +19,7 @@ import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtur
 import { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import type { WorktreeDeleteStreamCallbacks } from "@traycer-clients/shared/host-transport/worktree-delete-stream-client";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/index";
+import type { WorktreeHostEntryV14 } from "@traycer/protocol/host/index";
 import type {
   WorktreeEntryScripts,
   WorktreeSubmoduleMergeFactV12,
@@ -222,12 +223,12 @@ type WorktreeSubmoduleMergeFactInput = Omit<
   >;
 
 function entry(
-  over: Partial<Omit<WorktreeHostEntryV12, "submodules">> & {
+  over: Partial<Omit<WorktreeHostEntryV14, "submodules">> & {
     worktreePath: string;
     branch: string;
     submodules?: readonly WorktreeSubmoduleMergeFactInput[];
   },
-): WorktreeHostEntryV12 {
+): WorktreeHostEntryV14 {
   const { submodules, ...rest } = over;
   return {
     repoLabel: "acme/app",
@@ -253,11 +254,12 @@ function entry(
         unmergedCommitSubjects: submodule.unmergedCommitSubjects ?? null,
       })) ?? [],
     atBaseCommit: false,
+    resolvedAt: 1,
     ...rest,
   };
 }
 
-const WORKTREES: WorktreeHostEntryV12[] = [
+const WORKTREES: WorktreeHostEntryV14[] = [
   entry({
     worktreePath: "/wt/clean",
     branch: "feat-clean",
@@ -306,18 +308,19 @@ afterEach(() => {
 // entry) - the default the behavioural tests want, so tiers classify immediately.
 // Tests that exercise the pending/lazy path pass their own partial overlay.
 function fullyEnriched(
-  worktrees: readonly WorktreeHostEntryV12[],
-): ReadonlyMap<string, WorktreeHostEntryV12> {
+  worktrees: readonly WorktreeHostEntryV14[],
+): ReadonlyMap<string, WorktreeHostEntryV14> {
   return new Map(worktrees.map((entry) => [entry.worktreePath, entry]));
 }
 
 function renderList(args: {
   readonly hostId: string;
   readonly queryClient: QueryClient;
-  readonly worktrees: readonly WorktreeHostEntryV12[];
+  readonly worktrees: readonly WorktreeHostEntryV14[];
   readonly enrichedByPath:
-    ReadonlyMap<string, WorktreeHostEntryV12> | undefined;
+    ReadonlyMap<string, WorktreeHostEntryV14> | undefined;
   readonly erroredPaths: ReadonlySet<string> | undefined;
+  readonly seededPaths: ReadonlySet<string> | undefined;
   readonly onVisiblePathsChange:
     ((paths: readonly string[]) => void) | undefined;
   readonly taskTitlesByEpicId: ReadonlyMap<string, string> | undefined;
@@ -335,9 +338,36 @@ function renderList(args: {
         worktrees={args.worktrees}
         enrichedByPath={args.enrichedByPath ?? fullyEnriched(args.worktrees)}
         erroredPaths={args.erroredPaths ?? new Set()}
+        seededPaths={args.seededPaths ?? new Set()}
         onVisiblePathsChange={args.onVisiblePathsChange ?? vi.fn()}
         taskTitlesByEpicId={args.taskTitlesByEpicId ?? new Map()}
         toolbarProps={testToolbarProps()}
+      />
+    </Wrapper>,
+  );
+}
+
+// Renders the toolbar with explicit props (the `renderList` helper always
+// passes the null-timestamp default) so tests can exercise the freshness label.
+function renderListWithToolbar(toolbarProps: ToolbarTestProps): void {
+  const queryClient = new QueryClient();
+  const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
+    <QueryClientProvider client={queryClient}>
+      <TooltipProvider>{props.children}</TooltipProvider>
+    </QueryClientProvider>
+  );
+  render(
+    <Wrapper>
+      <WorktreesList
+        openStreamTransport={() => stubOpenStreamTransport()}
+        hostId="host-a"
+        worktrees={WORKTREES}
+        enrichedByPath={fullyEnriched(WORKTREES)}
+        erroredPaths={new Set()}
+        seededPaths={new Set()}
+        onVisiblePathsChange={vi.fn()}
+        taskTitlesByEpicId={new Map()}
+        toolbarProps={toolbarProps}
       />
     </Wrapper>,
   );
@@ -350,6 +380,7 @@ function renderDefault(): void {
     worktrees: WORKTREES,
     enrichedByPath: undefined,
     erroredPaths: undefined,
+    seededPaths: undefined,
     onVisiblePathsChange: undefined,
     taskTitlesByEpicId: undefined,
   });
@@ -379,7 +410,17 @@ function callbacksFor(path: string): WorktreeDeleteStreamCallbacks {
   return callbacks;
 }
 
-function testToolbarProps() {
+type ToolbarTestProps = {
+  hosts: readonly HostDirectoryEntry[];
+  value: string | null;
+  onChange: (hostId: string) => void;
+  onRefresh: () => Promise<unknown>;
+  refreshing: boolean;
+  canRefresh: boolean;
+  lastUpdatedAt: number | null;
+};
+
+function testToolbarProps(): ToolbarTestProps {
   return {
     hosts: [],
     value: null,
@@ -387,6 +428,7 @@ function testToolbarProps() {
     onRefresh: vi.fn(),
     refreshing: false,
     canRefresh: true,
+    lastUpdatedAt: null,
   };
 }
 
@@ -456,20 +498,88 @@ describe("useWorktreeListing", () => {
         ["/wt/a", "/wt/b"],
       );
     });
+    // Every page of the automatic listing sends `forceRefresh: false`: a poll
+    // must serve the host's TTL-cached view, never force a disk recompute.
+    // Only the toolbar's Refresh sends `true`.
     expect(requests).toEqual([
       {
         includeActivity: false,
         activityPaths: null,
         cursor: null,
         limit: 32,
+        forceRefresh: false,
       },
       {
         includeActivity: false,
         activityPaths: null,
         cursor: first.worktreePath,
         limit: 32,
+        forceRefresh: false,
       },
     ]);
+  });
+
+  // The 5-minute host-side TTL rests on "staleness between polls is acceptable
+  // BECAUSE manual refresh is the freshness path", so the refresh MUST send
+  // `forceRefresh: true` - and the fresh data must land in the SAME cache entry
+  // the view already reads, not a forked `forceRefresh: true` key.
+  it("sends forceRefresh: true for a manual refresh and lands it in the same cache entry", async () => {
+    const stale = entry({ worktreePath: "/wt/a", branch: "stale" });
+    const fresh = entry({ worktreePath: "/wt/a", branch: "fresh" });
+    const requests: Array<{ readonly forceRefresh: boolean }> = [];
+    const client = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: { invalidateHostScope: () => undefined },
+      messenger: new MockHostMessenger<HostRpcRegistry>({
+        registry: hostRpcRegistry,
+        requestId: () => "req-1",
+        handlers: {
+          "worktree.listAllForHost": (params) => {
+            requests.push({ forceRefresh: params.forceRefresh });
+            // The host serves its TTL-cached (stale) view unless forced.
+            return {
+              worktrees: [params.forceRefresh ? fresh : stale],
+              nextCursor: null,
+            };
+          },
+        },
+      }),
+    });
+    client.bind(mockLocalHostEntry);
+    client.setRequestContext(
+      createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+    );
+    const queryClient = new QueryClient();
+    const wrapper = (props: { readonly children: ReactNode }): ReactNode => (
+      <QueryClientProvider client={queryClient}>
+        {props.children}
+      </QueryClientProvider>
+    );
+
+    const { result } = renderHook(() => useWorktreeListing(client, true), {
+      wrapper,
+    });
+    await waitFor(() => {
+      expect(result.current.worktrees.map((item) => item.branch)).toEqual([
+        "stale",
+      ]);
+    });
+    expect(requests).toEqual([{ forceRefresh: false }]);
+
+    // Exactly what the toolbar's Refresh button runs (worktrees-settings-panel):
+    // one awaited resolve-now request, with no global force window.
+    await act(async () => {
+      await result.current.refresh();
+    });
+
+    expect(requests).toEqual([{ forceRefresh: false }, { forceRefresh: true }]);
+    // Same hook instance - so the forced response landed in the entry this
+    // view reads, rather than a second, forked cache entry.
+    await waitFor(() => {
+      expect(result.current.worktrees.map((item) => item.branch)).toEqual([
+        "fresh",
+      ]);
+    });
   });
 
   it("flags a truncated list as partial instead of hiding the failed page", async () => {
@@ -563,6 +673,178 @@ describe("WorktreesList delete flow", () => {
     expect(busyButton.hasAttribute("disabled")).toBe(true);
   });
 
+  it("renders unresolved rows as checking and excludes them from destructive selection", () => {
+    const unresolved = entry({
+      worktreePath: "/wt/unresolved",
+      branch: "feat-unresolved",
+      // These schema-safe defaults would otherwise classify as clean enough
+      // to select. resolvedAt is the authoritative fail-closed gate.
+      resolvedAt: null,
+      inUse: false,
+      uncommittedCount: 0,
+      gitRemovable: true,
+    });
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [unresolved],
+      enrichedByPath: fullyEnriched([unresolved]),
+      erroredPaths: undefined,
+      seededPaths: undefined,
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
+    });
+
+    screen.getByTestId("worktree-tier-pill-pending-spinner");
+    screen.getByText("Waiting for host verification…");
+    expect(
+      screen
+        .getByRole("checkbox", { name: "Select worktree feat-unresolved" })
+        .getAttribute("aria-disabled"),
+    ).toBe("true");
+    expect(
+      screen
+        .getByRole("button", { name: /status is still being checked/i })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+  });
+
+  it("keeps an unresolved base row authoritative over a cached resolved enrichment", () => {
+    const unresolvedBase = entry({
+      worktreePath: "/wt/regressed",
+      branch: "feat-regressed",
+      resolvedAt: null,
+      inUse: false,
+      uncommittedCount: 0,
+      gitRemovable: true,
+    });
+    const staleResolvedEnrichment = entry({
+      worktreePath: "/wt/regressed",
+      branch: "feat-regressed",
+      resolvedAt: 100,
+      inUse: false,
+      uncommittedCount: 0,
+      gitRemovable: true,
+    });
+    const deleteRunsBefore = streamMock.paths.length;
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [unresolvedBase],
+      enrichedByPath: fullyEnriched([staleResolvedEnrichment]),
+      erroredPaths: undefined,
+      seededPaths: undefined,
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
+    });
+
+    screen.getByTestId("worktree-tier-pill-pending-spinner");
+    const checkbox = screen.getByRole("checkbox", {
+      name: "Select worktree feat-regressed",
+    });
+    expect(checkbox.getAttribute("aria-disabled")).toBe("true");
+    const deleteButton = screen.getByRole("button", {
+      name: /status is still being checked/i,
+    });
+    expect(deleteButton.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(deleteButton);
+    expect(streamMock.paths).toHaveLength(deleteRunsBefore);
+  });
+
+  it("gates delete on live data: a snapshot-seeded row keeps its restored tier but is not deletable", () => {
+    const seededRow = entry({
+      worktreePath: "/wt/seeded",
+      branch: "feat-seeded",
+      branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+    });
+    const queryClient = new QueryClient();
+    const rendered = renderList({
+      hostId: "host-a",
+      queryClient,
+      worktrees: [seededRow],
+      enrichedByPath: undefined, // overlay present, exactly as the restore seeds it
+      erroredPaths: undefined,
+      seededPaths: new Set(["/wt/seeded"]),
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
+    });
+
+    // Display keeps the restored tier - warm-open value is not sacrificed:
+    // the row shows its "Landed" pill, never the pending spinner. (The tier
+    // filter menu also says "Landed", hence getAllByText.)
+    expect(screen.getAllByText("Landed").length).toBeGreaterThan(0);
+    expect(
+      screen.queryByTestId("worktree-tier-pill-pending-spinner"),
+    ).toBeNull();
+    // But the delete affordance reads the DELETE-scoped state: seeded =
+    // still-checking, so the row action is disabled with the checking copy.
+    const gatedButton = screen.getByRole("button", {
+      name: /status is still being checked/i,
+    });
+    expect(gatedButton.hasAttribute("disabled")).toBe(true);
+
+    // Once the live probe replaces the seed (the path leaves `seededPaths`),
+    // the same row becomes deletable through the normal confirmation. Drive
+    // that as a prop update on the LIVE tree rather than a remount: the row's
+    // memo comparator is what has to notice the change, and a fresh mount
+    // would sidestep it entirely.
+    rendered.rerender(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <WorktreesList
+            openStreamTransport={() => stubOpenStreamTransport()}
+            hostId="host-a"
+            worktrees={[seededRow]}
+            enrichedByPath={fullyEnriched([seededRow])}
+            erroredPaths={new Set()}
+            seededPaths={new Set()}
+            onVisiblePathsChange={vi.fn()}
+            taskTitlesByEpicId={new Map()}
+            toolbarProps={testToolbarProps()}
+          />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Delete worktree feat-seeded" }),
+    );
+    screen.getByText("Delete worktree?");
+  });
+
+  it("drops snapshot-seeded rows from a bulk delete request", () => {
+    const seeded = entry({
+      worktreePath: "/wt/seeded",
+      branch: "feat-seeded",
+      branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+    });
+    const live = entry({
+      worktreePath: "/wt/live",
+      branch: "feat-live",
+      branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+    });
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [seeded, live],
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      seededPaths: new Set(["/wt/seeded"]),
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
+    });
+
+    fireEvent.click(screen.getByTestId("worktrees-select-all"));
+
+    // A seeded row counts as still-checking for the selection action bar:
+    // bulk delete is blocked with the checking notice (same rule as a row
+    // whose probe genuinely hasn't landed), so no confirmation can open that
+    // would trust the seeded entry.
+    screen.getByText("1 selected worktree is still checking status");
+    fireEvent.click(screen.getByTestId("worktrees-list-delete-selected"));
+    expect(screen.queryByText("Delete 2 worktrees?")).toBeNull();
+    expect(screen.queryByText("Delete worktree?")).toBeNull();
+  });
+
   it("keeps a stable toolbar; the selection action bar is separate and only shown when selecting", () => {
     renderDefault();
 
@@ -593,6 +875,29 @@ describe("WorktreesList delete flow", () => {
     expect(
       within(actionBar).getByTestId("worktrees-list-delete-selected").className,
     ).toContain("whitespace-nowrap");
+  });
+
+  it("shows the freshness label for a real timestamp and suppresses it while refreshing", () => {
+    // A non-null lastUpdatedAt renders the "Updated …" label; the null-timestamp
+    // fixtures elsewhere only cover its absence.
+    renderListWithToolbar({
+      ...testToolbarProps(),
+      lastUpdatedAt: Date.now() - 60_000,
+      refreshing: false,
+    });
+    const label = screen.getByTestId("worktrees-updated-ago");
+    expect(label.textContent).toMatch(/^Updated /);
+
+    cleanup();
+
+    // While a manual refresh is in flight the timestamp is suppressed (the
+    // spinning Refresh button stands in for it).
+    renderListWithToolbar({
+      ...testToolbarProps(),
+      lastUpdatedAt: Date.now() - 60_000,
+      refreshing: true,
+    });
+    expect(screen.queryByTestId("worktrees-updated-ago")).toBeNull();
   });
 
   it("selecting the first row does not insert a new top bar that shifts the list", () => {
@@ -763,6 +1068,7 @@ describe("WorktreesList delete flow", () => {
       worktrees: multiRepoWorktrees,
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
       taskTitlesByEpicId: undefined,
     });
@@ -810,6 +1116,7 @@ describe("WorktreesList delete flow", () => {
       worktrees: multiRepoWorktrees,
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
       taskTitlesByEpicId: undefined,
     });
@@ -1074,6 +1381,7 @@ describe("WorktreesList delete flow", () => {
       worktrees: multiRepoWorktrees,
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
       taskTitlesByEpicId: undefined,
     });
@@ -1128,7 +1436,7 @@ describe("WorktreesList delete flow", () => {
     );
     expect(invalidateSpy).toHaveBeenCalledWith({
       queryKey: hostQueryKeys.methodScope("host-a", "worktree.listAllForHost"),
-      refetchType: "all",
+      refetchType: "active",
     });
   });
 
@@ -1155,6 +1463,7 @@ describe("WorktreesList delete flow", () => {
       worktrees: multiRepoWorktrees,
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
       taskTitlesByEpicId: undefined,
     });
@@ -1280,6 +1589,7 @@ describe("WorktreesList delete flow", () => {
       worktrees: WORKTREES,
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
       taskTitlesByEpicId: undefined,
     });
@@ -1297,6 +1607,7 @@ describe("WorktreesList delete flow", () => {
             worktrees={WORKTREES}
             enrichedByPath={fullyEnriched(WORKTREES)}
             erroredPaths={new Set()}
+            seededPaths={new Set()}
             onVisiblePathsChange={vi.fn()}
             taskTitlesByEpicId={new Map()}
             toolbarProps={testToolbarProps()}
@@ -1311,7 +1622,7 @@ describe("WorktreesList delete flow", () => {
 
     expect(invalidateSpy).toHaveBeenCalledWith({
       queryKey: hostQueryKeys.methodScope("host-a", "worktree.listAllForHost"),
-      refetchType: "all",
+      refetchType: "active",
     });
     for (const method of WORKTREE_BINDING_INVALIDATIONS) {
       expect(invalidateSpy).toHaveBeenCalledWith({
@@ -1321,7 +1632,7 @@ describe("WorktreesList delete flow", () => {
     }
     expect(invalidateSpy).not.toHaveBeenCalledWith({
       queryKey: hostQueryKeys.methodScope("host-b", "worktree.listAllForHost"),
-      refetchType: "all",
+      refetchType: "active",
     });
   });
 
@@ -1355,6 +1666,7 @@ describe("WorktreesList delete flow", () => {
       worktrees: WORKTREES,
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
       taskTitlesByEpicId: undefined,
     });
@@ -1384,6 +1696,7 @@ describe("WorktreesList delete flow", () => {
       worktrees: WORKTREES,
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
       taskTitlesByEpicId: undefined,
     });
@@ -1460,6 +1773,7 @@ describe("WorktreesList delete flow", () => {
       worktrees: WORKTREES,
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
       taskTitlesByEpicId: undefined,
     });
@@ -1497,6 +1811,7 @@ describe("WorktreesList delete flow", () => {
               ),
             )}
             erroredPaths={new Set()}
+            seededPaths={new Set()}
             onVisiblePathsChange={vi.fn()}
             taskTitlesByEpicId={new Map()}
             toolbarProps={testToolbarProps()}
@@ -1556,6 +1871,7 @@ describe("WorktreesList delete flow", () => {
       worktrees: WORKTREES,
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
       taskTitlesByEpicId: undefined,
     });
@@ -1593,7 +1909,7 @@ describe("WorktreesList confirm-time re-check", () => {
     toastMock.messages = [];
   });
 
-  function merged(path: string, branch: string): WorktreeHostEntryV12 {
+  function merged(path: string, branch: string): WorktreeHostEntryV14 {
     return entry({
       worktreePath: path,
       branch,
@@ -1603,7 +1919,7 @@ describe("WorktreesList confirm-time re-check", () => {
 
   function renderWith(
     queryClient: QueryClient,
-    worktrees: readonly WorktreeHostEntryV12[],
+    worktrees: readonly WorktreeHostEntryV14[],
   ) {
     return (
       <QueryClientProvider client={queryClient}>
@@ -1614,6 +1930,7 @@ describe("WorktreesList confirm-time re-check", () => {
             worktrees={worktrees}
             enrichedByPath={fullyEnriched(worktrees)}
             erroredPaths={new Set()}
+            seededPaths={new Set()}
             onVisiblePathsChange={vi.fn()}
             taskTitlesByEpicId={new Map()}
             toolbarProps={testToolbarProps()}
@@ -1691,7 +2008,7 @@ describe("WorktreesList confirm-time re-check", () => {
     expect(streamMock.paths).toEqual(["/wt/merged"]);
   });
 
-  function atBase(path: string, branch: string): WorktreeHostEntryV12 {
+  function atBase(path: string, branch: string): WorktreeHostEntryV14 {
     return entry({ worktreePath: path, branch, atBaseCommit: true });
   }
 
@@ -1933,6 +2250,34 @@ describe("WorktreesList confirm-time re-check", () => {
     screen.getByText(/2 commits not on the default branch/i);
   });
 
+  it("skips the unpushed-commits warning when the branch's PR is proven merged, even if local ancestry can't see it (squash merge)", () => {
+    render(
+      renderWith(new QueryClient(), [
+        entry({
+          worktreePath: "/wt/squash-merged",
+          branch: "feat-squash-merged",
+          // A squash merge creates a new default-branch commit that isn't a
+          // literal ancestor of these commits, so mergedIntoDefault stays
+          // false and ahead stays >0 — but the GitHub-proven merge fact
+          // (prState/mergedHeadShaMatches) means the work already landed.
+          branchStatus: { ahead: 2, behind: 0, mergedIntoDefault: false },
+          prState: "merged",
+          mergedHeadShaMatches: true,
+        }),
+      ]),
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Delete worktree feat-squash-merged",
+      }),
+    );
+    screen.getByText("Delete worktree?");
+    expect(
+      screen.queryByText("Delete worktree with 2 unpushed commits?"),
+    ).toBeNull();
+  });
+
   it("warns about never-pushed local-only commits in the per-row confirm", () => {
     render(
       renderWith(new QueryClient(), [
@@ -1998,6 +2343,7 @@ describe("WorktreesList v1.2 signals", () => {
       taskTitlesByEpicId: new Map([["epic-1", "Ship the audit"]]),
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
     });
 
@@ -2029,6 +2375,7 @@ describe("WorktreesList v1.2 signals", () => {
       taskTitlesByEpicId: new Map([["epic-1", "Ship the audit"]]),
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
     });
 
@@ -2074,6 +2421,7 @@ describe("WorktreesList v1.2 signals", () => {
       taskTitlesByEpicId: new Map(),
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
     });
 
@@ -2150,6 +2498,7 @@ describe("WorktreesList v1.2 signals", () => {
       taskTitlesByEpicId: undefined,
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
     });
 
@@ -2226,6 +2575,7 @@ describe("WorktreesList v1.2 signals", () => {
       taskTitlesByEpicId: undefined,
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
     });
 
@@ -2273,6 +2623,7 @@ describe("WorktreesList v1.2 signals", () => {
       taskTitlesByEpicId: undefined,
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
     });
 
@@ -2300,6 +2651,7 @@ describe("WorktreesList v1.2 signals", () => {
       taskTitlesByEpicId: undefined,
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
     });
 
@@ -2338,6 +2690,7 @@ describe("WorktreesList v1.2 signals", () => {
       taskTitlesByEpicId: undefined,
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
     });
 
@@ -2375,6 +2728,7 @@ describe("WorktreesList v1.2 signals", () => {
       taskTitlesByEpicId: undefined,
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
     });
 
@@ -2388,6 +2742,7 @@ describe("WorktreesList v1.2 signals", () => {
       worktrees: [entry({ worktreePath: "/wt/free", branch: "feat-free" })],
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
       taskTitlesByEpicId: undefined,
     });
@@ -2412,6 +2767,7 @@ describe("WorktreesList v1.2 signals", () => {
       ],
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
       taskTitlesByEpicId: undefined,
     });
@@ -2444,6 +2800,7 @@ describe("WorktreesList v1.2 signals", () => {
       // No path enriched yet: the base row paints but its tier isn't known.
       enrichedByPath: new Map(),
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
       taskTitlesByEpicId: undefined,
     });
@@ -2485,6 +2842,7 @@ describe("WorktreesList v1.2 signals", () => {
       taskTitlesByEpicId: new Map([["epic-1", "Payments revamp"]]),
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
     });
 
@@ -2546,6 +2904,7 @@ describe("WorktreesList v1.2 signals", () => {
       taskTitlesByEpicId: new Map([["epic-1", "Payments revamp"]]),
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
     });
     const rollup = screen.getByTestId("task-merge-rollup");
@@ -2589,6 +2948,7 @@ describe("WorktreesList v1.2 signals", () => {
       taskTitlesByEpicId: new Map([["epic-1", "Payments revamp"]]),
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
     });
     const rollup = screen.getByTestId("task-merge-rollup");
@@ -2619,6 +2979,7 @@ describe("WorktreesList v1.2 signals", () => {
       taskTitlesByEpicId: new Map([["epic-1", "Payments revamp"]]),
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
     });
     // The Task title still renders; the merge-rollup badge does not.
@@ -2650,6 +3011,7 @@ describe("WorktreesList v1.2 signals", () => {
       ],
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
       taskTitlesByEpicId: undefined,
     });
@@ -2701,6 +3063,7 @@ describe("WorktreesList v1.2 signals", () => {
       ],
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
       taskTitlesByEpicId: undefined,
     });
@@ -2746,6 +3109,7 @@ describe("WorktreesList v1.2 signals", () => {
         [orphanRow.worktreePath, orphanRow],
       ]),
       erroredPaths: new Set([unknownRow.worktreePath]),
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
       taskTitlesByEpicId: undefined,
     });
@@ -2786,6 +3150,7 @@ describe("WorktreesList v1.2 signals", () => {
       // `unknownRow` is out of the overlay AND settled to an error (Unknown).
       enrichedByPath: new Map([[readyRow.worktreePath, readyRow]]),
       erroredPaths: new Set([unknownRow.worktreePath]),
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
       taskTitlesByEpicId: undefined,
     });
@@ -2847,6 +3212,7 @@ describe("WorktreesList v1.2 signals", () => {
       taskTitlesByEpicId: new Map([["epic-1", "Payments revamp"]]),
       enrichedByPath: undefined,
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
     });
 
@@ -2877,8 +3243,8 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
   });
 
   function listElement(args: {
-    readonly worktrees: readonly WorktreeHostEntryV12[];
-    readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV12>;
+    readonly worktrees: readonly WorktreeHostEntryV14[];
+    readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV14>;
     readonly erroredPaths: ReadonlySet<string> | undefined;
     readonly onVisiblePathsChange:
       ((paths: readonly string[]) => void) | undefined;
@@ -2892,6 +3258,7 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
             worktrees={args.worktrees}
             enrichedByPath={args.enrichedByPath}
             erroredPaths={args.erroredPaths ?? new Set()}
+            seededPaths={new Set()}
             onVisiblePathsChange={args.onVisiblePathsChange ?? vi.fn()}
             taskTitlesByEpicId={new Map()}
             toolbarProps={testToolbarProps()}
@@ -2901,7 +3268,7 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
     );
   }
 
-  function manyWorktrees(count: number): WorktreeHostEntryV12[] {
+  function manyWorktrees(count: number): WorktreeHostEntryV14[] {
     return Array.from({ length: count }, (_unused, index) =>
       entry({
         worktreePath: `/wt/w${index}`,
@@ -2921,6 +3288,7 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
       worktrees,
       enrichedByPath: fullyEnriched(worktrees),
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
       taskTitlesByEpicId: undefined,
     });
@@ -2978,6 +3346,7 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
       worktrees,
       enrichedByPath: new Map(),
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
       taskTitlesByEpicId: undefined,
     });
@@ -3211,8 +3580,8 @@ describe("WorktreesList status-aware delete safety", () => {
   // `pendingDeleteTargets`) instead of remounting the whole subtree.
   function statusAwareElement(args: {
     readonly queryClient: QueryClient;
-    readonly worktrees: readonly WorktreeHostEntryV12[];
-    readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV12>;
+    readonly worktrees: readonly WorktreeHostEntryV14[];
+    readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV14>;
     readonly erroredPaths: ReadonlySet<string>;
   }): ReactNode {
     return (
@@ -3224,6 +3593,7 @@ describe("WorktreesList status-aware delete safety", () => {
             worktrees={args.worktrees}
             enrichedByPath={args.enrichedByPath}
             erroredPaths={args.erroredPaths}
+            seededPaths={new Set()}
             onVisiblePathsChange={vi.fn()}
             taskTitlesByEpicId={new Map()}
             toolbarProps={testToolbarProps()}
@@ -3245,6 +3615,7 @@ describe("WorktreesList status-aware delete safety", () => {
       // Never enriched - the row stays "Checking…" for the whole test.
       enrichedByPath: new Map(),
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
       taskTitlesByEpicId: undefined,
     });
@@ -3275,6 +3646,7 @@ describe("WorktreesList status-aware delete safety", () => {
       worktrees: [mergedRow, pendingRow],
       enrichedByPath: new Map([[mergedRow.worktreePath, mergedRow]]),
       erroredPaths: undefined,
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
       taskTitlesByEpicId: undefined,
     });
@@ -3300,6 +3672,7 @@ describe("WorktreesList status-aware delete safety", () => {
       worktrees: [erroredRow],
       enrichedByPath: new Map(),
       erroredPaths: new Set([erroredRow.worktreePath]),
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
       taskTitlesByEpicId: undefined,
     });
@@ -3332,6 +3705,7 @@ describe("WorktreesList status-aware delete safety", () => {
       worktrees: [mergedRow, erroredRow],
       enrichedByPath: new Map([[mergedRow.worktreePath, mergedRow]]),
       erroredPaths: new Set([erroredRow.worktreePath]),
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
       taskTitlesByEpicId: undefined,
     });
@@ -3508,6 +3882,7 @@ describe("WorktreesList status-aware delete safety", () => {
       // uncommitted count is still known: it is a cheap base-listing field.
       enrichedByPath: new Map(),
       erroredPaths: new Set([dirtyErroredRow.worktreePath]),
+      seededPaths: undefined,
       onVisiblePathsChange: undefined,
       taskTitlesByEpicId: undefined,
     });
@@ -3530,5 +3905,209 @@ describe("WorktreesList status-aware delete safety", () => {
 
     fireEvent.click(screen.getByTestId("confirm-action"));
     expect(streamMock.paths).toEqual(["/wt/errored-dirty"]);
+  });
+});
+
+describe("WorktreesList PR-number search", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  // The BASE listing exactly as the host serves it: `prNumber` pinned to null on
+  // every row (see `worktree-setup-orchestrator`'s base shape). PR facts do not
+  // exist here - they only arrive on the enrichment overlay below. Building the
+  // fixture this way is what makes the un-enriched cases honest.
+  const PR_BASE: readonly WorktreeHostEntryV14[] = [
+    entry({ worktreePath: "/wt/super-pr", branch: "feat-super-pr" }),
+    entry({ worktreePath: "/wt/sub-pr", branch: "feat-sub-pr" }),
+    entry({ worktreePath: "/wt/no-pr", branch: "feat-no-pr" }),
+  ];
+
+  // What those rows resolve to once probed: a superproject PR, a submodule-only
+  // PR, and a row that genuinely has none.
+  const PR_ENRICHED: readonly WorktreeHostEntryV14[] = [
+    entry({
+      worktreePath: "/wt/super-pr",
+      branch: "feat-super-pr",
+      prState: "merged",
+      prNumber: 4360,
+      prUrl: "https://github.com/acme/app/pull/4360",
+    }),
+    entry({
+      worktreePath: "/wt/sub-pr",
+      branch: "feat-sub-pr",
+      submodules: [
+        {
+          repoIdentifier: { owner: "acme", repo: "sub" },
+          branch: "feat-sub-pr",
+          prState: "open",
+          prNumber: 256,
+          prUrl: "https://github.com/acme/sub/pull/256",
+          mergedHeadShaMatches: false,
+          mergedIntoDefault: false,
+          atPinnedCommit: false,
+        },
+      ],
+    }),
+    entry({ worktreePath: "/wt/no-pr", branch: "feat-no-pr" }),
+  ];
+
+  // The overlay with the named paths held back - i.e. still awaiting their probe.
+  function enrichedExcept(
+    unprobedPaths: readonly string[],
+  ): ReadonlyMap<string, WorktreeHostEntryV14> {
+    return new Map(
+      PR_ENRICHED.filter(
+        (worktree) => !unprobedPaths.includes(worktree.worktreePath),
+      ).map((worktree) => [worktree.worktreePath, worktree]),
+    );
+  }
+
+  function search(value: string): void {
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search worktrees" }),
+      { target: { value } },
+    );
+  }
+
+  function renderPrList(args: {
+    readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV14>;
+    readonly erroredPaths: ReadonlySet<string> | undefined;
+  }): void {
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: PR_BASE,
+      enrichedByPath: args.enrichedByPath,
+      erroredPaths: args.erroredPaths,
+      seededPaths: undefined,
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
+    });
+  }
+
+  function visibleBranches(): readonly string[] {
+    return PR_BASE.map((worktree) => worktree.branch).filter(
+      (branch): branch is string =>
+        branch !== null &&
+        screen.queryByRole("button", { name: `Delete worktree ${branch}` }) !==
+          null,
+    );
+  }
+
+  it.each([
+    ["4360", "feat-super-pr"],
+    ["#4360", "feat-super-pr"],
+    // The submodule leg is indexed too - the row wears a `#256` pill, so the
+    // number on that pill has to find it.
+    ["256", "feat-sub-pr"],
+    ["#256", "feat-sub-pr"],
+  ])("narrows to the row owning PR %s", (query, expectedBranch) => {
+    renderPrList({
+      enrichedByPath: enrichedExcept([]),
+      erroredPaths: undefined,
+    });
+    search(query);
+    expect(visibleBranches()).toEqual([expectedBranch]);
+  });
+
+  it("still matches repo, branch, path, and Task after the PR leg is added", () => {
+    renderPrList({
+      enrichedByPath: enrichedExcept([]),
+      erroredPaths: undefined,
+    });
+    // The PR index is a UNION with the text haystack, never a replacement: a
+    // non-PR query must keep behaving exactly as it did before.
+    search("feat-no-pr");
+    expect(visibleBranches()).toEqual(["feat-no-pr"]);
+    search("acme/app");
+    expect(visibleBranches()).toEqual([
+      "feat-super-pr",
+      "feat-sub-pr",
+      "feat-no-pr",
+    ]);
+  });
+
+  it("reads 'still checking' - not 'no matches' - while the PR row is un-enriched", () => {
+    // `/wt/super-pr` is held back from the overlay, so its base row still carries
+    // `prNumber: null`. It genuinely cannot match `4360` yet - but claiming "no
+    // matches" would be a lie, because the worktree being looked for is right
+    // there, one probe away.
+    renderPrList({
+      enrichedByPath: enrichedExcept(["/wt/super-pr"]),
+      erroredPaths: undefined,
+    });
+    search("4360");
+
+    expect(visibleBranches()).toEqual([]);
+    screen.getByText("No matches yet - still checking 1 worktree.");
+    expect(screen.queryByText("No worktrees match your search.")).toBeNull();
+  });
+
+  it("settles to 'no matches' once every probe has landed", () => {
+    renderPrList({
+      enrichedByPath: enrichedExcept([]),
+      erroredPaths: undefined,
+    });
+    search("9999");
+
+    expect(visibleBranches()).toEqual([]);
+    screen.getByText("No worktrees match your search.");
+  });
+
+  it("does not hold the 'still checking' notice open for an errored row", () => {
+    // An errored row is un-enriched too, but its probe SETTLED - it will never
+    // learn its PR number. Counting it would pin the spinner on forever, so the
+    // empty state has to fall through to the plain no-match copy.
+    renderPrList({
+      enrichedByPath: enrichedExcept(["/wt/super-pr"]),
+      erroredPaths: new Set(["/wt/super-pr"]),
+    });
+    search("4360");
+
+    expect(visibleBranches()).toEqual([]);
+    screen.getByText("No worktrees match your search.");
+    expect(screen.queryByText(/still checking/)).toBeNull();
+  });
+
+  it("suppresses the 'still checking' notice while a tier filter is active", () => {
+    // A pending row bypasses the tier stage only WHILE it's pending (see
+    // `filteredWorktrees`) - once it resolves it might land in a tier the
+    // active filter excludes, and the search would never surface it despite
+    // the notice having promised to. `/wt/atbase` is enriched purely so
+    // "At base commit" is an available filter option to select; the two rows
+    // that matter, `/wt/super-pr` and `/wt/other-pending`, are left pending
+    // and irrelevant to the "4360" query either way.
+    const atBase = entry({
+      worktreePath: "/wt/atbase",
+      branch: "feat-atbase",
+      atBaseCommit: true,
+    });
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [
+        entry({ worktreePath: "/wt/super-pr", branch: "feat-super-pr" }),
+        entry({
+          worktreePath: "/wt/other-pending",
+          branch: "feat-other-pending",
+        }),
+        atBase,
+      ],
+      enrichedByPath: new Map([[atBase.worktreePath, atBase]]),
+      erroredPaths: undefined,
+      seededPaths: undefined,
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
+    });
+
+    fireEvent.click(screen.getByTestId("worktrees-filter-at-base-commit"));
+    search("4360");
+
+    expect(
+      screen.queryByRole("button", { name: "Delete worktree feat-super-pr" }),
+    ).toBeNull();
+    screen.getByText("No worktrees match your search.");
+    expect(screen.queryByText(/still checking/)).toBeNull();
   });
 });

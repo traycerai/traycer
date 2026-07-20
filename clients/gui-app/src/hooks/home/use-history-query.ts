@@ -9,15 +9,19 @@ import {
   collectHistoryRepos,
   dedupSortWorkspaces,
   filterHistoryItems,
+  prioritizePinnedHistoryItems,
   sortHistoryItems,
+  withHistoryItemPullRequestNumbers,
 } from "@/components/home/data/home-page.data";
 import { useCloudEpicTasksQuery } from "@/hooks/epics/use-cloud-epic-tasks-query";
 import { useDebouncedValue } from "@/hooks/ui/use-debounced-value";
+import { useTaskWorktreeMetadata } from "@/hooks/worktree/use-task-worktree-metadata-query";
 import {
   listCloudTasksRequestForHistorySearch,
   type ListCloudTasksRequest,
 } from "@/lib/cloud-epic-tasks-query";
 import type { ListTasksResponse } from "@traycer/protocol/host/epic/unary-schemas";
+import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/worktree-schemas";
 import type { HistorySearchState } from "@/lib/history-search";
 import { patchHistorySearch } from "@/lib/history-search";
 import Fuse, { type IFuseOptions } from "fuse.js";
@@ -32,6 +36,7 @@ const LOCAL_FUSE_OPTIONS: IFuseOptions<HistoryItem> = {
   keys: [
     { name: "title", weight: 0.8 },
     { name: "linkedRepos", weight: 0.2 },
+    { name: "pullRequestNumbers", weight: 0.8 },
   ],
 };
 
@@ -60,8 +65,13 @@ export function useHistoryQuery(
   const [fallbackNowMs] = useState(() => Date.now());
   const nowMs = params.nowMs ?? fallbackNowMs;
   const request = useMemo<ListCloudTasksRequest>(() => {
+    const isPullRequestNumberQuery =
+      isHistoryPullRequestNumberQuery(debouncedQuery);
     const search = patchHistorySearch(params.search, {
-      query: debouncedQuery,
+      // PR numbers are discovered from local worktree activity, not the cloud
+      // task index. Keep the cloud query broad so it cannot remove the task
+      // before the local PR projection gets to match it.
+      query: isPullRequestNumberQuery ? "" : debouncedQuery,
     });
     return listCloudTasksRequestForHistorySearch(search);
   }, [debouncedQuery, params.search]);
@@ -76,17 +86,39 @@ export function useHistoryQuery(
   } = useCloudEpicTasksQuery(request, { enabled: true });
   const tasksQueryRefetch = tasksQuery.refetch;
   const isQueryDebouncing = debouncedQuery !== trimmedQuery;
+  const isPullRequestNumberQuery =
+    isHistoryPullRequestNumberQuery(debouncedQuery);
   const shouldProjectLocally =
-    isQueryDebouncing || tasksQuery.isFetching || tasksQuery.isPlaceholderData;
+    isQueryDebouncing ||
+    isPullRequestNumberQuery ||
+    tasksQuery.isFetching ||
+    tasksQuery.isPlaceholderData;
+  const baseItems = useMemo(
+    () => buildHistoryItemsFromTasks(tasks, nowMs, currentUserId),
+    [currentUserId, nowMs, tasks],
+  );
+  const historyEpicIds = useMemo(
+    () => baseItems.map((item) => item.epicId),
+    [baseItems],
+  );
+  const worktreeMetadata = useTaskWorktreeMetadata(historyEpicIds);
+  const worktreesByEpicId = worktreeMetadata.worktreesByEpicId;
+  const serverItems = useMemo(
+    () => withHistoryItemPullRequestNumbers(baseItems, worktreesByEpicId),
+    [baseItems, worktreesByEpicId],
+  );
 
   const data = useMemo<HistoryFetchResult | undefined>(() => {
     if (tasksQuery.data === undefined) {
       return undefined;
     }
-    const serverItems = buildHistoryItemsFromTasks(tasks, nowMs, currentUserId);
+    // The settled server order is pinned-first, but an optimistic pin patch
+    // flips a cached row's bit without moving it - the stable pinned-first
+    // partition lifts it into (or drops it out of) the pinned block
+    // instantly, and is an order-preserving no-op on untouched server data.
     const items = shouldProjectLocally
       ? projectHistoryItems(serverItems, params.search)
-      : serverItems;
+      : prioritizePinnedHistoryItems(serverItems);
     const canUseServerFacets =
       !isQueryDebouncing && !tasksQuery.isPlaceholderData;
     const facets = canUseServerFacets
@@ -105,16 +137,16 @@ export function useHistoryQuery(
       availableWorkspaces,
       totalCount: items.length,
       facets,
+      worktreesByEpicId,
     };
   }, [
-    currentUserId,
     isQueryDebouncing,
-    nowMs,
     params.search,
+    serverItems,
     shouldProjectLocally,
-    tasks,
     tasksQuery.data,
     tasksQuery.isPlaceholderData,
+    worktreesByEpicId,
   ]);
 
   const refetch = useCallback(() => tasksQueryRefetch(), [tasksQueryRefetch]);
@@ -122,12 +154,22 @@ export function useHistoryQuery(
   return {
     data,
     isPending: tasksQuery.isPending,
-    isFetching: tasksQuery.isFetching || isQueryDebouncing,
-    error: tasksQuery.error instanceof Error ? tasksQuery.error : null,
+    isFetching:
+      tasksQuery.isFetching ||
+      isQueryDebouncing ||
+      (isPullRequestNumberQuery && worktreeMetadata.isFetching),
+    error:
+      (tasksQuery.error instanceof Error ? tasksQuery.error : null) ??
+      (isPullRequestNumberQuery ? worktreeMetadata.error : null),
     hostId,
     refetch,
     fetchNextPage,
-    hasNextPage: hasNextPage && !shouldProjectLocally,
+    // A settled PR query intentionally projects the broad cloud page locally,
+    // but it must retain pagination so matching tasks beyond the first page
+    // remain reachable. During ordinary debouncing / placeholder handoff, keep
+    // the existing guard so "Show more" cannot fetch against a stale request.
+    hasNextPage:
+      hasNextPage && !isQueryDebouncing && !tasksQuery.isPlaceholderData,
     isFetchingNextPage,
   };
 }
@@ -138,6 +180,7 @@ export interface HistoryFetchResult {
   availableWorkspaces: ReadonlyArray<HistoryWorkspaceRef>;
   totalCount: number;
   facets: HistoryFacets;
+  worktreesByEpicId: ReadonlyMap<string, readonly WorktreeHostEntryV12[]>;
 }
 
 export interface HistoryFacets {
@@ -223,6 +266,12 @@ function sortProjectedHistoryItems(
   sort: HistorySortOption,
   query: string,
 ): ReadonlyArray<HistoryItem> {
-  if (sort === "relevance" && query.length > 0) return items;
+  if (sort === "relevance" && query.length > 0) {
+    return prioritizePinnedHistoryItems(items);
+  }
   return sortHistoryItems(items, sort);
+}
+
+function isHistoryPullRequestNumberQuery(query: string): boolean {
+  return /^(?:pr\s*)?#?\d+$/i.test(query.trim());
 }

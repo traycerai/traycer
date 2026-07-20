@@ -1,12 +1,20 @@
-import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import type {
   InterviewAnswer,
   InterviewQuestion,
 } from "@traycer/protocol/persistence/epic/schemas";
 import { registerComposerFocus } from "@/lib/composer/composer-focus-registry";
 import {
+  readInterviewDraftSnapshot,
+  selectInterviewDraft,
+  useInterviewDraftStore,
+} from "@/stores/composer/interview-draft-store";
+import {
+  draftFromStoredAnswer,
   draftHasContent,
+  draftHasState,
   draftToAnswerValues,
+  draftToStoredAnswer,
   emptyDraft,
   replaceDraftAt,
   type DraftAnswer,
@@ -54,6 +62,7 @@ function digitFromEventKey(key: string): number | null {
 }
 
 interface UseInterviewCardArgs {
+  chatId: string;
   blockId: string;
   questions: ReadonlyArray<InterviewQuestion>;
   // Whether this card's chat tab is the active one in its pane. Gates focus so
@@ -61,6 +70,12 @@ interface UseInterviewCardArgs {
   // refocuses when its tab/pane becomes active - the same contract the Tiptap
   // composer follows.
   isActive: boolean;
+  // True while a Submit/Skip this card sent is still in flight or accepted but
+  // not yet resolved by the host (derived from the chat session's pending /
+  // accepted actions, scoped to this block). Gates every affordance so the same
+  // action cannot be double-sent; it clears on a rejected/failed ack, leaving
+  // the retained draft for retry.
+  isBusy: boolean;
   onSubmit:
     | ((
         blockId: string,
@@ -75,42 +90,110 @@ interface UseInterviewCardArgs {
 // shortcuts - so the components stay purely presentational. Attach
 // `containerRef` to the focusable card element.
 export function useInterviewCard(args: UseInterviewCardArgs) {
-  const { blockId, questions, isActive, onSubmit, onSkip } = args;
+  const { chatId, blockId, questions, isActive, isBusy, onSubmit, onSkip } =
+    args;
+  const total = questions.length;
 
-  // Where the pager is and which way it last moved - the question transition
-  // animates along `step`, so the two always change together.
-  const [page, setPage] = useState<{ index: number; step: 1 | -1 }>({
-    index: 0,
-    step: 1,
-  });
-  const [drafts, setDrafts] = useState<ReadonlyArray<DraftAnswer>>(() =>
-    questions.map(() => emptyDraft()),
+  // The persisted row for THIS (chat, block) is the canonical draft state.
+  // Subscribing (rather than reading it once) keeps duplicate live views of the
+  // same chat in lockstep and means a write always merges against the latest
+  // answers, so one view can never overwrite another's progress with a stale
+  // full snapshot. The row is a stable reference between unrelated store writes,
+  // so this selector never churns renders. `selectInterviewDraft` reads through
+  // own-property checks so a `"__proto__"` id resolves to null, not the
+  // prototype.
+  const storedDraft = useInterviewDraftStore((state) =>
+    selectInterviewDraft(state.draftsByChat, chatId, blockId),
   );
-  // Once the user submits or skips we lock the affordances. The parent
-  // remounts this card via `key={blockId}` when the next interview arrives,
-  // so this flag never needs to clear on its own.
-  const [dispatched, setDispatched] = useState<boolean>(false);
+  const saveStoredDraft = useInterviewDraftStore((state) => state.saveDraft);
+  const clearStoredDraft = useInterviewDraftStore((state) => state.clearDraft);
+
+  // The pager INDEX is canonical (persisted with the row); `step` is per-view
+  // ephemeral animation direction and never persists.
+  const [step, setStep] = useState<1 | -1>(1);
   // The just-picked single-select option, highlighted until auto-advance.
   const [pendingLabel, setPendingLabel] = useState<string | null>(null);
 
   const containerRef = useRef<HTMLElement | null>(null);
   const advanceTimerRef = useRef<number | null>(null);
+  // The single-select advance timer (~110ms) closes over `submitDrafts`/
+  // `navigate` from the render that scheduled it, which in turn closed over
+  // that render's `isBusy`. If another live view sends an action before the
+  // timer fires, this render's `isBusy` guard inside those functions is
+  // already stale. Track the latest value in a ref so the timer can re-check
+  // it at fire time instead of trusting its own scheduling-time snapshot.
+  const latestIsBusyRef = useRef(isBusy);
+  useEffect(() => {
+    latestIsBusyRef.current = isBusy;
+  }, [isBusy]);
 
-  const total = questions.length;
-  const safeIndex = Math.min(Math.max(page.index, 0), Math.max(total - 1, 0));
+  const drafts = useMemo(
+    () =>
+      questions.map((question, index) =>
+        draftFromStoredAnswer(storedDraft?.answers[index], question),
+      ),
+    [questions, storedDraft],
+  );
+
+  const safeIndex = Math.min(
+    Math.max(storedDraft?.pageIndex ?? 0, 0),
+    Math.max(total - 1, 0),
+  );
   const question = total > 0 ? questions[safeIndex] : null;
   const draft = drafts[safeIndex] ?? emptyDraft();
   const freeTextQuestion = question !== null && question.options.length === 0;
 
   const isLast = safeIndex >= total - 1;
   const answeredCount = drafts.filter(draftHasContent).length;
-  const canAdvance = total > 0 && safeIndex < total - 1 && !dispatched;
-  const canSubmit = total > 0 && onSubmit !== null && !dispatched;
-  const canSkip = onSkip !== null && !dispatched;
+  // `isBusy` is the ack-aware gate: an interview action this card sent is in
+  // flight or accepted-but-unresolved. It blocks re-sends, edits, paging,
+  // keyboard actions, and forks. It clears on a rejected/failed ack (the
+  // interview stays pending), so the retained draft is retryable then - but not
+  // an immediate double-submit while the first send is still live.
+  const canAdvance = total > 0 && safeIndex < total - 1 && !isBusy;
+  const canSubmit = total > 0 && onSubmit !== null && !isBusy;
+  const canSkip = onSkip !== null && !isBusy;
+
+  // Read the LATEST canonical row at call time rather than trusting a
+  // render-time closure. A delayed single-select callback (see `toggleOption`)
+  // fires ~110ms later, by which point a duplicate view may have edited the
+  // answers or navigated to another page; replaying a captured snapshot would
+  // clobber it. The page index is clamped exactly like `safeIndex` so the two
+  // are comparable.
+  const readCanonicalState = () => {
+    const latest = readInterviewDraftSnapshot(chatId, blockId);
+    return {
+      pageIndex: Math.min(
+        Math.max(latest?.pageIndex ?? 0, 0),
+        Math.max(total - 1, 0),
+      ),
+      drafts: questions.map((question, index) =>
+        draftFromStoredAnswer(latest?.answers[index], question),
+      ),
+    };
+  };
+
+  // Write with the originating action so a tab switch cannot unmount the card
+  // before an effect flushes. Untouched interviews never create stored rows.
+  const persistDraft = (
+    nextPageIndex: number,
+    nextDrafts: ReadonlyArray<DraftAnswer>,
+  ) => {
+    if (nextPageIndex === 0 && !nextDrafts.some(draftHasState)) {
+      clearStoredDraft(chatId, blockId);
+      return;
+    }
+    saveStoredDraft(chatId, blockId, {
+      pageIndex: nextPageIndex,
+      answers: nextDrafts.map(draftToStoredAnswer),
+    });
+  };
 
   const updateDraft = (next: DraftAnswer): ReadonlyArray<DraftAnswer> => {
     const nextDrafts = replaceDraftAt(drafts, safeIndex, next);
-    setDrafts(nextDrafts);
+    // Persisting is the only write: the store subscription re-derives `drafts`
+    // and re-renders, so there is no separate local copy to drift out of sync.
+    persistDraft(safeIndex, nextDrafts);
     return nextDrafts;
   };
 
@@ -121,20 +204,28 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
     }
   };
 
-  const navigate = (step: 1 | -1) => {
+  const navigate = (
+    direction: 1 | -1,
+    answerDrafts: ReadonlyArray<DraftAnswer>,
+  ) => {
+    if (isBusy) return;
     clearAdvanceTimer();
     setPendingLabel(null);
-    setPage(({ index }) => ({
-      index: Math.min(Math.max(index + step, 0), Math.max(total - 1, 0)),
-      step,
-    }));
+    const nextIndex = Math.min(
+      Math.max(safeIndex + direction, 0),
+      Math.max(total - 1, 0),
+    );
+    setStep(direction);
+    // The index is canonical: persist it so the subscription moves this view
+    // (and any duplicate view) to the new page.
+    persistDraft(nextIndex, answerDrafts);
   };
 
-  const goNext = () => navigate(1);
-  const goPrevious = () => navigate(-1);
+  const goNext = () => navigate(1, drafts);
+  const goPrevious = () => navigate(-1, drafts);
 
   const submitDrafts = (answerDrafts: ReadonlyArray<DraftAnswer>) => {
-    if (onSubmit === null || dispatched) return;
+    if (onSubmit === null || isBusy) return;
     clearAdvanceTimer();
     // Submit is unconditional: unanswered questions go through with empty
     // values (draftToAnswerValues returns [] for an empty draft).
@@ -145,9 +236,11 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
       notes: null,
     }));
     setPendingLabel(null);
-    const clientActionId = onSubmit(blockId, answers);
-    if (clientActionId === null) return;
-    setDispatched(true);
+    // Fire and keep the draft: a returned client action id only proves the
+    // renderer sent the action, not that the host accepted it. The draft is
+    // cleared authoritatively when the interviewAnswered lifecycle frame lands
+    // (chat-session-store); a rejection keeps it for retry.
+    onSubmit(blockId, answers);
   };
 
   const submit = () => {
@@ -155,7 +248,7 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
   };
 
   const proceed = () => {
-    if (dispatched) return;
+    if (isBusy) return;
     if (isLast) submit();
     else goNext();
   };
@@ -164,13 +257,13 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
     if (!canSkip) return;
     clearAdvanceTimer();
     setPendingLabel(null);
-    const clientActionId = onSkip(blockId, "Skipped by user");
-    if (clientActionId === null) return;
-    setDispatched(true);
+    // Same lifecycle contract as submit: keep the draft until the authoritative
+    // interviewErrored frame clears it, so a rejected skip stays retryable.
+    onSkip(blockId, "Skipped by user");
   };
 
   const toggleOption = (label: string) => {
-    if (question === null || dispatched) return;
+    if (question === null || isBusy) return;
     if (question.multiSelect) {
       const next = new Set(draft.selected);
       if (next.has(label)) next.delete(label);
@@ -181,7 +274,7 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
     // Single-select: commit the choice, hold a brief highlight, then advance.
     // Re-picking during the highlight window replaces the choice and restarts
     // the timer, so a quick correction is never swallowed.
-    const nextDrafts = updateDraft({
+    updateDraft({
       ...draft,
       selected: new Set([label]),
       otherSelected: false,
@@ -190,13 +283,47 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
     clearAdvanceTimer();
     advanceTimerRef.current = window.setTimeout(() => {
       advanceTimerRef.current = null;
-      if (isLast) submitDrafts(nextDrafts);
-      else goNext();
+      // Re-check busy state at fire time: another live view may have sent an
+      // action during the highlight window, making this scheduling-time
+      // snapshot stale. Submitting or advancing now would mutate state (or
+      // double-dispatch) while busy.
+      if (latestIsBusyRef.current) {
+        setPendingLabel(null);
+        return;
+      }
+      // Re-derive from the LATEST canonical row at fire time. A duplicate view
+      // may have changed this answer or the page during the highlight window.
+      const latest = readCanonicalState();
+      // No-op when the canonical page moved off the question this timer was
+      // armed on: a duplicate view explicitly navigated (Previous/Next), and
+      // submitting or advancing from here would override that navigation -
+      // e.g. stale-submitting the last question the other view just left, or
+      // rewinding a view that advanced further ahead.
+      if (latest.pageIndex !== safeIndex) {
+        setPendingLabel(null);
+        return;
+      }
+      const currentAnswer = latest.drafts[safeIndex] ?? emptyDraft();
+      // No-op when this single-select choice was superseded (another view
+      // picked Other, a different option, or cleared it): that view drives its
+      // own advance, and replaying our stale choice would clobber it.
+      const stillOurChoice =
+        !currentAnswer.otherSelected &&
+        currentAnswer.selected.size === 1 &&
+        currentAnswer.selected.has(label);
+      if (!stillOurChoice) {
+        setPendingLabel(null);
+        return;
+      }
+      // Submit / page-advance against the LATEST canonical answers, never the
+      // captured snapshot.
+      if (isLast) submitDrafts(latest.drafts);
+      else navigate(1, latest.drafts);
     }, ADVANCE_DELAY_MS);
   };
 
   const toggleOther = () => {
-    if (question === null || dispatched) return;
+    if (question === null || isBusy) return;
     // Diverting to a custom answer cancels any pending single-select advance.
     clearAdvanceTimer();
     setPendingLabel(null);
@@ -212,10 +339,12 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
   };
 
   const setOtherText = (text: string) => {
+    if (isBusy) return;
     updateDraft({ ...draft, otherText: text });
   };
 
   const setFreeText = (text: string) => {
+    if (isBusy) return;
     updateDraft({ ...draft, otherText: text, otherSelected: true });
   };
 
@@ -275,7 +404,7 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
   // jsx-a11y/no-noninteractive-element-interactions correctly rejects JSX key
   // handlers on non-widget elements; useEffectEvent keeps it on fresh state.
   const handleKey = useEffectEvent((event: KeyboardEvent) => {
-    if (dispatched) return;
+    if (isBusy) return;
     const editable = isEditableTarget(event.target);
     let handled = false;
     if (event.key === "Enter") handled = handleEnter(event);
@@ -352,9 +481,8 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
     safeIndex,
     question,
     draft,
-    direction: page.step,
+    direction: step,
     pendingLabel,
-    dispatched,
     isLast,
     answeredCount,
     canAdvance,

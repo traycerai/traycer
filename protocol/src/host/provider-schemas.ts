@@ -249,9 +249,43 @@ export const providerLoginCapabilitySchema = z.object({
    * `providers.setEnvOverride`. Null when paste-to-reconnect is unsupported.
    */
   token: z.object({ vars: z.array(z.string()) }).nullable(),
+  /**
+   * Non-null when the provider's `providers.startLogin` child accepts a
+   * pasted authorization code on stdin (e.g. Claude's manual-code redirect
+   * page - see the code-paste decision log). The GUI shows the paste-code
+   * waiting step only for providers with this slot set; the code itself
+   * goes over `providers.submitLoginCode`, kept alive via
+   * `providers.touchLogin`. Shape carries no fields today - existence alone
+   * is the capability signal - but stays an object rather than a boolean so
+   * a future paste-flow variant can grow it without a shape change.
+   * `.catch(null)` tolerates old host builds that predate this field; old
+   * peers degrade to no paste UI.
+   */
+  codePaste: z.object({}).nullable().catch(null),
 });
 export type ProviderLoginCapability = z.infer<
   typeof providerLoginCapabilitySchema
+>;
+
+/**
+ * Frozen pre-code-paste snapshot of `providerLoginCapabilitySchema`, as it
+ * shipped in host-v1.0.0 (`oauthArgs` + `token` only) - a hand-copy, NOT
+ * derived via `.omit()` from the live schema, same invariant as
+ * `providerCliStateBaseShapeV20`'s own comment below. Referenced by the
+ * frozen `providerCliStateBaseShapeV10` / `V20` / `V30` base shapes in place
+ * of the live schema, so those already-released wire shapes don't silently
+ * inherit `codePaste` (or any future capability field) the moment the live
+ * schema grows one - `loginCapability` predates per-field freezing
+ * discipline (it was part of the original v1.0 base shape, not added and
+ * frozen alongside a version bump like `profiles` was), so this snapshot
+ * retrofits that guarantee.
+ */
+export const providerLoginCapabilitySchemaV10 = z.object({
+  oauthArgs: z.array(z.string()).nullable(),
+  token: z.object({ vars: z.array(z.string()) }).nullable(),
+});
+export type ProviderLoginCapabilityV10 = z.infer<
+  typeof providerLoginCapabilitySchemaV10
 >;
 
 /**
@@ -332,6 +366,19 @@ export type ProviderProfileAccentColor = z.infer<
   typeof providerProfileAccentColorSchema
 >;
 
+// One near/at-limit rate-limit window on a profile, annotated with the model
+// family it gates. `family` is a provider-reported token - "opus", "sonnet",
+// or a model-scoped bucket's display name ("Fable") - matched by the GUI
+// against the selected model's slug/label; `null` means a shared window that
+// gates every model.
+export const providerProfileRateLimitScopeSchema = z.object({
+  family: z.string().nullable(),
+  severity: z.enum(["near_limit", "hard_limit"]),
+});
+export type ProviderProfileRateLimitScope = z.infer<
+  typeof providerProfileRateLimitScopeSchema
+>;
+
 export const providerProfileSchema = z.object({
   profileId: z.string(),
   kind: providerProfileKindSchema,
@@ -348,6 +395,17 @@ export const providerProfileSchema = z.object({
   usageUpdatedAt: z.number().nullable(),
   // `.catch("unknown")` tolerates old host builds that predate this field.
   rateLimitStatus: providerProfileRateLimitStatusSchema.catch("unknown"),
+  // The windows behind `rateLimitStatus`, per model family (see the scope
+  // schema above), so the composer can scope its switch prompt to the selected
+  // model instead of warning profile-wide. `null` = no per-scope data: an old
+  // host build that predates this field (via `.catch(null)`, same guard as
+  // `accentColor`) or a profile whose gauge has never been read / has gone
+  // stale - consumers fall back to the profile-level `rateLimitStatus`. An
+  // empty array means "read fine, nothing limited".
+  rateLimitLimitedScopes: z
+    .array(providerProfileRateLimitScopeSchema)
+    .nullable()
+    .catch(null),
   // Set when this profile's resolved identity (accountUuid, or email
   // fallback) matches another active profile of the same provider (including
   // ambient) - the id of that other profile. Duplicates are warned, never
@@ -461,10 +519,11 @@ const providerCliStateBaseShape = {
   // Per-profile rows for this provider: the ambient login plus any
   // Traycer-managed subscriptions. `[]` for providers that don't support the
   // multi-profile capability (gated per-adapter, see the decision log's
-  // rollout row) and for old host builds that predate profiles - `.catch([])`
-  // tolerates both the same way `availabilityPending` does above. UI
-  // affordances only appear once a provider has 2+ rows (progressive
-  // disclosure).
+  // rollout row). The field ships with the v4.0 line: hosts on older lines
+  // never send it and the v3→v4 upgrade bridge fills `profiles: []` ("old
+  // host never had this feature"), with `.catch([])` kept as parse-time
+  // hardening. UI affordances only appear once a provider has 2+ rows
+  // (progressive disclosure).
   profiles: z.array(providerProfileSchema).catch([]),
 };
 
@@ -478,7 +537,7 @@ const providerCliStateBaseShapeV10 = {
   apiKey: providerApiKeyStateSchema,
   terminalAgentArgs: z.string().catch(""),
   envOverrides: z.array(providerEnvOverrideSchema).catch([]),
-  loginCapability: providerLoginCapabilitySchema.nullable().catch(null),
+  loginCapability: providerLoginCapabilitySchemaV10.nullable().catch(null),
 };
 
 // Frozen protocol-v2.0 base shape (before `profiles`) - a hand-copy of
@@ -502,7 +561,7 @@ const providerCliStateBaseShapeV20 = {
   apiKey: providerApiKeyStateSchema,
   terminalAgentArgs: z.string().catch(""),
   envOverrides: z.array(providerEnvOverrideSchema).catch([]),
-  loginCapability: providerLoginCapabilitySchema.nullable().catch(null),
+  loginCapability: providerLoginCapabilitySchemaV10.nullable().catch(null),
   availabilityPending: z.boolean().catch(false),
 };
 
@@ -597,14 +656,21 @@ export type ProviderCliStateMutationV20 = z.infer<
 
 // ── Frozen protocol-v3.0 provider state + list response (with Amp, before ──
 // Devin/Pi). `providers.list` always returns every provider; v3.0 shipped with
-// Amp (and profiles[]). The v4.0 line adds Devin/Pi and a v4→v3 (and v4→v2 /
-// v4→v1) downgrade bridge filters them for older callers. Do not add new
-// providers here - use the existing v4 bridge.
+// Amp and WITHOUT `profiles` - multi-profile landed mid-line but never reached
+// a released host on this line, so `profiles` belongs to the v4.0 cut and the
+// v3→v4 upgrade fills `profiles: []` for v3.0 hosts. The v4.0 line also adds
+// Devin/Pi, and the v4→v3 (and v4→v2 / v4→v1) downgrade bridges filter them
+// for older callers. Do not add new providers or fields here - use the
+// existing v4 bridge.
 //
-// Built as a snapshot of the live base shape as of the v3.0 freeze (includes
-// `profiles`) with the frozen v3.0 provider-id enum - NOT derived via
+// Built as a hand-frozen snapshot of the base shape as actually released on
+// the v3.0 line, with the frozen v3.0 provider-id enum - NOT derived via
 // `.extend()` from the live schema, so future live-only fields do not leak
-// into the v3.0 wire for already-shipped clients.
+// into the v3.0 wire for already-shipped clients. The plain (non-strict)
+// `z.object` built from this shape also silently DROPS an unmodeled
+// `profiles` key, so the v4.0->v3.0 downgrade strips profile identity
+// (email, label) off the wire for v3.0 callers that never negotiated profile
+// support - same mechanism as `providerCliStateBaseShapeV20`.
 const providerCliStateBaseShapeV30 = {
   enabled: z.boolean(),
   disabledBy: providerDisabledBySchema.nullable(),
@@ -615,9 +681,8 @@ const providerCliStateBaseShapeV30 = {
   apiKey: providerApiKeyStateSchema,
   terminalAgentArgs: z.string().catch(""),
   envOverrides: z.array(providerEnvOverrideSchema).catch([]),
-  loginCapability: providerLoginCapabilitySchema.nullable().catch(null),
+  loginCapability: providerLoginCapabilitySchemaV10.nullable().catch(null),
   availabilityPending: z.boolean().catch(false),
-  profiles: z.array(providerProfileSchema).catch([]),
 };
 
 export const providerCliStateSchemaV30 = z.object({
@@ -653,6 +718,7 @@ export {
   DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
   type ProviderNativeCapabilities,
 };
+
 
 export const providersSetSelectionRequestSchema = z.object({
   providerId: providerIdSchema,
@@ -804,8 +870,11 @@ export type ProvidersSetEnabledResponse = z.infer<
  * `removeProfile` / `recolorProfile` methods (see that contract in `registry.ts` for the full
  * rationale). `profileAction: null` is today's plain enable/disable request,
  * byte-identical to `providersSetEnabledRequestSchema` - old clients are
- * unaffected. The response is unchanged (`providersSetEnabledResponseSchema`)
- * since the mutated `state.profiles[]` already reflects the rename/removal/recolor.
+ * unaffected. The 2.1 response is the live shape
+ * (`providersSetEnabledResponseSchema`, whose `state.profiles[]` reflects the
+ * rename/removal/recolor); the released 2.0 response is frozen pre-profiles
+ * (`providersSetEnabledResponseSchemaV20`) and the 2.0→2.1 upgrade fills
+ * `profiles: []`.
  */
 export const providersSetEnabledRequestSchemaV21 =
   providersSetEnabledRequestSchema.extend({
@@ -1077,11 +1146,12 @@ export type ProvidersStartLoginResponseV11 = z.infer<
  * the GUI awaits this instead of polling auth status.
  */
 // `profileId` mirrors `providers.startLogin@1.1`'s request field so the
-// caller awaits the same profile-scoped login child it started. Bare
-// additive/defaulted field (not a version bump) - safe in both directions
-// per the released-peer compat gate's "added optional properties" rule; the
-// v2->v1 downgrade bridge in registry.ts explicitly drops it before the
-// strict v1.0 parse (see `providersAwaitLoginDowngradeV2ToV1`).
+// caller awaits the same profile-scoped login child it started. Ships with
+// `providers.awaitLogin@2.1` (originally landed as a bare additive/defaulted
+// field on the released 2.0 line; the 2.0 shapes are frozen without it below
+// and the 2.0→2.1 upgrade fills `null`). The v2->v1 downgrade bridge in
+// registry.ts explicitly drops it before the strict v1.0 parse (see
+// `providersAwaitLoginDowngradeV21ToV10`).
 export const providersAwaitLoginRequestSchema = z.object({
   providerId: providerIdSchema,
   mcpAuth: nativeAuthPollContextSchema.nullable().default(null),
@@ -1105,8 +1175,22 @@ export const providersAwaitLoginResponseSchema = z.object({
   mcpAuth: nativeAuthResultSchema.nullable().default(null),
   // Create-profile only: when the authenticated account already belongs to
   // an active profile, the host discards the pending profile instead of
-  // activating a duplicate and identifies the existing profile here.
+  // activating a duplicate and identifies the existing profile here. Ships
+  // with `providers.awaitLogin@2.1`; the frozen 2.0 response below never
+  // carried it.
   existingProfileId: z.string().nullable().default(null),
+  // Code-paste only: true when this call resolved because a previously
+  // submitted `providers.submitLoginCode` was rejected by the exchange (the
+  // login child exited nonzero without auth success on re-probe - see the
+  // code-paste decision log's "Failure classification" row), distinct from
+  // the default outcome (a successful re-probe, or nothing was in flight).
+  // The GUI uses this to drive its bounded auto-restart (decision log's
+  // "Bad-code recovery" row) instead of surfacing a generic failed state.
+  // Bare additive field on the still-unreleased 2.1 line (same precedent as
+  // `providers.startLogin@1.1`'s `createProfile.shareSkillsAndPlugins`):
+  // old hosts never emit it and `.default(false)` keeps old-client parses
+  // byte-identical to today.
+  codeRejected: z.boolean().default(false),
 });
 export const providersAwaitLoginResponseSchemaV20 = z.object({
   state: providerCliStateSchemaMutationV20.nullable(),
@@ -1117,6 +1201,25 @@ export const providersAwaitLoginResponseSchemaV10 = z.object({
 export type ProvidersAwaitLoginResponse = z.infer<
   typeof providersAwaitLoginResponseSchema
 >;
+
+/**
+ * Client-side response-frame budget for `providers.awaitLogin`, which is a
+ * long-poll: the host's response is contractually silent until the OAuth
+ * login child terminates. A transport-default frame timeout (~30 s) misreads
+ * that silence as a dead host and abandons a healthy in-flight sign-in as
+ * soon as the user takes longer than the timeout in the browser.
+ *
+ * Derivation: the host's login timeout is now a rolling deadline (see the
+ * code-paste decision log's "Timeouts" row) - each `providers.touchLogin`
+ * keepalive or `providers.submitLoginCode` submit resets the kill timer to
+ * 3 minutes out, hard-capped at 15 minutes from spawn - so a child can
+ * legitimately stay alive up to 15 minutes even while the long-poll caller
+ * sees no traffic. 16 minutes covers that hard cap plus slack for the await
+ * path's own bounded auth re-probe before the response is framed. The host
+ * must keep its internal deadline strictly under this budget - clients wait
+ * exactly this long before declaring the call dead.
+ */
+export const PROVIDERS_AWAIT_LOGIN_RESPONSE_BUDGET_MS = 16 * 60_000;
 
 /**
  * Frozen `providers.cancelLogin@1.0` request/response.
@@ -1183,6 +1286,72 @@ export type {
   NativeMutationResult,
 };
 
+/**
+ * Relay a pasted authorization code to an in-flight `providers.startLogin`
+ * child's stdin (see the code-paste decision log's "Mechanism" row).
+ * `profileId` mirrors `providers.startLogin@1.1`'s convention - the same
+ * profile-scoped login child the caller started - and defaults to `null`
+ * for the legacy (no-profile-override) login. The exchange outcome itself
+ * (accepted vs rejected by claude.ai) is NOT carried here: submitting only
+ * confirms the code reached a live child; the real outcome surfaces later
+ * via the existing `providers.awaitLogin` long-poll (see that response's
+ * `codeRejected` flag) or, after an auto-restart, a fresh login.
+ */
+export const providersSubmitLoginCodeRequestSchema = z.object({
+  providerId: providerIdSchema,
+  profileId: z.string().nullable().default(null),
+  code: z.string(),
+});
+export type ProvidersSubmitLoginCodeRequest = z.infer<
+  typeof providersSubmitLoginCodeRequestSchema
+>;
+
+/**
+ * `accepted`: the code reached a live login child (a real exchange attempt
+ * is now underway, or the child re-armed after a malformed paste - see the
+ * decision log's "Malformed paste" row); await the result via
+ * `providers.awaitLogin`. `noActiveLogin`: no login child is running for
+ * this provider/profile (already finished, cancelled, or timed out) - the
+ * caller should start a fresh login instead of waiting.
+ */
+export const providersSubmitLoginCodeResponseSchema = z.object({
+  outcome: z.enum(["accepted", "noActiveLogin"]),
+});
+export type ProvidersSubmitLoginCodeResponse = z.infer<
+  typeof providersSubmitLoginCodeResponseSchema
+>;
+
+/**
+ * Keepalive for an in-flight `providers.startLogin` child: resets the
+ * host's rolling kill timer without submitting a code (see the code-paste
+ * decision log's "Timeouts" row - each keepalive or submit resets the timer
+ * to 3 minutes out, hard-capped at 15 minutes from spawn). The GUI fires
+ * this while the user is still away in the browser so a slow copy-paste
+ * doesn't race the kill timer. `profileId` mirrors the same profile-scoped
+ * convention as `providers.submitLoginCode`; unlike that request this
+ * method has no pre-profile legacy shape to stay compatible with, so the
+ * field is required rather than defaulted.
+ */
+export const providersTouchLoginRequestSchema = z.object({
+  providerId: providerIdSchema,
+  profileId: z.string().nullable(),
+});
+export type ProvidersTouchLoginRequest = z.infer<
+  typeof providersTouchLoginRequestSchema
+>;
+
+/**
+ * `extended: false` when no live login child exists for this
+ * provider/profile (already finished, cancelled, or timed out) - the
+ * caller should stop touching and re-probe instead of retrying.
+ */
+export const providersTouchLoginResponseSchema = z.object({
+  extended: z.boolean(),
+});
+export type ProvidersTouchLoginResponse = z.infer<
+  typeof providersTouchLoginResponseSchema
+>;
+
 export function downgradeProviderAuthV20ToV10(
   auth: ProviderAuthV20,
 ): ProviderAuthV10 {
@@ -1208,6 +1377,11 @@ export function downgradeProviderAuthV20ToV10(
 // than requiring callers to conjure one. `providersListDowngradeV2ToV1`
 // (v2.0/mutation-v2.0 sources) and the v3.0/latest downgrade paths (live
 // source) share this one stripping function.
+// `loginCapability` is typed as either the live or frozen-v10 capability
+// shape for the same reason: the v2.0/v3.0 frozen states carry the
+// pre-`codePaste` shape (`providerLoginCapabilitySchemaV10`), not the live
+// one - either is fine here since the strict v1.0 parse below only keeps
+// `oauthArgs`/`token` regardless.
 export function downgradeProviderCliStateToV10(
   state: (
     | ProviderCliState
@@ -1217,6 +1391,8 @@ export function downgradeProviderCliStateToV10(
   ) & {
     profiles?: ProviderCliState["profiles"];
     nativeCapabilities?: ProviderNativeCapabilities;
+    loginCapability:
+      ProviderLoginCapability | ProviderLoginCapabilityV10 | null;
   },
 ): ProviderCliStateV10 | null {
   // `providerCliStateSchemaV10` is a `z.strictObject`, so it REJECTS any key it
@@ -1256,9 +1432,12 @@ export function downgradeProviderCliStateListToV20(
   });
 }
 
-// Downgrades a latest-shaped provider-state list to the frozen v3.0 shape,
-// dropping Devin/Pi (or any future post-v3.0 provider) so an already-shipped
-// v3.0 client's strict decode never sees it.
+// Downgrades a latest-shaped (v4.0) provider-state list to the frozen v3.0
+// shape, dropping Devin/Pi (or any future post-v3.0 provider) so an already-
+// shipped v3.0 client's strict decode never sees it. The reparse also strips
+// `profiles`/`nativeCapabilities` - the frozen v3.0 object doesn't model
+// them - keeping profile identity (email, label) off the wire for callers
+// that never negotiated profile support.
 export function downgradeProviderCliStateListToV30(
   states: readonly unknown[],
 ): ProviderCliStateV30[] {
@@ -1291,8 +1470,9 @@ export function downgradeProviderCliStateToMutationV20(
 // Upgrades a v1.0 state to the frozen v2.0 shape - used only by
 // `providers.list`'s v1.0 -> v2.0 bridge, whose response is pinned to
 // `providerCliStateSchemaV20` (narrower `providerId`, no `profiles`). Every
-// other provider.* mutation's v1.0 -> v2.0 bridge upgrades to the LIVE shape
-// instead - see `upgradeProviderCliStateV10ToLatest` below.
+// other provider.* mutation's v1.0 -> v2.0 bridge upgrades to the frozen
+// major-2 mutation shape instead - see
+// `upgradeProviderCliStateV10ToMutationV20` below.
 export function upgradeProviderCliStateV10ToV20(
   state: ProviderCliStateV10,
 ): ProviderCliStateV20 {
@@ -1335,19 +1515,16 @@ export function upgradeProviderCliStateListToLatest(
   return states.map(upgradeProviderCliStateToLatest);
 }
 
-// Upgrades a v1.0 state straight to the live/latest shape - used by every
-// provider.* mutation (setSelection, addCustomPath, setEnabled, ...) whose
-// "v2.0" contract reuses `providerCliStateSchema` directly rather than the
-// frozen `providerCliStateSchemaV20` (only `providers.list` freezes v2.0).
-// `profiles: []` matches a v1.0 host, which predates profiles entirely - the
-// same "old host never had this feature" semantics `availabilityPending`
-// already uses here.
-export function upgradeProviderCliStateV10ToLatest(
+// Upgrades a v1.0 state to the frozen major-2 mutation-response shape - used
+// by every provider.* state-echo mutation's v1.0 -> v2.0 bridge
+// (setSelection, addCustomPath, setEnabled, ...). Like the v1.0 host itself,
+// the frozen 2.0 shape predates `profiles`; each method's 2.0 -> 2.1 upgrade
+// fills `profiles: []` for the caller's canonical.
+export function upgradeProviderCliStateV10ToMutationV20(
   state: ProviderCliStateV10,
-): ProviderCliState {
-  return providerCliStateSchema.parse({
+): ProviderCliStateMutationV20 {
+  return providerCliStateSchemaMutationV20.parse({
     ...state,
     availabilityPending: false,
-    profiles: [],
   });
 }

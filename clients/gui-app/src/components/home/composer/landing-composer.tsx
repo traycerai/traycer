@@ -48,6 +48,7 @@ import { contentIsSubmittable } from "@/lib/composer/composer-content";
 import { nextComposerMode } from "@/components/home/data/landing-options";
 import { ArrowLeftRight } from "lucide-react";
 import { useHostBinding, useHostClient } from "@/lib/host";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 interface LandingComposerProps {
   readonly draftId: string | null;
@@ -177,14 +178,24 @@ export function LandingComposer(props: LandingComposerProps) {
       deriveFolderlessAllowedWorkspaceAvailability(
         resolvedWorkspace.folders,
         resolvedWorkspace.isLoading,
+        resolvedWorkspace.isError,
       ),
-    [resolvedWorkspace.folders, resolvedWorkspace.isLoading],
+    [
+      resolvedWorkspace.folders,
+      resolvedWorkspace.isLoading,
+      resolvedWorkspace.isError,
+    ],
   );
   const workspaceCanStart = workspaceComposerCanStart(workspaceAvailability);
-  const canSubmit = !isSubmitting && workspaceCanStart && hasSubmittableContent;
+  const paste = useLandingComposerPaste(editorRef);
+  const attachmentPending = paste.isIngestingImages;
+  const canSubmit =
+    !isSubmitting &&
+    !attachmentPending &&
+    workspaceCanStart &&
+    hasSubmittableContent;
 
   const actions = useLandingComposerActions();
-  const paste = useLandingComposerPaste(editorRef);
   const { dictationControl, dictationPreparing } = useComposerDictation({
     editorRef,
     isActive: chatComposerActive,
@@ -222,6 +233,10 @@ export function LandingComposer(props: LandingComposerProps) {
   );
 
   const handleRemoveImage = useCallback((id: string) => {
+    Analytics.getInstance().track(AnalyticsEvent.AttachmentRemoved, {
+      kind: "image",
+      surface: "draft",
+    });
     editorRef.current?.removeImageAttachmentById(id);
   }, []);
 
@@ -259,6 +274,7 @@ export function LandingComposer(props: LandingComposerProps) {
       initialSelection={initialSelection}
       canSubmit={canSubmit}
       isSubmitting={isSubmitting}
+      attachmentPending={attachmentPending}
       workspaceDisabledHint={workspaceAvailability.disabledHint}
       header={<div className="flex justify-end">{switcher}</div>}
       attachmentsStrip={
@@ -268,6 +284,7 @@ export function LandingComposer(props: LandingComposerProps) {
       dictationControl={dictationControl}
       dictationPreparing={dictationPreparing}
       paste={paste}
+      hasPastedImageBytes={null}
       onSubmit={handleSubmit}
       onStartTerminal={handleStartTerminal}
       onSnapshot={handleSnapshot}

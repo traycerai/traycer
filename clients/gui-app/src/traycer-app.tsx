@@ -5,6 +5,7 @@ import { HostOperationStatusListener } from "@/components/layout/bridges/host-op
 import { HostRegistryUpdateListener } from "@/components/layout/bridges/host-registry-update-listener";
 import { RunnerHostBridges } from "@/components/layout/bridges/runner-host-bridges";
 import { WorktreeDeleteProgressToastBridge } from "@/components/layout/bridges/worktree-delete-progress-toast-bridge";
+import { ReportIssueDialogHost } from "@/components/layout/dialogs/report-issue-dialog-host";
 import { CenteredCard } from "@/components/centered-card";
 import { RootErrorBoundary } from "@/components/errors/root-error-boundary";
 import { Toaster } from "@/components/ui/sonner";
@@ -25,12 +26,16 @@ import { ComposerHarnessMemoryPersistLifecycleBridge } from "@/providers/compose
 import { WorktreeIntentMemoryPersistLifecycleBridge } from "@/providers/worktree-intent-memory-persist-lifecycle-bridge";
 import { WorktreeIntentStagingPersistLifecycleBridge } from "@/providers/worktree-intent-staging-persist-lifecycle-bridge";
 import { EpicCanvasPersistLifecycleBridge } from "@/providers/epic-canvas-persist-lifecycle-bridge";
+import { AppLocalNotificationsPersistLifecycleBridge } from "@/providers/app-local-notifications-persist-lifecycle-bridge";
+import { LandingTerminalPersistLifecycleBridge } from "@/providers/landing-terminal-persist-lifecycle-bridge";
+import { LandingTerminalTombstoneRecoveryBridge } from "@/providers/landing-terminal-tombstone-recovery-bridge";
 import { EpicTabExistenceReconciler } from "@/providers/epic-tab-existence-reconciler";
 import { CliCredentialSeeder } from "@/providers/cli-credential-seeder";
 import { HarnessCatalogPrefetcher } from "@/providers/harness-catalog-prefetcher";
 import { HistoryPruneProvider } from "@/providers/history-prune-provider";
 import { KeybindingProvider } from "@/providers/keybinding-provider";
 import { NotificationsSessionProvider } from "@/providers/notifications-session-provider";
+import { WorktreeChangedStreamMount } from "@/providers/worktree-changed-stream-mount";
 import { RateLimitQueueProvider } from "@/providers/rate-limit-queue-provider";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { ThemeProvider } from "@/providers/theme-provider";
@@ -55,7 +60,15 @@ import { RouterProvider } from "@tanstack/react-router";
 import type { RemoteHostFetcher } from "@traycer-clients/shared/host-client/remote-fetcher";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { LazyMotion, domMax } from "motion/react";
-import { useMemo, type ReactNode } from "react";
+import { lazy, Suspense, useMemo, type ReactNode } from "react";
+
+const ReactQueryDevtools = import.meta.env.DEV
+  ? lazy(() =>
+      import("@tanstack/react-query-devtools").then((module) => ({
+        default: module.ReactQueryDevtools,
+      })),
+    )
+  : null;
 
 export interface TraycerAppProps {
   readonly runnerHost: IRunnerHost;
@@ -122,6 +135,8 @@ export function TraycerApp(props: TraycerAppProps): ReactNode {
               <TooltipProvider>
                 <KeybindingProvider router={router}>
                   <DesktopZoomController />
+                  <ReportIssueDialogHost />
+                  <Toaster />
                   <HostRuntimeProvider
                     registry={props.registry}
                     messengerFactory={props.messengerFactory ?? null}
@@ -139,6 +154,11 @@ export function TraycerApp(props: TraycerAppProps): ReactNode {
                 </KeybindingProvider>
               </TooltipProvider>
             </ThemeProvider>
+            {ReactQueryDevtools === null ? null : (
+              <Suspense fallback={null}>
+                <ReactQueryDevtools initialIsOpen={false} />
+              </Suspense>
+            )}
           </QueryClientProvider>
         </WindowsBridgeProvider>
       </LazyMotion>
@@ -173,12 +193,18 @@ function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
               <WorktreeIntentMemoryPersistLifecycleBridge>
                 <WorktreeIntentStagingPersistLifecycleBridge>
                   <EpicCanvasPersistLifecycleBridge>
-                    <EpicTabExistenceReconciler />
-                    <HostStreamProvider>
-                      <NotificationsSessionProvider>
-                        <TraycerAppRuntimeSurface router={props.router} />
-                      </NotificationsSessionProvider>
-                    </HostStreamProvider>
+                    <LandingTerminalPersistLifecycleBridge>
+                      <LandingTerminalTombstoneRecoveryBridge />
+                      <EpicTabExistenceReconciler />
+                      <HostStreamProvider>
+                        <WorktreeChangedStreamMount />
+                        <AppLocalNotificationsPersistLifecycleBridge>
+                          <NotificationsSessionProvider>
+                            <TraycerAppRuntimeSurface router={props.router} />
+                          </NotificationsSessionProvider>
+                        </AppLocalNotificationsPersistLifecycleBridge>
+                      </HostStreamProvider>
+                    </LandingTerminalPersistLifecycleBridge>
                   </EpicCanvasPersistLifecycleBridge>
                 </WorktreeIntentStagingPersistLifecycleBridge>
               </WorktreeIntentMemoryPersistLifecycleBridge>
@@ -212,7 +238,6 @@ function TraycerAppRuntimeSurface(props: TraycerAppRuntimeSurfaceProps) {
       <HistoryPruneProvider router={props.router} />
       <RouterProvider router={props.router} />
       <HostPicker />
-      <Toaster />
     </>
   );
 }

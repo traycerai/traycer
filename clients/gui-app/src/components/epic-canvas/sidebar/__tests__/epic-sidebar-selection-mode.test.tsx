@@ -30,12 +30,20 @@ interface TestRecord {
   readonly hostId: string;
 }
 
+interface TestIndicatorState {
+  readonly unreadFailure: boolean;
+  readonly pendingApproval: boolean;
+  readonly pendingInterview: boolean;
+  readonly unreadDone: boolean;
+}
+
 interface TestState {
   readonly createChatMutate: Mock;
   readonly createArtifactMutate: Mock;
   readonly deleteArtifactMutateAsync: Mock;
   readonly deleteChatMutateAsync: Mock;
   readonly deleteTuiAgentMutateAsync: Mock;
+  readonly exportArtifactsMutate: Mock;
   readonly localDeleteArtifact: Mock;
   readonly closeCanvasTab: Mock;
   readonly markArtifactSelfDeleted: Mock;
@@ -55,6 +63,9 @@ interface TestState {
     readonly nodeById: Readonly<Record<string, TestTreeNode | undefined>>;
   };
   records: readonly TestRecord[];
+  indicatorChats: Readonly<Record<string, TestIndicatorState>>;
+  activeAgentIds: ReadonlySet<string>;
+  activityTierById: Map<string, "turn" | "background">;
   permissionRole: "owner" | "editor" | "viewer" | null;
   rowHostId: string | null;
   rowHostEntry: unknown;
@@ -72,6 +83,7 @@ const testState = vi.hoisted<TestState>(() => ({
   deleteArtifactMutateAsync: vi.fn(),
   deleteChatMutateAsync: vi.fn(),
   deleteTuiAgentMutateAsync: vi.fn(),
+  exportArtifactsMutate: vi.fn(),
   localDeleteArtifact: vi.fn(),
   closeCanvasTab: vi.fn(),
   markArtifactSelfDeleted: vi.fn(),
@@ -91,6 +103,9 @@ const testState = vi.hoisted<TestState>(() => ({
     nodeById: {},
   },
   records: [],
+  indicatorChats: {},
+  activeAgentIds: new Set<string>(),
+  activityTierById: new Map<string, "turn" | "background">(),
   permissionRole: "owner",
   rowHostId: "host-1",
   rowHostEntry: { hostId: "host-1" },
@@ -158,6 +173,21 @@ vi.mock(
 
 vi.mock("@/components/chat/chat-progress-icon", () => ({
   ChatProgressIcon: () => <span data-testid="chat-sidebar-spinner" />,
+}));
+
+vi.mock("@/components/worktree/worktree-owner-metadata", () => ({
+  WorktreeOwnerMetadataTooltip: (props: { readonly trigger: ReactNode }) =>
+    props.trigger,
+}));
+
+vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
+  useHostNotificationIndicators: () => ({
+    data: { epics: {}, chats: testState.indicatorChats },
+    isPending: false,
+    isFetching: false,
+    error: null,
+    refetch: () => Promise.resolve(),
+  }),
 }));
 
 vi.mock("@/components/ui/dropdown-menu", () => ({
@@ -282,6 +312,13 @@ vi.mock("@/hooks/epic/use-epic-node-mutations", () => ({
   useEpicRenameArtifact: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
+vi.mock("@/hooks/epic/use-epic-export-artifacts-mutation", () => ({
+  useEpicExportArtifacts: () => ({
+    mutate: testState.exportArtifactsMutate,
+    isPending: false,
+  }),
+}));
+
 vi.mock("@/hooks/epic/use-epic-tui-agent-mutations", () => ({
   useEpicDeleteTuiAgent: () => ({
     mutate: vi.fn(),
@@ -375,7 +412,17 @@ vi.mock("@/lib/epic-selectors", () => ({
   useAncestorIds: () => new Set<string>(),
   useChildIds: (parentId: string) =>
     testState.tree.childrenByParent[parentId] ?? [],
-  useEpicActiveAgentIds: () => new Set<string>(),
+  useEpicActiveAgentIds: () => testState.activeAgentIds,
+  // Awareness reports a tier per working agent. An agent whose host did not
+  // classify it reads as "turn", so tests that only set `activeAgentIds` keep
+  // their pre-tier behaviour.
+  useEpicAgentActivityTiers: () =>
+    new Map(
+      [...testState.activeAgentIds].map((id) => [
+        id,
+        testState.activityTierById.get(id) ?? "turn",
+      ]),
+    ),
   useEpicArtifact: (artifactId: string | null) => {
     if (artifactId === null) return null;
     const node = testState.tree.nodeById[artifactId];
@@ -397,6 +444,7 @@ vi.mock("@/lib/epic-selectors", () => ({
   // effect's dependency never changes and it never seeds in these tests.
   useEpicNodeWorkspaceFolders: () => EMPTY_WORKSPACE_FOLDERS,
   useEpicPermissionRole: () => testState.permissionRole,
+  useEpicSnapshotMeta: () => ({ epicLight: { title: "Test epic" } }),
   useEpicTreeIndex: () => testState.tree,
   useEpicTreeNode: (nodeId: string) => testState.tree.nodeById[nodeId] ?? null,
   useMaybeEpicTuiAgentHarnessId: () => null,
@@ -510,6 +558,9 @@ describe("epic sidebar selection mode", () => {
       nodeById: {},
     };
     testState.records = [];
+    testState.indicatorChats = {};
+    testState.activeAgentIds = new Set<string>();
+    testState.activityTierById = new Map();
     testState.permissionRole = "owner";
     testState.rowHostId = "host-1";
     testState.rowHostEntry = { hostId: "host-1" };
@@ -679,6 +730,41 @@ describe("epic sidebar selection mode", () => {
     expect(screen.getByTestId("epic-sidebar-rename-agent-root")).not.toBeNull();
     expect(screen.getByTestId("epic-sidebar-delete-agent-root")).not.toBeNull();
     expect(screen.getByTestId("epic-sidebar-more-chat-root")).not.toBeNull();
+  });
+
+  it("keeps chat add inline and exposes ellipsis actions on right-click", async () => {
+    seedChatTree();
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    const chatRow = screen.getByTestId("epic-sidebar-item-chat-root");
+    expect(
+      chatRow.parentElement?.querySelector(
+        '[aria-label="Add child chat or agent"]',
+      ),
+    ).not.toBeNull();
+    fireEvent.contextMenu(chatRow);
+
+    expect(
+      await screen.findByRole("menuitem", { name: "Rename" }),
+    ).not.toBeNull();
+    expect(screen.getByRole("menuitem", { name: "Delete" })).not.toBeNull();
+  });
+
+  it("keeps artifact add inline and exposes ellipsis actions on right-click", async () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    expect(screen.getByTestId("epic-sidebar-add-spec-root")).not.toBeNull();
+    fireEvent.contextMenu(screen.getByTestId("epic-sidebar-item-spec-root"));
+
+    expect(
+      await screen.findByRole("menuitem", { name: "Export as Markdown" }),
+    ).not.toBeNull();
+    expect(screen.getByRole("menuitem", { name: "Rename" })).not.toBeNull();
+    expect(screen.getByRole("menuitem", { name: "Delete" })).not.toBeNull();
   });
 
   it("enters chat selection mode from cmd-click on a row", () => {
@@ -861,6 +947,71 @@ describe("epic sidebar selection mode", () => {
     expect(markRead).toHaveBeenCalledWith(EPIC_ID, "ticket-child", 2);
   });
 
+  it("exports one artifact from its row actions for viewers", () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+    testState.permissionRole = "viewer";
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    fireEvent.click(
+      screen.getByTestId("epic-sidebar-export-markdown-spec-root"),
+    );
+
+    expect(testState.exportArtifactsMutate).toHaveBeenCalledWith({
+      archive: false,
+      archiveTitle: null,
+      artifacts: [{ id: "spec-root", title: "Root spec" }],
+      format: "markdown",
+    });
+    expect(
+      screen.getByTestId("epic-sidebar-rename-spec-root").matches(":disabled"),
+    ).toBe(true);
+    expect(
+      screen.getByTestId("epic-sidebar-delete-spec-root").matches(":disabled"),
+    ).toBe(true);
+  });
+
+  it("bulk-exports every selected visible artifact, including descendants", () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+    testState.permissionRole = "viewer";
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Select artifacts" }));
+    fireEvent.click(screen.getByTestId("epic-sidebar-select-spec-root"));
+    expect(
+      screen
+        .getByTestId("epic-sidebar-export-selected-markdown")
+        .matches(":disabled"),
+    ).toBe(true);
+    fireEvent.click(screen.getByTestId("epic-sidebar-select-ticket-child"));
+    expect(
+      screen
+        .getByTestId("epic-sidebar-export-selected-markdown")
+        .matches(":disabled"),
+    ).toBe(false);
+    fireEvent.click(
+      screen.getByTestId("epic-sidebar-export-selected-markdown"),
+    );
+
+    expect(testState.exportArtifactsMutate).toHaveBeenCalledWith({
+      archive: true,
+      archiveTitle: "Test epic",
+      artifacts: [
+        { id: "spec-root", title: "Root spec" },
+        { id: "ticket-child", title: "Child ticket" },
+      ],
+      format: "markdown",
+    });
+    expect(
+      screen
+        .getByTestId("epic-sidebar-delete-selected-artifacts")
+        .matches(":disabled"),
+    ).toBe(true);
+  });
+
   it("selects artifact rows explicitly and bulk-deletes topmost selected artifacts", async () => {
     seedArtifactTree();
     testState.activePanelId = "artifacts";
@@ -1013,6 +1164,343 @@ describe("epic sidebar selection mode", () => {
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
     expect(markRead).not.toHaveBeenCalled();
+  });
+});
+
+describe("chat descendant status rollup", () => {
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+    testState.activePanelId = "chats";
+    testState.expandedIds = new Set<string>();
+    testState.tree = {
+      rootIds: [],
+      childrenByParent: {},
+      nodeById: {},
+    };
+    testState.records = [];
+    testState.indicatorChats = {};
+    testState.activeAgentIds = new Set<string>();
+    testState.activityTierById = new Map();
+    testState.chatFilterOrigin = "all";
+  });
+
+  function seedNestedChatTree(): void {
+    const chatRoot = treeNode("chat-root", null, "Root chat", "chat");
+    const chatChild = treeNode("chat-child", "chat-root", "Child chat", "chat");
+    const chatGrandchild = treeNode(
+      "chat-grandchild",
+      "chat-child",
+      "Grandchild chat",
+      "chat",
+    );
+    const agentChild = treeNode(
+      "agent-child",
+      "chat-root",
+      "Terminal agent",
+      "terminal-agent",
+    );
+    testState.activePanelId = "chats";
+    testState.expandedIds = new Set<string>();
+    testState.tree = {
+      rootIds: ["chat-root"],
+      childrenByParent: {
+        "chat-root": ["chat-child", "agent-child"],
+        "chat-child": ["chat-grandchild"],
+      },
+      nodeById: {
+        "chat-root": chatRoot,
+        "chat-child": chatChild,
+        "chat-grandchild": chatGrandchild,
+        "agent-child": agentChild,
+      },
+    };
+    testState.records = [chatRoot, chatChild, chatGrandchild, agentChild].map(
+      recordFromNode,
+    );
+  }
+
+  function indicator(
+    overrides: Partial<TestIndicatorState>,
+  ): TestIndicatorState {
+    return {
+      unreadFailure: false,
+      pendingApproval: false,
+      pendingInterview: false,
+      unreadDone: false,
+      ...overrides,
+    };
+  }
+
+  it("bubbles a hidden grandchild's needs-attention status onto the collapsed root", () => {
+    seedNestedChatTree();
+    testState.indicatorChats = {
+      "chat-grandchild": indicator({ unreadFailure: true }),
+    };
+
+    const view = render(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+
+    // The grandchild's row is not even mounted, yet its status reaches the
+    // collapsed root as the rollup badge.
+    expect(
+      screen.queryByTestId("epic-sidebar-item-chat-grandchild"),
+    ).toBeNull();
+    expect(
+      screen.getByTestId("chat-descendant-status-failure-chat-root"),
+    ).toBeTruthy();
+
+    // Expanding the root moves the rollup down to the still-collapsed child.
+    testState.expandedIds = new Set(["chat-root"]);
+    view.rerender(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+    expect(
+      screen.queryByTestId("chat-descendant-status-failure-chat-root"),
+    ).toBeNull();
+    expect(
+      screen.getByTestId("chat-descendant-status-failure-chat-child"),
+    ).toBeTruthy();
+
+    // Fully expanded: the grandchild presents its own status, no rollups left.
+    testState.expandedIds = new Set(["chat-root", "chat-child"]);
+    view.rerender(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+    expect(
+      screen.queryByTestId("chat-descendant-status-failure-chat-child"),
+    ).toBeNull();
+    expect(
+      screen.getByTestId("epic-sidebar-item-chat-grandchild"),
+    ).toBeTruthy();
+  });
+
+  it("rolls an active terminal-agent descendant up as running, outranked by failure", () => {
+    seedNestedChatTree();
+    testState.activeAgentIds = new Set(["agent-child"]);
+    testState.indicatorChats = {
+      "chat-grandchild": indicator({ unreadDone: true }),
+    };
+
+    const view = render(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+
+    // Running outranks unread completion...
+    expect(
+      screen.getByTestId("chat-descendant-status-running-chat-root"),
+    ).toBeTruthy();
+
+    // ...and a failure anywhere below outranks running.
+    testState.indicatorChats = {
+      "chat-grandchild": indicator({ unreadDone: true }),
+      "chat-child": indicator({ unreadFailure: true }),
+    };
+    view.rerender(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+    expect(
+      screen.queryByTestId("chat-descendant-status-running-chat-root"),
+    ).toBeNull();
+    expect(
+      screen.getByTestId("chat-descendant-status-failure-chat-root"),
+    ).toBeTruthy();
+  });
+
+  it("lets a hidden failure take the slot from a merely-running parent, with a breakdown tooltip", () => {
+    seedNestedChatTree();
+    testState.activeAgentIds = new Set(["chat-root", "agent-child"]);
+    testState.indicatorChats = {
+      "chat-grandchild": indicator({ unreadFailure: true }),
+      "chat-child": indicator({ unreadDone: true }),
+    };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    // The parent is running (rank below failure), so the nested failure owns
+    // the icon slot - rendered as the muted variant in place of the parent's
+    // own icon, with the tooltip carrying the full nested breakdown.
+    const nested = screen.getByTestId(
+      "chat-descendant-status-failure-chat-root",
+    );
+    expect(nested.getAttribute("title")).toBe(
+      "Nested: 1 needs attention · 1 running · 1 completed",
+    );
+    expect(screen.queryByTestId("chat-sidebar-spinner")).toBeNull();
+  });
+
+  it("keeps the slot with the parent when its own status is at least as urgent", () => {
+    seedNestedChatTree();
+    // Parent's own failure vs a nested running agent: parent outranks.
+    testState.activeAgentIds = new Set(["agent-child"]);
+    testState.indicatorChats = {
+      "chat-root": indicator({ unreadFailure: true }),
+    };
+
+    const view = render(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+    expect(
+      screen.queryByTestId("chat-descendant-status-running-chat-root"),
+    ).toBeNull();
+    expect(screen.getByTestId("chat-sidebar-spinner")).toBeTruthy();
+
+    // Equal tiers: the tie goes to the parent's own (solid) presentation.
+    testState.activeAgentIds = new Set<string>();
+    testState.activityTierById = new Map();
+    testState.indicatorChats = {
+      "chat-root": indicator({ pendingApproval: true }),
+      "chat-grandchild": indicator({ pendingApproval: true }),
+    };
+    view.rerender(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+    expect(
+      screen.queryByTestId("chat-descendant-status-approval-chat-root"),
+    ).toBeNull();
+    expect(screen.getByTestId("chat-sidebar-spinner")).toBeTruthy();
+  });
+
+  it("distinguishes a background-only descendant from one mid-turn", () => {
+    seedNestedChatTree();
+    // The grandchild is non-idle, but only because a background task
+    // (run_in_background / Monitor / a scheduled wakeup) is keeping it alive -
+    // the agent itself is not executing. Before the awareness tier existed
+    // this was indistinguishable from a live turn.
+    testState.activeAgentIds = new Set(["chat-grandchild"]);
+    testState.activityTierById = new Map([["chat-grandchild", "background"]]);
+
+    const view = render(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+    const backgroundIcon = screen.getByTestId(
+      "chat-descendant-status-background-chat-root",
+    );
+    expect(backgroundIcon).toBeTruthy();
+    expect(backgroundIcon.getAttribute("class")).toContain("opacity-60");
+    expect(
+      backgroundIcon.querySelector(".lucide-message-square-clock"),
+    ).not.toBeNull();
+    expect(
+      screen.queryByTestId("chat-descendant-status-running-chat-root"),
+    ).toBeNull();
+
+    // Same descendant, now genuinely mid-turn: the busier tier takes the slot.
+    testState.activityTierById = new Map([["chat-grandchild", "turn"]]);
+    view.rerender(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+    expect(
+      screen.getByTestId("chat-descendant-status-running-chat-root"),
+    ).toBeTruthy();
+    expect(
+      screen.queryByTestId("chat-descendant-status-background-chat-root"),
+    ).toBeNull();
+  });
+
+  it("ranks a descendant's turn above a descendant's background work", () => {
+    seedNestedChatTree();
+    testState.activeAgentIds = new Set(["chat-child", "chat-grandchild"]);
+    testState.activityTierById = new Map([
+      ["chat-child", "background"],
+      ["chat-grandchild", "turn"],
+    ]);
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+    const icon = screen.getByTestId("chat-descendant-status-running-chat-root");
+    expect(icon).toBeTruthy();
+    // The tooltip breaks the aggregate down across both tiers.
+    expect(icon.getAttribute("title")).toContain("1 running");
+    expect(icon.getAttribute("title")).toContain("1 in background");
+  });
+
+  it("lets a descendant's turn outrank the parent's own background work", () => {
+    seedNestedChatTree();
+    // Parent is non-idle but only in background; a hidden descendant is
+    // actually mid-turn, so the busier nested tier must win the slot rather
+    // than being masked by the parent's own (lower) tier.
+    testState.activeAgentIds = new Set(["chat-root", "chat-grandchild"]);
+    testState.activityTierById = new Map([
+      ["chat-root", "background"],
+      ["chat-grandchild", "turn"],
+    ]);
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+    expect(
+      screen.getByTestId("chat-descendant-status-running-chat-root"),
+    ).toBeTruthy();
+  });
+
+  it("shows an unread-done rollup and nothing when descendants are idle", () => {
+    seedNestedChatTree();
+    testState.indicatorChats = {
+      "chat-child": indicator({ unreadDone: true }),
+    };
+
+    const view = render(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+    expect(
+      screen.getByTestId("chat-descendant-status-done-chat-root"),
+    ).toBeTruthy();
+
+    testState.indicatorChats = {};
+    view.rerender(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+    expect(
+      screen.queryByTestId("chat-descendant-status-done-chat-root"),
+    ).toBeNull();
+  });
+
+  it("ranks interview above approval, both outranked by failure", () => {
+    seedNestedChatTree();
+    testState.indicatorChats = {
+      "chat-child": indicator({ pendingApproval: true }),
+      "chat-grandchild": indicator({ pendingInterview: true }),
+    };
+
+    const view = render(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+    expect(
+      screen.getByTestId("chat-descendant-status-interview-chat-root"),
+    ).toBeTruthy();
+
+    testState.indicatorChats = {
+      ...testState.indicatorChats,
+      "chat-child": indicator({ unreadFailure: true }),
+    };
+    view.rerender(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+    expect(
+      screen.queryByTestId("chat-descendant-status-interview-chat-root"),
+    ).toBeNull();
+    expect(
+      screen.getByTestId("chat-descendant-status-failure-chat-root"),
+    ).toBeTruthy();
+  });
+
+  it("excludes a filter-hidden subtree from the rollup while keeping a visible descendant's status", () => {
+    seedNestedChatTree();
+    // GUI-only origin filter hides the terminal-agent descendant entirely -
+    // its active-run state must not leak into the rollup as "running" - while
+    // the chat subtree (still reachable under the filter) keeps surfacing.
+    testState.chatFilterOrigin = "gui";
+    testState.activeAgentIds = new Set(["agent-child"]);
+    testState.indicatorChats = {
+      "chat-grandchild": indicator({ unreadFailure: true }),
+    };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+    expect(
+      screen.queryByTestId("chat-descendant-status-running-chat-root"),
+    ).toBeNull();
+    expect(
+      screen.getByTestId("chat-descendant-status-failure-chat-root"),
+    ).toBeTruthy();
   });
 });
 

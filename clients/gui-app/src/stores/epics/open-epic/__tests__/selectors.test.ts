@@ -110,13 +110,14 @@ function makeMeta(): SnapshotMetaEpic {
 function makeTerminalAgentProjectionDoc(
   terminalAgentArgs: unknown,
   shouldSetTerminalAgentArgs: boolean,
+  harnessId: string,
 ): Y.Doc {
   const doc = new Y.Doc();
   const epic = doc.getMap("epic");
   const tuiAgents = new Y.Map<unknown>();
   const terminalAgent = new Y.Map<unknown>();
   terminalAgent.set("id", "terminal-1");
-  terminalAgent.set("harnessId", "codex");
+  terminalAgent.set("harnessId", harnessId);
   terminalAgent.set("title", "Codex");
   terminalAgent.set("parentId", null);
   terminalAgent.set("createdAt", 0);
@@ -227,6 +228,14 @@ describe("open-epic-store doc projection", () => {
     expect(projected.byId["terminal-1"]).toBeUndefined();
   });
 
+  it("rejects Cursor records from the terminal-agent projection", () => {
+    const doc = makeTerminalAgentProjectionDoc(null, false, "cursor");
+
+    const projected = projectTerminalAgents(doc, null);
+
+    expect(projected.byId["terminal-1"]).toBeUndefined();
+  });
+
   it("projects durable terminal-agent args with fallback and override semantics", () => {
     const cases: ReadonlyArray<{
       readonly label: string;
@@ -262,7 +271,7 @@ describe("open-epic-store doc projection", () => {
 
     cases.forEach(({ label, rawValue, shouldSetRawValue, expected }) => {
       const projected = projectTerminalAgents(
-        makeTerminalAgentProjectionDoc(rawValue, shouldSetRawValue),
+        makeTerminalAgentProjectionDoc(rawValue, shouldSetRawValue, "codex"),
         null,
       );
 
@@ -297,6 +306,46 @@ describe("open-epic-store doc projection", () => {
     const projected = projectChats(doc, null);
 
     expect(projected.byId["chat-1"].settings).toBeNull();
+  });
+
+  it("projects chat settings persisted as a nested Y.Map (host shape)", () => {
+    const doc = new Y.Doc();
+    const epic = doc.getMap("epic");
+    const chats = new Y.Map<unknown>();
+    const chat = new Y.Map<unknown>();
+    chat.set("id", "chat-1");
+    chat.set("title", "Chat");
+    chat.set("parentId", null);
+    chat.set("createdAt", 0);
+    chat.set("updatedAt", 0);
+    chat.set("userId", "user-1");
+    chat.set("hostId", "host-1");
+    chat.set("isTitleEditedByUser", false);
+    // The host persists settings via `createTypedMap`, i.e. a nested Y.Map -
+    // not a plain object. The projector must serialize before validating.
+    const settings = new Y.Map<unknown>();
+    settings.set("harnessId", "codex");
+    settings.set("model", "gpt-5.6-terra");
+    settings.set("permissionMode", "supervised");
+    settings.set("reasoningEffort", null);
+    settings.set("serviceTier", null);
+    settings.set("agentMode", "regular");
+    settings.set("profileId", "profile-uuid");
+    chat.set("settings", settings);
+    chats.set("chat-1", chat);
+    epic.set("chats", chats);
+
+    const projected = projectChats(doc, null);
+
+    expect(projected.byId["chat-1"].settings).toEqual({
+      harnessId: "codex",
+      model: "gpt-5.6-terra",
+      permissionMode: "supervised",
+      reasoningEffort: null,
+      serviceTier: null,
+      agentMode: "regular",
+      profileId: "profile-uuid",
+    });
   });
 
   it("filters foreign-owner chats out of shim-built tree records", () => {

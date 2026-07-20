@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, renderHook } from "@testing-library/react";
-import type { WorktreeBindingSelectorRow } from "@traycer/protocol/host";
+import type { WorktreeBindingSelectorRowV12 } from "@traycer/protocol/host";
 import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
 import type { CommandContext, CommandItem } from "@/lib/commands/types";
 import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
@@ -56,8 +56,9 @@ const terminalBindingsMock = vi.hoisted(() => ({
       setupState: "not_required",
       disabledReason: null,
       sources: [],
+      isGitResolvePending: false,
     },
-  ] satisfies WorktreeBindingSelectorRow[],
+  ] satisfies WorktreeBindingSelectorRowV12[],
 }));
 
 function chat(id: string, title: string): ChatProjection {
@@ -100,6 +101,7 @@ function artifact(id: string, title: string): ArtifactProjection {
     id,
     kind: "spec",
     title,
+    folderName: "",
     parentId: null,
     artifactRoomId: null,
     createdAt: 0,
@@ -156,6 +158,7 @@ vi.mock("@/hooks/terminal/use-terminal-list-query", () => ({
       sessions: [
         {
           sessionId: "term-1",
+          scope: { kind: "epic", epicId: "epic-1" },
           sessionKind: "terminal",
           status: "running",
           title: "shell one",

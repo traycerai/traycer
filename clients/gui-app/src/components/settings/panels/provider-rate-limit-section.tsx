@@ -2,6 +2,7 @@ import { useCallback, type ReactNode } from "react";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { RefreshIconButton } from "@/components/refresh-icon-button";
 import { ProviderRateLimitBody } from "@/components/settings/panels/provider-rate-limit-views";
+import { resolveCodexResetCreditAction } from "@/components/settings/panels/codex-reset-credit-availability";
 import { useHostProviderRateLimitsQuery } from "@/hooks/host/use-host-provider-rate-limits-query";
 import { useRefreshProviderRateLimitsOnMount } from "@/hooks/host/use-refresh-provider-rate-limits-on-mount";
 import { useRefreshProviderRateLimitsOnTurn } from "@/hooks/host/use-refresh-provider-rate-limits-on-turn";
@@ -136,6 +137,11 @@ function EmbeddedProviderRateLimitSettingsCard({
         isFetching={query.isFetching}
         isError={query.isError}
         envelope={query.data}
+        codexResetAction={resolveCodexResetCreditAction(
+          providerId,
+          profileId,
+          true,
+        )}
       />
     </div>
   );
@@ -177,6 +183,11 @@ function ProviderRateLimitSettingsCard({
         isFetching={query.isFetching || isRefreshing}
         isError={query.isError}
         envelope={query.data}
+        codexResetAction={resolveCodexResetCreditAction(
+          providerId,
+          profileId,
+          true,
+        )}
       />
     </div>
   );

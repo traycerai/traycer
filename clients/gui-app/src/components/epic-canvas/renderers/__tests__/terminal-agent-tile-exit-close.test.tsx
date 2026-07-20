@@ -9,12 +9,17 @@ import {
 } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { create } from "zustand";
+import type { TerminalSessionExitReason } from "@traycer/protocol/host/terminal/unary-schemas";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
+import {
+  __resetAppLocalNotificationsStoreForTests,
+  useAppLocalNotificationsStore,
+} from "@/stores/notifications/app-local-notifications-store";
 
 // A terminal-agent tile auto-closes when the harness TUI exits (e.g. the user
 // presses Ctrl+C and the process terminates). The close must target the pane
@@ -39,7 +44,7 @@ const exitedHandle = {
     status: "exited" as const,
     connectionStatus: "open" as const,
     exitCode: 0,
-    exitReason: null,
+    exitReason: null as TerminalSessionExitReason | null,
     effectiveCols: 80,
     effectiveRows: 24,
     lastOutputPreview: null,
@@ -229,6 +234,8 @@ describe("<TuiAgentTile /> exit close", () => {
   beforeEach(() => {
     cleanup();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    __resetAppLocalNotificationsStoreForTests();
+    exitedHandle.store.setState({ exitCode: 0, exitReason: null });
     testState.reachability = { status: "reachable", hostLabel: "Host A" };
     resetNavigationSpy();
   });
@@ -292,6 +299,39 @@ describe("<TuiAgentTile /> exit close", () => {
     expectTileClosed(fixture.viewTabId, fixture.closingNode.instanceId);
   });
 
+  it("keeps an abnormal harness exit mounted and emits its terminal failure", async () => {
+    exitedHandle.store.setState({
+      exitCode: 1,
+      exitReason: "process-exit",
+    });
+    useAppLocalNotificationsStore.getState().activateIdentity("user-a");
+    const fixture = openAgentFixture(false);
+
+    render(
+      withQueryClient(
+        <TuiAgentTile
+          viewTabId={fixture.viewTabId}
+          node={fixture.closingNode}
+          tileId={fixture.paneId}
+          isActive
+        />,
+      ),
+    );
+
+    await waitFor(() => {
+      expect(useAppLocalNotificationsStore.getState().orderedIds).toHaveLength(
+        1,
+      );
+    });
+    const notificationId =
+      useAppLocalNotificationsStore.getState().orderedIds[0];
+    expect(
+      useAppLocalNotificationsStore.getState().byId[notificationId].kind,
+    ).toBe("terminal.crashed");
+    expectTileOpen(fixture.viewTabId, fixture.closingNode.instanceId);
+    expect(testState.navigateNested).not.toHaveBeenCalled();
+  });
+
   it("closes an inactive exited tile without producing a route-write target", async () => {
     const fixture = openAgentFixture(true);
 
@@ -319,3 +359,9 @@ describe("<TuiAgentTile /> exit close", () => {
     expect(pane.activeTabId).toBe(fixture.activeNode.instanceId);
   });
 });
+
+function expectTileOpen(viewTabId: string, instanceId: string): void {
+  const canvas = useEpicCanvasStore.getState().canvasByTabId[viewTabId];
+  if (canvas === undefined) throw new Error("expected view tab canvas");
+  expect(canvas.tilesByInstanceId[instanceId]).toBeDefined();
+}

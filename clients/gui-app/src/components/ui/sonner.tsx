@@ -7,7 +7,7 @@ import {
   TriangleAlertIcon,
   OctagonXIcon,
 } from "lucide-react";
-import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { ProgressToastIcon } from "@/components/ui/progress-toast-icon";
 import { cn } from "@/lib/utils";
 
 const TOAST_CLASS_NAME = cn("cn-toast", "group/toast");
@@ -21,13 +21,23 @@ const TOAST_CLOSE_BUTTON_CLASS_NAME = cn(
   "focus-visible:pointer-events-auto",
   "focus-visible:opacity-100",
 );
+const TOAST_CANCEL_BUTTON_CLASS_NAME = cn(
+  "border border-border bg-background text-foreground",
+  "hover:bg-muted",
+);
+const INTERACTIVE_ELEMENT_SELECTOR =
+  "button, a, input, textarea, select, [role='button']";
+const NOTIFICATION_TOAST_ACTION_SELECTOR = "[data-notification-toast-action]";
 
 const Toaster = ({ ...props }: ToasterProps) => {
   const { theme = "system" } = useTheme();
   const toasterTheme = normalizeToasterTheme(theme);
 
   return (
-    <DismissableLayer.Branch data-slot="toaster-branch">
+    <DismissableLayer.Branch
+      data-slot="toaster-branch"
+      onClick={activateNotificationToastSurface}
+    >
       <Sonner
         theme={toasterTheme}
         className="toaster group"
@@ -36,13 +46,7 @@ const Toaster = ({ ...props }: ToasterProps) => {
           info: <InfoIcon className="size-4" />,
           warning: <TriangleAlertIcon className="size-4" />,
           error: <OctagonXIcon className="size-4" />,
-          loading: (
-            <AgentSpinningDots
-              testId={undefined}
-              variant="orbit"
-              className="size-4 text-current"
-            />
-          ),
+          loading: <ProgressToastIcon />,
         }}
         style={
           {
@@ -56,6 +60,7 @@ const Toaster = ({ ...props }: ToasterProps) => {
           classNames: {
             toast: TOAST_CLASS_NAME,
             closeButton: TOAST_CLOSE_BUTTON_CLASS_NAME,
+            cancelButton: TOAST_CANCEL_BUTTON_CLASS_NAME,
           },
         }}
         {...props}
@@ -64,6 +69,23 @@ const Toaster = ({ ...props }: ToasterProps) => {
     </DismissableLayer.Branch>
   );
 };
+
+function activateNotificationToastSurface(
+  event: React.MouseEvent<HTMLDivElement>,
+): void {
+  const target = event.target;
+  if (!(target instanceof Element)) return;
+
+  const interactiveTarget = target.closest(INTERACTIVE_ELEMENT_SELECTOR);
+  const toastSurface = target.closest("[data-sonner-toast]");
+  const action = toastSurface?.querySelector<HTMLButtonElement>(
+    NOTIFICATION_TOAST_ACTION_SELECTOR,
+  );
+  if (interactiveTarget !== null) return;
+
+  if (action === undefined || action === null) return;
+  action.click();
+}
 
 function normalizeToasterTheme(
   theme: string | undefined,

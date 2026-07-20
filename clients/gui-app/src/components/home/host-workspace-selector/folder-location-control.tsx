@@ -56,13 +56,16 @@ function LocationGlyph(props: { readonly value: FolderLocationValue }) {
   // label text), matching the host rows' muted kind icon + bright label.
   if (props.value === "local") {
     return (
-      <Laptop className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+      <Laptop
+        className="size-3.5 shrink-0 text-muted-foreground/65"
+        aria-hidden
+      />
     );
   }
   // New + existing worktrees share the rotated split glyph.
   return (
     <Split
-      className="size-3.5 shrink-0 rotate-90 text-muted-foreground"
+      className="size-3.5 shrink-0 rotate-90 text-muted-foreground/65"
       aria-hidden
     />
   );
@@ -122,7 +125,7 @@ export function FolderLocationControl(props: {
       {/* Reserve the widest label's width with an invisible ghost so the control
           is static across mode switches AND snug to the longest label — no empty
           space trailing "Existing worktree". */}
-      <span className="grid min-w-0 text-left">
+      <span className="grid min-w-0 flex-1 text-left">
         <span
           aria-hidden
           className="invisible col-start-1 row-start-1 truncate"
@@ -133,7 +136,7 @@ export function FolderLocationControl(props: {
           {locationLabel(value)}
         </span>
       </span>
-      <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+      <ChevronDown className="size-3.5 shrink-0 text-muted-foreground/60" />
     </button>
   );
 

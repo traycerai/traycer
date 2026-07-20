@@ -1,7 +1,15 @@
 import "../../../../../__tests__/test-browser-apis";
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import type { ProviderRateLimits } from "@traycer/protocol/host";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { formatResetFullDateTime } from "@/lib/relative-time";
 import {
   ClaudeRateLimitView,
   CodexRateLimitView,
@@ -59,7 +67,7 @@ describe("CodexRateLimitView (extended fields)", () => {
     ],
     credits: null,
     individualLimit: null,
-    resetCredits: { availableCount: 3 },
+    resetCredits: { availableCount: 3, credits: null },
     rateLimitReachedType: null,
   };
 
@@ -91,6 +99,145 @@ describe("CodexRateLimitView (extended fields)", () => {
     expect(screen.getByText("3 available")).toBeTruthy();
   });
 
+  const soonExpiry = NOW + 2 * 60 * 60 * 1000;
+  const laterExpiry = NOW + 3 * 24 * 60 * 60 * 1000;
+  const detailedCodex: CodexRateLimits = {
+    ...codex,
+    resetCredits: {
+      availableCount: 3,
+      credits: [
+        {
+          id: "later",
+          resetType: "codexRateLimits",
+          status: "available",
+          grantedAt: NOW,
+          expiresAt: laterExpiry,
+          title: "Later reset",
+          description: null,
+        },
+        {
+          id: "soon",
+          resetType: "codexRateLimits",
+          status: "available",
+          grantedAt: NOW,
+          expiresAt: soonExpiry,
+          title: "Soon reset",
+          description: null,
+        },
+      ],
+    },
+  };
+
+  it("lists reset expiries soonest first in Settings, and discloses a capped remainder", () => {
+    render(<CodexRateLimitView data={detailedCodex} variant="settings" />);
+
+    const resetLabels = screen.getAllByText(/reset$/);
+    expect(resetLabels.map((label) => label.textContent)).toEqual([
+      "Soon reset",
+      "Later reset",
+    ]);
+    expect(screen.getByText(/^Expires in /)).toBeTruthy();
+    expect(
+      screen.getByText(`Expires ${formatResetFullDateTime(laterExpiry)}`),
+    ).toBeTruthy();
+    expect(screen.getByText("+1 more not shown")).toBeTruthy();
+    // Nothing to hover in Settings - the list is already on screen.
+    expect(screen.getByText("3 available").className).not.toContain(
+      "cursor-help",
+    );
+  });
+
+  it("tints a reset expiring inside 48h in the Settings list, but not the far one", () => {
+    render(<CodexRateLimitView data={detailedCodex} variant="settings" />);
+    // `soonExpiry` is 2h out (inside the warning window); `laterExpiry` is 3d out.
+    expect(screen.getByText(/^Expires in /).className).toContain(
+      "text-destructive",
+    );
+    expect(
+      screen.getByText(`Expires ${formatResetFullDateTime(laterExpiry)}`)
+        .className,
+    ).not.toContain("text-destructive");
+  });
+
+  it("drops the warning tint in the tooltip, whose inverted surface can't carry it", async () => {
+    render(
+      <TooltipProvider delayDuration={0}>
+        <CodexRateLimitView data={detailedCodex} variant="popover-detail" />
+      </TooltipProvider>,
+    );
+
+    fireEvent.pointerMove(screen.getByText("3 available"));
+
+    const tooltip = await screen.findByRole("tooltip");
+    expect(within(tooltip).getByText(/^Expires in /).className).not.toContain(
+      "text-destructive",
+    );
+  });
+
+  it("collapses the popover to a bare count - no expiries, no per-credit rows", () => {
+    render(
+      <TooltipProvider delayDuration={0}>
+        <CodexRateLimitView data={detailedCodex} variant="popover-detail" />
+      </TooltipProvider>,
+    );
+    expect(screen.getByText("3 available")).toBeTruthy();
+    expect(screen.queryByText("Soon reset")).toBeNull();
+    expect(screen.queryByText(/^Expires/)).toBeNull();
+    expect(screen.queryByText("+1 more not shown")).toBeNull();
+  });
+
+  it("reveals the popover's expiries soonest first, plus the capped remainder, on hovering the count", async () => {
+    render(
+      <TooltipProvider delayDuration={0}>
+        <CodexRateLimitView data={detailedCodex} variant="popover-detail" />
+      </TooltipProvider>,
+    );
+
+    fireEvent.pointerMove(screen.getByText("3 available"));
+
+    const tooltip = await screen.findByRole("tooltip");
+    const resetLabels = within(tooltip).getAllByText(/reset$/);
+    expect(resetLabels.map((label) => label.textContent)).toEqual([
+      "Soon reset",
+      "Later reset",
+    ]);
+    expect(within(tooltip).getByText(/^Expires in /)).toBeTruthy();
+    expect(
+      within(tooltip).getByText(
+        `Expires ${formatResetFullDateTime(laterExpiry)}`,
+      ),
+    ).toBeTruthy();
+    expect(within(tooltip).getByText("+1 more not shown")).toBeTruthy();
+  });
+
+  it("reveals the popover's tooltip on keyboard focus, not just hover", async () => {
+    render(
+      <TooltipProvider delayDuration={0}>
+        <CodexRateLimitView data={detailedCodex} variant="popover-detail" />
+      </TooltipProvider>,
+    );
+
+    // A native `<button>`, not a `span` + `tabIndex`: natively
+    // keyboard-focusable, and valid without an ARIA role.
+    const count = screen.getByRole("button", { name: "3 available" });
+    fireEvent.focus(count);
+
+    expect(await screen.findByRole("tooltip")).toBeTruthy();
+  });
+
+  it("leaves the popover count out of tab order when the host sends no credit detail", () => {
+    render(<CodexRateLimitView data={codex} variant="popover-detail" />);
+    expect(screen.queryByRole("button", { name: "3 available" })).toBeNull();
+    expect(screen.getByText("3 available").tagName).toBe("SPAN");
+  });
+
+  it("leaves the popover count un-hoverable when the host sends no credit detail", () => {
+    render(<CodexRateLimitView data={codex} variant="popover-detail" />);
+    expect(screen.getByText("3 available").className).not.toContain(
+      "cursor-help",
+    );
+  });
+
   it("renders a generic day/hour duration for an off-standard window", () => {
     render(
       <CodexRateLimitView
@@ -118,7 +265,7 @@ describe("CodexRateLimitView (extended fields)", () => {
     expect(screen.getByText("68% used")).toBeTruthy();
   });
 
-  it("renders the popover variant as '% used' with the shared blue/red bar color", () => {
+  it("renders the popover variant as '% used' with the shared semantic bar color", () => {
     const { container } = render(
       <CodexRateLimitView data={codex} variant="popover-detail" />,
     );
@@ -130,7 +277,62 @@ describe("CodexRateLimitView (extended fields)", () => {
     expect(container.querySelectorAll(".bg-blue-500").length).toBeGreaterThan(
       0,
     );
-    expect(container.querySelectorAll(".bg-yellow-500").length).toBe(0);
+    expect(container.querySelectorAll(".bg-amber-500").length).toBe(0);
+  });
+
+  it("uses the same Healthy, Running low, and Limited tones in Settings and Usage Limits", () => {
+    const severityFixture: CodexRateLimits = {
+      ...codex,
+      primary: {
+        usedPercent: 80,
+        resetsAt: NOW + 60 * 60 * 1000,
+        durationMinutes: 300,
+      },
+      secondary: {
+        usedPercent: 95,
+        resetsAt: NOW + 3 * 24 * 60 * 60 * 1000,
+        durationMinutes: 10_080,
+      },
+      extraWindows: [
+        {
+          limitId: "limited",
+          limitName: "Limited",
+          primary: {
+            usedPercent: 100,
+            resetsAt: NOW + 60 * 60 * 1000,
+            durationMinutes: 300,
+          },
+          secondary: {
+            usedPercent: 40,
+            resetsAt: NOW + 3 * 24 * 60 * 60 * 1000,
+            durationMinutes: 10_080,
+          },
+        },
+      ],
+    };
+
+    const settings = render(
+      <CodexRateLimitView data={severityFixture} variant="settings" />,
+    );
+    expect(settings.container.querySelectorAll(".bg-amber-500")).toHaveLength(
+      2,
+    );
+    expect(settings.container.querySelectorAll(".bg-red-500")).toHaveLength(1);
+    expect(settings.container.querySelectorAll(".bg-blue-500")).toHaveLength(1);
+    cleanup();
+
+    const usageLimits = render(
+      <CodexRateLimitView data={severityFixture} variant="popover-detail" />,
+    );
+    expect(
+      usageLimits.container.querySelectorAll(".bg-amber-500"),
+    ).toHaveLength(2);
+    expect(usageLimits.container.querySelectorAll(".bg-red-500")).toHaveLength(
+      1,
+    );
+    expect(usageLimits.container.querySelectorAll(".bg-blue-500")).toHaveLength(
+      1,
+    );
   });
 
   it("draws every popover window track with a foreground-opacity fill so an empty bar stays visible", () => {
@@ -182,9 +384,10 @@ describe("CodexRateLimitView (extended fields)", () => {
     expect(screen.queryByText(/^Resets [A-Za-z]{3} \d{1,2}:\d{2}/)).toBeNull();
   });
 
-  it("shows an absolute weekday-tagged time for a weekly popover window", () => {
+  it("shows an absolute calendar date and time for a weekly popover window", () => {
     // The weekly (10080-min) `secondary` window keeps the absolute reset line
-    // ("Resets Sat 3:35 AM"), since "Resets in 3d" is too coarse.
+    // with its full date, since "Resets in 3d" is too coarse and a weekday
+    // alone is ambiguous.
     render(
       <CodexRateLimitView
         data={{ ...codex, primary: null, extraWindows: [] }}
@@ -192,7 +395,9 @@ describe("CodexRateLimitView (extended fields)", () => {
       />,
     );
     expect(
-      screen.getByText(/^Resets [A-Za-z]{3} \d{1,2}:\d{2}\s?[AP]M$/i),
+      screen.getByText(
+        `Resets ${formatResetFullDateTime(NOW + 3 * 24 * 60 * 60 * 1000)}`,
+      ),
     ).toBeTruthy();
     expect(screen.queryByText(/^Resets in /)).toBeNull();
   });
@@ -225,13 +430,13 @@ describe("CodexRateLimitView (extended fields)", () => {
 });
 
 describe("ClaudeRateLimitView", () => {
-  it("shows an absolute weekday-tagged time for a far per-model reset, even though modelScoped carries no durationMinutes", () => {
+  it("shows an absolute calendar date and time for a far per-model reset, even though modelScoped carries no durationMinutes", () => {
     // Regression: `modelScoped` entries never carry a `durationMinutes` (the
     // SDK's per-model usage has no separate duration field), so a
     // duration-based "is this weekly-scale" check always fell back to the
     // relative countdown for these rows, no matter how far away the real
-    // reset was ("Fable" usage showed "Resets in 3d" instead of "Resets Tue
-    // 5:29 PM"). The reset-format decision is now based on the real
+    // reset was ("Fable" usage showed "Resets in 3d" instead of a precise
+    // date/time). The reset-format decision is now based on the real
     // `resetsAt` delta instead, so a 3-day-out per-model reset gets the same
     // absolute treatment a weekly window does.
     const claude: ClaudeRateLimits = {
@@ -255,7 +460,9 @@ describe("ClaudeRateLimitView", () => {
     render(<ClaudeRateLimitView data={claude} variant="settings" />);
     expect(screen.getByText("Fable")).toBeTruthy();
     expect(
-      screen.getByText(/^Resets [A-Za-z]{3} \d{1,2}:\d{2}\s?[AP]M$/i),
+      screen.getByText(
+        `Resets ${formatResetFullDateTime(NOW + 3 * 24 * 60 * 60 * 1000)}`,
+      ),
     ).toBeTruthy();
     expect(screen.queryByText(/^Resets in /)).toBeNull();
   });
@@ -446,6 +653,7 @@ describe("ProviderRateLimitDetail dispatch", () => {
           balance: 12,
         }}
         variant="settings"
+        codexResetAction={null}
       />,
     );
     expect(screen.getByText("Balance")).toBeTruthy();
@@ -462,6 +670,7 @@ describe("ProviderRateLimitDetail dispatch", () => {
           passState: null,
         }}
         variant="settings"
+        codexResetAction={null}
       />,
     );
     expect(screen.getByText("Credit balance")).toBeTruthy();
@@ -486,6 +695,7 @@ describe("ProviderRateLimitBody (unavailable state)", () => {
           lastGoodAt: null,
           lastFailureAt: NOW,
         }}
+        codexResetAction={null}
       />,
     );
     expect(
@@ -493,5 +703,40 @@ describe("ProviderRateLimitBody (unavailable state)", () => {
         "Usage limits unavailable - not available for this account",
       ),
     ).toBeTruthy();
+  });
+});
+
+describe("ProviderRateLimitBody (Codex reset action)", () => {
+  it("places the supplied action beside a positive manual-reset count", () => {
+    render(
+      <ProviderRateLimitBody
+        isPending={false}
+        isFetching={false}
+        isError={false}
+        envelope={{
+          latest: {
+            provider: "codex",
+            available: true,
+            planType: "pro_5x",
+            limitId: "codex",
+            limitName: "Codex",
+            primary: null,
+            secondary: null,
+            extraWindows: [],
+            credits: null,
+            individualLimit: null,
+            resetCredits: { availableCount: 3, credits: null },
+            rateLimitReachedType: null,
+          },
+          lastGood: null,
+          lastGoodAt: null,
+          lastFailureAt: null,
+        }}
+        codexResetAction={() => <button type="button">Use reset</button>}
+      />,
+    );
+
+    expect(screen.getByText("3 available")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Use reset" })).toBeTruthy();
   });
 });

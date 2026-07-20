@@ -49,6 +49,7 @@ function ambientProfile(
     },
     usageUpdatedAt: null,
     rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: driftNotice,

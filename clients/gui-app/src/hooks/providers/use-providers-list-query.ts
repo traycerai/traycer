@@ -9,7 +9,7 @@ import { useHostQuery } from "@/hooks/host/use-host-query";
 import type { QueryActivityOptions } from "@/hooks/harnesses/use-gui-harness-catalog";
 import {
   PROVIDERS_LIST_REFRESH_MS,
-  providersListRefetchInterval,
+  providersListRefetchIntervalForQuery,
 } from "@/hooks/providers/providers-list-refetch-interval";
 
 type ProvidersListQueryResult = UseQueryResult<
@@ -41,11 +41,12 @@ export function useProvidersListForClient(
       subscribed: activity.subscribed,
       staleTime: PROVIDERS_LIST_REFRESH_MS,
       // The host returns the list immediately with pending version/auth
-      // probes. Poll quickly while probes are pending; bounded while any
-      // profile is near/at its rate limit; once settled, refresh only on the
-      // steady catalog cadence while this query stays mounted.
-      refetchInterval: (query) =>
-        providersListRefetchInterval(query.state.data),
+      // probes. Poll quickly while probes are pending; bounded once a pending
+      // probe overruns its budget or while any profile is near/at its rate
+      // limit; once settled, refresh only on the steady catalog cadence while
+      // this query stays mounted. The budget is tracked against the shared
+      // query, so multiple observers can't re-arm the fast-poll.
+      refetchInterval: (query) => providersListRefetchIntervalForQuery(query),
     },
   });
 }

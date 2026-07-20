@@ -5,6 +5,7 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { AssistantMessageBody } from "./chat-message-assistant-body";
 import { chatFindSegmentUnitId } from "./chat-find";
+import { singleSpecialSegment } from "./chat-special-segment";
 import { UserMessageBody } from "./chat-message-user-body";
 import { ForkedChatLinkSegment } from "./segments/forked-chat-link-segment";
 import { SetupCardSegment } from "./segments/setup-card-segment";
@@ -31,8 +32,8 @@ interface ChatMessageProps {
  *    down an alternate path in parallel, with the question re-opened as an
  *    answerable card. Titled "A/B Fork".
  *
- * `cross-question` / `ab-worktree` are offered ONLY on the pending-interview
- * card; the per-message footer button is always `plain`.
+ * `cross-question` / `ab-worktree` are offered on pending-question cards and
+ * resolved Q&A rows; the per-message footer button is always `plain`.
  */
 export type ChatForkMode = "plain" | "cross-question" | "ab-worktree";
 
@@ -55,8 +56,11 @@ export interface ChatMessageEditing {
 export interface ChatMessageForkAction {
   readonly enabled: boolean;
   readonly pending: boolean;
-  /** Opens the fork dialog for a plain per-message fork. */
-  readonly onFork: () => void;
+  /** Opens the fork dialog with the selected message-level or Q&A mode. */
+  readonly onFork: (
+    mode: ChatForkMode,
+    interviewBlockId: string | null,
+  ) => void;
 }
 
 export interface ChatMessageUserActions {
@@ -99,8 +103,8 @@ function messageAlignmentClass(message: ChatMessageModel): string {
 function renderSingleSpecialSegment(
   message: ChatMessageModel,
 ): ReactElement | null {
-  if (message.segments.length !== 1) return null;
-  const segment = message.segments[0];
+  const segment = singleSpecialSegment(message.segments);
+  if (segment === null) return null;
   if (segment.kind === "setup-card") {
     return (
       <div
@@ -156,6 +160,7 @@ function ChatMessageImpl(props: ChatMessageProps) {
           pausedDurationMs={message.pausedDurationMs ?? 0}
           pausedSinceMs={message.pausedSinceMs ?? null}
           completedAt={message.completedAt}
+          stopped={message.stopped}
           meta={message.assistantMeta}
           nextStepActions={nextStepActions}
           forkAction={assistantActions?.fork ?? null}

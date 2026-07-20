@@ -1,5 +1,6 @@
-import { Notification, app, shell, systemPreferences } from "electron";
+import { app, shell, systemPreferences } from "electron";
 import { log } from "../app/logger";
+import { showNativeNotification } from "../notifications";
 import { safelyOpenExternal } from "../app/security";
 import { RunnerHostInvoke } from "../../ipc-contracts/ipc-channels";
 import { assertString, parseSupportLogTarget } from "./ipc-parsers";
@@ -75,12 +76,31 @@ export function registerSupportIpc(bridge: RunnerIpcBridge): void {
 
   bridge.handleInvoke(
     RunnerHostInvoke.notificationShow,
-    async (_event, title: unknown, body: unknown, payload: unknown) => {
+    async (
+      _event,
+      title: unknown,
+      body: unknown,
+      payload: unknown,
+      replaceKey: unknown,
+      deliveryKey: unknown,
+    ) => {
       assertString(title, "notifications.show");
       assertString(body, "notifications.show");
-      showNotification(title, body, payload, (p) =>
-        bridge.deliverNotificationClick(p),
-      );
+      if (replaceKey !== null && typeof replaceKey !== "string") {
+        throw new Error(
+          "notifications.show requires a replacement key or null",
+        );
+      }
+      if (deliveryKey !== null && typeof deliveryKey !== "string") {
+        throw new Error("notifications.show requires a delivery key or null");
+      }
+      showNativeNotification({
+        title,
+        body,
+        replaceKey,
+        deliveryKey,
+        onClick: () => bridge.deliverNotificationClick(payload),
+      });
     },
   );
 
@@ -148,21 +168,4 @@ function parseSupportTailLogInput(input: unknown): {
     target: parseSupportLogTarget(payload.target),
     tailLines,
   };
-}
-
-function showNotification(
-  title: string,
-  body: string,
-  payload: unknown,
-  onClick: (payload: unknown) => void,
-): void {
-  if (!Notification.isSupported()) {
-    log.warn("[notifications] not supported on this platform");
-    return;
-  }
-  const notification = new Notification({ title, body });
-  notification.on("click", () => {
-    onClick(payload);
-  });
-  notification.show();
 }

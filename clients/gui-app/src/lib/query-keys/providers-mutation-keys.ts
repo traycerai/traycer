@@ -11,6 +11,8 @@ export const providersMutationKeys = {
   startLogin: () => ["providers.startLogin"] as const,
   awaitLogin: () => ["providers.awaitLogin"] as const,
   cancelLogin: () => ["providers.cancelLogin"] as const,
+  submitLoginCode: () => ["providers.submitLoginCode"] as const,
+  touchLogin: () => ["providers.touchLogin"] as const,
   renameProfile: () => ["providers.renameProfile"] as const,
   recolorProfile: () => ["providers.recolorProfile"] as const,
   removeProfile: () => ["providers.removeProfile"] as const,
@@ -21,4 +23,6 @@ export const providersMutationKeys = {
   pluginsMutate: () => ["providers.pluginsMutate"] as const,
   skillsMutate: () => ["providers.skillsMutate"] as const,
   acknowledgeAmbientDrift: () => ["providers.acknowledgeAmbientDrift"] as const,
+  consumeRateLimitResetCredit: () =>
+    ["providers.consumeRateLimitResetCredit"] as const,
 };

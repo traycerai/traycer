@@ -31,6 +31,43 @@ const OTHER_GOOD: ProviderRateLimits = {
   fiveHour: { usedPercent: 40, resetsAt: null, durationMinutes: 300 },
 };
 
+const CODEX_WITH_RESET_DETAILS: ProviderRateLimits = {
+  provider: "codex",
+  available: true,
+  planType: "plus",
+  limitId: "codex",
+  limitName: "Codex",
+  primary: null,
+  secondary: null,
+  extraWindows: [],
+  credits: null,
+  individualLimit: null,
+  resetCredits: {
+    availableCount: 2,
+    credits: [
+      {
+        id: "reset-1",
+        resetType: "codexRateLimits",
+        status: "available",
+        grantedAt: 500,
+        expiresAt: 10_000,
+        title: "Full reset",
+        description: null,
+      },
+      {
+        id: "reset-2",
+        resetType: "codexRateLimits",
+        status: "available",
+        grantedAt: 750,
+        expiresAt: 20_000,
+        title: "Full reset",
+        description: null,
+      },
+    ],
+  },
+  rateLimitReachedType: null,
+};
+
 function response(
   providerRateLimits: ProviderRateLimits | null,
 ): RateLimitUsageResponse {
@@ -155,6 +192,74 @@ describe("buildProviderRateLimitEnvelope", () => {
       // unavailable reason updates it again.
       lastFailureAt: 1_500,
     });
+  });
+
+  it("retains Codex reset-credit details when a refresh only reports the unchanged count", () => {
+    const previous: ProviderRateLimitEnvelope = {
+      latest: CODEX_WITH_RESET_DETAILS,
+      lastGood: CODEX_WITH_RESET_DETAILS,
+      lastGoodAt: 1_000,
+      lastFailureAt: null,
+    };
+    const countOnlyRefresh: ProviderRateLimits = {
+      ...CODEX_WITH_RESET_DETAILS,
+      primary: { usedPercent: 42, resetsAt: 30_000, durationMinutes: 300 },
+      resetCredits: { availableCount: 2, credits: null },
+    };
+    const envelope = buildProviderRateLimitEnvelope(
+      previous,
+      response(countOnlyRefresh),
+      2_000,
+    );
+
+    expect(envelope.latest).toEqual({
+      ...countOnlyRefresh,
+      resetCredits: CODEX_WITH_RESET_DETAILS.resetCredits,
+    });
+    expect(envelope.lastGood).toEqual(envelope.latest);
+    expect(envelope.lastGoodAt).toBe(2_000);
+  });
+
+  it("does not retain Codex reset-credit details when the count changes", () => {
+    const previous: ProviderRateLimitEnvelope = {
+      latest: CODEX_WITH_RESET_DETAILS,
+      lastGood: CODEX_WITH_RESET_DETAILS,
+      lastGoodAt: 1_000,
+      lastFailureAt: null,
+    };
+    const countOnlyRefresh: ProviderRateLimits = {
+      ...CODEX_WITH_RESET_DETAILS,
+      resetCredits: { availableCount: 1, credits: null },
+    };
+
+    expect(
+      buildProviderRateLimitEnvelope(
+        previous,
+        response(countOnlyRefresh),
+        2_000,
+      ).latest,
+    ).toEqual(countOnlyRefresh);
+  });
+
+  it("does not replace an explicit empty Codex credit list with cached details", () => {
+    const previous: ProviderRateLimitEnvelope = {
+      latest: CODEX_WITH_RESET_DETAILS,
+      lastGood: CODEX_WITH_RESET_DETAILS,
+      lastGoodAt: 1_000,
+      lastFailureAt: null,
+    };
+    const emptyDetailRefresh: ProviderRateLimits = {
+      ...CODEX_WITH_RESET_DETAILS,
+      resetCredits: { availableCount: 2, credits: [] },
+    };
+
+    expect(
+      buildProviderRateLimitEnvelope(
+        previous,
+        response(emptyDetailRefresh),
+        2_000,
+      ).latest,
+    ).toEqual(emptyDetailRefresh);
   });
 
   it("treats a null provider snapshot (aperture-only response) like an authoritative reset", () => {

@@ -111,6 +111,24 @@ const startSessionResponse = {
   harnessId: "claude" as const,
 };
 
+// worktree.create resolves per-entry; echo an `ok` row for every requested
+// entry so the dispatch's partial-failure gate sees a full success.
+function worktreeCreateOkResponse(payload: unknown): unknown {
+  const entries =
+    (payload as { entries?: ReadonlyArray<{ workspacePath: string }> })
+      .entries ?? [];
+  return {
+    binding: { entries: [] },
+    perEntry: entries.map((entry) => ({
+      workspacePath: entry.workspacePath,
+      ok: true,
+      worktreePath: null,
+      branch: null,
+      errorMessage: null,
+    })),
+  };
+}
+
 function setupSequencedMock(): {
   readonly calls: ReadonlyArray<CapturedCall>;
 } {
@@ -126,7 +144,7 @@ function setupSequencedMock(): {
           (payload as { tuiAgentId?: string | null }).tuiAgentId ?? "server-id",
       });
     }
-    return Promise.resolve({ binding: { entries: [] } });
+    return Promise.resolve(worktreeCreateOkResponse(payload));
   });
   return { calls };
 }
@@ -143,6 +161,82 @@ describe("useCreateTuiAgent", () => {
 
   afterEach(() => {
     cleanup();
+  });
+
+  it("aborts the launch when worktree.create reports a per-entry failure", async () => {
+    const calls: CapturedCall[] = [];
+    hookMocks.request.mockImplementation((method, payload) => {
+      calls.push({ method, payload });
+      if (method === "worktree.create") {
+        // RPC resolves, but the host failed the folder's worktree.
+        return Promise.resolve({
+          binding: { entries: [] },
+          perEntry: [
+            {
+              workspacePath: WORKSPACE_PATH,
+              ok: false,
+              worktreePath: null,
+              branch: null,
+              errorMessage: "branch already exists",
+            },
+          ],
+        });
+      }
+      if (method === "epic.createTuiAgent") {
+        return Promise.resolve({ tuiAgentId: "server-id" });
+      }
+      return Promise.resolve(worktreeCreateOkResponse(payload));
+    });
+    const queryClient = makeQueryClient();
+    const { result } = renderHook(() => useCreateTuiAgent(), {
+      wrapper: queryClientWrapper(queryClient),
+    });
+
+    const intent: WorktreeIntent = {
+      entries: [
+        {
+          kind: "worktree",
+          scripts: null,
+          workspacePath: WORKSPACE_PATH,
+          repoIdentifier: { owner: "traycerai", repo: "traycer" },
+          isPrimary: true,
+          branch: {
+            type: "new",
+            name: "traycer/fix-x",
+            source: "main",
+            carryUncommittedChanges: false,
+          },
+        },
+      ],
+    };
+
+    await act(async () => {
+      await expect(
+        result.current.create({
+          epicId: EPIC_ID,
+          tabId: TAB_ID,
+          parentId: null,
+          title: "",
+          placement: { kind: "active-tile" },
+          harnessId: "claude",
+          model: null,
+          reasoningEffort: null,
+          agentMode: "regular",
+          forkSourceHarnessSessionId: null,
+          onStatusChange: null,
+          workspaceMode: "inherit",
+          worktreeIntent: intent,
+          terminalAgentArgs: null,
+          profileId: null,
+        }),
+      ).rejects.toThrow("Couldn't prepare the workspace");
+    });
+
+    // Launching against the partial binding never proceeds to harness work.
+    const methodOrder = calls.map((call) => call.method);
+    expect(methodOrder).toContain("worktree.create");
+    expect(methodOrder).not.toContain("agent.tui.prepareLaunch");
+    expect(methodOrder).not.toContain("epic.createTuiAgent");
   });
 
   it("Worktree-mode (create) dispatches worktree.create BEFORE agent.tui.prepareLaunch", async () => {
@@ -308,7 +402,7 @@ describe("useCreateTuiAgent", () => {
             "server-id",
         });
       }
-      return Promise.resolve({ binding: { entries: [] } });
+      return Promise.resolve(worktreeCreateOkResponse(payload));
     });
     const queryClient = makeQueryClient();
     const { result } = renderHook(() => useCreateTuiAgent(), {
@@ -447,7 +541,7 @@ describe("useCreateTuiAgent", () => {
             "server-id",
         });
       }
-      return Promise.resolve({ binding: { entries: [] } });
+      return Promise.resolve(worktreeCreateOkResponse(payload));
     });
 
     const queryClient = makeQueryClient();
@@ -597,19 +691,17 @@ describe("useCreateTuiAgent", () => {
     queryClient.clear();
   });
 
-  it("setup failure: agent.tui.prepareLaunch rejection prevents epic.createTuiAgent", async () => {
+  it("prepareLaunch rejection prevents epic.createTuiAgent", async () => {
     const calls: CapturedCall[] = [];
     hookMocks.request.mockImplementation((method, payload) => {
       calls.push({ method, payload });
       if (method === "agent.tui.prepareLaunch") {
-        return Promise.reject(
-          new Error("WORKTREE_SETUP_FAILED: setup exited 1"),
-        );
+        return Promise.reject(new Error("launch preparation failed"));
       }
       if (method === "epic.createTuiAgent") {
         return Promise.resolve({ tuiAgentId: "server-id" });
       }
-      return Promise.resolve({ binding: { entries: [] } });
+      return Promise.resolve(worktreeCreateOkResponse(payload));
     });
 
     const queryClient = makeQueryClient();
@@ -661,18 +753,18 @@ describe("useCreateTuiAgent", () => {
     });
 
     expect(caught).toBeInstanceOf(Error);
-    expect((caught as Error).message).toMatch(/WORKTREE_SETUP_FAILED/);
+    expect((caught as Error).message).toMatch(/launch preparation failed/);
 
     const methodOrder = calls.map((call) => call.method);
     expect(methodOrder).toContain("worktree.create");
     expect(methodOrder).toContain("agent.tui.prepareLaunch");
     // Harness never starts: the persisted record is never written when
-    // setup rejects.
+    // prepareLaunch rejects.
     expect(methodOrder).not.toContain("epic.createTuiAgent");
-    // Placeholder canvas tab IS opened before the setup wait so the user
-    // is not stranded outside the Epic context on failure. The recovery
-    // surface is the placeholder + setup terminal tab + toast - no
-    // hidden unrecoverable owner state is created.
+    // Placeholder canvas tab IS opened before launch preparation so the
+    // user is not stranded outside the Epic context on failure. The
+    // recovery surface is the placeholder + toast - no hidden
+    // unrecoverable owner state is created.
     expect(hookMocks.openTileInTab).toHaveBeenCalledTimes(1);
     const createCall = calls.find((c) => c.method === "worktree.create");
     expect(createCall).toBeDefined();
@@ -683,82 +775,6 @@ describe("useCreateTuiAgent", () => {
     expect(placeholderNode.id).toBe(
       (createCall?.payload as { ownerId: string }).ownerId,
     );
-    expect(placeholderNode.type).toBe("terminal-agent");
-
-    queryClient.clear();
-  });
-
-  it("setup cancellation: agent.tui.prepareLaunch cancellation prevents epic.createTuiAgent", async () => {
-    const calls: CapturedCall[] = [];
-    hookMocks.request.mockImplementation((method, payload) => {
-      calls.push({ method, payload });
-      if (method === "agent.tui.prepareLaunch") {
-        return Promise.reject(
-          new Error("WORKTREE_SETUP_CANCELLED: setup terminal killed"),
-        );
-      }
-      if (method === "epic.createTuiAgent") {
-        return Promise.resolve({ tuiAgentId: "server-id" });
-      }
-      return Promise.resolve({ binding: { entries: [] } });
-    });
-
-    const queryClient = makeQueryClient();
-    const { result } = renderHook(() => useCreateTuiAgent(), {
-      wrapper: queryClientWrapper(queryClient),
-    });
-
-    const intent: WorktreeIntent = {
-      entries: [
-        {
-          kind: "worktree",
-          scripts: null,
-          workspacePath: WORKSPACE_PATH,
-          repoIdentifier: null,
-          isPrimary: true,
-          branch: {
-            type: "new",
-            name: "traycer/fix-x",
-            source: "main",
-            carryUncommittedChanges: false,
-          },
-        },
-      ],
-    };
-
-    await act(async () => {
-      try {
-        await result.current.create({
-          epicId: EPIC_ID,
-          tabId: TAB_ID,
-          parentId: null,
-          title: "",
-          placement: { kind: "active-tile" },
-          harnessId: "claude",
-          model: null,
-          reasoningEffort: null,
-          agentMode: "regular",
-          forkSourceHarnessSessionId: null,
-          onStatusChange: null,
-          workspaceMode: "inherit",
-          worktreeIntent: intent,
-          terminalAgentArgs: null,
-          profileId: null,
-        });
-      } catch {
-        // expected
-      }
-    });
-
-    const methodOrder = calls.map((call) => call.method);
-    expect(methodOrder).not.toContain("epic.createTuiAgent");
-    // Same recovery-surface invariant on cancellation: the placeholder
-    // is visible inside the Epic context even though the harness never
-    // launched and no record was persisted.
-    expect(hookMocks.openTileInTab).toHaveBeenCalledTimes(1);
-    const placeholderNode = hookMocks.openTileInTab.mock.calls[0][1] as {
-      type: string;
-    };
     expect(placeholderNode.type).toBe("terminal-agent");
 
     queryClient.clear();
@@ -1052,7 +1068,7 @@ describe("useCreateTuiAgent", () => {
             "server-id",
         });
       }
-      return Promise.resolve({ binding: { entries: [] } });
+      return Promise.resolve(worktreeCreateOkResponse(payload));
     });
 
     const queryClient = makeQueryClient();

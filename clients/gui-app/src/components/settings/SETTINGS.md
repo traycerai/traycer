@@ -25,6 +25,7 @@ SettingsLayout
         ├── GeneralSettingsPanel
         ├── AppearanceSettingsPanel
         ├── ProvidersSettingsPanel
+        ├── NotificationsSettingsPanel
         ├── AgentsSettingsPanel
         ├── KeybindingsSettingsPanel
         ├── ShellSettingsPanel
@@ -178,8 +179,8 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     value if it changes underneath (refetch / another window) and stays editable
     while a save is in flight (writes are serialized host-side). Shown only for
     terminal-agent-capable providers - it checks `useGuiHarnessesQuery` for the
-    mapped harness (`HARNESS_ICON_ID`) advertising the `tui` `mode`, so it's
-    hidden for Cursor. Persisted as `terminalAgentArgs` in
+    mapped harness (`HARNESS_ICON_ID`) advertising the `tui` `mode`, so GUI-only
+    providers do not show it. Persisted as `terminalAgentArgs` in
     `provider-overrides.json` via `providers.setTerminalAgentArgs`
     (`useProvidersSetTerminalAgentArgs`, invalidates only `providers.list`). In
     `agent.tui.prepareLaunch` the host tokenizes the string and each harness
@@ -201,11 +202,9 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     `cursor-agent about` for provider auth because GUI chats use `@cursor/sdk`,
     not the CLI login session. Backed by `providers.setApiKey` /
     `providers.clearApiKey` (`useProvidersSetApiKey` /
-    `useProvidersClearApiKey`). Cursor is GUI-only in the UI for now - its
-    `cursor-agent` TUI surface is hidden until the CLI reaches feature parity
-    (the adapter advertises only the `gui` mode via `listGuiHarnesses`'s
-    `modes`) - so the Cursor row hides the CLI candidates table and shows only
-    the API-key section; the key drives the `@cursor/sdk` GUI chat surface.
+    `useProvidersClearApiKey`). Cursor is GUI-only, so its row hides the CLI
+    candidates table and shows only the API-key section; the key drives the
+    `@cursor/sdk` GUI chat surface.
   - **Traycer subscription + credits.** The Traycer provider detail leads with a
     `TraycerSubscriptionSection` card (always visible, not gated by the
     enable/disable toggle since it is account- not binary-level) showing the
@@ -241,10 +240,23 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     Traycer has no API key field. The enable toggle remains a real gate:
     disabling it hides the Traycer harness from the new-chat picker and blocks
     runs like any other provider.
+- `Notifications` Host-side notification generation controls. The `In-app`
+  column gates durable host-row creation before anything enters the bell feed,
+  unread count, tab indicators, delivery channels, or notification hooks.
+  Collaboration and app-local notifications are independent. Notification
+  hooks are configured separately below the grid and further filter generated
+  rows by severity.
+  Backed by `host.notifications.getConfig` /
+  `host.notifications.setConfig` through host-scoped TanStack Query hooks.
+  The protocol still carries forward-compatible email config, but this panel
+  round-trips it untouched instead of exposing an inactive email delivery
+  surface.
 - `Agents` Editor for the **global** agent selection guide
   (`~/.traycer/agent-selection-guide.md`) - the instructions Traycer agents read
   to decide which child agents to spawn (harness / model / reasoning effort) for
-  a task. A monospace `Textarea` debounce-auto-saves (and flushes on blur) via
+  a task. A full-height CodeMirror Markdown source editor provides syntax
+  highlighting and line numbers, including for Mermaid and wireframe fences.
+  It debounce-auto-saves (and flushes on blur) via
   `agent.selectionGuide.setGlobal`; a quiet "Saving… / Saved" status sits in the
   footer, no Save button. A **Revert to default** button (disabled while the
   content already equals the provider-based default) calls
@@ -267,26 +279,97 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
   `traycer host start` and therefore take effect on the host's next restart.
   Backed by the `traycer config shell` / `traycer config env` CLI through
   `IRunnerHost.traycerCli`. Hidden on shells without a CLI (mobile, web).
+  - **Flags belong to a shell, not the panel.** Each program carries its own
+    startup flags: `shell.entries` is a list of `{ path, args }` launch specs,
+    and `shell.path`/`shell.args` are the selected command MATERIALISED for an
+    EXPLICIT selection (the mirror invariant - see `protocol/config`). `args` is
+    a DEVIATION: `null` means "runs the family default", so presence (an entry
+    exists) and flag-deviation (`args !== null`) are independent - an added
+    program on factory flags is `{ path, args: null }`. The store's write path
+    canonicalises any args equal to `defaultShellArgs(path)` (`-i -l` for a login
+    shell, none otherwise) down to `null`, which makes "the visible flags differ
+    from the family default" exactly equal to "a non-null deviation is on disk".
+    Picking a program swaps the flags row to that program's resolved flags.
+    Picking is not remembering - only adding a program or editing its flags
+    creates an entry. **"System default" is an alias for the login shell and
+    INHERITS its entry flags**: in the pure-auto state (`path`/`args` both null)
+    resolution reads the login shell's entry, and editing the flags row while on
+    it configures that entry while staying auto (the mirror stays null/null so
+    the System default row stays checked). **Nothing is forgotten by changing
+    selection** - only the ✕ removes an entry; **Restore default flags** clears a
+    shell's deviation (`args: null`) while keeping the entry.
   - **UI (Direction B - live-preview cards).** Two cards under
     `panels/shell/`: a _Shell_ card with an `EffectiveCommandPreview`
     (terminal-styled `❯ <path> <args>`, reusing `--term-ansi-*`), a
-    `ShellProgramCombobox` (editable path input + detected-shell quick-picks),
-    and `ShellFlagChips`; and an _Environment variables_ card with the shared
-    inline `EnvOverrideEditor` (host-process scope only - set/unset mode, value
-    edit, key rename, and staged add/remove; per-harness env now lives in
-    Settings → Providers). Existing env rows **auto-save on commit** (env
-    blur/Enter); new env rows apply only when their check button is pressed.
-    Other controls auto-save on commit (combobox select/Enter, chip add/remove)
-    and a quiet "Saving… / ✓ Saved" status sits in each card.
-    Reset is a low-emphasis footer button, disabled while `synthesised`.
-  - **Detected shells** come from `traycer config shell list` →
-    `protocol/config` `detectShells()` (POSIX `/etc/shells` + probe set +
-    `$SHELL`, `X_OK`-filtered; Windows probes PowerShell/cmd), surfaced via
-    `ITraycerCli.shellListDetected()` and the `useRunnerTraycerShellListQuery`
-    hook (cached for the session). Best-effort - an empty list is fine since the
-    combobox always accepts a typed custom path. Env **rename** is
-    client-sequenced (`envOverrideSet` new → `envOverrideDelete` old) with an
-    inline unique-key + `/^[A-Za-z_][A-Za-z0-9_]*$/` guard.
+    `ShellProgramCombobox`, and `ShellFlagChips` (labelled _Startup flags for
+    &lt;shell&gt;_, with the "`-i -l` loads your full shell profile" helper only
+    when the selected program is a login shell, and a quiet _Restore default
+    flags_ action shown only while the visible flags deviate from the family
+    default - reverting the SELECTED shell via
+    `useRunnerTraycerShellRevertArgsMutation`); and an _Environment variables_
+    card with the shared inline `EnvOverrideEditor` (host-process scope only -
+    set/unset mode, value edit, key rename, and staged add/remove; per-harness
+    env now lives in Settings → Providers). Existing env rows **auto-save on
+    commit** (env blur/Enter); new env rows apply only when their check button
+    is pressed. Other controls auto-save on commit (row select, add, chip
+    add/remove) and a quiet "Saving… / ✓ Saved" status sits in each card. The
+    footer holds only that save status - there is no reset button.
+  - **The "system default" concept lives in exactly one place: the picker's
+    first row.** It is not repeated as a preview badge, a trigger chip, or a
+    footer button (all removed). `EffectiveCommandPreview` shows only the
+    effective `❯ <path> <args>`.
+  - **Shell picker (`ShellProgramCombobox`).** The trigger shows either
+    **"System default"** + `{defaultName} · {path}` (when `config.synthesised`)
+    or the stored shell's name + start-truncated path (otherwise) - no chip. The
+    popover leads with a **System default** row, then one alphabetical list of
+    concrete shells, then a labelled _Add a shell_ section:
+    - **System default row** (first, present whenever the list has an OS-default
+      entry, carrying `data-testid="settings-shell-reset"` migrated from the old
+      footer button). Its check shows when `config.synthesised`; clicking it
+      clears ONLY the selection via `useRunnerTraycerShellConfigResetMutation`
+      (invalidates just the config query). Remembered shells and their flags are
+      kept - the login shell's own entry is inherited - so the row stays checked
+      even when the login shell has customised flags, and editing the flags row
+      while checked persists to that entry without un-checking it.
+    - **The concrete list** is `detectShells()` ∪ the user's `shell.entries`
+      paths (`traycer config shell list` → `ITraycerCli.shellListDetected()` →
+      `useRunnerTraycerShellListQuery`, cached for the session), sorted purely
+      alphabetically (the System default row owns the auto concept, so no
+      default-first ordering or per-row "default" tag). A concrete row is checked
+      only when a shell is explicitly stored (`!synthesised`) and its path
+      matches; a hover/focus ✕ removes rows whose `source` is `"added"` (detected
+      rows are never removable). An entry-derived row whose file has since
+      vanished lists with `missing: true` - its path takes the amber
+      (`--term-ansi-yellow`) validation tone with a quiet "not found" hint, and
+      it stays selectable and removable (that ✕ is the cleanup path). A selection
+      that is neither detected nor an entry (set by hand via the CLI) renders as a
+      transient checked row without ✕. Clicking a row auto-saves via the set
+      mutation, materialising that program's flags.
+    - **Add a shell** is an always-visible path input with a live status line
+      driven by a debounced native probe (`ITraycerCli.shellProbe` →
+      `useRunnerTraycerShellProbeQuery`): non-absolute → "an absolute path is
+      required"; found+executable → green "✓ found · executable"; the amber
+      states ("found, but not executable" / "not found on this machine") **block
+      the add**. Enter adds only from the green state (remember + select via
+      `ITraycerCli.shellConfigAdd` → `useRunnerTraycerShellConfigAddMutation`,
+      which invalidates both the config and list queries). A **Browse…** row
+      (`ITraycerCli.pickShellProgramFile`, hidden when the dialog capability is
+      absent) runs a chosen file through the same probe gate - executable files
+      are added outright, a non-executable pick is left in the input with its
+      amber status. The ✕ removes via `ITraycerCli.shellConfigRemove` →
+      `useRunnerTraycerShellConfigRemoveMutation`; the backend falls back to the
+      OS default when the removed shell was current.
+  - **Detection** (`protocol/config` `detectShells()`) unions `/etc/shells`, a
+    probe set, `$SHELL`, and a scan of every `PATH` directory for known shell
+    names; on Windows it scans `PATH` plus env-var-derived well-known locations
+    (WSL, Git Bash, Store PowerShell) and `%COMSPEC%`, giving WSL/Git Bash
+    friendly names. All candidates pass the same `X_OK` filter, realpath
+    duplicates collapse (preferring the OS default), and detection never throws.
+    Added/customised shells persist as `shell.entries` (additive config field,
+    replacing the never-shipped `shell.added`) and are listed even when their
+    file no longer exists (flagged `missing`). Env **rename** is client-sequenced
+    (`envOverrideSet` new → `envOverrideDelete` old) with an inline unique-key +
+    `/^[A-Za-z_][A-Za-z0-9_]*$/` guard.
 - `Worktrees` Host-wide management of the git worktrees Traycer creates under
   `~/.traycer/worktrees/`, presented as a calm inspection-and-cleanup list, not
   a delete console. A host selector (default = active host, gated on
@@ -307,10 +390,12 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     `classify-worktree.ts`) naming a PROVEN fact, never a generic "Safe"
     label. **Merged**, **At base commit**, and **Unreferenced** are the three
     green tiers - each requires positive, host-validated proof (a merged PR at
-    the live HEAD or local ancestry into the default branch; never advanced
-    from the worktree's birth commit; or clean, fully pushed, and unreferenced
-    by any Task) - and are deliberately kept distinct rather than collapsed
-    into one badge. **Review** is the amber catch-all for anything unproven or
+    the live HEAD, local ancestry into the default branch, or authored owned-
+    submodule work proven landed from an otherwise at-base superproject; never
+    advanced from the worktree's birth commit with no landed authored submodule
+    work; or clean, fully pushed, and unreferenced by any Task) - and are
+    deliberately kept distinct rather than collapsed into one badge. **Review**
+    is the amber catch-all for anything unproven or
     with would-be-lost state (dirty, unpushed/local-only commits, a detached
     HEAD, an unmerged owned-submodule branch, or unverified branch status).
     **Orphaned** means git can't remove the worktree normally (missing/broken

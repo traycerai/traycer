@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
@@ -29,6 +30,7 @@ describe("useHostQueries enabled handling", () => {
       () =>
         useHostQueries({
           client: fixture.client,
+          cacheKeyIdentity: undefined,
           requests: [{ method: "host.status", params: {} }],
           options: { enabled: () => false },
         }),
@@ -42,6 +44,7 @@ describe("useHostQueries enabled handling", () => {
       () =>
         useHostQueries({
           client: fixture.client,
+          cacheKeyIdentity: undefined,
           requests: [{ method: "host.status", params: {} }],
           options: { enabled: () => true },
         }),
@@ -51,6 +54,42 @@ describe("useHostQueries enabled handling", () => {
     await waitFor(() => {
       expect(fixture.requestCount.value).toBe(1);
     });
+  });
+
+  it("keeps a combined result stable when its query data is unchanged", async () => {
+    const fixture = createHostQueriesFixture();
+    fixture.client.bind(mockLocalHostEntry);
+    fixture.client.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "tok-1",
+      }),
+    );
+
+    const { result, rerender } = renderHook(
+      () =>
+        useHostQueries<
+          HostRpcRegistry,
+          "host.status",
+          {
+            readonly data:
+              ResponseOfMethod<HostRpcRegistry, "host.status"> | undefined;
+          }
+        >({
+          client: fixture.client,
+          cacheKeyIdentity: undefined,
+          requests: [{ method: "host.status", params: {} }],
+          options: null,
+          combine: (results) => ({ data: results[0]?.data }),
+        }),
+      { wrapper: fixture.Wrapper },
+    );
+
+    await waitFor(() => expect(result.current.data).toBeDefined());
+    const combined = result.current;
+    rerender();
+
+    expect(result.current).toBe(combined);
   });
 });
 

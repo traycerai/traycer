@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -134,6 +134,29 @@ describe("dev-desktop concurrent stack entries", () => {
     expect(hostEntry?.command).toContain(
       "/tmp/traycer/example-slot/host.log",
     );
+  });
+
+  it("makes concurrent shutdown triggers await the same teardown", async () => {
+    let finishTeardown;
+    const onTeardown = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          finishTeardown = resolve;
+        }),
+    );
+    const teardown = devDesktop.createTeardown(onTeardown);
+
+    const first = teardown();
+    const second = teardown();
+
+    expect(onTeardown).toHaveBeenCalledOnce();
+    expect(second).toBe(first);
+
+    finishTeardown();
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      undefined,
+      undefined,
+    ]);
   });
 });
 

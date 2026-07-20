@@ -1,11 +1,15 @@
 import { createElement, type ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { ListTasksResponse } from "@traycer/protocol/host/epic/unary-schemas";
+import type {
+  GetTaskContextsResponse,
+  ListTasksResponse,
+} from "@traycer/protocol/host/epic/unary-schemas";
 import {
   LIST_CLOUD_TASKS_REQUEST,
   cloudEpicTasksQueryKey,
 } from "@/lib/cloud-epic-tasks-query";
+import { hostQueryKeys } from "@/lib/query-keys";
 
 vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn() },
@@ -65,39 +69,46 @@ describe("useEpicUpdateTitle", () => {
     expect(toast.success).toHaveBeenCalledWith("Epic renamed");
   });
 
-  it("patches cached history titles on success", () => {
+  it("patches cached history titles and batch-title caches on success", () => {
     const queryClient = new QueryClient();
-    const queryKey = cloudEpicTasksQueryKey(
+    const listKey = cloudEpicTasksQueryKey(
       "host-1",
       "user-1",
       LIST_CLOUD_TASKS_REQUEST,
     );
-    queryClient.setQueryData<ListTasksResponse>(queryKey, {
-      tasks: [
-        {
-          epic: {
-            light: {
-              id: "epic-1",
-              title: "Original",
-              initialUserPrompt: "",
-              ticketCount: 0,
-              specCount: 0,
-              storyCount: 0,
-              reviewCount: 0,
-              status: "draft",
-              createdAt: 1,
-              updatedAt: 1,
-              createdBy: "user-1",
-              version: "1",
-            },
-            permission: null,
-            repos: [],
-            workspaces: [],
-            roomInfo: null,
-          },
-        },
-      ],
+    const batchKey = hostQueryKeys.epicTaskContexts("host-1", "user-1", [
+      "epic-1",
+    ]);
+    const light = {
+      id: "epic-1",
+      title: "Original",
+      initialUserPrompt: "",
+      ticketCount: 0,
+      specCount: 0,
+      storyCount: 0,
+      reviewCount: 0,
+      status: "draft" as const,
+      createdAt: 1,
+      updatedAt: 1,
+      createdBy: "user-1",
+      version: "1",
+    };
+    const row = {
+      epic: {
+        light,
+        permission: null,
+        repos: [],
+        workspaces: [],
+        roomInfo: null,
+      },
+      pinned: false,
+    };
+    queryClient.setQueryData<ListTasksResponse>(listKey, {
+      tasks: [row],
       hasMore: false,
+    });
+    queryClient.setQueryData<GetTaskContextsResponse>(batchKey, {
+      tasks: { "epic-1": row },
     });
     renderUseEpicUpdateTitle(queryClient);
 
@@ -108,8 +119,13 @@ describe("useEpicUpdateTitle", () => {
     );
 
     expect(
-      queryClient.getQueryData<ListTasksResponse>(queryKey)?.tasks[0]?.epic
+      queryClient.getQueryData<ListTasksResponse>(listKey)?.tasks[0]?.epic
         ?.light?.title,
+    ).toBe("Renamed");
+    expect(
+      queryClient.getQueryData<GetTaskContextsResponse>(batchKey)?.tasks[
+        "epic-1"
+      ]?.epic?.light?.title,
     ).toBe("Renamed");
   });
 
@@ -118,6 +134,7 @@ describe("useEpicUpdateTitle", () => {
     capturedOptions.onError?.({
       code: "RPC_ERROR",
       message: "test",
+      fatalDetails: null,
     });
     expect(toast.error).toHaveBeenCalledWith("Couldn't rename epic.");
   });
@@ -127,6 +144,7 @@ describe("useEpicUpdateTitle", () => {
     capturedOptions.onError?.({
       code: "UNAUTHORIZED",
       message: "test",
+      fatalDetails: null,
     });
     expect(toast.error).toHaveBeenCalledWith("Please sign in again.");
   });

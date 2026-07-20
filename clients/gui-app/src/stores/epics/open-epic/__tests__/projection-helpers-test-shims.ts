@@ -4,16 +4,22 @@
  * the live `projectFullState` (which projects every slice at once).
  */
 import * as Y from "yjs";
+import { v4 as uuidv4 } from "uuid";
 import {
+  ensureMap,
   getArtifactsMap,
   getChatsMap,
+  getEpicMap,
   getTerminalAgentsMap,
   isChatVisibleToUser,
   isTerminalAgentVisibleToUser,
+  NEW_ARTIFACT_TITLES,
   projectArtifact,
   projectChat,
   projectTerminalAgent,
+  type AddableArtifactType,
 } from "@/stores/epics/open-epic/projection-helpers";
+import { LOCAL_ORIGIN } from "@/stores/epics/open-epic/store";
 import type {
   ArtifactProjection,
   ArtifactsSlice,
@@ -55,6 +61,49 @@ export function projectChatsSliceForTests(
     allIds.push(id);
   }
   return { byId, allIds: allIds.length === 0 ? EMPTY_ARRAY : allIds };
+}
+
+/**
+ * Seeds a metadata-only artifact or chat entry directly into the doc,
+ * standing in for the host-side `epic.createArtifact` / `epic.createChat`
+ * writes. The renderer no longer exposes a local create action (creation is
+ * host-RPC-only), so tests seed the doc here. Transacts with the store's
+ * LOCAL_ORIGIN so `handleDocUpdate` routes the update exactly like the
+ * removed local mutation did, keeping projector and render-count semantics.
+ */
+export function createArtifactInDocForTests(
+  doc: Y.Doc,
+  type: AddableArtifactType,
+  parentId: string | null,
+): string {
+  const id = uuidv4();
+  const now = Date.now();
+  const title = NEW_ARTIFACT_TITLES[type];
+  doc.transact(() => {
+    const epic = getEpicMap(doc);
+    if (type === "chat") {
+      const chats = ensureMap(epic, "chats");
+      const entry = new Y.Map<unknown>();
+      entry.set("id", id);
+      entry.set("title", title);
+      entry.set("parentId", parentId);
+      entry.set("createdAt", now);
+      entry.set("updatedAt", now);
+      entry.set("messages", new Y.Array());
+      chats.set(id, entry);
+      return;
+    }
+    const artifacts = ensureMap(epic, "artifacts");
+    const entry = new Y.Map<unknown>();
+    entry.set("id", id);
+    entry.set("kind", type);
+    entry.set("title", title);
+    entry.set("parentId", parentId);
+    entry.set("createdAt", now);
+    entry.set("updatedAt", now);
+    artifacts.set(id, entry);
+  }, LOCAL_ORIGIN);
+  return id;
 }
 
 export function projectTerminalAgentsSliceForTests(

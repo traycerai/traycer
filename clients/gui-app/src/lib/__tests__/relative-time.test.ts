@@ -3,6 +3,7 @@ import {
   formatRelativeTimestamp,
   formatResetCountdown,
   formatResetDateTime,
+  formatResetFullDateTime,
   isFarReset,
 } from "@/lib/relative-time";
 
@@ -118,5 +119,12 @@ describe("formatResetDateTime", () => {
     // AM/PM designator, and no year/date digits leaking back in.
     expect(formatted).toMatch(/^[A-Za-z]{3} \d{1,2}:\d{2}\s?[AP]M$/i);
     expect(formatted).not.toContain("2026");
+  });
+
+  it("renders the calendar date on roomy surfaces", () => {
+    const timestamp = Date.parse("2026-07-11T10:35:00.000Z");
+    const formatted = formatResetFullDateTime(timestamp);
+    expect(formatted).toContain("2026");
+    expect(formatted).not.toBe(formatResetDateTime(timestamp));
   });
 });

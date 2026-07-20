@@ -9,13 +9,14 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import type {
   AssistantTurnMeta,
   ChatMessageRunState,
+  ChatMessageStoppedInfo,
   MessageSegment,
 } from "@/stores/composer/chat-store";
-import { Check, Copy, GitBranch, Sparkles } from "lucide-react";
+import { Check, Copy, Sparkles, Split, Square } from "lucide-react";
 import { use, useCallback, useMemo } from "react";
-import { toast } from "sonner";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { useElapsedSeconds } from "@/hooks/use-elapsed-seconds";
+import { collectAssistantReplyText } from "@/lib/chat/collect-assistant-reply-text";
 import { formatClockDuration } from "@/lib/format-duration";
 import { cn } from "@/lib/utils";
 import type { ChatMessageForkAction } from "./chat-message";
@@ -37,27 +38,18 @@ import { SubagentSegment } from "./segments/subagent-segment";
 import { TextSegment } from "./segments/text-segment";
 import { TodoSegment } from "./segments/todo-segment";
 import { ToolSegment } from "./segments/tool-segment";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
 const COPIED_RESET_MS = 1600;
 
 const handleCopyError = (): void => {
-  toast.error("Couldn't copy to clipboard.");
+  reportableErrorToast("Couldn't copy to clipboard.", undefined, {
+    title: "Could not copy to clipboard",
+    message: null,
+    code: null,
+    source: "Clipboard",
+  });
 };
-
-/**
- * Plain-text reply of a finished turn: the visible answer is the `text`
- * segments, joined with blank lines. Reasoning, tool calls, and file-change
- * blocks are intentionally excluded so "copy reply" yields the prose the
- * assistant actually addressed to the user.
- */
-function collectAssistantReplyText(
-  segments: ReadonlyArray<MessageSegment>,
-): string {
-  return segments
-    .flatMap((segment) => (segment.kind === "text" ? [segment.markdown] : []))
-    .join("\n\n")
-    .trim();
-}
 
 interface AssistantBodyProps {
   segments: ReadonlyArray<MessageSegment>;
@@ -86,6 +78,14 @@ interface AssistantBodyProps {
    */
   completedAt: number | null;
   /**
+   * Present when this turn ended via a user Stop (direct or cascaded
+   * `agent.stop`), derived from the persisted `turn.stopped` chat event.
+   * Drives the "Stopped · Nm Xs" footer variant, the "Stopped before
+   * responding" empty-turn note, and the error-suppression override on
+   * `shouldShowElapsedFooter`.
+   */
+  stopped: ChatMessageStoppedInfo | null;
+  /**
    * Per-turn agent run metadata (provider, model, reasoning effort, fast mode)
    * surfaced through the elapsed footer's info tooltip. `null` for turns that
    * predate the persisted run-metadata fields.
@@ -104,6 +104,7 @@ export function AssistantMessageBody({
   pausedDurationMs,
   pausedSinceMs,
   completedAt,
+  stopped,
   meta,
   nextStepActions,
   forkAction,
@@ -117,25 +118,56 @@ export function AssistantMessageBody({
       }),
     [activityTimelineTurnState, backgroundToolBlockIds, segments],
   );
+  // A content-less boundary row's own segments never carry copyable text
+  // (the reply lives on an earlier row in the same turn, before the trailing
+  // steer bubble) - fall back to the turn-wide text `withTurnCompletion`
+  // aggregated onto `stopped` so the copy button still has something to
+  // copy. Every other row (including a stopped row that legitimately has its
+  // own content) keeps using its own segments, unchanged.
   const replyText = useMemo(
-    () => collectAssistantReplyText(segments),
-    [segments],
+    () =>
+      segments.length === 0 && stopped !== null && stopped.turnHadOutput
+        ? stopped.turnReplyText
+        : collectAssistantReplyText(segments),
+    [segments, stopped],
   );
   // No content yet. While the turn is live (`runState` non-null) show the
-  // in-progress indicator for the pre-first-token gap. Once the turn has ended
-  // (`runState === null`) - e.g. stopped before producing any output - show the
-  // empty-turn note instead, NEVER a "Working…" indicator that would stick.
+  // in-progress indicator for the pre-first-token gap. Once the turn has
+  // ended (`runState === null`), a genuinely empty stopped turn (no output
+  // anywhere) gets its own note - the transcript must always explain why
+  // there is no reply. A content-less STOPPED row whose turn DID produce
+  // output elsewhere (`stopped.turnHadOutput`) - the boundary marker
+  // synthesized after a trailing steer bubble - falls through to the normal
+  // render below instead: an empty `segments` there renders an empty
+  // timeline plus just the elapsed footer, which is exactly the "Stopped ·
+  // Nm Xs" the turn's true end needs. Any other ended, empty turn renders
+  // nothing, NEVER a "Working…" indicator that would stick.
   if (segments.length === 0) {
-    return runState === null ? null : (
-      <AssistantRunIndicator
-        runState={runState}
-        createdAt={createdAt}
-        pausedDurationMs={pausedDurationMs}
-        pausedSinceMs={pausedSinceMs}
-        messageId={messageId}
-        meta={meta}
-      />
-    );
+    if (runState !== null) {
+      return (
+        <AssistantRunIndicator
+          runState={runState}
+          createdAt={createdAt}
+          pausedDurationMs={pausedDurationMs}
+          pausedSinceMs={pausedSinceMs}
+          messageId={messageId}
+          meta={meta}
+        />
+      );
+    }
+    if (stopped === null || !stopped.turnHadOutput) {
+      return stopped === null ? null : (
+        <div
+          role="status"
+          aria-label="Stopped before responding"
+          data-testid="assistant-stopped-before-responding"
+          className="flex w-fit items-center gap-1.5 py-1 text-ui-sm text-destructive"
+        >
+          <StopBadge />
+          <span>Stopped before responding</span>
+        </div>
+      );
+    }
   }
   return (
     <div className="flex w-full max-w-none flex-col gap-2 py-1 @container">
@@ -147,6 +179,7 @@ export function AssistantMessageBody({
           return (
             <InterviewSegment
               key={item.id}
+              blockId={item.segment.id}
               findUnitId={chatFindSegmentUnitId(item.segment.id)}
               status={item.segment.status}
               toolName={item.segment.toolName}
@@ -156,6 +189,7 @@ export function AssistantMessageBody({
               answers={item.segment.answers}
               error={item.segment.error}
               forkedWithoutAnswer={item.segment.forkedWithoutAnswer}
+              forkAction={forkAction}
             />
           );
         }
@@ -187,6 +221,7 @@ export function AssistantMessageBody({
             segment={item.segment}
             backgroundToolBlockIds={backgroundToolBlockIds}
             nextStepActions={nextStepActions}
+            forkAction={forkAction}
           />
         );
       })}
@@ -202,12 +237,13 @@ export function AssistantMessageBody({
           meta={meta}
         />
       ) : null}
-      {shouldShowElapsedFooter(runState, completedAt, segments) ? (
+      {shouldShowElapsedFooter(runState, completedAt, segments, stopped) ? (
         <AssistantElapsedFooter
           messageId={messageId}
           createdAt={createdAt}
           pausedDurationMs={pausedDurationMs}
           completedAt={completedAt}
+          stopped={stopped}
           meta={meta}
           replyText={replyText}
           forkAction={forkAction}
@@ -222,18 +258,61 @@ export function AssistantMessageBody({
  * turns (still working), turns with no completion timestamp, and turns whose
  * last block is an error (the host emits a terminal `error` block when the
  * turn fails - rendering "Cogitated for ..." in that case misrepresents an
- * error as a successful run).
+ * error as a successful run). A user Stop overrides the error suppression: a
+ * turn.stopped event means the turn ended because the user asked it to, not
+ * because it failed, so hiding the footer would recreate the abrupt-end
+ * confusion this indicator exists to fix.
  */
 function shouldShowElapsedFooter(
   runState: ChatMessageRunState | null,
   completedAt: number | null,
   segments: ReadonlyArray<MessageSegment>,
+  stopped: ChatMessageStoppedInfo | null,
 ): boolean {
   if (runState !== null) return false;
   if (completedAt === null) return false;
+  if (stopped !== null) return true;
   const last = segments.at(-1);
   if (last !== undefined && last.kind === "error") return false;
   return true;
+}
+
+/**
+ * Stop-button pictogram for a stopped turn - a faint destructive circle with
+ * a smaller solid destructive rounded square centered inside, matching the
+ * composer's stop button in miniature. A plain outline square at footer size
+ * previously read as an empty checkbox.
+ */
+function StopBadge() {
+  return (
+    <span
+      aria-hidden
+      data-testid="assistant-stop-badge"
+      className="flex size-3.5 shrink-0 items-center justify-center rounded-full bg-destructive/15"
+    >
+      <Square className="size-1.5 rounded-xs fill-destructive text-destructive" />
+    </span>
+  );
+}
+
+/**
+ * Leading glyph for the elapsed footer. A stopped turn always shows the
+ * filled stop glyph, never the provider icon - natural footers keep the
+ * provider mark (legacy turns with no metadata fall back to the spark).
+ */
+function AssistantElapsedFooterIcon({
+  stopped,
+  meta,
+}: {
+  stopped: ChatMessageStoppedInfo | null;
+  meta: AssistantTurnMeta | null;
+}) {
+  if (stopped !== null) return <StopBadge />;
+  return meta === null ? (
+    <Sparkles className="size-3.5 shrink-0" aria-hidden />
+  ) : (
+    <HarnessIcon harnessId={meta.provider} className="size-3.5" />
+  );
 }
 
 function AssistantElapsedFooter({
@@ -241,6 +320,7 @@ function AssistantElapsedFooter({
   createdAt,
   pausedDurationMs,
   completedAt,
+  stopped,
   meta,
   replyText,
   forkAction,
@@ -249,42 +329,60 @@ function AssistantElapsedFooter({
   createdAt: number;
   pausedDurationMs: number;
   completedAt: number | null;
+  stopped: ChatMessageStoppedInfo | null;
   meta: AssistantTurnMeta | null;
   replyText: string;
   forkAction: ChatMessageForkAction | null;
 }) {
   if (completedAt === null) return null;
+  // Wind-down time counts toward the elapsed duration - a Stop doesn't get a
+  // separate truncated-at-click timer, it uses the same
+  // `completedAt - createdAt - pausedDurationMs` rule as a natural finish.
   const elapsedMs = completedAt - createdAt - pausedDurationMs;
   const verb = pickElapsedVerb(messageId);
+  const elapsedContent = (
+    <>
+      <AssistantElapsedFooterIcon stopped={stopped} meta={meta} />
+      {stopped !== null ? (
+        <span className="text-ui-sm leading-5">
+          <span className="text-destructive">Stopped</span>
+          {` · ${formatWorkedFor(elapsedMs)}`}
+        </span>
+      ) : (
+        <span className="text-ui-sm leading-5">{`${verb} for ${formatWorkedFor(elapsedMs)}`}</span>
+      )}
+    </>
+  );
   // Hovering the whole footer reveals the agent run details (provider, model,
   // reasoning effort, fast mode) - no separate info icon, so the row stays
   // clean. `w-fit` keeps the hover target tight to the text.
-  const elapsed = (
-    <div
-      data-testid="assistant-elapsed-footer"
-      className="flex w-fit cursor-default items-center gap-1.5 py-0.5 text-ui-sm text-muted-foreground/70"
-    >
-      {/* The provider's mono icon names which agent ran without needing the
-          hover tooltip; legacy turns with no metadata fall back to the spark. */}
-      {meta === null ? (
-        <Sparkles className="size-3.5 shrink-0" aria-hidden />
-      ) : (
-        <HarnessIcon harnessId={meta.provider} className="size-3.5" />
-      )}
-      <span className="text-ui-sm leading-5">
-        {verb} for {formatWorkedFor(elapsedMs)}
-      </span>
-    </div>
-  );
+  const elapsed =
+    meta === null && stopped === null ? (
+      <div
+        data-testid="assistant-elapsed-footer"
+        className="flex w-fit cursor-default items-center gap-1.5 py-0.5 text-ui-sm text-muted-foreground/70"
+      >
+        {elapsedContent}
+      </div>
+    ) : (
+      <button
+        type="button"
+        data-testid="assistant-elapsed-footer"
+        className="flex w-fit cursor-default items-center gap-1.5 py-0.5 text-ui-sm text-muted-foreground/70"
+      >
+        {elapsedContent}
+      </button>
+    );
   // The meta tooltip wraps only the elapsed text, not the copy button, so the
   // copy hit-target stays its own affordance rather than re-triggering the
-  // agent-details popover.
+  // agent-details popover. Shown whenever there's either agent metadata or
+  // stop detail to surface.
   const elapsedWithTooltip =
-    meta === null ? (
+    meta === null && stopped === null ? (
       elapsed
     ) : (
       <TooltipWrapper
-        label={<AssistantMetaTooltip meta={meta} />}
+        label={<AssistantMetaTooltip meta={meta} stopped={stopped} />}
         side="top"
         align="start"
         sideOffset={6}
@@ -356,7 +454,7 @@ function AssistantForkButton({
         aria-label={label}
         data-testid="assistant-fork-chat"
         disabled={!action.enabled || action.pending}
-        onClick={action.onFork}
+        onClick={() => action.onFork("plain", null)}
         className={cn(
           "inline-flex size-6 shrink-0 items-center justify-center rounded-md",
           "text-muted-foreground/60 transition-colors",
@@ -365,42 +463,90 @@ function AssistantForkButton({
           "disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent disabled:hover:text-muted-foreground/60",
         )}
       >
-        <GitBranch className="size-3.5" aria-hidden />
+        <Split className="size-3.5 rotate-90" aria-hidden />
       </button>
     </TooltipWrapper>
   );
 }
 
 /**
- * Hover content for the elapsed-footer info icon: provider, model, reasoning
- * effort, and fast mode (only when enabled). Mirrors the context-usage chip's
- * label/value row layout so the two tooltips read consistently.
+ * Hover content for the elapsed-footer info icon: provider, profile, model,
+ * reasoning effort, and fast mode (only when enabled), plus - for a
+ * user-stopped turn - the stop time and reason from the `turn.stopped` event.
+ * Mirrors the context-usage chip's label/value row layout so the two tooltips
+ * read consistently. Either section is optional; `AssistantElapsedFooter`
+ * only renders this tooltip at all when at least one is present.
  */
-function AssistantMetaTooltip({ meta }: { meta: AssistantTurnMeta }) {
-  const reasoning = meta.reasoningEffortLabel;
-  const fastModeEnabled = isFastModeEnabled(meta.serviceTier);
+function AssistantMetaTooltip({
+  meta,
+  stopped,
+}: {
+  meta: AssistantTurnMeta | null;
+  stopped: ChatMessageStoppedInfo | null;
+}) {
+  const reasoning = meta?.reasoningEffortLabel ?? null;
+  const fastModeEnabled = meta !== null && isFastModeEnabled(meta.serviceTier);
   return (
     // Tooltip surface is `bg-foreground text-background`, so all text here must
     // be tinted off `background` (using `foreground` would be invisible).
     <div className="flex min-w-36 flex-col gap-1.5 text-ui-xs">
-      <div className="border-b border-background/20 pb-1.5 font-medium">
-        Agent
-      </div>
-      <AssistantMetaRow label="Provider" value={meta.providerLabel} />
-      {meta.modelLabel === null ? null : (
-        <AssistantMetaRow label="Model" value={meta.modelLabel} />
+      {meta === null ? null : (
+        <>
+          <div className="border-b border-background/20 pb-1.5 font-medium">
+            Agent
+          </div>
+          <AssistantMetaRow label="Provider" value={meta.providerLabel} />
+          {meta.profileLabel === null ? null : (
+            <AssistantMetaRow label="Profile" value={meta.profileLabel} />
+          )}
+          {meta.modelLabel === null ? null : (
+            <AssistantMetaRow label="Model" value={meta.modelLabel} />
+          )}
+          {reasoning === null ? null : (
+            <AssistantMetaRow label="Reasoning" value={reasoning} />
+          )}
+          {fastModeEnabled ? (
+            <AssistantMetaRow label="Fast mode" value="On" />
+          ) : null}
+          {meta.costUsd !== null && meta.costUsd > 0 ? (
+            <AssistantMetaRow label="Cost" value={formatUsd(meta.costUsd)} />
+          ) : null}
+        </>
       )}
-      {reasoning === null ? null : (
-        <AssistantMetaRow label="Reasoning" value={reasoning} />
+      {stopped === null ? null : (
+        <>
+          <div
+            className={cn(
+              "font-medium",
+              meta !== null && "border-t border-background/20 pt-1.5",
+            )}
+          >
+            Stopped
+          </div>
+          <AssistantMetaRow
+            label="Time"
+            value={formatStoppedAt(stopped.stoppedAt)}
+          />
+          {stopped.reason === null ? null : (
+            <AssistantMetaRow label="Reason" value={stopped.reason} />
+          )}
+        </>
       )}
-      {fastModeEnabled ? (
-        <AssistantMetaRow label="Fast mode" value="On" />
-      ) : null}
-      {meta.costUsd !== null && meta.costUsd > 0 ? (
-        <AssistantMetaRow label="Cost" value={formatUsd(meta.costUsd)} />
-      ) : null}
     </div>
   );
+}
+
+/**
+ * Absolute clock time for the stop-detail tooltip row (e.g. "3:45 PM"). A
+ * user Stop is a here-and-now action the user just took, so the exact time of
+ * day is more useful than a relative/elapsed label - unlike `formatWorkedFor`,
+ * which measures the turn's duration, not when it ended.
+ */
+function formatStoppedAt(timestampMs: number): string {
+  return new Date(timestampMs).toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
 /**
@@ -546,7 +692,7 @@ function AssistantRunIndicator({
   if (meta === null) return indicator;
   return (
     <TooltipWrapper
-      label={<AssistantMetaTooltip meta={meta} />}
+      label={<AssistantMetaTooltip meta={meta} stopped={null} />}
       side="top"
       align="start"
       sideOffset={6}
@@ -601,6 +747,7 @@ interface AssistantSegmentProps {
   segment: MessageSegment;
   backgroundToolBlockIds: ReadonlySet<string>;
   nextStepActions: NextStepActionHandler | null;
+  forkAction: ChatMessageForkAction | null;
 }
 
 function ApprovalSegmentCard({
@@ -634,6 +781,7 @@ function AssistantSegment({
   segment,
   backgroundToolBlockIds,
   nextStepActions,
+  forkAction,
 }: AssistantSegmentProps) {
   const findUnitId = chatFindSegmentUnitId(id);
   switch (segment.kind) {
@@ -785,6 +933,7 @@ function AssistantSegment({
     case "interview":
       return (
         <InterviewSegment
+          blockId={segment.id}
           findUnitId={findUnitId}
           status={segment.status}
           toolName={segment.toolName}
@@ -794,6 +943,7 @@ function AssistantSegment({
           answers={segment.answers}
           error={segment.error}
           forkedWithoutAnswer={segment.forkedWithoutAnswer}
+          forkAction={forkAction}
         />
       );
     case "setup-card":

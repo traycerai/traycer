@@ -1,8 +1,4 @@
-import {
-  useMutation,
-  useQueryClient,
-  type UseMutationResult,
-} from "@tanstack/react-query";
+import { useQueryClient, type UseMutationResult } from "@tanstack/react-query";
 import type {
   HostRpcError,
   RequestOfMethod,
@@ -10,8 +6,10 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
+import { useHostMutation } from "@/hooks/host/use-host-query";
 import { hostQueryKeys, worktreeMutationKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 export interface SetRepoScriptsMutationContext {
   readonly hostId: string | null;
@@ -34,7 +32,8 @@ const SET_REPO_SCRIPTS_INVALIDATIONS: ReadonlyArray<
  * page and in an epic.
  *
  * A `null` client makes the mutation a rejecting no-op, matching the other
- * `*For` worktree hooks.
+ * `*For` worktree hooks - `useHostMutation`'s own `client === null` guard
+ * covers it.
  */
 export function useWorktreeSetRepoScriptsFor(
   client: HostClient<HostRpcRegistry> | null,
@@ -45,32 +44,37 @@ export function useWorktreeSetRepoScriptsFor(
   SetRepoScriptsMutationContext
 > {
   const queryClient = useQueryClient();
-  return useMutation<
-    ResponseOfMethod<HostRpcRegistry, "worktree.setRepoScripts">,
-    HostRpcError,
-    RequestOfMethod<HostRpcRegistry, "worktree.setRepoScripts">,
+  return useHostMutation<
+    HostRpcRegistry,
+    "worktree.setRepoScripts",
     SetRepoScriptsMutationContext
   >({
-    mutationKey: worktreeMutationKeys.setRepoScripts(),
-    mutationFn: (variables) => {
-      if (client === null) {
-        return Promise.reject<
-          ResponseOfMethod<HostRpcRegistry, "worktree.setRepoScripts">
-        >(new Error("Host client unavailable"));
-      }
-      return client.request("worktree.setRepoScripts", variables);
-    },
-    onMutate: () => ({
-      hostId: client === null ? null : client.getActiveHostId(),
-    }),
-    onSuccess: (_data, _variables, mutationContext) => {
-      if (mutationContext.hostId === null) return;
-      for (const method of SET_REPO_SCRIPTS_INVALIDATIONS) {
-        void queryClient.invalidateQueries({
-          queryKey: hostQueryKeys.methodScope(mutationContext.hostId, method),
+    client,
+    method: "worktree.setRepoScripts",
+    mapVariables: (variables) => variables,
+    options: {
+      mutationKey: worktreeMutationKeys.setRepoScripts(),
+      onMutate: () => ({
+        hostId: client === null ? null : client.getActiveHostId(),
+      }),
+      onSuccess: (_data, _variables, mutationContext) => {
+        Analytics.getInstance().track(AnalyticsEvent.SetupScriptsSaved, {
+          script_count: [_variables.setup, _variables.teardown].filter(
+            (script) =>
+              Object.values(script).some(
+                (command) => command !== null && command.trim().length > 0,
+              ),
+          ).length,
         });
-      }
+        if (mutationContext.hostId === null) return;
+        for (const method of SET_REPO_SCRIPTS_INVALIDATIONS) {
+          void queryClient.invalidateQueries({
+            queryKey: hostQueryKeys.methodScope(mutationContext.hostId, method),
+          });
+        }
+      },
+      onError: (error) =>
+        toastFromHostError(error, "Couldn't save environment."),
     },
-    onError: (error) => toastFromHostError(error, "Couldn't save environment."),
   });
 }

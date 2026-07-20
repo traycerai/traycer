@@ -13,9 +13,15 @@ import {
 } from "@/components/home/data/landing-options";
 import { useSurfaceActivity } from "@/components/home/composer/surface-activity-hooks";
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
-import { commitSelection } from "@/stores/composer/commit-selection";
 import {
+  commitProfileSelection,
+  commitSelection,
+} from "@/stores/composer/commit-selection";
+import {
+  harnessCatalogEntryNeedsRefresh,
+  useDefaultHostClient,
   useGuiHarnessCatalog,
+  useGuiHarnessCommandsQuery,
   useGuiHarnessModelsQuery,
   useGuiHarnessesQuery,
   useRefreshHarnessCatalog,
@@ -86,6 +92,10 @@ import {
 export type { ReasoningFooterConfig, ServiceTierFooterConfig };
 
 const EMPTY_MODELS: ReadonlyArray<ModelOption> = [];
+// No working directory is scoped to the picker surface itself - this feeds
+// the commands prewarm query below, where an empty set is the correct shape
+// (see the comment at its call site).
+const EMPTY_COMMANDS_WORKING_DIRECTORIES: ReadonlyArray<string> = [];
 const EMPTY_DEGRADED_HARNESS_IDS: ReadonlySet<GuiHarnessId> = new Set();
 const EMPTY_PROFILES_BY_HARNESS_ID: ReadonlyMap<
   GuiHarnessId,
@@ -128,6 +138,9 @@ interface HarnessModelPickerProps {
    * runs turns on a different one (the tab-host-binding rule).
    */
   createProfileHostId: string | null;
+  /** The exact host where the next run executes. This is explicit so usage
+   *  comparison can never silently fall back to the renderer-default host. */
+  runTargetHostId: string | null;
 }
 
 function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
@@ -139,6 +152,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     disabled,
     registerActivation,
     createProfileHostId,
+    runTargetHostId,
   } = props;
   const activityEnabled = useSurfaceActivity();
   const selection = useStore(store, (s) => s.selection);
@@ -274,14 +288,110 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   const selectedHarness = harnesses.find(
     (harness) => harness.id === selection.harnessId,
   );
+  const selectedHarnessAvailable = selectedHarness?.available === true;
+  // Shared gate for every intent-edge refetch below (models AND the commands
+  // prewarm): mirrors `selectedModelsQuery`'s own `enabled`. TanStack's
+  // imperative `.refetch()` ignores `enabled` - it runs the queryFn
+  // regardless - so an unguarded refetch here would still spawn a server (or
+  // hit a disabled provider's `listModels`/`listCommands`) for a harness the
+  // user disabled or that isn't available. `harness-runtime.ts`'s
+  // `prewarmCatalog` re-checks provider enablement for the same reason.
+  const selectedHarnessRefetchGate =
+    activityEnabled && selectedHarnessAvailable;
   const selectedModelsQuery = useGuiHarnessModelsQuery(
     selection.harnessId,
     null,
     {
-      enabled: activityEnabled && selectedHarness?.available === true,
+      enabled: selectedHarnessRefetchGate,
       subscribed: activityEnabled,
     },
   );
+  // Traycer and OpenRouter fetch their model catalogs over remote HTTP, so
+  // `selectedModelsQuery` never touches their managed OpenCode server - only
+  // `listCommands` (or chat) does. The intent edges below therefore also
+  // refetch this harness's commands purely to prewarm that server; the
+  // returned catalog itself is unused here (the composer owns rendering
+  // commands). The picker isn't scoped to any working directory, and an empty
+  // `workingDirectories` still reaches the adapter/server - every adapter's
+  // `listCommands` falls back to a single `{ workingDirectory: null }`
+  // request when given none - so it's the simplest correct shape for a
+  // prewarm-only call.
+  //
+  // Held permanently disabled (and unsubscribed - nothing here renders its
+  // result) so the ONLY thing that can ever fire it is the guarded
+  // `runSelectedHarnessIntentRefetch` below. `enabled: true` would let
+  // TanStack fetch it on mount and on other automatic triggers - i.e. spawn a
+  // provider's server outside an intent edge and outside that guard.
+  // `.refetch()` ignores `enabled` (the same quirk the guard exists to
+  // contain), so the intent edges still drive it.
+  const defaultHostClient = useDefaultHostClient();
+  const selectedCommandsQuery = useGuiHarnessCommandsQuery(
+    defaultHostClient,
+    selection.harnessId,
+    EMPTY_COMMANDS_WORKING_DIRECTORIES,
+    {
+      enabled: false,
+      subscribed: false,
+    },
+  );
+  // Latest-ref indirection: a `UseQueryResult` is a fresh object every render,
+  // and `selectedHarnessRefetchGate` must be read at the moment the intent
+  // effects below actually fire rather than captured as a stale closure from
+  // whenever `visibleOpen` / `selection.harnessId` last changed - so none of
+  // these is a dependency of those effects. Adding the gate as a dependency
+  // would re-run them on every gate flip, not just on an actual open/selection
+  // edge. This effect has no dependency array, so it re-syncs after every
+  // render and is declared BEFORE the intent effects: React runs effects in
+  // declaration order, so on the render where the user picks a new harness the
+  // refs already point at that harness's query by the time the selection edge
+  // fires.
+  const selectedModelsQueryRef = useRef(selectedModelsQuery);
+  const selectedCommandsQueryRef = useRef(selectedCommandsQuery);
+  const selectedHarnessRefetchGateRef = useRef(selectedHarnessRefetchGate);
+  useEffect(() => {
+    selectedModelsQueryRef.current = selectedModelsQuery;
+    selectedCommandsQueryRef.current = selectedCommandsQuery;
+    selectedHarnessRefetchGateRef.current = selectedHarnessRefetchGate;
+  });
+  // Shared by both intent effects below - a stable identity (empty deps) so
+  // listing it as an effect dependency never itself retriggers them. Kept as
+  // its own function (rather than inlined) so the guards are a single source of
+  // truth and don't duplicate into both effect bodies.
+  //
+  // Each query is asked separately whether it is due, rather than sharing one
+  // verdict: models are seeded by the app-load prefetch while the commands
+  // prewarm is only ever fired from here, so a shared verdict keyed on models
+  // would leave a Traycer/OpenRouter server un-prewarmed for the whole first
+  // window (their models come from remote HTTP and never touch it - only
+  // `listCommands` does).
+  const runSelectedHarnessIntentRefetch = useCallback(() => {
+    if (!selectedHarnessRefetchGateRef.current) return;
+    const models = selectedModelsQueryRef.current;
+    if (harnessCatalogEntryNeedsRefresh(models)) void models.refetch();
+    const commands = selectedCommandsQueryRef.current;
+    if (harnessCatalogEntryNeedsRefresh(commands)) void commands.refetch();
+  }, []);
+  // Explicit intent edges, and the ONLY thing that refreshes a model catalog
+  // outside the app-load fill and the manual refresh button - every model query
+  // is cache-only now (see `use-gui-harness-catalog.ts`). They refresh just the
+  // selected harness, so opening the picker no longer fans out across every
+  // provider, and only once its cached entry has aged past the window, so an
+  // open on warm cache costs nothing. That also makes them the intent-driven
+  // prewarm for a reaped OpenCode-backed server (the age threshold is the
+  // host's idle timeout) and the error-recovery path, now that a failed fetch
+  // no longer self-heals on a background timer.
+  useEffect(() => {
+    if (!visibleOpen) return;
+    runSelectedHarnessIntentRefetch();
+  }, [runSelectedHarnessIntentRefetch, visibleOpen]);
+  const skipInitialHarnessRefetchRef = useRef(true);
+  useEffect(() => {
+    if (skipInitialHarnessRefetchRef.current) {
+      skipInitialHarnessRefetchRef.current = false;
+      return;
+    }
+    runSelectedHarnessIntentRefetch();
+  }, [runSelectedHarnessIntentRefetch, selection.harnessId]);
   const catalogActive = activityEnabled && visibleOpen;
   const catalog = useGuiHarnessCatalog(null, {
     enabled: catalogActive,
@@ -300,7 +410,6 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   );
   const refreshCatalog = useRefreshHarnessCatalog();
   const selectedModels = selectedModelsQuery.data?.models ?? EMPTY_MODELS;
-  const selectedHarnessAvailable = selectedHarness?.available === true;
   const presentation = useMemo(
     () =>
       deriveHarnessModelPickerPresentation({
@@ -487,10 +596,9 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         return;
       }
       // Commit the picked model through the memory-aware funnel (restores that
-      // (harness, profile, model)'s remembered effort/tier, or the model's
-      // defaults). Selecting a model keeps the picker open; it only closes on
-      // an outside click / escape (handled by Popover's onOpenChange ->
-      // closeOnly).
+      // (provider, model)'s remembered effort/tier, or the model's defaults).
+      // Selecting a model keeps the picker open; it only closes on an outside
+      // click / escape (handled by Popover's onOpenChange -> closeOnly).
       commitSelection(store, row.harnessId, row.value, activePanelProfileId);
     },
     [activePanelProfileId, closeOnly, disabled, store],
@@ -538,7 +646,18 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       // Mirrors `handleRailEntryChange`'s lock rule: while a fork lock is
       // active the strip stays interactive for the locked provider only.
       if (lockedHarnessId !== null && providerId !== lockedHarnessId) return;
-      commitSelection(store, providerId, null, profileId);
+      // Same-provider profile changes only replace the credential, preserving
+      // the user's configured model, reasoning effort, and tier. The provider
+      // can differ after browsing a degraded rail entry without committing it,
+      // or when this globally retained create-profile callback resolves after
+      // another control changed the selection. In that case preserve the old
+      // provider-switch behavior and restore the target provider's remembered
+      // settings instead of pairing its profile with the current provider.
+      if (store.getState().selection.harnessId === providerId) {
+        commitProfileSelection(store, profileId);
+      } else {
+        commitSelection(store, providerId, null, profileId);
+      }
       setActiveRailEntry(providerId, profileId);
     },
     [lockedHarnessId, setActiveRailEntry, store],
@@ -706,6 +825,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         reasoningFooter={reasoningFooter}
         serviceTierFooter={serviceTierFooter}
         createProfileHostId={createProfileHostId}
+        runTargetHostId={runTargetHostId}
         createProfileDisabled={createProfileGate.disabled}
         createProfileDisabledReason={createProfileGate.reason}
       />
@@ -803,11 +923,8 @@ function modelPickerSelectionSummary(
   return `${label} · Thinking ${reasoningLabel}`;
 }
 
-// Restrict to harnesses whose adapter advertises a TUI surface. This is the
-// runtime capability (`modes`), not the schema id: Cursor is a TUI harness at
-// the schema level but its adapter currently advertises only `gui`, so it stays
-// hidden from the terminal launcher until the CLI ships - and reappears on its
-// own once the host starts advertising `tui`, with no code change here.
+// Restrict to harnesses whose adapter advertises a TUI surface. Runtime
+// capability (`modes`) is the source of truth for the terminal launcher.
 function isTuiCapable(harness: HarnessOption): boolean {
   return harness.modes.includes("tui");
 }

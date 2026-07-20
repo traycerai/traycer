@@ -20,6 +20,7 @@ import type {
 } from "@traycer-clients/shared/auth/bearer-source";
 import {
   HostRpcError,
+  HostTransportFailureError,
   RetryableTransportError,
   type IHostMessenger,
   type RequestOfMethod,
@@ -114,7 +115,8 @@ export interface WsRpcClientOptions<Registry extends VersionedRpcRegistry> {
  *
  * Failure mapping (Refactoring Approach D-N2):
  *   - dial timeout / transport unreachable / transport aborted / frame timeout
- *     → `HostRpcError(code: "RPC_ERROR")`
+ *     → `HostTransportFailureError(code: "RPC_ERROR")` (the pre-send subset is
+ *     a `RetryableTransportError`)
  *   - missing / released bearer before dial → `HostRpcError(code: "RPC_ERROR")`
  *   - host `fatalError { code }` (`INCOMPATIBLE`, `UNAUTHORIZED`, or a
  *     domain-specific code) → known RPC codes are preserved on
@@ -161,11 +163,19 @@ export class WsRpcClient<
     method: Method,
     params: RequestOfMethod<Registry, Method>,
   ): Promise<ResponseOfMethod<Registry, Method>> {
+    return this.requestWithResponseTimeout(method, params, this.frameTimeoutMs);
+  }
+
+  async requestWithResponseTimeout<Method extends keyof Registry & string>(
+    method: Method,
+    params: RequestOfMethod<Registry, Method>,
+    responseTimeoutMs: number,
+  ): Promise<ResponseOfMethod<Registry, Method>> {
     const requestId = this.requestIdProvider();
     const selected = this.endpoint();
 
     if (selected === null) {
-      throw new HostRpcError({
+      throw new HostTransportFailureError({
         code: "RPC_ERROR",
         message: "No host is currently bound to the client",
         requestId,
@@ -194,7 +204,6 @@ export class WsRpcClient<
     const session = openSession({
       socket: this.webSocketFactory.create(selected.websocketUrl),
       dialTimeoutMs: this.dialTimeoutMs,
-      frameTimeoutMs: this.frameTimeoutMs,
       requestId,
       method,
     });
@@ -209,7 +218,10 @@ export class WsRpcClient<
         optionalManifest: clientManifest.optionalManifest,
       });
 
-      const ackFrame = await session.next();
+      // Handshake stays on the transport default even when the caller
+      // extended the response wait - a host that can't complete `openAck`
+      // quickly is unreachable, and long-poll patience must not mask that.
+      const ackFrame = await session.next(this.frameTimeoutMs);
 
       if (ackFrame.kind === "fatalError") {
         throw hostFatalError(ackFrame, requestId, method);
@@ -281,6 +293,7 @@ export class WsRpcClient<
           mergedHostManifest,
           params,
           requestId,
+          responseTimeoutMs,
         );
       }
 
@@ -295,6 +308,7 @@ export class WsRpcClient<
         hostCanonical,
         params,
         requestId,
+        responseTimeoutMs,
       );
     } finally {
       session.close(1000, "ok");
@@ -314,6 +328,7 @@ async function executeAvailableMethodRequest<Payload, Response>(
   hostCanonical: SchemaVersion,
   params: Payload,
   requestId: string,
+  responseTimeoutMs: number,
 ): Promise<Response> {
   const preparedRequest = prepareRequestPayload<Payload>(
     methodRegistry,
@@ -332,7 +347,7 @@ async function executeAvailableMethodRequest<Payload, Response>(
     params: preparedRequest.onWirePayload,
   });
 
-  const responseFrame = await session.next();
+  const responseFrame = await session.next(responseTimeoutMs);
 
   if (responseFrame.kind === "fatalError") {
     throw hostFatalError(responseFrame, requestId, method);
@@ -372,6 +387,7 @@ async function executeUnavailableMethodDegrade<
   hostManifest: ConnectionManifest,
   params: RequestOfMethod<Registry, Method>,
   requestId: string,
+  responseTimeoutMs: number,
 ): Promise<ResponseOfMethod<Registry, Method>> {
   if (clientCanonical === undefined) {
     throw new HostRpcError({
@@ -407,6 +423,7 @@ async function executeUnavailableMethodDegrade<
     hostManifest,
     params,
     requestId,
+    responseTimeoutMs,
   );
 }
 
@@ -422,6 +439,7 @@ async function executeFallbackMethodDegrade<
   hostManifest: ConnectionManifest,
   params: RequestOfMethod<Registry, Method>,
   requestId: string,
+  responseTimeoutMs: number,
 ): Promise<ResponseOfMethod<Registry, Method>> {
   if (degrade.kind !== "fallback") {
     throw unsupportedHostMethodError(method, requestId);
@@ -465,6 +483,7 @@ async function executeFallbackMethodDegrade<
     targetHostCanonical,
     fallbackParams,
     requestId,
+    responseTimeoutMs,
   );
   return degrade.adaptResponse(fallbackResult) as ResponseOfMethod<
     Registry,
@@ -630,11 +649,32 @@ function upgradeResponseAlongChain<Payload>(
   method: string,
 ): Payload {
   try {
+    // The host is the older side here, so `result` is raw wire data framed at
+    // `fromVersion` - the one place old-host payloads enter the client. Parse
+    // it through that version's response schema before upgrading so the
+    // line's `.catch(...)` tolerances (fields added mid-line that old host
+    // builds omit, e.g. `providers.list@3.0`'s `profiles`) actually apply -
+    // otherwise the upgraded payload can violate the caller's canonical type
+    // and blow up deep in app code instead of at this boundary. A version
+    // absent from the registry falls through untouched and surfaces the
+    // chain's own not-installed error below.
+    const fromEntry =
+      methodRegistry[fromVersion.major]?.versions[fromVersion.minor];
+    let chainInput = result;
+    if (fromEntry !== undefined) {
+      const parsed = fromEntry.contract.responseSchema.safeParse(result);
+      if (!parsed.success) {
+        throw new Error(
+          `response does not match the ${fromVersion.major}.${fromVersion.minor} response schema`,
+        );
+      }
+      chainInput = parsed.data;
+    }
     const upgraded = upgradeResponseToVersion(
       methodRegistry,
       fromVersion,
       toVersion,
-      result as never,
+      chainInput as never,
     );
     return upgraded as Payload;
   } catch (cause) {
@@ -740,14 +780,19 @@ function decodeResponseFrame(
 interface SessionOptions {
   readonly socket: WebSocketLike;
   readonly dialTimeoutMs: number;
-  readonly frameTimeoutMs: number;
   readonly requestId: string;
   readonly method: string;
 }
 
 interface Session {
   dial(): Promise<void>;
-  next(): Promise<HostFrame>;
+  /**
+   * Waits up to `timeoutMs` for the next host frame. The budget is per wait,
+   * not per session: the handshake (`openAck`) wait passes the transport's
+   * default frame timeout, while the response wait may pass a caller-extended
+   * budget for long-poll methods.
+   */
+  next(timeoutMs: number): Promise<HostFrame>;
   send(frame: ClientFrame): void;
   close(code: number, reason: string): void;
 }
@@ -760,15 +805,15 @@ interface Session {
  * channel.
  */
 function openSession(options: SessionOptions): Session {
-  const { socket, dialTimeoutMs, frameTimeoutMs, requestId, method } = options;
+  const { socket, dialTimeoutMs, requestId, method } = options;
 
   let opened = false;
   let closed = false;
   // Flipped the instant the `request` frame is handed to `send`. Before this
   // point every transient failure is provably pre-send (the host never saw the
   // call), so it surfaces as a `RetryableTransportError`; after it, the same
-  // failure shapes stay a plain `HostRpcError` because a retry could
-  // re-execute a non-idempotent method.
+  // failure shapes stay a non-retryable `HostTransportFailureError` because a
+  // retry could re-execute a non-idempotent method.
   let requestSent = false;
   let failure: HostRpcError | null = null;
 
@@ -780,7 +825,7 @@ function openSession(options: SessionOptions): Session {
    */
   const transientFailure = (message: string): HostRpcError =>
     requestSent
-      ? new HostRpcError({
+      ? new HostTransportFailureError({
           code: "RPC_ERROR",
           message,
           requestId,
@@ -918,7 +963,7 @@ function openSession(options: SessionOptions): Session {
       });
     },
 
-    next(): Promise<HostFrame> {
+    next(timeoutMs: number): Promise<HostFrame> {
       if (failure !== null) {
         return Promise.reject(failure);
       }
@@ -929,11 +974,9 @@ function openSession(options: SessionOptions): Session {
       return new Promise<HostFrame>((resolve, reject) => {
         const timer = setTimeout(() => {
           failAll(
-            transientFailure(
-              `WebSocket frame timed out after ${frameTimeoutMs}ms`,
-            ),
+            transientFailure(`WebSocket frame timed out after ${timeoutMs}ms`),
           );
-        }, frameTimeoutMs);
+        }, timeoutMs);
         frameResolver = { resolve, reject, timer };
       });
     },

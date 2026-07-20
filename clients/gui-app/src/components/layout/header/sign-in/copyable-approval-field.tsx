@@ -1,11 +1,16 @@
 import { Check, Copy } from "lucide-react";
-import { toast } from "sonner";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { cn } from "@/lib/utils";
 import { COPY_CONFIRMATION_RESET_MS } from "./styles";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
 const handleCopyError = (): void => {
-  toast.error("Couldn't copy to clipboard.");
+  reportableErrorToast("Couldn't copy to clipboard.", undefined, {
+    title: "Could not copy to clipboard",
+    message: null,
+    code: null,
+    source: "Sign in",
+  });
 };
 
 export function CopyableApprovalField(props: {

@@ -64,6 +64,39 @@ import {
  * here so writer and reader cannot drift.
  */
 export const AGENT_WORKING_AWARENESS_FIELD = "agentWorking";
+
+/**
+ * Awareness state field under which each host publishes the subset of its
+ * {@link AGENT_WORKING_AWARENESS_FIELD} ids whose work is an actual agent
+ * **turn** (running or activating), as opposed to background-only work
+ * (`run_in_background` / a subagent / Monitor / a scheduled wakeup) that keeps
+ * a session non-idle while the agent itself is not executing.
+ *
+ * Additive and OPTIONAL by design. Awareness rides an opaque binary payload
+ * (the `awareness` frame is `hasBinaryPayload: true`), so this value is NOT
+ * schema-validated and is NOT covered by the stream contract's
+ * `major`/`minor` negotiation - a reader cannot learn from the handshake
+ * whether its peer publishes this field. Two rules follow, and both are
+ * load-bearing:
+ *
+ * 1. NEVER change the shape of `agentWorking` itself. Existing readers do
+ *    `Array.isArray(...)` on it and skip the whole entry otherwise, so
+ *    repurposing it makes agents silently vanish from the working set on older
+ *    clients.
+ * 2. Absence is per-HOST, and must be read that way. Cloud-merged awareness
+ *    carries one entry per host, so a single client can see an old host (field
+ *    absent) and a new host (field present) simultaneously - indefinitely, not
+ *    just during a rollout. Readers must therefore decide per entry:
+ *      - field absent  -> tier unknown for that host; treat its working ids
+ *                         conservatively as turns (the pre-existing behaviour).
+ *      - field present -> ids listed here are turns; working ids NOT listed
+ *                         here are genuinely background-only.
+ *
+ * Because "turn" is the conservative default, a publisher only needs to list
+ * ids it can positively classify; agents with no turn/background distinction
+ * (terminal agents, CLI/TUI runs) simply stay in the turn set.
+ */
+export const AGENT_WORKING_TURN_AWARENESS_FIELD = "agentWorkingTurn";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
 import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 

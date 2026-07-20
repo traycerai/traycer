@@ -64,6 +64,7 @@ function changedFileLeaves(
             hostId,
             runningDir: workspacePath,
             file,
+            repositoryContext: null,
           }),
           navigateNestedFocus: ctx.router.navigateNestedFocus,
         }),

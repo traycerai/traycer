@@ -42,6 +42,14 @@ export interface ChatQueueActionsInput {
     settings: ChatRunSettings,
     timestamp: number,
   ) => void;
+  /**
+   * Fire-and-forget durable sync of the chat's run settings to the host
+   * (`epic.updateChatRunSettings`), so a profile/model switch that is never
+   * followed by a send still governs headless turns (e.g. incoming
+   * agent-to-agent messages). Failures (old host: E_HOST_UNSUPPORTED) fall
+   * back to the legacy persist-on-next-send behavior.
+   */
+  readonly persistChatRunSettings: (settings: ChatRunSettings) => void;
 }
 
 export interface ChatQueueActionsResult {
@@ -87,6 +95,7 @@ export function useChatQueueActions(
     activeEditingQueueItemId,
     dispatchUi,
     setEpicRunSettings,
+    persistChatRunSettings,
   } = input;
 
   // Set when steering a queued prompt requires ending the running turn (a
@@ -234,6 +243,9 @@ export function useChatQueueActions(
         settings.permissionMode !== currentComposerSettings.permissionMode;
       setEpicRunSettings(currentEpicId, settings, Date.now());
       handle.store.getState().setCurrentComposerSettings(settings);
+      // Durable sync: the host's per-chat settings must not lag the composer,
+      // or a headless agent-to-agent turn runs on the previously sent profile.
+      persistChatRunSettings(settings);
       // Live-mirror: pending queued prompts always resolve the latest toolbar
       // settings. Exclude the item open for editing (it commits on submit); the
       // store also skips no-op updates and when there are no pending items.
@@ -254,6 +266,7 @@ export function useChatQueueActions(
       currentComposerSettings.permissionMode,
       currentEpicId,
       handle.store,
+      persistChatRunSettings,
       setEpicRunSettings,
     ],
   );

@@ -131,13 +131,12 @@ export function createArtifactEditorFindAdapter(
   };
 
   const handleTransaction = (props: { readonly transaction: Transaction }) => {
-    if (
-      props.transaction.docChanged &&
-      !hasArtifactFindTransactionMeta(props.transaction)
-    ) {
+    const hasFindMeta = hasArtifactFindTransactionMeta(props.transaction);
+    if (props.transaction.docChanged && !hasFindMeta) {
       scheduleRescan();
       return;
     }
+    if (!hasFindMeta) return;
     publish();
   };
 

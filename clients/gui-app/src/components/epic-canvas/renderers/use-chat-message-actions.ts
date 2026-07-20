@@ -31,6 +31,7 @@ import {
   chatMessageEditingForInlineEdit,
   editablePersistentMessageId,
   forkableAssistantMessageId,
+  forkableInterviewAssistantMessageId,
   inlineEditForPersistentMessage,
   inlineEditIsPending,
   inlineEditLocksMessageActions,
@@ -73,13 +74,15 @@ export interface ChatMessageActionsResult {
    * Opens the fork dialog to branch the chat through the given assistant
    * message, pre-configured for the chosen fork mode ("cross-question" =
    * source binding verbatim + carried questions settled as reference;
-   * "ab-worktree" = new worktrees carrying the working tree + carried
-   * questions re-opened as answerable). Used by the pending-interview card's
-   * actions; the per-message fork buttons route through the same seed.
+   * "ab-worktree" = new worktrees carrying the working tree + unanswered
+   * carried questions re-opened as answerable). Used by pending and resolved
+   * interview actions; the per-message fork buttons route through the same
+   * seed.
    */
   readonly forkAtAssistantMessage: (
     assistantMessageId: string,
     mode: ChatForkMode,
+    interviewBlockId: string | null,
   ) => void;
   readonly revertOnEdit: {
     readonly open: boolean;
@@ -234,16 +237,20 @@ export function useChatMessageActions(
 
   // Open the fork dialog seeded to branch the source chat through
   // `assistantMessageId`. Shared by the per-message fork buttons and the
-  // pending interview card's actions so all entry points seed identically.
+  // interview actions so all entry points seed identically.
   // Cross Question seeds the source binding VERBATIM (same working copy:
   // local stays local, an existing worktree is adopted — matching the "+ chat"
   // defaults in a Task) and settles carried questions as reference. A/B Fork
   // REBASES each folder to the chat's actual working-copy directory (a
   // worktree-bound folder's base becomes the origin worktree path) and
-  // pre-selects a new worktree off that base's working tree; carried questions
-  // re-open as answerable.
+  // pre-selects a new worktree off that base's working tree; unanswered
+  // carried questions re-open as answerable.
   const forkAtAssistantMessage = useCallback(
-    (assistantMessageId: string, mode: ChatForkMode) => {
+    (
+      assistantMessageId: string,
+      mode: ChatForkMode,
+      interviewBlockId: string | null,
+    ) => {
       const sourceStagingKey: WorktreeStagingKey = {
         surface: "owner",
         epicId: currentEpicId,
@@ -271,6 +278,7 @@ export function useChatMessageActions(
         sourceChatId: node.id,
         sourceChatTitle: chatTitle ?? node.name,
         assistantMessageId,
+        interviewBlockId,
         parentId: chatParentId,
         settingsSeed: currentComposerSettings,
         workspaceSeed,
@@ -297,10 +305,20 @@ export function useChatMessageActions(
 
   const messageActionsFor = useCallback(
     (message: ChatMessageModel): ChatMessageActions | null => {
-      // The per-message footer fork button is the plain fork, on completed
-      // assistant messages only. The two fork flavors (Cross Question / A/B)
-      // live exclusively on the pending-interview card.
-      const assistantMessageId = forkableAssistantMessageId(message);
+      // A completed assistant message exposes the plain footer fork. A stable
+      // message with a resolved interview also exposes its Q&A fork icons while
+      // the rest of that assistant turn may still be running.
+      const plainForkMessageId = forkableAssistantMessageId(message);
+      const hasTerminalInterview = message.segments.some(
+        (segment) =>
+          segment.kind === "interview" &&
+          segment.status !== "streaming" &&
+          !segment.forkedWithoutAnswer,
+      );
+      const interviewForkMessageId = hasTerminalInterview
+        ? forkableInterviewAssistantMessageId(message)
+        : null;
+      const assistantMessageId = plainForkMessageId ?? interviewForkMessageId;
       if (assistantMessageId !== null) {
         if (!canAct) return null;
         return {
@@ -308,7 +326,12 @@ export function useChatMessageActions(
           fork: {
             enabled: true,
             pending: false,
-            onFork: () => forkAtAssistantMessage(assistantMessageId, "plain"),
+            onFork: (mode, interviewBlockId) =>
+              forkAtAssistantMessage(
+                assistantMessageId,
+                mode,
+                interviewBlockId,
+              ),
           },
         };
       }

@@ -7,6 +7,7 @@ import {
 } from "@/components/epic-canvas/dnd/dnd";
 import { useSidebarReparentTargetActive } from "@/components/epic-canvas/dnd/dnd-store";
 import type { RootCreatePanelId } from "@/stores/epics/left-panel-store";
+import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
 
 /**
  * Row container shared by the chat and artifact trees: registers the
@@ -20,8 +21,9 @@ export function SidebarReparentRowDropWrapper(props: {
   readonly nodeId: string;
   readonly panelId: RootCreatePanelId;
   readonly children: ReactNode;
+  readonly contextMenu: ReactNode | null;
 }) {
-  const { epicId, viewTabId, nodeId, panelId, children } = props;
+  const { epicId, viewTabId, nodeId, panelId, children, contextMenu } = props;
   const dropData = useMemo<EpicCanvasDropTargetData>(
     () => ({
       kind: "sidebar-reparent-row",
@@ -37,7 +39,7 @@ export function SidebarReparentRowDropWrapper(props: {
     data: dropData,
   });
   const isReparentTarget = useSidebarReparentTargetActive(nodeId);
-  return (
+  const row = (
     <div
       ref={setNodeRef}
       className={cn(
@@ -47,5 +49,13 @@ export function SidebarReparentRowDropWrapper(props: {
     >
       {children}
     </div>
+  );
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild disabled={contextMenu === null}>
+        {row}
+      </ContextMenuTrigger>
+      {contextMenu}
+    </ContextMenu>
   );
 }

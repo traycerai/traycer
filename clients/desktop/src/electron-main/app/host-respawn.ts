@@ -33,8 +33,9 @@ export function approvalRequiredMessage(): string {
  * IPC `requestHostRespawn`, tray "Restart Host", menu-bar host
  * actions. Two concurrent invocations would interleave SMAppService
  * unregister/register cycles and produce the very same LWCR-stuck state
- * the fix exists to prevent. Mirrors the dedup in
- * `ipc/host-ensure-ipc.ts`.
+ * the fix exists to prevent. This remains a respawn-specific dedup; the
+ * shared lock in `host-login-item.ts` also serializes this flow with ensure
+ * and pending-revision refresh cycles.
  */
 let inFlight: Promise<void> | null = null;
 
@@ -106,10 +107,27 @@ async function respawnViaLoginItem(host: IpcHostLifecycle): Promise<void> {
   host.notifyRespawning();
 
   if (host.isDisposed) return;
-  const status = await registerHostLoginItem();
+  // No revalidation guard: a respawn is a deliberate teardown+re-register,
+  // not an opportunistic idle-only refresh, so it intentionally proceeds
+  // regardless of host activity.
+  const status = await registerHostLoginItem(undefined);
   if (host.isDisposed) return;
+  if (status === "removed-by-user") {
+    // "Remove Traycer" ran while this respawn waited on the registration
+    // lock; the locked cycle refused to resurrect the login item. Mirror
+    // the entry check's silent skip.
+    log.info("[host-respawn] skipped - host removed by user mid-respawn");
+    return;
+  }
   if (status === "requires-approval") {
     throw new Error(approvalRequiredMessage());
+  }
+  if (status === "deferred-busy") {
+    // Unreachable: this call site passes no revalidation guard (see above),
+    // so `registerHostLoginItemUnserialized` never produces this outcome.
+    throw new Error(
+      "[host-respawn] registerHostLoginItem reported deferred-busy without a revalidation guard",
+    );
   }
   if (status !== "enabled") {
     log.warn(

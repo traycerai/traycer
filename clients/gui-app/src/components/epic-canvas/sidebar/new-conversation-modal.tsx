@@ -10,20 +10,19 @@ import {
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { v4 as uuidv4 } from "uuid";
-import { toast } from "sonner";
 import { ArrowLeftRight, Plus, XIcon } from "lucide-react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
-import type {
-  WorktreeFolderIntent,
-  WorktreeIntent,
-} from "@traycer/protocol/host/worktree-schemas";
+import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
 
 import {
   AttachmentStrip,
   NO_SESSION_OBJECT_URL,
 } from "@/components/chat/composer/attachments/attachment-strip";
-import { useEpicImageFetcher } from "@/lib/attachments/use-attachment-blob-src";
+import {
+  useEpicAttachmentBytesPresence,
+  useEpicImageFetcher,
+} from "@/lib/attachments/use-attachment-blob-src";
 import { DialogOverlayBoundaryContext } from "@/providers/dialog-overlay-boundary-context";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
@@ -77,7 +76,7 @@ import {
   deriveFolderlessAllowedWorkspaceAvailability,
   workspaceComposerCanStart,
 } from "@/lib/composer/workspace-composer-availability";
-import { buildForkWorkspaceSeedFromWorkspaceFolders } from "@/lib/worktree/fork-workspace-seed";
+import { effectiveWorktreeIntent } from "@/lib/worktree/effective-worktree-intent";
 import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
 import { cn } from "@/lib/utils";
 import { ActiveHostWorkspaceControls } from "@/components/home/host-workspace-selector/host-workspace-selector";
@@ -116,6 +115,7 @@ import {
   worktreeStagingKeyString,
 } from "@/stores/worktree/worktree-intent-staging-store";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
 /**
  * Isolated subscriber for the live draft content. The editor rewrites content
@@ -401,7 +401,7 @@ function NewConversationModalHeader(props: {
   );
 }
 
-function NewConversationModalBody(props: {
+export function NewConversationModalBody(props: {
   readonly epicId: string;
   readonly tabId: string;
   readonly placement: ConversationTilePlacement;
@@ -549,17 +549,28 @@ function NewConversationModalBody(props: {
       deriveFolderlessAllowedWorkspaceAvailability(
         resolvedWorkspace.folders,
         resolvedWorkspace.isLoading,
+        resolvedWorkspace.isError,
       ),
-    [resolvedWorkspace.folders, resolvedWorkspace.isLoading],
+    [
+      resolvedWorkspace.folders,
+      resolvedWorkspace.isLoading,
+      resolvedWorkspace.isError,
+    ],
   );
   const workspaceCanStart = workspaceComposerCanStart(workspaceAvailability);
   const draftWorkspaceFolderCount = draftWorkspace.folders.length;
+  const paste = useComposerPaste(editorRef);
+  const attachmentPending = paste.isIngestingImages;
   const canSubmit =
-    canMutate && !isSubmitting && workspaceCanStart && hasSubmittableContent;
+    canMutate &&
+    !isSubmitting &&
+    !attachmentPending &&
+    workspaceCanStart &&
+    hasSubmittableContent;
   const composerDisabledHint =
     mutationDisabledHint(permissionRole, isDisconnected, "make changes") ??
     workspaceAvailability.disabledHint;
-  const paste = useComposerPaste(editorRef);
+  const hasPastedImageBytes = useEpicAttachmentBytesPresence();
   const { dictationControl, dictationPreparing } = useComposerDictation({
     editorRef,
     isActive: chatComposerActive,
@@ -637,9 +648,18 @@ function NewConversationModalBody(props: {
     // open with no feedback - mirror the landing flow's host-first toast.
     const activeHostId = hostClient.getActiveHostId();
     if (activeHostId === null) {
-      toast.error("Couldn't start the chat.", {
-        description: "No active device. Reconnect and try again.",
-      });
+      reportableErrorToast(
+        "Couldn't start the chat.",
+        {
+          description: "No active device. Reconnect and try again.",
+        },
+        {
+          title: "Could not start chat",
+          message: "No active device was available.",
+          code: null,
+          source: "Chat",
+        },
+      );
       return;
     }
     const content = buildSubmittedChatJSONContent(editor.getJSON());
@@ -805,6 +825,7 @@ function NewConversationModalBody(props: {
       initialSelection={null}
       canSubmit={canSubmit}
       isSubmitting={isSubmitting}
+      attachmentPending={attachmentPending}
       workspaceDisabledHint={composerDisabledHint}
       header={header}
       attachmentsStrip={
@@ -818,6 +839,7 @@ function NewConversationModalBody(props: {
       dictationControl={dictationControl}
       dictationPreparing={dictationPreparing}
       paste={paste}
+      hasPastedImageBytes={hasPastedImageBytes}
       onSubmit={handleSubmit}
       onStartTerminal={handleStartTerminal}
       onSnapshot={handleSnapshot}
@@ -969,6 +991,7 @@ function useGlobalWorkspaceSnapshot(): LandingDraftWorkspaceSnapshot {
     useShallow((state) => ({
       folders: state.folders,
       folderInfoByPath: state.folderInfoByPath,
+      primaryPath: state.primaryPath,
     })),
   );
 }
@@ -986,68 +1009,4 @@ function toTuiPlacement(
     return { kind: "target-group", groupId: placement.groupId };
   }
   return { kind: "active-tile" };
-}
-
-function effectiveWorktreeIntent(input: {
-  readonly workspace: LandingDraftWorkspaceSnapshot;
-  readonly seedIntent: WorktreeIntent | null;
-  readonly stagedIntent: WorktreeIntent | null;
-}): WorktreeIntent | null {
-  const fallback =
-    input.seedIntent ??
-    buildForkWorkspaceSeedFromWorkspaceFolders(input.workspace.folders).intent;
-  if (input.stagedIntent === null) {
-    return trimIntentToWorkspace(input.workspace, fallback);
-  }
-  const fallbackByPath = intentEntriesByWorkspacePath(fallback);
-  const stagedByPath = intentEntriesByWorkspacePath(input.stagedIntent);
-  const entries = input.workspace.folders.flatMap((workspacePath, index) => {
-    const entry =
-      stagedByPath.get(workspacePath) ?? fallbackByPath.get(workspacePath);
-    if (entry === undefined) {
-      return localIntentEntry(input.workspace, workspacePath, index);
-    }
-    return [{ ...entry, isPrimary: index === 0 }];
-  });
-  return entries.length === 0 ? null : { entries };
-}
-
-function trimIntentToWorkspace(
-  workspace: LandingDraftWorkspaceSnapshot,
-  intent: WorktreeIntent | null,
-): WorktreeIntent | null {
-  const intentByPath = intentEntriesByWorkspacePath(intent);
-  const entries = workspace.folders.flatMap((workspacePath, index) => {
-    const entry = intentByPath.get(workspacePath);
-    if (entry === undefined) {
-      return localIntentEntry(workspace, workspacePath, index);
-    }
-    return [{ ...entry, isPrimary: index === 0 }];
-  });
-  return entries.length === 0 ? null : { entries };
-}
-
-function localIntentEntry(
-  workspace: LandingDraftWorkspaceSnapshot,
-  workspacePath: string,
-  index: number,
-): WorktreeFolderIntent[] {
-  if (!Object.hasOwn(workspace.folderInfoByPath, workspacePath)) return [];
-  const folder = workspace.folderInfoByPath[workspacePath];
-  return [
-    {
-      kind: "local",
-      workspacePath,
-      repoIdentifier: folder.repoIdentifier,
-      isPrimary: index === 0,
-    },
-  ];
-}
-
-function intentEntriesByWorkspacePath(
-  intent: WorktreeIntent | null,
-): ReadonlyMap<string, WorktreeFolderIntent> {
-  return new Map(
-    intent?.entries.map((entry) => [entry.workspacePath, entry]) ?? [],
-  );
 }

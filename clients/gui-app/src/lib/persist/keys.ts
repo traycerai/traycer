@@ -10,7 +10,7 @@
 
 export const PERSIST_PREFIX = "traycer-gui-app";
 
-// Six stores bucket their key by the signed-in identity; an absent/empty
+// Seven stores bucket their key by the signed-in identity; an absent/empty
 // identity collapses to the shared anonymous bucket. Preserved verbatim from
 // the per-store `ANONYMOUS_USER_KEY = "anon"` + `value.length > 0` logic.
 export const scopeBucket = (value: string | null): string =>
@@ -45,11 +45,70 @@ export const worktreeIntentStagingKey = (email: string | null): string =>
 export const epicCanvasKey = (identity: string | null): string =>
   scopedPersistKey("epic-canvas", scopeBucket(identity));
 
+export const landingTerminalsKey = (identity: string | null): string =>
+  scopedPersistKey("landing-terminals", scopeBucket(identity));
+
 // Arg order is `(identity, epicId)` but the emitted string keeps today's
 // `…:open-epic:{identityBucket}:{epicId}` order (the current store's local
 // `persistKey(epicId, userId)` emitted exactly this).
 export const openEpicKey = (identity: string | null, epicId: string): string =>
   scopedPersistKey("open-epic", scopeBucket(identity), epicId);
+
+export const appLocalNotificationsKey = (userId: string | null): string =>
+  scopedPersistKey("app-local-notifications", scopeBucket(userId));
+
+export const appLocalNotificationDisplayReceiptPrefix = (
+  userId: string,
+): string =>
+  scopedPersistKey(
+    "app-local-notification-display-receipt",
+    encodeURIComponent(userId),
+  );
+
+export const appLocalNotificationDisplayReceiptNotificationPrefix = (input: {
+  readonly userId: string;
+  readonly notificationId: string;
+}): string =>
+  scopedPersistKey(
+    "app-local-notification-display-receipt",
+    encodeURIComponent(input.userId),
+    encodeURIComponent(input.notificationId),
+  );
+
+export const appLocalNotificationDisplayReceiptKey = (input: {
+  readonly userId: string;
+  readonly notificationId: string;
+  readonly updatedAt: number;
+}): string =>
+  `${appLocalNotificationDisplayReceiptNotificationPrefix(input)}:${String(input.updatedAt)}`;
+
+// Interview answer drafts persist ONE localStorage key per (chatId, blockId)
+// instead of a single full-snapshot Zustand blob. Separate keys prevent a
+// full-map write from one window (or a stale store context) from erasing an
+// unrelated chat's draft persisted by another window — the same isolation the
+// app-local display receipts above rely on. Both segments are percent-encoded so
+// a `:` inside an id can never split the key.
+export const interviewDraftKeyPrefix = (): string =>
+  `${persistKey("interview-drafts")}:`;
+
+export const interviewDraftKey = (chatId: string, blockId: string): string =>
+  scopedPersistKey(
+    "interview-drafts",
+    encodeURIComponent(chatId),
+    encodeURIComponent(blockId),
+  );
+
+// Host-scoped (not identity-scoped): the worktrees panel's warm-open snapshot
+// of per-path activity entries (worktrees-enrichment-persistence.ts). A host
+// id is always non-empty, so no `scopeBucket` collapse applies.
+export const worktreeActivityCacheKey = (hostId: string): string =>
+  scopedPersistKey("worktree-activity-cache", hostId);
+
+// Host-scoped sibling of `worktreeActivityCacheKey`: the base listing rows
+// (worktrees-listing-query.ts), so the panel paints its row list instantly on
+// launch while the live listing refetches behind it.
+export const worktreeListingCacheKey = (hostId: string): string =>
+  scopedPersistKey("worktree-listing-cache", hostId);
 
 // ── Catalog ────────────────────────────────────────────────────────────────
 // `kind` tells enumeration the shape of each persisted surface:
@@ -71,7 +130,7 @@ export interface PersistStoreEntry {
 }
 
 export const PERSIST_STORES = [
-  // ── Scoped zustand stores (6) ────────────────────────────────────────────
+  // ── Scoped zustand stores (8) ────────────────────────────────────────────
   {
     camelName: "composerRunSettings",
     leaf: "composer-run-settings",
@@ -93,12 +152,31 @@ export const PERSIST_STORES = [
     kind: "scoped",
   },
   { camelName: "epicCanvas", leaf: "epic-canvas", kind: "scoped" },
+  {
+    camelName: "landingTerminals",
+    leaf: "landing-terminals",
+    kind: "scoped",
+  },
   { camelName: "openEpic", leaf: "open-epic", kind: "scoped" },
+  {
+    camelName: "appLocalNotifications",
+    leaf: "app-local-notifications",
+    kind: "scoped",
+  },
 
   // ── Static zustand stores (18) ───────────────────────────────────────────
   { camelName: "onboarding", leaf: "onboarding", kind: "static" },
   { camelName: "commandPalette", leaf: "command-palette", kind: "static" },
   { camelName: "composerDraft", leaf: "composer-drafts", kind: "static" },
+  // Enumerated under the `interview-drafts` leaf, but persisted as one key per
+  // (chatId, blockId) — `interview-drafts:{encChatId}:{encBlockId}` — for
+  // cross-window isolation (see `interviewDraftKey`). The `traycer-gui-app:`
+  // prefix sweep in `wipe.ts` still clears every per-draft key.
+  {
+    camelName: "interviewDraft",
+    leaf: "interview-drafts",
+    kind: "static",
+  },
   {
     camelName: "artifactReadState",
     leaf: "artifact-read-state",
@@ -164,6 +242,28 @@ export const PERSIST_STORES = [
     camelName: "deletedEpicEventsChannel",
     leaf: "deleted-epic-events:v1",
     kind: "channel",
+  },
+  // One monotonic key per displayed app-local notification version. Separate
+  // keys prevent an unrelated full-snapshot Zustand write in another window
+  // from erasing a receipt.
+  {
+    camelName: "appLocalNotificationDisplayReceipt",
+    leaf: "app-local-notification-display-receipt",
+    kind: "scoped",
+  },
+  // `worktree-activity-cache:<hostId>` — the worktrees panel's warm-open
+  // TanStack snapshot (worktrees-enrichment-persistence.ts), host-scoped.
+  {
+    camelName: "worktreeActivityCache",
+    leaf: "worktree-activity-cache",
+    kind: "scoped",
+  },
+  // `worktree-listing-cache:<hostId>` — the worktrees panel's base listing
+  // snapshot (worktrees-listing-query.ts), host-scoped.
+  {
+    camelName: "worktreeListingCache",
+    leaf: "worktree-listing-cache",
+    kind: "scoped",
   },
 ] as const satisfies ReadonlyArray<PersistStoreEntry>;
 

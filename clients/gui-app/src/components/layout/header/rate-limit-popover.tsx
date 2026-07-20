@@ -2,10 +2,12 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
-import { useIsFetching, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { Gauge, Settings } from "lucide-react";
 import {
   DEFAULT_ACCOUNT_CONTEXT,
@@ -17,6 +19,11 @@ import { PopoverContent } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { RefreshIconButton } from "@/components/refresh-icon-button";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import {
+  createReportIssueContext,
+  type ReportIssueContext,
+} from "@/lib/report-issue-context";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { AccentDot } from "@/components/providers/accent-dot";
 import { profileDisplayLabel } from "@/components/providers/provider-profile-model";
@@ -24,9 +31,13 @@ import {
   ProviderRateLimitDetail,
   type ProviderRateLimitQueryState,
 } from "@/components/settings/panels/provider-rate-limit-views";
+import { resolveCodexResetCreditAction } from "@/components/settings/panels/codex-reset-credit-availability";
 import { useHostProviderRateLimitsQuery } from "@/hooks/host/use-host-provider-rate-limits-query";
 import { useRefreshProviderRateLimitsOnMount } from "@/hooks/host/use-refresh-provider-rate-limits-on-mount";
-import { useHostQueriesWithResponseMap } from "@/hooks/host/use-host-queries";
+import {
+  useHostQueries,
+  useHostQueriesWithResponseMap,
+} from "@/hooks/host/use-host-queries";
 import { providerRateLimitQueryOptions } from "@/hooks/host/provider-rate-limit-query-options";
 import {
   mapResponseToProviderRateLimitEnvelope,
@@ -34,6 +45,7 @@ import {
 } from "@/lib/rate-limits/rate-limit-envelope";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import type { RateLimitUnavailableReason } from "@traycer/protocol/host";
+import type { TraycerTeamSubscription } from "@traycer/protocol/auth";
 import type {
   ProviderId,
   ProviderProfile,
@@ -48,7 +60,7 @@ import {
   resolveRateLimitProfileId,
   type RateLimitProfileSelection,
 } from "@/hooks/rate-limits/use-rate-limit-profile-selection";
-import { enqueueRateLimitFetch } from "@/lib/rate-limits/ephemeral-fetch-queue";
+import { enqueueRateLimitFetchBatch } from "@/lib/rate-limits/ephemeral-fetch-queue";
 import {
   formatUnavailableReason,
   resolvePopoverProviderRateLimitState,
@@ -62,6 +74,7 @@ import {
   sortProviderStatesByProviderOrder,
 } from "@/lib/provider-ordering";
 import { queryKeys } from "@/lib/query-keys";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import {
   PROVIDER_RATE_LIMITS_STALE_TIME_MS,
   rateLimitFetchLane,
@@ -78,16 +91,13 @@ import {
   accountContextValue,
   isCreditBasedPricing,
   isTraycerEligible,
-  parseAccountContextValue,
   resolveTraycerSubscriptionState,
   selectSubscription,
   subscriptionPlanLabel,
+  type TraycerSubscription,
   type TraycerSubscriptionState,
 } from "@/lib/auth/traycer-subscription-content";
-import {
-  TraycerAccountSelect,
-  TraycerSubscriptionView,
-} from "@/components/settings/panels/traycer-subscription-views";
+import { TraycerSubscriptionView } from "@/components/settings/panels/traycer-subscription-views";
 import {
   useRateLimitPopoverStore,
   type RateLimitPopoverTab,
@@ -104,6 +114,168 @@ type RailTabDescriptor =
   | { readonly kind: "provider"; readonly providerId: RateLimitProviderId }
   | { readonly kind: "traycer" };
 
+const PERSONAL_ACCOUNT_CONTEXT: AccountContext = { type: "PERSONAL" };
+
+const POPOVER_SURFACE_CLASS_NAME =
+  "relative w-[min(92vw,30rem)] min-w-[min(92vw,20rem,var(--radix-popover-content-available-width))] max-w-[var(--radix-popover-content-available-width)] max-h-[var(--radix-popover-content-available-height)] overflow-hidden";
+
+type RateLimitPopoverResizeDirection =
+  "n" | "ne" | "e" | "se" | "s" | "sw" | "w" | "nw";
+
+interface RateLimitPopoverPositionLock {
+  readonly wrapperElement: HTMLElement;
+  offsetXPx: number;
+  offsetYPx: number;
+  readonly setOffset: (xPx: number, yPx: number) => void;
+  readonly restore: () => void;
+}
+
+interface RateLimitPopoverViewportBounds {
+  readonly rightPx: number;
+  readonly bottomPx: number;
+}
+
+interface RateLimitPopoverResizeDrag {
+  readonly pointerId: number;
+  readonly direction: RateLimitPopoverResizeDirection;
+  readonly startClientX: number;
+  readonly startClientY: number;
+  readonly startLeftPx: number;
+  readonly startTopPx: number;
+  readonly startRightPx: number;
+  readonly startBottomPx: number;
+  readonly startWidthPx: number;
+  readonly startHeightPx: number;
+  readonly viewportRightPx: number;
+  readonly viewportBottomPx: number;
+  readonly positionLock: RateLimitPopoverPositionLock;
+  readonly restorePositionOnCancel: boolean;
+  readonly startPositionOffsetXPx: number;
+  readonly startPositionOffsetYPx: number;
+  readonly previousInlineWidth: string;
+  readonly previousInlineHeight: string;
+  latestWidthPx: number;
+  latestHeightPx: number;
+  moved: boolean;
+}
+
+const RATE_LIMIT_POPOVER_RESIZE_DIRECTIONS = [
+  "n",
+  "ne",
+  "e",
+  "se",
+  "s",
+  "sw",
+  "w",
+  "nw",
+] as const;
+
+function isRateLimitPopoverResizeDirection(
+  value: string | undefined,
+): value is RateLimitPopoverResizeDirection {
+  return RATE_LIMIT_POPOVER_RESIZE_DIRECTIONS.some(
+    (direction) => direction === value,
+  );
+}
+
+const RATE_LIMIT_POPOVER_RESIZE_HANDLE_CLASS_NAMES = {
+  n: "absolute inset-x-3 top-0 z-20 h-2 cursor-n-resize touch-none",
+  ne: "absolute top-0 right-0 z-30 size-3 cursor-ne-resize touch-none",
+  e: "absolute inset-y-3 right-0 z-20 w-2 cursor-e-resize touch-none",
+  se: "absolute right-0 bottom-0 z-30 size-3 cursor-se-resize touch-none",
+  s: "absolute inset-x-3 bottom-0 z-20 h-2 cursor-s-resize touch-none",
+  sw: "absolute bottom-0 left-0 z-30 size-3 cursor-sw-resize touch-none",
+  w: "absolute inset-y-3 left-0 z-20 w-2 cursor-w-resize touch-none",
+  nw: "absolute top-0 left-0 z-30 size-3 cursor-nw-resize touch-none",
+} satisfies Record<RateLimitPopoverResizeDirection, string>;
+
+const RATE_LIMIT_POPOVER_COLLISION_PADDING_PX = 12;
+
+// Radix owns the floating wrapper's transform and rewrites it whenever content
+// size changes. Lock that transform for the rest of this popover opening so a
+// resize can move the exact active edge without Radix re-anchoring underneath
+// the pointer. The observer only restores one expected transform; it never
+// derives another offset from the moved element, avoiding a feedback loop.
+function createRateLimitPopoverPositionLock(
+  wrapperElement: HTMLElement,
+): RateLimitPopoverPositionLock {
+  const originalTransform = wrapperElement.style.transform;
+  const originalTransformPriority =
+    wrapperElement.style.getPropertyPriority("transform");
+  let expectedTransform = originalTransform;
+  let restored = false;
+  const applyExpectedTransform = (): void => {
+    if (restored) return;
+    if (
+      wrapperElement.style.transform === expectedTransform &&
+      wrapperElement.style.getPropertyPriority("transform") === "important"
+    ) {
+      return;
+    }
+    wrapperElement.style.setProperty(
+      "transform",
+      expectedTransform,
+      "important",
+    );
+  };
+  const observer = new MutationObserver(applyExpectedTransform);
+  const positionLock: RateLimitPopoverPositionLock = {
+    wrapperElement,
+    offsetXPx: 0,
+    offsetYPx: 0,
+    setOffset: (xPx, yPx) => {
+      positionLock.offsetXPx = xPx;
+      positionLock.offsetYPx = yPx;
+      const offsetTransform = `translate(${xPx}px, ${yPx}px)`;
+      expectedTransform =
+        originalTransform === "" || originalTransform === "none"
+          ? offsetTransform
+          : `${originalTransform} ${offsetTransform}`;
+      applyExpectedTransform();
+    },
+    restore: () => {
+      if (restored) return;
+      restored = true;
+      observer.disconnect();
+      if (originalTransform === "") {
+        wrapperElement.style.removeProperty("transform");
+        return;
+      }
+      wrapperElement.style.setProperty(
+        "transform",
+        originalTransform,
+        originalTransformPriority,
+      );
+    },
+  };
+  observer.observe(wrapperElement, {
+    attributes: true,
+    attributeFilter: ["style"],
+  });
+  applyExpectedTransform();
+  return positionLock;
+}
+
+function rateLimitPopoverViewportBounds(
+  surface: HTMLDivElement,
+  rect: DOMRect,
+): RateLimitPopoverViewportBounds {
+  const ownerDocument = surface.ownerDocument;
+  const win = ownerDocument.defaultView;
+  const viewportWidth =
+    ownerDocument.documentElement.clientWidth || win?.innerWidth || rect.right;
+  const viewportHeight =
+    ownerDocument.documentElement.clientHeight ||
+    win?.innerHeight ||
+    rect.bottom;
+  return {
+    rightPx: viewportWidth - RATE_LIMIT_POPOVER_COLLISION_PADDING_PX,
+    bottomPx: viewportHeight - RATE_LIMIT_POPOVER_COLLISION_PADDING_PX,
+  };
+}
+
+type RateLimitPopoverSurfaceVariant = "content" | "empty";
+
 function railTabProviderId(tab: RailTabDescriptor): ProviderId {
   return tab.kind === "traycer" ? "traycer" : tab.providerId;
 }
@@ -118,19 +290,37 @@ function useTraycerSubscription() {
     storedAccountContext,
     teamIds,
   );
+  const personalSubscription = user?.userSubscription ?? null;
   const subscription = selectSubscription(user, resolvedAccountContext, teams);
-  const eligible = subscription !== null && isTraycerEligible(subscription);
-  const rateLimitBased =
-    subscription !== null &&
-    !isCreditBasedPricing(subscription.subscriptionStatus);
+  const accountSubscriptions = [
+    {
+      accountContext: PERSONAL_ACCOUNT_CONTEXT,
+      subscription: personalSubscription,
+    },
+    ...teams.map((team) => ({
+      accountContext: { type: "TEAM" as const, teamId: team.team.id },
+      subscription: team,
+    })),
+  ];
+  const eligible = accountSubscriptions.some(
+    (account) =>
+      account.subscription !== null && isTraycerEligible(account.subscription),
+  );
+  const rateLimitAccountContexts = accountSubscriptions
+    .filter(
+      (account) =>
+        account.subscription !== null &&
+        !isCreditBasedPricing(account.subscription.subscriptionStatus),
+    )
+    .map((account) => account.accountContext);
   return {
     query,
-    storedAccountContext,
     resolvedAccountContext,
     teams,
+    personalSubscription,
     subscription,
     eligible,
-    rateLimitBased,
+    rateLimitAccountContexts,
   };
 }
 
@@ -164,7 +354,7 @@ function configuredProviderProfiles(
 function refreshTargetsForProvider(
   provider: ConfiguredRateLimitProvider,
 ): ReadonlyArray<string | null> {
-  if (provider.profiles.length <= 1) return [null];
+  if (provider.profiles.length === 0) return [null];
   return provider.profiles
     .filter(profileLoggedInForUsage)
     .map(rateLimitProfileId);
@@ -201,10 +391,10 @@ export function RateLimitPopover({
       side="bottom"
       align="end"
       sideOffset={8}
-      collisionPadding={12}
+      collisionPadding={RATE_LIMIT_POPOVER_COLLISION_PADDING_PX}
       role="dialog"
       aria-label="Usage limits"
-      className="w-[min(92vw,30rem)] gap-0 overflow-hidden rounded-xl p-0"
+      className="w-fit max-w-[var(--radix-popover-content-available-width)] max-h-[var(--radix-popover-content-available-height)] gap-0 overflow-hidden rounded-xl p-0"
       // Radix auto-focuses the first focusable child on open. Here that's the
       // Overview rail tab, whose `TooltipWrapper` opens the tooltip on focus
       // (keyboard a11y) - so it would pop open the instant the popover mounts
@@ -213,12 +403,235 @@ export function RateLimitPopover({
       // focusable is its search input, so it wants and keeps the auto-focus), so
       // opting out of the initial focus is harmless and stops the stuck tooltip.
       onOpenAutoFocus={(event) => event.preventDefault()}
+      onInteractOutside={(event) => {
+        const target = event.target;
+        if (
+          target instanceof Element &&
+          (target.closest('[data-testid="confirm-destructive-dialog"]') !==
+            null ||
+            target.closest('[data-slot="dialog-overlay"]') !== null)
+        ) {
+          event.preventDefault();
+        }
+      }}
     >
       <RateLimitPopoverBody
         onClose={onClose}
         profileSelection={profileSelection}
       />
     </PopoverContent>
+  );
+}
+
+/**
+ * Viewport-bounded resize surface with OS-style hit areas on every edge and
+ * corner. Drag frames mutate inline dimensions directly, while pointer release
+ * commits the final measured size once so subsequent opens restore it.
+ */
+function RateLimitPopoverResizeSurface({
+  variant,
+  children,
+}: {
+  readonly variant: RateLimitPopoverSurfaceVariant;
+  readonly children: ReactNode;
+}): ReactNode {
+  const size = useRateLimitPopoverStore((state) => state.size);
+  const setSize = useRateLimitPopoverStore((state) => state.setSize);
+  const dragRef = useRef<RateLimitPopoverResizeDrag | null>(null);
+  const positionLockRef = useRef<RateLimitPopoverPositionLock | null>(null);
+  useEffect(
+    () => () => {
+      positionLockRef.current?.restore();
+    },
+    [],
+  );
+
+  const startResize = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    if (event.button !== 0 || dragRef.current !== null) return;
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    const direction = target.dataset.resizeDirection;
+    if (!isRateLimitPopoverResizeDirection(direction)) return;
+
+    const surface = event.currentTarget;
+    const positionWrapper = surface.closest<HTMLElement>(
+      "[data-radix-popper-content-wrapper]",
+    );
+    if (positionWrapper === null) return;
+    const rect = surface.getBoundingClientRect();
+    const { width, height } = rect;
+    if (width <= 0 || height <= 0) return;
+    const viewportBounds = rateLimitPopoverViewportBounds(surface, rect);
+    event.preventDefault();
+    event.stopPropagation();
+    surface.setPointerCapture(event.pointerId);
+    const existingPositionLock = positionLockRef.current;
+    const restorePositionOnCancel =
+      existingPositionLock === null ||
+      existingPositionLock.wrapperElement !== positionWrapper;
+    if (
+      existingPositionLock !== null &&
+      existingPositionLock.wrapperElement !== positionWrapper
+    ) {
+      existingPositionLock.restore();
+    }
+    const positionLock = restorePositionOnCancel
+      ? createRateLimitPopoverPositionLock(positionWrapper)
+      : existingPositionLock;
+    positionLockRef.current = positionLock;
+    const drag: RateLimitPopoverResizeDrag = {
+      pointerId: event.pointerId,
+      direction,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startLeftPx: rect.left,
+      startTopPx: rect.top,
+      startRightPx: rect.right,
+      startBottomPx: rect.bottom,
+      startWidthPx: width,
+      startHeightPx: height,
+      viewportRightPx: viewportBounds.rightPx,
+      viewportBottomPx: viewportBounds.bottomPx,
+      positionLock,
+      restorePositionOnCancel,
+      startPositionOffsetXPx: positionLock.offsetXPx,
+      startPositionOffsetYPx: positionLock.offsetYPx,
+      previousInlineWidth: surface.style.width,
+      previousInlineHeight: surface.style.height,
+      latestWidthPx: width,
+      latestHeightPx: height,
+      moved: false,
+    };
+    dragRef.current = drag;
+    // Freeze both axes at their computed dimensions before the first drag frame;
+    // otherwise a content reflow can change the untouched axis mid-drag.
+    surface.style.width = `${width}px`;
+    surface.style.height = `${height}px`;
+  };
+
+  const resizeDuringDrag = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    const drag = dragRef.current;
+    if (drag === null || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    const deltaX = event.clientX - drag.startClientX;
+    const deltaY = event.clientY - drag.startClientY;
+    const resizeFromLeft = drag.direction.includes("w");
+    const resizeFromRight = drag.direction.includes("e");
+    const resizeFromTop = drag.direction.includes("n");
+    const resizeFromBottom = drag.direction.includes("s");
+    let widthDelta = 0;
+    if (resizeFromLeft) widthDelta = -deltaX;
+    else if (resizeFromRight) widthDelta = deltaX;
+    let heightDelta = 0;
+    if (resizeFromTop) heightDelta = -deltaY;
+    else if (resizeFromBottom) heightDelta = deltaY;
+    let maxWidthPx = drag.startWidthPx;
+    if (resizeFromLeft) {
+      maxWidthPx = drag.startRightPx - RATE_LIMIT_POPOVER_COLLISION_PADDING_PX;
+    } else if (resizeFromRight) {
+      maxWidthPx = drag.viewportRightPx - drag.startLeftPx;
+    }
+    let maxHeightPx = drag.startHeightPx;
+    if (resizeFromTop) {
+      maxHeightPx =
+        drag.startBottomPx - RATE_LIMIT_POPOVER_COLLISION_PADDING_PX;
+    } else if (resizeFromBottom) {
+      maxHeightPx = drag.viewportBottomPx - drag.startTopPx;
+    }
+    drag.latestWidthPx = Math.min(
+      Math.max(1, maxWidthPx),
+      Math.max(1, drag.startWidthPx + widthDelta),
+    );
+    drag.latestHeightPx = Math.min(
+      Math.max(1, maxHeightPx),
+      Math.max(1, drag.startHeightPx + heightDelta),
+    );
+    event.currentTarget.style.width = `${drag.latestWidthPx}px`;
+    event.currentTarget.style.height = `${drag.latestHeightPx}px`;
+    const measured = event.currentTarget.getBoundingClientRect();
+    drag.moved =
+      measured.width !== drag.startWidthPx ||
+      measured.height !== drag.startHeightPx;
+    const offsetDeltaXPx = resizeFromLeft
+      ? drag.startWidthPx - measured.width
+      : 0;
+    const offsetDeltaYPx = resizeFromTop
+      ? drag.startHeightPx - measured.height
+      : 0;
+    drag.positionLock.setOffset(
+      drag.startPositionOffsetXPx + offsetDeltaXPx,
+      drag.startPositionOffsetYPx + offsetDeltaYPx,
+    );
+  };
+
+  const finishResize = (
+    event: ReactPointerEvent<HTMLDivElement>,
+    commit: boolean,
+  ): void => {
+    const drag = dragRef.current;
+    if (drag === null || drag.pointerId !== event.pointerId) return;
+    dragRef.current = null;
+    const surface = event.currentTarget;
+    if (surface.hasPointerCapture(event.pointerId)) {
+      surface.releasePointerCapture(event.pointerId);
+    }
+    if (!commit || !drag.moved) {
+      surface.style.width = drag.previousInlineWidth;
+      surface.style.height = drag.previousInlineHeight;
+      if (drag.restorePositionOnCancel) {
+        drag.positionLock.restore();
+        if (positionLockRef.current === drag.positionLock) {
+          positionLockRef.current = null;
+        }
+      } else {
+        drag.positionLock.setOffset(
+          drag.startPositionOffsetXPx,
+          drag.startPositionOffsetYPx,
+        );
+      }
+      return;
+    }
+
+    const measured = surface.getBoundingClientRect();
+    const widthPx = measured.width > 0 ? measured.width : drag.latestWidthPx;
+    const heightPx =
+      measured.height > 0 ? measured.height : drag.latestHeightPx;
+    surface.style.width = `${widthPx}px`;
+    surface.style.height = `${heightPx}px`;
+    setSize({ widthPx, heightPx });
+  };
+
+  return (
+    <div
+      data-testid="rate-limit-popover-resize-surface"
+      className={cn(
+        POPOVER_SURFACE_CLASS_NAME,
+        variant === "content"
+          ? "grid h-[max(50vh,22rem)] min-h-[min(35vh,16rem,var(--radix-popover-content-available-height))] grid-cols-[3rem_minmax(0,1fr)] grid-rows-[minmax(0,1fr)]"
+          : "flex min-h-[min(20vh,8rem,var(--radix-popover-content-available-height))] flex-col items-start gap-3 p-4",
+      )}
+      style={
+        size === null
+          ? undefined
+          : { width: size.widthPx, height: size.heightPx }
+      }
+      onPointerDown={startResize}
+      onPointerMove={resizeDuringDrag}
+      onPointerUp={(event) => finishResize(event, true)}
+      onPointerCancel={(event) => finishResize(event, false)}
+      onLostPointerCapture={(event) => finishResize(event, false)}
+    >
+      {children}
+      {RATE_LIMIT_POPOVER_RESIZE_DIRECTIONS.map((direction) => (
+        <div
+          key={direction}
+          aria-hidden="true"
+          data-resize-direction={direction}
+          data-testid={`rate-limit-popover-resize-${direction}`}
+          className={RATE_LIMIT_POPOVER_RESIZE_HANDLE_CLASS_NAMES[direction]}
+        />
+      ))}
+    </div>
   );
 }
 
@@ -252,7 +665,11 @@ function RateLimitPopoverBody({
   // Zero-state only when there is genuinely nothing to show: no host-RPC
   // providers AND no eligible Traycer tab.
   if (providers.length === 0 && !traycerSubscription.eligible) {
-    return <RateLimitZeroState onClose={onClose} />;
+    return (
+      <RateLimitPopoverResizeSurface variant="empty">
+        <RateLimitZeroState onClose={onClose} />
+      </RateLimitPopoverResizeSurface>
+    );
   }
 
   // A credential removed (or Traycer becoming ineligible) mid-session can drop
@@ -268,22 +685,19 @@ function RateLimitPopoverBody({
     ? activeTab
     : "overview";
 
-  // A *fixed target* height (not content-sized), plus an explicit
-  // `minmax(0,1fr)` grid row, is what makes the popover a stable box across
-  // tabs and lets its panes scroll. The target is at least half the viewport in
-  // normal header placement, while Radix's available-height guard keeps it
-  // inside short windows. `minmax(0,1fr)` pins the row to the used container
-  // height regardless of content, and both columns stretch into it with their
-  // own `min-h-0` + `overflow-y-auto`, so each scrolls internally.
+  // The default target height keeps the popover stable across tabs. The resize
+  // surface applies the remembered user size within fluid viewport bounds.
+  // `minmax(0,1fr)` pins the row to that height, and both columns keep their
+  // own `min-h-0` + `overflow-y-auto` scrolling.
   return (
-    <div className="grid h-[max(50vh,22rem)] max-h-[var(--radix-popover-content-available-height)] grid-cols-[3rem_minmax(0,1fr)] grid-rows-[minmax(0,1fr)] overflow-hidden">
+    <RateLimitPopoverResizeSurface variant="content">
       <RateLimitRail
         railTabs={railTabs}
         providers={providers}
         traycerRefreshTarget={{
           enabled: traycerSubscription.eligible,
-          accountContext: traycerSubscription.storedAccountContext,
-          rateLimitBased: traycerSubscription.rateLimitBased,
+          rateLimitAccountContexts:
+            traycerSubscription.rateLimitAccountContexts,
           isFetching: traycerSubscription.query.isFetching,
           refetch: traycerSubscription.query.refetch,
         }}
@@ -306,7 +720,7 @@ function RateLimitPopoverBody({
           />
         )}
       </div>
-    </div>
+    </RateLimitPopoverResizeSurface>
   );
 }
 
@@ -556,24 +970,53 @@ function RateLimitOverviewLoading(): ReactNode {
 
 interface TraycerRefreshTarget {
   readonly enabled: boolean;
-  readonly accountContext: AccountContext;
-  readonly rateLimitBased: boolean;
+  readonly rateLimitAccountContexts: ReadonlyArray<AccountContext>;
   readonly isFetching: boolean;
   readonly refetch: () => Promise<unknown>;
 }
 
+function useTraycerRateLimitUsageState(
+  accountContexts: ReadonlyArray<AccountContext>,
+): {
+  readonly isFetching: boolean;
+  readonly updatedAtByAccount: ReadonlyMap<string, number>;
+} {
+  const client = useHostClient();
+  const queries = useHostQueries<HostRpcRegistry, "host.getRateLimitUsage">({
+    client,
+    requests: accountContexts.map((accountContext) => ({
+      method: "host.getRateLimitUsage",
+      params: { accountContext, profileId: null },
+    })),
+    cacheKeyIdentity: undefined,
+    // Observe the exact shared query states without initiating a second fetch;
+    // each rendered RateLimitView remains the enabled owner of its account pull.
+    options: { enabled: false },
+  });
+  return {
+    isFetching: queries.some((query) => query.isFetching),
+    updatedAtByAccount: new Map(
+      accountContexts.map((accountContext, index) => [
+        accountContextValue(accountContext),
+        queries[index]?.dataUpdatedAt ?? 0,
+      ]),
+    ),
+  };
+}
+
 /**
  * The rail's icon-only "Refresh all" (Core Flows): ephemeralProcess providers
- * refresh one at a time through the shared serial queue (`force: true`), while
- * httpFetch providers refresh concurrently alongside via a direct query
- * invalidation - a plain GET has no subprocess cost to serialize. The synthetic
- * Traycer entry refreshes here too: it refetches the AuthService subscription
- * query, and rate-limit based plans additionally invalidate the unscoped
- * aperture `host.getRateLimitUsage` query that backs the live artifact bar.
+ * refresh as one queued batch whose profile pulls run concurrently
+ * (`force: true`), while httpFetch providers refresh concurrently alongside via
+ * a direct query invalidation - a plain GET has no subprocess cost to serialize.
+ * The synthetic Traycer entry refreshes here too: it refetches the AuthService
+ * subscription query, and rate-limit based plans additionally invalidate the
+ * unscoped aperture `host.getRateLimitUsage` query that backs the live artifact
+ * bar.
  * `refreshing` combines all lanes' real query state - the queue's draining flag
- * for ephemeralProcess (which stays true a beat longer than any single
- * provider's `isFetching`, covering the "still waiting behind an earlier
- * provider in the queue" gap), each configured httpFetch provider's own
+ * for ephemeralProcess (which stays true until every profile in the batch has
+ * settled, even after one provider's own `isFetching` clears), each configured
+ * httpFetch provider's own
  * `isFetching` (read via `useHostQueries` against the exact same query keys the
  * invalidation below targets), plus Traycer's auth/aperture fetch state - so
  * the icon spins for the whole round regardless of which lane(s) are actually
@@ -591,14 +1034,9 @@ function RateLimitRefreshAllButton({
   const queryClient = useQueryClient();
   const hostId = useReactiveActiveHostId();
   const client = useHostClient();
-  const traycerRateLimitUsageFetching =
-    useIsFetching({
-      queryKey: queryKeys.hostTraycerRateLimitUsage(
-        hostId,
-        traycerRefreshTarget.accountContext,
-      ),
-      exact: true,
-    }) > 0;
+  const traycerRateLimitUsageState = useTraycerRateLimitUsageState(
+    traycerRefreshTarget.rateLimitAccountContexts,
+  );
   const httpFetchProviders = providers.filter(
     (provider) => provider.lane === "httpFetch",
   );
@@ -608,6 +1046,15 @@ function RateLimitRefreshAllButton({
       profileId,
     })),
   );
+  const ephemeralProcessRequests = providers
+    .filter((provider) => provider.lane === "ephemeralProcess")
+    .flatMap((provider) =>
+      refreshTargetsForProvider(provider).map((profileId) => ({
+        providerId: provider.providerId,
+        accountContext: DEFAULT_ACCOUNT_CONTEXT,
+        profileId,
+      })),
+    );
   // Every httpFetch provider resolves to the exact same lane options (the
   // `isHttpFetch` branch in `providerRateLimitQueryOptions` doesn't vary by
   // provider id) - reusing the first one's is safe without the "verify every
@@ -629,6 +1076,7 @@ function RateLimitRefreshAllButton({
     ProviderRateLimitEnvelope
   >({
     client,
+    cacheKeyIdentity: undefined,
     requests: httpFetchRequests.map((target) => {
       const { method, params } = providerRateLimitQueryOptions(
         target.providerId,
@@ -641,16 +1089,15 @@ function RateLimitRefreshAllButton({
   });
   const traycerRefreshing =
     traycerRefreshTarget.enabled &&
-    (traycerRefreshTarget.isFetching ||
-      (traycerRefreshTarget.rateLimitBased && traycerRateLimitUsageFetching));
+    (traycerRefreshTarget.isFetching || traycerRateLimitUsageState.isFetching);
   const refreshing =
     draining ||
     httpFetchQueries.some((query) => query.isFetching) ||
     traycerRefreshing;
 
   // Fire-and-forget, not awaited: httpFetch providers refresh concurrently via a
-  // direct invalidation, ephemeralProcess providers queue through the shared
-  // serial lane, and Traycer refetches its subscription/usage queries. Returns
+  // direct invalidation, ephemeralProcess profiles fan out inside one queued
+  // batch, and Traycer refetches its subscription/usage queries. Returns
   // an already-resolved promise so `RefreshIconButton` gets its
   // `() => Promise<void>` contract without gating the spinner on the fetches
   // themselves - `refreshing` (above) owns that.
@@ -667,28 +1114,20 @@ function RateLimitRefreshAllButton({
         }),
       });
     });
-    providers
-      .filter((provider) => provider.lane === "ephemeralProcess")
-      .forEach((provider) => {
-        refreshTargetsForProvider(provider).forEach((profileId) => {
-          void enqueueRateLimitFetch(
-            provider.providerId,
-            DEFAULT_ACCOUNT_CONTEXT,
-            { force: true, profileId },
-          );
-        });
-      });
+    void enqueueRateLimitFetchBatch(ephemeralProcessRequests, { force: true });
     if (traycerRefreshTarget.enabled) {
       void traycerRefreshTarget.refetch();
-      if (traycerRefreshTarget.rateLimitBased) {
-        void queryClient.invalidateQueries({
-          queryKey: queryKeys.hostTraycerRateLimitUsage(
-            hostId,
-            traycerRefreshTarget.accountContext,
-          ),
-          exact: true,
-        });
-      }
+      traycerRefreshTarget.rateLimitAccountContexts.forEach(
+        (accountContext) => {
+          void queryClient.invalidateQueries({
+            queryKey: queryKeys.hostTraycerRateLimitUsage(
+              hostId,
+              accountContext,
+            ),
+            exact: true,
+          });
+        },
+      );
     }
     return Promise.resolve();
   };
@@ -844,13 +1283,13 @@ function SingleProfileRateLimitProviderBlock({
               // `isRefreshing` (from useProviderRateLimitRefresh) already folds
               // in the ephemeralProcess `draining` flag, so this button stays
               // disabled for a "Refresh all" round's full duration, not just
-              // this provider's own slice of it.
+              // this provider's own fetch.
               refreshing={isRefreshing}
             />
           ) : null}
         </div>
       </div>
-      <RateLimitProviderBody state={state} variant={variant} />
+      <RateLimitProviderBody state={state} variant={variant} profileId={null} />
     </div>
   );
 }
@@ -896,6 +1335,7 @@ function ProfileRateLimitProviderBlock({
       );
       return { method, params };
     }),
+    cacheKeyIdentity: undefined,
     options: queryOptions,
     mapResponse: mapResponseToProviderRateLimitEnvelope,
   });
@@ -907,12 +1347,14 @@ function ProfileRateLimitProviderBlock({
 
   const refresh = (): Promise<void> => {
     if (lane === "ephemeralProcess") {
-      targets.forEach((target) => {
-        void enqueueRateLimitFetch(providerId, DEFAULT_ACCOUNT_CONTEXT, {
-          force: true,
+      void enqueueRateLimitFetchBatch(
+        targets.map((target) => ({
+          providerId,
+          accountContext: DEFAULT_ACCOUNT_CONTEXT,
           profileId: target.profileId,
-        });
-      });
+        })),
+        { force: true },
+      );
       return Promise.resolve();
     }
     targets.forEach((target) => {
@@ -944,7 +1386,10 @@ function ProfileRateLimitProviderBlock({
           refresh={refresh}
           isRefreshing={isRefreshing}
         />
-        <RateLimitErrorMessage message="No logged-in profiles." />
+        <RateLimitErrorMessage
+          message="No logged-in profiles."
+          reportContext={null}
+        />
       </div>
     );
   }
@@ -1090,7 +1535,11 @@ function RateLimitProviderProfileRow({
           />
         </div>
       </div>
-      <RateLimitProviderBody state={state} variant={variant} />
+      <RateLimitProviderBody
+        state={state}
+        variant={variant}
+        profileId={profileId}
+      />
     </div>
   );
 }
@@ -1200,21 +1649,37 @@ function UpdatedAgoText({
 function RateLimitProviderBody({
   state,
   variant,
+  profileId,
 }: {
   readonly state: PopoverProviderRateLimitState;
   readonly variant: PopoverBlockVariant;
+  readonly profileId: string | null;
 }): ReactNode {
   switch (state.kind) {
     case "cold":
       return <RateLimitDetailSkeleton />;
     case "error":
       return (
-        <RateLimitErrorMessage message="Couldn't load usage limits right now." />
+        <RateLimitErrorMessage
+          message="Couldn't load usage limits right now."
+          reportContext={createReportIssueContext({
+            title: "Couldn't load usage limits",
+            message: null,
+            code: null,
+            source: "Usage limits",
+          })}
+        />
       );
     case "unavailable":
       return (
         <RateLimitErrorMessage
           message={`Usage limits unavailable - ${formatUnavailableReason(state.reason)}`}
+          reportContext={createReportIssueContext({
+            title: "Usage limits unavailable",
+            message: null,
+            code: null,
+            source: "Usage limits",
+          })}
         />
       );
     case "ready":
@@ -1222,7 +1687,15 @@ function RateLimitProviderBody({
       // than replacing it with an error (Core Flows).
       return (
         <div className={cn(state.degraded && "opacity-60")}>
-          <ProviderRateLimitDetail data={state.data} variant={variant} />
+          <ProviderRateLimitDetail
+            data={state.data}
+            variant={variant}
+            codexResetAction={resolveCodexResetCreditAction(
+              state.data.provider,
+              profileId,
+              variant === "popover-detail",
+            )}
+          />
         </div>
       );
   }
@@ -1235,12 +1708,11 @@ function RateLimitProviderBody({
  * NOT a `host.getRateLimitUsage` provider pull. Header mirrors the provider
  * blocks (name + plan/tier chip + "Updated Xm ago" + refresh) - the chip
  * (`subscriptionPlanLabel`) reflects whichever account is currently selected
- * and is single-provider-tab only, same scoping
- * `RateLimitProviderBlock` applies to its own plan chip; the detail variant
- * adds the same Personal/Team picker the Settings card uses, so switching
- * accounts here updates the global selection (and therefore Overview, the
- * Settings card, and what a Traycer run bills). Both variants render through
- * the shared `TraycerSubscriptionView`. `onReady` mirrors
+ * and is shown on each account card in the single-provider tab. The detail
+ * variant and Overview both render Personal/Team cards like the Codex and
+ * Claude profile cards; selecting a card updates the global account selection
+ * (and therefore Overview, the Settings card, and what a Traycer run bills).
+ * Both variants render through the shared `TraycerSubscriptionView`. `onReady` mirrors
  * `RateLimitProviderBlock`'s own - fires once `state.kind` moves past `cold`,
  * `null` on the single-provider detail tab.
  */
@@ -1265,42 +1737,27 @@ function TraycerRateLimitBlock({
   }, [state.kind, onReady]);
 
   const overview = variant === "popover-overview";
-  const rateLimitUsageFetching =
-    useIsFetching({
-      queryKey: queryKeys.hostTraycerRateLimitUsage(
-        hostId,
-        traycerSubscription.storedAccountContext,
-      ),
-      exact: true,
-    }) > 0;
+  const rateLimitUsageState = useTraycerRateLimitUsageState(
+    traycerSubscription.rateLimitAccountContexts,
+  );
   const isRefreshing =
-    traycerSubscription.query.isFetching ||
-    (traycerSubscription.rateLimitBased && rateLimitUsageFetching);
-  // Chip next to the name, single-provider tab only - same scoping
-  // `resolveProviderPlanLabel` uses for the host-RPC providers' plan chip.
-  // Reflects whichever account (personal/team) is currently selected, since
-  // `subscription` is already resolved against that selection.
-  const planLabel =
-    !overview && traycerSubscription.subscription !== null
-      ? subscriptionPlanLabel(
-          traycerSubscription.subscription.subscriptionStatus,
-        )
-      : null;
-
-  // Refetch the subscription, and - only for rate-limit-based plans, whose
-  // aperture bar is live host data - invalidate that exact query so the mounted
-  // `RateLimitView` refetches it too. `exact: true` targets only the aperture
-  // `{ accountContext }` key, never the providers' `{ accountContext, providerId }`
-  // pulls (which a Traycer refresh can't have changed).
+    traycerSubscription.query.isFetching || rateLimitUsageState.isFetching;
+  // Refetch the subscription and every rendered rate-limit account. Exact
+  // invalidation targets only aperture `{ accountContext }` keys, never provider
+  // `{ accountContext, providerId }` pulls.
   const refresh = async (): Promise<void> => {
-    await traycerSubscription.query.refetch();
-    if (traycerSubscription.rateLimitBased) {
+    const result = await traycerSubscription.query.refetch();
+    traycerSubscription.rateLimitAccountContexts.forEach((accountContext) => {
       void queryClient.invalidateQueries({
-        queryKey: queryKeys.hostTraycerRateLimitUsage(
-          hostId,
-          traycerSubscription.storedAccountContext,
-        ),
+        queryKey: queryKeys.hostTraycerRateLimitUsage(hostId, accountContext),
         exact: true,
+      });
+    });
+    // Observational only: the UI awaits exactly what it always did (the
+    // primary refetch; invalidations stay fire-and-forget background work).
+    if (result.status === "success") {
+      Analytics.getInstance().track(AnalyticsEvent.SubscriptionRefreshed, {
+        source: "direct_ui",
       });
     }
   };
@@ -1315,22 +1772,8 @@ function TraycerRateLimitBlock({
           <span className="text-ui-sm font-medium text-foreground">
             {providerDisplayName("traycer")}
           </span>
-          {planLabel !== null ? (
-            <Badge variant="secondary" className="font-normal">
-              {planLabel}
-            </Badge>
-          ) : null}
         </div>
         <div className="flex items-center gap-1.5">
-          <UsageLimitUpdatedLabel
-            ready={state.kind === "ready"}
-            updatedAt={traycerSubscription.query.dataUpdatedAt}
-            refreshing={isRefreshing}
-            degraded={state.kind === "ready" && state.degraded}
-            // The Traycer aperture block's state (`resolveTraycerSubscriptionState`)
-            // has no transient-reason concept of its own - always the generic note.
-            degradedReason={null}
-          />
           {/* Overview has its own "Refresh all" on the rail (item 2 feedback);
               only the single-provider detail tab keeps this one. */}
           {!overview ? (
@@ -1342,36 +1785,143 @@ function TraycerRateLimitBlock({
           ) : null}
         </div>
       </div>
-      {/* Detail tab only: the account picker, matching the Settings card. Renders
-          nothing when the user has no teams. Overview just reflects the global
-          selection with no controls, like every other Overview block. */}
-      {!overview ? (
-        <TraycerAccountSelect
-          teams={traycerSubscription.teams}
-          value={accountContextValue(
-            traycerSubscription.resolvedAccountContext,
-          )}
-          onValueChange={(value) =>
-            setAccountContext(parseAccountContextValue(value))
-          }
-        />
-      ) : null}
-      <TraycerRateLimitBody state={state} />
+      <TraycerAccountCards
+        state={state}
+        teams={traycerSubscription.teams}
+        personalSubscription={traycerSubscription.personalSubscription}
+        activeAccountContext={traycerSubscription.resolvedAccountContext}
+        updatedAt={traycerSubscription.query.dataUpdatedAt}
+        rateLimitUpdatedAtByAccount={rateLimitUsageState.updatedAtByAccount}
+        refreshing={isRefreshing}
+        onSelect={setAccountContext}
+      />
+    </div>
+  );
+}
+
+function TraycerAccountCards({
+  state,
+  teams,
+  personalSubscription,
+  activeAccountContext,
+  updatedAt,
+  rateLimitUpdatedAtByAccount,
+  refreshing,
+  onSelect,
+}: {
+  readonly state: TraycerSubscriptionState;
+  readonly teams: readonly TraycerTeamSubscription[];
+  readonly personalSubscription: TraycerSubscription | null;
+  readonly activeAccountContext: AccountContext;
+  readonly updatedAt: number;
+  readonly rateLimitUpdatedAtByAccount: ReadonlyMap<string, number>;
+  readonly refreshing: boolean;
+  readonly onSelect: (accountContext: AccountContext) => void;
+}): ReactNode {
+  if (state.kind !== "ready") {
+    return (
+      <TraycerRateLimitBody
+        state={state}
+        accountContext={activeAccountContext}
+      />
+    );
+  }
+
+  const accounts = [
+    {
+      key: accountContextValue(PERSONAL_ACCOUNT_CONTEXT),
+      label: "Personal",
+      accountContext: PERSONAL_ACCOUNT_CONTEXT,
+      subscription: personalSubscription,
+    },
+    ...teams.map((team) => ({
+      key: accountContextValue({ type: "TEAM", teamId: team.team.id }),
+      label: team.team.slug,
+      accountContext: { type: "TEAM" as const, teamId: team.team.id },
+      subscription: team,
+    })),
+  ];
+  return (
+    <div className="flex flex-col gap-2">
+      {accounts.map((account) => {
+        if (account.subscription === null) return null;
+        const active =
+          accountContextValue(activeAccountContext) === account.key;
+        return (
+          <button
+            key={account.key}
+            type="button"
+            onClick={() => onSelect(account.accountContext)}
+            aria-current={active ? "true" : undefined}
+            aria-label={`Use ${account.label} account`}
+            className={cn(
+              "flex w-full flex-col gap-2 rounded-lg border border-border/60 bg-background/40 p-2 text-left transition-colors hover:border-border hover:bg-accent/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+              active && "border-primary/60 bg-primary/5",
+            )}
+          >
+            <div className="min-w-0">
+              <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                <AccentDot
+                  profileId={account.key}
+                  accentColor={null}
+                  label={null}
+                  variant="inline"
+                  size="default"
+                  className={undefined}
+                />
+                <span className="min-w-0 truncate text-ui-sm font-medium text-foreground">
+                  {account.label}
+                </span>
+                <Badge variant="secondary" className="font-normal">
+                  {subscriptionPlanLabel(
+                    account.subscription.subscriptionStatus,
+                  )}
+                </Badge>
+                {active ? (
+                  <Badge variant="outline" className="font-normal">
+                    Active
+                  </Badge>
+                ) : null}
+              </div>
+              <ProfileUsageUpdatedLabel
+                updatedAt={
+                  rateLimitUpdatedAtByAccount.get(account.key) ?? updatedAt
+                }
+                refreshing={refreshing}
+              />
+            </div>
+            <TraycerSubscriptionView
+              subscription={account.subscription}
+              accountContext={account.accountContext}
+            />
+          </button>
+        );
+      })}
     </div>
   );
 }
 
 function TraycerRateLimitBody({
   state,
+  accountContext,
 }: {
   readonly state: TraycerSubscriptionState;
+  readonly accountContext: AccountContext;
 }): ReactNode {
   switch (state.kind) {
     case "cold":
       return <RateLimitDetailSkeleton />;
     case "error":
       return (
-        <RateLimitErrorMessage message="Couldn't load your Traycer subscription right now." />
+        <RateLimitErrorMessage
+          message="Couldn't load your Traycer subscription right now."
+          reportContext={createReportIssueContext({
+            title: "Couldn't load your Traycer subscription",
+            message: null,
+            code: null,
+            source: "Subscription",
+          })}
+        />
       );
     case "empty":
       return (
@@ -1382,7 +1932,10 @@ function TraycerRateLimitBody({
     case "ready":
       return (
         <div className={cn(state.degraded && "opacity-60")}>
-          <TraycerSubscriptionView subscription={state.subscription} />
+          <TraycerSubscriptionView
+            subscription={state.subscription}
+            accountContext={accountContext}
+          />
         </div>
       );
   }
@@ -1394,10 +1947,24 @@ function TraycerRateLimitBody({
 // for the same action.
 function RateLimitErrorMessage({
   message,
+  reportContext,
 }: {
   readonly message: string;
+  readonly reportContext: ReportIssueContext | null;
 }): ReactNode {
-  return <p className="text-ui-xs text-muted-foreground">{message}</p>;
+  if (reportContext === null) {
+    return <p className="text-ui-xs text-muted-foreground">{message}</p>;
+  }
+  return (
+    <div className="flex items-center gap-2 text-ui-xs text-muted-foreground">
+      <span>{message}</span>
+      <ReportIssueAction
+        context={reportContext}
+        presentation="link"
+        className="h-auto p-0 text-current"
+      />
+    </div>
+  );
 }
 
 /**
@@ -1446,7 +2013,7 @@ function RateLimitZeroState({
     openSettings({ section: "providers", resetToGeneral: false });
   };
   return (
-    <div className="flex flex-col items-start gap-3 p-4">
+    <div className="flex h-full flex-col items-start gap-3">
       <p className="text-ui-sm text-muted-foreground">
         Connect Claude Code or Codex to see usage here.
       </p>

@@ -28,8 +28,9 @@ export type RateLimitProviderId = RateLimitCapableProviderId;
  *   serial queue.
  * - `"ephemeralProcess"`: the host spawns a real CLI subprocess to read usage
  *   (codex, claude-code). Expensive; these are funnelled through a shared
- *   serial queue so an interval tick, a manual refresh, and a turn completion
- *   can never spawn overlapping subprocesses.
+ *   queue so background and single-profile triggers cannot overlap. The
+ *   deliberate exception is the popover's "Refresh all" queue item, which fans
+ *   out its configured profiles together before the next item begins.
  */
 export type RateLimitFetchLane = "httpFetch" | "ephemeralProcess";
 
@@ -46,7 +47,7 @@ export type RateLimitFetchLane = "httpFetch" | "ephemeralProcess";
  * rather than in the turn-completion hook, so the queue module, the query
  * options, and that hook can all read it without an import cycle.
  */
-export const PROVIDER_RATE_LIMITS_STALE_TIME_MS = 30_000;
+export const PROVIDER_RATE_LIMITS_STALE_TIME_MS = 5 * 60 * 1000;
 
 export function isRateLimitCapableProvider(
   providerId: ProviderId,

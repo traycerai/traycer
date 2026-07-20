@@ -6,7 +6,10 @@ export {
   cloudQueryKeys,
   isCloudEpicTasksQueryKey,
 } from "@/lib/query-keys/cloud-query-keys";
-export { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
+export {
+  hostQueryKeys,
+  isEpicTaskContextsQueryKey,
+} from "@/lib/query-keys/host-query-keys";
 export { uiQueryKeys } from "@/lib/query-keys/ui-query-keys";
 export { gitQueryKeys } from "@/lib/query-keys/git-query-keys";
 export { gitMutationKeys } from "@/lib/query-keys/git-mutation-keys";
@@ -41,6 +44,7 @@ export {
 } from "@/lib/query-keys/providers-native-query-keys";
 export { speechMutationKeys } from "@/lib/query-keys/speech-mutation-keys";
 export { notificationsMutationKeys } from "@/lib/query-keys/notifications-mutation-keys";
+export { notificationsQueryKeys } from "@/lib/query-keys/notifications-query-keys";
 
 export const queryKeys = {
   hostBase: hostQueryKeys.base,
@@ -49,6 +53,7 @@ export const queryKeys = {
   hostMethod: hostQueryKeys.method,
   hostResolveArtifactByPath: hostQueryKeys.resolveArtifactByPath,
   hostTraycerRateLimitUsage: hostQueryKeys.traycerRateLimitUsage,
+  hostEpicTaskContexts: hostQueryKeys.epicTaskContexts,
   cloudEpicTasks: cloudQueryKeys.epicTasks,
   workspaceEntries: uiQueryKeys.workspaceEntries,
   hostPicker: uiQueryKeys.hostPicker,

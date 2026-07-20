@@ -3,12 +3,15 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import type { ChatQueueState } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
+  pruneAcceptedActions,
   reconcileQueueChange,
   reconcileSnapshotChange,
+  sweepStalePendingActions,
   type ReconcileQueueInput,
   type ReconcileSnapshotInput,
 } from "@/stores/chats/chat-queue-reconciler";
 import type {
+  AcceptedChatAction,
   PendingChatAction,
   PendingUserMessage,
 } from "@/stores/chats/chat-session-store";
@@ -44,11 +47,30 @@ function createPendingAction(
   return {
     clientActionId,
     action,
+    interviewBlockId: null,
     messageId,
     restoreContent: isSendOrEdit ? CONTENT : null,
     sender: isSendOrEdit ? SENDER : null,
     settings: isSendOrEdit ? SETTINGS : null,
+    restoreWorktreeIntent: null,
+    restoreWorktreeStagingRevision: null,
     createdAt: 1000,
+    connectionEpoch: 0,
+  };
+}
+
+function createAcceptedAction(
+  clientActionId: string,
+  acceptedAt: number,
+  interviewBlockId: string | null,
+): AcceptedChatAction {
+  return {
+    clientActionId,
+    action: interviewBlockId === null ? "send" : "interviewAnswer",
+    interviewBlockId,
+    messageId: null,
+    acceptedAt,
+    restoreContent: null,
   };
 }
 
@@ -136,11 +158,15 @@ describe("chat-queue-reconciler", () => {
       const action2: PendingChatAction = {
         clientActionId: "action-2",
         action: "send",
+        interviewBlockId: null,
         messageId: "msg-2",
         restoreContent: CONTENT_2,
         sender: SENDER,
         settings: SETTINGS,
+        restoreWorktreeIntent: null,
+        restoreWorktreeStagingRevision: null,
         createdAt: 1000,
+        connectionEpoch: 0,
       };
       const user1 = createPendingUserMessage("action-1", "msg-1");
       const user2: PendingUserMessage = {
@@ -190,11 +216,15 @@ describe("chat-queue-reconciler", () => {
       const action2: PendingChatAction = {
         clientActionId: "action-2",
         action: "send",
+        interviewBlockId: null,
         messageId: "msg-2",
         restoreContent: CONTENT_2,
         sender: SENDER,
         settings: SETTINGS,
+        restoreWorktreeIntent: null,
+        restoreWorktreeStagingRevision: null,
         createdAt: 1000,
+        connectionEpoch: 0,
       };
       const action3 = createPendingAction("action-3", null, "stop");
       const input: ReconcileQueueInput = {
@@ -343,11 +373,15 @@ describe("chat-queue-reconciler", () => {
       const action2: PendingChatAction = {
         clientActionId: "action-2",
         action: "send",
+        interviewBlockId: null,
         messageId: "msg-2",
         restoreContent: CONTENT_2,
         sender: SENDER,
         settings: SETTINGS,
+        restoreWorktreeIntent: null,
+        restoreWorktreeStagingRevision: null,
         createdAt: 1000,
+        connectionEpoch: 0,
       };
       const confirmedMessage: Message = {
         role: "user",
@@ -424,11 +458,15 @@ describe("chat-queue-reconciler", () => {
       const pendingAction: PendingChatAction = {
         clientActionId: "action-1",
         action: "send",
+        interviewBlockId: null,
         messageId: "msg-1",
         restoreContent: null, // null restore content
         sender: SENDER,
         settings: SETTINGS,
+        restoreWorktreeIntent: null,
+        restoreWorktreeStagingRevision: null,
         createdAt: 1000,
+        connectionEpoch: 0,
       };
       const input: ReconcileSnapshotInput = {
         pendingActions: { "action-1": pendingAction },
@@ -526,6 +564,105 @@ describe("chat-queue-reconciler", () => {
       expect(Object.keys(result.acceptedActions).length).toBeLessThanOrEqual(
         70,
       );
+    });
+  });
+
+  describe("pruneAcceptedActions", () => {
+    it("drops a non-interview accepted action past the 5-minute retention window", () => {
+      const acceptedActions = {
+        "action-1": createAcceptedAction("action-1", 0, null),
+      };
+
+      const result = pruneAcceptedActions(acceptedActions, 350_000);
+
+      expect(result).not.toHaveProperty("action-1");
+    });
+
+    it("retains an accepted-but-unresolved interview action past the 5-minute retention window", () => {
+      const acceptedActions = {
+        "action-1": createAcceptedAction("action-1", 0, "block-1"),
+      };
+
+      const result = pruneAcceptedActions(acceptedActions, 350_000);
+
+      // A slow-to-resolve interview must stay gated until the host's
+      // interviewAnswered/interviewErrored frame clears it - the retention
+      // window must not silently un-gate a duplicate dispatch.
+      expect(result).toHaveProperty("action-1");
+    });
+
+    it("retains an accepted-but-unresolved interview action beyond the record cap", () => {
+      const acceptedActions: Record<string, AcceptedChatAction> = {
+        "interview-action": createAcceptedAction(
+          "interview-action",
+          0,
+          "block-1",
+        ),
+      };
+      // Fill past the 64-record cap with unrelated, non-interview traffic.
+      for (let i = 0; i < 70; i += 1) {
+        const id = `action-${i}`;
+        acceptedActions[id] = createAcceptedAction(id, i, null);
+      }
+
+      const result = pruneAcceptedActions(acceptedActions, 5000);
+
+      expect(result).toHaveProperty("interview-action");
+      expect(Object.keys(result).length).toBeLessThanOrEqual(65);
+    });
+  });
+
+  describe("sweepStalePendingActions", () => {
+    it("drops stale pendings from an older connection epoch, keeping sends", () => {
+      const staleStop: PendingChatAction = {
+        ...createPendingAction("action-stop", null, "stop"),
+        connectionEpoch: 0,
+      };
+      const currentStop: PendingChatAction = {
+        ...createPendingAction("action-stop-live", null, "stop"),
+        connectionEpoch: 1,
+      };
+      // A stale SEND is never swept - it reconciles by messageId with
+      // composer restoration instead.
+      const staleSend: PendingChatAction = {
+        ...createPendingAction("action-send", "msg-1", "send"),
+        connectionEpoch: 0,
+      };
+      // A stale EDIT has no restoration path (restoreContent is null and its
+      // fresh messageId never appears in the snapshot when the frame died
+      // with the connection), so it IS swept - otherwise it wedges the edit
+      // affordances forever.
+      const staleEdit: PendingChatAction = {
+        ...createPendingAction("action-edit", "msg-2", "editUserMessage"),
+        connectionEpoch: 0,
+      };
+      const result = sweepStalePendingActions(
+        {
+          "action-stop": staleStop,
+          "action-stop-live": currentStop,
+          "action-send": staleSend,
+          "action-edit": staleEdit,
+        },
+        1,
+      );
+
+      expect(Object.keys(result.pendingActions).sort()).toEqual([
+        "action-send",
+        "action-stop-live",
+      ]);
+      expect([...result.sweptActionIds].sort()).toEqual([
+        "action-edit",
+        "action-stop",
+      ]);
+    });
+
+    it("returns the same reference and an empty swept set when nothing is stale", () => {
+      const pendingActions = {
+        "action-1": createPendingAction("action-1", null, "stop"),
+      };
+      const result = sweepStalePendingActions(pendingActions, 0);
+      expect(result.pendingActions).toBe(pendingActions);
+      expect(result.sweptActionIds.size).toBe(0);
     });
   });
 });

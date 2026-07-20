@@ -3,8 +3,9 @@ import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ListTasksResponse,
-  TaskLight,
+  ListTaskLight,
 } from "@traycer/protocol/host/epic/unary-schemas";
+import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/worktree-schemas";
 import {
   DEFAULT_HISTORY_SEARCH,
   patchHistorySearch,
@@ -13,7 +14,7 @@ import type { HistorySearchState } from "@/lib/history-search";
 import { useHistoryQuery } from "@/hooks/home/use-history-query";
 
 const testState = vi.hoisted(() => {
-  const tasks: TaskLight[] = [];
+  const tasks: ListTaskLight[] = [];
   const response: ListTasksResponse = {
     tasks,
     hasMore: false,
@@ -23,6 +24,9 @@ const testState = vi.hoisted(() => {
     response,
     isFetching: false,
     isPlaceholderData: false,
+    hasNextPage: false,
+    worktreesByEpicId: new Map<string, readonly WorktreeHostEntryV12[]>(),
+    worktreeMetadataError: null as Error | null,
     refetch: vi.fn(),
     fetchNextPage: vi.fn(),
   };
@@ -42,8 +46,16 @@ vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
       refetch: testState.refetch,
     },
     fetchNextPage: testState.fetchNextPage,
-    hasNextPage: false,
+    hasNextPage: testState.hasNextPage,
     isFetchingNextPage: false,
+  }),
+}));
+
+vi.mock("@/hooks/worktree/use-task-worktree-metadata-query", () => ({
+  useTaskWorktreeMetadata: () => ({
+    worktreesByEpicId: testState.worktreesByEpicId,
+    isFetching: false,
+    error: testState.worktreeMetadataError,
   }),
 }));
 
@@ -59,6 +71,9 @@ describe("useHistoryQuery", () => {
     testState.response = { tasks: testState.tasks, hasMore: false };
     testState.isFetching = false;
     testState.isPlaceholderData = false;
+    testState.hasNextPage = false;
+    testState.worktreesByEpicId = new Map();
+    testState.worktreeMetadataError = null;
     testState.refetch.mockReset();
     testState.fetchNextPage.mockReset();
   });
@@ -133,6 +148,109 @@ describe("useHistoryQuery", () => {
     expect(screen.getByTestId("workspace-facets").textContent).toBe("");
     expect(screen.getByTestId("ownership-facets").textContent).toBe("");
   });
+
+  it.each(["84", "#84", "PR #84"])(
+    "locally matches a task by enriched PR query %s",
+    (query) => {
+      testState.worktreesByEpicId = new Map([
+        ["epic-beta", [worktreeWithPullRequest(84)]],
+      ]);
+
+      render(
+        <HistoryQueryHarness
+          search={patchHistorySearch(DEFAULT_HISTORY_SEARCH, {
+            query,
+          })}
+        />,
+      );
+
+      expect(screen.getByTestId("titles").textContent).toBe("Beta search flow");
+    },
+  );
+
+  it("keeps pagination available for a settled PR query", () => {
+    testState.hasNextPage = true;
+    testState.worktreesByEpicId = new Map([
+      ["epic-beta", [worktreeWithPullRequest(84)]],
+    ]);
+
+    render(
+      <HistoryQueryHarness
+        search={patchHistorySearch(DEFAULT_HISTORY_SEARCH, {
+          query: "#84",
+        })}
+      />,
+    );
+
+    expect(screen.getByTestId("has-next-page").textContent).toBe("true");
+  });
+
+  it("lifts an optimistically pinned row above unpinned rows in the settled server order", () => {
+    // An optimistic pin patch flips the cached row's bit in place, so the
+    // settled (non-projecting) path must partition pinned-first itself
+    // instead of trusting the raw cached order, which still reflects the
+    // pre-pin state.
+    testState.tasks = [
+      taskLight("epic-alpha", "Alpha workbench", "traycer/gui-app"),
+      {
+        ...taskLight("epic-beta", "Beta search flow", "traycer/server"),
+        pinned: true,
+      },
+    ];
+    testState.response = { tasks: testState.tasks, hasMore: false };
+
+    render(<HistoryQueryHarness search={DEFAULT_HISTORY_SEARCH} />);
+
+    expect(screen.getByTestId("titles").textContent).toBe(
+      "Beta search flow|Alpha workbench",
+    );
+  });
+
+  it("floats pinned rows above a higher-relevance unpinned match under relevance sort", () => {
+    // Relevance sort + a non-empty query is the only path that routes through
+    // prioritizePinnedHistoryItems (use-history-query.ts). That local
+    // projection only runs while the cloud query is unsettled, so mark it
+    // fetching. The unpinned row is the exact-title match, so Fuse ranks it
+    // first; the pin must still lift its (weaker-matching) row above it.
+    testState.isFetching = true;
+    testState.tasks = [
+      taskLight("epic-exact", "search", "traycer/gui-app"),
+      {
+        ...taskLight("epic-pinned", "Beta search flow", "traycer/server"),
+        pinned: true,
+      },
+    ];
+    testState.response = { tasks: testState.tasks, hasMore: false };
+
+    render(
+      <HistoryQueryHarness
+        search={patchHistorySearch(DEFAULT_HISTORY_SEARCH, {
+          query: "search",
+          sort: "relevance",
+        })}
+      />,
+    );
+
+    expect(screen.getByTestId("titles").textContent).toBe(
+      "Beta search flow|search",
+    );
+  });
+
+  it("surfaces a worktree metadata failure for a PR-number search", () => {
+    testState.worktreeMetadataError = new Error("Worktree metadata failed");
+
+    render(
+      <HistoryQueryHarness
+        search={patchHistorySearch(DEFAULT_HISTORY_SEARCH, {
+          query: "#84",
+        })}
+      />,
+    );
+
+    expect(screen.getByTestId("error").textContent).toBe(
+      "Worktree metadata failed",
+    );
+  });
 });
 
 function HistoryQueryHarness(props: {
@@ -143,6 +261,8 @@ function HistoryQueryHarness(props: {
     <div>
       <div data-testid="pending">{String(result.isPending)}</div>
       <div data-testid="fetching">{String(result.isFetching)}</div>
+      <div data-testid="error">{result.error?.message ?? ""}</div>
+      <div data-testid="has-next-page">{String(result.hasNextPage)}</div>
       <div data-testid="titles">
         {result.data?.items.map((item) => item.title).join("|") ?? ""}
       </div>
@@ -168,7 +288,7 @@ function HistoryQueryHarness(props: {
   );
 }
 
-function taskLight(id: string, title: string, repo: string): TaskLight {
+function taskLight(id: string, title: string, repo: string): ListTaskLight {
   const [owner, repoName] = repo.split("/");
   return {
     epic: {
@@ -201,5 +321,36 @@ function taskLight(id: string, title: string, repo: string): TaskLight {
       workspaces: [],
       roomInfo: null,
     },
+    pinned: false,
+  };
+}
+
+function worktreeWithPullRequest(prNumber: number): WorktreeHostEntryV12 {
+  return {
+    worktreePath: "/worktrees/task-history",
+    repoLabel: "traycer/gui-app",
+    repoIdentifier: { owner: "traycer", repo: "gui-app" },
+    branch: "task-history",
+    inUse: false,
+    uncommittedCount: 0,
+    gitRemovable: true,
+    scripts: null,
+    lastActivityAt: null,
+    owners: [
+      {
+        epicId: "epic-beta",
+        ownerKind: "chat",
+        ownerId: "chat-1",
+        updatedAt: 1,
+      },
+    ],
+    branchStatus: null,
+    createdAt: null,
+    prState: "open",
+    prNumber,
+    prUrl: `https://github.com/traycer/gui-app/pull/${prNumber}`,
+    mergedHeadShaMatches: false,
+    submodules: [],
+    atBaseCommit: false,
   };
 }

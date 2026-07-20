@@ -132,6 +132,11 @@ const canvasMock = vi.hoisted(() => {
     tabsById: {
       "tab-1": { tabId: "tab-1", epicId: "epic-1", name: "Resource Task" },
       "tab-2": { tabId: "tab-2", epicId: "epic-1", name: "Resource Task" },
+      "tab-closed": {
+        tabId: "tab-closed",
+        epicId: "epic-2",
+        name: "Background Task",
+      },
     },
     canvasByTabId: {
       "tab-1": {
@@ -176,6 +181,29 @@ const canvasMock = vi.hoisted(() => {
             titleSource: "manual",
             hostId: "host-1",
             cwd: "/work",
+          },
+        },
+        sizesByGroupId: {},
+      },
+      "tab-closed": {
+        root: {
+          kind: "pane",
+          id: "pane-closed",
+          tabInstanceIds: ["tile-term-closed"],
+          activeTabId: "tile-term-closed",
+          previewTabId: null,
+          activationHistory: ["tile-term-closed"],
+        },
+        activePaneId: "pane-closed",
+        tilesByInstanceId: {
+          "tile-term-closed": {
+            id: "term-closed",
+            instanceId: "tile-term-closed",
+            type: "terminal",
+            name: "Background Terminal",
+            titleSource: "manual",
+            hostId: "host-1",
+            cwd: "/work/background",
           },
         },
         sizesByGroupId: {},
@@ -415,6 +443,32 @@ afterEach(() => {
 });
 
 describe("ResourceMonitorPopover", () => {
+  it("defaults to tab order when the popover opens", () => {
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(projection({ owners: [owner({})] }));
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    const sortTrigger = screen.getByRole("button", {
+      name: "Sort resource rows",
+    });
+    expect(sortTrigger.textContent).toContain("Tab order");
+
+    fireEvent.pointerDown(sortTrigger, {
+      button: 0,
+      ctrlKey: false,
+      pointerType: "mouse",
+    });
+    expect(
+      screen
+        .getByRole("menuitemradio", { name: "Tab order" })
+        .getAttribute("aria-checked"),
+    ).toBe("true");
+  });
+
   it("uses the live chat title when the persisted owner name is untitled", async () => {
     liveArtifactTitleMock.title = "Generated chat title";
     canvasMock.state.artifactTreeByEpicId["epic-1"][0] = {
@@ -783,7 +837,6 @@ describe("ResourceMonitorPopover", () => {
     ).toBeNull();
     expect(screen.queryByText("/bin/sh")).toBeNull();
     expect(screen.queryByText("make")).toBeNull();
-    expect(screen.getByText("2 open terminals")).not.toBeNull();
     expect(screen.queryByText(/terminal processes/)).toBeNull();
 
     fireEvent.click(
@@ -963,6 +1016,59 @@ describe("ResourceMonitorPopover", () => {
     );
   });
 
+  it("reopens a closed task and focuses its preserved terminal", async () => {
+    routerMock.pathname = "/epics/epic-1/tab-1";
+    canvasMock.prepareSetActiveTileTabFocusTarget.mockReturnValue({
+      paneId: "pane-closed",
+      tileInstanceId: "tile-term-closed",
+    });
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [
+            owner({
+              owner: {
+                kind: "terminal",
+                hostId: "host-1",
+                epicId: "epic-2",
+                ownerId: "term-closed",
+              },
+              activeProcessName: "make",
+            }),
+          ],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.click(await screen.findByText("Background Terminal"));
+
+    expect(canvasMock.prepareSetActiveTileTabFocusTarget).toHaveBeenCalledWith(
+      "tab-closed",
+      "pane-closed",
+      "tile-term-closed",
+    );
+    expect(
+      tabNavigationMock.existingEpicTabIntentWithNestedFocus,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({
+        epicId: "epic-2",
+        tabId: "tab-closed",
+        nestedFocus: {
+          paneId: "pane-closed",
+          tileInstanceId: "tile-term-closed",
+        },
+      }),
+    );
+    expect(tabNavigationMock.navigateToTabIntent).toHaveBeenCalledWith(
+      routerMock.navigate,
+      expect.objectContaining({ tabId: "tab-closed" }),
+    );
+  });
+
   it("commits a not-yet-open owner through prepareOpenTileInTabFocusTarget + cross-route navigation", async () => {
     routerMock.pathname = "/epics/epic-1/tab-1";
     canvasMock.resolveTargetTabForEpic.mockReturnValue("tab-2");
@@ -1065,6 +1171,165 @@ describe("ResourceMonitorPopover", () => {
     );
   });
 
+  it("sorts sibling process rows by aggregated subtree usage", () => {
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [
+            owner({
+              processes: [
+                resourceProcess({
+                  pid: 100,
+                  rootPid: 100,
+                  name: "zsh",
+                  command: "/bin/zsh",
+                  cpuPercent: 0,
+                  rssBytes: 1 * 1024 * 1024,
+                }),
+                // Wire order puts the light sibling first; the heavy-subtree
+                // sibling must still bubble above it under the memory sort.
+                resourceProcess({
+                  pid: 101,
+                  parentPid: 100,
+                  rootPid: 100,
+                  name: "alpha",
+                  command: "alpha",
+                  cpuPercent: 8,
+                  rssBytes: 10 * 1024 * 1024,
+                }),
+                // Small on its own, but carries a heavy grandchild: subtree
+                // totals (21% / 205 MB) dominate alpha's (8% / 10 MB).
+                resourceProcess({
+                  pid: 102,
+                  parentPid: 100,
+                  rootPid: 100,
+                  name: "beta",
+                  command: "beta",
+                  cpuPercent: 1,
+                  rssBytes: 5 * 1024 * 1024,
+                }),
+                resourceProcess({
+                  pid: 103,
+                  parentPid: 102,
+                  rootPid: 100,
+                  name: "gamma",
+                  command: "gamma",
+                  cpuPercent: 20,
+                  rssBytes: 200 * 1024 * 1024,
+                }),
+              ],
+            }),
+          ],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Sort resource rows" }),
+      { button: 0, ctrlKey: false, pointerType: "mouse" },
+    );
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Memory" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Expand process tree" }),
+    );
+
+    const expectBefore = (firstText: string, secondText: string) => {
+      const first = screen.getByText(firstText);
+      const second = screen.getByText(secondText);
+      expect(
+        first.compareDocumentPosition(second) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).not.toBe(0);
+    };
+
+    // Memory sort: beta's 205 MB subtree outranks alpha's 10 MB.
+    expectBefore("beta (1 sub-process)", "alpha");
+
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Sort resource rows" }),
+      { button: 0, ctrlKey: false, pointerType: "mouse" },
+    );
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Name" }));
+    expectBefore("alpha", "beta (1 sub-process)");
+
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Sort resource rows" }),
+      { button: 0, ctrlKey: false, pointerType: "mouse" },
+    );
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Tab order" }));
+    // Tab order has no process meaning: fall back to the host's wire order.
+    expectBefore("alpha", "beta (1 sub-process)");
+  });
+
+  it("sorts the desktop process groups by the selected option", async () => {
+    const stub = installStubFactory();
+    Reflect.set(globalThis, "runnerHost", {
+      platform: {
+        diagnostics: {
+          getMetrics: vi.fn().mockResolvedValue({
+            appMetrics: [
+              {
+                pid: 10,
+                type: "Browser",
+                cpu: { percentCPUUsage: 0.5 },
+                memory: { workingSetSize: 100 * 1024 },
+              },
+              {
+                pid: 11,
+                type: "Tab",
+                cpu: { percentCPUUsage: 2 },
+                memory: { workingSetSize: 300 * 1024 },
+              },
+            ],
+          }),
+        },
+      },
+    });
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(projection({ app: app(), owners: [owner({})] }));
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    const renderer = await screen.findByText("Renderer");
+    const main = screen.getByText("Main");
+
+    // Tab order has no process-group meaning, so the fixed Main-first order is
+    // kept when the popover opens.
+    expect(
+      main.compareDocumentPosition(renderer) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
+
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Sort resource rows" }),
+      { button: 0, ctrlKey: false, pointerType: "mouse" },
+    );
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Memory" }));
+    expect(
+      screen
+        .getByText("Renderer")
+        .compareDocumentPosition(screen.getByText("Main")) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
+
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Sort resource rows" }),
+      { button: 0, ctrlKey: false, pointerType: "mouse" },
+    );
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Name" }));
+    expect(
+      screen
+        .getByText("Main")
+        .compareDocumentPosition(screen.getByText("Renderer")) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
+  });
+
   it("pins an expanded owner row beneath its sticky section header", () => {
     const stub = installStubFactory();
     render(
@@ -1142,7 +1407,6 @@ describe("ResourceMonitorPopover", () => {
     expect(screen.getByText("Terminal Alpha")).not.toBeNull();
     expect(screen.getByText("idle-shell")).not.toBeNull();
     expect(screen.queryByText("/usr/bin/idle-zsh")).toBeNull();
-    expect(screen.getByText("2 open terminals")).not.toBeNull();
     expect(screen.getAllByText("89%").length).toBeGreaterThan(0);
     expect(screen.getAllByText("1000 MB").length).toBeGreaterThan(0);
   });

@@ -194,6 +194,30 @@ export default tseslint.config(
 
   // ── Per-directory overrides ─────────────────────────────────────────────────
   {
+    // PostHog is reachable only through the typed adapter so every event and
+    // property passes its allowlist sanitizer before leaving the app. The
+    // adapter's own test is the one other legitimate consumer: it drives the
+    // real SDK through the sanitizer to prove the payload boundary.
+    files: ["src/**/*.{ts,tsx}"],
+    ignores: ["src/lib/analytics.ts", "src/lib/__tests__/analytics.test.ts"],
+    rules: {
+      "@typescript-eslint/no-restricted-imports": [
+        "error",
+        {
+          ...traycerClientsImportBoundaryRestrictions,
+          patterns: [
+            ...(traycerClientsImportBoundaryRestrictions.patterns ?? []),
+            {
+              group: ["posthog-js", "posthog-js/*"],
+              message:
+                "Import PostHog only through the typed adapter in @/lib/analytics.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     // shadcn/ui generated primitives follow library conventions that
     // intentionally diverge from app-code rules.
     files: ["src/components/ui/**/*.tsx"],
@@ -307,7 +331,12 @@ export default tseslint.config(
     // Registers a server-created terminal as a saved background tab without
     // activating it - prepareOpenTileInBackgroundTabFocusTarget always
     // returns a null focus delta, so this call never needs a route write.
-    files: ["src/hooks/chats/use-setup-terminal-tab-register-driver.ts"],
+    // Both the chat and terminal-agent tab-register drivers delegate their
+    // registration effect to this single shared hook, so the exemption lives
+    // here, at the one site that actually calls openTileInBackgroundTab.
+    files: [
+      "src/hooks/worktree/use-register-setup-terminal-tabs-from-binding.ts",
+    ],
     rules: {
       "no-restricted-syntax": [
         "error",

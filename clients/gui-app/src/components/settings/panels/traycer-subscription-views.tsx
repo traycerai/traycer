@@ -11,7 +11,7 @@
  * and credits"). Unlike `ProviderRateLimitDetail`, it is NOT
  * variant-parameterized: the Traycer body has no per-model / extra-window rows
  * to drop, so the Overview-vs-detail difference is purely the surrounding
- * chrome (the account picker, the "Manage subscription" link), which each
+ * chrome (account cards or picker, the "Manage subscription" link), which each
  * caller composes around this body. Each bucket (Plan/Bonus/Bundle/Artifacts)
  * renders through `CreditMeterRow`, the same shared `MeterRow` shell the
  * Codex/Claude windows use, so Traycer's own bars read identically
@@ -25,6 +25,7 @@
  */
 import type { ReactNode } from "react";
 import type { TraycerTeamSubscription } from "@traycer/protocol/auth";
+import type { AccountContext } from "@traycer/protocol/common/schemas";
 import {
   Select,
   SelectContent,
@@ -46,9 +47,10 @@ import {
   type TraycerSubscription,
 } from "@/lib/auth/traycer-subscription-content";
 import {
+  creditUsageSeverity,
   rateLimitWindowFillPercent,
-  rateLimitWindowSeverity,
   rateLimitWindowSeverityBarClassName,
+  type RateLimitWindowSeverity,
 } from "@/lib/rate-limits/window-severity";
 import { cn } from "@/lib/utils";
 
@@ -95,14 +97,19 @@ export function TraycerAccountSelect({
  */
 export function TraycerSubscriptionView({
   subscription,
+  accountContext,
 }: {
   readonly subscription: TraycerSubscription;
+  readonly accountContext: AccountContext;
 }): ReactNode {
   const status = subscription.subscriptionStatus;
   return isCreditBasedPricing(status) ? (
     <CreditBreakdownView breakdown={creditBreakdown(subscription)} />
   ) : (
-    <RateLimitView subscription={subscription} />
+    <RateLimitView
+      subscription={subscription}
+      accountContext={accountContext}
+    />
   );
 }
 
@@ -115,13 +122,15 @@ export function TraycerSubscriptionView({
 // its `useHostRateLimitUsageQuery` mount is the implicit tier-gate.
 function RateLimitView({
   subscription,
+  accountContext,
 }: {
   readonly subscription: TraycerSubscription;
+  readonly accountContext: AccountContext;
 }) {
-  const usageQuery = useHostRateLimitUsageQuery(null);
+  const usageQuery = useHostRateLimitUsageQuery(accountContext, null);
   // Keep the bar live: a Traycer turn finishing while this is on screen
   // re-fetches usage. Only mounted here, so it costs nothing elsewhere.
-  useRefreshRateLimitUsageOnTraycerTurn();
+  useRefreshRateLimitUsageOnTraycerTurn(accountContext);
 
   const recharge = formatRechargeRate(subscription.rechargeRateSeconds);
   const usage = usageQuery.data ?? null;
@@ -216,7 +225,9 @@ function CreditBreakdownView({
  * through: a header line (`label` left, a `detail` slot right - a reset line
  * plus percent for windows, a plain amount line for credit/uncapped-usage
  * buckets), then a bar spanning the row's *full* width on its own line below,
- * colored by the shared severity scale (`window-severity.ts`).
+ * colored by the caller-provided semantic tone (`window-severity.ts`). Provider
+ * windows use the canonical duration-aware classifier; credit/balance meters
+ * keep their separate, non-provider semantics.
  *
  * The bar is deliberately on its own line rather than beside the text (as it
  * used to be): sitting the label and bar on the same line made the bar's
@@ -230,8 +241,7 @@ function CreditBreakdownView({
  * in `provider-rate-limit-views.tsx`), Traycer's own bars (`CreditMeterRow`
  * below), and the uncapped OpenRouter/Claude-extra-usage bars from drifting
  * apart visually - each computes its own `usedPercent` and composes its own
- * `detail`, but all of them render through this one layout and one severity
- * scale.
+ * `detail` and semantic tone, but all of them render through this one layout.
  *
  * The track fills with `bg-foreground/15` rather than `bg-muted`, and carries
  * no border: several dark theme presets set `--muted` equal to `--popover`,
@@ -246,12 +256,13 @@ export function MeterRow({
   label,
   usedPercent,
   detail,
+  severity,
 }: {
   readonly label: string;
   readonly usedPercent: number;
   readonly detail: ReactNode;
+  readonly severity: RateLimitWindowSeverity;
 }): ReactNode {
-  const severity = rateLimitWindowSeverity(usedPercent);
   const fillPercent = rateLimitWindowFillPercent(usedPercent);
   return (
     <div className="flex flex-col gap-1.5">
@@ -294,6 +305,7 @@ function CreditMeterRow({
       label={label}
       usedPercent={usedPercent}
       detail={`${formatValue(consumed)} / ${formatValue(total)}`}
+      severity={creditUsageSeverity(usedPercent)}
     />
   );
 }

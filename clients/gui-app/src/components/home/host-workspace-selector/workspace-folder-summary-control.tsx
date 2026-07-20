@@ -1,14 +1,10 @@
 import { useRef, useState } from "react";
 import {
-  HoverCard,
-  HoverCardContent,
-  HoverCardTrigger,
-} from "@/components/ui/hover-card";
-import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { HoverPreviewCard } from "@/components/ui/hover-preview-card";
 import { preserveWhenNestedOverlay } from "./preserve-when-nested-overlay";
 import { useDialogOverlayBoundaryEl } from "@/providers/dialog-overlay-boundary-context";
 import {
@@ -43,7 +39,6 @@ export function WorkspaceFolderSummaryControl(props: {
   readonly updatePending: boolean;
   readonly onDiscardStaged: (() => void) | null;
   readonly onEditEnvironment: (workspacePath: string) => void;
-  readonly hoverPreviewEnabled: boolean;
   readonly popoverTestId: string;
   readonly popoverSide: "top" | "bottom";
 }) {
@@ -124,8 +119,15 @@ export function WorkspaceFolderSummaryControl(props: {
       className="justify-start overflow-hidden"
     />
   );
-  const popoverTrigger = props.hoverPreviewEnabled ? (
-    <HoverCard
+  // Controlled hover, gated on the click-open popover: a HoverCard is purely
+  // hover-driven and (unlike a Tooltip) does not dismiss when the trigger is
+  // clicked, so the preview must be forced closed while the picker is open.
+  const popoverTrigger = (
+    <HoverPreviewCard
+      content={<WorkspaceFolderHoverList items={props.items} />}
+      side={props.popoverSide}
+      sideOffset={4}
+      align="start"
       open={!overlayState.workspacePopoverOpen && overlayState.summaryHoverOpen}
       onOpenChange={(open) => {
         setOverlayState((current) => {
@@ -133,22 +135,9 @@ export function WorkspaceFolderSummaryControl(props: {
           return { ...current, summaryHoverOpen: open };
         });
       }}
-      openDelay={350}
-      closeDelay={120}
     >
-      <HoverCardTrigger asChild>
-        <PopoverTrigger asChild>{trigger}</PopoverTrigger>
-      </HoverCardTrigger>
-      <HoverCardContent
-        side={props.popoverSide}
-        align="start"
-        className="w-[min(92vw,24rem)] rounded-md bg-foreground p-0 text-ui-xs text-background"
-      >
-        <WorkspaceFolderHoverList items={props.items} />
-      </HoverCardContent>
-    </HoverCard>
-  ) : (
-    <PopoverTrigger asChild>{trigger}</PopoverTrigger>
+      <PopoverTrigger asChild>{trigger}</PopoverTrigger>
+    </HoverPreviewCard>
   );
 
   return (
@@ -171,8 +160,9 @@ export function WorkspaceFolderSummaryControl(props: {
         align="start"
         collisionPadding={12}
         container={dialogBoundaryEl ?? undefined}
-        className="w-fit max-w-[min(92vw,40rem)] max-h-[min(var(--radix-popover-content-available-height),32rem)] gap-0 overflow-y-auto p-3"
+        className="w-[min(92vw,42rem)] max-w-[var(--radix-popover-content-available-width)] max-h-[min(var(--radix-popover-content-available-height),32rem)] gap-0 overflow-y-auto p-3"
         data-testid={props.popoverTestId}
+        onOpenAutoFocus={(event) => event.preventDefault()}
         onInteractOutside={(event) =>
           preserveWhenNestedOverlay(event, contentRef.current)
         }

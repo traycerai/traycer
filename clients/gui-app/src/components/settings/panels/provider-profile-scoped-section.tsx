@@ -4,6 +4,7 @@ import {
   ChevronRight,
   Eye,
   EyeOff,
+  LogIn,
   Plus,
   RefreshCw,
   Settings2,
@@ -19,6 +20,8 @@ import {
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import {
   Dialog,
@@ -54,6 +57,20 @@ import {
 
 type ProviderId = ProviderCliState["providerId"];
 
+const TERMINAL_PROFILE_REMOVE_DISABLED_REASON =
+  "This profile uses your default CLI login and cannot be removed.";
+
+const PROFILE_REMOVE_PRESENTATION = {
+  ambient: {
+    ariaLabel: `Remove profile. ${TERMINAL_PROFILE_REMOVE_DISABLED_REASON}`,
+    disabledReason: TERMINAL_PROFILE_REMOVE_DISABLED_REASON,
+  },
+  managed: {
+    ariaLabel: "Remove profile",
+    disabledReason: null,
+  },
+} as const;
+
 // Stable module-level reference (not a fresh closure per render) - Settings
 // has no picker leader scope, so every row opts out of the shortcut hint.
 function noProfileShortcutHint(): ProfileDropdownShortcutHint | null {
@@ -74,6 +91,7 @@ interface ProviderProfileScopedSectionProps {
   readonly hostId: string | null;
   readonly isSelectedHostLocal: boolean;
   readonly canAddProfile: boolean;
+  readonly startInReauth: boolean;
   readonly failedAttempt: FailedProviderProfileAttempt | null;
   readonly onAddProfile: () => void;
   readonly onDismissFailedAttempt: () => void;
@@ -106,6 +124,7 @@ export function ProviderProfileScopedSection(
     hostId,
     isSelectedHostLocal,
     canAddProfile,
+    startInReauth,
     failedAttempt,
     onAddProfile,
     onDismissFailedAttempt,
@@ -116,8 +135,11 @@ export function ProviderProfileScopedSection(
   const [dismissedDriftKeys, setDismissedDriftKeys] = useState<
     readonly string[]
   >([]);
-  const [editProfileOpen, setEditProfileOpen] = useState(false);
+  const [editProfileOpen, setEditProfileOpen] = useState(startInReauth);
   const [editSessionId, setEditSessionId] = useState(0);
+  const [editIntent, setEditIntent] = useState<"manage" | "sign-in">(
+    startInReauth ? "sign-in" : "manage",
+  );
 
   if (profiles.length === 0) return null;
 
@@ -142,6 +164,13 @@ export function ProviderProfileScopedSection(
   };
 
   const openProfileEditor = (): void => {
+    setEditIntent("manage");
+    setEditSessionId((current) => current + 1);
+    setEditProfileOpen(true);
+  };
+
+  const openProfileSignIn = (): void => {
+    setEditIntent("sign-in");
     setEditSessionId((current) => current + 1);
     setEditProfileOpen(true);
   };
@@ -183,12 +212,30 @@ export function ProviderProfileScopedSection(
           shortcutHintForIndex={noProfileShortcutHint}
           contentContainer={null}
           onCloseAutoFocus={null}
+          usagePresentation={null}
         />
         <div className="flex flex-wrap items-center justify-end gap-2">
           <ProfileSummary
             key={selectedProfile.profileId}
             profile={selectedProfile}
           />
+          {selectedProfile.auth.status === "unauthenticated" ? (
+            <Button
+              type="button"
+              size="xs"
+              variant="secondary"
+              disabled={!canAddProfile}
+              title={
+                canAddProfile
+                  ? undefined
+                  : "Sign in requires a local host with browser sign-in available."
+              }
+              onClick={openProfileSignIn}
+            >
+              <LogIn data-icon="inline-start" />
+              Sign in
+            </Button>
+          ) : null}
           <TooltipWrapper
             label="Change the profile name and accent color, sign in again, or remove this profile."
             side="bottom"
@@ -235,6 +282,16 @@ export function ProviderProfileScopedSection(
               >
                 Dismiss
               </Button>
+              <ReportIssueAction
+                context={createReportIssueContext({
+                  title: "Provider sign-in failed",
+                  message: "Sign-in did not finish for a provider profile.",
+                  code: null,
+                  source: "Provider sign-in",
+                })}
+                presentation="icon"
+                className={undefined}
+              />
             </div>
           </div>
         ) : null}
@@ -265,6 +322,7 @@ export function ProviderProfileScopedSection(
         profile={selectedProfile}
         profiles={profiles}
         canOauth={canAddProfile}
+        startInReauth={editIntent === "sign-in"}
         open={editProfileOpen}
         onOpenChange={setEditProfileOpen}
         remainingProfilesAfterRemoval={orderedProfiles.filter(
@@ -398,11 +456,28 @@ function ProfileEditErrors({
   );
 }
 
+function profileEditDialogCopy(
+  profile: ProviderProfile,
+  startInReauth: boolean,
+) {
+  if (startInReauth) {
+    return {
+      title: `Sign in to ${profileDisplayLabel(profile)}`,
+      description: "Reconnect this profile without changing its name or color.",
+    };
+  }
+  return {
+    title: "Edit profile",
+    description: `Update how ${profileDisplayLabel(profile)} appears and which account it uses.`,
+  };
+}
+
 function ProfileEditDialog({
   state,
   profile,
   profiles,
   canOauth,
+  startInReauth,
   open,
   onOpenChange,
   remainingProfilesAfterRemoval,
@@ -412,6 +487,7 @@ function ProfileEditDialog({
   readonly profile: ProviderProfile;
   readonly profiles: readonly ProviderProfile[];
   readonly canOauth: boolean;
+  readonly startInReauth: boolean;
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
   /** The provider's other profiles, ordered - what stays once `profile` is
@@ -425,7 +501,7 @@ function ProfileEditDialog({
   const removeProfile = useRemoveProviderProfile();
   const renameProfile = useRenameProviderProfile();
   const recolorProfile = useRecolorProviderProfile();
-  const [switchingAccount, setSwitchingAccount] = useState(false);
+  const [switchingAccount, setSwitchingAccount] = useState(startInReauth);
   const [confirmRemoveOpen, setConfirmRemoveOpen] = useState(false);
   const [label, setLabel] = useState(profile.label);
   const [committedLabel, setCommittedLabel] = useState(profile.label);
@@ -438,6 +514,10 @@ function ProfileEditDialog({
   const changed =
     trimmedLabel !== committedLabel || accentColor !== committedAccentColor;
   const invalid = trimmedLabel.length === 0;
+  const removeProfilePresentation = PROFILE_REMOVE_PRESENTATION[profile.kind];
+  const removeProfileDisabledReason = removeProfilePresentation.disabledReason;
+  const isTerminalProfile = removeProfileDisabledReason !== null;
+  const dialogCopy = profileEditDialogCopy(profile, startInReauth);
 
   const commitProfile = (onSuccess: () => void): void => {
     if (savePending || invalid) return;
@@ -507,11 +587,10 @@ function ProfileEditDialog({
         >
           <DialogHeader className="gap-1.5 px-5 pt-5 pr-12 pb-4">
             <DialogTitle className="text-ui font-semibold leading-snug">
-              Edit profile
+              {dialogCopy.title}
             </DialogTitle>
             <DialogDescription className="text-ui-sm leading-relaxed text-muted-foreground">
-              Update how {profileDisplayLabel(profile)} appears and which
-              account it uses.
+              {dialogCopy.description}
             </DialogDescription>
           </DialogHeader>
 
@@ -577,21 +656,34 @@ function ProfileEditDialog({
             }
           >
             <div className="flex w-full flex-wrap items-center justify-between gap-2">
-              {profile.kind === "managed" ? (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  disabled={removeProfile.isPending || savePending}
-                  onClick={requestRemove}
-                  className="text-ui-sm text-destructive"
+              <TooltipWrapper
+                label={removeProfileDisabledReason}
+                side="top"
+                sideOffset={6}
+                align="start"
+              >
+                <span
+                  className="inline-flex"
+                  title={removeProfileDisabledReason ?? undefined}
                 >
-                  <Trash2 className="size-3.5" />
-                  Remove profile
-                </Button>
-              ) : (
-                <span />
-              )}
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    aria-label={removeProfilePresentation.ariaLabel}
+                    disabled={
+                      isTerminalProfile ||
+                      removeProfile.isPending ||
+                      savePending
+                    }
+                    onClick={requestRemove}
+                    className="text-ui-sm text-destructive"
+                  >
+                    <Trash2 className="size-3.5" />
+                    Remove profile
+                  </Button>
+                </span>
+              </TooltipWrapper>
               <div className="flex items-center gap-2">
                 <Button
                   type="button"

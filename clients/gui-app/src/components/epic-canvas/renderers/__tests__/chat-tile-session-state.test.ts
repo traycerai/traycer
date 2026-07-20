@@ -1,4 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { MouseEvent as ReactMouseEvent, ReactNode } from "react";
+import type { ExternalToast } from "sonner";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   ChatActiveTurn,
@@ -6,11 +8,60 @@ import type {
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ChatMessage } from "@/stores/composer/chat-store";
+import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
+
+const toastSuccess = vi.hoisted(() =>
+  vi.fn<(message: ReactNode, options: ExternalToast | undefined) => string>(
+    () => "success-toast",
+  ),
+);
+const toastWarning = vi.hoisted(() =>
+  vi.fn<(message: ReactNode, options: ExternalToast | undefined) => string>(
+    () => "warning-toast",
+  ),
+);
+const toastInfo = vi.hoisted(() =>
+  vi.fn<(message: ReactNode, options: ExternalToast | undefined) => string>(
+    () => "info-toast",
+  ),
+);
+
+vi.mock("sonner", () => ({
+  toast: {
+    success: toastSuccess,
+    warning: toastWarning,
+    info: toastInfo,
+  },
+}));
+
 import {
+  chatActivityIndicator,
   chatMessageEditingForInlineEdit,
   resolvedTurnStatus,
+  showRestoreResultToast,
   type InlineEditState,
 } from "../chat-tile-session-state";
+
+beforeEach(() => {
+  toastSuccess.mockClear();
+  toastWarning.mockClear();
+  toastInfo.mockClear();
+  useDesktopDialogStore.setState({
+    activeDialog: null,
+    reportIssueAvailable: false,
+    reportIssueContext: null,
+    reportIssueDraftId: 0,
+  });
+});
+
+afterEach(() => {
+  useDesktopDialogStore.setState({
+    activeDialog: null,
+    reportIssueAvailable: false,
+    reportIssueContext: null,
+    reportIssueDraftId: 0,
+  });
+});
 
 const CONTENT: JsonContent = {
   type: "doc",
@@ -42,6 +93,7 @@ const MESSAGE: ChatMessage = {
   settings: null,
   createdAt: 0,
   completedAt: null,
+  stopped: null,
   persistentMessageId: "persisted-message-1",
   senderLabel: null,
   assistantMeta: null,
@@ -89,6 +141,107 @@ describe("chatMessageEditingForInlineEdit", () => {
     expect(renderInlineEdit(true).canSubmit).toBe(true);
   });
 });
+
+describe("showRestoreResultToast", () => {
+  const FAILED_RESULT = {
+    filePath: "/Users/alice/private-project/secrets.txt",
+    status: "failed" as const,
+    operation: "edit" as const,
+    reason: "Restore rejected for token sk-secret-123",
+  };
+
+  it("keeps Show details primary and adds a privacy-safe secondary report action", () => {
+    useDesktopDialogStore.setState({ reportIssueAvailable: true });
+
+    showRestoreResultToast([FAILED_RESULT]);
+
+    const options = readWarningOptions();
+    expect(toastWarning.mock.lastCall?.[0]).toBe(
+      "0 restored, 0 skipped, 1 failed",
+    );
+    expectToastAction(options.action, "Show details");
+    expectToastAction(options.cancel, "Report issue");
+    clickToastAction(options.action, "Show details");
+    expect(toastInfo).toHaveBeenCalledWith("Restore details", {
+      description:
+        "failed: /Users/alice/private-project/secrets.txt (Restore rejected for token sk-secret-123)",
+    });
+
+    clickToastAction(options.cancel, "Report issue");
+    expect(useDesktopDialogStore.getState().reportIssueContext).toEqual({
+      title: "File restore incomplete",
+      message: null,
+      code: null,
+      source: "File restore",
+    });
+    expect(
+      JSON.stringify(useDesktopDialogStore.getState().reportIssueContext),
+    ).not.toMatch(/alice|private-project|secrets\.txt|sk-secret-123/);
+  });
+
+  it("keeps Show details but omits reporting when capability is unavailable", () => {
+    showRestoreResultToast([FAILED_RESULT]);
+
+    const options = readWarningOptions();
+    expect(toastWarning.mock.lastCall?.[0]).toBe(
+      "0 restored, 0 skipped, 1 failed",
+    );
+    expectToastAction(options.action, "Show details");
+    expect(options.cancel).toBeUndefined();
+  });
+
+  it("leaves skipped-only restore notifications on the success path", () => {
+    useDesktopDialogStore.setState({ reportIssueAvailable: true });
+
+    showRestoreResultToast([
+      {
+        filePath: "/Users/alice/private-project/unchanged.txt",
+        status: "skipped",
+        operation: "edit",
+        reason: "Already matches",
+      },
+    ]);
+
+    expect(toastWarning).not.toHaveBeenCalled();
+    expect(toastSuccess.mock.lastCall?.[0]).toBe(
+      "0 restored, 1 skipped, 0 failed",
+    );
+    const options = toastSuccess.mock.lastCall?.[1];
+    if (options === undefined) {
+      throw new Error("Expected success toast options.");
+    }
+    expectToastAction(options.action, "Show details");
+    expect(options).not.toHaveProperty("cancel");
+  });
+});
+
+function readWarningOptions(): ExternalToast {
+  const options = toastWarning.mock.lastCall?.[1];
+  if (options === undefined) {
+    throw new Error("Expected warning toast options.");
+  }
+  return options;
+}
+
+function clickToastAction(
+  action: ExternalToast["action"],
+  label: string,
+): void {
+  if (typeof action !== "object" || action === null || !("onClick" in action)) {
+    throw new Error(`Expected ${label} action.`);
+  }
+  action.onClick({} as ReactMouseEvent<HTMLButtonElement>);
+}
+
+function expectToastAction(
+  action: ExternalToast["action"],
+  label: string,
+): void {
+  if (typeof action !== "object" || action === null || !("label" in action)) {
+    throw new Error(`Expected ${label} action.`);
+  }
+  expect(action.label).toBe(label);
+}
 
 const ACTIVE_TURN: ChatActiveTurn = {
   turnId: "turn-1",
@@ -330,5 +483,109 @@ describe("resolvedTurnStatus - turnInProgress present (host-sent, exact)", () =>
         null,
       ),
     ).toBeNull();
+  });
+});
+
+describe("chatActivityIndicator", () => {
+  const MONITOR_ITEM = {
+    taskId: "t1",
+    kind: "monitor" as const,
+    title: "Monitor",
+    blockId: "t1",
+    parentTaskId: null,
+    scheduledFor: null,
+  };
+
+  it("reads null for an idle chat", () => {
+    expect(
+      chatActivityIndicator({
+        runStatus: "idle",
+        activeTurn: null,
+        queue: EMPTY_QUEUE,
+        backgroundItems: [],
+        turnInProgress: false,
+      }),
+    ).toBeNull();
+  });
+
+  it("reads turn while the host reports a genuine turn in progress", () => {
+    expect(
+      chatActivityIndicator({
+        runStatus: "running",
+        activeTurn: ACTIVE_TURN,
+        queue: EMPTY_QUEUE,
+        backgroundItems: [],
+        turnInProgress: true,
+      }),
+    ).toBe("turn");
+  });
+
+  it("reads background when only a Monitor/background task keeps the chat non-idle", () => {
+    expect(
+      chatActivityIndicator({
+        runStatus: "running",
+        activeTurn: null,
+        queue: EMPTY_QUEUE,
+        backgroundItems: [MONITOR_ITEM],
+        turnInProgress: false,
+      }),
+    ).toBe("background");
+  });
+
+  it("prioritizes the turn when a turn and background work run simultaneously", () => {
+    expect(
+      chatActivityIndicator({
+        runStatus: "running",
+        activeTurn: ACTIVE_TURN,
+        queue: EMPTY_QUEUE,
+        backgroundItems: [MONITOR_ITEM],
+        turnInProgress: true,
+      }),
+    ).toBe("turn");
+  });
+
+  it("reads turn (not background) while a runnable queue drains between turns", () => {
+    expect(
+      chatActivityIndicator({
+        runStatus: "running",
+        activeTurn: null,
+        queue: runnableQueue(1),
+        backgroundItems: [],
+        turnInProgress: false,
+      }),
+    ).toBe("turn");
+  });
+
+  it("keeps the stopping phase on the turn tier", () => {
+    expect(
+      chatActivityIndicator({
+        runStatus: "stopping",
+        activeTurn: ACTIVE_TURN,
+        queue: EMPTY_QUEUE,
+        backgroundItems: [],
+        turnInProgress: true,
+      }),
+    ).toBe("turn");
+  });
+
+  it("falls back to the older-host heuristic when turnInProgress is absent", () => {
+    expect(
+      chatActivityIndicator({
+        runStatus: "running",
+        activeTurn: null,
+        queue: EMPTY_QUEUE,
+        backgroundItems: [MONITOR_ITEM],
+        turnInProgress: undefined,
+      }),
+    ).toBe("background");
+    expect(
+      chatActivityIndicator({
+        runStatus: "running",
+        activeTurn: null,
+        queue: EMPTY_QUEUE,
+        backgroundItems: undefined,
+        turnInProgress: undefined,
+      }),
+    ).toBe("turn");
   });
 });

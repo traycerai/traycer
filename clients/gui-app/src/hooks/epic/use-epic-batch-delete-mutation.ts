@@ -12,7 +12,7 @@ import type {
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { hostQueryKeys, epicMutationKeys } from "@/lib/query-keys";
-import { WORKTREE_BINDING_INVALIDATIONS } from "@/hooks/worktree/invalidations";
+import { invalidateWorktreeListingAndBindingCaches } from "@/hooks/worktree/invalidations";
 import { useWorktreeDeleteStreamTransportFactory } from "@/lib/host/use-worktree-delete-stream-transport";
 import {
   runWorktreeCleanup,
@@ -33,6 +33,11 @@ import { pickNeighborAfterRemovingTabs } from "@/stores/tabs/neighbor";
 import { tabResolveIntent } from "@/stores/tabs/registry";
 import type { HeaderTab } from "@/stores/tabs/types";
 import { getHeaderTabs } from "@/stores/tabs/use-header-tabs";
+import {
+  reportableErrorToast,
+  reportableWarningToast,
+} from "@/lib/reportable-error-toast";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 interface BatchDeleteEpicMutationContext {
   readonly hostId: string | null;
@@ -109,6 +114,13 @@ export function useEpicBatchDelete(): UseMutationResult<
           result.success ? [result.taskId] : [],
         );
         const successes = data.results.length - failures.length;
+        if (variables.ids.length === 1 && successes === 1) {
+          Analytics.getInstance().track(AnalyticsEvent.TaskDeleted, {
+            source: "direct_ui",
+            cleanup_worktrees:
+              (variables.worktreeCleanup?.candidates.length ?? 0) > 0,
+          });
+        }
         const navigationTarget = pickNeighborAfterDeletingEpics(
           getHeaderTabs(),
           activePathname,
@@ -143,7 +155,7 @@ export function useEpicBatchDelete(): UseMutationResult<
           successes,
         );
         if (ctx.hostId === null || eligibleWorktreePaths.length === 0) {
-          emitToast(epicToast.level, epicToast.message);
+          emitEpicDeleteToast(epicToast.level, epicToast.message);
         } else {
           // The Task(s) are already deleted; stream the approved worktree
           // removals and report a single combined summary once they settle.
@@ -290,16 +302,29 @@ function epicDeleteToastParts(args: {
   };
 }
 
-function emitToast(level: EpicDeleteToastLevel, message: string): void {
+export function emitEpicDeleteToast(
+  level: EpicDeleteToastLevel,
+  message: string,
+): void {
   if (level === "success") {
     toast.success(message);
     return;
   }
   if (level === "warning") {
-    toast.warning(message);
+    reportableWarningToast(message, undefined, {
+      title: "Epic deletion incomplete",
+      message: null,
+      code: null,
+      source: "Epic deletion",
+    });
     return;
   }
-  toast.error(message);
+  reportableErrorToast(message, undefined, {
+    title: "Could not delete Epics",
+    message: null,
+    code: null,
+    source: "Epic deletion",
+  });
 }
 
 // A worktree is safe to remove only when EVERY owning Task actually succeeded -
@@ -346,32 +371,22 @@ function emitTaskDeleteSummaryToast(
     outcome.failed.length,
   );
   if (summary === null) {
-    emitToast(epicToast.level, epicToast.message);
+    emitEpicDeleteToast(epicToast.level, epicToast.message);
     return;
   }
   // A worktree that couldn't be removed downgrades the combined toast to a
   // warning even when every Task deleted cleanly.
   const level = outcome.failed.length > 0 ? "warning" : epicToast.level;
-  emitToast(level, `${epicToast.message} · ${summary}`);
+  emitEpicDeleteToast(level, `${epicToast.message} · ${summary}`);
 }
 
 // Refresh the host-wide worktree list plus the shared binding-backed caches
 // after the cleanup lands, so Settings ▸ Worktrees and the folder/worktree
-// pickers stop showing the removed worktrees. `refetchType: "all"` reaches the
-// often-unmounted pickers too. Mirrors the Settings delete flow's invalidation.
+// pickers stop showing the removed worktrees. Shares the Settings delete
+// flow's invalidation slice; see the helper for the refetchType rationale.
 function invalidateWorktreeCachesForHost(
   queryClient: QueryClient,
   hostId: string,
 ): void {
-  const refetchType = "all" as const;
-  void queryClient.invalidateQueries({
-    queryKey: hostQueryKeys.methodScope(hostId, "worktree.listAllForHost"),
-    refetchType,
-  });
-  for (const method of WORKTREE_BINDING_INVALIDATIONS) {
-    void queryClient.invalidateQueries({
-      queryKey: hostQueryKeys.methodScope(hostId, method),
-      refetchType,
-    });
-  }
+  invalidateWorktreeListingAndBindingCaches(queryClient, hostId);
 }

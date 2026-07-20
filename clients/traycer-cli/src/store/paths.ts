@@ -40,6 +40,10 @@ const HOST_STAGING_SUBDIR = "install-staging";
 const HOST_INSTALL_RECORD_FILENAME = "install.json";
 const CLI_LOG_FILENAME = "cli.log";
 const HOST_LOG_FILENAME = "host.log";
+// Single retained generation of the host log. One is enough: it exists so the
+// PREVIOUS session's trail survives a restart or a runtime purge, not to build
+// an archive (see `host-log-rotation.ts`).
+const HOST_LOG_BACKUP_FILENAME = "host.log.1";
 const HOST_PID_FILENAME = "pid.json";
 
 function environmentSubdir(base: string, environment: Environment): string {
@@ -127,6 +131,11 @@ export function hostPidMetadataPath(
 }
 export function hostLogPath(environment: Environment | undefined): string {
   return join(hostHomeDir(environment), HOST_LOG_FILENAME);
+}
+export function hostLogBackupPath(
+  environment: Environment | undefined,
+): string {
+  return join(hostHomeDir(environment), HOST_LOG_BACKUP_FILENAME);
 }
 export function bootstrapLogPath(environment: Environment | undefined): string {
   return hostLogPath(environment);

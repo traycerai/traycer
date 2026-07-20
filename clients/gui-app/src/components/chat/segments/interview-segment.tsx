@@ -11,9 +11,12 @@ import {
 } from "@/components/ui/collapsible";
 import { useChatMeasuredOpenChange } from "@/components/chat/chat-measured-item-change-context";
 import { answeredQuestionsSummaryFromCounts } from "@/components/chat/chat-activity-groups";
+import type { ChatMessageForkAction } from "@/components/chat/chat-message";
+import { InterviewForkActions } from "@/components/chat/segments/interview-fork-actions";
 import { cn } from "@/lib/utils";
 
 interface InterviewSegmentProps {
+  blockId: string;
   findUnitId: string | null;
   status: "streaming" | "completed" | "errored";
   toolName: string | null;
@@ -26,6 +29,7 @@ interface InterviewSegmentProps {
   // answered. Render as inline reference — open by default with
   // carried-from-the-original copy — rather than "Answered 0 of N".
   forkedWithoutAnswer: boolean;
+  forkAction: ChatMessageForkAction | null;
 }
 
 /**
@@ -34,8 +38,16 @@ interface InterviewSegmentProps {
  * the question doesn't appear twice.
  */
 export function InterviewSegment(props: InterviewSegmentProps) {
-  const { findUnitId, status, questions, answers, error, forkedWithoutAnswer } =
-    props;
+  const {
+    blockId,
+    findUnitId,
+    status,
+    questions,
+    answers,
+    error,
+    forkedWithoutAnswer,
+    forkAction,
+  } = props;
   const [open, setOpen] = useState(forkedWithoutAnswer);
   const measuredOpenChange = useChatMeasuredOpenChange(setOpen);
 
@@ -55,25 +67,35 @@ export function InterviewSegment(props: InterviewSegmentProps) {
       onOpenChange={measuredOpenChange}
       className="text-ui-sm text-muted-foreground"
     >
-      <CollapsibleTrigger
-        data-find-include="true"
-        data-chat-find-unit={findUnitId ?? undefined}
-        className={cn(
-          "group/interview flex max-w-full items-center gap-2 rounded-sm py-1 pr-1 text-left transition-colors",
-          "hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-          status === "errored" && "text-destructive/85 hover:text-destructive",
-        )}
-      >
-        <MessageSquareText
-          className="size-3.5 shrink-0 text-muted-foreground/75"
-          aria-hidden
-        />
-        <span className="min-w-0 truncate">{summary}</span>
-        <ChevronRight
-          className="size-3.5 shrink-0 text-muted-foreground/65 transition-transform group-data-[state=open]/interview:rotate-90"
-          aria-hidden
-        />
-      </CollapsibleTrigger>
+      <div className="flex max-w-full items-center gap-1">
+        <CollapsibleTrigger
+          data-find-include="true"
+          data-chat-find-unit={findUnitId ?? undefined}
+          className={cn(
+            "group/interview flex min-w-0 items-center gap-2 rounded-sm py-1 pr-1 text-left transition-colors",
+            "hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+            status === "errored" &&
+              "text-destructive/85 hover:text-destructive",
+          )}
+        >
+          <MessageSquareText
+            className="size-3.5 shrink-0 text-muted-foreground/75"
+            aria-hidden
+          />
+          <span className="min-w-0 truncate">{summary}</span>
+          <ChevronRight
+            className="size-3.5 shrink-0 text-muted-foreground/65 transition-transform group-data-[state=open]/interview:rotate-90"
+            aria-hidden
+          />
+        </CollapsibleTrigger>
+        {!forkedWithoutAnswer && forkAction !== null ? (
+          <InterviewForkActions
+            onFork={(mode) => forkAction.onFork(mode, blockId)}
+            disabled={!forkAction.enabled || forkAction.pending}
+            display="icons"
+          />
+        ) : null}
+      </div>
       <CollapsibleContent>
         <div className="mt-0.5 ml-5 border-l border-border/35 pl-3">
           <ResolvedInterviewView

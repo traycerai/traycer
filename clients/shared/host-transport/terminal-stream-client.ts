@@ -1,7 +1,9 @@
 import {
   terminalSubscribeServerFrameSchema,
+  terminalSubscribeServerFrameSchemaV14,
   type TerminalSubscribeClientFrame,
   type TerminalSubscribeServerFrame,
+  type TerminalSubscribeServerFrameV14,
 } from "@traycer/protocol/host/terminal/subscribe";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type {
@@ -24,36 +26,45 @@ import type { WsStreamClient } from "./ws-stream-client";
  * lets the store handle either encoding uniformly without knowing which
  * minor negotiated.
  */
+type TerminalSubscribeServerFrameOnWire =
+  TerminalSubscribeServerFrame | TerminalSubscribeServerFrameV14;
+
 export interface TerminalStreamCallbacks {
   readonly onSnapshot: (
     frame: Extract<
-      TerminalSubscribeServerFrame,
+      TerminalSubscribeServerFrameOnWire,
       { readonly kind: "snapshot" | "binarySnapshot" }
     >,
     scrollback: string | Uint8Array,
   ) => void;
   readonly onData: (
     frame: Extract<
-      TerminalSubscribeServerFrame,
+      TerminalSubscribeServerFrameOnWire,
       { readonly kind: "data" | "binaryData" }
     >,
     chunk: string | Uint8Array,
   ) => void;
   readonly onResized: (
-    frame: Extract<TerminalSubscribeServerFrame, { readonly kind: "resized" }>,
+    frame: Extract<
+      TerminalSubscribeServerFrameOnWire,
+      { readonly kind: "resized" }
+    >,
   ) => void;
   readonly onExit: (
-    frame: Extract<TerminalSubscribeServerFrame, { readonly kind: "exit" }>,
+    frame: Extract<
+      TerminalSubscribeServerFrameOnWire,
+      { readonly kind: "exit" }
+    >,
   ) => void;
   readonly onActionAck: (
     frame: Extract<
-      TerminalSubscribeServerFrame,
+      TerminalSubscribeServerFrameOnWire,
       { readonly kind: "actionAck" }
     >,
   ) => void;
   readonly onSessionUpdated: (
     frame: Extract<
-      TerminalSubscribeServerFrame,
+      TerminalSubscribeServerFrameOnWire,
       { readonly kind: "sessionUpdated" }
     >,
   ) => void;
@@ -79,10 +90,12 @@ export interface TerminalStreamClientOptions {
  */
 export class TerminalStreamClient {
   private readonly session: IStreamSession;
+  private readonly wsStreamClient: WsStreamClient<HostStreamRpcRegistry>;
   private readonly callbacks: TerminalStreamCallbacks;
   private closed: boolean;
 
   constructor(options: TerminalStreamClientOptions) {
+    this.wsStreamClient = options.wsStreamClient;
     this.callbacks = options.callbacks;
     this.closed = false;
     this.session = options.wsStreamClient.subscribe("terminal.subscribe", {
@@ -113,7 +126,12 @@ export class TerminalStreamClient {
     envelope: StreamFrameEnvelope,
     binaryPayload: Uint8Array | null,
   ): void {
-    const parsed = terminalSubscribeServerFrameSchema.safeParse(envelope);
+    const version =
+      this.wsStreamClient.getMethodSchemaVersion("terminal.subscribe");
+    const parsed =
+      version !== null && version.major === 1 && version.minor >= 4
+        ? terminalSubscribeServerFrameSchemaV14.safeParse(envelope)
+        : terminalSubscribeServerFrameSchema.safeParse(envelope);
     if (!parsed.success) {
       // Schema mismatch: a version-skewed host/client or a genuine wire bug.
       // Log the envelope kind and issue paths only - never `parsed.error` or
@@ -129,7 +147,7 @@ export class TerminalStreamClient {
       );
       return;
     }
-    const frame: TerminalSubscribeServerFrame = parsed.data;
+    const frame: TerminalSubscribeServerFrameOnWire = parsed.data;
     switch (frame.kind) {
       case "snapshot": {
         this.callbacks.onSnapshot(frame, frame.scrollback);

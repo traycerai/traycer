@@ -26,6 +26,7 @@ import {
 } from "@/hooks/epic/use-epic-node-mutations";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { RpcErrorCode } from "@traycer/protocol/framework/index";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 function makeError(code: RpcErrorCode): HostRpcError {
   return new HostRpcError({
@@ -83,11 +84,33 @@ describe("useEpicUpdateArtifactStatus", () => {
 
 describe("useEpicRenameArtifact", () => {
   it("shows fallback on error", () => {
-    renderHook(() => useEpicRenameArtifact());
+    renderHook(() => useEpicRenameArtifact(true));
     const opts = capturedOptions["epic.renameArtifact"] as {
       onError: (e: HostRpcError) => void;
     };
     opts.onError(makeError("RPC_ERROR"));
     expect(toast.error).toHaveBeenCalledWith("Couldn't rename artifact.");
+  });
+
+  it("tracks ArtifactRenamed on success when trackUserIntent is true", () => {
+    const track = vi.spyOn(Analytics.getInstance(), "track");
+    track.mockClear();
+    renderHook(() => useEpicRenameArtifact(true));
+    const opts = capturedOptions["epic.renameArtifact"] as {
+      onSuccess: () => void;
+    };
+    opts.onSuccess();
+    expect(track).toHaveBeenCalledWith(AnalyticsEvent.ArtifactRenamed, null);
+  });
+
+  it("does not track on success when trackUserIntent is false", () => {
+    const track = vi.spyOn(Analytics.getInstance(), "track");
+    track.mockClear();
+    renderHook(() => useEpicRenameArtifact(false));
+    const opts = capturedOptions["epic.renameArtifact"] as {
+      onSuccess: () => void;
+    };
+    opts.onSuccess();
+    expect(track).not.toHaveBeenCalled();
   });
 });

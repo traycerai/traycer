@@ -11,9 +11,12 @@ import { NodeViewWrapper, type NodeViewProps } from "@tiptap/react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 import { trustedMarkupToReactNodes } from "@/lib/trusted-markup";
 import { BlockErrorBoundary } from "../shared/block-error-boundary";
 import { MermaidBlockToolbar } from "./mermaid-block-toolbar";
+import { MermaidExpandButton } from "./mermaid-expand-button";
 import { MermaidFullscreenDialog } from "./mermaid-fullscreen-dialog";
 import {
   deriveMermaidAriaLabel,
@@ -208,15 +211,13 @@ export function MermaidNodeView(props: NodeViewProps) {
           onToggleEdit={handleToggleEdit}
           onCopyCode={handleCopy}
           onDownloadPng={downloadMermaidPng}
-          onOpenFullscreen={() => setFullscreenOpen(true)}
           downloadDisabled={render.status !== "ready" || isDownloading}
-          fullscreenDisabled={render.status !== "ready"}
         />
 
         <figure
           className="tc-node-mermaid__preview m-0"
-          role="img"
-          aria-label={ariaLabel}
+          role={render.status === "pending" ? "img" : undefined}
+          aria-label={render.status === "pending" ? ariaLabel : undefined}
         >
           {render.status === "pending" && (
             <div className="tc-node-block__skeleton" aria-hidden="true">
@@ -228,7 +229,12 @@ export function MermaidNodeView(props: NodeViewProps) {
             </div>
           )}
           {render.status === "ready" && (
-            <div className="tc-node-mermaid__svg">{renderedSvg}</div>
+            <MermaidExpandButton
+              ariaLabel={ariaLabel}
+              onExpand={() => setFullscreenOpen(true)}
+            >
+              {renderedSvg}
+            </MermaidExpandButton>
           )}
           {render.status === "error" && (
             <div className="tc-node-block__error" role="alert">
@@ -236,6 +242,16 @@ export function MermaidNodeView(props: NodeViewProps) {
                 Mermaid parse error
               </div>
               <div className="tc-node-block__error-detail">{render.error}</div>
+              <ReportIssueAction
+                context={createReportIssueContext({
+                  title: "Mermaid parse error",
+                  message: null,
+                  code: null,
+                  source: "Artifact editor",
+                })}
+                presentation="icon"
+                className={undefined}
+              />
             </div>
           )}
           {render.status === "idle" && rawCode.trim().length === 0 && (

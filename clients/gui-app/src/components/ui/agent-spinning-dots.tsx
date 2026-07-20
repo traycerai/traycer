@@ -307,11 +307,6 @@ const AGENT_SPINNER_PRESETS: AgentSpinnerPresets = {
     intervalMs: 80,
     widthCh: 1,
   },
-  bounce: {
-    frames: ["⠁", "⠂", "⠄", "⡀", "⠄", "⠂"],
-    intervalMs: 120,
-    widthCh: 1,
-  },
   dots_circle: {
     frames: ["⢎ ", "⠎⠁", "⠊⠑", "⠈⠱", " ⡱", "⢀⡰", "⢄⡠", "⢆⡀"],
     intervalMs: 80,
@@ -590,6 +585,13 @@ const AGENT_SPINNER_PRESETS: AgentSpinnerPresets = {
     intervalMs: 530,
     widthCh: 1,
   },
+  // Fixed six-dot braille cell: exactly the same 3 × 2 glyph geometry as the
+  // animated spinner, but with no frame cycling. Used for notification state.
+  static: {
+    frames: ["⠿"],
+    intervalMs: 0,
+    widthCh: 1,
+  },
 };
 
 export interface AgentSpinningDotsProps {
@@ -619,14 +621,13 @@ export function AgentSpinningDots(props: AgentSpinningDotsProps) {
     if (node === null) return;
     let frameIndex = 0;
     node.textContent = preset.frames[0];
+    if (preset.frames.length === 1) return;
     const intervalId = window.setInterval(() => {
       frameIndex = (frameIndex + 1) % preset.frames.length;
       node.textContent = preset.frames[frameIndex];
     }, preset.intervalMs);
 
-    return () => {
-      window.clearInterval(intervalId);
-    };
+    return () => window.clearInterval(intervalId);
   }, [preset.frames, preset.intervalMs]);
 
   return (
@@ -635,7 +636,11 @@ export function AgentSpinningDots(props: AgentSpinningDotsProps) {
       data-testid={props.testId}
       aria-hidden="true"
       className={cn(
-        "inline-flex h-3.5 min-w-3.5 shrink-0 items-center justify-center whitespace-pre font-mono text-code leading-none tabular-nums",
+        // `font-normal` is load-bearing on macOS: the mono stack has no braille
+        // coverage, and an inherited 500 (active tab / Button `font-medium`)
+        // makes Chromium's fallback pick the hollow-grid "Apple Braille
+        // Outline" faces instead of the filled-dot regular face.
+        "inline-flex h-3.5 min-w-3.5 shrink-0 items-center justify-center whitespace-pre font-mono text-code font-normal leading-none tabular-nums",
         props.className,
       )}
       style={{ width: `${preset.widthCh}ch` }}

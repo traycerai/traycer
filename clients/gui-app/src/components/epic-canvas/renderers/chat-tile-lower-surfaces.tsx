@@ -30,10 +30,7 @@ import { ComposerSlotApprovalQueue } from "@/components/chat/segments/composer-s
 import { ComposerSlotFileEditApprovalQueue } from "@/components/chat/segments/composer-slot-file-edit-approval-queue";
 import { ComposerReadonlyWorkspaceModeRow } from "@/components/home/composer/composer-workspace-mode-row";
 import { lowerScrollRegionMaxHeightClass } from "@/lib/chat/chat-lower-scroll-budget";
-import {
-  WORKSPACE_COMPOSER_READY,
-  type WorkspaceComposerAvailability,
-} from "@/lib/composer/workspace-composer-availability";
+import type { WorkspaceComposerAvailability } from "@/lib/composer/workspace-composer-availability";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
 import { cn } from "@/lib/utils";
 import type { PendingInterviewView } from "./chat-tile-types";
@@ -79,6 +76,10 @@ export interface ChatLowerTurnState {
 
 export interface ChatLowerInterviewState {
   readonly pending: PendingInterviewView | null;
+  // True while an answer/skip for the pending block is in flight or accepted
+  // but unresolved (derived from the chat session's pending/accepted actions).
+  // Gates the card so the same action cannot be double-sent.
+  readonly isBusy: boolean;
   readonly onAnswer: (
     blockId: string,
     answers: ReadonlyArray<InterviewAnswer>,
@@ -388,19 +389,7 @@ function ComposerSurface(props: {
 }): ReactNode {
   const { model, layout } = props;
   if (!model.runtime.snapshotLoaded) {
-    return (
-      <InertChatComposer
-        taskId={model.composer.nodeId}
-        isActive={model.composer.isActive}
-        mentionRoots={model.composer.mentionRoots}
-        fallbackToGlobalMentionRoots={
-          model.composer.fallbackToGlobalMentionRoots
-        }
-        currentEpicId={model.composer.currentEpicId}
-        workspaceControls={model.composer.workspaceControls}
-        topSpacing={layout.topSpacing}
-      />
-    );
+    return null;
   }
   if (model.access.isViewer) {
     return (
@@ -419,13 +408,15 @@ function ComposerSurface(props: {
     return (
       <ComposerSlotShell topSpacing={layout.topSpacing} bottomSpacing="normal">
         <PendingInterviewCard
-          key={model.interview.pending.blockId}
+          key={`${model.composer.nodeId}:${model.interview.pending.blockId}`}
+          chatId={model.composer.nodeId}
           blockId={model.interview.pending.blockId}
           toolName={model.interview.pending.toolName}
           title={model.interview.pending.title}
           description={model.interview.pending.description}
           questions={model.interview.pending.questions}
           isActive={model.composer.isActive}
+          isBusy={model.interview.isBusy}
           onSubmit={model.access.canAct ? model.interview.onAnswer : null}
           onSkip={model.access.canAct ? model.interview.onError : null}
           onFork={model.access.canAct ? model.interview.onFork : null}
@@ -497,41 +488,6 @@ function PendingApprovalQueues(props: {
         onDecision={props.onApprovalDecision}
       />
     </div>
-  );
-}
-
-export function InertChatComposer(props: {
-  readonly taskId: string;
-  readonly isActive: boolean;
-  readonly mentionRoots: ReadonlyArray<string>;
-  readonly fallbackToGlobalMentionRoots: boolean;
-  readonly currentEpicId: string;
-  readonly workspaceControls: ReactNode;
-  readonly topSpacing: ChatLowerSurfaceTopSpacing;
-}) {
-  return (
-    <ChatComposer
-      taskId={props.taskId}
-      isActive={props.isActive}
-      sendDisabled
-      mentionRoots={props.mentionRoots}
-      fallbackToGlobalMentionRoots={props.fallbackToGlobalMentionRoots}
-      currentEpicId={props.currentEpicId}
-      settingsSeed={null}
-      fallbackSettingsSeed={null}
-      onSubmitMessage={() => false}
-      onSettingsChange={null}
-      activeTurnStatus={null}
-      editingQueueItemId={null}
-      onCancelQueueEdit={null}
-      hasPendingApprovals={false}
-      stopDisabled
-      onStopTurn={null}
-      workspaceControls={props.workspaceControls}
-      workspaceAvailability={WORKSPACE_COMPOSER_READY}
-      topSpacing={props.topSpacing}
-      topSlot={null}
-    />
   );
 }
 

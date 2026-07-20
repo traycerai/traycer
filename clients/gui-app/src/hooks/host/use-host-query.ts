@@ -13,6 +13,8 @@ import {
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import {
   HostRpcError,
+  toHostRpcError,
+  withHostRpcErrorBoundary,
   type RequestOfMethod,
   type ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -127,17 +129,35 @@ export function useHostQueryWithResponseMap<
     ...(args.cacheKeyIdentity ?? []),
   ];
 
-  const request = async (): Promise<TData> => {
-    if (client === null) {
-      return Promise.reject<TData>(hostClientUnavailableError(method));
-    }
-    const response = await client.request(method, params);
-    return mapResponse({ response, queryClient, queryKey });
-  };
+  // The boundary makes the declared `HostRpcError` generic true by
+  // construction: it also normalizes throws from the caller-supplied
+  // `mapResponse`, which the transport's own error discipline can't cover.
+  const request = (): Promise<TData> =>
+    withHostRpcErrorBoundary(method, async () => {
+      if (client === null) {
+        return Promise.reject<TData>(hostClientUnavailableError(method));
+      }
+      const response = await client.request(method, params);
+      return mapResponse({ response, queryClient, queryKey });
+    });
 
+  const select = baseOptions.select;
   return useQuery<TData, HostRpcError, TData>(
     queryOptions<TData, HostRpcError, TData>({
       ...baseOptions,
+      // A throw inside a caller-supplied `select` is stored by the observer
+      // as `result.error` - the same `HostRpcError`-typed channel the queryFn
+      // boundary protects - so it must be normalized too.
+      select:
+        select === undefined
+          ? undefined
+          : (data) => {
+              try {
+                return select(data);
+              } catch (error) {
+                throw toHostRpcError(error, method);
+              }
+            },
       queryKey,
       queryFn: request,
       // A function-form `enabled` must still be evaluated per-query - not
@@ -200,15 +220,65 @@ export function useHostMutation<
     TVariables,
     TContext
   >({
-    ...baseOptions,
-    mutationFn: (variables) => {
-      if (args.client === null) {
-        return Promise.reject<ResponseOfMethod<Registry, Method>>(
-          hostClientUnavailableError(args.method),
+    ...withHostMutationLifecycleBoundary(args.method, baseOptions),
+    // Boundary-wrapped so a throw inside the caller-supplied `mapVariables`
+    // (pre-flight validation) surfaces as the declared `HostRpcError`.
+    mutationFn: (variables) =>
+      withHostRpcErrorBoundary(args.method, () => {
+        if (args.client === null) {
+          return Promise.reject<ResponseOfMethod<Registry, Method>>(
+            hostClientUnavailableError(args.method),
+          );
+        }
+        return args.client.request(args.method, args.mapVariables(variables));
+      }),
+  });
+}
+
+/**
+ * `useHostMutation` for long-poll methods whose response is contractually
+ * silent until a domain event fires (e.g. `providers.awaitLogin` blocks until
+ * the OAuth child terminates): the request runs with the caller's extended
+ * response-frame budget instead of the transport's default frame timeout,
+ * which would misread that silence as a dead host. Dial and handshake keep
+ * the transport defaults, so an unreachable host still fails fast.
+ */
+export function useHostMutationWithResponseTimeout<
+  Registry extends VersionedRpcRegistry,
+  Method extends keyof Registry & string,
+  TContext = unknown,
+  TVariables = RequestOfMethod<Registry, Method>,
+>(
+  args: UseHostMutationOptions<Registry, Method, TContext, TVariables> & {
+    readonly responseTimeoutMs: number;
+  },
+): UseMutationResult<
+  ResponseOfMethod<Registry, Method>,
+  HostRpcError,
+  TVariables,
+  TContext
+> {
+  const baseOptions = args.options ?? {};
+  return useMutation<
+    ResponseOfMethod<Registry, Method>,
+    HostRpcError,
+    TVariables,
+    TContext
+  >({
+    ...withHostMutationLifecycleBoundary(args.method, baseOptions),
+    mutationFn: (variables) =>
+      withHostRpcErrorBoundary(args.method, () => {
+        if (args.client === null) {
+          return Promise.reject<ResponseOfMethod<Registry, Method>>(
+            hostClientUnavailableError(args.method),
+          );
+        }
+        return args.client.requestWithResponseTimeout(
+          args.method,
+          args.mapVariables(variables),
+          args.responseTimeoutMs,
         );
-      }
-      return args.client.request(args.method, args.mapVariables(variables));
-    },
+      }),
   });
 }
 
@@ -220,4 +290,54 @@ export function hostClientUnavailableError(method: string): HostRpcError {
     message: "Host client unavailable",
     fatalDetails: null,
   });
+}
+
+/**
+ * Wraps a mutation's lifecycle callbacks (`onMutate` / `onSuccess` /
+ * `onSettled`) so a throw inside them is normalized to `HostRpcError`.
+ * TanStack stores a lifecycle throw in `mutation.state.error`, hands it to
+ * `onError`, and rejects `mutateAsync` with it - all surfaces the declared
+ * `HostRpcError` generic covers but the mutationFn boundary cannot reach.
+ * TanStack awaits every mutation lifecycle callback, so the async wrappers
+ * do not change observable ordering. Used by `useHostMutation` and by the
+ * bespoke `useMutation` producers that declare a `HostRpcError` generic.
+ */
+export function withHostMutationLifecycleBoundary<TData, TVariables, TContext>(
+  method: string,
+  options: UseMutationOptions<TData, HostRpcError, TVariables, TContext>,
+): UseMutationOptions<TData, HostRpcError, TVariables, TContext> {
+  const { onMutate, onSuccess, onSettled } = options;
+  return {
+    ...options,
+    onMutate:
+      onMutate === undefined
+        ? undefined
+        : async (...args) => {
+            try {
+              return await onMutate(...args);
+            } catch (error) {
+              throw toHostRpcError(error, method);
+            }
+          },
+    onSuccess:
+      onSuccess === undefined
+        ? undefined
+        : async (...args) => {
+            try {
+              return await onSuccess(...args);
+            } catch (error) {
+              throw toHostRpcError(error, method);
+            }
+          },
+    onSettled:
+      onSettled === undefined
+        ? undefined
+        : async (...args) => {
+            try {
+              return await onSettled(...args);
+            } catch (error) {
+              throw toHostRpcError(error, method);
+            }
+          },
+  };
 }

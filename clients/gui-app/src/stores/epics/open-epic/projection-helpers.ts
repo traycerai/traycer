@@ -155,12 +155,7 @@ export function readArtifactKind(map: Y.Map<unknown>): EpicArtifactKind | null {
 
 function readHarnessType(map: Y.Map<unknown>): TuiHarnessId | null {
   const value = map.get("harnessId");
-  if (
-    value === "claude" ||
-    value === "codex" ||
-    value === "opencode" ||
-    value === "cursor"
-  ) {
+  if (value === "claude" || value === "codex" || value === "opencode") {
     return value;
   }
   return null;
@@ -221,6 +216,7 @@ export function projectArtifact(
     id,
     kind,
     title: readMaybeString(entry, "title"),
+    folderName: readMaybeString(entry, "folderName"),
     parentId: readMaybeNullableString(entry, "parentId"),
     artifactRoomId:
       artifactRoomId !== null && artifactRoomId.length > 0
@@ -276,7 +272,11 @@ export function projectChat(id: string, entry: Y.Map<unknown>): ChatProjection {
  * compare undefined and produce spurious inequality.
  */
 function coerceChatRunSettings(raw: unknown): ChatRunSettings | null {
-  const parsed = chatRunSettingsSchema.safeParse(raw);
+  // The host persists settings as a nested Y.Map (`createTypedMap`), so the
+  // replicated entry must be serialized before schema validation - zod cannot
+  // read fields off a Y.Map and would reject every real record.
+  const value = raw instanceof Y.Map ? raw.toJSON() : raw;
+  const parsed = chatRunSettingsSchema.safeParse(value);
   return parsed.success ? parsed.data : null;
 }
 
@@ -290,14 +290,8 @@ export function projectTerminalAgent(
   if (typeof hostId !== "string") return null;
   const harnessSessionId = entry.get("harnessSessionId");
   // Claude/OpenCode require a non-null harness session id (allocated
-  // synchronously). Codex tolerates null until `thread/started` back-fills;
-  // Cursor tolerates null when `create-chat` minting failed (re-mints on the
-  // next launch) rather than persisting a bogus id.
-  if (
-    typeof harnessSessionId !== "string" &&
-    harnessId !== "codex" &&
-    harnessId !== "cursor"
-  ) {
+  // synchronously). Codex tolerates null until `thread/started` back-fills.
+  if (typeof harnessSessionId !== "string" && harnessId !== "codex") {
     return null;
   }
   const model = entry.get("model");
@@ -360,6 +354,7 @@ export function artifactProjectionsEq(
     a.id === b.id &&
     a.kind === b.kind &&
     a.title === b.title &&
+    a.folderName === b.folderName &&
     a.parentId === b.parentId &&
     a.artifactRoomId === b.artifactRoomId &&
     a.createdAt === b.createdAt &&

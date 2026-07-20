@@ -8,6 +8,7 @@ import {
   DialogDescription,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 export interface RestartUpdateDialogProps {
   readonly open: boolean;
@@ -41,6 +42,9 @@ export function RestartUpdateDialog(props: RestartUpdateDialogProps) {
   function handleConfirm(): void {
     if (actionHandled) return;
     setActionState({ open, actionHandled: true });
+    Analytics.getInstance().track(AnalyticsEvent.UpdateRestartRequested, {
+      source: "direct_ui",
+    });
     onConfirm();
   }
 

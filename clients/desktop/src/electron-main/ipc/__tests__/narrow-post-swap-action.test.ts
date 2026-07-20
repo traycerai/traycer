@@ -56,6 +56,15 @@ describe("narrowPostSwapAction", () => {
     expect(warnMock).not.toHaveBeenCalled();
   });
 
+  it("returns 'none' for an explicit \"none\" without warning - routine for externally-managed labels, not version skew", async () => {
+    const { log } = await import("../../app/logger");
+    const warnMock = vi.mocked(log.warn);
+    warnMock.mockClear();
+    const { narrowPostSwapAction } = await import("../host-management-ipc");
+    expect(narrowPostSwapAction("none")).toBe("none");
+    expect(warnMock).not.toHaveBeenCalled();
+  });
+
   it("collapses unknown string to 'none' and emits a warn (surfaces CLI/desktop drift)", async () => {
     const { log } = await import("../../app/logger");
     const warnMock = vi.mocked(log.warn);

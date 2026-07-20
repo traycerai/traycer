@@ -38,6 +38,7 @@ import {
   type QueuedInvite,
 } from "@/lib/epic-invites";
 import { toast } from "sonner";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
 const EMPTY_DIRECT_USERS: ReadonlyArray<EpicCollaboratorView> = [];
 const EMPTY_TEAMS: ReadonlyArray<EpicTeamCollaboratorView> = [];
@@ -201,8 +202,15 @@ export function useEpicSharingPanelController(
     });
 
     if (result.failedInvites.length > 0) {
-      toast.error(
+      reportableErrorToast(
         `Couldn't invite ${result.failedInvites.map(formatInviteLabel).join(", ")}`,
+        undefined,
+        {
+          title: "Could not invite collaborators",
+          message: null,
+          code: null,
+          source: "Epic sharing",
+        },
       );
     }
   };

@@ -60,7 +60,10 @@ import {
   type AmbientDriftSendNotice,
 } from "./use-ambient-drift-gate";
 import { useComposerPickerItems } from "./picker/use-composer-picker-items";
-import { commitSelection } from "@/stores/composer/commit-selection";
+import { commitProfileSelection } from "@/stores/composer/commit-selection";
+import { useTaskProfileRateLimitSwitch } from "./use-task-profile-rate-limit-switch";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import { useEpicAttachmentBytesPresence } from "@/lib/attachments/use-attachment-blob-src";
 
 interface ChatComposerProps {
   readonly taskId: string;
@@ -146,6 +149,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
   const workspaceBlocked = !workspaceComposerCanStart(workspaceAvailability);
 
   const editorRef = useRef<ComposerPromptEditorHandle | null>(null);
+  const hasPastedImageBytes = useEpicAttachmentBytesPresence();
   // Counts editor-ready transitions (a counter, not a boolean, so a torn-down
   // and re-created editor re-fires). The draft-reset bridge keys its
   // handle-ready catch-up on this - a ref flip alone never re-renders us.
@@ -214,7 +218,6 @@ function ChatComposerImpl(props: ChatComposerProps) {
   );
   const harnessId = useStore(toolbarStore, (s) => s.selection.harnessId);
   const profileId = useStore(toolbarStore, (s) => s.selection.profileId);
-  const modelSlug = useStore(toolbarStore, (s) => s.selection.modelSlug);
   // Connection-level auth gate for the selected provider, scoped to the tab's
   // host. When the provider CLI is signed out it blocks send and mounts the
   // re-auth banner above the composer; a doomed turn can't start.
@@ -225,11 +228,14 @@ function ChatComposerImpl(props: ChatComposerProps) {
     seedSource.kind,
   );
   const sendBlocked = sendDisabled === true || reauthGate.signedOut;
+  const selectedModel = useStore(toolbarStore, (s) => s.selectedModel);
   // Rate-limit switch prompt: purely informational + user-confirmed, so it
-  // never blocks send the way the reauth gate does.
+  // never blocks send the way the reauth gate does. Scoped to the selected
+  // model - a limit gating only another model family stays silent here.
   const rateLimitPrompt = useProfileRateLimitSwitchPrompt(
     harnessId,
     profileId,
+    selectedModel,
     isActive,
   );
   // Keeps the switch prompt's own `providers.list` read converging with a
@@ -239,11 +245,22 @@ function ChatComposerImpl(props: ChatComposerProps) {
   useRefreshProvidersListOnTurn(harnessId, tabHostId);
   const onSwitchProfile = useCallback(
     (nextProfileId: string | null) => {
-      commitSelection(toolbarStore, harnessId, modelSlug, nextProfileId);
+      commitProfileSelection(toolbarStore, nextProfileId);
     },
-    [toolbarStore, harnessId, modelSlug],
+    [toolbarStore],
   );
-  const selectedModel = useStore(toolbarStore, (s) => s.selectedModel);
+  // Task-wide extension of the rate-limit switch: sibling chats of this task
+  // pinned to the same limited profile, and the action moving them together.
+  const taskProfileSwitch = useTaskProfileRateLimitSwitch({
+    enabled:
+      rateLimitPrompt.kind === "visible" &&
+      rateLimitPrompt.primaryTarget !== null,
+    harnessId,
+    profileId,
+    selectedModel,
+    epicId: currentEpicId,
+    chatId: taskId,
+  });
   const imagesUnsupported = imageAttachmentsUnsupported(
     draftHasImages,
     selectedModel,
@@ -259,6 +276,18 @@ function ChatComposerImpl(props: ChatComposerProps) {
     isActive,
   });
 
+  const {
+    onPaste,
+    onDrop,
+    onDragOver,
+    onDragEnter,
+    onDragLeave,
+    attachImageFiles,
+    isDraggingFiles,
+    isIngestingImages,
+  } = useComposerPaste(editorRef);
+  const attachmentPending = isIngestingImages;
+
   const submitDraft = useChatComposerSubmit({
     taskId,
     editorRef,
@@ -269,6 +298,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     sendDisabled: sendBlocked,
     workspaceBlocked,
     imagesUnsupported,
+    attachmentPreparationPending: attachmentPending,
     onSubmitMessage,
   });
   const ambientDrift = useAmbientDriftGate(
@@ -283,26 +313,21 @@ function ChatComposerImpl(props: ChatComposerProps) {
   const topBannerKind = resolveComposerTopBannerKind({
     reauthVisible: reauthBanner !== null,
     ambientDriftVisible: ambientDrift.pendingNotice !== null,
-    rateLimitVisible: !reauthGate.signedOut && rateLimitPrompt.limited,
+    rateLimitVisible:
+      !reauthGate.signedOut && rateLimitPrompt.kind === "visible",
   });
   const continueAfterAmbientDrift = (): void => {
     ambientDrift.acknowledge(() => {
-      if (rateLimitPrompt.limited) return;
+      if (rateLimitPrompt.kind === "visible") return;
       submitDraft();
     });
   };
 
-  const {
-    onPaste,
-    onDrop,
-    onDragOver,
-    onDragEnter,
-    onDragLeave,
-    attachImageFiles,
-    isDraggingFiles,
-  } = useComposerPaste(editorRef);
-
   const removeImage = useCallback((id: string) => {
+    Analytics.getInstance().track(AnalyticsEvent.AttachmentRemoved, {
+      kind: "image",
+      surface: "chat",
+    });
     editorRef.current?.removeImageAttachmentById(id);
   }, []);
 
@@ -316,6 +341,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     sendDisabled: sendBlocked,
     workspaceBlocked,
     imagesUnsupported,
+    attachmentPreparationPending: attachmentPending,
     draftHasText,
     draftHasImages,
   });
@@ -326,14 +352,26 @@ function ChatComposerImpl(props: ChatComposerProps) {
         <ChatComposerBannerPortal>
           <div className="bg-canvas px-4 pt-4">
             <div className="mx-auto w-full max-w-3xl">
-              <ProfileRateLimitSwitchBanner
-                harnessId={harnessId}
-                hardLimited={rateLimitPrompt.hardLimited}
-                current={rateLimitPrompt.current}
-                alternatives={rateLimitPrompt.alternatives}
-                onSwitchProfile={onSwitchProfile}
-                onDismiss={rateLimitPrompt.dismiss}
-              />
+              {rateLimitPrompt.kind === "visible" ? (
+                <ProfileRateLimitSwitchBanner
+                  key={rateLimitPrompt.warningKey}
+                  harnessId={harnessId}
+                  providerId={rateLimitPrompt.providerId}
+                  severity={rateLimitPrompt.severity}
+                  limitedFamilies={rateLimitPrompt.limitedFamilies}
+                  current={rateLimitPrompt.current}
+                  profiles={rateLimitPrompt.profiles}
+                  destinations={rateLimitPrompt.destinations}
+                  primaryTarget={rateLimitPrompt.primaryTarget}
+                  runTargetHostId={tabHostId}
+                  onSwitchProfile={onSwitchProfile}
+                  affectedChatCount={taskProfileSwitch.affectedChatCount}
+                  onSwitchProfileForTask={
+                    taskProfileSwitch.switchOtherTaskChats
+                  }
+                  onDismiss={rateLimitPrompt.dismiss}
+                />
+              ) : null}
             </div>
           </div>
         </ChatComposerBannerPortal>
@@ -350,6 +388,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
               providerId={reauthBanner.providerId}
               state={reauthGate.state}
               reason={reauthBanner.reason}
+              profileId={reauthGate.profileId}
               profileLabel={reauthGate.profileLabel}
               onContinueOnAmbient={
                 reauthBanner.reason === "provider_unauthenticated"
@@ -390,6 +429,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
                   initialContent={initialContent}
                   initialSelection={initialSelection}
                   slashProviderId={harnessId}
+                  hasPastedImageBytes={hasPastedImageBytes}
                   isActive={isActive}
                   onSnapshot={handleSnapshot}
                   onSubmit={handleSubmitDraft}
@@ -404,6 +444,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
                   store={toolbarStore}
                   onAttachImages={attachImageFiles}
                   canSubmit={canSubmit}
+                  attachmentPending={attachmentPending}
                   onSubmit={handleSubmitDraft}
                   activeTurnStatus={activeTurnStatus}
                   hasPendingApprovals={hasPendingApprovals}
@@ -414,6 +455,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
                   dictationPreparing={dictationPreparing}
                   settingsLocked={false}
                   createProfileHostId={tabHostId}
+                  runTargetHostId={tabHostId}
                 />
               }
             />
@@ -515,6 +557,7 @@ interface CanSubmitDraftArgs {
   readonly sendDisabled: boolean | undefined;
   readonly workspaceBlocked: boolean;
   readonly imagesUnsupported: boolean;
+  readonly attachmentPreparationPending: boolean;
   readonly draftHasText: boolean;
   readonly draftHasImages: boolean;
 }
@@ -526,6 +569,7 @@ function canSubmitDraft(args: CanSubmitDraftArgs): boolean {
     !args.sendDisabled &&
     !args.workspaceBlocked &&
     !args.imagesUnsupported &&
+    !args.attachmentPreparationPending &&
     (args.draftHasText || args.draftHasImages)
   );
 }

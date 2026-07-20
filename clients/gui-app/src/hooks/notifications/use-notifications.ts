@@ -1,10 +1,16 @@
 import { useCallback, useEffect } from "react";
 import { useRunnerHost } from "@/providers/use-runner-host";
 
+export interface NotificationShowRequest {
+  readonly title: string;
+  readonly body: string;
+  readonly payload: unknown;
+  readonly replaceKey: string | null;
+  readonly deliveryKey: string | null;
+}
+
 export type NotificationShow = (
-  title: string,
-  body: string,
-  payload: unknown,
+  request: NotificationShowRequest,
 ) => Promise<void>;
 
 /**
@@ -14,8 +20,14 @@ export type NotificationShow = (
 export function useNotificationShow(): NotificationShow {
   const runnerHost = useRunnerHost();
   return useCallback<NotificationShow>(
-    async (title, body, payload) => {
-      await runnerHost.notifications.show(title, body, payload);
+    async ({ title, body, payload, replaceKey, deliveryKey }) => {
+      await runnerHost.notifications.show(
+        title,
+        body,
+        payload,
+        replaceKey,
+        deliveryKey,
+      );
     },
     [runnerHost],
   );

@@ -87,6 +87,7 @@ const NODES: ReadonlyArray<EpicCanvasTileRef> = [
     id: "git-1",
     instanceId: "git-inst",
     type: "git-diff",
+    repositoryContext: null,
     diff: {
       kind: "file",
       runningDir: "/repo",

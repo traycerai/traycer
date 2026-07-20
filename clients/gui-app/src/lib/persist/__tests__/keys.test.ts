@@ -1,14 +1,23 @@
 import { describe, expect, it } from "vitest";
 import {
   PERSIST_STORES,
+  appLocalNotificationDisplayReceiptKey,
+  appLocalNotificationDisplayReceiptNotificationPrefix,
+  appLocalNotificationDisplayReceiptPrefix,
+  appLocalNotificationsKey,
   composerHarnessMemoryKey,
   composerRunSettingsKey,
   epicCanvasKey,
+  interviewDraftKey,
+  interviewDraftKeyPrefix,
+  landingTerminalsKey,
   openEpicKey,
   persistKey,
   scopeBucket,
+  worktreeActivityCacheKey,
   worktreeIntentMemoryKey,
   worktreeIntentStagingKey,
+  worktreeListingCacheKey,
 } from "@/lib/persist/keys";
 
 // CRITICAL: every literal below is HAND-TRANSCRIBED from the current store
@@ -18,7 +27,7 @@ import {
 // would make the test circular and unable to catch a divergence.
 
 describe("persist key builders — output-preserving against current source", () => {
-  it("emits the current localStorage key for each of the 18 static stores", () => {
+  it("emits the current localStorage key for each static store", () => {
     // Source: src/stores/onboarding/onboarding-store.ts
     expect(persistKey("onboarding")).toBe("traycer-gui-app:onboarding");
     // Source: src/stores/command-palette/command-palette-store.ts
@@ -28,6 +37,15 @@ describe("persist key builders — output-preserving against current source", ()
     // Source: src/stores/composer/composer-draft-store.ts (plural divergence)
     expect(persistKey("composer-drafts")).toBe(
       "traycer-gui-app:composer-drafts",
+    );
+    // Source: src/stores/composer/interview-draft-store.ts — leaf prefix only;
+    // drafts persist as one key per (chatId, blockId) via interviewDraftKey.
+    expect(persistKey("interview-drafts")).toBe(
+      "traycer-gui-app:interview-drafts",
+    );
+    expect(interviewDraftKeyPrefix()).toBe("traycer-gui-app:interview-drafts:");
+    expect(interviewDraftKey("chat/1", "block:2")).toBe(
+      "traycer-gui-app:interview-drafts:chat%2F1:block%3A2",
     );
     // Source: src/stores/epics/artifact-read-state-store.ts
     expect(persistKey("artifact-read-state")).toBe(
@@ -76,7 +94,7 @@ describe("persist key builders — output-preserving against current source", ()
     );
   });
 
-  it("emits the current localStorage key for each of the 6 scoped stores", () => {
+  it("emits the current localStorage key for each of the 8 scoped stores", () => {
     // Source: src/stores/composer/composer-run-settings-store.ts
     // (`composerRunSettingsPersistKey`).
     expect(composerRunSettingsKey(null)).toBe(
@@ -113,10 +131,69 @@ describe("persist key builders — output-preserving against current source", ()
     // by userId).
     expect(epicCanvasKey(null)).toBe("traycer-gui-app:epic-canvas:anon");
     expect(epicCanvasKey("u1")).toBe("traycer-gui-app:epic-canvas:u1");
+    // Source: src/stores/home/landing-terminal-store.ts.
+    expect(landingTerminalsKey(null)).toBe(
+      "traycer-gui-app:landing-terminals:anon",
+    );
+    expect(landingTerminalsKey("u1")).toBe(
+      "traycer-gui-app:landing-terminals:u1",
+    );
     // Source: src/stores/epics/open-epic/store.ts (local
     // `persistKey(epicId, userId)` emits `…:open-epic:{userBucket}:{epicId}`).
     expect(openEpicKey(null, "e1")).toBe("traycer-gui-app:open-epic:anon:e1");
     expect(openEpicKey("u1", "e1")).toBe("traycer-gui-app:open-epic:u1:e1");
+    // Source: src/stores/notifications/app-local-notifications-store.ts
+    expect(appLocalNotificationsKey(null)).toBe(
+      "traycer-gui-app:app-local-notifications:anon",
+    );
+    expect(appLocalNotificationsKey("u1")).toBe(
+      "traycer-gui-app:app-local-notifications:u1",
+    );
+  });
+
+  it("emits the current localStorage keys for the host-scoped worktree caches (non-zustand)", () => {
+    // Source: src/components/settings/panels/worktrees-enrichment-persistence.ts
+    // (host-scoped - a host id is always non-empty, so no `anon` bucket).
+    expect(worktreeActivityCacheKey("host-1")).toBe(
+      "traycer-gui-app:worktree-activity-cache:host-1",
+    );
+    expect(worktreeListingCacheKey("host-1")).toBe(
+      "traycer-gui-app:worktree-listing-cache:host-1",
+    );
+  });
+
+  it("scopes app-local display receipts by user and exact row version", () => {
+    expect(appLocalNotificationDisplayReceiptPrefix("user-1")).toBe(
+      "traycer-gui-app:app-local-notification-display-receipt:user-1",
+    );
+    expect(
+      appLocalNotificationDisplayReceiptNotificationPrefix({
+        userId: "user-1",
+        notificationId: "host.error:transport",
+      }),
+    ).toBe(
+      "traycer-gui-app:app-local-notification-display-receipt:user-1:host.error%3Atransport",
+    );
+    expect(
+      appLocalNotificationDisplayReceiptKey({
+        userId: "user-1",
+        notificationId: "host.error:transport",
+        updatedAt: 42,
+      }),
+    ).toBe(
+      "traycer-gui-app:app-local-notification-display-receipt:user-1:host.error%3Atransport:42",
+    );
+  });
+
+  it("keys interview drafts per (chatId, blockId), percent-encoding segments", () => {
+    expect(interviewDraftKeyPrefix()).toBe("traycer-gui-app:interview-drafts:");
+    expect(interviewDraftKey("chat-1", "block-1")).toBe(
+      "traycer-gui-app:interview-drafts:chat-1:block-1",
+    );
+    // A `:` or `/` inside an id must be encoded so it can never split the key.
+    expect(interviewDraftKey("a:b", "c/d")).toBe(
+      "traycer-gui-app:interview-drafts:a%3Ab:c%2Fd",
+    );
   });
 
   it("buckets identity values, collapsing null and empty to `anon`", () => {

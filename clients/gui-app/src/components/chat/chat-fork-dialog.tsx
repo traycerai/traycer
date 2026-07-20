@@ -33,6 +33,7 @@ import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
 import { openCreatedChatWhenProjectedWithNavigation } from "@/lib/commands/actions/new-chat";
 import {
   pendingForkChatStagingKey,
+  type WorktreeStagingKey,
   useWorktreeIntentStagingStore,
   worktreeStagingKeyString,
 } from "@/stores/worktree/worktree-intent-staging-store";
@@ -40,13 +41,20 @@ import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-
 import type { ChatForkMode } from "@/components/chat/chat-message";
 import type { ForkWorkspaceSeed } from "@/lib/worktree/fork-workspace-seed";
 import type { SeedIntentOverride } from "@/lib/worktree/worktree-intent-seeding";
-import { readSeededLaunchWorktreeIntent } from "@/lib/worktree/seeded-launch-worktree-intent";
+import { readSeededLaunchWorkspace } from "@/lib/worktree/seeded-launch-worktree-intent";
+import { useSeededWorkspaceSnapshotStore } from "@/stores/worktree/seeded-workspace-snapshot-store";
 import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+
+const activeChatForkWorkspaceOwnerByKey = new Map<string, symbol>();
 
 export interface ChatForkDialogTarget {
   readonly sourceChatId: string;
   readonly sourceChatTitle: string;
   readonly assistantMessageId: string;
+  // Q&A forks identify the exact interview block within an assistant row;
+  // ordinary message-level forks leave this null and retain the whole row.
+  readonly interviewBlockId: string | null;
   readonly parentId: string | null;
   readonly settingsSeed: ChatRunSettings;
   // The full seed (intent + folder snapshot) projected from the source chat's
@@ -179,38 +187,58 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     hasStagedPreselection: stagedIntentForKey !== null,
     createPending: createChat.isPending,
   });
+  const activeWorkspaceTarget = open ? target : null;
+
+  useEffect(() => {
+    if (activeWorkspaceTarget === null) return;
+    const stagingKeyId = worktreeStagingKeyString(stagingKey);
+    const owner = Symbol(activeWorkspaceTarget.assistantMessageId);
+    activeChatForkWorkspaceOwnerByKey.set(stagingKeyId, owner);
+    return () => {
+      if (activeChatForkWorkspaceOwnerByKey.get(stagingKeyId) !== owner) {
+        return;
+      }
+      activeChatForkWorkspaceOwnerByKey.delete(stagingKeyId);
+      clearChatForkWorkspace(stagingKey);
+    };
+  }, [activeWorkspaceTarget, stagingKey]);
 
   const close = useCallback(() => {
     if (createChat.isPending) return;
+    clearChatForkWorkspace(stagingKey);
     onOpenChange(false);
-  }, [createChat.isPending, onOpenChange]);
+  }, [createChat.isPending, onOpenChange, stagingKey]);
 
   const handleOpenChange = useCallback(
     (nextOpen: boolean) => {
       if (!nextOpen && createChat.isPending) return;
+      if (!nextOpen) {
+        clearChatForkWorkspace(stagingKey);
+      }
       onOpenChange(nextOpen);
     },
-    [createChat.isPending, onOpenChange],
+    [createChat.isPending, onOpenChange, stagingKey],
   );
 
   const submit = useCallback(() => {
     if (!canSubmit || target === null) return;
     const chatId = uuidv4();
     const hostId = tabHostId;
-    const worktreeIntent = readSeededLaunchWorktreeIntent({
+    const launchWorkspace = readSeededLaunchWorkspace({
       stagingKey,
-      fallbackIntent: target.workspaceSeed.intent,
+      seedIntent: target.workspaceSeed.intent,
+      fallbackWorkspace: target.workspaceSeed.workspace,
     });
     const workspaceMode = deriveWorkspaceMode(
-      target.workspaceSeed.workspace.folders.length,
-      worktreeIntent,
+      launchWorkspace.folderCount,
+      launchWorkspace.worktreeIntent,
     );
+    const worktreeIntent = launchWorkspace.worktreeIntent;
     if (worktreeIntent !== null) {
       useWorktreeIntentMemoryStore
         .getState()
         .setEpicIntent(epicId, worktreeIntent, Date.now());
     }
-    useWorktreeIntentStagingStore.getState().clear(stagingKey);
     const toolbar = toolbarStore.getState();
     const settings = buildChatRunSettings({
       selection: toolbar.selection,
@@ -232,11 +260,17 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
         forkSource: {
           sourceChatId: target.sourceChatId,
           assistantMessageId: target.assistantMessageId,
+          interviewBlockId: target.interviewBlockId,
           carriedInterviews: target.carriedInterviews,
         },
       },
       {
         onSuccess: (result) => {
+          Analytics.getInstance().track(AnalyticsEvent.ChatForked, {
+            source: "direct_ui",
+            include_history: true,
+          });
+          clearChatForkWorkspace(stagingKey);
           const cancel = openCreatedChatWhenProjectedWithNavigation({
             intent: {
               kind: "active-tile",
@@ -244,6 +278,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
               tabId,
               chatId: result.chatId,
               hostId,
+              source: "direct_ui",
             },
             navigateNestedFocus,
           });
@@ -307,6 +342,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
                 disabled={createChat.isPending}
                 registerActivation={false}
                 createProfileHostId={tabHostId}
+                runTargetHostId={tabHostId}
               />
               <div className="shrink-0">
                 <AgentModeToggle
@@ -350,6 +386,11 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       </DialogContent>
     </Dialog>
   );
+}
+
+function clearChatForkWorkspace(stagingKey: WorktreeStagingKey): void {
+  useWorktreeIntentStagingStore.getState().clear(stagingKey);
+  useSeededWorkspaceSnapshotStore.getState().clear(stagingKey);
 }
 
 function displayChatTitle(title: string): string {

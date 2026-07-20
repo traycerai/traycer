@@ -29,12 +29,12 @@ interface DeleteTasksDialogProps {
 }
 
 /**
- * The Task-delete confirmation. Mirrors {@link ConfirmDestructiveDialog}'s
- * layout so the zero-candidate case is visually identical to before this
- * feature, and adds an opt-out worktree-cleanup checklist when the deleted
- * Task(s) exclusively own worktrees on this host. Copy is deliberately "no
- * longer used by any other Task" - never "orphaned", which the Settings tab
- * reserves for `gitRemovable: false`.
+ * The Task-delete confirmation. It keeps the irreversible action, optional
+ * local cleanup, and confirmation controls in distinct visual regions. The
+ * cleanup checklist appears only when the deleted Task(s) exclusively own
+ * worktrees on this host. Copy is deliberately "no longer used by any other
+ * Task" - never "orphaned", which the Settings tab reserves for
+ * `gitRemovable: false`.
  */
 export function DeleteTasksDialog(props: DeleteTasksDialogProps) {
   const {
@@ -53,14 +53,14 @@ export function DeleteTasksDialog(props: DeleteTasksDialogProps) {
     <Dialog open={open} onOpenChange={isPending ? undefined : onOpenChange}>
       <DialogContent
         showCloseButton={false}
-        className="w-[min(92vw,28rem)] gap-0 overflow-hidden p-0 sm:max-w-md"
+        className="flex max-h-[min(90dvh,40rem)] w-[min(92vw,32rem)] min-w-0 flex-col gap-0 overflow-hidden p-0 sm:max-w-lg"
         data-testid="delete-tasks-dialog"
       >
-        <div className="flex min-w-0 items-start gap-3 p-5">
-          <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-destructive/10 text-destructive">
+        <div className="flex min-w-0 shrink-0 items-start gap-3 px-5 pt-5 pb-4">
+          <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-destructive/10 text-destructive ring-1 ring-destructive/15">
             <AlertTriangle className="size-4" aria-hidden />
           </div>
-          <div className="min-w-0 flex-1 space-y-1.5">
+          <div className="max-h-[min(32dvh,14rem)] min-h-0 min-w-0 flex-1 space-y-1.5 overflow-y-auto overscroll-contain pr-1">
             <DialogTitle className="text-ui font-semibold leading-snug wrap-anywhere">
               {title}
             </DialogTitle>
@@ -72,17 +72,25 @@ export function DeleteTasksDialog(props: DeleteTasksDialogProps) {
 
         {candidates.length > 0 ? (
           <section
-            className="border-t border-border/60 px-5 py-3"
+            className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden border-t border-border/60 bg-muted/10 px-5 py-4"
+            aria-labelledby="delete-tasks-worktree-heading"
+            aria-describedby="delete-tasks-worktree-description"
             data-testid="delete-tasks-worktree-cleanup"
           >
-            <p className="text-ui-sm font-medium text-foreground">
-              Also remove worktrees no longer used by any other Task
+            <h3
+              id="delete-tasks-worktree-heading"
+              className="text-ui-sm font-semibold text-foreground"
+            >
+              Remove local worktrees too?
+            </h3>
+            <p
+              id="delete-tasks-worktree-description"
+              className="mt-1 text-ui-xs leading-relaxed text-muted-foreground"
+            >
+              Only worktrees on this host no longer used by any other Task are
+              shown. Proven-removable worktrees are pre-selected.
             </p>
-            <p className="mt-0.5 text-ui-xs text-muted-foreground">
-              Cleanup is limited to worktrees on this host. Only
-              proven-removable worktrees are pre-selected.
-            </p>
-            <ul className="mt-2 flex max-h-[min(40vh,16rem)] flex-col gap-0.5 overflow-y-auto">
+            <ul className="mt-3 flex min-h-0 min-w-0 flex-1 flex-col gap-1 overflow-y-auto overscroll-contain rounded-lg border border-border/60 bg-background/40 p-1">
               {candidates.map((candidate) => (
                 <WorktreeCleanupRow
                   key={candidate.worktreePath}
@@ -96,11 +104,12 @@ export function DeleteTasksDialog(props: DeleteTasksDialogProps) {
           </section>
         ) : null}
 
-        <div className="flex justify-end gap-2 border-t border-border/60 bg-muted/20 px-5 py-3">
+        <div className="grid min-w-0 shrink-0 grid-cols-2 gap-2 border-t border-border/60 bg-muted/20 px-5 py-3 sm:flex sm:justify-end">
           <Button
             type="button"
             variant="ghost"
             size="sm"
+            className="w-full sm:w-auto"
             disabled={isPending}
             onClick={() => {
               onOpenChange(false);
@@ -113,6 +122,7 @@ export function DeleteTasksDialog(props: DeleteTasksDialogProps) {
             type="button"
             variant="destructive"
             size="sm"
+            className="w-full sm:w-auto"
             disabled={isPending}
             onClick={onConfirm}
             data-testid="delete-tasks-confirm"
@@ -199,8 +209,8 @@ function WorktreeCleanupRow(props: {
     );
   }
   return (
-    <li>
-      <label className="flex cursor-pointer items-start gap-2 rounded-md px-1.5 py-1.5 hover:bg-accent/40">
+    <li className="min-w-0">
+      <label className="flex min-w-0 cursor-pointer items-start gap-3 rounded-md px-2.5 py-2 transition-colors hover:bg-accent/40 has-disabled:cursor-not-allowed has-disabled:opacity-60">
         <Checkbox
           checked={checked}
           disabled={disabled}
@@ -211,14 +221,17 @@ function WorktreeCleanupRow(props: {
           aria-label={`Remove worktree ${branch}`}
           data-testid="delete-tasks-worktree-checkbox"
         />
-        <span className="min-w-0 flex-1">
-          <span className="flex flex-wrap items-center gap-x-2 text-ui-sm text-foreground">
+        <span className="min-w-0 flex-1 overflow-hidden">
+          <span className="flex min-w-0 flex-col gap-0.5 text-ui-sm text-foreground sm:flex-row sm:flex-wrap sm:items-baseline sm:gap-x-2">
             <span className="font-medium wrap-anywhere">{branch}</span>
             <span className="text-ui-xs text-muted-foreground wrap-anywhere">
               {candidate.repoLabel}
             </span>
           </span>
-          <span className="block truncate text-ui-xs text-muted-foreground">
+          <span
+            className="mt-1 block max-w-full truncate font-mono text-ui-xs text-muted-foreground"
+            title={candidate.worktreePath}
+          >
             {candidate.worktreePath}
           </span>
           {hint}

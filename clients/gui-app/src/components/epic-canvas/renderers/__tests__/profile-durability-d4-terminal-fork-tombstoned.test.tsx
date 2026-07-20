@@ -188,7 +188,7 @@ function sourceAgentWithProfile(profileId: string | null): TuiAgentProjection {
 
 function emptyWorkspaceSeed(): ForkWorkspaceSeed {
   return {
-    workspace: { folders: [], folderInfoByPath: {} },
+    workspace: { folders: [], folderInfoByPath: {}, primaryPath: null },
     intent: null,
   };
 }
@@ -212,6 +212,7 @@ function profile(
     identity: null,
     usageUpdatedAt: null,
     rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,

@@ -1,5 +1,8 @@
+import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { ChatProgressIcon } from "@/components/chat/chat-progress-icon";
+import { NotificationIndicatorIcon } from "@/components/notifications/notification-indicator-icon";
+import { useSurfaceNotificationIndicatorState } from "@/components/notifications/notification-indicator-context";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import {
   EPIC_NODE_ICONS,
@@ -30,6 +33,11 @@ export function EpicNodeTabIcon(props: {
   readonly epicId: string;
   readonly variant: "live" | "static";
   readonly className: string;
+  /**
+   * Idle-slot override for live chat icons (e.g. title-generation spinner).
+   * Ignored for non-chat / static paths. Semantic chat status still wins.
+   */
+  readonly defaultIcon: ReactNode | undefined;
 }) {
   if (props.node.type === "chat" && props.variant === "live") {
     return (
@@ -39,6 +47,7 @@ export function EpicNodeTabIcon(props: {
         className={props.className}
         mutedClassName="text-muted-foreground"
         testId="chat-tab-spinner"
+        defaultIcon={props.defaultIcon}
       />
     );
   }
@@ -47,6 +56,32 @@ export function EpicNodeTabIcon(props: {
       <WorkspaceFileIcon
         fileName={props.node.name}
         className={props.className}
+      />
+    );
+  }
+  if (props.variant === "live" && props.node.type === "terminal") {
+    return (
+      <TerminalNodeTabIcon
+        nodeId={props.node.id}
+        epicId={props.epicId}
+        defaultIcon={
+          <StaticEpicNodeIcon type="terminal" className={props.className} />
+        }
+      />
+    );
+  }
+  if (props.variant === "live" && props.node.type === "terminal-agent") {
+    return (
+      <TerminalNodeTabIcon
+        nodeId={props.node.id}
+        epicId={props.epicId}
+        defaultIcon={
+          <TuiAgentTabIcon
+            nodeId={props.node.id}
+            pendingTuiHarnessId={props.node.pendingTuiHarnessId}
+            className={props.className}
+          />
+        }
       />
     );
   }
@@ -61,6 +96,30 @@ export function EpicNodeTabIcon(props: {
   }
   return (
     <StaticEpicNodeIcon type={props.node.type} className={props.className} />
+  );
+}
+
+function TerminalNodeTabIcon(props: {
+  readonly nodeId: string;
+  readonly epicId: string;
+  readonly defaultIcon: ReactNode;
+}) {
+  const indicatorState = useSurfaceNotificationIndicatorState({
+    epicId: props.epicId,
+    chatId: props.nodeId,
+  });
+  return (
+    <NotificationIndicatorIcon
+      state={indicatorState}
+      running={false}
+      subjectId={props.nodeId}
+      testIdPrefix="terminal-tab"
+      className={undefined}
+      style={undefined}
+      runningTitle=""
+      defaultIcon={props.defaultIcon}
+      statusPresentation="spinner"
+    />
   );
 }
 

@@ -26,6 +26,11 @@ import {
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { RestartHostConfirmDialog } from "@/components/host/restart-host-confirm-dialog";
+import {
+  Analytics,
+  AnalyticsEvent,
+  analyticsBlockerFromError,
+} from "@/lib/analytics";
 
 interface HostWithRequestClose extends IRunnerHost {
   readonly windows: {
@@ -80,9 +85,6 @@ export function MenuCommandListener() {
   const openEpicInNewWindow = useDesktopDialogStore(
     (state) => state.openEpicInNewWindow,
   );
-  const openReportIssue = useDesktopDialogStore(
-    (state) => state.openReportIssue,
-  );
   const management = runnerHost.hostManagement;
   const service = runnerHost.service;
   const traycerCli = runnerHost.traycerCli;
@@ -93,6 +95,9 @@ export function MenuCommandListener() {
     mutationFn: () => runnerHost.requestHostRespawn(),
     onSuccess: () => {
       toast.success("Host restart requested");
+      // Belt-and-braces: the dialog already closed optimistically at
+      // confirm time, but this guarantees the open flag can never survive
+      // settlement even if something else set it in between.
       setPendingHostRestart(false);
       if (traycerCli !== null) {
         void queryClient.invalidateQueries({
@@ -114,7 +119,13 @@ export function MenuCommandListener() {
       }
       return management.updateHost({ onProgress: null });
     },
+    onMutate: () => {
+      Analytics.getInstance().track(AnalyticsEvent.HostUpdateStarted, {
+        source: "native_menu",
+      });
+    },
     onSuccess: (data) => {
+      Analytics.getInstance().track(AnalyticsEvent.HostUpdateSucceeded, null);
       toast.success(`Updated host to v${data.version}`);
       if (management !== null) {
         if (service !== null) {
@@ -133,7 +144,12 @@ export function MenuCommandListener() {
         });
       }
     },
-    onError: (err) => toastFromRunnerError(err, "Couldn't install host update"),
+    onError: (err) => {
+      Analytics.getInstance().track(AnalyticsEvent.HostUpdateFailed, {
+        blocker: analyticsBlockerFromError(err),
+      });
+      toastFromRunnerError(err, "Couldn't install host update");
+    },
   });
 
   const { mutate: mutateInstallUpdate } = installUpdateMutation;
@@ -172,9 +188,28 @@ export function MenuCommandListener() {
           mutateInstallUpdate();
         },
         requestHostRestart: () => {
+          // A restart already in flight (from this or an earlier confirm)
+          // must not reopen the dialog - it would mount with
+          // `isPending=true`, which locks Cancel/Esc for the rest of that
+          // mutation's lifetime (the exact lockout this fix removed). Read
+          // the mutation cache directly (not a ref synced from
+          // `restartHostMutation.isPending`) - `isMutating` reflects
+          // `mutate()` the instant it's called, synchronously, with no
+          // render/effect delay for a queued native command to slip through.
+          if (
+            queryClient.isMutating({
+              mutationKey: runnerMutationKeys.requestHostRespawn(),
+            }) > 0
+          ) {
+            return;
+          }
           setPendingHostRestart(true);
         },
-        reportIssue: openReportIssue,
+        reportIssue: () => {
+          const state = useDesktopDialogStore.getState();
+          if (!state.reportIssueAvailable) return;
+          state.openReportIssue();
+        },
       });
     });
     return () => {
@@ -189,7 +224,7 @@ export function MenuCommandListener() {
     openLogs,
     runnerHost,
     mutateInstallUpdate,
-    openReportIssue,
+    queryClient,
   ]);
 
   return (
@@ -201,7 +236,14 @@ export function MenuCommandListener() {
           if (!open) setPendingHostRestart(false);
         }}
         isPending={restartHostMutation.isPending}
-        onConfirm={() => restartHostMutation.mutate()}
+        onConfirm={() => {
+          // Close optimistically - see host-settings-panel.tsx for why. This
+          // surface's mutation can legitimately run up to ~180s with zero
+          // progress feedback, which is what made the un-dismissable dialog
+          // read as "stuck forever" in the field.
+          setPendingHostRestart(false);
+          restartHostMutation.mutate();
+        }}
       />
     </>
   );
@@ -234,18 +276,32 @@ function handleMenuCommand(
   handlers: MenuCommandHandlers,
 ): void {
   if (payload.command === "app.openSettings") {
+    Analytics.getInstance().track(AnalyticsEvent.SettingsOpened, {
+      source: "native_menu",
+      section: "general",
+    });
     handlers.navigateSettings();
     return;
   }
   if (payload.command === "app.signIn") {
+    Analytics.getInstance().track(AnalyticsEvent.SignInStarted, {
+      source: "native_menu",
+    });
     void handlers.authService.signIn();
     return;
   }
   if (payload.command === "app.signOut") {
+    Analytics.getInstance().track(AnalyticsEvent.SignOutRequested, {
+      source: "native_menu",
+    });
     void handlers.authService.signOut();
     return;
   }
   if (payload.command === "app.openLogs") {
+    Analytics.getInstance().track(AnalyticsEvent.CommandExecuted, {
+      source: "native_menu",
+      command: "open_logs",
+    });
     handlers.openLogs();
     return;
   }
@@ -262,14 +318,25 @@ function handleMenuCommand(
     return;
   }
   if (payload.command === "app.reportIssue") {
+    Analytics.getInstance().track(AnalyticsEvent.ReportIssueOpened, {
+      source: "native_menu",
+    });
     handlers.reportIssue();
     return;
   }
   if (payload.command === "host.installUpdate") {
+    Analytics.getInstance().track(AnalyticsEvent.CommandExecuted, {
+      source: "native_menu",
+      command: "install_host_update",
+    });
     handlers.installHostUpdate();
     return;
   }
   if (payload.command === "host.restart") {
+    Analytics.getInstance().track(AnalyticsEvent.CommandExecuted, {
+      source: "native_menu",
+      command: "restart_host",
+    });
     handlers.requestHostRestart();
     return;
   }

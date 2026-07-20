@@ -115,7 +115,12 @@ function mergeVisibleEntries(
 function worktreeIntentToLandingWorkspaceSnapshot(
   intent: WorktreeIntent | null,
 ): LandingDraftWorkspaceSnapshot {
-  if (intent === null) return emptyLandingDraftWorkspaceSnapshot();
+  // An entry-less intent is the empty workspace. Every producer above already
+  // collapses that to `null`, but checking it here is what lets the primary
+  // below index `entries[0]` without a dead undefined-fallback.
+  if (intent === null || intent.entries.length === 0) {
+    return emptyLandingDraftWorkspaceSnapshot();
+  }
   const folderInfoByPath = intent.entries.reduce<
     Record<string, WorkspaceFolderInfo>
   >(
@@ -125,9 +130,15 @@ function worktreeIntentToLandingWorkspaceSnapshot(
     }),
     {},
   );
+  // The seed's primary is the entry marked `isPrimary` on the source
+  // intent - not array order - with the first entry as a fallback so a
+  // legacy/edge-case intent carrying no marked entry still seeds a primary.
+  const primaryEntry =
+    intent.entries.find((entry) => entry.isPrimary) ?? intent.entries[0];
   return {
     folders: intent.entries.map((entry) => entry.workspacePath),
     folderInfoByPath,
+    primaryPath: primaryEntry.workspacePath,
   };
 }
 

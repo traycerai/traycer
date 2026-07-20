@@ -14,11 +14,11 @@ import {
   runnerQueryKeys,
 } from "@/lib/query-keys/runner-mutation-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
+import { useRunnerHostOperationStatusQuery } from "@/hooks/runner/use-runner-host-operation-status-query";
 import { cn } from "@/lib/utils";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import type {
   HostInstallResult,
-  HostOperationStatus,
   HostRegistryUpdateState,
   IHostManagement,
 } from "@traycer-clients/shared/platform/runner-host";
@@ -27,6 +27,11 @@ import {
   isHostUpdateBannerSnoozed,
   useHostUpdateBannerStore,
 } from "@/stores/settings/host-update-banner-store";
+import {
+  Analytics,
+  AnalyticsEvent,
+  hostUpdateAnalyticsCallbacks,
+} from "@/lib/analytics";
 
 interface HostUpdateBannerProps {
   readonly className: string | undefined;
@@ -91,15 +96,8 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
   // open window via the same query key, so the button here disables and
   // shows progress whether THIS banner, Settings, or the background
   // auto-update reconciler is the one actually driving the update.
-  // `staleTime: Infinity` because this is entirely event-sourced (pushed by
-  // `HostOperationStatusListener`), never polling-appropriate.
-  const { data: operationStatus } = useQuery(
-    queryOptions<HostOperationStatus | null>({
-      queryKey: runnerQueryKeys.hostOperationStatus(management),
-      queryFn: () => management.getOperationStatus(),
-      staleTime: Infinity,
-    }),
-  );
+  const { data: operationStatus } =
+    useRunnerHostOperationStatusQuery(management);
   const sharedOperationActive =
     operationStatus !== undefined && operationStatus !== null;
   const sharedPercent =
@@ -107,13 +105,18 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
       ? operationStatus.percent
       : null;
 
+  const hostUpdateAnalytics = hostUpdateAnalyticsCallbacks("direct_ui");
   const updateMutation = useMutation<HostInstallResult>({
     mutationKey: runnerMutationKeys.hostUpdate(),
     // Progress is read from the shared `operationStatus` query above (it
     // reflects the operation regardless of which surface started it), so
     // this mutation doesn't need its own progress callback.
     mutationFn: () => management.updateHost({ onProgress: null }),
+    onMutate: () => {
+      hostUpdateAnalytics.onStarted();
+    },
     onSuccess: (data) => {
+      hostUpdateAnalytics.onSucceeded();
       toast.success(`Updated host to v${data.version}`);
       // Drop any snooze entry recorded against the version the user just
       // installed. We pull `clearSnooze` from the store via `getState()`
@@ -128,7 +131,10 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
         queryKey: runnerQueryKeys.hostInstalledRecord(management),
       });
     },
-    onError: (err) => toastFromRunnerError(err, "Couldn't update host"),
+    onError: (err) => {
+      hostUpdateAnalytics.onFailed(err);
+      toastFromRunnerError(err, "Couldn't update host");
+    },
   });
 
   const nowMs = useHostUpdateNowMs();
@@ -216,6 +222,9 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
         className="text-current hover:bg-sky-500/15 hover:text-current"
         onClick={() => {
           snooze(latestVersion, getHostUpdateSnoozeUntilMs());
+          Analytics.getInstance().track(AnalyticsEvent.HostUpdateSnoozed, {
+            source: "direct_ui",
+          });
         }}
       >
         <X className="size-3" aria-hidden />

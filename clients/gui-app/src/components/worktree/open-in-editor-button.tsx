@@ -26,6 +26,7 @@ import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-i
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
 type EditorIconComponent = ComponentType<EditorIconProps>;
 
@@ -77,7 +78,7 @@ export function OpenInEditorButton(props: OpenInEditorButtonProps) {
   const activeHostEntry = useHostDirectoryEntry(activeHostId ?? "");
   const defaultEditor = useSettingsStore((s) => s.defaultEditor);
   const setDefaultEditor = useSettingsStore((s) => s.setDefaultEditor);
-  const mutation = useEditorOpen();
+  const mutation = useEditorOpen("workspace");
   const { active: openFeedbackActive, trigger: triggerOpenFeedback } =
     useEditorOpenFeedback();
   const availability = useEditorAvailability();
@@ -87,7 +88,12 @@ export function OpenInEditorButton(props: OpenInEditorButtonProps) {
       toast.success("Copied workspace path");
     },
     onError: () => {
-      toast.error("Couldn't copy path to clipboard.");
+      reportableErrorToast("Couldn't copy path to clipboard.", undefined, {
+        title: "Could not copy workspace path",
+        message: null,
+        code: null,
+        source: "Workspace",
+      });
     },
   });
 

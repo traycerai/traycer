@@ -1,7 +1,14 @@
 import { act, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import type {
   GitChangedFileV11,
   GitListChangedFilesResponseV11,
@@ -15,7 +22,7 @@ import { useGitPanelStore } from "@/stores/epics/git-panel-store";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { GitChangedFilesView } from "../git-changed-files-view";
 import { SelectedRepoChanges } from "../selected-repo-changes";
-import { expectModuleHeaderTooltip } from "./git-module-header-test-utils";
+import { expectModuleHeaderPreview } from "./git-module-header-test-utils";
 
 vi.mock("../bundle-open-button", () => ({
   BundleOpenButton: (props: { readonly group: string }) => (
@@ -215,11 +222,11 @@ describe("<SelectedRepoChanges /> module section state", () => {
     });
     expect(rootHeader.getAttribute("aria-expanded")).toBe("true");
     expect(submoduleHeader.getAttribute("aria-expanded")).toBe("true");
-    const tooltipText = await expectModuleHeaderTooltip(
+    const previewText = await expectModuleHeaderPreview(
       submoduleHeader,
       "Path: /repo/traycer",
     );
-    expect(tooltipText).toContain("Status: pinned commit out of date");
+    expect(previewText).toContain("Status: pinned commit out of date");
     expect(rootHeader.className).toContain("bg-background");
     expect(rootHeader.className).toContain("hover:bg-muted");
     expect(rootHeader.className).toContain("z-40");
@@ -276,6 +283,106 @@ describe("<SelectedRepoChanges /> module section state", () => {
 
     expect(screen.queryByText("src/root-working.ts")).toBeNull();
     expect(screen.getByTestId("git-no-matching-files")).toBeDefined();
+  });
+
+  it("gives the live non-virtualized tree enough height to show its rows", async () => {
+    useGitPanelStore.getState().setListLayout("epic-1", "tree");
+    renderSelectedChanges(
+      response({
+        files: [file("src/root-working.ts")],
+      }),
+    );
+
+    expect(screen.getByTestId("git-single-repo-changes")).toBeDefined();
+    const tree = screen.getByTestId("git-pierre-file-tree");
+    expect(tree.style.height).toBe("48px");
+    await waitFor(() => {
+      expect(tree.shadowRoot?.querySelectorAll("[data-item-path]").length).toBe(
+        2,
+      );
+    });
+
+    const directoryRow = tree.shadowRoot?.querySelector(
+      'button[data-item-type="folder"]',
+    );
+    if (!(directoryRow instanceof HTMLButtonElement)) {
+      throw new Error("Expected a Pierre directory row");
+    }
+    fireEvent.click(directoryRow);
+
+    await waitFor(() => expect(tree.style.height).toBe("24px"));
+  });
+
+  it("does not reserve extra height for flattened directory segments", async () => {
+    useGitPanelStore.getState().setListLayout("epic-1", "tree");
+    renderSelectedChanges(
+      response({
+        files: [
+          stagedFile("Profile/components/PlatformRatings.jsx"),
+          stagedFile("Trace-20260603T220311.json.gz"),
+          stagedFile("Trace-20260604T133730.json.gz"),
+          file("backend/controller.js"),
+        ],
+      }),
+    );
+
+    const [stagedTree] = screen.getAllByTestId("git-pierre-file-tree");
+    await waitFor(() => {
+      expect(
+        stagedTree.shadowRoot?.querySelectorAll("[data-item-path]").length,
+      ).toBe(4);
+    });
+
+    expect(stagedTree.style.height).toBe("96px");
+  });
+
+  it("keeps live tree stage headers in the module sticky hierarchy", () => {
+    useGitPanelStore.getState().setListLayout("epic-1", "tree");
+    const rectSpy = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockReturnValue(DOMRect.fromRect({ width: 320, height: 36 }));
+
+    renderSelectedChanges(
+      response({
+        files: [
+          stagedFile("src/root-staged.ts"),
+          file("src/root-working.ts"),
+          gitlink("traycer"),
+        ],
+        submodules: [changeset({ files: [file("src/submodule-working.ts")] })],
+      }),
+    );
+
+    const rootModule = screen.getByTestId("git-module-group-root");
+    const moduleHeader = within(rootModule).getByTestId(
+      "git-module-header-root",
+    );
+    const treeSections = within(rootModule).getByTestId(
+      "git-file-tree-sections",
+    );
+    const stagedButton = within(rootModule).getByRole("button", {
+      name: "Staged section, 1 file",
+    });
+    const stagedHeader = stagedButton.closest(".sticky");
+    const moduleBody = rootModule.querySelector<HTMLElement>(
+      '[style*="--git-section-sticky-top"]',
+    );
+
+    expect(moduleHeader.className).toContain("sticky");
+    expect(moduleHeader.className).toContain("top-0");
+    expect(moduleHeader.className).toContain("z-40");
+    expect(moduleBody?.style.getPropertyValue("--git-section-sticky-top")).toBe(
+      "36px",
+    );
+    expect(stagedHeader?.className).toContain("sticky");
+    expect(stagedHeader?.className).toContain(
+      "top-[var(--git-section-sticky-top,0px)]",
+    );
+    expect(stagedHeader?.className).toContain("z-30");
+    expect(treeSections.className).toContain("overflow-visible");
+    expect(treeSections.className).not.toContain("overflow-hidden");
+
+    rectSpy.mockRestore();
   });
 
   it("expands a collapsed module while search reveals a matching file", () => {

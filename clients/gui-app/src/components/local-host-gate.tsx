@@ -18,6 +18,7 @@ import type {
   LocalHostSnapshot,
 } from "@traycer-clients/shared/platform/runner-host";
 import { Button } from "@/components/ui/button";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { Card, CardContent } from "@/components/ui/card";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { AppHeader } from "@/components/layout/header/app-header";
@@ -34,6 +35,43 @@ import {
 import { requestAppQuit } from "@/lib/desktop-app-lifecycle";
 import { runnerQueryKeys } from "@/lib/query-keys";
 import { cn } from "@/lib/utils";
+import { createReportIssueContext } from "@/lib/report-issue-context";
+import {
+  Analytics,
+  AnalyticsEvent,
+  analyticsBlockerFromError,
+} from "@/lib/analytics";
+
+type HostSetupReason = "launch" | "recovery" | "reinstall" | "update";
+
+// Best-effort setup telemetry around the `ensureHost` mutation. Emitted from
+// mutation events, never renders. `host-busy`/`removed` results are neither
+// success nor failure - the user resolves them through their own surfaces.
+function hostSetupAnalyticsCallbacks(
+  reason: HostSetupReason,
+  onSuccess: (result: HostEnsureResult) => void,
+): {
+  readonly onSuccess: (result: HostEnsureResult) => void;
+  readonly onError: (error: unknown) => void;
+} {
+  Analytics.getInstance().track(AnalyticsEvent.HostSetupStarted, { reason });
+  return {
+    onSuccess: (result) => {
+      onSuccess(result);
+      if (result.action !== "host-busy" && result.action !== "removed") {
+        Analytics.getInstance().track(AnalyticsEvent.HostSetupSucceeded, {
+          reason,
+        });
+      }
+    },
+    onError: (error) => {
+      Analytics.getInstance().track(AnalyticsEvent.HostSetupFailed, {
+        source: "direct_ui",
+        blocker: analyticsBlockerFromError(error),
+      });
+    },
+  };
+}
 
 /**
  * URL prefix that bypasses the host-readiness gate. Settings work without
@@ -410,12 +448,12 @@ function useHostProvisioning(args: {
   // Retry/forced update: clear any prior error/progress, then re-run ensure. Only
   // `onSuccess` transitions the busy-keep latch; an error leaves it untouched
   // (see markBusyKeep).
-  const run = (force: boolean): void => {
+  const run = (force: boolean, reason: HostSetupReason): void => {
     reset();
     setProgress(null);
     mutate(
       { force, onProgress: (event) => setProgress(event) },
-      { onSuccess: markBusyKeep },
+      hostSetupAnalyticsCallbacks(reason, markBusyKeep),
     );
   };
 
@@ -435,7 +473,7 @@ function useHostProvisioning(args: {
       removedByUser: false,
     });
     void management.clearRemoval().then(
-      () => run(false),
+      () => run(false, "reinstall"),
       () => {
         // The sentinel couldn't be cleared, so ensure would just short-circuit
         // back to `removed`. Restore the removed surface instead of flashing a
@@ -455,7 +493,7 @@ function useHostProvisioning(args: {
     attemptedRef.current = true;
     mutate(
       { force: false, onProgress: (event) => setProgress(event) },
-      { onSuccess: markBusyKeep },
+      hostSetupAnalyticsCallbacks("launch", markBusyKeep),
     );
   }, [canProvision, args.isReady, mutate, markBusyKeep]);
 
@@ -488,8 +526,8 @@ function useHostProvisioning(args: {
     hostBusy: hasManagement && inBusyKeepFlow,
     removed: hasManagement && isRemoved,
     canManageHost: hasManagement,
-    retry: () => run(false),
-    force: () => run(true),
+    retry: () => run(false, "recovery"),
+    force: () => run(true, "update"),
     reinstall,
   };
 }
@@ -635,6 +673,16 @@ function GateIncompatibleHost(props: GateIncompatibleBusyProps) {
                   {isBusyKeep ? "Force update host" : "Update host"}
                 </Button>
               ) : null}
+              <ReportIssueAction
+                context={createReportIssueContext({
+                  title: "Host update required",
+                  message: "Traycer Host requires an update.",
+                  code: null,
+                  source: "Host startup",
+                })}
+                presentation="text"
+                className="w-full"
+              />
             </div>
           </CardContent>
         </Card>
@@ -658,7 +706,7 @@ function GateProvisioningError(props: GateProvisioningErrorProps) {
       <Card className="w-full max-w-md">
         <CardContent className="flex flex-col gap-4 py-6 text-ui-sm">
           <p className="text-center">{props.message}</p>
-          <div className="flex justify-center">
+          <div className="flex flex-wrap justify-center gap-2">
             <Button
               type="button"
               size="sm"
@@ -678,6 +726,16 @@ function GateProvisioningError(props: GateProvisioningErrorProps) {
                 ) : null}
               </span>
             </Button>
+            <ReportIssueAction
+              context={createReportIssueContext({
+                title: "Could not start Traycer Host",
+                message: "Traycer Host could not start.",
+                code: null,
+                source: "Host startup",
+              })}
+              presentation="text"
+              className={undefined}
+            />
           </div>
         </CardContent>
       </Card>
@@ -908,7 +966,7 @@ export function LocalHostUnavailable(props: LocalHostUnavailableProps) {
               bootstrapLogPath={status.data?.bootstrapLogPath ?? null}
             />
           ) : null}
-          <div className="flex justify-center">
+          <div className="flex flex-wrap justify-center gap-2">
             <Button
               type="button"
               size="sm"
@@ -930,6 +988,16 @@ export function LocalHostUnavailable(props: LocalHostUnavailableProps) {
                 ) : null}
               </span>
             </Button>
+            <ReportIssueAction
+              context={createReportIssueContext({
+                title: "Traycer Host is unavailable",
+                message: "Traycer Host was unavailable.",
+                code: null,
+                source: "Host startup",
+              })}
+              presentation="text"
+              className={undefined}
+            />
           </div>
         </CardContent>
       </Card>

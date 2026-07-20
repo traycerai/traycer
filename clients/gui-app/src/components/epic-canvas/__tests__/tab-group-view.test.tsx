@@ -39,6 +39,26 @@ vi.mock("@/components/epic-canvas/canvas/use-rename-canvas-tab", () => ({
   useRenameCanvasTab: () => () => undefined,
 }));
 
+// TabItem resolves the tab's bound-host client for terminal renames; these
+// tests render outside a <HostRuntimeProvider>, so stub the host seam.
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => null,
+}));
+
+vi.mock("@/hooks/terminal/use-terminal-rename-for-mutation", () => ({
+  useTerminalRenameFor: () => ({ mutate: () => undefined }),
+}));
+
+vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
+  useHostNotificationIndicators: () => ({
+    data: { epics: {}, chats: {} },
+    isPending: false,
+    isFetching: false,
+    error: null,
+    refetch: () => Promise.resolve(),
+  }),
+}));
+
 vi.mock("@/lib/epic-selectors", () => ({
   useEpicArtifact: (id: string) => ({ id }),
   useEpicTabDisplayTitle: (node: { readonly name: string }) => node.name,

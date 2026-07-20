@@ -8,7 +8,7 @@ import {
   vi,
   type Mock,
 } from "vitest";
-import { cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
@@ -68,11 +68,22 @@ vi.mock("@/hooks/terminal/use-terminal-create-mutation", () => ({
 }));
 
 // The session handle resolution is irrelevant to the create gate; stub it.
-vi.mock("@/lib/registries/terminal-session-registry", () => ({
-  useTerminalSessionHandle: () => null,
-}));
+vi.mock(
+  "@/lib/registries/terminal-session-registry",
+  async (importOriginal) => ({
+    // Keep the real registry surface (the bootstrap's warm-handle adoption
+    // reads it; against an empty registry it no-ops) and stub only the handle.
+    ...(await importOriginal<
+      typeof import("@/lib/registries/terminal-session-registry")
+    >()),
+    useTerminalSessionHandle: () => null,
+  }),
+);
 
-import { useTerminalTileBootstrap } from "../use-terminal-tile-bootstrap";
+import {
+  MEASURE_GRID_TIMEOUT_MS,
+  useTerminalTileBootstrap,
+} from "../use-terminal-tile-bootstrap";
 
 function wrapper({ children }: { children: ReactNode }) {
   const queryClient = new QueryClient({
@@ -88,6 +99,7 @@ function runBootstrap(sessionKind: "terminal" | "terminal-agent") {
     () =>
       useTerminalTileBootstrap({
         hostId: "host-1",
+        scope: { kind: "epic", epicId: "epic-1" },
         sessionId: "term-1",
         instanceId: "inst-1",
         sessionKind,
@@ -138,27 +150,39 @@ describe("useTerminalTileBootstrap create gate", () => {
       ],
     };
 
-    runBootstrap("terminal");
+    const { result } = runBootstrap("terminal");
 
     // Give effects a couple of ticks to settle; assert no create fired.
     await Promise.resolve();
     await Promise.resolve();
     expect(mockCreate.mutate).not.toHaveBeenCalled();
+    expect(result.current.hostSessionExited).toBe(true);
   });
 
   it("creates a session that is absent from the host list", async () => {
     // Fresh tile (or host-restart resilience): no host record at all.
     mockList.data = { sessions: [] };
 
-    runBootstrap("terminal");
+    const { result } = runBootstrap("terminal");
+    // Measure-before-subscribe: the create is held until the probe reports.
+    act(() => {
+      result.current.reportMeasuredGrid(120, 40);
+    });
 
     await waitFor(() => {
       expect(mockCreate.mutate).toHaveBeenCalledTimes(1);
     });
     const [request] = mockCreate.mutate.mock.calls[0] as [
-      { readonly desiredSessionId: string },
+      {
+        readonly desiredSessionId: string;
+        readonly cols: number;
+        readonly rows: number;
+      },
     ];
     expect(request.desiredSessionId).toBe("term-1");
+    // The PTY spawns at the measured grid, not the 80x24 defaults.
+    expect(request.cols).toBe(120);
+    expect(request.rows).toBe(40);
   });
 
   it("DOES re-create an exited terminal-agent (stable id, reopen restarts)", async () => {
@@ -175,10 +199,75 @@ describe("useTerminalTileBootstrap create gate", () => {
       ],
     };
 
-    runBootstrap("terminal-agent");
+    const { result } = runBootstrap("terminal-agent");
+    act(() => {
+      result.current.reportMeasuredGrid(120, 40);
+    });
 
     await waitFor(() => {
       expect(mockCreate.mutate).toHaveBeenCalledTimes(1);
     });
+  });
+
+  it("does not let the measure timeout expire while disabled - a late-projecting agent still spawns at the probed grid", async () => {
+    // A TUI tile keeps the bootstrap disabled (and renders no probe) until
+    // its agent record projects. The measure timeout must therefore not run
+    // while disabled: if it expired during a slow projection, enabling would
+    // dispatch the create at the fallback grid before the freshly-mounted
+    // probe could report - the wrong-sized spawn this machinery prevents.
+    mockList.data = { sessions: [] };
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { result, rerender } = renderHook(
+        (props: { readonly enabled: boolean }) =>
+          useTerminalTileBootstrap({
+            hostId: "host-1",
+            scope: { kind: "epic", epicId: "epic-1" },
+            sessionId: "term-1",
+            instanceId: "inst-1",
+            sessionKind: "terminal-agent",
+            enabled: props.enabled,
+            preparePayload: () =>
+              Promise.resolve({
+                tuiHarnessId: null,
+                cwd: "/work/repo",
+                shellCommand: null,
+                shellArgs: null,
+                worktreeBusyPaths: [],
+              }),
+          }),
+        { wrapper, initialProps: { enabled: false } },
+      );
+
+      // Projection takes longer than the measure timeout.
+      act(() => {
+        vi.advanceTimersByTime(MEASURE_GRID_TIMEOUT_MS + 500);
+      });
+      rerender({ enabled: true });
+
+      // Enabled, but the probe has not reported yet: the stale timeout must
+      // not have unlocked the create.
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(mockCreate.mutate).not.toHaveBeenCalled();
+
+      // The probe (mounted on enable) reports; the create dispatches at the
+      // measured grid.
+      act(() => {
+        result.current.reportMeasuredGrid(150, 50);
+      });
+      await waitFor(() => {
+        expect(mockCreate.mutate).toHaveBeenCalledTimes(1);
+      });
+      const [request] = mockCreate.mutate.mock.calls[0] as [
+        { readonly cols: number; readonly rows: number },
+      ];
+      expect(request.cols).toBe(150);
+      expect(request.rows).toBe(50);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

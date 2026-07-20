@@ -13,8 +13,10 @@
 import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { Plus } from "lucide-react";
-import type { WorktreeBindingSelectorRow } from "@traycer/protocol/host";
+import type { WorktreeBindingSelectorRowV12 } from "@traycer/protocol/host";
 import { Button } from "@/components/ui/button";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 import {
   Popover,
   PopoverContent,
@@ -40,7 +42,7 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
   // the effective selection is derived below so a default never has to be
   // written into state via an effect.
   const [explicitRow, setExplicitRow] =
-    useState<WorktreeBindingSelectorRow | null>(null);
+    useState<WorktreeBindingSelectorRowV12 | null>(null);
   const activeHostId = useReactiveActiveHostId();
   const navigateNested = useEpicNestedFocusNavigation();
   const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
@@ -122,7 +124,7 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
     launchTarget,
   ]);
 
-  const handleSelectRow = useCallback((row: WorktreeBindingSelectorRow) => {
+  const handleSelectRow = useCallback((row: WorktreeBindingSelectorRowV12) => {
     setExplicitRow(row);
   }, []);
 
@@ -131,10 +133,20 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
   if (folderlessCwdFailed) {
     folderlessCwdStatus = (
       <span
-        className="text-destructive"
+        className="flex items-center gap-1.5 text-destructive"
         data-testid="new-terminal-folderless-cwd-error"
       >
         Couldn't resolve terminal directory.
+        <ReportIssueAction
+          context={createReportIssueContext({
+            title: "Couldn't resolve terminal directory",
+            message: "The terminal working directory could not be resolved.",
+            code: null,
+            source: "New terminal",
+          })}
+          presentation="icon"
+          className={undefined}
+        />
       </span>
     );
   }
@@ -199,8 +211,8 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
  * is just `disabledReason === null` (unlike the git surfaces' `isGitSelectable`).
  */
 function pickDefaultTerminalRow(
-  rows: ReadonlyArray<WorktreeBindingSelectorRow>,
-): WorktreeBindingSelectorRow | null {
+  rows: ReadonlyArray<WorktreeBindingSelectorRowV12>,
+): WorktreeBindingSelectorRowV12 | null {
   const selectable = rows.filter((row) => row.disabledReason === null);
   if (selectable.length === 0) return null;
   return selectable.find((row) => row.isPrimary) ?? selectable[0];
@@ -213,9 +225,9 @@ function pickDefaultTerminalRow(
  * fields across binding updates.
  */
 function resolveTerminalSelection(
-  explicit: WorktreeBindingSelectorRow | null,
-  rows: ReadonlyArray<WorktreeBindingSelectorRow>,
-): WorktreeBindingSelectorRow | null {
+  explicit: WorktreeBindingSelectorRowV12 | null,
+  rows: ReadonlyArray<WorktreeBindingSelectorRowV12>,
+): WorktreeBindingSelectorRowV12 | null {
   if (explicit !== null) {
     const explicitKey = worktreeRowKey(explicit);
     const live = rows.find(

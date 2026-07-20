@@ -4,12 +4,12 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { WorktreeBinding } from "@traycer/protocol/host/worktree-schemas";
-import type { TerminalSessionInfo } from "@traycer/protocol/host/terminal/unary-schemas";
+import type { CanonicalTerminalSessionInfo } from "@traycer/protocol/host/terminal/unary-schemas";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 let mockBinding: WorktreeBinding | null = null;
 let mockBindingResolved = true;
-let mockTerminalSessions: ReadonlyArray<TerminalSessionInfo> = [];
+let mockTerminalSessions: ReadonlyArray<CanonicalTerminalSessionInfo> = [];
 
 const dialogMocks = vi.hoisted(() => ({
   openProps: [] as unknown[],
@@ -151,9 +151,17 @@ vi.mock("@/hooks/terminal/use-terminal-kill-for-mutation", () => ({
   }),
 }));
 
-vi.mock("@/lib/registries/terminal-session-registry", () => ({
-  useTerminalSessionHandle: () => null,
-}));
+vi.mock(
+  "@/lib/registries/terminal-session-registry",
+  async (importOriginal) => ({
+    // Keep the real registry surface (the bootstrap's warm-handle adoption
+    // reads it; against an empty registry it no-ops) and stub only the handle.
+    ...(await importOriginal<
+      typeof import("@/lib/registries/terminal-session-registry")
+    >()),
+    useTerminalSessionHandle: () => null,
+  }),
+);
 
 vi.mock("@/stores/epics/canvas/store", () => ({
   useEpicCanvasStore: (selector: (s: unknown) => unknown) =>
@@ -438,7 +446,7 @@ describe("<TuiAgentTile /> worktree chip binding wiring", () => {
     mockTerminalSessions = [
       {
         sessionId: "agent-1",
-        epicId: "epic-test",
+        scope: { kind: "epic", epicId: "epic-test" },
         sessionKind: "terminal-agent",
         cwd: "/workspace/app",
         shellCommand: "claude",

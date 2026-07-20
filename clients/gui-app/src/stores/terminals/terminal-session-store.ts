@@ -2,9 +2,11 @@ import { create, type StoreApi, type UseBoundStore } from "zustand";
 import { v4 as uuidv4 } from "uuid";
 import type { TerminalSubscribeClientFrame } from "@traycer/protocol/host/terminal/subscribe";
 import type {
+  CanonicalTerminalSessionInfo,
   TerminalSessionExitReason,
   TerminalSessionInfo,
   TerminalSessionKind,
+  TerminalScope,
 } from "@traycer/protocol/host/terminal/unary-schemas";
 import type {
   TerminalStreamCallbacks,
@@ -87,7 +89,7 @@ export interface PendingTerminalAction {
 
 export interface TerminalSessionState {
   readonly sessionId: string;
-  readonly epicId: string;
+  readonly scope: TerminalScope;
   readonly connectionStatus: StreamConnectionStatus;
   readonly snapshotLoaded: boolean;
   readonly status: TerminalLifecycleStatus;
@@ -126,7 +128,7 @@ export interface TerminalSessionState {
 }
 
 export interface TerminalSessionStoreOptions {
-  readonly epicId: string;
+  readonly scope: TerminalScope;
   readonly sessionId: string;
   readonly cols: number;
   readonly rows: number;
@@ -136,7 +138,7 @@ export interface TerminalSessionStoreOptions {
 }
 
 export interface TerminalSessionStoreHandle {
-  readonly epicId: string;
+  readonly scope: TerminalScope;
   readonly sessionId: string;
   readonly store: UseBoundStore<StoreApi<TerminalSessionState>>;
   readonly dispose: () => void;
@@ -225,7 +227,9 @@ function terminalOutputPreview(content: string | Uint8Array): string | null {
 }
 
 function activeProcessNameFromSession(
-  session: TerminalSessionInfo,
+  session:
+    | Pick<CanonicalTerminalSessionInfo, "activeProcessName">
+    | Pick<TerminalSessionInfo, "activeProcessName">,
 ): string | null {
   const name = session.activeProcessName;
   if (name === undefined || name === null) return null;
@@ -546,7 +550,7 @@ export function createTerminalSessionStore(
 
     return {
       sessionId: options.sessionId,
-      epicId: options.epicId,
+      scope: options.scope,
       connectionStatus: "connecting",
       snapshotLoaded: false,
       status: "creating",
@@ -596,11 +600,29 @@ export function createTerminalSessionStore(
       requestResize: (cols, rows) => {
         if (disposed || streamClient === null) return null;
         const state = get();
-        if (state.status === "exited" || state.status === "lost") return null;
-        if (state.requestedCols === cols && state.requestedRows === rows) {
+        if (state.status === "exited") return null;
+        // Dedupe only a size that is BOTH already requested and already the
+        // effective grid. Skipping on requested alone stranded the xterm
+        // engine's latch self-heal: a resize frame lost in flight leaves
+        // `requested` recorded while the host never adopted it, and the
+        // engine's deliberate re-report of the same size must reach the wire
+        // to retry. Calls arriving here are already engine-dedupe-gated, so
+        // this cannot re-send on render-tick churn.
+        if (
+          state.requestedCols === cols &&
+          state.requestedRows === rows &&
+          state.effectiveCols === cols &&
+          state.effectiveRows === rows
+        ) {
           return null;
         }
-        if (state.connectionStatus !== "open") {
+        // "lost" stashes rather than drops: the xterm engine records every
+        // report in its own dedupe before this store sees it, so a dropped
+        // resize here is never re-offered - after the reconnect the session
+        // would stay latched at the pre-disconnect grid. The stash is flushed
+        // by `flushRequestedResize` once the reconnect's snapshot restores the
+        // session to "running".
+        if (state.status === "lost" || state.connectionStatus !== "open") {
           set({
             requestedCols: cols,
             requestedRows: rows,
@@ -638,7 +660,7 @@ export function createTerminalSessionStore(
   });
 
   return {
-    epicId: options.epicId,
+    scope: options.scope,
     sessionId: options.sessionId,
     store,
     dispose: () => {

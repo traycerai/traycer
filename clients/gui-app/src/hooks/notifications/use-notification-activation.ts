@@ -83,9 +83,15 @@ function getNotificationPreflightEpicId(
       return payload.epicId;
     case "artifact":
       return payload.epicId ?? null;
-    case "session":
     case "approval":
+      return payload.epicId ?? null;
+    case "interview":
+      return payload.epicId;
     case "chat":
+      return payload.epicId;
+    case "terminal":
+      return payload.epicId;
+    case "session":
       return null;
   }
 }

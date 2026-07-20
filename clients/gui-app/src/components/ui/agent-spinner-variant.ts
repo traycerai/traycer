@@ -14,7 +14,6 @@ export type AgentSpinnerVariant =
   | "dots13"
   | "dots14"
   | "sand"
-  | "bounce"
   | "dots_circle"
   | "wave"
   | "scan"
@@ -32,4 +31,5 @@ export type AgentSpinnerVariant =
   | "fillsweep"
   | "diagswipe"
   | "infinity"
+  | "static"
   | "waiting";

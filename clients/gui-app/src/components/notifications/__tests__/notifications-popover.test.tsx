@@ -11,6 +11,10 @@ import {
 } from "@testing-library/react";
 import * as Y from "yjs";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import {
   createMemoryHistory,
   createRootRoute,
@@ -27,7 +31,12 @@ import {
   openNotificationsStream,
   useNotificationsStore,
 } from "@/stores/notifications/notifications-store";
+import {
+  __resetHostNotificationsStoreForTests,
+  useHostNotificationsStore,
+} from "@/stores/notifications/host-notifications-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useSettingsSectionStore } from "@/stores/tabs/settings-section-store";
 import type { NotificationsStreamCallbacks } from "@traycer-clients/shared/host-transport/notifications-stream-client";
 import {
   type NotificationEntry,
@@ -38,6 +47,22 @@ import {
   NOTIFICATIONS_ARRAY_KEY,
   createNotificationRoomEntryMap,
 } from "@traycer/protocol/notifications/notification-room";
+import type { HostNotificationEntry } from "@traycer/protocol/host/notifications/contracts";
+import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
+
+const hostBindingState = vi.hoisted<{
+  current: { readonly hostClient: HostClient<HostRpcRegistry> } | null;
+}>(() => ({ current: null }));
+
+vi.mock("@/lib/host", async (importActual) => {
+  const actual = await importActual<typeof import("@/lib/host")>();
+  return {
+    ...actual,
+    useHostBinding: () => hostBindingState.current,
+  };
+});
+
+const TASK_TITLE = "Checkout notification title and hover behavior";
 
 function seedEntries(
   callbacks: NotificationsStreamCallbacks,
@@ -127,6 +152,84 @@ function renderRouter(router: AnyRouter): void {
   );
 }
 
+function createHostClient(
+  clearAllRequests: Array<{ readonly beforeUpdatedAt: number }>,
+): HostClient<HostRpcRegistry> {
+  const client = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: { invalidateHostScope: () => undefined },
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "clear-all-request",
+      handlers: {
+        "host.notifications.clearAll": (request) => {
+          clearAllRequests.push(request);
+          return {};
+        },
+      },
+    }),
+  });
+  client.bind(mockLocalHostEntry);
+  client.setRequestContext(
+    createRequestContextFixture({
+      origin: "renderer",
+      bearerToken: "test-token",
+    }),
+  );
+  return client;
+}
+
+function hostAgentEntry(input: {
+  readonly id: string;
+  readonly kind: "agent.stopped" | "agent.stalled";
+  readonly severity: "failure" | "done";
+  readonly outcome: "completed" | "stopped" | "errored" | null;
+}): HostNotificationEntry {
+  if (input.kind === "agent.stopped") {
+    return {
+      id: input.id,
+      updatedAt: input.id === "failed" ? 20 : 10,
+      readAt: null,
+      kind: "agent.stopped",
+      sourceRef: input.id,
+      severity: input.severity,
+      outcome: input.outcome ?? "completed",
+      epicId: "epic-1",
+      chatId: "chat-1",
+      payload: {
+        kind: "chat",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        agentName: "Agent",
+        taskTitle: TASK_TITLE,
+        outcome: input.outcome ?? "completed",
+      },
+    };
+  }
+  return {
+    id: input.id,
+    updatedAt: input.id === "failed" ? 20 : 10,
+    readAt: null,
+    kind: "agent.stalled",
+    sourceRef: input.id,
+    severity: input.severity,
+    outcome: "errored",
+    epicId: "epic-1",
+    chatId: "chat-1",
+    payload: {
+      kind: "agent_stalled",
+      epicId: "epic-1",
+      chatId: "chat-1",
+      agentId: "chat-1",
+      agentName: "Agent",
+      taskTitle: TASK_TITLE,
+      reason: "provider_buffering",
+      title: "Provider is buffering",
+      outcome: "errored",
+    },
+  };
+}
+
 function threadEntry(
   id: string,
   epicId: string,
@@ -172,6 +275,46 @@ function notificationIds(rows: ReadonlyArray<HTMLElement>) {
   return rows.map((row) => row.dataset.notificationId);
 }
 
+const ELEMENT_DIMENSIONS = [
+  "scrollHeight",
+  "clientHeight",
+  "scrollWidth",
+  "clientWidth",
+] as const;
+
+type ElementDimension = (typeof ELEMENT_DIMENSIONS)[number];
+
+function mockElementDimensions(
+  getValue: (element: HTMLElement, dimension: ElementDimension) => number,
+) {
+  const descriptors = new Map(
+    ELEMENT_DIMENSIONS.map((dimension) => [
+      dimension,
+      Object.getOwnPropertyDescriptor(HTMLElement.prototype, dimension),
+    ]),
+  );
+
+  ELEMENT_DIMENSIONS.forEach((dimension) => {
+    Object.defineProperty(HTMLElement.prototype, dimension, {
+      configurable: true,
+      get(this: HTMLElement) {
+        return getValue(this, dimension);
+      },
+    });
+  });
+
+  return (): void => {
+    ELEMENT_DIMENSIONS.forEach((dimension) => {
+      const descriptor = descriptors.get(dimension);
+      if (descriptor === undefined) {
+        Reflect.deleteProperty(HTMLElement.prototype, dimension);
+      } else {
+        Object.defineProperty(HTMLElement.prototype, dimension, descriptor);
+      }
+    });
+  };
+}
+
 async function selectTab(testId: string) {
   const trigger = screen.getByTestId(testId);
   await act(async () => {
@@ -182,7 +325,9 @@ async function selectTab(testId: string) {
 
 describe("NotificationsPopover click routing", () => {
   beforeEach(() => {
+    hostBindingState.current = null;
     __resetNotificationsStoreForTests();
+    __resetHostNotificationsStoreForTests();
     useEpicCanvasStore.setState({
       tabsById: {},
       openTabOrder: [],
@@ -193,6 +338,8 @@ describe("NotificationsPopover click routing", () => {
 
   afterEach(() => {
     cleanup();
+    hostBindingState.current = null;
+    __resetHostNotificationsStoreForTests();
   });
 
   it("renders a relative timestamp on every notification row", async () => {
@@ -271,13 +418,13 @@ describe("NotificationsPopover click routing", () => {
     );
     const unreadRows =
       within(unreadContent).getAllByTestId("notification-entry");
-    expect(notificationIds(unreadRows)).toEqual(["unread-new"]);
+    expect(notificationIds(unreadRows)).toEqual(["global:unread-new"]);
     const unreadRow = unreadRows[0];
     const unreadMarker = within(unreadRow).getByTestId(
       "notification-unread-marker",
     );
     expect(unreadMarker.className).toContain("absolute");
-    expect(unreadMarker.className).toContain("inset-y-0");
+    expect(unreadMarker.className).toContain("inset-y-2");
     expect(unreadMarker.className).toContain("left-0");
     expect(unreadMarker.className).toContain("rounded-r-full");
 
@@ -289,12 +436,269 @@ describe("NotificationsPopover click routing", () => {
     let allRows: ReadonlyArray<HTMLElement> = [];
     await waitFor(() => {
       allRows = within(allContent).getAllByTestId("notification-entry");
-      expect(notificationIds(allRows)).toEqual(["unread-new", "read-old"]);
+      expect(notificationIds(allRows)).toEqual([
+        "global:unread-new",
+        "global:read-old",
+      ]);
     });
     const readRow = allRows[1];
     expect(
       within(readRow).queryByTestId("notification-unread-marker"),
     ).toBeNull();
+  });
+
+  it("renders failed host outcomes and stalled rows as failure severity", async () => {
+    useHostNotificationsStore.getState().replaceFromSnapshot(
+      [
+        hostAgentEntry({
+          id: "completed",
+          kind: "agent.stopped",
+          severity: "done",
+          outcome: "completed",
+        }),
+        hostAgentEntry({
+          id: "failed",
+          kind: "agent.stopped",
+          severity: "failure",
+          outcome: "errored",
+        }),
+        hostAgentEntry({
+          id: "stalled",
+          kind: "agent.stalled",
+          severity: "failure",
+          outcome: "errored",
+        }),
+      ],
+      50,
+    );
+
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
+    renderRouter(router);
+
+    const rows = await screen.findAllByTestId("notification-entry");
+    const failed = rows.find(
+      (row) => row.dataset.notificationId === "host:failed",
+    );
+    const completed = rows.find(
+      (row) => row.dataset.notificationId === "host:completed",
+    );
+    const stalled = rows.find(
+      (row) => row.dataset.notificationId === "host:stalled",
+    );
+
+    expect(failed?.dataset.notificationSeverity).toBe("failure");
+    expect(failed?.dataset.notificationOutcome).toBe("errored");
+    expect(failed?.textContent).toContain(TASK_TITLE);
+    expect(failed?.textContent).toContain("Agent • Failed");
+    expect(completed?.dataset.notificationSeverity).toBe("done");
+    expect(completed?.textContent).toContain(TASK_TITLE);
+    expect(completed?.textContent).toContain("Agent • Done");
+    expect(stalled?.dataset.notificationSeverity).toBe("failure");
+    expect(stalled?.textContent).toContain(TASK_TITLE);
+    expect(stalled?.textContent).toContain(
+      "Agent • Provider is taking longer than expected",
+    );
+
+    if (completed === undefined) throw new Error("missing completed row");
+    const notificationTitle =
+      within(completed).getByTestId("notification-title");
+    const notificationBody = within(completed).getByTestId("notification-body");
+    expect(notificationTitle.className).toContain("line-clamp-2");
+    expect(notificationTitle.className).toContain("font-semibold");
+    expect(notificationBody.className).toContain("line-clamp-2");
+  });
+
+  it("expands overflowing notification text inline", async () => {
+    const restoreDimensions = mockElementDimensions((_element, dimension) =>
+      dimension === "scrollHeight" ? 48 : 24,
+    );
+
+    try {
+      useHostNotificationsStore.getState().replaceFromSnapshot(
+        [
+          hostAgentEntry({
+            id: "completed",
+            kind: "agent.stopped",
+            severity: "done",
+            outcome: "completed",
+          }),
+        ],
+        50,
+      );
+
+      const captured: TargetCapture = {
+        epicId: null,
+        tabId: null,
+        focusArtifactId: null,
+        focusThreadId: null,
+      };
+      const onNavigate = vi.fn();
+      const { router } = buildRouterWithCapture(captured, onNavigate);
+      renderRouter(router);
+
+      const completed = await screen.findByTestId("notification-entry");
+      const notificationTitle =
+        within(completed).getByTestId("notification-title");
+      const notificationBody =
+        within(completed).getByTestId("notification-body");
+      expect(notificationTitle.className).toContain("line-clamp-2");
+      expect(notificationTitle.className).toContain("font-semibold");
+      expect(notificationBody.className).toContain("line-clamp-2");
+      expect(notificationBody.className).toContain("break-words");
+      expect(notificationBody.className).not.toContain("truncate");
+
+      const expand = within(completed).getByRole("button", {
+        name: "Show more",
+      });
+      expect(expand.getAttribute("aria-expanded")).toBe("false");
+      fireEvent.click(expand);
+      expect(onNavigate).not.toHaveBeenCalled();
+
+      expect(notificationTitle.className).not.toContain("line-clamp-2");
+      expect(notificationBody.className).not.toContain("line-clamp-2");
+      const collapse = within(completed).getByRole("button", {
+        name: "Show less",
+      });
+      expect(collapse.getAttribute("aria-expanded")).toBe("true");
+
+      fireEvent.click(collapse);
+      expect(notificationTitle.className).toContain("line-clamp-2");
+      expect(notificationBody.className).toContain("line-clamp-2");
+    } finally {
+      restoreDimensions();
+    }
+  });
+
+  it("omits the expansion control when notification text fits", async () => {
+    useHostNotificationsStore.getState().replaceFromSnapshot(
+      [
+        hostAgentEntry({
+          id: "completed",
+          kind: "agent.stopped",
+          severity: "done",
+          outcome: "completed",
+        }),
+      ],
+      50,
+    );
+
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
+    renderRouter(router);
+
+    await screen.findByTestId("notification-entry");
+    expect(screen.queryByRole("button", { name: "Show more" })).toBeNull();
+  });
+
+  it("omits disclosure when the title and body fit within two lines", async () => {
+    const restoreDimensions = mockElementDimensions((element, dimension) => {
+      const isTitle = element.dataset.testid === "notification-title";
+      const isWidth =
+        dimension === "scrollWidth" || dimension === "clientWidth";
+      if (isWidth) {
+        return isTitle &&
+          dimension === "scrollWidth" &&
+          element.className.includes("truncate")
+          ? 240
+          : 200;
+      }
+      return isTitle ? 40 : 20;
+    });
+
+    try {
+      useHostNotificationsStore.getState().replaceFromSnapshot(
+        [
+          hostAgentEntry({
+            id: "completed",
+            kind: "agent.stopped",
+            severity: "done",
+            outcome: "completed",
+          }),
+        ],
+        50,
+      );
+
+      const captured: TargetCapture = {
+        epicId: null,
+        tabId: null,
+        focusArtifactId: null,
+        focusThreadId: null,
+      };
+      const { router } = buildRouterWithCapture(captured, () => undefined);
+      renderRouter(router);
+
+      await screen.findByTestId("notification-entry");
+      expect(screen.queryByRole("button", { name: "Show more" })).toBeNull();
+    } finally {
+      restoreDimensions();
+    }
+  });
+
+  it("shows disclosure consistently for overflowing read and unread rows", async () => {
+    const restoreDimensions = mockElementDimensions((element, dimension) => {
+      if (dimension === "scrollWidth" || dimension === "clientWidth")
+        return 200;
+      const isBody = element.dataset.testid === "notification-body";
+      if (isBody && dimension === "scrollHeight") return 60;
+      return isBody ? 40 : 20;
+    });
+
+    try {
+      const readEntry = {
+        ...hostAgentEntry({
+          id: "read",
+          kind: "agent.stopped",
+          severity: "done",
+          outcome: "completed",
+        }),
+        readAt: 10,
+      };
+      useHostNotificationsStore.getState().replaceFromSnapshot(
+        [
+          hostAgentEntry({
+            id: "unread",
+            kind: "agent.stopped",
+            severity: "done",
+            outcome: "completed",
+          }),
+          readEntry,
+        ],
+        50,
+      );
+
+      const captured: TargetCapture = {
+        epicId: null,
+        tabId: null,
+        focusArtifactId: null,
+        focusThreadId: null,
+      };
+      const { router } = buildRouterWithCapture(captured, () => undefined);
+      renderRouter(router);
+      await screen.findByTestId("notifications-tab-all");
+      await selectTab("notifications-tab-all");
+
+      const allContent = await screen.findByTestId(
+        "notifications-tab-content-all",
+      );
+      await waitFor(() => {
+        expect(
+          within(allContent).getAllByRole("button", { name: "Show more" }),
+        ).toHaveLength(2);
+      });
+    } finally {
+      restoreDimensions();
+    }
   });
 
   it("keeps the Unread tab visible when every notification is read", async () => {
@@ -345,7 +749,7 @@ describe("NotificationsPopover click routing", () => {
         notificationIds(
           within(allContent).getAllByTestId("notification-entry"),
         ),
-      ).toEqual(["read-only"]);
+      ).toEqual(["global:read-only"]);
     });
   });
 
@@ -423,6 +827,21 @@ describe("NotificationsPopover click routing", () => {
   });
 
   it("clears every notification when Clear all is clicked", async () => {
+    const clearAllRequests: Array<{ readonly beforeUpdatedAt: number }> = [];
+    hostBindingState.current = {
+      hostClient: createHostClient(clearAllRequests),
+    };
+    useHostNotificationsStore.getState().replaceFromSnapshot(
+      [
+        hostAgentEntry({
+          id: "clear-host",
+          kind: "agent.stopped",
+          severity: "done",
+          outcome: "completed",
+        }),
+      ],
+      50,
+    );
     const captured: TargetCapture = {
       epicId: null,
       tabId: null,
@@ -446,6 +865,41 @@ describe("NotificationsPopover click routing", () => {
     fireEvent.click(await screen.findByTestId("notifications-clear-all"));
 
     expect(useNotificationsStore.getState().entries.length).toBe(0);
+    await waitFor(() => {
+      expect(clearAllRequests).toHaveLength(1);
+      expect(clearAllRequests.at(0)?.beforeUpdatedAt).toBe(10);
+      expect(useHostNotificationsStore.getState().orderedIds).toEqual([]);
+    });
     expect(await screen.findByTestId("notifications-empty")).not.toBeNull();
+  });
+
+  it("opens the Notifications settings section when the gear button is clicked", async () => {
+    useSettingsSectionStore.getState().setSection(null);
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    let navigated = false;
+    const { router } = buildRouterWithCapture(captured, () => {
+      navigated = true;
+    });
+
+    renderRouter(router);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Open notification settings",
+      }),
+    );
+
+    expect(navigated).toBe(true);
+    expect(useSettingsSectionStore.getState().section).toBe("notifications");
+    await waitFor(() => {
+      expect(router.state.location.search).toMatchObject({
+        settingsOverlay: true,
+      });
+    });
   });
 });

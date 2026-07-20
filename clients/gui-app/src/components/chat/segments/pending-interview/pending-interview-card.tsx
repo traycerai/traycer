@@ -1,11 +1,4 @@
-import {
-  Check,
-  ChevronLeft,
-  ChevronRight,
-  MessageSquareQuote,
-  Split,
-} from "lucide-react";
-import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { Check, ChevronLeft, ChevronRight } from "lucide-react";
 import type { ChatForkMode } from "@/components/chat/chat-message";
 import { AnimatePresence, useReducedMotion } from "motion/react";
 import * as m from "motion/react-m";
@@ -16,10 +9,12 @@ import type {
 import { Button } from "@/components/ui/button";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { modLabel } from "@/lib/keybindings/platform";
+import { InterviewForkActions } from "@/components/chat/segments/interview-fork-actions";
 import { QuestionPage } from "./question-page";
 import { QUESTION_TRANSITION, useInterviewCard } from "./use-interview-card";
 
 interface PendingInterviewCardProps {
+  chatId: string;
   blockId: string;
   toolName: string | null;
   title: string | null;
@@ -28,6 +23,11 @@ interface PendingInterviewCardProps {
   // Whether this card's chat tab is the active one in its pane - gates focus
   // for multi-pane layouts (see useInterviewCard).
   isActive: boolean;
+  // True while a Submit/Skip for this interview block is in flight or accepted
+  // but unresolved (from the chat session's pending/accepted actions). Locks
+  // every affordance so the action cannot be double-sent; clears on a
+  // rejected/failed ack so the retained draft becomes retryable.
+  isBusy: boolean;
   /**
    * `null` disables the Submit/Skip affordances while the chat cannot send.
    * The card still paginates so the pending question remains readable.
@@ -62,7 +62,6 @@ export function PendingInterviewCard(props: PendingInterviewCardProps) {
     draft,
     direction,
     pendingLabel,
-    dispatched,
     isLast,
     answeredCount,
     canAdvance,
@@ -77,9 +76,11 @@ export function PendingInterviewCard(props: PendingInterviewCardProps) {
     setOtherText,
     setFreeText,
   } = useInterviewCard({
+    chatId: props.chatId,
     blockId: props.blockId,
     questions: props.questions,
     isActive: props.isActive,
+    isBusy: props.isBusy,
     onSubmit: props.onSubmit,
     onSkip: props.onSkip,
   });
@@ -117,6 +118,7 @@ export function PendingInterviewCard(props: PendingInterviewCardProps) {
               question={question}
               draft={draft}
               isActive={props.isActive}
+              disabled={props.isBusy}
               pendingLabel={pendingLabel}
               onToggleOption={toggleOption}
               onToggleOther={toggleOther}
@@ -131,13 +133,17 @@ export function PendingInterviewCard(props: PendingInterviewCardProps) {
           <QuestionPager
             current={safeIndex + 1}
             total={total}
-            disabled={dispatched}
+            disabled={props.isBusy}
             onPrevious={goPrevious}
             onNext={goNext}
           />
           <InterviewProgress answeredCount={answeredCount} total={total} />
           {props.onFork !== null ? (
-            <InterviewForkActions onFork={props.onFork} disabled={dispatched} />
+            <InterviewForkActions
+              onFork={props.onFork}
+              disabled={props.isBusy}
+              display="labels"
+            />
           ) : null}
         </div>
         <div className="ml-auto flex items-center gap-2">
@@ -187,57 +193,6 @@ export function PendingInterviewCard(props: PendingInterviewCardProps) {
   );
 }
 
-/**
- * The two fork-at-this-question entry points. Both open the fork dialog with
- * the workspace disposition pre-selected; the question stays pending in this
- * chat while the fork carries its own answerable copy.
- */
-function InterviewForkActions(props: {
-  readonly onFork: (mode: ChatForkMode) => void;
-  readonly disabled: boolean;
-}) {
-  return (
-    <>
-      <TooltipWrapper
-        label="Fork on this chat's workspace to interrogate the assistant before answering"
-        side="top"
-        sideOffset={undefined}
-        align={undefined}
-      >
-        <Button
-          type="button"
-          size="sm"
-          variant="ghost"
-          className="text-muted-foreground"
-          disabled={props.disabled}
-          onClick={() => props.onFork("cross-question")}
-        >
-          <MessageSquareQuote className="size-3.5" aria-hidden />
-          Cross Question
-        </Button>
-      </TooltipWrapper>
-      <TooltipWrapper
-        label="Fork into new worktrees carrying your working tree to proceed with different answers in parallel"
-        side="top"
-        sideOffset={undefined}
-        align={undefined}
-      >
-        <Button
-          type="button"
-          size="sm"
-          variant="ghost"
-          className="text-muted-foreground"
-          disabled={props.disabled}
-          onClick={() => props.onFork("ab-worktree")}
-        >
-          <Split className="size-3.5 rotate-90" aria-hidden />
-          A/B Fork
-        </Button>
-      </TooltipWrapper>
-    </>
-  );
-}
-
 interface InterviewQuestionHeaderProps {
   readonly questionText: string;
 }
@@ -280,7 +235,7 @@ function QuestionPager(props: QuestionPagerProps) {
         type="button"
         size="icon-xs"
         variant="ghost"
-        disabled={props.current <= 1 || props.disabled}
+        disabled={props.disabled || props.current <= 1}
         onClick={props.onPrevious}
         aria-label="Previous question"
       >
@@ -293,7 +248,7 @@ function QuestionPager(props: QuestionPagerProps) {
         type="button"
         size="icon-xs"
         variant="ghost"
-        disabled={props.current >= props.total || props.disabled}
+        disabled={props.disabled || props.current >= props.total}
         onClick={props.onNext}
         aria-label="Next question"
       >

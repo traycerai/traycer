@@ -30,6 +30,7 @@ export type MarkdownFileLinkHandler = (link: MarkdownFileLink) => boolean;
 
 export interface MarkdownLinkPolicy {
   readonly openFileLink: MarkdownFileLinkHandler;
+  readonly supersedePendingFileLink: () => void;
 }
 
 export const MarkdownLinkContext = createContext<MarkdownLinkPolicy | null>(

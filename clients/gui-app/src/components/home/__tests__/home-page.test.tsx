@@ -167,6 +167,10 @@ vi.mock("@/components/home/host-update-banner", () => ({
 vi.mock("@/components/epics/epics-list-panel", () => ({
   EpicsListPanel: () => <div data-testid="epics-list-panel" />,
 }));
+
+vi.mock("@/components/home/terminal-panel/landing-terminal-panel", () => ({
+  LandingTerminalPanel: () => <div data-testid="landing-terminal-panel-slot" />,
+}));
 import { HomePage } from "@/components/home/home-page";
 
 describe("<HomePage />", () => {

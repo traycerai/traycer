@@ -1454,4 +1454,219 @@ describe("AuthService", () => {
       expect(cli.lastLoginRefreshToken).toBe(`${rotated}-refresh`);
     });
   });
+
+  describe("identity-transition generation fencing", () => {
+    // The attempt epoch is consumed before the finalization's token-save and
+    // provisioning awaits, so these races are exactly the window only the
+    // identity generation can fence.
+
+    it("a sign-out during the token save wins over the in-flight finalization", async () => {
+      const { service, host } = makeService();
+      await service.start();
+      await service.signIn();
+
+      let releaseSave: () => void = () => undefined;
+      const savePending = new Promise<void>((resolve) => {
+        releaseSave = resolve;
+      });
+      let signalSaveStarted: () => void = () => undefined;
+      const saveStarted = new Promise<void>((resolve) => {
+        signalSaveStarted = resolve;
+      });
+      const originalSet = host.tokenStore.set.bind(host.tokenStore);
+      host.tokenStore.set = async (tokens: StoredAuthTokens): Promise<void> => {
+        signalSaveStarted();
+        await savePending;
+        await originalSet(tokens);
+      };
+
+      host.deviceFlow.emitResult({
+        kind: "authorized",
+        token: "raced-token",
+        refreshToken: "raced-token-refresh",
+      });
+      // The finalization validated the token and is now awaiting the save.
+      await saveStarted;
+
+      // Sign out while the save is in flight. Its generation bump lands
+      // synchronously; the storage clear is SERIALIZED behind the hanging
+      // save (last-dispatched op owns the final on-disk state), so the
+      // sign-out settles only after the save is released.
+      const signOutSettled = service.signOut();
+      releaseSave();
+      await signOutSettled;
+      expect(useAuthStore.getState().status).toBe("signed-out");
+
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+      // The stale finalization must not resurrect the signed-in projection.
+      expect(useAuthStore.getState().status).toBe("signed-out");
+      expect(service.getCurrentSessionSnapshot().token).toBeNull();
+      expect(await host.tokenStore.get()).toBeNull();
+    });
+
+    it("a newer sign-in wins over a finalization awaiting local provisioning", async () => {
+      const cli = new MockTraycerCli();
+      let releaseLogin: () => void = () => undefined;
+      const loginPending = new Promise<void>((resolve) => {
+        releaseLogin = resolve;
+      });
+      let signalLoginStarted: () => void = () => undefined;
+      const loginStarted = new Promise<void>((resolve) => {
+        signalLoginStarted = resolve;
+      });
+      cli.cliLogin = async (): Promise<void> => {
+        signalLoginStarted();
+        await loginPending;
+      };
+      const host = new MockRunnerHost({
+        signInUrl:
+          "https://auth.traycer.ai/sign-in?redirect_uri=traycer%3A%2F%2Fauth",
+        authnBaseUrl: "http://localhost:5005",
+        localHost: null,
+        hosts: [],
+        workspaceFolderPickerPaths: undefined,
+        hasLocalHost: undefined,
+        traycerCli: cli,
+      });
+      const service = trackService(new AuthService({ runnerHost: host }));
+      await service.start();
+
+      await service.signIn();
+      const sessionA = host.deviceFlow.lastSession;
+      sessionA?.emit({
+        kind: "authorized",
+        token: "token-a",
+        refreshToken: "token-a-refresh",
+      });
+      // Attempt A validated + saved and is now awaiting provisioning.
+      await loginStarted;
+
+      await service.signIn();
+      expect(useAuthStore.getState().status).toBe("signing-in");
+
+      releaseLogin();
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+      // A's finalization must not project its identity over attempt B.
+      expect(useAuthStore.getState().status).toBe("signing-in");
+      expect(service.getCurrentSessionSnapshot().token).toBeNull();
+
+      // Attempt B still completes normally.
+      host.deviceFlow.emitResult({
+        kind: "authorized",
+        token: "token-b",
+        refreshToken: "token-b-refresh",
+      });
+      await vi.waitFor(() => {
+        expect(service.getCurrentSessionSnapshot().token).toBe("token-b");
+      });
+      expect(useAuthStore.getState().status).toBe("signed-in");
+    });
+
+    it("treats a rejected token save as a product sign-in failure and stays retryable", async () => {
+      const { service, host } = makeService();
+      await service.start();
+
+      const originalSet = host.tokenStore.set.bind(host.tokenStore);
+      host.tokenStore.set = (): Promise<void> =>
+        Promise.reject(new Error("disk full"));
+
+      await service.signIn();
+      host.deviceFlow.emitResult({
+        kind: "authorized",
+        token: "unsaved-token",
+        refreshToken: "unsaved-token-refresh",
+      });
+
+      await vi.waitFor(() => {
+        expect(useAuthStore.getState().status).toBe("signed-out");
+      });
+      expect(service.getLastError()).toBe(AUTH_ERROR_SIGN_IN_FAILED);
+      expect(service.getCurrentSessionSnapshot().token).toBeNull();
+
+      // Terminal failure, not a wedge: a retry with a healthy store succeeds.
+      host.tokenStore.set = originalSet;
+      await deviceSignIn(service, host, "retry-after-save-failure");
+      expect(useAuthStore.getState().status).toBe("signed-in");
+    });
+
+    it("a sign-out during a proactive token refresh is not resurrected by the refresh tail", async () => {
+      const { service, host } = makeService();
+      // 5m of life left → inside the proactive lead window, so an OS resume
+      // drives an immediate force-refresh against `/api/v3/auth/refresh`.
+      const nearExpiry = jwtExpiringInMs(5 * 60_000);
+      await host.tokenStore.set({
+        token: nearExpiry,
+        refreshToken: `${nearExpiry}-refresh`,
+      });
+      restoreFetch();
+      const deferredRefresh = createDeferredResponse();
+      let signalRefreshStarted: () => void = () => undefined;
+      const refreshStarted = new Promise<void>((resolve) => {
+        signalRefreshStarted = resolve;
+      });
+      restoreFetch = installFetch((input) => {
+        const url = typeof input === "string" ? input : String(input);
+        if (url === REFRESH_URL) {
+          signalRefreshStarted();
+          return deferredRefresh.promise;
+        }
+        return okWithProfile();
+      });
+      await service.start();
+      expect(useAuthStore.getState().status).toBe("signed-in");
+
+      // The wake-driven proactive refresh dispatches and hangs on /refresh.
+      host.emitSystemResumed();
+      await refreshStarted;
+
+      await service.signOut();
+      expect(useAuthStore.getState().status).toBe("signed-out");
+
+      // The refresh now resolves successfully - its tail must not resurrect
+      // the session in memory or on disk.
+      const rotated = jwtExpiringInMs(4 * 60 * 60_000);
+      deferredRefresh.resolve(
+        new Response(
+          JSON.stringify({
+            token: rotated,
+            refreshToken: `${rotated}-refresh`,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+      expect(useAuthStore.getState().status).toBe("signed-out");
+      expect(service.getCurrentSessionSnapshot().token).toBeNull();
+      expect(await host.tokenStore.get()).toBeNull();
+    });
+
+    it("start()'s rehydration defers to an interactive sign-in that began mid-validation", async () => {
+      const { service, host } = makeService();
+      await host.tokenStore.set({
+        token: "persisted-token",
+        refreshToken: "persisted-token-refresh",
+      });
+      restoreFetch();
+      const deferredValidate = createDeferredResponse();
+      restoreFetch = installFetch(() => deferredValidate.promise);
+
+      const startPromise = service.start();
+      // Let start() get past the token load and dispatch its validation.
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+      await service.signIn();
+      expect(useAuthStore.getState().status).toBe("signing-in");
+
+      deferredValidate.resolve(await okWithProfile());
+      await startPromise;
+
+      // The stored-token rehydration must not project the old identity over
+      // the interactive attempt the user just started.
+      expect(useAuthStore.getState().status).toBe("signing-in");
+      expect(service.getCurrentSessionSnapshot().token).toBeNull();
+    });
+  });
 });

@@ -29,12 +29,21 @@ export interface WorkspaceRunItem {
   readonly isGitRepo: boolean;
   readonly mode: WorkspaceRunMode;
   readonly branchLabel: string;
-  readonly hoverLabel: string;
   readonly summary: WorktreeWorkspaceSummary | null;
   readonly currentIntent: WorktreeFolderIntent | null;
   readonly defaultNewBranchName: string;
   readonly repoIdentifier: WorktreeFolderIntent["repoIdentifier"];
   readonly isPrimary: boolean;
+  // Surface capability (same value for every row in a given surface): true
+  // for every not-yet-created-owner picker (landing, fork dialogs, the
+  // new-conversation modal, the terminal-agent launcher); false for bound
+  // owner rows (chat / terminal-agent), where the primary pin is
+  // read-only - there is no atomic set-primary RPC for a live binding.
+  readonly canChangePrimary: boolean;
+  // True for a row that can't act on "Make primary" yet (unresolved /
+  // still loading its disk metadata), independent of `canChangePrimary`.
+  readonly makePrimaryDisabled: boolean;
+  readonly makePrimaryDisabledReason: string | null;
   readonly hostClient: HostClient<HostRpcRegistry> | null;
   readonly modeDisabled: boolean;
   readonly modeDisabledReason: string | null;
@@ -44,7 +53,21 @@ export interface WorkspaceRunItem {
   readonly onSelectMode: (mode: WorkspaceRunMode) => void;
   readonly onEmit: (intent: WorktreeFolderIntent) => void;
   readonly onLocate: (() => void) | null;
+  readonly onMakePrimary: () => void;
   readonly onRemove: (() => void) | null;
+}
+
+/**
+ * The path where the chat/terminal actually runs: the adopted worktree path
+ * for an imported worktree, the folder's own path for local, or `null` for a
+ * new worktree that has not been created yet (no path exists on disk).
+ */
+export function workspaceRunPath(item: WorkspaceRunItem): string | null {
+  if (item.mode === "local") return item.displayPath;
+  if (item.currentIntent?.kind === "import") {
+    return item.currentIntent.worktreePath;
+  }
+  return null;
 }
 
 export type FolderLocationValue = "local" | "worktree" | "import";
@@ -91,11 +114,11 @@ export function locationSelectionChanges(
 }
 
 /**
- * The branch label shown on a folder row / summary. A new worktree reads as its
- * SOURCE branch, not the fork's new name: a `new` fork carries its source
- * explicitly, and an `existing` checkout's `name` IS the adopted source branch.
- * `local` falls back to the checkout's current branch; an `import` reads the
- * adopted on-disk worktree's branch (or its folder name when headless).
+ * The branch label shown on a folder row / summary. A new worktree reads as the
+ * new branch it will create; its source is secondary context supplied by
+ * {@link workspaceRunBranchSourceLabel}. `local` falls back to the checkout's
+ * current branch; an `import` reads the adopted on-disk worktree's branch (or
+ * its folder name when headless).
  */
 export function workspaceRunBranchLabel(input: {
   readonly mode: WorkspaceRunMode;
@@ -111,15 +134,10 @@ export function workspaceRunBranchLabel(input: {
   if (input.currentIntent.kind === "local")
     return input.currentBranch ?? "Local";
   if (input.currentIntent.kind === "worktree") {
-    const { branch } = input.currentIntent;
-    if (branch.type !== "new") return branch.name;
-    // A `new` worktree reads as its source branch. When it carries the working
-    // tree's uncommitted WIP (only possible when the source matches the checkout's
-    // current branch) say so explicitly; a clean fork reads as the plain source.
-    return branch.carryUncommittedChanges &&
-      branch.source === input.currentBranch
-      ? `Working tree · ${branch.source}`
-      : branch.source;
+    // Both a `new` fork and an `existing` checkout read as the branch the
+    // worktree will run on; a `new` fork's SOURCE is separate, secondary
+    // context supplied by `workspaceRunBranchSourceLabel`.
+    return input.currentIntent.branch.name;
   }
   const importIntent = input.currentIntent;
   const matching =
@@ -132,23 +150,32 @@ export function workspaceRunBranchLabel(input: {
   return workspaceFolderName(importIntent.worktreePath);
 }
 
+/** Secondary source context for a new-worktree target label. */
+export function workspaceRunBranchSourceLabel(
+  intent: WorktreeFolderIntent | null,
+): string | null {
+  if (intent?.kind !== "worktree" || intent.branch.type !== "new") return null;
+  return intent.branch.carryUncommittedChanges
+    ? `Working tree · ${intent.branch.source}`
+    : intent.branch.source;
+}
+
 /**
  * Muted, borderless trigger styling shared by the folder-row controls (Location,
  * Branch) so they match the host picker and the older folder chip — no border,
- * `text-muted-foreground` at reduced opacity, subtle hover. Pass through `cn(...)`.
+ * secondary text, subtle hover. Branch callers raise their selected value to
+ * medium-emphasis foreground. Pass through `cn(...)`.
  */
-// `w-full` so each trigger fills its grid cell and the chevron (a `flex-1`
-// label sits before it) pins to the cell's right edge instead of hugging short
-// text. See the Location / Branch controls. Resting tone is the muted composer
-// chip (muted-foreground @ 0.7) by default; a mount can set `--fc-text` /
-// `--fc-opacity` to render full-opacity foreground text (e.g. fork / terminal
-// panels, where it must match the surrounding non-muted sections).
+// The row grid owns each control's width. Filling its minmax(0, …) track keeps
+// intrinsic label widths from increasing a modal or submenu's minimum width;
+// labels truncate inside the control instead.
+// Resting tone is secondary muted text by default; a mount can set `--fc-text`
+// to brighten location labels (e.g. fork / terminal panels).
 export const FOLDER_CONTROL_TRIGGER_CLASS =
-  // A disabled control (active-run lock / non-git folder) keeps the SAME base
-  // `--fc-opacity` as the folder chip, branch label, and "Add folder" so it does
-  // not render lighter than the rest of its row. The disabled affordance is the
-  // not-allowed cursor + no hover-brighten + the rebind tooltip, not extra fade.
-  "inline-flex w-full min-w-0 items-center gap-1.5 rounded-md px-1.5 py-1 text-ui-sm text-[color:var(--fc-text,var(--color-muted-foreground))] opacity-[var(--fc-opacity,0.7)] transition-[background-color,opacity] hover:bg-accent/50 hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:opacity-[var(--fc-opacity,0.7)] aria-disabled:cursor-not-allowed aria-disabled:hover:bg-transparent aria-disabled:hover:opacity-[var(--fc-opacity,0.7)] data-[state=open]:bg-accent/50 data-[state=open]:opacity-100";
+  // A disabled control (active-run lock / non-git folder) keeps the same text
+  // tone. Its affordance is the not-allowed cursor + no hover-brighten + the
+  // rebind tooltip, rather than another layer of fading.
+  "inline-flex w-full max-w-full min-w-0 items-center gap-1.5 rounded-md px-1.5 py-1 text-ui-sm text-[color:var(--fc-text,var(--color-muted-foreground))] transition-[background-color,color] hover:bg-accent/50 hover:text-foreground focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-[color:var(--fc-text,var(--color-muted-foreground))] aria-disabled:cursor-not-allowed aria-disabled:hover:bg-transparent aria-disabled:hover:text-[color:var(--fc-text,var(--color-muted-foreground))] data-[state=open]:bg-accent/50 data-[state=open]:text-foreground";
 
 // The ⚙ scripts button opens the modal in every mode with no per-folder
 // "configured" indicator, so no scripts-content derivation lives here.

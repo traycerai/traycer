@@ -69,6 +69,7 @@ function claudeState(profileIds: readonly string[]): ProviderCliState {
       identity: null,
       usageUpdatedAt: null,
       rateLimitStatus: "unknown" as const,
+      rateLimitLimitedScopes: null,
       duplicateOfProfileId: null,
       accentColor: null,
       ambientDriftNotice: null,

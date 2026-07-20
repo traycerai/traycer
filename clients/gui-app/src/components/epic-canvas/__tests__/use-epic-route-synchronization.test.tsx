@@ -626,6 +626,7 @@ describe("useEpicRouteSynchronization", () => {
       type: "git-diff",
       name: "file.ts · Working",
       hostId: "host-1",
+      repositoryContext: null,
       diff: {
         kind: "file",
         runningDir: "/repo",

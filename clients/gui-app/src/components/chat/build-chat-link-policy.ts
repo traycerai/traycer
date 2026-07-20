@@ -1,14 +1,19 @@
 import type { QueryClient } from "@tanstack/react-query";
 import type { UseNavigateResult } from "@tanstack/react-router";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { ResolveArtifactByPathResult } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
+import { EPIC_ARTIFACT_INDEX_FILENAME } from "@traycer/protocol/common/artifact-path";
 import {
+  candidateWorkspaceFileRefsForAbsoluteLinkPath,
+  candidateWorkspaceFileRefsForRelativeLinkPath,
   workspaceFileRefFromAbsoluteFilePath,
   workspaceFileRefFromLinkPath,
 } from "@/components/epic-canvas/workspace-file/workspace-file-link-ref";
-import { isAbsolutePath } from "@/lib/path/cross-platform-path";
+import { isAbsolutePath, joinPath } from "@/lib/path/cross-platform-path";
 import { openProjectedSidebarNodeInTabWhenAvailable } from "@/components/epic-canvas/sidebar/open-projected-sidebar-node";
 import { fetchResolveArtifactByPath } from "@/lib/host/resolve-artifact-by-path";
+import { fetchWorkspaceFileExists } from "@/lib/host/probe-workspace-file-exists";
 import {
   navigateToTabIntent,
   openOrFocusEpicIntent,
@@ -17,7 +22,10 @@ import { artifactEpicIdFromLinkPath } from "@/markdown/links/artifact-link-path"
 import type { MarkdownFileLink } from "@/markdown/links/markdown-link-context";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import { setWorkspaceFileRevealTarget } from "@/stores/epics/canvas/workspace-file-reveal-store";
-import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
+import type {
+  EpicCanvasTileRef,
+  WorkspaceFileRef,
+} from "@/stores/epics/canvas/types";
 
 /**
  * Static dependencies the chat link policy closes over, all sourced from React
@@ -38,7 +46,25 @@ export interface ChatLinkPolicyDeps {
   readonly openEpicId: string;
   readonly epicHandle: OpenEpicStoreHandle;
   readonly queryClient: QueryClient;
+  /**
+   * Client for the ARTIFACT-resolve RPC, bound to `activeHostId` (the
+   * app-wide default host - epics are listed from it and the resolved
+   * artifact tab is stamped with it, matching sidebar artifact opens).
+   */
   readonly client: HostClient<HostRpcRegistry>;
+  /**
+   * Client for a RELATIVE plain-file link's existence probes, bound to
+   * `hostId` (the chat tab's OWN host) - NOT `client`. `hostId` only scopes
+   * the query KEY; `client.request(...)` always sends over whatever
+   * connection the client itself is bound to. A tab pinned to a different
+   * host than the app's active one must probe ITS OWN filesystem through a
+   * client actually connected to that host, or the probe silently checks the
+   * wrong machine while the opened ref is stamped with the tab's `hostId`.
+   * `null` while the tab-scoped client hasn't resolved yet - a relative-link
+   * click fails fast (the existing failure toast) rather than falling back to
+   * `client`.
+   */
+  readonly workspaceClient: HostClient<HostRpcRegistry> | null;
   readonly navigate: UseNavigateResult<string>;
   readonly previewTileInTab: (tabId: string, node: EpicCanvasTileRef) => void;
 }
@@ -69,6 +95,8 @@ export interface ChatLinkLifecycle {
   readonly beginClick: () => number;
   /** Whether `token` is still the latest click (not yet superseded). */
   readonly isCurrent: (token: number) => boolean;
+  /** Reports an async artifact resolve/fallback that produced no open. */
+  readonly onAsyncFailure: () => void;
 }
 
 /** Synchronous boolean handler markdown anchors call for a file-shaped link. */
@@ -134,16 +162,106 @@ export function buildChatLinkPolicy(deps: ChatLinkPolicyDeps): ChatLinkHandler {
       return true;
     }
 
-    return openChatWorkspaceFilePreview(deps, lifecycle, link, true);
+    // A relative path is ambiguous across the chat's bound roots (they may
+    // be unrelated sibling worktrees on disk), so it needs an existence
+    // probe per candidate root - claim the click and resolve asynchronously.
+    // An absolute path keeps the existing synchronous longest-prefix-match
+    // resolution (deterministic, no probing needed).
+    if (!isAbsolutePath(link.path)) {
+      void resolveAndOpenRelativeWorkspaceFile(deps, lifecycle, link, {
+        clickToken,
+      });
+      return true;
+    }
+
+    void resolveAndOpenAbsoluteWorkspaceFile(deps, lifecycle, link, {
+      clickToken,
+    });
+    return true;
   };
 }
 
 /** The artifact-shaped link target: its epic id and the host to resolve against. */
-interface ArtifactLinkTarget {
+export interface ArtifactLinkTarget {
   readonly artifactEpicId: string;
   readonly resolveHostId: string;
   /** The click's supersession token, checked when the RPC settles. */
   readonly clickToken: number;
+}
+
+/**
+ * Opens an artifact already resolved via `epic.resolveArtifactByPath`: a
+ * replaceable PREVIEW tile (routed through the projection waiter so a
+ * not-yet-projected artifact opens as soon as it lands) when it belongs to
+ * the currently open epic, or a cross-epic navigate+focus otherwise.
+ *
+ * Exported/shared so BOTH an already-index.md-shaped link's fast-path
+ * resolve (`resolveAndOpenArtifactLink`) and a plain-link resolution whose
+ * WINNING candidate turned out to be artifact-shaped
+ * (`openResolvedWorkspaceTarget`, B) open an artifact the exact same way -
+ * only what happens when the projection itself never lands differs per
+ * caller, so that's the one thing left to the caller via `onUnavailable`.
+ */
+export interface ResolvedArtifactOpen {
+  readonly artifact: ResolveArtifactByPathResult;
+  readonly target: ArtifactLinkTarget;
+  /** Called when the same-epic projection never lands (deleted mid-wait). */
+  readonly onUnavailable: () => void;
+}
+
+export function openResolvedArtifact(
+  deps: ChatLinkPolicyDeps,
+  lifecycle: ChatLinkLifecycle,
+  resolved: ResolvedArtifactOpen,
+): void {
+  const { artifact, target, onUnavailable } = resolved;
+  const { artifactEpicId, resolveHostId } = target;
+  if (artifactEpicId === deps.openEpicId) {
+    // Same epic: open a replaceable PREVIEW tile stamped with the active
+    // host. Route through the projection waiter (passing the PREVIEW
+    // opener, D3) so an artifact not yet projected opens as soon as it
+    // lands, and the tile name comes from the loaded projection. Any prior
+    // wait was already silently cancelled at click time (supersession at
+    // the top of the handler); retain the new handle so a later superseding
+    // click or an unmount can tear down the subscribe + 30s timeout.
+    lifecycle.setPendingProjectedOpenCancel(
+      openProjectedSidebarNodeInTabWhenAvailable({
+        epicHandle: deps.epicHandle,
+        tabId: deps.tabId,
+        nodeId: artifact.artifactId,
+        fallbackHostId: resolveHostId,
+        openTileInTab: deps.previewTileInTab,
+        onBeforeOpen: null,
+        onOpened: () => {
+          lifecycle.setPendingProjectedOpenCancel(null);
+        },
+        // Projection never lands (deleted in a stale cache window): let the
+        // caller degrade rather than a dead click.
+        onUnavailable: () => {
+          lifecycle.setPendingProjectedOpenCancel(null);
+          onUnavailable();
+        },
+        onCleanup: null,
+      }),
+    );
+    return;
+  }
+  // Cross epic: navigate + focus the artifact via the existing route-sync
+  // auto-open. A FRESH `focusedAt` per click ensures re-clicking after
+  // closing the tab re-opens it (the auto-open effect dedups on
+  // `epicId|focusArtifactId|focusedAt`).
+  navigateToTabIntent(
+    deps.navigate,
+    openOrFocusEpicIntent({
+      epicId: artifactEpicId,
+      focus: {
+        focusArtifactId: artifact.artifactId,
+        focusedAt: Date.now(),
+        focusThreadId: undefined,
+        migrationSource: undefined,
+      },
+    }),
+  );
 }
 
 /**
@@ -157,6 +275,13 @@ function resolveAndOpenArtifactLink(
   target: ArtifactLinkTarget,
 ): Promise<void> {
   const { artifactEpicId, resolveHostId, clickToken } = target;
+  const fallbackToFilePreview = (): void => {
+    if (lifecycle.isDisposed()) return;
+    if (!lifecycle.isCurrent(clickToken)) return;
+    if (!openChatWorkspaceFilePreview(deps, lifecycle, link, false)) {
+      lifecycle.onAsyncFailure();
+    }
+  };
   return fetchResolveArtifactByPath({
     queryClient: deps.queryClient,
     client: deps.client,
@@ -173,57 +298,14 @@ function resolveAndOpenArtifactLink(
       // latest click (latest-click-wins).
       if (!lifecycle.isCurrent(clickToken)) return;
       if (artifact === null) {
-        openChatWorkspaceFilePreview(deps, lifecycle, link, false);
+        fallbackToFilePreview();
         return;
       }
-      if (artifactEpicId === deps.openEpicId) {
-        // Same epic: open a replaceable PREVIEW tile stamped with the active
-        // host. Route through the projection waiter (passing the PREVIEW
-        // opener, D3) so an artifact not yet projected opens as soon as it
-        // lands, and the tile name comes from the loaded projection. Any prior
-        // wait was already silently cancelled at click time (supersession at
-        // the top of the handler); retain the new handle so a later superseding
-        // click or an unmount can tear down the subscribe + 30s timeout.
-        lifecycle.setPendingProjectedOpenCancel(
-          openProjectedSidebarNodeInTabWhenAvailable({
-            epicHandle: deps.epicHandle,
-            tabId: deps.tabId,
-            nodeId: artifact.artifactId,
-            fallbackHostId: resolveHostId,
-            openTileInTab: deps.previewTileInTab,
-            onBeforeOpen: null,
-            onOpened: () => {
-              lifecycle.setPendingProjectedOpenCancel(null);
-            },
-            // Projection never lands (deleted in a stale cache window): degrade
-            // to the raw file preview rather than a dead click.
-            // `openChatWorkspaceFilePreview` no-ops once disposed, so a
-            // cancel-on-unmount won't open into a dead tab.
-            onUnavailable: () => {
-              lifecycle.setPendingProjectedOpenCancel(null);
-              openChatWorkspaceFilePreview(deps, lifecycle, link, false);
-            },
-            onCleanup: null,
-          }),
-        );
-        return;
-      }
-      // Cross epic: navigate + focus the artifact via the existing route-sync
-      // auto-open. A FRESH `focusedAt` per click ensures re-clicking after
-      // closing the tab re-opens it (the auto-open effect dedups on
-      // `epicId|focusArtifactId|focusedAt`).
-      navigateToTabIntent(
-        deps.navigate,
-        openOrFocusEpicIntent({
-          epicId: artifactEpicId,
-          focus: {
-            focusArtifactId: artifact.artifactId,
-            focusedAt: Date.now(),
-            focusThreadId: undefined,
-            migrationSource: undefined,
-          },
-        }),
-      );
+      openResolvedArtifact(deps, lifecycle, {
+        artifact,
+        target,
+        onUnavailable: fallbackToFilePreview,
+      });
     })
     .catch(() => {
       // Mirror the success path's guards: a tab torn down mid-flight, or a
@@ -231,12 +313,10 @@ function resolveAndOpenArtifactLink(
       // rejected resolve open a fallback preview over the user's latest
       // selection (latest-click-wins). `openChatWorkspaceFilePreview` already
       // no-ops once disposed, but the supersession check only exists here.
-      if (lifecycle.isDisposed()) return;
-      if (!lifecycle.isCurrent(clickToken)) return;
       // Transport error on an artifact-shaped link: keep the safe no-op (D5) —
       // out-of-root synthesis stays disabled, so a missing artifact does not
       // open a raw / error tile.
-      openChatWorkspaceFilePreview(deps, lifecycle, link, false);
+      fallbackToFilePreview();
     });
 }
 
@@ -276,15 +356,348 @@ function openChatWorkspaceFilePreview(
       ? workspaceFileRefFromAbsoluteFilePath(deps.hostId, link.path)
       : null);
   if (ref === null) return false;
-  // A `:line` target is transient and NOT part of tab identity: record it on
-  // the (tab, content-id)-keyed reveal channel IMMEDIATELY BEFORE the open so
-  // the tile (new or re-focused, deduped on `ref.id`) reads the fresh value on
-  // mount / nonce change, then re-clicking a different line reuses the same tab
-  // and re-scrolls. Artifact links carry no line, so only this normal-file
-  // branch touches the channel.
+  openWorkspaceFileRef(deps, link, ref);
+  return true;
+}
+
+/**
+ * A `:line` target is transient and NOT part of tab identity: record it on
+ * the (tab, content-id)-keyed reveal channel IMMEDIATELY BEFORE the open so
+ * the tile (new or re-focused, deduped on `ref.id`) reads the fresh value on
+ * mount / nonce change, then re-clicking a different line reuses the same tab
+ * and re-scrolls. Artifact links carry no line, so only the plain-file paths
+ * that call this touch the channel.
+ */
+function openWorkspaceFileRef(
+  deps: ChatLinkPolicyDeps,
+  link: MarkdownFileLink,
+  ref: WorkspaceFileRef,
+): void {
   if (link.line !== null) {
     setWorkspaceFileRevealTarget(deps.tabId, ref.id, link.line, link.col);
   }
   deps.previewTileInTab(deps.tabId, ref);
-  return true;
+}
+
+/** The click's supersession token, checked when the existence probe settles. */
+interface WorkspaceFileProbeTarget {
+  readonly clickToken: number;
+}
+
+/**
+ * The winning candidate from either an absolute or relative existence-probe
+ * race might structurally BE an artifact `index.md` even though it was
+ * reached through the plain-workspace-file resolution path rather than the
+ * fast-path `artifactEpicIdFromLinkPath(link.path)` check at the top of the
+ * handler (which only catches a link ALREADY written index.md-shaped) - e.g.
+ * a relative href resolves, against a bound root, onto
+ * `.../epics/<id>/artifacts/<chain>/index.md`. Reclassifying the winner here
+ * routes it through the artifact resolver (a collab tile) instead of a raw
+ * file preview, keeping it capability-equivalent with a link already
+ * authored index.md-shaped (B).
+ */
+export interface ResolvedWorkspaceFileTarget {
+  readonly ref: WorkspaceFileRef;
+  /** The click's supersession token, checked when the resolve settles. */
+  readonly clickToken: number;
+}
+
+export function openResolvedWorkspaceTarget(
+  deps: ChatLinkPolicyDeps,
+  lifecycle: ChatLinkLifecycle,
+  link: MarkdownFileLink,
+  resolved: ResolvedWorkspaceFileTarget,
+): void {
+  const { ref, clickToken } = resolved;
+  const fullPath = joinPath(ref.workspacePath, ref.filePath);
+  const artifactEpicId = artifactEpicIdFromLinkPath(fullPath);
+  if (artifactEpicId === null || deps.activeHostId === null) {
+    openWorkspaceFileRef(deps, link, ref);
+    return;
+  }
+  const resolveHostId = deps.activeHostId;
+  const openAsPlainFile = (): void => {
+    if (lifecycle.isDisposed()) return;
+    if (!lifecycle.isCurrent(clickToken)) return;
+    openWorkspaceFileRef(deps, link, ref);
+  };
+  void fetchResolveArtifactByPath({
+    queryClient: deps.queryClient,
+    client: deps.client,
+    hostId: resolveHostId,
+    epicId: artifactEpicId,
+    filePath: fullPath,
+  })
+    .then((artifact) => {
+      if (lifecycle.isDisposed()) return;
+      if (!lifecycle.isCurrent(clickToken)) return;
+      if (artifact === null) {
+        openAsPlainFile();
+        return;
+      }
+      openResolvedArtifact(deps, lifecycle, {
+        artifact,
+        target: { artifactEpicId, resolveHostId, clickToken },
+        onUnavailable: openAsPlainFile,
+      });
+    })
+    .catch(() => openAsPlainFile());
+}
+
+/**
+ * Resolves as soon as the priority order can be DECIDED without waiting for
+ * every probe: the winning index is the first `true` that has no still-
+ * pending candidate before it (an earlier candidate's eventual `true` would
+ * always outrank a later one, so a later `true` can't be trusted until every
+ * earlier index is known). Resolves `-1` once every candidate has settled
+ * `false`. A lower-priority probe still pending after the winner is decided
+ * is left to settle on its own; its result is simply never read.
+ *
+ * A REJECTED probe is treated as `false`, the same as a settled miss - most
+ * callers here already swallow their own transport errors
+ * (`fetchWorkspaceFileExists` never rejects), but a caller that races a raw
+ * RPC promise (e.g. an artifact-resolve candidate) must not be able to hang
+ * this race forever: an unobserved rejection would leave that slot
+ * permanently pending, blocking every later-priority candidate from ever
+ * being decided and leaving the whole race unsettled.
+ */
+export function firstEagerlyTrueIndex(
+  probes: ReadonlyArray<Promise<boolean>>,
+): Promise<number> {
+  if (probes.length === 0) return Promise.resolve(-1);
+  return new Promise((resolve) => {
+    const results: Array<boolean | undefined> = probes.map(() => undefined);
+    let decided = false;
+    const tryDecide = (): void => {
+      if (decided) return;
+      const firstPendingIndex = results.findIndex((r) => r === undefined);
+      const firstTrueIndex = results.findIndex((r) => r === true);
+      const decidedTrue =
+        firstTrueIndex !== -1 &&
+        (firstPendingIndex === -1 || firstTrueIndex < firstPendingIndex);
+      if (decidedTrue) {
+        decided = true;
+        resolve(firstTrueIndex);
+        return;
+      }
+      if (firstPendingIndex === -1) {
+        decided = true;
+        resolve(-1);
+      }
+    };
+    probes.forEach((probe, index) => {
+      void probe
+        .then((value) => {
+          results[index] = value;
+          tryDecide();
+        })
+        .catch(() => {
+          results[index] = false;
+          tryDecide();
+        });
+    });
+  });
+}
+
+/**
+ * Resolves a RELATIVE plain-file link against every one of the chat's bound
+ * roots and opens the first one that actually exists. Roots may be unrelated
+ * sibling worktrees on disk, so - unlike an absolute path's deterministic
+ * longest-prefix match - the right root can't be picked by string matching
+ * alone; each candidate is probed via `workspace.readFile` (existence-only,
+ * `maxBytes: 1`) THROUGH `deps.workspaceClient` (the chat's OWN bound host,
+ * not the app-wide `deps.client`) at click time, run concurrently, and the
+ * first-BY-PRIORITY-ORDER hit wins as soon as it's decided (`firstEagerlyTrueIndex`)
+ * - a fast root-0 hit opens immediately rather than waiting on a slow
+ * lower-priority root that can no longer change the outcome.
+ *
+ * Mirrors `resolveAndOpenArtifactLink`'s lifecycle guards: a torn-down tab or
+ * a superseding later click drops this resolve silently; finding no existing
+ * candidate reports `onAsyncFailure` (the click-failure toast). A `null`
+ * `hostId` or not-yet-resolved `workspaceClient` fails the same way - there is
+ * no host to probe against.
+ */
+function resolveAndOpenRelativeWorkspaceFile(
+  deps: ChatLinkPolicyDeps,
+  lifecycle: ChatLinkLifecycle,
+  link: MarkdownFileLink,
+  target: WorkspaceFileProbeTarget,
+): Promise<void> {
+  if (deps.hostId === null || deps.workspaceClient === null) {
+    lifecycle.onAsyncFailure();
+    return Promise.resolve();
+  }
+  const hostId = deps.hostId;
+  const workspaceClient = deps.workspaceClient;
+  const candidates = candidateWorkspaceFileRefsForRelativeLinkPath(
+    hostId,
+    deps.workspaceRoots,
+    link.path,
+  );
+  if (candidates === null) {
+    lifecycle.onAsyncFailure();
+    return Promise.resolve();
+  }
+  const probes = candidates.map((ref) =>
+    fetchWorkspaceFileExists({
+      queryClient: deps.queryClient,
+      client: workspaceClient,
+      hostId,
+      workspacePath: ref.workspacePath,
+      filePath: ref.filePath,
+    }),
+  );
+  return firstEagerlyTrueIndex(probes).then((winningIndex) => {
+    if (lifecycle.isDisposed()) return;
+    if (!lifecycle.isCurrent(target.clickToken)) return;
+    if (winningIndex === -1) {
+      lifecycle.onAsyncFailure();
+      return;
+    }
+    openResolvedWorkspaceTarget(deps, lifecycle, link, {
+      ref: candidates[winningIndex],
+      clickToken: target.clickToken,
+    });
+  });
+}
+
+/**
+ * The last resort for an ABSOLUTE link whose local existence probes all
+ * missed: tries `directoryIndexPath` (the href suffixed with `index.md`)
+ * through the root-prefix-agnostic artifact resolver ONCE, and only calls
+ * `openDirectFallback` if that candidate isn't structurally artifact-shaped,
+ * `activeHostId` isn't set, the resolve comes back `null`, or it rejects.
+ *
+ * Exists because a foreign-prefix artifact directory (a collaborator's
+ * home, a different device's `~/.traycer`) can never win the local
+ * existence-probe race - `workspace.readFile` only sees THIS machine's
+ * filesystem - even though the RPC would resolve it correctly, since it
+ * matches the `epics/<id>/artifacts/<chain>/index.md` marker as a
+ * SUBSEQUENCE anywhere in the path rather than requiring a local prefix
+ * match.
+ */
+function resolveArtifactShapedFallback(
+  deps: ChatLinkPolicyDeps,
+  lifecycle: ChatLinkLifecycle,
+  fallback: {
+    readonly clickToken: number;
+    readonly directoryIndexPath: string;
+    readonly openDirectFallback: () => void;
+  },
+): void {
+  const { clickToken, directoryIndexPath, openDirectFallback } = fallback;
+  const artifactEpicId = artifactEpicIdFromLinkPath(directoryIndexPath);
+  const resolveHostId = deps.activeHostId;
+  if (artifactEpicId === null || resolveHostId === null) {
+    openDirectFallback();
+    return;
+  }
+  void fetchResolveArtifactByPath({
+    queryClient: deps.queryClient,
+    client: deps.client,
+    hostId: resolveHostId,
+    epicId: artifactEpicId,
+    filePath: directoryIndexPath,
+  })
+    .then((artifact) => {
+      if (lifecycle.isDisposed()) return;
+      if (!lifecycle.isCurrent(clickToken)) return;
+      if (artifact === null) {
+        openDirectFallback();
+        return;
+      }
+      openResolvedArtifact(deps, lifecycle, {
+        artifact,
+        target: { artifactEpicId, resolveHostId, clickToken },
+        onUnavailable: openDirectFallback,
+      });
+    })
+    .catch(() => openDirectFallback());
+}
+
+/**
+ * Resolves an ABSOLUTE plain-file link that isn't already a deterministic
+ * bound-root match into whichever of its two shapes actually exists: the
+ * direct file, or (a slashless target that's really a directory reference)
+ * its `index.md` (A, C1). Mirrors the relative resolver's existence-probe
+ * race (`firstEagerlyTrueIndex`) rather than the old purely string-based
+ * longest-prefix match, so a real file like `spec/README.md` is never
+ * coerced into `spec/README.md/index.md` just because the suffixed form
+ * would ALSO parse as artifact-shaped.
+ *
+ * When NEITHER local candidate probes true, a structurally artifact-shaped
+ * candidate (the href suffixed with `index.md`) still gets one shot through
+ * the root-prefix-agnostic artifact resolver before falling back to the
+ * direct candidate: a foreign-prefix artifact directory (a collaborator's
+ * home, a different device) will never probe true against THIS machine's
+ * filesystem, but the resolver doesn't care about the literal prefix
+ * (`resolveArtifactShapedFallback`, C1/#4). Only once that also misses does
+ * this open the direct candidate anyway rather than failing the click -
+ * unlike the relative case, an absolute link has no "wrong workspace"
+ * ambiguity to fail safely out of, so this preserves the deliberate "open
+ * any agent-emitted file" capability `openChatWorkspaceFilePreview` already
+ * had for the synchronous case.
+ */
+function resolveAndOpenAbsoluteWorkspaceFile(
+  deps: ChatLinkPolicyDeps,
+  lifecycle: ChatLinkLifecycle,
+  link: MarkdownFileLink,
+  target: WorkspaceFileProbeTarget,
+): Promise<void> {
+  const openDirectFallback = (): void => {
+    if (lifecycle.isDisposed()) return;
+    if (!lifecycle.isCurrent(target.clickToken)) return;
+    if (!openChatWorkspaceFilePreview(deps, lifecycle, link, true)) {
+      lifecycle.onAsyncFailure();
+    }
+  };
+  // Computed from `link.path` alone (no host/workspace dependency), so it's
+  // available even in the no-workspace-client branch below, where the
+  // artifact resolver - bound to `deps.client`/`deps.activeHostId`, NOT
+  // `deps.hostId`/`deps.workspaceClient` - can still be worth a try.
+  const directoryIndexPath = joinPath(link.path, EPIC_ARTIFACT_INDEX_FILENAME);
+  if (deps.hostId === null || deps.workspaceClient === null) {
+    resolveArtifactShapedFallback(deps, lifecycle, {
+      clickToken: target.clickToken,
+      directoryIndexPath,
+      openDirectFallback,
+    });
+    return Promise.resolve();
+  }
+  const hostId = deps.hostId;
+  const workspaceClient = deps.workspaceClient;
+  const candidates = candidateWorkspaceFileRefsForAbsoluteLinkPath(
+    hostId,
+    deps.workspaceRoots,
+    link.path,
+  );
+  if (candidates === null) {
+    openDirectFallback();
+    return Promise.resolve();
+  }
+  const probes = candidates.map((ref) =>
+    fetchWorkspaceFileExists({
+      queryClient: deps.queryClient,
+      client: workspaceClient,
+      hostId,
+      workspacePath: ref.workspacePath,
+      filePath: ref.filePath,
+    }),
+  );
+  return firstEagerlyTrueIndex(probes).then((winningIndex) => {
+    if (lifecycle.isDisposed()) return;
+    if (!lifecycle.isCurrent(target.clickToken)) return;
+    if (winningIndex !== -1) {
+      openResolvedWorkspaceTarget(deps, lifecycle, link, {
+        ref: candidates[winningIndex],
+        clickToken: target.clickToken,
+      });
+      return;
+    }
+    resolveArtifactShapedFallback(deps, lifecycle, {
+      clickToken: target.clickToken,
+      directoryIndexPath,
+      openDirectFallback,
+    });
+  });
 }

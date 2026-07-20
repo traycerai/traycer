@@ -175,12 +175,24 @@ describe("MockRunnerHost - IRunnerHost contract", () => {
     await host.tray.setEpics([
       { epicId: "e1", title: "Epic 1", subtitle: "2 hours ago" },
     ]);
-    await host.notifications.show("Title", "Body", { kind: "info" });
+    await host.notifications.show(
+      "Title",
+      "Body",
+      { kind: "info" },
+      null,
+      "delivery-1",
+    );
 
     expect(host.tray.indicator).toBe("attention");
     expect(host.tray.epics).toHaveLength(1);
     expect(host.notificationsSent).toEqual([
-      { title: "Title", body: "Body", payload: { kind: "info" } },
+      {
+        title: "Title",
+        body: "Body",
+        payload: { kind: "info" },
+        replaceKey: null,
+        deliveryKey: "delivery-1",
+      },
     ]);
     expect(traySelection).not.toHaveBeenCalled();
     expect(notificationClick).not.toHaveBeenCalled();

@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import { downgradeRequestAcrossMajors } from "@traycer/protocol/framework/index";
 import { agentListHarnessModelsDowngradeV2ToV1 } from "@traycer/protocol/host/agent/contracts";
 import {
+  guiHarnessIdSchema,
+  tuiHarnessIdSchema,
+} from "@traycer/protocol/host/agent/shared";
+import {
   agentSelectionGuideResponseSchema,
   createAgentRequestSchema,
   hostRpcRegistry,
@@ -16,6 +20,17 @@ import {
 } from "@traycer/protocol/host/index";
 
 describe("agent host schemas", () => {
+  it("retains Cursor in the TUI wire schema as a compatibility value", () => {
+    expect(guiHarnessIdSchema.safeParse("cursor").success).toBe(true);
+    expect(tuiHarnessIdSchema.safeParse("cursor").success).toBe(true);
+    expect(tuiHarnessIdSchema.options).toEqual([
+      "claude",
+      "codex",
+      "opencode",
+      "cursor",
+    ]);
+  });
+
   it("accepts the agent.gui.listCommands request and response shapes", () => {
     expect(
       listGuiAgentCommandsRequestSchema.parse({

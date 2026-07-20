@@ -175,6 +175,7 @@ describe("buildForkWorkspaceSeed", () => {
           hostId: null,
         },
       },
+      primaryPath: "/Users/me/traycer",
     });
   });
 

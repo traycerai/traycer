@@ -1,12 +1,15 @@
 import {
   defineDowngradePath,
+  defineFloorAwareVersionedRpcRegistry,
   defineUpgradePath,
-  defineVersionedRpcRegistry,
   type DowngradeResult,
 } from "@traycer/protocol/framework/index";
 import { defineVersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
   agentCreateV10,
+  agentCreateV20,
+  agentCreateDowngradeV20ToV10,
+  agentCreateUpgradeV10ToV20,
   agentGetTranscriptV10,
   agentListHarnessModelsDowngradeV2ToV1,
   agentListHarnessModelsV10,
@@ -34,6 +37,11 @@ import {
   agentStopV10,
 } from "@traycer/protocol/host/agent/contracts";
 import {
+  agentConfigureV10,
+  agentGetProviderProfileRateLimitsV10,
+  agentListProviderProfilesV10,
+} from "@traycer/protocol/host/agent/profiles";
+import {
   agentInboxReadV10,
   agentInboxSubscribeV10,
 } from "@traycer/protocol/host/agent/inbox";
@@ -47,10 +55,12 @@ import {
   agentGuiListHarnessesDowngradeV4ToV2,
   agentGuiListHarnessesDowngradeV4ToV3,
   agentGuiListHarnessesUpgradeV1ToV2,
+  agentGuiListHarnessesUpgradeV20ToV21,
   agentGuiListHarnessesUpgradeV2ToV3,
   agentGuiListHarnessesUpgradeV3ToV4,
   agentGuiListHarnessesV10,
   agentGuiListHarnessesV20,
+  agentGuiListHarnessesV21,
   agentGuiListHarnessesV30,
   agentGuiListHarnessesV40,
   agentGuiListModelsV10,
@@ -58,6 +68,7 @@ import {
   chatSubscribeV11,
   chatSubscribeV12,
   chatSubscribeV13,
+  chatSubscribeV14,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -79,10 +90,13 @@ import {
   hostGetRateLimitUsageV11,
   hostGetRateLimitUsageV12,
   hostGetRateLimitUsageV20,
+  hostGetRateLimitUsageV21,
   hostGetRateLimitUsageUpgradeV10ToV11,
   hostGetRateLimitUsageUpgradeV11ToV12,
   hostGetRateLimitUsageUpgradeV12ToV20,
+  hostGetRateLimitUsageUpgradeV20ToV21,
   hostGetRateLimitUsageDowngradeV2ToV1,
+  providersConsumeRateLimitResetCreditV10,
 } from "@traycer/protocol/host/rate-limit/contracts";
 import {
   epicBatchDeleteV10,
@@ -98,10 +112,13 @@ import {
   epicDeleteCommentV10,
   epicDeleteTuiAgentV10,
   epicEditCommentV10,
+  epicGetTaskContextsV10,
   epicGrantAccessV10,
   epicListCollaboratorsV10,
   epicListCommentThreadsV10,
   epicListTasksV10,
+  epicListTasksV11,
+  epicListTasksUpgradeV10ToV11,
   epicMentionEpicsV10,
   epicMentionReviewsV10,
   epicMentionSpecsV10,
@@ -110,6 +127,7 @@ import {
   epicRemoveRepoV10,
   epicRenameArtifactV10,
   epicRenameChatV10,
+  epicUpdateChatRunSettingsV10,
   epicRenameTuiAgentV10,
   epicReparentArtifactV10,
   epicReparentChatV10,
@@ -117,6 +135,7 @@ import {
   epicResolveArtifactByPathV10,
   epicRevokeCollaboratorV10,
   epicSetCommentThreadResolvedV10,
+  epicSetPinnedV10,
   epicSubscribeV10,
   epicUpdateArtifactStatusV10,
   epicUpdateTitleV10,
@@ -135,16 +154,37 @@ import {
   workspaceResolvePathsByRepoIdentifiersV10,
 } from "@traycer/protocol/host/workspace/contracts";
 import {
+  terminalCreateDowngradeV20ToV10,
   terminalCreateV10,
+  terminalCreateV20,
+  terminalCreateUpgradeV10ToV20,
   terminalKillV10,
+  terminalListDowngradeV20ToV10,
   terminalListV10,
+  terminalListV20,
+  terminalListUpgradeV10ToV20,
   terminalRenameV10,
   terminalSubscribeV10,
   terminalSubscribeV11,
   terminalSubscribeV12,
   terminalSubscribeV13,
+  terminalSubscribeV14,
 } from "@traycer/protocol/host/terminal/contracts";
-import { notificationsSubscribeV10 } from "@traycer/protocol/host/notifications/contracts";
+import {
+  hostNotificationHooksSave,
+  hostNotificationHooksStatus,
+  hostNotificationHooksTest,
+  hostNotificationsClearAll,
+  hostNotificationsGetConfig,
+  hostNotificationsIndicatorState,
+  hostNotificationsList,
+  hostNotificationsMarkAllRead,
+  hostNotificationsMarkRead,
+  hostNotificationsSetConfig,
+  hostNotificationsSubscribe,
+  notificationsSubscribeV10,
+} from "@traycer/protocol/host/notifications/contracts";
+import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import {
   resourcesSubscribeV10,
   resourcesSubscribeV11,
@@ -160,6 +200,7 @@ import {
   phaseMigrateToEpicV10,
 } from "@traycer/protocol/host/migration/contracts";
 import { worktreeDeleteByPathStreamV10 } from "@traycer/protocol/host/worktree-delete-stream";
+import { worktreeChangedV10 } from "@traycer/protocol/host/worktree-changed-stream";
 import { editorOpenPathsV10 } from "@traycer/protocol/host/editor/contracts";
 import {
   gitListChangedFilesV10,
@@ -169,6 +210,7 @@ import {
   gitGetFileDiffsV10,
   gitGetCapabilitiesV10,
   gitSubscribeStatusV10,
+  gitSubscribeStatusV11,
 } from "@traycer/protocol/host/git-contracts";
 import { defineRpcContract } from "@traycer/protocol/framework/index";
 import {
@@ -184,6 +226,10 @@ import {
   worktreeListAllForHostResponseSchemaV11,
   worktreeListAllForHostRequestSchemaV12,
   worktreeListAllForHostResponseSchemaV12,
+  worktreeListAllForHostRequestSchemaV13,
+  worktreeListAllForHostResponseSchemaV13,
+  worktreeListAllForHostRequestSchemaV14,
+  worktreeListAllForHostResponseSchemaV14,
   worktreeImportRequestSchema,
   worktreeImportResponseSchema,
   worktreeListBranchesRequestSchema,
@@ -192,9 +238,14 @@ import {
   worktreeListByWorkspacePathsResponseSchema,
   worktreeListByWorkspacePathsRequestSchemaV11,
   worktreeListByWorkspacePathsResponseSchemaV11,
+  worktreeListByWorkspacePathsRequestSchemaV12,
+  worktreeListByWorkspacePathsResponseSchemaV12,
+  worktreeListByWorkspacePathsRequestSchemaV13,
+  worktreeListByWorkspacePathsResponseSchemaV13,
   worktreeListBindingsForEpicRequestSchema,
   worktreeListBindingsForEpicResponseSchema,
   worktreeListBindingsForEpicResponseSchemaV11,
+  worktreeListBindingsForEpicResponseSchemaV12,
   worktreeRetrySetupRequestSchema,
   worktreeRetrySetupResponseSchema,
   workspaceBindingRemoveEntryRequestSchema,
@@ -205,6 +256,7 @@ import {
   worktreeSetRepoScriptsResponseSchema,
   worktreeGetBindingRequestSchema,
   worktreeGetBindingResponseSchema,
+  LEGACY_HOST_RESOLVED_AT,
 } from "@traycer/protocol/host/worktree-schemas";
 import {
   snapshotsClearLocalSnapshotsRequestSchema,
@@ -246,6 +298,10 @@ import {
   providersStartLoginRequestSchemaV11,
   providersStartLoginResponseSchemaV10,
   providersStartLoginResponseSchemaV11,
+  providersSubmitLoginCodeRequestSchema,
+  providersSubmitLoginCodeResponseSchema,
+  providersTouchLoginRequestSchema,
+  providersTouchLoginResponseSchema,
   providersListRequestSchema,
   providersListRequestSchemaV30,
   providersListResponseSchema,
@@ -259,7 +315,7 @@ import {
   upgradeProviderCliStateV10ToV20,
   upgradeProviderCliStateToLatest,
   upgradeProviderCliStateListToLatest,
-  upgradeProviderCliStateV10ToLatest,
+  upgradeProviderCliStateV10ToMutationV20,
   providersRemoveCustomPathRequestSchema,
   providersRemoveCustomPathRequestSchemaV10,
   providersRemoveCustomPathResponseSchema,
@@ -297,6 +353,8 @@ import {
   type ProviderCliStateV30,
   type ProviderCliStateMutationV20,
   type ProviderNativeCapabilities,
+  type ProviderLoginCapability,
+  type ProviderLoginCapabilityV10,
 } from "@traycer/protocol/host/provider-schemas";
 
 export { hostGetRuntimeCapabilitiesV10 };
@@ -388,6 +446,63 @@ export const worktreeListByWorkspacePathsUpgradeV10ToV11 = defineUpgradePath<
   upgradeResponse: (response) => ({
     workspaces: response.workspaces,
     scriptsAtRefs: [],
+  }),
+});
+
+// v1.2 adds `forceRefresh`, the manual-refresh escape hatch over the
+// minutes-scale TTL cache `WorktreeService` now serves `listForWorkspace`
+// summaries from. Response shape is identical to v1.1.
+export const worktreeListByWorkspacePathsV12 = defineRpcContract({
+  method: "worktree.listByWorkspacePaths",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: worktreeListByWorkspacePathsRequestSchemaV12,
+  responseSchema: worktreeListByWorkspacePathsResponseSchemaV12,
+});
+
+// Additive upgrade from v1.1: an older peer never asks for a forced
+// recompute, so the request defaults `forceRefresh: false` (cached-read
+// behavior, unchanged from what v1.1 always did). The response is passed
+// through unchanged.
+export const worktreeListByWorkspacePathsUpgradeV11ToV12 = defineUpgradePath<
+  typeof worktreeListByWorkspacePathsV11,
+  typeof worktreeListByWorkspacePathsV12
+>({
+  from: worktreeListByWorkspacePathsV11.schemaVersion,
+  to: worktreeListByWorkspacePathsV12.schemaVersion,
+  upgradeRequest: (request) => ({
+    ...request,
+    forceRefresh: false,
+  }),
+  upgradeResponse: (response) => response,
+});
+
+// v1.3 adds per-summary `resolvedAt`, allowing clients to distinguish a
+// schema-safe unresolved fallback from facts the host has actually derived.
+export const worktreeListByWorkspacePathsV13 = defineRpcContract({
+  method: "worktree.listByWorkspacePaths",
+  schemaVersion: { major: 1, minor: 3 } as const,
+  requestSchema: worktreeListByWorkspacePathsRequestSchemaV13,
+  responseSchema: worktreeListByWorkspacePathsResponseSchemaV13,
+});
+
+// A v1.2 host predates `resolvedAt` and never emits one, so its rows bridge to
+// the resolved sentinel (NOT `null`): its summaries are authoritative, and
+// stamping `null` would strand every folder as perpetually pending in the home
+// workspace selector (non-selectable, no git eligibility). See
+// LEGACY_HOST_RESOLVED_AT.
+export const worktreeListByWorkspacePathsUpgradeV12ToV13 = defineUpgradePath<
+  typeof worktreeListByWorkspacePathsV12,
+  typeof worktreeListByWorkspacePathsV13
+>({
+  from: worktreeListByWorkspacePathsV12.schemaVersion,
+  to: worktreeListByWorkspacePathsV13.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    ...response,
+    workspaces: response.workspaces.map((workspace) => ({
+      ...workspace,
+      resolvedAt: LEGACY_HOST_RESOLVED_AT,
+    })),
   }),
 });
 
@@ -548,6 +663,65 @@ export const worktreeListAllForHostUpgradeV11ToV12 = defineUpgradePath<
   }),
 });
 
+// v1.3 adds `forceRefresh`, the manual-refresh escape hatch over the
+// minutes-scale TTL cache `WorktreeService` now serves the disk-truth
+// enumeration + per-worktree status from. Response shape is identical to
+// v1.2.
+export const worktreeListAllForHostV13 = defineRpcContract({
+  method: "worktree.listAllForHost",
+  schemaVersion: { major: 1, minor: 3 } as const,
+  requestSchema: worktreeListAllForHostRequestSchemaV13,
+  responseSchema: worktreeListAllForHostResponseSchemaV13,
+});
+
+// Additive upgrade from v1.2: an older peer never asks for a forced
+// recompute, so the request defaults `forceRefresh: false` (cached-read
+// behavior, unchanged from what v1.2 always did). The response is passed
+// through unchanged.
+export const worktreeListAllForHostUpgradeV12ToV13 = defineUpgradePath<
+  typeof worktreeListAllForHostV12,
+  typeof worktreeListAllForHostV13
+>({
+  from: worktreeListAllForHostV12.schemaVersion,
+  to: worktreeListAllForHostV13.schemaVersion,
+  upgradeRequest: (request) => ({
+    ...request,
+    forceRefresh: false,
+  }),
+  upgradeResponse: (response) => response,
+});
+
+// v1.4 adds per-row `resolvedAt`, allowing clients to distinguish a
+// schema-safe unresolved fallback from facts the host has actually derived.
+export const worktreeListAllForHostV14 = defineRpcContract({
+  method: "worktree.listAllForHost",
+  schemaVersion: { major: 1, minor: 4 } as const,
+  requestSchema: worktreeListAllForHostRequestSchemaV14,
+  responseSchema: worktreeListAllForHostResponseSchemaV14,
+});
+
+// A v1.3 host predates `resolvedAt` and never emits one, so its rows bridge to
+// the resolved sentinel (NOT `null`): stamping `null` would strand every
+// worktree in the settings panel as perpetually "checking" - non-selectable,
+// non-deletable, no enrichment ever accepted by the staleness merge. Every row
+// from the legacy host shares the same sentinel, so that merge's timestamp
+// comparison degrades to a no-op accept. See LEGACY_HOST_RESOLVED_AT.
+export const worktreeListAllForHostUpgradeV13ToV14 = defineUpgradePath<
+  typeof worktreeListAllForHostV13,
+  typeof worktreeListAllForHostV14
+>({
+  from: worktreeListAllForHostV13.schemaVersion,
+  to: worktreeListAllForHostV14.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    ...response,
+    worktrees: response.worktrees.map((worktree) => ({
+      ...worktree,
+      resolvedAt: LEGACY_HOST_RESOLVED_AT,
+    })),
+  }),
+});
+
 export const worktreeSetRepoScriptsV10 = defineRpcContract({
   method: "worktree.setRepoScripts",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -612,6 +786,8 @@ function downgradeProviderStateForV10(
   ) & {
     profiles?: ProviderCliState["profiles"];
     nativeCapabilities?: ProviderNativeCapabilities;
+    loginCapability:
+      ProviderLoginCapability | ProviderLoginCapabilityV10 | null;
   },
 ): DowngradeResult<ProviderCliStateV10> {
   const downgraded = downgradeProviderCliStateToV10(state);
@@ -630,6 +806,8 @@ function downgradeProviderStateListForV10(
   ) & {
     profiles?: ProviderCliState["profiles"];
     nativeCapabilities?: ProviderNativeCapabilities;
+    loginCapability:
+      ProviderLoginCapability | ProviderLoginCapabilityV10 | null;
   })[],
 ): ProviderCliStateV10[] {
   return states.flatMap((state) => {
@@ -638,14 +816,16 @@ function downgradeProviderStateListForV10(
   });
 }
 
-// Upgrades a v1.0 state to the LIVE/latest shape - shared by every
-// provider.* mutation whose v2.0 contract reuses `providerCliStateSchema`
-// directly (all except `providers.list`, which freezes its own v2.0 shape
-// and upgrades via `upgradeProviderCliStateV10ToV20` inline below instead).
+// Upgrades a v1.0 state to the frozen major-2 mutation-response shape -
+// shared by every provider.* state-echo mutation's v1.0 -> v2.0 bridge
+// (`providers.list` freezes its own v2.0 shape and upgrades via
+// `upgradeProviderCliStateV10ToV20` inline below instead). Like the v1.0
+// host itself, the frozen 2.0 shape predates `profiles`; each method's
+// 2.0 -> 2.1 upgrade fills `profiles: []` for the caller's canonical.
 function upgradeProviderStateFromV10(
   state: ProviderCliStateV10,
-): ProviderCliState {
-  return upgradeProviderCliStateV10ToLatest(state);
+): ProviderCliStateMutationV20 {
+  return upgradeProviderCliStateV10ToMutationV20(state);
 }
 
 function downgradeProviderRequestForV10<T>(
@@ -705,18 +885,11 @@ export const providersListUpgradeV2ToV3 = defineUpgradePath<
 >({
   from: { major: 2, minor: 0 },
   to: { major: 3, minor: 0 },
-  // A v2.0 response without Amp is a valid v3.0 response modulo `profiles`,
-  // and the request shape is identical - the request upgrade is identity. A
-  // v2.0 host predates profiles entirely, so its response upgrades to
-  // `profiles: []` per provider (same "old host never had this feature"
-  // semantics as the v1.0 -> v2.0 upgrade above).
+  // A v2.0 response without Amp is a valid v3.0 response, and the request
+  // shape is identical - both upgrades are identity. (`profiles` belongs to
+  // the v4.0 line; the v3→v4 upgrade below fills it.)
   upgradeRequest: (request) => request,
-  upgradeResponse: (response) => ({
-    providers: response.providers.map((provider) => ({
-      ...provider,
-      profiles: [],
-    })),
-  }),
+  upgradeResponse: (response) => response,
 });
 
 export const providersListDowngradeV3ToV2 = defineDowngradePath<
@@ -749,23 +922,34 @@ export const providersListDowngradeV3ToV1 = defineDowngradePath<
   }),
 });
 
-// v3.1 adds `nativeCapabilities` on each ProviderCliState and folds native
-// list/discover onto optional `native` request/response fields. Shipped as a
-// minor so a v3.0 host still negotiates: old-host responses upgrade with the
-// default descriptor + native:null; old clients strip the fields via bridges.
-export const providersListV31 = defineRpcContract({
+// v4.0 adds `profiles` (multi-profile management), `nativeCapabilities` (per-
+// provider MCP/plugins/skills facts), Devin/Pi, and folds native list/discover
+// onto optional `native` request/response fields. A genuine major: v3.0
+// predates `profiles` entirely (it never reached a released host on that
+// line - see `providerCliStateBaseShapeV30`'s comment), so growing the
+// response with a new non-optional-shaped field is a breaking change per
+// `assertSchemaCompatibility`, not something a minor bump can carry.
+export const providersListV40 = defineRpcContract({
   method: "providers.list",
-  schemaVersion: { major: 3, minor: 1 } as const,
+  schemaVersion: { major: 4, minor: 0 } as const,
   requestSchema: providersListRequestSchema,
   responseSchema: providersListResponseSchema,
 });
 
-export const providersListUpgradeV30ToV31 = defineUpgradePath<
+export const providersListUpgradeV3ToV4 = defineUpgradePath<
   typeof providersListV30,
-  typeof providersListV31
+  typeof providersListV40
 >({
   from: { major: 3, minor: 0 },
-  to: { major: 3, minor: 1 },
+  to: { major: 4, minor: 0 },
+  // The request gains `native` - a v3.0 caller never sends it, defaulting to
+  // null. The response gains `profiles` (every v3.0 host predates it - "old
+  // host never had this feature" semantics, same as the v1.0 -> v2.0
+  // `availabilityPending` fill above) and `nativeCapabilities` (the default
+  // descriptor) + `native: null` (classic callers get no native result) -
+  // `upgradeProviderCliStateListToLatest` fills both via a full re-parse
+  // against the live schema's catch fallbacks (also backfilling
+  // `loginCapability.codePaste: null` the same way).
   upgradeRequest: (request) => ({
     ...request,
     native: null,
@@ -776,11 +960,11 @@ export const providersListUpgradeV30ToV31 = defineUpgradePath<
   }),
 });
 
-export const providersListDowngradeV31ToV30 = defineDowngradePath<
-  typeof providersListV31,
+export const providersListDowngradeV4ToV3 = defineDowngradePath<
+  typeof providersListV40,
   typeof providersListV30
 >({
-  from: { major: 3, minor: 1 },
+  from: { major: 4, minor: 0 },
   to: { major: 3, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -796,11 +980,11 @@ export const providersListDowngradeV31ToV30 = defineDowngradePath<
   }),
 });
 
-export const providersListDowngradeV31ToV20 = defineDowngradePath<
-  typeof providersListV31,
+export const providersListDowngradeV4ToV2 = defineDowngradePath<
+  typeof providersListV40,
   typeof providersListV20
 >({
-  from: { major: 3, minor: 1 },
+  from: { major: 4, minor: 0 },
   to: { major: 2, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -816,11 +1000,11 @@ export const providersListDowngradeV31ToV20 = defineDowngradePath<
   }),
 });
 
-export const providersListDowngradeV31ToV10 = defineDowngradePath<
-  typeof providersListV31,
+export const providersListDowngradeV4ToV1 = defineDowngradePath<
+  typeof providersListV40,
   typeof providersListV10
 >({
-  from: { major: 3, minor: 1 },
+  from: { major: 4, minor: 0 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -828,62 +1012,6 @@ export const providersListDowngradeV31ToV10 = defineDowngradePath<
       forceAuthRefresh: request.forceAuthRefresh,
     }),
   }),
-  downgradeResponse: (response) => ({
-    ok: true,
-    value: providersListResponseSchemaV10.parse({
-      providers: downgradeProviderStateListForV10(response.providers),
-    }),
-  }),
-});
-
-// v3.2 adds Devin/Pi to the live provider-id set. Shipped as a minor, not a
-// major: v3.1's request/response schemas already ride the live (unfrozen)
-// types, so a growing `providerId` enum is additive, not breaking, for any
-// v3.1-negotiated caller - `assertSchemaCompatibility` rejects a major bump
-// here as unjustified. Only v3.0-and-older (frozen) callers need Devin/Pi
-// filtered out, which the existing v3.0/v2.0/v1.0 downgrade bridges already
-// do via their frozen provider-id enums.
-export const providersListV32 = defineRpcContract({
-  method: "providers.list",
-  schemaVersion: { major: 3, minor: 2 } as const,
-  requestSchema: providersListRequestSchema,
-  responseSchema: providersListResponseSchema,
-});
-
-export const providersListUpgradeV31ToV32 = defineUpgradePath<
-  typeof providersListV31,
-  typeof providersListV32
->({
-  from: { major: 3, minor: 1 },
-  to: { major: 3, minor: 2 },
-  // Devin/Pi ride the same live request/response shapes v3.1 already uses -
-  // both upgrades are identity.
-  upgradeRequest: (request) => request,
-  upgradeResponse: (response) => response,
-});
-
-export const providersListDowngradeV32ToV20 = defineDowngradePath<
-  typeof providersListV32,
-  typeof providersListV20
->({
-  from: { major: 3, minor: 2 },
-  to: { major: 2, minor: 0 },
-  downgradeRequest: (request) => ({ ok: true, value: request }),
-  downgradeResponse: (response) => ({
-    ok: true,
-    value: providersListResponseSchemaV20.parse({
-      providers: downgradeProviderCliStateListToV20(response.providers),
-    }),
-  }),
-});
-
-export const providersListDowngradeV32ToV10 = defineDowngradePath<
-  typeof providersListV32,
-  typeof providersListV10
->({
-  from: { major: 3, minor: 2 },
-  to: { major: 1, minor: 0 },
-  downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
     ok: true,
     value: providersListResponseSchemaV10.parse({
@@ -918,29 +1046,10 @@ export const providersSetSelectionUpgradeV1ToV2 = defineUpgradePath<
   }),
 });
 
-export const providersSetSelectionDowngradeV2ToV1 = defineDowngradePath<
-  typeof providersSetSelectionV20,
-  typeof providersSetSelectionV10
->({
-  from: { major: 2, minor: 0 },
-  to: { major: 1, minor: 0 },
-  downgradeRequest: (request) =>
-    downgradeProviderRequestForV10(
-      providersSetSelectionRequestSchemaV10,
-      request,
-    ),
-  downgradeResponse: (response) => {
-    const state = downgradeProviderStateForV10(response.state);
-    if (!state.ok) return state;
-    return {
-      ok: true,
-      value: providersSetSelectionResponseSchemaV10.parse({
-        state: state.value,
-      }),
-    };
-  },
-});
-
+// v2.1 carries the live state shape - `profiles` ships with the 2.1 line
+// (the released 2.0 response above is frozen pre-profiles), so a released
+// 2.0 host's response upgrades to `profiles: []` ("old host never had this
+// feature"). The request is unchanged.
 export const providersSetSelectionV21 = defineRpcContract({
   method: "providers.setSelection",
   schemaVersion: { major: 2, minor: 1 } as const,
@@ -1025,29 +1134,10 @@ export const providersAddCustomPathUpgradeV1ToV2 = defineUpgradePath<
   }),
 });
 
-export const providersAddCustomPathDowngradeV2ToV1 = defineDowngradePath<
-  typeof providersAddCustomPathV20,
-  typeof providersAddCustomPathV10
->({
-  from: { major: 2, minor: 0 },
-  to: { major: 1, minor: 0 },
-  downgradeRequest: (request) =>
-    downgradeProviderRequestForV10(
-      providersAddCustomPathRequestSchemaV10,
-      request,
-    ),
-  downgradeResponse: (response) => {
-    const state = downgradeProviderStateForV10(response.state);
-    if (!state.ok) return state;
-    return {
-      ok: true,
-      value: providersAddCustomPathResponseSchemaV10.parse({
-        state: state.value,
-      }),
-    };
-  },
-});
-
+// v2.1 carries the live state shape - `profiles` ships with the 2.1 line
+// (the released 2.0 response above is frozen pre-profiles), so a released
+// 2.0 host's response upgrades to `profiles: []` ("old host never had this
+// feature"). The request is unchanged.
 export const providersAddCustomPathV21 = defineRpcContract({
   method: "providers.addCustomPath",
   schemaVersion: { major: 2, minor: 1 } as const,
@@ -1132,29 +1222,10 @@ export const providersRemoveCustomPathUpgradeV1ToV2 = defineUpgradePath<
   }),
 });
 
-export const providersRemoveCustomPathDowngradeV2ToV1 = defineDowngradePath<
-  typeof providersRemoveCustomPathV20,
-  typeof providersRemoveCustomPathV10
->({
-  from: { major: 2, minor: 0 },
-  to: { major: 1, minor: 0 },
-  downgradeRequest: (request) =>
-    downgradeProviderRequestForV10(
-      providersRemoveCustomPathRequestSchemaV10,
-      request,
-    ),
-  downgradeResponse: (response) => {
-    const state = downgradeProviderStateForV10(response.state);
-    if (!state.ok) return state;
-    return {
-      ok: true,
-      value: providersRemoveCustomPathResponseSchemaV10.parse({
-        state: state.value,
-      }),
-    };
-  },
-});
-
+// v2.1 carries the live state shape - `profiles` ships with the 2.1 line
+// (the released 2.0 response above is frozen pre-profiles), so a released
+// 2.0 host's response upgrades to `profiles: []` ("old host never had this
+// feature"). The request is unchanged.
 export const providersRemoveCustomPathV21 = defineRpcContract({
   method: "providers.removeCustomPath",
   schemaVersion: { major: 2, minor: 1 } as const,
@@ -1295,33 +1366,12 @@ export const providersAwaitLoginUpgradeV1ToV2 = defineUpgradePath<
   }),
 });
 
-export const providersAwaitLoginDowngradeV2ToV1 = defineDowngradePath<
-  typeof providersAwaitLoginV20,
-  typeof providersAwaitLoginV10
->({
-  from: { major: 2, minor: 0 },
-  to: { major: 1, minor: 0 },
-  // Frozen v2.0 request is already byte-identical to v1.0's shape.
-  downgradeRequest: (request) =>
-    downgradeProviderRequestForV10(providersAwaitLoginRequestSchemaV10, request),
-  downgradeResponse: (response) => {
-    if (response.state === null) {
-      return {
-        ok: true,
-        value: providersAwaitLoginResponseSchemaV10.parse({ state: null }),
-      };
-    }
-    const state = downgradeProviderStateForV10(response.state);
-    if (!state.ok) return state;
-    return {
-      ok: true,
-      value: providersAwaitLoginResponseSchemaV10.parse({
-        state: state.value,
-      }),
-    };
-  },
-});
-
+// v2.1 adds `profileId` to the request (await the same profile-scoped login
+// child `providers.startLogin@1.1` started) and, on the response, `profiles`
+// on the echoed state plus `existingProfileId` (duplicate-account detection
+// for create-profile logins). The released 2.0 shapes above are frozen
+// without all three; this upgrade fills the "old host never had this
+// feature" defaults.
 export const providersAwaitLoginV21 = defineRpcContract({
   method: "providers.awaitLogin",
   schemaVersion: { major: 2, minor: 1 } as const,
@@ -1347,6 +1397,7 @@ export const providersAwaitLoginUpgradeV20ToV21 = defineUpgradePath<
         : upgradeProviderCliStateToLatest(response.state),
     mcpAuth: null,
     existingProfileId: null,
+    codeRejected: false,
   }),
 });
 
@@ -1446,6 +1497,31 @@ export const providersCancelLoginUpgradeV10ToV11 = defineUpgradePath<
     ...response,
     mcpAuth: null,
   }),
+});
+
+/**
+ * Brand-new v1.0 method (not part of `RELEASED_FLOOR_METHOD_NAMES` - this
+ * whole code-paste surface is unreleased), registered below with
+ * `degrade: { kind: "unsupported" }`: an old host simply lacks it, and
+ * callers get per-call upgrade guidance instead of a fatal handshake
+ * mismatch (see `agent/profiles.ts`'s note on the same pattern).
+ */
+export const providersSubmitLoginCodeV10 = defineRpcContract({
+  method: "providers.submitLoginCode",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersSubmitLoginCodeRequestSchema,
+  responseSchema: providersSubmitLoginCodeResponseSchema,
+});
+
+/**
+ * Brand-new v1.0 method, registered the same way as
+ * `providers.submitLoginCode` above.
+ */
+export const providersTouchLoginV10 = defineRpcContract({
+  method: "providers.touchLogin",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersTouchLoginRequestSchema,
+  responseSchema: providersTouchLoginResponseSchema,
 });
 
 export const providersSetEnabledV10 = defineRpcContract({
@@ -1644,26 +1720,6 @@ export const providersSetApiKeyUpgradeV1ToV2 = defineUpgradePath<
   }),
 });
 
-export const providersSetApiKeyDowngradeV2ToV1 = defineDowngradePath<
-  typeof providersSetApiKeyV20,
-  typeof providersSetApiKeyV10
->({
-  from: { major: 2, minor: 0 },
-  to: { major: 1, minor: 0 },
-  downgradeRequest: (request) =>
-    downgradeProviderRequestForV10(providersSetApiKeyRequestSchemaV10, request),
-  downgradeResponse: (response) => {
-    const state = downgradeProviderStateForV10(response.state);
-    if (!state.ok) return state;
-    return {
-      ok: true,
-      value: providersSetApiKeyResponseSchemaV10.parse({
-        state: state.value,
-      }),
-    };
-  },
-});
-
 export const providersSetApiKeyV21 = defineRpcContract({
   method: "providers.setApiKey",
   schemaVersion: { major: 2, minor: 1 } as const,
@@ -1746,29 +1802,6 @@ export const providersClearApiKeyUpgradeV1ToV2 = defineUpgradePath<
   upgradeResponse: (response) => ({
     state: upgradeProviderStateFromV10(response.state),
   }),
-});
-
-export const providersClearApiKeyDowngradeV2ToV1 = defineDowngradePath<
-  typeof providersClearApiKeyV20,
-  typeof providersClearApiKeyV10
->({
-  from: { major: 2, minor: 0 },
-  to: { major: 1, minor: 0 },
-  downgradeRequest: (request) =>
-    downgradeProviderRequestForV10(
-      providersClearApiKeyRequestSchemaV10,
-      request,
-    ),
-  downgradeResponse: (response) => {
-    const state = downgradeProviderStateForV10(response.state);
-    if (!state.ok) return state;
-    return {
-      ok: true,
-      value: providersClearApiKeyResponseSchemaV10.parse({
-        state: state.value,
-      }),
-    };
-  },
 });
 
 export const providersClearApiKeyV21 = defineRpcContract({
@@ -1855,29 +1888,6 @@ export const providersSetTerminalAgentArgsUpgradeV1ToV2 = defineUpgradePath<
   }),
 });
 
-export const providersSetTerminalAgentArgsDowngradeV2ToV1 = defineDowngradePath<
-  typeof providersSetTerminalAgentArgsV20,
-  typeof providersSetTerminalAgentArgsV10
->({
-  from: { major: 2, minor: 0 },
-  to: { major: 1, minor: 0 },
-  downgradeRequest: (request) =>
-    downgradeProviderRequestForV10(
-      providersSetTerminalAgentArgsRequestSchemaV10,
-      request,
-    ),
-  downgradeResponse: (response) => {
-    const state = downgradeProviderStateForV10(response.state);
-    if (!state.ok) return state;
-    return {
-      ok: true,
-      value: providersSetTerminalAgentArgsResponseSchemaV10.parse({
-        state: state.value,
-      }),
-    };
-  },
-});
-
 export const providersSetTerminalAgentArgsV21 = defineRpcContract({
   method: "providers.setTerminalAgentArgs",
   schemaVersion: { major: 2, minor: 1 } as const,
@@ -1962,29 +1972,6 @@ export const providersSetEnvOverrideUpgradeV1ToV2 = defineUpgradePath<
   }),
 });
 
-export const providersSetEnvOverrideDowngradeV2ToV1 = defineDowngradePath<
-  typeof providersSetEnvOverrideV20,
-  typeof providersSetEnvOverrideV10
->({
-  from: { major: 2, minor: 0 },
-  to: { major: 1, minor: 0 },
-  downgradeRequest: (request) =>
-    downgradeProviderRequestForV10(
-      providersSetEnvOverrideRequestSchemaV10,
-      request,
-    ),
-  downgradeResponse: (response) => {
-    const state = downgradeProviderStateForV10(response.state);
-    if (!state.ok) return state;
-    return {
-      ok: true,
-      value: providersSetEnvOverrideResponseSchemaV10.parse({
-        state: state.value,
-      }),
-    };
-  },
-});
-
 export const providersSetEnvOverrideV21 = defineRpcContract({
   method: "providers.setEnvOverride",
   schemaVersion: { major: 2, minor: 1 } as const,
@@ -2067,29 +2054,6 @@ export const providersDeleteEnvOverrideUpgradeV1ToV2 = defineUpgradePath<
   upgradeResponse: (response) => ({
     state: upgradeProviderStateFromV10(response.state),
   }),
-});
-
-export const providersDeleteEnvOverrideDowngradeV2ToV1 = defineDowngradePath<
-  typeof providersDeleteEnvOverrideV20,
-  typeof providersDeleteEnvOverrideV10
->({
-  from: { major: 2, minor: 0 },
-  to: { major: 1, minor: 0 },
-  downgradeRequest: (request) =>
-    downgradeProviderRequestForV10(
-      providersDeleteEnvOverrideRequestSchemaV10,
-      request,
-    ),
-  downgradeResponse: (response) => {
-    const state = downgradeProviderStateForV10(response.state);
-    if (!state.ok) return state;
-    return {
-      ok: true,
-      value: providersDeleteEnvOverrideResponseSchemaV10.parse({
-        state: state.value,
-      }),
-    };
-  },
 });
 
 export const providersDeleteEnvOverrideV21 = defineRpcContract({
@@ -2188,10 +2152,44 @@ export const worktreeListBindingsForEpicUpgradeV10ToV11 = defineUpgradePath<
   }),
 });
 
+// v1.2 adds per-row `isGitResolvePending`, the host's authoritative signal
+// that a row's git facts (`isGitRepo` and the `missing_worktree_path` reason
+// derived from it) are still an unverified placeholder - pickers render such
+// rows as pending ("checking") instead of dead.
+export const worktreeListBindingsForEpicV12 = defineRpcContract({
+  method: "worktree.listBindingsForEpic",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: worktreeListBindingsForEpicRequestSchema,
+  responseSchema: worktreeListBindingsForEpicResponseSchemaV12,
+});
+
+// Additive upgrade from v1.1: a v1.1 host has no pending concept and never
+// emits a signal that would later clear it, so every bridged row is stamped
+// `isGitResolvePending: false` - the old host's answer is authoritative and
+// must render as-is (its truthful `not git` / `missing` label, and the
+// recoverable empty-state), NOT as perpetual "checking". Bridging to `true`
+// would strand every correctly-resolved old-host row in a pending state that
+// never converges against a v1.1 host.
+export const worktreeListBindingsForEpicUpgradeV11ToV12 = defineUpgradePath<
+  typeof worktreeListBindingsForEpicV11,
+  typeof worktreeListBindingsForEpicV12
+>({
+  from: worktreeListBindingsForEpicV11.schemaVersion,
+  to: worktreeListBindingsForEpicV12.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    ...response,
+    rows: response.rows.map((row) => ({
+      ...row,
+      isGitResolvePending: false,
+    })),
+  }),
+});
+
 // Note: git contract definitions are imported from git-contracts.ts above
 // and registered inline in hostRpcRegistry and hostStreamRpcRegistry below.
 
-export const hostRpcRegistry = defineVersionedRpcRegistry({
+const HOST_RPC_REGISTRY_DEFINITION = {
   "host.status": {
     1: {
       latestMinor: 0,
@@ -2236,14 +2234,161 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
       downgradePathsFromLatest: {},
     },
     2: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: hostGetRateLimitUsageV20,
           upgradeFromPreviousVersion: hostGetRateLimitUsageUpgradeV12ToV20,
         },
+        1: {
+          contract: hostGetRateLimitUsageV21,
+          upgradeFromPreviousVersion: hostGetRateLimitUsageUpgradeV20ToV21,
+        },
       },
       downgradePathsFromLatest: { 1: hostGetRateLimitUsageDowngradeV2ToV1 },
+    },
+  },
+  "providers.consumeRateLimitResetCredit": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersConsumeRateLimitResetCreditV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.notifications.list": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationsList,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.notificationHooks.status": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationHooksStatus,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.notificationHooks.test": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationHooksTest,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.notificationHooks.save": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationHooksSave,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.notifications.getConfig": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationsGetConfig,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.notifications.setConfig": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationsSetConfig,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.notifications.markRead": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationsMarkRead,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.notifications.markAllRead": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationsMarkAllRead,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.notifications.clearAll": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationsClearAll,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.notifications.indicatorState": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationsIndicatorState,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
     },
   },
   "comments.listThreads": {
@@ -2318,11 +2463,15 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
       downgradePathsFromLatest: {},
     },
     2: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: agentGuiListHarnessesV20,
           upgradeFromPreviousVersion: agentGuiListHarnessesUpgradeV1ToV2,
+        },
+        1: {
+          contract: agentGuiListHarnessesV21,
+          upgradeFromPreviousVersion: agentGuiListHarnessesUpgradeV20ToV21,
         },
       },
       downgradePathsFromLatest: { 1: agentGuiListHarnessesDowngradeV2ToV1 },
@@ -2465,6 +2614,16 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
         },
       },
       downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentCreateV20,
+          upgradeFromPreviousVersion: agentCreateUpgradeV10ToV20,
+        },
+      },
+      downgradePathsFromLatest: { 1: agentCreateDowngradeV20ToV10 },
     },
   },
   "agent.selectionGuide": {
@@ -2662,15 +2821,48 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
   },
   "epic.listTasks": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicListTasksV10,
           upgradeFromPreviousVersion: null,
         },
+        1: {
+          contract: epicListTasksV11,
+          upgradeFromPreviousVersion: epicListTasksUpgradeV10ToV11,
+        },
       },
       downgradePathsFromLatest: {},
     },
+  },
+  "epic.setPinned": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicSetPinnedV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  // Optional (non-floor): batch task-context by id for title resolution.
+  // Old peers lack it in their optional manifest; callers get
+  // E_HOST_UNSUPPORTED for this call only and degrade to cache-only titles.
+  "epic.getTaskContexts": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicGetTaskContextsV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
   },
   "epic.create": {
     1: {
@@ -2996,6 +3188,23 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
       downgradePathsFromLatest: {},
     },
   },
+  // Optional (non-floor) capability: settings-only chat update, no send.
+  // Old peers lack it in their optional manifest; callers get
+  // E_HOST_UNSUPPORTED for this call only and degrade to the legacy
+  // persist-on-next-send behavior.
+  "epic.updateChatRunSettings": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicUpdateChatRunSettingsV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
   "epic.deleteChat": {
     1: {
       latestMinor: 0,
@@ -3278,6 +3487,16 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
       },
       downgradePathsFromLatest: {},
     },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: terminalCreateV20,
+          upgradeFromPreviousVersion: terminalCreateUpgradeV10ToV20,
+        },
+      },
+      downgradePathsFromLatest: { 1: terminalCreateDowngradeV20ToV10 },
+    },
   },
   "terminal.kill": {
     1: {
@@ -3302,6 +3521,16 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
       },
       downgradePathsFromLatest: {},
     },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: terminalListV20,
+          upgradeFromPreviousVersion: terminalListUpgradeV10ToV20,
+        },
+      },
+      downgradePathsFromLatest: { 1: terminalListDowngradeV20ToV10 },
+    },
   },
   "terminal.rename": {
     1: {
@@ -3317,7 +3546,7 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
   },
   "worktree.listByWorkspacePaths": {
     1: {
-      latestMinor: 1,
+      latestMinor: 3,
       versions: {
         0: {
           contract: worktreeListByWorkspacePathsV10,
@@ -3327,6 +3556,16 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
           contract: worktreeListByWorkspacePathsV11,
           upgradeFromPreviousVersion:
             worktreeListByWorkspacePathsUpgradeV10ToV11,
+        },
+        2: {
+          contract: worktreeListByWorkspacePathsV12,
+          upgradeFromPreviousVersion:
+            worktreeListByWorkspacePathsUpgradeV11ToV12,
+        },
+        3: {
+          contract: worktreeListByWorkspacePathsV13,
+          upgradeFromPreviousVersion:
+            worktreeListByWorkspacePathsUpgradeV12ToV13,
         },
       },
       downgradePathsFromLatest: {},
@@ -3430,7 +3669,7 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
   },
   "worktree.listAllForHost": {
     1: {
-      latestMinor: 2,
+      latestMinor: 4,
       versions: {
         0: {
           contract: worktreeListAllForHostV10,
@@ -3443,6 +3682,14 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
         2: {
           contract: worktreeListAllForHostV12,
           upgradeFromPreviousVersion: worktreeListAllForHostUpgradeV11ToV12,
+        },
+        3: {
+          contract: worktreeListAllForHostV13,
+          upgradeFromPreviousVersion: worktreeListAllForHostUpgradeV12ToV13,
+        },
+        4: {
+          contract: worktreeListAllForHostV14,
+          upgradeFromPreviousVersion: worktreeListAllForHostUpgradeV13ToV14,
         },
       },
       downgradePathsFromLatest: {},
@@ -3494,24 +3741,30 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
       downgradePathsFromLatest: { 1: providersListDowngradeV2ToV1 },
     },
     3: {
-      latestMinor: 2,
+      latestMinor: 0,
       versions: {
         0: {
           contract: providersListV30,
           upgradeFromPreviousVersion: providersListUpgradeV2ToV3,
         },
-        1: {
-          contract: providersListV31,
-          upgradeFromPreviousVersion: providersListUpgradeV30ToV31,
-        },
-        2: {
-          contract: providersListV32,
-          upgradeFromPreviousVersion: providersListUpgradeV31ToV32,
+      },
+      downgradePathsFromLatest: {
+        1: providersListDowngradeV3ToV1,
+        2: providersListDowngradeV3ToV2,
+      },
+    },
+    4: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersListV40,
+          upgradeFromPreviousVersion: providersListUpgradeV3ToV4,
         },
       },
       downgradePathsFromLatest: {
-        1: providersListDowngradeV32ToV10,
-        2: providersListDowngradeV32ToV20,
+        1: providersListDowngradeV4ToV1,
+        2: providersListDowngradeV4ToV2,
+        3: providersListDowngradeV4ToV3,
       },
     },
   },
@@ -3667,6 +3920,32 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
         1: {
           contract: providersCancelLoginV11,
           upgradeFromPreviousVersion: providersCancelLoginUpgradeV10ToV11,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "providers.submitLoginCode": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersSubmitLoginCodeV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "providers.touchLogin": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersTouchLoginV10,
+          upgradeFromPreviousVersion: null,
         },
       },
       downgradePathsFromLatest: {},
@@ -3844,7 +4123,7 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
   },
   "worktree.listBindingsForEpic": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: worktreeListBindingsForEpicV10,
@@ -3854,6 +4133,11 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
           contract: worktreeListBindingsForEpicV11,
           upgradeFromPreviousVersion:
             worktreeListBindingsForEpicUpgradeV10ToV11,
+        },
+        2: {
+          contract: worktreeListBindingsForEpicV12,
+          upgradeFromPreviousVersion:
+            worktreeListBindingsForEpicUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},
@@ -3887,7 +4171,51 @@ export const hostRpcRegistry = defineVersionedRpcRegistry({
       downgradePathsFromLatest: {},
     },
   },
-});
+  "agent.listProviderProfiles": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentListProviderProfilesV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "agent.getProviderProfileRateLimits": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentGetProviderProfileRateLimitsV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "agent.configure": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentConfigureV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+} as const;
+
+export const hostRpcRegistry = defineFloorAwareVersionedRpcRegistry(
+  RELEASED_FLOOR_METHOD_NAMES,
+  HOST_RPC_REGISTRY_DEFINITION,
+);
 
 export type HostRpcRegistry = typeof hostRpcRegistry;
 
@@ -3896,7 +4224,7 @@ export type HostRpcRegistry = typeof hostRpcRegistry;
  *
  * One manifest per `/stream` WS: `epic.subscribe@1.0`,
  * `chat.subscribe@1.3`, `notifications.subscribe@1.0`,
- * `terminal.subscribe@1.0`, `git.subscribeStatus@1.0`,
+ * `terminal.subscribe@1.0`, `git.subscribeStatus@1.1`,
  * `resources.subscribe@1.0`, `agent.inbox.subscribe@1.0`,
  * `speech.dictate@1.0`, and
  * `migration.run@1.0` are negotiated from this registry. Later minors within
@@ -3928,7 +4256,7 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
   },
   "chat.subscribe": {
     1: {
-      latestMinor: 3,
+      latestMinor: 4,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -3941,6 +4269,9 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
         },
         3: {
           contract: chatSubscribeV13,
+        },
+        4: {
+          contract: chatSubscribeV14,
         },
       },
     },
@@ -3955,9 +4286,19 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
       },
     },
   },
+  "host.notifications.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationsSubscribe,
+        },
+      },
+    },
+  },
   "terminal.subscribe": {
     1: {
-      latestMinor: 3,
+      latestMinor: 4,
       versions: {
         0: {
           contract: terminalSubscribeV10,
@@ -3971,15 +4312,25 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
         3: {
           contract: terminalSubscribeV13,
         },
+        4: {
+          contract: terminalSubscribeV14,
+        },
       },
     },
   },
   "git.subscribeStatus": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: gitSubscribeStatusV10,
+        },
+        // Nested-snapshot minor: `submodules[]` + `nestedFingerprint` + v1.1
+        // file rows on server frames. Additive; the HOST resolver projects
+        // frames per negotiated minor (streams have no version bridges). See
+        // the COMPAT POSTURE note on `gitSubscribeStatusV11`.
+        1: {
+          contract: gitSubscribeStatusV11,
         },
       },
     },
@@ -4026,6 +4377,16 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
       versions: {
         0: {
           contract: worktreeDeleteByPathStreamV10,
+        },
+      },
+    },
+  },
+  "worktree.changed": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: worktreeChangedV10,
         },
       },
     },

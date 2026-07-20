@@ -1,80 +1,125 @@
 import { Notification } from "electron";
 import { log } from "./app/logger";
-import type { MenuCommandId } from "../ipc-contracts/window-types";
 
-interface RichNotificationButton {
-  readonly text: string;
-  readonly command: MenuCommandId;
-}
+export const NOTIFICATION_REPLACE_TTL_MS = 60_000;
+const MAX_REPLACEABLE_NOTIFICATIONS = 100;
+const MAX_DELIVERED_NOTIFICATION_KEYS = 5_000;
+const replaceableNotifications = new Map<string, Notification>();
+const deliveredNotificationKeys = new Set<string>();
 
-export interface RichNotificationOptions {
+export interface NativeNotificationOptions {
   readonly title: string;
   readonly body: string;
-  readonly subtitle: string | undefined;
-  readonly silent: boolean;
-  readonly urgency: "normal" | "critical" | "low";
-  readonly buttons: ReadonlyArray<RichNotificationButton>;
-  readonly defaultClickCommand: MenuCommandId | undefined;
-  readonly closeButtonText: string | undefined;
+  readonly replaceKey: string | null;
+  readonly deliveryKey: string | null;
+  readonly onClick: (() => void) | null;
 }
 
 /**
- * Shows a notification with optional action buttons. Buttons surface as native
- * action buttons on macOS (always) and Windows (Electron 41+). On Linux only
- * the body/click path is wired; the buttons array is ignored by the OS but the
- * `defaultClickCommand` still fires on body click.
+ * Shows a native notification. A replacement key groups notifications that
+ * describe the same entity: a newer notification closes and re-alerts over
+ * the prior one instead of leaving a stack in the OS notification center.
  */
-export function showRichNotification(
-  options: RichNotificationOptions,
-  runCommand: (command: MenuCommandId) => void,
+export function showNativeNotification(
+  options: NativeNotificationOptions,
 ): void {
-  if (!Notification.isSupported()) {
-    log.warn("[notifications] not supported on this platform");
+  if (
+    options.deliveryKey !== null &&
+    deliveredNotificationKeys.has(options.deliveryKey)
+  ) {
     return;
   }
+  if (!Notification.isSupported()) {
+    log.warn("[notifications] not supported on this platform");
+    rememberDeliveredNotificationKey(options.deliveryKey);
+    return;
+  }
+
   const notification = new Notification({
     title: options.title,
     body: options.body,
-    subtitle: options.subtitle,
-    silent: options.silent,
-    urgency: options.urgency,
-    closeButtonText: options.closeButtonText,
-    actions: options.buttons.map((button) => ({
-      type: "button",
-      text: button.text,
-    })),
   });
-  notification.on("action", (_event, index) => {
-    const button = options.buttons[index];
-    if (button !== undefined) {
-      runCommand(button.command);
+  const replaceKey = options.replaceKey;
+
+  if (replaceKey !== null) {
+    const priorNotification = replaceableNotifications.get(replaceKey);
+    if (priorNotification !== undefined) {
+      priorNotification.close();
     }
-  });
-  if (options.defaultClickCommand !== undefined) {
-    const click = options.defaultClickCommand;
-    notification.on("click", () => runCommand(click));
+    evictReplaceableNotifications();
+    replaceableNotifications.set(replaceKey, notification);
+    notification.on("close", () => {
+      deleteReplacementIfCurrent(replaceKey, notification);
+    });
+    notification.on("click", () => {
+      deleteReplacementIfCurrent(replaceKey, notification);
+    });
+    setTimeout(() => {
+      if (replaceableNotifications.get(replaceKey) !== notification) return;
+      replaceableNotifications.delete(replaceKey);
+    }, NOTIFICATION_REPLACE_TTL_MS);
+  }
+
+  if (options.onClick !== null) {
+    notification.on("click", options.onClick);
   }
   notification.show();
+  rememberDeliveredNotificationKey(options.deliveryKey);
+}
+
+function rememberDeliveredNotificationKey(deliveryKey: string | null): void {
+  if (deliveryKey === null || deliveredNotificationKeys.has(deliveryKey)) {
+    return;
+  }
+  while (deliveredNotificationKeys.size >= MAX_DELIVERED_NOTIFICATION_KEYS) {
+    const oldest = deliveredNotificationKeys.values().next();
+    if (oldest.done) return;
+    deliveredNotificationKeys.delete(oldest.value);
+  }
+  deliveredNotificationKeys.add(deliveryKey);
+}
+
+/**
+ * Releases bookkeeping for platforms that do not report notification closes.
+ * It deliberately does not dismiss native notifications; once an entry ages
+ * out, a later same-key notification may stack rather than replace it.
+ */
+function evictReplaceableNotifications(): void {
+  while (replaceableNotifications.size >= MAX_REPLACEABLE_NOTIFICATIONS) {
+    const oldest = replaceableNotifications.entries().next();
+    if (oldest.done) return;
+    const [replaceKey, notification] = oldest.value;
+    if (replaceableNotifications.get(replaceKey) !== notification) continue;
+    replaceableNotifications.delete(replaceKey);
+  }
+}
+
+function deleteReplacementIfCurrent(
+  replaceKey: string,
+  notification: Notification,
+): void {
+  if (replaceableNotifications.get(replaceKey) === notification) {
+    replaceableNotifications.delete(replaceKey);
+  }
 }
 
 /**
  * Shows a plain title/body notification whose only interaction is a body click.
  * Used where there is no command to route - the click handler runs directly
- * (e.g. bring the app forward). Buttons and command routing stay in
- * {@link showRichNotification}.
+ * (e.g. bring the app forward).
  */
 export function showSimpleNotification(
   title: string,
   body: string,
   onClick: () => void,
 ): void {
-  if (!Notification.isSupported()) {
-    log.warn("[notifications] not supported on this platform");
-    return;
-  }
-  const notification = new Notification({ title, body });
-  notification.on("click", onClick);
-  notification.show();
+  showNativeNotification({
+    title,
+    body,
+    replaceKey: null,
+    deliveryKey: null,
+    onClick,
+  });
 }
 
 /**

@@ -15,7 +15,7 @@
     "url": "git+https://github.com/traycerai/traycer.git",
     "directory": "clients/traycer-cli"
   },
-  "license": "Apache-2.0",
+  "license": "MIT",
   "scripts": {
     "traycer": "bun run src/index.ts",
     "compile": "tsc --noEmit",
@@ -32,7 +32,7 @@
     "@sentry/node": "catalog:",
     "commander": "catalog:",
     "node-stream-zip": "catalog:",
-    "tar": "^7.5.19",
+    "tar": "^7.5.20",
     "zod": "catalog:"
   },
   "devDependencies": {

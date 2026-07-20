@@ -1,5 +1,7 @@
 import type { QueryClient } from "@tanstack/react-query";
 import type {
+  GetTaskContextsResponse,
+  ListTaskLight,
   ListTasksFacets,
   ListTasksResponse,
   TaskLight,
@@ -7,7 +9,10 @@ import type {
   TaskWorkspaceIdentifier,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import { formatRepoIdentifier } from "@traycer/protocol/host/epic/unary-schemas";
-import { isCloudEpicTasksQueryKey } from "@/lib/query-keys";
+import {
+  isCloudEpicTasksQueryKey,
+  isEpicTaskContextsQueryKey,
+} from "@/lib/query-keys";
 
 export interface CloudEpicTasksCacheScope {
   readonly hostId: string | null;
@@ -89,6 +94,86 @@ export function updateEpicTitleInCloudTaskCaches(
     if (next === response) continue;
     queryClient.setQueryData<ListTasksResponse>(queryKey, next);
   }
+  // Batch-title entries (`epic.getTaskContexts`) are a second copy of the same
+  // ListTaskLight rows. Patch them in the same write so rename never leaves a
+  // stale owner chip in Settings ▸ Worktrees.
+  updateEpicTitleInTaskContextsCaches(
+    queryClient,
+    scope,
+    epicId,
+    normalizedTitle,
+  );
+}
+
+/**
+ * Patches every matching `epic.getTaskContexts` cache entry for `epicId`.
+ * Invoked from `updateEpicTitleInCloudTaskCaches` so all rename call sites
+ * keep both cache families coherent without a second call.
+ */
+export function updateEpicTitleInTaskContextsCaches(
+  queryClient: QueryClient,
+  scope: CloudEpicTasksCacheScope,
+  epicId: string,
+  title: string,
+): void {
+  const normalizedTitle = normalizeEpicTitle(title);
+  if (normalizedTitle === null) return;
+  for (const [
+    queryKey,
+    response,
+  ] of queryClient.getQueriesData<GetTaskContextsResponse>({
+    predicate: (query) =>
+      epicTaskContextsQueryKeyMatchesScope(query.queryKey, scope),
+  })) {
+    if (response === undefined) continue;
+    const next = updateEpicTitleInTaskContextsResponse(
+      response,
+      epicId,
+      normalizedTitle,
+    );
+    if (next === response) continue;
+    queryClient.setQueryData<GetTaskContextsResponse>(queryKey, next);
+  }
+}
+
+export function setEpicPinnedInCloudTaskCaches(
+  queryClient: QueryClient,
+  scope: CloudEpicTasksCacheScope,
+  epicId: string,
+  pinned: boolean,
+): void {
+  for (const [
+    queryKey,
+    response,
+  ] of queryClient.getQueriesData<ListTasksResponse>({
+    predicate: (query) =>
+      cloudEpicTasksQueryKeyMatchesScope(query.queryKey, scope),
+  })) {
+    if (response === undefined) continue;
+    const next = setEpicPinnedInCloudTasksResponse(response, epicId, pinned);
+    if (next === response) continue;
+    queryClient.setQueryData<ListTasksResponse>(queryKey, next);
+  }
+}
+
+/**
+ * Identity-preserving per-row pin patch: returns the same response reference
+ * when the epic is absent or already carries the requested pin state. Shared
+ * with the pages store so the cached first page and the accumulated "Show
+ * more" tails patch identically.
+ */
+export function setEpicPinnedInCloudTasksResponse(
+  response: ListTasksResponse,
+  epicId: string,
+  pinned: boolean,
+): ListTasksResponse {
+  const tasks = response.tasks.map((task) => {
+    if (task.epic?.light?.id !== epicId) return task;
+    if ((task.pinned ?? false) === pinned) return task;
+    return { ...task, pinned };
+  });
+  const changed = tasks.some((task, index) => task !== response.tasks[index]);
+  return changed ? { ...response, tasks } : response;
 }
 
 export function cloudEpicTasksQueryKeyMatchesScope(
@@ -100,6 +185,21 @@ export function cloudEpicTasksQueryKeyMatchesScope(
     queryKey[0] === "host" &&
     (scope.hostId === null || queryKey[1] === scope.hostId) &&
     queryKey[5] === scope.userId
+  );
+}
+
+/**
+ * Scope match for `epic.getTaskContexts` keys:
+ * `["host", hostId, "epic.getTaskContexts", { taskIds }, userId]`.
+ */
+export function epicTaskContextsQueryKeyMatchesScope(
+  queryKey: readonly unknown[],
+  scope: CloudEpicTasksCacheScope,
+): boolean {
+  return (
+    isEpicTaskContextsQueryKey(queryKey) &&
+    (scope.hostId === null || queryKey[1] === scope.hostId) &&
+    queryKey[4] === scope.userId
   );
 }
 
@@ -131,24 +231,60 @@ function updateEpicTitleInCloudTasksResponse(
   title: string,
 ): ListTasksResponse {
   const tasks = response.tasks.map((task) => {
-    const epic = task.epic;
-    const light = epic?.light;
-    if (epic === null || epic === undefined) return task;
-    if (light === null || light === undefined) return task;
-    if (light.id !== epicId || light.title === title) return task;
-    return {
-      ...task,
-      epic: {
-        ...epic,
-        light: {
-          ...light,
-          title,
-        },
-      },
-    };
+    const next = updateEpicTitleInListTaskLight(task, epicId, title);
+    return next ?? task;
   });
   const changed = tasks.some((task, index) => task !== response.tasks[index]);
   return changed ? { ...response, tasks } : response;
+}
+
+function updateEpicTitleInTaskContextsResponse(
+  response: GetTaskContextsResponse,
+  epicId: string,
+  title: string,
+): GetTaskContextsResponse {
+  let changed = false;
+  const tasks: Record<string, ListTaskLight | null> = {};
+  for (const [taskId, task] of Object.entries(response.tasks)) {
+    if (task === null) {
+      tasks[taskId] = null;
+      continue;
+    }
+    const next = updateEpicTitleInListTaskLight(task, epicId, title);
+    if (next === null) {
+      tasks[taskId] = task;
+      continue;
+    }
+    changed = true;
+    tasks[taskId] = next;
+  }
+  return changed ? { ...response, tasks } : response;
+}
+
+/**
+ * Returns a new row with the epic title updated, or `null` when the row does
+ * not carry `epicId` / already has `title` (identity-preserving skip).
+ */
+function updateEpicTitleInListTaskLight(
+  task: ListTaskLight,
+  epicId: string,
+  title: string,
+): ListTaskLight | null {
+  const epic = task.epic;
+  const light = epic?.light;
+  if (epic === null || epic === undefined) return null;
+  if (light === null || light === undefined) return null;
+  if (light.id !== epicId || light.title === title) return null;
+  return {
+    ...task,
+    epic: {
+      ...epic,
+      light: {
+        ...light,
+        title,
+      },
+    },
+  };
 }
 
 function removeTasksFromFacets(

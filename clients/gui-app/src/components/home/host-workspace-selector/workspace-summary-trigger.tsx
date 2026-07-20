@@ -1,21 +1,21 @@
 import { useState, type ButtonHTMLAttributes, type Ref } from "react";
 import { ChevronDown, TriangleAlert } from "lucide-react";
 import {
-  HoverCard,
-  HoverCardContent,
-  HoverCardTrigger,
-} from "@/components/ui/hover-card";
-import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { HoverPreviewCard } from "@/components/ui/hover-preview-card";
 import { cn } from "@/lib/utils";
 import { WorkspaceFolderHoverList } from "./workspace-folder-hover-list";
 import { WorkspaceFolderRows } from "./workspace-folder-rows";
 import { WorkspaceModeIcon } from "./workspace-mode-icon";
-import type { WorkspaceRunItem } from "./workspace-run-item";
+import {
+  workspaceRunBranchSourceLabel,
+  type WorkspaceRunItem,
+} from "./workspace-run-item";
+import { WorkspaceBranchLabel } from "./workspace-branch-label";
 
 const NOOP = (): void => undefined;
 const NOOP_ADD = (): Promise<boolean> => Promise.resolve(false);
@@ -35,18 +35,23 @@ export function WorkspaceSummaryTrigger(
   },
 ) {
   const { items, readOnly, bindingResolved, className, ref, ...rest } = props;
-  const primary = items.length === 0 ? null : items[0];
+  // Resolve by the marked `isPrimary` row, not array order: the host
+  // normalizes binding flags without reordering entries, so the collapsed
+  // chip must agree with the primary pin/row rather than always reading
+  // position 0.
+  const primary =
+    items.length === 0
+      ? null
+      : (items.find((item) => item.isPrimary) ?? items[0]);
   const extraCount = Math.max(0, items.length - 1);
   const anyMissing = items.some((item) => item.missing);
-  const title = summaryTitle(items, anyMissing, bindingResolved);
   const [readOnlyPopoverOpen, setReadOnlyPopoverOpen] = useState(false);
   const [readOnlyHoverOpen, setReadOnlyHoverOpen] = useState(false);
 
-  const trigger = (
+  const triggerButton = (
     <button
       type="button"
       ref={ref}
-      title={title}
       data-testid="workspace-summary-trigger"
       aria-disabled={readOnly && items.length === 0 ? true : undefined}
       className={cn(
@@ -76,8 +81,12 @@ export function WorkspaceSummaryTrigger(
           <span className="shrink-0 text-lg leading-none text-current/70">
             ·
           </span>
-          <span className="min-w-0 max-w-[min(44vw,18rem)] flex-1 truncate">
-            {primary.branchLabel}
+          <span className="flex min-w-0 max-w-[min(44vw,18rem)] flex-1">
+            <WorkspaceBranchLabel
+              target={primary.branchLabel}
+              source={workspaceRunBranchSourceLabel(primary.currentIntent)}
+              className={undefined}
+            />
           </span>
           {extraCount > 0 ? (
             <span className="shrink-0 rounded-md bg-muted/80 px-1.5 py-0.5 text-overline font-medium text-current">
@@ -89,6 +98,11 @@ export function WorkspaceSummaryTrigger(
       <ChevronDown className="size-3.5 shrink-0 text-current" />
     </button>
   );
+  // The interactive (non-read-only) summary is wrapped by the parent's
+  // controlled hover card (`WorkspaceFolderSummaryControl`), which gates the
+  // preview on the click-open picker; the read-only branch below owns its own
+  // coordinated hover+popover pair.
+  const trigger = triggerButton;
 
   // Read-only (terminal-agent): hover keeps the compact preview; click expands
   // the normal folder rows with every binding control suppressed.
@@ -102,32 +116,26 @@ export function WorkspaceSummaryTrigger(
           if (nextOpen) setReadOnlyHoverOpen(false);
         }}
       >
-        <HoverCard
+        <HoverPreviewCard
+          content={<WorkspaceFolderHoverList items={items} />}
+          side="bottom"
+          sideOffset={4}
+          align="start"
           open={!readOnlyPopoverOpen && readOnlyHoverOpen}
           onOpenChange={(nextOpen) => {
             if (readOnlyPopoverOpen) return;
             setReadOnlyHoverOpen(nextOpen);
           }}
-          openDelay={350}
-          closeDelay={120}
         >
-          <HoverCardTrigger asChild>
-            <PopoverTrigger asChild>{trigger}</PopoverTrigger>
-          </HoverCardTrigger>
-          <HoverCardContent
-            side="bottom"
-            align="start"
-            className="w-[min(92vw,24rem)] rounded-md bg-foreground p-0 text-ui-xs text-background"
-          >
-            <WorkspaceFolderHoverList items={items} />
-          </HoverCardContent>
-        </HoverCard>
+          <PopoverTrigger asChild>{trigger}</PopoverTrigger>
+        </HoverPreviewCard>
         <PopoverContent
           side="bottom"
           align="start"
           collisionPadding={12}
-          className="w-fit max-w-[min(92vw,40rem)] max-h-[min(var(--radix-popover-content-available-height),32rem)] gap-0 overflow-y-auto p-3"
+          className="w-[min(92vw,42rem)] max-w-[var(--radix-popover-content-available-width)] max-h-[min(var(--radix-popover-content-available-height),32rem)] gap-0 overflow-y-auto p-3"
           data-testid="workspace-readonly-folders-popover"
+          onOpenAutoFocus={(event) => event.preventDefault()}
         >
           <WorkspaceFolderRows
             items={items}
@@ -150,22 +158,6 @@ export function WorkspaceSummaryTrigger(
   }
 
   return trigger;
-}
-
-function summaryTitle(
-  items: ReadonlyArray<WorkspaceRunItem>,
-  anyMissing: boolean,
-  bindingResolved: boolean,
-): string {
-  if (anyMissing) {
-    return `A bound folder is missing on disk. ${items
-      .map((item) => item.hoverLabel)
-      .join("\n")}`;
-  }
-  if (items.length === 0) {
-    return bindingResolved ? "No workspace linked" : "Linking workspace…";
-  }
-  return items.map((item) => item.hoverLabel).join("\n");
 }
 
 function SummaryEmptyState(props: { readonly bindingResolved: boolean }) {

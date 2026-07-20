@@ -19,6 +19,7 @@ import { useLocalSnapshotClearStore } from "@/stores/settings/local-snapshot-cle
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useSettingsSectionStore } from "@/stores/tabs/settings-section-store";
 import { useTabsStore } from "@/stores/tabs/store";
+import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
 import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
 import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent-staging-store";
@@ -30,8 +31,9 @@ import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent
 // to catch a divergence. A wrong leaf, a typo'd STORE_KEYS access, or a store
 // that stops routing through the catalog must fail HERE.
 //
-// The five scoped singletons (composer-run-settings, composer-harness-memory,
-// worktree-intent-memory, worktree-intent-staging, epic-canvas) are constructed
+// The six scoped singletons (composer-run-settings, composer-harness-memory,
+// worktree-intent-memory, worktree-intent-staging, epic-canvas,
+// app-local-notifications) are constructed
 // at module load in their initial `anon` bucket; the persist lifecycle bridges
 // retarget them at runtime. The construction-time name asserted here is
 // therefore the `anon` one.
@@ -47,7 +49,7 @@ interface StorePersistHandle {
 const STORE_PERSIST_NAME_CASES: ReadonlyArray<
   [label: string, store: StorePersistHandle, expectedName: string]
 > = [
-  // ── 17 static singletons ─────────────────────────────────────────────────
+  // ── Static singletons ────────────────────────────────────────────────────
   [
     "useCommandPaletteStore",
     useCommandPaletteStore,
@@ -58,6 +60,11 @@ const STORE_PERSIST_NAME_CASES: ReadonlyArray<
     useComposerDraftStore,
     "traycer-gui-app:composer-drafts",
   ],
+  // NOTE: useInterviewDraftStore is intentionally absent. It no longer uses the
+  // zustand `persist` middleware (so it has no `.persist.getOptions().name`): it
+  // persists one localStorage key per (chatId, blockId) via `interviewDraftKey`
+  // for cross-window isolation — the same reason the app-local display-receipt
+  // store is not listed here.
   [
     "useArtifactReadStateStore",
     useArtifactReadStateStore,
@@ -106,7 +113,7 @@ const STORE_PERSIST_NAME_CASES: ReadonlyArray<
     "traycer-gui-app:workspace-folders",
   ],
 
-  // ── 5 scoped singletons (initial `anon` bucket at construction) ───────────
+  // ── Scoped singletons (initial `anon` bucket at construction) ─────────────
   [
     "useComposerRunSettingsStore",
     useComposerRunSettingsStore,
@@ -131,6 +138,11 @@ const STORE_PERSIST_NAME_CASES: ReadonlyArray<
     "useEpicCanvasStore",
     useEpicCanvasStore,
     "traycer-gui-app:epic-canvas:anon",
+  ],
+  [
+    "useAppLocalNotificationsStore",
+    useAppLocalNotificationsStore,
+    "traycer-gui-app:app-local-notifications:anon",
   ],
 ];
 

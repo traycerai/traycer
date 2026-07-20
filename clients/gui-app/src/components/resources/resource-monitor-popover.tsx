@@ -116,14 +116,6 @@ const desktopAppResourceListeners = new Set<() => void>();
 let desktopAppResourceSnapshot: DesktopAppResourceUsage | null = null;
 let desktopAppResourceTimer: number | null = null;
 let desktopAppResourceInFlight = false;
-const EMPTY_RESOURCE_SUMMARY: TaskResourceSummary = {
-  cpuPercent: 0,
-  rssBytes: 0,
-  trackedProcessCount: 0,
-  openTerminalCount: 0,
-  tuiAgentCount: 0,
-  guiAgentCount: 0,
-};
 
 interface ResourceMonitorPopoverProps {
   readonly className: string | undefined;
@@ -180,6 +172,11 @@ interface DesktopResourceSummary {
   readonly cpuPercent: number;
   readonly rssBytes: number;
   readonly processCount: number;
+}
+
+interface DesktopProcessGroupEntry {
+  readonly label: string;
+  readonly usage: DesktopAppProcessGroupUsage;
 }
 
 interface ProcessDisplayRow {
@@ -250,7 +247,7 @@ export function ResourceMonitorPopover(props: ResourceMonitorPopoverProps) {
 }
 
 function ResourceMonitorContent(props: { readonly onClose: () => void }) {
-  const [sortOption, setSortOption] = useState<ResourceSortOption>("memory");
+  const [sortOption, setSortOption] = useState<ResourceSortOption>("tab");
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const [expandedOwners, setExpandedOwners] = useState<Set<string>>(
     () => new Set(),
@@ -288,10 +285,17 @@ function ResourceMonitorContent(props: { readonly onClose: () => void }) {
     () =>
       combineHeadlineResourceSummary(
         supportsHostTree ? projection.hostTree : null,
-        projection.summary,
+        projection.app,
+        projection.owners,
         desktopApp,
       ),
-    [desktopApp, projection.hostTree, projection.summary, supportsHostTree],
+    [
+      desktopApp,
+      projection.app,
+      projection.hostTree,
+      projection.owners,
+      supportsHostTree,
+    ],
   );
 
   const canvasIndex = useMemo(() => buildCanvasResourceIndex(canvas), [canvas]);
@@ -497,14 +501,16 @@ function ResourceMonitorContent(props: { readonly onClose: () => void }) {
                   }}
                 />
               </div>
-              <ResourceCounts summary={summary} />
             </>
           )}
         </div>
 
         <div className="max-h-[min(58vh,36rem)] overflow-y-auto">
           {desktopApp === null ? null : (
-            <DesktopAppResourceSection app={desktopApp} />
+            <DesktopAppResourceSection
+              app={desktopApp}
+              sortOption={sortOption}
+            />
           )}
           {projection.app === null ? null : (
             <HostAppResourceSection app={projection.app} />
@@ -522,6 +528,7 @@ function ResourceMonitorContent(props: { readonly onClose: () => void }) {
                     task={task}
                     expandedOwners={expandedOwners}
                     expandedProcesses={expandedProcesses}
+                    sortOption={sortOption}
                     onToggleOwner={toggleOwner}
                     onToggleProcess={toggleProcess}
                     onOpenOwner={openOwner}
@@ -532,6 +539,7 @@ function ResourceMonitorContent(props: { readonly onClose: () => void }) {
                 <OtherResourceSection
                   other={projection.other}
                   expandedProcesses={expandedProcesses}
+                  sortOption={sortOption}
                   onToggleProcess={toggleProcess}
                 />
               )}
@@ -637,33 +645,22 @@ function MetricBlock(props: {
   );
 }
 
-function ResourceCounts(props: { readonly summary: TaskResourceSummary }) {
-  return (
-    <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-ui-xs text-muted-foreground">
-      <span>
-        {countLabel(
-          props.summary.openTerminalCount,
-          "open terminal",
-          "open terminals",
-        )}
-      </span>
-      <span>
-        {countLabel(props.summary.tuiAgentCount, "TUI agent", "TUI agents")}
-      </span>
-      <span>
-        {countLabel(props.summary.guiAgentCount, "GUI agent", "GUI agents")}
-      </span>
-    </div>
-  );
-}
-
 function DesktopAppResourceSection(props: {
   readonly app: DesktopAppResourceUsage;
+  readonly sortOption: ResourceSortOption;
 }) {
   const showOther =
     props.app.other.cpuPercent > 0 ||
     props.app.other.rssBytes > 0 ||
     props.app.other.processCount > 0;
+  const groups = sortDesktopProcessGroups(
+    [
+      { label: "Main", usage: props.app.main },
+      { label: "Renderer", usage: props.app.renderer },
+      ...(showOther ? [{ label: "Other", usage: props.app.other }] : []),
+    ],
+    props.sortOption,
+  );
 
   return (
     <div className="border-b border-border/60 py-1">
@@ -685,11 +682,13 @@ function DesktopAppResourceSection(props: {
           className="text-ui-sm text-foreground"
         />
       </div>
-      <DesktopAppProcessGroupRow label="Main" usage={props.app.main} />
-      <DesktopAppProcessGroupRow label="Renderer" usage={props.app.renderer} />
-      {showOther ? (
-        <DesktopAppProcessGroupRow label="Other" usage={props.app.other} />
-      ) : null}
+      {groups.map((group) => (
+        <DesktopAppProcessGroupRow
+          key={group.label}
+          label={group.label}
+          usage={group.usage}
+        />
+      ))}
     </div>
   );
 }
@@ -762,22 +761,27 @@ function resourcesSubscribeV12Supported(
 
 function combineHeadlineResourceSummary(
   hostTree: HostTreeResourceSnapshotWire | null,
-  legacySummary: TaskResourceSummary | null,
+  app: AppResourceUsage | null,
+  owners: readonly OwnerResourceSnapshotWire[],
   desktopApp: DesktopAppResourceUsage | null,
 ): TaskResourceSummary | null {
-  if (hostTree === null && legacySummary === null && desktopApp === null) {
+  if (
+    hostTree === null &&
+    app === null &&
+    desktopApp === null &&
+    owners.length === 0
+  ) {
     return null;
   }
+  // Pre-v1.2 hosts don't send the whole-host-tree aggregate, so fall back to
+  // the host app process plus the tracked owner trees.
   const base =
     hostTree === null
-      ? (legacySummary ?? EMPTY_RESOURCE_SUMMARY)
+      ? legacyHeadlineSummary(app, owners)
       : {
           cpuPercent: hostTree.cpuPercent,
           rssBytes: hostTree.rssBytes,
           trackedProcessCount: hostTree.processCount,
-          openTerminalCount: legacySummary?.openTerminalCount ?? 0,
-          tuiAgentCount: legacySummary?.tuiAgentCount ?? 0,
-          guiAgentCount: legacySummary?.guiAgentCount ?? 0,
         };
   const desktop = desktopResourceSummary(desktopApp);
 
@@ -785,10 +789,25 @@ function combineHeadlineResourceSummary(
     cpuPercent: base.cpuPercent + desktop.cpuPercent,
     rssBytes: base.rssBytes + desktop.rssBytes,
     trackedProcessCount: base.trackedProcessCount + desktop.processCount,
-    openTerminalCount: base.openTerminalCount,
-    tuiAgentCount: base.tuiAgentCount,
-    guiAgentCount: base.guiAgentCount,
   };
+}
+
+function legacyHeadlineSummary(
+  app: AppResourceUsage | null,
+  owners: readonly OwnerResourceSnapshotWire[],
+): TaskResourceSummary {
+  return owners.reduce(
+    (summary, owner) => ({
+      cpuPercent: summary.cpuPercent + owner.cpuPercent,
+      rssBytes: summary.rssBytes + owner.rssBytes,
+      trackedProcessCount: summary.trackedProcessCount + owner.processCount,
+    }),
+    {
+      cpuPercent: app?.cpuPercent ?? 0,
+      rssBytes: app?.rssBytes ?? 0,
+      trackedProcessCount: app?.processCount ?? 0,
+    },
+  );
 }
 
 function desktopResourceSummary(
@@ -822,6 +841,7 @@ function TaskResourceSection(props: {
   readonly task: TaskDisplayRow;
   readonly expandedOwners: ReadonlySet<string>;
   readonly expandedProcesses: ReadonlySet<string>;
+  readonly sortOption: ResourceSortOption;
   readonly onToggleOwner: (key: string) => void;
   readonly onToggleProcess: (key: string) => void;
   readonly onOpenOwner: (row: OwnerDisplayRow) => void;
@@ -870,6 +890,7 @@ function TaskResourceSection(props: {
             row={row}
             expanded={props.expandedOwners.has(key)}
             expandedProcesses={props.expandedProcesses}
+            sortOption={props.sortOption}
             stickyTop={headerHeight}
             onToggle={() => props.onToggleOwner(key)}
             onToggleProcess={props.onToggleProcess}
@@ -884,6 +905,7 @@ function TaskResourceSection(props: {
 function OtherResourceSection(props: {
   readonly other: OtherResourceSnapshotWire;
   readonly expandedProcesses: ReadonlySet<string>;
+  readonly sortOption: ResourceSortOption;
   readonly onToggleProcess: (key: string) => void;
 }) {
   const headerRef = useRef<HTMLDivElement | null>(null);
@@ -896,6 +918,7 @@ function OtherResourceSection(props: {
     props.other.processes,
     props.expandedProcesses,
     props.other,
+    props.sortOption,
   );
 
   useLayoutEffect(() => {
@@ -961,6 +984,7 @@ function OwnerTreeRow(props: {
   readonly row: OwnerDisplayRow;
   readonly expanded: boolean;
   readonly expandedProcesses: ReadonlySet<string>;
+  readonly sortOption: ResourceSortOption;
   readonly stickyTop: number;
   readonly onToggle: () => void;
   readonly onToggleProcess: (key: string) => void;
@@ -981,6 +1005,7 @@ function OwnerTreeRow(props: {
     props.row.snapshot.processes,
     props.expandedProcesses,
     props.row.snapshot,
+    props.sortOption,
   );
   const visibleCpuPercent = props.expanded
     ? processRows.selfCpuPercent
@@ -1241,6 +1266,7 @@ function buildTaskRows(input: {
         snapshot.processes,
         NO_EXPANDED_PROCESSES,
         snapshot,
+        input.sortOption,
       );
       return {
         snapshot,
@@ -1277,7 +1303,16 @@ function buildCanvasResourceIndex(
 ): CanvasResourceIndex {
   const locationByOwner = new Map<string, OpenOwnerLocation>();
   const tabOrderByOwner = new Map<string, number>();
-  const candidates = canvas.openTabOrder.flatMap((tabId) => {
+  const openTabIds = new Set(canvas.openTabOrder);
+  // Closing a task only removes its tab from the visible strip; its tab and
+  // canvas stay preserved so reopening can restore the exact pane/tile focus.
+  // Scan visible tabs first, then retained hidden tabs, so an open location
+  // wins when duplicate task tabs contain the same owner.
+  const indexedTabIds = [
+    ...canvas.openTabOrder,
+    ...Object.keys(canvas.tabsById).filter((tabId) => !openTabIds.has(tabId)),
+  ];
+  const candidates = indexedTabIds.flatMap((tabId) => {
     const tab = canvas.tabsById[tabId];
     const state = canvas.canvasByTabId[tabId];
     if (tab === undefined || state === undefined || state.root === null) {
@@ -1352,6 +1387,29 @@ function sortTaskRows(
       break;
     case "tab":
       sorted.sort((a, b) => a.tabOrder - b.tabOrder);
+      break;
+  }
+  return sorted;
+}
+
+function sortDesktopProcessGroups(
+  groups: readonly DesktopProcessGroupEntry[],
+  sortOption: ResourceSortOption,
+): readonly DesktopProcessGroupEntry[] {
+  const sorted = [...groups];
+  switch (sortOption) {
+    case "memory":
+      sorted.sort((a, b) => b.usage.rssBytes - a.usage.rssBytes);
+      break;
+    case "cpu":
+      sorted.sort((a, b) => b.usage.cpuPercent - a.usage.cpuPercent);
+      break;
+    case "name":
+      sorted.sort((a, b) => a.label.localeCompare(b.label));
+      break;
+    case "tab":
+      // Process groups have no tab identity; keep the fixed
+      // Main / Renderer / Other order.
       break;
   }
   return sorted;
@@ -1673,10 +1731,34 @@ function processRowKey(process: ResourceProcessSnapshotWire): string {
   return `${process.rootPid}:${process.pid}`;
 }
 
+/**
+ * Comparator for sibling process rows. Sorts on the SUBTREE aggregates, not a
+ * process's own usage, so a parent with a heavy descendant bubbles above a
+ * lighter sibling even while collapsed - matching the inclusive values the
+ * collapsed rows display. "tab" has no meaning for OS processes; null keeps
+ * the host's wire order.
+ */
+function processRowComparator(
+  sortOption: ResourceSortOption,
+): ((a: ProcessDisplayRow, b: ProcessDisplayRow) => number) | null {
+  switch (sortOption) {
+    case "memory":
+      return (a, b) => b.treeRssBytes - a.treeRssBytes;
+    case "cpu":
+      return (a, b) => b.treeCpuPercent - a.treeCpuPercent;
+    case "name":
+      return (a, b) =>
+        processLabel(a.process).localeCompare(processLabel(b.process));
+    case "tab":
+      return null;
+  }
+}
+
 function buildProcessRows(
   processes: readonly ResourceProcessSnapshotWire[],
   expandedKeys: ReadonlySet<string>,
   fallback: { readonly cpuPercent: number; readonly rssBytes: number },
+  sortOption: ResourceSortOption,
 ): OwnerProcessRows {
   if (processes.length === 0) {
     return {
@@ -1714,6 +1796,12 @@ function buildProcessRows(
   );
   const completeRoots = roots.length === 0 ? processes : roots;
 
+  const compareRows = processRowComparator(sortOption);
+  const sortSiblingRows = (
+    siblingRows: readonly ProcessDisplayRow[],
+  ): readonly ProcessDisplayRow[] =>
+    compareRows === null ? siblingRows : [...siblingRows].sort(compareRows);
+
   const buildRow = (
     process: ResourceProcessSnapshotWire,
     depth: number,
@@ -1724,8 +1812,8 @@ function buildProcessRows(
     );
     const nextAncestors = new Set(ancestors);
     nextAncestors.add(process.pid);
-    const children = childProcesses.map((child) =>
-      buildRow(child, depth + 1, nextAncestors),
+    const children = sortSiblingRows(
+      childProcesses.map((child) => buildRow(child, depth + 1, nextAncestors)),
     );
     const treeCpuPercent = children.reduce(
       (sum, child) => sum + child.treeCpuPercent,
@@ -1750,7 +1838,9 @@ function buildProcessRows(
     };
   };
 
-  const rootRows = completeRoots.map((root) => buildRow(root, 0, new Set()));
+  const rootRows = sortSiblingRows(
+    completeRoots.map((root) => buildRow(root, 0, new Set())),
+  );
   const rows = rootRows.flatMap((root) => root.children);
   return {
     rows,

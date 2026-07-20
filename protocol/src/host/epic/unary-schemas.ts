@@ -472,13 +472,24 @@ export type ListEpicCollaboratorsResponse = z.infer<
   typeof listEpicCollaboratorsResponseSchema
 >;
 
-// ─── Task list (epic.listTasks@1.0 wire shape) ───────────────────────────────
+// ─── Task list (versioned epic.listTasks wire shapes) ───────────────────────
 
 export const taskLightSchema = z.object({
   epic: epicLightWithPermissionSchema.nullable().optional(),
   phase: phaseLightWithPermissionSchema.nullable().optional(),
 });
 export type TaskLight = z.infer<typeof taskLightSchema>;
+
+// The task list carries viewer-specific presentation state in addition to the
+// reusable TaskLight core. Keep the v1.0 row frozen so a v1.1 client can bridge
+// an older host by defaulting every row to unpinned.
+export const listTaskLightSchemaV10 = taskLightSchema;
+export type ListTaskLightV10 = z.infer<typeof listTaskLightSchemaV10>;
+
+export const listTaskLightSchema = taskLightSchema.extend({
+  pinned: z.boolean().optional(),
+});
+export type ListTaskLight = z.infer<typeof listTaskLightSchema>;
 
 export const listTasksRequestSchema = z.object({
   limit: z.number(),
@@ -512,13 +523,61 @@ export const listTasksFacetsSchema = z.object({
 });
 export type ListTasksFacets = z.infer<typeof listTasksFacetsSchema>;
 
+export const listTasksResponseSchemaV10 = z.object({
+  tasks: z.array(listTaskLightSchemaV10),
+  nextCursor: z.string().optional(),
+  hasMore: z.boolean(),
+  facets: listTasksFacetsSchema.optional(),
+});
+export type ListTasksResponseV10 = z.infer<typeof listTasksResponseSchemaV10>;
+
 export const listTasksResponseSchema = z.object({
-  tasks: z.array(taskLightSchema),
+  tasks: z.array(listTaskLightSchema),
   nextCursor: z.string().optional(),
   hasMore: z.boolean(),
   facets: listTasksFacetsSchema.optional(),
 });
 export type ListTasksResponse = z.infer<typeof listTasksResponseSchema>;
+
+// ─── Personal history pinning (epic.setPinned@1.0) ──────────────────────────
+
+export const setEpicPinnedRequestSchema = z.object({
+  epicId: z.string(),
+  pinned: z.boolean(),
+});
+export type SetEpicPinnedRequest = z.infer<typeof setEpicPinnedRequestSchema>;
+
+export const setEpicPinnedResponseSchema = z.object({
+  pinned: z.boolean(),
+});
+export type SetEpicPinnedResponse = z.infer<typeof setEpicPinnedResponseSchema>;
+
+// ─── Batch task context (epic.getTaskContexts@1.0) ───────────────────────────
+// Optional (non-floor) capability: resolve a small set of task ids to list-row
+// shapes for title/context (e.g. worktree owner titles). Old hosts fail only
+// this call with E_HOST_UNSUPPORTED; callers degrade to cache-only resolution.
+//
+// `null` in the response map means deleted OR not permitted to the requester —
+// indistinguishable by design. Clients render both the same way (e.g. muted
+// "Owner unresolved").
+
+export const GET_TASK_CONTEXTS_MAX_IDS = 50;
+
+export const getTaskContextsRequestSchema = z.object({
+  taskIds: z.array(z.string()).max(GET_TASK_CONTEXTS_MAX_IDS),
+});
+export type GetTaskContextsRequest = z.infer<
+  typeof getTaskContextsRequestSchema
+>;
+
+export const getTaskContextsResponseSchema = z.object({
+  // Per-id: ListTaskLight when readable, null when deleted or not permitted
+  // (indistinguishable by design).
+  tasks: z.record(z.string(), listTaskLightSchema.nullable()),
+});
+export type GetTaskContextsResponse = z.infer<
+  typeof getTaskContextsResponseSchema
+>;
 
 // ─── Epic/entity mentions ────────────────────────────────────────────────────
 
@@ -831,6 +890,11 @@ export type ReparentArtifactResponse = z.infer<
 export const createChatForkSourceSchema = z.object({
   sourceChatId: z.string(),
   assistantMessageId: z.string(),
+  // Optional content-block boundary within the selected assistant message.
+  // Q&A actions pass the interview block id so a completed assistant turn can
+  // be forked at the question checkpoint instead of at the end of the row.
+  // Message-level forks leave this null/absent and retain the whole message.
+  interviewBlockId: z.string().nullish(),
   // Disposition for interview (AskUserQuestion) blocks still pending at the
   // fork boundary when forking mid-Q&A:
   //  - "pending" - re-open each carried question in the fork as an answerable
@@ -893,6 +957,29 @@ export type RenameChatRequest = z.infer<typeof renameChatRequestSchema>;
 
 export const renameChatResponseSchema = z.object({ updated: z.boolean() });
 export type RenameChatResponse = z.infer<typeof renameChatResponseSchema>;
+
+// Persists a chat's run settings (harness/model/profile/…) WITHOUT sending a
+// message. Composer selection changes call this so the durable per-chat
+// settings — the ones a headless turn (e.g. an incoming agent-to-agent
+// message) resolves its provider profile from — never lag behind the UI.
+// Optional (non-floor) capability: old hosts fail only this call with
+// E_HOST_UNSUPPORTED and the renderer degrades to the legacy
+// persist-on-next-send behavior.
+export const updateChatRunSettingsRequestSchema = z.object({
+  epicId: z.string(),
+  chatId: z.string(),
+  settings: chatRunSettingsSchema,
+});
+export type UpdateChatRunSettingsRequest = z.infer<
+  typeof updateChatRunSettingsRequestSchema
+>;
+
+export const updateChatRunSettingsResponseSchema = z.object({
+  updated: z.boolean(),
+});
+export type UpdateChatRunSettingsResponse = z.infer<
+  typeof updateChatRunSettingsResponseSchema
+>;
 
 export const deleteChatRequestSchema = z.object({
   epicId: z.string(),

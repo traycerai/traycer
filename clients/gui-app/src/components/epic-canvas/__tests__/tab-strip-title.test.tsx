@@ -1,4 +1,17 @@
 import "../../../../__tests__/test-browser-apis";
+
+const useHostNotificationIndicatorsMock = vi.hoisted(() =>
+  vi.fn(() => ({
+    data: { epics: {}, chats: {} },
+    isPending: false,
+    isFetching: false,
+    error: null,
+    refetch: () => Promise.resolve(),
+  })),
+);
+vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
+  useHostNotificationIndicators: useHostNotificationIndicatorsMock,
+}));
 import {
   act,
   cleanup,
@@ -10,6 +23,7 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
+import { AGENT_WORKING_AWARENESS_FIELD } from "@traycer/protocol/host/epic/subscribe";
 import { TabStrip } from "@/components/epic-canvas/canvas/tab-strip";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -46,6 +60,17 @@ vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
   useReactiveActiveHostId: () => "host-test",
 }));
 
+// Terminal titles resolve through the tab's bound-host client; these tests
+// assert chat/artifact titles outside a <HostRuntimeProvider>, so stub the
+// host seam (a null client keeps the terminal.list query disabled).
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => null,
+}));
+
+vi.mock("@/hooks/terminal/use-terminal-rename-for-mutation", () => ({
+  useTerminalRenameFor: () => ({ mutate: () => undefined }),
+}));
+
 vi.mock("@dnd-kit/core", () => ({
   useDraggable: () => ({
     setNodeRef: (_element: HTMLElement | null) => undefined,
@@ -57,9 +82,8 @@ vi.mock("@dnd-kit/core", () => ({
   }),
 }));
 
-vi.mock("@/components/chat/chat-progress-icon", () => ({
-  ChatProgressIcon: () => <span data-testid="chat-tab-spinner" />,
-}));
+// Intentionally do not mock ChatProgressIcon: title-generation composition
+// must exercise real running / notification / idle-default precedence.
 
 const EPIC_ID = "epic-tab-strip-title";
 const CHAT_ID = "chat-1";
@@ -99,7 +123,7 @@ function renderTabStrip(tab: typeof TAB, canRenameTabs: boolean): void {
   const onSelectTab = vi.fn<(groupId: string, tabId: string) => void>();
   const onCloseTab = vi.fn<(groupId: string, tabId: string) => void>();
   const onPromotePreview = vi.fn<(groupId: string) => void>();
-  const onSplitRight = vi.fn<(groupId: string) => void>();
+  const onSplit = vi.fn<(groupId: string, direction: SplitDirection) => void>();
   const onCloseGroup = vi.fn<(groupId: string) => void>();
   const onOpenBlankTab = vi.fn<(groupId: string) => void>();
   const onMenuTab = vi.fn<(groupId: string, tabId: string) => void>();
@@ -127,7 +151,7 @@ function renderTabStrip(tab: typeof TAB, canRenameTabs: boolean): void {
           onSelectTab={onSelectTab}
           onCloseTab={onCloseTab}
           onPromotePreview={onPromotePreview}
-          onSplitRight={onSplitRight}
+          onSplit={onSplit}
           onCloseGroup={onCloseGroup}
           onOpenBlankTab={onOpenBlankTab}
           canRenameTabs={canRenameTabs}
@@ -152,6 +176,14 @@ async function flushEpicSnapshot(): Promise<void> {
   });
 }
 
+function markChatWorking(): void {
+  const handle = __getOpenEpicRegistryForTests().get(EPIC_ID);
+  if (handle === null) throw new Error("expected open epic handle");
+  handle.awareness.setLocalState({
+    [AGENT_WORKING_AWARENESS_FIELD]: [CHAT_ID],
+  });
+}
+
 describe("TabStrip title", () => {
   beforeEach(() => {
     queryClient = new QueryClient({
@@ -161,6 +193,13 @@ describe("TabStrip title", () => {
       },
     });
     harness.install(seedDocWithChat, "owner");
+    useHostNotificationIndicatorsMock.mockReturnValue({
+      data: { epics: {}, chats: {} },
+      isPending: false,
+      isFetching: false,
+      error: null,
+      refetch: () => Promise.resolve(),
+    });
   });
 
   afterEach(() => {
@@ -211,6 +250,153 @@ describe("TabStrip title", () => {
     expect(
       screen.getByTestId(`tab-title-generating-${TAB.instanceId}`),
     ).toBeTruthy();
+  });
+
+  it("shows running chat status over the title spinner on first-send overlap", async () => {
+    useEpicCanvasStore.getState().markChatTitlePending(CHAT_ID, "New chat");
+
+    renderTabStrip(TAB, true);
+    await flushEpicSnapshot();
+
+    expect(
+      screen.getByTestId(`tab-title-generating-${TAB.instanceId}`),
+    ).toBeTruthy();
+
+    act(() => {
+      markChatWorking();
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId(`chat-tab-spinner-activity-${CHAT_ID}`),
+      ).toBeTruthy();
+    });
+    expect(screen.getByTitle("Chat in progress")).toBeTruthy();
+    expect(
+      screen.queryByTestId(`tab-title-generating-${TAB.instanceId}`),
+    ).toBeNull();
+  });
+
+  it("shows the chat's pending-approval status instead of the title spinner", async () => {
+    useEpicCanvasStore.getState().markChatTitlePending(CHAT_ID, "New chat");
+    useHostNotificationIndicatorsMock.mockReturnValue({
+      data: {
+        epics: {},
+        chats: {
+          [CHAT_ID]: {
+            pendingApproval: true,
+            pendingInterview: false,
+            unreadFailure: false,
+            unreadDone: false,
+          },
+        },
+      },
+      isPending: false,
+      isFetching: false,
+      error: null,
+      refetch: () => Promise.resolve(),
+    });
+
+    renderTabStrip(TAB, true);
+    await flushEpicSnapshot();
+
+    expect(
+      screen.queryByTestId(`tab-title-generating-${TAB.instanceId}`),
+    ).toBeNull();
+    expect(
+      screen.getByTestId(`chat-tab-spinner-approval-${CHAT_ID}`),
+    ).toBeTruthy();
+  });
+
+  it("shows the chat's pending-interview status instead of the title spinner", async () => {
+    useEpicCanvasStore.getState().markChatTitlePending(CHAT_ID, "New chat");
+    useHostNotificationIndicatorsMock.mockReturnValue({
+      data: {
+        epics: {},
+        chats: {
+          [CHAT_ID]: {
+            pendingApproval: false,
+            pendingInterview: true,
+            unreadFailure: false,
+            unreadDone: false,
+          },
+        },
+      },
+      isPending: false,
+      isFetching: false,
+      error: null,
+      refetch: () => Promise.resolve(),
+    });
+
+    renderTabStrip(TAB, true);
+    await flushEpicSnapshot();
+
+    expect(
+      screen.queryByTestId(`tab-title-generating-${TAB.instanceId}`),
+    ).toBeNull();
+    expect(
+      screen.getByTestId(`chat-tab-spinner-interview-${CHAT_ID}`),
+    ).toBeTruthy();
+  });
+
+  it("shows the chat's unread-failure status instead of the title spinner", async () => {
+    useEpicCanvasStore.getState().markChatTitlePending(CHAT_ID, "New chat");
+    useHostNotificationIndicatorsMock.mockReturnValue({
+      data: {
+        epics: {},
+        chats: {
+          [CHAT_ID]: {
+            pendingApproval: false,
+            pendingInterview: false,
+            unreadFailure: true,
+            unreadDone: false,
+          },
+        },
+      },
+      isPending: false,
+      isFetching: false,
+      error: null,
+      refetch: () => Promise.resolve(),
+    });
+
+    renderTabStrip(TAB, true);
+    await flushEpicSnapshot();
+
+    expect(
+      screen.queryByTestId(`tab-title-generating-${TAB.instanceId}`),
+    ).toBeNull();
+    expect(
+      screen.getByTestId(`chat-tab-spinner-failure-${CHAT_ID}`),
+    ).toBeTruthy();
+  });
+
+  it("shows the chat's unread-done status instead of the title spinner", async () => {
+    useEpicCanvasStore.getState().markChatTitlePending(CHAT_ID, "New chat");
+    useHostNotificationIndicatorsMock.mockReturnValue({
+      data: {
+        epics: {},
+        chats: {
+          [CHAT_ID]: {
+            pendingApproval: false,
+            pendingInterview: false,
+            unreadFailure: false,
+            unreadDone: true,
+          },
+        },
+      },
+      isPending: false,
+      isFetching: false,
+      error: null,
+      refetch: () => Promise.resolve(),
+    });
+
+    renderTabStrip(TAB, true);
+    await flushEpicSnapshot();
+
+    expect(
+      screen.queryByTestId(`tab-title-generating-${TAB.instanceId}`),
+    ).toBeNull();
+    expect(screen.getByTestId(`chat-tab-spinner-done-${CHAT_ID}`)).toBeTruthy();
   });
 
   it("clears chat title spinner when generation completes with the same title", async () => {

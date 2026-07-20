@@ -39,8 +39,10 @@ import {
   InputGroupButton,
   InputGroupInput,
 } from "@/components/ui/input-group";
-import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { HoverPreviewCard } from "@/components/ui/hover-preview-card";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { cn } from "@/lib/utils";
+import { createReportIssueContext } from "@/lib/report-issue-context";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
 import { FileList } from "./file-list";
 import { RepoStateBanner } from "./repo-state-banner";
@@ -168,31 +170,48 @@ function moduleHeaderPath(module: GitModuleGroup): string | null {
   return module.parentPath;
 }
 
-function moduleHeaderTooltip(args: {
+interface ModuleHeaderPreviewRow {
+  readonly key: string;
+  readonly label: string;
+  readonly value: string;
+}
+
+function moduleHeaderPreviewRows(args: {
   readonly module: GitModuleGroup;
   readonly countLabel: string;
   readonly parentLabel: string | null;
-}): string {
+}): ReadonlyArray<ModuleHeaderPreviewRow> {
   const { module, countLabel, parentLabel } = args;
   const path = moduleHeaderPath(module);
   return [
-    module.kind === "submodule"
-      ? `Submodule: ${module.label}`
-      : `Workspace module: ${module.label}`,
-    path === null ? null : `Path: ${path}`,
-    module.parentPath === null ? null : `Parent path: ${module.parentPath}`,
-    `Head: ${module.headLabel}`,
-    `Changed files: ${countLabel}`,
-    parentLabel === null ? null : `Status: ${parentLabel}`,
+    path === null ? null : { key: "path", label: "Path", value: path },
+    module.parentPath === null
+      ? null
+      : {
+          key: "parent-path",
+          label: "Parent path",
+          value: module.parentPath,
+        },
+    { key: "head", label: "Head", value: module.headLabel },
+    { key: "changed-files", label: "Changed files", value: countLabel },
+    parentLabel === null
+      ? null
+      : { key: "parent-status", label: "Status", value: parentLabel },
     module.parentReference?.summary === undefined
       ? null
-      : `Details: ${module.parentReference.summary}`,
+      : {
+          key: "details",
+          label: "Details",
+          value: module.parentReference.summary,
+        },
     module.unavailable && module.parentReference?.status !== "unavailable"
-      ? "Status: unavailable"
+      ? {
+          key: "availability-status",
+          label: "Status",
+          value: "unavailable",
+        }
       : null,
-  ]
-    .filter((line): line is string => line !== null)
-    .join("\n");
+  ].filter((row): row is ModuleHeaderPreviewRow => row !== null);
 }
 
 function moduleHeaderAccessibleName(args: {
@@ -285,11 +304,37 @@ function gitSectionStickyStyle(top: string): GitSectionStickyStyle {
   return { "--git-section-sticky-top": top };
 }
 
-function ModuleHeaderTooltipContent(props: { readonly text: string }) {
+function ModuleHeaderPreviewContent(props: {
+  readonly module: GitModuleGroup;
+  readonly countLabel: string;
+  readonly parentLabel: string | null;
+}) {
+  const rows = moduleHeaderPreviewRows(props);
   return (
-    <span className="block whitespace-pre-line text-left leading-5">
-      {props.text}
-    </span>
+    <div
+      className="w-[min(80vw,28rem)] min-w-0 px-3 py-2 text-left"
+      data-testid="git-module-header-preview-content"
+    >
+      <p className="min-w-0 truncate text-ui-sm font-semibold text-popover-foreground">
+        {props.module.kind === "submodule" ? "Submodule" : "Workspace module"}:{" "}
+        {props.module.label}
+      </p>
+      <dl className="mt-1.5 flex min-w-0 flex-col gap-1 text-ui-xs">
+        {rows.map((row) => (
+          <div key={row.key} className="flex min-w-0 items-baseline gap-1">
+            <dt className="shrink-0 font-medium text-popover-foreground/85">
+              {row.label}:{" "}
+            </dt>
+            <dd
+              className="m-0 min-w-0 truncate text-muted-foreground"
+              data-testid={`git-module-header-preview-${row.key}`}
+            >
+              {row.value}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </div>
   );
 }
 
@@ -431,6 +476,7 @@ export function SelectedRepoChanges(
       epicId={props.epicId}
       viewTabId={props.viewTabId}
       hostId={props.selected.hostId}
+      workspaceLabel={props.rootLabel}
       modules={moduleModel.modules}
       hiddenCleanModuleCount={moduleModel.hiddenCleanModuleCount}
       lastUpdatedAtMs={source.lastUpdatedAtMs}
@@ -445,6 +491,7 @@ function GitModuleGroupsView(props: {
   readonly epicId: string;
   readonly viewTabId: string;
   readonly hostId: string;
+  readonly workspaceLabel: string;
   readonly modules: ReadonlyArray<GitModuleGroup>;
   readonly hiddenCleanModuleCount: number;
   readonly lastUpdatedAtMs: number | null;
@@ -677,6 +724,7 @@ function GitModuleGroupsView(props: {
           epicId={props.epicId}
           viewTabId={props.viewTabId}
           hostId={props.hostId}
+          workspaceLabel={props.workspaceLabel}
           module={singleRepo}
           query={appliedQuery}
           lastUpdatedAtMs={props.lastUpdatedAtMs}
@@ -706,6 +754,7 @@ function GitModuleGroupsView(props: {
                 epicId={props.epicId}
                 viewTabId={props.viewTabId}
                 hostId={props.hostId}
+                workspaceLabel={props.workspaceLabel}
                 module={module}
                 expanded={expanded}
                 query={moduleMatchesHeader ? "" : appliedQuery}
@@ -760,6 +809,16 @@ function GitSnapshotErrorBanner(props: { readonly error: HostRpcError }) {
       <span className="min-w-0 truncate">
         {props.error.message || "Could not refresh git changes"}
       </span>
+      <ReportIssueAction
+        context={createReportIssueContext({
+          title: "Could not refresh git changes",
+          message: "The Git changes snapshot could not be refreshed.",
+          code: props.error.code,
+          source: "Git changes",
+        })}
+        presentation="icon"
+        className="-my-1 shrink-0 text-warning-foreground"
+      />
     </div>
   );
 }
@@ -807,6 +866,7 @@ function SingleRepoChangesView(props: {
   readonly epicId: string;
   readonly viewTabId: string;
   readonly hostId: string;
+  readonly workspaceLabel: string;
   readonly module: GitModuleGroup;
   readonly query: string;
   readonly lastUpdatedAtMs: number | null;
@@ -828,6 +888,7 @@ function SingleRepoChangesView(props: {
         epicId={props.epicId}
         viewTabId={props.viewTabId}
         hostId={props.hostId}
+        workspaceLabel={props.workspaceLabel}
         module={props.module}
         query={props.query}
         lastUpdatedAtMs={props.lastUpdatedAtMs}
@@ -845,6 +906,7 @@ function GitModuleGroupView(props: {
   readonly epicId: string;
   readonly viewTabId: string;
   readonly hostId: string;
+  readonly workspaceLabel: string;
   readonly module: GitModuleGroup;
   readonly expanded: boolean;
   readonly query: string;
@@ -927,6 +989,7 @@ function GitModuleGroupView(props: {
             epicId={props.epicId}
             viewTabId={props.viewTabId}
             hostId={props.hostId}
+            workspaceLabel={props.workspaceLabel}
             module={module}
             query={props.query}
             lastUpdatedAtMs={props.lastUpdatedAtMs}
@@ -959,7 +1022,6 @@ function GitModuleHeader(props: {
     module.files.length === 1 ? "file" : "files"
   }`;
   const showCount = !props.expanded || module.files.length === 0;
-  const tooltip = moduleHeaderTooltip({ module, countLabel, parentLabel });
   const path = moduleHeaderPath(module);
   const showStatusIcon = moduleHeaderStatusVisible(
     parentReferenceStatus,
@@ -972,11 +1034,19 @@ function GitModuleHeader(props: {
     [moduleKey, onHeaderRef],
   );
   return (
-    <TooltipWrapper
-      label={<ModuleHeaderTooltipContent text={tooltip} />}
+    <HoverPreviewCard
+      content={
+        <ModuleHeaderPreviewContent
+          module={module}
+          countLabel={countLabel}
+          parentLabel={parentLabel}
+        />
+      }
       side="right"
       sideOffset={8}
       align="start"
+      open={undefined}
+      onOpenChange={undefined}
     >
       <button
         ref={setHeaderRef}
@@ -1049,7 +1119,7 @@ function GitModuleHeader(props: {
           </span>
         </span>
       </button>
-    </TooltipWrapper>
+    </HoverPreviewCard>
   );
 }
 
@@ -1071,6 +1141,7 @@ function GitModuleBody(props: {
   readonly epicId: string;
   readonly viewTabId: string;
   readonly hostId: string;
+  readonly workspaceLabel: string;
   readonly module: GitModuleGroup;
   readonly query: string;
   readonly lastUpdatedAtMs: number | null;
@@ -1135,6 +1206,10 @@ function GitModuleBody(props: {
         viewTabId={props.viewTabId}
         hostId={props.hostId}
         runningDir={module.repoRoot}
+        repositoryContext={{
+          workspaceLabel: props.workspaceLabel,
+          repositoryLabel: module.label,
+        }}
         files={module.files}
         query={props.query}
         onClearQuery={props.onClearQuery}

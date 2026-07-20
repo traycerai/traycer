@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   ChatEvent,
@@ -33,6 +33,11 @@ import {
   type WorktreeStagingKey,
 } from "@/stores/worktree/worktree-intent-staging-store";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
+import { interviewDraftKey } from "@/lib/persist";
+import {
+  readInterviewDraftSnapshot,
+  useInterviewDraftStore,
+} from "@/stores/composer/interview-draft-store";
 import { isOptimisticQueuedItem } from "@/stores/chats/optimistic-queue";
 import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
 
@@ -178,6 +183,7 @@ interface SnapshotFrameInput {
   readonly messages: ReadonlyArray<Message>;
   readonly queue: ChatQueueState;
   readonly pendingFileEditApprovals: ReadonlyArray<ChatFileEditApprovalState>;
+  readonly settings?: ChatRunSettings | null;
   readonly pendingInterviews?: ReadonlyArray<ChatPendingInterviewState>;
   readonly backgroundItems?: ReadonlyArray<BackgroundItem>;
   readonly claudePendingWakes?: ReadonlyArray<ClaudePendingWake>;
@@ -200,7 +206,7 @@ function emitSnapshotFrame(input: SnapshotFrameInput): void {
         createdAt: 1,
         updatedAt: 1,
         isTitleEditedByUser: false,
-        settings: null,
+        settings: input.settings ?? null,
         activeSessionChain: null,
         claudePendingWakes: [...(input.claudePendingWakes ?? [])],
         messages: [...input.messages],
@@ -333,6 +339,7 @@ function assistantSteerMessage(
       agentId: "codex",
       displayName: "Codex",
       reply: { expectsReply: false },
+      inReplyTo: null,
     },
     blocks: [
       {
@@ -344,6 +351,7 @@ function assistantSteerMessage(
         messageId,
         content: CONTENT,
         mode: "safe_point",
+        sender: null,
       },
     ],
     startedAt: 4,
@@ -372,6 +380,16 @@ function persistedUserMessage(
 }
 
 describe("createChatSessionStore", () => {
+  // The worktree intent staging store is a module-global Zustand store; a test
+  // that leaves a staged (or restored-on-reject) intent behind would make later
+  // tests order-dependent. Reset it after every test so each starts clean.
+  // Interview drafts share the same module-global risk across lifecycle tests.
+  afterEach(() => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    useInterviewDraftStore.setState({ draftsByChat: {} });
+    window.localStorage.clear();
+  });
+
   it("clears a running chat when the stream closes", () => {
     const harness = createHarness();
 
@@ -507,6 +525,23 @@ describe("createChatSessionStore", () => {
     ]);
   });
 
+  it("seeds composer settings from the initial persisted chat snapshot", () => {
+    const harness = createHarness();
+
+    emitSnapshotFrame({
+      callbacks: harness.callbacks(),
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      settings: SETTINGS,
+    });
+
+    expect(harness.handle.store.getState().currentComposerSettings).toEqual(
+      SETTINGS,
+    );
+  });
+
   it("tracks send actions until actionAck and accepts host messages", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
@@ -628,6 +663,320 @@ describe("createChatSessionStore", () => {
     const pendingEchoes = harness.handle.store.getState().pendingUserMessages;
     expect(pendingEchoes).toHaveLength(1);
     expect(pendingEchoes[0]?.messageId).toBe(frame.messageId);
+  });
+
+  it("restores a staged worktree intent when the send is rejected", () => {
+    useWorktreeIntentStagingStore.setState({ intentByKey: {} });
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    const intent: WorktreeIntent = {
+      entries: [
+        {
+          kind: "worktree",
+          scripts: null,
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+          branch: {
+            type: "new",
+            name: "feat",
+            source: "main",
+            carryUncommittedChanges: false,
+          },
+        },
+      ],
+    };
+    useWorktreeIntentStagingStore.getState().stageIntent(key, intent);
+
+    harness.handle.store
+      .getState()
+      .sendMessage(CONTENT, { type: "user", userId: OWNER_ID }, SETTINGS);
+
+    const frame = harness.sent.at(-1);
+    if (frame === undefined || frame.kind !== "send") {
+      throw new Error("Expected send frame");
+    }
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toBeUndefined();
+
+    callbacks.onActionAck({
+      kind: "actionAck",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      clientActionId: frame.clientActionId,
+      action: "send",
+      status: "rejected",
+      reason: "Stop the active chat run before rebinding its worktree.",
+      code: "WORKTREE_CREATE_FAILED",
+      backgroundStopTaskIds: [],
+    });
+
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toEqual(intent);
+  });
+
+  it("restores a staged worktree intent when an edit-and-resend is rejected", () => {
+    useWorktreeIntentStagingStore.setState({ intentByKey: {} });
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    // Seed the message the edit targets so `editUserMessage` has something to
+    // rewrite. A stopped first message is the real-world trigger for this path.
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [persistedUserMessage("msg-original")],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    const intent: WorktreeIntent = {
+      entries: [
+        {
+          kind: "worktree",
+          scripts: null,
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+          branch: {
+            type: "new",
+            name: "feat",
+            source: "main",
+            carryUncommittedChanges: false,
+          },
+        },
+      ],
+    };
+    useWorktreeIntentStagingStore.getState().stageIntent(key, intent);
+
+    const result = harness.handle.store.getState().editUserMessage({
+      targetMessageId: "msg-original",
+      content: CONTENT,
+      sender: { type: "user", userId: OWNER_ID },
+      settings: SETTINGS,
+      revertFileChanges: false,
+      revertArtifacts: false,
+    });
+    expect(result).not.toBeNull();
+
+    const frame = harness.sent.at(-1);
+    if (frame === undefined || frame.kind !== "editUserMessage") {
+      throw new Error("Expected editUserMessage frame");
+    }
+    expect(frame.worktreeIntent).toEqual(intent);
+    // The dispatch consumes the slot up front (mirrors send).
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toBeUndefined();
+
+    callbacks.onActionAck({
+      kind: "actionAck",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      clientActionId: frame.clientActionId,
+      action: "editUserMessage",
+      status: "rejected",
+      reason: "feat already exists; choose a new branch name.",
+      code: "WORKTREE_CREATE_FAILED",
+      backgroundStopTaskIds: [],
+    });
+
+    // The rejected edit puts the selection back, so the chip reflects the
+    // worktree the user chose rather than silently reverting to the binding.
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toEqual(intent);
+  });
+
+  it("restores a staged worktree intent when a pending edit is swept after reconnect", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [persistedUserMessage("msg-original")],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    const intent: WorktreeIntent = {
+      entries: [
+        {
+          kind: "worktree",
+          scripts: null,
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+          branch: {
+            type: "new",
+            name: "feat",
+            source: "main",
+            carryUncommittedChanges: false,
+          },
+        },
+      ],
+    };
+    useWorktreeIntentStagingStore.getState().stageIntent(key, intent);
+
+    const result = harness.handle.store.getState().editUserMessage({
+      targetMessageId: "msg-original",
+      content: CONTENT,
+      sender: { type: "user", userId: OWNER_ID },
+      settings: SETTINGS,
+      revertFileChanges: false,
+      revertArtifacts: false,
+    });
+    expect(result).not.toBeNull();
+    // Dispatch consumed the slot.
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toBeUndefined();
+
+    // Connection drops before the ack (epoch bumps), then a fresh snapshot
+    // arrives with the edit still un-acked: the stale pending is swept, and the
+    // sweep restores its staged intent instead of leaving the slot cleared for
+    // the next resend to run against the prior binding.
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [persistedUserMessage("msg-original")],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toEqual(intent);
+  });
+
+  it("does not restore a rejected worktree intent after a newer explicit clear", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    useWorktreeIntentStagingStore.getState().stageIntent(key, {
+      entries: [
+        {
+          kind: "local",
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+        },
+      ],
+    });
+
+    harness.handle.store
+      .getState()
+      .sendMessage(CONTENT, { type: "user", userId: OWNER_ID }, SETTINGS);
+    const frame = harness.sent.at(-1);
+    if (frame === undefined || frame.kind !== "send") {
+      throw new Error("Expected send frame");
+    }
+
+    // The send consumed this slot. Clearing the now-empty slot is a deliberate
+    // newer choice to send without a workspace selection on retry.
+    useWorktreeIntentStagingStore.getState().clear(key);
+
+    callbacks.onActionAck({
+      kind: "actionAck",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      clientActionId: frame.clientActionId,
+      action: "send",
+      status: "rejected",
+      reason: "Stop the active chat run before rebinding its worktree.",
+      code: "WORKTREE_CREATE_FAILED",
+      backgroundStopTaskIds: [],
+    });
+
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toBeUndefined();
+  });
+
+  it("refuses chat send while staged worktree metadata is unresolved", () => {
+    const harness = createHarness();
+    emitSnapshot(harness.callbacks(), "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    useWorktreeIntentStagingStore.getState().stageIntent(key, {
+      entries: [
+        {
+          kind: "worktree",
+          scripts: null,
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+          branch: {
+            type: "new",
+            name: "feat-unresolved",
+            source: "main",
+            carryUncommittedChanges: false,
+          },
+        },
+      ],
+    });
+    useWorktreeIntentStagingStore
+      .getState()
+      .setSuspendedWorkspacePaths(key, ["/repo"]);
+
+    const result = harness.handle.store
+      .getState()
+      .sendMessage(CONTENT, { type: "user", userId: OWNER_ID }, SETTINGS);
+
+    expect(result).toBeNull();
+    expect(harness.sent).toEqual([]);
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toBeDefined();
   });
 
   it("sends worktreeIntent null when nothing is staged", () => {
@@ -1383,6 +1732,193 @@ describe("createChatSessionStore", () => {
     });
   });
 
+  it("attaches a staged worktree intent when editing and resending a stopped message", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    useWorktreeIntentMemoryStore.getState().resetForTests();
+    const harness = createHarness();
+    emitSnapshot(harness.callbacks(), "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    const intent: WorktreeIntent = {
+      entries: [
+        {
+          kind: "worktree",
+          scripts: null,
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+          branch: {
+            type: "new",
+            name: "edited-first-message",
+            source: "main",
+            carryUncommittedChanges: false,
+          },
+        },
+      ],
+    };
+    useWorktreeIntentStagingStore.getState().stageIntent(key, intent);
+
+    harness.handle.store.getState().editUserMessage({
+      targetMessageId: "message-1",
+      content: CONTENT,
+      sender: { type: "user", userId: OWNER_ID },
+      settings: SETTINGS,
+      revertFileChanges: false,
+      revertArtifacts: true,
+    });
+
+    const frame = harness.sent.at(-1);
+    if (frame === undefined || frame.kind !== "editUserMessage") {
+      throw new Error("Expected editUserMessage frame");
+    }
+    expect(frame).toMatchObject({ worktreeIntent: intent });
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toBeUndefined();
+    expect(
+      useWorktreeIntentMemoryStore.getState().getEpicIntent(EPIC_ID),
+    ).toEqual(intent);
+  });
+
+  it("does not restore a rejected edit intent over a newer selection", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    const staleIntent: WorktreeIntent = {
+      entries: [
+        {
+          kind: "worktree",
+          scripts: null,
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+          branch: {
+            type: "new",
+            name: "edited-stale",
+            source: "main",
+            carryUncommittedChanges: false,
+          },
+        },
+      ],
+    };
+    useWorktreeIntentStagingStore.getState().stageIntent(key, staleIntent);
+
+    harness.handle.store.getState().editUserMessage({
+      targetMessageId: "message-1",
+      content: CONTENT,
+      sender: { type: "user", userId: OWNER_ID },
+      settings: SETTINGS,
+      revertFileChanges: false,
+      revertArtifacts: true,
+    });
+    const frame = harness.sent.at(-1);
+    if (frame === undefined || frame.kind !== "editUserMessage") {
+      throw new Error("Expected editUserMessage frame");
+    }
+
+    // While the edit is in flight the user re-picks. The rejection of the
+    // OLD edit must not clobber this newer choice.
+    const newerIntent: WorktreeIntent = {
+      entries: [
+        {
+          kind: "local",
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+        },
+      ],
+    };
+    useWorktreeIntentStagingStore.getState().stageIntent(key, newerIntent);
+
+    callbacks.onActionAck({
+      kind: "actionAck",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      clientActionId: frame.clientActionId,
+      action: "editUserMessage",
+      status: "rejected",
+      reason: "feat already exists; choose a new branch name.",
+      code: "WORKTREE_CREATE_FAILED",
+      backgroundStopTaskIds: [],
+    });
+
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toEqual(newerIntent);
+    useWorktreeIntentStagingStore.getState().resetForTests();
+  });
+
+  it("refuses edit and resend while staged worktree metadata is unresolved", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    useWorktreeIntentMemoryStore.getState().resetForTests();
+    const harness = createHarness();
+    emitSnapshot(harness.callbacks(), "owner");
+    const key: WorktreeStagingKey = {
+      surface: "owner",
+      epicId: EPIC_ID,
+      ownerKind: "chat",
+      ownerId: CHAT_ID,
+    };
+    const intent: WorktreeIntent = {
+      entries: [
+        {
+          kind: "worktree",
+          scripts: null,
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+          branch: {
+            type: "new",
+            name: "edited-unresolved",
+            source: "main",
+            carryUncommittedChanges: false,
+          },
+        },
+      ],
+    };
+    useWorktreeIntentStagingStore.getState().stageIntent(key, intent);
+    useWorktreeIntentStagingStore
+      .getState()
+      .setSuspendedWorkspacePaths(key, ["/repo"]);
+
+    const result = harness.handle.store.getState().editUserMessage({
+      targetMessageId: "message-1",
+      content: CONTENT,
+      sender: { type: "user", userId: OWNER_ID },
+      settings: SETTINGS,
+      revertFileChanges: false,
+      revertArtifacts: true,
+    });
+
+    expect(result).toBeNull();
+    expect(harness.sent).toEqual([]);
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(key)
+      ],
+    ).toEqual(intent);
+    expect(
+      useWorktreeIntentMemoryStore.getState().getEpicIntent(EPIC_ID),
+    ).toBeNull();
+    useWorktreeIntentStagingStore.getState().resetForTests();
+  });
+
   it("sends queue settings update owner actions", () => {
     const harness = createHarness();
     emitSnapshot(harness.callbacks(), "owner");
@@ -1724,6 +2260,416 @@ describe("createChatSessionStore", () => {
     ]);
   });
 
+  it("clears the interview draft on host interviewAnswered", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const blockId = "question-draft-answered";
+
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      pendingInterviews: [{ blockId, requestedAt: 2 }],
+    });
+
+    useInterviewDraftStore.getState().saveDraft(CHAT_ID, blockId, {
+      pageIndex: 0,
+      answers: [{ selected: ["Alpha"], otherText: "", otherSelected: false }],
+    });
+    expect(
+      useInterviewDraftStore.getState().draftsByChat[CHAT_ID]?.[blockId],
+    ).toBeDefined();
+
+    callbacks.onInterviewAnswered({
+      kind: "interviewAnswered",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId,
+      answers: [],
+      resolvedAt: 4,
+    });
+
+    expect(
+      useInterviewDraftStore.getState().draftsByChat[CHAT_ID],
+    ).toBeUndefined();
+    expect(harness.handle.store.getState().pendingInterviews).toEqual([]);
+  });
+
+  it("clears the interview draft on host interviewErrored", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const blockId = "question-draft-errored";
+
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      pendingInterviews: [{ blockId, requestedAt: 2 }],
+    });
+
+    useInterviewDraftStore.getState().saveDraft(CHAT_ID, blockId, {
+      pageIndex: 1,
+      answers: [
+        { selected: [], otherText: "skip me later", otherSelected: true },
+      ],
+    });
+    expect(
+      useInterviewDraftStore.getState().draftsByChat[CHAT_ID]?.[blockId],
+    ).toBeDefined();
+
+    callbacks.onInterviewErrored({
+      kind: "interviewErrored",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId,
+      reason: "Skipped by user",
+      resolvedAt: 5,
+    });
+
+    expect(
+      useInterviewDraftStore.getState().draftsByChat[CHAT_ID],
+    ).toBeUndefined();
+    expect(harness.handle.store.getState().pendingInterviews).toEqual([]);
+  });
+
+  it("does not clear the interview draft when an interview action is rejected", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const blockId = "question-draft-rejected";
+
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      pendingInterviews: [{ blockId, requestedAt: 2 }],
+    });
+
+    const draft = {
+      pageIndex: 0,
+      answers: [{ selected: ["Retry"], otherText: "", otherSelected: false }],
+    };
+    useInterviewDraftStore.getState().saveDraft(CHAT_ID, blockId, draft);
+
+    const answerActionId = harness.handle.store
+      .getState()
+      .interviewAnswer(blockId, []);
+    if (answerActionId === null) {
+      throw new Error("expected sent interviewAnswer action");
+    }
+
+    callbacks.onActionAck({
+      kind: "actionAck",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      clientActionId: answerActionId,
+      action: "interviewAnswer",
+      status: "rejected",
+      reason: "Interview answer rejected.",
+      code: "INTERVIEW_REJECTED",
+      backgroundStopTaskIds: [],
+    });
+
+    expect(harness.handle.store.getState().pendingInterviews).toEqual([
+      { blockId, requestedAt: 2 },
+    ]);
+    expect(
+      useInterviewDraftStore.getState().draftsByChat[CHAT_ID]?.[blockId],
+    ).toEqual(draft);
+  });
+
+  it("refuses a second interviewAnswer while the first is still in flight", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const blockId = "question-double-dispatch";
+
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      pendingInterviews: [{ blockId, requestedAt: 2 }],
+    });
+
+    const firstId = harness.handle.store
+      .getState()
+      .interviewAnswer(blockId, []);
+    const secondId = harness.handle.store
+      .getState()
+      .interviewAnswer(blockId, []);
+
+    expect(firstId).not.toBeNull();
+    expect(secondId).toBe(firstId);
+    expect(
+      harness.sent.filter((frame) => frame.kind === "interviewAnswer"),
+    ).toHaveLength(1);
+    const pendingInterviewActions = Object.values(
+      harness.handle.store.getState().pendingActions,
+    ).filter((action) => action.interviewBlockId === blockId);
+    expect(pendingInterviewActions).toHaveLength(1);
+    expect(pendingInterviewActions[0]?.clientActionId).toBe(firstId);
+  });
+
+  it("allows a new interviewAnswer after a rejected ack and retains the draft", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const blockId = "question-reject-retry";
+    const draft = {
+      pageIndex: 0,
+      answers: [{ selected: ["Retry"], otherText: "", otherSelected: false }],
+    };
+
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      pendingInterviews: [{ blockId, requestedAt: 2 }],
+    });
+    useInterviewDraftStore.getState().saveDraft(CHAT_ID, blockId, draft);
+
+    const firstId = harness.handle.store
+      .getState()
+      .interviewAnswer(blockId, []);
+    if (firstId === null) {
+      throw new Error("expected first interviewAnswer action");
+    }
+
+    callbacks.onActionAck({
+      kind: "actionAck",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      clientActionId: firstId,
+      action: "interviewAnswer",
+      status: "rejected",
+      reason: "Interview answer rejected.",
+      code: "INTERVIEW_REJECTED",
+      backgroundStopTaskIds: [],
+    });
+
+    expect(
+      harness.handle.store.getState().pendingActions[firstId],
+    ).toBeUndefined();
+    expect(
+      Object.values(harness.handle.store.getState().pendingActions).some(
+        (action) => action.interviewBlockId === blockId,
+      ),
+    ).toBe(false);
+    expect(harness.handle.store.getState().pendingInterviews).toEqual([
+      { blockId, requestedAt: 2 },
+    ]);
+    expect(readInterviewDraftSnapshot(CHAT_ID, blockId)).toEqual(draft);
+
+    const retryId = harness.handle.store
+      .getState()
+      .interviewAnswer(blockId, []);
+    expect(retryId).not.toBeNull();
+    expect(retryId).not.toBe(firstId);
+    expect(
+      harness.sent.filter((frame) => frame.kind === "interviewAnswer"),
+    ).toHaveLength(2);
+    expect(
+      harness.handle.store.getState().pendingActions[retryId ?? ""],
+    ).toMatchObject({
+      action: "interviewAnswer",
+      interviewBlockId: blockId,
+    });
+  });
+
+  it("drops pending and accepted interview actions on interviewAnswered", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const blockId = "question-resolve-actions";
+
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      pendingInterviews: [{ blockId, requestedAt: 2 }],
+    });
+    useInterviewDraftStore.getState().saveDraft(CHAT_ID, blockId, {
+      pageIndex: 0,
+      answers: [{ selected: ["Done"], otherText: "", otherSelected: false }],
+    });
+
+    const actionId = harness.handle.store
+      .getState()
+      .interviewAnswer(blockId, []);
+    if (actionId === null) {
+      throw new Error("expected interviewAnswer action");
+    }
+    expect(
+      harness.handle.store.getState().pendingActions[actionId],
+    ).toBeDefined();
+
+    callbacks.onInterviewAnswered({
+      kind: "interviewAnswered",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId,
+      answers: [],
+      resolvedAt: 4,
+    });
+
+    expect(harness.handle.store.getState().pendingInterviews).toEqual([]);
+    expect(
+      harness.handle.store.getState().pendingActions[actionId],
+    ).toBeUndefined();
+    expect(
+      Object.values(harness.handle.store.getState().pendingActions).some(
+        (action) => action.interviewBlockId === blockId,
+      ),
+    ).toBe(false);
+    expect(
+      Object.values(harness.handle.store.getState().acceptedActions).some(
+        (action) => action.interviewBlockId === blockId,
+      ),
+    ).toBe(false);
+    expect(readInterviewDraftSnapshot(CHAT_ID, blockId)).toBeNull();
+  });
+
+  it("drops pending and accepted interview actions on interviewErrored", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const blockId = "question-error-actions";
+
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      pendingInterviews: [{ blockId, requestedAt: 2 }],
+    });
+    useInterviewDraftStore.getState().saveDraft(CHAT_ID, blockId, {
+      pageIndex: 0,
+      answers: [{ selected: [], otherText: "skip", otherSelected: true }],
+    });
+
+    const actionId = harness.handle.store
+      .getState()
+      .interviewError(blockId, "Skipped by user");
+    if (actionId === null) {
+      throw new Error("expected interviewError action");
+    }
+
+    callbacks.onInterviewErrored({
+      kind: "interviewErrored",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId,
+      reason: "Skipped by user",
+      resolvedAt: 5,
+    });
+
+    expect(harness.handle.store.getState().pendingInterviews).toEqual([]);
+    expect(
+      harness.handle.store.getState().pendingActions[actionId],
+    ).toBeUndefined();
+    expect(
+      Object.values(harness.handle.store.getState().acceptedActions).some(
+        (action) => action.interviewBlockId === blockId,
+      ),
+    ).toBe(false);
+    expect(readInterviewDraftSnapshot(CHAT_ID, blockId)).toBeNull();
+  });
+
+  it("prunes orphan interview drafts on the first snapshot", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const keepBlock = "question-keep";
+    const dropBlock = "question-drop";
+    const keepDraft = {
+      pageIndex: 0,
+      answers: [{ selected: ["Keep"], otherText: "", otherSelected: false }],
+    };
+    const dropDraft = {
+      pageIndex: 1,
+      answers: [{ selected: ["Drop"], otherText: "", otherSelected: false }],
+    };
+
+    useInterviewDraftStore.getState().saveDraft(CHAT_ID, keepBlock, keepDraft);
+    useInterviewDraftStore.getState().saveDraft(CHAT_ID, dropBlock, dropDraft);
+
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      pendingInterviews: [{ blockId: keepBlock, requestedAt: 2 }],
+    });
+
+    expect(readInterviewDraftSnapshot(CHAT_ID, keepBlock)).toEqual(keepDraft);
+    expect(readInterviewDraftSnapshot(CHAT_ID, dropBlock)).toBeNull();
+    expect(
+      window.localStorage.getItem(interviewDraftKey(CHAT_ID, keepBlock)),
+    ).not.toBeNull();
+    expect(
+      window.localStorage.getItem(interviewDraftKey(CHAT_ID, dropBlock)),
+    ).toBeNull();
+  });
+
+  it("prunes orphan interview drafts on a later reconnect snapshot", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const keepBlock = "question-keep-later";
+    const dropBlock = "question-drop-later";
+    const keepDraft = {
+      pageIndex: 0,
+      answers: [{ selected: ["Keep"], otherText: "", otherSelected: false }],
+    };
+    const dropDraft = {
+      pageIndex: 0,
+      answers: [{ selected: ["Drop"], otherText: "", otherSelected: false }],
+    };
+
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      pendingInterviews: [
+        { blockId: keepBlock, requestedAt: 2 },
+        { blockId: dropBlock, requestedAt: 3 },
+      ],
+    });
+    useInterviewDraftStore.getState().saveDraft(CHAT_ID, keepBlock, keepDraft);
+    useInterviewDraftStore.getState().saveDraft(CHAT_ID, dropBlock, dropDraft);
+
+    // Reconnect snapshot: only keepBlock is still pending.
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      pendingInterviews: [{ blockId: keepBlock, requestedAt: 2 }],
+    });
+
+    expect(readInterviewDraftSnapshot(CHAT_ID, keepBlock)).toEqual(keepDraft);
+    expect(readInterviewDraftSnapshot(CHAT_ID, dropBlock)).toBeNull();
+    expect(
+      window.localStorage.getItem(interviewDraftKey(CHAT_ID, dropBlock)),
+    ).toBeNull();
+  });
+
   it("tracks checkpoint restore action and lifecycle frames", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
@@ -1773,6 +2719,7 @@ describe("createChatSessionStore", () => {
       startedAt: 2,
       processedCount: 1,
       totalCount: 2,
+      connectionEpoch: 0,
     });
 
     callbacks.onRestoreCompleted({
@@ -2191,6 +3138,7 @@ describe("createChatSessionStore", () => {
                 agentId: "claude-sonnet",
                 displayName: "claude-sonnet",
                 reply: { expectsReply: false },
+                inReplyTo: null,
               },
               blocks: [],
               startedAt: 3,
@@ -2275,6 +3223,232 @@ describe("createChatSessionStore", () => {
       { type: "text", text: "I am in the host folder." },
     ]);
     expect(state.liveAssistantMessage).toBeNull();
+  });
+
+  it("routes a steer-split carryover block's events to the frozen pre-split row (completes in place, no duplicate)", () => {
+    // A steer delivered mid-thinking splits the turn into two assistant rows
+    // sharing one turnId, with the reasoning block still STREAMING in the
+    // frozen pre-split row. Its remaining deltas + completion must apply to
+    // that row (the block finishes in place above the steer bubble); only a
+    // genuinely NEW block belongs to the continuation row. Without ownership
+    // routing the delta re-materialized the block as a duplicate in the
+    // continuation row while the original froze mid-sentence.
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const agentSender: Extract<Message, { role: "assistant" }>["sender"] = {
+      type: "agent",
+      harnessId: "claude",
+      agentId: "claude-sonnet",
+      displayName: "claude-sonnet",
+      reply: { expectsReply: false },
+      inReplyTo: null,
+    };
+    callbacks.onSnapshot({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      snapshot: {
+        chat: {
+          id: CHAT_ID,
+          parentId: null,
+          userId: OWNER_ID,
+          hostId: "test-host",
+          title: "Split Chat",
+          createdAt: 1,
+          updatedAt: 5,
+          isTitleEditedByUser: false,
+          settings: null,
+          activeSessionChain: null,
+          claudePendingWakes: [],
+          messages: [
+            persistedUserMessage("message-split-run"),
+            {
+              role: "assistant",
+              messageId: "assistant-frozen",
+              sender: agentSender,
+              blocks: [
+                {
+                  type: "reasoning",
+                  blockId: "think-split",
+                  status: "streaming",
+                  timestamp: 4,
+                  startedAt: 4,
+                  content: "The grep search is pulling in fal",
+                },
+              ],
+              startedAt: 3,
+              timestamp: 4,
+              turnId: "turn-split",
+              usage: null,
+              reasoningEffort: null,
+              serviceTier: null,
+            },
+            persistedUserMessage("message-split-steered"),
+            {
+              role: "assistant",
+              messageId: "assistant-continuation",
+              sender: agentSender,
+              blocks: [
+                {
+                  type: "steer",
+                  blockId: "steer:queue-split-steered",
+                  status: "completed",
+                  timestamp: 5,
+                  queueItemId: "queue-split-steered",
+                  messageId: "message-split-steered",
+                  content: CONTENT,
+                  mode: "safe_point",
+                  sender: null,
+                },
+              ],
+              startedAt: 3,
+              timestamp: 5,
+              turnId: "turn-split",
+              usage: null,
+              reasoningEffort: null,
+              serviceTier: null,
+            },
+          ],
+          events: [],
+        },
+        access: {
+          role: "owner",
+          ownerUserId: OWNER_ID,
+          canAct: true,
+        },
+        queue: { status: "idle", items: [] },
+        runStatus: "running",
+        activeTurn: {
+          turnId: "turn-split",
+          status: "running",
+          harnessId: "claude",
+          model: "claude-sonnet",
+          agentMode: "regular",
+          profileId: null,
+          userMessageId: "message-split-run",
+          startedAt: 3,
+          updatedAt: 5,
+          reasoningEffort: null,
+          serviceTier: null,
+        },
+        pendingApprovals: [],
+        pendingInterviews: [],
+        worktreeBinding: null,
+        missingWorktreePaths: [],
+        pendingFileEditApprovals: [],
+        accumulatedFileChanges: [],
+      },
+    });
+
+    // The SAME in-flight reasoning block keeps streaming after the split,
+    // then finalizes; a genuinely new text block follows it.
+    callbacks.onBlockDelta({
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      event: {
+        type: "reasoning.delta",
+        blockId: "think-split",
+        timestamp: 6,
+        delta: "se positives.",
+      },
+    });
+    callbacks.onBlockDelta({
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      event: {
+        type: "reasoning.completed",
+        blockId: "think-split",
+        timestamp: 7,
+      },
+    });
+    callbacks.onBlockDelta({
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      event: {
+        type: "text.delta",
+        blockId: "text-after-steer",
+        timestamp: 8,
+        delta: "Continuing after the steer.",
+      },
+    });
+
+    const state = harness.handle.store.getState();
+    const frozen = state.messages.find(
+      (message): message is Extract<Message, { role: "assistant" }> =>
+        message.role === "assistant" &&
+        message.messageId === "assistant-frozen",
+    );
+    const continuation = state.messages.find(
+      (message): message is Extract<Message, { role: "assistant" }> =>
+        message.role === "assistant" &&
+        message.messageId === "assistant-continuation",
+    );
+    // The in-flight block completed IN PLACE in the frozen row, whole.
+    expect(frozen?.blocks).toMatchObject([
+      {
+        type: "reasoning",
+        blockId: "think-split",
+        status: "completed",
+        content: "The grep search is pulling in false positives.",
+      },
+    ]);
+    // The frozen row's own timestamp is untouched by carryover routing - only
+    // its blocks/blocksVersion change (mirrors the host's carryover writer).
+    expect(frozen?.timestamp).toBe(4);
+    // The continuation row holds the steer marker and the NEW block only -
+    // no duplicate reasoning block below the steer bubble.
+    expect(
+      continuation?.blocks.filter((block) => block.type === "reasoning"),
+    ).toStrictEqual([]);
+    expect(continuation?.blocks).toMatchObject([
+      { type: "steer", blockId: "steer:queue-split-steered" },
+      { type: "text", blockId: "text-after-steer" },
+    ]);
+
+    // A CHILD of the frozen block (parentBlockId) also follows its parent
+    // into the frozen row, not the continuation row.
+    callbacks.onBlockDelta({
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      event: {
+        type: "tool_call.started",
+        blockId: "child-of-think-split",
+        parentBlockId: "think-split",
+        timestamp: 9,
+        toolName: "read_file",
+        agentMessageSend: null,
+      },
+    });
+
+    const stateAfterChild = harness.handle.store.getState();
+    const frozenAfterChild = stateAfterChild.messages.find(
+      (message): message is Extract<Message, { role: "assistant" }> =>
+        message.role === "assistant" &&
+        message.messageId === "assistant-frozen",
+    );
+    const continuationAfterChild = stateAfterChild.messages.find(
+      (message): message is Extract<Message, { role: "assistant" }> =>
+        message.role === "assistant" &&
+        message.messageId === "assistant-continuation",
+    );
+    expect(frozenAfterChild?.blocks).toMatchObject([
+      { blockId: "think-split" },
+      { blockId: "child-of-think-split", parentBlockId: "think-split" },
+    ]);
+    expect(
+      continuationAfterChild?.blocks.some(
+        (block) => block.blockId === "child-of-think-split",
+      ),
+    ).toBe(false);
   });
 
   it("tracks live in-flight usage from usage.updated and carries the final value forward through turn.completed", () => {
@@ -3477,5 +4651,178 @@ describe("in-flight block finalization on stop / steer", () => {
       },
     });
     expect(liveToolStatus(harness)).toBe("interrupted");
+  });
+});
+
+// Non-message pendings (stop / approvalDecision / restoreCheckpoint /
+// background stops) are cleared only by their actionAck - which dies with a
+// dropped connection. The authoritative post-reconnect snapshot must settle
+// them so their controls re-enable and the action can be re-issued; the
+// disconnect event itself must settle nothing.
+describe("non-message pendings across a missed-ack reconnect", () => {
+  function pendingActionKinds(harness: Harness): string[] {
+    return Object.values(harness.handle.store.getState().pendingActions).map(
+      (pending) => pending.action,
+    );
+  }
+
+  it("clears stop/approval/restore pendings on the post-reconnect snapshot and allows re-issuing", () => {
+    const harness = createHarness();
+    emitSnapshot(harness.callbacks(), "owner");
+    const store = harness.handle.store;
+
+    expect(store.getState().stopTurn()).not.toBeNull();
+    expect(
+      store.getState().approvalDecision("approval-1", { approved: true }),
+    ).not.toBeNull();
+    expect(
+      store.getState().restoreCheckpoint("checkpoint-1", false),
+    ).not.toBeNull();
+    expect(pendingActionKinds(harness)).toEqual([
+      "stop",
+      "approvalDecision",
+      "restoreCheckpoint",
+    ]);
+
+    // The connection drops before any ack arrives; the drop itself settles
+    // NOTHING (a transient wobble must not cancel in-flight actions).
+    harness.callbacks().onConnectionStatus("reconnecting", null);
+    expect(pendingActionKinds(harness)).toEqual([
+      "stop",
+      "approvalDecision",
+      "restoreCheckpoint",
+    ]);
+
+    // The reconnect snapshot is the authority: the lost acks can never
+    // arrive, so the pendings clear and the controls re-enable.
+    emitSnapshot(harness.callbacks(), "owner");
+    expect(store.getState().pendingActions).toEqual({});
+
+    // Re-issuing after the reconnect works (nothing is wedged).
+    expect(store.getState().stopTurn()).not.toBeNull();
+    expect(pendingActionKinds(harness)).toEqual(["stop"]);
+  });
+
+  it("clears a stale editUserMessage pending whose ack was lost across a reconnect", () => {
+    const harness = createHarness();
+    emitSnapshot(harness.callbacks(), "owner");
+    const store = harness.handle.store;
+
+    // An edit's fresh messageId only appears in the snapshot if the host
+    // applied it, and it has no composer-restoration path - so a lost frame
+    // would previously wedge the edit affordances forever.
+    expect(
+      store.getState().editUserMessage({
+        targetMessageId: "msg-1",
+        content: { type: "doc", content: [] },
+        sender: { type: "user", userId: OWNER_ID },
+        settings: SETTINGS,
+        revertFileChanges: false,
+        revertArtifacts: false,
+      }),
+    ).not.toBeNull();
+    expect(pendingActionKinds(harness)).toEqual(["editUserMessage"]);
+
+    harness.callbacks().onConnectionStatus("reconnecting", null);
+    // The reconnect snapshot does not contain the edit (never applied).
+    emitSnapshot(harness.callbacks(), "owner");
+    expect(store.getState().pendingActions).toEqual({});
+  });
+
+  it("keeps a pending dispatched on the CURRENT connection when its own snapshot arrives", () => {
+    const harness = createHarness();
+    emitSnapshot(harness.callbacks(), "owner");
+
+    // Reconnect first, then act on the NEW connection before its snapshot
+    // lands - that pending's ack is still live and must survive the sweep.
+    harness.callbacks().onConnectionStatus("reconnecting", null);
+    harness.callbacks().onConnectionStatus("open", null);
+    expect(harness.handle.store.getState().stopTurn()).not.toBeNull();
+
+    emitSnapshot(harness.callbacks(), "owner");
+    expect(pendingActionKinds(harness)).toEqual(["stop"]);
+  });
+
+  it("makes a background stop whose frame died with the connection retryable, keeping ack-accepted stops disabled", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const runningTasks: BackgroundItem[] = [
+      {
+        taskId: "task-lost",
+        kind: "command",
+        title: "sleep 60",
+        blockId: "tool-1",
+        parentTaskId: null,
+        scheduledFor: null,
+      },
+      {
+        taskId: "task-accepted",
+        kind: "command",
+        title: "sleep 90",
+        blockId: "tool-2",
+        parentTaskId: null,
+        scheduledFor: null,
+      },
+    ];
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      backgroundItems: runningTasks,
+    });
+    const store = harness.handle.store;
+
+    // One stop gets its ack before the drop; the other's frame/ack is lost.
+    expect(store.getState().stopBackgroundItem("task-accepted")).not.toBeNull();
+    acceptLastAction(harness);
+    expect(store.getState().stopBackgroundItem("task-lost")).not.toBeNull();
+
+    // Both tasks are still running when the reconnect snapshot arrives.
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      backgroundItems: runningTasks,
+    });
+
+    // The lost stop is retryable again; the host-confirmed stop stays
+    // disabled until its task actually terminates.
+    expect(Object.keys(store.getState().pendingBackgroundStops)).toEqual([
+      "task-accepted",
+    ]);
+    expect(store.getState().stopBackgroundItem("task-lost")).not.toBeNull();
+    expect(store.getState().stopBackgroundItem("task-accepted")).toBeNull();
+  });
+
+  it("clears a restore slot stranded in-flight by a drop, but not one on the live connection", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    callbacks.onRestoreStarted({
+      kind: "restoreStarted",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      checkpointId: "turn-1",
+      restoringUserId: OWNER_ID,
+      restoringHostId: "host-1",
+      startedAt: 2,
+    });
+
+    // A snapshot on the SAME connection leaves the live restore alone.
+    emitSnapshot(callbacks, "owner");
+    expect(harness.handle.store.getState().restore?.kind).toBe("in-flight");
+
+    // After a drop, its restoreCompleted can never arrive - the reconnect
+    // snapshot clears the stranded slot instead of spinning forever.
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshot(callbacks, "owner");
+    expect(harness.handle.store.getState().restore).toBeNull();
   });
 });
