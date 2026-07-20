@@ -107,16 +107,14 @@ export function mentionRootsFromWorktreeBindingAndIntent(
   binding: WorktreeBinding | null,
   intent: WorktreeIntent | null,
 ): ReadonlyArray<string> {
+  if (binding !== null && binding.workspaceMode === "folderless") return [];
   if (intent === null || intent.entries.length === 0) {
     return mentionRootsFromWorktreeBinding(binding);
   }
   const stagedByWorkspacePath = new Map(
     intent.entries.map((entry) => [entry.workspacePath, entry]),
   );
-  const bindingEntries =
-    binding === null || binding.workspaceMode === "folderless"
-      ? []
-      : binding.entries;
+  const bindingEntries = binding === null ? [] : binding.entries;
   const bindingRoots = bindingEntries.map((entry) => {
     const staged = stagedByWorkspacePath.get(entry.workspacePath);
     if (staged === undefined) return bindingEntryRoot(entry);

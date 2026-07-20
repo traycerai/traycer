@@ -384,4 +384,26 @@ describe("mentionRootsFromWorktreeBindingAndIntent", () => {
       ),
     ).toEqual(["/repo"]);
   });
+
+  it("returns no roots for a folderless binding even with staged intent entries", () => {
+    // mentionRootsFromWorktreeBinding suppresses folderless unconditionally -
+    // the combined projection must preserve that invariant rather than
+    // leaking a staged-only root through as if the binding had no folders.
+    const folderless: WorktreeBinding = {
+      entries: [],
+      workspaceMode: "folderless",
+    };
+    expect(
+      mentionRootsFromWorktreeBindingAndIntent(
+        folderless,
+        worktreeIntent("/repo", "create", null),
+      ),
+    ).toEqual([]);
+    expect(
+      mentionRootsFromWorktreeBindingAndIntent(
+        folderless,
+        worktreeIntent("/repo", "import", "/wt/feature"),
+      ),
+    ).toEqual([]);
+  });
 });
