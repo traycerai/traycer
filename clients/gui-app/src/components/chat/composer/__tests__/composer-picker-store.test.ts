@@ -206,6 +206,8 @@ describe("composer picker store", () => {
       step: ROOT_MENTION_STEP,
       items: [mentionItem("a")],
       loading: false,
+      loadFailed: false,
+      retryLoad: null,
     });
     open(store, "src", NOOP_COMMIT);
 
@@ -229,6 +231,8 @@ describe("composer picker store", () => {
       step: ROOT_MENTION_STEP,
       items: [mentionItem("a")],
       loading: false,
+      loadFailed: false,
+      retryLoad: null,
     });
     expect(store.getState().items).toEqual([]);
   });
@@ -256,6 +260,8 @@ describe("composer picker store", () => {
       step: ROOT_MENTION_STEP,
       items: [mentionItem("stale")],
       loading: false,
+      loadFailed: false,
+      retryLoad: null,
     });
     expect(store.getState().items).toEqual([]);
     expect(store.getState().itemsForQuery).toBeNull();
@@ -272,6 +278,8 @@ describe("composer picker store", () => {
       step: ROOT_MENTION_STEP,
       items: [mentionItem("a"), mentionItem("b")],
       loading: false,
+      loadFailed: false,
+      retryLoad: null,
     });
     expect(store.getState().items.length).toBe(2);
     expect(store.getState().itemsForQuery).toBe("src");
@@ -289,6 +297,8 @@ describe("composer picker store", () => {
       step: ROOT_MENTION_STEP,
       items: [mentionItem("a")],
       loading: false,
+      loadFailed: false,
+      retryLoad: null,
     });
     expect(store.getState().items).toEqual([]);
   });
@@ -304,6 +314,8 @@ describe("composer picker store", () => {
       step: ROOT_MENTION_STEP,
       items: [mentionItem("a")],
       loading: false,
+      loadFailed: false,
+      retryLoad: null,
     });
     store.getState().setStep(FILES_PROVIDER_STEP);
     expect(store.getState().items).toEqual([]);
@@ -321,6 +333,8 @@ describe("composer picker store", () => {
       step: ROOT_MENTION_STEP,
       items: [mentionItem("a"), mentionItem("b"), mentionItem("c")],
       loading: false,
+      loadFailed: false,
+      retryLoad: null,
     });
     expect(store.getState().activeIndex).toBe(0);
     store.getState().moveActive(-1);
@@ -344,6 +358,8 @@ describe("composer picker store", () => {
       step: ROOT_MENTION_STEP,
       items,
       loading: false,
+      loadFailed: false,
+      retryLoad: null,
     });
     store.getState().setActiveIndex(1);
     expect(store.getState().commitActiveItem()).toBe(true);
@@ -374,6 +390,8 @@ describe("composer picker store", () => {
       step: ROOT_MENTION_STEP,
       items,
       loading: false,
+      loadFailed: false,
+      retryLoad: null,
     });
     // Default selection lands past the leading disabled row so Enter works
     // without the user moving first.
@@ -419,6 +437,8 @@ describe("composer picker store", () => {
       step: ROOT_MENTION_STEP,
       items: [slashItem("compact", null)],
       loading: false,
+      loadFailed: false,
+      retryLoad: null,
     });
     expect(store.getState().items.length).toBe(1);
     expect(store.getState().itemsForSlashScope).toBe("all");
@@ -449,6 +469,8 @@ describe("composer picker store", () => {
       step: ROOT_MENTION_STEP,
       items: [slashItem("compact", null)],
       loading: false,
+      loadFailed: false,
+      retryLoad: null,
     });
     expect(store.getState().items).toEqual([]);
 
@@ -461,6 +483,8 @@ describe("composer picker store", () => {
       step: ROOT_MENTION_STEP,
       items: [slashItem("compact", LEADING_ONLY)],
       loading: false,
+      loadFailed: false,
+      retryLoad: null,
     });
     expect(store.getState().items.length).toBe(1);
     expect(store.getState().itemsForSlashScope).toBe("skills");
@@ -483,6 +507,8 @@ describe("composer picker store", () => {
       step: ROOT_MENTION_STEP,
       items,
       loading: false,
+      loadFailed: false,
+      retryLoad: null,
     });
 
     store.getState().setActiveIndex(1);
@@ -508,6 +534,8 @@ describe("composer picker store", () => {
       step: ROOT_MENTION_STEP,
       items: [mentionItem("a")],
       loading: true,
+      loadFailed: false,
+      retryLoad: null,
     });
     store.getState().close();
     const state = store.getState();
@@ -540,6 +568,8 @@ describe("composer picker store", () => {
       step: ROOT_MENTION_STEP,
       items: [slashItem("plan", null), slashItem("commit", null)],
       loading: false,
+      loadFailed: false,
+      retryLoad: null,
     });
     expect(store.getState().items.length).toBe(2);
     expect(store.getState().kind).toBe("slash");

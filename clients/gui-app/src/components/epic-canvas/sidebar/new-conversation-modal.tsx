@@ -41,11 +41,15 @@ import {
 } from "@/hooks/agent/use-create-tui-agent";
 import { useComposerDictation } from "@/hooks/composer/use-composer-dictation";
 import { useLeaderScopeAbsorber } from "@/hooks/keybindings/use-leader-scope-absorber";
-import { useComposerPaste } from "@/hooks/composer/use-composer-paste";
+import {
+  isAttachmentIngestPending,
+  useComposerPaste,
+} from "@/hooks/composer/use-composer-paste";
 import {
   mentionRootsFromWorktreeIntent,
   useWorkspaceMentionRoots,
 } from "@/hooks/composer/use-workspace-mention-roots";
+import { useRunnerHost } from "@/providers/use-runner-host";
 import { useEpicCreateChat } from "@/hooks/epic/use-epic-chat-mutations";
 import { useResolvedWorkspaceFolders } from "@/hooks/workspace/use-resolved-workspace-folders-query";
 import {
@@ -559,8 +563,9 @@ export function NewConversationModalBody(props: {
   );
   const workspaceCanStart = workspaceComposerCanStart(workspaceAvailability);
   const draftWorkspaceFolderCount = draftWorkspace.folders.length;
-  const paste = useComposerPaste(editorRef);
-  const attachmentPending = paste.isIngestingImages;
+  const runnerHost = useRunnerHost();
+  const paste = useComposerPaste(editorRef, runnerHost.fileDrops, mentionRoots);
+  const attachmentPending = isAttachmentIngestPending(paste);
   const canSubmit =
     canMutate &&
     !isSubmitting &&

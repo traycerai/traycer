@@ -18,6 +18,7 @@ const testState = vi.hoisted(() => ({
   bodySubmit: null as (() => void) | null,
   installEditor: null as (() => void) | null,
   ingesting: false,
+  resolvingPaths: false,
 }));
 
 vi.mock("@/components/home/composer/composer-body", async () => {
@@ -112,6 +113,16 @@ vi.mock("@/components/home/hooks/use-landing-composer-actions", () => ({
   }),
 }));
 
+vi.mock("@/providers/use-runner-host", () => ({
+  useRunnerHost: () => ({
+    fileDrops: {
+      resolveDroppedFilePaths: () => Promise.resolve([]),
+      copyDroppedFilePaths: (paths: readonly string[]) =>
+        Promise.resolve(paths),
+    },
+  }),
+}));
+
 vi.mock("@/hooks/composer/use-landing-composer-paste", () => ({
   useLandingComposerPaste: () => ({
     onPaste: vi.fn(),
@@ -121,7 +132,9 @@ vi.mock("@/hooks/composer/use-landing-composer-paste", () => ({
     onDragLeave: vi.fn(),
     attachImageFiles: vi.fn(),
     isDraggingFiles: false,
+    dragOverlayVariant: null,
     isIngestingImages: testState.ingesting,
+    isResolvingFilePaths: testState.resolvingPaths,
   }),
 }));
 
@@ -171,6 +184,7 @@ afterEach(() => {
   testState.bodySubmit = null;
   testState.installEditor = null;
   testState.ingesting = false;
+  testState.resolvingPaths = false;
 });
 
 describe("LandingComposer direct submit gate", () => {
@@ -201,6 +215,35 @@ describe("LandingComposer direct submit gate", () => {
     fireEvent.click(screen.getByRole("button", { name: "Submit landing" }));
     expect(testState.submit).toHaveBeenCalledTimes(1);
   });
+
+  // Finding 3: pure path-resolution must also hold submit open.
+  it("blocks the actual landing submit path while file-path resolution is pending", () => {
+    testState.resolvingPaths = true;
+    const view = render(
+      <LandingComposer
+        draftId={null}
+        initialSettings={null}
+        workspaceControls={null}
+      />,
+    );
+    const installEditor = testState.installEditor;
+    if (installEditor === null) throw new Error("expected ComposerBody seam");
+    installEditor();
+
+    fireEvent.click(screen.getByRole("button", { name: "Submit landing" }));
+    expect(testState.submit).not.toHaveBeenCalled();
+
+    testState.resolvingPaths = false;
+    view.rerender(
+      <LandingComposer
+        draftId={null}
+        initialSettings={null}
+        workspaceControls={null}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Submit landing" }));
+    expect(testState.submit).toHaveBeenCalledTimes(1);
+  });
 });
 
 function editorHandle(): ComposerPromptEditorHandle {
@@ -213,6 +256,7 @@ function editorHandle(): ComposerPromptEditorHandle {
     clear: () => undefined,
     setContent: () => undefined,
     insertImageAttachments: () => undefined,
+    beginPathInsertion: () => null,
     removeImageAttachmentById: () => undefined,
     insertDictatedText: () => undefined,
     dismissActiveSuggestion: () => false,

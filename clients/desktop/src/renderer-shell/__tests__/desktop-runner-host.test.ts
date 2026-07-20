@@ -155,6 +155,7 @@ function buildFakeBridge(
       },
       copyTemporaryFiles: async (paths) =>
         paths.map((path) => `/tmp/copied/${path.split("/").pop() ?? ""}`),
+      readNativeClipboardFilePaths: async () => [],
       saveFile: async (input) => {
         temporaryWrites.push(input);
         return input.name;
@@ -794,18 +795,25 @@ describe("DesktopRunnerHost.onLocalHostChange", () => {
     expect(fake.temporaryWrites[0]?.name).toBe("screenshot.png");
   });
 
-  it("copies ephemeral dropped paths into stable temp paths", async () => {
+  it("preserves stable URI paths and copies only ephemeral dropped paths", async () => {
     const fake = buildFakeBridge(null);
     const host = new DesktopRunnerHost({
       bridge: fake.bridge,
       signInUrl: "https://auth.example.invalid/sign-in",
     });
+    const copyTemporaryFiles = vi.spyOn(
+      fake.bridge.fileDrops,
+      "copyTemporaryFiles",
+    );
+    const stablePath = "/repo/src/index.ts";
+    const ephemeralPath =
+      "/var/folders/x/TemporaryItems/screencaptureui_1/Screenshot.png";
 
     await expect(
-      host.fileDrops.copyDroppedFilePaths([
-        "/var/folders/x/TemporaryItems/screencaptureui_1/Screenshot.png",
-      ]),
-    ).resolves.toEqual(["/tmp/copied/Screenshot.png"]);
+      host.fileDrops.copyDroppedFilePaths([stablePath, ephemeralPath]),
+    ).resolves.toEqual([stablePath, "/tmp/copied/Screenshot.png"]);
+    expect(copyTemporaryFiles).toHaveBeenCalledOnce();
+    expect(copyTemporaryFiles).toHaveBeenCalledWith([ephemeralPath]);
     await expect(host.fileDrops.copyDroppedFilePaths([])).resolves.toEqual([]);
   });
 

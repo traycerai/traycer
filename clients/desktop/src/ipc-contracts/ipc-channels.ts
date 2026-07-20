@@ -35,6 +35,8 @@ export const RunnerHostInvoke = {
   workspaceFoldersPick: "runnerHost:workspaceFolders:pick",
   fileDropWriteTemporary: "runnerHost:fileDrops:writeTemporary",
   fileDropCopyTemporary: "runnerHost:fileDrops:copyTemporary",
+  fileDropReadNativeClipboardPaths:
+    "runnerHost:fileDrops:readNativeClipboardPaths",
   fileSave: "runnerHost:file:save",
   requestHostRespawn: "runnerHost:host:requestRespawn",
   setUnsyncedEditsSnapshot: "runnerHost:appLifecycle:setUnsyncedEditsSnapshot",
