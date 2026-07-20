@@ -115,22 +115,28 @@ import {
   type HostControllerHostLifecycle,
 } from "../host-controller";
 import { getHostFsLayout, cliLockPath } from "../host-paths";
+import { DEV_DESKTOP_SLOT_ENV } from "../dev-desktop-slot";
 import { acquireDesktopCliLock } from "../desktop-cli-lock";
 import {
   __resetHostRemovalStateForTest,
   isHostRemovedByUser,
   markHostRemovedByUser,
 } from "../host-removal-state";
-import { __setAsyncProcessStartTimeReaderForTest } from "../process-identity";
+import {
+  __setAsyncProcessLivenessReaderForTest,
+  __setAsyncProcessStartTimeReaderForTest,
+} from "../process-identity";
 
 const ORIGINAL_HOME = process.env.HOME;
 const ORIGINAL_USERPROFILE = process.env.USERPROFILE;
+const ORIGINAL_DEV_DESKTOP_SLOT = process.env[DEV_DESKTOP_SLOT_ENV];
 let workHome: string;
 
 beforeEach(() => {
   workHome = mkdtempSync(join(tmpdir(), "traycer-host-controller-"));
   process.env.HOME = workHome;
   process.env.USERPROFILE = workHome;
+  delete process.env[DEV_DESKTOP_SLOT_ENV];
   // `withDesktopCliLock`'s `open(path, "wx", ...)` needs the lock file's
   // parent directory to already exist (production always has it - the CLI
   // slot setup creates it early); a fresh temp HOME does not.
@@ -166,6 +172,11 @@ afterEach(() => {
     delete process.env.USERPROFILE;
   } else {
     process.env.USERPROFILE = ORIGINAL_USERPROFILE;
+  }
+  if (ORIGINAL_DEV_DESKTOP_SLOT === undefined) {
+    delete process.env[DEV_DESKTOP_SLOT_ENV];
+  } else {
+    process.env[DEV_DESKTOP_SLOT_ENV] = ORIGINAL_DEV_DESKTOP_SLOT;
   }
   rmSync(workHome, { recursive: true, force: true });
   vi.clearAllMocks();
@@ -534,12 +545,11 @@ describe("mutation lane: wait-never-reject", () => {
     // Fixup C2: the title's own "FIFO order" claim was never checked - only
     // mutual exclusion was. The second `respawn()` coalesces with the first
     // (same key, still in flight). `applyStaged`'s production preflight
-    // revalidates the extant stage before consuming it, so the automatic
-    // download/yank-heal pass sits between the queued restart and apply.
-    // This pins the complete observable ordering, not only exclusivity.
+    // revalidates the extant stage before consuming it, but that in-lane
+    // pass is manifest-only. The one automatic download stays on the
+    // independent lane before apply owns the mutation lane.
     expect(order).toEqual([
       "host restart",
-      "host download --automatic",
       "host download --automatic",
       "host apply",
     ]);
@@ -658,7 +668,9 @@ describe("coalescing: duplicate in-flight submissions join rather than re-execut
     await Promise.all([first, second]);
 
     expect(availableCalls).toBe(2);
-    expect(downloadCalls).toBe(2);
+    // Coalescing retains one outer download and one in-lane manifest check;
+    // a second download here would violate the lane boundary.
+    expect(downloadCalls).toBe(1);
     expect(applyCalls).toBe(1);
   });
 
@@ -1112,6 +1124,11 @@ describe("desktop-held cli-lock: two-process test", () => {
   // post-acquisition reread after the terminal mutation wins the lock.
   it("V1: a packaged-macOS registerService call yields to a real terminal host uninstall, then detects its post-lock supersession", async () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    // Use a real multi-run slot, not dev's legacy path. The controller, the
+    // worker, and the source CLI must all carry this exact value: if any
+    // side drops slot resolution, they contend on different .lock files and
+    // desktop registers before the terminal uninstall wins.
+    process.env[DEV_DESKTOP_SLOT_ENV] = "round4-v1-lock";
     // The checked-in real CLI source is a dev build, so exercise the dev
     // slot: that makes the terminal command and desktop controller address
     // the identical live lock and install record without a test-only CLI.
@@ -1132,7 +1149,7 @@ describe("desktop-held cli-lock: two-process test", () => {
     });
 
     const lockPath = cliLockPath("dev");
-    mkdirSync(join(workHome, ".traycer", "cli", "dev"), {
+    mkdirSync(join(workHome, ".traycer", "cli", "dev-runs", "round4-v1-lock"), {
       recursive: true,
     });
     const barrierDir = join(workHome, "barrier");
@@ -1155,6 +1172,8 @@ describe("desktop-held cli-lock: two-process test", () => {
           "src",
           "index.ts",
         ),
+        WORKER_ENVIRONMENT: "dev",
+        WORKER_DEV_DESKTOP_SLOT: process.env[DEV_DESKTOP_SLOT_ENV],
         WORKER_CLI_LOCK_ACQUIRED_MARKER: join(barrierDir, "cli-lock-acquired"),
       },
     });
@@ -1442,6 +1461,69 @@ describe("canonical status: activation-state derivation", () => {
     }
   });
 
+  it("F4: awaits the async identity probe instead of synchronously shelling out from getStatus", async () => {
+    const livenessGate = deferred<"alive" | "dead" | "indeterminate">();
+    const livenessReader = vi.fn(async () => livenessGate.promise);
+    const startReader = vi.fn(async () => Date.now() - 1_000);
+    const restoreLiveness =
+      __setAsyncProcessLivenessReaderForTest(livenessReader);
+    const restoreStart = __setAsyncProcessStartTimeReaderForTest(startReader);
+    try {
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      writePidMetadata("production", {
+        version: "1.7.0",
+        pid: process.pid,
+      });
+      const statusPromise = newControllerWithReachability(
+        "production",
+        async () => true,
+      ).getStatus();
+      await vi.waitFor(() => {
+        expect(livenessReader).toHaveBeenCalledOnce();
+      });
+      // `getStatus()` has reached the production identity path but cannot
+      // finish until its off-thread probe returns. A synchronous replacement
+      // bypasses this reader entirely and fails this boundary assertion.
+      expect(startReader).not.toHaveBeenCalled();
+
+      livenessGate.resolve("alive");
+      await expect(statusPromise).resolves.toMatchObject({ reachable: true });
+      expect(startReader).toHaveBeenCalledOnce();
+    } finally {
+      __setAsyncProcessStartTimeReaderForTest(restoreStart);
+      __setAsyncProcessLivenessReaderForTest(restoreLiveness);
+    }
+  });
+
+  it("reports a handshake-reachable stale record unavailable when the PID is confirmed dead", async () => {
+    const restoreLiveness = __setAsyncProcessLivenessReaderForTest(
+      async () => "dead",
+    );
+    try {
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      writePidMetadata("production", {
+        version: "1.7.0",
+        pid: 999_999,
+      });
+
+      const status = await newControllerWithReachability(
+        "production",
+        async () => true,
+      ).getStatus();
+
+      expect(status.reachable).toBe(false);
+      expect(status.activation).toBe("unavailable");
+    } finally {
+      __setAsyncProcessLivenessReaderForTest(restoreLiveness);
+    }
+  });
+
   // A legacy record has no `startedAt`, so it cannot positively establish a
   // recycled PID mismatch. The endpoint handshake remains the authoritative
   // liveness evidence; an unsuccessful `ps`/tasklist probe is indeterminate,
@@ -1686,7 +1768,7 @@ describe("yank/apply ordering", () => {
     );
   });
 
-  it("F1: a queued apply rechecks eligibility under its own mutation after an older mutation's pending reconcile", async () => {
+  it("F1: a queued apply rechecks staged eligibility under its own mutation without starting a second download", async () => {
     const controller = newController("production");
     writeInstallRecord("production", {
       version: "1.7.0",
@@ -1718,9 +1800,6 @@ describe("yank/apply ordering", () => {
       }
       if (opts.args.includes("download")) {
         downloadCalls += 1;
-        if (downloadCalls === 2) {
-          rmSync(layout.stagedRecordFile, { force: true });
-        }
         return { data: {} };
       }
       if (opts.args.includes("apply")) {
@@ -1750,8 +1829,13 @@ describe("yank/apply ordering", () => {
     await Promise.all([restart, pendingReconcile, apply]);
 
     expect(availableCalls).toBeGreaterThanOrEqual(2);
-    expect(downloadCalls).toBeGreaterThanOrEqual(2);
+    // The first (outer) reconcile may stage/download before apply owns the
+    // lane. The fresh in-lane pass is manifest-only: its yanked verdict
+    // deletes the stage and no-ops apply rather than transferring a
+    // replacement archive while a mutation is active.
+    expect(downloadCalls).toBe(1);
     expect(applyCalls).toBe(0);
+    expect(existsSync(layout.stagedRecordFile)).toBe(false);
   });
 
   // Fixup B13: `activateInstalled`'s "a ready update supersedes activation
@@ -1987,6 +2071,7 @@ describe("platform matrix", () => {
     expect(runBundledTraycerCliJson).toHaveBeenCalledWith(
       expect.arrayContaining(["host", "service", "install"]),
     );
+    expect(waitForHostReady).toHaveBeenCalledTimes(1);
     expect(registerHostLoginItem).not.toHaveBeenCalled();
 
     vi.clearAllMocks();
@@ -1996,6 +2081,90 @@ describe("platform matrix", () => {
     await macController.registerService();
     expect(runBundledTraycerCliJson).not.toHaveBeenCalled();
     expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
+    expect(waitForHostReady).toHaveBeenCalledTimes(1);
+  });
+
+  it("F8b: CLI registerService treats a readiness timeout as non-converged and never reports registration success", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    vi.mocked(waitForHostReady).mockResolvedValue({
+      ready: false,
+      version: null,
+      pid: null,
+      reason: "timeout",
+    });
+
+    const outcome = await controller.registerService();
+
+    expect(outcome.kind).toBe("failed");
+    expect(runBundledTraycerCliJson).toHaveBeenCalledWith(
+      expect.arrayContaining(["host", "service", "install"]),
+    );
+  });
+
+  it("F8b: CLI registerService stamps a committed null-runtime record only after readiness", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: null,
+    });
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+    vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
+      if (args.includes("stamp-runtime")) return { outcome: "stamped" };
+      return {};
+    });
+
+    const outcome = await controller.registerService();
+
+    expect(outcome.kind).toBe("ok");
+    expect(waitForHostReady).toHaveBeenCalledTimes(1);
+    expect(runBundledTraycerCliJson).toHaveBeenCalledWith(
+      expect.arrayContaining(["host", "stamp-runtime"]),
+    );
+  });
+
+  it("F8b: packaged-macOS registerService routes requires-approval to Doctor instead of reporting success", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    vi.mocked(registerHostLoginItem).mockResolvedValue("requires-approval");
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+
+    const outcome = await controller.registerService();
+
+    expect(outcome).toMatchObject({
+      kind: "failed",
+      message: expect.stringContaining("System Settings"),
+    });
+    expect(waitForHostReady).not.toHaveBeenCalled();
+  });
+
+  it("F8b: packaged-macOS registerService stamps a committed null-runtime record after readiness", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    vi.mocked(registerHostLoginItem).mockResolvedValue("enabled");
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: null,
+    });
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+    vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
+      if (args.includes("stamp-runtime")) return { outcome: "stamped" };
+      return {};
+    });
+
+    const outcome = await controller.registerService();
+
+    expect(outcome.kind).toBe("ok");
+    expect(waitForHostReady).toHaveBeenCalledTimes(1);
+    expect(runBundledTraycerCliJson).toHaveBeenCalledWith(
+      expect.arrayContaining(["host", "stamp-runtime"]),
+    );
   });
 
   // Fixup B12 (lock rule 3): re-read install state after acquisition - a
@@ -2158,6 +2327,35 @@ describe("platform matrix", () => {
 // avoidable durable activation debt.
 // ---------------------------------------------------------------------------
 describe("applyStagedCliOwned stamping decision (fixup B9)", () => {
+  it("F8a: reports a durable failure when apply reports a post-swap service-start error", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writeStagedRecord("production", "1.8.0", null);
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+      availableSnapshotFixture("1.8.0", ["1.8.0"]),
+    );
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: {
+        outcome: "applied",
+        record: { version: "1.8.0", runtimeVersion: null },
+        runningActivated: false,
+        installGeneration: "apply-command-generation",
+        postSwapError: "service manager rejected the launch",
+      },
+    });
+
+    const outcome = await controller.applyStaged("manual", false);
+
+    expect(outcome).toMatchObject({
+      kind: "failed",
+      message: expect.stringContaining("Doctor"),
+    });
+    expect(waitForHostReady).not.toHaveBeenCalled();
+  });
+
   it("P8: reports a failed apply when a null-runtime activation never becomes ready", async () => {
     const controller = newController("production");
     writeInstallRecord("production", {

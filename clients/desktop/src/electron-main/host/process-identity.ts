@@ -7,6 +7,7 @@
 // keeps working unchanged.
 export {
   __parseElapsedSecondsForTest,
+  __setAsyncProcessLivenessReaderForTest,
   __setAsyncProcessStartTimeReaderForTest,
   computeProcessIdentityVerdict,
   currentProcessIdentityToken,

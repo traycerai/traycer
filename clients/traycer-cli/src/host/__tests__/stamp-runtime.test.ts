@@ -260,6 +260,31 @@ describe("stampRuntime", () => {
     expect(stored?.runtimeVersion).toBeNull();
   });
 
+  it("superseded: generation mismatch wins over an already-stamped replacement record", async () => {
+    const installA = await writeInstall({ installId: "install-a" });
+    const pid = writePid({});
+
+    await writeInstall({
+      installId: "install-b",
+      version: "3.0.0",
+      installedAt: "2026-01-02T00:00:00.000Z",
+      runtimeVersion: "3.0.0",
+    });
+
+    const result = await stampRuntime({
+      environment: ENV,
+      expectedInstallGeneration: generationFor(installA),
+      observedPid: pid.pid,
+      observedStartedAt: pid.startedAt,
+      observedRuntimeVersion: pid.version,
+    });
+
+    expect(result).toEqual({
+      outcome: "superseded",
+      reason: "generation-mismatch",
+    });
+  });
+
   it("superseded: no live host (pid.json absent)", async () => {
     const installed = await writeInstall({});
 

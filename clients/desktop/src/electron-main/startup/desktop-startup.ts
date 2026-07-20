@@ -171,44 +171,18 @@ const QUIT_FRESH_UNSYNCED_SNAPSHOT_TIMEOUT_MS = 200;
  */
 export async function runDesktopStartup(): Promise<void> {
   const testHooks = desktopStartupTestHooks;
-  if (testHooks !== null) {
-    initLogger();
-    const state: BootState = {
-      config: testHooks.config,
-      pendingAuthReturnSignal: false,
-      bridge: null,
-    };
-    testHooks.runPreReady();
-    await testHooks.whenReady();
-    await testHooks.runOnReady();
-    const services = await testHooks.runWindowPhase();
-    // Keep this on the real startup entry's path: tests replace the costly
-    // Electron phases, never the deferred convergence edge itself.
-    runDeferred(state, services, testHooks.runDeferredBackground);
-    return;
-  }
-  initLogger();
-  const config = resolveDesktopConfig();
+  const deferredPlan =
+    testHooks === null
+      ? await runProductionStartupPhases()
+      : await runTestStartupPhases(testHooks);
 
-  const state: BootState = {
-    config,
-    pendingAuthReturnSignal: false,
-    bridge: null,
-  };
-
-  runPreReady(state);
-
-  await app.whenReady();
-
-  await runOnReady(state);
-  log.info("[desktop] app ready", {
-    platform: process.platform,
-    environment: config.environment,
-  });
-
-  const services = await runWindowPhase(state);
-
-  runDeferred(state, services, runDeferredBackground);
+  // There is deliberately one startup → deferred handoff. Tests may replace
+  // expensive Electron phases, but they never get a separate convergence
+  // branch: removing this production call therefore leaves the composition
+  // test red rather than silently exercising a test-only equivalent.
+  runDeferred(deferredPlan.state, deferredPlan.services, () =>
+    deferredPlan.runBackground(),
+  );
 }
 
 interface BootState {
@@ -259,6 +233,59 @@ interface AppServices {
   readonly menu: MenuController;
   readonly windowRegistry: WindowRegistry;
   readonly zoomController: WindowZoomController;
+}
+
+interface DeferredStartupPlan {
+  readonly state: BootState;
+  readonly services: {
+    readonly hostController: IpcHostController;
+    readonly menu: HostUpdateMenuSurface;
+  };
+  runBackground(): void;
+}
+
+async function runTestStartupPhases(
+  testHooks: DesktopStartupTestHooks,
+): Promise<DeferredStartupPlan> {
+  initLogger();
+  const state: BootState = {
+    config: testHooks.config,
+    pendingAuthReturnSignal: false,
+    bridge: null,
+  };
+  testHooks.runPreReady();
+  await testHooks.whenReady();
+  await testHooks.runOnReady();
+  const services = await testHooks.runWindowPhase();
+  return {
+    state,
+    services,
+    runBackground: testHooks.runDeferredBackground,
+  };
+}
+
+async function runProductionStartupPhases(): Promise<DeferredStartupPlan> {
+  initLogger();
+  const config = resolveDesktopConfig();
+  const state: BootState = {
+    config,
+    pendingAuthReturnSignal: false,
+    bridge: null,
+  };
+
+  runPreReady(state);
+  await app.whenReady();
+  await runOnReady(state);
+  log.info("[desktop] app ready", {
+    platform: process.platform,
+    environment: config.environment,
+  });
+  const services = await runWindowPhase(state);
+  return {
+    state,
+    services,
+    runBackground: () => runDeferredBackground(state, services),
+  };
 }
 
 // Wrap a step in timing + a best-effort boundary. A non-fatal step throwing

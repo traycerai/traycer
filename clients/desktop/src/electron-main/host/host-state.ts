@@ -132,11 +132,11 @@ export async function readRunningRuntimeVersion(
   if (state.kind !== "parsed") return null;
   const { snapshot, startedAt } = state;
   if (!(await reachabilityProbe(snapshot.websocketUrl))) return null;
-  if (
-    startedAt !== null &&
-    (await getPublishedProcessIdentityVerdict(snapshot.pid, startedAt)) ===
-      "mismatch"
-  ) {
+  const identityVerdict =
+    startedAt === null
+      ? "indeterminate"
+      : await getPublishedProcessIdentityVerdict(snapshot.pid, startedAt);
+  if (identityVerdict === "mismatch" || identityVerdict === "dead") {
     return null;
   }
   return snapshot.version;

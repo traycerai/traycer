@@ -355,6 +355,7 @@ class FakeHostController implements IpcHostController {
 // every IPC wiring test simulate the mutation scheduler. This lets the F9
 // test drive a same-kind launch apply and a renderer update independently.
 class AttributedFakeHostController extends FakeHostController {
+  private applyOperationId: string | null = null;
   private attributedProgressListeners = new Set<
     (
       progress: MutationProgress,
@@ -369,8 +370,13 @@ class AttributedFakeHostController extends FakeHostController {
   async applyStagedForOperation(
     trigger: ApplyStagedTrigger,
     force: boolean,
-    _operationId: string,
+    operationId: string,
   ): Promise<MutationOutcome<ApplyStagedOk>> {
+    // Preserve the identity production handed this operation. The F9 test
+    // emits its renderer-owned lane state through the helpers below, so
+    // dropping the IPC argument to null cannot be papered over by a manually
+    // supplied test literal.
+    this.applyOperationId = operationId;
     return super.applyStaged(trigger, force);
   }
 
@@ -431,6 +437,19 @@ class AttributedFakeHostController extends FakeHostController {
     for (const listener of this.mutationStatusListeners) {
       listener(status);
     }
+  }
+
+  emitCurrentApplyStatus(startedAt: string): void {
+    this.emitMutationStatus({
+      kind: "apply",
+      operationId: this.applyOperationId,
+      progress: null,
+      startedAt,
+    });
+  }
+
+  emitCurrentApplyProgress(progress: MutationProgress): void {
+    this.emitAttributedProgress(progress, "apply", this.applyOperationId);
   }
 }
 
@@ -1317,23 +1336,14 @@ describe("host-management IPC - legacy progress broadcast over HostController's 
     expect(progressCalls()).toHaveLength(0);
     expect(mgmt.getHostOperationStatus()).toBeNull();
 
-    hostController.emitMutationStatus({
-      kind: "apply",
-      operationId: "renderer-update",
-      progress: null,
-      startedAt: "2026-01-01T00:00:01.000Z",
+    hostController.emitCurrentApplyStatus("2026-01-01T00:00:01.000Z");
+    hostController.emitCurrentApplyProgress({
+      stage: "apply",
+      percent: 70,
+      bytes: 70,
+      totalBytes: 100,
+      message: "renderer apply",
     });
-    hostController.emitAttributedProgress(
-      {
-        stage: "apply",
-        percent: 70,
-        bytes: 70,
-        totalBytes: 100,
-        message: "renderer apply",
-      },
-      "apply",
-      "renderer-update",
-    );
     expect(progressCalls()).toHaveLength(1);
     expect(progressCalls()[0]?.[1]).toMatchObject({
       operationId: "renderer-update",

@@ -482,11 +482,11 @@ export class HostLifecycle extends EventEmitter {
     if (!(await probe(raw.websocketUrl))) {
       return null;
     }
-    if (
-      publishedAt !== null &&
-      (await getPublishedProcessIdentityVerdict(raw.pid, publishedAt)) ===
-        "mismatch"
-    ) {
+    const identityVerdict =
+      publishedAt === null
+        ? "indeterminate"
+        : await getPublishedProcessIdentityVerdict(raw.pid, publishedAt);
+    if (identityVerdict === "mismatch" || identityVerdict === "dead") {
       return null;
     }
     return withConfiguredHostName(this.options.layout, raw);

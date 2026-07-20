@@ -1,5 +1,5 @@
 import { constants } from "node:fs";
-import { access } from "node:fs/promises";
+import { access, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { log } from "../app/logger";
 import {
@@ -342,6 +342,7 @@ function parseUninstallResult(
 }
 
 interface AvailableSnapshotShape {
+  readonly valid: boolean;
   readonly latest: string;
   readonly versions: ReadonlyArray<{
     readonly version: string;
@@ -357,7 +358,7 @@ interface AvailableSnapshotShape {
 // `traycer-cli/src/commands/__tests__/host-available.test.ts`.
 function parseAvailableSnapshot(raw: unknown): AvailableSnapshotShape {
   if (!isPlainObject(raw) || typeof raw.platformKey !== "string") {
-    return { latest: "", versions: [] };
+    return { valid: false, latest: "", versions: [] };
   }
   const platformKey = raw.platformKey;
   const manifest = isPlainObject(raw.manifest) ? raw.manifest : null;
@@ -366,7 +367,7 @@ function parseAvailableSnapshot(raw: unknown): AvailableSnapshotShape {
     typeof manifest.latest !== "string" ||
     !Array.isArray(manifest.versions)
   ) {
-    return { latest: "", versions: [] };
+    return { valid: false, latest: "", versions: [] };
   }
   const versions = manifest.versions.flatMap((entry) => {
     if (!isPlainObject(entry) || typeof entry.version !== "string") return [];
@@ -375,11 +376,18 @@ function parseAvailableSnapshot(raw: unknown): AvailableSnapshotShape {
     return [
       {
         version: entry.version,
-        available: isPlainObject(asset) && asset.available === true,
+        // A platform asset can remain physically present while a release is
+        // withdrawn. `host available` is the curation authority for staged
+        // bytes, so a yanked entry is ineligible even if its asset says it
+        // can be downloaded.
+        available:
+          entry.yanked !== true &&
+          isPlainObject(asset) &&
+          asset.available === true,
       },
     ];
   });
-  return { latest: manifest.latest, versions };
+  return { valid: true, latest: manifest.latest, versions };
 }
 
 // Resolve the host-runtime archive bundled beside the desktop's CLI binary
@@ -911,6 +919,20 @@ export class HostController {
     throw new Error(
       "Traycer Host activation could not be confirmed - run `traycer host doctor` to recover.",
     );
+  }
+
+  // Keep the post-cycle invariant in one place. A service command returning
+  // successfully only means the manager accepted the request; it does not
+  // prove the host bound its endpoint. Every branch that starts or cycles a
+  // service must complete this sequence before reporting success.
+  private async completeServiceStart(
+    prePid: number | null,
+    expectedInstallGeneration: string | null,
+  ): Promise<void> {
+    await this.confirmActivationReadiness(prePid);
+    await this.stampIfNullRuntime(expectedInstallGeneration);
+    this.hostLifecycle.ensureWatcherInstalled();
+    await this.hostLifecycle.reloadSnapshotFromDisk();
   }
 
   // ---- Shared locked macOS SMAppService activation cycle ------------------
@@ -1521,18 +1543,10 @@ export class HostController {
       await this.runStageLatest();
       return;
     }
-    await this.reconcileEligibleStage(false);
+    await this.reconcileEligibleStage();
   }
 
-  // Split out from `stageLatest` so `applyStaged`'s own preflight reconcile
-  // (the "apply awaits any in-flight-or-due eligibility reconcile" ordering
-  // edge) can run this directly while ITS OWN mutation-lane job is active -
-  // `stageLatest`'s `mutationStatus !== null` guard exists to keep a
-  // background/independent download from starting during a mutation; it
-  // must not also block a mutation's own preflight step against itself.
-  private async reconcileEligibleStage(
-    ownsCurrentMutation: boolean,
-  ): Promise<void> {
+  private async reconcileEligibleStage(): Promise<void> {
     if (await isHostRemovedByUser()) return;
     let snapshot: AvailableSnapshotShape;
     try {
@@ -1561,23 +1575,20 @@ export class HostController {
     // an async gap a mutation can start during; without this re-check a
     // download would still begin right after, violating "no new download
     // while a mutation is active."
-    if (this.mutationStatus !== null && !ownsCurrentMutation) {
+    if (this.mutationStatus !== null) {
       this.stageLatestPending = true;
       return;
     }
-    await this.runDownloadLane(null, ownsCurrentMutation);
+    await this.runDownloadLane(null);
   }
 
-  private async runDownloadLane(
-    explicitVersion: string | null,
-    ownsCurrentMutation: boolean,
-  ): Promise<void> {
+  private async runDownloadLane(explicitVersion: string | null): Promise<void> {
     const job = this.downloadTail.then(async () => {
       // This work may have sat behind another download. Check both gates at
       // execution time: a mutation can have started, or Remove Traycer can
       // have persisted its sentinel, while it was waiting.
       if (await isHostRemovedByUser()) return;
-      if (this.mutationStatus !== null && !ownsCurrentMutation) {
+      if (this.mutationStatus !== null) {
         this.stageLatestPending = true;
         return;
       }
@@ -1658,6 +1669,71 @@ export class HostController {
     await this.downloadTail;
   }
 
+  /**
+   * Applies the narrow, in-lane half of staged-update reconciliation. The
+   * registry read is bounded; it can establish that a signed stage has been
+   * withdrawn, but it never starts `host download`. A fresh stage is instead
+   * queued after the mutation releases the lane via `stageLatestPending`.
+   *
+   * A failed registry read deliberately preserves the signed stage: network
+   * reachability is not evidence that a prior successful curation decision
+   * has changed. A successful read that omits or withdraws this version is
+   * positive evidence, so the stage is discarded and this apply is a no-op.
+   */
+  private async verifyStagedEligibilityInMutation(): Promise<boolean> {
+    if (await isHostRemovedByUser()) return false;
+    const staged = await readDesktopHostStagedRecord(this.layout);
+    if (staged === null) return true;
+
+    let snapshot: AvailableSnapshotShape;
+    try {
+      snapshot = parseAvailableSnapshot(
+        await this.runBundled<unknown>(["host", "available", "--json"]),
+      );
+    } catch (err) {
+      log.debug("[host-controller] in-lane stage eligibility probe failed", {
+        err: describeError(err),
+      });
+      return true;
+    }
+
+    this.latestVersionCache = latestVersionFromSnapshot(snapshot);
+    if (!snapshot.valid) {
+      log.debug(
+        "[host-controller] in-lane stage eligibility response was invalid",
+      );
+      return true;
+    }
+    const stageIsEligible = snapshot.versions.some(
+      (entry) => entry.version === staged.version && entry.available,
+    );
+    if (stageIsEligible) return true;
+
+    // The stage and its archive are shared with the CLI. Remove both only
+    // under the same cross-process lock, then never consume the stale bytes
+    // even if another writer won the lock and changed them while we waited.
+    const discard = await withDesktopCliLock(
+      {
+        lockPath: this.lockPath,
+        reason: "host-controller-discard-ineligible-stage",
+        waitMs: this.desktopLockWaitMs,
+        pollIntervalMs: this.desktopLockPollIntervalMs,
+      },
+      async () => {
+        const current = await readDesktopHostStagedRecord(this.layout);
+        if (current?.version !== staged.version) return;
+        await rm(this.layout.stagedDir, { recursive: true, force: true });
+      },
+    );
+    if (discard.kind === "busy") {
+      log.debug(
+        "[host-controller] could not discard ineligible staged host while CLI lock was busy",
+      );
+    }
+    this.stageLatestPending = true;
+    return false;
+  }
+
   // ---- applyStaged -----------------------------------------------------
 
   applyStaged(
@@ -1700,14 +1776,19 @@ export class HostController {
                 message: "Host was removed by the user.",
               };
             }
-            // The preflight outside the lane keeps ordinary apply calls from
-            // holding the mutation owner across a WAN round trip. It cannot,
-            // however, prove that the stage is still eligible once every
-            // older mutation's `finally` has run: that `finally` can join a
-            // reconcile which is already settling. Reconcile once more here,
-            // under this operation's lane ownership, then derive the stage
-            // from disk immediately before consuming it.
-            await this.reconcileEligibleStage(true);
+            // The outer reconcile may have become stale while a prior
+            // mutation drained. Re-check only the stage's eligibility here:
+            // downloads belong exclusively to the independent download lane.
+            if (!(await this.verifyStagedEligibilityInMutation())) {
+              const installed = await readDesktopHostInstallRecord(this.layout);
+              return {
+                kind: "ok",
+                value: {
+                  appliedVersion: installed?.version ?? "",
+                  runningActivated: true,
+                },
+              };
+            }
             const installed = await readDesktopHostInstallRecord(this.layout);
             const staged = await readDesktopHostStagedRecord(this.layout);
             if (
@@ -1758,22 +1839,29 @@ export class HostController {
         },
       };
     }
+    if (result.postSwapError !== null) {
+      return {
+        kind: "failed",
+        message: `Host bytes were applied, but the background service failed to start after the swap: ${result.postSwapError}. Open Doctor or run 'traycer host doctor' to recover.`,
+      };
+    }
     // A CLI-owned apply can itself restart the supervisor. Readiness is
     // required for that cycle regardless of whether the committed record
     // needs a runtime CAS backfill; stamping is a separate null-runtime-only
     // concern.
     if (result.runningActivated) {
       try {
-        await this.confirmActivationReadiness(prePid);
-        await this.stampIfNullRuntime(
+        await this.completeServiceStart(
+          prePid,
           result.runtimeVersion === null ? result.installGeneration : null,
         );
       } catch (err) {
         return { kind: "failed", message: describeError(err) };
       }
+    } else {
+      this.hostLifecycle.ensureWatcherInstalled();
+      await this.hostLifecycle.reloadSnapshotFromDisk();
     }
-    this.hostLifecycle.ensureWatcherInstalled();
-    await this.hostLifecycle.reloadSnapshotFromDisk();
     return {
       kind: "ok",
       value: {
@@ -2074,22 +2162,50 @@ export class HostController {
               // longer exists.
               const record = await readDesktopHostInstallRecord(this.layout);
               if (record === null) return null;
-              return registerHostLoginItem(undefined);
+              const prePid =
+                (await readRunningHostIdentity(this.layout))?.pid ?? null;
+              const expectedInstallGeneration =
+                record.runtimeVersion === null
+                  ? attestedInstallGenerationFromDisk(record)
+                  : null;
+              const status = await registerHostLoginItem(undefined);
+              return { status, prePid, expectedInstallGeneration };
             },
           );
           if (outcome.kind === "busy") return this.lockBusyOutcome(false);
-          const status = outcome.result;
-          if (status === null) {
+          const registration = outcome.result;
+          if (registration === null) {
             return { kind: "failed", message: "No host installed." };
           }
-          if (status === "enabled" || status === "requires-approval") {
+          if (registration.status === "requires-approval") {
+            return { kind: "failed", message: approvalRequiredMessage() };
+          }
+          if (registration.status === "enabled") {
+            try {
+              await this.completeServiceStart(
+                registration.prePid,
+                registration.expectedInstallGeneration,
+              );
+            } catch (err) {
+              return { kind: "failed", message: describeError(err) };
+            }
             return { kind: "ok", value: { registered: true } };
           }
           return {
             kind: "failed",
-            message: `Failed to register the host login item (status=${status}).`,
+            message: `Failed to register the host login item (status=${registration.status}).`,
           };
         }
+        const record = await readDesktopHostInstallRecord(this.layout);
+        if (record === null) {
+          return { kind: "failed", message: "No host installed." };
+        }
+        const prePid =
+          (await readRunningHostIdentity(this.layout))?.pid ?? null;
+        const expectedInstallGeneration =
+          record.runtimeVersion === null
+            ? attestedInstallGenerationFromDisk(record)
+            : null;
         try {
           await this.runBundled<unknown>([
             "host",
@@ -2100,6 +2216,11 @@ export class HostController {
         } catch (err) {
           if (err instanceof TraycerCliError && err.code === CLI_LOCK_BUSY_CODE)
             return this.lockBusyOutcome(false);
+          return { kind: "failed", message: describeError(err) };
+        }
+        try {
+          await this.completeServiceStart(prePid, expectedInstallGeneration);
+        } catch (err) {
           return { kind: "failed", message: describeError(err) };
         }
         return { kind: "ok", value: { registered: true } };

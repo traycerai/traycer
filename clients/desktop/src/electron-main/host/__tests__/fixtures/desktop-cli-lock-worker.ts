@@ -38,15 +38,31 @@ async function main(): Promise<void> {
   const lockPath = process.env.WORKER_LOCK_PATH;
   const barrierDir = process.env.WORKER_BARRIER_DIR;
   const cliEntry = process.env.WORKER_CLI_ENTRY;
+  const environment = process.env.WORKER_ENVIRONMENT;
+  const devDesktopSlot = process.env.WORKER_DEV_DESKTOP_SLOT;
   const cliLockAcquiredMarker = process.env.WORKER_CLI_LOCK_ACQUIRED_MARKER;
   if (
     lockPath === undefined ||
     barrierDir === undefined ||
     cliEntry === undefined ||
+    environment === undefined ||
+    devDesktopSlot === undefined ||
     cliLockAcquiredMarker === undefined
   ) {
     throw new Error(
-      "desktop-cli-lock-worker: WORKER_LOCK_PATH, WORKER_BARRIER_DIR, WORKER_CLI_ENTRY, and WORKER_CLI_LOCK_ACQUIRED_MARKER are required",
+      "desktop-cli-lock-worker: lock path, barrier, CLI entry, environment, dev slot, and lock marker are required",
+    );
+  }
+  // The checked-in CLI source has a baked dev environment. Keep the worker's
+  // real terminal command on the exact dev-run slot the controller owns;
+  // otherwise this test can prove a callback ran while accidentally letting
+  // the CLI mutate a different environment's install/lock tree.
+  if (
+    environment !== "dev" ||
+    process.env.DEV_DESKTOP_SLOT !== devDesktopSlot
+  ) {
+    throw new Error(
+      "desktop-cli-lock-worker: terminal CLI environment/slot diverges from the controller",
     );
   }
   const outcome = await acquireDesktopCliLock({
@@ -63,6 +79,7 @@ async function main(): Promise<void> {
   const cli = spawn("bun", ["run", cliEntry, "host", "uninstall", "--json"], {
     env: {
       ...process.env,
+      DEV_DESKTOP_SLOT: devDesktopSlot,
       TRAYCER_CLI_LOCK_ACQUIRED_MARKER: cliLockAcquiredMarker,
     },
     stdio: ["ignore", "pipe", "pipe"],

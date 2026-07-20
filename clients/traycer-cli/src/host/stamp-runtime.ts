@@ -85,14 +85,6 @@ export async function stampRuntime(
     });
     return { outcome: "superseded", reason: "no-install-record" };
   }
-  if (installed.runtimeVersion !== null) {
-    logger.info("Host stamp-runtime superseded - runtime already stamped", {
-      environment: opts.environment,
-      runtimeVersion: installed.runtimeVersion,
-    });
-    return { outcome: "superseded", reason: "runtime-already-stamped" };
-  }
-
   const currentGeneration = encodeInstallGeneration({
     installId: installed.installId,
     installedAt: installed.installedAt,
@@ -106,6 +98,13 @@ export async function stampRuntime(
       current: currentGeneration,
     });
     return { outcome: "superseded", reason: "generation-mismatch" };
+  }
+  if (installed.runtimeVersion !== null) {
+    logger.info("Host stamp-runtime superseded - runtime already stamped", {
+      environment: opts.environment,
+      runtimeVersion: installed.runtimeVersion,
+    });
+    return { outcome: "superseded", reason: "runtime-already-stamped" };
   }
 
   const pidMetadata = await readHostPidMetadata(opts.environment);

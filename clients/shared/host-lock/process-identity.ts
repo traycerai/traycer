@@ -114,7 +114,7 @@ export function isPublishedProcessIdentityCurrent(
 }
 
 export type PublishedProcessIdentityVerdict =
-  "current" | "mismatch" | "indeterminate";
+  "current" | "mismatch" | "dead" | "indeterminate";
 
 // Electron-main checks an advertised endpoint first. Once the handshake has
 // established positive liveness, identity only rules out a positively
@@ -127,6 +127,9 @@ export async function getPublishedProcessIdentityVerdict(
   if (publishedAt === null) return "indeterminate";
   const publishedAtMs = Date.parse(publishedAt);
   if (!Number.isFinite(publishedAtMs)) return "indeterminate";
+  const liveness = await asyncProcessLivenessReader(pid);
+  if (liveness === "dead") return "dead";
+  if (liveness !== "alive") return "indeterminate";
   const processStartedAtMs = await asyncProcessStartTimeReader(pid);
   if (processStartedAtMs === null) return "indeterminate";
   return processStartedAtMs >
@@ -279,6 +282,9 @@ let processStartTimeReader: (pid: number) => number | null =
   readProcessStartTimeMsImpl;
 let asyncProcessStartTimeReader: (pid: number) => Promise<number | null> =
   readProcessStartTimeMsAsyncImpl;
+let asyncProcessLivenessReader: (
+  pid: number,
+) => Promise<ProcessLivenessVerdict> = probeProcessLivenessAsyncImpl;
 
 // Test-only seam - pass `null` to restore the default reader. Returns the
 // previous reader so tests can save/restore symmetrically.
@@ -296,6 +302,15 @@ export function __setAsyncProcessStartTimeReaderForTest(
   const previous = asyncProcessStartTimeReader;
   asyncProcessStartTimeReader =
     next === null ? readProcessStartTimeMsAsyncImpl : next;
+  return previous;
+}
+
+export function __setAsyncProcessLivenessReaderForTest(
+  next: ((pid: number) => Promise<ProcessLivenessVerdict>) | null,
+): (pid: number) => Promise<ProcessLivenessVerdict> {
+  const previous = asyncProcessLivenessReader;
+  asyncProcessLivenessReader =
+    next === null ? probeProcessLivenessAsyncImpl : next;
   return previous;
 }
 
@@ -380,6 +395,31 @@ function execFileOutput(
       (err, stdout) => resolve(err === null ? stdout : null),
     );
   });
+}
+
+async function probeProcessLivenessAsyncImpl(
+  pid: number,
+): Promise<ProcessLivenessVerdict> {
+  if (!Number.isInteger(pid) || pid <= 0) return "dead";
+  if (process.platform !== "win32") {
+    try {
+      process.kill(pid, 0);
+      return "alive";
+    } catch (err) {
+      const code = isErrnoException(err) ? err.code : null;
+      if (code === "EPERM") return "alive";
+      return code === "ESRCH" ? "dead" : "indeterminate";
+    }
+  }
+  const stdout = await execFileOutput(
+    "tasklist",
+    ["/FI", `PID eq ${pid}`, "/NH", "/FO", "CSV"],
+    3_000,
+  );
+  if (stdout === null) return "indeterminate";
+  const trimmed = stdout.trim();
+  if (trimmed.length === 0 || trimmed.startsWith("INFO:")) return "dead";
+  return trimmed.includes(`"${pid}"`) ? "alive" : "dead";
 }
 
 async function readProcessStartTimeMsAsyncImpl(
