@@ -4,7 +4,10 @@ import type {
   ActivateInstalledOk,
   MutationOutcome,
 } from "../../host/host-controller-types";
-import { respawnIfDown } from "../host-health-respawn";
+import {
+  HostRecoveryDeferredError,
+  respawnIfDown,
+} from "../host-health-respawn";
 
 function fakeControllerWithRecoverOutcome(
   outcome:
@@ -87,10 +90,20 @@ describe("respawnIfDown (fixup B3: automatic-intent lock-contention class)", () 
     await expect(respawnIfDown(controller)).resolves.toBeUndefined();
   });
 
-  it("resolves without throwing on 'deferred' (lock contention or removed-by-user) - silent reschedule, not a failed recovery attempt", async () => {
+  it("throws a retryable signal on lock-contention deferred so the monitor retains recovery ownership", async () => {
     const controller = fakeControllerWithRecoverOutcome({
       kind: "deferred",
       message: "Another Traycer process is managing the host.",
+    });
+    await expect(respawnIfDown(controller)).rejects.toBeInstanceOf(
+      HostRecoveryDeferredError,
+    );
+  });
+
+  it("resolves without throwing when the host was explicitly removed by the user", async () => {
+    const controller = fakeControllerWithRecoverOutcome({
+      kind: "deferred",
+      message: "Host was removed by the user.",
     });
     await expect(respawnIfDown(controller)).resolves.toBeUndefined();
   });

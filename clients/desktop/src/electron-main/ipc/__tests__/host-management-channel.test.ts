@@ -28,6 +28,7 @@ import type {
   InstallVersionOk,
   MutationOutcome,
   MutationProgress,
+  MutationKind,
   RemoveTraycerOk,
   ServiceRegistrationOk,
   UninstallOk,
@@ -163,6 +164,9 @@ interface RecordedControllerCall {
 class FakeHostController implements IpcHostController {
   readonly calls: RecordedControllerCall[] = [];
   private progressListeners = new Set<(progress: MutationProgress) => void>();
+  private progressListenersWithKind = new Set<
+    (progress: MutationProgress, kind: MutationKind) => void
+  >();
 
   installVersionResult: MutationOutcome<InstallVersionOk> = {
     kind: "ok",
@@ -328,9 +332,20 @@ class FakeHostController implements IpcHostController {
       this.progressListeners.delete(listener);
     };
   }
-  emitProgress(progress: MutationProgress): void {
+  onMutationProgressWithKind(
+    listener: (progress: MutationProgress, kind: MutationKind) => void,
+  ): () => void {
+    this.progressListenersWithKind.add(listener);
+    return () => {
+      this.progressListenersWithKind.delete(listener);
+    };
+  }
+  emitProgress(progress: MutationProgress, kind: MutationKind): void {
     for (const listener of this.progressListeners) {
       listener(progress);
+    }
+    for (const listener of this.progressListenersWithKind) {
+      listener(progress, kind);
     }
   }
 }
@@ -1093,7 +1108,7 @@ describe("host-management IPC - legacy progress broadcast over HostController's 
     installFakeCli({ runResult: {}, streamResult: {} });
     const mgmt = await import("../host-management-ipc");
     mgmt.setActiveEnvironment("production");
-    const { RunnerHostInvoke } =
+    const { RunnerHostEvent, RunnerHostInvoke } =
       await import("../../../ipc-contracts/ipc-channels");
     const bridge = makeBridge();
     mgmt.registerHostManagementIpc(bridge as never);
@@ -1111,17 +1126,42 @@ describe("host-management IPC - legacy progress broadcast over HostController's 
     // A progress tick while both are queued must be attributed to A - it's
     // the one HostController's real lane is actually running (mirrored
     // here by resolving strictly in submission order below).
-    hostController.emitProgress({
-      stage: "download",
-      percent: 40,
-      bytes: 40,
-      totalBytes: 100,
-      message: "downloading",
-    });
+    hostController.emitProgress(
+      {
+        stage: "download",
+        percent: 40,
+        bytes: 40,
+        totalBytes: 100,
+        message: "downloading",
+      },
+      "apply",
+    );
+    const progressCalls = () =>
+      bridge.fanOut.mock.calls.filter(
+        ([channel]) => channel === RunnerHostEvent.cliOperationProgress,
+      );
+    // The shared controller emitter has two registered legacy calls here,
+    // but exactly one front-of-lane legacy update may publish A's progress.
+    expect(progressCalls()).toHaveLength(1);
+    expect(progressCalls()[0]?.[1]).toMatchObject({ operationId: "op-A" });
     expect(mgmt.getHostOperationStatus()).toMatchObject({
       operationId: "op-A",
       percent: 40,
     });
+
+    // A non-legacy mutation must not be attributed to the queued legacy
+    // update merely because the legacy listener is currently registered.
+    hostController.emitProgress(
+      {
+        stage: "activate",
+        percent: null,
+        bytes: null,
+        totalBytes: null,
+        message: "non-legacy respawn",
+      },
+      "respawn",
+    );
+    expect(progressCalls()).toHaveLength(1);
 
     // A settles first - B is still legitimately in flight, so status must
     // hand off to B's identity, never drop to null.
@@ -1168,13 +1208,16 @@ describe("host-management IPC - legacy progress broadcast over HostController's 
     });
     expect(mgmt.getHostOperationStatus()).toMatchObject({ kind: "update" });
 
-    hostController.emitProgress({
-      stage: "download",
-      percent: 50,
-      bytes: 50,
-      totalBytes: 100,
-      message: "downloading",
-    });
+    hostController.emitProgress(
+      {
+        stage: "download",
+        percent: 50,
+        bytes: 50,
+        totalBytes: 100,
+        message: "downloading",
+      },
+      "apply",
+    );
     hostController.resolveApplyStaged({
       kind: "ok",
       value: { appliedVersion: "1.7.0", runningActivated: true },

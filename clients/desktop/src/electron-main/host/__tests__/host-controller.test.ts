@@ -2881,6 +2881,29 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     expect(await controller.awaitMutationLaneIdle(20)).toBe(true);
   });
 
+  it("P4: quit drain sees the pending-revision intent during its reachability precheck", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    const reachabilityGate = deferred<boolean>();
+    const controller = newControllerWithReachability(
+      "production",
+      async () => reachabilityGate.promise,
+    );
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+
+    const refresh = controller.applyPendingLoginItemRevisionIfIdle();
+    await flushMicrotasks();
+
+    expect(await controller.awaitMutationLaneIdle(20)).toBe(false);
+
+    reachabilityGate.resolve(false);
+    await refresh;
+    expect(await controller.awaitMutationLaneIdle(20)).toBe(true);
+  });
+
   // Fixup D1: two concurrent callers (the monitor's standalone tick and a
   // reentrant call from `convergeReadyPackagedMac`) used to each pass every
   // pre-check independently and run their own disruptive SMAppService

@@ -653,6 +653,15 @@ export class HostController {
         });
       }
     }
+    for (const listener of this.progressListenersWithKind) {
+      try {
+        listener(progress, this.mutationStatus.kind);
+      } catch (err) {
+        log.warn("[host-controller] mutation progress listener threw", {
+          err: describeError(err),
+        });
+      }
+    }
   }
 
   // Legacy renderer shim support: IPC handlers that used to broadcast
@@ -660,10 +669,13 @@ export class HostController {
   // now-removed `trackHostOperation`) subscribe here for the duration of
   // their own call to keep re-emitting those events, without the controller
   // needing to know anything about IPC channels or renderer-minted
-  // operation ids. Since the mutation lane is exclusive FIFO, a listener
-  // registered immediately before submitting an intent only ever observes
-  // progress for that intent - nothing else can be running concurrently.
+  // operation ids. The compatibility listener preserves the older
+  // progress-only contract; the attributed listener carries the lane kind
+  // so the IPC shim cannot label a non-legacy mutation as a legacy one.
   private progressListeners = new Set<(progress: MutationProgress) => void>();
+  private progressListenersWithKind = new Set<
+    (progress: MutationProgress, kind: MutationKind) => void
+  >();
 
   onMutationProgress(
     listener: (progress: MutationProgress) => void,
@@ -671,6 +683,15 @@ export class HostController {
     this.progressListeners.add(listener);
     return () => {
       this.progressListeners.delete(listener);
+    };
+  }
+
+  onMutationProgressWithKind(
+    listener: (progress: MutationProgress, kind: MutationKind) => void,
+  ): () => void {
+    this.progressListenersWithKind.add(listener);
+    return () => {
+      this.progressListenersWithKind.delete(listener);
     };
   }
 
@@ -1009,6 +1030,17 @@ export class HostController {
       return this.pendingRevisionCycleInFlight;
     }
     const run = this.applyPendingLoginItemRevisionIfIdleUncoalesced();
+    // The D1 cache becomes visible synchronously, before any of the
+    // reachability/quarantine/approval prechecks await. Quit drain must see
+    // the entire in-flight intent, not only the later lock-owning cycle.
+    const priorTail = this.pendingRevisionTail;
+    this.pendingRevisionTail = Promise.all([
+      priorTail,
+      run.then(
+        () => undefined,
+        () => undefined,
+      ),
+    ]).then(() => undefined);
     this.pendingRevisionCycleInFlight = run;
     const clearInFlight = (): void => {
       if (this.pendingRevisionCycleInFlight === run) {
@@ -1046,23 +1078,7 @@ export class HostController {
       );
       return null;
     }
-    // Fixup B15: everything from here on acquires the desktop lock and
-    // cycles SMAppService - a genuine host mutation the quit-time drain
-    // (`awaitMutationLaneIdle`) must be able to wait for. Track it on an
-    // independent tail (not the FIFO mutation lane - see the doc comment on
-    // `applyPendingLoginItemRevisionIfIdle`), joined (not overwritten) with
-    // whatever the tail already covers, so an overlapping call never drops
-    // visibility of an earlier one still in flight.
-    const priorTail = this.pendingRevisionTail;
-    const cycle = this.runPendingLoginItemRevisionCycle(currentVersion);
-    this.pendingRevisionTail = Promise.all([
-      priorTail,
-      cycle.then(
-        () => undefined,
-        () => undefined,
-      ),
-    ]).then(() => undefined);
-    return cycle;
+    return this.runPendingLoginItemRevisionCycle(currentVersion);
   }
 
   private async runPendingLoginItemRevisionCycle(

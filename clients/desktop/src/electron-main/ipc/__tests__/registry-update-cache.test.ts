@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IpcHostController } from "../runner-ipc-bridge";
 import type { HostControllerStatus } from "../../host/host-controller-types";
+import type { HostRegistryUpdateState } from "../../../ipc-contracts/host-management-types";
 import { DEV_DESKTOP_SLOT_ENV } from "../../host/dev-desktop-slot";
 
 // `refreshRegistryUpdateState` is the launch-time host registry
@@ -225,10 +226,12 @@ function deferred<T>(): {
 // This file is about the CACHE/PROBE mechanics, not the controller's own
 // staging decision (that's `host-controller.test.ts`'s job) - `updateReady`
 // is just a fixed, test-controlled input here.
-function fakeHostController(
-  updateReady: boolean,
-): IpcHostController & { readonly stageLatestCalls: number[] } {
+function fakeHostController(updateReady: boolean): IpcHostController & {
+  readonly stageLatestCalls: number[];
+  setUpdateReady(updateReady: boolean): void;
+} {
   const stageLatestCalls: number[] = [];
+  let currentUpdateReady = updateReady;
   return {
     get stageLatestCalls() {
       return stageLatestCalls;
@@ -242,7 +245,7 @@ function fakeHostController(
         stagedVersion: null,
         installedRuntimeVersion: null,
         runningRuntimeVersion: null,
-        updateReady,
+        updateReady: currentUpdateReady,
         activation: "unavailable",
         reachable: false,
         removedByUser: false,
@@ -251,6 +254,9 @@ function fakeHostController(
     },
     async stageLatest(): Promise<void> {
       stageLatestCalls.push(1);
+    },
+    setUpdateReady(nextUpdateReady: boolean): void {
+      currentUpdateReady = nextUpdateReady;
     },
     convergeReady: () => {
       throw new Error(
@@ -737,6 +743,37 @@ describe("refreshRegistryUpdateState - launch-time probe", () => {
       maxAgeMs: null,
     });
     expect(freshProbeController.stageLatestCalls).toHaveLength(1);
+  });
+
+  it("P6: republishes updateReady after the production background stage completes", async () => {
+    vi.doMock("../../cli/traycer-cli", () => ({
+      runTraycerCliJson: vi
+        .fn()
+        .mockResolvedValue(registryProbeResult("1.4.3", true, null)),
+      streamTraycerCliJson: vi.fn(),
+      TraycerCliError: class extends Error {},
+    }));
+    const { onHostRegistryUpdateStateChange, refreshRegistryUpdateState } =
+      await import("../host-management-ipc");
+    const controller = fakeHostController(false);
+    controller.stageLatest = async () => {
+      controller.setUpdateReady(true);
+    };
+    const publications: HostRegistryUpdateState[] = [];
+    const unsubscribe = onHostRegistryUpdateStateChange((state) => {
+      publications.push(state);
+    });
+
+    await refreshRegistryUpdateState(controller, {
+      force: true,
+      maxAgeMs: null,
+    });
+
+    await vi.waitFor(() => {
+      expect(publications.at(-1)?.updateAvailable).toBe(true);
+    });
+    expect(publications[0]?.updateAvailable).toBe(false);
+    unsubscribe();
   });
 
   it("does not stage anything after a failed registry probe", async () => {

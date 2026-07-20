@@ -17,6 +17,7 @@ vi.mock("electron-log", () => ({
 }));
 
 import { startHostHealthMonitor } from "../host-health-monitor";
+import { HostRecoveryDeferredError } from "../../startup/host-health-respawn";
 
 const INTERVAL_MS = 1_000;
 
@@ -171,6 +172,35 @@ describe("startHostHealthMonitor", () => {
     });
     await ticks(3);
     expect(probe).not.toHaveBeenCalled();
+    monitor.dispose();
+  });
+
+  it("P5: retries a lock-deferred recovery after the monitor has demoted its snapshot", async () => {
+    let snapshot: DesktopLocalHostSnapshot | null = SNAPSHOT;
+    let respawnCalls = 0;
+    const respawn = vi.fn(async () => {
+      respawnCalls += 1;
+      if (respawnCalls === 1) throw new HostRecoveryDeferredError();
+    });
+    const monitor = startHostHealthMonitor({
+      host: fakeHost({
+        getSnapshot: () => snapshot,
+        reloadSnapshotFromDisk: vi.fn(async () => {
+          snapshot = null;
+          return null;
+        }),
+      }),
+      intervalMs: INTERVAL_MS,
+      probe: vi.fn(async () => false),
+      readMetadata: vi.fn(async () => SNAPSHOT),
+      respawn,
+    });
+
+    await ticks(2);
+    expect(respawn).toHaveBeenCalledTimes(1);
+
+    await ticks(1);
+    expect(respawn).toHaveBeenCalledTimes(2);
     monitor.dispose();
   });
 

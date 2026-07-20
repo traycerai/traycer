@@ -1,4 +1,5 @@
 import { log } from "../app/logger";
+import { HostRecoveryDeferredError } from "../startup/host-health-respawn";
 import { canReachHostWebsocketUrl, readPidMetadata } from "./host-lifecycle";
 import type { IpcHostLifecycle } from "../ipc/runner-ipc-bridge";
 import type { DesktopLocalHostSnapshot } from "../../ipc-contracts/host-types";
@@ -74,6 +75,7 @@ export function startHostHealthMonitor(
   const respawn = deps.respawn;
   let consecutiveFailures = 0;
   let respawnsSinceRecovery = 0;
+  let recoveryPending = false;
   let ticking = false;
   let disposed = false;
 
@@ -85,8 +87,21 @@ export function startHostHealthMonitor(
     try {
       const snapshot = deps.host.getSnapshot();
       if (snapshot === null) {
-        // Host known-down: the gate/ensure/respawn flows own recovery.
-        consecutiveFailures = 0;
+        // A deferred recovery intentionally demotes the snapshot before the
+        // foreign lock holder finishes. Keep ownership across that null
+        // state; otherwise every later tick returns here and the dead host
+        // is never retried.
+        if (!recoveryPending) {
+          consecutiveFailures = 0;
+          return;
+        }
+        const metadata = await readMetadata(deps.host.pidMetadataFile);
+        if (metadata === null) {
+          recoveryPending = false;
+          return;
+        }
+        await respawn();
+        recoveryPending = false;
         return;
       }
       if (await probe(snapshot.websocketUrl)) {
@@ -144,7 +159,13 @@ export function startHostHealthMonitor(
         { pid: metadata.pid, attempt: respawnsSinceRecovery },
       );
       await respawn();
+      recoveryPending = false;
     } catch (err) {
+      if (err instanceof HostRecoveryDeferredError) {
+        respawnsSinceRecovery = Math.max(0, respawnsSinceRecovery - 1);
+        recoveryPending = true;
+        return;
+      }
       // A failed respawn already surfaced through the lifecycle's error
       // event; the monitor only logs and keeps watching.
       log.warn("[host-health] auto-recovery attempt failed", err);

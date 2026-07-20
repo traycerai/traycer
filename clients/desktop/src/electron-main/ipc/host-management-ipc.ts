@@ -27,7 +27,11 @@ import {
   clearHostRemovedByUser,
   isHostRemovedByUser,
 } from "../host/host-removal-state";
-import type { MutationOutcome } from "../host/host-controller-types";
+import type {
+  MutationKind,
+  MutationOutcome,
+  MutationProgress,
+} from "../host/host-controller-types";
 import {
   environmentSubdir,
   getHostFsLayout,
@@ -206,6 +210,30 @@ function announceLegacyOperationStatus(bridge: RunnerIpcBridge): void {
   );
 }
 
+function legacyKindMatchesMutation(
+  legacyKind: HostOperationKind,
+  mutationKind: MutationKind,
+): boolean {
+  return (
+    (legacyKind === "install" && mutationKind === "install") ||
+    (legacyKind === "update" && mutationKind === "apply") ||
+    (legacyKind === "register-service" && mutationKind === "register") ||
+    (legacyKind === "ensure" && mutationKind === "ensure")
+  );
+}
+
+type MutationProgressKindObserver = {
+  onMutationProgressWithKind(
+    listener: (progress: MutationProgress, kind: MutationKind) => void,
+  ): () => void;
+};
+
+function hasMutationProgressKinds(
+  hostController: IpcHostController,
+): hostController is IpcHostController & MutationProgressKindObserver {
+  return "onMutationProgressWithKind" in hostController;
+}
+
 /**
  * Wraps a `HostController` mutation call for the four legacy-tracked kinds:
  * broadcasts `hostOperationStatusChange` on start, re-broadcasts every
@@ -233,31 +261,44 @@ async function runControllerMutationWithLegacyProgress<TOk, TResult>(
   };
   legacyOperationQueue.push(entry);
   announceLegacyOperationStatus(bridge);
-  const unsubscribe = bridge.options.hostController.onMutationProgress(
-    (progress) => {
-      const front = legacyOperationQueue[0];
-      if (front === undefined) return;
-      const payload: HostProgressEvent = {
-        operationId: front.operationId,
-        stage: progress.stage ?? "",
-        percent: progress.percent,
-        bytes: progress.bytes,
-        totalBytes: progress.totalBytes,
-        message: progress.message,
-      };
-      bridge.fanOut(RunnerHostEvent.cliOperationProgress, payload);
-      setHostOperationStatus(bridge, {
-        operationId: front.operationId,
-        kind: front.kind,
-        stage: progress.stage,
-        percent: progress.percent,
-        bytes: progress.bytes,
-        totalBytes: progress.totalBytes,
-        message: progress.message,
-        startedAt: front.startedAt,
-      });
-    },
-  );
+  const onProgress = (
+    progress: MutationProgress,
+    mutationKind: MutationKind | null,
+  ): void => {
+    const front = legacyOperationQueue[0];
+    if (
+      front !== entry ||
+      (mutationKind !== null &&
+        !legacyKindMatchesMutation(entry.kind, mutationKind))
+    ) {
+      return;
+    }
+    const payload: HostProgressEvent = {
+      operationId: front.operationId,
+      stage: progress.stage ?? "",
+      percent: progress.percent,
+      bytes: progress.bytes,
+      totalBytes: progress.totalBytes,
+      message: progress.message,
+    };
+    bridge.fanOut(RunnerHostEvent.cliOperationProgress, payload);
+    setHostOperationStatus(bridge, {
+      operationId: front.operationId,
+      kind: front.kind,
+      stage: progress.stage,
+      percent: progress.percent,
+      bytes: progress.bytes,
+      totalBytes: progress.totalBytes,
+      message: progress.message,
+      startedAt: front.startedAt,
+    });
+  };
+  const hostController = bridge.options.hostController;
+  const unsubscribe = hasMutationProgressKinds(hostController)
+    ? hostController.onMutationProgressWithKind(onProgress)
+    : hostController.onMutationProgress((progress) =>
+        onProgress(progress, null),
+      );
   try {
     const outcome = await run();
     return mapOutcome(outcome);
@@ -759,17 +800,29 @@ async function refreshRegistryUpdateStateSerial(
   }
   const fresh = await probeRegistry();
   await writeRegistryCache(fresh);
+  const status = await hostController.getStatus();
+  const state = buildUpdateState(fresh, status.updateReady);
+  emitHostRegistryUpdateState(state);
   if (fresh.reachable) {
     // Fixup B1: stage the eligible update in the background on every
     // successful refresh (comparable `latest > installed`, or the
     // yank-heal reconcile arm when a stage already exists - both decided
     // by `stageLatest`'s own eligibility check) - never awaited here, so a
     // registry check never blocks on a WAN download.
-    void hostController.stageLatest();
+    void hostController
+      .stageLatest()
+      .then(async () => {
+        const stagedStatus = await hostController.getStatus();
+        emitHostRegistryUpdateState(
+          buildUpdateState(fresh, stagedStatus.updateReady),
+        );
+      })
+      .catch((err) => {
+        log.debug("[host-registry] background stage completion failed", {
+          err,
+        });
+      });
   }
-  const status = await hostController.getStatus();
-  const state = buildUpdateState(fresh, status.updateReady);
-  emitHostRegistryUpdateState(state);
   return state;
 }
 
