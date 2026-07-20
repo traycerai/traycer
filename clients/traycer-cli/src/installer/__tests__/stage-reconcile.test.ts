@@ -34,6 +34,7 @@ function stagedDirFor(environment: Environment): string {
 // every other path proxies straight through to the real implementation -
 // see the "forced double failure" test below.
 const mocks = vi.hoisted(() => ({
+  forceRenameFailureForPath: null as string | null,
   forceUnlinkFailureForPath: null as string | null,
   forceRmFailureForPath: null as string | null,
 }));
@@ -57,6 +58,21 @@ vi.mock("node:fs/promises", async (importOriginal) => {
         });
       }
       return actual.rm(path, options);
+    },
+  };
+});
+
+vi.mock("../rename-retry", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../rename-retry")>();
+  return {
+    ...actual,
+    renameWithRetry: async (from: string, to: string): Promise<void> => {
+      if (from === mocks.forceRenameFailureForPath) {
+        throw Object.assign(new Error("simulated rename failure"), {
+          code: "EPERM",
+        });
+      }
+      return actual.renameWithRetry(from, to);
     },
   };
 });
@@ -177,6 +193,7 @@ describe("reconcileHostStage", () => {
   });
 
   afterEach(() => {
+    mocks.forceRenameFailureForPath = null;
     mocks.forceUnlinkFailureForPath = null;
     mocks.forceRmFailureForPath = null;
     rmSync(sandboxRoot, { recursive: true, force: true });
@@ -457,13 +474,49 @@ describe("reconcileHostStage", () => {
     renameSync(stagedDirFor(ENV), asideDir);
     await writeStagedAt(stagedDirFor(ENV), "1.6.0", {});
 
-    await purgeHostStage(ENV);
+    await purgeHostStage(ENV, null);
 
     expect(existsSync(stagedDirFor(ENV))).toBe(false);
     expect(existsSync(asideDir)).toBe(false);
     const reconciled = await reconcileHostStage(ENV);
     expect(reconciled.stagedAsideOutcome).toBe("none");
     expect(existsSync(stagedDirFor(ENV))).toBe(false);
+  });
+
+  it("does not report a yanked stage purged when every invalidation layer leaves a recoverable aside", async () => {
+    await writeInstall("1.0.0", {});
+    await writeStagedAt(stagedDirFor(ENV), "1.5.0", {});
+    const asideDir = `${stagedDirFor(ENV)}.old-${Date.now()}`;
+    await writeStagedAt(asideDir, "1.5.0", {});
+    mocks.forceRenameFailureForPath = asideDir;
+    mocks.forceUnlinkFailureForPath = join(asideDir, "staged.json");
+    mocks.forceRmFailureForPath = asideDir;
+
+    await expect(purgeHostStage(ENV, null)).rejects.toThrow(
+      "Could not invalidate every recoverable staged aside",
+    );
+    expect(existsSync(asideDir)).toBe(true);
+
+    mocks.forceRenameFailureForPath = null;
+    mocks.forceUnlinkFailureForPath = null;
+    mocks.forceRmFailureForPath = null;
+    const reconciled = await reconcileHostStage(ENV);
+    expect(reconciled.stagedAsideOutcome).toBe("restored");
+    expect(existsSync(stagedDirFor(ENV))).toBe(true);
+  });
+
+  it("keeps a replacement stage when the expected yanked-stage fingerprint is stale", async () => {
+    await writeInstall("1.0.0", {});
+    await writeStagedAt(stagedDirFor(ENV), "1.8.0", { stageId: "stage-b" });
+
+    const outcome = await purgeHostStage(ENV, "stage-a");
+
+    expect(outcome).toEqual({
+      outcome: "stage-fingerprint-mismatch",
+      purged: false,
+      actualStageFingerprint: "stage-b",
+    });
+    expect(existsSync(stagedDirFor(ENV))).toBe(true);
   });
 
   it("reports the installed record is still readable after reconcile", async () => {

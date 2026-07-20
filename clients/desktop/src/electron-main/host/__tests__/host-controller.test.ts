@@ -1897,7 +1897,7 @@ describe("yank/apply ordering", () => {
     ]);
   });
 
-  it("purges a yanked stage on the download lane instead of deleting it from the mutation lane", async () => {
+  it("purges only the yanked stage fingerprint on the download lane, never a replacement promoted during the registry probe", async () => {
     const controller = newController("production");
     writeInstallRecord("production", {
       version: "1.7.0",
@@ -1910,8 +1910,11 @@ describe("yank/apply ordering", () => {
         return availableSnapshotFixture("1.7.0", ["1.7.0"]);
       }
       if (args.includes("purge-stage")) {
-        rmSync(layout.stagedDir, { recursive: true, force: true });
-        return { purged: true };
+        writeStagedRecord("production", "1.9.0", "1.9.0");
+        return {
+          outcome: "stage-fingerprint-mismatch",
+          purged: false,
+        };
       }
       return {};
     });
@@ -1921,8 +1924,15 @@ describe("yank/apply ordering", () => {
     expect(runBundledTraycerCliJson).toHaveBeenCalledWith([
       "host",
       "purge-stage",
+      "--expected-stage-fingerprint",
+      "stage-1.8.0",
     ]);
-    expect(existsSync(layout.stagedRecordFile)).toBe(false);
+    expect(
+      JSON.parse(readFileSync(layout.stagedRecordFile, "utf8")),
+    ).toMatchObject({
+      version: "1.9.0",
+      stageId: "stage-1.9.0",
+    });
   });
 
   it("applyStaged awaits the download lane before AND after reconciling eligibility (ordering edge)", async () => {
@@ -2011,7 +2021,7 @@ describe("yank/apply ordering", () => {
       }
       if (args.includes("purge-stage")) {
         rmSync(layout.stagedDir, { recursive: true, force: true });
-        return { purged: true };
+        return { outcome: "purged", purged: true };
       }
       return {};
     });
@@ -2070,7 +2080,7 @@ describe("yank/apply ordering", () => {
     vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
       if (args.includes("purge-stage")) {
         rmSync(layout.stagedDir, { recursive: true, force: true });
-        return { purged: true };
+        return { outcome: "purged", purged: true };
       }
       if (!args.includes("available")) return {};
       availableCalls += 1;
@@ -2149,7 +2159,7 @@ describe("yank/apply ordering", () => {
       }
       if (args.includes("purge-stage")) {
         rmSync(layout.stagedDir, { recursive: true, force: true });
-        return { purged: true };
+        return { outcome: "purged", purged: true };
       }
       return { outcome: "stamped" };
     });

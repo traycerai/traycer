@@ -50,7 +50,7 @@ import { configShellResetCommand } from "./commands/config-shell-reset";
 import { buildConfigShellRevertArgsCommand } from "./commands/config-shell-revert-args";
 import { buildConfigShellSetCommand } from "./commands/config-shell-set";
 import { buildHostApplyCommand } from "./commands/host-apply";
-import { hostPurgeStageCommand } from "./commands/host-purge-stage";
+import { buildHostPurgeStageCommand } from "./commands/host-purge-stage";
 import { buildHostAvailableCommand } from "./commands/host-available";
 import { buildHostDownloadCommand } from "./commands/host-download";
 import { hostDoctorCommand } from "./commands/host-doctor";
@@ -594,8 +594,19 @@ function registerHostCommands(program: Command): void {
   );
 
   withRunner(
-    host.command("purge-stage", { hidden: true }),
-    () => hostPurgeStageCommand,
+    host
+      .command("purge-stage", { hidden: true })
+      .requiredOption(
+        "--expected-stage-fingerprint <fingerprint>",
+        "Internal: expected staged archive handoff identity",
+      ),
+    (opts) =>
+      buildHostPurgeStageCommand({
+        expectedStageFingerprint:
+          typeof opts.expectedStageFingerprint === "string"
+            ? opts.expectedStageFingerprint
+            : null,
+      }),
   );
 
   withRunner(

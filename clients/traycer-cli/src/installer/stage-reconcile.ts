@@ -1,13 +1,17 @@
 import { access, readFile, rm, stat } from "node:fs/promises";
 import { isAbsolute, join, relative } from "node:path";
 import { compareHostVersions } from "@traycer-clients/shared/host-version/compare-host-versions";
+import { encodeStageFingerprint } from "@traycer-clients/shared/host-version/stage-fingerprint";
 import type { Environment } from "../runner/environment";
 import { createCliLogger, type ILogger } from "../logger";
 import {
   readHostInstallRecord,
   type HostInstallRecord,
 } from "../manifest/host-install";
-import { readHostStagedRecordAt } from "../manifest/host-staged";
+import {
+  readHostStagedRecord,
+  readHostStagedRecordAt,
+} from "../manifest/host-staged";
 import { hostInstallDir, hostStagedDir } from "../store/paths";
 import { sweepOwnedTempDirs } from "../store/owned-temp";
 import {
@@ -240,22 +244,58 @@ async function reconcileStagedAside(
 // reconcile: reconcile restores a valid `staged.old-*` when canonical
 // `staged/` is absent. A yanked stage must instead make both canonical and
 // every recoverable aside permanently ineligible before the next reconcile
-// can run. Caller owns cli-lock.
-export async function purgeHostStage(environment: Environment): Promise<void> {
+// can run. Caller owns cli-lock. A command-driven purge supplies the exact
+// stage fingerprint it judged withdrawn: a different stage arriving while a
+// registry probe was in flight is a stale verdict, never authority to delete
+// the replacement. Internal locked callers that just read their own manifest
+// pass null and retain their existing unconditional invalidation behavior.
+export type PurgeHostStageResult =
+  | { readonly outcome: "purged"; readonly purged: true }
+  | {
+      readonly outcome: "stage-fingerprint-mismatch";
+      readonly purged: false;
+      readonly actualStageFingerprint: string | null;
+    };
+
+export async function purgeHostStage(
+  environment: Environment,
+  expectedStageFingerprint: string | null,
+): Promise<PurgeHostStageResult> {
   const logger = createCliLogger(environment);
   const stagedDir = hostStagedDir(environment);
+  const staged = await readHostStagedRecord(environment);
+  const actualStageFingerprint =
+    staged?.stageId === null || staged?.stageId === undefined
+      ? null
+      : encodeStageFingerprint(staged.stageId);
+  if (
+    expectedStageFingerprint !== null &&
+    actualStageFingerprint !== expectedStageFingerprint
+  ) {
+    return {
+      outcome: "stage-fingerprint-mismatch",
+      purged: false,
+      actualStageFingerprint,
+    };
+  }
   await rm(stagedDir, { recursive: true, force: true });
   const asides = await listAsideDirsNewestFirst(stagedDir, "old-");
-  await Promise.all(
+  const invalidated = await Promise.all(
     asides.map((aside) =>
       invalidateAsideDir(stagedDir, aside, "staged.json", logger),
     ),
   );
+  if (invalidated.some((outcome) => !outcome)) {
+    throw new Error(
+      "Could not invalidate every recoverable staged aside; the stage was not purged.",
+    );
+  }
   await sweepDeadAsideDirs(stagedDir);
   logger.info("Host stage purged", {
     environment,
     recoverableAsideCount: asides.length,
   });
+  return { outcome: "purged", purged: true };
 }
 
 export async function reconcileHostStage(

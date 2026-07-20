@@ -166,6 +166,20 @@ interface ApplyResultShape {
   readonly postSwapAction: string | null;
 }
 
+interface PurgeStageResultShape {
+  readonly outcome: "purged" | "stage-fingerprint-mismatch" | null;
+}
+
+function parsePurgeStageResult(raw: unknown): PurgeStageResultShape {
+  if (!isPlainObject(raw)) return { outcome: null };
+  return {
+    outcome:
+      raw.outcome === "purged" || raw.outcome === "stage-fingerprint-mismatch"
+        ? raw.outcome
+        : null,
+  };
+}
+
 function parseApplyResult(raw: unknown): ApplyResultShape {
   if (
     !isPlainObject(raw) ||
@@ -1743,8 +1757,34 @@ export class HostController {
         (entry) => entry.version === staged?.version && entry.available,
       );
     if (staged !== null && !stageIsEligible) {
+      const expectedStageFingerprint =
+        staged.stageId === null ? null : encodeStageFingerprint(staged.stageId);
+      if (expectedStageFingerprint === null) {
+        log.warn(
+          "[host-controller] cannot purge an unpinned staged host after registry invalidation",
+          { version: staged.version },
+        );
+        return;
+      }
       try {
-        await this.runBundled<unknown>(["host", "purge-stage"]);
+        const purge = parsePurgeStageResult(
+          await this.runBundled<unknown>([
+            "host",
+            "purge-stage",
+            "--expected-stage-fingerprint",
+            expectedStageFingerprint,
+          ]),
+        );
+        if (purge.outcome === "stage-fingerprint-mismatch") {
+          log.info(
+            "[host-controller] staged host changed before the yanked stage could be purged",
+            { expectedStageFingerprint },
+          );
+          return;
+        }
+        if (purge.outcome !== "purged") {
+          throw new Error("host purge-stage returned an invalid outcome");
+        }
       } catch (err) {
         log.warn(
           "[host-controller] could not purge an ineligible staged host",

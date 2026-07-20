@@ -69,27 +69,29 @@ export async function invalidateAsideDir(
   aside: string,
   sidecarFilename: string,
   logger: ILogger,
-): Promise<void> {
+): Promise<boolean> {
   const deadAside = `${target}.dead-${Date.now()}`;
   try {
     await renameWithRetry(aside, deadAside);
-    return;
+    return true;
   } catch {
     // Fall through to layer 2.
   }
   try {
     await unlink(join(aside, sidecarFilename));
-    return;
+    return true;
   } catch {
     // Fall through to layer 3.
   }
   try {
     await rm(aside, { recursive: true, force: true });
+    return true;
   } catch {
     logger.warn(
       "Could not invalidate a replaced aside on any layer - it remains restorable",
       { aside },
     );
+    return false;
   }
 }
 

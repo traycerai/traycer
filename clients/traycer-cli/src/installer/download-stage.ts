@@ -133,7 +133,7 @@ async function discardIneligibleStagedVersion(
   // This runs under the caller's short promote/precheck lock. Do not delete
   // only canonical `staged/`: normal reconcile would restore a valid
   // `staged.old-*` aside and resurrect this withdrawn artifact.
-  await purgeHostStage(environment);
+  await purgeHostStage(environment, null);
   logger.info("Host download discarded an ineligible staged version", {
     environment,
     version: staged.version,
