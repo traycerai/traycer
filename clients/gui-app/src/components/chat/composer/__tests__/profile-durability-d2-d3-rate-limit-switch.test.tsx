@@ -126,6 +126,7 @@ function ComposerProfileSwitchHarness() {
             profiles={prompt.profiles}
             destinations={prompt.destinations}
             primaryTarget={prompt.primaryTarget}
+            probeTarget={null}
             runTargetHostId={null}
             onSwitchProfile={setProfileId}
             affectedChatCount={1}
@@ -198,6 +199,7 @@ function ComposerBannerPrecedenceHarness() {
             profiles={prompt.profiles}
             destinations={prompt.destinations}
             primaryTarget={prompt.primaryTarget}
+            probeTarget={null}
             runTargetHostId={null}
             onSwitchProfile={setProfileId}
             affectedChatCount={1}

@@ -81,6 +81,12 @@ export interface ProfileUsageComparisonEntry {
   /** Addresses exactly this `(host, provider, profile)` - see
    *  `useProfileUsageComparison`'s doc comment for routing/serialization. */
   readonly refresh: () => Promise<void>;
+  /** Non-forced sibling of `refresh` for AUTOMATIC callers (the composer
+   *  banner's single unknown-destination check): routes through the same
+   *  serial queue but with `force: false`, so it no-ops on still-fresh cache
+   *  and honors the post-`usage_fetch_failed` cool-down instead of
+   *  re-tripping a server-side penalty window. */
+  readonly ensureFresh: () => Promise<void>;
 }
 
 function isSemanticWarning(

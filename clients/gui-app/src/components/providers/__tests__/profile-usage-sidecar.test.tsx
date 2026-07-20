@@ -34,6 +34,7 @@ function entry(
   return {
     profileId: "work",
     refresh: vi.fn(() => Promise.resolve()),
+    ensureFresh: vi.fn(() => Promise.resolve()),
     ...overrides,
   };
 }
