@@ -123,6 +123,7 @@ function renderInlineEdit(dirty: boolean) {
     canModifyMessages: true,
     editSettings: SETTINGS,
     mentionRoots: [],
+    fallbackToGlobalMentionRoots: true,
     currentEpicId: "epic-1",
     onSnapshot: vi.fn(),
     onSubmit: vi.fn(),
@@ -139,6 +140,10 @@ describe("chatMessageEditingForInlineEdit", () => {
   it("requires a dirty edit before enabling submit", () => {
     expect(renderInlineEdit(false).canSubmit).toBe(false);
     expect(renderInlineEdit(true).canSubmit).toBe(true);
+  });
+
+  it("carries the workspace fallback policy into the inline editor", () => {
+    expect(renderInlineEdit(false).fallbackToGlobalMentionRoots).toBe(true);
   });
 });
 

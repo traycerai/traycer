@@ -82,6 +82,8 @@ export function createMentionExtension(deps: MentionExtensionDeps) {
       render: createComposerSuggestionRender({
         pickerStore: deps.pickerStore,
         kind: "mention",
+        slashTrigger: null,
+        slashScopeForProps: null,
       }),
       command: ({ editor, range, props }) => {
         const item = props as ComposerPickerItem;

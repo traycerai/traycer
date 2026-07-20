@@ -497,6 +497,7 @@ export function chatMessageEditingForInlineEdit(input: {
   readonly canModifyMessages: boolean;
   readonly editSettings: ChatRunSettings | null;
   readonly mentionRoots: ReadonlyArray<string>;
+  readonly fallbackToGlobalMentionRoots: boolean;
   readonly currentEpicId: string;
   readonly onSnapshot: (
     content: JsonContent,
@@ -519,6 +520,7 @@ export function chatMessageEditingForInlineEdit(input: {
       inlineEditHasDraftContent(editing),
     slashProviderId: input.editSettings?.harnessId ?? DEFAULT_SLASH_PROVIDER_ID,
     mentionRoots: input.mentionRoots,
+    fallbackToGlobalMentionRoots: input.fallbackToGlobalMentionRoots,
     currentEpicId: input.currentEpicId,
     onSnapshot: input.onSnapshot,
     onSubmit: input.onSubmit,

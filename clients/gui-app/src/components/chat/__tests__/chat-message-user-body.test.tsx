@@ -28,12 +28,16 @@ import {
   useSetChatFindForcedOpen,
 } from "@/stores/chats/chat-find-force-store-context";
 import { collectImageAtoms } from "@/lib/composer/image-atoms";
+import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
 
 const attachmentMocks = vi.hoisted(() => ({
   fetcher: vi.fn((_hash: string, _signal: AbortSignal) =>
     Promise.resolve(new Uint8Array([1, 2, 3])),
   ),
   hasBytes: vi.fn(() => true),
+}));
+const composerPickerMocks = vi.hoisted(() => ({
+  useComposerPickerItems: vi.fn(),
 }));
 
 function render(ui: ReactNode) {
@@ -62,7 +66,7 @@ vi.mock("@/hooks/host/use-tab-host-client", () => ({
 }));
 
 vi.mock("@/components/chat/composer/picker/use-composer-picker-items", () => ({
-  useComposerPickerItems: () => undefined,
+  useComposerPickerItems: composerPickerMocks.useComposerPickerItems,
 }));
 
 vi.mock(
@@ -188,6 +192,8 @@ describe("<UserMessageBody /> agent messages", () => {
     );
     attachmentMocks.hasBytes.mockReset();
     attachmentMocks.hasBytes.mockReturnValue(true);
+    composerPickerMocks.useComposerPickerItems.mockClear();
+    useWorkspaceFoldersStore.setState({ folders: [] });
   });
 
   it("reveals the action chip for keyboard focus", () => {
@@ -344,6 +350,62 @@ describe("<UserMessageBody /> agent messages", () => {
     ).not.toBeNull();
     expect(screen.getByLabelText("Open Image#1: first.png")).not.toBeNull();
     expect(screen.getByLabelText("Open Image#2: second.png")).not.toBeNull();
+  });
+
+  it("uses inherited workspace roots for the inline edit skill picker", async () => {
+    useWorkspaceFoldersStore.setState({ folders: ["/workspace/project"] });
+    render(
+      <TooltipProvider>
+        <UserMessageBody
+          actions={editingUserActions(INLINE_EDIT_INITIAL_CONTENT)}
+          message={{
+            ...plainUserMessage("Edit this message"),
+            structuredContent: INLINE_EDIT_INITIAL_CONTENT,
+          }}
+        />
+      </TooltipProvider>,
+    );
+
+    await waitFor(() => {
+      expect(composerPickerMocks.useComposerPickerItems).toHaveBeenCalledWith(
+        expect.objectContaining({
+          harnessId: "claude",
+          mentionRoots: ["/workspace/project"],
+          isActive: true,
+        }),
+      );
+    });
+  });
+
+  it("ignores populated workspace roots for the inline edit skill picker when global fallback is disabled", async () => {
+    useWorkspaceFoldersStore.setState({ folders: ["/workspace/project"] });
+    const actions = editingUserActions(INLINE_EDIT_INITIAL_CONTENT);
+    const baseEditing = actions.editing;
+    if (baseEditing === null) throw new Error("expected editing actions");
+    render(
+      <TooltipProvider>
+        <UserMessageBody
+          actions={{
+            ...actions,
+            editing: { ...baseEditing, fallbackToGlobalMentionRoots: false },
+          }}
+          message={{
+            ...plainUserMessage("Edit this message"),
+            structuredContent: INLINE_EDIT_INITIAL_CONTENT,
+          }}
+        />
+      </TooltipProvider>,
+    );
+
+    await waitFor(() => {
+      expect(composerPickerMocks.useComposerPickerItems).toHaveBeenCalledWith(
+        expect.objectContaining({
+          harnessId: "claude",
+          mentionRoots: [],
+          isActive: true,
+        }),
+      );
+    });
   });
 
   it("adds multiple pasted images to the edit strip and submits base64 nodes", async () => {
@@ -717,6 +779,7 @@ function editingUserActions(content: JsonContent): ChatMessageUserActions {
       canSubmit: false,
       slashProviderId: "claude",
       mentionRoots: [],
+      fallbackToGlobalMentionRoots: true,
       currentEpicId: "epic-1",
       onSnapshot: () => undefined,
       onSubmit: () => undefined,
