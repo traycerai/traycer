@@ -8,6 +8,8 @@ import {
   createComposerPickerStore,
   type ComposerPickerItem,
   type ComposerPickerStore,
+  type ComposerSlashScope,
+  type ComposerSlashTrigger,
 } from "../../picker/composer-picker-store";
 import { ComposerMenu } from "../composer-menu";
 
@@ -46,10 +48,20 @@ function openWith(
   store: ComposerPickerStore,
   items: ReadonlyArray<ComposerPickerItem>,
 ): void {
+  openTriggered(store, items, "/", "skills");
+}
+
+function openTriggered(
+  store: ComposerPickerStore,
+  items: ReadonlyArray<ComposerPickerItem>,
+  slashTrigger: ComposerSlashTrigger,
+  slashScope: ComposerSlashScope,
+): void {
   store.getState().openPicker({
     sessionId: 1,
     kind: "slash",
-    slashScope: "skills",
+    slashScope,
+    slashTrigger,
     range: { from: 1, to: 2 },
     query: "",
     commit: () => undefined,
@@ -58,7 +70,7 @@ function openWith(
   store.getState().setItems({
     kind: "slash",
     query: "",
-    slashScope: "skills",
+    slashScope,
     step: store.getState().step,
     items,
     loading: false,
@@ -96,5 +108,62 @@ describe("<ComposerMenu /> disabled rows", () => {
     const option = screen.getByRole("option");
     expect(option.getAttribute("aria-disabled")).toBe("false");
     expect(option.textContent).not.toContain("Disabled.");
+  });
+});
+
+// The menu has to echo the character the user actually typed. Rendering a `$`
+// list as `/name` contradicts both the composer and the chip the row inserts,
+// which reads back as `$name`.
+describe("<ComposerMenu /> trigger echo", () => {
+  it("prefixes rows with $ when the picker was opened with $", () => {
+    const store = createComposerPickerStore();
+    act(() => {
+      render(<ComposerMenu pickerStore={store} />);
+    });
+    act(() => {
+      openTriggered(
+        store,
+        [slashItem("frontend-design", null)],
+        "$",
+        "skills-only",
+      );
+    });
+
+    expect(screen.getByRole("option").textContent).toContain(
+      "$frontend-design",
+    );
+    expect(screen.getByRole("option").textContent).not.toContain(
+      "/frontend-design",
+    );
+  });
+
+  it("keeps the / prefix for a slash-opened picker", () => {
+    const store = createComposerPickerStore();
+    act(() => {
+      render(<ComposerMenu pickerStore={store} />);
+    });
+    act(() => {
+      openTriggered(store, [slashItem("plan", null)], "/", "all");
+    });
+
+    expect(screen.getByRole("option").textContent).toContain("/plan");
+  });
+
+  it("titles a $ picker as skills rather than slash commands", () => {
+    const store = createComposerPickerStore();
+    act(() => {
+      render(<ComposerMenu pickerStore={store} />);
+    });
+    act(() => {
+      openTriggered(
+        store,
+        [slashItem("frontend-design", null)],
+        "$",
+        "skills-only",
+      );
+    });
+
+    expect(document.body.textContent).toContain("Skills");
+    expect(document.body.textContent).not.toContain("Slash commands");
   });
 });

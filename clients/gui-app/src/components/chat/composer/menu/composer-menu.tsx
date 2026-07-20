@@ -38,6 +38,7 @@ import {
   pickerItemPreview,
   type ComposerPickerItem,
   type ComposerPickerStore,
+  type ComposerSlashTrigger,
 } from "../picker/composer-picker-store";
 
 import { MentionMenuItem } from "./mention-menu-item";
@@ -48,6 +49,12 @@ import { ZERO_DOM_RECT } from "./zero-dom-rect";
 const SLASH_MENU_COPY = {
   header: "Slash commands",
   empty: "No matching commands",
+};
+// `$` lists skills and nothing else, so "Slash commands" would misdescribe both
+// the trigger the user typed and every row under it.
+const SKILL_MENU_COPY = {
+  header: "Skills",
+  empty: "No matching skills",
 };
 const COMPOSER_ARTIFACT_REFRESH_TIMEOUT_MS = 10_000;
 
@@ -60,6 +67,7 @@ type LockedPlacement = Extract<Placement, "bottom-start" | "top-start">;
 interface MenuSlice {
   readonly open: boolean;
   readonly kind: "mention" | "slash" | null;
+  readonly slashTrigger: ComposerSlashTrigger | null;
   readonly items: ReadonlyArray<ComposerPickerItem>;
   readonly activeIndex: number;
   readonly loading: boolean;
@@ -70,6 +78,7 @@ interface MenuSlice {
 function selectMenuSlice(state: {
   open: boolean;
   kind: "mention" | "slash" | null;
+  slashTrigger: ComposerSlashTrigger | null;
   items: ReadonlyArray<ComposerPickerItem>;
   activeIndex: number;
   loading: boolean;
@@ -79,6 +88,7 @@ function selectMenuSlice(state: {
   return {
     open: state.open,
     kind: state.kind,
+    slashTrigger: state.slashTrigger,
     items: state.items,
     activeIndex: state.activeIndex,
     loading: state.loading,
@@ -94,7 +104,16 @@ export interface ComposerMenuProps {
 export function ComposerMenu(props: ComposerMenuProps) {
   const { pickerStore } = props;
   const slice = useStore(pickerStore, useShallow(selectMenuSlice));
-  const { open, kind, items, activeIndex, loading, fetching, step } = slice;
+  const {
+    open,
+    kind,
+    slashTrigger,
+    items,
+    activeIndex,
+    loading,
+    fetching,
+    step,
+  } = slice;
 
   const baseMenuId = useId();
   const menuId = `${baseMenuId}-menu`;
@@ -106,6 +125,7 @@ export function ComposerMenu(props: ComposerMenuProps) {
     <ComposerMenuPortal
       pickerStore={pickerStore}
       kind={kind}
+      slashTrigger={slashTrigger}
       items={items}
       activeIndex={activeIndex}
       loading={loading}
@@ -119,6 +139,7 @@ export function ComposerMenu(props: ComposerMenuProps) {
 interface ComposerMenuPortalProps {
   readonly pickerStore: ComposerPickerStore;
   readonly kind: "mention" | "slash" | null;
+  readonly slashTrigger: ComposerSlashTrigger | null;
   readonly items: ReadonlyArray<ComposerPickerItem>;
   readonly activeIndex: number;
   readonly loading: boolean;
@@ -131,6 +152,7 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
   const {
     pickerStore,
     kind,
+    slashTrigger,
     items,
     activeIndex,
     loading,
@@ -143,8 +165,11 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
   const previewPanelRef = useRef<HTMLDivElement | null>(null);
 
   const renderedItems = useMemo<ReadonlyArray<RenderedItem>>(
-    () => items.map((item, index) => renderPickerItem(item, index, menuId)),
-    [items, menuId],
+    () =>
+      items.map((item, index) =>
+        renderPickerItem(item, index, menuId, slashTrigger ?? "/"),
+      ),
+    [items, menuId, slashTrigger],
   );
 
   const activePreview = useMemo<MentionPreview | null>(() => {
@@ -159,9 +184,9 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
 
   const copy = useMemo(() => {
     if (kind === "mention") return mentionProviderRegistry.menuCopy(step);
-    if (kind === "slash") return SLASH_MENU_COPY;
+    if (slashTrigger === "$") return SKILL_MENU_COPY;
     return SLASH_MENU_COPY;
-  }, [kind, step]);
+  }, [kind, slashTrigger, step]);
 
   const showEmptyLabelWithItems = useMemo(
     () =>
@@ -379,6 +404,7 @@ function renderPickerItem(
   item: ComposerPickerItem,
   index: number,
   menuId: string,
+  trigger: ComposerSlashTrigger,
 ): RenderedItem {
   if (item.kind === "mention") {
     return {
@@ -389,7 +415,7 @@ function renderPickerItem(
   }
   return {
     id: `${menuId}-item-${index}`,
-    node: <SlashMenuItem command={item.command} />,
+    node: <SlashMenuItem command={item.command} trigger={trigger} />,
     disabledReason: pickerItemDisabledReason(item),
   };
 }

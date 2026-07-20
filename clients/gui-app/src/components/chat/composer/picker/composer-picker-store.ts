@@ -22,6 +22,13 @@ export type ComposerPickerKind = "mention" | "slash";
  */
 export type ComposerSlashScope = "all" | "skills" | "skills-only";
 
+/**
+ * Character that opened a slash picker. Distinct from the scope: the scope says
+ * what the picker offers, this says what the user typed, and the menu has to
+ * echo it back so a row picked with `$` does not read as `/name`.
+ */
+export type ComposerSlashTrigger = "/" | "$";
+
 export interface ComposerPickerRange {
   readonly from: number;
   readonly to: number;
@@ -93,6 +100,8 @@ export interface ComposerPickerState {
   readonly open: boolean;
   readonly kind: ComposerPickerKind | null;
   readonly slashScope: ComposerSlashScope | null;
+  /** Trigger that opened this picker; null for the mention picker. */
+  readonly slashTrigger: ComposerSlashTrigger | null;
   readonly range: ComposerPickerRange | null;
   readonly query: string;
   readonly step: MentionFlowStep;
@@ -152,6 +161,7 @@ export interface ComposerPickerActions {
     readonly sessionId: number;
     readonly kind: ComposerPickerKind;
     readonly slashScope: ComposerSlashScope | null;
+    readonly slashTrigger: ComposerSlashTrigger | null;
     readonly range: ComposerPickerRange;
     readonly query: string;
     readonly commit: ComposerPickerCommit;
@@ -203,6 +213,7 @@ const INITIAL_STATE: ComposerPickerState = {
   sessionId: null,
   kind: null,
   slashScope: null,
+  slashTrigger: null,
   range: null,
   query: "",
   step: ROOT_MENTION_STEP,
@@ -260,6 +271,7 @@ export function createComposerPickerStore(): ComposerPickerStore {
       sessionId,
       kind,
       slashScope,
+      slashTrigger,
       range,
       query,
       commit,
@@ -270,6 +282,7 @@ export function createComposerPickerStore(): ComposerPickerStore {
         sessionId,
         kind,
         slashScope,
+        slashTrigger,
         range,
         query,
         step: ROOT_MENTION_STEP,

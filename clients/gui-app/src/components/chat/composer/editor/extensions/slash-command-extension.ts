@@ -14,6 +14,7 @@ import type {
   ComposerPickerItem,
   ComposerPickerStore,
   ComposerSlashScope,
+  ComposerSlashTrigger,
 } from "../../picker/composer-picker-store";
 import {
   dataAttributeMap,
@@ -76,8 +77,11 @@ export const skillSuggestionPluginKey = new PluginKey(
   "composer-skill-suggestion",
 );
 
-/** Character that opened a picker, recorded on the chip it inserts. */
-export type SlashCommandTrigger = "/" | "$";
+/**
+ * Character that opened a picker, recorded on the chip it inserts. Shared with
+ * the picker store, which echoes it back in the menu rows.
+ */
+export type SlashCommandTrigger = ComposerSlashTrigger;
 
 function slashLeadingGuardPlugin(): Plugin {
   return new Plugin({
@@ -201,6 +205,7 @@ function suggestionForTrigger(args: {
     render: createComposerSuggestionRender({
       pickerStore: args.pickerStore,
       kind: "slash",
+      slashTrigger: args.trigger,
       slashScopeForProps: args.slashScopeForProps,
     }),
     command: ({ editor, range, props }) => {

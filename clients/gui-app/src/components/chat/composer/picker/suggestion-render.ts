@@ -4,12 +4,14 @@ import type {
   ComposerPickerItem,
   ComposerPickerKind,
   ComposerSlashScope,
+  ComposerSlashTrigger,
   ComposerPickerStore,
 } from "./composer-picker-store";
 
 export interface ComposerSuggestionRenderArgs {
   readonly pickerStore: ComposerPickerStore;
   readonly kind: ComposerPickerKind;
+  readonly slashTrigger: ComposerSlashTrigger | null;
   readonly slashScopeForProps:
     ((props: SuggestionProps) => ComposerSlashScope) | null;
 }
@@ -47,6 +49,7 @@ export function createComposerSuggestionRender<
           sessionId,
           kind: args.kind,
           slashScope,
+          slashTrigger: args.slashTrigger,
           range: { from: props.range.from, to: props.range.to },
           query: props.query,
           commit: (item) => {
