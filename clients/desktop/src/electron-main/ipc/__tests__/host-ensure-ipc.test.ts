@@ -228,6 +228,8 @@ beforeEach(() => {
     logFile: "/tmp/traycer-host-ensure-ipc-test/host.log",
     installDir: "/tmp/traycer-host-ensure-ipc-test/install",
     installRecordFile: "/tmp/traycer-host-ensure-ipc-test/install/install.json",
+    stagedDir: "/tmp/traycer-host-ensure-ipc-test/staged",
+    stagedRecordFile: "/tmp/traycer-host-ensure-ipc-test/staged/staged.json",
     pendingLoginItemRevisionFile:
       "/tmp/traycer-host-ensure-ipc-test/pending-login-item-revision.json",
     environment: "production",

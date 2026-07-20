@@ -122,6 +122,28 @@ export async function resolveTraycerCliInvocation(): Promise<TraycerCliInvocatio
   );
 }
 
+/**
+ * Bundled-only resolution for `HostController` (Host Update Layer Redesign
+ * Tech Plan, D7: "The controller always invokes the desktop-bundled,
+ * version-matched CLI for host operations. The discovered
+ * package-manager/PATH CLI remains for terminal use and CLI
+ * self-management."). Skips the manifest/PATH steps `resolveTraycerCliInvocation`
+ * uses - a controller-driven host mutation must never race a differently
+ * versioned PATH/manifest CLI outside the lock's current-generation
+ * guarantee. `resolveBundledCliPath` already resolves to the staged dev
+ * wrapper in dev builds, so this covers both packaged and `make
+ * dev-desktop` transparently.
+ */
+export async function resolveBundledTraycerCliInvocation(): Promise<TraycerCliInvocation> {
+  const bundled = await resolveBundledCliPath();
+  if (bundled !== null) {
+    return { command: bundled, args: [] };
+  }
+  throw new Error(
+    `traycer CLI: no bundled CLI found (looked for ${cliBinaryName()} under app resources). This is a broken install - run \`traycer host doctor\` or reinstall Traycer.`,
+  );
+}
+
 export interface RunTraycerCliOptions {
   /**
    * Subcommand args appended after the resolved CLI command. E.g.
@@ -150,6 +172,21 @@ export async function runTraycerCli(
   opts: RunTraycerCliOptions,
 ): Promise<TraycerCliResult> {
   const inv = await resolveTraycerCliInvocation();
+  return runTraycerCliWithInvocation(inv, opts);
+}
+
+/**
+ * Same as `runTraycerCli`, but the caller supplies an already-resolved
+ * `TraycerCliInvocation` instead of letting this module resolve one via
+ * `resolveTraycerCliInvocation()`. Extracted so `runBundledTraycerCliJson`
+ * (D7: bundled-only invocation for `HostController`) can reuse the exact
+ * same spawn/error-decoration logic without re-resolving through the
+ * manifest/PATH steps.
+ */
+async function runTraycerCliWithInvocation(
+  inv: TraycerCliInvocation,
+  opts: RunTraycerCliOptions,
+): Promise<TraycerCliResult> {
   const allArgs = [...inv.args, ...opts.args];
   return new Promise((resolve, reject) => {
     execFile(
@@ -312,10 +349,31 @@ export async function runTraycerCliPlainJson<T>(
 export async function runTraycerCliJson<T>(
   args: readonly string[],
 ): Promise<T> {
+  const inv = await resolveTraycerCliInvocation();
+  return runTraycerCliJsonWithInvocation(inv, args);
+}
+
+/**
+ * Bundled-only counterpart to `runTraycerCliJson` (D7: `HostController`
+ * host operations always invoke the desktop-bundled, version-matched CLI -
+ * never the discovered manifest/PATH CLI `runTraycerCliJson` resolves).
+ * Same envelope contract; only the invocation resolution differs.
+ */
+export async function runBundledTraycerCliJson<T>(
+  args: readonly string[],
+): Promise<T> {
+  const inv = await resolveBundledTraycerCliInvocation();
+  return runTraycerCliJsonWithInvocation(inv, args);
+}
+
+async function runTraycerCliJsonWithInvocation<T>(
+  inv: TraycerCliInvocation,
+  args: readonly string[],
+): Promise<T> {
   const augmented = ensureJsonFlag(args);
   let result: TraycerCliResult;
   try {
-    result = await runTraycerCli({
+    result = await runTraycerCliWithInvocation(inv, {
       args: augmented,
       maxBuffer: 1024 * 1024,
       timeoutMs: 10_000,
@@ -548,6 +606,28 @@ export async function streamTraycerCliJson<T>(
   opts: StreamTraycerCliOptions,
 ): Promise<StreamTraycerCliResult<T>> {
   const inv = await resolveTraycerCliInvocation();
+  return streamTraycerCliJsonWithInvocation(inv, opts);
+}
+
+/**
+ * Bundled-only counterpart to `streamTraycerCliJson` (D7: every CLI
+ * subprocess `HostController` spawns for a host mutation - apply, install,
+ * ensure, download, service register/deregister, restart, uninstall - uses
+ * the desktop-bundled, version-matched CLI, never the discovered
+ * manifest/PATH one). Same NDJSON progress/result contract; only the
+ * invocation resolution differs.
+ */
+export async function streamBundledTraycerCliJson<T>(
+  opts: StreamTraycerCliOptions,
+): Promise<StreamTraycerCliResult<T>> {
+  const inv = await resolveBundledTraycerCliInvocation();
+  return streamTraycerCliJsonWithInvocation(inv, opts);
+}
+
+async function streamTraycerCliJsonWithInvocation<T>(
+  inv: TraycerCliInvocation,
+  opts: StreamTraycerCliOptions,
+): Promise<StreamTraycerCliResult<T>> {
   const augmentedArgs = ensureJsonFlag(opts.args);
   const allArgs = [...inv.args, ...augmentedArgs];
   return new Promise<StreamTraycerCliResult<T>>((resolve, reject) => {

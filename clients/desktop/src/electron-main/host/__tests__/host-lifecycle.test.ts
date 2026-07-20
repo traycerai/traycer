@@ -227,6 +227,8 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
+      stagedDir: join(dir, "staged"),
+      stagedRecordFile: join(dir, "staged", "staged.json"),
       pendingLoginItemRevisionFile: join(
         dir,
         "pending-login-item-revision.json",
@@ -279,6 +281,8 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
+      stagedDir: join(dir, "staged"),
+      stagedRecordFile: join(dir, "staged", "staged.json"),
       pendingLoginItemRevisionFile: join(
         dir,
         "pending-login-item-revision.json",
@@ -325,6 +329,8 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
+      stagedDir: join(dir, "staged"),
+      stagedRecordFile: join(dir, "staged", "staged.json"),
       pendingLoginItemRevisionFile: join(
         dir,
         "pending-login-item-revision.json",
@@ -381,6 +387,8 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
+      stagedDir: join(dir, "staged"),
+      stagedRecordFile: join(dir, "staged", "staged.json"),
       pendingLoginItemRevisionFile: join(
         dir,
         "pending-login-item-revision.json",
@@ -429,6 +437,8 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
+      stagedDir: join(dir, "staged"),
+      stagedRecordFile: join(dir, "staged", "staged.json"),
       pendingLoginItemRevisionFile: join(
         dir,
         "pending-login-item-revision.json",
@@ -479,6 +489,8 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
+      stagedDir: join(dir, "staged"),
+      stagedRecordFile: join(dir, "staged", "staged.json"),
       pendingLoginItemRevisionFile: join(
         dir,
         "pending-login-item-revision.json",
@@ -528,6 +540,8 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
+      stagedDir: join(dir, "staged"),
+      stagedRecordFile: join(dir, "staged", "staged.json"),
       pendingLoginItemRevisionFile: join(
         dir,
         "pending-login-item-revision.json",
@@ -576,6 +590,8 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
+      stagedDir: join(dir, "staged"),
+      stagedRecordFile: join(dir, "staged", "staged.json"),
       pendingLoginItemRevisionFile: join(
         dir,
         "pending-login-item-revision.json",
@@ -640,6 +656,8 @@ describe("HostLifecycle.getServiceStatus", () => {
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
+      stagedDir: join(dir, "staged"),
+      stagedRecordFile: join(dir, "staged", "staged.json"),
       pendingLoginItemRevisionFile: join(
         dir,
         "pending-login-item-revision.json",
@@ -692,6 +710,8 @@ describe("HostLifecycle.respawn (CLI subprocess)", () => {
           logFile: "/tmp/no-such-dir/host.log",
           installDir: "/tmp/no-such-dir/install",
           installRecordFile: "/tmp/no-such-dir/install/install.json",
+          stagedDir: "/tmp/no-such-dir/staged",
+          stagedRecordFile: "/tmp/no-such-dir/staged/staged.json",
           pendingLoginItemRevisionFile:
             "/tmp/no-such-dir/pending-login-item-revision.json",
           environment,
