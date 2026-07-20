@@ -146,26 +146,34 @@ export function useProfileUsageComparison({
         queueDraining: draining,
         lane,
       });
-      const refresh = async (): Promise<void> => {
+      const runFetch = async (force: boolean): Promise<void> => {
         if (rateLimitProviderId === null || lane === null) return;
         if (lane === "ephemeralProcess") {
           await enqueueRateLimitFetchForScope(
             target.queueScope,
             rateLimitProviderId,
             DEFAULT_ACCOUNT_CONTEXT,
-            { force: true, profileId },
+            { force, profileId },
           );
           return;
         }
         if (query === undefined) return;
         await query.refetch();
       };
+      const refresh = (): Promise<void> => runFetch(true);
+      // Automatic callers only: the queue's `force: false` path skips
+      // still-fresh cache and honors the usage-fetch cool-down, so this can
+      // never re-trip a tripped server-side limit the way a forced refresh
+      // loop could. (The httpFetch lane has no such queue - its refetch is a
+      // cheap direct HTTP call either way.)
+      const ensureFresh = (): Promise<void> => runFetch(false);
       map.set(profileId, {
         profileId,
         providerId,
         detail,
         refreshStatus,
         refresh,
+        ensureFresh,
       });
     });
     return map;
