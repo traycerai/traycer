@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
-import { checkCompatibility } from "@traycer/protocol/framework/index";
-import { buildManifestFromRegistry } from "@traycer/protocol/framework/rpc-manifest";
+import {
+  checkCompatibility,
+  splitConnectionManifest,
+} from "@traycer/protocol/framework/index";
+import type { ConnectionManifest } from "@traycer/protocol/framework/index";
+import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import { supportMatrix } from "./__fixtures__/support-matrix";
 
 /**
@@ -50,7 +54,23 @@ import { supportMatrix } from "./__fixtures__/support-matrix";
  * and `RELEASE-INVARIANT.md` for the append procedure).
  */
 describe("two-sided release invariant: current registry vs support matrix", () => {
-  const currentManifest = buildManifestFromRegistry(hostRpcRegistry);
+  // This invariant governs the FLOOR handshake - the required, name-set-fatal
+  // methods a still-supported peer relies on. Post-#272 the registry also grows
+  // additive OPTIONAL methods that ride the optional-manifest channel with an
+  // explicit `degrade` strategy (guarded by released-surface-compat.test.ts); a
+  // peer missing an optional method is non-fatal by construction, so it must NOT
+  // count as an incompatible bridge here. Restrict BOTH sides to the released
+  // floor so the check models the real floor-vs-floor handshake rather than
+  // flagging every additive method the historical peer never advertised.
+  const floorNames = new Set(RELEASED_FLOOR_METHOD_NAMES);
+  const floorOnly = (manifest: ConnectionManifest): ConnectionManifest =>
+    Object.fromEntries(
+      Object.entries(manifest).filter(([method]) => floorNames.has(method)),
+    );
+  const { manifest: currentManifest } = splitConnectionManifest(
+    hostRpcRegistry,
+    RELEASED_FLOOR_METHOD_NAMES,
+  );
 
   it.each(supportMatrix)(
     "forward-compat: current registry bridges down to $version",
@@ -58,7 +78,7 @@ describe("two-sided release invariant: current registry vs support matrix", () =
       const result = checkCompatibility(
         hostRpcRegistry,
         currentManifest,
-        manifest,
+        floorOnly(manifest),
         "host",
       );
 
@@ -76,7 +96,7 @@ describe("two-sided release invariant: current registry vs support matrix", () =
     ({ version, manifest }) => {
       const result = checkCompatibility(
         hostRpcRegistry,
-        manifest,
+        floorOnly(manifest),
         currentManifest,
         "client",
       );
