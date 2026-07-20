@@ -426,6 +426,90 @@ describe("composer slash flow", () => {
     expect(slashCommandLabelFromAttrs(chip.attrs)).toBe("/frontend-design");
   });
 
+  // Row construction already keeps natives out of a `$` menu, but the commit is
+  // public: a stale producer or a direct store call can still hand one over. A
+  // `$plan` chip would read as a skill and run the native command, so the
+  // trigger's meaning cannot rest on row construction alone. The leading
+  // position is where it would otherwise slip through, since that is the one
+  // place the pre-existing non-leading check does not fire.
+  it("refuses a native command committed through a leading $ picker", async () => {
+    const { editor, pickerStore } = makeFixture();
+    editor.commands.insertContent("$pl");
+    await flush();
+    expect(pickerStore.getState().slashScope).toBe("skills-only");
+
+    const commit = pickerStore.getState().commit;
+    if (commit === null) throw new Error("commit missing");
+    commit({
+      id: "plan",
+      kind: "slash",
+      command: planCommand(),
+      disabledReason: null,
+    });
+    await flush();
+
+    expect(slashCount(editor)).toBe(0);
+    expect(editor.state.doc.textContent).toBe("$pl");
+  });
+
+  // The guard also sees content the picker never built - pasted, restored from
+  // a draft, or carried in by an edited message.
+  it("strips a persisted $ chip that is not a skill", async () => {
+    const { editor } = makeFixture();
+    editor.commands.setContent({
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            {
+              type: "slashCommand",
+              attrs: {
+                commandName: "plan",
+                harnessId: "claude",
+                kind: "slash-command",
+                trigger: "$",
+              },
+            },
+          ],
+        },
+      ],
+    });
+    // Any transaction runs the guard's appendTransaction.
+    editor.commands.insertContent(" go");
+    await flush();
+
+    expect(slashCount(editor)).toBe(0);
+  });
+
+  it("keeps a persisted $ chip that is a skill", async () => {
+    const { editor } = makeFixture();
+    editor.commands.setContent({
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            { type: "text", text: "use " },
+            {
+              type: "slashCommand",
+              attrs: {
+                commandName: "frontend-design",
+                harnessId: "claude",
+                kind: "skill",
+                trigger: "$",
+              },
+            },
+          ],
+        },
+      ],
+    });
+    editor.commands.insertContent(" go");
+    await flush();
+
+    expect(slashCount(editor)).toBe(1);
+  });
+
   it("commits multiple skill chips anywhere in the prompt", async () => {
     const { editor, pickerStore } = makeFixture();
     editor.commands.insertContent("Review this with /front");

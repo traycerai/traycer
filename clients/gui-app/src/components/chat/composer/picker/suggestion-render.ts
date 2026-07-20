@@ -14,6 +14,8 @@ export interface ComposerSuggestionRenderArgs {
     ((props: SuggestionProps) => ComposerSlashScope) | null;
 }
 
+let nextSessionId = 0;
+
 interface SuggestionRender<TItem extends ComposerPickerItem> {
   onStart(props: SuggestionProps<unknown, TItem>): void;
   onUpdate(props: SuggestionProps<unknown, TItem>): void;
@@ -32,11 +34,17 @@ export function createComposerSuggestionRender<
     // leave the typed query in place. Track the latest props so commits
     // dispatch against the up-to-date range.
     let latestProps: SuggestionProps<unknown, TItem> | null = null;
+    // Identity for this one suggestion session. Tiptap calls this factory per
+    // session, and several plugins share the store, so every write is tagged
+    // to keep a departing session from writing over a newer one.
+    nextSessionId += 1;
+    const sessionId = nextSessionId;
     return {
       onStart(props) {
         latestProps = props;
         const slashScope = args.slashScopeForProps?.(props) ?? null;
         args.pickerStore.getState().openPicker({
+          sessionId,
           kind: args.kind,
           slashScope,
           range: { from: props.range.from, to: props.range.to },
@@ -53,6 +61,7 @@ export function createComposerSuggestionRender<
         latestProps = props;
         const slashScope = args.slashScopeForProps?.(props) ?? null;
         args.pickerStore.getState().updateRange({
+          sessionId,
           range: { from: props.range.from, to: props.range.to },
           query: props.query,
           slashScope,
@@ -62,7 +71,10 @@ export function createComposerSuggestionRender<
 
       onExit() {
         latestProps = null;
-        args.pickerStore.getState().close();
+        // Ownership-checked: swapping `$` for `/` over a selection starts the
+        // new session before this one exits, and an unconditional close here
+        // would shut the picker that just opened.
+        args.pickerStore.getState().closeSession(sessionId);
       },
 
       onKeyDown({ event }) {
@@ -92,7 +104,7 @@ export function createComposerSuggestionRender<
           return state.commitActiveItem();
         }
         if (event.key === "Escape") {
-          state.close();
+          state.closeSession(sessionId);
           return true;
         }
         return false;

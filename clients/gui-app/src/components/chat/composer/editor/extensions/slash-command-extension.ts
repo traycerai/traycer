@@ -102,13 +102,32 @@ function collectIllegalSlashPositions(state: EditorState): number[] {
   const positions: number[] = [];
   state.doc.descendants((node, pos) => {
     if (node.type.name !== "slashCommand") return true;
-    if (node.attrs.kind === "skill") return false;
-    if (!isLeadingSlashPosition(state.doc, pos)) {
-      positions.push(pos);
-    }
+    if (!isLegalSlashChip(state.doc, node, pos)) positions.push(pos);
     return false;
   });
   return positions;
+}
+
+/**
+ * Whether a chip already in the document is one the composer could have
+ * produced.
+ *
+ * The guard runs over persisted content too - pasted, restored from a draft, or
+ * carried in by an edited message - so it cannot assume the picker built every
+ * node it sees. `$` only ever inserts skills, so a non-skill wearing that
+ * trigger did not come from the picker and is stripped wherever it sits; a
+ * native command under `/` is legal only at the leading position the provider
+ * will actually parse.
+ */
+function isLegalSlashChip(
+  doc: ProseMirrorNode,
+  node: ProseMirrorNode,
+  pos: number,
+): boolean {
+  const isSkill = node.attrs.kind === "skill";
+  if (node.attrs.trigger === "$") return isSkill;
+  if (isSkill) return true;
+  return isLeadingSlashPosition(doc, pos);
 }
 
 function isLeadingSlashPosition(doc: ProseMirrorNode, pos: number): boolean {
@@ -348,6 +367,13 @@ function commitSlashInsertion(
   command: SlashCommand,
   trigger: SlashCommandTrigger,
 ): void {
+  // `$` offers skills and nothing else, so a native command arriving here did
+  // not come from a row the picker built - a stale producer or a direct call on
+  // the store's public commit. Refusing at insertion keeps the trigger's
+  // meaning from depending on row construction alone, and the leading position
+  // is no exception: `$plan` would render as a skill and still run the native
+  // command.
+  if (trigger === "$" && command.kind !== "skill") return;
   if (
     command.kind === "slash-command" &&
     !isLeadingRange(editor.state, range.from, range.to)

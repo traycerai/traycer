@@ -132,10 +132,24 @@ export interface ComposerPickerState {
    * not transient popover state, so it survives open/close/reset.
    */
   readonly knownSlashCommands: ReadonlyMap<string, string> | null;
+  /**
+   * Which suggestion session currently owns this store.
+   *
+   * Several suggestion plugins (`/`, `$`, `@`) drive one store, and a single
+   * ProseMirror transaction can stop one and start another - replacing `$` with
+   * `/` over a selection does exactly that. Tiptap fires the new session's
+   * `onStart` before the old session's `onExit`, so without an owner the
+   * departing session's teardown closes the picker that just opened, leaving
+   * the store shut while its plugin is still active and the menu invisible
+   * until the range is abandoned. Every session-scoped write carries its id and
+   * is dropped when it no longer matches.
+   */
+  readonly sessionId: number | null;
 }
 
 export interface ComposerPickerActions {
   readonly openPicker: (input: {
+    readonly sessionId: number;
     readonly kind: ComposerPickerKind;
     readonly slashScope: ComposerSlashScope | null;
     readonly range: ComposerPickerRange;
@@ -144,6 +158,7 @@ export interface ComposerPickerActions {
     readonly clientRect: ComposerPickerClientRect | null;
   }) => void;
   readonly updateRange: (input: {
+    readonly sessionId: number;
     readonly range: ComposerPickerRange;
     readonly query: string;
     readonly slashScope: ComposerSlashScope | null;
@@ -171,7 +186,10 @@ export interface ComposerPickerActions {
   readonly setKnownSlashCommands: (
     commands: ReadonlyMap<string, string> | null,
   ) => void;
+  /** Unconditional close, for callers that are not a suggestion session. */
   readonly close: () => void;
+  /** Close only if `sessionId` still owns the store. See {@link ComposerPickerState.sessionId}. */
+  readonly closeSession: (sessionId: number) => void;
   readonly reset: () => void;
 }
 
@@ -182,6 +200,7 @@ export type ComposerPickerStore = StoreApi<ComposerPickerStoreState>;
 
 const INITIAL_STATE: ComposerPickerState = {
   open: false,
+  sessionId: null,
   kind: null,
   slashScope: null,
   range: null,
@@ -237,9 +256,18 @@ export function createComposerPickerStore(): ComposerPickerStore {
   return createStore<ComposerPickerStoreState>((set, get) => ({
     ...INITIAL_STATE,
 
-    openPicker: ({ kind, slashScope, range, query, commit, clientRect }) => {
+    openPicker: ({
+      sessionId,
+      kind,
+      slashScope,
+      range,
+      query,
+      commit,
+      clientRect,
+    }) => {
       set({
         open: true,
+        sessionId,
         kind,
         slashScope,
         range,
@@ -257,8 +285,11 @@ export function createComposerPickerStore(): ComposerPickerStore {
       });
     },
 
-    updateRange: ({ range, query, slashScope, clientRect }) => {
+    updateRange: ({ sessionId, range, query, slashScope, clientRect }) => {
       const previous = get();
+      // A session that no longer owns the store is winding down; letting it
+      // write would hand the live picker the departing session's range.
+      if (previous.sessionId !== sessionId) return;
       const sameRange =
         previous.range !== null &&
         previous.range.from === range.from &&
@@ -393,6 +424,14 @@ export function createComposerPickerStore(): ComposerPickerStore {
     // `close`/`reset` clear transient popover state but preserve the loaded
     // command catalog - it is host/harness data, not per-popover-session state.
     close: () => {
+      set((previous) => ({
+        ...INITIAL_STATE,
+        knownSlashCommands: previous.knownSlashCommands,
+      }));
+    },
+
+    closeSession: (sessionId) => {
+      if (get().sessionId !== sessionId) return;
       set((previous) => ({
         ...INITIAL_STATE,
         knownSlashCommands: previous.knownSlashCommands,

@@ -47,6 +47,7 @@ function openWith(
   items: ReadonlyArray<ComposerPickerItem>,
 ): void {
   store.getState().openPicker({
+    sessionId: 1,
     kind: "slash",
     slashScope: "skills",
     range: { from: 1, to: 2 },

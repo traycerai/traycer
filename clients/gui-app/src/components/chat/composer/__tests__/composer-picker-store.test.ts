@@ -76,6 +76,7 @@ function open(
   commit: ComposerPickerCommit,
 ): void {
   store.getState().openPicker({
+    sessionId: 1,
     kind: "mention",
     slashScope: null,
     range: { from: 1, to: 1 + query.length + 1 },
@@ -90,6 +91,7 @@ function openSlash(
   commit: ComposerPickerCommit,
 ): void {
   store.getState().openPicker({
+    sessionId: 1,
     kind: "slash",
     slashScope: "skills",
     range: { from: 1, to: 2 },
@@ -98,6 +100,86 @@ function openSlash(
     clientRect: null,
   });
 }
+
+// Several suggestion plugins (`/`, `$`, `@`) drive one store, and replacing one
+// trigger with another over a selection stops the old session and starts the
+// new one in a single transaction - new `onStart` first, old `onExit` after.
+// Without ownership the departing session's teardown shuts the picker that just
+// opened, and the menu stays invisible while its plugin is still active.
+describe("composer picker store session ownership", () => {
+  it("ignores a close from a session that no longer owns the store", () => {
+    const store = createComposerPickerStore();
+    store.getState().openPicker({
+      sessionId: 1,
+      kind: "slash",
+      slashScope: "skills-only",
+      range: { from: 1, to: 2 },
+      query: "",
+      commit: NOOP_COMMIT,
+      clientRect: null,
+    });
+    store.getState().openPicker({
+      sessionId: 2,
+      kind: "slash",
+      slashScope: "all",
+      range: { from: 1, to: 2 },
+      query: "",
+      commit: NOOP_COMMIT,
+      clientRect: null,
+    });
+
+    store.getState().closeSession(1);
+
+    expect(store.getState().open).toBe(true);
+    expect(store.getState().sessionId).toBe(2);
+    expect(store.getState().slashScope).toBe("all");
+  });
+
+  it("closes when the owning session exits", () => {
+    const store = createComposerPickerStore();
+    openSlash(store, NOOP_COMMIT);
+
+    store.getState().closeSession(1);
+
+    expect(store.getState().open).toBe(false);
+    expect(store.getState().sessionId).toBeNull();
+  });
+
+  it("drops a range update from a session that no longer owns the store", () => {
+    const store = createComposerPickerStore();
+    openSlash(store, NOOP_COMMIT);
+    store.getState().openPicker({
+      sessionId: 2,
+      kind: "slash",
+      slashScope: "all",
+      range: { from: 4, to: 5 },
+      query: "",
+      commit: NOOP_COMMIT,
+      clientRect: null,
+    });
+
+    store.getState().updateRange({
+      sessionId: 1,
+      range: { from: 90, to: 99 },
+      query: "stale",
+      slashScope: "skills-only",
+      clientRect: null,
+    });
+
+    expect(store.getState().range).toEqual({ from: 4, to: 5 });
+    expect(store.getState().query).toBe("");
+    expect(store.getState().slashScope).toBe("all");
+  });
+
+  it("still lets an unscoped close shut whatever is open", () => {
+    const store = createComposerPickerStore();
+    openSlash(store, NOOP_COMMIT);
+
+    store.getState().close();
+
+    expect(store.getState().open).toBe(false);
+  });
+});
 
 describe("composer picker store", () => {
   it("starts in fully reset state", () => {
@@ -279,6 +361,7 @@ describe("composer picker store", () => {
   it("drops published items when the slash scope flips", () => {
     const store = createComposerPickerStore();
     store.getState().openPicker({
+      sessionId: 1,
       kind: "slash",
       slashScope: "all",
       range: { from: 1, to: 2 },
@@ -298,6 +381,7 @@ describe("composer picker store", () => {
     expect(store.getState().itemsForSlashScope).toBe("all");
 
     store.getState().updateRange({
+      sessionId: 1,
       range: { from: 8, to: 9 },
       query: "",
       slashScope: "skills",
@@ -392,6 +476,7 @@ describe("composer picker store", () => {
   it("supports slash kind items", () => {
     const store = createComposerPickerStore();
     store.getState().openPicker({
+      sessionId: 1,
       kind: "slash",
       slashScope: "all",
       range: { from: 1, to: 2 },
@@ -431,6 +516,7 @@ describe("composer picker store", () => {
     const before = store.getState();
     if (before.range === null) throw new Error("range missing");
     store.getState().updateRange({
+      sessionId: 1,
       range: before.range,
       query: "src",
       slashScope: null,
