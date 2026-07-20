@@ -4,7 +4,7 @@ import type {
   EpicResourceSnapshotWire,
   HostTreeResourceSnapshotWire,
   OtherResourceSnapshotWire,
-  OwnerResourceSnapshotWire,
+  OwnerResourceSnapshotWireV13,
   ResourceProcessSnapshotWire,
   ResourceOwnerKindWire,
 } from "@traycer/protocol/host/resources/subscribe";
@@ -37,12 +37,13 @@ function makeProcess(
 function makeOwner(
   kind: ResourceOwnerKindWire,
   ownerId: string,
-  over: Partial<OwnerResourceSnapshotWire>,
-): OwnerResourceSnapshotWire {
+  over: Partial<OwnerResourceSnapshotWireV13>,
+): OwnerResourceSnapshotWireV13 {
   return {
     owner: { kind, hostId: "host-1", epicId: "epic-1", ownerId },
     sampledAt: 1_000,
     rootPids: [1],
+    harnessId: null,
     activeProcessName: "bash",
     processCount: 2,
     cpuPercent: 10,
