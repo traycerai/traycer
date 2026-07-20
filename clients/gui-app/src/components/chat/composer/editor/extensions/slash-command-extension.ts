@@ -6,6 +6,7 @@ import { ReactNodeViewRenderer } from "@tiptap/react";
 import Suggestion from "@tiptap/suggestion";
 
 import { slashCommandPlainTextFromAttrs } from "@/lib/composer/tiptap-json-content";
+import type { SlashCommand } from "@/lib/composer/types";
 
 import { SlashCommandNodeView } from "../nodes/slash-command-node-view";
 import { createComposerSuggestionRender } from "../../picker/suggestion-render";
@@ -92,6 +93,7 @@ function collectIllegalSlashPositions(state: EditorState): number[] {
   const positions: number[] = [];
   state.doc.descendants((node, pos) => {
     if (node.type.name !== "slashCommand") return true;
+    if (node.attrs.kind === "skill") return false;
     if (!isLeadingSlashPosition(state.doc, pos)) {
       positions.push(pos);
     }
@@ -126,20 +128,22 @@ export function createSlashSuggestionExtension(
           pluginKey: slashSuggestionPluginKey,
           char: "/",
           allowSpaces: false,
-          startOfLine: true,
+          startOfLine: false,
           decorationTag: "span",
           decorationClass: "",
-          allow: ({ state, range }) =>
-            isLeadingRange(state, range.from, range.to),
           items: () => [],
           render: createComposerSuggestionRender({
             pickerStore: deps.pickerStore,
             kind: "slash",
+            slashScopeForProps: ({ editor, range }) =>
+              isLeadingRange(editor.state, range.from, range.to)
+                ? "all"
+                : "skills",
           }),
           command: ({ editor, range, props }) => {
             const item = props as ComposerPickerItem;
             if (item.kind !== "slash") return;
-            commitSlashInsertion(editor, range, item.command.name);
+            commitSlashInsertion(editor, range, item.command);
           },
         }),
       ];
@@ -165,18 +169,7 @@ export function leadingTokenBefore(
 export function leadingTokenInDocument(
   doc: ProseMirrorNode,
 ): LeadingToken | null {
-  let childPos = 0;
-  for (let index = 0; index < doc.childCount; index += 1) {
-    const child = doc.child(index);
-    if (isIgnoredLeadingLeaf(child)) {
-      childPos += child.nodeSize;
-      continue;
-    }
-
-    const token = leadingTokenInRange(doc, childPos, childPos + child.nodeSize);
-    return token ?? { node: child, pos: childPos };
-  }
-  return null;
+  return firstTokenInBlocks(doc, doc.childCount);
 }
 
 function leadingTokenBeforePosition(
@@ -185,15 +178,36 @@ function leadingTokenBeforePosition(
 ): LeadingToken | null {
   const clampedPos = Math.min(Math.max(0, pos), doc.content.size);
   const $pos = doc.resolve(clampedPos);
-  const topLevelIndex = $pos.index(0);
-  for (let index = 0; index < topLevelIndex; index += 1) {
-    const child = doc.child(index);
-    if (!isIgnoredLeadingLeaf(child)) {
-      return { node: child, pos: childOffsetBefore(doc, index) };
-    }
-  }
+  const earlier = firstTokenInBlocks(doc, $pos.index(0));
+  if (earlier !== null) return earlier;
   if ($pos.depth === 0) return null;
   return leadingTokenInRange(doc, $pos.before(1), clampedPos);
+}
+
+/**
+ * First real token across the document's first `blockCount` top-level blocks.
+ *
+ * A block that contributes no prompt text is skipped, whether it holds
+ * whitespace or only attachments: `plainTextFromNodes` serializes both to the
+ * empty string and drops the block outright, so the command really does reach
+ * the provider at the start of the prompt. Classifying by what the parser sees
+ * rather than by document shape is also what keeps an attachment consistent
+ * with itself - the same image one line up used to disable native commands
+ * while an image beside the caret did not.
+ */
+function firstTokenInBlocks(
+  doc: ProseMirrorNode,
+  blockCount: number,
+): LeadingToken | null {
+  let blockPos = 0;
+  for (let index = 0; index < blockCount; index += 1) {
+    const block = doc.child(index);
+    const blockEnd = blockPos + block.nodeSize;
+    const token = leadingTokenInRange(doc, blockPos, blockEnd);
+    if (token !== null) return token;
+    blockPos = blockEnd;
+  }
+  return null;
 }
 
 function leadingTokenInRange(
@@ -205,9 +219,15 @@ function leadingTokenInRange(
   doc.nodesBetween(from, to, (node, pos) => {
     if (token !== null) return false;
     if (isIgnoredLeadingLeaf(node)) return false;
+    if (isWhitespaceLeadingLeaf(node)) return false;
     if (isTransparentLeadingContainer(node)) return true;
-    if (node.isText && node.textContent.length === 0) return false;
-    if (node.isText || node.isAtom || node.isLeaf) {
+    if (node.isText) {
+      if (textWithinRange(node, pos, from, to).trim().length === 0)
+        return false;
+      token = { node, pos };
+      return false;
+    }
+    if (node.isAtom || node.isLeaf) {
       token = { node, pos };
       return false;
     }
@@ -216,18 +236,42 @@ function leadingTokenInRange(
   return token;
 }
 
-function childOffsetBefore(doc: ProseMirrorNode, index: number): number {
-  let offset = 0;
-  for (let childIndex = 0; childIndex < index; childIndex += 1) {
-    offset += doc.child(childIndex).nodeSize;
-  }
-  return offset;
+/**
+ * The slice of a text node that actually lies inside `[from, to)`.
+ *
+ * Only that slice may decide whether the run is blank: when the user types
+ * `   /`, the trigger character shares one text node with the spaces before
+ * it, so testing the node's whole text would report non-blank and classify a
+ * genuinely leading command as inline.
+ */
+function textWithinRange(
+  node: ProseMirrorNode,
+  pos: number,
+  from: number,
+  to: number,
+): string {
+  const text = node.text ?? "";
+  const start = Math.max(0, from - pos);
+  const end = Math.min(text.length, to - pos);
+  return end > start ? text.slice(start, end) : "";
 }
 
+/**
+ * Attachments are not serialized into the prompt text, so they never form the
+ * token a command would be measured against inside a block.
+ */
 function isIgnoredLeadingLeaf(node: ProseMirrorNode): boolean {
   return (
     node.type.name === "attachmentGroup" || node.type.name === "imageAttachment"
   );
+}
+
+/**
+ * A hard break serializes to a bare newline, which `trim()` strips - so like
+ * whitespace text it is not content a command can follow.
+ */
+function isWhitespaceLeadingLeaf(node: ProseMirrorNode): boolean {
+  return node.type.name === "hardBreak";
 }
 
 function isTransparentLeadingContainer(node: ProseMirrorNode): boolean {
@@ -239,8 +283,14 @@ function commitSlashInsertion(
     NonNullable<Parameters<typeof Suggestion>[0]["command"]>
   >[0]["editor"],
   range: { from: number; to: number },
-  name: string,
+  command: SlashCommand,
 ): void {
+  if (
+    command.kind === "slash-command" &&
+    !isLeadingRange(editor.state, range.from, range.to)
+  ) {
+    return;
+  }
   const trailingSpaceFollows =
     editor.state.doc.textBetween(
       range.to,
@@ -255,7 +305,20 @@ function commitSlashInsertion(
         to: trailingSpaceFollows ? range.to + 1 : range.to,
       },
       [
-        { type: "slashCommand", attrs: { commandName: name } },
+        {
+          type: "slashCommand",
+          attrs: {
+            commandName: command.name,
+            harnessId: command.harnessId,
+            kind: command.kind,
+            description: command.description,
+            argumentHint: command.argumentHint,
+            path:
+              typeof command.metadata.path === "string"
+                ? command.metadata.path
+                : null,
+          },
+        },
         { type: "text", text: " " },
       ],
     )

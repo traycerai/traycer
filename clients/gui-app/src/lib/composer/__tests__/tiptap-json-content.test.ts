@@ -55,3 +55,34 @@ describe("extractPlainTextFromComposerJSONContent blockquote handling", () => {
     );
   });
 });
+
+// The slash picker classifies a command as "leading" by asking what the
+// provider's parser will see, not by where the chip sits in the document. That
+// only holds while an attachment-only block contributes nothing to the prompt -
+// if it ever serialized to a blank line instead of being dropped, a native
+// command below it would stop being leading and the picker would silently
+// offer commands the provider then refuses.
+describe("extractPlainTextFromComposerJSONContent attachment blocks", () => {
+  it("drops an attachment-only block so a following command stays leading", () => {
+    const content: JsonContent = {
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [{ type: "imageAttachment", attrs: { imageId: "img-1" } }],
+        },
+        {
+          type: "paragraph",
+          content: [
+            { type: "slashCommand", attrs: { commandName: "plan" } },
+            { type: "text", text: " ship it" },
+          ],
+        },
+      ],
+    };
+
+    expect(extractPlainTextFromComposerJSONContent(content)).toBe(
+      "/plan ship it",
+    );
+  });
+});

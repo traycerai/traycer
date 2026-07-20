@@ -315,6 +315,9 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     pickerStore.getState().setItems({
       kind: "mention",
       query,
+      // Mentions have no scope; the store holds null for a mention picker, so
+      // this matches its guard rather than opting out of it.
+      slashScope: null,
       step,
       items,
       loading,

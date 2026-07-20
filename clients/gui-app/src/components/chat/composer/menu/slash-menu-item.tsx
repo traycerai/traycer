@@ -18,11 +18,6 @@ export function SlashMenuItem(props: SlashMenuItemProps) {
           <span className="ml-1 font-mono text-code-xs">{argHint}</span>
         ) : null}
       </span>
-      {command.kind === "skill" ? (
-        <span className="shrink-0 rounded border border-border/70 px-1 py-px text-overline uppercase text-muted-foreground/70">
-          Skill
-        </span>
-      ) : null}
     </div>
   );
 }

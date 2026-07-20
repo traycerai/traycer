@@ -9,6 +9,7 @@ import {
 import type { SlashCommand } from "@/lib/composer/types";
 
 import {
+  activePickerItemDisabledReason,
   createComposerPickerStore,
   type ComposerPickerCommit,
   type ComposerPickerItem,
@@ -55,8 +56,18 @@ function slashCommand(name: string): SlashCommand {
   };
 }
 
-function slashItem(name: string): ComposerPickerItem {
-  return { id: name, kind: "slash", command: slashCommand(name) };
+const LEADING_ONLY = "Commands can only be used at the start of a message";
+
+function slashItem(
+  name: string,
+  disabledReason: string | null,
+): ComposerPickerItem {
+  return {
+    id: name,
+    kind: "slash",
+    command: slashCommand(name),
+    disabledReason,
+  };
 }
 
 function open(
@@ -66,8 +77,23 @@ function open(
 ): void {
   store.getState().openPicker({
     kind: "mention",
+    slashScope: null,
     range: { from: 1, to: 1 + query.length + 1 },
     query,
+    commit,
+    clientRect: null,
+  });
+}
+
+function openSlash(
+  store: ComposerPickerStore,
+  commit: ComposerPickerCommit,
+): void {
+  store.getState().openPicker({
+    kind: "slash",
+    slashScope: "skills",
+    range: { from: 1, to: 2 },
+    query: "",
     commit,
     clientRect: null,
   });
@@ -88,6 +114,7 @@ describe("composer picker store", () => {
     store.getState().setItems({
       kind: "mention",
       query: "stale",
+      slashScope: null,
       step: ROOT_MENTION_STEP,
       items: [mentionItem("a")],
       loading: false,
@@ -109,6 +136,7 @@ describe("composer picker store", () => {
     store.getState().setItems({
       kind: "mention",
       query: "old",
+      slashScope: null,
       step: ROOT_MENTION_STEP,
       items: [mentionItem("a")],
       loading: false,
@@ -122,6 +150,7 @@ describe("composer picker store", () => {
     store.getState().setItems({
       kind: "mention",
       query: "src",
+      slashScope: null,
       step: ROOT_MENTION_STEP,
       items: [mentionItem("a"), mentionItem("b")],
       loading: false,
@@ -137,6 +166,7 @@ describe("composer picker store", () => {
     store.getState().setItems({
       kind: "mention",
       query: "src",
+      slashScope: null,
       step: ROOT_MENTION_STEP,
       items: [mentionItem("a")],
       loading: false,
@@ -150,6 +180,7 @@ describe("composer picker store", () => {
     store.getState().setItems({
       kind: "mention",
       query: "src",
+      slashScope: null,
       step: ROOT_MENTION_STEP,
       items: [mentionItem("a")],
       loading: false,
@@ -165,6 +196,7 @@ describe("composer picker store", () => {
     store.getState().setItems({
       kind: "mention",
       query: "",
+      slashScope: null,
       step: ROOT_MENTION_STEP,
       items: [mentionItem("a"), mentionItem("b"), mentionItem("c")],
       loading: false,
@@ -186,6 +218,7 @@ describe("composer picker store", () => {
     store.getState().setItems({
       kind: "mention",
       query: "",
+      slashScope: null,
       step: ROOT_MENTION_STEP,
       items,
       loading: false,
@@ -201,12 +234,146 @@ describe("composer picker store", () => {
     expect(store.getState().commitActiveItem()).toBe(false);
   });
 
+  it("opens on the first selectable row but navigates through disabled ones", () => {
+    const store = createComposerPickerStore();
+    const commit = vi.fn<ComposerPickerCommit>();
+    openSlash(store, commit);
+    const items = [
+      slashItem("compact", LEADING_ONLY),
+      slashItem("review", null),
+      slashItem("clear", LEADING_ONLY),
+      slashItem("simplify", null),
+    ];
+    store.getState().setItems({
+      kind: "slash",
+      query: "",
+      slashScope: "skills",
+      step: ROOT_MENTION_STEP,
+      items,
+      loading: false,
+    });
+    // Default selection lands past the leading disabled row so Enter works
+    // without the user moving first.
+    expect(store.getState().activeIndex).toBe(1);
+
+    // Navigation is continuous - the highlight must not appear to teleport
+    // over rows the user can still see.
+    store.getState().moveActive(1);
+    expect(store.getState().activeIndex).toBe(2);
+    store.getState().moveActive(1);
+    expect(store.getState().activeIndex).toBe(3);
+    store.getState().moveActive(1);
+    expect(store.getState().activeIndex).toBe(0);
+    store.getState().moveActive(-1);
+    expect(store.getState().activeIndex).toBe(3);
+
+    // Hover may also land on a disabled row.
+    store.getState().setActiveIndex(2);
+    expect(store.getState().activeIndex).toBe(2);
+  });
+
+  // A scope flip rewrites every row's enabled/disabled policy, so rows built
+  // under the old scope must not survive it - otherwise a native command
+  // published while the caret was leading stays committable after the caret
+  // makes the position skills-only.
+  it("drops published items when the slash scope flips", () => {
+    const store = createComposerPickerStore();
+    store.getState().openPicker({
+      kind: "slash",
+      slashScope: "all",
+      range: { from: 1, to: 2 },
+      query: "",
+      commit: NOOP_COMMIT,
+      clientRect: null,
+    });
+    store.getState().setItems({
+      kind: "slash",
+      query: "",
+      slashScope: "all",
+      step: ROOT_MENTION_STEP,
+      items: [slashItem("compact", null)],
+      loading: false,
+    });
+    expect(store.getState().items.length).toBe(1);
+    expect(store.getState().itemsForSlashScope).toBe("all");
+
+    store.getState().updateRange({
+      range: { from: 8, to: 9 },
+      query: "",
+      slashScope: "skills",
+      clientRect: null,
+    });
+
+    expect(store.getState().items).toEqual([]);
+    expect(store.getState().itemsForSlashScope).toBeNull();
+  });
+
+  it("rejects items published under a scope the caret has already left", () => {
+    const store = createComposerPickerStore();
+    openSlash(store, NOOP_COMMIT);
+
+    // The item hook resolved under "all" but the caret has since moved to a
+    // skills-only position, so this list must not land.
+    store.getState().setItems({
+      kind: "slash",
+      query: "",
+      slashScope: "all",
+      step: ROOT_MENTION_STEP,
+      items: [slashItem("compact", null)],
+      loading: false,
+    });
+    expect(store.getState().items).toEqual([]);
+
+    // Republished under the live scope, it lands.
+    store.getState().setItems({
+      kind: "slash",
+      query: "",
+      slashScope: "skills",
+      step: ROOT_MENTION_STEP,
+      items: [slashItem("compact", LEADING_ONLY)],
+      loading: false,
+    });
+    expect(store.getState().items.length).toBe(1);
+    expect(store.getState().itemsForSlashScope).toBe("skills");
+    expect(store.getState().commitActiveItem()).toBe(false);
+  });
+
+  it("refuses to commit a disabled row while keeping it selectable", () => {
+    const store = createComposerPickerStore();
+    const commit = vi.fn<ComposerPickerCommit>();
+    openSlash(store, commit);
+    const items = [
+      slashItem("review", null),
+      slashItem("compact", LEADING_ONLY),
+    ];
+    store.getState().setItems({
+      kind: "slash",
+      query: "",
+      slashScope: "skills",
+      step: ROOT_MENTION_STEP,
+      items,
+      loading: false,
+    });
+
+    store.getState().setActiveIndex(1);
+    expect(store.getState().activeIndex).toBe(1);
+    expect(activePickerItemDisabledReason(store.getState())).toBe(LEADING_ONLY);
+    expect(store.getState().commitActiveItem()).toBe(false);
+    expect(commit).not.toHaveBeenCalled();
+
+    store.getState().setActiveIndex(0);
+    expect(activePickerItemDisabledReason(store.getState())).toBeNull();
+    expect(store.getState().commitActiveItem()).toBe(true);
+    expect(commit).toHaveBeenCalledWith(items[0]);
+  });
+
   it("close fully resets store state", () => {
     const store = createComposerPickerStore();
     open(store, "src", NOOP_COMMIT);
     store.getState().setItems({
       kind: "mention",
       query: "src",
+      slashScope: null,
       step: ROOT_MENTION_STEP,
       items: [mentionItem("a")],
       loading: true,
@@ -226,6 +393,7 @@ describe("composer picker store", () => {
     const store = createComposerPickerStore();
     store.getState().openPicker({
       kind: "slash",
+      slashScope: "all",
       range: { from: 1, to: 2 },
       query: "",
       commit: NOOP_COMMIT,
@@ -234,8 +402,9 @@ describe("composer picker store", () => {
     store.getState().setItems({
       kind: "slash",
       query: "",
+      slashScope: "all",
       step: ROOT_MENTION_STEP,
-      items: [slashItem("plan"), slashItem("commit")],
+      items: [slashItem("plan", null), slashItem("commit", null)],
       loading: false,
     });
     expect(store.getState().items.length).toBe(2);
@@ -264,6 +433,7 @@ describe("composer picker store", () => {
     store.getState().updateRange({
       range: before.range,
       query: "src",
+      slashScope: null,
       clientRect: null,
     });
     expect(store.getState()).toBe(before);

@@ -1,13 +1,17 @@
 import type { SuggestionProps } from "@tiptap/suggestion";
+import { activePickerItemDisabledReason } from "./composer-picker-store";
 import type {
   ComposerPickerItem,
   ComposerPickerKind,
+  ComposerSlashScope,
   ComposerPickerStore,
 } from "./composer-picker-store";
 
 export interface ComposerSuggestionRenderArgs {
   readonly pickerStore: ComposerPickerStore;
   readonly kind: ComposerPickerKind;
+  readonly slashScopeForProps:
+    ((props: SuggestionProps) => ComposerSlashScope) | null;
 }
 
 interface SuggestionRender<TItem extends ComposerPickerItem> {
@@ -31,8 +35,10 @@ export function createComposerSuggestionRender<
     return {
       onStart(props) {
         latestProps = props;
+        const slashScope = args.slashScopeForProps?.(props) ?? null;
         args.pickerStore.getState().openPicker({
           kind: args.kind,
+          slashScope,
           range: { from: props.range.from, to: props.range.to },
           query: props.query,
           commit: (item) => {
@@ -45,9 +51,11 @@ export function createComposerSuggestionRender<
 
       onUpdate(props) {
         latestProps = props;
+        const slashScope = args.slashScopeForProps?.(props) ?? null;
         args.pickerStore.getState().updateRange({
           range: { from: props.range.from, to: props.range.to },
           query: props.query,
+          slashScope,
           clientRect: props.clientRect ?? null,
         });
       },
@@ -72,10 +80,15 @@ export function createComposerSuggestionRender<
         if (event.key === "Enter") {
           if (event.shiftKey) return false;
           if (state.items.length === 0) return false;
+          // Swallow the key on an inert row. Returning false would let Enter
+          // fall through to the composer and submit the message with the
+          // picker still open.
+          if (activePickerItemDisabledReason(state) !== null) return true;
           return state.commitActiveItem();
         }
         if (event.key === "Tab") {
           if (state.items.length === 0) return false;
+          if (activePickerItemDisabledReason(state) !== null) return true;
           return state.commitActiveItem();
         }
         if (event.key === "Escape") {

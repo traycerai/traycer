@@ -33,6 +33,8 @@ import type { MentionPreview } from "@/lib/composer/types";
 import { cn } from "@/lib/utils";
 
 import {
+  activePickerItemDisabledReason,
+  pickerItemDisabledReason,
   pickerItemPreview,
   type ComposerPickerItem,
   type ComposerPickerStore,
@@ -149,6 +151,11 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
     if (activeIndex < 0 || activeIndex >= items.length) return null;
     return pickerItemPreview(items[activeIndex]);
   }, [items, activeIndex]);
+
+  const activeDisabledReason = useMemo<string | null>(
+    () => activePickerItemDisabledReason({ items, activeIndex }),
+    [items, activeIndex],
+  );
 
   const copy = useMemo(() => {
     if (kind === "mention") return mentionProviderRegistry.menuCopy(step);
@@ -328,6 +335,7 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
         listRef={listRef}
         activeIndex={activeIndex}
         preview={activePreview}
+        disabledReason={activeDisabledReason}
       />
     </>
   );
@@ -364,6 +372,7 @@ function activeDialogContentShard(): HTMLElement | null {
 interface RenderedItem {
   readonly id: string;
   readonly node: ReactNode;
+  readonly disabledReason: string | null;
 }
 
 function renderPickerItem(
@@ -375,12 +384,24 @@ function renderPickerItem(
     return {
       id: `${menuId}-item-${index}`,
       node: <MentionMenuItem entry={item.entry} />,
+      disabledReason: null,
     };
   }
   return {
     id: `${menuId}-item-${index}`,
     node: <SlashMenuItem command={item.command} />,
+    disabledReason: pickerItemDisabledReason(item),
   };
+}
+
+/**
+ * Inert rows still take the highlight as you arrow past them - skipping them
+ * makes the selection look like it teleports - but at a weaker weight so
+ * "selected" never reads as "actionable".
+ */
+function rowHighlightClass(isActive: boolean, disabled: boolean): string {
+  if (!isActive) return "hover:bg-accent/40";
+  return disabled ? "bg-accent/25" : "bg-accent/60";
 }
 
 interface ComposerMenuBodyProps {
@@ -414,6 +435,7 @@ function ComposerMenuBody(props: ComposerMenuBodyProps): ReactNode {
   if (loading && renderedItems.length === 0) return loadingRow;
   if (renderedItems.length === 0) return emptyRow(emptyLabel, false);
   const rows = renderedItems.map((item, index) => {
+    const disabled = item.disabledReason !== null;
     const isActive = index === activeIndex;
     return (
       <div
@@ -422,16 +444,20 @@ function ComposerMenuBody(props: ComposerMenuBodyProps): ReactNode {
         role="option"
         tabIndex={-1}
         aria-selected={isActive}
+        aria-disabled={disabled}
         data-active={isActive}
+        data-disabled={disabled}
         className={cn(
-          "cursor-pointer px-2 py-0.5 text-ui-sm outline-none",
-          isActive ? "bg-accent/60" : "hover:bg-accent/40",
+          "px-2 py-0.5 text-ui-sm outline-none",
+          disabled ? "cursor-default opacity-50" : "cursor-pointer",
+          rowHighlightClass(isActive, disabled),
         )}
         onMouseEnter={() => {
           pickerStore.getState().setActiveIndex(index);
         }}
         onMouseDown={(event) => {
           event.preventDefault();
+          if (disabled) return;
           const state = pickerStore.getState();
           state.setActiveIndex(index);
           state.commitActiveItem();

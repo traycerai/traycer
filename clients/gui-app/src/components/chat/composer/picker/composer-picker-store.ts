@@ -7,6 +7,7 @@ import {
 import type { MentionPreview, SlashCommand } from "@/lib/composer/types";
 
 export type ComposerPickerKind = "mention" | "slash";
+export type ComposerSlashScope = "all" | "skills";
 
 export interface ComposerPickerRange {
   readonly from: number;
@@ -23,7 +24,42 @@ export type ComposerPickerItem =
       readonly id: string;
       readonly kind: "slash";
       readonly command: SlashCommand;
+      /**
+       * Non-null when the row is shown but not selectable - currently only
+       * native provider commands offered at a non-leading caret, which the
+       * Claude CLI parser only recognizes at the start of the prompt. The
+       * entry stays in the list (so the catalog looks the same everywhere)
+       * and the reason is surfaced in the menu instead of the row silently
+       * disappearing.
+       */
+      readonly disabledReason: string | null;
     };
+
+/**
+ * Single place that decides whether a row can be activated or committed.
+ * Keyboard navigation, hover, and commit all read through this so a disabled
+ * row can never become the active index.
+ */
+export function pickerItemDisabledReason(
+  item: ComposerPickerItem,
+): string | null {
+  if (item.kind === "mention") return null;
+  return item.disabledReason;
+}
+
+/**
+ * Disabled reason for the row the highlight currently sits on, or null when it
+ * is selectable. Key-handling reads this so Enter/Tab on an inert row is
+ * swallowed rather than falling through to the composer's submit handler.
+ */
+export function activePickerItemDisabledReason(state: {
+  readonly items: ReadonlyArray<ComposerPickerItem>;
+  readonly activeIndex: number;
+}): string | null {
+  const { items, activeIndex } = state;
+  if (activeIndex < 0 || activeIndex >= items.length) return null;
+  return pickerItemDisabledReason(items[activeIndex]);
+}
 
 /**
  * Uniform preview lookup for either picker item shape - the side preview
@@ -43,12 +79,20 @@ export type ComposerPickerClientRect = () => DOMRect | null;
 export interface ComposerPickerState {
   readonly open: boolean;
   readonly kind: ComposerPickerKind | null;
+  readonly slashScope: ComposerSlashScope | null;
   readonly range: ComposerPickerRange | null;
   readonly query: string;
   readonly step: MentionFlowStep;
   readonly items: ReadonlyArray<ComposerPickerItem>;
   readonly itemsForQuery: string | null;
   readonly itemsForStepId: string | null;
+  /**
+   * Scope the published `items` were built under. Part of item identity, not
+   * just a render input: the scope decides each row's enabled/disabled policy,
+   * so a list built under `all` is wrong the moment the caret makes the
+   * position `skills`-only, even though kind, query, and step all still match.
+   */
+  readonly itemsForSlashScope: ComposerSlashScope | null;
   readonly activeIndex: number;
   readonly loading: boolean;
   /**
@@ -80,6 +124,7 @@ export interface ComposerPickerState {
 export interface ComposerPickerActions {
   readonly openPicker: (input: {
     readonly kind: ComposerPickerKind;
+    readonly slashScope: ComposerSlashScope | null;
     readonly range: ComposerPickerRange;
     readonly query: string;
     readonly commit: ComposerPickerCommit;
@@ -88,12 +133,14 @@ export interface ComposerPickerActions {
   readonly updateRange: (input: {
     readonly range: ComposerPickerRange;
     readonly query: string;
+    readonly slashScope: ComposerSlashScope | null;
     readonly clientRect: ComposerPickerClientRect | null;
   }) => void;
   readonly setStep: (step: MentionFlowStep) => void;
   readonly setItems: (input: {
     readonly kind: ComposerPickerKind;
     readonly query: string;
+    readonly slashScope: ComposerSlashScope | null;
     readonly step: MentionFlowStep;
     readonly items: ReadonlyArray<ComposerPickerItem>;
     readonly loading: boolean;
@@ -123,12 +170,14 @@ export type ComposerPickerStore = StoreApi<ComposerPickerStoreState>;
 const INITIAL_STATE: ComposerPickerState = {
   open: false,
   kind: null,
+  slashScope: null,
   range: null,
   query: "",
   step: ROOT_MENTION_STEP,
   items: [],
   itemsForQuery: null,
   itemsForStepId: null,
+  itemsForSlashScope: null,
   activeIndex: 0,
   loading: false,
   fetching: false,
@@ -147,25 +196,46 @@ function clampIndex(index: number, length: number): number {
   return Math.min(Math.max(0, index), length - 1);
 }
 
-function nextIndex(index: number, length: number, direction: 1 | -1): number {
-  if (length === 0) return 0;
-  return (clampIndex(index, length) + direction + length) % length;
+function wrapIndex(index: number, length: number): number {
+  return ((index % length) + length) % length;
+}
+
+/**
+ * First selectable index starting at `start` and scanning in `direction`,
+ * wrapping once. Null when every row is disabled, which callers treat as
+ * "leave the selection where it is" rather than highlighting a dead row.
+ */
+function findEnabledIndex(
+  items: ReadonlyArray<ComposerPickerItem>,
+  start: number,
+  direction: 1 | -1,
+): number | null {
+  const length = items.length;
+  if (length === 0) return null;
+  const from = clampIndex(start, length);
+  for (let step = 0; step < length; step += 1) {
+    const candidate = wrapIndex(from + direction * step, length);
+    if (pickerItemDisabledReason(items[candidate]) === null) return candidate;
+  }
+  return null;
 }
 
 export function createComposerPickerStore(): ComposerPickerStore {
   return createStore<ComposerPickerStoreState>((set, get) => ({
     ...INITIAL_STATE,
 
-    openPicker: ({ kind, range, query, commit, clientRect }) => {
+    openPicker: ({ kind, slashScope, range, query, commit, clientRect }) => {
       set({
         open: true,
         kind,
+        slashScope,
         range,
         query,
         step: ROOT_MENTION_STEP,
         items: [],
         itemsForQuery: null,
         itemsForStepId: null,
+        itemsForSlashScope: null,
         activeIndex: 0,
         loading: false,
         fetching: false,
@@ -174,13 +244,14 @@ export function createComposerPickerStore(): ComposerPickerStore {
       });
     },
 
-    updateRange: ({ range, query, clientRect }) => {
+    updateRange: ({ range, query, slashScope, clientRect }) => {
       const previous = get();
       const sameRange =
         previous.range !== null &&
         previous.range.from === range.from &&
         previous.range.to === range.to &&
-        previous.query === query;
+        previous.query === query &&
+        previous.slashScope === slashScope;
       // Always refresh `clientRect`: even when the range is identical the
       // closure may be stale after a view.update, and `autoUpdate` reads
       // through it for live positioning.
@@ -190,11 +261,21 @@ export function createComposerPickerStore(): ComposerPickerStore {
         }
         return;
       }
+      // A scope flip rewrites the enabled/disabled policy for every row, so the
+      // published list is stale until the item hook republishes under the new
+      // scope. Drop it now rather than rendering (and accepting commits on)
+      // rows whose policy no longer holds for this caret position.
+      const scopeChanged = previous.slashScope !== slashScope;
       set({
         range,
         query,
+        slashScope,
         activeIndex: 0,
         clientRect: clientRect ?? previous.clientRect,
+        items: scopeChanged ? [] : previous.items,
+        itemsForQuery: scopeChanged ? null : previous.itemsForQuery,
+        itemsForStepId: scopeChanged ? null : previous.itemsForStepId,
+        itemsForSlashScope: scopeChanged ? null : previous.itemsForSlashScope,
       });
     },
 
@@ -206,18 +287,20 @@ export function createComposerPickerStore(): ComposerPickerStore {
         items: [],
         itemsForQuery: null,
         itemsForStepId: null,
+        itemsForSlashScope: null,
         activeIndex: 0,
         loading: false,
         fetching: false,
       });
     },
 
-    setItems: ({ kind, query, step, items, loading }) => {
+    setItems: ({ kind, query, slashScope, step, items, loading }) => {
       const previous = get();
       if (
         !previous.open ||
         previous.kind !== kind ||
         previous.query !== query ||
+        previous.slashScope !== slashScope ||
         stepIdOf(previous.step) !== stepIdOf(step)
       ) {
         return;
@@ -226,8 +309,11 @@ export function createComposerPickerStore(): ComposerPickerStore {
         items,
         itemsForQuery: query,
         itemsForStepId: stepIdOf(step),
+        itemsForSlashScope: slashScope,
         loading,
-        activeIndex: clampIndex(previous.activeIndex, items.length),
+        activeIndex:
+          findEnabledIndex(items, previous.activeIndex, 1) ??
+          clampIndex(previous.activeIndex, items.length),
       });
     },
 
@@ -250,8 +336,13 @@ export function createComposerPickerStore(): ComposerPickerStore {
       set({ fetching });
     },
 
+    // Navigation deliberately traverses disabled rows rather than jumping over
+    // them: skipping makes the highlight look like it teleports past entries
+    // the user can still see. Disabled rows highlight as inert instead, and
+    // `commitActiveItem` is what refuses.
     setActiveIndex: (index) => {
       const previous = get();
+      if (previous.items.length === 0) return;
       const clamped = clampIndex(index, previous.items.length);
       if (clamped === previous.activeIndex) return;
       set({ activeIndex: clamped });
@@ -259,10 +350,11 @@ export function createComposerPickerStore(): ComposerPickerStore {
 
     moveActive: (direction) => {
       const previous = get();
-      const next = nextIndex(
-        previous.activeIndex,
-        previous.items.length,
-        direction,
+      const length = previous.items.length;
+      if (length === 0) return;
+      const next = wrapIndex(
+        clampIndex(previous.activeIndex, length) + direction,
+        length,
       );
       if (next === previous.activeIndex) return;
       set({ activeIndex: next });
@@ -274,7 +366,9 @@ export function createComposerPickerStore(): ComposerPickerStore {
       if (state.activeIndex < 0 || state.activeIndex >= state.items.length) {
         return false;
       }
-      state.commit(state.items[state.activeIndex]);
+      const item = state.items[state.activeIndex];
+      if (pickerItemDisabledReason(item) !== null) return false;
+      state.commit(item);
       return true;
     },
 

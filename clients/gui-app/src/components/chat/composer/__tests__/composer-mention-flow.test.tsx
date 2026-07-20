@@ -203,6 +203,7 @@ describe("composer mention flow", () => {
     pickerStore.getState().setItems({
       kind: "mention",
       query: "xy",
+      slashScope: null,
       step: pickerStore.getState().step,
       items: [],
       loading: false,
