@@ -1532,6 +1532,7 @@ export class HostController {
     try {
       raw = await this.streamBundled<unknown>(args);
     } catch (err) {
+      await this.reloadAfterServiceCycleFailure();
       return this.classifyEnsureLikeError(err, true);
     }
     const result = parseEnsureResult(raw);
@@ -1982,6 +1983,7 @@ export class HostController {
         ...(force ? ["--force"] : []),
       ]);
     } catch (err) {
+      await this.reloadAfterServiceCycleFailure();
       return this.classifyApplyLikeError(err, "retry-with-force");
     }
     const result = parseApplyResult(raw);
@@ -2111,61 +2113,73 @@ export class HostController {
     return this.coalesceIntent<ActivateInstalledOk>(
       `activate:${force}`,
       async () => {
-        await this.awaitDownloadLaneIdle();
-        await this.stageLatest();
-        await this.awaitDownloadLaneIdle();
+        // Match `applyStaged`'s at-most-once freshness retry: the first
+        // fingerprint can be invalidated by a replacement stage after the
+        // off-lane eligibility pass. Re-check outside the mutation lane,
+        // never by reusing stale stage state under the exclusive lock.
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          await this.awaitDownloadLaneIdle();
+          await this.stageLatest();
+          await this.awaitDownloadLaneIdle();
 
-        return this.enqueueMutation<ActivateInstalledOk>(
-          "activate",
-          `activate:${force}`,
-          null,
-          async () => {
-            // A ready update supersedes activation debt - prevents the
-            // restart-old -> stamp -> restart-new double cycle. The reconcile
-            // already ran above; this only re-reads the (now-fresh) state and
-            // performs the apply/activate choreography, no further download.
-            const installed = await readDesktopHostInstallRecord(this.layout);
-            const staged = await readDesktopHostStagedRecord(this.layout);
-            if (
-              deriveUpdateReady(
-                installed?.version ?? null,
-                staged?.version ?? null,
-              )
-            ) {
-              const eligibleStage = this.eligibleStage;
-              if (eligibleStage === null) {
-                return {
-                  kind: "deferred",
-                  message:
-                    "The staged host could not be eligibility-checked. Try the update again when the registry is reachable.",
-                };
+          const outcome = await this.enqueueMutation<ActivateInstalledOk>(
+            "activate",
+            `activate:${force}`,
+            null,
+            async () => {
+              // A ready update supersedes activation debt - prevents the
+              // restart-old -> stamp -> restart-new double cycle. The reconcile
+              // already ran above; this only re-reads the (now-fresh) state and
+              // performs the apply/activate choreography, no further download.
+              const installed = await readDesktopHostInstallRecord(this.layout);
+              const staged = await readDesktopHostStagedRecord(this.layout);
+              if (
+                deriveUpdateReady(
+                  installed?.version ?? null,
+                  staged?.version ?? null,
+                )
+              ) {
+                const eligibleStage = this.eligibleStage;
+                if (eligibleStage === null) {
+                  return {
+                    kind: "deferred",
+                    message:
+                      "The staged host could not be eligibility-checked. Try the update again when the registry is reachable.",
+                  };
+                }
+                const applied = (await this.isPackagedMacOwned())
+                  ? await this.applyStagedPackagedMac(eligibleStage.fingerprint)
+                  : await this.applyStagedCliOwned(
+                      force,
+                      eligibleStage.fingerprint,
+                    );
+                if (applied.kind === "stage-fingerprint-mismatch") {
+                  return applied;
+                }
+                return applied.kind === "ok"
+                  ? {
+                      kind: "ok",
+                      value: { activated: applied.value.runningActivated },
+                    }
+                  : applied;
               }
-              const applied = (await this.isPackagedMacOwned())
-                ? await this.applyStagedPackagedMac(eligibleStage.fingerprint)
-                : await this.applyStagedCliOwned(
-                    force,
-                    eligibleStage.fingerprint,
-                  );
-              if (applied.kind === "stage-fingerprint-mismatch") {
-                return {
-                  kind: "deferred",
-                  message:
-                    "The staged host changed while the update was being applied. Retry to apply the current stage.",
-                };
+              if (await this.isPackagedMacOwned()) {
+                return this.runLockedMacActivationCycle(
+                  force,
+                  "activate",
+                  false,
+                );
               }
-              return applied.kind === "ok"
-                ? {
-                    kind: "ok",
-                    value: { activated: applied.value.runningActivated },
-                  }
-                : applied;
-            }
-            if (await this.isPackagedMacOwned()) {
-              return this.runLockedMacActivationCycle(force, "activate", false);
-            }
-            return this.activateInstalledCliOwned(force);
-          },
-        );
+              return this.activateInstalledCliOwned(force);
+            },
+          );
+          if (outcome.kind !== "stage-fingerprint-mismatch") return outcome;
+        }
+        return {
+          kind: "deferred",
+          message:
+            "The staged host changed while activation was being applied. Retry to apply the current stage.",
+        };
       },
     );
   }
@@ -2252,6 +2266,7 @@ export class HostController {
           : ["host", "install", "--release", pin, "--if-idle"],
       );
     } catch (err) {
+      await this.reloadAfterServiceCycleFailure();
       return this.classifyApplyLikeError(err, "retry-with-force");
     }
     const result = parseInstallResult(raw);
@@ -2396,8 +2411,6 @@ export class HostController {
             message: `Failed to register the host login item (status=${registration.status}).`,
           };
         }
-        const prePid =
-          (await readRunningHostIdentity(this.layout))?.pid ?? null;
         let raw: unknown;
         try {
           raw = await this.runBundled<unknown>([
@@ -2414,8 +2427,13 @@ export class HostController {
         }
         const result = parseServiceStartResult(raw);
         try {
+          // Service registration can be an idempotent Linux
+          // `systemctl enable --now`: it may leave the current host PID in
+          // place. Only restart/cycle actions pass a pre-PID to readiness;
+          // treating registration as a guaranteed replacement converts a
+          // healthy same-PID service into a 60s false timeout.
           await this.completeServiceStart(
-            prePid,
+            null,
             result.runtimeWasNull ? result.installGeneration : null,
             result.runtimeVersion,
           );

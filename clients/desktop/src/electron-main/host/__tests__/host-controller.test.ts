@@ -1823,6 +1823,58 @@ describe("yank/apply ordering", () => {
     expect(applyFingerprints).toEqual(["stage-1.8.0", "stage-replaced"]);
   });
 
+  it("F6: activateInstalled re-eligibility retries a stage-fingerprint mismatch exactly once", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writeStagedRecord("production", "1.8.0", "1.8.0");
+    const layout = getHostFsLayout("production");
+    const applyFingerprints: string[] = [];
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+      availableSnapshotFixture("1.8.0", ["1.8.0"]),
+    );
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (!opts.args.includes("apply")) return { data: {} };
+      const fingerprintIndex = opts.args.indexOf(
+        "--expected-stage-fingerprint",
+      );
+      const fingerprint = opts.args[fingerprintIndex + 1];
+      if (fingerprint === undefined) throw new Error("missing fingerprint");
+      applyFingerprints.push(fingerprint);
+      if (applyFingerprints.length === 1) {
+        writeFileSync(
+          layout.stagedRecordFile,
+          JSON.stringify({
+            stageId: "stage-replaced",
+            version: "1.8.0",
+            runtimeVersion: "1.8.0",
+          }),
+        );
+        return { data: { outcome: "stage-fingerprint-mismatch" } };
+      }
+      return {
+        data: {
+          outcome: "applied",
+          record: { version: "1.8.0", runtimeVersion: "1.8.0" },
+          runningActivated: true,
+          installGeneration: null,
+        },
+      };
+    });
+    vi.mocked(waitForHostReady).mockResolvedValue({
+      ready: true,
+      version: "1.8.0",
+      pid: 1,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reason: "ready",
+    });
+
+    expect((await controller.activateInstalled(false)).kind).toBe("ok");
+    expect(applyFingerprints).toEqual(["stage-1.8.0", "stage-replaced"]);
+  });
+
   it("uses the prerelease registry view when the stage is an RC", async () => {
     const controller = newController("production");
     writeInstallRecord("production", {
@@ -4375,6 +4427,35 @@ describe("CLI-owned service start attestation (closing A2)", () => {
     expectCommandGenerationWasStamped();
   });
 
+  it("F3: registerService accepts the existing PID when service install does not cycle it", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue({
+      installGeneration: "already-stamped-generation",
+      runtimeVersion: "1.7.0",
+      runtimeWasNull: false,
+    });
+    vi.mocked(waitForHostReady).mockResolvedValue({
+      ready: true,
+      version: "1.7.0",
+      pid: process.pid,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reason: "ready",
+    });
+
+    expect((await controller.registerService()).kind).toBe("ok");
+    expect(waitForHostReady).toHaveBeenCalledWith(
+      expect.any(Number),
+      getHostFsLayout("production").pidMetadataFile,
+      expect.any(Number),
+      null,
+    );
+  });
+
   it("respawn stamps the restart command's attested generation", async () => {
     const controller = newController("production");
     writeInstallRecord("production", {
@@ -4506,6 +4587,71 @@ describe("CLI-owned service start attestation (closing A2)", () => {
 
     expect(outcome.kind).toBe("failed");
     expect(lifecycle.reloadSnapshotFromDisk).toHaveBeenCalledTimes(1);
+  });
+
+  it("F7: reloads lifecycle state after each disruptive CLI command throws", async () => {
+    const convergeLifecycle = fakeHostLifecycle();
+    const convergeController = new HostController({
+      environment: "production",
+      hostLifecycle: convergeLifecycle,
+      reachabilityProbe: async () => true,
+      desktopLockWaitMs: DESKTOP_LOCK_WAIT_MS,
+      desktopLockPollIntervalMs: DESKTOP_LOCK_POLL_INTERVAL_MS,
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockRejectedValueOnce(
+      new Error("ensure failed after side effects"),
+    );
+
+    expect((await convergeController.convergeReady(false)).kind).toBe("failed");
+    expect(convergeLifecycle.reloadSnapshotFromDisk).toHaveBeenCalledTimes(1);
+
+    const applyLifecycle = fakeHostLifecycle();
+    const applyController = new HostController({
+      environment: "production",
+      hostLifecycle: applyLifecycle,
+      reachabilityProbe: async () => true,
+      desktopLockWaitMs: DESKTOP_LOCK_WAIT_MS,
+      desktopLockPollIntervalMs: DESKTOP_LOCK_POLL_INTERVAL_MS,
+    });
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writeStagedRecord("production", "1.8.0", "1.8.0");
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+      availableSnapshotFixture("1.8.0", ["1.8.0"]),
+    );
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args.includes("apply")) {
+        throw new Error("apply failed after side effects");
+      }
+      return { data: {} };
+    });
+
+    expect((await applyController.applyStaged("manual", false)).kind).toBe(
+      "failed",
+    );
+    expect(applyLifecycle.reloadSnapshotFromDisk).toHaveBeenCalledTimes(1);
+
+    const installLifecycle = fakeHostLifecycle();
+    const installController = new HostController({
+      environment: "production",
+      hostLifecycle: installLifecycle,
+      reachabilityProbe: async () => true,
+      desktopLockWaitMs: DESKTOP_LOCK_WAIT_MS,
+      desktopLockPollIntervalMs: DESKTOP_LOCK_POLL_INTERVAL_MS,
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args.includes("install")) {
+        throw new Error("install failed after side effects");
+      }
+      return { data: {} };
+    });
+
+    expect((await installController.installVersion("1.8.0", false)).kind).toBe(
+      "failed",
+    );
+    expect(installLifecycle.reloadSnapshotFromDisk).toHaveBeenCalledTimes(1);
   });
 });
 
