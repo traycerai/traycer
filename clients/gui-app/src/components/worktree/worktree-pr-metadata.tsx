@@ -133,6 +133,7 @@ function WorktreePrOverflow(props: {
         </PopoverTrigger>
       </Badge>
       <PopoverContent
+        aria-label="More pull requests"
         align="end"
         sideOffset={6}
         className="w-[min(90vw,24rem)]"

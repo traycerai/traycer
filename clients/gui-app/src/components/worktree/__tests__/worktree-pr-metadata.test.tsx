@@ -225,6 +225,9 @@ describe("worktree PR metadata", () => {
     fireEvent.click(overflow);
 
     const content = screen.getByTestId("worktree-pr-overflow-content");
+    expect(screen.getByRole("dialog", { name: "More pull requests" })).toBe(
+      content,
+    );
     expect(
       within(content).getByRole("link", {
         name: "Open design-system PR #9 Open",
