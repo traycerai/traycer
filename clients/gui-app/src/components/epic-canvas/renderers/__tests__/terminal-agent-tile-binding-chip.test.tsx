@@ -151,9 +151,17 @@ vi.mock("@/hooks/terminal/use-terminal-kill-for-mutation", () => ({
   }),
 }));
 
-vi.mock("@/lib/registries/terminal-session-registry", () => ({
-  useTerminalSessionHandle: () => null,
-}));
+vi.mock(
+  "@/lib/registries/terminal-session-registry",
+  async (importOriginal) => ({
+    // Keep the real registry surface (the bootstrap's warm-handle adoption
+    // reads it; against an empty registry it no-ops) and stub only the handle.
+    ...(await importOriginal<
+      typeof import("@/lib/registries/terminal-session-registry")
+    >()),
+    useTerminalSessionHandle: () => null,
+  }),
+);
 
 vi.mock("@/stores/epics/canvas/store", () => ({
   useEpicCanvasStore: (selector: (s: unknown) => unknown) =>

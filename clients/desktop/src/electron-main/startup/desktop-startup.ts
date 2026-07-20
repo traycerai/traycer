@@ -81,6 +81,8 @@ import {
   installProcessGoneListeners,
   logGpuInfo,
 } from "../app/crash-reporter";
+import { suppressWslKernelCoreDumps } from "../app/core-dump-guard";
+import { pruneStaleCrashDumps } from "../app/crash-dump-prune";
 import { startRendererMemorySampler } from "../app/diagnostics";
 import {
   configureAppUserModelId,
@@ -127,6 +129,7 @@ import { startHostHealthMonitor } from "../host/host-health-monitor";
 import { startPendingLoginItemRevisionMonitor } from "../host/pending-login-item-revision-monitor";
 import { hostManagesHostLoginItem } from "../app/host-login-item";
 import { DESKTOP_APP_NAME } from "../../config";
+import { hydrateUpdatePreferences } from "../app/update-preferences";
 
 // Per-window fresh-snapshot query budget during `before-quit`. Each renderer,
 // on receiving `getFreshUnsyncedSnapshot`, first AWAITS its debounced per-window
@@ -231,13 +234,15 @@ async function timed(
 // Pre-ready: command-line switches, scheme registration, hardware
 // acceleration toggle, V8 heap, and crash collection all run before
 // Chromium initializes. These are synchronous in-process Electron calls
-// (the one sync filesystem read - the GPU preference - is documented as the
-// required pre-`whenReady` exception in app/gpu-acceleration.ts).
+// (two documented sync-filesystem exceptions: the GPU preference read in
+// app/gpu-acceleration.ts and the memory-backed /proc write in
+// app/core-dump-guard.ts, which must land before Chromium spawns children).
 function runPreReady(state: BootState): void {
   trimUnusedChromiumFeatures();
   configureV8HeapSize();
   applyHardwareAccelerationPreference();
   registerAppScheme();
+  suppressWslKernelCoreDumps();
   initCrashReporter();
   installGlobalErrorHandlers();
   installProcessGoneListeners();
@@ -273,6 +278,10 @@ async function runOnReady(state: BootState): Promise<void> {
     timed("on-ready", "download-observer", () => installDownloadObserver()),
     timed("on-ready", "preconnect", () => preconnectTraycerHosts()),
     timed("on-ready", "gpu-info", () => logGpuInfo()),
+    timed("on-ready", "crash-dump-prune", () => pruneStaleCrashDumps()),
+    timed("on-ready", "update-preferences", () =>
+      hydrateUpdatePreferences().then(() => undefined),
+    ),
   ]);
 }
 
@@ -443,8 +452,8 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
     perWindowState,
     tray,
     zoomController: createdZoomController,
-    dispatchRendererCommand: (command) =>
-      bridge.dispatchMenuCommand(command) ?? false,
+    dispatchRendererCommand: (command, hostUpdateVersion) =>
+      bridge.dispatchMenuCommand(command, hostUpdateVersion) ?? false,
     checkForUpdates: () =>
       checkForUpdatesNow(config.isDev, "manual").then(() => undefined),
   });

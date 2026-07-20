@@ -26,6 +26,7 @@ function entry(
     profileId: "p-a",
     refreshStatus: "idle",
     refresh: vi.fn(() => Promise.resolve()),
+    ensureFresh: vi.fn(() => Promise.resolve()),
     projection,
   };
 }

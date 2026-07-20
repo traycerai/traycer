@@ -522,9 +522,17 @@ function registerHostCommands(program: Command): void {
       .option(
         "--force",
         "Update the host even if it has work in progress (skips the busy check).",
+      )
+      .option(
+        "--release <version>",
+        "Update to an exact registry version instead of the stable latest pointer.",
       ),
     (opts) =>
       buildHostUpdateCommand({
+        versionRequest:
+          typeof opts.release === "string" && opts.release.length > 0
+            ? opts.release
+            : "latest",
         force: opts.force === true,
       }),
   );

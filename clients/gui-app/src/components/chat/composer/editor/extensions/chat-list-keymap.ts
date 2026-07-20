@@ -59,7 +59,14 @@ function handlePickerEnter(pickerStore: ComposerPickerStore | null): boolean {
   if (pickerStore === null) return false;
   const state = pickerStore.getState();
   if (!state.open || state.items.length === 0) return false;
-  return state.commitActiveItem();
+  // An open, non-empty picker owns Enter outright - including when the
+  // highlighted row legally refuses to commit (a disabled row). Returning
+  // `commitActiveItem()` directly would fall through to `onSubmit` and send a
+  // half-typed message with the picker still on screen. This binding wins over
+  // the suggestion plugin's own key handling, so the refusal has to be
+  // absorbed here rather than there.
+  state.commitActiveItem();
+  return true;
 }
 
 // Shift-Enter on an empty final line inside a blockquote lifts the caret out

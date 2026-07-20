@@ -67,6 +67,7 @@ function makeManagement(overrides: Overrides): IHostManagement {
           updateAvailable: false,
           reachable: false,
           errorMessage: null,
+          includePreReleases: false,
         }),
       ),
     getOperationStatus: vi.fn(
@@ -198,6 +199,7 @@ describe("HostUpdateBanner (Flow 6)", () => {
           updateAvailable: true,
           reachable: true,
           errorMessage: null,
+          includePreReleases: false,
         }),
     });
     renderBanner(makeHost(management));
@@ -216,6 +218,7 @@ describe("HostUpdateBanner (Flow 6)", () => {
           updateAvailable: false,
           reachable: true,
           errorMessage: null,
+          includePreReleases: false,
         }),
     });
     renderBanner(makeHost(management));
@@ -233,6 +236,7 @@ describe("HostUpdateBanner (Flow 6)", () => {
           updateAvailable: false,
           reachable: false,
           errorMessage: "offline",
+          includePreReleases: false,
         }),
     });
     renderBanner(makeHost(management));
@@ -268,6 +272,7 @@ describe("HostUpdateBanner (Flow 6)", () => {
           updateAvailable: true,
           reachable: true,
           errorMessage: null,
+          includePreReleases: false,
         }),
       updateHost,
     });
@@ -276,6 +281,14 @@ describe("HostUpdateBanner (Flow 6)", () => {
     fireEvent.click(button);
     await waitFor(() => {
       expect(updateHost).toHaveBeenCalledTimes(1);
+    });
+    // Review finding 5: the banner pins the install to the exact version it
+    // is displaying, so the shell can refuse if the registry resolves a
+    // different target by the time this click lands (e.g. a channel switch
+    // in another window/the tray).
+    expect(updateHost).toHaveBeenCalledWith({
+      expectedVersion: "1.4.2",
+      onProgress: null,
     });
   });
 
@@ -290,6 +303,7 @@ describe("HostUpdateBanner (Flow 6)", () => {
           updateAvailable: true,
           reachable: true,
           errorMessage: null,
+          includePreReleases: false,
         }),
     });
     const host = Object.assign(makeHost(management), {
@@ -306,6 +320,7 @@ describe("HostUpdateBanner (Flow 6)", () => {
         updateAvailable: false,
         reachable: true,
         errorMessage: null,
+        includePreReleases: false,
       });
     });
 
@@ -333,6 +348,7 @@ describe("HostUpdateBanner (Flow 6)", () => {
           updateAvailable: true,
           reachable: true,
           errorMessage: null,
+          includePreReleases: false,
         }),
     });
     renderBanner(makeHost(management));
@@ -364,6 +380,7 @@ describe("HostUpdateBanner (Flow 6)", () => {
           updateAvailable: true,
           reachable: true,
           errorMessage: null,
+          includePreReleases: false,
         }),
     });
     renderBanner(makeHost(management));
@@ -387,6 +404,7 @@ describe("HostUpdateBanner (Flow 6)", () => {
           updateAvailable: true,
           reachable: true,
           errorMessage: null,
+          includePreReleases: false,
         }),
     });
     renderBanner(makeHost(management));
@@ -409,6 +427,7 @@ describe("HostUpdateBanner (Flow 6)", () => {
           updateAvailable: true,
           reachable: true,
           errorMessage: null,
+          includePreReleases: false,
         }),
     });
     renderBanner(makeHost(management));
@@ -447,6 +466,7 @@ describe("HostUpdateBanner (Flow 6)", () => {
           updateAvailable: true,
           reachable: true,
           errorMessage: null,
+          includePreReleases: false,
         }),
       updateHost,
     });

@@ -14,11 +14,12 @@ import {
   runnerQueryKeys,
 } from "@/lib/query-keys/runner-mutation-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
+import { useRunnerHostOperationStatusQuery } from "@/hooks/runner/use-runner-host-operation-status-query";
 import { cn } from "@/lib/utils";
+import { useAllowPrereleaseUpdates } from "@/hooks/runner/use-desktop-app-updates";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import type {
   HostInstallResult,
-  HostOperationStatus,
   HostRegistryUpdateState,
   IHostManagement,
 } from "@traycer-clients/shared/platform/runner-host";
@@ -77,6 +78,7 @@ interface HostUpdateBannerInnerProps {
 function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
   const { management, className } = props;
   const queryClient = useQueryClient();
+  const allowPrerelease = useAllowPrereleaseUpdates();
   const snoozeUntilByVersion = useHostUpdateBannerStore(
     (state) => state.snoozeUntilByVersion,
   );
@@ -84,7 +86,7 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
 
   const { data: registryState } = useQuery(
     queryOptions<HostRegistryUpdateState>({
-      queryKey: runnerQueryKeys.hostRegistryUpdate(management),
+      queryKey: runnerQueryKeys.hostRegistryUpdate(management, allowPrerelease),
       queryFn: () => management.registryCheck({ force: false }),
       // Same TTL as Settings - both reuse the cached probe.
       staleTime: 60 * 60 * 1000,
@@ -96,15 +98,8 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
   // open window via the same query key, so the button here disables and
   // shows progress whether THIS banner, Settings, or the background
   // auto-update reconciler is the one actually driving the update.
-  // `staleTime: Infinity` because this is entirely event-sourced (pushed by
-  // `HostOperationStatusListener`), never polling-appropriate.
-  const { data: operationStatus } = useQuery(
-    queryOptions<HostOperationStatus | null>({
-      queryKey: runnerQueryKeys.hostOperationStatus(management),
-      queryFn: () => management.getOperationStatus(),
-      staleTime: Infinity,
-    }),
-  );
+  const { data: operationStatus } =
+    useRunnerHostOperationStatusQuery(management);
   const sharedOperationActive =
     operationStatus !== undefined && operationStatus !== null;
   const sharedPercent =
@@ -113,12 +108,15 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
       : null;
 
   const hostUpdateAnalytics = hostUpdateAnalyticsCallbacks("direct_ui");
-  const updateMutation = useMutation<HostInstallResult>({
+  const updateMutation = useMutation<HostInstallResult, Error, string>({
     mutationKey: runnerMutationKeys.hostUpdate(),
     // Progress is read from the shared `operationStatus` query above (it
     // reflects the operation regardless of which surface started it), so
     // this mutation doesn't need its own progress callback.
-    mutationFn: () => management.updateHost({ onProgress: null }),
+    // `expectedVersion` is the version this banner is displaying: the shell
+    // refuses the install if the registry now resolves a different target.
+    mutationFn: (expectedVersion) =>
+      management.updateHost({ expectedVersion, onProgress: null }),
     onMutate: () => {
       hostUpdateAnalytics.onStarted();
     },
@@ -132,7 +130,7 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
       // to acquire the action.
       useHostUpdateBannerStore.getState().clearSnooze(data.version);
       void queryClient.invalidateQueries({
-        queryKey: runnerQueryKeys.hostRegistryUpdate(management),
+        queryKey: runnerQueryKeys.hostRegistryUpdateScope(management),
       });
       void queryClient.invalidateQueries({
         queryKey: runnerQueryKeys.hostInstalledRecord(management),
@@ -199,7 +197,7 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
         size="sm"
         variant="default"
         disabled={updateMutation.isPending || sharedOperationActive}
-        onClick={() => updateMutation.mutate()}
+        onClick={() => updateMutation.mutate(latestVersion)}
       >
         {updateMutation.isPending || sharedOperationActive ? (
           <>
