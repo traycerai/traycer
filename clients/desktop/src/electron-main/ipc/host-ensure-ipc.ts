@@ -215,6 +215,7 @@ async function ensureHost(
       "ensure",
       LONG_OP_TIMEOUT_MS,
       bridge,
+      null,
     );
   } catch (err) {
     const categorized = categorizeHostCliError(err);

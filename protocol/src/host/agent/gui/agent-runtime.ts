@@ -187,6 +187,15 @@ export type RuntimeSlashInvocation = z.infer<
   typeof runtimeSlashInvocationSchema
 >;
 
+export const runtimeSkillInvocationSchema = z.object({
+  name: z.string(),
+  path: z.string().nullable(),
+  metadata: z.record(z.string(), z.unknown()).default({}),
+});
+export type RuntimeSkillInvocation = z.infer<
+  typeof runtimeSkillInvocationSchema
+>;
+
 export const runtimeAgentRunInputSchema = z.object({
   harnessId: guiHarnessIdSchema,
   prompt: z.string(),
@@ -205,6 +214,9 @@ export const runtimeAgentRunInputSchema = z.object({
   providerWorkspace: providerWorkspaceSchema,
   systemPrompt: z.string().nullable().default(null),
   slashInvocation: runtimeSlashInvocationSchema.nullable().default(null),
+  // Skills selected as inline composer modifiers. Optional preserves runtime
+  // compatibility with callers created before multi-skill composer support.
+  skillInvocations: z.array(runtimeSkillInvocationSchema).optional(),
   // Billing/account context for the turn, sourced from the turn-bearing frame's
   // `accountContext` (a global app-wide selection), not from per-chat
   // `chatRunSettings`. The Traycer harness threads this to its per-user

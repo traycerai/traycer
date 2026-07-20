@@ -15,13 +15,21 @@ interface HostDoctorIssueCardProps {
   readonly expanded: boolean;
   readonly recurrenceLocked: boolean;
   readonly fixPendingCode: string | null;
+  readonly externalOperationActive: boolean;
   readonly onFix: (issue: HostDoctorIssue) => void;
   readonly onToggle: (code: string) => void;
 }
 
 export function HostDoctorIssueCard(props: HostDoctorIssueCardProps) {
-  const { issue, expanded, recurrenceLocked, fixPendingCode, onFix, onToggle } =
-    props;
+  const {
+    issue,
+    expanded,
+    recurrenceLocked,
+    fixPendingCode,
+    externalOperationActive,
+    onFix,
+    onToggle,
+  } = props;
   const issueFixPending = fixPendingCode === issue.code;
   return (
     <div
@@ -49,7 +57,11 @@ export function HostDoctorIssueCard(props: HostDoctorIssueCardProps) {
               <Button
                 variant="default"
                 size="sm"
-                disabled={recurrenceLocked || fixPendingCode !== null}
+                disabled={
+                  recurrenceLocked ||
+                  fixPendingCode !== null ||
+                  externalOperationActive
+                }
                 onClick={() => onFix(issue)}
               >
                 {issueFixPending ? (

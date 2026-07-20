@@ -15,6 +15,7 @@ import {
 } from "./host-display-name";
 import type { DesktopLocalHostSnapshot } from "../../ipc-contracts/host-types";
 import { streamTraycerCliJson } from "../cli/traycer-cli";
+import { HOST_RESTART_SUBPROCESS_TIMEOUT_MS } from "@traycer/protocol/host/lifecycle-constants";
 
 /**
  * Snapshot of the OS-supervised host's runtime state, as projected by
@@ -50,7 +51,6 @@ const WS_RPC_HOST = "127.0.0.1";
 const HOST_READY_TIMEOUT_MS = 60_000;
 const HOST_POLL_INTERVAL_MS = 250;
 const HOST_ENDPOINT_CHECK_TIMEOUT_MS = 750;
-const CLI_RESTART_TIMEOUT_MS = 2 * 60_000;
 const CLI_START_STOP_TIMEOUT_MS = 60_000;
 /**
  * Backoff ladder for re-probing a pid.json that is present but whose
@@ -245,6 +245,11 @@ export class HostLifecycle extends EventEmitter {
    * build) instead of poking the platform service-manager APIs directly. The
    * PID-file watcher fires `change` once the new host publishes fresh
    * metadata.
+   *
+   * Rethrows after logging/emitting so the renderer-driven caller (IPC
+   * `requestHostRespawn` via `respawnHost`) sees a rejected promise instead of
+   * a false success - a swallowed failure here used to resolve while the host
+   * stayed dead.
    */
   async respawn(): Promise<void> {
     if (this.disposed) {
@@ -269,6 +274,7 @@ export class HostLifecycle extends EventEmitter {
       const startupError = await this.buildStartupError(cause);
       log.error("[host] respawn failed", startupError);
       this.emit("error", startupError);
+      throw cause;
     }
   }
 
@@ -574,7 +580,8 @@ export class HostLifecycle extends EventEmitter {
     await streamTraycerCliJson<unknown>({
       args: ["host", "restart"],
       env: null,
-      timeoutMs: CLI_RESTART_TIMEOUT_MS,
+      timeoutMs: HOST_RESTART_SUBPROCESS_TIMEOUT_MS,
+      invocation: null,
       onEvent: () => {
         // No progress sink - restart payload is small and any partial
         // progress lines are advisory. The PID-metadata watcher fires

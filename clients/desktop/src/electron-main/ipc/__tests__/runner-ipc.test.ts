@@ -498,6 +498,7 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.appUpdateDownload,
         RunnerHostInvoke.appUpdateGetSnapshot,
         RunnerHostInvoke.appUpdateInstall,
+        RunnerHostInvoke.appUpdateSetAllowPrerelease,
         RunnerHostInvoke.windowsList,
         RunnerHostInvoke.windowsRequestNew,
         RunnerHostInvoke.windowsRequestFocus,
@@ -1352,11 +1353,15 @@ describe("RunnerIpcBridge", () => {
 
     windowA.setFocused(true);
     windowB.setFocused(false);
-    expect(bridge.dispatchMenuCommand("app.openLogs")).toBe(true);
+    expect(bridge.dispatchMenuCommand("app.openLogs", null)).toBe(true);
     expect(windowA.sentMessages).toEqual([
       {
         channel: RunnerHostEvent.menuCommand,
-        payload: { command: "app.openLogs", windowId: "window-a" },
+        payload: {
+          command: "app.openLogs",
+          windowId: "window-a",
+          hostUpdateVersion: null,
+        },
       },
     ]);
     expect(windowB.sentMessages).toEqual([]);
@@ -1364,7 +1369,7 @@ describe("RunnerIpcBridge", () => {
     windowA.setFocused(false);
     windowA.sentMessages.length = 0;
     windowB.sentMessages.length = 0;
-    expect(bridge.dispatchMenuCommand("app.aboutDetails")).toBe(true);
+    expect(bridge.dispatchMenuCommand("app.aboutDetails", null)).toBe(true);
     expect(registry.mostRecentlyFocusedId()).toBe("window-b");
     expect(
       windowB.sentMessages.filter(
@@ -1373,12 +1378,16 @@ describe("RunnerIpcBridge", () => {
     ).toEqual([
       {
         channel: RunnerHostEvent.menuCommand,
-        payload: { command: "app.aboutDetails", windowId: "window-b" },
+        payload: {
+          command: "app.aboutDetails",
+          windowId: "window-b",
+          hostUpdateVersion: null,
+        },
       },
     ]);
     windowB.setFocused(false);
     windowB.sentMessages.length = 0;
-    expect(bridge.dispatchMenuCommand("epic.openInNewWindow")).toBe(true);
+    expect(bridge.dispatchMenuCommand("epic.openInNewWindow", null)).toBe(true);
     expect(
       windowB.sentMessages.filter(
         (message) => message.channel === RunnerHostEvent.menuCommand,
@@ -1386,7 +1395,11 @@ describe("RunnerIpcBridge", () => {
     ).toEqual([
       {
         channel: RunnerHostEvent.menuCommand,
-        payload: { command: "epic.openInNewWindow", windowId: "window-b" },
+        payload: {
+          command: "epic.openInNewWindow",
+          windowId: "window-b",
+          hostUpdateVersion: null,
+        },
       },
     ]);
     windowB.sentMessages.length = 0;
@@ -1394,7 +1407,11 @@ describe("RunnerIpcBridge", () => {
     // renderer (tray click while another app is foregrounded). The
     // dispatcher must fall back to the MRU renderer so the in-app install
     // mutation still runs.
-    expect(bridge.dispatchMenuCommand("host.installUpdate")).toBe(true);
+    // The version the tray row was labelled with rides along, so the renderer
+    // can pin the install to exactly what the user clicked.
+    expect(bridge.dispatchMenuCommand("host.installUpdate", "1.4.2")).toBe(
+      true,
+    );
     expect(
       windowB.sentMessages.filter(
         (message) => message.channel === RunnerHostEvent.menuCommand,
@@ -1405,13 +1422,14 @@ describe("RunnerIpcBridge", () => {
         payload: {
           command: "host.installUpdate",
           windowId: "window-b",
+          hostUpdateVersion: "1.4.2",
         },
       },
     ]);
     windowB.sentMessages.length = 0;
     // Tray "Settings…" / "Sign In" fire in the same no-focused-renderer
     // situation and must reach the MRU renderer instead of no-oping.
-    expect(bridge.dispatchMenuCommand("app.openSettings")).toBe(true);
+    expect(bridge.dispatchMenuCommand("app.openSettings", null)).toBe(true);
     expect(
       windowB.sentMessages.filter(
         (message) => message.channel === RunnerHostEvent.menuCommand,
@@ -1422,6 +1440,7 @@ describe("RunnerIpcBridge", () => {
         payload: {
           command: "app.openSettings",
           windowId: "window-b",
+          hostUpdateVersion: null,
         },
       },
     ]);
@@ -1451,25 +1470,33 @@ describe("RunnerIpcBridge", () => {
     windowA.sentMessages.length = 0;
     windowB.sentMessages.length = 0;
 
-    expect(bridge.dispatchMenuCommand("epic.closeTab")).toBe(false);
-    expect(bridge.dispatchMenuCommand("window.closeWindow")).toBe(false);
+    expect(bridge.dispatchMenuCommand("epic.closeTab", null)).toBe(false);
+    expect(bridge.dispatchMenuCommand("window.closeWindow", null)).toBe(false);
     expect(windowA.sentMessages).toEqual([]);
     expect(windowB.sentMessages).toEqual([]);
 
     windowB.setFocused(true);
-    expect(bridge.dispatchMenuCommand("epic.closeTab")).toBe(true);
+    expect(bridge.dispatchMenuCommand("epic.closeTab", null)).toBe(true);
     expect(windowB.sentMessages).toEqual([
       {
         channel: RunnerHostEvent.menuCommand,
-        payload: { command: "epic.closeTab", windowId: "window-b" },
+        payload: {
+          command: "epic.closeTab",
+          windowId: "window-b",
+          hostUpdateVersion: null,
+        },
       },
     ]);
     windowB.sentMessages.length = 0;
-    expect(bridge.dispatchMenuCommand("window.closeWindow")).toBe(true);
+    expect(bridge.dispatchMenuCommand("window.closeWindow", null)).toBe(true);
     expect(windowB.sentMessages).toEqual([
       {
         channel: RunnerHostEvent.menuCommand,
-        payload: { command: "window.closeWindow", windowId: "window-b" },
+        payload: {
+          command: "window.closeWindow",
+          windowId: "window-b",
+          hostUpdateVersion: null,
+        },
       },
     ]);
     bridge.dispose();
@@ -2470,6 +2497,60 @@ describe("RunnerIpcBridge", () => {
     bridge.dispose();
   });
 
+  it("tracks requestHostRespawn in the shared host-operation single-flight guard", async () => {
+    const mod = await import("../register-runner-ipc");
+    const host = new FakeHost();
+    const respawnStarted = Promise.withResolvers<void>();
+    const releaseRespawn = Promise.withResolvers<void>();
+    host.respawn = vi.fn(() => {
+      host.respawnCalls += 1;
+      respawnStarted.resolve();
+      return releaseRespawn.promise;
+    });
+    const bridge = new mod.RunnerIpcBridge({
+      host,
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      window: buildWindow(),
+    });
+    bridge.install();
+
+    const respawnHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.requestHostRespawn,
+    );
+    const statusHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.traycerHostOperationStatusGet,
+    );
+    const restartHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.traycerHostRestart,
+    );
+    if (
+      respawnHandler === undefined ||
+      statusHandler === undefined ||
+      restartHandler === undefined
+    ) {
+      throw new Error("host restart handlers missing");
+    }
+
+    const respawn = respawnHandler(bareEvent());
+    await respawnStarted.promise;
+
+    await expect(statusHandler(bareEvent())).resolves.toMatchObject({
+      kind: "restart",
+    });
+    await expect(restartHandler(bareEvent())).rejects.toThrow(
+      /Another host operation \(restart\) is already in progress/i,
+    );
+    expect(host.respawnCalls).toBe(1);
+
+    releaseRespawn.resolve();
+    await respawn;
+    await expect(statusHandler(bareEvent())).resolves.toBeNull();
+    bridge.dispose();
+  });
+
   it("serves authnBaseUrl synchronously via ipcMain.on", async () => {
     const mod = await import("../register-runner-ipc");
     const bridge = new mod.RunnerIpcBridge({
@@ -2569,6 +2650,7 @@ describe("RunnerIpcBridge", () => {
           sequence: 0,
           status: "idle",
           currentVersion: "1.0.0",
+          allowPrerelease: false,
           latestVersion: null,
           downloadProgress: null,
           installBlockedReason: null,

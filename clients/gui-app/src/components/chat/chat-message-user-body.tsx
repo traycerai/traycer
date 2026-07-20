@@ -80,6 +80,7 @@ import {
   isAttachmentIngestPending,
   useComposerPaste,
 } from "@/hooks/composer/use-composer-paste";
+import { useWorkspaceMentionRoots } from "@/hooks/composer/use-workspace-mention-roots";
 import { useEpicAttachmentBytesPresence } from "@/lib/attachments/use-attachment-blob-src";
 import { useRunnerHost } from "@/providers/use-runner-host";
 
@@ -594,6 +595,10 @@ function InlineUserMessageEditor({
 }): ReactNode {
   const [pickerStore] = useState(() => createComposerPickerStore());
   const hostClient = useTabHostClient();
+  const resolvedMentionRoots = useWorkspaceMentionRoots(
+    editing.mentionRoots,
+    editing.fallbackToGlobalMentionRoots,
+  );
   const editorRef = useRef<ComposerPromptEditorHandle | null>(null);
   const hasPastedImageBytes = useEpicAttachmentBytesPresence();
   const imageInputRef = useRef<HTMLInputElement | null>(null);
@@ -608,7 +613,7 @@ function InlineUserMessageEditor({
     attachImageFiles,
     isIngestingImages,
     isResolvingFilePaths,
-  } = useComposerPaste(editorRef, runnerHost.fileDrops, editing.mentionRoots);
+  } = useComposerPaste(editorRef, runnerHost.fileDrops, resolvedMentionRoots);
   const attachmentPending = isAttachmentIngestPending({
     isIngestingImages,
     isResolvingFilePaths,
@@ -619,7 +624,7 @@ function InlineUserMessageEditor({
     pickerStore,
     hostClient,
     harnessId: editing.slashProviderId,
-    mentionRoots: editing.mentionRoots,
+    mentionRoots: resolvedMentionRoots,
     currentEpicId: editing.currentEpicId,
     // The inline editor mounts only while a message is being edited - active.
     isActive: true,

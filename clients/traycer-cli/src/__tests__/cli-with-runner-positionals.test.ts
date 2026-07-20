@@ -10,6 +10,7 @@ import {
 import { Command } from "commander";
 import { buildProgram, extractActionPositionals } from "../index";
 import * as hostInstallModule from "../commands/host-install";
+import * as hostUpdateModule from "../commands/host-update";
 
 // `host install` accepts a registry version via the `--release`
 // flag (defaults to `latest`) or a local archive via `--from`; the
@@ -97,11 +98,11 @@ describe("traycer host install - --release / --from handling", () => {
   // because we re-suppress it inside the helper.
   let exitSpy: MockInstance;
   beforeEach(() => {
-    exitSpy = vi.spyOn(process, "exit").mockImplementation(((
-      code: number | undefined,
-    ) => {
-      throw new Error(`__test_exit_${code ?? 0}`);
-    }) as never);
+    exitSpy = vi
+      .spyOn(process, "exit")
+      .mockImplementation((code: string | number | null | undefined): never => {
+        throw new Error(`__test_exit_${code ?? 0}`);
+      });
   });
   afterEach(() => {
     exitSpy.mockRestore();
@@ -227,5 +228,50 @@ describe("traycer host install - --release / --from handling", () => {
       versionRequest: "1.4.2",
     });
     spy.mockRestore();
+  });
+});
+
+describe("traycer host update - --release handling", () => {
+  let exitSpy: MockInstance;
+
+  beforeEach(() => {
+    exitSpy = vi
+      .spyOn(process, "exit")
+      .mockImplementation((code: string | number | null | undefined): never => {
+        throw new Error(`__test_exit_${code ?? 0}`);
+      });
+  });
+
+  afterEach(() => {
+    exitSpy.mockRestore();
+    vi.restoreAllMocks();
+  });
+
+  it("normalizes an empty --release value to the stable latest pointer", async () => {
+    const updateSpy = vi
+      .spyOn(hostUpdateModule, "buildHostUpdateCommand")
+      .mockImplementation(() => async () => ({
+        data: { ok: true },
+        human: "ok",
+        exitCode: 0,
+      }));
+    const program = buildProgram();
+    program.exitOverride();
+
+    try {
+      await program.parseAsync(["host", "update", "--release", "", "--json"], {
+        from: "user",
+      });
+    } catch (err) {
+      if (!(err instanceof Error && err.message.startsWith("__test_exit_"))) {
+        throw err;
+      }
+    }
+
+    expect(updateSpy).toHaveBeenCalledTimes(1);
+    expect(updateSpy.mock.calls[0][0]).toMatchObject({
+      versionRequest: "latest",
+      force: false,
+    });
   });
 });

@@ -23,8 +23,7 @@ import {
 // The surfaces a harness can run on. `"gui"` is the host-driven chat tab;
 // `"tui"` is the PTY terminal-agent tab. Each adapter declares the surfaces it
 // implements, and `listGuiHarnesses` reports them so the renderer can show the
-// terminal-agent launcher only for harnesses that actually support it (Cursor,
-// for instance, is GUI-only until its CLI reaches TUI parity).
+// terminal-agent launcher only for harnesses that actually support it.
 export const harnessSurfaceSchema = z.enum(["gui", "tui"]);
 export type HarnessSurface = z.infer<typeof harnessSurfaceSchema>;
 
