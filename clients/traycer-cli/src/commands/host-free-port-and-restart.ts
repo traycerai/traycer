@@ -1,4 +1,5 @@
 import { killConflictingPortOwner } from "../host/free-port-kill";
+import { attestInstallRuntime } from "../host/attested-install-runtime";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import { createServiceController, serviceLabelFor } from "../service";
@@ -32,7 +33,7 @@ export function buildHostFreePortAndRestartCommand(
       });
     }
     const label = serviceLabelFor(ctx.runtime.environment);
-    const { killed, killError } = await withCliLock(
+    const { killed, killError, attestation } = await withCliLock(
       {
         environment: ctx.runtime.environment,
         reason: "host-free-port-and-restart",
@@ -66,7 +67,11 @@ export function buildHostFreePortAndRestartCommand(
           totalBytes: null,
         });
         await createServiceController().restart(label);
-        return { killed: killedInner, killError: killErrorInner };
+        return {
+          killed: killedInner,
+          killError: killErrorInner,
+          attestation: await attestInstallRuntime(ctx.runtime.environment),
+        };
       },
     );
     const human =
@@ -83,6 +88,9 @@ export function buildHostFreePortAndRestartCommand(
         killed,
         killError,
         restartedLabel: label.id,
+        installGeneration: attestation.installGeneration,
+        runtimeVersion: attestation.runtimeVersion,
+        runtimeWasNull: attestation.runtimeWasNull,
       },
       human,
       exitCode: 0,

@@ -110,6 +110,25 @@ function fakeCtx(): CommandContext {
   };
 }
 
+async function writeInstallRecordForAttestation(): Promise<void> {
+  const { writeHostInstallRecord } =
+    await import("../../manifest/host-install");
+  await writeHostInstallRecord("production", {
+    installId: "restart-attestation-install",
+    version: "1.7.0",
+    runtimeVersion: null,
+    platform: "darwin",
+    arch: "arm64",
+    installedAt: "2026-01-01T00:00:00.000Z",
+    source: { kind: "registry", value: "1.7.0" },
+    archiveSha256: "a".repeat(64),
+    signatureVerifiedAt: "2026-01-01T00:00:00.000Z",
+    signatureKeyId: "test-key",
+    sizeBytes: 1,
+    executablePath: join(workHome, "host", "traycer-host"),
+  });
+}
+
 describe("buildHostRestartCommand", () => {
   beforeEach(() => {
     workHome = mkdtempSync(join(tmpdir(), "traycer-host-restart-cmd-test-"));
@@ -159,6 +178,20 @@ describe("buildHostRestartCommand", () => {
     expect(mocks.busyCalls).toHaveLength(0);
     expect(mocks.controllerCalls).toEqual(["stop", "start"]);
     expect(result.data).toMatchObject({ restarted: true });
+  });
+
+  it("returns the install record it observed under cli-lock for Desktop's post-restart CAS", async () => {
+    await writeInstallRecordForAttestation();
+    const { buildHostRestartCommand } = await import("../host-restart");
+    const command = buildHostRestartCommand({ ifIdle: false });
+
+    const result = await command(fakeCtx());
+
+    expect(result.data).toMatchObject({
+      runtimeVersion: null,
+      runtimeWasNull: true,
+      installGeneration: expect.stringContaining("restart-attestation-install"),
+    });
   });
 
   it("--if-idle probes busy (inside the lock) before stop, and proceeds when idle", async () => {

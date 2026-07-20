@@ -226,6 +226,25 @@ describe("stampRuntime", () => {
     expect(stored?.runtimeVersion).toBe("2.0.0");
   });
 
+  it("superseded: a same-generation record stamped with a different runtime is not benign", async () => {
+    const installed = await writeInstall({ runtimeVersion: "2.0.0" });
+    const pid = writePid({ version: "2.1.0" });
+
+    const result = await stampRuntime({
+      environment: ENV,
+      expectedInstallGeneration: generationFor(installed),
+      observedPid: pid.pid,
+      observedStartedAt: pid.startedAt,
+      observedRuntimeVersion: pid.version,
+    });
+
+    expect(result).toEqual({
+      outcome: "superseded",
+      reason: "runtime-version-mismatch",
+    });
+    expect((await readHostInstallRecord(ENV))?.runtimeVersion).toBe("2.0.0");
+  });
+
   it("superseded: generation mismatch when a different install now occupies the record - uninstall/reinstall between readiness and stamp, debt preserved on the NEW record", async () => {
     // Simulates the controller observing readiness of install A's fresh
     // process, then - before it calls stampRuntime - an

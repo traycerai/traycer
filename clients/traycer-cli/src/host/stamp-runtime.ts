@@ -57,6 +57,7 @@ export interface StampRuntimeOptions {
 export type StampRuntimeSupersededReason =
   | "no-install-record"
   | "runtime-already-stamped"
+  | "runtime-version-mismatch"
   | "generation-mismatch"
   | "no-live-host"
   | "pid-evidence-mismatch"
@@ -100,6 +101,14 @@ export async function stampRuntime(
     return { outcome: "superseded", reason: "generation-mismatch" };
   }
   if (installed.runtimeVersion !== null) {
+    if (installed.runtimeVersion !== opts.observedRuntimeVersion) {
+      logger.info("Host stamp-runtime superseded - runtime version mismatch", {
+        environment: opts.environment,
+        stampedRuntimeVersion: installed.runtimeVersion,
+        observedRuntimeVersion: opts.observedRuntimeVersion,
+      });
+      return { outcome: "superseded", reason: "runtime-version-mismatch" };
+    }
     logger.info("Host stamp-runtime superseded - runtime already stamped", {
       environment: opts.environment,
       runtimeVersion: installed.runtimeVersion,

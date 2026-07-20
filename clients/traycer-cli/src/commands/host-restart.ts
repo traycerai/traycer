@@ -4,6 +4,7 @@ import {
   type FinalizePendingCliUpgradeOutcome,
 } from "./cli-upgrade";
 import { assertHostNotBusy } from "../host/busy-check";
+import { attestInstallRuntime } from "../host/attested-install-runtime";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import {
   createServiceController,
@@ -72,7 +73,7 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
   return async (ctx): Promise<CommandResult> => {
     const label = serviceLabelFor(ctx.runtime.environment);
     const controller = createServiceController();
-    const result = await withCliLock(
+    const locked = await withCliLock(
       {
         environment: ctx.runtime.environment,
         reason: "host-restart",
@@ -83,7 +84,7 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
         if (args.ifIdle) {
           await assertHostNotBusy(ctx.runtime.environment);
         }
-        return restartWithPendingCliUpgradeFinalize({
+        const result = await restartWithPendingCliUpgradeFinalize({
           environment: ctx.runtime.environment,
           controller,
           label,
@@ -92,17 +93,24 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
           spawnImpl: defaultSpawnImpl,
           writeImpl: defaultWriteImpl,
         });
+        return {
+          result,
+          attestation: await attestInstallRuntime(ctx.runtime.environment),
+        };
       },
     );
     return {
       data: {
         restarted: true,
         label: label.id,
-        cliUpgrade: result.finalize,
-        helper: result.helper,
-        markerReconcile: result.markerReconcile,
+        cliUpgrade: locked.result.finalize,
+        helper: locked.result.helper,
+        markerReconcile: locked.result.markerReconcile,
+        installGeneration: locked.attestation.installGeneration,
+        runtimeVersion: locked.attestation.runtimeVersion,
+        runtimeWasNull: locked.attestation.runtimeWasNull,
       },
-      human: humanForRestart(label.id, result),
+      human: humanForRestart(label.id, locked.result),
       exitCode: 0,
     };
   };

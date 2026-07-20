@@ -83,6 +83,7 @@ vi.mock("../host-readiness", async (importOriginal) => {
       ready: true,
       version: "1.0.0",
       pid: 1,
+      startedAt: "2026-01-01T00:00:00.000Z",
       reason: "ready",
     })),
   };
@@ -152,6 +153,7 @@ beforeEach(() => {
     ready: true,
     version: "1.0.0",
     pid: 1,
+    startedAt: "2026-01-01T00:00:00.000Z",
     reason: "ready",
   });
   vi.mocked(hasPendingLoginItemRevision).mockResolvedValue(false);
@@ -404,6 +406,13 @@ describe("headline: convergeReady during an in-flight mutation resolves, never r
     });
     writeStagedRecord("production", "1.8.0", null);
     writePidMetadata("production", { version: "1.8.0", pid: process.pid });
+    vi.mocked(waitForHostReady).mockResolvedValue({
+      ready: true,
+      version: "1.8.0",
+      pid: process.pid,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reason: "ready",
+    });
 
     const applyGate = deferred<{ data: unknown }>();
     vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
@@ -562,6 +571,13 @@ describe("mutation lane: wait-never-reject", () => {
       runtimeVersion: "1.7.0",
     });
     writeStagedRecord("production", "1.8.0", "1.8.0");
+    vi.mocked(waitForHostReady).mockResolvedValue({
+      ready: true,
+      version: "1.8.0",
+      pid: process.pid,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reason: "ready",
+    });
     const statuses: Array<{ readonly operationId: string | null }> = [];
     const progressOperationIds: Array<string | null> = [];
     const unsubscribeStatus = controller.onMutationStatus((status) => {
@@ -1648,7 +1664,15 @@ describe("canonical status: activation-state derivation", () => {
     });
     removePidMetadata("production");
     vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
-      if (opts.args.includes("restart")) return { data: { activated: true } };
+      if (opts.args.includes("restart")) {
+        return {
+          data: {
+            installGeneration: "legacy-command-generation",
+            runtimeVersion: null,
+            runtimeWasNull: true,
+          },
+        };
+      }
       return { data: {} };
     });
     vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
@@ -1984,6 +2008,13 @@ describe("platform matrix", () => {
     vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
       data: { version: "1.8.0", installGeneration: null },
     });
+    vi.mocked(waitForHostReady).mockResolvedValue({
+      ready: true,
+      version: "1.7.0",
+      pid: process.pid,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reason: "ready",
+    });
 
     const outcome = await controller.installVersion("1.8.0", false);
 
@@ -2023,6 +2054,13 @@ describe("platform matrix", () => {
     vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
       data: { version: "1.8.0", installGeneration: null },
     });
+    vi.mocked(waitForHostReady).mockResolvedValue({
+      ready: true,
+      version: "1.7.0",
+      pid: process.pid,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reason: "ready",
+    });
 
     const outcome = await controller.installVersion("1.8.0", true);
 
@@ -2055,6 +2093,7 @@ describe("platform matrix", () => {
       ready: false,
       version: null,
       pid: null,
+      startedAt: null,
       reason: "pid metadata never appeared",
     });
     vi.mocked(readHostLoginItemStatus).mockReturnValue("requires-approval");
@@ -2145,6 +2184,7 @@ describe("platform matrix", () => {
       ready: false,
       version: null,
       pid: null,
+      startedAt: null,
       reason: "timeout",
     });
 
@@ -2165,7 +2205,11 @@ describe("platform matrix", () => {
     writePidMetadata("production", { version: "1.7.0", pid: process.pid });
     vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
       if (args.includes("stamp-runtime")) return { outcome: "stamped" };
-      return {};
+      return {
+        installGeneration: "service-install-command-generation",
+        runtimeVersion: null,
+        runtimeWasNull: true,
+      };
     });
 
     const outcome = await controller.registerService();
@@ -2401,7 +2445,7 @@ describe("applyStagedCliOwned stamping decision (fixup B9)", () => {
     const outcome = await controller.applyStaged("manual", false);
 
     expect(outcome).toMatchObject({
-      kind: "failed",
+      kind: "installed-not-converged",
       message: expect.stringContaining("Doctor"),
     });
     expect(waitForHostReady).not.toHaveBeenCalled();
@@ -2437,13 +2481,14 @@ describe("applyStagedCliOwned stamping decision (fixup B9)", () => {
       ready: false,
       version: null,
       pid: null,
+      startedAt: null,
       reason: "timeout",
     });
 
     const outcome = await controller.applyStaged("manual", false);
 
     expect(outcome).toMatchObject({
-      kind: "failed",
+      kind: "installed-not-converged",
       message: expect.stringContaining("doctor"),
     });
   });
@@ -2473,13 +2518,14 @@ describe("applyStagedCliOwned stamping decision (fixup B9)", () => {
       ready: false,
       version: null,
       pid: null,
+      startedAt: null,
       reason: "endpoint never bound",
     });
 
     const outcome = await controller.applyStaged("manual", false);
 
     expect(outcome).toMatchObject({
-      kind: "failed",
+      kind: "installed-not-converged",
       message: expect.stringContaining("doctor"),
     });
     expect(runBundledTraycerCliJson).not.toHaveBeenCalledWith(
@@ -2525,10 +2571,10 @@ describe("applyStagedCliOwned stamping decision (fixup B9)", () => {
     const outcome = await controller.applyStaged("manual", false);
 
     expect(outcome).toMatchObject({
-      kind: "failed",
+      kind: "installed-not-converged",
       message: expect.stringContaining("activationUnknown"),
     });
-    if (outcome.kind === "failed") {
+    if (outcome.kind === "installed-not-converged") {
       expect(outcome.message).not.toContain(
         "activation could not be confirmed:",
       );
@@ -2548,6 +2594,13 @@ describe("applyStagedCliOwned stamping decision (fixup B9)", () => {
           postSwapError: null,
         },
       },
+    });
+    vi.mocked(waitForHostReady).mockResolvedValue({
+      ready: true,
+      version: "1.8.0",
+      pid: process.pid,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reason: "ready",
     });
 
     const outcome = await controller.installVersion("1.8.0", false);
@@ -2725,6 +2778,114 @@ describe("applyStagedCliOwned stamping decision (fixup B9)", () => {
       expect.arrayContaining(["host", "stamp-runtime"]),
     );
   });
+
+  it("reports installed-not-converged when apply commits bytes without starting the service", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writeStagedRecord("production", "1.8.0", "1.8.0");
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+      availableSnapshotFixture("1.8.0", ["1.8.0"]),
+    );
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args.includes("download")) return { data: {} };
+      return {
+        data: {
+          outcome: "applied",
+          record: { version: "1.8.0", runtimeVersion: "1.8.0" },
+          runningActivated: false,
+          installGeneration: "apply-command-generation",
+        },
+      };
+    });
+
+    const outcome = await controller.applyStaged("manual", false);
+
+    expect(outcome).toMatchObject({ kind: "installed-not-converged" });
+    expect(waitForHostReady).not.toHaveBeenCalled();
+  });
+
+  it("does not skip a still-current pid unless apply actually stopped that old service", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writeStagedRecord("production", "1.8.0", "1.8.0");
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+      availableSnapshotFixture("1.8.0", ["1.8.0"]),
+    );
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args.includes("download")) return { data: {} };
+      return {
+        data: {
+          outcome: "applied",
+          record: { version: "1.8.0", runtimeVersion: "1.8.0" },
+          runningActivated: true,
+          installGeneration: "apply-command-generation",
+          serviceLifecycle: { stoppedBeforeSwap: false },
+        },
+      };
+    });
+    vi.mocked(waitForHostReady).mockResolvedValue({
+      ready: true,
+      version: "1.8.0",
+      pid: process.pid,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reason: "ready",
+    });
+
+    expect((await controller.applyStaged("manual", false)).kind).toBe("ok");
+    expect(waitForHostReady).toHaveBeenLastCalledWith(
+      expect.any(Number),
+      expect.any(String),
+      expect.any(Number),
+      null,
+    );
+  });
+
+  it("requires a replacement pid when apply stopped the prior service", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writeStagedRecord("production", "1.8.0", "1.8.0");
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+      availableSnapshotFixture("1.8.0", ["1.8.0"]),
+    );
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args.includes("download")) return { data: {} };
+      return {
+        data: {
+          outcome: "applied",
+          record: { version: "1.8.0", runtimeVersion: "1.8.0" },
+          runningActivated: true,
+          installGeneration: "apply-command-generation",
+          serviceLifecycle: { stoppedBeforeSwap: true },
+        },
+      };
+    });
+    vi.mocked(waitForHostReady).mockResolvedValue({
+      ready: true,
+      version: "1.8.0",
+      pid: process.pid + 1,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reason: "ready",
+    });
+
+    expect((await controller.applyStaged("manual", false)).kind).toBe("ok");
+    expect(waitForHostReady).toHaveBeenLastCalledWith(
+      expect.any(Number),
+      expect.any(String),
+      expect.any(Number),
+      process.pid,
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -2749,6 +2910,7 @@ describe("packaged-macOS null-runtime readiness budget", () => {
       ready: true,
       version: "1.7.0",
       pid: process.pid,
+      startedAt: "2026-01-01T00:00:00.000Z",
       reason: "ready",
     });
 
@@ -2815,6 +2977,7 @@ describe("convergeReadyCliOwned postSwapError + readiness (fixup B7)", () => {
       ready: false,
       version: null,
       pid: null,
+      startedAt: null,
       reason: "timeout",
     });
 
@@ -3178,6 +3341,7 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
       ready: false,
       version: null,
       pid: null,
+      startedAt: null,
       reason: "pid metadata never appeared",
     });
 
@@ -3193,6 +3357,7 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
       ready: true,
       version: "1.7.0",
       pid: process.pid,
+      startedAt: "2026-01-01T00:00:00.000Z",
       reason: "ready",
     });
     const second = await controller.applyPendingLoginItemRevisionIfIdle();
@@ -3226,6 +3391,7 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
       ready: true,
       version: "1.7.0",
       pid: process.pid,
+      startedAt: "2026-01-01T00:00:00.000Z",
       reason: "ready",
     });
 
@@ -3264,6 +3430,7 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
       ready: true,
       version: "1.7.0",
       pid: process.pid,
+      startedAt: "2026-01-01T00:00:00.000Z",
       reason: "ready",
     });
 
@@ -3293,6 +3460,7 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
       ready: true,
       version: "1.7.0",
       pid: process.pid,
+      startedAt: "2026-01-01T00:00:00.000Z",
       reason: "ready",
     });
 
@@ -3364,6 +3532,7 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
       ready: true,
       version: "1.7.0",
       pid: process.pid,
+      startedAt: "2026-01-01T00:00:00.000Z",
       reason: "ready",
     });
     const stampCalls: (readonly string[])[] = [];
@@ -3402,6 +3571,7 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
       ready: true,
       version: "1.7.0",
       pid: process.pid,
+      startedAt: "2026-01-01T00:00:00.000Z",
       reason: "ready",
     });
 
@@ -3525,6 +3695,7 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
       ready: true,
       version: "1.7.0",
       pid: process.pid,
+      startedAt: "2026-01-01T00:00:00.000Z",
       reason: "ready",
     });
 
@@ -3760,6 +3931,13 @@ describe("hostLifecycle wiring on success (fixup C2)", () => {
     vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
       data: { version: "1.8.0", installGeneration: null },
     });
+    vi.mocked(waitForHostReady).mockResolvedValue({
+      ready: true,
+      version: "1.7.0",
+      pid: process.pid,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reason: "ready",
+    });
 
     const outcome = await controller.installVersion("1.8.0", false);
 
@@ -3824,7 +4002,11 @@ describe("recoverIfDown", () => {
     });
     writePidMetadata("production", { version: "1.7.0", pid: process.pid });
     vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
-      data: { activated: true },
+      data: {
+        installGeneration: "recover-command-generation",
+        runtimeVersion: null,
+        runtimeWasNull: true,
+      },
     });
     vi.mocked(runBundledTraycerCliJson).mockResolvedValue({
       outcome: "stamped",
@@ -3906,7 +4088,11 @@ describe("recoverIfDown", () => {
     });
     writePidMetadata("production", { version: "1.7.0", pid: process.pid });
     vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
-      data: { activated: true },
+      data: {
+        installGeneration: "free-port-command-generation",
+        runtimeVersion: null,
+        runtimeWasNull: true,
+      },
     });
 
     await controller.recoverIfDown();
@@ -3934,7 +4120,11 @@ describe("freePortAndRestart (CLI-owned)", () => {
     });
     writePidMetadata("production", { version: "1.7.0", pid: process.pid });
     vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
-      data: { activated: true },
+      data: {
+        installGeneration: "free-port-command-generation",
+        runtimeVersion: null,
+        runtimeWasNull: true,
+      },
     });
     vi.mocked(runBundledTraycerCliJson).mockResolvedValue({
       outcome: "stamped",
@@ -3949,6 +4139,171 @@ describe("freePortAndRestart (CLI-owned)", () => {
     expect(runBundledTraycerCliJson).toHaveBeenCalledWith(
       expect.arrayContaining(["host", "stamp-runtime"]),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Closing A2: these are the five Desktop production edges that start or
+// cycle a CLI-owned service. The command returns the record it observed
+// while holding cli-lock; each caller must feed THAT generation to the CAS,
+// never derive one from its pre-lock Desktop disk read.
+// ---------------------------------------------------------------------------
+describe("CLI-owned service start attestation (closing A2)", () => {
+  const commandGeneration = "committed-under-cli-lock";
+
+  function configureStampAndServiceAttestation(): void {
+    vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
+      if (args.includes("stamp-runtime")) return { outcome: "stamped" };
+      if (args.includes("available")) {
+        return availableSnapshotFixture("1.7.0", ["1.7.0"]);
+      }
+      return {
+        installGeneration: commandGeneration,
+        runtimeVersion: null,
+        runtimeWasNull: true,
+      };
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: {
+        installGeneration: commandGeneration,
+        runtimeVersion: null,
+        runtimeWasNull: true,
+      },
+    });
+  }
+
+  function expectCommandGenerationWasStamped(): void {
+    expect(runBundledTraycerCliJson).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        "host",
+        "stamp-runtime",
+        "--expected-install-generation",
+        commandGeneration,
+        "--observed-pid",
+        "1",
+        "--observed-started-at",
+        "2026-01-01T00:00:00.000Z",
+      ]),
+    );
+  }
+
+  it("activateInstalled stamps the restart command's attested generation", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: null,
+    });
+    configureStampAndServiceAttestation();
+
+    expect((await controller.activateInstalled(false)).kind).toBe("ok");
+    expectCommandGenerationWasStamped();
+  });
+
+  it("registerService stamps the service-install command's attested generation", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: null,
+    });
+    configureStampAndServiceAttestation();
+
+    expect((await controller.registerService()).kind).toBe("ok");
+    expectCommandGenerationWasStamped();
+  });
+
+  it("respawn stamps the restart command's attested generation", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: null,
+    });
+    configureStampAndServiceAttestation();
+
+    expect((await controller.respawn()).kind).toBe("ok");
+    expectCommandGenerationWasStamped();
+  });
+
+  it("recoverIfDown stamps the restart command's attested generation", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: null,
+    });
+    configureStampAndServiceAttestation();
+
+    expect((await controller.recoverIfDown()).kind).toBe("ok");
+    expectCommandGenerationWasStamped();
+  });
+
+  it("freePortAndRestart stamps its command's attested generation", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: null,
+    });
+    configureStampAndServiceAttestation();
+
+    expect((await controller.freePortAndRestart(null, null)).kind).toBe("ok");
+    expectCommandGenerationWasStamped();
+  });
+
+  it("does not report success when a command-attested stamped install publishes a different runtime", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue({
+      installGeneration: "already-stamped-generation",
+      runtimeVersion: "1.7.0",
+      runtimeWasNull: false,
+    });
+    vi.mocked(waitForHostReady).mockResolvedValue({
+      ready: true,
+      version: "1.8.0",
+      pid: 1,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reason: "ready",
+    });
+
+    const outcome = await controller.registerService();
+
+    expect(outcome).toMatchObject({
+      kind: "failed",
+      message: expect.stringContaining("committed installation expects 1.7.0"),
+    });
+  });
+
+  it("reloads the lifecycle snapshot after a command-started service fails readiness", async () => {
+    const lifecycle = fakeHostLifecycle();
+    const controller = new HostController({
+      environment: "production",
+      hostLifecycle: lifecycle,
+      reachabilityProbe: async () => false,
+      desktopLockWaitMs: DESKTOP_LOCK_WAIT_MS,
+      desktopLockPollIntervalMs: DESKTOP_LOCK_POLL_INTERVAL_MS,
+    });
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue({
+      installGeneration: "already-stamped-generation",
+      runtimeVersion: "1.7.0",
+      runtimeWasNull: false,
+    });
+    vi.mocked(waitForHostReady).mockResolvedValue({
+      ready: false,
+      version: null,
+      pid: null,
+      startedAt: null,
+      reason: "timeout",
+    });
+
+    const outcome = await controller.registerService();
+
+    expect(outcome.kind).toBe("failed");
+    expect(lifecycle.reloadSnapshotFromDisk).toHaveBeenCalledTimes(1);
   });
 });
 
