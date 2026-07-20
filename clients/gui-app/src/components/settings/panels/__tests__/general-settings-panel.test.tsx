@@ -313,6 +313,27 @@ describe("GeneralSettingsPanel", () => {
     });
   });
 
+  it("shows progress and disables the release-channel toggle while saving", async () => {
+    const setAllowPrerelease = vi.fn(() => new Promise<unknown>(() => {}));
+    appUpdatesMock.current = {
+      bridge: { setAllowPrerelease },
+      snapshot: { allowPrerelease: false },
+    };
+    renderPanel();
+
+    const toggle = screen.getByRole("switch", {
+      name: "Allow release candidate updates",
+    });
+    fireEvent.click(toggle);
+
+    await waitFor(() => {
+      expect(toggle.hasAttribute("disabled")).toBe(true);
+    });
+    expect(
+      screen.getByTestId("release-channel-pending-indicator"),
+    ).toBeTruthy();
+  });
+
   // Review finding 5's amendment: a refusal (main rejects the invoke, e.g.
   // an update is downloading/staged) must surface as a mutation error and
   // must NOT be tracked as a successful setting change or invalidate any Host

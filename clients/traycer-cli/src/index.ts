@@ -530,7 +530,9 @@ function registerHostCommands(program: Command): void {
     (opts) =>
       buildHostUpdateCommand({
         versionRequest:
-          typeof opts.release === "string" ? opts.release : "latest",
+          typeof opts.release === "string" && opts.release.length > 0
+            ? opts.release
+            : "latest",
         force: opts.force === true,
       }),
   );

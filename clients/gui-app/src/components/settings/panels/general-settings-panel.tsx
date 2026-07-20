@@ -276,12 +276,21 @@ function PrereleaseUpdatesRow() {
       label="Release candidate updates"
       description="Allow Traycer Desktop and Host update checks to install RC releases. Stable releases remain eligible."
       control={
-        <Switch
-          checked={snapshot.allowPrerelease}
-          disabled={preferenceMutation.isPending}
-          onCheckedChange={(value) => preferenceMutation.mutate(value)}
-          aria-label="Allow release candidate updates"
-        />
+        <div className="flex items-center gap-2">
+          {preferenceMutation.isPending ? (
+            <AgentSpinningDots
+              className="size-3"
+              testId="release-channel-pending-indicator"
+              variant={undefined}
+            />
+          ) : null}
+          <Switch
+            checked={snapshot.allowPrerelease}
+            disabled={preferenceMutation.isPending}
+            onCheckedChange={(value) => preferenceMutation.mutate(value)}
+            aria-label="Allow release candidate updates"
+          />
+        </div>
       }
     />
   );

@@ -729,6 +729,8 @@ describe("preload hostManagement registry-update-state guard", () => {
 
     expect(observed).toEqual([withTrue, withFalse]);
     subscription.dispose();
+    fakeElectron.emit(RunnerHostEvent.hostRegistryUpdateStateChange, withTrue);
+    expect(observed).toEqual([withTrue, withFalse]);
   });
 
   it("rejects payloads missing includePreReleases or with a non-boolean value", async () => {
@@ -773,5 +775,10 @@ describe("preload hostManagement registry-update-state guard", () => {
 
     expect(observed).toEqual([]);
     subscription.dispose();
+    fakeElectron.emit(
+      RunnerHostEvent.hostRegistryUpdateStateChange,
+      validRegistryState(true),
+    );
+    expect(observed).toEqual([]);
   });
 });
