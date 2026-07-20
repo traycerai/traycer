@@ -464,6 +464,13 @@ function ComposerMenuBody(props: ComposerMenuBodyProps): ReactNode {
         }}
       >
         {item.node}
+        {item.disabledReason === null ? null : (
+          // `aria-disabled` says a row is unavailable but never why, and the
+          // preview panel that carries the reason is `aria-hidden` and drops
+          // out of view entirely when it cannot fit. Without this the reason
+          // reaches no screen reader at all.
+          <span className="sr-only">{`Disabled. ${item.disabledReason}`}</span>
+        )}
       </div>
     );
   });

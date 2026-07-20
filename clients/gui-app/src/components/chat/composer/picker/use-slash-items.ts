@@ -100,9 +100,10 @@ export function useSlashItems(params: UseSlashItemsParams): void {
 const STATIC_STEP = { kind: "root" as const };
 
 /**
- * Shown as the menu footer and, for the highlighted row, as the preview
- * panel's disabled notice - so the wording has to read as a standalone
- * sentence in both places.
+ * Rendered twice for the highlighted row: as the preview panel's disabled
+ * notice, and as the row's screen-reader-only text. Both prefix it with
+ * "Disabled", so the wording has to read as a standalone sentence following
+ * that word.
  */
 export const NATIVE_COMMAND_DISABLED_REASON =
   "This command is only allowed at the start of the message";

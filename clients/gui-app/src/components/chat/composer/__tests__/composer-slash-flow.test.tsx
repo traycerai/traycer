@@ -192,6 +192,50 @@ describe("composer slash flow", () => {
     expect(editor.state.doc.textContent).toBe("/");
   });
 
+  // A blockquote is the one wrapper that cannot be skipped for looking empty:
+  // it serializes to a bare `>` even with nothing but a hard break inside, so
+  // the prompt starts with `>` and the provider never routes the command. The
+  // hard break alone would otherwise read as trimmable whitespace.
+  it("restricts the picker after a quote holding only a hard break", async () => {
+    const { editor, pickerStore } = makeFixture();
+    editor.commands.setContent({
+      type: "doc",
+      content: [
+        {
+          type: "blockquote",
+          content: [{ type: "paragraph", content: [{ type: "hardBreak" }] }],
+        },
+        { type: "paragraph" },
+      ],
+    });
+    const firstBlock = editor.state.doc.firstChild;
+    if (firstBlock === null) throw new Error("expected first block");
+    editor.commands.setTextSelection(firstBlock.nodeSize + 2);
+
+    editor.commands.insertContent("/");
+    await flush();
+
+    expect(pickerStore.getState().open).toBe(true);
+    expect(pickerStore.getState().slashScope).toBe("skills");
+  });
+
+  // Same rule seen from inside: the quote prefix precedes the caret even at the
+  // very start of the quote, so no position within a blockquote is leading.
+  it("restricts the picker at the start of a quote", async () => {
+    const { editor, pickerStore } = makeFixture();
+    editor.commands.setContent({
+      type: "doc",
+      content: [{ type: "blockquote", content: [{ type: "paragraph" }] }],
+    });
+
+    editor.commands.setTextSelection(2);
+    editor.commands.insertContent("/");
+    await flush();
+
+    expect(pickerStore.getState().open).toBe(true);
+    expect(pickerStore.getState().slashScope).toBe("skills");
+  });
+
   // Regression: `ChatListKeymap` owns Enter and falls through to submit when
   // `commitActiveItem()` returns false. Once a highlighted row could legally
   // refuse to commit, that fall-through started firing submit with the picker

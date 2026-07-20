@@ -85,4 +85,28 @@ describe("extractPlainTextFromComposerJSONContent attachment blocks", () => {
       "/plan ship it",
     );
   });
+
+  // The mirror of the case above, and the reason a blockquote can never be
+  // skipped the way an attachment block is: `quotePrefixLines` emits a bare `>`
+  // for a blank line, so even a visually empty quote puts a character in front
+  // of the command and the provider stops seeing a leading slash.
+  it("keeps a '>' for a blank quote so a following command is not leading", () => {
+    const content: JsonContent = {
+      type: "doc",
+      content: [
+        {
+          type: "blockquote",
+          content: [{ type: "paragraph", content: [{ type: "hardBreak" }] }],
+        },
+        {
+          type: "paragraph",
+          content: [{ type: "slashCommand", attrs: { commandName: "plan" } }],
+        },
+      ],
+    };
+
+    expect(extractPlainTextFromComposerJSONContent(content)).toBe(
+      ">\n>\n/plan",
+    );
+  });
 });

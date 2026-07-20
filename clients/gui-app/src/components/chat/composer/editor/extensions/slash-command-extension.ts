@@ -194,6 +194,10 @@ function leadingTokenBeforePosition(
  * rather than by document shape is also what keeps an attachment consistent
  * with itself - the same image one line up used to disable native commands
  * while an image beside the caret did not.
+ *
+ * "Contributes no prompt text" is a question for the serializer, not for how
+ * empty the block looks: a blockquote holding nothing but a hard break still
+ * emits `>`, so `isQuoteLeadingWrapper` stops it from being skipped here.
  */
 function firstTokenInBlocks(
   doc: ProseMirrorNode,
@@ -220,6 +224,10 @@ function leadingTokenInRange(
     if (token !== null) return false;
     if (isIgnoredLeadingLeaf(node)) return false;
     if (isWhitespaceLeadingLeaf(node)) return false;
+    if (isQuoteLeadingWrapper(node)) {
+      token = { node, pos };
+      return false;
+    }
     if (isTransparentLeadingContainer(node)) return true;
     if (node.isText) {
       if (textWithinRange(node, pos, from, to).trim().length === 0)
@@ -254,6 +262,19 @@ function textWithinRange(
   const start = Math.max(0, from - pos);
   const end = Math.min(text.length, to - pos);
   return end > start ? text.slice(start, end) : "";
+}
+
+/**
+ * A blockquote is content however empty it looks, so it is never descended
+ * into. `quotePrefixLines` emits a bare `>` for a blank line, so a quote always
+ * puts a character in front of whatever follows - and the prefix precedes the
+ * caret from inside the quote too, which is why one rule here covers both an
+ * earlier quote block and a caret sitting within one. Descending would let a
+ * hard-break-only quote read as trimmable whitespace and classify the command
+ * after it as leading, when the provider actually receives `>\n>\n/plan`.
+ */
+function isQuoteLeadingWrapper(node: ProseMirrorNode): boolean {
+  return node.type.name === "blockquote";
 }
 
 /**
