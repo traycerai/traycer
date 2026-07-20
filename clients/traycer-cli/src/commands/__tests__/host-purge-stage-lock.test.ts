@@ -121,6 +121,7 @@ describe.skipIf(process.platform === "win32")(
         });
         expect(mocks.purgeCalls).toBe(1);
       } finally {
+        writeFileSync(join(barrierDir, "release"), "");
         expect(await exited).toBe(0);
         rmSync(barrierDir, { recursive: true, force: true });
       }

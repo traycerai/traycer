@@ -1823,6 +1823,45 @@ describe("yank/apply ordering", () => {
     expect(applyFingerprints).toEqual(["stage-1.8.0", "stage-replaced"]);
   });
 
+  it("caps re-eligibility at two apply attempts when every staged handoff is replaced", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writeStagedRecord("production", "1.8.0", "1.8.0");
+    const layout = getHostFsLayout("production");
+    const applyFingerprints: string[] = [];
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+      availableSnapshotFixture("1.8.0", ["1.8.0"]),
+    );
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (!opts.args.includes("apply")) return { data: {} };
+      const fingerprintIndex = opts.args.indexOf(
+        "--expected-stage-fingerprint",
+      );
+      const fingerprint = opts.args[fingerprintIndex + 1];
+      if (fingerprint === undefined) throw new Error("missing fingerprint");
+      applyFingerprints.push(fingerprint);
+      writeFileSync(
+        layout.stagedRecordFile,
+        JSON.stringify({
+          stageId: `stage-replaced-${applyFingerprints.length}`,
+          version: "1.8.0",
+          runtimeVersion: "1.8.0",
+        }),
+      );
+      return { data: { outcome: "stage-fingerprint-mismatch" } };
+    });
+
+    await expect(controller.applyStaged("manual", false)).resolves.toEqual({
+      kind: "deferred",
+      message:
+        "The staged host changed while the update was being applied. Retry to apply the current stage.",
+    });
+    expect(applyFingerprints).toEqual(["stage-1.8.0", "stage-replaced-1"]);
+  });
+
   it("F6: activateInstalled re-eligibility retries a stage-fingerprint mismatch exactly once", async () => {
     const controller = newController("production");
     writeInstallRecord("production", {

@@ -24,6 +24,10 @@ import type { CommandContext } from "../../runner/runner";
 const mocks = vi.hoisted(() => ({
   controllerCalls: [] as string[],
   busyOverride: null as "busy" | null,
+  attestationBarrier: null as {
+    readonly signalStarted: () => void;
+    readonly release: Promise<void>;
+  } | null,
 }));
 
 vi.mock("../../service", async (importOriginal) => {
@@ -60,6 +64,27 @@ vi.mock("../../host/busy-check", () => ({
   },
 }));
 
+// The barrier intentionally wraps the real attestation read. Pausing it
+// while a real foreign process waits on cli-lock proves the read has not
+// slipped to after lock release (a passthrough withCliLock mock cannot).
+vi.mock("../../host/attested-install-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../../host/attested-install-runtime")
+    >();
+  return {
+    ...actual,
+    attestInstallRuntime: async (environment: "dev" | "production") => {
+      const barrier = mocks.attestationBarrier;
+      if (barrier !== null) {
+        barrier.signalStarted();
+        await barrier.release;
+      }
+      return actual.attestInstallRuntime(environment);
+    },
+  };
+});
+
 // `process.env.HOME`/`USERPROFILE` mutation alone is not trustworthy under
 // `bun --bun`, which can honor its own startup home independently of a
 // runtime env mutation - the exact root cause of a prior incident where a
@@ -95,6 +120,17 @@ function waitForFile(path: string): Promise<void> {
     };
     poll();
   });
+}
+
+function deferred(): {
+  readonly promise: Promise<void>;
+  resolve(): void;
+} {
+  let resolve: () => void = () => undefined;
+  const promise = new Promise<void>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 }
 
 // Registers the "exit" listener immediately (returning a promise, not a
@@ -142,6 +178,7 @@ describe.skipIf(process.platform === "win32")(
       vi.resetModules();
       mocks.controllerCalls = [];
       mocks.busyOverride = null;
+      mocks.attestationBarrier = null;
     });
 
     afterEach(() => {
@@ -232,6 +269,53 @@ describe.skipIf(process.platform === "win32")(
       } finally {
         expect(await exited).toBe(0);
         rmSync(holdBarrierDir, { recursive: true, force: true });
+      }
+    }, 20_000);
+
+    it("keeps the install-runtime attestation inside cli-lock until its read has completed", async () => {
+      const { cliLockPath, ensureCliInstallHomeDir } =
+        await import("../../store/paths");
+      await ensureCliInstallHomeDir("production");
+      const lockPath = cliLockPath("production");
+      const attestationStarted = deferred();
+      const releaseAttestation = deferred();
+      const barrierDir = mkdtempSync(
+        join(tmpdir(), "traycer-restart-attestation-lock-barrier-"),
+      );
+      mocks.attestationBarrier = {
+        signalStarted: attestationStarted.resolve,
+        release: releaseAttestation.promise,
+      };
+
+      const { buildHostRestartCommand } = await import("../host-restart");
+      const pendingRestart = buildHostRestartCommand({ ifIdle: false })(
+        fakeCtx(),
+      );
+      await attestationStarted.promise;
+      const { exited } = spawnLockWorker(WORKER_SCRIPT, {
+        WORKER_LOCK_PATH: lockPath,
+        WORKER_MARKER_DIR: barrierDir,
+        WORKER_LABEL: "attestation-contender",
+        WORKER_HOLD_BARRIER_DIR: barrierDir,
+      });
+
+      try {
+        // If attestation were called after `withCliLock` settled, this
+        // contender would acquire now despite the paused read.
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        expect(existsSync(join(barrierDir, "held"))).toBe(false);
+
+        releaseAttestation.resolve();
+        await pendingRestart;
+        await waitForFile(join(barrierDir, "held"));
+        writeFileSync(join(barrierDir, "release"), "");
+        expect(await exited).toBe(0);
+      } finally {
+        releaseAttestation.resolve();
+        writeFileSync(join(barrierDir, "release"), "");
+        await exited;
+        mocks.attestationBarrier = null;
+        rmSync(barrierDir, { recursive: true, force: true });
       }
     }, 20_000);
   },

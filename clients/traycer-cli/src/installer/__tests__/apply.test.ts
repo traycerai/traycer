@@ -236,6 +236,62 @@ describe("applyHost", () => {
     expect(mocks.lifecycleCalls).toHaveLength(0);
   });
 
+  it("rejects a legacy staged record with no stageId when the production apply command was given an expected handoff", async () => {
+    await writeInstall("1.0.0", {});
+    await writeStaged("2.0.0", {});
+    const recordPath = join(stagedDirFor(ENV), "staged.json");
+    const legacyRecord = JSON.parse(readFileSync(recordPath, "utf8")) as {
+      stageId?: unknown;
+    };
+    delete legacyRecord.stageId;
+    writeFileSync(recordPath, JSON.stringify(legacyRecord));
+
+    const result = await applyHost({
+      environment: ENV,
+      force: false,
+      noService: false,
+      expectedStageFingerprint: "stage-a",
+      onProgress: () => {},
+    });
+
+    expect(result).toEqual({
+      outcome: "stage-fingerprint-mismatch",
+      installedVersion: "1.0.0",
+      expectedStageFingerprint: "stage-a",
+      actualStageFingerprint: null,
+    });
+    expect(existsSync(stagedDirFor(ENV))).toBe(true);
+    expect(mocks.lifecycleCalls).toHaveLength(0);
+  });
+
+  it("checks the expected fingerprint after reconcile restores a replacement, before any commit can consume it", async () => {
+    await writeInstall("1.0.0", {});
+    await writeStaged("2.0.0", { stageId: "stage-b" });
+    const replacementAside = `${stagedDirFor(ENV)}.old-${Date.now()}`;
+    renameSync(stagedDirFor(ENV), replacementAside);
+    // This expected stage is deliberately stale/equal and reconcile removes
+    // it. Its valid aside replacement is then restored as canonical stage-b.
+    await writeStaged("1.0.0", { stageId: "stage-a" });
+
+    const result = await applyHost({
+      environment: ENV,
+      force: false,
+      noService: false,
+      expectedStageFingerprint: "stage-a",
+      onProgress: () => {},
+    });
+
+    expect(result).toEqual({
+      outcome: "stage-fingerprint-mismatch",
+      installedVersion: "1.0.0",
+      expectedStageFingerprint: "stage-a",
+      actualStageFingerprint: "stage-b",
+    });
+    expect(existsSync(stagedDirFor(ENV))).toBe(true);
+    expect(existsSync(replacementAside)).toBe(false);
+    expect(mocks.lifecycleCalls).toHaveLength(0);
+  });
+
   it("no-ops when the only staged version is comparable and not newer than installed (swept by reconcile's own stale-or-equal-version rule)", async () => {
     await writeInstall("2.0.0", {});
     await writeStaged("2.0.0", {});
