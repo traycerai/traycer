@@ -56,12 +56,14 @@ function hidesCliCandidates(
 
 /**
  * D6's PATH-unblock composite: the user's selection is the managed candidate,
- * it isn't installed yet, and a PATH binary is standing in for it right now.
- * Derived client-side from existing signals (selection + candidates) plus
- * `managedInstallState` rather than carried as its own field - there is
- * nothing here a host-computed boolean would tell us that these don't
- * already. `null` (old host, or this provider hasn't been cut over to the
- * registry yet) never activates it.
+ * an install is ACTIVELY in progress (not merely absent - an absent pack with
+ * no download running yet is not "installing", so the copy must stay quiet
+ * until a download actually starts), and a PATH binary is standing in for it
+ * right now. Derived client-side from existing signals (selection +
+ * candidates) plus `managedInstallState` rather than carried as its own field
+ * - there is nothing here a host-computed boolean would tell us that these
+ * don't already. `null` (old host, or this provider hasn't been cut over to
+ * the registry yet) never activates it.
  */
 function pathUnblockActive(
   selected: ProviderSelection,
@@ -69,12 +71,7 @@ function pathUnblockActive(
   candidates: readonly ProviderCliCandidate[],
 ): boolean {
   if (selected.kind !== "bundled") return false;
-  if (
-    managedInstallState === null ||
-    managedInstallState.status === "installed"
-  ) {
-    return false;
-  }
+  if (managedInstallState?.status !== "downloading") return false;
   return candidates.some(
     (candidate) => candidate.kind === "path" && candidate.available,
   );

@@ -105,13 +105,17 @@ function providerState(args: {
     availabilityPending: false,
     profiles: [],
   };
-  if (args.managedInstallState !== undefined) {
-    return { ...state, managedInstallState: args.managedInstallState };
-  }
-  if (args.versionVisibility !== undefined) {
-    return { ...state, versionVisibility: args.versionVisibility };
-  }
-  return state;
+  // Apply each optional field independently (not an if/else-if chain) so
+  // passing both together can't silently drop one.
+  return {
+    ...state,
+    ...(args.managedInstallState !== undefined
+      ? { managedInstallState: args.managedInstallState }
+      : {}),
+    ...(args.versionVisibility !== undefined
+      ? { versionVisibility: args.versionVisibility }
+      : {}),
+  };
 }
 
 function renderSection(state: ProviderCliState) {
@@ -203,6 +207,21 @@ describe("ProviderCliCandidatesSection: D6 PATH-unblock composite state", () => 
     expect(
       screen.getByText("Running from PATH · installing managed copy"),
     ).toBeDefined();
+  });
+
+  it("does not show the notice when the managed pack is merely absent with no download in flight yet (reachable first-boot state)", () => {
+    const state = providerState({
+      selected: { kind: "bundled" },
+      candidates: [
+        bundledCandidate({ available: false }),
+        pathCandidate({ available: true }),
+      ],
+      managedInstallState: { status: "absent" },
+    });
+    renderSection(state);
+    expect(
+      screen.queryByText("Running from PATH · installing managed copy"),
+    ).toBeNull();
   });
 
   it("does not show the notice once the managed pack is installed", () => {
