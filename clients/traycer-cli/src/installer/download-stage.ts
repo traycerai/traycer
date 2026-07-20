@@ -264,6 +264,7 @@ export async function downloadAndStageHost(
         installedVsTarget.comparable && installedVsTarget.ordering !== "less";
       const alreadyStagedAtTarget =
         stagedAfterYankHeal !== null &&
+        stagedAfterYankHeal.stageId !== null &&
         stagedAfterYankHeal.version === targetVersion;
       // Snapshot both taken under this same lock acquisition - the
       // short-circuit return below must report exactly what was true at
@@ -432,6 +433,7 @@ export async function downloadAndStageHost(
         const strictlyNewerThanStaged =
           explicitVersionRequested ||
           freshStaged === null ||
+          freshStaged.stageId === null ||
           isStrictlyNewerHostVersion(stagedRecord.version, freshStaged.version);
 
         if (passesInstalledMonotonicity && strictlyNewerThanStaged) {

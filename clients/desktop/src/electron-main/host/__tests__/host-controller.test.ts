@@ -1768,6 +1768,70 @@ describe("yank/apply ordering", () => {
     );
   });
 
+  it("migrates a legacy unpinned stage through automatic redownload, then applies its fresh fingerprint", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    const layout = getHostFsLayout("production");
+    mkdirSync(layout.stagedDir, { recursive: true });
+    writeFileSync(
+      layout.stagedRecordFile,
+      JSON.stringify({
+        stageId: null,
+        version: "1.8.0",
+        runtimeVersion: "1.8.0",
+      }),
+    );
+    let downloadCalls = 0;
+    let applyCalls = 0;
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+      availableSnapshotFixture("1.8.0", ["1.8.0"]),
+    );
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args.includes("download")) {
+        downloadCalls += 1;
+        writeStagedRecord("production", "1.8.0", "1.8.0");
+        return { data: {} };
+      }
+      if (opts.args.includes("apply")) {
+        applyCalls += 1;
+        expect(opts.args).toEqual(
+          expect.arrayContaining([
+            "--expected-stage-fingerprint",
+            "stage-1.8.0",
+          ]),
+        );
+        return {
+          data: {
+            outcome: "applied",
+            record: { version: "1.8.0", runtimeVersion: "1.8.0" },
+            runningActivated: true,
+            installGeneration: null,
+          },
+        };
+      }
+      return { data: {} };
+    });
+    vi.mocked(waitForHostReady).mockResolvedValue({
+      ready: true,
+      version: "1.8.0",
+      pid: 1,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reason: "ready",
+    });
+
+    await expect(
+      controller.applyStaged("manual", false),
+    ).resolves.toMatchObject({
+      kind: "ok",
+      value: { appliedVersion: "1.8.0", runningActivated: true },
+    });
+    expect(downloadCalls).toBe(1);
+    expect(applyCalls).toBe(1);
+  });
+
   it("re-eligibility retries a stage-fingerprint mismatch once and never reports the first stage applied", async () => {
     const controller = newController("production");
     writeInstallRecord("production", {

@@ -1770,6 +1770,21 @@ export class HostController {
     }
     const installed = await readDesktopHostInstallRecord(this.layout);
     const installedVersion = installed?.version ?? null;
+    let migratedLegacyStage = false;
+    if (staged?.stageId === null) {
+      // Legacy archives predate the stage fingerprint used by the atomic
+      // apply/purge handoff. Keep the signed bytes only long enough for the
+      // normal automatic download path to replace them with a freshly
+      // verified, fingerprinted stage; otherwise this valid update remains
+      // permanently deferred because Desktop can neither apply nor purge it.
+      log.info(
+        "[host-controller] replacing a legacy staged host without a handoff fingerprint",
+        { version: staged.version },
+      );
+      await this.runDownloadLane(null);
+      migratedLegacyStage = true;
+      staged = await readDesktopHostStagedRecord(this.layout);
+    }
     const stageIsEligible =
       staged !== null &&
       staged.stageId !== null &&
@@ -1818,10 +1833,14 @@ export class HostController {
       staged = null;
     }
     const needsDownload =
-      staged !== null ||
-      (this.latestVersionCache !== null &&
-        installedVersion !== null &&
-        isStrictlyNewerHostVersion(this.latestVersionCache, installedVersion));
+      !migratedLegacyStage &&
+      (staged !== null ||
+        (this.latestVersionCache !== null &&
+          installedVersion !== null &&
+          isStrictlyNewerHostVersion(
+            this.latestVersionCache,
+            installedVersion,
+          )));
     if (!needsDownload) {
       if (stageIsEligible && staged !== null && staged.stageId !== null) {
         this.eligibleStage = {

@@ -1,6 +1,7 @@
 import {
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   readdirSync,
   rmSync,
   writeFileSync,
@@ -451,6 +452,55 @@ describe("downloadAndStageHost", () => {
       reason: "already-staged",
     });
     expect(downloadStarted).toBe(false);
+  });
+
+  it("replaces a legacy target-stage with no handoff fingerprint instead of short-circuiting it forever", async () => {
+    await writeInstall("1.0.0", {});
+    const versions = [
+      { version: "1.0.0", yanked: false },
+      { version: "1.5.0", yanked: false },
+    ];
+    await downloadAndStageHost({
+      environment: ENV,
+      versionRequest: "1.5.0",
+      automatic: false,
+      onProgress: noopProgress,
+      registryClient: fakeRegistryClient({
+        latest: "1.5.0",
+        versions,
+        downloadGate: null,
+        onDownloadStart: null,
+      }),
+    });
+    const recordPath = join(stagedDirFor(ENV), "staged.json");
+    const legacy = JSON.parse(readFileSync(recordPath, "utf8")) as {
+      stageId?: unknown;
+    };
+    delete legacy.stageId;
+    writeFileSync(recordPath, JSON.stringify(legacy));
+
+    let downloadStarted = false;
+    const outcome = await downloadAndStageHost({
+      environment: ENV,
+      versionRequest: null,
+      automatic: true,
+      onProgress: noopProgress,
+      registryClient: fakeRegistryClient({
+        latest: "1.5.0",
+        versions,
+        downloadGate: null,
+        onDownloadStart: () => {
+          downloadStarted = true;
+        },
+      }),
+    });
+
+    expect(outcome).toMatchObject({
+      outcome: "promoted",
+      stagedVersion: "1.5.0",
+    });
+    expect(downloadStarted).toBe(true);
+    expect((await readHostStagedRecord(ENV))?.stageId).not.toBeNull();
   });
 
   it("downloads and promotes a fresh, strictly-newer version by default (latest)", async () => {
