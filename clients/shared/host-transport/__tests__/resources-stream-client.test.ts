@@ -126,6 +126,7 @@ const OWNER = {
   },
   sampledAt: 1_000,
   rootPids: [1],
+  harnessId: null,
   activeProcessName: "bash",
   processCount: 2,
   cpuPercent: 10,
@@ -217,7 +218,7 @@ describe("ResourcesStreamClient", () => {
     expect(parseText(sockets[0].textSent[1])).toEqual({
       kind: "subscribe",
       method: "resources.subscribe",
-      schemaVersion: { major: 1, minor: 2 },
+      schemaVersion: { major: 1, minor: 3 },
       params: {
         epicId: "epic-1",
         scope: { kind: "epic", epicId: "epic-1" },
@@ -250,6 +251,7 @@ describe("ResourcesStreamClient", () => {
     expect(snapshots).toHaveLength(1);
     expect(snapshots[0].app?.process?.name).toBe("traycer-host");
     expect(snapshots[0].owners[0].owner.ownerId).toBe("s1");
+    expect(snapshots[0].owners[0].harnessId).toBeNull();
     expect(snapshots[0].owners[0].processes[0].command).toBe("/bin/bash");
     expect(snapshots[0].epic?.epicId).toBe("epic-1");
     expect(snapshots[0].epics).toEqual([]);

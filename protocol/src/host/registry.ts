@@ -189,6 +189,8 @@ import {
   resourcesSubscribeV10,
   resourcesSubscribeV11,
   resourcesSubscribeV12,
+  resourcesSubscribeV13,
+  resourcesKillV10,
 } from "@traycer/protocol/host/resources/subscribe";
 import {
   speechEnsureModelV10,
@@ -3328,6 +3330,22 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  // Brand-new v1.0 method (not on `RELEASED_FLOOR_METHOD_NAMES`): an old host
+  // simply lacks it, so callers get per-call upgrade guidance instead of a
+  // fatal handshake mismatch. Same pattern as `providers.submitLoginCode`.
+  "resources.kill": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: resourcesKillV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "terminal.list": {
     1: {
       latestMinor: 0,
@@ -4139,7 +4157,7 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
   },
   "resources.subscribe": {
     1: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: resourcesSubscribeV10,
@@ -4149,6 +4167,9 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
         },
         2: {
           contract: resourcesSubscribeV12,
+        },
+        3: {
+          contract: resourcesSubscribeV13,
         },
       },
     },
