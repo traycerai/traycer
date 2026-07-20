@@ -124,6 +124,7 @@ function makeManagement(): IHostManagement {
         updateAvailable: false,
         reachable: false,
         errorMessage: null,
+        includePreReleases: false,
       }),
     ),
     getOperationStatus: vi.fn(() => Promise.resolve(null)),

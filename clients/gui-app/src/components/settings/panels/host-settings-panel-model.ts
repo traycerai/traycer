@@ -8,8 +8,31 @@ import type {
   LocalHostSnapshot,
   ServiceStatusSnapshot,
 } from "@traycer-clients/shared/platform/runner-host";
+import {
+  isConsentedHostChannelVersion,
+  isReleaseCandidateHostVersion,
+} from "@traycer-clients/shared/platform/runner-host";
 
 export const VERSION_LIST_PREVIEW = 10;
+
+/**
+ * `host available --include-pre-releases` is deliberately broad for terminal
+ * operators. The app picker is an RC-consent surface, so project its response
+ * before it can be rendered or selected.
+ */
+export function projectAppHostAvailableSnapshot(
+  snapshot: HostAvailableSnapshot,
+  includePreReleases: boolean,
+): HostAvailableSnapshot {
+  return {
+    ...snapshot,
+    versions: snapshot.versions.filter(
+      (entry) =>
+        isConsentedHostChannelVersion(entry.version) &&
+        (includePreReleases || !isReleaseCandidateHostVersion(entry.version)),
+    ),
+  };
+}
 
 export interface HostProgressState {
   readonly kind: HostOperationKind;

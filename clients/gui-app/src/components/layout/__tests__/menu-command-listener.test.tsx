@@ -83,7 +83,10 @@ interface FakeDesktopMenu {
   onCommand(handler: (payload: DesktopMenuCommandPayload) => void): {
     dispose(): void;
   };
-  emit(command: DesktopMenuCommandPayload["command"]): void;
+  emit(
+    command: DesktopMenuCommandPayload["command"],
+    hostUpdateVersion: string | null,
+  ): void;
 }
 
 interface FakeDesktopWindows {
@@ -115,8 +118,8 @@ function createMenu(): FakeDesktopMenu {
         },
       };
     },
-    emit(command) {
-      this.handler?.({ command, windowId: "window-1" });
+    emit(command, hostUpdateVersion) {
+      this.handler?.({ command, windowId: "window-1", hostUpdateVersion });
     },
   };
 }
@@ -359,12 +362,12 @@ describe("<MenuCommandListener />", () => {
     );
 
     act(() => {
-      menu.emit("app.openSettings");
-      menu.emit("app.signIn");
-      menu.emit("app.openLogs");
-      menu.emit("app.aboutDetails");
-      menu.emit("epic.openInNewWindow");
-      menu.emit("epic.newWindow");
+      menu.emit("app.openSettings", null);
+      menu.emit("app.signIn", null);
+      menu.emit("app.openLogs", null);
+      menu.emit("app.aboutDetails", null);
+      menu.emit("epic.openInNewWindow", null);
+      menu.emit("epic.newWindow", null);
     });
 
     expect(navigateMock).toHaveBeenCalledWith({ to: "/settings/general" });
@@ -381,13 +384,13 @@ describe("<MenuCommandListener />", () => {
     renderMenuCommandListener(menu);
 
     act(() => {
-      menu.emit("app.reportIssue");
+      menu.emit("app.reportIssue", null);
     });
     expect(useDesktopDialogStore.getState().activeDialog).toBeNull();
 
     useDesktopDialogStore.setState({ reportIssueAvailable: true });
     act(() => {
-      menu.emit("app.reportIssue");
+      menu.emit("app.reportIssue", null);
     });
     expect(useDesktopDialogStore.getState().activeDialog).toBe("report-issue");
   });
@@ -405,7 +408,7 @@ describe("<MenuCommandListener />", () => {
     );
 
     act(() => {
-      menu.emit("window.closeWindow");
+      menu.emit("window.closeWindow", null);
     });
 
     expect(runnerHost.windows.requestClose).toHaveBeenCalledWith("window-1");
@@ -421,9 +424,9 @@ describe("<MenuCommandListener />", () => {
     renderMenuCommandListener(menu);
 
     act(() => {
-      menu.emit("view.findInPage");
-      menu.emit("view.findNext");
-      menu.emit("view.findPrevious");
+      menu.emit("view.findInPage", null);
+      menu.emit("view.findNext", null);
+      menu.emit("view.findPrevious", null);
     });
 
     expect(
@@ -453,7 +456,7 @@ describe("<MenuCommandListener />", () => {
     renderMenuCommandListener(menu);
 
     act(() => {
-      menu.emit("view.findInPage");
+      menu.emit("view.findInPage", null);
     });
 
     const blankUi =
@@ -478,8 +481,8 @@ describe("<MenuCommandListener />", () => {
     renderMenuCommandListener(menu);
 
     act(() => {
-      menu.emit("view.findInPage");
-      menu.emit("view.findNext");
+      menu.emit("view.findInPage", null);
+      menu.emit("view.findNext", null);
     });
 
     expect(
@@ -504,7 +507,7 @@ describe("<MenuCommandListener />", () => {
     );
 
     act(() => {
-      menu.emit("epic.closeTab");
+      menu.emit("epic.closeTab", null);
     });
 
     expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]);
@@ -528,7 +531,7 @@ describe("<MenuCommandListener />", () => {
     );
 
     act(() => {
-      menu.emit("epic.closeTab");
+      menu.emit("epic.closeTab", null);
     });
 
     expect(
@@ -615,13 +618,19 @@ describe("<MenuCommandListener />", () => {
     );
 
     act(() => {
-      menu.emit("host.installUpdate");
+      menu.emit("host.installUpdate", "1.4.2");
     });
 
     await waitFor(() => {
       expect(updateHost).toHaveBeenCalledTimes(1);
     });
-    expect(updateHost).toHaveBeenCalledWith({ onProgress: null });
+    // The version the native menu/tray row displayed is pinned as
+    // `expectedVersion`, so the shell installs exactly what the user clicked
+    // even if the release channel changed in the meantime.
+    expect(updateHost).toHaveBeenCalledWith({
+      expectedVersion: "1.4.2",
+      onProgress: null,
+    });
   });
 
   it("opens a confirmation dialog for host.restart and only respawns after confirm", async () => {
@@ -640,7 +649,7 @@ describe("<MenuCommandListener />", () => {
     );
 
     act(() => {
-      menu.emit("host.restart");
+      menu.emit("host.restart", null);
     });
 
     const dialog = await screen.findByTestId("confirm-destructive-dialog");
@@ -694,7 +703,7 @@ describe("<MenuCommandListener />", () => {
     );
 
     act(() => {
-      menu.emit("epic.closeTab");
+      menu.emit("epic.closeTab", null);
     });
 
     expect(useLandingDraftStore.getState().drafts).toEqual([]);

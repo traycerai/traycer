@@ -38,6 +38,7 @@ export interface HostManagementBridgeSurface {
     readonly onProgress: ((event: HostProgressEvent) => void) | null;
   }): Promise<HostInstallResult>;
   updateHost(input: {
+    readonly expectedVersion: string | null;
     readonly onProgress: ((event: HostProgressEvent) => void) | null;
   }): Promise<HostInstallResult>;
   uninstallHost(input: { readonly all: boolean }): Promise<HostUninstallResult>;
@@ -131,10 +132,10 @@ export function buildHostManagementBridge(): HostManagementBridgeSurface {
         { version },
         onProgress,
       ),
-    updateHost: ({ onProgress }) =>
+    updateHost: ({ expectedVersion, onProgress }) =>
       withOperationListener<HostInstallResult>(
         RunnerHostInvoke.traycerHostUpdate,
-        null,
+        { expectedVersion },
         onProgress,
       ),
     uninstallHost: ({ all }) =>
@@ -252,13 +253,18 @@ function isHostRegistryUpdateState(
   const latestVersion = candidate.latestVersion;
   const installedVersion = candidate.installedVersion;
   const errorMessage = candidate.errorMessage;
+  // `includePreReleases` is the query-key discriminator for registry state
+  // (channel-scoped cache). Accepting a payload without a boolean would let
+  // older/malformed pushes file under `undefined` and clobber the live key
+  // (cold-review #9).
   return (
     (typeof checkedAt === "string" || checkedAt === null) &&
     (typeof latestVersion === "string" || latestVersion === null) &&
     (typeof installedVersion === "string" || installedVersion === null) &&
     typeof candidate.updateAvailable === "boolean" &&
     typeof candidate.reachable === "boolean" &&
-    (typeof errorMessage === "string" || errorMessage === null)
+    (typeof errorMessage === "string" || errorMessage === null) &&
+    typeof candidate.includePreReleases === "boolean"
   );
 }
 

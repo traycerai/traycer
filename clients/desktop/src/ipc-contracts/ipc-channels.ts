@@ -112,6 +112,7 @@ export const RunnerHostInvoke = {
   diagnosticsTraceStop: "runnerHost:diagnostics:trace:stop",
   appUpdateGetSnapshot: "runnerHost:appUpdate:getSnapshot",
   appUpdateCheck: "runnerHost:appUpdate:check",
+  appUpdateSetAllowPrerelease: "runnerHost:appUpdate:setAllowPrerelease",
   appUpdateDownload: "runnerHost:appUpdate:download",
   appUpdateInstall: "runnerHost:appUpdate:install",
   systemPreferencesAccentColor: "runnerHost:systemPreferences:accentColor",

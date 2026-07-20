@@ -356,7 +356,10 @@ function createController(options: {
   readonly host: FakeHost;
   readonly authSession: DesktopAuthSession;
   readonly perWindowState: IpcPerWindowState;
-  readonly dispatchRendererCommand: (command: MenuCommandId) => boolean;
+  readonly dispatchRendererCommand: (
+    command: MenuCommandId,
+    hostUpdateVersion: string | null,
+  ) => boolean;
 }): MenuController {
   return new MenuController({
     appName: "Traycer",
@@ -400,12 +403,13 @@ function runControllerCommand(
   controller: MenuController,
   command: MenuCommandId,
   senderWindow: MenuManagedWindow | null,
+  hostUpdateVersion: string | null,
 ): void {
   const handleCommand = Reflect.get(controller, "handleCommand");
   if (typeof handleCommand !== "function") {
     throw new Error("handleCommand missing");
   }
-  handleCommand.call(controller, command, senderWindow);
+  handleCommand.call(controller, command, senderWindow, hostUpdateVersion);
 }
 
 describe("MenuController", () => {
@@ -487,9 +491,63 @@ describe("MenuController", () => {
     expect(closeTab.enabled).toBe(true);
     closeTab.click?.(null, null);
 
-    expect(dispatchRendererCommand).toHaveBeenCalledWith("epic.closeTab");
+    expect(dispatchRendererCommand).toHaveBeenCalledWith("epic.closeTab", null);
     controller.dispose();
   });
+
+  // Cold-review #3 / review finding 5: the version dispatched with
+  // `host.installUpdate` is the value captured into the tray item callback
+  // when the row was labelled - not live MenuController state - so a stale
+  // open-menu click after presentation moves on still pins the version the
+  // user saw.
+  it("dispatches host.installUpdate with the version captured by the tray item callback", () => {
+    const dispatchRendererCommand = vi.fn(() => true);
+    const controller = createController({
+      registry: new FakeWindowRegistry(),
+      host: new FakeHost(),
+      authSession: new DesktopAuthSession(),
+      perWindowState: new PerWindowState(null),
+      dispatchRendererCommand,
+    });
+    controller.install();
+    // Live controller state may already disagree with the captured click.
+    controller.setHostUpdateAvailableVersion("1.7.0-rc.9");
+
+    runControllerCommand(controller, "host.installUpdate", null, "1.6.0-rc.1");
+
+    expect(dispatchRendererCommand).toHaveBeenCalledWith(
+      "host.installUpdate",
+      "1.6.0-rc.1",
+    );
+    controller.dispose();
+  });
+
+  it("dispatches host.installUpdate with null when the item callback captured no version", () => {
+    const dispatchRendererCommand = vi.fn(() => true);
+    const controller = createController({
+      registry: new FakeWindowRegistry(),
+      host: new FakeHost(),
+      authSession: new DesktopAuthSession(),
+      perWindowState: new PerWindowState(null),
+      dispatchRendererCommand,
+    });
+    controller.install();
+    controller.setHostUpdateAvailableVersion("1.6.0-rc.1");
+
+    runControllerCommand(controller, "host.installUpdate", null, null);
+
+    expect(dispatchRendererCommand).toHaveBeenCalledWith(
+      "host.installUpdate",
+      null,
+    );
+    controller.dispose();
+  });
+
+  // Stale open-menu capture of version A after presentation moves to B is
+  // covered end-to-end at the tray boundary in tray.test.ts (DesktopTrayController
+  // private fields make a real tray fixture impractical here). The cases above
+  // prove MenuController dispatches the callback-captured version rather than
+  // live hostUpdateAvailableVersion.
 
   it("dispatches Restart Host through the renderer confirmation path", () => {
     const host = new FakeHost();
@@ -504,9 +562,9 @@ describe("MenuController", () => {
     });
 
     controller.install();
-    runControllerCommand(controller, "host.restart", null);
+    runControllerCommand(controller, "host.restart", null, null);
 
-    expect(dispatchRendererCommand).toHaveBeenCalledWith("host.restart");
+    expect(dispatchRendererCommand).toHaveBeenCalledWith("host.restart", null);
     expect(host.respawnCalls).toBe(0);
     expect(registry.createRequests).toEqual([]);
     controller.dispose();
@@ -528,15 +586,23 @@ describe("MenuController", () => {
     });
 
     controller.install();
-    runControllerCommand(controller, "host.restart", null);
+    runControllerCommand(controller, "host.restart", null, null);
     await Promise.resolve();
 
     expect(registry.createRequests).toEqual([
       { initialRoute: null, beforeLoad: null },
     ]);
     expect(dispatchRendererCommand).toHaveBeenCalledTimes(2);
-    expect(dispatchRendererCommand).toHaveBeenNthCalledWith(1, "host.restart");
-    expect(dispatchRendererCommand).toHaveBeenNthCalledWith(2, "host.restart");
+    expect(dispatchRendererCommand).toHaveBeenNthCalledWith(
+      1,
+      "host.restart",
+      null,
+    );
+    expect(dispatchRendererCommand).toHaveBeenNthCalledWith(
+      2,
+      "host.restart",
+      null,
+    );
     expect(host.respawnCalls).toBe(0);
     controller.dispose();
   });
@@ -555,7 +621,7 @@ describe("MenuController", () => {
 
     controller.install();
     vi.mocked(log.warn).mockClear();
-    runControllerCommand(controller, "host.restart", null);
+    runControllerCommand(controller, "host.restart", null, null);
     await Promise.resolve();
     await Promise.resolve();
 
@@ -563,8 +629,16 @@ describe("MenuController", () => {
       { initialRoute: null, beforeLoad: null },
     ]);
     expect(dispatchRendererCommand).toHaveBeenCalledTimes(2);
-    expect(dispatchRendererCommand).toHaveBeenNthCalledWith(1, "host.restart");
-    expect(dispatchRendererCommand).toHaveBeenNthCalledWith(2, "host.restart");
+    expect(dispatchRendererCommand).toHaveBeenNthCalledWith(
+      1,
+      "host.restart",
+      null,
+    );
+    expect(dispatchRendererCommand).toHaveBeenNthCalledWith(
+      2,
+      "host.restart",
+      null,
+    );
     expect(host.respawnCalls).toBe(0);
     expect(log.warn).toHaveBeenCalledWith(
       "[menu] host.restart had no renderer after opening window",
@@ -588,7 +662,7 @@ describe("MenuController", () => {
 
     controller.install();
     vi.mocked(log.warn).mockClear();
-    runControllerCommand(controller, "host.restart", null);
+    runControllerCommand(controller, "host.restart", null, null);
     await Promise.resolve();
     await Promise.resolve();
 
@@ -596,7 +670,7 @@ describe("MenuController", () => {
       { initialRoute: null, beforeLoad: null },
     ]);
     expect(dispatchRendererCommand).toHaveBeenCalledTimes(1);
-    expect(dispatchRendererCommand).toHaveBeenCalledWith("host.restart");
+    expect(dispatchRendererCommand).toHaveBeenCalledWith("host.restart", null);
     expect(host.respawnCalls).toBe(0);
     expect(log.warn).toHaveBeenCalledWith(
       "[menu] host.restart window creation failed",
@@ -617,7 +691,12 @@ describe("MenuController", () => {
     });
 
     controller.install();
-    runControllerCommand(controller, "window.closeWindow", registry.window);
+    runControllerCommand(
+      controller,
+      "window.closeWindow",
+      registry.window,
+      null,
+    );
 
     expect(registry.closeRequests).toEqual(["window-a"]);
     expect(dispatchRendererCommand).not.toHaveBeenCalled();
@@ -636,8 +715,18 @@ describe("MenuController", () => {
     });
 
     controller.install();
-    runControllerCommand(controller, "window.minimizeWindow", registry.window);
-    runControllerCommand(controller, "window.zoomWindow", registry.window);
+    runControllerCommand(
+      controller,
+      "window.minimizeWindow",
+      registry.window,
+      null,
+    );
+    runControllerCommand(
+      controller,
+      "window.zoomWindow",
+      registry.window,
+      null,
+    );
 
     expect(registry.minimizeRequests).toEqual(["window-a"]);
     expect(registry.zoomRequests).toEqual(["window-a"]);
@@ -662,9 +751,9 @@ describe("MenuController", () => {
     });
 
     controller.install();
-    runControllerCommand(controller, "view.zoomIn", null);
-    runControllerCommand(controller, "view.zoomOut", null);
-    runControllerCommand(controller, "view.resetZoom", null);
+    runControllerCommand(controller, "view.zoomIn", null, null);
+    runControllerCommand(controller, "view.zoomOut", null, null);
+    runControllerCommand(controller, "view.resetZoom", null, null);
     await Promise.resolve();
 
     expect(zoomController.requests).toEqual(["in", "out", "reset"]);
@@ -683,7 +772,7 @@ describe("MenuController", () => {
     });
 
     controller.install();
-    runControllerCommand(controller, "epic.newWindow", null);
+    runControllerCommand(controller, "epic.newWindow", null, null);
 
     expect(
       registry.createRequests.map((request) => request.initialRoute),
@@ -731,9 +820,9 @@ describe("MenuController", () => {
     });
 
     controller.install();
-    runControllerCommand(controller, "window.minimizeWindow", null);
-    runControllerCommand(controller, "window.zoomWindow", null);
-    runControllerCommand(controller, "window.closeWindow", null);
+    runControllerCommand(controller, "window.minimizeWindow", null, null);
+    runControllerCommand(controller, "window.zoomWindow", null, null);
+    runControllerCommand(controller, "window.closeWindow", null, null);
 
     expect(registry.minimizeRequests).toEqual(["window-a"]);
     expect(registry.zoomRequests).toEqual(["window-a"]);
@@ -758,7 +847,7 @@ describe("MenuController", () => {
     });
 
     expect(() =>
-      runControllerCommand(controller, "app.about", null),
+      runControllerCommand(controller, "app.about", null, null),
     ).not.toThrow();
     expect(log.warn).toHaveBeenCalledWith(
       "[menu] command threw",
@@ -780,7 +869,7 @@ describe("MenuController", () => {
 
     controller.install();
     vi.mocked(log.warn).mockClear();
-    runControllerCommand(controller, "epic.newWindow", null);
+    runControllerCommand(controller, "epic.newWindow", null, null);
     // Flush the microtask that runs the attached `.catch`.
     await Promise.resolve();
 
@@ -804,9 +893,24 @@ describe("MenuController", () => {
 
     controller.install();
     expect(windowMenuItem("Close Window").enabled).toBe(true);
-    runControllerCommand(controller, "window.minimizeWindow", registry.windowB);
-    runControllerCommand(controller, "window.zoomWindow", registry.windowB);
-    runControllerCommand(controller, "window.closeWindow", registry.windowB);
+    runControllerCommand(
+      controller,
+      "window.minimizeWindow",
+      registry.windowB,
+      null,
+    );
+    runControllerCommand(
+      controller,
+      "window.zoomWindow",
+      registry.windowB,
+      null,
+    );
+    runControllerCommand(
+      controller,
+      "window.closeWindow",
+      registry.windowB,
+      null,
+    );
 
     expect(registry.minimizeRequests).toEqual(["window-b"]);
     expect(registry.zoomRequests).toEqual(["window-b"]);

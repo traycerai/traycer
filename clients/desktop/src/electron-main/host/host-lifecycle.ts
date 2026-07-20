@@ -575,6 +575,7 @@ export class HostLifecycle extends EventEmitter {
       args: ["host", "restart"],
       env: null,
       timeoutMs: CLI_RESTART_TIMEOUT_MS,
+      invocation: null,
       onEvent: () => {
         // No progress sink - restart payload is small and any partial
         // progress lines are advisory. The PID-metadata watcher fires
