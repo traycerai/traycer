@@ -29,7 +29,10 @@ import * as Y from "yjs";
 import type { Awareness } from "y-protocols/awareness";
 import { artifactFolderChain } from "@/lib/artifacts/artifact-folder-chain";
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
-import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
+import type {
+  GuiHarnessId,
+  TuiHarnessId,
+} from "@traycer/protocol/persistence/epic/schemas";
 import type { WorktreeBindingOwnerKind } from "@traycer/protocol/host/worktree-schemas";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import {
@@ -1222,6 +1225,19 @@ export function useEpicNodeHostId(nodeId: string): string | null {
       return s.tuiAgents.byId[nodeId].hostId;
     }
     return null;
+  });
+}
+
+/**
+ * A GUI chat row's persisted harness id, selected as a primitive so unrelated
+ * chat projection churn cannot re-render the sidebar icon. New chats normally
+ * persist settings at creation; legacy or optimistic records can still have
+ * no settings, in which case the caller keeps the generic chat glyph.
+ */
+export function useEpicChatHarnessId(nodeId: string): GuiHarnessId | null {
+  return useEpicStore((s) => {
+    if (!Object.hasOwn(s.chats.byId, nodeId)) return null;
+    return s.chats.byId[nodeId].settings?.harnessId ?? null;
   });
 }
 

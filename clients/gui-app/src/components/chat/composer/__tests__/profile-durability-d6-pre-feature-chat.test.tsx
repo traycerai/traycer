@@ -146,6 +146,7 @@ function PreFeatureComposerHarness() {
             profiles={prompt.profiles}
             destinations={prompt.destinations}
             primaryTarget={prompt.primaryTarget}
+            probeTarget={null}
             runTargetHostId={null}
             onSwitchProfile={setProfileId}
             affectedChatCount={1}

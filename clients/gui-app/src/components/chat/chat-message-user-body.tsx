@@ -76,9 +76,13 @@ import { AccentDot } from "@/components/providers/accent-dot";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import type { ProviderId } from "@/components/home/data/landing-options";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
-import { useComposerPaste } from "@/hooks/composer/use-composer-paste";
+import {
+  isAttachmentIngestPending,
+  useComposerPaste,
+} from "@/hooks/composer/use-composer-paste";
 import { useWorkspaceMentionRoots } from "@/hooks/composer/use-workspace-mention-roots";
 import { useEpicAttachmentBytesPresence } from "@/lib/attachments/use-attachment-blob-src";
+import { useRunnerHost } from "@/providers/use-runner-host";
 
 const NOOP: () => void = () => undefined;
 
@@ -601,9 +605,19 @@ function InlineUserMessageEditor({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const focusFrameRef = useRef<number | null>(null);
   const visibilityFrameRef = useRef<number | null>(null);
-  const { onPaste, onDrop, onDragOver, attachImageFiles, isIngestingImages } =
-    useComposerPaste(editorRef);
-  const attachmentPending = isIngestingImages;
+  const runnerHost = useRunnerHost();
+  const {
+    onPaste,
+    onDrop,
+    onDragOver,
+    attachImageFiles,
+    isIngestingImages,
+    isResolvingFilePaths,
+  } = useComposerPaste(editorRef, runnerHost.fileDrops, resolvedMentionRoots);
+  const attachmentPending = isAttachmentIngestPending({
+    isIngestingImages,
+    isResolvingFilePaths,
+  });
 
   // Without this, the picker opens empty - nothing writes items into the store.
   useComposerPickerItems({
