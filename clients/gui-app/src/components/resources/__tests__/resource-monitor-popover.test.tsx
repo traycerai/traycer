@@ -540,14 +540,20 @@ describe("ResourceMonitorPopover", () => {
 
     // The per-row "Kill" text button is present (revealed on hover) and arms an
     // inline Confirm/Cancel pair rather than opening a modal.
+    resourcesKillMock.mutate.mockClear();
     const killButton = screen.getByRole("button", { name: /^Kill / });
     fireEvent.click(killButton);
     expect(
-      screen.getByRole("button", { name: /^Confirm kill / }),
-    ).not.toBeNull();
-    expect(
       screen.getByRole("button", { name: /^Keep .* running$/ }),
     ).not.toBeNull();
+
+    // Confirming fires the kill mutation with the owner's host + root pids.
+    fireEvent.click(screen.getByRole("button", { name: /^Confirm kill / }));
+    expect(resourcesKillMock.mutate).toHaveBeenCalledTimes(1);
+    expect(resourcesKillMock.mutate).toHaveBeenCalledWith({
+      hostId: "host-1",
+      pids: [100],
+    });
   });
 
   it("enters multi-select mode and reveals row checkboxes", () => {
@@ -577,7 +583,19 @@ describe("ResourceMonitorPopover", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Select processes to kill" }),
     );
-    expect(screen.getAllByRole("checkbox").length).toBeGreaterThan(0);
+    const checkboxes = screen.getAllByRole("checkbox");
+    expect(checkboxes.length).toBeGreaterThan(0);
+
+    // Selecting the owner and confirming the bulk action fires one grouped
+    // kill for its host + root pids.
+    resourcesKillMock.mutate.mockClear();
+    fireEvent.click(checkboxes[0]);
+    fireEvent.click(screen.getByRole("button", { name: "Kill 1 selected" }));
+    expect(resourcesKillMock.mutate).toHaveBeenCalledTimes(1);
+    expect(resourcesKillMock.mutate).toHaveBeenCalledWith({
+      hostId: "host-1",
+      pids: [100],
+    });
   });
 
   it("prunes the selection count when a selected process exits on its own", () => {
