@@ -64,6 +64,40 @@ describe("insertPathSpansCommand via the real composer editor", () => {
     ).toHaveLength(2);
   });
 
+  it("replaces the selection captured when path insertion begins", async () => {
+    const handleRef = await mountedHandle();
+
+    act(() => {
+      handleRef.current?.setContent(paragraphText("abcdef"), {
+        from: 2,
+        to: 5,
+      });
+      handleRef.current?.beginPathInsertion()?.(["src/app.ts"]);
+    });
+
+    expect(composerText(handleRef.current)).toBe("asrc/app.ts ef");
+    expect(pathSpanRuns(handleRef.current)).toContainEqual({
+      text: "src/app.ts",
+      code: true,
+    });
+  });
+
+  it("preserves text appended while a selected-range insertion resolves", async () => {
+    const handleRef = await mountedHandle();
+
+    act(() => {
+      handleRef.current?.setContent(paragraphText("abcdef"), {
+        from: 2,
+        to: 5,
+      });
+      const commit = handleRef.current?.beginPathInsertion();
+      handleRef.current?.insertDictatedText("typed");
+      commit?.(["src/app.ts"]);
+    });
+
+    expect(composerText(handleRef.current)).toBe("asrc/app.ts eftyped ");
+  });
+
   it("does nothing for an empty path list", async () => {
     const handleRef = await mountedHandle();
     const before = handleRef.current?.getJSON();
@@ -147,6 +181,21 @@ function Harness({
 
 function emptyContent(): JsonContent {
   return { type: "doc", content: [{ type: "paragraph" }] };
+}
+
+function paragraphText(text: string): JsonContent {
+  return {
+    type: "doc",
+    content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+  };
+}
+
+function composerText(handle: ComposerPromptEditorHandle | null): string {
+  const content = handle?.getJSON();
+  return (content?.content ?? [])
+    .flatMap((paragraph) => paragraph.content ?? [])
+    .map((node) => node.text ?? "")
+    .join("");
 }
 
 interface PathSpanRun {

@@ -767,11 +767,12 @@ function pathSpansContent(paths: ReadonlyArray<string>): Array<{
 
 export interface InsertPathSpansCommandInput {
   readonly paths: ReadonlyArray<string>;
-  readonly position: number;
+  readonly from: number;
+  readonly to: number;
 }
 
 /**
- * Inserts resolved paths in one history group at a mapped caret position.
+ * Inserts resolved paths in one history group at a mapped selection range.
  * Each path is its own inline-code span, separated by plain spaces, followed
  * by a plain trailing space so continued typing resumes outside the code mark.
  */
@@ -779,7 +780,7 @@ export function insertPathSpansCommand(
   editor: Editor,
   input: InsertPathSpansCommandInput,
 ): void {
-  const { paths, position } = input;
+  const { paths, from, to } = input;
   if (paths.length === 0) return;
   let chain = editor
     .chain()
@@ -787,7 +788,7 @@ export function insertPathSpansCommand(
       closeHistory(tr);
       return true;
     })
-    .setTextSelection(position);
+    .setTextSelection({ from, to });
   chain = chain.insertContent(pathSpansContent(paths)).unsetMark("code");
   chain.run();
   editor.view.dispatch(closeHistory(editor.state.tr));

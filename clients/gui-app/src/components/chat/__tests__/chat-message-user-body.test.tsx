@@ -46,6 +46,7 @@ vi.mock("@/providers/use-runner-host", () => ({
       resolveDroppedFilePaths: () => Promise.resolve([]),
       copyDroppedFilePaths: (paths: readonly string[]) =>
         Promise.resolve(paths),
+      readNativeClipboardFilePaths: () => Promise.resolve([]),
     },
   }),
 }));
