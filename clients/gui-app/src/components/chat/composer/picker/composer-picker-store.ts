@@ -60,6 +60,17 @@ export interface ComposerPickerState {
   readonly fetching: boolean;
   readonly commit: ComposerPickerCommit | null;
   /**
+   * True when the active kind's catalog query FAILED (currently only the
+   * slash-command catalog reports this). The menu renders a "couldn't load"
+   * row with a Retry action instead of claiming "no matching" results -
+   * repeated provider failures must not be indistinguishable from a
+   * legitimately empty catalog. `retryLoad` is the failed query's refetch,
+   * kept as a closure in the store the same way `commit` / `clientRect` are;
+   * it is non-null only while `loadFailed` is set.
+   */
+  readonly loadFailed: boolean;
+  readonly retryLoad: (() => void) | null;
+  /**
    * Latest viewport rect of the suggestion range (trigger char + query).
    * Tiptap rebuilds the closure on every view update; we keep the function
    * itself in the store so the menu can read the freshest rect via
@@ -97,6 +108,8 @@ export interface ComposerPickerActions {
     readonly step: MentionFlowStep;
     readonly items: ReadonlyArray<ComposerPickerItem>;
     readonly loading: boolean;
+    readonly loadFailed: boolean;
+    readonly retryLoad: (() => void) | null;
   }) => void;
   readonly setLoading: (input: {
     readonly kind: ComposerPickerKind;
@@ -133,6 +146,8 @@ const INITIAL_STATE: ComposerPickerState = {
   loading: false,
   fetching: false,
   commit: null,
+  loadFailed: false,
+  retryLoad: null,
   clientRect: null,
   knownSlashCommands: null,
 };
@@ -170,6 +185,8 @@ export function createComposerPickerStore(): ComposerPickerStore {
         loading: false,
         fetching: false,
         commit,
+        loadFailed: false,
+        retryLoad: null,
         clientRect,
       });
     },
@@ -209,10 +226,20 @@ export function createComposerPickerStore(): ComposerPickerStore {
         activeIndex: 0,
         loading: false,
         fetching: false,
+        loadFailed: false,
+        retryLoad: null,
       });
     },
 
-    setItems: ({ kind, query, step, items, loading }) => {
+    setItems: ({
+      kind,
+      query,
+      step,
+      items,
+      loading,
+      loadFailed,
+      retryLoad,
+    }) => {
       const previous = get();
       if (
         !previous.open ||
@@ -227,6 +254,8 @@ export function createComposerPickerStore(): ComposerPickerStore {
         itemsForQuery: query,
         itemsForStepId: stepIdOf(step),
         loading,
+        loadFailed,
+        retryLoad,
         activeIndex: clampIndex(previous.activeIndex, items.length),
       });
     },

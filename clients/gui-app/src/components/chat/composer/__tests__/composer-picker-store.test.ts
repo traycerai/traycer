@@ -91,6 +91,8 @@ describe("composer picker store", () => {
       step: ROOT_MENTION_STEP,
       items: [mentionItem("a")],
       loading: false,
+      loadFailed: false,
+      retryLoad: null,
     });
     open(store, "src", NOOP_COMMIT);
 
@@ -112,6 +114,8 @@ describe("composer picker store", () => {
       step: ROOT_MENTION_STEP,
       items: [mentionItem("a")],
       loading: false,
+      loadFailed: false,
+      retryLoad: null,
     });
     expect(store.getState().items).toEqual([]);
   });
@@ -125,6 +129,8 @@ describe("composer picker store", () => {
       step: ROOT_MENTION_STEP,
       items: [mentionItem("a"), mentionItem("b")],
       loading: false,
+      loadFailed: false,
+      retryLoad: null,
     });
     expect(store.getState().items.length).toBe(2);
     expect(store.getState().itemsForQuery).toBe("src");
@@ -140,6 +146,8 @@ describe("composer picker store", () => {
       step: ROOT_MENTION_STEP,
       items: [mentionItem("a")],
       loading: false,
+      loadFailed: false,
+      retryLoad: null,
     });
     expect(store.getState().items).toEqual([]);
   });
@@ -153,6 +161,8 @@ describe("composer picker store", () => {
       step: ROOT_MENTION_STEP,
       items: [mentionItem("a")],
       loading: false,
+      loadFailed: false,
+      retryLoad: null,
     });
     store.getState().setStep(FILES_PROVIDER_STEP);
     expect(store.getState().items).toEqual([]);
@@ -168,6 +178,8 @@ describe("composer picker store", () => {
       step: ROOT_MENTION_STEP,
       items: [mentionItem("a"), mentionItem("b"), mentionItem("c")],
       loading: false,
+      loadFailed: false,
+      retryLoad: null,
     });
     expect(store.getState().activeIndex).toBe(0);
     store.getState().moveActive(-1);
@@ -189,6 +201,8 @@ describe("composer picker store", () => {
       step: ROOT_MENTION_STEP,
       items,
       loading: false,
+      loadFailed: false,
+      retryLoad: null,
     });
     store.getState().setActiveIndex(1);
     expect(store.getState().commitActiveItem()).toBe(true);
@@ -210,6 +224,8 @@ describe("composer picker store", () => {
       step: ROOT_MENTION_STEP,
       items: [mentionItem("a")],
       loading: true,
+      loadFailed: false,
+      retryLoad: null,
     });
     store.getState().close();
     const state = store.getState();
@@ -237,6 +253,8 @@ describe("composer picker store", () => {
       step: ROOT_MENTION_STEP,
       items: [slashItem("plan"), slashItem("commit")],
       loading: false,
+      loadFailed: false,
+      retryLoad: null,
     });
     expect(store.getState().items.length).toBe(2);
     expect(store.getState().kind).toBe("slash");
