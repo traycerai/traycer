@@ -5,7 +5,7 @@ import {
   type RefObject,
 } from "react";
 import { createPortal } from "react-dom";
-import { Folder } from "lucide-react";
+import { Folder, TriangleAlertIcon } from "lucide-react";
 import {
   autoUpdate,
   computePosition,
@@ -42,6 +42,12 @@ export interface MentionPreviewPanelProps {
   readonly listRef: RefObject<HTMLDivElement | null>;
   readonly activeIndex: number;
   readonly preview: MentionPreview | null;
+  /**
+   * Why the highlighted row cannot be committed, or null when it can be.
+   * Rendered above the preview body and separated from it, so the reason
+   * reads first rather than as a footnote to the description.
+   */
+  readonly disabledReason: string | null;
 }
 
 /**
@@ -53,7 +59,7 @@ export interface MentionPreviewPanelProps {
  * than letting it render past the viewport edge or overlap the list.
  */
 export function MentionPreviewPanel(props: MentionPreviewPanelProps) {
-  const { panelRef, listRef, activeIndex, preview } = props;
+  const { panelRef, listRef, activeIndex, preview, disabledReason } = props;
   const [fits, setFits] = useState(false);
 
   useLayoutEffect(() => {
@@ -140,6 +146,20 @@ export function MentionPreviewPanel(props: MentionPreviewPanelProps) {
         data-slot="mention-preview-panel-scroll-area"
         className={cn("max-h-[min(50vh,16rem)]", HOVER_PREVIEW_SCROLL_CLASS)}
       >
+        {disabledReason === null ? null : (
+          <div
+            data-slot="mention-preview-panel-disabled"
+            className="mb-2 flex items-start gap-1.5 border-b border-border/60 pb-2 text-ui-xs text-foreground"
+          >
+            <TriangleAlertIcon
+              className="mt-px size-3.5 shrink-0 text-amber-500"
+              aria-hidden
+            />
+            <span className="min-w-0">
+              <span className="font-semibold">Disabled</span> - {disabledReason}
+            </span>
+          </div>
+        )}
         <PreviewBody preview={preview} />
       </div>
     </div>,

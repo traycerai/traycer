@@ -67,6 +67,7 @@ function makeManagement(
         updateAvailable: false,
         reachable: false,
         errorMessage: null,
+        includePreReleases: false,
       }),
     ),
     freePortAndRestart: vi.fn((input) => Promise.resolve(input)),

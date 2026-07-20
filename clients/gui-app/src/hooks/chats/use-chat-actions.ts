@@ -3,6 +3,7 @@ import type {
   ChatRunSettings,
   ChatActiveTurn,
 } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type { PermissionMode } from "@traycer/protocol/persistence/epic/foundation";
 import type {
   InterviewAnswer,
@@ -64,6 +65,10 @@ export interface ChatActions {
   ) => void;
   readonly updateActivePermissionMode: (
     permissionMode: PermissionMode,
+  ) => string | null;
+  readonly updateActiveProfile: (
+    harnessId: GuiHarnessId,
+    profileId: string | null,
   ) => string | null;
   readonly queueCancel: (queueItemId: string) => string | null;
   readonly queueReorder: (
@@ -195,6 +200,8 @@ export function useChatActions(handle: ChatSessionStoreHandle): ChatActions {
           .restampQueuedItemSettings(settings, excludeQueueItemId),
       updateActivePermissionMode: (permissionMode) =>
         handle.store.getState().updateActivePermissionMode(permissionMode),
+      updateActiveProfile: (harnessId, profileId) =>
+        handle.store.getState().updateActiveProfile(harnessId, profileId),
       queueCancel: (queueItemId) =>
         tracked(handle.store.getState().queueCancel(queueItemId), () => {
           Analytics.getInstance().track(

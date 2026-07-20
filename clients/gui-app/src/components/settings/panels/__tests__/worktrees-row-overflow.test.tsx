@@ -86,6 +86,7 @@ function renderSingleRow(
           onRefresh: () => Promise.resolve(),
           refreshing: false,
           canRefresh: true,
+          lastUpdatedAt: null,
         }}
       />
     </Wrapper>,

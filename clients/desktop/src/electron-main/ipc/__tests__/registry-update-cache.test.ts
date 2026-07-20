@@ -48,6 +48,12 @@ vi.mock("electron-log", () => ({
   error: vi.fn(),
 }));
 
+const updatePreference = vi.hoisted(() => ({ allowPrerelease: false }));
+
+vi.mock("../../app/update-preferences", () => ({
+  prereleaseUpdatesEnabled: () => updatePreference.allowPrerelease,
+}));
+
 const ORIGINAL_HOME = process.env.HOME;
 const ORIGINAL_USERPROFILE = process.env.USERPROFILE;
 let workHome: string;
@@ -91,6 +97,7 @@ beforeEach(() => {
   process.env.HOME = workHome;
   process.env.USERPROFILE = workHome;
   vi.resetModules();
+  updatePreference.allowPrerelease = false;
 });
 
 afterEach(() => {
@@ -116,6 +123,7 @@ function writeCache(opts: {
   readonly reachable: boolean;
   readonly errorMessage: string | null;
   readonly environment?: "production" | "dev";
+  readonly includePreReleases?: boolean;
 }): void {
   const environment = opts.environment ?? "production";
   const dir = join(workHome, ".traycer", "desktop");
@@ -346,6 +354,295 @@ describe("refreshRegistryUpdateState - launch-time probe", () => {
     });
     expect(probeSpy).toHaveBeenCalledOnce();
     expect(state.latestVersion).toBe("1.4.3");
+  });
+
+  it("selects the highest healthy prerelease and bypasses a stable-channel cache after opt-in", async () => {
+    writeInstallRecord("production", "1.4.2");
+    writeCache({
+      checkedAt: new Date().toISOString(),
+      latestVersion: "1.4.2",
+      installedVersion: "1.4.2",
+      reachable: true,
+      errorMessage: null,
+    });
+    updatePreference.allowPrerelease = true;
+    const probeSpy = vi.fn().mockResolvedValue({
+      manifest: {
+        schemaVersion: 1,
+        generatedAt: "2026-05-15T00:00:00Z",
+        latest: "1.4.2",
+        versions: [
+          registryVersion("1.5.0-rc.2", true, null),
+          registryVersion("1.5.0-rc.1", true, null),
+          registryVersion("1.4.2", true, null),
+        ],
+      },
+      platformKey: "darwin-arm64",
+      manifestUrl: "https://example.invalid/versions.json",
+    });
+    vi.doMock("../../cli/traycer-cli", () => ({
+      runTraycerCliJson: probeSpy,
+      streamTraycerCliJson: vi.fn(),
+      TraycerCliError: class extends Error {},
+    }));
+
+    const { refreshRegistryUpdateState } =
+      await import("../host-management-ipc");
+    const state = await refreshRegistryUpdateState({
+      force: false,
+      maxAgeMs: null,
+    });
+
+    expect(probeSpy).toHaveBeenCalledWith([
+      "host",
+      "available",
+      "--json",
+      "--include-pre-releases",
+    ]);
+    expect(state).toMatchObject({
+      latestVersion: "1.5.0-rc.2",
+      installedVersion: "1.4.2",
+      updateAvailable: true,
+    });
+  });
+
+  // Review finding 5's symmetric case: opting back OUT must bypass a cache
+  // that was resolved under the RC channel just as reliably as opting in
+  // bypasses a stable-channel cache above. Otherwise a window/tray reading
+  // the fresh (< 24h) cache right after opt-out would keep advertising the
+  // RC target the user just turned off.
+  it("bypasses a release-candidate-channel cache after opting back out to stable", async () => {
+    writeInstallRecord("production", "1.4.2");
+    writeCache({
+      checkedAt: new Date().toISOString(),
+      latestVersion: "1.5.0-rc.2",
+      installedVersion: "1.4.2",
+      reachable: true,
+      errorMessage: null,
+      includePreReleases: true,
+    });
+    updatePreference.allowPrerelease = false;
+    const probeSpy = vi
+      .fn()
+      .mockResolvedValue(registryProbeResult("1.4.2", true, null));
+    vi.doMock("../../cli/traycer-cli", () => ({
+      runTraycerCliJson: probeSpy,
+      streamTraycerCliJson: vi.fn(),
+      TraycerCliError: class extends Error {},
+    }));
+
+    const { refreshRegistryUpdateState } =
+      await import("../host-management-ipc");
+    const state = await refreshRegistryUpdateState({
+      force: false,
+      maxAgeMs: null,
+    });
+
+    // The cache is fresh and would normally short-circuit, but it was
+    // resolved under a different channel than the one now active, so it must
+    // not be reused as-is.
+    expect(probeSpy).toHaveBeenCalledWith(["host", "available", "--json"]);
+    expect(state).toMatchObject({
+      latestVersion: "1.4.2",
+      installedVersion: "1.4.2",
+      updateAvailable: false,
+    });
+  });
+
+  it("notifies every registered listener (window fan-out + native menu/tray) with the same freshly-resolved channel state", async () => {
+    writeInstallRecord("production", "1.4.2");
+    updatePreference.allowPrerelease = true;
+    const probeSpy = vi.fn().mockResolvedValue({
+      manifest: {
+        schemaVersion: 1,
+        generatedAt: "2026-05-15T00:00:00Z",
+        latest: "1.4.2",
+        versions: [
+          registryVersion("1.5.0-rc.1", true, null),
+          registryVersion("1.4.2", true, null),
+        ],
+      },
+      platformKey: "darwin-arm64",
+      manifestUrl: "https://example.invalid/versions.json",
+    });
+    vi.doMock("../../cli/traycer-cli", () => ({
+      runTraycerCliJson: probeSpy,
+      streamTraycerCliJson: vi.fn(),
+      TraycerCliError: class extends Error {},
+    }));
+
+    const { refreshRegistryUpdateState, onHostRegistryUpdateStateChange } =
+      await import("../host-management-ipc");
+    const windowFanOutListener = vi.fn();
+    const menuTrayListener = vi.fn();
+    const unsubscribeWindow =
+      onHostRegistryUpdateStateChange(windowFanOutListener);
+    const unsubscribeMenu = onHostRegistryUpdateStateChange(menuTrayListener);
+
+    await refreshRegistryUpdateState({ force: true, maxAgeMs: null });
+    unsubscribeWindow();
+    unsubscribeMenu();
+
+    const expected = expect.objectContaining({
+      latestVersion: "1.5.0-rc.1",
+      installedVersion: "1.4.2",
+      updateAvailable: true,
+      includePreReleases: true,
+    });
+    expect(windowFanOutListener).toHaveBeenCalledWith(expected);
+    expect(menuTrayListener).toHaveBeenCalledWith(expected);
+    // Both consumers must see the identical object the probe produced -
+    // neither surface can diverge from the other.
+    expect(windowFanOutListener.mock.calls[0]?.[0]).toBe(
+      menuTrayListener.mock.calls[0]?.[0],
+    );
+  });
+
+  it("clears the advertised version for every listener when the refreshed probe is unreachable", async () => {
+    writeInstallRecord("production", "1.4.2");
+    writeCache({
+      checkedAt: new Date().toISOString(),
+      latestVersion: "1.5.0-rc.1",
+      installedVersion: "1.4.2",
+      reachable: true,
+      errorMessage: null,
+      includePreReleases: true,
+    });
+    updatePreference.allowPrerelease = true;
+    vi.doMock("../../cli/traycer-cli", () => ({
+      runTraycerCliJson: vi.fn(() => Promise.reject(new Error("offline"))),
+      streamTraycerCliJson: vi.fn(),
+      TraycerCliError: class extends Error {},
+    }));
+
+    const { refreshRegistryUpdateState, onHostRegistryUpdateStateChange } =
+      await import("../host-management-ipc");
+    const menuTrayListener = vi.fn();
+    const unsubscribe = onHostRegistryUpdateStateChange(menuTrayListener);
+
+    await refreshRegistryUpdateState({ force: true, maxAgeMs: null });
+    unsubscribe();
+
+    // A native menu/tray consumer projects `updateAvailable && latestVersion`
+    // into its "Update to …" row - it must clear rather than keep advertising
+    // the previous channel's cached RC target.
+    expect(menuTrayListener).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reachable: false,
+        updateAvailable: false,
+      }),
+    );
+  });
+
+  // Review finding 7 (host half): RC opt-in is not "every SemVer
+  // prerelease". Only stable X.Y.Z and the project's X.Y.Z-rc.N form are
+  // consented targets — alpha/beta must not win over a lower healthy RC
+  // or stable, and yanked / platform-unavailable entries stay filtered.
+  it("rejects non-RC prereleases when includePreReleases is true and picks the highest healthy RC/stable", async () => {
+    writeInstallRecord("production", "1.4.0");
+    updatePreference.allowPrerelease = true;
+    const probeSpy = vi.fn().mockResolvedValue({
+      manifest: {
+        schemaVersion: 1,
+        generatedAt: "2026-05-15T00:00:00Z",
+        latest: "1.4.0",
+        versions: [
+          registryVersion("2.0.0-alpha.1", true, null),
+          registryVersion("2.0.0-beta.1", true, null),
+          registryVersion("1.5.0-rc.1", true, null),
+          registryVersion("1.4.0", true, null),
+        ],
+      },
+      platformKey: "darwin-arm64",
+      manifestUrl: "https://example.invalid/versions.json",
+    });
+    vi.doMock("../../cli/traycer-cli", () => ({
+      runTraycerCliJson: probeSpy,
+      streamTraycerCliJson: vi.fn(),
+      TraycerCliError: class extends Error {},
+    }));
+
+    const { refreshRegistryUpdateState } =
+      await import("../host-management-ipc");
+    const state = await refreshRegistryUpdateState({
+      force: true,
+      maxAgeMs: null,
+    });
+
+    expect(state.latestVersion).toBe("1.5.0-rc.1");
+    expect(state.updateAvailable).toBe(true);
+  });
+
+  it("filters yanked and platform-unavailable RC entries when selecting the consented latest", async () => {
+    writeInstallRecord("production", "1.4.0");
+    updatePreference.allowPrerelease = true;
+    const yankedRc = {
+      ...registryVersion("1.6.0-rc.9", true, null),
+      yanked: true,
+    };
+    const probeSpy = vi.fn().mockResolvedValue({
+      manifest: {
+        schemaVersion: 1,
+        generatedAt: "2026-05-15T00:00:00Z",
+        latest: "1.4.0",
+        versions: [
+          yankedRc,
+          registryVersion("1.6.0-rc.8", false, "platform not yet published"),
+          registryVersion("1.5.0-rc.1", true, null),
+          registryVersion("1.4.0", true, null),
+          registryVersion("2.0.0-alpha.1", true, null),
+        ],
+      },
+      platformKey: "darwin-arm64",
+      manifestUrl: "https://example.invalid/versions.json",
+    });
+    vi.doMock("../../cli/traycer-cli", () => ({
+      runTraycerCliJson: probeSpy,
+      streamTraycerCliJson: vi.fn(),
+      TraycerCliError: class extends Error {},
+    }));
+
+    const { refreshRegistryUpdateState } =
+      await import("../host-management-ipc");
+    const state = await refreshRegistryUpdateState({
+      force: true,
+      maxAgeMs: null,
+    });
+
+    expect(state.latestVersion).toBe("1.5.0-rc.1");
+  });
+
+  it("prefers a higher healthy stable over a lower RC when both are consented", async () => {
+    writeInstallRecord("production", "1.4.0");
+    updatePreference.allowPrerelease = true;
+    const probeSpy = vi.fn().mockResolvedValue({
+      manifest: {
+        schemaVersion: 1,
+        generatedAt: "2026-05-15T00:00:00Z",
+        latest: "1.4.0",
+        versions: [
+          registryVersion("1.5.0-rc.1", true, null),
+          registryVersion("1.6.0", true, null),
+          registryVersion("2.0.0-beta.1", true, null),
+        ],
+      },
+      platformKey: "darwin-arm64",
+      manifestUrl: "https://example.invalid/versions.json",
+    });
+    vi.doMock("../../cli/traycer-cli", () => ({
+      runTraycerCliJson: probeSpy,
+      streamTraycerCliJson: vi.fn(),
+      TraycerCliError: class extends Error {},
+    }));
+
+    const { refreshRegistryUpdateState } =
+      await import("../host-management-ipc");
+    const state = await refreshRegistryUpdateState({
+      force: true,
+      maxAgeMs: null,
+    });
+
+    expect(state.latestVersion).toBe("1.6.0");
   });
 
   it("re-probes when cache is stale (>= 24h)", async () => {
@@ -666,11 +963,13 @@ describe("refreshRegistryUpdateState - environment-scoped cache", () => {
       environment: "production",
     });
     // Seed a poisoned dev cache that, if accidentally read, would
-    // hand the prod launch the wrong installed/latest pair.
+    // hand the prod launch the wrong installed/latest pair. Use valid
+    // but clearly distinct SemVer so a mis-read is unambiguous and the
+    // consented-channel validator cannot null the versions away.
     writeCache({
       checkedAt: new Date().toISOString(),
-      latestVersion: "DEV-99.0.0",
-      installedVersion: "DEV-98.0.0",
+      latestVersion: "99.0.0",
+      installedVersion: "98.0.0",
       reachable: true,
       errorMessage: null,
       environment: "dev",
@@ -695,16 +994,16 @@ describe("refreshRegistryUpdateState - environment-scoped cache", () => {
     }));
     writeCache({
       checkedAt: new Date().toISOString(),
-      latestVersion: "PROD-1.4.2",
-      installedVersion: "PROD-1.4.1",
+      latestVersion: "1.4.2",
+      installedVersion: "1.4.1",
       reachable: true,
       errorMessage: null,
       environment: "production",
     });
     writeCache({
       checkedAt: new Date().toISOString(),
-      latestVersion: "DEV-2.0.0",
-      installedVersion: "DEV-1.0.0",
+      latestVersion: "2.0.0",
+      installedVersion: "1.0.0",
       reachable: true,
       errorMessage: null,
       environment: "dev",
@@ -716,14 +1015,14 @@ describe("refreshRegistryUpdateState - environment-scoped cache", () => {
       maxAgeMs: null,
     });
     expect(probeSpy).not.toHaveBeenCalled();
-    expect(state.latestVersion).toBe("DEV-2.0.0");
-    expect(state.installedVersion).toBe("DEV-1.0.0");
+    expect(state.latestVersion).toBe("2.0.0");
+    expect(state.installedVersion).toBe("1.0.0");
   });
 
   it("dev launch ignores stale prod cache and re-probes when no dev cache exists", async () => {
     const probeSpy = vi
       .fn()
-      .mockResolvedValue(registryProbeResult("DEV-2.0.0", true, null));
+      .mockResolvedValue(registryProbeResult("2.0.0", true, null));
     vi.doMock("../../cli/traycer-cli", () => ({
       runTraycerCliJson: probeSpy,
       streamTraycerCliJson: vi.fn(),
@@ -731,8 +1030,8 @@ describe("refreshRegistryUpdateState - environment-scoped cache", () => {
     }));
     writeCache({
       checkedAt: new Date().toISOString(),
-      latestVersion: "PROD-1.4.2",
-      installedVersion: "PROD-1.4.1",
+      latestVersion: "1.4.2",
+      installedVersion: "1.4.1",
       reachable: true,
       errorMessage: null,
       environment: "production",
@@ -744,7 +1043,7 @@ describe("refreshRegistryUpdateState - environment-scoped cache", () => {
       maxAgeMs: null,
     });
     expect(probeSpy).toHaveBeenCalledOnce();
-    expect(state.latestVersion).toBe("DEV-2.0.0");
+    expect(state.latestVersion).toBe("2.0.0");
     // The freshly written cache must land in the dev file, not the
     // prod file.
     const devPath = join(
@@ -756,13 +1055,13 @@ describe("refreshRegistryUpdateState - environment-scoped cache", () => {
     expect(existsSync(devPath)).toBe(true);
     const persisted = JSON.parse(readFileSync(devPath, "utf8"));
     expect(persisted.environment).toBe("dev");
-    expect(persisted.latestVersion).toBe("DEV-2.0.0");
+    expect(persisted.latestVersion).toBe("2.0.0");
   });
 
   it("prod launch ignores stale dev cache and re-probes when no prod cache exists", async () => {
     const probeSpy = vi
       .fn()
-      .mockResolvedValue(registryProbeResult("PROD-1.4.2", true, null));
+      .mockResolvedValue(registryProbeResult("1.4.2", true, null));
     vi.doMock("../../cli/traycer-cli", () => ({
       runTraycerCliJson: probeSpy,
       streamTraycerCliJson: vi.fn(),
@@ -770,8 +1069,8 @@ describe("refreshRegistryUpdateState - environment-scoped cache", () => {
     }));
     writeCache({
       checkedAt: new Date().toISOString(),
-      latestVersion: "DEV-2.0.0",
-      installedVersion: "DEV-1.0.0",
+      latestVersion: "2.0.0",
+      installedVersion: "1.0.0",
       reachable: true,
       errorMessage: null,
       environment: "dev",
@@ -783,7 +1082,7 @@ describe("refreshRegistryUpdateState - environment-scoped cache", () => {
       maxAgeMs: null,
     });
     expect(probeSpy).toHaveBeenCalledOnce();
-    expect(state.latestVersion).toBe("PROD-1.4.2");
+    expect(state.latestVersion).toBe("1.4.2");
     const prodPath = join(
       workHome,
       ".traycer",
@@ -796,7 +1095,7 @@ describe("refreshRegistryUpdateState - environment-scoped cache", () => {
   it("does not allow a environment-scoped file whose body claims the other environment to leak through (defence in depth)", async () => {
     const probeSpy = vi
       .fn()
-      .mockResolvedValue(registryProbeResult("PROD-1.4.2", true, null));
+      .mockResolvedValue(registryProbeResult("1.4.2", true, null));
     vi.doMock("../../cli/traycer-cli", () => ({
       runTraycerCliJson: probeSpy,
       streamTraycerCliJson: vi.fn(),
@@ -811,8 +1110,8 @@ describe("refreshRegistryUpdateState - environment-scoped cache", () => {
       join(dir, "registry-update-cache.json"),
       JSON.stringify({
         checkedAt: new Date().toISOString(),
-        latestVersion: "DEV-99.0.0",
-        installedVersion: "DEV-98.0.0",
+        latestVersion: "99.0.0",
+        installedVersion: "98.0.0",
         reachable: true,
         errorMessage: null,
         environment: "dev",
@@ -826,7 +1125,7 @@ describe("refreshRegistryUpdateState - environment-scoped cache", () => {
       maxAgeMs: null,
     });
     expect(probeSpy).toHaveBeenCalledOnce();
-    expect(state.latestVersion).toBe("PROD-1.4.2");
+    expect(state.latestVersion).toBe("1.4.2");
   });
 
   it("registry probe failure on dev environment stays non-blocking and writes a dev-scoped error snapshot", async () => {

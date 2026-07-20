@@ -13,7 +13,11 @@ import {
   SHUTDOWN_FORCE_EXIT_MS,
   STOP_EXIT_GRACE_MARGIN_MS,
 } from "@traycer/protocol/host/lifecycle-constants";
-import { serviceManifestPath, type ServiceLabel } from "../label";
+import {
+  serviceManifestPath,
+  smAppServiceAgentLabelId,
+  type ServiceLabel,
+} from "../label";
 import {
   ProcessRunError,
   runCommand,
@@ -87,6 +91,28 @@ async function installService(
       details: {
         label: options.label.id,
         loadedPath: ownership.path,
+      },
+      exitCode: 1,
+    });
+  }
+  // Same refusal for the label-split world: post-split Desktop builds
+  // register `<label>.agent` via SMAppService and leave the CLI label
+  // unloaded. Without this probe, a manual `service install` beside a
+  // desktop-owned agent would silently bootstrap a SECOND host under the
+  // CLI label - two hosts racing over the same pid metadata and stores.
+  const agentLabelId = smAppServiceAgentLabelId(options.label);
+  const agentOwnership = await inspectLaunchdOwnership(
+    `${guiTarget}/${agentLabelId}`,
+    run,
+  );
+  if (agentOwnership.kind === "smappservice") {
+    throw cliError({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      message: `service install: Traycer Desktop owns host registration on this machine (SMAppService agent '${agentLabelId}' loaded from ${agentOwnership.path}); installing the raw '${options.label.id}' LaunchAgent would run a second host beside it. Use the Traycer app to repair the host (host ensure --no-service-register).`,
+      details: {
+        label: options.label.id,
+        agentLabel: agentLabelId,
+        loadedPath: agentOwnership.path,
       },
       exitCode: 1,
     });
@@ -442,25 +468,60 @@ async function uninstallService(
       { label: options.label.id, loadedPath: ownership.path },
     );
   }
-  try {
-    await run("launchctl", ["bootout", "--wait", serviceTarget], {
-      env: undefined,
-      cwd: undefined,
-      // `--wait` is launchd's authoritative completion barrier but may block
-      // indefinitely. Keep the subprocess bound above the host's own forced
-      // shutdown watchdog so normal graceful shutdown has time to finish.
-      timeoutMs: STOP_EXIT_TIMEOUT_MS,
-      tolerateNonZeroExit: false,
-    });
-  } catch (cause) {
-    if (!isBenignBootoutFailure(cause)) {
-      throw cliError({
-        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
-        message: `launchctl bootout failed for ${options.label.id}: ${describeCause(cause)}`,
-        details: { label: options.label.id, cause: describeCause(cause) },
-        exitCode: 1,
+  // Post-label-split Desktop builds run the host under `<label>.agent`;
+  // tear that job down too (agent first - it is the live one on such
+  // machines) so `host uninstall --all` doesn't leave a running host
+  // pointed at the install dir being removed. Same BTM-record caveat as
+  // the CLI-label bootout above.
+  const agentLabelId = smAppServiceAgentLabelId(options.label);
+  const agentTarget = `${guiDomain()}/${agentLabelId}`;
+  const agentOwnership = await inspectLaunchdOwnership(agentTarget, run).catch(
+    (): LaunchdOwnership => ({ kind: "not-loaded" }),
+  );
+  if (agentOwnership.kind === "smappservice") {
+    createCliLogger(options.label.environment).warn(
+      "Service uninstall: Traycer Desktop's SMAppService agent is registered for this environment; booting it out now, but macOS may keep the login-item record. If the host reappears at next login, remove Traycer in the Desktop app or System Settings -> Login Items.",
+      { label: agentLabelId, loadedPath: agentOwnership.path },
+    );
+  }
+  // Attempt both targets even when one fails hard: a hard failure on the
+  // agent label (iterated first, since it's the live job on migrated
+  // machines) must not skip the CLI-label bootout - `host uninstall --all`
+  // promises best-effort-per-target cleanup, not "stop at the first
+  // failure". The manifest `rm` below stays gated on BOTH attempts being
+  // clean (success or benign not-loaded): `statusService` treats a missing
+  // manifest as "not-installed", so deleting it after a genuinely failed
+  // bootout would misreport a still-loaded job as gone.
+  const bootoutFailures: Array<{ labelId: string; cause: unknown }> = [];
+  for (const [labelId, target] of [
+    [agentLabelId, agentTarget],
+    [options.label.id, serviceTarget],
+  ] as const) {
+    try {
+      await run("launchctl", ["bootout", "--wait", target], {
+        env: undefined,
+        cwd: undefined,
+        // `--wait` is launchd's authoritative completion barrier but may
+        // block indefinitely. Keep the subprocess bound above the host's
+        // own forced shutdown watchdog so normal graceful shutdown has
+        // time to finish.
+        timeoutMs: STOP_EXIT_TIMEOUT_MS,
+        tolerateNonZeroExit: false,
       });
+    } catch (cause) {
+      if (!isBenignBootoutFailure(cause)) {
+        bootoutFailures.push({ labelId, cause });
+      }
     }
+  }
+  if (bootoutFailures.length > 0) {
+    const [{ labelId, cause }] = bootoutFailures;
+    throw cliError({
+      code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+      message: `launchctl bootout failed for ${labelId}: ${describeCause(cause)}`,
+      details: { label: labelId, cause: describeCause(cause) },
+      exitCode: 1,
+    });
   }
   await rm(serviceManifestPath(options.label), { force: true });
 }
@@ -498,6 +559,23 @@ async function statusService(
       pid: null,
     };
   }
+  // Post-label-split Desktop builds register `<label>.agent` and leave the
+  // CLI label unloaded with its raw manifest deleted - without this probe
+  // such a machine reads `not-installed` and doctor/auto-bootstrap route
+  // into `installService`'s agent-label refusal instead of recognizing the
+  // healthy Desktop-owned registration.
+  const agentOwnership = await inspectLaunchdOwnership(
+    `${guiDomain()}/${smAppServiceAgentLabelId(label)}`,
+    run,
+  );
+  if (agentOwnership.kind === "smappservice") {
+    return {
+      state: "externally-managed",
+      version: null,
+      listenUrl: null,
+      pid: null,
+    };
+  }
   const manifestExists = await fileExists(serviceManifestPath(label));
   if (!manifestExists) {
     return statusNotInstalled();
@@ -526,10 +604,44 @@ async function statusService(
 const STOP_EXIT_TIMEOUT_MS = SHUTDOWN_FORCE_EXIT_MS + STOP_EXIT_GRACE_MARGIN_MS;
 const STOP_EXIT_POLL_MS = 150;
 
+// Fail fast when Traycer Desktop's post-label-split SMAppService agent owns
+// the host for this environment. stop/start/restart operate on the CLI
+// label's launchd job; on a migrated machine that job doesn't exist - `stop`
+// would signal nothing, wait out the full shutdown grace against a host that
+// never received SIGTERM, and report a misleading "stop did not take
+// effect", while `start`/`restart` would surface raw kickstart errors with
+// no routing. Mirrors `statusService`'s externally-managed detection. The
+// probe is advisory (a hung/unspawnable launchctl reads as not-loaded) so it
+// can never block the operation on a genuinely CLI-managed machine.
+async function assertNotDesktopAgentManaged(
+  label: ServiceLabel,
+  operation: string,
+  run: ProcessRunner,
+): Promise<void> {
+  const agentLabelId = smAppServiceAgentLabelId(label);
+  const agentOwnership = await inspectLaunchdOwnership(
+    `${guiDomain()}/${agentLabelId}`,
+    run,
+  ).catch((): LaunchdOwnership => ({ kind: "not-loaded" }));
+  if (agentOwnership.kind === "smappservice") {
+    throw cliError({
+      code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+      message: `host ${operation}: Traycer Desktop owns host registration on this machine (SMAppService agent '${agentLabelId}' loaded from ${agentOwnership.path}); the CLI does not manage this host. Use the Traycer app to ${operation} it.`,
+      details: {
+        label: label.id,
+        agentLabel: agentLabelId,
+        loadedPath: agentOwnership.path,
+      },
+      exitCode: 1,
+    });
+  }
+}
+
 async function stopService(
   label: ServiceLabel,
   run: ProcessRunner,
 ): Promise<void> {
+  await assertNotDesktopAgentManaged(label, "stop", run);
   // Snapshot the live host pid BEFORE signalling so we can confirm the
   // process truly exits. `host restart` does stop→start: if `start`'s
   // kickstart fires while the old process is still winding down, launchd
@@ -594,6 +706,7 @@ async function startService(
   label: ServiceLabel,
   run: ProcessRunner,
 ): Promise<void> {
+  await assertNotDesktopAgentManaged(label, "start", run);
   try {
     await run("launchctl", ["kickstart", `${guiDomain()}/${label.id}`], {
       env: undefined,
@@ -615,6 +728,7 @@ async function restartService(
   label: ServiceLabel,
   run: ProcessRunner,
 ): Promise<void> {
+  await assertNotDesktopAgentManaged(label, "restart", run);
   try {
     await run("launchctl", ["kickstart", "-k", `${guiDomain()}/${label.id}`], {
       env: undefined,

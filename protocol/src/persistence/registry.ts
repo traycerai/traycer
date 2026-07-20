@@ -24,6 +24,9 @@ import { roomMetadataSchema } from "@traycer/protocol/persistence/_internal/room
  * the cloud data client (internal, not in this repo) and are NOT versioned
  * here. Phases were folded into epics in Traycer 3.0, so there is no
  * `phase-light` record here either.
+ *
+ * Compatibility rules and the frozen epic-schema review workflow live in
+ * `COMPATIBILITY.md` beside this registry.
  */
 
 export const epicRecordV200 = defineRecordContract({
@@ -67,4 +70,7 @@ export type PersistenceRecordRegistry = typeof persistenceRecordRegistry;
 // Types via `RecordValue<>` so runtime + type stay in lock-step.
 
 export type Epic = RecordValue<PersistenceRecordRegistry, "epic">;
-export type RoomMetadata = RecordValue<PersistenceRecordRegistry, "room-metadata">;
+export type RoomMetadata = RecordValue<
+  PersistenceRecordRegistry,
+  "room-metadata"
+>;

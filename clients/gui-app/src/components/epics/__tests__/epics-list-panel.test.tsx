@@ -518,6 +518,60 @@ describe("<EpicsListPanel />", () => {
     ).not.toBeNull();
   });
 
+  it("collapses excess History PR pills into an overflow control", async () => {
+    testState.worktreesByEpicId = new Map([
+      [
+        "epic-from-history",
+        [
+          {
+            ...historyWorktree(),
+            submodules: [
+              {
+                repoIdentifier: { owner: "acme", repo: "shared" },
+                branch: "feature/shared-history",
+                prState: "merged",
+                prNumber: 85,
+                prUrl: "https://github.com/acme/shared/pull/85",
+                mergedHeadShaMatches: true,
+                mergedIntoDefault: true,
+                atPinnedCommit: true,
+                unmergedCommitCount: null,
+                unmergedCommitSubjects: null,
+              },
+              {
+                repoIdentifier: { owner: "acme", repo: "docs" },
+                branch: "feature/docs-history",
+                prState: "open",
+                prNumber: 86,
+                prUrl: "https://github.com/acme/docs/pull/86",
+                mergedHeadShaMatches: false,
+                mergedIntoDefault: false,
+                atPinnedCommit: false,
+                unmergedCommitCount: null,
+                unmergedCommitSubjects: null,
+              },
+            ],
+          },
+        ],
+      ],
+    ]);
+    renderPanel("embedded", "/");
+
+    const overflow = await screen.findByRole("button", {
+      name: "Show 1 more pull request",
+    });
+    expect(overflow.textContent).toBe("+1");
+    expect(
+      screen.queryByRole("link", { name: "Open docs PR #86 Open" }),
+    ).toBeNull();
+
+    fireEvent.click(overflow);
+
+    expect(
+      await screen.findByRole("link", { name: "Open docs PR #86 Open" }),
+    ).not.toBeNull();
+  });
+
   it("keeps the updated timestamp visible when a task has no PR pills", async () => {
     renderPanel("embedded", "/");
 
@@ -607,7 +661,7 @@ describe("<EpicsListPanel />", () => {
       "epics-list-row-background-activity-epic-from-history",
     );
     expect(backgroundIcon.getAttribute("class")).toContain(
-      "lucide-calendar-clock",
+      "lucide-message-square-clock",
     );
     expect(
       screen.queryByTitle("Background activity — agent idle"),

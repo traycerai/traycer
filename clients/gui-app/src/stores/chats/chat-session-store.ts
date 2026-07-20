@@ -68,6 +68,7 @@ import type {
   WorktreeIntent,
 } from "@traycer/protocol/host/worktree-schemas";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
+import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type { RestoreResultEntry } from "@traycer/protocol/persistence/epic/checkpoint-manifests";
 import type {
   PermissionMode,
@@ -461,6 +462,19 @@ export interface ChatSessionState {
     settings: ChatRunSettings,
   ) => string | null;
   updateActivePermissionMode: (permissionMode: PermissionMode) => string | null;
+  /**
+   * Narrow in-flight profile switch, parallel to
+   * `updateActivePermissionMode`: tells the host the chat's CURRENT work
+   * should run on `profileId` (of `harnessId` - profile ids are
+   * harness-scoped). The host stamps a pre-spawn override from the frame at
+   * intake, so a turn still parked on worktree setup adopts the switch
+   * before it spawns. Deliberately not a whole-settings frame: model/harness
+   * never late-bind into an accepted turn.
+   */
+  updateActiveProfile: (
+    harnessId: GuiHarnessId,
+    profileId: string | null,
+  ) => string | null;
   // Live-mirror: atomically re-stamp every non-transient pending queued item
   // with the current toolbar settings so the host's stored copy stays current
   // for auto-send. Transient items (steer_requested/steering/injected) keep the
@@ -2152,6 +2166,25 @@ export function createChatSessionStore(
           get,
           frame,
           pending: basicPending(clientActionId, "activePermissionModeUpdate"),
+          pendingUserMessage: null,
+        });
+      },
+      updateActiveProfile: (harnessId, profileId) => {
+        const clientActionId = uuidv4();
+        const frame: ChatOwnerActionFrame = {
+          kind: "activeProfileUpdate",
+          hasBinaryPayload: false,
+          epicId: options.epicId,
+          chatId: options.chatId,
+          clientActionId,
+          harnessId,
+          profileId,
+        };
+        return sendAction({
+          set,
+          get,
+          frame,
+          pending: basicPending(clientActionId, "activeProfileUpdate"),
           pendingUserMessage: null,
         });
       },

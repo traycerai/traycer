@@ -19,7 +19,10 @@ import {
   AttachmentStrip,
   NO_SESSION_OBJECT_URL,
 } from "@/components/chat/composer/attachments/attachment-strip";
-import { useEpicImageFetcher } from "@/lib/attachments/use-attachment-blob-src";
+import {
+  useEpicAttachmentBytesPresence,
+  useEpicImageFetcher,
+} from "@/lib/attachments/use-attachment-blob-src";
 import { DialogOverlayBoundaryContext } from "@/providers/dialog-overlay-boundary-context";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
@@ -38,11 +41,15 @@ import {
 } from "@/hooks/agent/use-create-tui-agent";
 import { useComposerDictation } from "@/hooks/composer/use-composer-dictation";
 import { useLeaderScopeAbsorber } from "@/hooks/keybindings/use-leader-scope-absorber";
-import { useComposerPaste } from "@/hooks/composer/use-composer-paste";
+import {
+  isAttachmentIngestPending,
+  useComposerPaste,
+} from "@/hooks/composer/use-composer-paste";
 import {
   mentionRootsFromWorktreeIntent,
   useWorkspaceMentionRoots,
 } from "@/hooks/composer/use-workspace-mention-roots";
+import { useRunnerHost } from "@/providers/use-runner-host";
 import { useEpicCreateChat } from "@/hooks/epic/use-epic-chat-mutations";
 import { useResolvedWorkspaceFolders } from "@/hooks/workspace/use-resolved-workspace-folders-query";
 import {
@@ -398,7 +405,7 @@ function NewConversationModalHeader(props: {
   );
 }
 
-function NewConversationModalBody(props: {
+export function NewConversationModalBody(props: {
   readonly epicId: string;
   readonly tabId: string;
   readonly placement: ConversationTilePlacement;
@@ -556,12 +563,19 @@ function NewConversationModalBody(props: {
   );
   const workspaceCanStart = workspaceComposerCanStart(workspaceAvailability);
   const draftWorkspaceFolderCount = draftWorkspace.folders.length;
+  const runnerHost = useRunnerHost();
+  const paste = useComposerPaste(editorRef, runnerHost.fileDrops, mentionRoots);
+  const attachmentPending = isAttachmentIngestPending(paste);
   const canSubmit =
-    canMutate && !isSubmitting && workspaceCanStart && hasSubmittableContent;
+    canMutate &&
+    !isSubmitting &&
+    !attachmentPending &&
+    workspaceCanStart &&
+    hasSubmittableContent;
   const composerDisabledHint =
     mutationDisabledHint(permissionRole, isDisconnected, "make changes") ??
     workspaceAvailability.disabledHint;
-  const paste = useComposerPaste(editorRef);
+  const hasPastedImageBytes = useEpicAttachmentBytesPresence();
   const { dictationControl, dictationPreparing } = useComposerDictation({
     editorRef,
     isActive: chatComposerActive,
@@ -816,6 +830,7 @@ function NewConversationModalBody(props: {
       initialSelection={null}
       canSubmit={canSubmit}
       isSubmitting={isSubmitting}
+      attachmentPending={attachmentPending}
       workspaceDisabledHint={composerDisabledHint}
       header={header}
       attachmentsStrip={
@@ -829,6 +844,7 @@ function NewConversationModalBody(props: {
       dictationControl={dictationControl}
       dictationPreparing={dictationPreparing}
       paste={paste}
+      hasPastedImageBytes={hasPastedImageBytes}
       onSubmit={handleSubmit}
       onStartTerminal={handleStartTerminal}
       onSnapshot={handleSnapshot}

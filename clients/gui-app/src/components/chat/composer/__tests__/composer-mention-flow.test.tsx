@@ -36,6 +36,7 @@ function makeFixture(): {
       placeholder: "test",
       onSubmit: submitHolder,
       slashProviderId: "claude",
+      getHasPastedImageBytes: () => null,
     }),
     content: { type: "doc", content: [{ type: "paragraph" }] },
   });
@@ -199,12 +200,20 @@ describe("composer mention flow", () => {
     editor.commands.insertContent("@xy");
     await flush();
     expect(pickerStore.getState().open).toBe(true);
+    // The suggestion plugin owns this session, so publish under its id the way
+    // the item hook does rather than inventing one the store would reject.
+    const { sessionId } = pickerStore.getState();
+    if (sessionId === null) throw new Error("expected an open picker session");
     pickerStore.getState().setItems({
+      sessionId,
       kind: "mention",
       query: "xy",
+      slashScope: null,
       step: pickerStore.getState().step,
       items: [],
       loading: false,
+      loadFailed: false,
+      retryLoad: null,
     });
     pickerStore.getState().close();
     expect(pickerStore.getState().open).toBe(false);

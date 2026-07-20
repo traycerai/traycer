@@ -61,6 +61,9 @@ export const SLASH_COMMAND_ATTRIBUTE_NAMES: ReadonlyArray<string> = [
   "description",
   "argumentHint",
   "path",
+  // Which character opened the picker. Display-only - it changes the chip's
+  // label, never what the node serializes to.
+  "trigger",
 ];
 
 export const IMAGE_ATTACHMENT_ATTRIBUTE_NAMES: ReadonlyArray<string> = [
