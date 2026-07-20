@@ -55,8 +55,6 @@ export const runnerMutationKeys = {
 };
 
 export const runnerQueryKeys = {
-  serviceStatus: (service: object) =>
-    ["runner.serviceStatus", service] as const,
   serviceLogTail: (service: object, maxLines: number) =>
     ["runner.serviceLogTail", service, maxLines] as const,
   // `traycerCli: object` keys these queries to a specific runner-host

@@ -86,7 +86,6 @@ export function MenuCommandListener() {
     (state) => state.openEpicInNewWindow,
   );
   const management = runnerHost.hostManagement;
-  const service = runnerHost.service;
   const traycerCli = runnerHost.traycerCli;
   const [pendingHostRestart, setPendingHostRestart] = useState<boolean>(false);
 
@@ -125,11 +124,6 @@ export function MenuCommandListener() {
       Analytics.getInstance().track(AnalyticsEvent.HostUpdateSucceeded, null);
       toast.success(`Updated host to v${data.version}`);
       if (management !== null) {
-        if (service !== null) {
-          void queryClient.invalidateQueries({
-            queryKey: runnerQueryKeys.serviceStatus(service),
-          });
-        }
         void queryClient.invalidateQueries({
           queryKey: runnerQueryKeys.hostAvailableVersionsScope(management),
         });

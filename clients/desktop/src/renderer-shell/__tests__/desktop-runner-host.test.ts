@@ -289,12 +289,6 @@ function buildFakeBridge(
       },
     },
     service: {
-      status: async () => ({
-        state: "not-installed" as const,
-        version: null,
-        listenUrl: null,
-        pid: null,
-      }),
       install: async () => undefined,
       uninstall: async (_purge: boolean) => undefined,
       start: async () => undefined,

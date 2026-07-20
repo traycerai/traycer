@@ -246,12 +246,6 @@ export interface IpcHostLifecycle {
    * torn down by an FSEvents stream reset earlier in the session.
    */
   ensureWatcherInstalled(): void;
-  getServiceStatus(): Promise<{
-    state: "running" | "stopped" | "not-installed";
-    version: string | null;
-    listenUrl: string | null;
-    pid: number | null;
-  }>;
   getRecentLogTail(maxLines: number): Promise<string | null>;
 }
 

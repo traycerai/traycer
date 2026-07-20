@@ -42,7 +42,6 @@ export function HostTrayCommandListener() {
   const openLogs = useDesktopDialogStore((state) => state.openLogs);
   const queryClient = useQueryClient();
   const management = runnerHost.hostManagement;
-  const service = runnerHost.service;
   const [pendingRestart, setPendingRestart] = useState<boolean>(false);
   const [pendingInstallVersion, setPendingInstallVersion] = useState<
     string | null
@@ -51,11 +50,6 @@ export function HostTrayCommandListener() {
 
   const invalidate = (): void => {
     if (management === null) return;
-    if (service !== null) {
-      void queryClient.invalidateQueries({
-        queryKey: runnerQueryKeys.serviceStatus(service),
-      });
-    }
     void queryClient.invalidateQueries({
       queryKey: runnerQueryKeys.hostAvailableVersionsScope(management),
     });

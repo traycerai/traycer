@@ -42,12 +42,6 @@ function fakeHost(overrides: Partial<IpcHostLifecycle>): IpcHostLifecycle {
     isDisposed: false,
     reloadSnapshotFromDisk: vi.fn(async () => null),
     ensureWatcherInstalled: vi.fn(),
-    getServiceStatus: vi.fn(async () => ({
-      state: "running" as const,
-      version: "1.0.0",
-      listenUrl: SNAPSHOT.websocketUrl,
-      pid: SNAPSHOT.pid,
-    })),
     getRecentLogTail: vi.fn(async () => null),
     ...overrides,
   } as IpcHostLifecycle;

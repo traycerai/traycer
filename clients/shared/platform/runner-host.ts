@@ -498,8 +498,8 @@ export interface ITraycerCli {
 }
 
 /**
- * Snapshot of the OS-managed host service, mirrored from the shell's
- * `ServiceController.status()` call. Field semantics:
+ * Renderer display snapshot derived from the local host publication and the
+ * committed install record. Field semantics:
  *   - `state`: `running` when the service is registered AND its PID
  *     metadata describes a live process; `stopped` when registered but the
  *     PID is missing or stale; `not-installed` when the manifest is absent.
@@ -515,7 +515,6 @@ export interface ServiceStatusSnapshot {
 }
 
 export interface IServiceHost {
-  status(): Promise<ServiceStatusSnapshot>;
   install(): Promise<void>;
   uninstall(purge: boolean): Promise<void>;
   start(): Promise<void>;

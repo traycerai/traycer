@@ -158,6 +158,16 @@ interface PreloadBridge {
     revealLog(target: unknown): Promise<unknown>;
     tailLog(input: unknown): Promise<unknown>;
   };
+  service: {
+    install(): Promise<void>;
+    uninstall(purge: boolean): Promise<void>;
+    start(): Promise<void>;
+    stop(): Promise<void>;
+    restart(): Promise<void>;
+    upgrade(): Promise<void>;
+    enableLinger(): Promise<void>;
+    getLogTail(maxLines: number): Promise<string | null>;
+  };
 }
 
 interface LoadPreloadOptions {
@@ -314,6 +324,18 @@ describe("preload new-capability wiring", () => {
     });
 
     expect(bridge.initialRoute).toBe("/epics/epic-a/tab-a");
+  });
+
+  it("does not expose the unhandled metadata-only service-status invoke", async () => {
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn: undefined,
+      sendSyncFn: undefined,
+    });
+
+    expect("status" in bridge.service).toBe(false);
   });
 
   it("forwards validateAuthToken through ipcRenderer.invoke", async () => {

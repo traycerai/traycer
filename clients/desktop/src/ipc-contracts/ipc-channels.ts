@@ -63,7 +63,6 @@ export const RunnerHostInvoke = {
   supportRevealLog: "runnerHost:support:log:reveal",
   supportSubmitReport: "runnerHost:support:report:submit",
   supportTailLog: "runnerHost:support:log:tail",
-  serviceStatus: "runnerHost:service:status",
   serviceInstall: "runnerHost:service:install",
   serviceUninstall: "runnerHost:service:uninstall",
   serviceStart: "runnerHost:service:start",

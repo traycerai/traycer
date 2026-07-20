@@ -23,18 +23,6 @@ import {
 export { isCurrentHostWebsocketUrl } from "./host-endpoint-reachability";
 
 /**
- * Snapshot of the OS-supervised host's runtime state, as projected by
- * `HostLifecycle.getServiceStatus`. Mirrors the wire shape consumed by the
- * renderer's Service Health pane.
- */
-export interface ServiceStatus {
-  readonly state: "running" | "stopped" | "not-installed";
-  readonly version: string | null;
-  readonly listenUrl: string | null;
-  readonly pid: number | null;
-}
-
-/**
  * How long we wait for the OS-supervised host to publish its PID
  * metadata before surfacing a Doctor-recovery startup failure to the
  * renderer. The CLI supervisor (`traycer host start`) sources the
@@ -328,34 +316,6 @@ export class HostLifecycle extends EventEmitter {
     // service manager owns the host's lifetime so other clients
     // (mobile, CLI) keep their local RPC endpoint when the desktop quits.
     // Lifecycle-level `dispose()` only tears down shell-side observers.
-  }
-
-  // -----------------------------------------------------------
-  // Service-control passthroughs for the Service Health pane.
-  //
-  // All routes delegate to the CLI subprocess so Desktop never reaches
-  // for the legacy platform service-manager dispatch (Tech Plan
-  // Decision 1, Ticket 7c890b39). `getServiceStatus` is metadata-first:
-  // a published `pid.json` is a running host; absence is presented to
-  // the renderer as `not-installed` so the Doctor card surfaces.
-  // -----------------------------------------------------------
-
-  async getServiceStatus(): Promise<ServiceStatus> {
-    const snapshot = await readPidMetadata(this.options.layout.pidMetadataFile);
-    if (snapshot === null) {
-      return {
-        state: "not-installed",
-        version: null,
-        listenUrl: null,
-        pid: null,
-      };
-    }
-    return {
-      state: "running",
-      version: snapshot.version,
-      listenUrl: snapshot.websocketUrl,
-      pid: snapshot.pid,
-    };
   }
 
   getRecentLogTail(maxLines: number): Promise<string | null> {

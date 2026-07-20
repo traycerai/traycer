@@ -36,7 +36,6 @@ import type {
   IZoomHost,
   LocalHostSnapshot,
   MigrationRunningSnapshot,
-  ServiceStatusSnapshot,
   TrayEpic,
   TrayIndicatorState,
   TraycerHostStatusSnapshot,
@@ -411,7 +410,6 @@ export interface DesktopTraycerCliBridge {
 }
 
 export interface DesktopServiceBridge {
-  status(): Promise<ServiceStatusSnapshot>;
   install(): Promise<void>;
   uninstall(purge: boolean): Promise<void>;
   start(): Promise<void>;
@@ -645,7 +643,6 @@ export class DesktopRunnerHost implements IRunnerHost {
     };
     this.fileDrops = buildDesktopFileDrops(this.bridge.fileDrops);
     this.service = {
-      status: () => this.bridge.service.status(),
       install: () => this.bridge.service.install(),
       uninstall: (purge) => this.bridge.service.uninstall(purge),
       start: () => this.bridge.service.start(),
