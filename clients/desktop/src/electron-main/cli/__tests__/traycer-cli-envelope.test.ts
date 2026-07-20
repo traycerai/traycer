@@ -674,6 +674,36 @@ describe("runTraycerCliJson preserves successful envelopes on non-zero exit", ()
   });
 });
 
+describe("runTraycerCliJson timeout must exceed the CLI's own lock wait (fixup A8)", () => {
+  it("passes execFile a timeout that exceeds the CLI's 30s cli-lock wait, not merely matches or falls short of it", async () => {
+    // Every lock-taking CLI command this helper backs (`host service
+    // install/uninstall`, `host stamp-runtime`, `host free-port`, `host
+    // uninstall [--all]`) waits up to `waitMs: 30_000` internally on the
+    // shared cli-lock before terminally throwing `E_CLI_LOCK_BUSY`. A
+    // desktop subprocess timeout at or below that window SIGKILLs the CLI
+    // before it can ever emit that classification - and, worse, can kill
+    // it the instant after it wins the lock and enters its critical
+    // section (a torn install/staged/pid record).
+    let capturedTimeout: number | null = null;
+    execFileImpl = (_cmd, _args, opts, callback) => {
+      capturedTimeout = (opts as { readonly timeout: number }).timeout;
+      const envelope = {
+        type: "result",
+        status: "ok",
+        data: {},
+        timestamp: "2026-05-15T00:00:00Z",
+      };
+      callback(null, `${JSON.stringify(envelope)}\n`, "");
+    };
+    const { runTraycerCliJson } = await import("../traycer-cli");
+    await runTraycerCliJson(["host", "service", "uninstall"]);
+    if (capturedTimeout === null) {
+      throw new Error("execFile was never invoked");
+    }
+    expect(capturedTimeout).toBeGreaterThan(30_000);
+  });
+});
+
 describe("CLI_UPGRADE_PENDING preservation through Desktop projection", () => {
   it("survives projectDoctorReport after envelope unwrapping", async () => {
     // The bug we're guarding against: before this fix, the Doctor IPC

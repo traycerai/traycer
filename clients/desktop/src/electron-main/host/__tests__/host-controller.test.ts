@@ -62,6 +62,10 @@ vi.mock("../../cli/traycer-cli", () => ({
   },
 }));
 
+vi.mock("../../cli/cli-discovery", () => ({
+  resolveBundledCliPath: vi.fn(async () => null),
+}));
+
 vi.mock("../../app/host-login-item", () => ({
   hostManagesHostLoginItem: vi.fn(async () => false),
   registerHostLoginItem: vi.fn(async () => "enabled"),
@@ -99,13 +103,18 @@ import {
   registerHostLoginItem,
   unregisterHostLoginItem,
 } from "../../app/host-login-item";
+import { resolveBundledCliPath } from "../../cli/cli-discovery";
 import { waitForHostReady } from "../host-readiness";
 import { probeHostActivityBusy } from "@traycer-clients/shared/host-client/host-activity-probe";
+import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/install-generation";
 import {
+  DESKTOP_LOCK_POLL_INTERVAL_MS,
+  DESKTOP_LOCK_WAIT_MS,
   HostController,
   type HostControllerHostLifecycle,
 } from "../host-controller";
 import { getHostFsLayout, cliLockPath } from "../host-paths";
+import { acquireDesktopCliLock } from "../desktop-cli-lock";
 import {
   __resetHostRemovalStateForTest,
   isHostRemovedByUser,
@@ -141,6 +150,7 @@ beforeEach(() => {
   vi.mocked(registerHostLoginItem).mockResolvedValue("enabled");
   vi.mocked(unregisterHostLoginItem).mockResolvedValue(undefined);
   vi.mocked(probeHostActivityBusy).mockResolvedValue(false);
+  vi.mocked(resolveBundledCliPath).mockResolvedValue(null);
 });
 
 afterEach(() => {
@@ -174,10 +184,53 @@ function fakeHostLifecycle(): HostControllerHostLifecycle & {
   };
 }
 
+// Fixup A3: `readRunningRuntimeVersion` now requires a real endpoint-
+// reachability probe. Defaulting it to always-reachable here preserves
+// every existing fixture-driven test's behavior (they write a pid.json with
+// a genuinely-alive `pid: process.pid` and rely on that alone meaning
+// "running") without needing a real TCP listener bound to the fixture's
+// `websocketUrl`; the small number of A3-specific tests that need to prove
+// the "process alive, endpoint dead" gap use
+// `newControllerWithReachability` directly with a probe that resolves false.
 function newController(environment: "production" | "dev"): HostController {
+  return newControllerWithReachability(environment, async () => true);
+}
+
+function newControllerWithReachability(
+  environment: "production" | "dev",
+  reachabilityProbe: (websocketUrl: string) => Promise<boolean>,
+): HostController {
+  return newControllerWithLockTiming(
+    environment,
+    reachabilityProbe,
+    DESKTOP_LOCK_WAIT_MS,
+    DESKTOP_LOCK_POLL_INTERVAL_MS,
+  );
+}
+
+// Fixup A9: the desktop-held cli-lock's wait/poll is now an injectable
+// `HostControllerOptions` field (production: `DESKTOP_LOCK_WAIT_MS`/
+// `DESKTOP_LOCK_POLL_INTERVAL_MS`, matching the CLI's own 30s `waitMs` -
+// fixup A8) rather than a hardcoded module constant every call site read
+// directly. Every existing test funnels through `newControllerWithReachability`
+// above, which passes the real production timing unchanged - the
+// "desktop-held cli-lock: two-process test" still exercises a genuine
+// multi-second poll against a real worker process. Only the
+// exhausted-lock-wait contract test below needs the wait to actually
+// elapse inside a unit test, so it calls this lower-level helper directly
+// with a small override instead.
+function newControllerWithLockTiming(
+  environment: "production" | "dev",
+  reachabilityProbe: (websocketUrl: string) => Promise<boolean>,
+  desktopLockWaitMs: number,
+  desktopLockPollIntervalMs: number,
+): HostController {
   return new HostController({
     environment,
     hostLifecycle: fakeHostLifecycle(),
+    reachabilityProbe,
+    desktopLockWaitMs,
+    desktopLockPollIntervalMs,
   });
 }
 
@@ -273,6 +326,48 @@ async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
   await Promise.resolve();
+}
+
+// Mirrors the REAL `traycer host available --json` wire shape (pinned by
+// the contract test in `traycer-cli/src/commands/__tests__/host-available.test.ts`):
+// `{ manifest: { latest, versions[].platforms[platformKey] }, manifestUrl,
+// platformKey }`, NOT a flat `{latest, versions[].platformAsset}` shape
+// (fixup A1 - every fixture using the old flat shape validated the parsing
+// bug rather than catching it).
+function availableSnapshotFixture(
+  latest: string,
+  availableVersions: readonly string[],
+): unknown {
+  return {
+    manifest: {
+      schemaVersion: 1,
+      generatedAt: "2026-01-01T00:00:00.000Z",
+      latest,
+      versions: availableVersions.map((version) => ({
+        version,
+        releasedAt: "2026-01-01T00:00:00.000Z",
+        releaseNotesUrl: `https://github.com/traycerai/traycer/releases/tag/host-v${version}`,
+        yanked: false,
+        deprecationReason: null,
+        requiredCliVersion: null,
+        platforms: {
+          "darwin-arm64": {
+            available: true,
+            unavailableReason: null,
+            url: `https://example.com/host-${version}.tar.gz`,
+            sizeBytes: 1,
+            sha256: "a".repeat(64),
+            signatureUrl: `https://example.com/host-${version}.tar.gz.minisig`,
+            signatureAlgorithm: "minisign",
+            publicKeyId: "test-key",
+          },
+        },
+      })),
+    },
+    manifestUrl: "https://example.com/versions.json",
+    platformKey: "darwin-arm64",
+    includePreReleases: false,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -426,6 +521,98 @@ describe("mutation lane: wait-never-reject", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Fixup A5: keyed coalescing (Tech Plan D3 "explicit coalescing keys, per-
+// intent results") - a duplicate submission still in flight for the same
+// intent + distinguishing params JOINS the existing job instead of
+// re-executing it. Distinct from mere serialization: these tests assert the
+// CLI was invoked exactly once for two concurrent identical calls, not just
+// that both eventually resolve.
+// ---------------------------------------------------------------------------
+describe("coalescing: duplicate in-flight submissions join rather than re-execute", () => {
+  it("two simultaneous respawn() calls execute the restart once; both callers resolve with the same outcome", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    let restartCalls = 0;
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async () => {
+      restartCalls += 1;
+      return { data: { activated: true } };
+    });
+
+    const [first, second] = await Promise.all([
+      controller.respawn(),
+      controller.respawn(),
+    ]);
+
+    expect(restartCalls).toBe(1);
+    expect(first).toEqual({ kind: "ok", value: { activated: true } });
+    expect(second).toEqual({ kind: "ok", value: { activated: true } });
+  });
+
+  it("two simultaneous installVersion calls with the same pin AND force join into one install", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    let installCalls = 0;
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async () => {
+      installCalls += 1;
+      return { data: { version: "1.8.0", installGeneration: null } };
+    });
+
+    const [first, second] = await Promise.all([
+      controller.installVersion("1.8.0", false),
+      controller.installVersion("1.8.0", false),
+    ]);
+
+    expect(installCalls).toBe(1);
+    expect(first.kind).toBe("ok");
+    expect(second.kind).toBe("ok");
+  });
+
+  it("two simultaneous installVersion calls with a DIFFERENT force do not coalesce - both execute", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    let installCalls = 0;
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async () => {
+      installCalls += 1;
+      return { data: { version: "1.8.0", installGeneration: null } };
+    });
+
+    await Promise.all([
+      controller.installVersion("1.8.0", false),
+      controller.installVersion("1.8.0", true),
+    ]);
+
+    expect(installCalls).toBe(2);
+  });
+
+  it("a second respawn() submitted AFTER the first has fully settled runs fresh, not joined to the stale settled promise", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    let restartCalls = 0;
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async () => {
+      restartCalls += 1;
+      return { data: { activated: true } };
+    });
+
+    await controller.respawn();
+    await controller.respawn();
+
+    expect(restartCalls).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Two independent lanes: a download never starts while a mutation owns the
 // host, and re-kicks once the mutation completes.
 // ---------------------------------------------------------------------------
@@ -449,10 +636,7 @@ describe("two lanes: mutation vs download independence", () => {
     });
     vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
       if (args.includes("available")) {
-        return {
-          latest: "1.8.0",
-          versions: [{ version: "1.8.0", platformAsset: { available: true } }],
-        };
+        return availableSnapshotFixture("1.8.0", ["1.8.0"]);
       }
       return {};
     });
@@ -476,6 +660,183 @@ describe("two lanes: mutation vs download independence", () => {
     });
 
     expect(downloadCalls.length).toBeGreaterThan(0);
+  });
+
+  // Fixup A6: `stageLatest`'s synchronous `mutationStatus !== null` guard
+  // only covers callers that start AFTER a mutation is already active. This
+  // proves the OTHER direction - a mutation starting WHILE the registry
+  // probe (an async gap) is still in flight must still be caught, by a
+  // re-check made atomically with the decision to start the download.
+  it("re-checks mutation state after the registry probe, not just at entry - a mutation starting mid-probe still defers the download", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writeStagedRecord("production", "1.8.0", null);
+
+    const probeGate = deferred<void>();
+    // Separately gated from the probe - respawn's OWN CLI call must stay
+    // pending for the length of this test, or its `finally` would clear
+    // `mutationStatus` back to null before the assertion below runs and the
+    // test would pass for the wrong reason (respawn already having
+    // finished) rather than genuinely exercising the re-check.
+    const restartGate = deferred<{ data: unknown }>();
+    const downloadCalls: string[][] = [];
+    vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
+      if (args.includes("available")) {
+        await probeGate.promise;
+        return availableSnapshotFixture("1.8.0", ["1.8.0"]);
+      }
+      return {};
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args.includes("download")) {
+        downloadCalls.push([...opts.args]);
+        return { data: {} };
+      }
+      if (opts.args.includes("restart")) return restartGate.promise;
+      return { data: {} };
+    });
+
+    // stageLatest's synchronous entry check passes (nothing is active yet)
+    // and it blocks mid-probe.
+    const stagePromise = controller.stageLatest();
+    await flushMicrotasks();
+
+    // A mutation starts WHILE the probe above is still pending, and stays
+    // active (gated on restartGate).
+    const respawnPromise = controller.respawn();
+    await flushMicrotasks();
+
+    probeGate.resolve(undefined);
+    await stagePromise;
+
+    // The re-check must have caught the now-active mutation and deferred -
+    // no download call despite the probe having resolved eligible.
+    expect(downloadCalls).toHaveLength(0);
+
+    restartGate.resolve({ data: { activated: true } });
+    await respawnPromise;
+    await vi.waitFor(() => {
+      if (downloadCalls.length === 0)
+        throw new Error("download not kicked yet");
+    });
+    expect(downloadCalls.length).toBeGreaterThan(0);
+  });
+
+  // Fixup A6: `applyStaged`'s preflight reconcile (registry probe + possible
+  // download) must run BEFORE the exclusive mutation lane is entered, so a
+  // WAN download never holds every other mutation hostage - the exact
+  // gate-pressure bug this ticket exists to eliminate.
+  it("applyStaged's preflight download reconcile does not hold the exclusive mutation lane - a concurrent convergeReady is not blocked on it", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writeStagedRecord("production", "1.8.0", null);
+
+    const downloadGate = deferred<unknown>();
+    let ensureCalled = false;
+    vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
+      if (args.includes("available")) {
+        return availableSnapshotFixture("1.8.0", ["1.8.0"]);
+      }
+      return {};
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args.includes("download")) {
+        await downloadGate.promise;
+        return { data: {} };
+      }
+      if (opts.args.includes("ensure")) {
+        ensureCalled = true;
+        return {
+          data: {
+            running: true,
+            runtimeVersion: "1.7.0",
+            version: "1.7.0",
+            action: "noop",
+          },
+        };
+      }
+      return { data: {} };
+    });
+
+    const applyPromise = controller.applyStaged("manual", false);
+    await flushMicrotasks();
+
+    const convergePromise = controller.convergeReady(false);
+    // The download is still gated (unresolved) while convergeReady reaches
+    // its own CLI call - real fs reads (readRunningHostIdentity et al.) are
+    // in the path first, so poll rather than assume a fixed number of
+    // microtask ticks is enough. If the exclusive lane were held across the
+    // download, this would never resolve until `downloadGate` is released.
+    await vi.waitFor(() => {
+      if (!ensureCalled) throw new Error("ensure not reached yet");
+    });
+    expect(ensureCalled).toBe(true);
+
+    downloadGate.resolve(undefined);
+    await applyPromise;
+    await convergePromise;
+  });
+
+  // Fixup A6 (third citation): `activateInstalled`'s "a ready update
+  // supersedes activation debt" branch used to run its own reconcile via
+  // `applyStagedInline` from WITHIN the lane (it couldn't re-enter
+  // `enqueueMutation`, so it inlined the same reconcile-then-download
+  // logic in place) - same gate-pressure bug as `applyStaged`'s own entry
+  // point. The reconcile now runs once, before `activateInstalled` enters
+  // the lane at all.
+  it("activateInstalled's preflight download reconcile (ready-update-supersedes-debt path) does not hold the exclusive mutation lane", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writeStagedRecord("production", "1.8.0", null);
+
+    const downloadGate = deferred<unknown>();
+    let ensureCalled = false;
+    vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
+      if (args.includes("available")) {
+        return availableSnapshotFixture("1.8.0", ["1.8.0"]);
+      }
+      return {};
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args.includes("download")) {
+        await downloadGate.promise;
+        return { data: {} };
+      }
+      if (opts.args.includes("ensure")) {
+        ensureCalled = true;
+        return {
+          data: {
+            running: true,
+            runtimeVersion: "1.7.0",
+            version: "1.7.0",
+            action: "noop",
+          },
+        };
+      }
+      return { data: {} };
+    });
+
+    const activatePromise = controller.activateInstalled(false);
+    await flushMicrotasks();
+
+    const convergePromise = controller.convergeReady(false);
+    await vi.waitFor(() => {
+      if (!ensureCalled) throw new Error("ensure not reached yet");
+    });
+    expect(ensureCalled).toBe(true);
+
+    downloadGate.resolve(undefined);
+    await activatePromise;
+    await convergePromise;
   });
 });
 
@@ -549,6 +910,98 @@ describe("desktop-held cli-lock: two-process test", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Fixup A7: the packaged-macOS null-runtime activation cycle used to call
+// `stampIfNullRuntime` (which spawns `host stamp-runtime` - a CLI subprocess
+// that reacquires this SAME desktop-held lock file) from INSIDE the
+// `withDesktopCliLock` closure. Nesting a CLI-locked section inside a
+// desktop-locked one deadlocks the subprocess against its own caller until
+// the desktop's own subprocess timeout swallows the error - activation then
+// reports success while the stamp silently never lands. `runBundledTraycerCliJson`
+// is mocked here to make a REAL acquisition attempt against the SAME lock
+// file `runLockedMacActivationCycle` uses (`./desktop-cli-lock` is real, not
+// mocked, per this suite's mocking boundary) - proving genuine contention
+// (or its absence) rather than merely asserting call order.
+// ---------------------------------------------------------------------------
+describe("desktop-held lock vs CLI subprocess: sequenced, not nested (fixup A7)", () => {
+  it("stamp-runtime's CLI subprocess call happens after the desktop lock has released, not while still held", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: null,
+    });
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+
+    const lockPath = cliLockPath("production");
+    const acquireAttempts: Array<"acquired" | "busy"> = [];
+    vi.mocked(runBundledTraycerCliJson).mockImplementation(async () => {
+      const outcome = await acquireDesktopCliLock({
+        lockPath,
+        reason: "stamp-runtime-probe",
+        waitMs: 0,
+        pollIntervalMs: 25,
+      });
+      acquireAttempts.push(outcome.kind === "acquired" ? "acquired" : "busy");
+      if (outcome.kind === "acquired") {
+        await outcome.handle.release();
+      }
+      return {};
+    });
+
+    const outcome = await controller.respawn();
+
+    expect(outcome.kind).toBe("ok");
+    expect(runBundledTraycerCliJson).toHaveBeenCalledTimes(1);
+    expect(acquireAttempts).toEqual(["acquired"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fixup A9: the desktop-held cli-lock's wait/poll used to be a hardcoded
+// module constant (`DESKTOP_LOCK_WAIT_MS = 30_000`) baked into every
+// `withDesktopCliLock` call site, so the "lock wait exhausted -> `deferred`"
+// terminal contract (the same contract fixup A8 depends on: a lock-taking
+// CLI subprocess must be allowed to run at least as long as the CLI's own
+// 30s lock wait) could only be proven with a real 30-second wait - not
+// practical for a unit suite, per the review's "code-level reasoning was
+// insufficient, and findings A6/A8 show why." `HostControllerOptions` now
+// takes the wait/poll as an explicit, required, per-instance field, so a
+// test can inject a small override and force a genuine exhaustion within
+// milliseconds instead of asserting on code shape.
+// ---------------------------------------------------------------------------
+describe("desktop-held lock: exhausted-wait terminal contract is deferred (fixup A9)", () => {
+  it("resolves 'deferred' once the injected lock wait is genuinely exhausted against a held lock, without hanging or throwing", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    const controller = newControllerWithLockTiming(
+      "production",
+      async () => true,
+      150,
+      25,
+    );
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+
+    const lockPath = cliLockPath("production");
+    const held = await acquireDesktopCliLock({
+      lockPath,
+      reason: "test-held-elsewhere",
+      waitMs: 0,
+      pollIntervalMs: 25,
+    });
+    if (held.kind !== "acquired") {
+      throw new Error("failed to seed a held lock for this test");
+    }
+
+    const outcome = await controller.respawn();
+
+    expect(outcome.kind).toBe("deferred");
+    await held.handle.release();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Canonical status: activation-state derivation + convergence across a
 // simulated app restart (a fresh HostController reading the same on-disk
 // state - exactly what production sees on a real relaunch, since nothing
@@ -564,6 +1017,24 @@ describe("canonical status: activation-state derivation", () => {
     const status = await newController("production").getStatus();
     expect(status.activation).toBe("unavailable");
     expect(status.reachable).toBe(false);
+  });
+
+  // Fixup A3: a well-formed but stale pid.json (endpoint probe fails) must
+  // not report `reachable`/`activated` - `getStatus` shares the same
+  // `readRunningRuntimeVersion` reader `recoverIfDown` uses.
+  it("unavailable when pid.json parses and the pid is alive but the endpoint probe reports unreachable", async () => {
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+    const status = await newControllerWithReachability(
+      "production",
+      async () => false,
+    ).getStatus();
+    expect(status.activation).toBe("unavailable");
+    expect(status.reachable).toBe(false);
+    expect(status.runningRuntimeVersion).toBeNull();
   });
 
   it("activationUnknown when the install record's runtimeVersion is null but the host is reachable", async () => {
@@ -665,10 +1136,7 @@ describe("yank/apply ordering", () => {
     vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
       if (args.includes("available")) {
         order.push("available-probe");
-        return {
-          latest: "1.8.0",
-          versions: [{ version: "1.8.0", platformAsset: { available: true } }],
-        };
+        return availableSnapshotFixture("1.8.0", ["1.8.0"]);
       }
       return {};
     });
@@ -849,10 +1317,7 @@ describe("platform matrix", () => {
     let observedAbortedBeforeSettle = false;
     vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
       if (args.includes("available")) {
-        return {
-          latest: "1.8.0",
-          versions: [{ version: "1.8.0", platformAsset: { available: true } }],
-        };
+        return availableSnapshotFixture("1.8.0", ["1.8.0"]);
       }
       return { removedInstallDir: true, serviceUninstalled: true };
     });
@@ -900,6 +1365,146 @@ describe("platform matrix", () => {
 
     await controller.uninstallHost(true);
     expect(await isHostRemovedByUser()).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Windows bundled-host `--from` fallback (fixup A2): on Windows the per-user
+// slot CLI is a COPY outside the app bundle (symlinks need elevated
+// privilege there), so the CLI's own sibling-archive resolution can't see
+// the bundled host archive and would fall back to the registry - which
+// publishes no win32 asset for dogfood/unsigned builds. `convergeReadyCliOwned`
+// must pass `--from <archive>` explicitly when running on win32 with a
+// bundled archive present beside the CLI binary.
+// ---------------------------------------------------------------------------
+describe("Windows bundled-host --from fallback", () => {
+  const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(
+    process,
+    "platform",
+  );
+  const originalArchDescriptor = Object.getOwnPropertyDescriptor(
+    process,
+    "arch",
+  );
+
+  afterEach(() => {
+    if (originalPlatformDescriptor !== undefined) {
+      Object.defineProperty(process, "platform", originalPlatformDescriptor);
+    }
+    if (originalArchDescriptor !== undefined) {
+      Object.defineProperty(process, "arch", originalArchDescriptor);
+    }
+  });
+
+  function setPlatform(value: string): void {
+    Object.defineProperty(process, "platform", { configurable: true, value });
+  }
+
+  function setArch(value: string): void {
+    Object.defineProperty(process, "arch", { configurable: true, value });
+  }
+
+  it("passes --from the bundled host archive on win32 when it exists beside the CLI binary", async () => {
+    setPlatform("win32");
+    setArch("x64");
+    const cliDir = join(workHome, "cli");
+    mkdirSync(cliDir, { recursive: true });
+    const bundledCli = join(cliDir, "traycer.exe");
+    writeFileSync(bundledCli, "");
+    const archive = join(cliDir, "host-runtime-win32-x64.tar.gz");
+    writeFileSync(archive, "");
+    vi.mocked(resolveBundledCliPath).mockResolvedValue(bundledCli);
+
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: { running: true, version: "1.7.0", action: "noop" },
+    });
+
+    await controller.convergeReady(false);
+
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: ["host", "ensure", "--from", archive],
+      }),
+    );
+  });
+
+  it("resolves win32-arm64 to the x64 host archive (no native win-arm64 host)", async () => {
+    setPlatform("win32");
+    setArch("arm64");
+    const cliDir = join(workHome, "cli");
+    mkdirSync(cliDir, { recursive: true });
+    const bundledCli = join(cliDir, "traycer.exe");
+    writeFileSync(bundledCli, "");
+    const archive = join(cliDir, "host-runtime-win32-x64.tar.gz");
+    writeFileSync(archive, "");
+    vi.mocked(resolveBundledCliPath).mockResolvedValue(bundledCli);
+
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: { running: true, version: "1.7.0", action: "noop" },
+    });
+
+    await controller.convergeReady(false);
+
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: ["host", "ensure", "--from", archive],
+      }),
+    );
+  });
+
+  it("omits --from on win32 when no bundled archive is present (dev/CLI-only install)", async () => {
+    setPlatform("win32");
+    setArch("x64");
+    vi.mocked(resolveBundledCliPath).mockResolvedValue(null);
+
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: { running: true, version: "1.7.0", action: "noop" },
+    });
+
+    await controller.convergeReady(false);
+
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+      expect.objectContaining({ args: ["host", "ensure"] }),
+    );
+  });
+
+  it("omits --from on macOS/Linux even when a bundled CLI path resolves (POSIX symlink self-resolution)", async () => {
+    setPlatform("darwin");
+    const cliDir = join(workHome, "cli");
+    mkdirSync(cliDir, { recursive: true });
+    const bundledCli = join(cliDir, "traycer");
+    writeFileSync(bundledCli, "");
+    vi.mocked(resolveBundledCliPath).mockResolvedValue(bundledCli);
+
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: { running: true, version: "1.7.0", action: "noop" },
+    });
+
+    await controller.convergeReady(false);
+
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+      expect.objectContaining({ args: ["host", "ensure"] }),
+    );
   });
 });
 
@@ -997,6 +1602,71 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     expect(controller.isPendingRevisionRefreshQuarantined()).toBe(false);
   });
 
+  // Fixup A4: a terminal bytes-only install (B) landing on disk WHILE this
+  // cycle is mid-`registerHostLoginItem` must not have its generation
+  // captured and stamped with A's (this cycle's) identity - the record read
+  // + generation computation must be pinned to A, captured before the
+  // disruptive cycle starts, never re-read from disk after it settles.
+  it("stamps the generation captured before the cycle started, not a superseding record that lands mid-cycle", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    const controller = newController("production");
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+    writeInstallRecord("production", {
+      installId: "install-A",
+      version: "1.7.0",
+      runtimeVersion: null,
+      installedAt: "2026-01-01T00:00:00.000Z",
+      archiveSha256: "a".repeat(64),
+    });
+    const expectedGenerationA = encodeInstallGeneration({
+      installId: "install-A",
+      installedAt: "2026-01-01T00:00:00.000Z",
+      archiveSha256: "a".repeat(64),
+      version: "1.7.0",
+    });
+    vi.mocked(hasPendingLoginItemRevision).mockResolvedValue(true);
+    // Simulate a terminal bytes-only install (B) completing WHILE this
+    // cycle is mid-registerHostLoginItem (called from inside the desktop
+    // lock) - the on-disk install record changes out from under this cycle
+    // before it returns.
+    vi.mocked(registerHostLoginItem).mockImplementation(async () => {
+      writeInstallRecord("production", {
+        installId: "install-B",
+        version: "1.8.0",
+        runtimeVersion: null,
+        installedAt: "2026-02-01T00:00:00.000Z",
+        archiveSha256: "b".repeat(64),
+      });
+      return "enabled";
+    });
+    vi.mocked(waitForHostReady).mockResolvedValue({
+      ready: true,
+      version: "1.7.0",
+      pid: process.pid,
+      reason: "ready",
+    });
+    const stampCalls: (readonly string[])[] = [];
+    vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
+      if (args.includes("stamp-runtime")) {
+        stampCalls.push(args);
+        return { outcome: "stamped" };
+      }
+      return {};
+    });
+
+    const outcome = await controller.applyPendingLoginItemRevisionIfIdle();
+    expect(outcome?.kind).toBe("ok");
+
+    expect(stampCalls).toHaveLength(1);
+    const generationIndex = stampCalls[0]?.indexOf(
+      "--expected-install-generation",
+    );
+    expect(generationIndex).toBeGreaterThanOrEqual(0);
+    expect(stampCalls[0]?.[(generationIndex as number) + 1]).toBe(
+      expectedGenerationA,
+    );
+  });
+
   it("convergeReady on packaged macOS opportunistically applies a pending revision when already reachable", async () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
     const controller = newController("production");
@@ -1054,6 +1724,34 @@ describe("recoverIfDown", () => {
     const outcome = await controller.recoverIfDown();
     expect(outcome).toEqual({ kind: "ok", value: { activated: true } });
     expect(streamBundledTraycerCliJson).not.toHaveBeenCalled();
+  });
+
+  // Fixup A3: `readRunningRuntimeVersion` used to be a structural pid.json
+  // parse only - a stale-but-well-formed file (the process behind it wedged
+  // or its endpoint stopped answering, without pid.json itself being
+  // rewritten) read as "running" and `recoverIfDown` silently skipped the
+  // restart, reporting success while the host stayed dead. The pid here IS
+  // genuinely alive (`process.pid`) - only the endpoint probe reports
+  // unreachable - so a correct implementation must still restart.
+  it("actually restarts when pid.json parses and the pid is alive but the endpoint probe reports unreachable", async () => {
+    const controller = newControllerWithReachability(
+      "production",
+      async () => false,
+    );
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: { activated: true },
+    });
+
+    const outcome = await controller.recoverIfDown();
+    expect(outcome).toEqual({ kind: "ok", value: { activated: true } });
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+      expect.objectContaining({ args: ["host", "restart"] }),
+    );
   });
 
   it("deferred when the host was removed by the user", async () => {

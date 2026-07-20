@@ -1,3 +1,6 @@
+import { constants } from "node:fs";
+import { access } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { log } from "../app/logger";
 import {
   hasPendingLoginItemRevision,
@@ -7,6 +10,7 @@ import {
   unregisterHostLoginItem,
   type RegisterHostLoginItemResult,
 } from "../app/host-login-item";
+import { resolveBundledCliPath } from "../cli/cli-discovery";
 import {
   runBundledTraycerCliJson,
   streamBundledTraycerCliJson,
@@ -42,6 +46,7 @@ import {
   readRunningHostIdentity,
   readRunningRuntimeVersion,
   type DesktopHostInstallRecord,
+  type HostEndpointReachabilityProbe,
 } from "./host-state";
 import type {
   ActivateInstalledOk,
@@ -69,8 +74,17 @@ import type {
 // writer cutover" for the exhaustive list of call sites this replaces.
 
 const CLI_STREAM_TIMEOUT_MS = 10 * 60_000;
-const DESKTOP_LOCK_WAIT_MS = 30_000;
-const DESKTOP_LOCK_POLL_INTERVAL_MS = 100;
+// Fixup A9: the production desktop-held cli-lock wait/poll - matches the
+// CLI's own `waitMs: 30_000` at every `withCliLock` call site (fixup A8).
+// Exported (not just a local default) so `HostControllerOptions.desktopLockWaitMs`/
+// `desktopLockPollIntervalMs` has one source of truth for its production
+// value at the one real construction site (`desktop-startup.ts`), while
+// still being an explicit, required, per-instance field - not a default
+// parameter - so a test can inject a small override and prove the
+// exhausted-lock -> `deferred` terminal contract in a unit suite instead of
+// a real 30s wait.
+export const DESKTOP_LOCK_WAIT_MS = 30_000;
+export const DESKTOP_LOCK_POLL_INTERVAL_MS = 100;
 const CLI_LOCK_BUSY_CODE = "E_CLI_LOCK_BUSY";
 const HOST_BUSY_CODE = "E_HOST_BUSY";
 const LOCK_BUSY_MESSAGE = "Another Traycer process is managing the host.";
@@ -302,27 +316,69 @@ interface AvailableSnapshotShape {
   }>;
 }
 
+// Mirrors the real wire shape `traycer host available --json` emits
+// (`traycer-cli/src/commands/host-available.ts`'s `data` envelope):
+// `{ manifest: { latest, versions[].platforms[platformKey] }, manifestUrl,
+// platformKey }` - NOT a flat `{latest, versions[].platformAsset}` shape.
+// Pinned against the CLI's real command output by the contract test in
+// `traycer-cli/src/commands/__tests__/host-available.test.ts`.
 function parseAvailableSnapshot(raw: unknown): AvailableSnapshotShape {
+  if (!isPlainObject(raw) || typeof raw.platformKey !== "string") {
+    return { latest: "", versions: [] };
+  }
+  const platformKey = raw.platformKey;
+  const manifest = isPlainObject(raw.manifest) ? raw.manifest : null;
   if (
-    !isPlainObject(raw) ||
-    typeof raw.latest !== "string" ||
-    !Array.isArray(raw.versions)
+    manifest === null ||
+    typeof manifest.latest !== "string" ||
+    !Array.isArray(manifest.versions)
   ) {
     return { latest: "", versions: [] };
   }
-  const versions = raw.versions.flatMap((entry) => {
+  const versions = manifest.versions.flatMap((entry) => {
     if (!isPlainObject(entry) || typeof entry.version !== "string") return [];
-    const asset = isPlainObject(entry.platformAsset)
-      ? entry.platformAsset
-      : null;
+    const platforms = isPlainObject(entry.platforms) ? entry.platforms : null;
+    const asset = platforms !== null ? platforms[platformKey] : null;
     return [
       {
         version: entry.version,
-        available: asset !== null && asset.available === true,
+        available: isPlainObject(asset) && asset.available === true,
       },
     ];
   });
-  return { latest: raw.latest, versions };
+  return { latest: manifest.latest, versions };
+}
+
+// Resolve the host-runtime archive bundled beside the desktop's CLI binary
+// (`resources/cli/<platform>-<arch>/host-runtime-<platform>-<arch>.tar.gz`,
+// staged by scripts/desktop-install-cloud.js). Windows-only (fixup A2): on
+// POSIX the per-user slot CLI is a symlink into the app bundle, so
+// `process.execPath` resolves beside the bundled host archive and the CLI's
+// own `resolveBundledHostArchive` finds it unaided - passing nothing is
+// correct there. On Windows symlinks need elevated privilege, so the slot
+// CLI is a COPY living outside the bundle; the CLI can no longer see the
+// sibling archive and would fall back to the registry, which publishes no
+// win32 asset for dogfood/unsigned builds. `--from` points it at the
+// archive explicitly. Returns null when there is no packaged archive (dev
+// builds, CLI-only installs) - `host ensure` then falls through to its
+// normal registry resolution.
+async function resolveWindowsBundledHostArchive(): Promise<string | null> {
+  if (process.platform !== "win32") return null;
+  const bundledCli = await resolveBundledCliPath();
+  if (bundledCli === null) return null;
+  // No native Windows arm64 host - arm64 runs the x64 runtime (mirrors
+  // resolveBundledHostArchive in the CLI).
+  const arch = process.arch === "arm64" ? "x64" : process.arch;
+  const archive = join(
+    dirname(bundledCli),
+    `host-runtime-win32-${arch}.tar.gz`,
+  );
+  try {
+    await access(archive, constants.R_OK);
+    return archive;
+  } catch {
+    return null;
+  }
 }
 
 function latestVersionFromSnapshot(
@@ -351,13 +407,54 @@ export interface HostControllerHostLifecycle {
 export interface HostControllerOptions {
   readonly environment: Environment;
   readonly hostLifecycle: HostControllerHostLifecycle;
+  /**
+   * Real-endpoint-reachability probe for `readRunningRuntimeVersion`
+   * (fixup A3). Production passes `canReachHostWebsocketUrl` from
+   * `./host-lifecycle`; tests substitute a deterministic stub instead of
+   * depending on a real TCP listener bound to a fixture's `websocketUrl`.
+   */
+  readonly reachabilityProbe: HostEndpointReachabilityProbe;
+  /**
+   * Fixup A9: injectable override for the desktop-held cli-lock's own
+   * wait/poll timing at every `withDesktopCliLock` call site. Production
+   * passes `DESKTOP_LOCK_WAIT_MS`/`DESKTOP_LOCK_POLL_INTERVAL_MS`
+   * (30_000ms/100ms, matching the CLI's own 30s `waitMs` - fixup A8);
+   * tests substitute a much smaller wait so the exhausted-lock ->
+   * `deferred` terminal contract is provable in a unit suite instead of a
+   * real 30s wait.
+   */
+  readonly desktopLockWaitMs: number;
+  readonly desktopLockPollIntervalMs: number;
 }
+
+/**
+ * `runLockedMacActivationCycle`'s desktop-locked closure result (fixup A7).
+ * `"terminal"` short-circuits with a final outcome decided under the lock
+ * (no host installed, busy, registration failure). `"registered"` carries
+ * just enough state for the CALLER to finish the choreography (stamp-runtime
+ * CAS + readiness wait) AFTER the lock has released - those steps must never
+ * run while still holding it, see the comment at the return site.
+ */
+type LockedMacActivationStep =
+  | {
+      readonly phase: "terminal";
+      readonly outcome: MutationOutcome<{ readonly activated: boolean }>;
+    }
+  | {
+      readonly phase: "registered";
+      readonly registerResult: RegisterHostLoginItemResult;
+      readonly prePid: number | null;
+      readonly expectedGeneration: string | null;
+    };
 
 export class HostController {
   private readonly environment: Environment;
   private readonly layout: HostFsLayout;
   private readonly lockPath: string;
   private readonly hostLifecycle: HostControllerHostLifecycle;
+  private readonly reachabilityProbe: HostEndpointReachabilityProbe;
+  private readonly desktopLockWaitMs: number;
+  private readonly desktopLockPollIntervalMs: number;
 
   private mutationTail: Promise<void> = Promise.resolve();
   private mutationStatus: MutationLaneStatus | null = null;
@@ -381,6 +478,9 @@ export class HostController {
     this.layout = getHostFsLayout(opts.environment);
     this.lockPath = cliLockPath(opts.environment);
     this.hostLifecycle = opts.hostLifecycle;
+    this.reachabilityProbe = opts.reachabilityProbe;
+    this.desktopLockWaitMs = opts.desktopLockWaitMs;
+    this.desktopLockPollIntervalMs = opts.desktopLockPollIntervalMs;
   }
 
   // ---- Canonical status --------------------------------------------------
@@ -388,7 +488,10 @@ export class HostController {
   async getStatus(): Promise<HostControllerStatus> {
     const installed = await readDesktopHostInstallRecord(this.layout);
     const staged = await readDesktopHostStagedRecord(this.layout);
-    const runningRuntimeVersion = await readRunningRuntimeVersion(this.layout);
+    const runningRuntimeVersion = await readRunningRuntimeVersion(
+      this.layout,
+      this.reachabilityProbe,
+    );
     const installedVersion = installed?.version ?? null;
     const installedRuntimeVersion = installed?.runtimeVersion ?? null;
     return {
@@ -418,11 +521,33 @@ export class HostController {
   // advances), so a submission behind a failed one is never starved. This
   // is also what makes `convergeReady` mid-mutation "drain then re-check"
   // - it's just another item submitted to the same queue.
+  //
+  // Coalescing (fixup A5, Tech Plan D3 "explicit coalescing keys, per-intent
+  // results"): `inFlightMutations` maps a coalescing key to the still-
+  // unsettled job's promise. A submission whose key already has an entry
+  // JOINS that job instead of enqueueing a duplicate - the entry is removed
+  // the instant the job settles (in `finally`, synchronously within that
+  // job's own continuation, so there is no window for a third submission to
+  // race the deletion), so a LATER, non-overlapping call with the same key
+  // still runs fresh rather than replaying a stale result. Every call site
+  // below derives its key from the intent's OWN distinguishing parameters
+  // (e.g. `force`, `pin`) - two `respawn()`s always coalesce; two
+  // `installVersion` calls only coalesce when the pin AND force both match.
+
+  private readonly inFlightMutations = new Map<
+    string,
+    Promise<MutationOutcome<unknown>>
+  >();
 
   private enqueueMutation<T>(
     kind: MutationKind,
+    coalesceKey: string,
     fn: () => Promise<MutationOutcome<T>>,
   ): Promise<MutationOutcome<T>> {
+    const existing = this.inFlightMutations.get(coalesceKey);
+    if (existing !== undefined) {
+      return existing as Promise<MutationOutcome<T>>;
+    }
     const job = this.mutationTail.then(async () => {
       this.mutationStatus = {
         kind,
@@ -439,12 +564,17 @@ export class HostController {
         } as MutationOutcome<T>;
       } finally {
         this.mutationStatus = null;
+        this.inFlightMutations.delete(coalesceKey);
         if (this.stageLatestPending) {
           this.stageLatestPending = false;
           void this.stageLatest();
         }
       }
     });
+    this.inFlightMutations.set(
+      coalesceKey,
+      job as Promise<MutationOutcome<unknown>>,
+    );
     this.mutationTail = job.then(
       () => undefined,
       () => undefined,
@@ -638,25 +768,28 @@ export class HostController {
       {
         lockPath: this.lockPath,
         reason: "host-controller-activate",
-        waitMs: DESKTOP_LOCK_WAIT_MS,
-        pollIntervalMs: DESKTOP_LOCK_POLL_INTERVAL_MS,
+        waitMs: this.desktopLockWaitMs,
+        pollIntervalMs: this.desktopLockPollIntervalMs,
       },
-      async () => {
+      async (): Promise<LockedMacActivationStep> => {
         // Re-read install/pid state after acquisition (lock rule 3) - a
         // superseding mutation may have landed while we waited.
         const record = await readDesktopHostInstallRecord(this.layout);
         if (record === null) {
           return {
-            kind: "failed",
-            message: "No host installed.",
-          } as MutationOutcome<{ readonly activated: boolean }>;
+            phase: "terminal",
+            outcome: { kind: "failed", message: "No host installed." },
+          };
         }
         if (!force) {
           const verdict = await probeHostBusyVerdict(this.layout);
           if (verdict === "busy") {
-            return this.hostBusyOutcome<{ readonly activated: boolean }>(
-              postCommitContinuation,
-            );
+            return {
+              phase: "terminal",
+              outcome: this.hostBusyOutcome<{ readonly activated: boolean }>(
+                postCommitContinuation,
+              ),
+            };
           }
         }
         const prePid =
@@ -669,16 +802,20 @@ export class HostController {
           await registerHostLoginItem(undefined);
         if (registerResult === "removed-by-user") {
           return {
-            kind: "failed",
-            message: "Host was removed by the user.",
-          } as MutationOutcome<{
-            readonly activated: boolean;
-          }>;
+            phase: "terminal",
+            outcome: {
+              kind: "failed",
+              message: "Host was removed by the user.",
+            },
+          };
         }
         if (registerResult === "deferred-busy") {
-          return this.hostBusyOutcome<{ readonly activated: boolean }>(
-            postCommitContinuation,
-          );
+          return {
+            phase: "terminal",
+            outcome: this.hostBusyOutcome<{ readonly activated: boolean }>(
+              postCommitContinuation,
+            ),
+          };
         }
         if (
           registerResult === "not-registered" ||
@@ -686,42 +823,60 @@ export class HostController {
           registerResult === "not-supported"
         ) {
           return {
-            kind: "failed",
-            message: `Failed to register the host login item (status=${registerResult}).`,
-          } as MutationOutcome<{ readonly activated: boolean }>;
+            phase: "terminal",
+            outcome: {
+              kind: "failed",
+              message: `Failed to register the host login item (status=${registerResult}).`,
+            },
+          };
         }
-        // `requires-approval` still means the plist is registered - launchd
-        // will start it once the user approves it in System Settings; we
-        // still wait for readiness (it may already be approved from a prior
-        // cycle) but the activation-failure semantics classify a timeout as
-        // the approval message rather than a generic readiness failure.
-        await this.stampIfNullRuntime(expectedGeneration, prePid);
-        const readiness = await waitForHostReady(
-          HOST_READY_TIMEOUT_MS,
-          this.layout.pidMetadataFile,
-          HOST_READY_POLL_MS,
+        // Fixup A7: the desktop lock is released as soon as this closure
+        // returns - registration is the only disruptive SMAppService step
+        // this cycle needs to hold it across. `stampIfNullRuntime` (below,
+        // post-lock) spawns `host stamp-runtime`, which reacquires this
+        // SAME lock (lock rule 3: "CLI-locked and desktop-locked sections
+        // are sequenced, not nested"). Nesting it here deadlocked the CLI
+        // subprocess against its own caller until the desktop-side 10s
+        // timeout fired and swallowed the error, silently leaving the
+        // record unstamped while activation reported success.
+        return {
+          phase: "registered",
+          registerResult,
           prePid,
-        );
-        if (!readiness.ready) {
-          const message =
-            registerResult === "requires-approval"
-              ? approvalRequiredMessage()
-              : `Traycer Host did not start within ${HOST_READY_TIMEOUT_MS}ms - run \`traycer host doctor\` to recover.`;
-          return { kind: "failed", message } as MutationOutcome<{
-            readonly activated: boolean;
-          }>;
-        }
-        this.hostLifecycle.ensureWatcherInstalled();
-        await this.hostLifecycle.reloadSnapshotFromDisk();
-        return { kind: "ok", value: { activated: true } } as MutationOutcome<{
-          readonly activated: boolean;
-        }>;
+          expectedGeneration,
+        };
       },
     );
     if (outcome.kind === "busy") {
       return this.lockBusyOutcome(false);
     }
-    return outcome.result;
+    const step = outcome.result;
+    if (step.phase === "terminal") {
+      return step.outcome;
+    }
+    const { registerResult, prePid, expectedGeneration } = step;
+    // `requires-approval` still means the plist is registered - launchd
+    // will start it once the user approves it in System Settings; we still
+    // wait for readiness (it may already be approved from a prior cycle)
+    // but the activation-failure semantics classify a timeout as the
+    // approval message rather than a generic readiness failure.
+    await this.stampIfNullRuntime(expectedGeneration, prePid);
+    const readiness = await waitForHostReady(
+      HOST_READY_TIMEOUT_MS,
+      this.layout.pidMetadataFile,
+      HOST_READY_POLL_MS,
+      prePid,
+    );
+    if (!readiness.ready) {
+      const message =
+        registerResult === "requires-approval"
+          ? approvalRequiredMessage()
+          : `Traycer Host did not start within ${HOST_READY_TIMEOUT_MS}ms - run \`traycer host doctor\` to recover.`;
+      return { kind: "failed", message };
+    }
+    this.hostLifecycle.ensureWatcherInstalled();
+    await this.hostLifecycle.reloadSnapshotFromDisk();
+    return { kind: "ok", value: { activated: true } };
   }
 
   // ---- Pending LaunchAgent revision refresh (packaged macOS) --------------
@@ -745,7 +900,10 @@ export class HostController {
   // terminal refresh failure), or `null` when there was nothing to do (not
   // reachable, no marker, quarantined, or the host is busy).
   async applyPendingLoginItemRevisionIfIdle(): Promise<MutationOutcome<ConvergeReadyOk> | null> {
-    const currentVersion = await readRunningRuntimeVersion(this.layout);
+    const currentVersion = await readRunningRuntimeVersion(
+      this.layout,
+      this.reachabilityProbe,
+    );
     if (currentVersion === null) return null;
     if (this.pendingRevisionRefreshQuarantined) return null;
     if (!(await hasPendingLoginItemRevision(this.environment))) return null;
@@ -768,23 +926,43 @@ export class HostController {
       );
       return null;
     }
-    const prePid = (await readRunningHostIdentity(this.layout))?.pid ?? null;
     const outcome = await withDesktopCliLock(
       {
         lockPath: this.lockPath,
         reason: "host-controller-pending-revision-refresh",
-        waitMs: DESKTOP_LOCK_WAIT_MS,
-        pollIntervalMs: DESKTOP_LOCK_POLL_INTERVAL_MS,
+        waitMs: this.desktopLockWaitMs,
+        pollIntervalMs: this.desktopLockPollIntervalMs,
       },
-      async () =>
+      async () => {
+        // Capture the pre-cycle identity AND the generation to
+        // (conditionally) stamp INSIDE the lock, immediately before the
+        // disruptive bootout/reregister - mirrors `runLockedMacActivationCycle`.
+        // Fixup A4: reading the install record AFTER the lock releases
+        // would risk observing a SUPERSEDING record that landed during the
+        // cycle (a terminal bytes-only install completing while we were
+        // mid-registerHostLoginItem) and CAS-stamping THAT record with this
+        // cycle's now-stale identity - the superseding install would then
+        // read as falsely activated and never get its own real activation
+        // cycle. Capturing both together, under the lock, ties the
+        // expected generation to the exact record this cycle is actually
+        // reactivating.
+        const prePid =
+          (await readRunningHostIdentity(this.layout))?.pid ?? null;
+        const record = await readDesktopHostInstallRecord(this.layout);
+        const expectedGeneration =
+          record !== null && record.runtimeVersion === null
+            ? attestedInstallGenerationFromDisk(record)
+            : null;
         // The busy probe above can go stale while this cycle waits its turn
         // on the shared registration lock (a concurrent respawn/activation
         // cycle can be mid-cycle right now) - re-check right before the
         // bootout actually runs, so a host that picked up real work while
         // queued isn't killed anyway.
-        registerHostLoginItem(
+        const status = await registerHostLoginItem(
           async () => (await probeHostBusyVerdict(this.layout)) === "idle",
-        ),
+        );
+        return { status, prePid, expectedGeneration };
+      },
     );
     if (outcome.kind === "busy") {
       // Desktop-lock contention is transient, not terminal - some other
@@ -796,7 +974,7 @@ export class HostController {
       );
       return null;
     }
-    const status = outcome.result;
+    const { status, prePid, expectedGeneration } = outcome.result;
     if (status === "removed-by-user") {
       log.info(
         "[host-controller] pending LaunchAgent revision skipped - host removed by user mid-refresh",
@@ -824,11 +1002,6 @@ export class HostController {
         message: `The host's macOS login item could not be enabled (status: ${status}). Open Doctor or run 'traycer host doctor' to recover.`,
       };
     }
-    const record = await readDesktopHostInstallRecord(this.layout);
-    const expectedGeneration =
-      record !== null && record.runtimeVersion === null
-        ? attestedInstallGenerationFromDisk(record)
-        : null;
     await this.stampIfNullRuntime(expectedGeneration, prePid);
     const readiness = await waitForHostReady(
       HOST_READY_TIMEOUT_MS,
@@ -886,26 +1059,35 @@ export class HostController {
   async convergeReady(
     force: boolean,
   ): Promise<MutationOutcome<ConvergeReadyOk>> {
-    return this.enqueueMutation<ConvergeReadyOk>("ensure", async () => {
-      if (await isHostRemovedByUser()) {
-        return { kind: "ok", value: { running: false, version: null } };
-      }
-      if (await this.isPackagedMacOwned()) {
-        return this.convergeReadyPackagedMac(force);
-      }
-      return this.convergeReadyCliOwned(force);
-    });
+    return this.enqueueMutation<ConvergeReadyOk>(
+      "ensure",
+      `ensure:${force}`,
+      async () => {
+        if (await isHostRemovedByUser()) {
+          return { kind: "ok", value: { running: false, version: null } };
+        }
+        if (await this.isPackagedMacOwned()) {
+          return this.convergeReadyPackagedMac(force);
+        }
+        return this.convergeReadyCliOwned(force);
+      },
+    );
   }
 
   private async convergeReadyCliOwned(
     force: boolean,
   ): Promise<MutationOutcome<ConvergeReadyOk>> {
     const prePid = (await readRunningHostIdentity(this.layout))?.pid ?? null;
+    const bundledHostFrom = await resolveWindowsBundledHostArchive();
+    const args = [
+      "host",
+      "ensure",
+      ...(force ? ["--force"] : []),
+      ...(bundledHostFrom !== null ? ["--from", bundledHostFrom] : []),
+    ];
     let raw: unknown;
     try {
-      raw = await this.streamBundled<unknown>(
-        force ? ["host", "ensure", "--force"] : ["host", "ensure"],
-      );
+      raw = await this.streamBundled<unknown>(args);
     } catch (err) {
       return this.classifyEnsureLikeError(err, true);
     }
@@ -947,7 +1129,10 @@ export class HostController {
     // was last cycled (see `applyPendingLoginItemRevisionIfIdle`).
     // Otherwise drive the same locked register cycle `activateInstalled`
     // uses so SMAppService (re-)starts it and picks up the plist revision.
-    const runningRuntimeVersion = await readRunningRuntimeVersion(this.layout);
+    const runningRuntimeVersion = await readRunningRuntimeVersion(
+      this.layout,
+      this.reachabilityProbe,
+    );
     if (runningRuntimeVersion !== null) {
       const refreshed = await this.applyPendingLoginItemRevisionIfIdle();
       if (refreshed !== null) return refreshed;
@@ -963,7 +1148,10 @@ export class HostController {
     if (activation.kind !== "ok") {
       return activation as MutationOutcome<ConvergeReadyOk>;
     }
-    const version = await readRunningRuntimeVersion(this.layout);
+    const version = await readRunningRuntimeVersion(
+      this.layout,
+      this.reachabilityProbe,
+    );
     return {
       kind: "ok",
       value: { running: true, version: version ?? result.version },
@@ -1033,6 +1221,16 @@ export class HostController {
         installedVersion !== null &&
         isStrictlyNewerHostVersion(this.latestVersionCache, installedVersion));
     if (!eligible) return;
+    // Fixup A6: re-check mutation state HERE, atomically with the decision
+    // to start a download - `stageLatest`'s own `mutationStatus !== null`
+    // guard only covers its SYNCHRONOUS entry. The registry probe above is
+    // an async gap a mutation can start during; without this re-check a
+    // download would still begin right after, violating "no new download
+    // while a mutation is active."
+    if (this.mutationStatus !== null) {
+      this.stageLatestPending = true;
+      return;
+    }
     await this.runDownloadLane(null);
   }
 
@@ -1101,42 +1299,54 @@ export class HostController {
     trigger: ApplyStagedTrigger,
     force: boolean,
   ): Promise<MutationOutcome<ApplyStagedOk>> {
-    return this.enqueueMutation<ApplyStagedOk>("apply", async () => {
-      if (trigger === "launch" && (await isHostRemovedByUser())) {
-        return { kind: "deferred", message: "Host was removed by the user." };
-      }
-      // Ordering edge: await any in-flight-or-due eligibility reconcile for
-      // the staged version before re-reading `updateReady`. Offline policy:
-      // a registry-unreachable reconcile still proceeds with the signed
-      // stage (yank is curation; the minisign signature is the security
-      // boundary) - `stageLatest`'s own probe failure is already silent.
-      await this.awaitDownloadLaneIdle();
-      await this.reconcileEligibleStage();
-      await this.awaitDownloadLaneIdle();
+    // Fixup A6: reconcile BEFORE entering the exclusive mutation lane. The
+    // ordering edge ("apply awaits any in-flight-or-due eligibility
+    // reconcile for the staged version") still holds - it's just no longer
+    // performed while HOLDING the lane, which used to block every other
+    // mutation (`convergeReady` included) for the length of a WAN download -
+    // a self-inflicted recurrence of the gate-pressure bug this ticket
+    // exists to eliminate. Offline policy: a registry-unreachable reconcile
+    // still proceeds with the signed stage (yank is curation; the minisign
+    // signature is the security boundary) - `stageLatest`'s own probe
+    // failure is already silent.
+    await this.awaitDownloadLaneIdle();
+    await this.reconcileEligibleStage();
+    await this.awaitDownloadLaneIdle();
 
-      const installed = await readDesktopHostInstallRecord(this.layout);
-      const staged = await readDesktopHostStagedRecord(this.layout);
-      if (
-        !deriveUpdateReady(
-          installed?.version ?? null,
-          staged?.version ?? null,
-        ) &&
-        staged === null
-      ) {
-        return {
-          kind: "ok",
-          value: {
-            appliedVersion: installed?.version ?? "",
-            runningActivated: true,
-          },
-        };
-      }
+    return this.enqueueMutation<ApplyStagedOk>(
+      "apply",
+      `apply:${trigger}:${force}`,
+      async () => {
+        if (trigger === "launch" && (await isHostRemovedByUser())) {
+          return {
+            kind: "deferred",
+            message: "Host was removed by the user.",
+          };
+        }
+        const installed = await readDesktopHostInstallRecord(this.layout);
+        const staged = await readDesktopHostStagedRecord(this.layout);
+        if (
+          !deriveUpdateReady(
+            installed?.version ?? null,
+            staged?.version ?? null,
+          ) &&
+          staged === null
+        ) {
+          return {
+            kind: "ok",
+            value: {
+              appliedVersion: installed?.version ?? "",
+              runningActivated: true,
+            },
+          };
+        }
 
-      if (await this.isPackagedMacOwned()) {
-        return this.applyStagedPackagedMac();
-      }
-      return this.applyStagedCliOwned(force);
-    });
+        if (await this.isPackagedMacOwned()) {
+          return this.applyStagedPackagedMac();
+        }
+        return this.applyStagedCliOwned(force);
+      },
+    );
   }
 
   private async applyStagedCliOwned(
@@ -1238,40 +1448,43 @@ export class HostController {
   async activateInstalled(
     force: boolean,
   ): Promise<MutationOutcome<ActivateInstalledOk>> {
-    return this.enqueueMutation<ActivateInstalledOk>("activate", async () => {
-      // A ready update supersedes activation debt - prevents the
-      // restart-old -> stamp -> restart-new double cycle.
-      const installed = await readDesktopHostInstallRecord(this.layout);
-      const staged = await readDesktopHostStagedRecord(this.layout);
-      if (
-        deriveUpdateReady(installed?.version ?? null, staged?.version ?? null)
-      ) {
-        const applied = await this.applyStagedInline(force);
-        return applied.kind === "ok"
-          ? { kind: "ok", value: { activated: applied.value.runningActivated } }
-          : applied;
-      }
-      if (await this.isPackagedMacOwned()) {
-        return this.runLockedMacActivationCycle(force, "activate");
-      }
-      return this.activateInstalledCliOwned(force);
-    });
-  }
-
-  // `activateInstalled` may need to run `applyStaged`'s own body when a
-  // ready update supersedes debt, but it's already inside the mutation
-  // lane (enqueueMutation would deadlock on itself) - this re-runs
-  // `applyStaged`'s logic directly rather than re-entering the lane.
-  private async applyStagedInline(
-    force: boolean,
-  ): Promise<MutationOutcome<ApplyStagedOk>> {
+    // Fixup A6: reconcile BEFORE entering the exclusive mutation lane, same
+    // reasoning as `applyStaged` - determining whether a ready update
+    // supersedes activation debt needs fresh `updateReady` state, and
+    // fetching it must never hold the lane hostage across a WAN download.
     await this.awaitDownloadLaneIdle();
     await this.reconcileEligibleStage();
     await this.awaitDownloadLaneIdle();
-    if (await this.isPackagedMacOwned()) {
-      return this.applyStagedPackagedMac();
-    }
-    return this.applyStagedCliOwned(force);
+
+    return this.enqueueMutation<ActivateInstalledOk>(
+      "activate",
+      `activate:${force}`,
+      async () => {
+        // A ready update supersedes activation debt - prevents the
+        // restart-old -> stamp -> restart-new double cycle. The reconcile
+        // already ran above; this only re-reads the (now-fresh) state and
+        // performs the apply/activate choreography, no further download.
+        const installed = await readDesktopHostInstallRecord(this.layout);
+        const staged = await readDesktopHostStagedRecord(this.layout);
+        if (
+          deriveUpdateReady(installed?.version ?? null, staged?.version ?? null)
+        ) {
+          const applied = (await this.isPackagedMacOwned())
+            ? await this.applyStagedPackagedMac()
+            : await this.applyStagedCliOwned(force);
+          return applied.kind === "ok"
+            ? {
+                kind: "ok",
+                value: { activated: applied.value.runningActivated },
+              }
+            : applied;
+        }
+        if (await this.isPackagedMacOwned()) {
+          return this.runLockedMacActivationCycle(force, "activate");
+        }
+        return this.activateInstalledCliOwned(force);
+      },
+    );
   }
 
   private async activateInstalledCliOwned(
@@ -1310,17 +1523,21 @@ export class HostController {
     pin: string,
     force: boolean,
   ): Promise<MutationOutcome<InstallVersionOk>> {
-    return this.enqueueMutation<InstallVersionOk>("install", async () => {
-      // Explicit reinstall clears the removed-by-user sentinel (host-
-      // removal-state.ts: "Cleared by an explicit reinstall").
-      if (await isHostRemovedByUser()) {
-        await clearHostRemovedByUser();
-      }
-      if (await this.isPackagedMacOwned()) {
-        return this.installVersionPackagedMac(pin);
-      }
-      return this.installVersionCliOwned(pin, force);
-    });
+    return this.enqueueMutation<InstallVersionOk>(
+      "install",
+      `install:${pin}:${force}`,
+      async () => {
+        // Explicit reinstall clears the removed-by-user sentinel (host-
+        // removal-state.ts: "Cleared by an explicit reinstall").
+        if (await isHostRemovedByUser()) {
+          await clearHostRemovedByUser();
+        }
+        if (await this.isPackagedMacOwned()) {
+          return this.installVersionPackagedMac(pin);
+        }
+        return this.installVersionCliOwned(pin, force);
+      },
+    );
   }
 
   private async installVersionCliOwned(
@@ -1342,7 +1559,10 @@ export class HostController {
     await this.stampIfNullRuntime(result.installGeneration, prePid);
     this.hostLifecycle.ensureWatcherInstalled();
     await this.hostLifecycle.reloadSnapshotFromDisk();
-    const runningRuntimeVersion = await readRunningRuntimeVersion(this.layout);
+    const runningRuntimeVersion = await readRunningRuntimeVersion(
+      this.layout,
+      this.reachabilityProbe,
+    );
     return {
       kind: "ok",
       value: {
@@ -1390,45 +1610,50 @@ export class HostController {
   // ---- registerService / deregisterService --------------------------------
 
   async registerService(): Promise<MutationOutcome<ServiceRegistrationOk>> {
-    return this.enqueueMutation<ServiceRegistrationOk>("register", async () => {
-      if (await this.isPackagedMacOwned()) {
-        const outcome = await withDesktopCliLock(
-          {
-            lockPath: this.lockPath,
-            reason: "host-controller-register",
-            waitMs: DESKTOP_LOCK_WAIT_MS,
-            pollIntervalMs: DESKTOP_LOCK_POLL_INTERVAL_MS,
-          },
-          async () => registerHostLoginItem(undefined),
-        );
-        if (outcome.kind === "busy") return this.lockBusyOutcome(false);
-        const status = outcome.result;
-        if (status === "enabled" || status === "requires-approval") {
-          return { kind: "ok", value: { registered: true } };
+    return this.enqueueMutation<ServiceRegistrationOk>(
+      "register",
+      "register",
+      async () => {
+        if (await this.isPackagedMacOwned()) {
+          const outcome = await withDesktopCliLock(
+            {
+              lockPath: this.lockPath,
+              reason: "host-controller-register",
+              waitMs: this.desktopLockWaitMs,
+              pollIntervalMs: this.desktopLockPollIntervalMs,
+            },
+            async () => registerHostLoginItem(undefined),
+          );
+          if (outcome.kind === "busy") return this.lockBusyOutcome(false);
+          const status = outcome.result;
+          if (status === "enabled" || status === "requires-approval") {
+            return { kind: "ok", value: { registered: true } };
+          }
+          return {
+            kind: "failed",
+            message: `Failed to register the host login item (status=${status}).`,
+          };
         }
-        return {
-          kind: "failed",
-          message: `Failed to register the host login item (status=${status}).`,
-        };
-      }
-      try {
-        await this.runBundled<unknown>([
-          "host",
-          "service",
-          "install",
-          ...this.devServiceInstallExtras(),
-        ]);
-      } catch (err) {
-        if (err instanceof TraycerCliError && err.code === CLI_LOCK_BUSY_CODE)
-          return this.lockBusyOutcome(false);
-        return { kind: "failed", message: describeError(err) };
-      }
-      return { kind: "ok", value: { registered: true } };
-    });
+        try {
+          await this.runBundled<unknown>([
+            "host",
+            "service",
+            "install",
+            ...this.devServiceInstallExtras(),
+          ]);
+        } catch (err) {
+          if (err instanceof TraycerCliError && err.code === CLI_LOCK_BUSY_CODE)
+            return this.lockBusyOutcome(false);
+          return { kind: "failed", message: describeError(err) };
+        }
+        return { kind: "ok", value: { registered: true } };
+      },
+    );
   }
 
   async deregisterService(): Promise<MutationOutcome<ServiceRegistrationOk>> {
     return this.enqueueMutation<ServiceRegistrationOk>(
+      "deregister",
       "deregister",
       async () => {
         if (await this.isPackagedMacOwned()) {
@@ -1436,8 +1661,8 @@ export class HostController {
             {
               lockPath: this.lockPath,
               reason: "host-controller-deregister",
-              waitMs: DESKTOP_LOCK_WAIT_MS,
-              pollIntervalMs: DESKTOP_LOCK_POLL_INTERVAL_MS,
+              waitMs: this.desktopLockWaitMs,
+              pollIntervalMs: this.desktopLockPollIntervalMs,
             },
             async () => unregisterHostLoginItem(),
           );
@@ -1466,29 +1691,34 @@ export class HostController {
   // would make the action a no-op exactly when the user is trying to
   // recover from a stuck host, which is the case it exists for.
   async respawn(): Promise<MutationOutcome<ActivateInstalledOk>> {
-    return this.enqueueMutation<ActivateInstalledOk>("respawn", async () => {
-      this.hostLifecycle.notifyRespawning();
-      if (await this.isPackagedMacOwned()) {
-        return this.runLockedMacActivationCycle(true, "activate");
-      }
-      const prePid = (await readRunningHostIdentity(this.layout))?.pid ?? null;
-      const record = await readDesktopHostInstallRecord(this.layout);
-      const expectedGeneration =
-        record !== null && record.runtimeVersion === null
-          ? attestedInstallGenerationFromDisk(record)
-          : null;
-      try {
-        await this.streamBundled<unknown>(["host", "restart"]);
-      } catch (err) {
-        if (err instanceof TraycerCliError && err.code === CLI_LOCK_BUSY_CODE)
-          return this.lockBusyOutcome(false);
-        return { kind: "failed", message: describeError(err) };
-      }
-      await this.stampIfNullRuntime(expectedGeneration, prePid);
-      this.hostLifecycle.ensureWatcherInstalled();
-      await this.hostLifecycle.reloadSnapshotFromDisk();
-      return { kind: "ok", value: { activated: true } };
-    });
+    return this.enqueueMutation<ActivateInstalledOk>(
+      "respawn",
+      "respawn",
+      async () => {
+        this.hostLifecycle.notifyRespawning();
+        if (await this.isPackagedMacOwned()) {
+          return this.runLockedMacActivationCycle(true, "activate");
+        }
+        const prePid =
+          (await readRunningHostIdentity(this.layout))?.pid ?? null;
+        const record = await readDesktopHostInstallRecord(this.layout);
+        const expectedGeneration =
+          record !== null && record.runtimeVersion === null
+            ? attestedInstallGenerationFromDisk(record)
+            : null;
+        try {
+          await this.streamBundled<unknown>(["host", "restart"]);
+        } catch (err) {
+          if (err instanceof TraycerCliError && err.code === CLI_LOCK_BUSY_CODE)
+            return this.lockBusyOutcome(false);
+          return { kind: "failed", message: describeError(err) };
+        }
+        await this.stampIfNullRuntime(expectedGeneration, prePid);
+        this.hostLifecycle.ensureWatcherInstalled();
+        await this.hostLifecycle.reloadSnapshotFromDisk();
+        return { kind: "ok", value: { activated: true } };
+      },
+    );
   }
 
   /**
@@ -1513,9 +1743,11 @@ export class HostController {
     }
     return this.enqueueMutation<ActivateInstalledOk>(
       "recoverIfDown",
+      "recoverIfDown",
       async () => {
         const runningRuntimeVersion = await readRunningRuntimeVersion(
           this.layout,
+          this.reachabilityProbe,
         );
         if (runningRuntimeVersion !== null) {
           return { kind: "ok", value: { activated: true } };
@@ -1555,6 +1787,7 @@ export class HostController {
   ): Promise<MutationOutcome<ActivateInstalledOk>> {
     return this.enqueueMutation<ActivateInstalledOk>(
       "freePortAndRestart",
+      `freePortAndRestart:${pid}:${port}`,
       async () => {
         if (await this.isPackagedMacOwned()) {
           if (pid !== null && port !== null) {
@@ -1598,40 +1831,44 @@ export class HostController {
   // ---- uninstallHost (Settings; no sentinel) -------------------------------
 
   async uninstallHost(all: boolean): Promise<MutationOutcome<UninstallOk>> {
-    return this.enqueueMutation<UninstallOk>("uninstallHost", async () => {
-      if (all && (await this.isPackagedMacOwned())) {
-        const outcome = await withDesktopCliLock(
-          {
-            lockPath: this.lockPath,
-            reason: "host-controller-uninstall",
-            waitMs: DESKTOP_LOCK_WAIT_MS,
-            pollIntervalMs: DESKTOP_LOCK_POLL_INTERVAL_MS,
+    return this.enqueueMutation<UninstallOk>(
+      "uninstallHost",
+      `uninstallHost:${all}`,
+      async () => {
+        if (all && (await this.isPackagedMacOwned())) {
+          const outcome = await withDesktopCliLock(
+            {
+              lockPath: this.lockPath,
+              reason: "host-controller-uninstall",
+              waitMs: this.desktopLockWaitMs,
+              pollIntervalMs: this.desktopLockPollIntervalMs,
+            },
+            async () => unregisterHostLoginItem(),
+          );
+          if (outcome.kind === "busy") return this.lockBusyOutcome(false);
+        }
+        let raw: unknown;
+        try {
+          raw = await this.runBundled<unknown>(
+            all ? ["host", "uninstall", "--all"] : ["host", "uninstall"],
+          );
+        } catch (err) {
+          if (err instanceof TraycerCliError && err.code === CLI_LOCK_BUSY_CODE)
+            return this.lockBusyOutcome(false);
+          return { kind: "failed", message: describeError(err) };
+        }
+        const result = parseUninstallResult(raw, all);
+        this.hostLifecycle.ensureWatcherInstalled();
+        await this.hostLifecycle.reloadSnapshotFromDisk();
+        return {
+          kind: "ok",
+          value: {
+            removedInstallDir: result.removedInstallDir,
+            deregisteredService: result.serviceUninstalled,
           },
-          async () => unregisterHostLoginItem(),
-        );
-        if (outcome.kind === "busy") return this.lockBusyOutcome(false);
-      }
-      let raw: unknown;
-      try {
-        raw = await this.runBundled<unknown>(
-          all ? ["host", "uninstall", "--all"] : ["host", "uninstall"],
-        );
-      } catch (err) {
-        if (err instanceof TraycerCliError && err.code === CLI_LOCK_BUSY_CODE)
-          return this.lockBusyOutcome(false);
-        return { kind: "failed", message: describeError(err) };
-      }
-      const result = parseUninstallResult(raw, all);
-      this.hostLifecycle.ensureWatcherInstalled();
-      await this.hostLifecycle.reloadSnapshotFromDisk();
-      return {
-        kind: "ok",
-        value: {
-          removedInstallDir: result.removedInstallDir,
-          deregisteredService: result.serviceUninstalled,
-        },
-      };
-    });
+        };
+      },
+    );
   }
 
   // ---- removeTraycer (Danger Zone; sentinel + BTM cleanup) -----------------
@@ -1643,41 +1880,45 @@ export class HostController {
     // they still execute their job body but immediately no-op).
     await markHostRemovedByUser();
     this.abortInFlightDownload();
-    return this.enqueueMutation<RemoveTraycerOk>("removeTraycer", async () => {
-      let removedLoginItem = false;
-      if (await this.isPackagedMacOwned()) {
-        const outcome = await withDesktopCliLock(
-          {
-            lockPath: this.lockPath,
-            reason: "host-controller-remove",
-            waitMs: DESKTOP_LOCK_WAIT_MS,
-            pollIntervalMs: DESKTOP_LOCK_POLL_INTERVAL_MS,
+    return this.enqueueMutation<RemoveTraycerOk>(
+      "removeTraycer",
+      "removeTraycer",
+      async () => {
+        let removedLoginItem = false;
+        if (await this.isPackagedMacOwned()) {
+          const outcome = await withDesktopCliLock(
+            {
+              lockPath: this.lockPath,
+              reason: "host-controller-remove",
+              waitMs: this.desktopLockWaitMs,
+              pollIntervalMs: this.desktopLockPollIntervalMs,
+            },
+            async () => unregisterHostLoginItem(),
+          );
+          if (outcome.kind === "busy") return this.lockBusyOutcome(false);
+          removedLoginItem = true;
+        }
+        let raw: unknown;
+        try {
+          raw = await this.runBundled<unknown>(["host", "uninstall", "--all"]);
+        } catch (err) {
+          if (err instanceof TraycerCliError && err.code === CLI_LOCK_BUSY_CODE)
+            return this.lockBusyOutcome(false);
+          return { kind: "failed", message: describeError(err) };
+        }
+        const result = parseUninstallResult(raw, true);
+        this.hostLifecycle.ensureWatcherInstalled();
+        await this.hostLifecycle.reloadSnapshotFromDisk();
+        return {
+          kind: "ok",
+          value: {
+            removedHost: result.removedInstallDir,
+            deregisteredService: result.serviceUninstalled,
+            removedLoginItem,
           },
-          async () => unregisterHostLoginItem(),
-        );
-        if (outcome.kind === "busy") return this.lockBusyOutcome(false);
-        removedLoginItem = true;
-      }
-      let raw: unknown;
-      try {
-        raw = await this.runBundled<unknown>(["host", "uninstall", "--all"]);
-      } catch (err) {
-        if (err instanceof TraycerCliError && err.code === CLI_LOCK_BUSY_CODE)
-          return this.lockBusyOutcome(false);
-        return { kind: "failed", message: describeError(err) };
-      }
-      const result = parseUninstallResult(raw, true);
-      this.hostLifecycle.ensureWatcherInstalled();
-      await this.hostLifecycle.reloadSnapshotFromDisk();
-      return {
-        kind: "ok",
-        value: {
-          removedHost: result.removedInstallDir,
-          deregisteredService: result.serviceUninstalled,
-          removedLoginItem,
-        },
-      };
-    });
+        };
+      },
+    );
   }
 }
 

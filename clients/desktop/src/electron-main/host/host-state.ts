@@ -9,6 +9,11 @@ import type { HostFsLayout } from "./host-paths";
 import { readPidMetadataState } from "./host-lifecycle";
 import { isProcessAlive } from "./process-identity";
 
+/** Real-endpoint-reachability probe signature - see `readRunningRuntimeVersion`. */
+export type HostEndpointReachabilityProbe = (
+  websocketUrl: string,
+) => Promise<boolean>;
+
 // Observed on-disk state readers + derived readiness/activation logic for
 // `HostController` (Host Update Layer Redesign Tech Plan, "Desktop main:
 // HostController" > "State model"). Desktop cannot import the CLI's
@@ -101,16 +106,34 @@ export async function readDesktopHostStagedRecord(
 
 /**
  * The runtime identity the live host is currently publishing, or `null`
- * when there is no reachable running host. Reuses `readPidMetadataState`
- * (the same tri-state reader `HostLifecycle` watches) rather than a
- * reachability-blind read - a stale/foreign `pid.json` must never be read
- * as a live runtime stamp.
+ * when there is no reachable running host. Fixup A3: `readPidMetadataState`
+ * is a STRUCTURAL parse only (pid.json well-formed) - it says nothing about
+ * whether the process it names is still alive. A crash/OOM/Task-Manager
+ * kill leaves a stale-but-well-formed `pid.json` behind, which a
+ * structural-only read reports as "running" - the exact bug that made
+ * `recoverIfDown` skip restarting a genuinely dead host (it read this same
+ * function and short-circuited to `ok`). Every "is the host running"
+ * decision in `HostController` (`getStatus`, `recoverIfDown`,
+ * `convergeReadyPackagedMac`, `applyPendingLoginItemRevisionIfIdle`) goes
+ * through this one function, so a real liveness probe here fixes all of
+ * them at once: the pid must belong to a live OS process AND the websocket
+ * endpoint must actually accept a connection, matching the same two checks
+ * `HostLifecycle.reloadSnapshot`'s `toReachableSnapshot` already applies to
+ * the renderer-facing snapshot. `reachabilityProbe` is threaded in (not
+ * imported directly) so tests can substitute a deterministic stub instead
+ * of depending on a real TCP listener bound to the fixture's `websocketUrl`
+ * - production callers pass `canReachHostWebsocketUrl` from `./host-lifecycle`.
  */
 export async function readRunningRuntimeVersion(
   layout: HostFsLayout,
+  reachabilityProbe: HostEndpointReachabilityProbe,
 ): Promise<string | null> {
   const state = await readPidMetadataState(layout.pidMetadataFile);
-  return state.kind === "parsed" ? state.snapshot.version : null;
+  if (state.kind !== "parsed") return null;
+  const { snapshot } = state;
+  if (!isProcessAlive(snapshot.pid)) return null;
+  if (!(await reachabilityProbe(snapshot.websocketUrl))) return null;
+  return snapshot.version;
 }
 
 /**

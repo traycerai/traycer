@@ -16,8 +16,16 @@ import {
   loadTrayIconImage,
   type TrayManagedWindow,
 } from "../tray/tray";
-import { HostLifecycle, type HostStartupError } from "../host/host-lifecycle";
-import { HostController } from "../host/host-controller";
+import {
+  canReachHostWebsocketUrl,
+  HostLifecycle,
+  type HostStartupError,
+} from "../host/host-lifecycle";
+import {
+  DESKTOP_LOCK_POLL_INTERVAL_MS,
+  DESKTOP_LOCK_WAIT_MS,
+  HostController,
+} from "../host/host-controller";
 import type { HostRegistryUpdateState } from "../../ipc-contracts/host-management-types";
 import { getHostFsLayout, labelForEnvironment } from "../host/host-paths";
 import {
@@ -408,6 +416,9 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
   const hostController = new HostController({
     environment: config.environment,
     hostLifecycle: host,
+    reachabilityProbe: canReachHostWebsocketUrl,
+    desktopLockWaitMs: DESKTOP_LOCK_WAIT_MS,
+    desktopLockPollIntervalMs: DESKTOP_LOCK_POLL_INTERVAL_MS,
   });
   const support = new DesktopSupportService({
     appName: appDisplayName,

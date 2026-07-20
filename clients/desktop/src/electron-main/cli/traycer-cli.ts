@@ -7,6 +7,23 @@ import {
 } from "./cli-discovery";
 
 /**
+ * Fixup A8: every lock-taking CLI command (`host service install/uninstall`,
+ * `host stamp-runtime`, `host free-port`, `host uninstall [--all]`, `host
+ * restart`, `host apply`, `host install`, `host ensure`, ...) waits up to
+ * `waitMs: 30_000` internally on the shared `cli-lock` before terminally
+ * throwing `E_CLI_LOCK_BUSY` (every `withCliLock` call site under
+ * `traycer-cli/src/commands/`). `runTraycerCliJsonWithInvocation` used to
+ * SIGKILL at a flat 10s - well inside that 30s window - so desktop never
+ * saw the CLI's own busy classification (breaking the exhausted-lock ->
+ * `deferred` terminal contract) and, worse, could kill the CLI the instant
+ * AFTER it won the lock and entered its critical section: a torn
+ * install/staged/pid record, the single most dangerous defect class in
+ * this ticket. Must exceed the CLI's own lock wait with real margin for
+ * process spawn + stdio/IPC overhead, never merely match it.
+ */
+const CLI_JSON_TIMEOUT_MS = 45_000;
+
+/**
  * Structured error thrown when the CLI subprocess exits non-zero or emits
  * an NDJSON `error` event. Carries the CLI's stable error `code` (e.g.
  * `CLI_UPGRADE_REPLACE_FAILED`) when present so Desktop can render a
@@ -376,7 +393,7 @@ async function runTraycerCliJsonWithInvocation<T>(
     result = await runTraycerCliWithInvocation(inv, {
       args: augmented,
       maxBuffer: 1024 * 1024,
-      timeoutMs: 10_000,
+      timeoutMs: CLI_JSON_TIMEOUT_MS,
     });
   } catch (err) {
     // execFile rejects on non-zero exit with an Error that carries
