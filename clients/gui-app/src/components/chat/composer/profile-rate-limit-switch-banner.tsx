@@ -232,7 +232,10 @@ export function ProfileRateLimitSwitchBanner(
   useEffect(() => {
     if (!probeReady || autoCheckSpentRef.current) return;
     autoCheckSpentRef.current = true;
-    void probeEntry.ensureFresh();
+    // Fire-and-forget at the boundary: a rejected probe (host/queue error) must
+    // not surface as an unhandled rejection - a failure just leaves the profile
+    // unknown, exactly as the no-retry contract above intends.
+    probeEntry.ensureFresh().catch(() => undefined);
   }, [probeEntry, probeReady]);
   const executeSwitch = (profileId: string | null): void => {
     const destination = props.destinations.find(
