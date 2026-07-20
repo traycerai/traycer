@@ -9,6 +9,7 @@ export {
   __parseElapsedSecondsForTest,
   computeProcessIdentityVerdict,
   currentProcessIdentityToken,
+  isPublishedProcessIdentityCurrent,
   isProcessAlive,
   readProcessStartTimeMs,
   verifyProcessIdentity,

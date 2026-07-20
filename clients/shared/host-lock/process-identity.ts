@@ -92,6 +92,27 @@ export function readLiveProcessStartTimeMs(pid: number): number | null {
     : null;
 }
 
+// pid.json is published only after the host has started. A process whose OS
+// start time is later than that publication cannot be the publisher - the PID
+// has been recycled onto an unrelated occupant. Keep a small allowance for
+// whole-second process-start probes and clock granularity; it never admits a
+// process that began meaningfully after the metadata was written.
+const PID_METADATA_PUBLICATION_ALLOWANCE_MS = 1_250;
+
+export function isPublishedProcessIdentityCurrent(
+  pid: number,
+  publishedAt: string | null,
+): boolean {
+  if (publishedAt === null) return false;
+  const publishedAtMs = Date.parse(publishedAt);
+  if (!Number.isFinite(publishedAtMs)) return false;
+  const processStartedAtMs = readLiveProcessStartTimeMs(pid);
+  if (processStartedAtMs === null) return false;
+  return (
+    processStartedAtMs <= publishedAtMs + PID_METADATA_PUBLICATION_ALLOWANCE_MS
+  );
+}
+
 // ---- Identity (pid + process-start-time) -----------------------------------
 
 export interface ProcessIdentityToken {

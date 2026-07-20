@@ -7,7 +7,10 @@ import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/in
 import { probeHostActivityBusy } from "@traycer-clients/shared/host-client/host-activity-probe";
 import type { HostFsLayout } from "./host-paths";
 import { readPidMetadataState } from "./host-lifecycle";
-import { isProcessAlive } from "./process-identity";
+import {
+  isProcessAlive,
+  isPublishedProcessIdentityCurrent,
+} from "./process-identity";
 
 /** Real-endpoint-reachability probe signature - see `readRunningRuntimeVersion`. */
 export type HostEndpointReachabilityProbe = (
@@ -130,8 +133,14 @@ export async function readRunningRuntimeVersion(
 ): Promise<string | null> {
   const state = await readPidMetadataState(layout.pidMetadataFile);
   if (state.kind !== "parsed") return null;
-  const { snapshot } = state;
-  if (!isProcessAlive(snapshot.pid)) return null;
+  const { snapshot, startedAt } = state;
+  if (
+    startedAt !== null
+      ? !isPublishedProcessIdentityCurrent(snapshot.pid, startedAt)
+      : !isProcessAlive(snapshot.pid)
+  ) {
+    return null;
+  }
   if (!(await reachabilityProbe(snapshot.websocketUrl))) return null;
   return snapshot.version;
 }

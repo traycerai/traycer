@@ -28,6 +28,7 @@ import {
   HOST_READY_POLL_MS,
   HOST_READY_TIMEOUT_MS,
   waitForHostReady,
+  type HostReadinessResult,
 } from "./host-readiness";
 import {
   clearHostRemovedByUser,
@@ -762,32 +763,27 @@ export class HostController {
   private async stampIfNullRuntime(
     expectedInstallGeneration: string | null,
     prePid: number | null,
+    readiness: HostReadinessResult | null,
   ): Promise<void> {
     if (expectedInstallGeneration === null) return;
-    const readiness = await waitForHostReady(
-      HOST_READY_TIMEOUT_MS,
-      this.layout.pidMetadataFile,
-      HOST_READY_POLL_MS,
-      prePid,
-    );
-    if (!readiness.ready) {
-      log.warn(
-        "[host-controller] stamp-runtime skipped - readiness not observed after a null-runtime cycle",
-        {
-          environment: this.environment,
-        },
+    const observedReadiness =
+      readiness ??
+      (await waitForHostReady(
+        HOST_READY_TIMEOUT_MS,
+        this.layout.pidMetadataFile,
+        HOST_READY_POLL_MS,
+        prePid,
+      ));
+    if (!observedReadiness.ready) {
+      throw new Error(
+        `Traycer Host did not become reachable after activation (${observedReadiness.reason}) - run \`traycer host doctor\` to recover.`,
       );
-      return;
     }
     const identity = await readRunningHostIdentity(this.layout);
     if (identity === null) {
-      log.warn(
-        "[host-controller] stamp-runtime skipped - no running host identity after readiness",
-        {
-          environment: this.environment,
-        },
+      throw new Error(
+        "Traycer Host did not publish a running identity after activation - run `traycer host doctor` to recover.",
       );
-      return;
     }
     try {
       const outcome = parseStampRuntimeResult(
@@ -804,13 +800,24 @@ export class HostController {
           identity.version,
         ]),
       );
+      if (outcome.outcome === "superseded") {
+        const status = await this.getStatus();
+        throw new Error(
+          `The host installation changed while activation was being confirmed (current activation: ${status.activation}). Retry to converge the current installation.`,
+        );
+      }
+      if (outcome.outcome !== "stamped") {
+        throw new Error(
+          "Traycer Host activation could not be confirmed - run `traycer host doctor` to recover.",
+        );
+      }
       log.info("[host-controller] stamp-runtime completed", {
         outcome: outcome.outcome,
       });
     } catch (err) {
-      log.warn("[host-controller] stamp-runtime call failed", {
-        err: describeError(err),
-      });
+      throw new Error(
+        `Traycer Host activation could not be confirmed: ${describeError(err)}`,
+      );
     }
   }
 
@@ -930,7 +937,6 @@ export class HostController {
     // wait for readiness (it may already be approved from a prior cycle)
     // but the activation-failure semantics classify a timeout as the
     // approval message rather than a generic readiness failure.
-    await this.stampIfNullRuntime(expectedGeneration, prePid);
     const readiness = await waitForHostReady(
       HOST_READY_TIMEOUT_MS,
       this.layout.pidMetadataFile,
@@ -955,6 +961,7 @@ export class HostController {
           : `Traycer Host did not start within ${HOST_READY_TIMEOUT_MS}ms - run \`traycer host doctor\` to recover.`;
       return { kind: "failed", message };
     }
+    await this.stampIfNullRuntime(expectedGeneration, prePid, readiness);
     this.hostLifecycle.ensureWatcherInstalled();
     await this.hostLifecycle.reloadSnapshotFromDisk();
     return { kind: "ok", value: { activated: true } };
@@ -1173,7 +1180,6 @@ export class HostController {
         message: `The host's macOS login item could not be enabled (status: ${status}). Open Doctor or run 'traycer host doctor' to recover.`,
       };
     }
-    await this.stampIfNullRuntime(expectedGeneration, prePid);
     const readiness = await waitForHostReady(
       HOST_READY_TIMEOUT_MS,
       this.layout.pidMetadataFile,
@@ -1189,6 +1195,11 @@ export class HostController {
         kind: "failed",
         message: `The host's background service was refreshed but did not become reachable in time (${readiness.reason}). Open Doctor or run 'traycer host doctor' to recover.`,
       };
+    }
+    try {
+      await this.stampIfNullRuntime(expectedGeneration, prePid, readiness);
+    } catch (err) {
+      return { kind: "failed", message: describeError(err) };
     }
     log.info("[host-controller] pending LaunchAgent revision applied", {
       version: readiness.version ?? currentVersion,
@@ -1301,7 +1312,7 @@ export class HostController {
           };
         }
       }
-      await this.stampIfNullRuntime(expectedInstallGeneration, prePid);
+      await this.stampIfNullRuntime(expectedInstallGeneration, prePid, null);
     }
     this.hostLifecycle.ensureWatcherInstalled();
     await this.hostLifecycle.reloadSnapshotFromDisk();
@@ -1650,7 +1661,7 @@ export class HostController {
     // archive over an already-stamped install must still stamp; the
     // reverse (re-stamping an already-stamped fresh record) must not.
     if (result.runtimeVersion === null) {
-      await this.stampIfNullRuntime(result.installGeneration, prePid);
+      await this.stampIfNullRuntime(result.installGeneration, prePid, null);
     }
     this.hostLifecycle.ensureWatcherInstalled();
     await this.hostLifecycle.reloadSnapshotFromDisk();
@@ -1797,7 +1808,7 @@ export class HostController {
       }
       return { kind: "failed", message: describeError(err) };
     }
-    await this.stampIfNullRuntime(expectedGeneration, prePid);
+    await this.stampIfNullRuntime(expectedGeneration, prePid, null);
     this.hostLifecycle.ensureWatcherInstalled();
     await this.hostLifecycle.reloadSnapshotFromDisk();
     return { kind: "ok", value: { activated: true } };
@@ -1842,7 +1853,7 @@ export class HostController {
       return this.classifyApplyLikeError(err, "retry-with-force");
     }
     const result = parseInstallResult(raw);
-    await this.stampIfNullRuntime(result.installGeneration, prePid);
+    await this.stampIfNullRuntime(result.installGeneration, prePid, null);
     this.hostLifecycle.ensureWatcherInstalled();
     await this.hostLifecycle.reloadSnapshotFromDisk();
     const runningRuntimeVersion = await readRunningRuntimeVersion(
@@ -2042,7 +2053,7 @@ export class HostController {
             return this.lockBusyOutcome(false);
           return { kind: "failed", message: describeError(err) };
         }
-        await this.stampIfNullRuntime(expectedGeneration, prePid);
+        await this.stampIfNullRuntime(expectedGeneration, prePid, null);
         this.hostLifecycle.ensureWatcherInstalled();
         await this.hostLifecycle.reloadSnapshotFromDisk();
         return { kind: "ok", value: { activated: true } };
@@ -2106,7 +2117,7 @@ export class HostController {
             return this.lockBusyOutcome(false);
           return { kind: "failed", message: describeError(err) };
         }
-        await this.stampIfNullRuntime(expectedGeneration, prePid);
+        await this.stampIfNullRuntime(expectedGeneration, prePid, null);
         this.hostLifecycle.ensureWatcherInstalled();
         await this.hostLifecycle.reloadSnapshotFromDisk();
         return { kind: "ok", value: { activated: true } };
@@ -2173,7 +2184,7 @@ export class HostController {
             return this.lockBusyOutcome(false);
           return { kind: "failed", message: describeError(err) };
         }
-        await this.stampIfNullRuntime(expectedGeneration, prePid);
+        await this.stampIfNullRuntime(expectedGeneration, prePid, null);
         this.hostLifecycle.ensureWatcherInstalled();
         await this.hostLifecycle.reloadSnapshotFromDisk();
         return { kind: "ok", value: { activated: true } };

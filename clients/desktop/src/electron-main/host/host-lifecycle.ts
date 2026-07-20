@@ -14,6 +14,7 @@ import {
   withDefaultHostName,
 } from "./host-display-name";
 import type { DesktopLocalHostSnapshot } from "../../ipc-contracts/host-types";
+import { isPublishedProcessIdentityCurrent } from "./process-identity";
 
 /**
  * Snapshot of the OS-supervised host's runtime state, as projected by
@@ -386,12 +387,14 @@ export class HostLifecycle extends EventEmitter {
       this.options.layout.pidMetadataFile,
     );
     const raw = readState.kind === "parsed" ? readState.snapshot : null;
+    const publishedAt =
+      readState.kind === "parsed" ? readState.startedAt : null;
     // Filter an unreachable / wrong-shaped host out of what the renderer sees,
     // so the host gate treats it as not-ready and fires `ensureHost`. A
     // reachable host is surfaced regardless of its version stamp - the renderer
     // negotiates protocol compatibility over the WS handshake and prompts for a
     // restart only if the running host is genuinely incompatible.
-    const next = await this.toReachableSnapshot(raw);
+    const next = await this.toReachableSnapshot(raw, publishedAt);
     // Superseded by a newer reload (or disposed): skip the emit so we never
     // clobber newer state, but still RETURN what THIS read derived. A caller
     // awaiting us - the host-busy surfacing in host-ensure-ipc - must judge
@@ -466,11 +469,18 @@ export class HostLifecycle extends EventEmitter {
 
   private async toReachableSnapshot(
     raw: DesktopLocalHostSnapshot | null,
+    publishedAt: string | null,
   ): Promise<DesktopLocalHostSnapshot | null> {
     if (raw === null) {
       return null;
     }
     if (!isCurrentHostWebsocketUrl(raw.websocketUrl)) {
+      return null;
+    }
+    if (
+      publishedAt !== null &&
+      !isPublishedProcessIdentityCurrent(raw.pid, publishedAt)
+    ) {
       return null;
     }
     const probe = this.options.reachabilityProbe ?? canReachHostWebsocketUrl;
@@ -602,7 +612,50 @@ export function canReachHostWebsocketUrl(url: string): Promise<boolean> {
     };
 
     socket.setTimeout(HOST_ENDPOINT_CHECK_TIMEOUT_MS);
-    socket.once("connect", () => settle(true));
+    let response = "";
+    socket.once("connect", () => {
+      socket.write(
+        [
+          `GET ${parsed.pathname} HTTP/1.1`,
+          `Host: ${parsed.host}`,
+          "Upgrade: websocket",
+          "Connection: Upgrade",
+          "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+          "Sec-WebSocket-Version: 13",
+          "",
+          "",
+        ].join("\r\n"),
+      );
+    });
+    socket.on("data", (chunk: Buffer) => {
+      response += chunk.toString("utf8");
+      if (!response.includes("\r\n\r\n")) return;
+      const [statusLine = "", ...headerLines] = response.split("\r\n");
+      const headers = headerLines
+        .filter((line) => line.includes(":"))
+        .map((line) => {
+          const separator = line.indexOf(":");
+          return [
+            line.slice(0, separator).trim().toLowerCase(),
+            line
+              .slice(separator + 1)
+              .trim()
+              .toLowerCase(),
+          ] as const;
+        });
+      const upgrade = headers.find(([name]) => name === "upgrade")?.[1];
+      const connection = headers.find(([name]) => name === "connection")?.[1];
+      const accept = headers.find(
+        ([name]) => name === "sec-websocket-accept",
+      )?.[1];
+      settle(
+        /^HTTP\/1\.1 101(?:\s|$)/.test(statusLine) &&
+          upgrade === "websocket" &&
+          connection?.includes("upgrade") === true &&
+          typeof accept === "string" &&
+          accept.length > 0,
+      );
+    });
     socket.once("timeout", () => settle(false));
     socket.once("error", () => settle(false));
   });
@@ -618,7 +671,11 @@ export function canReachHostWebsocketUrl(url: string): Promise<boolean> {
  * interleaving, not a theoretical one.
  */
 type PidMetadataRead =
-  | { readonly kind: "parsed"; readonly snapshot: DesktopLocalHostSnapshot }
+  | {
+      readonly kind: "parsed";
+      readonly snapshot: DesktopLocalHostSnapshot;
+      readonly startedAt: string | null;
+    }
   | { readonly kind: "absent" }
   | { readonly kind: "indeterminate" };
 
@@ -652,6 +709,7 @@ export async function readPidMetadataState(
   const websocketUrl = obj.websocketUrl;
   const version = obj.version;
   const pid = obj.pid;
+  const startedAt = obj.startedAt;
 
   if (
     typeof hostId !== "string" ||
@@ -665,6 +723,7 @@ export async function readPidMetadataState(
   return {
     kind: "parsed",
     snapshot: withDefaultHostName({ hostId, websocketUrl, version, pid }),
+    startedAt: typeof startedAt === "string" ? startedAt : null,
   };
 }
 

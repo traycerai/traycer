@@ -6,7 +6,20 @@ import { join } from "node:path";
 
 function listenOnEphemeralPort(): Promise<{ server: Server; port: number }> {
   return new Promise((resolve, reject) => {
-    const server = createServer();
+    const server = createServer((socket) => {
+      socket.once("data", () => {
+        socket.write(
+          [
+            "HTTP/1.1 101 Switching Protocols",
+            "Upgrade: websocket",
+            "Connection: Upgrade",
+            "Sec-WebSocket-Accept: test",
+            "",
+            "",
+          ].join("\r\n"),
+        );
+      });
+    });
     server.once("error", reject);
     server.listen(0, "127.0.0.1", () => {
       const address = server.address();
@@ -181,7 +194,7 @@ describe("readPidMetadataState", () => {
 // unreachable case - without the close/rebind-same-port race that made the
 // orchestration test flaky.
 describe("canReachHostWebsocketUrl", () => {
-  it("returns true when something is accepting connections on the port", async () => {
+  it("returns true when the endpoint completes a WebSocket handshake", async () => {
     const { server, port } = await listenOnEphemeralPort();
     try {
       expect(await canReachHostWebsocketUrl(`ws://127.0.0.1:${port}/rpc`)).toBe(
@@ -199,6 +212,29 @@ describe("canReachHostWebsocketUrl", () => {
     expect(await canReachHostWebsocketUrl(`ws://127.0.0.1:${port}/rpc`)).toBe(
       false,
     );
+  });
+
+  it("returns false for an unrelated TCP listener that does not speak WebSocket", async () => {
+    const server = createServer((socket) => {
+      socket.once("data", () => {
+        socket.write("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("ephemeral listener has no port");
+    }
+    try {
+      expect(
+        await canReachHostWebsocketUrl(`ws://127.0.0.1:${address.port}/rpc`),
+      ).toBe(false);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 });
 

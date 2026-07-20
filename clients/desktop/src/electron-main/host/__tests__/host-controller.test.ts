@@ -295,7 +295,7 @@ function writePidMetadata(
       websocketUrl: fields.websocketUrl ?? "ws://127.0.0.1:55555/rpc",
       version: fields.version,
       pid: fields.pid,
-      startedAt: fields.startedAt ?? "2026-01-01T00:00:00.000Z",
+      startedAt: fields.startedAt ?? new Date().toISOString(),
     }),
   );
 }
@@ -386,6 +386,7 @@ describe("headline: convergeReady during an in-flight mutation resolves, never r
       runtimeVersion: "1.7.0",
     });
     writeStagedRecord("production", "1.8.0", null);
+    writePidMetadata("production", { version: "1.8.0", pid: process.pid });
 
     const applyGate = deferred<{ data: unknown }>();
     vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
@@ -1172,7 +1173,7 @@ describe("desktop-held lock vs CLI subprocess: sequenced, not nested (fixup A7)"
       if (outcome.kind === "acquired") {
         await outcome.handle.release();
       }
-      return {};
+      return { outcome: "stamped" };
     });
 
     const outcome = await controller.respawn();
@@ -1315,6 +1316,52 @@ describe("canonical status: activation-state derivation", () => {
       async () => false,
     ).getStatus();
     expect(status.activation).toBe("unavailable");
+    expect(status.reachable).toBe(false);
+    expect(status.runningRuntimeVersion).toBeNull();
+  });
+
+  it("P7/V5: rejects a recycled PID whose current process started after the published host identity", async () => {
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writePidMetadata("production", {
+      version: "1.7.0",
+      pid: process.pid,
+      startedAt: "2000-01-01T00:00:00.000Z",
+    });
+
+    const status = await newControllerWithReachability(
+      "production",
+      async () => true,
+    ).getStatus();
+
+    expect(status.reachable).toBe(false);
+    expect(status.activation).toBe("unavailable");
+  });
+
+  it("V5: rejects legacy pid metadata whose named process is no longer alive", async () => {
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    const layout = getHostFsLayout("production");
+    mkdirSync(layout.rootDir, { recursive: true });
+    writeFileSync(
+      layout.pidMetadataFile,
+      JSON.stringify({
+        hostId: "host-1",
+        websocketUrl: "ws://127.0.0.1:55555/rpc",
+        version: "1.7.0",
+        pid: 999_999,
+      }),
+    );
+
+    const status = await newControllerWithReachability(
+      "production",
+      async () => true,
+    ).getStatus();
+
     expect(status.reachable).toBe(false);
     expect(status.runningRuntimeVersion).toBeNull();
   });
@@ -1549,12 +1596,13 @@ describe("yank/apply ordering", () => {
     });
     writeStagedRecord("production", "1.8.0", null);
     const layout = getHostFsLayout("production");
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
 
     vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
       if (args.includes("available")) {
         return availableSnapshotFixture("1.8.0", ["1.8.0"]);
       }
-      return {};
+      return { outcome: "stamped" };
     });
     vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
       if (opts.args.includes("download")) {
@@ -1936,6 +1984,134 @@ describe("platform matrix", () => {
 // avoidable durable activation debt.
 // ---------------------------------------------------------------------------
 describe("applyStagedCliOwned stamping decision (fixup B9)", () => {
+  it("P8: reports a failed apply when a null-runtime activation never becomes ready", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writeStagedRecord("production", "1.8.0", null);
+    writePidMetadata("production", { version: "1.8.0", pid: process.pid });
+    vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
+      if (args.includes("stamp-runtime")) return { outcome: "stamped" };
+      return availableSnapshotFixture("1.8.0", ["1.8.0"]);
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args.includes("download")) return { data: {} };
+      if (opts.args.includes("apply")) {
+        return {
+          data: {
+            outcome: "applied",
+            record: { version: "1.8.0", runtimeVersion: null },
+            runningActivated: true,
+            installGeneration: "gen-1.8.0",
+          },
+        };
+      }
+      return { data: {} };
+    });
+    vi.mocked(waitForHostReady).mockResolvedValue({
+      ready: false,
+      version: null,
+      pid: null,
+      reason: "timeout",
+    });
+
+    const outcome = await controller.applyStaged("manual", false);
+
+    expect(outcome).toMatchObject({
+      kind: "failed",
+      message: expect.stringContaining("doctor"),
+    });
+  });
+
+  it("P9: reports superseded stamping as non-converged after re-deriving the newer generation", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writeStagedRecord("production", "1.8.0", null);
+    writePidMetadata("production", { version: "1.8.0", pid: process.pid });
+    let stampCalls = 0;
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args.includes("download")) return { data: {} };
+      if (opts.args.includes("apply")) {
+        return {
+          data: {
+            outcome: "applied",
+            record: { version: "1.8.0", runtimeVersion: null },
+            runningActivated: true,
+            installGeneration: "gen-1.8.0",
+          },
+        };
+      }
+      return { data: {} };
+    });
+    vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
+      if (args.includes("stamp-runtime")) {
+        stampCalls += 1;
+        writeInstallRecord("production", {
+          version: "1.9.0",
+          runtimeVersion: null,
+        });
+        return { outcome: "superseded" };
+      }
+      return availableSnapshotFixture("1.8.0", ["1.8.0"]);
+    });
+
+    const outcome = await controller.applyStaged("manual", false);
+
+    expect(outcome).toMatchObject({
+      kind: "failed",
+      message: expect.stringContaining("activationUnknown"),
+    });
+    expect(stampCalls).toBe(1);
+  });
+
+  it("V4: stamps an applied null-runtime generation using the apply command's attested generation", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writeStagedRecord("production", "1.8.0", null);
+    writePidMetadata("production", { version: "1.8.0", pid: process.pid });
+    const stampCalls: (readonly string[])[] = [];
+    vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
+      if (args.includes("stamp-runtime")) {
+        stampCalls.push(args);
+        return { outcome: "stamped" };
+      }
+      return availableSnapshotFixture("1.8.0", ["1.8.0"]);
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args.includes("download")) return { data: {} };
+      return {
+        data: {
+          outcome: "applied",
+          record: { version: "1.8.0", runtimeVersion: null },
+          runningActivated: true,
+          installGeneration: "apply-command-generation",
+        },
+      };
+    });
+
+    const outcome = await controller.applyStaged("manual", false);
+
+    expect(outcome.kind).toBe("ok");
+    expect(stampCalls).toHaveLength(1);
+    const generationIndex = stampCalls[0]?.indexOf(
+      "--expected-install-generation",
+    );
+    if (generationIndex === undefined || generationIndex < 0) {
+      throw new Error("stamp-runtime did not receive an expected generation");
+    }
+    expect(stampCalls[0]?.[generationIndex + 1]).toBe(
+      "apply-command-generation",
+    );
+  });
+
   it("stamps when the newly-applied record is null-runtime, even though the record it replaced was already stamped", async () => {
     const controller = newController("production");
     writeInstallRecord("production", {
@@ -1981,6 +2157,38 @@ describe("applyStagedCliOwned stamping decision (fixup B9)", () => {
     expect(runBundledTraycerCliJson).not.toHaveBeenCalledWith(
       expect.arrayContaining(["host", "stamp-runtime"]),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P12: packaged-macOS activation with a null-runtime record must share its
+// one readiness observation with stamp-runtime instead of spending one full
+// timeout budget in each step.
+// ---------------------------------------------------------------------------
+describe("packaged-macOS null-runtime readiness budget", () => {
+  it("P12: performs one readiness wait before stamping and reporting activation", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: null,
+    });
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+    vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
+      if (args.includes("stamp-runtime")) return { outcome: "stamped" };
+      return availableSnapshotFixture("1.7.0", ["1.7.0"]);
+    });
+    vi.mocked(waitForHostReady).mockResolvedValue({
+      ready: true,
+      version: "1.7.0",
+      pid: process.pid,
+      reason: "ready",
+    });
+
+    const outcome = await controller.activateInstalled(false);
+
+    expect(outcome).toEqual({ kind: "ok", value: { activated: true } });
+    expect(waitForHostReady).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -2933,6 +3141,9 @@ describe("recoverIfDown", () => {
     vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
       data: { activated: true },
     });
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue({
+      outcome: "stamped",
+    });
 
     const outcome = await controller.recoverIfDown();
     expect(outcome).toEqual({ kind: "ok", value: { activated: true } });
@@ -3039,6 +3250,9 @@ describe("freePortAndRestart (CLI-owned)", () => {
     writePidMetadata("production", { version: "1.7.0", pid: process.pid });
     vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
       data: { activated: true },
+    });
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue({
+      outcome: "stamped",
     });
 
     const outcome = await controller.freePortAndRestart(null, null);
