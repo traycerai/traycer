@@ -1,5 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import type {
   WorktreeBinding,
   WorktreeHostEntryV12,
@@ -143,6 +149,7 @@ describe("worktree PR metadata", () => {
         <WorktreePrPills
           worktrees={[entry]}
           detailOnHover
+          maximumVisible={null}
           className={undefined}
           testId="history-prs"
         />
@@ -168,6 +175,64 @@ describe("worktree PR metadata", () => {
     }
     expect(screen.getByText("feature/login")).toBeDefined();
     expect(screen.getByText("/worktrees/app/feature-login")).toBeDefined();
+  });
+
+  it("collapses excess PR pills behind an accessible overflow control", () => {
+    const entry = worktree({
+      submodules: [
+        {
+          repoIdentifier: { owner: "acme", repo: "shared" },
+          branch: "feature/shared-login",
+          prState: "merged",
+          prNumber: 7,
+          prUrl: "https://github.com/acme/shared/pull/7",
+          mergedHeadShaMatches: true,
+          mergedIntoDefault: true,
+          atPinnedCommit: true,
+          unmergedCommitCount: null,
+          unmergedCommitSubjects: null,
+        },
+        {
+          repoIdentifier: { owner: "acme", repo: "design-system" },
+          branch: "feature/design-login",
+          prState: "open",
+          prNumber: 9,
+          prUrl: "https://github.com/acme/design-system/pull/9",
+          mergedHeadShaMatches: false,
+          mergedIntoDefault: false,
+          atPinnedCommit: false,
+          unmergedCommitCount: null,
+          unmergedCommitSubjects: null,
+        },
+      ],
+    });
+    renderWithProviders(
+      <WorktreePrPills
+        worktrees={[entry]}
+        detailOnHover
+        maximumVisible={2}
+        className={undefined}
+        testId="history-prs"
+      />,
+    );
+
+    expect(screen.getAllByRole("link")).toHaveLength(2);
+    const overflow = screen.getByRole("button", {
+      name: "Show 1 more pull request",
+    });
+    expect(overflow.textContent).toBe("+1");
+
+    fireEvent.click(overflow);
+
+    const content = screen.getByTestId("worktree-pr-overflow-content");
+    expect(screen.getByRole("dialog", { name: "More pull requests" })).toBe(
+      content,
+    );
+    expect(
+      within(content).getByRole("link", {
+        name: "Open design-system PR #9 Open",
+      }),
+    ).toBeDefined();
   });
 
   it("renders the owner hover's embedded PR pill as a real link", () => {

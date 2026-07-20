@@ -143,6 +143,7 @@ describe("<HostSettingsPanel /> - mutation flows", () => {
       updateAvailable: true,
       reachable: true,
       errorMessage: null,
+      includePreReleases: false,
     };
     const { management } = makeManagement({
       updateHost,
@@ -165,6 +166,13 @@ describe("<HostSettingsPanel /> - mutation flows", () => {
       expect(updateHost).toHaveBeenCalledTimes(1);
     });
     expect(toast.success).toHaveBeenCalledWith("Updated host to v2.0.0");
+    // Review finding 5: the Updates row pins the install to the exact
+    // version it is showing, so a channel switch elsewhere can't redirect
+    // this click to a different target.
+    expect(updateHost).toHaveBeenCalledWith({
+      expectedVersion: "2.0.0",
+      onProgress: null,
+    });
   });
 
   it("surfaces the install progress banner when the shared operation status reports progress", async () => {
@@ -249,7 +257,7 @@ describe("<HostSettingsPanel /> - mutation flows", () => {
     expect(screen.queryByRole("button", { name: /^Uninstall$/ })).toBeNull();
   });
 
-  it("passes the include prereleases filter when the Advanced version picker checkbox is selected", async () => {
+  it("uses the stable version filter by default and keeps release-channel configuration out of Advanced", async () => {
     const availableVersions = vi.fn(
       (_input: { readonly includePreReleases: boolean }) =>
         Promise.resolve(makeAvailableSnapshot()),
@@ -264,17 +272,11 @@ describe("<HostSettingsPanel /> - mutation flows", () => {
       });
     });
     await openAdvancedDisclosure();
-    fireEvent.click(
-      screen.getByRole("checkbox", {
+    expect(
+      screen.queryByRole("checkbox", {
         name: /include release candidates/i,
       }),
-    );
-
-    await waitFor(() => {
-      expect(availableVersions).toHaveBeenCalledWith({
-        includePreReleases: true,
-      });
-    });
+    ).toBeNull();
   });
 
   it("disables advanced install when the registry asset is unavailable", async () => {
@@ -295,6 +297,7 @@ describe("<HostSettingsPanel /> - mutation flows", () => {
           updateAvailable: false,
           reachable: true,
           errorMessage: null,
+          includePreReleases: false,
         }),
       ),
     });
@@ -325,6 +328,7 @@ describe("<HostSettingsPanel /> - mutation flows", () => {
           updateAvailable: false,
           reachable: true,
           errorMessage: null,
+          includePreReleases: false,
         }),
       ),
     });
@@ -428,6 +432,7 @@ function makeManagement(
           updateAvailable: false,
           reachable: false,
           errorMessage: null,
+          includePreReleases: false,
         }),
       ),
     getOperationStatus: vi.fn(() => Promise.resolve(null)),

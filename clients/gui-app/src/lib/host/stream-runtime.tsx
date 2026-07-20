@@ -88,15 +88,14 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
         binding !== null && binding.hostClient.getActiveHost() !== null,
     });
   }, [binding, readiness.hostId, value]);
-  // Liveness guard: the context must never keep serving a CLOSED client -
-  // every subscribe on one degrades to an inert session and its consumer
-  // hangs in a pending state until the window reloads (the stuck git-diff
-  // skeleton incident). Legitimate closes (replace / unmount) are always
+  // Liveness guard: a CLOSED client must be replaced, not left unavailable
+  // until the window reloads. Legitimate closes (replace / unmount) are always
   // paired with a value change or teardown, so this effect's subscription is
   // gone before they fire; anything else closing the served client - e.g. the
   // deferred unmount-close in `useCloseWsStreamClientOnReplace` firing across
   // an effects-disconnect where React preserves the memoized value - lands
-  // here and forces a rebuild. The `isClosed()` re-check covers closes that
+  // here and forces a rebuild. `useWsStreamClient` hides the dead instance
+  // during that handoff, and the `isClosed()` re-check covers closes that
   // happened while this effect itself was disconnected.
   useEffect(() => {
     if (value === null) return;

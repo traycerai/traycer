@@ -18,6 +18,7 @@ import {
   deriveStatus,
   extractErrorMessage,
   findReleasedAt,
+  projectAppHostAvailableSnapshot,
   type HostProgressState,
 } from "@/components/settings/panels/host-settings-panel-model";
 import { HostProgressBanner } from "@/components/settings/panels/host-settings-progress-banner";
@@ -38,10 +39,12 @@ import { toastFromRunnerError } from "@/lib/runner-error-toast";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useRunnerHostOperationStatusQuery } from "@/hooks/runner/use-runner-host-operation-status-query";
 import { useHostUpdateBannerStore } from "@/stores/settings/host-update-banner-store";
+import { useDesktopAppUpdates } from "@/hooks/runner/use-desktop-app-updates";
 import type {
   CliInstallManifestSnapshot,
   HostAvailableSnapshot,
   HostInstalledRecord,
+  HostInstallResult,
   HostNameSettings,
   HostRegistryUpdateState,
   IHostManagement,
@@ -168,7 +171,8 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
     string | null
   >(null);
   const [restartConfirmOpen, setRestartConfirmOpen] = useState<boolean>(false);
-  const [includePreReleases, setIncludePreReleases] = useState(false);
+  const { snapshot: appUpdateSnapshot } = useDesktopAppUpdates();
+  const includePreReleases = appUpdateSnapshot.allowPrerelease;
   const localHost = useLocalHostSnapshot(runnerHost);
 
   // Canonical cross-surface "is a host mutation running" status (Ticket:
@@ -208,14 +212,22 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
         management,
         includePreReleases,
       ),
-      queryFn: () => management.availableVersions({ includePreReleases }),
+      queryFn: () =>
+        management
+          .availableVersions({ includePreReleases })
+          .then((snapshot) =>
+            projectAppHostAvailableSnapshot(snapshot, includePreReleases),
+          ),
       staleTime: 5 * 60 * 1000,
     }),
   );
 
   const { data: registryState, isFetching: registryFetching } = useQuery(
     queryOptions<HostRegistryUpdateState>({
-      queryKey: runnerQueryKeys.hostRegistryUpdate(management),
+      queryKey: runnerQueryKeys.hostRegistryUpdate(
+        management,
+        includePreReleases,
+      ),
       queryFn: () => management.registryCheck({ force: false }),
       staleTime: 60 * 60 * 1000,
     }),
@@ -256,7 +268,7 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
       queryKey: runnerQueryKeys.hostAvailableVersionsScope(management),
     });
     void queryClient.invalidateQueries({
-      queryKey: runnerQueryKeys.hostRegistryUpdate(management),
+      queryKey: runnerQueryKeys.hostRegistryUpdateScope(management),
     });
     void queryClient.invalidateQueries({
       queryKey: runnerQueryKeys.hostInstalledRecord(management),
@@ -280,9 +292,12 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
     },
   });
 
-  const updateMutation = useMutation({
+  const updateMutation = useMutation<HostInstallResult, Error, string | null>({
     mutationKey: runnerMutationKeys.hostUpdate(),
-    mutationFn: () => management.updateHost({ onProgress: null }),
+    // Pin the install to the version the Updates row is showing, so a channel
+    // switch in another window can't redirect this click to another target.
+    mutationFn: (expectedVersion) =>
+      management.updateHost({ expectedVersion, onProgress: null }),
     onSuccess: (data) => {
       toast.success(`Updated host to v${data.version}`);
       useHostUpdateBannerStore.getState().clearSnooze(data.version);
@@ -343,8 +358,11 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
     mutationKey: runnerMutationKeys.hostRegistryCheck(),
     mutationFn: () => management.registryCheck({ force: true }),
     onSuccess: (data) => {
+      // Key off the channel the probe actually ran under, not this render's
+      // value - they diverge if the channel changed while the probe was in
+      // flight (see `HostRegistryUpdateListener`).
       queryClient.setQueryData(
-        runnerQueryKeys.hostRegistryUpdate(management),
+        runnerQueryKeys.hostRegistryUpdate(management, data.includePreReleases),
         data,
       );
       void queryClient.invalidateQueries({
@@ -472,7 +490,9 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
           updatePending={updatePending}
           latestReleasedAt={latestReleasedAt}
           nowMs={nowMs}
-          onUpdate={() => updateMutation.mutate()}
+          onUpdate={() =>
+            updateMutation.mutate(registryState?.latestVersion ?? null)
+          }
           onRefresh={handleRefreshRegistry}
         />
       )}
@@ -490,7 +510,6 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
           registryState,
         )}
         availableFetching={availableFetching}
-        includePreReleases={includePreReleases}
         registryState={registryState}
         statusState={status?.state}
         anyPending={anyPending}
@@ -500,7 +519,6 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
         onRegisterService={() => registerServiceMutation.mutate()}
         onDeregisterService={() => deregisterServiceMutation.mutate()}
         onRefreshAvailable={handleRefreshRegistry}
-        onIncludePreReleasesChange={setIncludePreReleases}
       />
 
       <DoctorSheet

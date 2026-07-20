@@ -125,6 +125,7 @@ function makeManagement(): IHostManagement {
         updateAvailable: false,
         reachable: false,
         errorMessage: null,
+        includePreReleases: false,
       }),
     ),
     getOperationStatus: vi.fn(() => Promise.resolve(null)),
@@ -191,6 +192,7 @@ function makeHost(tray: IHostTray, management: IHostManagement): IRunnerHost {
     fileDrops: {
       resolveDroppedFilePaths: () => Promise.resolve([]),
       copyDroppedFilePaths: (paths) => Promise.resolve(paths),
+      readNativeClipboardFilePaths: () => Promise.resolve([]),
     },
     tokenStore: {
       get: () => Promise.resolve(null),

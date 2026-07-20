@@ -76,8 +76,13 @@ import { AccentDot } from "@/components/providers/accent-dot";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import type { ProviderId } from "@/components/home/data/landing-options";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
-import { useComposerPaste } from "@/hooks/composer/use-composer-paste";
+import {
+  isAttachmentIngestPending,
+  useComposerPaste,
+} from "@/hooks/composer/use-composer-paste";
+import { useWorkspaceMentionRoots } from "@/hooks/composer/use-workspace-mention-roots";
 import { useEpicAttachmentBytesPresence } from "@/lib/attachments/use-attachment-blob-src";
+import { useRunnerHost } from "@/providers/use-runner-host";
 
 const NOOP: () => void = () => undefined;
 
@@ -590,22 +595,36 @@ function InlineUserMessageEditor({
 }): ReactNode {
   const [pickerStore] = useState(() => createComposerPickerStore());
   const hostClient = useTabHostClient();
+  const resolvedMentionRoots = useWorkspaceMentionRoots(
+    editing.mentionRoots,
+    editing.fallbackToGlobalMentionRoots,
+  );
   const editorRef = useRef<ComposerPromptEditorHandle | null>(null);
   const hasPastedImageBytes = useEpicAttachmentBytesPresence();
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const focusFrameRef = useRef<number | null>(null);
   const visibilityFrameRef = useRef<number | null>(null);
-  const { onPaste, onDrop, onDragOver, attachImageFiles, isIngestingImages } =
-    useComposerPaste(editorRef);
-  const attachmentPending = isIngestingImages;
+  const runnerHost = useRunnerHost();
+  const {
+    onPaste,
+    onDrop,
+    onDragOver,
+    attachImageFiles,
+    isIngestingImages,
+    isResolvingFilePaths,
+  } = useComposerPaste(editorRef, runnerHost.fileDrops, resolvedMentionRoots);
+  const attachmentPending = isAttachmentIngestPending({
+    isIngestingImages,
+    isResolvingFilePaths,
+  });
 
   // Without this, the picker opens empty - nothing writes items into the store.
   useComposerPickerItems({
     pickerStore,
     hostClient,
     harnessId: editing.slashProviderId,
-    mentionRoots: editing.mentionRoots,
+    mentionRoots: resolvedMentionRoots,
     currentEpicId: editing.currentEpicId,
     // The inline editor mounts only while a message is being edited - active.
     isActive: true,

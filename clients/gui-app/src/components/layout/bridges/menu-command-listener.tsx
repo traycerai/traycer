@@ -111,13 +111,20 @@ export function MenuCommandListener() {
     },
   });
 
-  const installUpdateMutation = useMutation<HostInstallResult>({
+  const installUpdateMutation = useMutation<
+    HostInstallResult,
+    Error,
+    string | null
+  >({
     mutationKey: runnerMutationKeys.hostUpdate(),
-    mutationFn: () => {
+    // The native menu/tray row carries the version it was labelled with, so
+    // main can refuse to install a different target than the one the user
+    // clicked (a release-channel switch between menu build and click).
+    mutationFn: (expectedVersion) => {
       if (management === null) {
         return Promise.reject(new Error("Host management unavailable"));
       }
-      return management.updateHost({ onProgress: null });
+      return management.updateHost({ expectedVersion, onProgress: null });
     },
     onMutate: () => {
       Analytics.getInstance().track(AnalyticsEvent.HostUpdateStarted, {
@@ -137,7 +144,7 @@ export function MenuCommandListener() {
           queryKey: runnerQueryKeys.hostAvailableVersionsScope(management),
         });
         void queryClient.invalidateQueries({
-          queryKey: runnerQueryKeys.hostRegistryUpdate(management),
+          queryKey: runnerQueryKeys.hostRegistryUpdateScope(management),
         });
         void queryClient.invalidateQueries({
           queryKey: runnerQueryKeys.hostInstalledRecord(management),
@@ -184,8 +191,8 @@ export function MenuCommandListener() {
         advanceFind: (forward) => {
           advanceActiveTileFind(forward ? 1 : -1);
         },
-        installHostUpdate: () => {
-          mutateInstallUpdate();
+        installHostUpdate: (expectedVersion) => {
+          mutateInstallUpdate(expectedVersion);
         },
         requestHostRestart: () => {
           // A restart already in flight (from this or an earlier confirm)
@@ -260,7 +267,7 @@ interface MenuCommandHandlers {
   readonly requestNewWindow: () => void;
   readonly openFindBar: () => void;
   readonly advanceFind: (forward: boolean) => void;
-  readonly installHostUpdate: () => void;
+  readonly installHostUpdate: (expectedVersion: string | null) => void;
   readonly requestHostRestart: () => void;
   readonly reportIssue: () => void;
 }
@@ -329,7 +336,7 @@ function handleMenuCommand(
       source: "native_menu",
       command: "install_host_update",
     });
-    handlers.installHostUpdate();
+    handlers.installHostUpdate(payload.hostUpdateVersion);
     return;
   }
   if (payload.command === "host.restart") {

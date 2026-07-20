@@ -1,4 +1,8 @@
 import { installHost } from "../installer";
+import {
+  compareHostVersions,
+  isHostSemanticVersion,
+} from "@traycer-clients/shared/platform/runner-host";
 import { assertHostNotBusy } from "../host/busy-check";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { CommandFn, CommandResult } from "../runner/runner";
@@ -15,6 +19,9 @@ import { withCliLock } from "../store/cli-lock";
 // pointed at a half-replaced install dir (especially relevant on
 // Windows where executable locks block the rename otherwise).
 export interface HostUpdateArgs {
+  // Exact registry version selected by Desktop when prereleases are enabled;
+  // "latest" preserves the stable manifest pointer for normal CLI usage.
+  readonly versionRequest: string;
   // Skip the busy check and update a running host unconditionally.
   // Surfaced as `--force`, matching `host ensure`'s flag.
   readonly force: boolean;
@@ -24,6 +31,7 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
   return async (ctx): Promise<CommandResult> => {
     ctx.runtime.logger.info("Host update command started", {
       environment: ctx.runtime.environment,
+      versionRequest: args.versionRequest,
       force: args.force,
     });
     return withCliLock(
@@ -50,6 +58,39 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
             details: { environment: ctx.runtime.environment },
             exitCode: 1,
           });
+        }
+        if (
+          args.versionRequest !== "latest" &&
+          isHostSemanticVersion(args.versionRequest) &&
+          isHostSemanticVersion(previous.version)
+        ) {
+          const targetComparison = compareHostVersions(
+            args.versionRequest,
+            previous.version,
+          );
+          if (targetComparison < 0) {
+            throw cliError({
+              code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
+              message: `host update: refusing to downgrade ${previous.version} to ${args.versionRequest}; use 'traycer host install --release ${args.versionRequest}' for a deliberate operator downgrade`,
+              details: {
+                installedVersion: previous.version,
+                requestedVersion: args.versionRequest,
+              },
+              exitCode: 1,
+            });
+          }
+          if (targetComparison === 0) {
+            return {
+              data: {
+                version: previous.version,
+                previousVersion: previous.version,
+                installedAt: previous.installedAt,
+                source: previous.source,
+              },
+              human: `host already at ${previous.version} (no-op)`,
+              exitCode: 0,
+            };
+          }
         }
         // Every update replaces the bytes of a potentially-LIVE host, same
         // hazard `provisionHost` guards against - refuse unless the host is
@@ -79,7 +120,7 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
         });
         const result = await installHost({
           environment: ctx.runtime.environment,
-          source: { kind: "registry", versionRequest: "latest" },
+          source: { kind: "registry", versionRequest: args.versionRequest },
           onProgress: (info) => ctx.progress(info),
           lifecycle: handle.lifecycle,
           // Registry update records the registry version; nothing to override.
