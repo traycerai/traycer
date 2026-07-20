@@ -9,6 +9,8 @@ import type {
   CreateChatResponse,
   DeleteChatRequest,
   DeleteChatResponse,
+  UpdateChatProfileRequest,
+  UpdateChatProfileResponse,
   UpdateChatRunSettingsRequest,
   UpdateChatRunSettingsResponse,
 } from "@traycer/protocol/host/epic/unary-schemas";
@@ -203,6 +205,38 @@ export function useEpicUpdateChatRunSettings(): UseMutationResult<
     mapVariables: (variables) => variables,
     options: {
       mutationKey: epicMutationKeys.updateChatRunSettings(),
+    },
+  });
+}
+
+/**
+ * Mutation hook for `epic.updateChatProfile` (optional host capability).
+ *
+ * Narrow profile-only settings update: moves a chat onto another logged-in
+ * profile of its current harness WITHOUT rebuilding the full tuple
+ * client-side - the host patches its own authoritative persisted record, so
+ * a possibly-stale projection can never be re-persisted just to move the
+ * profile. Tab-host scoped, like `useEpicUpdateChatRunSettings` above, and
+ * likewise fire-and-forget: against an old host the call fails with
+ * `E_HOST_UNSUPPORTED` and callers degrade to persist-on-next-send.
+ */
+export function useEpicUpdateChatProfile(): UseMutationResult<
+  UpdateChatProfileResponse,
+  HostRpcError,
+  UpdateChatProfileRequest
+> {
+  const client = useTabHostClient();
+  return useHostMutation<
+    HostRpcRegistry,
+    "epic.updateChatProfile",
+    unknown,
+    UpdateChatProfileRequest
+  >({
+    client,
+    method: "epic.updateChatProfile",
+    mapVariables: (variables) => variables,
+    options: {
+      mutationKey: epicMutationKeys.updateChatProfile(),
     },
   });
 }

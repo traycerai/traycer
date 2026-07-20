@@ -6,4 +6,5 @@ export const epicMutationKeys = {
   createChat: () => ["epic.createChat"] as const,
   exportArtifacts: () => ["epic.exportArtifacts"] as const,
   updateChatRunSettings: () => ["epic.updateChatRunSettings"] as const,
+  updateChatProfile: () => ["epic.updateChatProfile"] as const,
 };

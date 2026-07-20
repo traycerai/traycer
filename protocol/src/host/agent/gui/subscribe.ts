@@ -111,6 +111,7 @@ export const chatActionSchema = z.enum([
   "queueSettingsUpdate",
   "queueSettingsRestamp",
   "activePermissionModeUpdate",
+  "activeProfileUpdate",
   "approvalDecision",
   "fileEditApprovalDecision",
   "interviewAnswer",
@@ -742,6 +743,24 @@ const pauseQueueClientFrameSchema = z.object({
   ...ownerActionFrameFields,
 });
 
+// Narrow live-turn field update, parallel to `activePermissionModeUpdate`:
+// move the chat's IN-FLIGHT work onto another logged-in profile of the same
+// harness. Sent by the composer on a profile switch while a run is in
+// progress; the host stamps a pre-spawn profile override from it at frame
+// intake, so a turn still parked on worktree setup adopts the switch before
+// it spawns instead of erroring on the rate-limited profile the user just
+// moved off. `harnessId` scopes application: profile ids are harness-scoped,
+// so the switch only applies to a turn on the same harness. Deliberately NOT
+// a whole-settings frame - model/harness never late-bind into an accepted
+// turn (a model change invalidates the reasoning/thinking selection and is
+// only expressible as a full tuple on a new send).
+const activeProfileUpdateClientFrameSchema = z.object({
+  kind: z.literal("activeProfileUpdate"),
+  ...ownerActionFrameFields,
+  harnessId: guiHarnessIdSchema,
+  profileId: z.string().nullable(),
+});
+
 const chatSubscribeClientFrameSchemaBeforeV13Options = [
   z.object({
     kind: z.literal("send"),
@@ -931,9 +950,22 @@ export const chatSubscribeClientFrameSchemaBeforeV13 = z.discriminatedUnion(
   chatSubscribeClientFrameSchemaBeforeV13Options,
 );
 
-const chatSubscribeClientFrameSchemaOptions = [
+const chatSubscribeClientFrameSchemaBeforeV14Options = [
   ...chatSubscribeClientFrameSchemaBeforeV13Options,
   pauseQueueClientFrameSchema,
+] as const;
+
+// Frozen client frame of the RELEASED `1.3` line (pauseQueue, but no
+// `activeProfileUpdate`). Kept as its own union so the shipped 1.3 shape
+// stays verbatim while the live schema below grows the minor-4 delta.
+export const chatSubscribeClientFrameSchemaBeforeV14 = z.discriminatedUnion(
+  "kind",
+  chatSubscribeClientFrameSchemaBeforeV14Options,
+);
+
+const chatSubscribeClientFrameSchemaOptions = [
+  ...chatSubscribeClientFrameSchemaBeforeV14Options,
+  activeProfileUpdateClientFrameSchema,
 ] as const;
 
 export const chatSubscribeClientFrameSchema = z.discriminatedUnion(
@@ -1451,7 +1483,7 @@ export const chatSubscribeV13 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 3 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchema,
   serverFrameSchema: chatSubscribeServerFrameSchemaV13,
-  clientFrameSchema: chatSubscribeClientFrameSchema,
+  clientFrameSchema: chatSubscribeClientFrameSchemaBeforeV14,
 });
 
 // ─── Live `chat.subscribe@1.4` contract (`inReplyTo` + `mcp` items) ─────────
@@ -1460,8 +1492,11 @@ export const chatSubscribeV13 = defineStreamRpcContract({
 // assistant, queue item, event `actor`, steer) and the `mcp` background-item
 // kind (CLI auto-backgrounded MCP tool calls). Older peers negotiate ≤1.3 and
 // receive the frozen frames above, which strip the key and never carry `mcp`
-// items (the host degrades them to `command`). The client frame is identical
-// to `1.3` (`inReplyTo` is host→client only).
+// items (the host degrades them to `command`). The client frame adds
+// `activeProfileUpdate` (the narrow in-flight profile switch); a ≤1.3 host
+// never receives it - the host drops unknown kinds with a MALFORMED_FRAME
+// ack, and the switch still lands durably via `epic.updateChatProfile` /
+// the next send's full tuple.
 
 export const chatSubscribeV14 = defineStreamRpcContract({
   method: "chat.subscribe",

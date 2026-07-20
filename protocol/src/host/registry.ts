@@ -127,7 +127,10 @@ import {
   epicRemoveRepoV10,
   epicRenameArtifactV10,
   epicRenameChatV10,
+  epicUpdateChatProfileV10,
+  epicUpdateChatRunSettingsUpgradeV10ToV11,
   epicUpdateChatRunSettingsV10,
+  epicUpdateChatRunSettingsV11,
   epicRenameTuiAgentV10,
   epicReparentArtifactV10,
   epicReparentChatV10,
@@ -3012,10 +3015,36 @@ const HOST_RPC_REGISTRY_DEFINITION = {
   // persist-on-next-send behavior.
   "epic.updateChatRunSettings": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicUpdateChatRunSettingsV10,
+          upgradeFromPreviousVersion: null,
+        },
+        // v1.1: wire-strict settings tuple - a subset-field patch fails
+        // validation at the canonical minor instead of silently null-
+        // clobbering omitted fields. Profile-only changes belong on
+        // `epic.updateChatProfile`.
+        1: {
+          contract: epicUpdateChatRunSettingsV11,
+          upgradeFromPreviousVersion: epicUpdateChatRunSettingsUpgradeV10ToV11,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  // Optional (non-floor) capability: narrow profile-only update of a chat's
+  // persisted run settings - the host patches its own authoritative tuple, so
+  // clients never rebuild (and stale-patch) the full tuple to move a chat's
+  // profile. Old peers lack it; callers get E_HOST_UNSUPPORTED for this call
+  // only and degrade to persist-on-next-send.
+  "epic.updateChatProfile": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicUpdateChatProfileV10,
           upgradeFromPreviousVersion: null,
         },
       },
