@@ -982,6 +982,15 @@ describe("macOS service lifecycle", () => {
       "bootout",
       "bootout",
     ]);
+    // Pin the actual targets, not just the command names: a buggy
+    // implementation that bootouts the agent target twice (and never
+    // touches the CLI label) would also produce two "bootout" calls and a
+    // ".agent"-containing error message, passing the assertions above.
+    const bootoutTargets = calls
+      .filter((call) => call.args[0] === "bootout")
+      .map((call) => call.args[call.args.length - 1]);
+    expect(bootoutTargets[0]?.endsWith(`/${label.id}.agent`)).toBe(true);
+    expect(bootoutTargets[1]?.endsWith(`/${label.id}`)).toBe(true);
     await expect(readFile(createdPlistPath, "utf8")).resolves.toBe(
       "test manifest",
     );
