@@ -56,7 +56,12 @@ function pressKey(editor: Editor, key: string): void {
 }
 
 function openDisabledOnlyPicker(pickerStore: ComposerPickerStore): void {
+  // The suggestion plugin owns this session, so publish under its id the way
+  // the item hook does rather than inventing one the store would reject.
+  const { sessionId } = pickerStore.getState();
+  if (sessionId === null) throw new Error("expected an open picker session");
   pickerStore.getState().setItems({
+    sessionId,
     kind: "slash",
     query: "",
     slashScope: "skills",

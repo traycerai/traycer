@@ -23,18 +23,25 @@ export interface UseSlashItemsParams {
 
 interface SlashPickerSlice {
   readonly active: boolean;
+  readonly sessionId: number | null;
   readonly query: string;
   readonly slashScope: ComposerSlashScope | null;
 }
 
 function selectSlashSlice(state: {
   open: boolean;
+  sessionId: number | null;
   kind: "mention" | "slash" | null;
   query: string;
   slashScope: ComposerSlashScope | null;
 }): SlashPickerSlice {
   return {
     active: state.open && state.kind === "slash",
+    // Watched, not just reported: a swap to a session with an identical query
+    // and scope leaves every other input untouched, and `openPicker` has
+    // already dropped the rows. Without the id in the slice this effect never
+    // re-runs and the menu stays empty until the next keystroke.
+    sessionId: state.kind === "slash" ? state.sessionId : null,
     query: state.kind === "slash" ? state.query : "",
     slashScope: state.kind === "slash" ? state.slashScope : null,
   };
@@ -44,7 +51,7 @@ export function useSlashItems(params: UseSlashItemsParams): void {
   const { pickerStore, hostClient, harnessId, workingDirectories } = params;
 
   const slice = useStore(pickerStore, useShallow(selectSlashSlice));
-  const { active, query, slashScope } = slice;
+  const { active, sessionId, query, slashScope } = slice;
 
   const {
     data: commands,
@@ -63,11 +70,12 @@ export function useSlashItems(params: UseSlashItemsParams): void {
   );
 
   useEffect(() => {
-    if (!active) return;
+    if (!active || sessionId === null) return;
     // `slashScope` is part of the published identity, not just an input: the
     // store rejects this list if the caret has already flipped the scope since
     // these items were built under it.
     pickerStore.getState().setItems({
+      sessionId,
       kind: "slash",
       query,
       slashScope,
@@ -75,7 +83,7 @@ export function useSlashItems(params: UseSlashItemsParams): void {
       items,
       loading: isLoading,
     });
-  }, [active, isLoading, items, pickerStore, query, slashScope]);
+  }, [active, isLoading, items, pickerStore, query, sessionId, slashScope]);
 
   useEffect(() => {
     if (!active) return;

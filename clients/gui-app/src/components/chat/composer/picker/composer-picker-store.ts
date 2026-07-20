@@ -177,6 +177,7 @@ export interface ComposerPickerActions {
   }) => void;
   readonly setStep: (step: MentionFlowStep) => void;
   readonly setItems: (input: {
+    readonly sessionId: number;
     readonly kind: ComposerPickerKind;
     readonly query: string;
     readonly slashScope: ComposerSlashScope | null;
@@ -352,10 +353,22 @@ export function createComposerPickerStore(): ComposerPickerStore {
       });
     },
 
-    setItems: ({ kind, query, slashScope, step, items, loading }) => {
+    setItems: ({
+      sessionId,
+      kind,
+      query,
+      slashScope,
+      step,
+      items,
+      loading,
+    }) => {
       const previous = get();
       if (
         !previous.open ||
+        // Rows belong to the session that asked for them. The remaining checks
+        // compare what the list was built for, and a replacement session can
+        // match every one of them, so only the id distinguishes the owner.
+        previous.sessionId !== sessionId ||
         previous.kind !== kind ||
         previous.query !== query ||
         previous.slashScope !== slashScope ||

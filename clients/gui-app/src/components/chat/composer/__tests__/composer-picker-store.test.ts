@@ -199,6 +199,7 @@ describe("composer picker store", () => {
   it("openPicker sets kind, range, query, and resets items", () => {
     const store = createComposerPickerStore();
     store.getState().setItems({
+      sessionId: 1,
       kind: "mention",
       query: "stale",
       slashScope: null,
@@ -221,6 +222,7 @@ describe("composer picker store", () => {
     const store = createComposerPickerStore();
     open(store, "src", NOOP_COMMIT);
     store.getState().setItems({
+      sessionId: 1,
       kind: "mention",
       query: "old",
       slashScope: null,
@@ -231,10 +233,39 @@ describe("composer picker store", () => {
     expect(store.getState().items).toEqual([]);
   });
 
+  // Kind, query, scope and step can all match across a session swap, so they
+  // cannot tell the owner from its predecessor. Only the id can.
+  it("setItems rejects a publication from a superseded same-identity session", () => {
+    const store = createComposerPickerStore();
+    open(store, "src", NOOP_COMMIT);
+    store.getState().openPicker({
+      sessionId: 2,
+      kind: "mention",
+      slashScope: null,
+      slashTrigger: null,
+      range: { from: 1, to: 5 },
+      query: "src",
+      commit: NOOP_COMMIT,
+      clientRect: null,
+    });
+    store.getState().setItems({
+      sessionId: 1,
+      kind: "mention",
+      query: "src",
+      slashScope: null,
+      step: ROOT_MENTION_STEP,
+      items: [mentionItem("stale")],
+      loading: false,
+    });
+    expect(store.getState().items).toEqual([]);
+    expect(store.getState().itemsForQuery).toBeNull();
+  });
+
   it("setItems writes when kind, query, and step all match", () => {
     const store = createComposerPickerStore();
     open(store, "src", NOOP_COMMIT);
     store.getState().setItems({
+      sessionId: 1,
       kind: "mention",
       query: "src",
       slashScope: null,
@@ -251,6 +282,7 @@ describe("composer picker store", () => {
     open(store, "src", NOOP_COMMIT);
     store.getState().setStep(FILES_PROVIDER_STEP);
     store.getState().setItems({
+      sessionId: 1,
       kind: "mention",
       query: "src",
       slashScope: null,
@@ -265,6 +297,7 @@ describe("composer picker store", () => {
     const store = createComposerPickerStore();
     open(store, "src", NOOP_COMMIT);
     store.getState().setItems({
+      sessionId: 1,
       kind: "mention",
       query: "src",
       slashScope: null,
@@ -281,6 +314,7 @@ describe("composer picker store", () => {
     const store = createComposerPickerStore();
     open(store, "", NOOP_COMMIT);
     store.getState().setItems({
+      sessionId: 1,
       kind: "mention",
       query: "",
       slashScope: null,
@@ -303,6 +337,7 @@ describe("composer picker store", () => {
     open(store, "", commit);
     const items = [mentionItem("a"), mentionItem("b")];
     store.getState().setItems({
+      sessionId: 1,
       kind: "mention",
       query: "",
       slashScope: null,
@@ -332,6 +367,7 @@ describe("composer picker store", () => {
       slashItem("simplify", null),
     ];
     store.getState().setItems({
+      sessionId: 1,
       kind: "slash",
       query: "",
       slashScope: "skills",
@@ -376,6 +412,7 @@ describe("composer picker store", () => {
       clientRect: null,
     });
     store.getState().setItems({
+      sessionId: 1,
       kind: "slash",
       query: "",
       slashScope: "all",
@@ -405,6 +442,7 @@ describe("composer picker store", () => {
     // The item hook resolved under "all" but the caret has since moved to a
     // skills-scoped position, so this list must not land.
     store.getState().setItems({
+      sessionId: 1,
       kind: "slash",
       query: "",
       slashScope: "all",
@@ -416,6 +454,7 @@ describe("composer picker store", () => {
 
     // Republished under the live scope, it lands.
     store.getState().setItems({
+      sessionId: 1,
       kind: "slash",
       query: "",
       slashScope: "skills",
@@ -437,6 +476,7 @@ describe("composer picker store", () => {
       slashItem("compact", LEADING_ONLY),
     ];
     store.getState().setItems({
+      sessionId: 1,
       kind: "slash",
       query: "",
       slashScope: "skills",
@@ -461,6 +501,7 @@ describe("composer picker store", () => {
     const store = createComposerPickerStore();
     open(store, "src", NOOP_COMMIT);
     store.getState().setItems({
+      sessionId: 1,
       kind: "mention",
       query: "src",
       slashScope: null,
@@ -492,6 +533,7 @@ describe("composer picker store", () => {
       clientRect: null,
     });
     store.getState().setItems({
+      sessionId: 1,
       kind: "slash",
       query: "",
       slashScope: "all",

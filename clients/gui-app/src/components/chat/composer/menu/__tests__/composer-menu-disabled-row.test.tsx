@@ -68,6 +68,7 @@ function openTriggered(
     clientRect: null,
   });
   store.getState().setItems({
+    sessionId: 1,
     kind: "slash",
     query: "",
     slashScope,
