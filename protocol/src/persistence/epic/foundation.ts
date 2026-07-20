@@ -76,6 +76,8 @@ export const guiHarnessIdSchema = z.enum([
 ]);
 export type GuiHarnessId = z.infer<typeof guiHarnessIdSchema>;
 
+// Cursor remains a reserved compatibility value: it shipped in this persisted
+// enum before the unfinished runtime surface was withdrawn from the product.
 export const tuiHarnessIdSchema = z.enum([
   "claude",
   "codex",
@@ -120,3 +122,25 @@ export const chatRunSettingsSchema = z.object({
   profileId: z.string().nullable().default(null),
 });
 export type ChatRunSettings = z.infer<typeof chatRunSettingsSchema>;
+
+// The wire-strict variant of `chatRunSettingsSchema`: identical output type,
+// but every field is REQUIRED - no `.default(...)` backstops. The defaults
+// above exist for PERSISTED records written before a field was introduced;
+// on a write path they are a misuse foothold: a caller sending a partial
+// tuple would have the omitted fields silently defaulted, turning a
+// subset-field "patch" into a null-clobber of settings it never looked at.
+// A settings write is a whole-tuple WYSIWYG replace - the caller must state
+// every field of the tuple it resolved, so a partial object is a validation
+// error instead. Field-level updates get their own narrow methods (e.g.
+// `epic.updateChatProfile`); there is deliberately no narrow model/harness
+// update - changing the model invalidates the reasoning/thinking/tier
+// selection, so it is only expressible as a full tuple.
+export const chatRunSettingsStrictSchema = z.object({
+  harnessId: guiHarnessIdSchema,
+  model: z.string().min(1),
+  permissionMode: permissionModeSchema,
+  reasoningEffort: z.string().nullable(),
+  serviceTier: z.string().nullable(),
+  agentMode: agentModeSchema,
+  profileId: z.string().nullable(),
+});

@@ -557,12 +557,15 @@ describe("DesktopTrayController menu structure", () => {
     expect(selectedIds).toEqual(["e6"]);
   });
 
-  it("inserts an 'Update to <version>' row that dispatches host.installUpdate when a host update is queued", () => {
-    const commands: string[] = [];
+  it("inserts an 'Update to <version>' row that dispatches host.installUpdate with the captured version", () => {
+    const commands: Array<{
+      command: string;
+      hostUpdateVersion: string | null;
+    }> = [];
     const controller = new DesktopTrayController(makeWindow(), trayImage(), {
       onEpicSelected: null,
-      onCommand: (command) => {
-        commands.push(command);
+      onCommand: (command, hostUpdateVersion) => {
+        commands.push({ command, hostUpdateVersion });
       },
     });
     controller.setPresentation({
@@ -580,7 +583,65 @@ describe("DesktopTrayController menu structure", () => {
     );
     expect(updateRow).toBeDefined();
     updateRow?.click?.();
-    expect(commands).toContain("host.installUpdate");
+    expect(commands).toEqual([
+      { command: "host.installUpdate", hostUpdateVersion: "1.4.2" },
+    ]);
+  });
+
+  // Cold-review #3: an already-open native tray menu can fire the click for a
+  // row labelled with version A after presentation has rebuilt to B. The
+  // item's closure must keep A so main refuses a mismatched current target.
+  it("dispatches the labelled version A when a stale open-menu click fires after presentation moves to B", () => {
+    const commands: Array<{
+      command: string;
+      hostUpdateVersion: string | null;
+    }> = [];
+    const controller = new DesktopTrayController(makeWindow(), trayImage(), {
+      onEpicSelected: null,
+      onCommand: (command, hostUpdateVersion) => {
+        commands.push({ command, hostUpdateVersion });
+      },
+    });
+    controller.setPresentation({
+      authStatus: "signed-in",
+      account: { name: null, email: "user@example.com" },
+      canCheckForUpdates: true,
+      hostUpdateAvailableVersion: "1.4.2",
+    });
+
+    const versionATemplate = latestMenuTemplate();
+    const staleUpdateRow = versionATemplate.find(
+      (entry) =>
+        typeof entry.label === "string" &&
+        entry.label.includes("Update to 1.4.2"),
+    );
+    if (staleUpdateRow?.click === undefined) {
+      throw new Error("expected Update to 1.4.2 row with a click handler");
+    }
+    const staleClick = staleUpdateRow.click;
+
+    // Presentation rebuilds to B (and a new menu template). The open menu's
+    // old item callback must still pin A.
+    controller.setPresentation({
+      authStatus: "signed-in",
+      account: { name: null, email: "user@example.com" },
+      canCheckForUpdates: true,
+      hostUpdateAvailableVersion: "1.6.0-rc.1",
+    });
+    const versionBTemplate = latestMenuTemplate();
+    expect(
+      versionBTemplate.some(
+        (entry) =>
+          typeof entry.label === "string" &&
+          entry.label.includes("Update to 1.6.0-rc.1"),
+      ),
+    ).toBe(true);
+
+    staleClick();
+    expect(commands).toEqual([
+      { command: "host.installUpdate", hostUpdateVersion: "1.4.2" },
+    ]);
+    expect(commands[0]?.hostUpdateVersion).not.toBe("1.6.0-rc.1");
   });
 
   it("does not render an update row when no host update is queued", () => {

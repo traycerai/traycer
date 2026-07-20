@@ -50,11 +50,10 @@ function TerminalLaunchPanelImpl(props: TerminalLaunchPanelProps) {
   const setAgentMode = useStore(store, (s) => s.setAgentMode);
   // Launch capability is the runtime `modes` the host advertises for the
   // selected harness - the same signal the store uses to reroute off non-TUI
-  // harnesses - NOT the schema id (`isTuiHarnessId`). They diverge for a
-  // schema-TUI harness whose adapter currently exposes only `gui` (e.g.
-  // `cursor`): gating on `modes` keeps Start in lockstep with the store's
-  // reroute and stays disabled until the catalog confirms capability, instead
-  // of briefly enabling a pre-reroute selection that can't back a terminal agent.
+  // harnesses, not the schema id (`isTuiHarnessId`). Gating on `modes` keeps
+  // Start in lockstep with the store's reroute and stays disabled until the
+  // catalog confirms capability, instead of briefly enabling a pre-reroute
+  // selection that can't back a terminal agent.
   const selectionIsTuiCapable = useStore(
     store,
     (s) =>
@@ -99,9 +98,8 @@ function TerminalLaunchPanelImpl(props: TerminalLaunchPanelProps) {
   const argsTouched = needsReseed ? false : argsState.touched;
 
   // The harness/model picker lists every GUI harness, including ones that can't
-  // back a terminal agent (the GUI-only `traycer`, or a schema-TUI harness whose
-  // adapter advertises only `gui`). Block Start (rather than silently no-op)
-  // unless the shared selection is runtime-TUI-capable.
+  // back a terminal agent. Block Start (rather than silently no-op) unless the
+  // shared selection is runtime-TUI-capable.
   const launchHint =
     disabledHint ??
     (selectionIsTuiCapable

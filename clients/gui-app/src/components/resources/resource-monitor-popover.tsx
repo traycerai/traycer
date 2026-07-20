@@ -247,7 +247,7 @@ export function ResourceMonitorPopover(props: ResourceMonitorPopoverProps) {
 }
 
 function ResourceMonitorContent(props: { readonly onClose: () => void }) {
-  const [sortOption, setSortOption] = useState<ResourceSortOption>("memory");
+  const [sortOption, setSortOption] = useState<ResourceSortOption>("tab");
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const [expandedOwners, setExpandedOwners] = useState<Set<string>>(
     () => new Set(),

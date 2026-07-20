@@ -63,7 +63,7 @@ describe("hover-preview surface", () => {
     expect(screen.getAllByTestId("hover-action")).toHaveLength(1);
   });
 
-  it("keeps short label tooltips on the inverted chip surface", () => {
+  it("keeps label tooltips on the bounded inverted chip surface", () => {
     render(
       <TooltipProvider delayDuration={0}>
         <Tooltip open>
@@ -84,6 +84,7 @@ describe("hover-preview surface", () => {
     expect(tokens).toContain("bg-foreground");
     expect(tokens).toContain("text-background");
     expect(tokens).toContain("max-w-xs");
+    expect(tokens).toContain("[overflow-wrap:anywhere]");
     expect(tokens).not.toContain("bg-popover");
     expect(document.querySelector(".fill-foreground")).not.toBeNull();
   });

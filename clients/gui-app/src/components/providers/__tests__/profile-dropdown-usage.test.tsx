@@ -130,6 +130,7 @@ function detailEntry(
     profileId,
     refreshStatus: "idle",
     refresh,
+    ensureFresh: () => Promise.resolve(),
     projection: {
       kind: "detail",
       severity: "running_low",
@@ -192,6 +193,7 @@ function semanticEntry(
     profileId: null,
     refreshStatus: "idle",
     refresh,
+    ensureFresh: () => Promise.resolve(),
     projection: {
       kind: "semantic_only",
       severity: "limited",

@@ -121,6 +121,7 @@ export class MockRunnerHost implements IRunnerHost {
     ): Promise<readonly string[]> => {
       return paths;
     },
+    readNativeClipboardFilePaths: async (): Promise<readonly string[]> => [],
   };
   readonly service: null = null;
   readonly traycerCli: ITraycerCli | null;

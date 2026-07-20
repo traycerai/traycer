@@ -3,6 +3,7 @@ import {
   ChevronDown,
   ChevronUp,
   Copy,
+  ImagePlus,
   Inbox,
   Pencil,
   SendHorizontal,
@@ -16,13 +17,10 @@ import {
   useMemo,
   useRef,
   useState,
+  type ChangeEvent,
   type ReactNode,
 } from "react";
-import type {
-  ClipboardEventHandler,
-  DragEventHandler,
-  KeyboardEvent,
-} from "react";
+import type { KeyboardEvent } from "react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import {
   ComposerPromptEditor,
@@ -69,6 +67,7 @@ import { ChatUserMessageContent } from "./chat-user-message-content";
 import { UserMessageAttachmentGallery } from "./user-message-attachment-gallery";
 import { ComposerArea } from "@/components/home/composer/composer-shell";
 import { LivePulse } from "@/components/ui/live-pulse";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { AgentReferenceMarkdown } from "./segments/agent-reference-markdown";
 import { SegmentCard } from "./segments/segment-card";
 import { SegmentPanel } from "./segments/segment-panel";
@@ -77,10 +76,15 @@ import { AccentDot } from "@/components/providers/accent-dot";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import type { ProviderId } from "@/components/home/data/landing-options";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import {
+  isAttachmentIngestPending,
+  useComposerPaste,
+} from "@/hooks/composer/use-composer-paste";
+import { useWorkspaceMentionRoots } from "@/hooks/composer/use-workspace-mention-roots";
+import { useEpicAttachmentBytesPresence } from "@/lib/attachments/use-attachment-blob-src";
+import { useRunnerHost } from "@/providers/use-runner-host";
 
 const NOOP: () => void = () => undefined;
-const NOOP_CLIPBOARD: ClipboardEventHandler<HTMLElement> = () => undefined;
-const NOOP_DRAG: DragEventHandler<HTMLElement> = () => undefined;
 
 // Keep long prompts compact: ~3-4 lines (leading-7 ≈ 28px/line) stay visible
 // before the bubble clamps and fades, with "Show more" revealing the rest.
@@ -591,26 +595,47 @@ function InlineUserMessageEditor({
 }): ReactNode {
   const [pickerStore] = useState(() => createComposerPickerStore());
   const hostClient = useTabHostClient();
+  const resolvedMentionRoots = useWorkspaceMentionRoots(
+    editing.mentionRoots,
+    editing.fallbackToGlobalMentionRoots,
+  );
   const editorRef = useRef<ComposerPromptEditorHandle | null>(null);
+  const hasPastedImageBytes = useEpicAttachmentBytesPresence();
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const focusFrameRef = useRef<number | null>(null);
   const visibilityFrameRef = useRef<number | null>(null);
+  const runnerHost = useRunnerHost();
+  const {
+    onPaste,
+    onDrop,
+    onDragOver,
+    attachImageFiles,
+    isIngestingImages,
+    isResolvingFilePaths,
+  } = useComposerPaste(editorRef, runnerHost.fileDrops, resolvedMentionRoots);
+  const attachmentPending = isAttachmentIngestPending({
+    isIngestingImages,
+    isResolvingFilePaths,
+  });
 
   // Without this, the picker opens empty - nothing writes items into the store.
   useComposerPickerItems({
     pickerStore,
     hostClient,
     harnessId: editing.slashProviderId,
-    mentionRoots: editing.mentionRoots,
+    mentionRoots: resolvedMentionRoots,
     currentEpicId: editing.currentEpicId,
     // The inline editor mounts only while a message is being edited - active.
     isActive: true,
   });
 
   const submit = useCallback(() => {
-    if (!editing.canSubmit || editing.pending) return;
+    if (!editing.canSubmit || editing.pending || attachmentPending) {
+      return;
+    }
     editing.onSubmit();
-  }, [editing]);
+  }, [attachmentPending, editing]);
 
   const cancel = useCallback(() => {
     if (editing.pending) return;
@@ -620,6 +645,22 @@ function InlineUserMessageEditor({
   const removeImageAttachment = useCallback((id: string) => {
     editorRef.current?.removeImageAttachmentById(id);
   }, []);
+
+  const openImagePicker = useCallback(() => {
+    const input = imageInputRef.current;
+    if (input === null) return;
+    input.value = "";
+    input.click();
+  }, []);
+
+  const handleImageChange = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => {
+      const files = Array.from(event.currentTarget.files ?? []);
+      event.currentTarget.value = "";
+      attachImageFiles(files);
+    },
+    [attachImageFiles],
+  );
 
   const onSnapshot = useCallback(
     (content: JsonContent, selection: { from: number; to: number }) => {
@@ -679,6 +720,7 @@ function InlineUserMessageEditor({
         initialContent={editing.initialContent}
         initialSelection={null}
         slashProviderId={editing.slashProviderId}
+        hasPastedImageBytes={hasPastedImageBytes}
         isActive
         disabled={editing.pending}
         placeholder="Edit message"
@@ -686,16 +728,26 @@ function InlineUserMessageEditor({
         stabilizeImageAttachmentCaret={false}
         onSnapshot={onSnapshot}
         onSubmit={submit}
-        onPaste={NOOP_CLIPBOARD}
-        onDragOver={NOOP_DRAG}
-        onDrop={NOOP_DRAG}
+        onPaste={onPaste}
+        onDragOver={onDragOver}
+        onDrop={onDrop}
         onKeyDown={handleEditorKeyDown}
         onFocus={NOOP}
         onBlur={NOOP}
         onEditorReady={null}
       />
     ),
-    [editing, handleEditorKeyDown, onSnapshot, pickerStore, submit],
+    [
+      editing,
+      handleEditorKeyDown,
+      onDragOver,
+      onDrop,
+      onPaste,
+      onSnapshot,
+      pickerStore,
+      hasPastedImageBytes,
+      submit,
+    ],
   );
   const editorSlot = useMemo(
     () => (
@@ -713,7 +765,28 @@ function InlineUserMessageEditor({
   );
   const toolbar = useMemo(
     () => (
-      <div className="flex justify-end gap-1 px-4 pb-3 pt-2">
+      <div className="flex items-center gap-1 px-4 pb-3 pt-2">
+        <input
+          ref={imageInputRef}
+          type="file"
+          accept="image/*"
+          multiple
+          tabIndex={-1}
+          aria-hidden="true"
+          className="hidden"
+          onChange={handleImageChange}
+        />
+        <MessageActionButton
+          label="Attach image"
+          variant="ghost"
+          size="icon-sm"
+          tooltip
+          disabled={editing.pending}
+          className="mr-auto text-muted-foreground hover:text-foreground"
+          onClick={openImagePicker}
+        >
+          <ImagePlus className="size-4" aria-hidden />
+        </MessageActionButton>
         <MessageActionButton
           label="Cancel edit"
           variant="secondary"
@@ -730,15 +803,30 @@ function InlineUserMessageEditor({
           variant="default"
           size="default"
           tooltip
-          disabled={!editing.canSubmit || editing.pending}
+          disabled={!editing.canSubmit || editing.pending || attachmentPending}
           className={undefined}
           onClick={submit}
         >
+          {attachmentPending ? (
+            <AgentSpinningDots
+              className="text-current"
+              testId="edit-attachment-pending"
+              variant={undefined}
+            />
+          ) : null}
           Send
         </MessageActionButton>
       </div>
     ),
-    [cancel, editing.canSubmit, editing.pending, submit],
+    [
+      cancel,
+      editing.canSubmit,
+      editing.pending,
+      handleImageChange,
+      openImagePicker,
+      attachmentPending,
+      submit,
+    ],
   );
 
   return (

@@ -1,5 +1,6 @@
 import "../../../../__tests__/test-browser-apis";
 import {
+  act,
   cleanup,
   fireEvent,
   render as rtlRender,
@@ -8,13 +9,17 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Mock } from "vitest";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import { deriveA2AReceivedCollapsibleKey } from "@/components/chat/chat-collapsible-key";
 import { UserMessageBody } from "@/components/chat/chat-message-user-body";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { parseComposerClipboardHtml } from "@/lib/composer/composer-clipboard";
+import {
+  buildComposerClipboardHtml,
+  composerClipboardPlainText,
+  parseComposerClipboardHtml,
+} from "@/lib/composer/composer-clipboard";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import type { ChatMessageUserActions } from "@/components/chat/chat-message";
 import { useSetA2AReceivedOpen } from "@/stores/chats/a2a-open-store-context";
@@ -22,6 +27,29 @@ import {
   useChatCollapsibleTileInstanceId,
   useSetChatFindForcedOpen,
 } from "@/stores/chats/chat-find-force-store-context";
+import { collectImageAtoms } from "@/lib/composer/image-atoms";
+import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
+
+const attachmentMocks = vi.hoisted(() => ({
+  fetcher: vi.fn((_hash: string, _signal: AbortSignal) =>
+    Promise.resolve(new Uint8Array([1, 2, 3])),
+  ),
+  hasBytes: vi.fn(() => true),
+}));
+const composerPickerMocks = vi.hoisted(() => ({
+  useComposerPickerItems: vi.fn(),
+}));
+
+vi.mock("@/providers/use-runner-host", () => ({
+  useRunnerHost: () => ({
+    fileDrops: {
+      resolveDroppedFilePaths: () => Promise.resolve([]),
+      copyDroppedFilePaths: (paths: readonly string[]) =>
+        Promise.resolve(paths),
+      readNativeClipboardFilePaths: () => Promise.resolve([]),
+    },
+  }),
+}));
 
 function render(ui: ReactNode) {
   return rtlRender(
@@ -49,8 +77,20 @@ vi.mock("@/hooks/host/use-tab-host-client", () => ({
 }));
 
 vi.mock("@/components/chat/composer/picker/use-composer-picker-items", () => ({
-  useComposerPickerItems: () => undefined,
+  useComposerPickerItems: composerPickerMocks.useComposerPickerItems,
 }));
+
+vi.mock(
+  import("@/lib/attachments/use-attachment-blob-src"),
+  async (importOriginal) => {
+    const actual = await importOriginal();
+    return {
+      ...actual,
+      useEpicImageFetcher: () => attachmentMocks.fetcher,
+      useEpicAttachmentBytesPresence: () => attachmentMocks.hasBytes,
+    };
+  },
+);
 
 interface OpenReceivedA2AButtonProps {
   readonly label: string;
@@ -156,6 +196,15 @@ const STRUCTURED_IMAGE_USER_CONTENT: JsonContent = {
 describe("<UserMessageBody /> agent messages", () => {
   afterEach(() => {
     cleanup();
+    vi.restoreAllMocks();
+    attachmentMocks.fetcher.mockReset();
+    attachmentMocks.fetcher.mockImplementation((_hash, _signal) =>
+      Promise.resolve(new Uint8Array([1, 2, 3])),
+    );
+    attachmentMocks.hasBytes.mockReset();
+    attachmentMocks.hasBytes.mockReturnValue(true);
+    composerPickerMocks.useComposerPickerItems.mockClear();
+    useWorkspaceFoldersStore.setState({ folders: [] });
   });
 
   it("reveals the action chip for keyboard focus", () => {
@@ -312,6 +361,240 @@ describe("<UserMessageBody /> agent messages", () => {
     ).not.toBeNull();
     expect(screen.getByLabelText("Open Image#1: first.png")).not.toBeNull();
     expect(screen.getByLabelText("Open Image#2: second.png")).not.toBeNull();
+  });
+
+  it("uses inherited workspace roots for the inline edit skill picker", async () => {
+    useWorkspaceFoldersStore.setState({ folders: ["/workspace/project"] });
+    render(
+      <TooltipProvider>
+        <UserMessageBody
+          actions={editingUserActions(INLINE_EDIT_INITIAL_CONTENT)}
+          message={{
+            ...plainUserMessage("Edit this message"),
+            structuredContent: INLINE_EDIT_INITIAL_CONTENT,
+          }}
+        />
+      </TooltipProvider>,
+    );
+
+    await waitFor(() => {
+      expect(composerPickerMocks.useComposerPickerItems).toHaveBeenCalledWith(
+        expect.objectContaining({
+          harnessId: "claude",
+          mentionRoots: ["/workspace/project"],
+          isActive: true,
+        }),
+      );
+    });
+  });
+
+  it("ignores populated workspace roots for the inline edit skill picker when global fallback is disabled", async () => {
+    useWorkspaceFoldersStore.setState({ folders: ["/workspace/project"] });
+    const actions = editingUserActions(INLINE_EDIT_INITIAL_CONTENT);
+    const baseEditing = actions.editing;
+    if (baseEditing === null) throw new Error("expected editing actions");
+    render(
+      <TooltipProvider>
+        <UserMessageBody
+          actions={{
+            ...actions,
+            editing: { ...baseEditing, fallbackToGlobalMentionRoots: false },
+          }}
+          message={{
+            ...plainUserMessage("Edit this message"),
+            structuredContent: INLINE_EDIT_INITIAL_CONTENT,
+          }}
+        />
+      </TooltipProvider>,
+    );
+
+    await waitFor(() => {
+      expect(composerPickerMocks.useComposerPickerItems).toHaveBeenCalledWith(
+        expect.objectContaining({
+          harnessId: "claude",
+          mentionRoots: [],
+          isActive: true,
+        }),
+      );
+    });
+  });
+
+  it("adds multiple pasted images to the edit strip and submits base64 nodes", async () => {
+    const onSubmit = vi.fn<(content: JsonContent) => void>();
+    render(<InlineEditAttachmentHarness onSubmit={onSubmit} />);
+    const editor = await screen.findByRole("textbox", { name: "Edit message" });
+    const first = imageFile("first-paste.png", [1, 2, 3]);
+    const second = imageFile("second-paste.png", [4, 5, 6]);
+
+    fireEvent.paste(editor, {
+      clipboardData: clipboardWithFiles([first, second]),
+    });
+
+    expect(
+      await screen.findByRole("button", {
+        name: "Open Image#1: first-paste.png",
+      }),
+    ).not.toBeNull();
+    expect(
+      screen.getByRole("button", {
+        name: "Open Image#2: second-paste.png",
+      }),
+    ).not.toBeNull();
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Remove Image#2: second-paste.png",
+      }),
+    );
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("button", {
+          name: "Open Image#2: second-paste.png",
+        }),
+      ).toBeNull();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Send edit" }));
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    const submitted = onSubmit.mock.calls[0][0];
+    const images = collectImageAtoms(submitted);
+    expect(images.map((image) => image.fileName)).toEqual(["first-paste.png"]);
+    expect(images.every((image) => image.b64content !== null)).toBe(true);
+    expect(images.every((image) => image.hash === null)).toBe(true);
+  });
+
+  it("blocks edit submission until a pasted image finishes reading", async () => {
+    const delayedReader = installDelayedFileReader();
+    const onSubmit = vi.fn<(content: JsonContent) => void>();
+    render(<InlineEditAttachmentHarness onSubmit={onSubmit} />);
+    const editor = await screen.findByRole("textbox", { name: "Edit message" });
+
+    fireEvent.paste(editor, {
+      clipboardData: clipboardWithFiles([
+        imageFile("delayed.png", [16, 17, 18]),
+      ]),
+    });
+
+    const send = screen.getByRole("button", { name: "Send edit" });
+    expect(send.getAttribute("disabled")).not.toBeNull();
+    fireEvent.click(send);
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    delayedReader.resolveNext("data:image/png;base64,EBES");
+    await screen.findByRole("button", {
+      name: "Open Image#1: delayed.png",
+    });
+    const readySend = screen.getByRole("button", { name: "Send edit" });
+    expect(readySend.getAttribute("disabled")).toBeNull();
+    fireEvent.click(readySend);
+
+    const submitted = onSubmit.mock.calls[0][0];
+    expect(collectImageAtoms(submitted)).toEqual([
+      expect.objectContaining({
+        fileName: "delayed.png",
+        b64content: "EBES",
+        hash: null,
+      }),
+    ]);
+  });
+
+  it("submits a synchronously validated rich paste immediately", async () => {
+    const onSubmit = vi.fn<(content: JsonContent) => void>();
+    render(<InlineEditAttachmentHarness onSubmit={onSubmit} />);
+    const editor = await screen.findByRole("textbox", { name: "Edit message" });
+    const content = hashOnlyInlineEditContent();
+    const html = buildComposerClipboardHtml(
+      content,
+      composerClipboardPlainText(content),
+    );
+
+    fireEvent.paste(editor, {
+      clipboardData: {
+        files: [],
+        items: [],
+        types: ["text/html"],
+        getData: (type: string) => (type === "text/html" ? html : ""),
+      },
+    });
+
+    expect(attachmentMocks.hasBytes).toHaveBeenCalledWith("same-epic-hash");
+    const readySend = screen.getByRole("button", { name: "Send edit" });
+    expect(readySend.getAttribute("disabled")).toBeNull();
+    fireEvent.click(readySend);
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(collectImageAtoms(onSubmit.mock.calls[0][0])).toEqual([
+      expect.objectContaining({
+        id: "rich-paste",
+        hash: "same-epic-hash",
+        b64content: null,
+      }),
+    ]);
+  });
+
+  it("adds a dropped image to the inline edit attachment strip", async () => {
+    render(<InlineEditAttachmentHarness onSubmit={() => undefined} />);
+    const editor = await screen.findByRole("textbox", { name: "Edit message" });
+    const dropped = imageFile("dropped.png", [7, 8, 9]);
+
+    fireEvent.drop(editor, {
+      dataTransfer: dataTransferWithFiles([dropped]),
+    });
+
+    expect(
+      await screen.findByRole("button", {
+        name: "Open Image#1: dropped.png",
+      }),
+    ).not.toBeNull();
+  });
+
+  it("opens the image picker and attaches its selected file", async () => {
+    const inputClick = vi
+      .spyOn(HTMLInputElement.prototype, "click")
+      .mockImplementation(() => undefined);
+    const view = render(
+      <InlineEditAttachmentHarness onSubmit={() => undefined} />,
+    );
+    await screen.findByRole("textbox", { name: "Edit message" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Attach image" }));
+    expect(inputClick).toHaveBeenCalledTimes(1);
+
+    const input =
+      view.container.querySelector<HTMLInputElement>('input[type="file"]');
+    if (input === null) throw new Error("expected inline edit image input");
+    fireEvent.change(input, {
+      target: { files: [imageFile("picked.png", [10, 11, 12])] },
+    });
+
+    expect(
+      await screen.findByRole("button", {
+        name: "Open Image#1: picked.png",
+      }),
+    ).not.toBeNull();
+  });
+
+  it("discards an image read that resolves after edit cancellation", async () => {
+    const delayedReader = installDelayedFileReader();
+    render(<InlineEditAttachmentHarness onSubmit={() => undefined} />);
+    const editor = await screen.findByRole("textbox", { name: "Edit message" });
+
+    fireEvent.paste(editor, {
+      clipboardData: clipboardWithFiles([
+        imageFile("discarded.png", [13, 14, 15]),
+      ]),
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel edit" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reopen edit" }));
+    await screen.findByRole("textbox", { name: "Edit message" });
+
+    delayedReader.resolveNext("data:image/png;base64,DQ4P");
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+    });
+
+    expect(screen.queryByRole("button", { name: /Open Image#/ })).toBeNull();
   });
 
   it("renders received agent messages as an expandable A2A card", () => {
@@ -507,6 +790,7 @@ function editingUserActions(content: JsonContent): ChatMessageUserActions {
       canSubmit: false,
       slashProviderId: "claude",
       mentionRoots: [],
+      fallbackToGlobalMentionRoots: true,
       currentEpicId: "epic-1",
       onSnapshot: () => undefined,
       onSubmit: () => undefined,
@@ -516,6 +800,141 @@ function editingUserActions(content: JsonContent): ChatMessageUserActions {
     onDeleteRequest: () => undefined,
     onDeleteConfirm: () => undefined,
     onDeleteCancel: () => undefined,
+  };
+}
+
+const INLINE_EDIT_INITIAL_CONTENT: JsonContent = {
+  type: "doc",
+  content: [
+    {
+      type: "paragraph",
+      content: [{ type: "text", text: "Edit this message" }],
+    },
+  ],
+};
+
+function hashOnlyInlineEditContent(): JsonContent {
+  return {
+    type: "doc",
+    content: [
+      {
+        type: "paragraph",
+        content: [
+          {
+            type: "imageAttachment",
+            attrs: {
+              id: "rich-paste",
+              fileName: "rich-paste.png",
+              b64content: null,
+              hash: "same-epic-hash",
+              mimeType: "image/png",
+              size: 3,
+            },
+          },
+          { type: "text", text: " pasted" },
+        ],
+      },
+    ],
+  };
+}
+
+function InlineEditAttachmentHarness(props: {
+  readonly onSubmit: (content: JsonContent) => void;
+}): ReactNode {
+  const [editing, setEditing] = useState(true);
+  const [content, setContent] = useState(INLINE_EDIT_INITIAL_CONTENT);
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        onClick={() => {
+          setContent(INLINE_EDIT_INITIAL_CONTENT);
+          setEditing(true);
+        }}
+      >
+        Reopen edit
+      </button>
+    );
+  }
+  const actions = editingUserActions(INLINE_EDIT_INITIAL_CONTENT);
+  const baseEditing = actions.editing;
+  if (baseEditing === null) throw new Error("expected editing actions");
+  return (
+    <TooltipProvider>
+      <UserMessageBody
+        message={{
+          ...plainUserMessage("Edit this message"),
+          structuredContent: INLINE_EDIT_INITIAL_CONTENT,
+        }}
+        actions={{
+          ...actions,
+          editing: {
+            ...baseEditing,
+            initialContent: INLINE_EDIT_INITIAL_CONTENT,
+            currentContent: content,
+            canSubmit: true,
+            onSnapshot: (nextContent) => setContent(nextContent),
+            onSubmit: () => props.onSubmit(content),
+            onCancel: () => {
+              setContent(INLINE_EDIT_INITIAL_CONTENT);
+              setEditing(false);
+            },
+          },
+        }}
+      />
+    </TooltipProvider>
+  );
+}
+
+function imageFile(name: string, bytes: ReadonlyArray<number>): File {
+  return new File([new Uint8Array(bytes)], name, { type: "image/png" });
+}
+
+function clipboardWithFiles(files: ReadonlyArray<File>) {
+  return {
+    files,
+    items: files.map((file) => ({
+      kind: "file",
+      type: file.type,
+      getAsFile: () => file,
+    })),
+    types: ["Files"],
+    getData: () => "",
+  };
+}
+
+function dataTransferWithFiles(files: ReadonlyArray<File>) {
+  return {
+    files,
+    items: [],
+    types: ["Files"],
+    dropEffect: "none",
+    getData: () => "",
+  };
+}
+
+interface DelayedFileReaderControl {
+  readonly resolveNext: (dataUrl: string) => void;
+}
+
+function installDelayedFileReader(): DelayedFileReaderControl {
+  const pending: FileReader[] = [];
+  vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(function (
+    this: FileReader,
+    _blob: Blob,
+  ) {
+    pending.push(this);
+  });
+  return {
+    resolveNext: (dataUrl) => {
+      const reader = pending.shift();
+      if (reader === undefined) throw new Error("expected pending file read");
+      Object.defineProperty(reader, "result", {
+        configurable: true,
+        value: dataUrl,
+      });
+      reader.dispatchEvent(new ProgressEvent("load"));
+    },
   };
 }
 

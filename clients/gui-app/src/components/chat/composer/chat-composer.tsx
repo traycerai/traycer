@@ -15,9 +15,13 @@ import type {
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 
-import { useComposerPaste } from "@/hooks/composer/use-composer-paste";
+import {
+  isAttachmentIngestPending,
+  useComposerPaste,
+} from "@/hooks/composer/use-composer-paste";
 import { useComposerDictation } from "@/hooks/composer/use-composer-dictation";
 import { useWorkspaceMentionRoots } from "@/hooks/composer/use-workspace-mention-roots";
+import { useRunnerHost } from "@/providers/use-runner-host";
 import { ComposerShell } from "@/components/home/composer/composer-shell";
 import { ComposerWorkspaceRow } from "@/components/home/composer/composer-workspace-mode-row";
 import type { ModelOption } from "@/components/home/data/landing-options";
@@ -63,6 +67,7 @@ import { useComposerPickerItems } from "./picker/use-composer-picker-items";
 import { commitProfileSelection } from "@/stores/composer/commit-selection";
 import { useTaskProfileRateLimitSwitch } from "./use-task-profile-rate-limit-switch";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import { useEpicAttachmentBytesPresence } from "@/lib/attachments/use-attachment-blob-src";
 
 interface ChatComposerProps {
   readonly taskId: string;
@@ -143,11 +148,13 @@ function ChatComposerImpl(props: ChatComposerProps) {
     mentionRoots,
     fallbackToGlobalMentionRoots,
   );
+  const runnerHost = useRunnerHost();
   const hostClient = useTabHostClient();
   const tabHostId = useTabHostId();
   const workspaceBlocked = !workspaceComposerCanStart(workspaceAvailability);
 
   const editorRef = useRef<ComposerPromptEditorHandle | null>(null);
+  const hasPastedImageBytes = useEpicAttachmentBytesPresence();
   // Counts editor-ready transitions (a counter, not a boolean, so a torn-down
   // and re-created editor re-fires). The draft-reset bridge keys its
   // handle-ready catch-up on this - a ref flip alone never re-renders us.
@@ -274,6 +281,22 @@ function ChatComposerImpl(props: ChatComposerProps) {
     isActive,
   });
 
+  const {
+    onPaste,
+    onDrop,
+    onDragOver,
+    onDragEnter,
+    onDragLeave,
+    attachImageFiles,
+    dragOverlayVariant,
+    isIngestingImages,
+    isResolvingFilePaths,
+  } = useComposerPaste(editorRef, runnerHost.fileDrops, resolvedMentionRoots);
+  const attachmentPending = isAttachmentIngestPending({
+    isIngestingImages,
+    isResolvingFilePaths,
+  });
+
   const submitDraft = useChatComposerSubmit({
     taskId,
     editorRef,
@@ -284,6 +307,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     sendDisabled: sendBlocked,
     workspaceBlocked,
     imagesUnsupported,
+    attachmentPreparationPending: attachmentPending,
     onSubmitMessage,
   });
   const ambientDrift = useAmbientDriftGate(
@@ -308,16 +332,6 @@ function ChatComposerImpl(props: ChatComposerProps) {
     });
   };
 
-  const {
-    onPaste,
-    onDrop,
-    onDragOver,
-    onDragEnter,
-    onDragLeave,
-    attachImageFiles,
-    isDraggingFiles,
-  } = useComposerPaste(editorRef);
-
   const removeImage = useCallback((id: string) => {
     Analytics.getInstance().track(AnalyticsEvent.AttachmentRemoved, {
       kind: "image",
@@ -336,6 +350,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     sendDisabled: sendBlocked,
     workspaceBlocked,
     imagesUnsupported,
+    attachmentPreparationPending: attachmentPending,
     draftHasText,
     draftHasImages,
   });
@@ -357,6 +372,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
                   profiles={rateLimitPrompt.profiles}
                   destinations={rateLimitPrompt.destinations}
                   primaryTarget={rateLimitPrompt.primaryTarget}
+                  probeTarget={rateLimitPrompt.probeTarget}
                   runTargetHostId={tabHostId}
                   onSwitchProfile={onSwitchProfile}
                   affectedChatCount={taskProfileSwitch.affectedChatCount}
@@ -407,7 +423,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
               onDrop={onDrop}
               onDragEnter={onDragEnter}
               onDragLeave={onDragLeave}
-              isDraggingFiles={isDraggingFiles}
+              dragOverlayVariant={dragOverlayVariant}
               attachmentsStrip={
                 <ChatComposerAttachmentsStrip
                   content={draftContent}
@@ -423,6 +439,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
                   initialContent={initialContent}
                   initialSelection={initialSelection}
                   slashProviderId={harnessId}
+                  hasPastedImageBytes={hasPastedImageBytes}
                   isActive={isActive}
                   onSnapshot={handleSnapshot}
                   onSubmit={handleSubmitDraft}
@@ -437,6 +454,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
                   store={toolbarStore}
                   onAttachImages={attachImageFiles}
                   canSubmit={canSubmit}
+                  attachmentPending={attachmentPending}
                   onSubmit={handleSubmitDraft}
                   activeTurnStatus={activeTurnStatus}
                   hasPendingApprovals={hasPendingApprovals}
@@ -549,6 +567,7 @@ interface CanSubmitDraftArgs {
   readonly sendDisabled: boolean | undefined;
   readonly workspaceBlocked: boolean;
   readonly imagesUnsupported: boolean;
+  readonly attachmentPreparationPending: boolean;
   readonly draftHasText: boolean;
   readonly draftHasImages: boolean;
 }
@@ -560,6 +579,7 @@ function canSubmitDraft(args: CanSubmitDraftArgs): boolean {
     !args.sendDisabled &&
     !args.workspaceBlocked &&
     !args.imagesUnsupported &&
+    !args.attachmentPreparationPending &&
     (args.draftHasText || args.draftHasImages)
   );
 }

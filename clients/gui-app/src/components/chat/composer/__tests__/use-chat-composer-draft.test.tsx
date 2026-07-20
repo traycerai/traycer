@@ -39,6 +39,7 @@ function fakeHandle(ready: boolean) {
     clear: () => undefined,
     setContent,
     insertImageAttachments: () => undefined,
+    beginPathInsertion: () => null,
     removeImageAttachmentById: () => undefined,
     insertDictatedText: () => undefined,
     dismissActiveSuggestion: () => false,
@@ -201,6 +202,7 @@ function QuoteFocusHarness(props: QuoteFocusHarnessProps) {
       isActive={false}
       disabled={false}
       slashProviderId="claude"
+      hasPastedImageBytes={null}
       stabilizeImageAttachmentCaret={false}
       onSnapshot={(_content, selection) => {
         selectionRef.current = selection;

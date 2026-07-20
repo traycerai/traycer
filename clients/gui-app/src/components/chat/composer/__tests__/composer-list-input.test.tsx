@@ -28,6 +28,7 @@ function makeFixture(): {
         },
       },
       slashProviderId: "claude",
+      getHasPastedImageBytes: () => null,
     }),
     content: { type: "doc", content: [{ type: "paragraph" }] },
   });

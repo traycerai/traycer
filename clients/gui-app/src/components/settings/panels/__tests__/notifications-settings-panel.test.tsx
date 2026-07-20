@@ -39,10 +39,10 @@ describe("<NotificationsSettingsPanel />", () => {
     const fixture = renderNotificationsSettings();
 
     const needsActionRenderer = await screen.findByRole("switch", {
-      name: "Needs action In-app interruptions",
+      name: "Needs action In-app notifications",
     });
     const doneRenderer = screen.getByRole("switch", {
-      name: "Done In-app interruptions",
+      name: "Done In-app notifications",
     });
 
     expect(needsActionRenderer.getAttribute("data-state")).toBe("checked");
@@ -50,11 +50,11 @@ describe("<NotificationsSettingsPanel />", () => {
     // Neither the removed webhook channel nor the host-only email channel
     // has a column.
     expect(
-      screen.queryByRole("switch", { name: /webhook interruptions/i }),
+      screen.queryByRole("switch", { name: /webhook notifications/i }),
     ).toBeNull();
     expect(screen.queryByLabelText("Webhook URL")).toBeNull();
     expect(
-      screen.queryByRole("switch", { name: /email interruptions/i }),
+      screen.queryByRole("switch", { name: /email notifications/i }),
     ).toBeNull();
     expect(screen.queryByLabelText("SMTP password")).toBeNull();
 
@@ -80,7 +80,7 @@ describe("<NotificationsSettingsPanel />", () => {
     const fixture = renderNotificationsSettingsWithDeferredRefetch();
 
     const doneRenderer = await screen.findByRole("switch", {
-      name: "Done In-app interruptions",
+      name: "Done In-app notifications",
     });
     expect(doneRenderer.hasAttribute("disabled")).toBe(false);
 
@@ -94,7 +94,7 @@ describe("<NotificationsSettingsPanel />", () => {
     });
 
     const failureRenderer = screen.getByRole("switch", {
-      name: "Failure In-app interruptions",
+      name: "Failure In-app notifications",
     });
     expect(failureRenderer.hasAttribute("disabled")).toBe(true);
 

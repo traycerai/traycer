@@ -523,8 +523,8 @@ export type ListHarnessModelsResponse = z.infer<
  * uuid-keyed map) so the wire shape lines up with `listEpicCollaborators`
  * and the rest of the `list*` family in this registry.
  *
- * `surface` lets a caller route to the right per-agent UI (e.g. fetch a
- * GUI chat transcript vs a TUI scrollback) without a second round-trip.
+ * `surface` lets a caller route to the right per-agent UI (e.g. a GUI chat
+ * interface vs a TUI terminal interface) without a second round-trip.
  * `isLocal` is the host's authoritative answer to "did I mint this
  * session?" - `hostId` equals the responding host's id. Cross-host
  * entries are returned for read-only enumeration; mutating RPCs
@@ -692,10 +692,11 @@ export type SendAgentMessageResponse = z.infer<
  * XML-tagged string so a sibling agent can read it without re-implementing
  * the discriminated `messageSchema` shape. For GUI agents the host
  * serializes the persisted `messageSchema` array (`<user>` / `<assistant>`
- * blocks); for TUI agents the host best-effort returns whatever
- * scrollback its PTY buffer holds. TUI scrollback is not persisted, so the
- * resolver errors when the target TUI session is not local and currently
- * present in this host's PTY manager.
+ * blocks); for supported TUI agents the host reads structured conversation
+ * history through the harness provider SDK. Provider history survives the PTY
+ * closing; there is deliberately no raw scrollback fallback. TUI transcript
+ * reads remain local to the agent's bound host because its provider session
+ * store and credentials are host-local.
  */
 export const getAgentTranscriptRequestSchema = z.object({
   epicId: z.string(),

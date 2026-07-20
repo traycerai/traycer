@@ -36,6 +36,7 @@ export interface ComposerBodyProps {
   } | null;
   readonly canSubmit: boolean;
   readonly isSubmitting: boolean;
+  readonly attachmentPending: boolean;
   readonly workspaceDisabledHint: string | null;
   readonly header: ReactNode;
   readonly attachmentsStrip: ReactNode;
@@ -43,6 +44,7 @@ export interface ComposerBodyProps {
   readonly dictationControl: ComposerDictationControl | null;
   readonly dictationPreparing: DictationPreparingStatus | null;
   readonly paste: UseComposerPasteResult;
+  readonly hasPastedImageBytes: ((hash: string) => boolean) | null;
   readonly onSubmit: () => void;
   readonly onStartTerminal: (launch: TerminalAgentLaunch) => void;
   readonly onSnapshot: (
@@ -62,6 +64,7 @@ export function ComposerBody({
   initialSelection,
   canSubmit,
   isSubmitting,
+  attachmentPending,
   workspaceDisabledHint,
   header,
   attachmentsStrip,
@@ -69,11 +72,13 @@ export function ComposerBody({
   dictationControl,
   dictationPreparing,
   paste,
+  hasPastedImageBytes,
   onSubmit,
   onStartTerminal,
   onSnapshot,
 }: ComposerBodyProps) {
   const harnessId = useStore(toolbarStore, (s) => s.selection.harnessId);
+  const chatPasteActive = composerMode === "chat";
   const hiddenInTerminal = cn(composerMode !== "chat" && "hidden");
   const hiddenInChat = cn(composerMode !== "terminal" && "hidden");
   const showLandingAgentModeTooltip = true;
@@ -83,11 +88,11 @@ export function ComposerBody({
       {header}
       <ComposerShell
         pickerStore={pickerStore}
-        onDragOver={paste.onDragOver}
-        onDrop={paste.onDrop}
-        onDragEnter={paste.onDragEnter}
-        onDragLeave={paste.onDragLeave}
-        isDraggingFiles={paste.isDraggingFiles}
+        onDragOver={chatPasteActive ? paste.onDragOver : NOOP}
+        onDrop={chatPasteActive ? paste.onDrop : NOOP}
+        onDragEnter={chatPasteActive ? paste.onDragEnter : NOOP}
+        onDragLeave={chatPasteActive ? paste.onDragLeave : NOOP}
+        dragOverlayVariant={chatPasteActive ? paste.dragOverlayVariant : null}
         attachmentsStrip={composerMode === "chat" ? attachmentsStrip : null}
         editor={
           <>
@@ -98,6 +103,7 @@ export function ComposerBody({
                 initialContent={initialContent}
                 initialSelection={initialSelection}
                 slashProviderId={harnessId}
+                hasPastedImageBytes={hasPastedImageBytes}
                 isActive={chatEditorIsActive}
                 disabled={false}
                 placeholder={COMPOSER_PLACEHOLDER}
@@ -105,9 +111,9 @@ export function ComposerBody({
                 stabilizeImageAttachmentCaret={false}
                 onSnapshot={onSnapshot}
                 onSubmit={onSubmit}
-                onPaste={paste.onPaste}
-                onDragOver={paste.onDragOver}
-                onDrop={paste.onDrop}
+                onPaste={chatPasteActive ? paste.onPaste : NOOP}
+                onDragOver={chatPasteActive ? paste.onDragOver : NOOP}
+                onDrop={chatPasteActive ? paste.onDrop : NOOP}
                 onKeyDown={undefined}
                 onFocus={NOOP}
                 onBlur={NOOP}
@@ -135,6 +141,7 @@ export function ComposerBody({
                 showNextTurnPermissionNote={false}
                 showAgentModeTooltip={showLandingAgentModeTooltip}
                 canSubmit={canSubmit}
+                attachmentPending={attachmentPending}
                 onSubmit={onSubmit}
                 activeTurnStatus={null}
                 stopDisabled
