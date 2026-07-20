@@ -76,6 +76,18 @@ export function providerIdToGuiHarnessId(providerId: ProviderId): GuiHarnessId {
   return GUI_HARNESS_BY_PROVIDER_ID[providerId];
 }
 
+/**
+ * Total harness -> provider projection: every `GuiHarnessId` maps to its
+ * `ProviderId` in `ORDERED_PROVIDERS`, `traycer` included. Use this for
+ * surfaces that reason about a provider's usage/profile data regardless of
+ * whether it has an external CLI login - e.g. the rate-limit profile picker
+ * and the add-profile flow, both of which show Traycer Inference's own
+ * profiles/usage even though it has no CLI to authenticate.
+ *
+ * For surfaces that gate on provider-CLI login specifically (reauth, seed
+ * validation, cross-host clone continuity), use `providerCliIdForHarness`
+ * instead - it excludes `traycer`, which has no provider-CLI concept at all.
+ */
 export function guiHarnessIdToProviderId(
   harnessId: GuiHarnessId,
 ): ProviderId | null {
@@ -83,6 +95,34 @@ export function guiHarnessIdToProviderId(
     ORDERED_PROVIDERS.find((provider) => provider.harnessId === harnessId)
       ?.providerId ?? null
   );
+}
+
+/**
+ * Harness ids with no provider-CLI login concept at all - kept as an
+ * explicit, single-membership set (rather than a second hand-maintained
+ * table) so adding a future CLI-less harness is a visible, deliberate edit
+ * here instead of a silent divergence between two mappers. Currently only
+ * `traycer` (Traycer's own inference, not an external CLI a user
+ * authenticates).
+ */
+const HARNESS_IDS_WITHOUT_PROVIDER_CLI: ReadonlySet<GuiHarnessId> = new Set([
+  "traycer",
+]);
+
+/**
+ * Provider-CLI-scoped projection of `guiHarnessIdToProviderId`: identical
+ * except it returns `null` for `HARNESS_IDS_WITHOUT_PROVIDER_CLI` members.
+ * Use this for surfaces that gate on, seed, or migrate a provider-CLI login/
+ * managed profile - the reauth gate, seeded-profile validation, cross-host
+ * chat clone, and tombstoned-profile lookup all fall through to "nothing to
+ * check" for a harness with no CLI login, rather than misreading
+ * `guiHarnessIdToProviderId`'s `"traycer"` as a loggable-in provider.
+ */
+export function providerCliIdForHarness(
+  harnessId: GuiHarnessId,
+): ProviderId | null {
+  if (HARNESS_IDS_WITHOUT_PROVIDER_CLI.has(harnessId)) return null;
+  return guiHarnessIdToProviderId(harnessId);
 }
 
 export function providerDisplayName(providerId: ProviderId): string {
