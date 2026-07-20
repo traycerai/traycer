@@ -102,6 +102,10 @@ class FakeChild extends EventEmitter {
     this.killed = true;
     this.killSignal = signal;
   }
+
+  close(exitCode: number | null): void {
+    this.emit("close", exitCode);
+  }
 }
 
 // Fixup C4: unlike `FakeChild`, never settles on its own - stands in for a
@@ -124,6 +128,10 @@ class HangingFakeChild extends EventEmitter {
   kill(signal: NodeJS.Signals): void {
     this.killed = true;
     this.killSignal = signal;
+  }
+
+  close(exitCode: number | null): void {
+    this.emit("close", exitCode);
   }
 }
 
@@ -489,7 +497,7 @@ describe("streamTraycerCliJson resolves data, fans progress, and converts error 
 // cosmetic. The subprocess must actually be killed the moment the signal
 // fires, and the awaited call must reject rather than hang.
 describe("streamTraycerCliJson kills the subprocess when its signal aborts", () => {
-  it("kills the still-running child and rejects once the AbortSignal fires, not before", async () => {
+  it("kills the still-running child but waits for close before rejecting", async () => {
     const child = new HangingFakeChild();
     spawnImpl = () => child;
     const { streamTraycerCliJson } = await import("../traycer-cli");
@@ -503,16 +511,36 @@ describe("streamTraycerCliJson kills the subprocess when its signal aborts", () 
       signal: abortController.signal,
     });
 
-    // Give the promise executor a turn to spawn and subscribe before
+    // Wait for the real stream wrapper to spawn and subscribe before
     // asserting nothing has happened yet.
-    await Promise.resolve();
+    await vi.waitFor(() => {
+      expect(child.stdout.listenerCount("data")).toBeGreaterThan(0);
+    });
     expect(child.killed).toBe(false);
 
     abortController.abort();
 
-    await expect(promise).rejects.toThrow();
     expect(child.killed).toBe(true);
     expect(child.killSignal).toBe("SIGKILL");
+
+    let settled = false;
+    void promise.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await vi.waitFor(() => {
+      expect(child.stdout.listenerCount("data")).toBeGreaterThan(0);
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    child.close(null);
+    await expect(promise).rejects.toThrow();
   });
 
   it("kills immediately when the signal is already aborted before the call starts", async () => {
@@ -522,17 +550,20 @@ describe("streamTraycerCliJson kills the subprocess when its signal aborts", () 
     const abortController = new AbortController();
     abortController.abort();
 
-    await expect(
-      streamTraycerCliJson<unknown>({
-        args: ["host", "download", "--automatic"],
-        onEvent: () => undefined,
-        env: null,
-        timeoutMs: 5_000,
-        signal: abortController.signal,
-      }),
-    ).rejects.toThrow();
+    const promise = streamTraycerCliJson<unknown>({
+      args: ["host", "download", "--automatic"],
+      onEvent: () => undefined,
+      env: null,
+      timeoutMs: 5_000,
+      signal: abortController.signal,
+    });
+    await vi.waitFor(() => {
+      expect(child.stdout.listenerCount("data")).toBeGreaterThan(0);
+    });
     expect(child.killed).toBe(true);
     expect(child.killSignal).toBe("SIGKILL");
+    child.close(null);
+    await expect(promise).rejects.toThrow();
   });
 });
 

@@ -492,6 +492,7 @@ export class HostController {
   private downloadTail: Promise<void> = Promise.resolve();
   private downloadStatus: DownloadLaneStatus | null = null;
   private downloadAbortController: AbortController | null = null;
+  private stageLatestInFlight: Promise<void> | null = null;
   private stageLatestPending = false;
 
   private latestVersionCache: string | null = null;
@@ -568,6 +569,33 @@ export class HostController {
     string,
     Promise<MutationOutcome<unknown>>
   >();
+
+  // Apply and activation both run asynchronous eligibility/download-lane
+  // preflight before they enter `enqueueMutation`. Coalesce that whole
+  // intent too, so identical callers cannot duplicate registry probes or
+  // automatic download submissions and only join at the mutation body.
+  private readonly inFlightIntentPreflights = new Map<
+    string,
+    Promise<MutationOutcome<unknown>>
+  >();
+
+  private coalesceIntent<T>(
+    coalesceKey: string,
+    fn: () => Promise<MutationOutcome<T>>,
+  ): Promise<MutationOutcome<T>> {
+    const existing = this.inFlightIntentPreflights.get(coalesceKey);
+    if (existing !== undefined) {
+      return existing as Promise<MutationOutcome<T>>;
+    }
+    const job = fn().finally(() => {
+      this.inFlightIntentPreflights.delete(coalesceKey);
+    });
+    this.inFlightIntentPreflights.set(
+      coalesceKey,
+      job as Promise<MutationOutcome<unknown>>,
+    );
+    return job;
+  }
 
   private enqueueMutation<T>(
     kind: MutationKind,
@@ -1377,9 +1405,29 @@ export class HostController {
   // mutation owns the host; re-kicked from `enqueueMutation`'s finally
   // once the mutation completes.
 
-  async stageLatest(): Promise<void> {
+  stageLatest(): Promise<void> {
+    if (this.stageLatestInFlight !== null) {
+      return this.stageLatestInFlight;
+    }
+    const job = this.runStageLatest().finally(() => {
+      if (this.stageLatestInFlight === job) {
+        this.stageLatestInFlight = null;
+      }
+    });
+    this.stageLatestInFlight = job;
+    return job;
+  }
+
+  private async runStageLatest(): Promise<void> {
     if (this.mutationStatus !== null) {
       this.stageLatestPending = true;
+      await this.mutationTail;
+    }
+    // A job may have entered the lane while this call was awaiting the old
+    // tail. Wait until the actual lane is idle before deciding to start a
+    // download, rather than relying on the status at submission time.
+    if (this.mutationStatus !== null) {
+      await this.runStageLatest();
       return;
     }
     await this.reconcileEligibleStage();
@@ -1429,6 +1477,14 @@ export class HostController {
 
   private async runDownloadLane(explicitVersion: string | null): Promise<void> {
     const job = this.downloadTail.then(async () => {
+      // This work may have sat behind another download. Check both gates at
+      // execution time: a mutation can have started, or Remove Traycer can
+      // have persisted its sentinel, while it was waiting.
+      if (await isHostRemovedByUser()) return;
+      if (this.mutationStatus !== null) {
+        this.stageLatestPending = true;
+        return;
+      }
       const version = explicitVersion ?? this.latestVersionCache ?? "latest";
       this.downloadStatus = { version, progress: null, lastError: null };
       const controller = new AbortController();
@@ -1508,7 +1564,7 @@ export class HostController {
 
   // ---- applyStaged -----------------------------------------------------
 
-  async applyStaged(
+  applyStaged(
     trigger: ApplyStagedTrigger,
     force: boolean,
   ): Promise<MutationOutcome<ApplyStagedOk>> {
@@ -1522,42 +1578,47 @@ export class HostController {
     // still proceeds with the signed stage (yank is curation; the minisign
     // signature is the security boundary) - `stageLatest`'s own probe
     // failure is already silent.
-    await this.awaitDownloadLaneIdle();
-    await this.reconcileEligibleStage();
-    await this.awaitDownloadLaneIdle();
-
-    return this.enqueueMutation<ApplyStagedOk>(
-      "apply",
+    return this.coalesceIntent<ApplyStagedOk>(
       `apply:${trigger}:${force}`,
       async () => {
-        if (trigger === "launch" && (await isHostRemovedByUser())) {
-          return {
-            kind: "deferred",
-            message: "Host was removed by the user.",
-          };
-        }
-        const installed = await readDesktopHostInstallRecord(this.layout);
-        const staged = await readDesktopHostStagedRecord(this.layout);
-        if (
-          !deriveUpdateReady(
-            installed?.version ?? null,
-            staged?.version ?? null,
-          ) &&
-          staged === null
-        ) {
-          return {
-            kind: "ok",
-            value: {
-              appliedVersion: installed?.version ?? "",
-              runningActivated: true,
-            },
-          };
-        }
+        await this.awaitDownloadLaneIdle();
+        await this.stageLatest();
+        await this.awaitDownloadLaneIdle();
 
-        if (await this.isPackagedMacOwned()) {
-          return this.applyStagedPackagedMac();
-        }
-        return this.applyStagedCliOwned(force);
+        return this.enqueueMutation<ApplyStagedOk>(
+          "apply",
+          `apply:${trigger}:${force}`,
+          async () => {
+            if (trigger === "launch" && (await isHostRemovedByUser())) {
+              return {
+                kind: "deferred",
+                message: "Host was removed by the user.",
+              };
+            }
+            const installed = await readDesktopHostInstallRecord(this.layout);
+            const staged = await readDesktopHostStagedRecord(this.layout);
+            if (
+              !deriveUpdateReady(
+                installed?.version ?? null,
+                staged?.version ?? null,
+              ) &&
+              staged === null
+            ) {
+              return {
+                kind: "ok",
+                value: {
+                  appliedVersion: installed?.version ?? "",
+                  runningActivated: true,
+                },
+              };
+            }
+
+            if (await this.isPackagedMacOwned()) {
+              return this.applyStagedPackagedMac();
+            }
+            return this.applyStagedCliOwned(force);
+          },
+        );
       },
     );
   }
@@ -1662,44 +1723,52 @@ export class HostController {
 
   // ---- activateInstalled -------------------------------------------------
 
-  async activateInstalled(
+  activateInstalled(
     force: boolean,
   ): Promise<MutationOutcome<ActivateInstalledOk>> {
     // Fixup A6: reconcile BEFORE entering the exclusive mutation lane, same
     // reasoning as `applyStaged` - determining whether a ready update
     // supersedes activation debt needs fresh `updateReady` state, and
     // fetching it must never hold the lane hostage across a WAN download.
-    await this.awaitDownloadLaneIdle();
-    await this.reconcileEligibleStage();
-    await this.awaitDownloadLaneIdle();
-
-    return this.enqueueMutation<ActivateInstalledOk>(
-      "activate",
+    return this.coalesceIntent<ActivateInstalledOk>(
       `activate:${force}`,
       async () => {
-        // A ready update supersedes activation debt - prevents the
-        // restart-old -> stamp -> restart-new double cycle. The reconcile
-        // already ran above; this only re-reads the (now-fresh) state and
-        // performs the apply/activate choreography, no further download.
-        const installed = await readDesktopHostInstallRecord(this.layout);
-        const staged = await readDesktopHostStagedRecord(this.layout);
-        if (
-          deriveUpdateReady(installed?.version ?? null, staged?.version ?? null)
-        ) {
-          const applied = (await this.isPackagedMacOwned())
-            ? await this.applyStagedPackagedMac()
-            : await this.applyStagedCliOwned(force);
-          return applied.kind === "ok"
-            ? {
-                kind: "ok",
-                value: { activated: applied.value.runningActivated },
-              }
-            : applied;
-        }
-        if (await this.isPackagedMacOwned()) {
-          return this.runLockedMacActivationCycle(force, "activate", false);
-        }
-        return this.activateInstalledCliOwned(force);
+        await this.awaitDownloadLaneIdle();
+        await this.stageLatest();
+        await this.awaitDownloadLaneIdle();
+
+        return this.enqueueMutation<ActivateInstalledOk>(
+          "activate",
+          `activate:${force}`,
+          async () => {
+            // A ready update supersedes activation debt - prevents the
+            // restart-old -> stamp -> restart-new double cycle. The reconcile
+            // already ran above; this only re-reads the (now-fresh) state and
+            // performs the apply/activate choreography, no further download.
+            const installed = await readDesktopHostInstallRecord(this.layout);
+            const staged = await readDesktopHostStagedRecord(this.layout);
+            if (
+              deriveUpdateReady(
+                installed?.version ?? null,
+                staged?.version ?? null,
+              )
+            ) {
+              const applied = (await this.isPackagedMacOwned())
+                ? await this.applyStagedPackagedMac()
+                : await this.applyStagedCliOwned(force);
+              return applied.kind === "ok"
+                ? {
+                    kind: "ok",
+                    value: { activated: applied.value.runningActivated },
+                  }
+                : applied;
+            }
+            if (await this.isPackagedMacOwned()) {
+              return this.runLockedMacActivationCycle(force, "activate", false);
+            }
+            return this.activateInstalledCliOwned(force);
+          },
+        );
       },
     );
   }
@@ -2168,6 +2237,10 @@ export class HostController {
       "removeTraycer",
       "removeTraycer",
       async () => {
+        // The abort asks the child to exit; wait for the stream's `close`
+        // before unregistering or uninstalling, and let queued automatic
+        // jobs observe the sentinel and no-op.
+        await this.awaitDownloadLaneIdle();
         let removedLoginItem = false;
         if (await this.isPackagedMacOwned()) {
           const outcome = await withDesktopCliLock(

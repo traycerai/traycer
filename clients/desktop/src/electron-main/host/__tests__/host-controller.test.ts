@@ -526,9 +526,15 @@ describe("mutation lane: wait-never-reject", () => {
     expect(maxConcurrentHolders).toBe(1);
     // Fixup C2: the title's own "FIFO order" claim was never checked - only
     // mutual exclusion was. The second `respawn()` coalesces with the first
-    // (same key, still in flight), so exactly two CLI invocations happen;
-    // this pins the order they run in, not just that they don't overlap.
-    expect(order).toEqual(["host restart", "host apply"]);
+    // (same key, still in flight). `applyStaged`'s production preflight
+    // revalidates the extant stage before consuming it, so the automatic
+    // download/yank-heal pass sits between the queued restart and apply.
+    // This pins the complete observable ordering, not only exclusivity.
+    expect(order).toEqual([
+      "host restart",
+      "host download --automatic",
+      "host apply",
+    ]);
   });
 });
 
@@ -541,6 +547,132 @@ describe("mutation lane: wait-never-reject", () => {
 // that both eventually resolve.
 // ---------------------------------------------------------------------------
 describe("coalescing: duplicate in-flight submissions join rather than re-execute", () => {
+  it("P10/V6: identical apply intents coalesce before their registry and download preflight", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writeStagedRecord("production", "1.8.0", "1.8.0");
+
+    const downloadGate = deferred<void>();
+    let availableCalls = 0;
+    let downloadCalls = 0;
+    let applyCalls = 0;
+    vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
+      if (args.includes("available")) {
+        availableCalls += 1;
+        return availableSnapshotFixture("1.8.0", ["1.8.0"]);
+      }
+      return {};
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args.includes("download")) {
+        downloadCalls += 1;
+        await downloadGate.promise;
+        return { data: {} };
+      }
+      if (opts.args.includes("apply")) {
+        applyCalls += 1;
+        return {
+          data: {
+            outcome: "applied",
+            record: { version: "1.8.0" },
+            runningActivated: true,
+            installGeneration: null,
+          },
+        };
+      }
+      return { data: {} };
+    });
+
+    const first = controller.applyStaged("manual", false);
+    const second = controller.applyStaged("manual", false);
+    expect(first).toBe(second);
+    await vi.waitFor(() => {
+      expect(downloadCalls).toBe(1);
+    });
+
+    downloadGate.resolve(undefined);
+    await Promise.all([first, second]);
+
+    expect(availableCalls).toBe(1);
+    expect(downloadCalls).toBe(1);
+    expect(applyCalls).toBe(1);
+  });
+
+  it("P10: identical activation intents coalesce before their registry preflight", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+
+    let availableCalls = 0;
+    let restartCalls = 0;
+    vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
+      if (args.includes("available")) {
+        availableCalls += 1;
+        return availableSnapshotFixture("1.7.0", ["1.7.0"]);
+      }
+      return {};
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args.includes("restart")) {
+        restartCalls += 1;
+        return { data: { activated: true } };
+      }
+      return { data: {} };
+    });
+
+    const first = controller.activateInstalled(false);
+    const second = controller.activateInstalled(false);
+    expect(first).toBe(second);
+    await Promise.all([first, second]);
+
+    expect(availableCalls).toBe(1);
+    expect(restartCalls).toBe(1);
+  });
+
+  it("P10: concurrent stageLatest calls share the production reconcile and download", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+
+    const downloadGate = deferred<void>();
+    let availableCalls = 0;
+    let downloadCalls = 0;
+    vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
+      if (args.includes("available")) {
+        availableCalls += 1;
+        return availableSnapshotFixture("1.8.0", ["1.8.0"]);
+      }
+      return {};
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args.includes("download")) {
+        downloadCalls += 1;
+        await downloadGate.promise;
+      }
+      return { data: {} };
+    });
+
+    const first = controller.stageLatest();
+    const second = controller.stageLatest();
+    expect(first).toBe(second);
+    await vi.waitFor(() => {
+      expect(downloadCalls).toBe(1);
+    });
+
+    downloadGate.resolve(undefined);
+    await Promise.all([first, second]);
+
+    expect(availableCalls).toBe(1);
+    expect(downloadCalls).toBe(1);
+  });
+
   it("two simultaneous respawn() calls execute the restart once; both callers resolve with the same outcome", async () => {
     const controller = newController("production");
     writeInstallRecord("production", {
@@ -656,12 +788,14 @@ describe("two lanes: mutation vs download independence", () => {
     const respawnPromise = controller.respawn();
     await flushMicrotasks();
 
-    await controller.stageLatest();
+    const stageLatestPromise = controller.stageLatest();
+    await flushMicrotasks();
     // Mutation lane still owns the host - no download call was made yet.
     expect(downloadCalls).toHaveLength(0);
 
     mutationGate.resolve({ data: { activated: true } });
     await respawnPromise;
+    await stageLatestPromise;
     // `enqueueMutation`'s finally re-kicks the pending stageLatest - real fs
     // reads (isHostRemovedByUser, install/staged records) are in the path
     // before the download call, so poll rather than assume a fixed number
@@ -1332,6 +1466,73 @@ describe("yank/apply ordering", () => {
     );
   });
 
+  it("P2/V9: apply joins an in-flight yank reconcile and re-reads the stage before consuming it", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writeStagedRecord("production", "1.8.0", "1.8.0");
+    const layout = getHostFsLayout("production");
+    const reconcileGate = deferred<void>();
+    let applyCalls = 0;
+    let availableCalls = 0;
+    let firstReconcileReleased = false;
+    let downloadCalls = 0;
+
+    vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
+      if (args.includes("available")) {
+        availableCalls += 1;
+        if (availableCalls === 1) {
+          await reconcileGate.promise;
+          firstReconcileReleased = true;
+        }
+        return availableSnapshotFixture("1.7.0", ["1.7.0"]);
+      }
+      return {};
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args.includes("download")) {
+        downloadCalls += 1;
+        if (firstReconcileReleased) {
+          rmSync(layout.stagedRecordFile, { force: true });
+        }
+        return { data: {} };
+      }
+      if (opts.args.includes("apply")) {
+        applyCalls += 1;
+        return {
+          data: {
+            outcome: "applied",
+            record: { version: "1.8.0" },
+            runningActivated: true,
+            installGeneration: null,
+          },
+        };
+      }
+      return { data: {} };
+    });
+
+    const inFlightReconcile = controller.stageLatest();
+    await vi.waitFor(() => {
+      expect(availableCalls).toBe(1);
+    });
+    const apply = controller.applyStaged("manual", false);
+    // The yanked stage is still present while the asynchronous eligibility
+    // probe is blocked. Apply must not consume that stale snapshot.
+    expect(applyCalls).toBe(0);
+    reconcileGate.resolve(undefined);
+    const outcome = await apply;
+    await inFlightReconcile;
+
+    expect(outcome.kind).toBe("ok");
+    expect(applyCalls).toBe(0);
+    expect(downloadCalls).toBe(1);
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+      expect.objectContaining({ args: ["host", "download", "--automatic"] }),
+    );
+  });
+
   // Fixup B13: `activateInstalled`'s "a ready update supersedes activation
   // debt" branch must re-derive `updateReady` AFTER its preflight reconcile
   // settles, not decide it from the pre-reconcile disk state. Simulates the
@@ -1633,49 +1834,48 @@ describe("platform matrix", () => {
     expect(await isHostRemovedByUser()).toBe(true);
   });
 
-  // Fixup C4: `abortInFlightDownload`'s `AbortController` used to flip
-  // `.aborted` with nothing downstream ever wired to it - a mock that just
-  // awaits a manually-resolved gate can't tell the difference between a real
-  // abort and a lucky race, so the original version of this test could pass
-  // even with the abort completely disconnected (which it was). This mock
-  // races the gate against `opts.signal`'s own "abort" event, so the test
-  // only passes if `removeTraycer()` genuinely fires the SAME signal
-  // `streamBundledTraycerCliJson` was given for this download - proving the
-  // wiring, not just the eventual "no resurrection" outcome.
-  it("removeTraycer aborts an in-flight download's AbortController (no resurrection: the download lane's own removed-by-user gate then blocks any further staging)", async () => {
+  // P3: the signal must reach the real download child, and removal must wait
+  // for that child to close before it begins the uninstall. A signal-only
+  // check is insufficient: it would still allow a late promote to race the
+  // removal path.
+  it("P3: removeTraycer aborts an in-flight download and waits for its child to settle before uninstalling", async () => {
     const controller = newController("production");
     writeInstallRecord("production", {
       version: "1.7.0",
       runtimeVersion: "1.7.0",
     });
     const downloadGate = deferred<unknown>();
-    let observedAbortedBeforeGateSettled = false;
+    let observedAbort = false;
+    let uninstallCalls = 0;
     vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
       if (args.includes("available")) {
         return availableSnapshotFixture("1.8.0", ["1.8.0"]);
+      }
+      if (args.includes("uninstall")) {
+        uninstallCalls += 1;
       }
       return { removedInstallDir: true, serviceUninstalled: true };
     });
     vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
       if (opts.args.includes("download")) {
-        const aborted = new Promise<"aborted">((resolve) => {
+        const aborted = new Promise<void>((resolve) => {
           if (opts.signal === null) return;
           if (opts.signal.aborted) {
-            resolve("aborted");
+            observedAbort = true;
+            resolve();
             return;
           }
-          opts.signal.addEventListener("abort", () => resolve("aborted"), {
-            once: true,
-          });
+          opts.signal.addEventListener(
+            "abort",
+            () => {
+              observedAbort = true;
+              resolve();
+            },
+            { once: true },
+          );
         });
-        const settled = await Promise.race([
-          aborted,
-          downloadGate.promise.then((): "resolved" => "resolved"),
-        ]);
-        if (settled === "aborted") {
-          observedAbortedBeforeGateSettled = true;
-          throw new Error("aborted");
-        }
+        await aborted;
+        await downloadGate.promise;
         return { data: {} };
       }
       return { data: {} };
@@ -1684,16 +1884,19 @@ describe("platform matrix", () => {
     const stagePromise = controller.stageLatest();
     await flushMicrotasks();
 
-    await controller.removeTraycer();
-    // The removal itself completed without waiting for the download.
-    expect(await isHostRemovedByUser()).toBe(true);
-    // The abort fired (and the in-flight download observed it) BEFORE the
-    // gate was ever manually resolved below - the download's own signal is
-    // genuinely wired to `removeTraycer`'s abort call, not merely present.
-    expect(observedAbortedBeforeGateSettled).toBe(true);
+    const removal = controller.removeTraycer();
+    await vi.waitFor(() => {
+      expect(observedAbort).toBe(true);
+    });
+    // Abort was observed, but the mocked child has not closed. The real
+    // uninstall must remain blocked until that close-equivalent settles.
+    expect(uninstallCalls).toBe(0);
 
     downloadGate.resolve(undefined);
+    await removal;
     await stagePromise;
+    expect(uninstallCalls).toBe(1);
+    expect(await isHostRemovedByUser()).toBe(true);
 
     // A subsequent registry-refresh tick's `stageLatest` is a hard no-op
     // once removed - this is the actual "no resurrection" guarantee (the
