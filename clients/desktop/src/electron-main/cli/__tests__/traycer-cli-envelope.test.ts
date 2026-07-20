@@ -609,6 +609,46 @@ describe("streamTraycerCliJson kills the subprocess when its signal aborts", () 
   });
 });
 
+describe("streamTraycerCliJson timeout waits for the child close", () => {
+  it("F11: keeps the download stream unsettled after timeout until the killed child closes", async () => {
+    vi.useFakeTimers();
+    try {
+      const child = new HangingFakeChild();
+      spawnImpl = () => child;
+      const { streamTraycerCliJson } = await import("../traycer-cli");
+
+      const promise = streamTraycerCliJson<unknown>({
+        args: ["host", "download", "--automatic"],
+        onEvent: () => undefined,
+        env: null,
+        timeoutMs: 5_000,
+        signal: null,
+      });
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(child.killed).toBe(true);
+      expect(child.killSignal).toBe("SIGKILL");
+
+      let settled = false;
+      void promise.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+      await Promise.resolve();
+      expect(settled).toBe(false);
+
+      child.close(null);
+      await expect(promise).rejects.toThrow("timed out");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("runTraycerCliPlainJson preserves legacy plain-JSON output", () => {
   it("parses a single plain JSON document (no NDJSON envelope) for `host status --json`", async () => {
     // `host status --json` predates the shared NDJSON runner - it

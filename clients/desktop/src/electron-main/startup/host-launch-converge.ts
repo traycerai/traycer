@@ -59,9 +59,22 @@ export async function runLaunchHostConvergeReconcile(
   hostController: IpcHostController,
   menu: HostUpdateMenuSurface,
 ): Promise<void> {
+  const initialStatus = await hostController.getStatus();
+  if (initialStatus.removedByUser) {
+    log.info("[host-controller] launch converge skipped for removed host");
+    return;
+  }
+
+  // Registry discovery stages asynchronously so a generic refresh never
+  // blocks its caller on a WAN download. At launch that is insufficient: a
+  // reconcile which samples status before staging finishes would leave the
+  // new release dormant until a later launch. Join (or start) the same
+  // controller-owned staging work, then make the apply/activate decision
+  // from the post-stage status.
+  await hostController.stageLatest();
   const status = await hostController.getStatus();
   if (status.removedByUser) {
-    log.info("[host-controller] launch converge skipped for removed host");
+    log.info("[host-controller] launch converge skipped after staging removal");
     return;
   }
 

@@ -665,6 +665,7 @@ async function streamTraycerCliJsonWithInvocation<T>(
     let sawTerminalOk = false;
     let terminalError: TraycerCliError | null = null;
     let abortError: TraycerCliError | null = null;
+    let timeoutError: TraycerCliError | null = null;
     let settled = false;
     const cleanupAbortListener = (): void => {
       if (opts.signal !== null) {
@@ -673,25 +674,25 @@ async function streamTraycerCliJsonWithInvocation<T>(
     };
     const timer = setTimeout(() => {
       if (settled) return;
-      settled = true;
-      cleanupAbortListener();
+      // Killing a timed-out child does not mean it has released its files.
+      // Keep this stream promise pending until `close`, just like explicit
+      // cancellation, so Remove Traycer's download-drain cannot launch an
+      // uninstall while the child is still exiting.
+      timeoutError = new TraycerCliError(
+        {
+          message: `traycer-cli timed out after ${opts.timeoutMs}ms (${augmentedArgs.join(" ")})`,
+          code: null,
+          details: null,
+          exitCode: null,
+          stderrTail,
+        },
+        null,
+      );
       try {
         child.kill("SIGKILL");
       } catch {
         // ignore - already exited
       }
-      reject(
-        new TraycerCliError(
-          {
-            message: `traycer-cli timed out after ${opts.timeoutMs}ms (${augmentedArgs.join(" ")})`,
-            code: null,
-            details: null,
-            exitCode: null,
-            stderrTail,
-          },
-          null,
-        ),
-      );
     }, opts.timeoutMs);
     // Fixup C4: the ONLY current caller (`runDownloadLane`'s
     // `abortInFlightDownload`) used to flip `AbortController.signal.aborted`
@@ -702,7 +703,7 @@ async function streamTraycerCliJsonWithInvocation<T>(
     // but this promise settles only after `close` so a follow-on uninstall
     // cannot race a child still holding or promoting files.
     const onAbort = (): void => {
-      if (settled || abortError !== null) return;
+      if (settled || abortError !== null || timeoutError !== null) return;
       clearTimeout(timer);
       abortError = new TraycerCliError(
         {
@@ -780,7 +781,7 @@ async function streamTraycerCliJsonWithInvocation<T>(
     });
 
     child.on("error", (err) => {
-      if (settled || abortError !== null) return;
+      if (settled || abortError !== null || timeoutError !== null) return;
       settled = true;
       clearTimeout(timer);
       cleanupAbortListener();
@@ -805,6 +806,10 @@ async function streamTraycerCliJsonWithInvocation<T>(
       cleanupAbortListener();
       if (abortError !== null) {
         reject(abortError);
+        return;
+      }
+      if (timeoutError !== null) {
+        reject(timeoutError);
         return;
       }
       if (terminalError !== null) {

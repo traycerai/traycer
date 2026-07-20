@@ -102,15 +102,20 @@ function fakeHostController(
 ): IpcHostController & {
   readonly applyStagedCalls: readonly [ApplyStagedTrigger, boolean][];
   readonly activateInstalledCalls: readonly boolean[];
+  readonly stageLatestCalls: number;
 } {
   const applyStagedCalls: [ApplyStagedTrigger, boolean][] = [];
   const activateInstalledCalls: boolean[] = [];
+  let stageLatestCalls = 0;
   return {
     get applyStagedCalls() {
       return applyStagedCalls;
     },
     get activateInstalledCalls() {
       return activateInstalledCalls;
+    },
+    get stageLatestCalls() {
+      return stageLatestCalls;
     },
     async getStatus(): Promise<HostControllerStatus> {
       return status;
@@ -133,10 +138,8 @@ function fakeHostController(
         "fakeHostController.convergeReady: not used by these tests",
       );
     },
-    stageLatest: () => {
-      throw new Error(
-        "fakeHostController.stageLatest: not used by these tests",
-      );
+    async stageLatest(): Promise<void> {
+      stageLatestCalls += 1;
     },
     installVersion: () => {
       throw new Error(
@@ -207,6 +210,29 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
 
     await runLaunchHostConvergeReconcile(controller, fakeMenu());
 
+    expect(controller.applyStagedCalls).toEqual([["launch", false]]);
+    expect(controller.activateInstalledCalls).toEqual([]);
+  });
+
+  it("F7: stages a release before deciding launch convergence, then applies that same launch", async () => {
+    const initial = fakeStatus(false, "activated", false);
+    const staged = fakeStatus(true, "activated", false);
+    const controller = fakeHostController(
+      initial,
+      {
+        kind: "ok",
+        value: { appliedVersion: "1.4.1", runningActivated: true },
+      },
+      { kind: "ok", value: { activated: true } },
+    );
+    vi.spyOn(controller, "getStatus")
+      .mockResolvedValueOnce(initial)
+      .mockResolvedValue(staged);
+    refreshRegistryUpdateStateMock.mockResolvedValue(fakeRegistryState());
+
+    await runLaunchHostConvergeReconcile(controller, fakeMenu());
+
+    expect(controller.stageLatestCalls).toBe(1);
     expect(controller.applyStagedCalls).toEqual([["launch", false]]);
     expect(controller.activateInstalledCalls).toEqual([]);
   });

@@ -540,6 +540,7 @@ describe("mutation lane: wait-never-reject", () => {
     expect(order).toEqual([
       "host restart",
       "host download --automatic",
+      "host download --automatic",
       "host apply",
     ]);
   });
@@ -554,7 +555,7 @@ describe("mutation lane: wait-never-reject", () => {
 // that both eventually resolve.
 // ---------------------------------------------------------------------------
 describe("coalescing: duplicate in-flight submissions join rather than re-execute", () => {
-  it("P10/V6: identical apply intents coalesce before their registry and download preflight", async () => {
+  it("P10/V6: identical apply intents coalesce across their preflight and in-lane eligibility verification", async () => {
     const controller = newController("production");
     writeInstallRecord("production", {
       version: "1.7.0",
@@ -603,8 +604,8 @@ describe("coalescing: duplicate in-flight submissions join rather than re-execut
     downloadGate.resolve(undefined);
     await Promise.all([first, second]);
 
-    expect(availableCalls).toBe(1);
-    expect(downloadCalls).toBe(1);
+    expect(availableCalls).toBe(2);
+    expect(downloadCalls).toBe(2);
     expect(applyCalls).toBe(1);
   });
 
@@ -1637,6 +1638,74 @@ describe("yank/apply ordering", () => {
     expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
       expect.objectContaining({ args: ["host", "download", "--automatic"] }),
     );
+  });
+
+  it("F1: a queued apply rechecks eligibility under its own mutation after an older mutation's pending reconcile", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writeStagedRecord("production", "1.8.0", "1.8.0");
+    const layout = getHostFsLayout("production");
+    const restartGate = deferred<void>();
+    let availableCalls = 0;
+    let downloadCalls = 0;
+    let applyCalls = 0;
+
+    vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
+      if (!args.includes("available")) return {};
+      availableCalls += 1;
+      // The reconciliation which was pending behind the older restart saw
+      // the stage as eligible. By the time apply owns the lane, registry
+      // curation has yanked it; only the fresh in-lane pass can observe
+      // that state before `host apply` consumes the bytes.
+      return availableSnapshotFixture(
+        availableCalls === 1 ? "1.8.0" : "1.7.0",
+        availableCalls === 1 ? ["1.8.0"] : ["1.7.0"],
+      );
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args.includes("restart")) {
+        await restartGate.promise;
+        return { data: { activated: true } };
+      }
+      if (opts.args.includes("download")) {
+        downloadCalls += 1;
+        if (downloadCalls === 2) {
+          rmSync(layout.stagedRecordFile, { force: true });
+        }
+        return { data: {} };
+      }
+      if (opts.args.includes("apply")) {
+        applyCalls += 1;
+        return {
+          data: {
+            outcome: "applied",
+            record: { version: "1.8.0", runtimeVersion: "1.8.0" },
+            runningActivated: true,
+            installGeneration: null,
+          },
+        };
+      }
+      return { data: {} };
+    });
+
+    const restart = controller.respawn();
+    await vi.waitFor(() => {
+      expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+        expect.objectContaining({ args: ["host", "restart"] }),
+      );
+    });
+    const pendingReconcile = controller.stageLatest();
+    const apply = controller.applyStaged("manual", false);
+
+    restartGate.resolve(undefined);
+    await Promise.all([restart, pendingReconcile, apply]);
+
+    expect(availableCalls).toBeGreaterThanOrEqual(2);
+    expect(downloadCalls).toBeGreaterThanOrEqual(2);
+    expect(applyCalls).toBe(0);
   });
 
   // Fixup B13: `activateInstalled`'s "a ready update supersedes activation

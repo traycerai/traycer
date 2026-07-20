@@ -1472,7 +1472,7 @@ export class HostController {
       await this.runStageLatest();
       return;
     }
-    await this.reconcileEligibleStage();
+    await this.reconcileEligibleStage(false);
   }
 
   // Split out from `stageLatest` so `applyStaged`'s own preflight reconcile
@@ -1481,7 +1481,9 @@ export class HostController {
   // `stageLatest`'s `mutationStatus !== null` guard exists to keep a
   // background/independent download from starting during a mutation; it
   // must not also block a mutation's own preflight step against itself.
-  private async reconcileEligibleStage(): Promise<void> {
+  private async reconcileEligibleStage(
+    ownsCurrentMutation: boolean,
+  ): Promise<void> {
     if (await isHostRemovedByUser()) return;
     let snapshot: AvailableSnapshotShape;
     try {
@@ -1510,20 +1512,23 @@ export class HostController {
     // an async gap a mutation can start during; without this re-check a
     // download would still begin right after, violating "no new download
     // while a mutation is active."
-    if (this.mutationStatus !== null) {
+    if (this.mutationStatus !== null && !ownsCurrentMutation) {
       this.stageLatestPending = true;
       return;
     }
-    await this.runDownloadLane(null);
+    await this.runDownloadLane(null, ownsCurrentMutation);
   }
 
-  private async runDownloadLane(explicitVersion: string | null): Promise<void> {
+  private async runDownloadLane(
+    explicitVersion: string | null,
+    ownsCurrentMutation: boolean,
+  ): Promise<void> {
     const job = this.downloadTail.then(async () => {
       // This work may have sat behind another download. Check both gates at
       // execution time: a mutation can have started, or Remove Traycer can
       // have persisted its sentinel, while it was waiting.
       if (await isHostRemovedByUser()) return;
-      if (this.mutationStatus !== null) {
+      if (this.mutationStatus !== null && !ownsCurrentMutation) {
         this.stageLatestPending = true;
         return;
       }
@@ -1637,6 +1642,14 @@ export class HostController {
                 message: "Host was removed by the user.",
               };
             }
+            // The preflight outside the lane keeps ordinary apply calls from
+            // holding the mutation owner across a WAN round trip. It cannot,
+            // however, prove that the stage is still eligible once every
+            // older mutation's `finally` has run: that `finally` can join a
+            // reconcile which is already settling. Reconcile once more here,
+            // under this operation's lane ownership, then derive the stage
+            // from disk immediately before consuming it.
+            await this.reconcileEligibleStage(true);
             const installed = await readDesktopHostInstallRecord(this.layout);
             const staged = await readDesktopHostStagedRecord(this.layout);
             if (
