@@ -18,11 +18,13 @@ import {
   ChevronDown,
   ChevronRight,
   Cpu,
+  ListChecks,
   Monitor,
   Server,
+  X,
 } from "lucide-react";
 import type {
-  OwnerResourceSnapshotWire,
+  OwnerResourceSnapshotWireV13,
   HostTreeResourceSnapshotWire,
   OtherResourceSnapshotWire,
   ResourceOwnerKindWire,
@@ -34,6 +36,12 @@ import { chatDisplayTitle } from "@/lib/display-title";
 import { useRegisteredEpicLiveArtifactTitle } from "@/lib/epic-selectors";
 import { terminalSessionTitle } from "@/lib/terminals/terminal-title";
 import { Button } from "@/components/ui/button";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { HarnessIcon } from "@/components/home/pickers/harness-icon";
+import { normalizeProviderId } from "@/components/home/data/landing-options";
+import { useResourcesKill } from "@/hooks/resources/use-resources-kill-mutation";
+import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { agentProviderLabel } from "@/lib/chat/sender-display";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -56,6 +64,8 @@ import { GlobalResourcesStreamMount } from "@/providers/resources-stream-mount";
 import { useStreamMethodSchemaVersion } from "@/lib/host/stream-runtime-context";
 import type {
   AppResourceUsage,
+  OtherResourceUsage,
+  OwnerResourceUsage,
   TaskResourceSummary,
 } from "@/stores/resources/resources-store";
 import {
@@ -111,6 +121,13 @@ const MEM_COL = "w-20 text-right";
 // Opaque background so scrolled rows slide cleanly underneath it.
 const STICKY_SECTION_HEADER =
   "sticky top-0 z-20 border-b border-border/50 bg-popover";
+/**
+ * Trailing gutter every row reserves for its kill affordance. Section headers
+ * (which have no action) reserve the same width as an empty spacer, so the
+ * cpu/memory columns share one right edge across headers, owner rows, and
+ * process rows. Icon-button sized, so hardcoding the track width is correct.
+ */
+const ROW_ACTION_SLOT = "flex w-10 shrink-0 items-center justify-center";
 const DESKTOP_RESOURCE_SAMPLE_INTERVAL_MS = 1000;
 const desktopAppResourceListeners = new Set<() => void>();
 let desktopAppResourceSnapshot: DesktopAppResourceUsage | null = null;
@@ -149,7 +166,7 @@ interface CanvasOwnerCandidate {
 }
 
 interface OwnerDisplayRow {
-  readonly snapshot: OwnerResourceSnapshotWire;
+  readonly snapshot: OwnerResourceSnapshotWireV13;
   readonly label: string;
   readonly canOpen: boolean;
   readonly tabOrder: number;
@@ -246,6 +263,90 @@ export function ResourceMonitorPopover(props: ResourceMonitorPopoverProps) {
   );
 }
 
+/**
+ * Owns the resource monitor's kill + multi-select state. Groups selected
+ * targets by host and merges their pids into one `resources.kill` per host, so
+ * a bulk kill is one RPC per host rather than one per row. The host validates
+ * every pid against its live tracked set, so an already-dead pid is harmless.
+ */
+function useResourceKillSelection(
+  // Keys of every row currently rendered as killable. Selection is pruned
+  // against this LIVE set at read time (never via an effect), so a selected
+  // process that exits on its own stops counting the moment its row drops
+  // out of the projection.
+  liveKeys: ReadonlySet<string>,
+  // Top-level kill targets (owner rows + Other roots) for "Select all".
+  // Deliberately excludes descendant process rows: selecting an owner already
+  // kills its whole tree, and counting children would double-count.
+  topLevelTargets: ReadonlyMap<string, KillTarget>,
+): {
+  readonly api: ResourceKillApi;
+  readonly selectionMode: boolean;
+  readonly selectedCount: number;
+  readonly allVisibleSelected: boolean;
+  readonly enterSelection: () => void;
+  readonly cancelSelection: () => void;
+  readonly selectAllVisible: () => void;
+  readonly deselectAllVisible: () => void;
+  readonly killSelected: () => void;
+  readonly isKilling: boolean;
+} {
+  const killMutation = useResourcesKill();
+  const { mutate } = killMutation;
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selected, setSelected] = useState<ReadonlyMap<string, KillTarget>>(
+    () => new Map(),
+  );
+  const liveSelected = new Map(
+    [...selected].filter(([key]) => liveKeys.has(key)),
+  );
+  const killTargets = (targets: readonly KillTarget[]): void => {
+    const pidsByHost = new Map<string, number[]>();
+    for (const target of targets) {
+      const existing = pidsByHost.get(target.hostId) ?? [];
+      existing.push(...target.pids);
+      pidsByHost.set(target.hostId, existing);
+    }
+    for (const [hostId, pids] of pidsByHost) {
+      if (pids.length > 0) mutate({ hostId, pids });
+    }
+  };
+  const api: ResourceKillApi = {
+    selectionMode,
+    isSelected: (key) => liveSelected.has(key),
+    toggleSelection: (target) =>
+      setSelected((prev) => {
+        const next = new Map(prev);
+        if (next.has(target.key)) next.delete(target.key);
+        else next.set(target.key, target);
+        return next;
+      }),
+    killOne: (target) => killTargets([target]),
+    isKilling: killMutation.isPending,
+  };
+  return {
+    api,
+    selectionMode,
+    selectedCount: liveSelected.size,
+    allVisibleSelected:
+      topLevelTargets.size > 0 &&
+      [...topLevelTargets.keys()].every((key) => liveSelected.has(key)),
+    enterSelection: () => setSelectionMode(true),
+    cancelSelection: () => {
+      setSelectionMode(false);
+      setSelected(new Map());
+    },
+    selectAllVisible: () => setSelected(new Map(topLevelTargets)),
+    deselectAllVisible: () => setSelected(new Map()),
+    killSelected: () => {
+      killTargets([...liveSelected.values()]);
+      setSelectionMode(false);
+      setSelected(new Map());
+    },
+    isKilling: killMutation.isPending,
+  };
+}
+
 function ResourceMonitorContent(props: { readonly onClose: () => void }) {
   const [sortOption, setSortOption] = useState<ResourceSortOption>("tab");
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
@@ -255,10 +356,23 @@ function ResourceMonitorContent(props: { readonly onClose: () => void }) {
   const [expandedProcesses, setExpandedProcesses] = useState<Set<string>>(
     () => new Set(),
   );
+  // The global projection streams a single host (the default host's transport),
+  // so every owner/Other pid in it belongs to this host - the kill route for
+  // the harness-less "Other" roots, which carry no owner hostId of their own.
+  const defaultHostId = useReactiveActiveHostId();
   const panelRef = useRef<HTMLDivElement | null>(null);
   const sortTriggerRef = useRef<HTMLButtonElement | null>(null);
   const dismissingSortMenuRef = useRef(false);
   const projection = useGlobalResourceProjection();
+  const killTargetIndex = useMemo(
+    () =>
+      buildKillTargetIndex(projection.owners, projection.other, defaultHostId),
+    [projection.owners, projection.other, defaultHostId],
+  );
+  const killSelection = useResourceKillSelection(
+    killTargetIndex.live,
+    killTargetIndex.topLevel,
+  );
   const resourcesVersion = useStreamMethodSchemaVersion("resources.subscribe");
   const { tasks } = useCloudEpicTasksQuery(undefined, { enabled: true });
   const canvas = useResourceCanvasSnapshot();
@@ -422,45 +536,109 @@ function ResourceMonitorContent(props: { readonly onClose: () => void }) {
       >
         <div className="border-b border-border/60 px-3.5 pb-3 pt-3">
           <div className="flex items-center justify-between gap-3">
-            <h4 className="truncate text-ui-sm font-medium text-foreground">
+            <h4 className="min-w-0 flex-1 truncate text-ui-sm font-medium text-foreground">
               Resources
             </h4>
-            <DropdownMenu
-              modal={false}
-              open={sortMenuOpen}
-              onOpenChange={setSortMenuOpen}
-            >
-              <DropdownMenuTrigger asChild>
-                <button
-                  ref={sortTriggerRef}
-                  type="button"
-                  className="flex h-6 items-center gap-1 rounded-sm px-1.5 text-ui-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                  aria-label="Sort resource rows"
-                >
-                  <ArrowDownNarrowWide className="size-3.5" />
-                  <span>{SORT_LABELS[sortOption]}</span>
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-40">
-                <DropdownMenuRadioGroup
-                  value={sortOption}
-                  onValueChange={(value) => {
-                    if (isResourceSortOption(value)) setSortOption(value);
-                  }}
-                >
-                  <DropdownMenuRadioItem value="memory">
-                    Memory
-                  </DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value="cpu">CPU</DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value="name">
-                    Name
-                  </DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value="tab">
-                    Tab order
-                  </DropdownMenuRadioItem>
-                </DropdownMenuRadioGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
+            <div className="flex shrink-0 items-center gap-1">
+              {killSelection.selectionMode ? (
+                // Selection mode replaces the header controls wholesale (the
+                // sort dropdown included), mirroring the chat navigator's
+                // Select all / Cancel / destructive-action toolbar.
+                <div className="flex items-center gap-0.5">
+                  <SelectAllToggle
+                    allSelected={killSelection.allVisibleSelected}
+                    onSelectAll={killSelection.selectAllVisible}
+                    onDeselectAll={killSelection.deselectAllVisible}
+                  />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="xs"
+                    className="h-6 px-1.5 text-muted-foreground hover:text-foreground"
+                    aria-label="Cancel selection"
+                    onClick={killSelection.cancelSelection}
+                  >
+                    <X className="mr-1 size-3.5" />
+                    Cancel
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="xs"
+                    className="h-6 px-1.5 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                    disabled={
+                      killSelection.selectedCount === 0 ||
+                      killSelection.isKilling
+                    }
+                    aria-label={`Kill ${killSelection.selectedCount} selected`}
+                    onClick={killSelection.killSelected}
+                  >
+                    Kill{" "}
+                    {killSelection.selectedCount > 0
+                      ? killSelection.selectedCount
+                      : ""}
+                    {killSelection.isKilling ? (
+                      <AgentSpinningDots
+                        className="ml-1"
+                        testId={undefined}
+                        variant={undefined}
+                      />
+                    ) : null}
+                  </Button>
+                </div>
+              ) : (
+                <>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    className="text-muted-foreground hover:text-foreground"
+                    aria-label="Select processes to kill"
+                    onClick={killSelection.enterSelection}
+                  >
+                    <ListChecks className="size-3.5" />
+                  </Button>
+                  <DropdownMenu
+                    modal={false}
+                    open={sortMenuOpen}
+                    onOpenChange={setSortMenuOpen}
+                  >
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        ref={sortTriggerRef}
+                        type="button"
+                        className="flex h-6 items-center gap-1 rounded-sm px-1.5 text-ui-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                        aria-label="Sort resource rows"
+                      >
+                        <ArrowDownNarrowWide className="size-3.5" />
+                        <span>{SORT_LABELS[sortOption]}</span>
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-40">
+                      <DropdownMenuRadioGroup
+                        value={sortOption}
+                        onValueChange={(value) => {
+                          if (isResourceSortOption(value)) setSortOption(value);
+                        }}
+                      >
+                        <DropdownMenuRadioItem value="memory">
+                          Memory
+                        </DropdownMenuRadioItem>
+                        <DropdownMenuRadioItem value="cpu">
+                          CPU
+                        </DropdownMenuRadioItem>
+                        <DropdownMenuRadioItem value="name">
+                          Name
+                        </DropdownMenuRadioItem>
+                        <DropdownMenuRadioItem value="tab">
+                          Tab order
+                        </DropdownMenuRadioItem>
+                      </DropdownMenuRadioGroup>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </>
+              )}
+            </div>
           </div>
 
           {summary === null ? (
@@ -532,6 +710,7 @@ function ResourceMonitorContent(props: { readonly onClose: () => void }) {
                     onToggleOwner={toggleOwner}
                     onToggleProcess={toggleProcess}
                     onOpenOwner={openOwner}
+                    kill={killSelection.api}
                   />
                 ))
               )}
@@ -541,6 +720,8 @@ function ResourceMonitorContent(props: { readonly onClose: () => void }) {
                   expandedProcesses={expandedProcesses}
                   sortOption={sortOption}
                   onToggleProcess={toggleProcess}
+                  kill={killSelection.api}
+                  killHostId={defaultHostId}
                 />
               )}
             </div>
@@ -676,11 +857,14 @@ function DesktopAppResourceSection(props: {
             Traycer Desktop
           </span>
         </div>
-        <MetricPair
-          cpuPercent={props.app.cpuPercent}
-          rssBytes={props.app.rssBytes}
-          className="text-ui-sm text-foreground"
-        />
+        <div className="flex items-center">
+          <MetricPair
+            cpuPercent={props.app.cpuPercent}
+            rssBytes={props.app.rssBytes}
+            className="text-ui-sm text-foreground"
+          />
+          <span className={ROW_ACTION_SLOT} />
+        </div>
       </div>
       {groups.map((group) => (
         <DesktopAppProcessGroupRow
@@ -726,11 +910,14 @@ function HostAppResourceSection(props: { readonly app: AppResourceUsage }) {
             Traycer Host
           </span>
         </div>
-        <MetricPair
-          cpuPercent={props.app.cpuPercent}
-          rssBytes={props.app.rssBytes}
-          className="text-ui-sm text-foreground"
-        />
+        <div className="flex items-center">
+          <MetricPair
+            cpuPercent={props.app.cpuPercent}
+            rssBytes={props.app.rssBytes}
+            className="text-ui-sm text-foreground"
+          />
+          <span className={ROW_ACTION_SLOT} />
+        </div>
       </div>
       {props.app.process === null ? null : (
         <ProcessTreeRow
@@ -747,6 +934,8 @@ function HostAppResourceSection(props: { readonly app: AppResourceUsage }) {
           stickyTop={0}
           labelMode="full"
           onToggleExpand={noProcessToggle}
+          kill={null}
+          killHostId={null}
         />
       )}
     </div>
@@ -762,7 +951,7 @@ function resourcesSubscribeV12Supported(
 function combineHeadlineResourceSummary(
   hostTree: HostTreeResourceSnapshotWire | null,
   app: AppResourceUsage | null,
-  owners: readonly OwnerResourceSnapshotWire[],
+  owners: readonly OwnerResourceSnapshotWireV13[],
   desktopApp: DesktopAppResourceUsage | null,
 ): TaskResourceSummary | null {
   if (
@@ -794,7 +983,7 @@ function combineHeadlineResourceSummary(
 
 function legacyHeadlineSummary(
   app: AppResourceUsage | null,
-  owners: readonly OwnerResourceSnapshotWire[],
+  owners: readonly OwnerResourceSnapshotWireV13[],
 ): TaskResourceSummary {
   return owners.reduce(
     (summary, owner) => ({
@@ -845,6 +1034,7 @@ function TaskResourceSection(props: {
   readonly onToggleOwner: (key: string) => void;
   readonly onToggleProcess: (key: string) => void;
   readonly onOpenOwner: (row: OwnerDisplayRow) => void;
+  readonly kill: ResourceKillApi;
 }) {
   const headerRef = useRef<HTMLDivElement | null>(null);
   const [headerHeight, setHeaderHeight] = useState(0);
@@ -872,11 +1062,14 @@ function TaskResourceSection(props: {
         <span className="min-w-0 truncate text-ui-xs font-semibold uppercase tracking-wide text-muted-foreground">
           {props.task.label}
         </span>
-        <MetricPair
-          cpuPercent={props.task.cpuPercent}
-          rssBytes={props.task.rssBytes}
-          className="text-ui-sm text-foreground/90"
-        />
+        <div className="flex items-center">
+          <MetricPair
+            cpuPercent={props.task.cpuPercent}
+            rssBytes={props.task.rssBytes}
+            className="text-ui-sm text-foreground/90"
+          />
+          <span className={ROW_ACTION_SLOT} />
+        </div>
       </div>
       {props.task.owners.map((row) => {
         const key = ownerKey(
@@ -895,6 +1088,7 @@ function TaskResourceSection(props: {
             onToggle={() => props.onToggleOwner(key)}
             onToggleProcess={props.onToggleProcess}
             onOpen={() => props.onOpenOwner(row)}
+            kill={props.kill}
           />
         );
       })}
@@ -907,6 +1101,8 @@ function OtherResourceSection(props: {
   readonly expandedProcesses: ReadonlySet<string>;
   readonly sortOption: ResourceSortOption;
   readonly onToggleProcess: (key: string) => void;
+  readonly kill: ResourceKillApi;
+  readonly killHostId: string | null;
 }) {
   const headerRef = useRef<HTMLDivElement | null>(null);
   const [headerHeight, setHeaderHeight] = useState(0);
@@ -959,11 +1155,14 @@ function OtherResourceSection(props: {
             Other
           </span>
         </button>
-        <MetricPair
-          cpuPercent={processRows.treeCpuPercent}
-          rssBytes={processRows.treeRssBytes}
-          className="text-ui-sm text-foreground/90"
-        />
+        <div className="flex items-center">
+          <MetricPair
+            cpuPercent={processRows.treeCpuPercent}
+            rssBytes={processRows.treeRssBytes}
+            className="text-ui-sm text-foreground/90"
+          />
+          <span className={ROW_ACTION_SLOT} />
+        </div>
       </div>
       {!expanded
         ? null
@@ -974,10 +1173,276 @@ function OtherResourceSection(props: {
               stickyTop={headerHeight}
               labelMode="compact-root"
               onToggleExpand={props.onToggleProcess}
+              kill={props.kill}
+              killHostId={props.killHostId}
             />
           ))}
     </div>
   );
+}
+
+/** A concrete kill target: a host and the root pids whose trees to terminate. */
+interface KillTarget {
+  readonly key: string;
+  readonly hostId: string;
+  readonly pids: readonly number[];
+}
+
+/**
+ * Kill controls threaded down to killable rows. `selectionMode` toggles the
+ * multi-select affordance; the rest drive per-row and bulk kills. `null` for
+ * rows that are not killable (the app/host sections never receive it).
+ */
+interface ResourceKillApi {
+  readonly selectionMode: boolean;
+  readonly isSelected: (key: string) => boolean;
+  readonly toggleSelection: (target: KillTarget) => void;
+  readonly killOne: (target: KillTarget) => void;
+  readonly isKilling: boolean;
+}
+
+/**
+ * Per-row kill affordance: hidden until the row is hovered/focused, then a
+ * two-step INLINE confirm (no modal) - the trash icon arms, swapping to a
+ * "Kill / cancel" pair. Escaping hover disarms it. Mirrors the chat-nav
+ * `StopAffordance` reveal + the sidebar destructive-ghost styling.
+ */
+function KillRowButton(props: {
+  readonly target: KillTarget;
+  readonly label: string;
+  readonly onKill: (target: KillTarget) => void;
+  readonly isKilling: boolean;
+}) {
+  const [armed, setArmed] = useState(false);
+  if (armed) {
+    // Armed confirm floats over the row's right edge as a small panel (the
+    // row wrapper is `relative`), instead of squeezing beside the metrics -
+    // nothing shifts or clips while confirming.
+    return (
+      <>
+        <span className={ROW_ACTION_SLOT} />
+        <span className="absolute inset-y-0 right-2 z-30 my-auto flex h-7 items-center gap-0.5 rounded-md border border-border/60 bg-popover px-1 shadow-sm">
+          <Button
+            type="button"
+            variant="ghost"
+            size="xs"
+            className="h-5 px-1.5 text-destructive hover:bg-destructive/10 hover:text-destructive"
+            disabled={props.isKilling}
+            aria-label={`Confirm kill ${props.label}`}
+            onClick={(event) => {
+              event.stopPropagation();
+              props.onKill(props.target);
+              setArmed(false);
+            }}
+          >
+            Confirm
+            {props.isKilling ? (
+              <AgentSpinningDots
+                className="ml-1"
+                testId={undefined}
+                variant={undefined}
+              />
+            ) : null}
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="xs"
+            className="h-5 px-1.5 text-muted-foreground hover:text-foreground"
+            aria-label={`Keep ${props.label} running`}
+            onClick={(event) => {
+              event.stopPropagation();
+              setArmed(false);
+            }}
+          >
+            Cancel
+          </Button>
+        </span>
+      </>
+    );
+  }
+  // Text label, not an icon: a bin reads as "delete this agent's state" and a
+  // stop glyph reads as "stop the turn", but this only terminates the process
+  // tree. The word carries the meaning unambiguously.
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="xs"
+      className="h-6 shrink-0 px-1.5 text-destructive opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
+      aria-label={`Kill ${props.label}`}
+      onClick={(event) => {
+        event.stopPropagation();
+        setArmed(true);
+      }}
+    >
+      Kill
+    </Button>
+  );
+}
+
+/**
+ * The owner row's leading cell: a select checkbox when the row is killable and
+ * selection mode is on, otherwise the expand chevron (or a spacer when the tree
+ * has no descendants). Owns the selection branching so `OwnerTreeRow` stays flat.
+ */
+function OwnerRowLeadingCell(props: {
+  readonly kill: ResourceKillApi | null;
+  readonly canKill: boolean;
+  readonly target: KillTarget;
+  readonly label: string;
+  readonly canExpand: boolean;
+  readonly expanded: boolean;
+  readonly onToggle: () => void;
+}) {
+  const kill = props.kill ?? null;
+  if (kill !== null && props.canKill && kill.selectionMode) {
+    return (
+      <span className="ml-3 flex size-6 shrink-0 items-center justify-center">
+        <input
+          type="checkbox"
+          className="size-3.5 accent-destructive"
+          checked={kill.isSelected(props.target.key)}
+          aria-label={`Select ${props.label}`}
+          onChange={() => kill.toggleSelection(props.target)}
+        />
+      </span>
+    );
+  }
+  if (!props.canExpand) {
+    return <span className="ml-3 size-6 shrink-0" />;
+  }
+  return (
+    <button
+      type="button"
+      aria-expanded={props.expanded}
+      onClick={props.onToggle}
+      className="ml-3 flex size-6 shrink-0 items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
+      aria-label={
+        props.expanded ? "Collapse process tree" : "Expand process tree"
+      }
+    >
+      {props.expanded ? (
+        <ChevronDown className="size-3.5" />
+      ) : (
+        <ChevronRight className="size-3.5" />
+      )}
+    </button>
+  );
+}
+
+/** Trailing kill affordance for an owner row (hidden in selection mode). */
+function OwnerRowKillCell(props: {
+  readonly kill: ResourceKillApi | null;
+  readonly canKill: boolean;
+  readonly target: KillTarget;
+  readonly label: string;
+}) {
+  const kill = props.kill ?? null;
+  if (kill === null || !props.canKill || kill.selectionMode) {
+    return <span className={ROW_ACTION_SLOT} />;
+  }
+  return (
+    <span className={ROW_ACTION_SLOT}>
+      <KillRowButton
+        target={props.target}
+        label={props.label}
+        onKill={kill.killOne}
+        isKilling={kill.isKilling}
+      />
+    </span>
+  );
+}
+
+/**
+ * Index of currently-killable rows. `live` holds every selectable key so a
+ * selection whose process exited on its own is pruned at read time; `topLevel`
+ * holds the owner-row / Other-root targets "Select all" operates on
+ * (descendant process rows are excluded - killing an owner already takes its
+ * whole tree, and counting children would double-count).
+ */
+function buildKillTargetIndex(
+  owners: readonly OwnerResourceUsage[],
+  other: OtherResourceUsage | null,
+  defaultHostId: string | null,
+): {
+  readonly live: ReadonlySet<string>;
+  readonly topLevel: ReadonlyMap<string, KillTarget>;
+} {
+  const live = new Set<string>();
+  const topLevel = new Map<string, KillTarget>();
+  for (const owner of owners) {
+    const key = ownerKey(
+      owner.owner.epicId,
+      owner.owner.kind,
+      owner.owner.ownerId,
+    );
+    live.add(key);
+    if (owner.rootPids.length > 0) {
+      topLevel.set(key, {
+        key,
+        hostId: owner.owner.hostId,
+        pids: owner.rootPids,
+      });
+    }
+    for (const process of owner.processes) live.add(processRowKey(process));
+  }
+  if (other !== null && defaultHostId !== null) {
+    for (const process of other.processes) {
+      const key = processRowKey(process);
+      live.add(key);
+      if (process.rootPid === process.pid) {
+        topLevel.set(key, { key, hostId: defaultHostId, pids: [process.pid] });
+      }
+    }
+  }
+  return { live, topLevel };
+}
+
+function SelectAllToggle(props: {
+  readonly allSelected: boolean;
+  readonly onSelectAll: () => void;
+  readonly onDeselectAll: () => void;
+}) {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="xs"
+      className="h-6 px-1.5 text-muted-foreground hover:text-foreground"
+      onClick={props.allSelected ? props.onDeselectAll : props.onSelectAll}
+    >
+      {props.allSelected ? "Deselect all" : "Select all"}
+    </Button>
+  );
+}
+
+/**
+ * In selection mode the whole owner row is a selection toggle - it must NOT
+ * navigate to the owner's tile. Outside selection mode it opens the tile.
+ */
+function ownerRowClickHandler(
+  selecting: boolean,
+  kill: ResourceKillApi | null,
+  target: KillTarget,
+  onOpen: () => void,
+): () => void {
+  if (!selecting || kill === null) return onOpen;
+  return () => kill.toggleSelection(target);
+}
+
+/**
+ * Provider icon for an owner row's subtitle, or a neutral glyph for a
+ * harness-less owner. Subscript-scale (`size-3`) so it reads as part of the
+ * secondary text line, not a second row element.
+ */
+function OwnerProviderIcon(props: { readonly harnessId: string | null }) {
+  const providerId =
+    props.harnessId === null ? null : normalizeProviderId(props.harnessId);
+  if (providerId === null) {
+    return <Server className="size-3 shrink-0 text-muted-foreground/70" />;
+  }
+  return <HarnessIcon harnessId={providerId} className="size-3" />;
 }
 
 function OwnerTreeRow(props: {
@@ -989,6 +1454,7 @@ function OwnerTreeRow(props: {
   readonly onToggle: () => void;
   readonly onToggleProcess: (key: string) => void;
   readonly onOpen: () => void;
+  readonly kill: ResourceKillApi | null;
 }) {
   const owner = props.row.snapshot.owner;
   const liveArtifactTitle = useRegisteredEpicLiveArtifactTitle(
@@ -1013,40 +1479,47 @@ function OwnerTreeRow(props: {
   const visibleRssBytes = props.expanded
     ? processRows.selfRssBytes
     : processRows.treeRssBytes;
+  const harnessId = props.row.snapshot.harnessId;
+  const killTarget: KillTarget = {
+    key: ownerKey(owner.epicId, owner.kind, owner.ownerId),
+    hostId: owner.hostId,
+    pids: props.row.snapshot.rootPids,
+  };
+  const kill = props.kill ?? null;
+  const canKill = kill !== null && killTarget.pids.length > 0;
+  const selecting = kill !== null && canKill && kill.selectionMode;
+  const selected = selecting && kill.isSelected(killTarget.key);
+  const rowClick = ownerRowClickHandler(
+    selecting,
+    kill,
+    killTarget,
+    props.onOpen,
+  );
   return (
     <div>
       <div
         className={cn(
-          "group flex items-center transition-colors hover:bg-muted/50",
+          "group relative flex items-center pr-3.5 transition-colors hover:bg-muted/50",
+          selected && "bg-muted/40",
           props.expanded && "sticky z-10 bg-popover",
         )}
         style={props.expanded ? { top: props.stickyTop } : undefined}
       >
-        {processRows.canExpand ? (
-          <button
-            type="button"
-            aria-expanded={props.expanded}
-            onClick={props.onToggle}
-            className="ml-3 flex size-6 shrink-0 items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
-            aria-label={
-              props.expanded ? "Collapse process tree" : "Expand process tree"
-            }
-          >
-            {props.expanded ? (
-              <ChevronDown className="size-3.5" />
-            ) : (
-              <ChevronRight className="size-3.5" />
-            )}
-          </button>
-        ) : (
-          <span className="ml-3 size-6 shrink-0" />
-        )}
+        <OwnerRowLeadingCell
+          kill={kill}
+          canKill={canKill}
+          target={killTarget}
+          label={label}
+          canExpand={processRows.canExpand}
+          expanded={props.expanded}
+          onToggle={props.onToggle}
+        />
         <button
           type="button"
-          onClick={props.onOpen}
-          disabled={!props.row.canOpen}
+          onClick={rowClick}
+          disabled={!selecting && !props.row.canOpen}
           className={cn(
-            "flex min-w-0 flex-1 items-center justify-between gap-3 py-1.5 pl-1 pr-3.5 text-left transition-colors",
+            "flex min-w-0 flex-1 items-center justify-between gap-3 py-1.5 pl-1 text-left transition-colors",
             props.row.canOpen
               ? "text-foreground hover:text-foreground"
               : "cursor-default text-foreground",
@@ -1054,11 +1527,15 @@ function OwnerTreeRow(props: {
         >
           <div className="min-w-0">
             <div className="truncate text-ui-sm">{label}</div>
-            <div className="truncate text-ui-xs text-muted-foreground">
-              {ownerKindLabel(props.row.snapshot.owner.kind)}
-              {props.row.snapshot.activeProcessName === null
-                ? ""
-                : ` · ${props.row.snapshot.activeProcessName}`}
+            <div className="flex min-w-0 items-center gap-1 text-ui-xs text-muted-foreground">
+              <OwnerProviderIcon harnessId={harnessId} />
+              <span className="min-w-0 truncate">
+                {harnessProviderSubtitle(
+                  harnessId,
+                  props.row.snapshot.owner.kind,
+                  props.row.snapshot.activeProcessName,
+                )}
+              </span>
             </div>
           </div>
           <ProcessMetricPair
@@ -1072,6 +1549,12 @@ function OwnerTreeRow(props: {
             className="text-ui-sm text-foreground/90"
           />
         </button>
+        <OwnerRowKillCell
+          kill={kill}
+          canKill={canKill}
+          target={killTarget}
+          label={label}
+        />
       </div>
       {!props.expanded
         ? null
@@ -1082,6 +1565,8 @@ function OwnerTreeRow(props: {
               stickyTop={props.stickyTop}
               labelMode="full"
               onToggleExpand={props.onToggleProcess}
+              kill={props.kill}
+              killHostId={owner.hostId}
             />
           ))}
     </div>
@@ -1104,11 +1589,88 @@ function ProcessRowMarker(props: {
   );
 }
 
+/**
+ * Trailing kill cell for a process row: a select checkbox in selection mode,
+ * otherwise the hover-revealed kill button. Killing a process pid terminates
+ * its whole subtree (the host enumerates descendants). `null` host or kill api
+ * renders nothing (a spacer), keeping the row width stable.
+ */
+function ProcessRowKillCell(props: {
+  readonly kill: ResourceKillApi | null;
+  readonly killHostId: string | null;
+  readonly process: ResourceProcessSnapshotWire;
+  readonly label: string;
+}) {
+  // `?? null` collapses undefined to null: a partial HMR update can transiently
+  // render this row before a parent passes `kill`, and a hover affordance must
+  // never crash the whole popover.
+  const kill = props.kill ?? null;
+  const killHostId = props.killHostId ?? null;
+  if (kill === null || killHostId === null) {
+    return <span className={ROW_ACTION_SLOT} />;
+  }
+  const target: KillTarget = {
+    key: processRowKey(props.process),
+    hostId: killHostId,
+    pids: [props.process.pid],
+  };
+  if (kill.selectionMode) {
+    // The selection checkbox lives on the row's LEFT (matching the chat /
+    // artifact selection convention); keep the trailing gutter as a spacer.
+    return <span className={ROW_ACTION_SLOT} />;
+  }
+  return (
+    <KillRowButton
+      target={target}
+      label={props.label}
+      onKill={kill.killOne}
+      isKilling={kill.isKilling}
+    />
+  );
+}
+
+function processCollapsedLabel(
+  labelMode: "full" | "compact-root",
+  process: ResourceProcessSnapshotWire,
+  hiddenCount: number,
+): string {
+  return labelMode === "compact-root"
+    ? processCompactLeafLabel(process, hiddenCount)
+    : processLeafLabel(process, hiddenCount);
+}
+
+/**
+ * Leading selection checkbox for a process row (left side, matching the
+ * chat / artifact selection convention). Renders nothing outside select mode.
+ */
+function ProcessRowSelectCheckbox(props: {
+  readonly visible: boolean;
+  readonly selected: boolean;
+  readonly label: string;
+  readonly onToggle: (() => void) | null;
+}) {
+  const onToggle = props.onToggle;
+  if (!props.visible || onToggle === null) return null;
+  return (
+    <span className="ml-3 flex size-6 shrink-0 items-center justify-center">
+      <input
+        type="checkbox"
+        className="size-3.5 accent-destructive"
+        checked={props.selected}
+        aria-label={`Select ${props.label}`}
+        onChange={() => onToggle()}
+      />
+    </span>
+  );
+}
+
 function ProcessTreeRow(props: {
   readonly processRow: ProcessDisplayRow;
   readonly stickyTop: number;
   readonly labelMode: "full" | "compact-root";
   readonly onToggleExpand: (key: string) => void;
+  readonly kill: ResourceKillApi | null;
+  readonly killHostId: string | null;
 }) {
   const {
     process,
@@ -1119,13 +1681,22 @@ function ProcessTreeRow(props: {
     treeCpuPercent,
     treeRssBytes,
   } = props.processRow;
+  const kill = props.kill ?? null;
+  const killHostId = props.killHostId ?? null;
+  const selecting = kill !== null && killHostId !== null && kill.selectionMode;
+  const rowKey = processRowKey(process);
+  const selected = selecting && kill.isSelected(rowKey);
   const rowClassName =
-    "flex w-full items-center justify-between gap-3 px-3.5 py-1 text-left text-muted-foreground transition-colors hover:bg-muted/40";
+    "flex min-w-0 flex-1 items-center justify-between gap-3 py-1 pl-3.5 text-left text-muted-foreground transition-colors hover:bg-muted/40";
   const rowStyle = { paddingLeft: `calc(1.25rem + ${depth} * 1rem)` };
-  const collapsedLabel =
-    props.labelMode === "compact-root"
-      ? processCompactLeafLabel(process, hiddenCount)
-      : processLeafLabel(process, hiddenCount);
+  const collapsedLabel = processCollapsedLabel(
+    props.labelMode,
+    process,
+    hiddenCount,
+  );
+  const shownMetrics = expanded
+    ? { cpu: process.cpuPercent, rss: process.rssBytes }
+    : { cpu: treeCpuPercent, rss: treeRssBytes };
   const inner = (
     <>
       <div className="flex min-w-0 items-center gap-1.5">
@@ -1135,8 +1706,8 @@ function ProcessTreeRow(props: {
         </span>
       </div>
       <ProcessMetricPair
-        cpuPercent={expanded ? process.cpuPercent : treeCpuPercent}
-        rssBytes={expanded ? process.rssBytes : treeRssBytes}
+        cpuPercent={shownMetrics.cpu}
+        rssBytes={shownMetrics.rss}
         selfCpuPercent={process.cpuPercent}
         selfRssBytes={process.rssBytes}
         treeCpuPercent={treeCpuPercent}
@@ -1146,34 +1717,88 @@ function ProcessTreeRow(props: {
       />
     </>
   );
-  // Leaf and non-boundary rows are static; only an expand boundary is an
-  // interactive, keyboard-reachable toggle that reveals its sub-tree inline.
-  const row = !canExpand ? (
-    <div className={rowClassName} style={rowStyle}>
-      {inner}
-    </div>
-  ) : (
-    <button
-      type="button"
-      aria-expanded={expanded}
-      aria-label={`${expanded ? "Collapse" : "Expand"} sub-processes of ${processLabel(process)}`}
-      onClick={() => props.onToggleExpand(processRowKey(process))}
-      className={cn(
-        rowClassName,
-        "outline-none focus-visible:bg-muted/40 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
-      )}
-      style={rowStyle}
-    >
-      {inner}
-    </button>
-  );
+  // In selection mode EVERY row is a whole-row selection toggle (expand is
+  // suspended, mirroring owner rows). Otherwise leaf and non-boundary rows are
+  // static; only an expand boundary is an interactive, keyboard-reachable
+  // toggle that reveals its sub-tree inline.
+  let row;
+  if (selecting) {
+    row = (
+      <button
+        type="button"
+        aria-pressed={selected}
+        aria-label={`Select ${processLabel(process)}`}
+        onClick={() =>
+          kill.toggleSelection({
+            key: rowKey,
+            hostId: killHostId,
+            pids: [process.pid],
+          })
+        }
+        className={cn(
+          rowClassName,
+          "outline-none focus-visible:bg-muted/40 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
+        )}
+        style={rowStyle}
+      >
+        {inner}
+      </button>
+    );
+  } else if (!canExpand) {
+    row = (
+      <div className={rowClassName} style={rowStyle}>
+        {inner}
+      </div>
+    );
+  } else {
+    row = (
+      <button
+        type="button"
+        aria-expanded={expanded}
+        aria-label={`${expanded ? "Collapse" : "Expand"} sub-processes of ${processLabel(process)}`}
+        onClick={() => props.onToggleExpand(processRowKey(process))}
+        className={cn(
+          rowClassName,
+          "outline-none focus-visible:bg-muted/40 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
+        )}
+        style={rowStyle}
+      >
+        {inner}
+      </button>
+    );
+  }
   return (
     <div>
       <div
-        className={cn(expanded && "sticky z-10 bg-popover")}
+        className={cn(
+          "group relative flex items-center pr-3.5",
+          selected && "bg-muted/40",
+          expanded && "sticky z-10 bg-popover",
+        )}
         style={expanded ? { top: props.stickyTop } : undefined}
       >
+        <ProcessRowSelectCheckbox
+          visible={selecting}
+          selected={selected}
+          label={processLabel(process)}
+          onToggle={
+            selecting
+              ? () =>
+                  kill.toggleSelection({
+                    key: rowKey,
+                    hostId: killHostId,
+                    pids: [process.pid],
+                  })
+              : null
+          }
+        />
         {row}
+        <ProcessRowKillCell
+          kill={props.kill}
+          killHostId={props.killHostId}
+          process={process}
+          label={processLabel(process)}
+        />
       </div>
       {!expanded
         ? null
@@ -1184,6 +1809,8 @@ function ProcessTreeRow(props: {
               stickyTop={props.stickyTop}
               labelMode="full"
               onToggleExpand={props.onToggleExpand}
+              kill={props.kill}
+              killHostId={props.killHostId}
             />
           ))}
     </div>
@@ -1560,7 +2187,7 @@ function commitOwnerFocus(args: {
   );
 }
 
-function focusForOwner(snapshot: OwnerResourceSnapshotWire) {
+function focusForOwner(snapshot: OwnerResourceSnapshotWireV13) {
   return {
     focusedAt: Date.now(),
     focusArtifactId:
@@ -1572,7 +2199,7 @@ function focusForOwner(snapshot: OwnerResourceSnapshotWire) {
 
 function findOwnerRecord(
   canvas: CanvasResourceSnapshot,
-  snapshot: OwnerResourceSnapshotWire,
+  snapshot: OwnerResourceSnapshotWireV13,
 ): EpicNodeRecord | null {
   const records = canvas.artifactTreeByEpicId[snapshot.owner.epicId] ?? [];
   return records.find((record) => record.id === snapshot.owner.ownerId) ?? null;
@@ -1642,8 +2269,23 @@ function ownerKindLabel(kind: ResourceOwnerKindWire): string {
   return "GUI agent";
 }
 
+// Subtitle beside the provider icon. Always non-empty so the icon never sits
+// alone on its line: a known provider shows its friendly name ("Claude Code"),
+// a harness-less owner (plain terminal) keeps its kind label; the running
+// process name trails either when present.
+function harnessProviderSubtitle(
+  harnessId: string | null,
+  kind: ResourceOwnerKindWire,
+  activeProcessName: string | null,
+): string {
+  const providerId = harnessId === null ? null : normalizeProviderId(harnessId);
+  const base =
+    providerId === null ? ownerKindLabel(kind) : agentProviderLabel(providerId);
+  return activeProcessName === null ? base : `${base} · ${activeProcessName}`;
+}
+
 function ownerLabel(
-  snapshot: OwnerResourceSnapshotWire,
+  snapshot: OwnerResourceSnapshotWireV13,
   location: OpenOwnerLocation | null,
   record: EpicNodeRecord | null,
   liveArtifactTitle: string | null,
@@ -1673,7 +2315,7 @@ function ownerLabel(
 }
 
 function canOpenOwner(
-  snapshot: OwnerResourceSnapshotWire,
+  snapshot: OwnerResourceSnapshotWireV13,
   location: OpenOwnerLocation | null,
   record: EpicNodeRecord | null,
 ): boolean {
