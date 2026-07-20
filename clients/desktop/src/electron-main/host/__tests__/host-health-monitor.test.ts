@@ -18,6 +18,7 @@ vi.mock("electron-log", () => ({
 
 import { startHostHealthMonitor } from "../host-health-monitor";
 import { HostRecoveryDeferredError } from "../../startup/host-health-respawn";
+import { __setAsyncProcessLivenessReaderForTest } from "../process-identity";
 
 const INTERVAL_MS = 1_000;
 
@@ -25,7 +26,7 @@ const SNAPSHOT: DesktopLocalHostSnapshot = {
   hostId: "host-1",
   websocketUrl: "ws://127.0.0.1:55555/rpc",
   version: "1.0.0",
-  pid: 4242,
+  pid: process.pid,
   systemHostName: "test-host",
   displayName: "Test Host",
 };
@@ -154,6 +155,40 @@ describe("startHostHealthMonitor", () => {
     await ticks(1); // fail #1 again
     expect(respawn).not.toHaveBeenCalled();
     monitor.dispose();
+  });
+
+  it("F2: treats a handshake-reachable stale PID as down instead of resetting the recovery counters", async () => {
+    const staleSnapshot: DesktopLocalHostSnapshot = {
+      ...SNAPSHOT,
+      pid: 999_999,
+    };
+    const restoreLiveness = __setAsyncProcessLivenessReaderForTest(
+      async () => "dead",
+    );
+    const reload = vi.fn(async () => null);
+    const respawn = vi.fn(async () => {});
+    const monitor = startHostHealthMonitor({
+      host: fakeHost({
+        getSnapshot: () => staleSnapshot,
+        reloadSnapshotFromDisk: reload,
+      }),
+      intervalMs: INTERVAL_MS,
+      probe: vi.fn(async () => true),
+      readMetadata: vi.fn(async () => staleSnapshot),
+      respawn,
+    });
+
+    try {
+      await ticks(2);
+      // The second outage reload demotes the stale snapshot; the recovery
+      // attempt then performs its own reload-confirmation before relinquishing
+      // ownership, so this is two reloads rather than a bare healthy reset.
+      expect(reload).toHaveBeenCalledTimes(2);
+      expect(respawn).toHaveBeenCalledTimes(1);
+    } finally {
+      monitor.dispose();
+      __setAsyncProcessLivenessReaderForTest(restoreLiveness);
+    }
   });
 
   it("treats missing pid metadata as a deliberate stop: demote, never respawn", async () => {
@@ -306,7 +341,10 @@ describe("startHostHealthMonitor", () => {
       probe: vi.fn(async () => false),
       readMetadata: vi.fn(async () => {
         metadataReads += 1;
-        return metadataReads === 1 ? SNAPSHOT : metadataGate.promise;
+        // F2 now reads published metadata on every positive-health decision:
+        // tick one, tick two, and the post-demotion recovery decision all
+        // observe the stable record. The next null-snapshot retry is gated.
+        return metadataReads <= 3 ? SNAPSHOT : metadataGate.promise;
       }),
       respawn,
     });
@@ -314,7 +352,7 @@ describe("startHostHealthMonitor", () => {
     await ticks(2);
     expect(respawn).toHaveBeenCalledTimes(1);
     await ticks(1);
-    expect(metadataReads).toBe(2);
+    expect(metadataReads).toBe(4);
 
     monitor.dispose();
     metadataGate.resolve(SNAPSHOT);

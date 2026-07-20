@@ -37,6 +37,13 @@ export function isCurrentHostWebsocketUrl(url: string): boolean {
  * endpoint handshake is necessary but cannot authenticate a stale PID: a
  * confirmed-dead or recycled identity defeats even an impostor listener;
  * indeterminate identity evidence defers to the handshake.
+ *
+ * This is the complete Desktop reachability-authority set: renderer snapshot
+ * publication (`HostLifecycle.toReachableSnapshot`), controller status
+ * (`readRunningRuntimeVersion`), post-service-start readiness
+ * (`waitForHostReady`), and steady-state health monitoring all call this
+ * predicate. Other pid readers may report structural metadata, but must not
+ * conclude that the host is live/reachable without this check.
  */
 export async function isPublishedHostEndpointReachable(
   websocketUrl: string,

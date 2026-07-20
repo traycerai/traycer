@@ -1000,7 +1000,12 @@ export class HostController {
     );
     await this.stampIfNullRuntime(expectedInstallGeneration, readiness);
     this.hostLifecycle.ensureWatcherInstalled();
-    await this.hostLifecycle.reloadSnapshotFromDisk();
+    const surfaced = await this.hostLifecycle.reloadSnapshotFromDisk();
+    if (surfaced === null) {
+      throw new HostReadinessError(
+        "Traycer Host became unavailable while activation was being published - run `traycer host doctor` to recover.",
+      );
+    }
   }
 
   private async reloadAfterServiceCycleFailure(): Promise<void> {

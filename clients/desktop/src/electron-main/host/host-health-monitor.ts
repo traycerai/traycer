@@ -1,6 +1,11 @@
 import { log } from "../app/logger";
 import { HostRecoveryDeferredError } from "../startup/host-health-respawn";
-import { canReachHostWebsocketUrl, readPidMetadata } from "./host-lifecycle";
+import {
+  canReachHostWebsocketUrl,
+  readPidMetadata,
+  readPidMetadataState,
+} from "./host-lifecycle";
+import { isPublishedHostEndpointReachable } from "./host-endpoint-reachability";
 import type { IpcHostLifecycle } from "../ipc/runner-ipc-bridge";
 import type { DesktopLocalHostSnapshot } from "../../ipc-contracts/host-types";
 
@@ -67,11 +72,41 @@ export interface HostHealthMonitor {
   dispose(): void;
 }
 
+interface PublishedHealthMetadata {
+  readonly snapshot: DesktopLocalHostSnapshot;
+  readonly startedAt: string | null;
+}
+
+function isCurrentPublishedSnapshot(
+  current: DesktopLocalHostSnapshot,
+  published: DesktopLocalHostSnapshot,
+): boolean {
+  return (
+    current.pid === published.pid &&
+    current.websocketUrl === published.websocketUrl
+  );
+}
+
 export function startHostHealthMonitor(
   deps: HostHealthMonitorDeps,
 ): HostHealthMonitor {
   const probe = deps.probe ?? canReachHostWebsocketUrl;
   const readMetadata = deps.readMetadata ?? readPidMetadata;
+  // Production needs the publication timestamp for A1's process-identity
+  // check. Existing test callers can continue supplying a structural reader;
+  // a missing timestamp deliberately falls through A1's indeterminate arm.
+  const readPublishedMetadata = async (
+    path: string,
+  ): Promise<PublishedHealthMetadata | null> => {
+    if (deps.readMetadata !== undefined) {
+      const snapshot = await readMetadata(path);
+      return snapshot === null ? null : { snapshot, startedAt: null };
+    }
+    const state = await readPidMetadataState(path);
+    return state.kind === "parsed"
+      ? { snapshot: state.snapshot, startedAt: state.startedAt }
+      : null;
+  };
   const respawn = deps.respawn;
   let consecutiveFailures = 0;
   let respawnsSinceRecovery = 0;
@@ -146,7 +181,17 @@ export function startHostHealthMonitor(
         await attemptRecovery(metadata);
         return;
       }
-      if (await probe(snapshot.websocketUrl)) {
+      const published = await readPublishedMetadata(deps.host.pidMetadataFile);
+      if (
+        published !== null &&
+        isCurrentPublishedSnapshot(snapshot, published.snapshot) &&
+        (await isPublishedHostEndpointReachable(
+          published.snapshot.websocketUrl,
+          published.snapshot.pid,
+          published.startedAt,
+          probe,
+        ))
+      ) {
         consecutiveFailures = 0;
         respawnsSinceRecovery = 0;
         return;

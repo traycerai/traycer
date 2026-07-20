@@ -196,7 +196,14 @@ function fakeHostLifecycle(): HostControllerHostLifecycle & {
       calls.push(1);
     },
     ensureWatcherInstalled: vi.fn(),
-    reloadSnapshotFromDisk: vi.fn(async () => null),
+    reloadSnapshotFromDisk: vi.fn(async () => ({
+      hostId: "host-1",
+      websocketUrl: "ws://127.0.0.1:55555/rpc",
+      version: "1.0.0",
+      pid: process.pid,
+      systemHostName: "test-host",
+      displayName: "Test Host",
+    })),
   };
 }
 
@@ -4429,6 +4436,44 @@ describe("CLI-owned service start attestation (closing A2)", () => {
       kind: "failed",
       message: expect.stringContaining("committed installation expects 1.7.0"),
     });
+  });
+
+  it("F1: treats a lifecycle reload that demotes post-start readiness as a failed registration", async () => {
+    const lifecycle = fakeHostLifecycle();
+    vi.mocked(lifecycle.reloadSnapshotFromDisk).mockResolvedValue(null);
+    const controller = new HostController({
+      environment: "production",
+      hostLifecycle: lifecycle,
+      reachabilityProbe: async () => true,
+      desktopLockWaitMs: DESKTOP_LOCK_WAIT_MS,
+      desktopLockPollIntervalMs: DESKTOP_LOCK_POLL_INTERVAL_MS,
+    });
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue({
+      installGeneration: "already-stamped-generation",
+      runtimeVersion: "1.7.0",
+      runtimeWasNull: false,
+    });
+    vi.mocked(waitForHostReady).mockResolvedValue({
+      ready: true,
+      version: "1.7.0",
+      pid: process.pid,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reason: "ready",
+    });
+
+    const outcome = await controller.registerService();
+
+    expect(outcome).toMatchObject({
+      kind: "failed",
+      message: expect.stringContaining("became unavailable"),
+    });
+    // The direct post-readiness publication demotes, then the failure path
+    // makes its required best-effort reload too. Neither may report `ok`.
+    expect(lifecycle.reloadSnapshotFromDisk).toHaveBeenCalledTimes(2);
   });
 
   it("reloads the lifecycle snapshot after a command-started service fails readiness", async () => {

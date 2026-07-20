@@ -4,6 +4,7 @@ import {
   isCurrentHostWebsocketUrl,
   sleep,
 } from "./host-lifecycle";
+import { isPublishedHostEndpointReachable } from "./host-endpoint-reachability";
 import { TraycerCliError } from "../cli/traycer-cli";
 
 // Host-readiness + CLI-error helpers used by the post-auth host-ensure
@@ -65,8 +66,15 @@ export async function waitForHostReady(
       lastReason = `old host pid ${skipPid} still bound; waiting for replacement`;
     } else if (!isCurrentHostWebsocketUrl(snapshot.websocketUrl)) {
       lastReason = `websocket URL ${snapshot.websocketUrl} does not match the committed host WS shape`;
-    } else if (!(await canReachHostWebsocketUrl(snapshot.websocketUrl))) {
-      lastReason = `websocket URL ${snapshot.websocketUrl} is not yet reachable`;
+    } else if (
+      !(await isPublishedHostEndpointReachable(
+        snapshot.websocketUrl,
+        snapshot.pid,
+        snapshot.startedAt,
+        canReachHostWebsocketUrl,
+      ))
+    ) {
+      lastReason = `websocket URL ${snapshot.websocketUrl} is not yet reachable as the published host process`;
     } else {
       return {
         ready: true,
