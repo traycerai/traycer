@@ -11,7 +11,7 @@ const BASE = {
   chatId: "chat-1",
 } as const;
 
-const cases: readonly {
+const CASES: readonly {
   readonly name: string;
   readonly entry: HostNotificationEntry;
   readonly title: string;
@@ -184,7 +184,7 @@ const cases: readonly {
 ];
 
 describe("formatHostNotificationPresentation", () => {
-  it.each(cases)("formats $name", ({ entry, title, body }) => {
+  it.each(CASES)("formats $name", ({ entry, title, body }) => {
     expect(formatHostNotificationPresentation(entry)).toEqual({ title, body });
   });
 
