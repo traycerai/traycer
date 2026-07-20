@@ -12,14 +12,16 @@ import {
   type KeyboardEventHandler,
   type Ref,
 } from "react";
+import type { Editor } from "@tiptap/core";
 import { EditorContent, useEditor } from "@tiptap/react";
-import { Selection } from "@tiptap/pm/state";
+import { Selection, type Transaction } from "@tiptap/pm/state";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 
 import { cn } from "@/lib/utils";
 import { registerComposerFocus } from "@/lib/composer/composer-focus-registry";
 import { normalizeComposerContentWithSelection } from "@/lib/composer/composer-content-normalizer";
+import { hasClaimableFileTransfer } from "@/lib/files/file-transfer-paths";
 
 import { buildComposerExtensions } from "./editor/editor-config";
 import { mentionSuggestionPluginKey } from "./editor/extensions/mention-extension";
@@ -27,7 +29,11 @@ import {
   skillSuggestionPluginKey,
   slashSuggestionPluginKey,
 } from "./editor/extensions/slash-command-extension";
-import { insertImageAttachmentsCommand } from "@/hooks/composer/use-composer-paste";
+import {
+  insertPathSpansCommand,
+  insertImageAttachmentsCommand,
+  type PathInsertionCommit,
+} from "@/hooks/composer/use-composer-paste";
 import type { ImageAttachmentAttrs } from "./editor/extensions/image-attachment-extension";
 import type { ComposerPickerStore } from "./picker/composer-picker-store";
 
@@ -53,6 +59,12 @@ export interface ComposerPromptEditorHandle {
   readonly insertImageAttachments: (
     attrs: ReadonlyArray<ImageAttachmentAttrs>,
   ) => void;
+  /**
+   * Starts a path-insertion job anchored to the current caret. The returned
+   * one-shot `commit` maps that position through intervening editor changes
+   * and returns `false` if the editor was destroyed before resolution.
+   */
+  readonly beginPathInsertion: () => PathInsertionCommit | null;
   readonly removeImageAttachmentById: (id: string) => void;
   /**
    * Insert a finalized dictation segment at the caret (with a trailing space
@@ -104,6 +116,19 @@ export interface ComposerPromptEditorProps {
    */
   readonly onEditorReady: (() => void) | null;
   readonly ref?: Ref<ComposerPromptEditorHandle>;
+}
+
+interface ComposerTransactionEvent {
+  readonly transaction: Transaction;
+  readonly appendedTransactions: Transaction[];
+}
+
+function subscribeToComposerTransactions(
+  editor: Editor,
+  listener: (event: ComposerTransactionEvent) => void,
+): () => void {
+  editor.on("transaction", listener);
+  return () => editor.off("transaction", listener);
 }
 
 function usePastedImageBytesPresenceGetter(
@@ -310,8 +335,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
 
   const handleDrop = useCallback<DragEventHandler<HTMLElement>>(
     (event) => {
-      const hasFiles = Array.from(event.dataTransfer.types).includes("Files");
-      if (editor !== null && hasFiles) {
+      if (editor !== null && hasClaimableFileTransfer(event.dataTransfer)) {
         const dropPos = editor.view.posAtCoords({
           left: event.clientX,
           top: event.clientY,
@@ -336,6 +360,35 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     },
     [editor, stabilizeImageAttachmentCaret],
   );
+
+  const beginPathInsertion = useCallback((): PathInsertionCommit | null => {
+    if (editor === null || editor.isDestroyed) return null;
+    let position = editor.state.selection.to;
+    const onTransaction = ({
+      transaction,
+      appendedTransactions,
+    }: ComposerTransactionEvent): void => {
+      [transaction, ...appendedTransactions].forEach((tr) => {
+        position = tr.mapping.map(position, -1);
+      });
+    };
+    const unsubscribeFromTransactions = subscribeToComposerTransactions(
+      editor,
+      onTransaction,
+    );
+    let settled = false;
+    return (paths): boolean => {
+      if (settled) return false;
+      settled = true;
+      unsubscribeFromTransactions();
+      if (editor.isDestroyed) return false;
+      if (paths.length > 0) {
+        insertPathSpansCommand(editor, { paths, position });
+        editor.commands.focus();
+      }
+      return true;
+    };
+  }, [editor]);
 
   const removeImageAttachmentById = useCallback(
     (id: string) => {
@@ -401,11 +454,13 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
       clear,
       setContent,
       insertImageAttachments,
+      beginPathInsertion,
       removeImageAttachmentById,
       insertDictatedText,
       dismissActiveSuggestion,
     }),
     [
+      beginPathInsertion,
       clear,
       dismissActiveSuggestion,
       focus,

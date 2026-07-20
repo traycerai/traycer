@@ -328,6 +328,10 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       step,
       items,
       loading,
+      // Mention providers keep their existing empty-on-failure behavior; only
+      // the slash catalog reports load failures into the picker for now.
+      loadFailed: false,
+      retryLoad: null,
     });
   }, [active, items, loading, pickerStore, query, sessionId, step]);
 

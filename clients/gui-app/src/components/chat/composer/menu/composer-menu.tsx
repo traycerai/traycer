@@ -50,6 +50,7 @@ const SLASH_MENU_COPY = {
   header: "Slash commands",
   empty: "No matching commands",
 };
+const LOAD_FAILED_LABEL = "Couldn't load commands";
 const COMPOSER_ARTIFACT_REFRESH_TIMEOUT_MS = 10_000;
 
 // Conservative bound for open-time placement decision; list is capped via
@@ -66,6 +67,7 @@ interface MenuSlice {
   readonly activeIndex: number;
   readonly loading: boolean;
   readonly fetching: boolean;
+  readonly loadFailed: boolean;
   readonly step: MentionFlowStep;
 }
 
@@ -77,6 +79,7 @@ function selectMenuSlice(state: {
   activeIndex: number;
   loading: boolean;
   fetching: boolean;
+  loadFailed: boolean;
   step: MentionFlowStep;
 }): MenuSlice {
   return {
@@ -87,6 +90,7 @@ function selectMenuSlice(state: {
     activeIndex: state.activeIndex,
     loading: state.loading,
     fetching: state.fetching,
+    loadFailed: state.loadFailed,
     step: state.step,
   };
 }
@@ -106,6 +110,7 @@ export function ComposerMenu(props: ComposerMenuProps) {
     activeIndex,
     loading,
     fetching,
+    loadFailed,
     step,
   } = slice;
 
@@ -124,6 +129,7 @@ export function ComposerMenu(props: ComposerMenuProps) {
       activeIndex={activeIndex}
       loading={loading}
       fetching={fetching}
+      loadFailed={loadFailed}
       step={step}
       menuId={menuId}
     />
@@ -138,6 +144,7 @@ interface ComposerMenuPortalProps {
   readonly activeIndex: number;
   readonly loading: boolean;
   readonly fetching: boolean;
+  readonly loadFailed: boolean;
   readonly step: MentionFlowStep;
   readonly menuId: string;
 }
@@ -151,6 +158,7 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
     activeIndex,
     loading,
     fetching,
+    loadFailed,
     step,
     menuId,
   } = props;
@@ -337,6 +345,7 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
           <ComposerMenuBody
             renderedItems={renderedItems}
             loading={loading}
+            loadFailed={loadFailed}
             emptyLabel={emptyLabel}
             showEmptyLabelWithItems={showEmptyLabelWithItems}
             activeIndex={activeIndex}
@@ -428,6 +437,7 @@ function rowHighlightClass(isActive: boolean, disabled: boolean): string {
 interface ComposerMenuBodyProps {
   readonly renderedItems: ReadonlyArray<RenderedItem>;
   readonly loading: boolean;
+  readonly loadFailed: boolean;
   readonly emptyLabel: string;
   readonly showEmptyLabelWithItems: boolean;
   readonly activeIndex: number;
@@ -438,6 +448,7 @@ function ComposerMenuBody(props: ComposerMenuBodyProps): ReactNode {
   const {
     renderedItems,
     loading,
+    loadFailed,
     emptyLabel,
     showEmptyLabelWithItems,
     activeIndex,
@@ -454,6 +465,30 @@ function ComposerMenuBody(props: ComposerMenuBodyProps): ReactNode {
     </div>
   );
   if (loading && renderedItems.length === 0) return loadingRow;
+  // A failed catalog load with nothing to show is an error state, not an
+  // empty result - "No matching commands" would misreport a provider failure
+  // as a legitimately empty catalog.
+  if (loadFailed && renderedItems.length === 0) {
+    return (
+      <div className="flex items-center justify-between gap-2 px-3 py-2 text-ui-xs text-muted-foreground/80">
+        <span className="min-w-0 truncate">{LOAD_FAILED_LABEL}</span>
+        <Button
+          type="button"
+          variant="ghost"
+          size="xs"
+          className="-my-1 shrink-0 text-muted-foreground/70 hover:text-foreground"
+          onMouseDown={(event) => {
+            event.preventDefault();
+          }}
+          onClick={() => {
+            pickerStore.getState().retryLoad?.();
+          }}
+        >
+          Retry
+        </Button>
+      </div>
+    );
+  }
   if (renderedItems.length === 0) return emptyRow(emptyLabel, false);
   const rows = renderedItems.map((item, index) => {
     const disabled = item.disabledReason !== null;
