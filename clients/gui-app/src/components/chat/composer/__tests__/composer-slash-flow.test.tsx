@@ -147,7 +147,7 @@ describe("composer slash flow", () => {
     expect(pickerStore.getState().kind).toBe("slash");
   });
 
-  it("opens a skills-only picker on a block after text", async () => {
+  it("scopes a block after text to skills", async () => {
     const { editor, pickerStore } = makeFixture();
     editor.commands.setContent({
       type: "doc",
@@ -288,7 +288,7 @@ describe("composer slash flow", () => {
 
   // Claude's parser bails unless `prompt.trim().startsWith("/")`, and the
   // host's own `parseProviderSlashPrompt` trims too - so whitespace before the
-  // command must not demote it to an inline (skills-only) position.
+  // command must not demote it to an inline (skills-scoped) position.
   it("treats a command after leading spaces as leading", async () => {
     const { editor, pickerStore } = makeFixture();
     editor.commands.insertContent("   /");
@@ -349,7 +349,7 @@ describe("composer slash flow", () => {
     expect(pickerStore.getState().slashScope).toBe("skills");
   });
 
-  it("opens a skills-only picker when / is typed mid-paragraph", async () => {
+  it("scopes a mid-paragraph / to skills", async () => {
     const { editor, pickerStore } = makeFixture();
     editor.commands.insertContent("hello /");
     await flush();
@@ -357,23 +357,45 @@ describe("composer slash flow", () => {
     expect(pickerStore.getState().slashScope).toBe("skills");
   });
 
-  // `$` is a skills trigger wherever it appears, so unlike `/` its scope never
-  // consults the caret position - the start of the prompt is not special.
-  it("opens a skills-exclusive picker when $ is typed mid-paragraph", async () => {
+  // `$` is a second way into the same catalog, so its scope tracks the caret
+  // exactly as `/` does - it does not narrow the list at either position.
+  it("scopes a mid-paragraph $ the same way as /", async () => {
     const { editor, pickerStore } = makeFixture();
     editor.commands.insertContent("hello $");
     await flush();
     expect(pickerStore.getState().open).toBe(true);
     expect(pickerStore.getState().kind).toBe("slash");
-    expect(pickerStore.getState().slashScope).toBe("skills-only");
+    expect(pickerStore.getState().slashScope).toBe("skills");
   });
 
-  it("opens a skills-exclusive picker when $ starts the prompt", async () => {
+  it("offers the whole catalog when $ starts the prompt", async () => {
     const { editor, pickerStore } = makeFixture();
     editor.commands.insertContent("$");
     await flush();
     expect(pickerStore.getState().open).toBe(true);
-    expect(pickerStore.getState().slashScope).toBe("skills-only");
+    expect(pickerStore.getState().slashScope).toBe("all");
+  });
+
+  // A native command is as legal under `$` as under `/`; only position governs.
+  it("commits a native command through a leading $ picker", async () => {
+    const { editor, pickerStore } = makeFixture();
+    editor.commands.insertContent("$pl");
+    await flush();
+
+    const commit = pickerStore.getState().commit;
+    if (commit === null) throw new Error("commit missing");
+    commit({
+      id: "plan",
+      kind: "slash",
+      command: planCommand(),
+      disabledReason: null,
+    });
+    await flush();
+
+    expect(slashCount(editor)).toBe(1);
+    const chip = firstSlashChip(editor);
+    expect(chip.attrs.kind).toBe("slash-command");
+    expect(chip.attrs.trigger).toBe("$");
   });
 
   // The decision behind the `$` trigger: the chip reads back as what was typed,
@@ -426,35 +448,10 @@ describe("composer slash flow", () => {
     expect(slashCommandLabelFromAttrs(chip.attrs)).toBe("/frontend-design");
   });
 
-  // Row construction already keeps natives out of a `$` menu, but the commit is
-  // public: a stale producer or a direct store call can still hand one over. A
-  // `$plan` chip would read as a skill and run the native command, so the
-  // trigger's meaning cannot rest on row construction alone. The leading
-  // position is where it would otherwise slip through, since that is the one
-  // place the pre-existing non-leading check does not fire.
-  it("refuses a native command committed through a leading $ picker", async () => {
-    const { editor, pickerStore } = makeFixture();
-    editor.commands.insertContent("$pl");
-    await flush();
-    expect(pickerStore.getState().slashScope).toBe("skills-only");
-
-    const commit = pickerStore.getState().commit;
-    if (commit === null) throw new Error("commit missing");
-    commit({
-      id: "plan",
-      kind: "slash",
-      command: planCommand(),
-      disabledReason: null,
-    });
-    await flush();
-
-    expect(slashCount(editor)).toBe(0);
-    expect(editor.state.doc.textContent).toBe("$pl");
-  });
-
-  // The guard also sees content the picker never built - pasted, restored from
-  // a draft, or carried in by an edited message.
-  it("strips a persisted $ chip that is not a skill", async () => {
+  // The guard sees content the picker never built - pasted, restored from a
+  // draft, or carried in by an edited message. Position is what it checks: a
+  // native command away from the start is stripped whichever trigger it wears.
+  it("strips a persisted non-leading $ native command chip", async () => {
     const { editor } = makeFixture();
     editor.commands.setContent({
       type: "doc",
@@ -462,6 +459,7 @@ describe("composer slash flow", () => {
         {
           type: "paragraph",
           content: [
+            { type: "text", text: "hello " },
             {
               type: "slashCommand",
               attrs: {

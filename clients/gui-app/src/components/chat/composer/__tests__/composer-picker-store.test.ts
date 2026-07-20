@@ -114,7 +114,7 @@ describe("composer picker store session ownership", () => {
     store.getState().openPicker({
       sessionId: 1,
       kind: "slash",
-      slashScope: "skills-only",
+      slashScope: "skills",
       slashTrigger: "$",
       range: { from: 1, to: 2 },
       query: "",
@@ -167,7 +167,7 @@ describe("composer picker store session ownership", () => {
       sessionId: 1,
       range: { from: 90, to: 99 },
       query: "stale",
-      slashScope: "skills-only",
+      slashScope: "skills",
       clientRect: null,
     });
 
@@ -362,7 +362,7 @@ describe("composer picker store", () => {
   // A scope flip rewrites every row's enabled/disabled policy, so rows built
   // under the old scope must not survive it - otherwise a native command
   // published while the caret was leading stays committable after the caret
-  // makes the position skills-only.
+  // makes the position skills-scoped.
   it("drops published items when the slash scope flips", () => {
     const store = createComposerPickerStore();
     store.getState().openPicker({
@@ -403,7 +403,7 @@ describe("composer picker store", () => {
     openSlash(store, NOOP_COMMIT);
 
     // The item hook resolved under "all" but the caret has since moved to a
-    // skills-only position, so this list must not land.
+    // skills-scoped position, so this list must not land.
     store.getState().setItems({
       kind: "slash",
       query: "",

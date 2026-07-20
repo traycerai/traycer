@@ -11,21 +11,22 @@ export type ComposerPickerKind = "mention" | "slash";
 /**
  * Which commands a slash picker offers, and how it treats the ones it cannot.
  *
- * - `all` - a leading `/`: every command is selectable.
- * - `skills` - a `/` past the start: skills are selectable and native commands
- *   stay listed but disabled, because the user asked for the whole catalog and
- *   a row vanishing mid-typing reads as a bug.
- * - `skills-only` - a `$`: skills are the whole point of the trigger, so native
- *   commands are absent rather than disabled. Listing them would answer a
- *   question nobody asked, and "only allowed at the start of the message" would
- *   be a lie here - `$` never offers them at any position.
+ * - `all` - a leading trigger: every command is selectable.
+ * - `skills` - a trigger past the start: skills are selectable and native
+ *   commands stay listed but disabled, because the user asked for the whole
+ *   catalog and a row vanishing mid-typing reads as a bug.
+ *
+ * Scope follows caret position, never which character was typed: `/` and `$`
+ * open the same catalog.
  */
-export type ComposerSlashScope = "all" | "skills" | "skills-only";
+export type ComposerSlashScope = "all" | "skills";
 
 /**
- * Character that opened a slash picker. Distinct from the scope: the scope says
- * what the picker offers, this says what the user typed, and the menu has to
- * echo it back so a row picked with `$` does not read as `/name`.
+ * Character that opened a slash picker. Purely what the user pressed - it does
+ * not narrow the catalog. The menu echoes it so a row picked with `$` does not
+ * read as `/name`, and the chip keeps it for the same reason; translating a
+ * skill into the form a provider expects is the harness layer's job (Codex
+ * takes `$name`, everything else `/name`).
  */
 export type ComposerSlashTrigger = "/" | "$";
 

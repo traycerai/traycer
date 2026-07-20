@@ -121,12 +121,7 @@ describe("<ComposerMenu /> trigger echo", () => {
       render(<ComposerMenu pickerStore={store} />);
     });
     act(() => {
-      openTriggered(
-        store,
-        [slashItem("frontend-design", null)],
-        "$",
-        "skills-only",
-      );
+      openTriggered(store, [slashItem("frontend-design", null)], "$", "all");
     });
 
     expect(screen.getByRole("option").textContent).toContain(
@@ -149,21 +144,17 @@ describe("<ComposerMenu /> trigger echo", () => {
     expect(screen.getByRole("option").textContent).toContain("/plan");
   });
 
-  it("titles a $ picker as skills rather than slash commands", () => {
+  // The trigger changes the row prefixes and nothing else: both open the same
+  // catalog, so a `$` list is not a skills list and must not claim to be one.
+  it("keeps the same header whichever trigger opened the picker", () => {
     const store = createComposerPickerStore();
     act(() => {
       render(<ComposerMenu pickerStore={store} />);
     });
     act(() => {
-      openTriggered(
-        store,
-        [slashItem("frontend-design", null)],
-        "$",
-        "skills-only",
-      );
+      openTriggered(store, [slashItem("frontend-design", null)], "$", "all");
     });
 
-    expect(document.body.textContent).toContain("Skills");
-    expect(document.body.textContent).not.toContain("Slash commands");
+    expect(document.body.textContent).toContain("Slash commands");
   });
 });

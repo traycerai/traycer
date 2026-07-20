@@ -72,7 +72,7 @@ export const slashSuggestionPluginKey = new PluginKey(
   "composer-slash-suggestion",
 );
 
-/** The `$` sibling of {@link slashSuggestionPluginKey}, for skills only. */
+/** The `$` sibling of {@link slashSuggestionPluginKey}, over the same catalog. */
 export const skillSuggestionPluginKey = new PluginKey(
   "composer-skill-suggestion",
 );
@@ -118,19 +118,17 @@ function collectIllegalSlashPositions(state: EditorState): number[] {
  *
  * The guard runs over persisted content too - pasted, restored from a draft, or
  * carried in by an edited message - so it cannot assume the picker built every
- * node it sees. `$` only ever inserts skills, so a non-skill wearing that
- * trigger did not come from the picker and is stripped wherever it sits; a
- * native command under `/` is legal only at the leading position the provider
- * will actually parse.
+ * node it sees. The rule is about position, not the trigger: a skill is legal
+ * anywhere, and a native command only at the leading position the provider will
+ * actually parse. Both triggers offer the same catalog, so neither narrows what
+ * a chip is allowed to be.
  */
 function isLegalSlashChip(
   doc: ProseMirrorNode,
   node: ProseMirrorNode,
   pos: number,
 ): boolean {
-  const isSkill = node.attrs.kind === "skill";
-  if (node.attrs.trigger === "$") return isSkill;
-  if (isSkill) return true;
+  if (node.attrs.kind === "skill") return true;
   return isLeadingSlashPosition(doc, pos);
 }
 
@@ -155,32 +153,42 @@ export function createSlashSuggestionExtension(
 
     addProseMirrorPlugins() {
       return [
-        // `/` offers the whole catalog at the start of the prompt and skills
-        // (with natives listed as disabled) anywhere else.
         suggestionForTrigger({
           editor: this.editor,
           pickerStore: deps.pickerStore,
           trigger: "/",
           pluginKey: slashSuggestionPluginKey,
-          slashScopeForProps: ({ editor, range }) =>
-            isLeadingRange(editor.state, range.from, range.to)
-              ? "all"
-              : "skills",
+          slashScopeForProps: slashScopeForRange,
         }),
-        // `$` is skills-only wherever it is typed, so its scope never consults
-        // the caret position - a skill is legal mid-sentence and at the start
-        // alike, because the host reads skills off the node's `kind` rather
-        // than out of the prompt text.
         suggestionForTrigger({
           editor: this.editor,
           pickerStore: deps.pickerStore,
           trigger: "$",
           pluginKey: skillSuggestionPluginKey,
-          slashScopeForProps: () => "skills-only",
+          slashScopeForProps: slashScopeForRange,
         }),
       ];
     },
   });
+}
+
+/**
+ * Scope follows the caret, not the trigger: both `/` and `$` open the whole
+ * catalog at the start of the prompt and skills past it. `$` is a second way
+ * into the same list, not a narrower one - rendering a skill in the form a
+ * given provider expects (Codex wants `$name`) is the harness layer's job.
+ */
+function slashScopeForRange(context: {
+  editor: { state: EditorState };
+  range: { from: number; to: number };
+}): ComposerSlashScope {
+  return isLeadingRange(
+    context.editor.state,
+    context.range.from,
+    context.range.to,
+  )
+    ? "all"
+    : "skills";
 }
 
 function suggestionForTrigger(args: {
@@ -372,13 +380,6 @@ function commitSlashInsertion(
   command: SlashCommand,
   trigger: SlashCommandTrigger,
 ): void {
-  // `$` offers skills and nothing else, so a native command arriving here did
-  // not come from a row the picker built - a stale producer or a direct call on
-  // the store's public commit. Refusing at insertion keeps the trigger's
-  // meaning from depending on row construction alone, and the leading position
-  // is no exception: `$plan` would render as a skill and still run the native
-  // command.
-  if (trigger === "$" && command.kind !== "skill") return;
   if (
     command.kind === "slash-command" &&
     !isLeadingRange(editor.state, range.from, range.to)

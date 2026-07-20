@@ -84,33 +84,28 @@ export function useSlashItems(params: UseSlashItemsParams): void {
 }
 
 /**
- * Projects the fetched catalog into rows for a given trigger's scope.
+ * Projects the fetched catalog into rows for the caret's scope.
  *
- * The two restricted scopes refuse a native command for different reasons, and
- * the difference is the whole point: under `/` the user asked for the catalog,
- * so a native command stays listed and explains itself; under `$` they asked
- * for skills, so a native command was never on offer and is simply absent.
+ * Scope depends on position, never on which trigger opened the picker - `/` and
+ * `$` list the same commands. Past the start of the prompt a native command
+ * stays listed and explains itself rather than vanishing, because the user
+ * asked for the catalog and a row disappearing mid-typing reads as a bug.
  */
 export function slashItemsForScope(
   commands: ReadonlyArray<SlashCommand>,
   slashScope: ComposerSlashScope | null,
 ): ReadonlyArray<ComposerPickerItem> {
-  return commands.flatMap((command: SlashCommand): ComposerPickerItem[] => {
-    const isSkill = command.kind === "skill";
-    if (slashScope === "skills-only" && !isSkill) return [];
+  return commands.map((command: SlashCommand): ComposerPickerItem => {
     // Native provider commands are parsed only at the very start of the prompt
     // (the Claude CLI bails unless the trimmed prompt starts with `/`), so
-    // inline they stay listed but unselectable rather than vanishing - the
-    // catalog reads the same at every caret position.
-    const disabled = slashScope === "skills" && !isSkill;
-    return [
-      {
-        id: `slash:${command.name}`,
-        kind: "slash",
-        command,
-        disabledReason: disabled ? NATIVE_COMMAND_DISABLED_REASON : null,
-      },
-    ];
+    // inline they stay listed but unselectable.
+    const disabled = slashScope === "skills" && command.kind !== "skill";
+    return {
+      id: `slash:${command.name}`,
+      kind: "slash",
+      command,
+      disabledReason: disabled ? NATIVE_COMMAND_DISABLED_REASON : null,
+    };
   });
 }
 

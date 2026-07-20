@@ -50,12 +50,6 @@ const SLASH_MENU_COPY = {
   header: "Slash commands",
   empty: "No matching commands",
 };
-// `$` lists skills and nothing else, so "Slash commands" would misdescribe both
-// the trigger the user typed and every row under it.
-const SKILL_MENU_COPY = {
-  header: "Skills",
-  empty: "No matching skills",
-};
 const COMPOSER_ARTIFACT_REFRESH_TIMEOUT_MS = 10_000;
 
 // Conservative bound for open-time placement decision; list is capped via
@@ -184,9 +178,10 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
 
   const copy = useMemo(() => {
     if (kind === "mention") return mentionProviderRegistry.menuCopy(step);
-    if (slashTrigger === "$") return SKILL_MENU_COPY;
+    // Both triggers list the same catalog, so the header does not vary with the
+    // trigger - only the row prefixes echo which character was typed.
     return SLASH_MENU_COPY;
-  }, [kind, slashTrigger, step]);
+  }, [kind, step]);
 
   const showEmptyLabelWithItems = useMemo(
     () =>

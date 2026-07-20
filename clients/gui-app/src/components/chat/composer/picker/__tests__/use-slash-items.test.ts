@@ -51,16 +51,16 @@ describe("slashItemsForScope", () => {
     ]);
   });
 
-  // Under `$` they asked for skills. A native command was never on offer at any
-  // position, so listing it disabled would answer a question nobody asked - and
-  // the "only at the start of the message" reason would be untrue here.
-  it("drops native commands entirely under a skills trigger", () => {
-    expect(namesAndReasons(slashItemsForScope(CATALOG, "skills-only"))).toEqual(
-      [["slash:frontend-design", null]],
-    );
+  // Scope follows the caret, never the trigger: `$` is a second way into the
+  // same catalog, so it projects exactly what `/` would at that position.
+  it("projects the same rows whichever trigger opened the picker", () => {
+    expect(namesAndReasons(slashItemsForScope(CATALOG, "all"))).toEqual([
+      ["slash:plan", null],
+      ["slash:frontend-design", null],
+    ]);
   });
 
   it("returns nothing to publish when the catalog is empty", () => {
-    expect(slashItemsForScope([], "skills-only")).toEqual([]);
+    expect(slashItemsForScope([], "skills")).toEqual([]);
   });
 });
