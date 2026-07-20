@@ -16,12 +16,6 @@ vi.mock("electron-log", () => ({
   },
 }));
 
-// The production default for `respawn` drags in the SMAppService login-item
-// chain; every test injects its own respawn, so stub the module out.
-vi.mock("../../app/host-respawn", () => ({
-  respawnHost: vi.fn(async () => {}),
-}));
-
 import { startHostHealthMonitor } from "../host-health-monitor";
 
 const INTERVAL_MS = 1_000;

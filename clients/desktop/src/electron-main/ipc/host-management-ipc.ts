@@ -1,16 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { readFile, stat, mkdir, writeFile } from "node:fs/promises";
-import { isAbsolute, join, normalize, relative } from "node:path";
+import { join } from "node:path";
 import { log } from "../app/logger";
 import { compareHostVersions } from "../cli/cli-discovery";
-import rawDevWrapperPaths from "../cli/dev-wrapper-paths.json";
-import {
-  runTraycerCliJson,
-  streamTraycerCliJson,
-  TraycerCliError,
-  type NdjsonEvent,
-} from "../cli/traycer-cli";
+import { runTraycerCliJson, TraycerCliError } from "../cli/traycer-cli";
 import {
   RunnerHostEvent,
   RunnerHostInvoke,
@@ -19,6 +13,7 @@ import type {
   HostAvailableSnapshot,
   HostAvailableVersionEntry,
   HostDoctorReport,
+  HostEnsureResult,
   HostInstallResult,
   HostInstalledRecord,
   HostLogsTailResult,
@@ -27,19 +22,13 @@ import type {
   HostProgressEvent,
   HostRegistryUpdateState,
   HostRemovalState,
-  HostUninstallResult,
-  TraycerUninstallResult,
   FreePortAndRestartInput,
 } from "../../ipc-contracts/host-management-types";
 import {
-  hostManagesHostLoginItem,
-  unregisterHostLoginItem,
-} from "../app/host-login-item";
-import {
   clearHostRemovedByUser,
   isHostRemovedByUser,
-  markHostRemovedByUser,
 } from "../host/host-removal-state";
+import type { MutationOutcome } from "../host/host-controller-types";
 import {
   environmentSubdir,
   getHostFsLayout,
@@ -115,125 +104,6 @@ function cliSlotRootForEnvironment(environment: Environment): string {
   return environmentSubdir(cliRoot, environment);
 }
 
-interface DevWrapperPaths {
-  readonly segments: readonly string[];
-  readonly filenamePosix: string;
-  readonly filenameWin32: string;
-}
-
-/**
- * Defensive parser for the bundled `dev-wrapper-paths.json`. We import
- * it as a JSON module (TS will type-check the literal at build time),
- * but a future hand-edit / corrupt commit could leave the file with
- * the wrong shape. Validate the shape explicitly so the failure mode
- * at module load is a clear "dev-wrapper-paths.json is malformed"
- * rather than an opaque `undefined.join` downstream.
- */
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function parseDevWrapperPaths(raw: unknown): DevWrapperPaths {
-  if (!isRecord(raw)) {
-    throw new Error("dev-wrapper-paths.json is malformed: not an object");
-  }
-  const segments = raw.segments;
-  if (
-    !Array.isArray(segments) ||
-    !segments.every((s): s is string => typeof s === "string" && s.length > 0)
-  ) {
-    throw new Error(
-      "dev-wrapper-paths.json is malformed: `segments` must be a non-empty array of non-empty strings",
-    );
-  }
-  const filenamePosix = raw.filenamePosix;
-  if (typeof filenamePosix !== "string" || filenamePosix.length === 0) {
-    throw new Error(
-      "dev-wrapper-paths.json is malformed: `filenamePosix` must be a non-empty string",
-    );
-  }
-  const filenameWin32 = raw.filenameWin32;
-  if (typeof filenameWin32 !== "string" || filenameWin32.length === 0) {
-    throw new Error(
-      "dev-wrapper-paths.json is malformed: `filenameWin32` must be a non-empty string",
-    );
-  }
-  return { segments, filenamePosix, filenameWin32 };
-}
-
-const devWrapperPaths: DevWrapperPaths =
-  parseDevWrapperPaths(rawDevWrapperPaths);
-
-/**
- * Absolute path to the dev CLI wrapper staged by `make dev-desktop`
- * (see `scripts/dev-desktop.js`). The wrapper exec's the working-tree
- * `traycer-cli/src/index.ts` via bun so the OS service plist resolves
- * to a stable executable path even though the dev environment has no
- * packaged SEA binary on disk.
- *
- * The run slot selects the CLI root; `dev-wrapper-paths.json` supplies the
- * platform filename so this module and `scripts/dev-desktop.js` stay in
- * lockstep on the wrapper executable name.
- */
-function devCliWrapperPath(): string {
-  const filename =
-    process.platform === "win32"
-      ? devWrapperPaths.filenameWin32
-      : devWrapperPaths.filenamePosix;
-  return join(cliSlotRootForEnvironment(activeEnvironment), "bin", filename);
-}
-
-/**
- * Path-safety check used before passing the dev CLI wrapper to a
- * subprocess as `--cli-bin <path>` (review item 13). The wrapper must
- * live under the user's `~/.traycer/` tree - anything outside it (a
- * symlink, an env-mutated wrapper, a `..` traversal) is rejected so a
- * compromised env can't trick the CLI install path into hand-registering
- * an attacker-controlled binary. We normalize first to collapse `..`
- * segments before computing the relative path.
- */
-function isUnderTraycerHome(candidate: string): boolean {
-  const traycerHome = join(homedir(), ".traycer");
-  const normalized = normalize(candidate);
-  const rel = relative(traycerHome, normalized);
-  if (rel.length === 0) return true;
-  if (rel.startsWith("..")) return false;
-  if (isAbsolute(rel)) return false;
-  return true;
-}
-
-/**
- * Extra args for the dev-slot `host service install` so reregister resolves
- * the dev CLI wrapper that `make dev-desktop` staged under this run's CLI bin
- * dir. Production (`activeEnvironment === "production"`) returns an empty list
- * so packaged Desktop keeps using the CLI install manifest at
- * `~/.traycer/cli/manifest.json`.
- *
- * The CLI's `resolveServiceCliInvocation` discovers that wrapper via the
- * well-known bin-dir convention without any flag - passing
- * `--allow-self-invocation` is the safety net for the case where
- * `make dev-desktop` hasn't staged the wrapper yet (the CLI then
- * registers its own `process.execPath` against the dev service rather
- * than throwing `SERVICE_CLI_PATH_UNRESOLVED`).
- *
- * Note: an older revision passed `--cli-bin <wrapper>` here. The CLI
- * removed that flag (the bin-dir convention subsumed it - see
- * `traycer-cli/src/service/cli-binary.ts`'s `override` field comment),
- * so we now only pass `--allow-self-invocation`. `devCliWrapperPath()` /
- * `isUnderTraycerHome()` are kept for the warning log only.
- */
-async function devServiceInstallExtras(): Promise<string[]> {
-  if (activeEnvironment !== "dev") return [];
-  const wrapper = devCliWrapperPath();
-  if (!isUnderTraycerHome(wrapper)) {
-    log.warn(
-      "[host-management] dev CLI wrapper path is outside ~/.traycer - relying on --allow-self-invocation",
-      { wrapper },
-    );
-  }
-  return ["--allow-self-invocation"];
-}
-
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -269,14 +139,16 @@ function nullableString(raw: unknown, key: string): string | null {
  * window reads it via `traycerHostOperationStatusGet` on mount and
  * `hostOperationStatusChange` thereafter.
  *
- * This is also the single-flight guard: `trackHostOperation` below rejects a
- * second concurrent call synchronously (no `await` between the null-check and
- * the set) instead of letting a second `traycer host …` subprocess spawn and
- * lose the race on `cli-lock`'s file mutex. That turns the user-visible "two
- * clicks -> CLI_LOCK_BUSY on the loser, stale UI on the winner" bug into a
- * same-process no-op, and makes `cli-lock` a pure backstop for a genuinely
- * separate process (a terminal `traycer host update` racing the desktop) -
- * not the mechanism the UI relies on for correctness.
+ * Host Update Layer Redesign Tech Plan ("Single-writer cutover"): this is now
+ * a pure STATUS MIRROR, not a guard. The single-flight throw that used to
+ * live here ("Another host operation … is already in progress") is gone -
+ * `HostController`'s own mutation lane is the actual single writer, and it
+ * queues a concurrent submission instead of rejecting it. Set/cleared only by
+ * `runControllerMutationWithLegacyProgress` below, and only for the four
+ * kinds the legacy contract knows about (`install` / `update` /
+ * `register-service` / `ensure`) - every other mutation (uninstall, restart,
+ * deregister, free-port-and-restart, remove) never broadcast progress under
+ * the old contract either, so they don't touch this.
  */
 let currentOperationStatus: HostOperationStatus | null = null;
 
@@ -293,23 +165,24 @@ function setHostOperationStatus(
 }
 
 /**
- * Single seam every long-running CLI-backed operation (install / update /
- * register-service / ensure) funnels through. Owns the single-flight guard,
- * the canonical status broadcast (start / each progress tick / settle), and
- * the legacy per-`operationId` `cliOperationProgress` fan-out that the
- * preload's `withOperationListener` still reads.
+ * Wraps a `HostController` mutation call for the four legacy-tracked kinds:
+ * broadcasts `hostOperationStatusChange` on start, re-broadcasts every
+ * `cliOperationProgress` / `hostOperationStatusChange` tick via
+ * `HostController.onMutationProgress` (the mutation lane is exclusive FIFO,
+ * so a listener registered here only ever observes progress for THIS call),
+ * clears the status on settle (success or failure - a rejected operation
+ * must never leave every surface permanently disabled), and lets `mapOutcome`
+ * decide how the terminal `MutationOutcome` becomes this handler's return
+ * value (or throws, for handlers where every non-"ok" kind should reject the
+ * IPC invoke the way the old CLI-throw contract did).
  */
-async function trackHostOperation<T>(
+async function runControllerMutationWithLegacyProgress<TOk, TResult>(
   bridge: RunnerIpcBridge,
   kind: HostOperationKind,
   operationId: string,
-  run: (onEvent: (event: NdjsonEvent) => void) => Promise<T>,
-): Promise<T> {
-  if (currentOperationStatus !== null) {
-    throw new Error(
-      `Another host operation (${currentOperationStatus.kind}) is already in progress`,
-    );
-  }
+  run: () => Promise<MutationOutcome<TOk>>,
+  mapOutcome: (outcome: MutationOutcome<TOk>) => TResult | Promise<TResult>,
+): Promise<TResult> {
   const startedAt = new Date().toISOString();
   setHostOperationStatus(bridge, {
     operationId,
@@ -321,55 +194,46 @@ async function trackHostOperation<T>(
     message: null,
     startedAt,
   });
-  const onEvent = (event: NdjsonEvent): void => {
-    if (event.type !== "progress") return;
-    const payload: HostProgressEvent = {
-      operationId,
-      stage: event.stage,
-      percent: event.percent,
-      bytes: event.bytes,
-      totalBytes: event.totalBytes,
-      message: event.message,
-    };
-    bridge.fanOut(RunnerHostEvent.cliOperationProgress, payload);
-    setHostOperationStatus(bridge, {
-      operationId,
-      kind,
-      stage: event.stage,
-      percent: event.percent,
-      bytes: event.bytes,
-      totalBytes: event.totalBytes,
-      message: event.message,
-      startedAt,
-    });
-  };
+  const unsubscribe = bridge.options.hostController.onMutationProgress(
+    (progress) => {
+      const payload: HostProgressEvent = {
+        operationId,
+        stage: progress.stage ?? "",
+        percent: progress.percent,
+        bytes: progress.bytes,
+        totalBytes: progress.totalBytes,
+        message: progress.message,
+      };
+      bridge.fanOut(RunnerHostEvent.cliOperationProgress, payload);
+      setHostOperationStatus(bridge, {
+        operationId,
+        kind,
+        stage: progress.stage,
+        percent: progress.percent,
+        bytes: progress.bytes,
+        totalBytes: progress.totalBytes,
+        message: progress.message,
+        startedAt,
+      });
+    },
+  );
   try {
-    return await run(onEvent);
+    const outcome = await run();
+    return mapOutcome(outcome);
   } finally {
-    // Always clears, success or failure, so a rejected operation never
-    // leaves every surface permanently disabled.
+    unsubscribe();
     setHostOperationStatus(bridge, null);
   }
 }
 
-export function streamCliWithProgress(
-  args: readonly string[],
-  operationId: string,
-  kind: HostOperationKind,
-  timeoutMs: number,
-  bridge: RunnerIpcBridge,
-): Promise<unknown> {
-  // The wrapper guarantees `--json`; non-progress envelopes are absorbed
-  // by streamTraycerCliJson which only resolves on a terminal `result`
-  // event (ok → data, error → TraycerCliError reject).
-  return trackHostOperation(bridge, kind, operationId, (onEvent) =>
-    streamTraycerCliJson<unknown>({
-      args,
-      onEvent,
-      env: null,
-      timeoutMs,
-    }).then((result: { readonly data: unknown }) => result.data),
-  );
+/** Every non-"ok" outcome rejects the IPC invoke - matches the legacy
+ * CLI-throw contract for the handlers that never had a "keep the old
+ * host, surface it for a compat probe" branch. */
+function okOrThrow<TOk>(outcome: MutationOutcome<TOk>): TOk {
+  if (outcome.kind !== "ok") {
+    throw new Error(outcome.message);
+  }
+  return outcome.value;
 }
 
 /**
@@ -839,28 +703,6 @@ async function refreshRegistryUpdateStateSerial(opts: {
   return state;
 }
 
-function projectUninstallResult(
-  raw: unknown,
-  requested: { readonly all: boolean },
-): HostUninstallResult {
-  if (!isPlainObject(raw)) {
-    return {
-      removedInstallDir: false,
-      deregisteredService: false,
-    };
-  }
-  return {
-    removedInstallDir:
-      raw.removedInstallDir === true || raw.removedRecord === true,
-    deregisteredService:
-      raw.deregisteredService === true ||
-      raw.serviceUninstalled === true ||
-      (requested.all && raw.serviceUninstalled !== false),
-  };
-}
-
-// Project the CLI's `host uninstall --all` payload into the in-app removal
-// summary. `--all` always requests service deregistration, so a CLI that
 // An explicit user-driven (re)provision - install host, update host, register
 // service - means the user wants the host back on this device. Clear the
 // removal sentinel so the host stops being treated as removed; otherwise the
@@ -873,104 +715,37 @@ async function clearHostRemovalIfSet(): Promise<void> {
   }
 }
 
-function projectFreePortAndRestartResult(
-  raw: unknown,
-  fallback: FreePortAndRestartInput,
-): FreePortAndRestartInput {
-  if (!isPlainObject(raw)) return fallback;
-  const port =
-    typeof raw.port === "number" && Number.isFinite(raw.port)
-      ? raw.port
-      : fallback.port;
-  const pid =
-    typeof raw.pid === "number" && Number.isFinite(raw.pid)
-      ? raw.pid
-      : fallback.pid;
-  const processName =
-    typeof raw.processName === "string"
-      ? raw.processName
-      : fallback.processName;
-  return { port, pid, processName };
-}
-
-function projectInstallResult(raw: unknown): HostInstallResult {
-  if (!isPlainObject(raw)) {
-    throw new Error("host install: malformed result");
-  }
-  const sourceRaw = isPlainObject(raw.source) ? raw.source : null;
-  const lifecycleRaw = isPlainObject(raw.serviceLifecycle)
-    ? raw.serviceLifecycle
-    : null;
-  return {
-    version: typeof raw.version === "string" ? raw.version : "",
-    installedAt: typeof raw.installedAt === "string" ? raw.installedAt : "",
-    executablePath:
-      typeof raw.executablePath === "string" ? raw.executablePath : "",
-    source:
-      sourceRaw === null
-        ? { kind: "registry", value: "" }
-        : {
-            kind: sourceRaw.kind === "local-file" ? "local-file" : "registry",
-            value: typeof sourceRaw.value === "string" ? sourceRaw.value : "",
-          },
-    archiveSha256:
-      typeof raw.archiveSha256 === "string" ? raw.archiveSha256 : "",
-    signatureKeyId:
-      typeof raw.signatureKeyId === "string" ? raw.signatureKeyId : "",
-    sizeBytes: typeof raw.sizeBytes === "number" ? raw.sizeBytes : 0,
-    previousVersion:
-      typeof raw.previousVersion === "string" ? raw.previousVersion : null,
-    serviceLifecycle:
-      lifecycleRaw === null
-        ? {
-            priorServiceState: "not-installed",
-            stoppedBeforeSwap: false,
-            postSwapAction: "none",
-            postSwapError: null,
-          }
-        : {
-            priorServiceState:
-              lifecycleRaw.priorServiceState === "running" ||
-              lifecycleRaw.priorServiceState === "stopped" ||
-              lifecycleRaw.priorServiceState === "not-installed" ||
-              lifecycleRaw.priorServiceState === "externally-managed"
-                ? lifecycleRaw.priorServiceState
-                : "not-installed",
-            stoppedBeforeSwap: lifecycleRaw.stoppedBeforeSwap === true,
-            postSwapAction: narrowPostSwapAction(lifecycleRaw.postSwapAction),
-            postSwapError:
-              typeof lifecycleRaw.postSwapError === "string"
-                ? lifecycleRaw.postSwapError
-                : null,
-          },
-  };
-}
-
-type PostSwapAction = "install" | "restart" | "start" | "none";
-
 /**
- * Project the CLI-reported `postSwapAction` into the Desktop union. A
- * legitimately absent field (the CLI didn't run a post-swap step) maps to
- * `"none"` silently. An *unknown* string is the interesting case: it means
- * the CLI emitted a value Desktop doesn't recognise - a version skew
- * between CLI and Desktop. We collapse it to `"none"` so the renderer
- * stays well-formed but log a warning with the raw value so the drift
- * shows up in support bundles instead of disappearing silently.
+ * Projects a freshly re-read install record into the legacy `HostInstallResult`
+ * IPC shape after an install/update mutation. `HostController`'s
+ * `InstallVersionOk` / `ApplyStagedOk` outcomes intentionally don't carry
+ * `previousVersion` or `serviceLifecycle` - those were raw CLI-response
+ * fields the old IPC layer parsed directly out of `host install`/`host
+ * apply`'s JSON, and no production renderer code reads them (confirmed: both
+ * fields appear only in test fixtures, never in a live component). Accepted
+ * legacy-shim gap - default them rather than plumbing CLI internals back
+ * through the controller's typed outcome.
  */
-export function narrowPostSwapAction(raw: unknown): PostSwapAction {
-  if (raw === "install") return "install";
-  if (raw === "restart") return "restart";
-  if (raw === "start") return "start";
-  // An explicit "none" is routine (e.g. an externally-managed/SMAppService
-  // label where the CLI deliberately leaves the service alone) - it must not
-  // trip the version-skew warning below.
-  if (raw === "none") return "none";
-  if (raw === undefined) return "none";
-  log.warn(
-    "[host-management] unknown postSwapAction value from CLI - collapsing to 'none'",
-    { raw },
-  );
-  return "none";
+function projectInstallResultFromRecord(
+  record: HostInstalledRecord | null,
+  fallbackVersion: string,
+): HostInstallResult {
+  return {
+    version: record?.version ?? fallbackVersion,
+    installedAt: record?.installedAt ?? "",
+    executablePath: record?.executablePath ?? "",
+    source: record?.source ?? { kind: "registry", value: "" },
+    archiveSha256: record?.archiveSha256 ?? "",
+    signatureKeyId: record?.signatureKeyId ?? "",
+    sizeBytes: record?.sizeBytes ?? 0,
+    previousVersion: null,
+    serviceLifecycle: {
+      priorServiceState: "not-installed",
+      stoppedBeforeSwap: false,
+      postSwapAction: "none",
+      postSwapError: null,
+    },
+  };
 }
 
 export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
@@ -984,19 +759,16 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
     RunnerHostInvoke.traycerHostInstall,
     async (_event, raw: unknown) => {
       await clearHostRemovalIfSet();
-      const version = optionalString(raw, "version");
+      const version = optionalString(raw, "version") ?? "latest";
       const operationId = optionalString(raw, "operationId") ?? randomUUID();
-      const args = [
-        "host",
-        "install",
-        ...(version !== null && version !== "latest" ? [version] : ["latest"]),
-      ];
-      const data = await streamCliWithProgress(
-        args,
-        operationId,
-        "install",
-        LONG_OP_TIMEOUT_MS,
-        bridge,
+      const outcome = okOrThrow(
+        await runControllerMutationWithLegacyProgress(
+          bridge,
+          "install",
+          operationId,
+          () => bridge.options.hostController.installVersion(version, true),
+          (o) => o,
+        ),
       );
       // The install record on disk now points at the freshly installed
       // version. Re-probe the registry so the cached `installedVersion`
@@ -1004,7 +776,10 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
       // keeps the launch-time snapshot and the Updates row / banner stay
       // stuck advertising the version we just installed.
       await refreshRegistryUpdateState({ force: true, maxAgeMs: null });
-      return projectInstallResult(data);
+      return projectInstallResultFromRecord(
+        await readInstalledHostRecord(),
+        outcome.installedVersion,
+      );
     },
   );
 
@@ -1013,15 +788,23 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
     async (_event, raw: unknown) => {
       await clearHostRemovalIfSet();
       const operationId = optionalString(raw, "operationId") ?? randomUUID();
-      const data = await streamCliWithProgress(
-        ["host", "update"],
-        operationId,
-        "update",
-        LONG_OP_TIMEOUT_MS,
-        bridge,
+      const outcome = okOrThrow(
+        await runControllerMutationWithLegacyProgress(
+          bridge,
+          "update",
+          operationId,
+          // `applyStaged`'s own preflight reconciles/downloads the eligible
+          // stage before applying it - no separate `stageLatest()` call
+          // needed here.
+          () => bridge.options.hostController.applyStaged("manual", false),
+          (o) => o,
+        ),
       );
       await refreshRegistryUpdateState({ force: true, maxAgeMs: null });
-      return projectInstallResult(data);
+      return projectInstallResultFromRecord(
+        await readInstalledHostRecord(),
+        outcome.appliedVersion,
+      );
     },
   );
 
@@ -1029,38 +812,20 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
     RunnerHostInvoke.traycerHostUninstall,
     async (_event, raw: unknown) => {
       const all = optionalBoolean(raw, "all");
-      const args = ["host", "uninstall"];
-      if (all) args.push("--all");
-      const data = await runTraycerCliJson<unknown>(args);
-      return projectUninstallResult(data, { all });
+      return okOrThrow(await bridge.options.hostController.uninstallHost(all));
     },
   );
 
   // In-app "Remove Traycer" (Settings → General → Danger Zone). Orchestrates
-  // the full background-component teardown while preserving all user data:
-  //   1. mark the device removed-by-user FIRST, so a crash mid-uninstall
-  //      still suppresses auto-reinstall on the next launch;
-  //   2. on macOS shipped builds, drop the SMAppService / BTM login item the
-  //      desktop owns (the CLI's `host uninstall --all` cannot - it only
-  //      boots out the launchd plist, leaving BTM to respawn the host);
-  //   3. run `host uninstall --all` to stop + deregister the service and
-  //      remove the host install. `~/.traycer` user data is never touched
-  //      (the CLI has no purge path by design).
+  // the full background-component teardown while preserving all user data -
+  // marking removed-by-user first, dropping the macOS SMAppService/BTM login
+  // item, and running `host uninstall --all` - all owned by
+  // `HostController.removeTraycer()` now. `~/.traycer` user data is never
+  // touched (the CLI has no purge path by design).
   bridge.handleInvoke(RunnerHostInvoke.traycerAppUninstall, async () => {
-    await markHostRemovedByUser();
-
-    let removedLoginItem = false;
-    if (await hostManagesHostLoginItem()) {
-      await unregisterHostLoginItem();
-      removedLoginItem = true;
-    }
-
-    const data = await runTraycerCliJson<unknown>([
-      "host",
-      "uninstall",
-      "--all",
-    ]);
-    const uninstalled = projectUninstallResult(data, { all: true });
+    const result = okOrThrow(
+      await bridge.options.hostController.removeTraycer(),
+    );
 
     // Refresh the registry cache so `installedVersion` (now absent) drives
     // `updateAvailable` to false. That makes every update-driven reinstall
@@ -1077,11 +842,6 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
       });
     });
 
-    const result: TraycerUninstallResult = {
-      removedHost: uninstalled.removedInstallDir,
-      deregisteredService: uninstalled.deregisteredService,
-      removedLoginItem,
-    };
     log.info("[host-management] in-app uninstall complete", { ...result });
     return result;
   });
@@ -1102,8 +862,59 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
   });
 
   bridge.handleInvoke(RunnerHostInvoke.traycerHostRestart, async () => {
-    await runTraycerCliJson<unknown>(["host", "restart", "--json"]);
+    okOrThrow(await bridge.options.hostController.respawn());
   });
+
+  // Post-auth host provisioning (Core Flow: auth-first boot). The renderer
+  // invokes this once after sign-in when no host is reachable, and again on
+  // any subsequent "make the host ready" need. `HostController.convergeReady`
+  // owns every branch the old `host-ensure-ipc.ts` hand-rolled here (fast
+  // reachability check, macOS SMAppService registration, busy detection,
+  // readiness polling, the pending-LaunchAgent-revision opportunistic
+  // refresh) - this handler only re-shapes its `MutationOutcome` into the
+  // legacy `HostEnsureResult` union the renderer still expects.
+  bridge.handleInvoke(
+    RunnerHostInvoke.traycerHostEnsure,
+    async (_event, raw: unknown) => {
+      const operationId = optionalString(raw, "operationId") ?? randomUUID();
+      const force = optionalBoolean(raw, "force");
+      return runControllerMutationWithLegacyProgress(
+        bridge,
+        "ensure",
+        operationId,
+        () => bridge.options.hostController.convergeReady(force),
+        async (outcome): Promise<HostEnsureResult> => {
+          if (outcome.kind === "ok") {
+            // `running: false` only ever comes back from the removed-by-user
+            // short-circuit (see `HostController.convergeReady`) - every
+            // other "ok" path exists precisely to make the host running.
+            // Renderer code (`local-host-gate.tsx`) never distinguishes
+            // "already-ready" from "provisioned" (confirmed: neither string
+            // appears in production gui-app code), so collapsing both into
+            // "provisioned" is not a behavioural loss.
+            return outcome.value.running
+              ? {
+                  action: "provisioned",
+                  running: true,
+                  version: outcome.value.version,
+                }
+              : { action: "removed", running: false, version: null };
+          }
+          if (outcome.kind === "busy") {
+            // Post-commit busy (continuation is always "activate" here): the
+            // running host has work in progress, so the controller kept it
+            // rather than restarting it. Surface it for the renderer's
+            // compat probe, mirroring the pre-HostController
+            // `surfaceBusyHostKeep` path.
+            await bridge.options.host.reloadSnapshotFromDisk();
+            const version = bridge.options.host.getSnapshot()?.version ?? null;
+            return { action: "host-busy", running: version !== null, version };
+          }
+          throw new Error(outcome.message);
+        },
+      );
+    },
+  );
 
   bridge.handleInvoke(
     RunnerHostInvoke.traycerHostLogs,
@@ -1161,28 +972,24 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
     async (_event, raw: unknown) => {
       await clearHostRemovalIfSet();
       const operationId = optionalString(raw, "operationId") ?? randomUUID();
-      // Dev environment needs the staged wrapper / self-invocation flags so
-      // service reregister works without a per-run dev manifest
-      // (Ticket f0ae4530). Prod returns []; this never widens prod's
-      // host service install argv.
-      const args = [
-        "host",
-        "service",
-        "install",
-        ...(await devServiceInstallExtras()),
-      ];
-      await streamCliWithProgress(
-        args,
-        operationId,
-        "register-service",
-        LONG_OP_TIMEOUT_MS,
-        bridge,
+      // Dev-slot CLI argv (the staged wrapper / self-invocation flags,
+      // Ticket f0ae4530) is now owned by `HostController.registerService()`
+      // itself, environment-aware since the controller already carries
+      // `environment`.
+      okOrThrow(
+        await runControllerMutationWithLegacyProgress(
+          bridge,
+          "register-service",
+          operationId,
+          () => bridge.options.hostController.registerService(),
+          (o) => o,
+        ),
       );
     },
   );
 
   bridge.handleInvoke(RunnerHostInvoke.traycerServiceDeregister, async () => {
-    await runTraycerCliJson<unknown>(["host", "service", "uninstall"]);
+    okOrThrow(await bridge.options.hostController.deregisterService());
   });
 
   bridge.handleInvoke(
@@ -1217,15 +1024,17 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
         pid,
         processName,
       });
-      const args = ["host", "free-port-and-restart"];
-      if (pid !== null) args.push("--pid", String(pid));
-      if (port !== null) args.push("--port", String(port));
-      const data = await runTraycerCliJson<unknown>(args);
-      return projectFreePortAndRestartResult(data, {
+      okOrThrow(
+        await bridge.options.hostController.freePortAndRestart(pid, port),
+      );
+      // `ActivateInstalledOk` carries no port/pid/processName - echo the
+      // confirmed input back, matching the renderer contract's shape.
+      const result: FreePortAndRestartInput = {
         port: port ?? 0,
         pid,
         processName,
-      });
+      };
+      return result;
     },
   );
 

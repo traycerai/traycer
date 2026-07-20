@@ -33,17 +33,6 @@ vi.mock("electron-log", () => ({
   },
 }));
 
-// `HostLifecycle` shells out to the CLI for `respawn` (`traycer host
-// restart`). Mock the helper so a test exercising that path can assert
-// on the captured argv without spawning a real CLI subprocess.
-const cliStreamCalls: { args: readonly string[] }[] = [];
-vi.mock("../../cli/traycer-cli", () => ({
-  streamTraycerCliJson: vi.fn(async (opts: { args: readonly string[] }) => {
-    cliStreamCalls.push({ args: opts.args });
-    return { data: {} };
-  }),
-}));
-
 import {
   canReachHostWebsocketUrl,
   HostLifecycle,
@@ -689,80 +678,6 @@ describe("HostLifecycle.getServiceStatus", () => {
     } finally {
       lifecycle.dispose();
       await rm(dir, { recursive: true, force: true });
-    }
-  });
-});
-
-describe("HostLifecycle.respawn (CLI subprocess)", () => {
-  // Ticket 7c890b39: user-driven restart now delegates to
-  // `traycer host restart` via CLI subprocess.
-
-  function makeChannelLifecycleForChannel(environment: "production" | "dev"): {
-    lifecycle: HostLifecycle;
-    cleanup: () => Promise<void>;
-  } {
-    const tmp = mkdtemp(join(tmpdir(), "lifecycle-test-"));
-    return {
-      lifecycle: new HostLifecycle({
-        layout: {
-          rootDir: "/tmp/no-such-dir",
-          pidMetadataFile: "/tmp/no-such-dir/pid.json",
-          logFile: "/tmp/no-such-dir/host.log",
-          installDir: "/tmp/no-such-dir/install",
-          installRecordFile: "/tmp/no-such-dir/install/install.json",
-          stagedDir: "/tmp/no-such-dir/staged",
-          stagedRecordFile: "/tmp/no-such-dir/staged/staged.json",
-          pendingLoginItemRevisionFile:
-            "/tmp/no-such-dir/pending-login-item-revision.json",
-          environment,
-        },
-        bundledBinaryPath: null,
-        label: environment === "dev" ? DEV_LABEL : PRODUCTION_LABEL,
-        // Short timeout - `respawn` calls `waitForReady` after the CLI
-        // step and we don't want the test to block waiting for pid.json.
-        readyTimeoutMs: 50,
-        reachabilityProbe: undefined,
-      }),
-      cleanup: async () => {
-        await tmp.then((d) => rm(d, { recursive: true, force: true }));
-      },
-    };
-  }
-
-  it("shells out to `traycer host restart`", async () => {
-    cliStreamCalls.length = 0;
-    const { lifecycle, cleanup } = makeChannelLifecycleForChannel("production");
-    // `respawn()` ends with a `waitForReady` against a deliberately
-    // missing pid.json so the lifecycle emits a `HOST_NOT_READY`
-    // error after the CLI step. Subscribe a no-op listener so
-    // EventEmitter does not throw the unhandled `error` event - the
-    // assertion here is purely about which CLI args were issued.
-    lifecycle.on("error", () => undefined);
-    try {
-      await lifecycle.respawn();
-      expect(cliStreamCalls).toHaveLength(1);
-      // No --environment - the CLI resolves its slot from config.environment.
-      expect(cliStreamCalls[0]?.args).toEqual(["host", "restart"]);
-    } finally {
-      lifecycle.dispose();
-      await cleanup();
-    }
-  });
-
-  it("shells out to `traycer host restart` for the dev label", async () => {
-    cliStreamCalls.length = 0;
-    const { lifecycle, cleanup } = makeChannelLifecycleForChannel("dev");
-    // See sibling test - pid.json is intentionally absent, so the
-    // post-CLI `waitForReady` emits a `HOST_NOT_READY` error.
-    lifecycle.on("error", () => undefined);
-    try {
-      await lifecycle.respawn();
-      expect(cliStreamCalls).toHaveLength(1);
-      // No --environment - the CLI resolves its slot from config.environment.
-      expect(cliStreamCalls[0]?.args).toEqual(["host", "restart"]);
-    } finally {
-      lifecycle.dispose();
-      await cleanup();
     }
   });
 });

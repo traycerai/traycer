@@ -14,7 +14,6 @@ import {
   withDefaultHostName,
 } from "./host-display-name";
 import type { DesktopLocalHostSnapshot } from "../../ipc-contracts/host-types";
-import { streamTraycerCliJson } from "../cli/traycer-cli";
 
 /**
  * Snapshot of the OS-supervised host's runtime state, as projected by
@@ -50,7 +49,6 @@ const WS_RPC_HOST = "127.0.0.1";
 const HOST_READY_TIMEOUT_MS = 60_000;
 const HOST_POLL_INTERVAL_MS = 250;
 const HOST_ENDPOINT_CHECK_TIMEOUT_MS = 750;
-const CLI_RESTART_TIMEOUT_MS = 2 * 60_000;
 const CLI_START_STOP_TIMEOUT_MS = 60_000;
 /**
  * Backoff ladder for re-probing a pid.json that is present but whose
@@ -83,6 +81,12 @@ export interface HostLifecycleEvents {
  * rendering, but are no longer raised by the steady-state boot path -
  * a missing/unreachable host now surfaces as `HOST_NOT_READY` and
  * the renderer routes into the Doctor/CLI recovery card.
+ *
+ * Host Update Layer Redesign Tech Plan (Desktop main: HostController):
+ * `SERVICE_RESTART_FAILED` joins that same retained-but-unraised set -
+ * `respawn()` (the CLI-subprocess restart it used to come from) moved to
+ * `HostController`, which reports restart failures through its own
+ * `MutationOutcome`, not this discriminant.
  */
 export type HostStartupErrorCode =
   | "BUNDLED_HOST_MISSING"
@@ -240,49 +244,15 @@ export class HostLifecycle extends EventEmitter {
   }
 
   /**
-   * Renderer-driven restart. The CLI is the host lifecycle authority, so
-   * we shell out to `traycer host restart` (the slot is baked into the CLI
-   * build) instead of poking the platform service-manager APIs directly. The
-   * PID-file watcher fires `change` once the new host publishes fresh
-   * metadata.
-   */
-  async respawn(): Promise<void> {
-    if (this.disposed) {
-      return;
-    }
-    log.info("[host] respawn requested");
-
-    this.notifyRespawning();
-
-    try {
-      try {
-        await this.cliHostRestart();
-      } catch (cause) {
-        throw new HostStartupException(
-          "SERVICE_RESTART_FAILED",
-          `traycer host restart failed: ${cause instanceof Error ? cause.message : String(cause)}`,
-        );
-      }
-      await this.waitForReady();
-      this.installWatcher();
-    } catch (cause) {
-      const startupError = await this.buildStartupError(cause);
-      log.error("[host] respawn failed", startupError);
-      this.emit("error", startupError);
-    }
-  }
-
-  /**
    * Mark the host as "currently down" from the renderer's perspective.
    *
-   * Used by the macOS host-owned-login-item respawn path
-   * (`app/host-respawn.ts`) so it can drive the SMAppService
-   * re-register cycle itself without re-entering `respawn()`'s
-   * CLI-restart codepath - but still keep the renderer's cached
-   * snapshot consistent (cleared on respawn start, repopulated by the
-   * existing pid-file watcher when the new host publishes pid.json).
-   * On non-macOS / dev / non-login-item paths, callers go through
-   * `respawn()`, which calls this internally.
+   * Used by `HostController`'s macOS host-owned-login-item activation cycle
+   * so it can drive the SMAppService re-register cycle itself while still
+   * keeping the renderer's cached snapshot consistent (cleared on respawn
+   * start, repopulated by the existing pid-file watcher when the new host
+   * publishes pid.json). `HostController`'s CLI-owned restart path
+   * (`traycer host restart`) does not call this - it shells out directly
+   * rather than through this lifecycle.
    */
   notifyRespawning(): void {
     if (this.disposed) return;
@@ -565,21 +535,6 @@ export class HostLifecycle extends EventEmitter {
         "[host] failed to reload pid metadata after watcher event",
         error,
       );
-    });
-  }
-
-  private async cliHostRestart(): Promise<void> {
-    // The CLI resolves its slot from `config.environment` (baked per build),
-    // so no channel arg is passed.
-    await streamTraycerCliJson<unknown>({
-      args: ["host", "restart"],
-      env: null,
-      timeoutMs: CLI_RESTART_TIMEOUT_MS,
-      onEvent: () => {
-        // No progress sink - restart payload is small and any partial
-        // progress lines are advisory. The PID-metadata watcher fires
-        // `change` once the new host publishes pid.json.
-      },
     });
   }
 

@@ -1,5 +1,4 @@
 import { log } from "../app/logger";
-import { respawnHost } from "../app/host-respawn";
 import { canReachHostWebsocketUrl, readPidMetadata } from "./host-lifecycle";
 import type { IpcHostLifecycle } from "../ipc/runner-ipc-bridge";
 import type { DesktopLocalHostSnapshot } from "../../ipc-contracts/host-types";
@@ -53,7 +52,14 @@ export interface HostHealthMonitorDeps {
   readonly probe: ((websocketUrl: string) => Promise<boolean>) | undefined;
   readonly readMetadata:
     ((path: string) => Promise<DesktopLocalHostSnapshot | null>) | undefined;
-  readonly respawn: (() => Promise<void>) | undefined;
+  /**
+   * The platform-correct recovery entry point - production callers pass
+   * `HostController.recoverIfDown()` wrapped to this monitor's void/throw
+   * contract (see `desktop-startup.ts`). No default: `HostController` is a
+   * process singleton constructed by the caller, not something this module
+   * can stand up itself.
+   */
+  readonly respawn: () => Promise<void>;
 }
 
 export interface HostHealthMonitor {
@@ -65,7 +71,7 @@ export function startHostHealthMonitor(
 ): HostHealthMonitor {
   const probe = deps.probe ?? canReachHostWebsocketUrl;
   const readMetadata = deps.readMetadata ?? readPidMetadata;
-  const respawn = deps.respawn ?? (() => respawnHost(deps.host));
+  const respawn = deps.respawn;
   let consecutiveFailures = 0;
   let respawnsSinceRecovery = 0;
   let ticking = false;

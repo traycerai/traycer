@@ -1,6 +1,8 @@
 import { log } from "../app/logger";
 import {
+  hasPendingLoginItemRevision,
   hostManagesHostLoginItem,
+  readHostLoginItemStatus,
   registerHostLoginItem,
   unregisterHostLoginItem,
   type RegisterHostLoginItemResult,
@@ -23,7 +25,6 @@ import {
   HOST_READY_TIMEOUT_MS,
   waitForHostReady,
 } from "./host-readiness";
-import type { HostLifecycle } from "./host-lifecycle";
 import {
   clearHostRemovedByUser,
   isHostRemovedByUser,
@@ -76,6 +77,19 @@ const LOCK_BUSY_MESSAGE = "Another Traycer process is managing the host.";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Single user-visible message for the SMAppService approval state. The sole
+// canonical copy (Tech Plan judgment call 3): every caller that used to
+// import this from the now-deleted `app/host-respawn.ts` - the ensure fast
+// path, IPC respawn, menu/tray respawn - now gets it from here, so the
+// actionable copy can never drift into two texts that quietly diverge.
+function approvalRequiredMessage(): string {
+  return (
+    "Traycer's background host is registered but disabled by macOS. " +
+    "Open System Settings → General → Login Items & Extensions and turn on " +
+    'Traycer under "Allow in the Background", then click Retry.'
+  );
 }
 
 function noopProgress(): MutationProgress {
@@ -253,7 +267,16 @@ interface UninstallResultShape {
   readonly serviceUninstalled: boolean;
 }
 
-function parseUninstallResult(raw: unknown): UninstallResultShape {
+// `all` mirrors the legacy IPC-layer `projectUninstallResult` leniency: an
+// `--all` uninstall always requests service deregistration, so a CLI
+// response that omits `serviceUninstalled` (rather than explicitly reporting
+// `false`) is read as deregistered. `removedRecord` is an older CLI field
+// name for `removedInstallDir` - accepted for backward compatibility with a
+// CLI build that predates the rename.
+function parseUninstallResult(
+  raw: unknown,
+  all: boolean,
+): UninstallResultShape {
   if (!isPlainObject(raw)) {
     return {
       removedInstallDir: false,
@@ -262,9 +285,12 @@ function parseUninstallResult(raw: unknown): UninstallResultShape {
     };
   }
   return {
-    removedInstallDir: raw.removedInstallDir === true,
+    removedInstallDir:
+      raw.removedInstallDir === true || raw.removedRecord === true,
     removedStagedDir: raw.removedStagedDir === true,
-    serviceUninstalled: raw.serviceUninstalled === true,
+    serviceUninstalled:
+      raw.serviceUninstalled === true ||
+      (all && raw.serviceUninstalled !== false),
   };
 }
 
@@ -309,16 +335,29 @@ function latestVersionFromSnapshot(
   return entry !== undefined && entry.available ? entry.version : null;
 }
 
+/**
+ * Narrow structural slice of `HostLifecycle` that `HostController` actually
+ * calls - the same "narrow interface for testability" pattern as
+ * `IpcHostLifecycle` / `IpcHostController`: tests supply a lightweight fake
+ * instead of constructing the real, heavier `HostLifecycle` class. The real
+ * class satisfies this structurally; no explicit `implements` needed.
+ */
+export interface HostControllerHostLifecycle {
+  notifyRespawning(): void;
+  ensureWatcherInstalled(): void;
+  reloadSnapshotFromDisk(): Promise<unknown>;
+}
+
 export interface HostControllerOptions {
   readonly environment: Environment;
-  readonly hostLifecycle: HostLifecycle;
+  readonly hostLifecycle: HostControllerHostLifecycle;
 }
 
 export class HostController {
   private readonly environment: Environment;
   private readonly layout: HostFsLayout;
   private readonly lockPath: string;
-  private readonly hostLifecycle: HostLifecycle;
+  private readonly hostLifecycle: HostControllerHostLifecycle;
 
   private mutationTail: Promise<void> = Promise.resolve();
   private mutationStatus: MutationLaneStatus | null = null;
@@ -329,6 +368,13 @@ export class HostController {
   private stageLatestPending = false;
 
   private latestVersionCache: string | null = null;
+
+  // Session quarantine for the pending-LaunchAgent-revision fast-path
+  // refresh (see `applyPendingLoginItemRevisionIfIdle` below). Instance-
+  // scoped, not module-scoped - each `HostController` is a single
+  // long-lived process singleton, so this needs no test-reset seam the way
+  // the old module-level flag did.
+  private pendingRevisionRefreshQuarantined = false;
 
   constructor(opts: HostControllerOptions) {
     this.environment = opts.environment;
@@ -409,6 +455,34 @@ export class HostController {
   private setMutationProgress(progress: MutationProgress): void {
     if (this.mutationStatus === null) return;
     this.mutationStatus = { ...this.mutationStatus, progress };
+    for (const listener of this.progressListeners) {
+      try {
+        listener(progress);
+      } catch (err) {
+        log.warn("[host-controller] mutation progress listener threw", {
+          err: describeError(err),
+        });
+      }
+    }
+  }
+
+  // Legacy renderer shim support: IPC handlers that used to broadcast
+  // `cliOperationProgress` / `hostOperationStatusChange` themselves (the
+  // now-removed `trackHostOperation`) subscribe here for the duration of
+  // their own call to keep re-emitting those events, without the controller
+  // needing to know anything about IPC channels or renderer-minted
+  // operation ids. Since the mutation lane is exclusive FIFO, a listener
+  // registered immediately before submitting an intent only ever observes
+  // progress for that intent - nothing else can be running concurrently.
+  private progressListeners = new Set<(progress: MutationProgress) => void>();
+
+  onMutationProgress(
+    listener: (progress: MutationProgress) => void,
+  ): () => void {
+    this.progressListeners.add(listener);
+    return () => {
+      this.progressListeners.delete(listener);
+    };
   }
 
   // ---- Shared CLI invocation helpers --------------------------------------
@@ -463,6 +537,26 @@ export class HostController {
 
   private async isPackagedMacOwned(): Promise<boolean> {
     return hostManagesHostLoginItem();
+  }
+
+  // Dev environment needs the staged wrapper / self-invocation flag so
+  // service (re)register resolves without a per-run dev manifest (Ticket
+  // f0ae4530) - `make dev-desktop` stages a CLI wrapper the packaged CLI
+  // can't self-resolve otherwise. Production returns `[]`; this never
+  // widens prod's `host service install` argv.
+  private devServiceInstallExtras(): readonly string[] {
+    return this.environment === "dev" ? ["--allow-self-invocation"] : [];
+  }
+
+  /**
+   * Consulted by the pending-login-item-revision monitor to stop ticking
+   * once a refresh cycle has run and terminally failed to land `enabled`,
+   * or the login item pre-flighted as `requires-approval` - see
+   * `applyPendingLoginItemRevisionIfIdle`'s doc comment for why retrying
+   * either case is pointless churn rather than eventual progress.
+   */
+  isPendingRevisionRefreshQuarantined(): boolean {
+    return this.pendingRevisionRefreshQuarantined;
   }
 
   // ---- stamp-runtime CAS backfill -----------------------------------------
@@ -611,7 +705,7 @@ export class HostController {
         if (!readiness.ready) {
           const message =
             registerResult === "requires-approval"
-              ? "Traycer needs approval in System Settings → Login Items to start the host."
+              ? approvalRequiredMessage()
               : `Traycer Host did not start within ${HOST_READY_TIMEOUT_MS}ms - run \`traycer host doctor\` to recover.`;
           return { kind: "failed", message } as MutationOutcome<{
             readonly activated: boolean;
@@ -630,6 +724,163 @@ export class HostController {
     return outcome.result;
   }
 
+  // ---- Pending LaunchAgent revision refresh (packaged macOS) --------------
+  //
+  // A busy/indeterminate `desktop-install-cloud.js` update preserves the
+  // running host instead of booting it out, so its LaunchAgent keeps the
+  // launchd registration it had before the bundle swap - the freshly
+  // written plist (e.g. a new descriptor limit) sits inert until something
+  // re-runs the SMAppService cycle. Two callers drive this opportunistically,
+  // ONLY when the host is idle, so the refresh never interrupts in-progress
+  // work: `convergeReadyPackagedMac`'s already-reachable branch (a renderer-
+  // triggered ensure), and `PendingLoginItemRevisionMonitor`'s poll loop (the
+  // background catch-up for a host that stays up for the rest of the
+  // session without another ensure). Public - not run through
+  // `enqueueMutation` - because it is fully self-locking via
+  // `withDesktopCliLock`, the same cross-process exclusion any other
+  // controller-driven SMAppService section uses; going through the
+  // mutation lane would additionally force a `host ensure` CLI round trip on
+  // every poll tick just to reach this check. Returns the converged result
+  // when this path fully handled the call (refreshed, removed-by-user, or a
+  // terminal refresh failure), or `null` when there was nothing to do (not
+  // reachable, no marker, quarantined, or the host is busy).
+  async applyPendingLoginItemRevisionIfIdle(): Promise<MutationOutcome<ConvergeReadyOk> | null> {
+    const currentVersion = await readRunningRuntimeVersion(this.layout);
+    if (currentVersion === null) return null;
+    if (this.pendingRevisionRefreshQuarantined) return null;
+    if (!(await hasPendingLoginItemRevision(this.environment))) return null;
+    if ((await probeHostBusyVerdict(this.layout)) !== "idle") {
+      log.debug(
+        "[host-controller] pending LaunchAgent revision deferred - host busy",
+      );
+      return null;
+    }
+    // Pre-flight: with the login item toggled off in System Settings the
+    // cycle is guaranteed futile (only the user can re-enable it) AND
+    // destructive (its leading bootout kills the healthy host we just
+    // probed). Skip AND quarantine for the session: retrying every
+    // convergeReady call cannot help (the toggle is the user's alone) and
+    // would only churn; the marker survives on disk for the next launch.
+    if (readHostLoginItemStatus() === "requires-approval") {
+      this.pendingRevisionRefreshQuarantined = true;
+      log.warn(
+        "[host-controller] pending LaunchAgent revision quarantined for this session - login item requires approval in System Settings",
+      );
+      return null;
+    }
+    const prePid = (await readRunningHostIdentity(this.layout))?.pid ?? null;
+    const outcome = await withDesktopCliLock(
+      {
+        lockPath: this.lockPath,
+        reason: "host-controller-pending-revision-refresh",
+        waitMs: DESKTOP_LOCK_WAIT_MS,
+        pollIntervalMs: DESKTOP_LOCK_POLL_INTERVAL_MS,
+      },
+      async () =>
+        // The busy probe above can go stale while this cycle waits its turn
+        // on the shared registration lock (a concurrent respawn/activation
+        // cycle can be mid-cycle right now) - re-check right before the
+        // bootout actually runs, so a host that picked up real work while
+        // queued isn't killed anyway.
+        registerHostLoginItem(
+          async () => (await probeHostBusyVerdict(this.layout)) === "idle",
+        ),
+    );
+    if (outcome.kind === "busy") {
+      // Desktop-lock contention is transient, not terminal - some other
+      // controller-driven SMAppService section is mid-cycle right now.
+      // Skip this opportunistic refresh silently rather than failing an
+      // otherwise-healthy convergeReady call.
+      log.debug(
+        "[host-controller] pending LaunchAgent revision deferred - desktop lock busy",
+      );
+      return null;
+    }
+    const status = outcome.result;
+    if (status === "removed-by-user") {
+      log.info(
+        "[host-controller] pending LaunchAgent revision skipped - host removed by user mid-refresh",
+      );
+      return { kind: "ok", value: { running: false, version: null } };
+    }
+    if (status === "deferred-busy") {
+      log.debug(
+        "[host-controller] pending LaunchAgent revision deferred - host became busy while queued behind another registration cycle",
+      );
+      return null;
+    }
+    if (status === "requires-approval") {
+      this.pendingRevisionRefreshQuarantined = true;
+      return { kind: "failed", message: approvalRequiredMessage() };
+    }
+    if (status !== "enabled") {
+      this.pendingRevisionRefreshQuarantined = true;
+      log.warn(
+        "[host-controller] pending LaunchAgent revision refresh did not enable the agent",
+        { status },
+      );
+      return {
+        kind: "failed",
+        message: `The host's macOS login item could not be enabled (status: ${status}). Open Doctor or run 'traycer host doctor' to recover.`,
+      };
+    }
+    const record = await readDesktopHostInstallRecord(this.layout);
+    const expectedGeneration =
+      record !== null && record.runtimeVersion === null
+        ? attestedInstallGenerationFromDisk(record)
+        : null;
+    await this.stampIfNullRuntime(expectedGeneration, prePid);
+    const readiness = await waitForHostReady(
+      HOST_READY_TIMEOUT_MS,
+      this.layout.pidMetadataFile,
+      HOST_READY_POLL_MS,
+      prePid,
+    );
+    if (!readiness.ready) {
+      log.warn(
+        "[host-controller] host did not become reachable after applying a pending LaunchAgent revision",
+        { reason: readiness.reason },
+      );
+      return {
+        kind: "failed",
+        message: `The host's background service was refreshed but did not become reachable in time (${readiness.reason}). Open Doctor or run 'traycer host doctor' to recover.`,
+      };
+    }
+    log.info("[host-controller] pending LaunchAgent revision applied", {
+      version: readiness.version ?? currentVersion,
+      pid: readiness.pid,
+    });
+    this.hostLifecycle.ensureWatcherInstalled();
+    await this.hostLifecycle.reloadSnapshotFromDisk();
+    return {
+      kind: "ok",
+      value: { running: true, version: readiness.version ?? currentVersion },
+    };
+  }
+
+  // ---- Quit-time drain -----------------------------------------------------
+
+  /**
+   * Bounded wait for whatever mutation is CURRENTLY chained on the lane to
+   * settle. Used at quit time (`update-install-quit.ts`) so the shell never
+   * tears down a subprocess mid-swap - it does NOT start a new mutation, only
+   * waits for one already in flight. Does not wait for mutations enqueued
+   * after this call starts (those are a fresh problem for the next launch to
+   * reconcile). Resolves `true` once drained, `false` on timeout - fail-open,
+   * matching every other quit-path step.
+   */
+  async awaitMutationLaneIdle(timeoutMs: number): Promise<boolean> {
+    const tail = this.mutationTail;
+    let timedOut = false;
+    await Promise.race([
+      tail,
+      sleep(timeoutMs).then(() => {
+        timedOut = true;
+      }),
+    ]);
+    return !timedOut;
+  }
+
   // ---- convergeReady -------------------------------------------------------
 
   async convergeReady(
@@ -640,7 +891,7 @@ export class HostController {
         return { kind: "ok", value: { running: false, version: null } };
       }
       if (await this.isPackagedMacOwned()) {
-        return this.convergeReadyPackagedMac();
+        return this.convergeReadyPackagedMac(force);
       }
       return this.convergeReadyCliOwned(force);
     });
@@ -676,33 +927,37 @@ export class HostController {
     };
   }
 
-  private async convergeReadyPackagedMac(): Promise<
-    MutationOutcome<ConvergeReadyOk>
-  > {
+  private async convergeReadyPackagedMac(
+    force: boolean,
+  ): Promise<MutationOutcome<ConvergeReadyOk>> {
     let raw: unknown;
     try {
-      raw = await this.streamBundled<unknown>([
-        "host",
-        "ensure",
-        "--no-service-register",
-      ]);
+      raw = await this.streamBundled<unknown>(
+        force
+          ? ["host", "ensure", "--force", "--no-service-register"]
+          : ["host", "ensure", "--no-service-register"],
+      );
     } catch (err) {
       return this.classifyEnsureLikeError(err, true);
     }
     const result = parseEnsureResult(raw);
     // Bytes-only ensure never starts the service itself - if the host is
-    // already reachable we're done; otherwise drive the same locked
-    // register cycle `activateInstalled` uses so SMAppService (re-)starts
-    // it and picks up the plist revision.
+    // already reachable we're done, modulo one opportunistic check: apply
+    // a pending LaunchAgent revision if the host has been idle since it
+    // was last cycled (see `applyPendingLoginItemRevisionIfIdle`).
+    // Otherwise drive the same locked register cycle `activateInstalled`
+    // uses so SMAppService (re-)starts it and picks up the plist revision.
     const runningRuntimeVersion = await readRunningRuntimeVersion(this.layout);
     if (runningRuntimeVersion !== null) {
+      const refreshed = await this.applyPendingLoginItemRevisionIfIdle();
+      if (refreshed !== null) return refreshed;
       return {
         kind: "ok",
         value: { running: true, version: runningRuntimeVersion },
       };
     }
     const activation = await this.runLockedMacActivationCycle(
-      false,
+      force,
       "activate",
     );
     if (activation.kind !== "ok") {
@@ -1157,7 +1412,12 @@ export class HostController {
         };
       }
       try {
-        await this.runBundled<unknown>(["host", "service", "install"]);
+        await this.runBundled<unknown>([
+          "host",
+          "service",
+          "install",
+          ...this.devServiceInstallExtras(),
+        ]);
       } catch (err) {
         if (err instanceof TraycerCliError && err.code === CLI_LOCK_BUSY_CODE)
           return this.lockBusyOutcome(false);
@@ -1198,6 +1458,13 @@ export class HostController {
 
   // ---- respawn / recoverIfDown --------------------------------------------
 
+  // `respawn` is always force=true (unconditional `host restart` / a
+  // force-activation cycle, never `--if-idle`): it is the explicit "restart
+  // the host now" intent - Settings → Restart Host, a doctor-recommended
+  // restart, the health monitor's recovery hook. The caller deliberately
+  // asked for an immediate restart; silently downgrading to "only if idle"
+  // would make the action a no-op exactly when the user is trying to
+  // recover from a stuck host, which is the case it exists for.
   async respawn(): Promise<MutationOutcome<ActivateInstalledOk>> {
     return this.enqueueMutation<ActivateInstalledOk>("respawn", async () => {
       this.hostLifecycle.notifyRespawning();
@@ -1230,6 +1497,13 @@ export class HostController {
    * healthy tick never queues redundant work) or the running host is
    * already reachable once re-checked at the head of the lane (no
    * double-restart against a host another mutation already fixed).
+   *
+   * Always force=true, same as `respawn`, but for a different reason: by the
+   * time the lane job below runs, `readRunningRuntimeVersion` has already
+   * confirmed the host is NOT reachable - there is no live work for
+   * `--if-idle` to protect, so gating on idle here would only add a chance
+   * of a stale/racy busy read silently swallowing a recovery the monitor
+   * exists to guarantee.
    */
   async recoverIfDown(): Promise<
     MutationOutcome<ActivateInstalledOk> | { readonly kind: "suppressed" }
@@ -1268,6 +1542,13 @@ export class HostController {
 
   // ---- freePortAndRestart --------------------------------------------------
 
+  // Always force=true, for the same reason as `respawn`: by the time this
+  // runs, the renderer's Doctor flow has already shown the user the foreign
+  // process holding the host's port and gotten their explicit confirmation
+  // to kill it and restart. `--if-idle` protecting "work in progress" makes
+  // no sense here - the port conflict means the host isn't even bound yet,
+  // so there is nothing in-flight on it to protect, and the whole point of
+  // the confirmed action is to force the restart through.
   async freePortAndRestart(
     pid: number | null,
     port: number | null,
@@ -1340,7 +1621,7 @@ export class HostController {
           return this.lockBusyOutcome(false);
         return { kind: "failed", message: describeError(err) };
       }
-      const result = parseUninstallResult(raw);
+      const result = parseUninstallResult(raw, all);
       this.hostLifecycle.ensureWatcherInstalled();
       await this.hostLifecycle.reloadSnapshotFromDisk();
       return {
@@ -1385,7 +1666,7 @@ export class HostController {
           return this.lockBusyOutcome(false);
         return { kind: "failed", message: describeError(err) };
       }
-      const result = parseUninstallResult(raw);
+      const result = parseUninstallResult(raw, true);
       this.hostLifecycle.ensureWatcherInstalled();
       await this.hostLifecycle.reloadSnapshotFromDisk();
       return {
