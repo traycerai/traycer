@@ -164,6 +164,21 @@ vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,
   useHostClient: () => null,
 }));
+vi.mock(
+  "@/components/chat/composer/use-profile-rate-limit-switch-prompt",
+  () => ({
+    useProfileRateLimitSwitchPrompt: () => ({
+      kind: "hidden",
+      dismiss: vi.fn(),
+    }),
+  }),
+);
+vi.mock(
+  "@/hooks/providers/use-refresh-providers-list-on-turn-default-host",
+  () => ({
+    useRefreshProvidersListOnTurnDefaultHost: () => undefined,
+  }),
+);
 
 afterEach(() => {
   cleanup();

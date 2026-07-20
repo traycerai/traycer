@@ -17,6 +17,10 @@ import type { DraftSelection } from "@/stores/composer/composer-draft-store";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
 import { useComposerPickerItems } from "@/components/chat/composer/picker/use-composer-picker-items";
+import { useProfileRateLimitSwitchPrompt } from "@/components/chat/composer/use-profile-rate-limit-switch-prompt";
+import { ProfileRateLimitSwitchBanner } from "@/components/chat/composer/profile-rate-limit-switch-banner";
+import { useRefreshProvidersListOnTurnDefaultHost } from "@/hooks/providers/use-refresh-providers-list-on-turn-default-host";
+import { commitProfileSelection } from "@/stores/composer/commit-selection";
 import { ComposerBody } from "@/components/home/composer/composer-body";
 import { COMPOSER_EDITOR_CLASSNAME } from "@/components/home/composer/composer-editor-classnames";
 import { useSurfaceActivity } from "@/components/home/composer/surface-activity-hooks";
@@ -142,6 +146,8 @@ export function LandingComposer(props: LandingComposerProps) {
     composerMode === "terminal",
   );
   const harnessId = useStore(toolbarStore, (s) => s.selection.harnessId);
+  const profileId = useStore(toolbarStore, (s) => s.selection.profileId);
+  const selectedModel = useStore(toolbarStore, (s) => s.selectedModel);
   const mentionRoots = useLandingComposerMentionRoots(draftId);
   useComposerPickerItems({
     pickerStore,
@@ -169,6 +175,29 @@ export function LandingComposer(props: LandingComposerProps) {
     );
   });
   const defaultHostClient = useHostClient();
+  // Rate-limit switch prompt for the landing composer's own toolbar
+  // selection, scoped to the app-wide default host (landing has no tab of
+  // its own) - the same shared hook the chat composer uses, mirroring its
+  // wiring in `chat-composer.tsx`. Purely informational: it never blocks
+  // epic creation.
+  const rateLimitPrompt = useProfileRateLimitSwitchPrompt({
+    harnessId,
+    profileId,
+    selectedModel,
+    active: activityEnabled,
+    client: defaultHostClient,
+  });
+  // Keeps the banner's `providers.list` read converging with a turn's
+  // passive rate-limit capture from ANY running epic on this host -
+  // mirrors `useRefreshProvidersListOnTurn` in `chat-composer.tsx`, scoped
+  // to the default host instead of a tab.
+  useRefreshProvidersListOnTurnDefaultHost(harnessId);
+  const onSwitchRateLimitedProfile = useCallback(
+    (nextProfileId: string | null) => {
+      commitProfileSelection(toolbarStore, nextProfileId);
+    },
+    [toolbarStore],
+  );
   const resolvedWorkspace = useResolvedWorkspaceFolders(
     draftWorkspace,
     defaultHostClient,
@@ -263,34 +292,60 @@ export function LandingComposer(props: LandingComposerProps) {
   );
 
   return (
-    <ComposerBody
-      pickerStore={pickerStore}
-      editorRef={editorRef}
-      toolbarStore={toolbarStore}
-      composerMode={composerMode}
-      chatEditorIsActive={chatComposerActive}
-      editorClassName={COMPOSER_EDITOR_CLASSNAME}
-      initialContent={initialContent}
-      initialSelection={initialSelection}
-      canSubmit={canSubmit}
-      isSubmitting={isSubmitting}
-      attachmentPending={attachmentPending}
-      workspaceDisabledHint={workspaceAvailability.disabledHint}
-      header={<div className="flex justify-end">{switcher}</div>}
-      attachmentsStrip={
-        <LandingComposerAttachmentStrip onRemoveImage={handleRemoveImage} />
-      }
-      workspaceControls={props.workspaceControls}
-      dictationControl={dictationControl}
-      dictationPreparing={dictationPreparing}
-      paste={paste}
-      hasPastedImageBytes={null}
-      onSubmit={handleSubmit}
-      onStartTerminal={handleStartTerminal}
-      onSnapshot={handleSnapshot}
-    />
+    <div className="flex flex-col gap-3">
+      {rateLimitPrompt.kind === "visible" ? (
+        <ProfileRateLimitSwitchBanner
+          key={rateLimitPrompt.warningKey}
+          harnessId={harnessId}
+          providerId={rateLimitPrompt.providerId}
+          severity={rateLimitPrompt.severity}
+          limitedFamilies={rateLimitPrompt.limitedFamilies}
+          current={rateLimitPrompt.current}
+          profiles={rateLimitPrompt.profiles}
+          destinations={rateLimitPrompt.destinations}
+          primaryTarget={rateLimitPrompt.primaryTarget}
+          // Landing has no tab of its own; `null` resolves the usage
+          // sidecar/R-key refresh to the app-wide default host, matching
+          // `ComposerToolbar`'s own `runTargetHostId={null}` for this
+          // surface (composer-body.tsx).
+          runTargetHostId={null}
+          onSwitchProfile={onSwitchRateLimitedProfile}
+          affectedChatCount={0}
+          onSwitchProfileForTask={noopSwitchProfileForTask}
+          onDismiss={rateLimitPrompt.dismiss}
+        />
+      ) : null}
+      <ComposerBody
+        pickerStore={pickerStore}
+        editorRef={editorRef}
+        toolbarStore={toolbarStore}
+        composerMode={composerMode}
+        chatEditorIsActive={chatComposerActive}
+        editorClassName={COMPOSER_EDITOR_CLASSNAME}
+        initialContent={initialContent}
+        initialSelection={initialSelection}
+        canSubmit={canSubmit}
+        isSubmitting={isSubmitting}
+        attachmentPending={attachmentPending}
+        workspaceDisabledHint={workspaceAvailability.disabledHint}
+        header={<div className="flex justify-end">{switcher}</div>}
+        attachmentsStrip={
+          <LandingComposerAttachmentStrip onRemoveImage={handleRemoveImage} />
+        }
+        workspaceControls={props.workspaceControls}
+        dictationControl={dictationControl}
+        dictationPreparing={dictationPreparing}
+        paste={paste}
+        hasPastedImageBytes={null}
+        onSubmit={handleSubmit}
+        onStartTerminal={handleStartTerminal}
+        onSnapshot={handleSnapshot}
+      />
+    </div>
   );
 }
+
+function noopSwitchProfileForTask(): void {}
 
 function LandingComposerAttachmentStrip(props: {
   readonly onRemoveImage: (id: string) => void;
