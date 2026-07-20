@@ -463,6 +463,9 @@ function providerState(input: {
     envOverrides: [...input.envOverrides],
     loginCapability: null,
     availabilityPending: false,
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
     profiles: [...(input.profiles ?? [])],
   };
 }

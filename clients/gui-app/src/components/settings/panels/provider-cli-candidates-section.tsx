@@ -3,6 +3,7 @@ import { Plus, Trash2 } from "lucide-react";
 import type {
   ProviderCliCandidate,
   ProviderCliState,
+  ProviderManagedInstallState,
   ProviderSelection,
 } from "@traycer/protocol/host/provider-schemas";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
@@ -51,6 +52,60 @@ function hidesCliCandidates(
   providerId: ProviderCliState["providerId"],
 ): boolean {
   return providerId === "cursor" || providerId === "amp";
+}
+
+/**
+ * D6's PATH-unblock composite: the user's selection is the managed candidate,
+ * it isn't installed yet, and a PATH binary is standing in for it right now.
+ * Derived client-side from existing signals (selection + candidates) plus
+ * `managedInstallState` rather than carried as its own field - there is
+ * nothing here a host-computed boolean would tell us that these don't
+ * already. `null` (old host, or this provider hasn't been cut over to the
+ * registry yet) never activates it.
+ */
+function pathUnblockActive(
+  selected: ProviderSelection,
+  managedInstallState: ProviderManagedInstallState | null,
+  candidates: readonly ProviderCliCandidate[],
+): boolean {
+  if (selected.kind !== "bundled") return false;
+  if (
+    managedInstallState === null ||
+    managedInstallState.status === "installed"
+  ) {
+    return false;
+  }
+  return candidates.some(
+    (candidate) => candidate.kind === "path" && candidate.available,
+  );
+}
+
+// The two quiet, self-correcting row indicators above the candidates table -
+// never a toast (see the plan's D6/D12 renderer rules). Both are absent by
+// default (old host, or nothing to report).
+function CandidateNotices({
+  showPathUnblockNotice,
+  differingSessionCount,
+}: {
+  readonly showPathUnblockNotice: boolean;
+  readonly differingSessionCount: number;
+}): ReactNode {
+  return (
+    <>
+      {showPathUnblockNotice ? (
+        <p className="mb-2 text-ui-xs text-muted-foreground">
+          Running from PATH · installing managed copy
+        </p>
+      ) : null}
+      {differingSessionCount > 0 ? (
+        <p className="mb-2 text-ui-xs text-muted-foreground">
+          {differingSessionCount === 1
+            ? "1 other session is using a different version."
+            : `${differingSessionCount} other sessions are using a different version.`}
+        </p>
+      ) : null}
+    </>
+  );
 }
 
 /**
@@ -108,8 +163,24 @@ export function ProviderCliCandidatesSection({
 
   if (!showCliCandidates) return null;
 
+  // Normalize once: an old host's payload leaves the key genuinely absent
+  // (`undefined`), which reads identically to an explicit `null` everywhere
+  // below.
+  const managedInstallState = state.managedInstallState ?? null;
+  const showPathUnblockNotice = pathUnblockActive(
+    cliConfig.selected,
+    managedInstallState,
+    cliConfig.candidates,
+  );
+  const differingSessionCount =
+    state.versionVisibility?.differingSessionCount ?? 0;
+
   return (
     <>
+      <CandidateNotices
+        showPathUnblockNotice={showPathUnblockNotice}
+        differingSessionCount={differingSessionCount}
+      />
       <div className="overflow-hidden rounded-lg border border-border/60">
         <div
           className={cn(
@@ -126,6 +197,7 @@ export function ProviderCliCandidatesSection({
           <CandidateRow
             key={candidateKey(candidate)}
             candidate={candidate}
+            managedInstallState={managedInstallState}
             radioName={radioName}
             selected={isSelected(cliConfig.selected, candidate)}
             busy={setSelection.isPending || removeCustom.isPending}
@@ -196,6 +268,7 @@ export function ProviderCliCandidatesSection({
 
 function CandidateRow({
   candidate,
+  managedInstallState,
   radioName,
   selected,
   busy,
@@ -203,6 +276,9 @@ function CandidateRow({
   onRemove,
 }: {
   readonly candidate: ProviderCliCandidate;
+  // Provider-level (not per-candidate - see that schema's comment), so only
+  // meaningful for the bundled row; other candidates ignore it.
+  readonly managedInstallState: ProviderManagedInstallState | null;
   readonly radioName: string;
   readonly selected: boolean;
   readonly busy: boolean;
@@ -211,11 +287,18 @@ function CandidateRow({
 }): ReactNode {
   const isBundled = candidate.kind === "bundled";
   const isCustom = candidate.kind === "custom";
-  const pathLabel = isBundled ? "Bundled" : candidate.path;
+  const pathLabel = isBundled
+    ? bundledPathLabel(managedInstallState)
+    : candidate.path;
+  const downloading =
+    isBundled && managedInstallState?.status === "downloading";
   // A resolved-but-missing binary (custom path the user typed that no longer
   // exists, or a bundled binary not installed). We keep the row and dim it so
-  // the user sees the entry is retained but unavailable.
-  const unavailable = !candidate.available && !candidate.versionPending;
+  // the user sees the entry is retained but unavailable. An in-progress
+  // managed install is not "unavailable" - it's actively working, so it stays
+  // undimmed even though `available` is still false.
+  const unavailable =
+    !candidate.available && !candidate.versionPending && !downloading;
   return (
     <div
       className={cn(
@@ -254,14 +337,10 @@ function CandidateRow({
           unavailable ? "text-destructive" : "text-muted-foreground",
         )}
       >
-        {candidate.versionPending ? (
-          <>
-            <MutedAgentSpinner />
-            <span className="text-ui-xs">checking…</span>
-          </>
-        ) : (
-          versionLabel(candidate)
-        )}
+        <CandidateStatus
+          candidate={candidate}
+          managedInstallState={isBundled ? managedInstallState : null}
+        />
       </span>
       <span className="flex items-center justify-center py-2.5">
         {isCustom ? (
@@ -287,6 +366,50 @@ function versionLabel(candidate: ProviderCliCandidate): string {
   }
   if (!candidate.available) return "Not found";
   return "-";
+}
+
+// "Bundled" while this provider still ships the still-inline binary (no
+// install-state signal at all, whether an old host or T7 hasn't cut this
+// provider over yet); "Managed" once the registry pack is what's actually
+// resolved here.
+function bundledPathLabel(
+  managedInstallState: ProviderManagedInstallState | null,
+): string {
+  return managedInstallState === null ? "Bundled" : "Managed";
+}
+
+// The bundled row's status cell: the in-progress managed-install state takes
+// priority over the plain version/availability copy (`versionLabel`), which
+// takes priority over the version-probe spinner every candidate can show.
+// Path/custom candidates always pass `managedInstallState: null` here, so
+// they fall straight through to the existing versionPending/versionLabel
+// behavior, unchanged.
+function CandidateStatus({
+  candidate,
+  managedInstallState,
+}: {
+  readonly candidate: ProviderCliCandidate;
+  readonly managedInstallState: ProviderManagedInstallState | null;
+}): ReactNode {
+  if (candidate.versionPending) {
+    return (
+      <>
+        <MutedAgentSpinner />
+        <span className="text-ui-xs">checking…</span>
+      </>
+    );
+  }
+  if (managedInstallState?.status === "downloading") {
+    return (
+      <>
+        <MutedAgentSpinner />
+        <span className="text-ui-xs">
+          Installing… {managedInstallState.percent}%
+        </span>
+      </>
+    );
+  }
+  return versionLabel(candidate);
 }
 
 function candidateKey(candidate: ProviderCliCandidate): string {

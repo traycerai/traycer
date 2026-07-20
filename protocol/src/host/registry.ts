@@ -629,11 +629,15 @@ function unsupportedProviderStateDowngrade(
 // Accepts either the live (latest) state or the frozen v2.0 state - see
 // `downgradeProviderCliStateToV10`'s comment. `providersListDowngradeV2ToV1`
 // downgrades from v2.0 (already `profiles`-free); every other caller
-// downgrades from the live state.
+// downgrades from the live state. The provider-pack-registry fields are
+// already optional on `ProviderCliState` itself, so no extra typing is
+// needed for those.
+type DowngradableToV10ProviderState = Omit<ProviderCliState, "profiles"> & {
+  profiles?: ProviderCliState["profiles"];
+};
+
 function downgradeProviderStateForV10(
-  state: Omit<ProviderCliState, "profiles"> & {
-    profiles?: ProviderCliState["profiles"];
-  },
+  state: DowngradableToV10ProviderState,
 ): DowngradeResult<ProviderCliStateV10> {
   const downgraded = downgradeProviderCliStateToV10(state);
   if (downgraded === null) {
@@ -643,9 +647,7 @@ function downgradeProviderStateForV10(
 }
 
 function downgradeProviderStateListForV10(
-  states: readonly (Omit<ProviderCliState, "profiles"> & {
-    profiles?: ProviderCliState["profiles"];
-  })[],
+  states: readonly DowngradableToV10ProviderState[],
 ): ProviderCliStateV10[] {
   return states.flatMap((state) => {
     const downgraded = downgradeProviderCliStateToV10(state);
@@ -664,6 +666,19 @@ function upgradeProviderStateFromV10(
 ): ProviderMutationCliStateV20 {
   return upgradeProviderCliStateV10ToMutationV20(state);
 }
+
+// Applied wherever a pre-@2.1-line provider-state echo (or providers.list's
+// pre-v4.0 line) upgrades to the live shape, alongside the existing
+// `profiles: []` fill. An old host predates the provider pack registry
+// entirely, so it has no managed-install lifecycle, no other-session
+// version-visibility signal, and no Phase-2 advisory to report - "nothing to
+// show" is the honest projection, matching how `profiles: []` reads "old
+// host never had this feature."
+const PROVIDER_LIVE_FIELDS_PRE_REGISTRY = {
+  managedInstallState: null,
+  versionVisibility: null,
+  advisory: null,
+} as const;
 
 function downgradeProviderRequestForV10<T>(
   schema: {
@@ -774,12 +789,14 @@ export const providersListUpgradeV3ToV4 = defineUpgradePath<
   // the v3.0 line (and below) predates it, so its providers upgrade to
   // `profiles: []` (same "old host never had this feature" semantics as the
   // v1.0 -> v2.0 `availabilityPending` fill above). Devin/Pi absence needs no
-  // transform - a v3.0 provider set is a valid v4.0 subset.
+  // transform - a v3.0 provider set is a valid v4.0 subset. The provider-pack-
+  // registry fields ship the same way - see `PROVIDER_LIVE_FIELDS_PRE_REGISTRY`.
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({
     providers: response.providers.map((provider) => ({
       ...provider,
       profiles: [],
+      ...PROVIDER_LIVE_FIELDS_PRE_REGISTRY,
     })),
   }),
 });
@@ -874,7 +891,11 @@ export const providersSetSelectionUpgradeV20ToV21 = defineUpgradePath<
   to: { major: 2, minor: 1 },
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({
-    state: { ...response.state, profiles: [] },
+    state: {
+      ...response.state,
+      profiles: [],
+      ...PROVIDER_LIVE_FIELDS_PRE_REGISTRY,
+    },
   }),
 });
 
@@ -949,7 +970,11 @@ export const providersAddCustomPathUpgradeV20ToV21 = defineUpgradePath<
   to: { major: 2, minor: 1 },
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({
-    state: { ...response.state, profiles: [] },
+    state: {
+      ...response.state,
+      profiles: [],
+      ...PROVIDER_LIVE_FIELDS_PRE_REGISTRY,
+    },
   }),
 });
 
@@ -1024,7 +1049,11 @@ export const providersRemoveCustomPathUpgradeV20ToV21 = defineUpgradePath<
   to: { major: 2, minor: 1 },
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({
-    state: { ...response.state, profiles: [] },
+    state: {
+      ...response.state,
+      profiles: [],
+      ...PROVIDER_LIVE_FIELDS_PRE_REGISTRY,
+    },
   }),
 });
 
@@ -1147,7 +1176,14 @@ export const providersAwaitLoginUpgradeV20ToV21 = defineUpgradePath<
   to: { major: 2, minor: 1 },
   upgradeRequest: (request) => ({ ...request, profileId: null }),
   upgradeResponse: (response) => ({
-    state: response.state === null ? null : { ...response.state, profiles: [] },
+    state:
+      response.state === null
+        ? null
+        : {
+            ...response.state,
+            profiles: [],
+            ...PROVIDER_LIVE_FIELDS_PRE_REGISTRY,
+          },
     existingProfileId: null,
   }),
 });
@@ -1276,7 +1312,11 @@ export const providersSetEnabledUpgradeV20ToV21 = defineUpgradePath<
   // The released 2.0 response is frozen pre-profiles; the 2.1 response is the
   // live state shape, so a 2.0 host's echo upgrades to `profiles: []`.
   upgradeResponse: (response) => ({
-    state: { ...response.state, profiles: [] },
+    state: {
+      ...response.state,
+      profiles: [],
+      ...PROVIDER_LIVE_FIELDS_PRE_REGISTRY,
+    },
   }),
 });
 
@@ -1356,7 +1396,11 @@ export const providersSetApiKeyUpgradeV20ToV21 = defineUpgradePath<
   to: { major: 2, minor: 1 },
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({
-    state: { ...response.state, profiles: [] },
+    state: {
+      ...response.state,
+      profiles: [],
+      ...PROVIDER_LIVE_FIELDS_PRE_REGISTRY,
+    },
   }),
 });
 
@@ -1428,7 +1472,11 @@ export const providersClearApiKeyUpgradeV20ToV21 = defineUpgradePath<
   to: { major: 2, minor: 1 },
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({
-    state: { ...response.state, profiles: [] },
+    state: {
+      ...response.state,
+      profiles: [],
+      ...PROVIDER_LIVE_FIELDS_PRE_REGISTRY,
+    },
   }),
 });
 
@@ -1503,7 +1551,11 @@ export const providersSetTerminalAgentArgsUpgradeV20ToV21 = defineUpgradePath<
   to: { major: 2, minor: 1 },
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({
-    state: { ...response.state, profiles: [] },
+    state: {
+      ...response.state,
+      profiles: [],
+      ...PROVIDER_LIVE_FIELDS_PRE_REGISTRY,
+    },
   }),
 });
 
@@ -1578,7 +1630,11 @@ export const providersSetEnvOverrideUpgradeV20ToV21 = defineUpgradePath<
   to: { major: 2, minor: 1 },
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({
-    state: { ...response.state, profiles: [] },
+    state: {
+      ...response.state,
+      profiles: [],
+      ...PROVIDER_LIVE_FIELDS_PRE_REGISTRY,
+    },
   }),
 });
 
@@ -1653,7 +1709,11 @@ export const providersDeleteEnvOverrideUpgradeV20ToV21 = defineUpgradePath<
   to: { major: 2, minor: 1 },
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({
-    state: { ...response.state, profiles: [] },
+    state: {
+      ...response.state,
+      profiles: [],
+      ...PROVIDER_LIVE_FIELDS_PRE_REGISTRY,
+    },
   }),
 });
 

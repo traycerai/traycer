@@ -322,6 +322,9 @@ function claudeStateWithProfiles(
     envOverrides: [],
     loginCapability: null,
     availabilityPending: false,
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
     profiles: [...profiles],
   };
 }

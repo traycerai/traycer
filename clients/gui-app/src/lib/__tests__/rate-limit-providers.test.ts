@@ -25,6 +25,9 @@ function state(
     envOverrides: [],
     loginCapability: null,
     availabilityPending: false,
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
     profiles: [],
     auth: {
       status: "authenticated",

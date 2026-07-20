@@ -149,6 +149,79 @@ export const providerCliCandidateSchema = z.object({
 });
 export type ProviderCliCandidate = z.infer<typeof providerCliCandidateSchema>;
 
+/**
+ * Install lifecycle of a provider's managed (registry-backed) binary pack.
+ * `absent` - never downloaded, or GC'd; `downloading` - fetch in progress,
+ * `percent` a best-effort progress estimate; `installed` - present and
+ * spawnable. Carried at the provider level (there is exactly one managed
+ * candidate per provider) rather than nested on `providerCliCandidateSchema`,
+ * which is shared byte-for-byte with the frozen v1.0/v2.0/v3.0 wire shapes -
+ * nesting it there would leak a new key into already-released responses (the
+ * providers.list #258 class). `null` (see `managedInstallState` below) means
+ * the host predates the provider pack registry, or - during the staged
+ * bundled -> managed rollout - this provider hasn't been cut over yet; the
+ * renderer falls back to today's `available`-flag rendering on the bundled
+ * candidate in both cases, never inferring one lifecycle from the other.
+ */
+export const providerManagedInstallStateSchema = z.discriminatedUnion(
+  "status",
+  [
+    z.object({ status: z.literal("absent") }),
+    z.object({
+      status: z.literal("downloading"),
+      percent: z.number().min(0).max(100),
+    }),
+    z.object({ status: z.literal("installed") }),
+  ],
+);
+export type ProviderManagedInstallState = z.infer<
+  typeof providerManagedInstallStateSchema
+>;
+
+/**
+ * Host-aggregated, direction-free signal that other active sessions for this
+ * provider are pinned to a version other than `current`. Deliberately NOT a
+ * bare `pin !== current` boolean: holders legitimately differ (each pins its
+ * managed candidate for its whole life), and a version rollback can make
+ * `current` OLDER than a surviving pin - there is no "ahead/behind" to
+ * report, only a count. Rollback-specific messaging belongs solely to the
+ * `advisory` field below. `differingSessionCount: 0` and `null` both mean
+ * "nothing to show" - the renderer never shows a toast for this, only a
+ * quiet, self-correcting row indicator.
+ */
+export const providerVersionVisibilitySchema = z.object({
+  differingSessionCount: z.number().int().nonnegative(),
+});
+export type ProviderVersionVisibility = z.infer<
+  typeof providerVersionVisibilitySchema
+>;
+
+/**
+ * Phase-2 (live update lane) advisory vocabulary. Ships now as a DORMANT
+ * field only - no Phase-1 host ever populates it, always `null` until the
+ * Phase-2 live reader lands. Structurally present so that later work can
+ * start populating it without another protocol bump. `stale-channel` /
+ * `cannot-confirm-eligibility` describe a live-channel read that couldn't be
+ * trusted; `yank-keep-running` / `yank-rollback` distinguish an informational
+ * "still fine" notice from an actionable "session may need reset" one;
+ * `row-incompatibility` covers an explicitly selected PATH/custom candidate
+ * that fails the closure-coupled version gate.
+ */
+export const providerAdvisoryKindSchema = z.enum([
+  "stale-channel",
+  "cannot-confirm-eligibility",
+  "yank-keep-running",
+  "yank-rollback",
+  "row-incompatibility",
+]);
+export type ProviderAdvisoryKind = z.infer<typeof providerAdvisoryKindSchema>;
+
+export const providerAdvisorySchema = z.object({
+  kind: providerAdvisoryKindSchema,
+  detail: z.string().nullable(),
+});
+export type ProviderAdvisory = z.infer<typeof providerAdvisorySchema>;
+
 export const PROVIDER_AUTH_STATUS_SCHEMA_V10 = z.enum([
   "authenticated",
   "unauthenticated",
@@ -487,6 +560,34 @@ const providerCliStateBaseShape = {
   // hardening. UI affordances only appear once a provider has 2+ rows
   // (progressive disclosure).
   profiles: z.array(providerProfileSchema).catch([]),
+  // Install lifecycle of this provider's managed (registry-backed) binary
+  // pack - see `providerManagedInstallStateSchema`. Null/undefined for a host
+  // that predates the provider pack registry, or (during the staged bundled
+  // -> managed rollout) for a provider T7 has not yet cut over; the renderer
+  // falls back to the existing `available` flag on the bundled candidate in
+  // both cases. `.optional()` keeps the key itself omittable in a TS object
+  // literal - host-side construction sites that predate this ticket (and
+  // T4's population work) don't need to be touched just to satisfy the type -
+  // while `.catch(null)` still normalizes a PRESENT-but-unrecognized value
+  // (an older client reading a newer host's shape) to null rather than
+  // throwing. Total decoder: every input either parses, defaults to null, or
+  // is simply absent - never a hard failure.
+  managedInstallState: providerManagedInstallStateSchema
+    .nullable()
+    .catch(null)
+    .optional(),
+  // Aggregated, direction-free "other sessions differ" signal - see
+  // `providerVersionVisibilitySchema`. Null/undefined/zero all mean nothing to
+  // show; see `managedInstallState` above for why the field is `.optional()`
+  // on top of `.catch(null)`.
+  versionVisibility: providerVersionVisibilitySchema
+    .nullable()
+    .catch(null)
+    .optional(),
+  // Phase-2 (live update lane) advisory - see `providerAdvisorySchema`. Lands
+  // now as a dormant field: no Phase-1 host ever populates it, always
+  // null/undefined. See `managedInstallState` above for why it's `.optional()`.
+  advisory: providerAdvisorySchema.nullable().catch(null).optional(),
 };
 
 const providerCliStateBaseShapeV10 = {
@@ -1112,8 +1213,11 @@ export function downgradeProviderAuthV20ToV10(
 // Accepts either the live (latest) state or the frozen v2.0 state - the v2.0
 // shape already lacks `profiles` (see `providerCliStateBaseShapeV20`), so
 // `profiles` is typed optional here rather than requiring callers to conjure
-// one. Both `providersListDowngradeV2ToV1` (v2.0 source) and the v3.0/latest
-// downgrade paths (live source) share this one stripping function.
+// one (the provider-pack-registry fields - `managedInstallState`,
+// `versionVisibility`, `advisory` - are already optional on `ProviderCliState`
+// itself, so no extra typing is needed for those). Both
+// `providersListDowngradeV2ToV1` (v2.0 source) and the v3.0/latest downgrade
+// paths (live source) share this one stripping function.
 export function downgradeProviderCliStateToV10(
   state: Omit<ProviderCliState, "profiles"> & {
     profiles?: ProviderCliState["profiles"];
@@ -1121,12 +1225,20 @@ export function downgradeProviderCliStateToV10(
 ): ProviderCliStateV10 | null {
   // `providerCliStateSchemaV10` is a `z.strictObject`, so it REJECTS any key it
   // doesn't model. Drop later-than-v1.0 fields (`availabilityPending`,
-  // `profiles`) before the parse - otherwise every provider fails the parse
-  // and silently vanishes from the downgraded payload for v1.0 clients.
-  // `profiles` in particular must never reach a v1.0 caller - stripping it
-  // here also keeps profile identity (email, label) off the wire for peers
-  // that never negotiated profile support.
-  const { availabilityPending, profiles, ...rest } = state;
+  // `profiles`, and the provider-pack-registry fields below) before the parse
+  // - otherwise every provider fails the parse and silently vanishes from the
+  // downgraded payload for v1.0 clients. `profiles` in particular must never
+  // reach a v1.0 caller - stripping it here also keeps profile identity
+  // (email, label) off the wire for peers that never negotiated profile
+  // support.
+  const {
+    availabilityPending,
+    profiles,
+    managedInstallState,
+    versionVisibility,
+    advisory,
+    ...rest
+  } = state;
   const parsed = providerCliStateSchemaV10.safeParse({
     ...rest,
     auth: downgradeProviderAuthV20ToV10(state.auth),
