@@ -98,11 +98,11 @@ describe("traycer host install - --release / --from handling", () => {
   // because we re-suppress it inside the helper.
   let exitSpy: MockInstance;
   beforeEach(() => {
-    exitSpy = vi.spyOn(process, "exit").mockImplementation(((
-      code: number | undefined,
-    ) => {
-      throw new Error(`__test_exit_${code ?? 0}`);
-    }) as never);
+    exitSpy = vi
+      .spyOn(process, "exit")
+      .mockImplementation((code: string | number | null | undefined): never => {
+        throw new Error(`__test_exit_${code ?? 0}`);
+      });
   });
   afterEach(() => {
     exitSpy.mockRestore();
@@ -235,11 +235,11 @@ describe("traycer host update - --release handling", () => {
   let exitSpy: MockInstance;
 
   beforeEach(() => {
-    exitSpy = vi.spyOn(process, "exit").mockImplementation(((
-      code: number | undefined,
-    ) => {
-      throw new Error(`__test_exit_${code ?? 0}`);
-    }) as never);
+    exitSpy = vi
+      .spyOn(process, "exit")
+      .mockImplementation((code: string | number | null | undefined): never => {
+        throw new Error(`__test_exit_${code ?? 0}`);
+      });
   });
 
   afterEach(() => {
