@@ -95,7 +95,6 @@ async function main(): Promise<void> {
   const cliExit = new Promise<number | null>((resolve) => {
     cli.once("exit", (code) => resolve(code));
   });
-  await waitForFile(join(barrierDir, "desktop-waiting"));
   await outcome.handle.release();
   const exitCode = await cliExit;
   await writeFile(

@@ -50,6 +50,7 @@ import { configShellResetCommand } from "./commands/config-shell-reset";
 import { buildConfigShellRevertArgsCommand } from "./commands/config-shell-revert-args";
 import { buildConfigShellSetCommand } from "./commands/config-shell-set";
 import { buildHostApplyCommand } from "./commands/host-apply";
+import { hostPurgeStageCommand } from "./commands/host-purge-stage";
 import { buildHostAvailableCommand } from "./commands/host-available";
 import { buildHostDownloadCommand } from "./commands/host-download";
 import { hostDoctorCommand } from "./commands/host-doctor";
@@ -565,6 +566,12 @@ function registerHostCommands(program: Command): void {
         "--force",
         "Apply even if the host has work in progress (skips the busy check).",
       )
+      .addOption(
+        new Option(
+          "--expected-stage-fingerprint <fingerprint>",
+          "Internal: expected staged archive handoff identity",
+        ).hideHelp(),
+      )
       // Hidden: the desktop-owned packaged-macOS path, which drives its own
       // locked SMAppService activation cycle after this non-disruptive
       // bytes-only apply - see commands/host-apply.ts.
@@ -579,7 +586,16 @@ function registerHostCommands(program: Command): void {
         force: opts.force === true,
         // commander materialises `--no-service` as `service: false`.
         noService: opts.service === false,
+        expectedStageFingerprint:
+          typeof opts.expectedStageFingerprint === "string"
+            ? opts.expectedStageFingerprint
+            : null,
       }),
+  );
+
+  withRunner(
+    host.command("purge-stage", { hidden: true }),
+    () => hostPurgeStageCommand,
   );
 
   withRunner(

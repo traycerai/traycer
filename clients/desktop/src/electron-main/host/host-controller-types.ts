@@ -86,6 +86,7 @@ export type MutationOutcome<TOk> =
   // process is managing the host" outcome, rendered by whichever surface
   // invoked them.
   | { readonly kind: "deferred"; readonly message: string }
+  | { readonly kind: "stage-fingerprint-mismatch"; readonly message: string }
   // The install bytes committed, but Desktop could not establish the
   // post-commit service/readiness invariant. This must not masquerade as an
   // ordinary successful apply: callers surface recovery rather than an

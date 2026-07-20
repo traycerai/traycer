@@ -45,6 +45,7 @@ import {
 function sampleRecord(version: string): HostStagedRecord {
   return {
     schemaVersion: HOST_STAGED_RECORD_SCHEMA_VERSION,
+    stageId: "test-stage-id",
     version,
     runtimeVersion: "runtime-" + version,
     archiveSha256: "a".repeat(64),
@@ -91,6 +92,16 @@ describe("host-staged sidecar (readHostStagedRecordAt / writeHostStagedRecordAt)
       JSON.stringify({ ...sampleRecord("1.5.0"), schemaVersion: 99 }),
     );
     expect(await readHostStagedRecordAt(dir)).toBeNull();
+  });
+
+  it("reads a pre-fingerprint sidecar as an explicitly un-attestable legacy stage", async () => {
+    const { stageId: _stageId, ...legacy } = sampleRecord("1.5.0");
+    writeFileSync(join(dir, "staged.json"), JSON.stringify(legacy));
+
+    expect(await readHostStagedRecordAt(dir)).toMatchObject({
+      version: "1.5.0",
+      stageId: null,
+    });
   });
 
   it("returns null for a top-level non-object payload", async () => {

@@ -236,6 +236,28 @@ async function reconcileStagedAside(
   return "deleted";
 }
 
+// Explicit curation invalidation is deliberately NOT expressed as a normal
+// reconcile: reconcile restores a valid `staged.old-*` when canonical
+// `staged/` is absent. A yanked stage must instead make both canonical and
+// every recoverable aside permanently ineligible before the next reconcile
+// can run. Caller owns cli-lock.
+export async function purgeHostStage(environment: Environment): Promise<void> {
+  const logger = createCliLogger(environment);
+  const stagedDir = hostStagedDir(environment);
+  await rm(stagedDir, { recursive: true, force: true });
+  const asides = await listAsideDirsNewestFirst(stagedDir, "old-");
+  await Promise.all(
+    asides.map((aside) =>
+      invalidateAsideDir(stagedDir, aside, "staged.json", logger),
+    ),
+  );
+  await sweepDeadAsideDirs(stagedDir);
+  logger.info("Host stage purged", {
+    environment,
+    recoverableAsideCount: asides.length,
+  });
+}
+
 export async function reconcileHostStage(
   environment: Environment,
 ): Promise<StageReconcileResult> {

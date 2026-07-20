@@ -26,6 +26,10 @@ export const HOST_STAGED_RECORD_SCHEMA_VERSION = 1;
 
 export interface HostStagedRecord {
   readonly schemaVersion: 1;
+  // Null means a record written before stage fingerprints existed. It may be
+  // inspected/reconciled, but an expected-fingerprint apply must reject it
+  // and force a fresh verified download rather than silently consuming it.
+  readonly stageId: string | null;
   readonly version: string;
   readonly runtimeVersion: string | null;
   readonly archiveSha256: string | null;
@@ -106,6 +110,14 @@ export async function readHostStagedRecordAt(
   }
   const obj = parsed as Record<string, unknown>;
   if (obj.schemaVersion !== HOST_STAGED_RECORD_SCHEMA_VERSION) return null;
+  let stageId: string | null;
+  if (obj.stageId === undefined) {
+    stageId = null;
+  } else if (typeof obj.stageId === "string" && obj.stageId.length > 0) {
+    stageId = obj.stageId;
+  } else {
+    return null;
+  }
   // The registry side of the version domain must always be valid SemVer
   // (see the Tech Plan's "Version identity" section) - a sidecar whose
   // `version` doesn't parse is corrupt/foreign data, not a legitimate
@@ -147,6 +159,7 @@ export async function readHostStagedRecordAt(
   if (!isArch(obj.arch)) return null;
   return {
     schemaVersion: HOST_STAGED_RECORD_SCHEMA_VERSION,
+    stageId,
     version: obj.version,
     runtimeVersion,
     archiveSha256,

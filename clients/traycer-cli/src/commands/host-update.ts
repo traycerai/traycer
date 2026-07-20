@@ -148,6 +148,7 @@ async function applyAndProjectLegacy(
           environment,
           force,
           noService: false,
+          expectedStageFingerprint: null,
           onProgress,
         });
       } catch (err) {
@@ -175,6 +176,17 @@ async function applyAndProjectLegacy(
         // - this re-read observes exactly the state `applyHost` had
         // internal access to but didn't return, not a fresh race.
         return projectNoOp(await requireInstalled(environment));
+      }
+      if (outcome.outcome === "stage-fingerprint-mismatch") {
+        throw cliError({
+          code: CLI_ERROR_CODES.UNEXPECTED,
+          message: "host update: staged handoff changed unexpectedly",
+          details: {
+            expectedStageFingerprint: outcome.expectedStageFingerprint,
+            actualStageFingerprint: outcome.actualStageFingerprint,
+          },
+          exitCode: 1,
+        });
       }
       return projectApplied(outcome);
     },

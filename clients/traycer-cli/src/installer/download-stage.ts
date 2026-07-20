@@ -1,4 +1,5 @@
 import { access, rm } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { dirname, relative } from "node:path";
 import { platform as osPlatform } from "node:os";
 import {
@@ -34,7 +35,7 @@ import {
 import { extractHostSource, resolveHostExecutable } from "./extract";
 import { invalidateAsideDir } from "./aside-dirs";
 import { renameWithRetry } from "./rename-retry";
-import { reconcileHostStage } from "./stage-reconcile";
+import { purgeHostStage, reconcileHostStage } from "./stage-reconcile";
 
 // `host download` - the CLI's half of the two-phase split (Host Update
 // Layer Redesign Tech Plan, "CLI: two-phase split with a staged store").
@@ -129,7 +130,10 @@ async function discardIneligibleStagedVersion(
   const entry = manifest.versions.find((v) => v.version === staged.version);
   const ineligible = entry === undefined || entry.yanked;
   if (!ineligible) return;
-  await rm(hostStagedDir(environment), { recursive: true, force: true });
+  // This runs under the caller's short promote/precheck lock. Do not delete
+  // only canonical `staged/`: normal reconcile would restore a valid
+  // `staged.old-*` aside and resurrect this withdrawn artifact.
+  await purgeHostStage(environment);
   logger.info("Host download discarded an ineligible staged version", {
     environment,
     version: staged.version,
@@ -358,6 +362,7 @@ export async function downloadAndStageHost(
     );
     const stagedRecord: HostStagedRecord = {
       schemaVersion: HOST_STAGED_RECORD_SCHEMA_VERSION,
+      stageId: randomUUID(),
       version: entry.version,
       runtimeVersion,
       archiveSha256: verified.archiveSha256,

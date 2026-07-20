@@ -167,6 +167,7 @@ async function writeStaged(
   writeFileSync(join(stagedDir, executableRelPath), "binary");
   const record: HostStagedRecord = {
     schemaVersion: HOST_STAGED_RECORD_SCHEMA_VERSION,
+    stageId: overrides.stageId ?? "test-stage-id",
     version,
     runtimeVersion: null,
     archiveSha256: "b".repeat(64),
@@ -210,6 +211,28 @@ describe("applyHost", () => {
     });
 
     expect(result).toEqual({ outcome: "no-op", installedVersion: "1.0.0" });
+    expect(mocks.lifecycleCalls).toHaveLength(0);
+  });
+
+  it("rejects a different staged handoff under the apply lock without consuming it", async () => {
+    await writeInstall("1.0.0", {});
+    await writeStaged("2.0.0", { stageId: "stage-a" });
+
+    const result = await applyHost({
+      environment: ENV,
+      force: false,
+      noService: false,
+      expectedStageFingerprint: "stage-b",
+      onProgress: () => {},
+    });
+
+    expect(result).toEqual({
+      outcome: "stage-fingerprint-mismatch",
+      installedVersion: "1.0.0",
+      expectedStageFingerprint: "stage-b",
+      actualStageFingerprint: "stage-a",
+    });
+    expect(existsSync(stagedDirFor(ENV))).toBe(true);
     expect(mocks.lifecycleCalls).toHaveLength(0);
   });
 

@@ -17,6 +17,7 @@ import { withCliLock } from "../store/cli-lock";
 export interface HostApplyArgs {
   readonly force: boolean;
   readonly noService: boolean;
+  readonly expectedStageFingerprint: string | null;
 }
 
 export function buildHostApplyCommand(args: HostApplyArgs): CommandFn {
@@ -38,6 +39,7 @@ export function buildHostApplyCommand(args: HostApplyArgs): CommandFn {
           environment: ctx.runtime.environment,
           force: args.force,
           noService: args.noService,
+          expectedStageFingerprint: args.expectedStageFingerprint,
           onProgress: (info) => ctx.progress(info),
         }),
     );
@@ -56,6 +58,9 @@ export function buildHostApplyCommand(args: HostApplyArgs): CommandFn {
 function humanSummary(outcome: ApplyHostOutcome): string {
   if (outcome.outcome === "no-op") {
     return `host already at ${outcome.installedVersion} (no-op)`;
+  }
+  if (outcome.outcome === "stage-fingerprint-mismatch") {
+    return "staged host changed after eligibility; retry against the current stage";
   }
   if (outcome.postSwapError !== null) {
     return `applied host ${outcome.record.version}; service did not converge: ${outcome.postSwapError}`;

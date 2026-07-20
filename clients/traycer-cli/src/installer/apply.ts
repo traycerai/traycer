@@ -31,6 +31,9 @@ import { commitInstallFromSource, currentInstallPlatform } from "./install";
 
 export interface ApplyHostOptions {
   readonly environment: Environment;
+  // Desktop receives this from its off-lane registry eligibility pass. The
+  // value is checked after reconcile, while the caller holds cli-lock.
+  readonly expectedStageFingerprint?: string | null;
   // Skips the busy check. Does NOT affect `--no-service`'s own busy-check
   // skip below - the two flags are independent knobs with the same effect
   // on this one gate.
@@ -88,6 +91,12 @@ export type ApplyHostOutcome =
       // successful "applied" outcome, never a thrown error - "installed,
       // not converged", never "update ready".
       readonly postSwapError: string | null;
+    }
+  | {
+      readonly outcome: "stage-fingerprint-mismatch";
+      readonly installedVersion: string;
+      readonly expectedStageFingerprint: string | null;
+      readonly actualStageFingerprint: string | null;
     };
 
 export async function applyHost(
@@ -124,6 +133,23 @@ export async function applyHost(
   // to `installed` (proceeds - D6 parity) or strictly newer - there is no
   // separate "staged but not newer" case left to check.
   const staged = await readHostStagedRecord(opts.environment);
+  const expectedStageFingerprint = opts.expectedStageFingerprint ?? null;
+  if (
+    expectedStageFingerprint !== null &&
+    (staged === null || staged.stageId !== expectedStageFingerprint)
+  ) {
+    logger.info("Host apply rejected a replaced staged handoff", {
+      environment: opts.environment,
+      expectedStageFingerprint,
+      actualStageFingerprint: staged?.stageId ?? null,
+    });
+    return {
+      outcome: "stage-fingerprint-mismatch",
+      installedVersion: installed.version,
+      expectedStageFingerprint,
+      actualStageFingerprint: staged?.stageId ?? null,
+    };
+  }
   if (staged === null) {
     logger.info("Host apply found nothing staged", {
       environment: opts.environment,

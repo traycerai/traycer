@@ -292,7 +292,11 @@ function writeStagedRecord(
   mkdirSync(layout.stagedDir, { recursive: true });
   writeFileSync(
     layout.stagedRecordFile,
-    JSON.stringify({ version, runtimeVersion }),
+    JSON.stringify({
+      stageId: `stage-${version}`,
+      version,
+      runtimeVersion,
+    }),
   );
 }
 
@@ -560,7 +564,7 @@ describe("mutation lane: wait-never-reject", () => {
     expect(order).toEqual([
       "host restart",
       "host download --automatic",
-      "host apply",
+      "host apply --expected-stage-fingerprint stage-1.8.0",
     ]);
   });
 
@@ -683,9 +687,9 @@ describe("coalescing: duplicate in-flight submissions join rather than re-execut
     downloadGate.resolve(undefined);
     await Promise.all([first, second]);
 
-    expect(availableCalls).toBe(2);
-    // Coalescing retains one outer download and one in-lane manifest check;
-    // a second download here would violate the lane boundary.
+    expect(availableCalls).toBe(1);
+    // Coalescing retains one off-lane eligibility pass and one download;
+    // no mutation-lane registry probe is permitted.
     expect(downloadCalls).toBe(1);
     expect(applyCalls).toBe(1);
   });
@@ -1215,13 +1219,13 @@ describe("desktop-held cli-lock: two-process test", () => {
     expect(existsSync(installRecordFile)).toBe(true);
     writeFileSync(join(barrierDir, "mutate"), "");
 
-    const registerPromise = controller.registerService();
-    writeFileSync(join(barrierDir, "desktop-waiting"), "");
     // This marker is written by the REAL CLI's `withCliLock` callback,
     // immediately after it acquires the shared lock and before host-uninstall
-    // enters its critical section. It is a boundary proof, unlike the old
-    // spawn-time marker plus a timing sleep.
+    // enters its critical section. Waiting for it before submitting Desktop
+    // avoids a scheduler race where a cold `bun run` has not reached its
+    // first lock attempt before Desktop's own retry timer wakes.
     await waitForFile(join(barrierDir, "cli-lock-acquired"));
+    const registerPromise = controller.registerService();
     await waitForFile(join(barrierDir, "cli-exit"));
     const cliExit = JSON.parse(
       readFileSync(join(barrierDir, "cli-exit"), "utf8"),
@@ -1715,6 +1719,153 @@ describe("canonical status: activation-state derivation", () => {
 // `updateReady`, so a yanked stage is never applied post-refresh.
 // ---------------------------------------------------------------------------
 describe("yank/apply ordering", () => {
+  it("passes the download-lane stage fingerprint to the real apply command", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writeStagedRecord("production", "1.8.0", "1.8.0");
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+      availableSnapshotFixture("1.8.0", ["1.8.0"]),
+    );
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args.includes("download")) return { data: {} };
+      return {
+        data: {
+          outcome: "applied",
+          record: { version: "1.8.0", runtimeVersion: "1.8.0" },
+          runningActivated: true,
+          installGeneration: null,
+        },
+      };
+    });
+    vi.mocked(waitForHostReady).mockResolvedValue({
+      ready: true,
+      version: "1.8.0",
+      pid: 1,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reason: "ready",
+    });
+
+    expect((await controller.applyStaged("manual", false)).kind).toBe("ok");
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: expect.arrayContaining([
+          "host",
+          "apply",
+          "--expected-stage-fingerprint",
+          "stage-1.8.0",
+        ]),
+      }),
+    );
+  });
+
+  it("re-eligibility retries a stage-fingerprint mismatch once and never reports the first stage applied", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writeStagedRecord("production", "1.8.0", "1.8.0");
+    const layout = getHostFsLayout("production");
+    const applyFingerprints: string[] = [];
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+      availableSnapshotFixture("1.8.0", ["1.8.0"]),
+    );
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args.includes("download")) return { data: {} };
+      if (opts.args.includes("apply")) {
+        const fingerprintIndex = opts.args.indexOf(
+          "--expected-stage-fingerprint",
+        );
+        const fingerprint = opts.args[fingerprintIndex + 1];
+        if (fingerprint === undefined) throw new Error("missing fingerprint");
+        applyFingerprints.push(fingerprint);
+        if (applyFingerprints.length === 1) {
+          writeFileSync(
+            layout.stagedRecordFile,
+            JSON.stringify({
+              stageId: "stage-replaced",
+              version: "1.8.0",
+              runtimeVersion: "1.8.0",
+            }),
+          );
+          return { data: { outcome: "stage-fingerprint-mismatch" } };
+        }
+        return {
+          data: {
+            outcome: "applied",
+            record: { version: "1.8.0", runtimeVersion: "1.8.0" },
+            runningActivated: true,
+            installGeneration: null,
+          },
+        };
+      }
+      return { data: {} };
+    });
+    vi.mocked(waitForHostReady).mockResolvedValue({
+      ready: true,
+      version: "1.8.0",
+      pid: 1,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reason: "ready",
+    });
+
+    expect((await controller.applyStaged("manual", false)).kind).toBe("ok");
+    expect(applyFingerprints).toEqual(["stage-1.8.0", "stage-replaced"]);
+  });
+
+  it("uses the prerelease registry view when the stage is an RC", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writeStagedRecord("production", "1.8.0-rc.1", "1.8.0-rc.1");
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+      availableSnapshotFixture("1.8.0-rc.1", ["1.8.0-rc.1"]),
+    );
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({ data: {} });
+
+    await controller.stageLatest();
+
+    expect(runBundledTraycerCliJson).toHaveBeenCalledWith([
+      "host",
+      "available",
+      "--json",
+      "--include-pre-releases",
+    ]);
+  });
+
+  it("purges a yanked stage on the download lane instead of deleting it from the mutation lane", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writeStagedRecord("production", "1.8.0", "1.8.0");
+    const layout = getHostFsLayout("production");
+    vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
+      if (args.includes("available")) {
+        return availableSnapshotFixture("1.7.0", ["1.7.0"]);
+      }
+      if (args.includes("purge-stage")) {
+        rmSync(layout.stagedDir, { recursive: true, force: true });
+        return { purged: true };
+      }
+      return {};
+    });
+
+    await controller.stageLatest();
+
+    expect(runBundledTraycerCliJson).toHaveBeenCalledWith([
+      "host",
+      "purge-stage",
+    ]);
+    expect(existsSync(layout.stagedRecordFile)).toBe(false);
+  });
+
   it("applyStaged awaits the download lane before AND after reconciling eligibility (ordering edge)", async () => {
     const controller = newController("production");
     writeInstallRecord("production", {
@@ -1799,6 +1950,10 @@ describe("yank/apply ordering", () => {
         }
         return availableSnapshotFixture("1.7.0", ["1.7.0"]);
       }
+      if (args.includes("purge-stage")) {
+        rmSync(layout.stagedDir, { recursive: true, force: true });
+        return { purged: true };
+      }
       return {};
     });
     vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
@@ -1837,10 +1992,7 @@ describe("yank/apply ordering", () => {
 
     expect(outcome.kind).toBe("ok");
     expect(applyCalls).toBe(0);
-    expect(downloadCalls).toBe(1);
-    expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
-      expect.objectContaining({ args: ["host", "download", "--automatic"] }),
-    );
+    expect(downloadCalls).toBe(0);
   });
 
   it("F1: a queued apply rechecks staged eligibility under its own mutation without starting a second download", async () => {
@@ -1857,6 +2009,10 @@ describe("yank/apply ordering", () => {
     let applyCalls = 0;
 
     vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
+      if (args.includes("purge-stage")) {
+        rmSync(layout.stagedDir, { recursive: true, force: true });
+        return { purged: true };
+      }
       if (!args.includes("available")) return {};
       availableCalls += 1;
       // The reconciliation which was pending behind the older restart saw
@@ -1903,14 +2059,11 @@ describe("yank/apply ordering", () => {
     restartGate.resolve(undefined);
     await Promise.all([restart, pendingReconcile, apply]);
 
-    expect(availableCalls).toBeGreaterThanOrEqual(2);
-    // The first (outer) reconcile may stage/download before apply owns the
-    // lane. The fresh in-lane pass is manifest-only: its yanked verdict
-    // deletes the stage and no-ops apply rather than transferring a
-    // replacement archive while a mutation is active.
+    expect(availableCalls).toBe(1);
+    // Eligibility is owned by the download lane; apply receives only the
+    // fingerprint and never performs an in-lane registry read.
     expect(downloadCalls).toBe(1);
-    expect(applyCalls).toBe(0);
-    expect(existsSync(layout.stagedRecordFile)).toBe(false);
+    expect(applyCalls).toBe(1);
   });
 
   // Fixup B13: `activateInstalled`'s "a ready update supersedes activation
@@ -1933,7 +2086,11 @@ describe("yank/apply ordering", () => {
 
     vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
       if (args.includes("available")) {
-        return availableSnapshotFixture("1.8.0", ["1.8.0"]);
+        return availableSnapshotFixture("1.7.0", ["1.7.0"]);
+      }
+      if (args.includes("purge-stage")) {
+        rmSync(layout.stagedDir, { recursive: true, force: true });
+        return { purged: true };
       }
       return { outcome: "stamped" };
     });

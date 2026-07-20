@@ -112,7 +112,7 @@ import {
   writeHostStagedRecordAt,
   type HostStagedRecord,
 } from "../../manifest/host-staged";
-import { reconcileHostStage } from "../stage-reconcile";
+import { purgeHostStage, reconcileHostStage } from "../stage-reconcile";
 
 const ENV: Environment = "production";
 
@@ -153,6 +153,7 @@ async function writeStagedAt(
   writeFileSync(join(stagedDir, executableRelPath), "binary");
   const record: HostStagedRecord = {
     schemaVersion: HOST_STAGED_RECORD_SCHEMA_VERSION,
+    stageId: overrides.stageId ?? "test-stage-id",
     version,
     runtimeVersion: null,
     archiveSha256: "b".repeat(64),
@@ -262,6 +263,7 @@ describe("reconcileHostStage", () => {
     mkdirSync(stagedDir, { recursive: true });
     await writeHostStagedRecordAt(stagedDir, {
       schemaVersion: HOST_STAGED_RECORD_SCHEMA_VERSION,
+      stageId: "test-stage-id",
       version: "2.0.0",
       runtimeVersion: null,
       archiveSha256: "b".repeat(64),
@@ -446,6 +448,22 @@ describe("reconcileHostStage", () => {
     expect(result.stagedAsideOutcome).toBe("none");
     expect(existsSync(deadDir)).toBe(false);
     expect(existsSync(stagedDirFor(ENV))).toBe(true);
+  });
+
+  it("purges canonical staged bytes and every recoverable aside without letting reconcile restore one", async () => {
+    await writeInstall("1.0.0", {});
+    await writeStagedAt(stagedDirFor(ENV), "1.5.0", {});
+    const asideDir = `${stagedDirFor(ENV)}.old-${Date.now()}`;
+    renameSync(stagedDirFor(ENV), asideDir);
+    await writeStagedAt(stagedDirFor(ENV), "1.6.0", {});
+
+    await purgeHostStage(ENV);
+
+    expect(existsSync(stagedDirFor(ENV))).toBe(false);
+    expect(existsSync(asideDir)).toBe(false);
+    const reconciled = await reconcileHostStage(ENV);
+    expect(reconciled.stagedAsideOutcome).toBe("none");
+    expect(existsSync(stagedDirFor(ENV))).toBe(false);
   });
 
   it("reports the installed record is still readable after reconcile", async () => {

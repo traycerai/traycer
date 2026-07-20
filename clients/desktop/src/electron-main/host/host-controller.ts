@@ -1,6 +1,7 @@
 import { constants } from "node:fs";
-import { access, rm } from "node:fs/promises";
+import { access } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { encodeStageFingerprint } from "@traycer-clients/shared/host-version/stage-fingerprint";
 import { log } from "../app/logger";
 import {
   hasPendingLoginItemRevision,
@@ -149,7 +150,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 // `projectInstallResult`/`projectUninstallResult` already do.
 
 interface ApplyResultShape {
-  readonly outcome: "no-op" | "applied";
+  readonly outcome: "no-op" | "applied" | "stage-fingerprint-mismatch";
   readonly installedVersion: string | null;
   readonly version: string | null;
   // The newly-COMMITTED record's runtime stamp (`record.runtimeVersion` on
@@ -166,13 +167,20 @@ interface ApplyResultShape {
 }
 
 function parseApplyResult(raw: unknown): ApplyResultShape {
-  if (!isPlainObject(raw) || raw.outcome === "no-op") {
+  if (
+    !isPlainObject(raw) ||
+    raw.outcome === "no-op" ||
+    raw.outcome === "stage-fingerprint-mismatch"
+  ) {
     const installedVersion =
       isPlainObject(raw) && typeof raw.installedVersion === "string"
         ? raw.installedVersion
         : null;
     return {
-      outcome: "no-op",
+      outcome:
+        isPlainObject(raw) && raw.outcome === "stage-fingerprint-mismatch"
+          ? "stage-fingerprint-mismatch"
+          : "no-op",
       installedVersion,
       version: null,
       runtimeVersion: null,
@@ -395,6 +403,11 @@ interface AvailableSnapshotShape {
   }>;
 }
 
+interface EligibleStage {
+  readonly version: string;
+  readonly fingerprint: string;
+}
+
 // Mirrors the real wire shape `traycer host available --json` emits
 // (`traycer-cli/src/commands/host-available.ts`'s `data` envelope):
 // `{ manifest: { latest, versions[].platforms[platformKey] }, manifestUrl,
@@ -570,6 +583,7 @@ export class HostController {
   private downloadAbortController: AbortController | null = null;
   private stageLatestInFlight: Promise<void> | null = null;
   private stageLatestPending = false;
+  private eligibleStage: EligibleStage | null = null;
 
   private latestVersionCache: string | null = null;
 
@@ -1672,27 +1686,84 @@ export class HostController {
 
   private async reconcileEligibleStage(): Promise<void> {
     if (await isHostRemovedByUser()) return;
+    this.eligibleStage = null;
+    let staged = await readDesktopHostStagedRecord(this.layout);
     let snapshot: AvailableSnapshotShape;
     try {
       snapshot = parseAvailableSnapshot(
-        await this.runBundled<unknown>(["host", "available", "--json"]),
+        await this.runBundled<unknown>([
+          "host",
+          "available",
+          "--json",
+          ...(staged?.version.includes("-") === true
+            ? ["--include-pre-releases"]
+            : []),
+        ]),
       );
     } catch (err) {
       log.debug("[host-controller] registry probe failed (silent)", {
         err: describeError(err),
       });
+      if (staged?.stageId !== null && staged?.stageId !== undefined) {
+        this.eligibleStage = {
+          version: staged.version,
+          fingerprint: encodeStageFingerprint(staged.stageId),
+        };
+      }
       return;
     }
     this.latestVersionCache = latestVersionFromSnapshot(snapshot);
+    if (!snapshot.valid) {
+      if (staged?.stageId !== null && staged?.stageId !== undefined) {
+        this.eligibleStage = {
+          version: staged.version,
+          fingerprint: encodeStageFingerprint(staged.stageId),
+        };
+        if (this.mutationStatus === null) {
+          await this.runDownloadLane(null);
+        } else {
+          this.stageLatestPending = true;
+        }
+      }
+      return;
+    }
     const installed = await readDesktopHostInstallRecord(this.layout);
-    const staged = await readDesktopHostStagedRecord(this.layout);
     const installedVersion = installed?.version ?? null;
-    const eligible =
+    const stageIsEligible =
+      staged !== null &&
+      staged.stageId !== null &&
+      snapshot.valid &&
+      snapshot.versions.some(
+        (entry) => entry.version === staged?.version && entry.available,
+      );
+    if (staged !== null && !stageIsEligible) {
+      try {
+        await this.runBundled<unknown>(["host", "purge-stage"]);
+      } catch (err) {
+        log.warn(
+          "[host-controller] could not purge an ineligible staged host",
+          {
+            err: describeError(err),
+          },
+        );
+        return;
+      }
+      staged = null;
+    }
+    const needsDownload =
       staged !== null ||
       (this.latestVersionCache !== null &&
         installedVersion !== null &&
         isStrictlyNewerHostVersion(this.latestVersionCache, installedVersion));
-    if (!eligible) return;
+    if (!needsDownload) {
+      if (stageIsEligible && staged !== null && staged.stageId !== null) {
+        this.eligibleStage = {
+          version: staged.version,
+          fingerprint: encodeStageFingerprint(staged.stageId),
+        };
+      }
+      return;
+    }
     // Fixup A6: re-check mutation state HERE, atomically with the decision
     // to start a download - `stageLatest`'s own `mutationStatus !== null`
     // guard only covers its SYNCHRONOUS entry. The registry probe above is
@@ -1704,6 +1775,24 @@ export class HostController {
       return;
     }
     await this.runDownloadLane(null);
+    staged = await readDesktopHostStagedRecord(this.layout);
+    const downloadedStageIsEligible =
+      staged !== null &&
+      staged.stageId !== null &&
+      snapshot.valid &&
+      snapshot.versions.some(
+        (entry) => entry.version === staged?.version && entry.available,
+      );
+    if (
+      downloadedStageIsEligible &&
+      staged !== null &&
+      staged.stageId !== null
+    ) {
+      this.eligibleStage = {
+        version: staged.version,
+        fingerprint: encodeStageFingerprint(staged.stageId),
+      };
+    }
   }
 
   private async runDownloadLane(explicitVersion: string | null): Promise<void> {
@@ -1793,71 +1882,6 @@ export class HostController {
     await this.downloadTail;
   }
 
-  /**
-   * Applies the narrow, in-lane half of staged-update reconciliation. The
-   * registry read is bounded; it can establish that a signed stage has been
-   * withdrawn, but it never starts `host download`. A fresh stage is instead
-   * queued after the mutation releases the lane via `stageLatestPending`.
-   *
-   * A failed registry read deliberately preserves the signed stage: network
-   * reachability is not evidence that a prior successful curation decision
-   * has changed. A successful read that omits or withdraws this version is
-   * positive evidence, so the stage is discarded and this apply is a no-op.
-   */
-  private async verifyStagedEligibilityInMutation(): Promise<boolean> {
-    if (await isHostRemovedByUser()) return false;
-    const staged = await readDesktopHostStagedRecord(this.layout);
-    if (staged === null) return true;
-
-    let snapshot: AvailableSnapshotShape;
-    try {
-      snapshot = parseAvailableSnapshot(
-        await this.runBundled<unknown>(["host", "available", "--json"]),
-      );
-    } catch (err) {
-      log.debug("[host-controller] in-lane stage eligibility probe failed", {
-        err: describeError(err),
-      });
-      return true;
-    }
-
-    this.latestVersionCache = latestVersionFromSnapshot(snapshot);
-    if (!snapshot.valid) {
-      log.debug(
-        "[host-controller] in-lane stage eligibility response was invalid",
-      );
-      return true;
-    }
-    const stageIsEligible = snapshot.versions.some(
-      (entry) => entry.version === staged.version && entry.available,
-    );
-    if (stageIsEligible) return true;
-
-    // The stage and its archive are shared with the CLI. Remove both only
-    // under the same cross-process lock, then never consume the stale bytes
-    // even if another writer won the lock and changed them while we waited.
-    const discard = await withDesktopCliLock(
-      {
-        lockPath: this.lockPath,
-        reason: "host-controller-discard-ineligible-stage",
-        waitMs: this.desktopLockWaitMs,
-        pollIntervalMs: this.desktopLockPollIntervalMs,
-      },
-      async () => {
-        const current = await readDesktopHostStagedRecord(this.layout);
-        if (current?.version !== staged.version) return;
-        await rm(this.layout.stagedDir, { recursive: true, force: true });
-      },
-    );
-    if (discard.kind === "busy") {
-      log.debug(
-        "[host-controller] could not discard ineligible staged host while CLI lock was busy",
-      );
-    }
-    this.stageLatestPending = true;
-    return false;
-  }
-
   // ---- applyStaged -----------------------------------------------------
 
   applyStaged(
@@ -1885,26 +1909,16 @@ export class HostController {
     return this.coalesceIntent<ApplyStagedOk>(
       `apply:${trigger}:${force}`,
       async () => {
-        await this.awaitDownloadLaneIdle();
-        await this.stageLatest();
-        await this.awaitDownloadLaneIdle();
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          await this.awaitDownloadLaneIdle();
+          await this.stageLatest();
+          await this.awaitDownloadLaneIdle();
 
-        return this.enqueueMutation<ApplyStagedOk>(
-          "apply",
-          `apply:${trigger}:${force}`,
-          operationId,
-          async () => {
-            if (trigger === "launch" && (await isHostRemovedByUser())) {
-              return {
-                kind: "deferred",
-                message: "Host was removed by the user.",
-              };
-            }
-            // The outer reconcile may have become stale while a prior
-            // mutation drained. Re-check only the stage's eligibility here:
-            // downloads belong exclusively to the independent download lane.
-            if (!(await this.verifyStagedEligibilityInMutation())) {
-              const installed = await readDesktopHostInstallRecord(this.layout);
+          const eligibleStage = this.eligibleStage;
+          const installed = await readDesktopHostInstallRecord(this.layout);
+          const staged = await readDesktopHostStagedRecord(this.layout);
+          if (eligibleStage === null) {
+            if (staged === null) {
               return {
                 kind: "ok",
                 value: {
@@ -1913,47 +1927,65 @@ export class HostController {
                 },
               };
             }
-            const installed = await readDesktopHostInstallRecord(this.layout);
-            const staged = await readDesktopHostStagedRecord(this.layout);
-            if (
-              !deriveUpdateReady(
-                installed?.version ?? null,
-                staged?.version ?? null,
-              ) &&
-              staged === null
-            ) {
-              return {
-                kind: "ok",
-                value: {
-                  appliedVersion: installed?.version ?? "",
-                  runningActivated: true,
-                },
-              };
-            }
+            return {
+              kind: "deferred",
+              message:
+                "The staged host could not be eligibility-checked. Try the update again when the registry is reachable.",
+            };
+          }
 
-            if (await this.isPackagedMacOwned()) {
-              return this.applyStagedPackagedMac();
-            }
-            return this.applyStagedCliOwned(force);
-          },
-        );
+          const outcome = await this.enqueueMutation<ApplyStagedOk>(
+            "apply",
+            `apply:${trigger}:${force}`,
+            operationId,
+            async () => {
+              if (trigger === "launch" && (await isHostRemovedByUser())) {
+                return {
+                  kind: "deferred",
+                  message: "Host was removed by the user.",
+                };
+              }
+              if (await this.isPackagedMacOwned()) {
+                return this.applyStagedPackagedMac(eligibleStage.fingerprint);
+              }
+              return this.applyStagedCliOwned(force, eligibleStage.fingerprint);
+            },
+          );
+          if (outcome.kind !== "stage-fingerprint-mismatch") return outcome;
+        }
+        return {
+          kind: "deferred",
+          message:
+            "The staged host changed while the update was being applied. Retry to apply the current stage.",
+        };
       },
     );
   }
 
   private async applyStagedCliOwned(
     force: boolean,
+    expectedStageFingerprint: string,
   ): Promise<MutationOutcome<ApplyStagedOk>> {
     const prePid = (await readRunningHostIdentity(this.layout))?.pid ?? null;
     let raw: unknown;
     try {
-      raw = await this.streamBundled<unknown>(
-        force ? ["host", "apply", "--force"] : ["host", "apply"],
-      );
+      raw = await this.streamBundled<unknown>([
+        "host",
+        "apply",
+        "--expected-stage-fingerprint",
+        expectedStageFingerprint,
+        ...(force ? ["--force"] : []),
+      ]);
     } catch (err) {
       return this.classifyApplyLikeError(err, "retry-with-force");
     }
     const result = parseApplyResult(raw);
+    if (result.outcome === "stage-fingerprint-mismatch") {
+      return {
+        kind: "stage-fingerprint-mismatch",
+        message: "The staged host changed after it was eligibility-checked.",
+      };
+    }
     if (result.outcome === "no-op") {
       return {
         kind: "ok",
@@ -1996,15 +2028,17 @@ export class HostController {
     };
   }
 
-  private async applyStagedPackagedMac(): Promise<
-    MutationOutcome<ApplyStagedOk>
-  > {
+  private async applyStagedPackagedMac(
+    expectedStageFingerprint: string,
+  ): Promise<MutationOutcome<ApplyStagedOk>> {
     let raw: unknown;
     try {
       raw = await this.streamBundled<unknown>([
         "host",
         "apply",
         "--no-service",
+        "--expected-stage-fingerprint",
+        expectedStageFingerprint,
       ]);
     } catch (err) {
       // `--no-service` never busy-checks CLI-side, so any error here is a
@@ -2012,6 +2046,12 @@ export class HostController {
       return this.classifyApplyLikeError(err, "retry-with-force");
     }
     const result = parseApplyResult(raw);
+    if (result.outcome === "stage-fingerprint-mismatch") {
+      return {
+        kind: "stage-fingerprint-mismatch",
+        message: "The staged host changed after it was eligibility-checked.",
+      };
+    }
     if (result.outcome === "no-op") {
       return {
         kind: "ok",
@@ -2087,9 +2127,27 @@ export class HostController {
                 staged?.version ?? null,
               )
             ) {
+              const eligibleStage = this.eligibleStage;
+              if (eligibleStage === null) {
+                return {
+                  kind: "deferred",
+                  message:
+                    "The staged host could not be eligibility-checked. Try the update again when the registry is reachable.",
+                };
+              }
               const applied = (await this.isPackagedMacOwned())
-                ? await this.applyStagedPackagedMac()
-                : await this.applyStagedCliOwned(force);
+                ? await this.applyStagedPackagedMac(eligibleStage.fingerprint)
+                : await this.applyStagedCliOwned(
+                    force,
+                    eligibleStage.fingerprint,
+                  );
+              if (applied.kind === "stage-fingerprint-mismatch") {
+                return {
+                  kind: "deferred",
+                  message:
+                    "The staged host changed while the update was being applied. Retry to apply the current stage.",
+                };
+              }
               return applied.kind === "ok"
                 ? {
                     kind: "ok",

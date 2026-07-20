@@ -37,6 +37,7 @@ export interface DesktopHostInstallRecord {
 }
 
 export interface DesktopHostStagedRecord {
+  readonly stageId: string | null;
   readonly version: string;
   readonly runtimeVersion: string | null;
 }
@@ -98,6 +99,7 @@ export async function readDesktopHostStagedRecord(
   if (!isPlainObject(parsed)) return null;
   if (typeof parsed.version !== "string") return null;
   return {
+    stageId: typeof parsed.stageId === "string" ? parsed.stageId : null,
     version: parsed.version,
     runtimeVersion:
       typeof parsed.runtimeVersion === "string" ? parsed.runtimeVersion : null,
