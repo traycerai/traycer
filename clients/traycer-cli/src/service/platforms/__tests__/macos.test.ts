@@ -184,6 +184,7 @@ describe("macOS service lifecycle", () => {
     // loaded" / EIO case launchctl bootstrap would otherwise hit.
     expect(calls.map((c) => c.args[0])).toEqual([
       "print",
+      "print",
       "bootout",
       "bootstrap",
       "kickstart",
@@ -217,6 +218,7 @@ describe("macOS service lifecycle", () => {
       // The CLI is the sole owner now - the legacy host-delegation env
       // var must no longer short-circuit registration.
       expect(calls.map((c) => c.args[0])).toEqual([
+        "print",
         "print",
         "bootout",
         "bootstrap",
@@ -270,6 +272,7 @@ describe("macOS service lifecycle", () => {
     ).resolves.toBeUndefined();
     expect(calls.map((c) => c.args[0])).toEqual([
       "print",
+      "print",
       "bootstrap",
       "kickstart",
     ]);
@@ -302,8 +305,9 @@ describe("macOS service lifecycle", () => {
       code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
       message: expect.stringContaining("bootout"),
     });
-    // Print probe + bootout attempted; bootstrap/kickstart never run.
-    expect(calls.map((c) => c.args[0])).toEqual(["print", "bootout"]);
+    // Both print probes (CLI + agent label) + bootout attempted;
+    // bootstrap/kickstart never run.
+    expect(calls.map((c) => c.args[0])).toEqual(["print", "print", "bootout"]);
   });
 
   it("on bootstrap 'already loaded' races, reloads via bootout → bootstrap rather than kickstarting the cache", async () => {
@@ -339,6 +343,7 @@ describe("macOS service lifecycle", () => {
       }),
     ).resolves.toBeUndefined();
     expect(calls.map((c) => c.args[0])).toEqual([
+      "print",
       "print",
       "bootout",
       "bootstrap",
@@ -393,6 +398,7 @@ describe("macOS service lifecycle", () => {
     ).resolves.toBeUndefined();
     expect(calls.map((c) => c.args[0])).toEqual([
       "print",
+      "print",
       "bootout",
       "bootstrap",
       "print",
@@ -446,6 +452,7 @@ describe("macOS service lifecycle", () => {
     ).rejects.toMatchObject({ code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED });
     expect(calls.map((c) => c.args[0])).toEqual([
       "print",
+      "print",
       "bootout",
       "bootstrap",
       "print",
@@ -484,6 +491,7 @@ describe("macOS service lifecycle", () => {
     ).resolves.toBeUndefined();
     expect(calls.map((c) => c.args[0])).toEqual([
       "print",
+      "print",
       "bootout",
       "bootstrap",
       "print",
@@ -502,15 +510,23 @@ describe("macOS service lifecycle", () => {
     const calls: RecordedCall[] = [];
     const smPath =
       "/Applications/Traycer.app/Contents/Library/LaunchAgents/ai.traycer.host.plist";
-    let printAttempts = 0;
+    let cliPrintAttempts = 0;
     const runner: ProcessRunner = async (command, args) => {
       calls.push({ command, args });
       if (args[0] === "print") {
-        printAttempts += 1;
-        // First print (installService's upfront check) sees no existing
-        // registration; the reload recovery's re-check (second print)
-        // finds Desktop's SMAppService won the race.
-        if (printAttempts >= 2) {
+        // The agent-label probe reads not-loaded on this machine.
+        if (args[1]?.endsWith(".agent") === true) {
+          return {
+            stdout: "",
+            stderr: "Could not find specified service\n",
+            exitCode: 113,
+          };
+        }
+        cliPrintAttempts += 1;
+        // First CLI-label print (installService's upfront check) sees no
+        // SMAppService owner; the reload recovery's re-check (second
+        // CLI-label print) finds Desktop's SMAppService won the race.
+        if (cliPrintAttempts >= 2) {
           return { stdout: `path = ${smPath}\n`, stderr: "", exitCode: 0 };
         }
         return buildSuccessResult();
@@ -543,6 +559,7 @@ describe("macOS service lifecycle", () => {
     // bootout/bootstrap/kickstart against Desktop's job.
     expect(calls.map((c) => c.args[0])).toEqual([
       "print",
+      "print",
       "bootout",
       "bootstrap",
       "print",
@@ -557,14 +574,22 @@ describe("macOS service lifecycle", () => {
     const calls: RecordedCall[] = [];
     const smPath =
       "/Applications/Traycer.app/Contents/Library/LaunchAgents/ai.traycer.host.plist";
-    let printAttempts = 0;
+    let cliPrintAttempts = 0;
     const runner: ProcessRunner = async (command, args) => {
       calls.push({ command, args });
       if (args[0] === "print") {
-        printAttempts += 1;
-        // Third print (post-bootout re-check inside the reload) finds
-        // Desktop's SMAppService now owns the label.
-        if (printAttempts >= 3) {
+        // The agent-label probe reads not-loaded on this machine.
+        if (args[1]?.endsWith(".agent") === true) {
+          return {
+            stdout: "",
+            stderr: "Could not find specified service\n",
+            exitCode: 113,
+          };
+        }
+        cliPrintAttempts += 1;
+        // Third CLI-label print (post-bootout re-check inside the reload)
+        // finds Desktop's SMAppService now owns the label.
+        if (cliPrintAttempts >= 3) {
           return { stdout: `path = ${smPath}\n`, stderr: "", exitCode: 0 };
         }
         return buildSuccessResult();
@@ -594,6 +619,7 @@ describe("macOS service lifecycle", () => {
       message: expect.stringContaining("SMAppService"),
     });
     expect(calls.map((c) => c.args[0])).toEqual([
+      "print",
       "print",
       "bootout",
       "bootstrap",
@@ -640,6 +666,7 @@ describe("macOS service lifecycle", () => {
     // print probe + bootout reload step still ran.
     expect(calls.map((c) => c.args[0])).toEqual([
       "print",
+      "print",
       "bootout",
       "bootstrap",
     ]);
@@ -673,6 +700,7 @@ describe("macOS service lifecycle", () => {
     });
     expect(calls.map((c) => c.args[0])).toEqual([
       "print",
+      "print",
       "bootout",
       "bootstrap",
       "kickstart",
@@ -699,11 +727,27 @@ describe("macOS service lifecycle", () => {
 
     expect(calls).toEqual([
       {
-        // Advisory ownership probe (SMAppService warning) - tolerated
-        // non-zero so a clean machine skips straight to the bootout.
+        // Advisory ownership probes (SMAppService warnings) - tolerated
+        // non-zero so a clean machine skips straight to the bootouts.
         args: ["print", `gui/${process.getuid?.() ?? 0}/${label.id}`],
         timeoutMs: 10_000,
         tolerateNonZeroExit: true,
+      },
+      {
+        args: ["print", `gui/${process.getuid?.() ?? 0}/${label.id}.agent`],
+        timeoutMs: 10_000,
+        tolerateNonZeroExit: true,
+      },
+      {
+        // Agent label first - it is the live job on post-label-split
+        // Desktop machines.
+        args: [
+          "bootout",
+          "--wait",
+          `gui/${process.getuid?.() ?? 0}/${label.id}.agent`,
+        ],
+        timeoutMs: SHUTDOWN_FORCE_EXIT_MS + STOP_EXIT_GRACE_MARGIN_MS,
+        tolerateNonZeroExit: false,
       },
       {
         args: [
@@ -892,8 +936,15 @@ describe("macOS service lifecycle", () => {
     const controller = createMacosController(runner);
 
     await expect(controller.uninstall({ label })).resolves.toBeUndefined();
-    expect(calls.map((c) => c.args[0])).toEqual(["print", "bootout"]);
-    expect(MOCKS.cliLoggerWarn).toHaveBeenCalledTimes(1);
+    expect(calls.map((c) => c.args[0])).toEqual([
+      "print",
+      "print",
+      "bootout",
+      "bootout",
+    ]);
+    // One warning per SMAppService-owned label: this stub reports both the
+    // CLI label and the agent label as SMAppService-loaded.
+    expect(MOCKS.cliLoggerWarn).toHaveBeenCalledTimes(2);
     expect(MOCKS.cliLoggerWarn.mock.calls[0]?.[0]).toContain("Login Items");
   });
 
@@ -930,6 +981,137 @@ describe("macOS service lifecycle", () => {
     // Must not bootout/bootstrap or rewrite the label under SMAppService.
     expect(calls.map((c) => c.args[0])).toEqual(["print"]);
     await expect(readFile(createdPlistPath, "utf8")).rejects.toThrow();
+  });
+
+  it("refuses install when Desktop's post-label-split AGENT label is SMAppService-loaded - the CLI label itself reads clean", async () => {
+    // Post-split Desktop machines run the host under `<label>.agent` and
+    // leave the CLI label unloaded with no raw manifest. A manual
+    // `service install` here would bootstrap a SECOND host beside
+    // Desktop's - the agent-label probe must refuse it.
+    const calls: RecordedCall[] = [];
+    const smAgentPath =
+      "/Applications/Traycer.app/Contents/Library/LaunchAgents/ai.traycer.host.agent.plist";
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (args[0] === "print") {
+        if (args[1]?.endsWith(".agent") === true) {
+          return { stdout: `path = ${smAgentPath}\n`, stderr: "", exitCode: 0 };
+        }
+        return {
+          stdout: "",
+          stderr: "Could not find specified service\n",
+          exitCode: 113,
+        };
+      }
+      return buildSuccessResult();
+    };
+    const controller = createMacosController(runner);
+    createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
+
+    await expect(
+      controller.install({
+        label,
+        cli: { command: "/usr/local/bin/traycer", args: [] },
+        enableLinger: false,
+      }),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      message: expect.stringContaining(`${label.id}.agent`),
+    });
+    // Both probes ran; nothing was booted out, bootstrapped, or written.
+    expect(calls.map((c) => c.args[0])).toEqual(["print", "print"]);
+    await expect(readFile(createdPlistPath, "utf8")).rejects.toThrow();
+  });
+
+  it("reports externally-managed when only the post-label-split AGENT label is SMAppService-loaded", async () => {
+    // Migrated machine: CLI label unloaded, raw manifest deleted by the
+    // desktop's register cycle, host running under `<label>.agent`.
+    // `not-installed` here would send doctor/auto-bootstrap into
+    // installService's agent-label refusal on every `traycer login`.
+    const smAgentPath =
+      "/Applications/Traycer.app/Contents/Library/LaunchAgents/ai.traycer.host.agent.plist";
+    const runner: ProcessRunner = async (command, args, options) => {
+      if (args[0] === "print" && options.tolerateNonZeroExit) {
+        if (args[1]?.endsWith(".agent") === true) {
+          return { stdout: `path = ${smAgentPath}\n`, stderr: "", exitCode: 0 };
+        }
+        return {
+          stdout: "",
+          stderr: "Could not find specified service\n",
+          exitCode: 113,
+        };
+      }
+      return buildSuccessResult();
+    };
+    const controller = createMacosController(runner);
+    MOCKS.readHostPidMetadata.mockResolvedValue(HOST_PID_METADATA);
+    MOCKS.isProcessAlive.mockReturnValue(true);
+
+    await expect(controller.status(label)).resolves.toEqual({
+      state: "externally-managed",
+      version: null,
+      listenUrl: null,
+      pid: null,
+    });
+    expect(MOCKS.readHostPidMetadata).not.toHaveBeenCalled();
+  });
+
+  it("stop/start/restart fail fast with a Desktop routing when the AGENT label is SMAppService-loaded, instead of signalling a job that doesn't exist", async () => {
+    // On a migrated machine the host runs under `<label>.agent`; the CLI
+    // label has no job. Without the guard, `stop` signals nothing, waits
+    // out the full shutdown grace, and reports a misleading "stop did not
+    // take effect"; `start`/`restart` surface raw kickstart errors.
+    const smAgentPath =
+      "/Applications/Traycer.app/Contents/Library/LaunchAgents/ai.traycer.host.agent.plist";
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (args[0] === "print" && args[1]?.endsWith(".agent") === true) {
+        return { stdout: `path = ${smAgentPath}\n`, stderr: "", exitCode: 0 };
+      }
+      return buildSuccessResult();
+    };
+    const controller = createMacosController(runner);
+    MOCKS.readHostPidMetadata.mockResolvedValue(HOST_PID_METADATA);
+    MOCKS.isProcessAlive.mockReturnValue(true);
+
+    for (const operation of [
+      () => controller.stop(label),
+      () => controller.start(label),
+      () => controller.restart(label),
+    ]) {
+      calls.length = 0;
+      await expect(operation()).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringContaining(`${label.id}.agent`),
+      });
+      // Only the advisory probe ran - no kill/kickstart was ever issued
+      // against either label.
+      expect(calls.map((c) => c.args[0])).toEqual(["print"]);
+    }
+  });
+
+  it("stop/start/restart proceed normally when the agent probe reads not-loaded (CLI-managed machine)", async () => {
+    // The guard must never block a genuinely CLI-managed machine - the
+    // probe is advisory and a not-loaded agent label falls through to the
+    // normal launchctl path.
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (args[0] === "print") {
+        return {
+          stdout: "",
+          stderr: "Could not find specified service\n",
+          exitCode: 113,
+        };
+      }
+      return buildSuccessResult();
+    };
+    const controller = createMacosController(runner);
+    MOCKS.readHostPidMetadata.mockResolvedValue(null);
+
+    await expect(controller.start(label)).resolves.toBeUndefined();
+    expect(calls.map((c) => c.args[0])).toEqual(["print", "kickstart"]);
   });
 
   it("still reports stopped for a CLI-owned LaunchAgents registration", async () => {
