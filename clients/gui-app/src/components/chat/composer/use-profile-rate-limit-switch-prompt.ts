@@ -11,6 +11,7 @@ import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-
 import { useRateLimitSwitchPromptDismissalsStore } from "@/stores/rate-limits/rate-limit-switch-prompt-dismissals-store";
 import { profileCommitId } from "@/components/providers/provider-profile-model";
 import {
+  assessProfileRateLimit,
   effectiveProfileRateLimitSeverity,
   matchingRateLimitScopes,
   rateLimitSeverityTier,
@@ -51,6 +52,10 @@ interface VisibleProfileRateLimitPrompt {
   /** First selectable destination in provider order. Usage is never used
    * to rank this default action. */
   readonly primaryTarget: ProfileRateLimitDestination | null;
+  /** Set only when `primaryTarget` is null: the first authenticated
+   * destination with UNKNOWN rate-limit state, for the banner's single
+   * automatic `ensureFresh` check. See `findProbeTarget`. */
+  readonly probeTarget: ProfileRateLimitDestination | null;
   readonly dismiss: () => void;
 }
 
@@ -66,6 +71,7 @@ interface ProfileRateLimitWarningProjection {
   readonly profiles: ReadonlyArray<ProviderProfile>;
   readonly destinations: ReadonlyArray<ProfileRateLimitDestination>;
   readonly primaryTarget: ProfileRateLimitDestination | null;
+  readonly probeTarget: ProfileRateLimitDestination | null;
 }
 
 const NO_PROFILES: ReadonlyArray<ProviderProfile> = [];
@@ -94,23 +100,49 @@ function findLimitedProfile(
 }
 
 /**
- * A destination is worth suggesting only when, for the selected model, it
- * sits in a strictly better tier than the limited current profile (not
- * limited < near_limit < hard_limit) - same-or-worse is no escape. A
- * destination that is limited only on a family the selected model doesn't use
- * stays selectable; one with no data at all ("unknown") counts as not limited
- * rather than being greyed out on zero evidence.
+ * A destination is worth suggesting only when its rate-limit state is KNOWN
+ * and, for the selected model, sits in a strictly better tier than the
+ * limited current profile (not limited < near_limit < hard_limit) -
+ * same-or-worse is no escape. A destination that is limited only on a family
+ * the selected model doesn't use stays selectable. Unknown (never read,
+ * stale, or failed-probe gauge) is incomparable, NOT weakly healthy: absence
+ * of evidence must never power the confident one-click switch, no matter how
+ * limited the current profile is. Unknown candidates are instead surfaced
+ * through `probeTarget` for a single automatic freshness check.
  */
 function selectableDestination(
   profile: ProviderProfile,
   selectedModel: ModelOption | null,
   currentSeverity: ProfileRateLimitSeverity,
 ): boolean {
+  const assessment = assessProfileRateLimit(profile, selectedModel);
   return (
     profile.auth.status === "authenticated" &&
-    rateLimitSeverityTier(
-      effectiveProfileRateLimitSeverity(profile, selectedModel),
-    ) < rateLimitSeverityTier(currentSeverity)
+    assessment.known &&
+    rateLimitSeverityTier(assessment.severity) <
+      rateLimitSeverityTier(currentSeverity)
+  );
+}
+
+/**
+ * The one destination worth spending an automatic usage check on: the first
+ * authenticated profile whose rate-limit state is unknown, and only when no
+ * known strictly-better destination already exists. The banner fires a
+ * single non-forced (`ensureFresh`) check for it; a successful reading
+ * lands in the gauge and the next `providers.list` snapshot promotes it to
+ * `primaryTarget` through the normal projection. Never a cascade - one
+ * candidate, one attempt.
+ */
+function findProbeTarget(
+  destinations: ReadonlyArray<ProfileRateLimitDestination>,
+  selectedModel: ModelOption | null,
+): ProfileRateLimitDestination | null {
+  return (
+    destinations.find(
+      (destination) =>
+        destination.profile.auth.status === "authenticated" &&
+        !assessProfileRateLimit(destination.profile, selectedModel).known,
+    ) ?? null
   );
 }
 
@@ -177,6 +209,10 @@ function warningProjection(input: {
   );
   const primaryTarget =
     destinations.find((destination) => destination.selectable) ?? null;
+  const probeTarget =
+    primaryTarget === null
+      ? findProbeTarget(destinations, input.selectedModel)
+      : null;
   const matchingScopes = matchingRateLimitScopes(
     limited.current,
     input.selectedModel,
@@ -213,6 +249,7 @@ function warningProjection(input: {
     profiles: input.profiles,
     destinations,
     primaryTarget,
+    probeTarget,
   };
 }
 

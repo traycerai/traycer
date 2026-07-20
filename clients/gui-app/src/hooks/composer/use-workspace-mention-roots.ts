@@ -1,6 +1,8 @@
 import { useMemo } from "react";
 import type {
   WorktreeBinding,
+  WorktreeBindingEntry,
+  WorktreeFolderIntent,
   WorktreeIntent,
 } from "@traycer/protocol/host/worktree-schemas";
 import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
@@ -73,18 +75,60 @@ export function mentionRootsFromWorktreeBinding(
 ): ReadonlyArray<string> {
   if (binding === null) return [];
   if (binding.workspaceMode === "folderless") return [];
-  // Mirror the host's `entryRunDirectory`: an empty-string worktreePath falls
-  // back to the workspacePath (where the turn actually runs), so a malformed
-  // worktree row doesn't drop the folder's mention root the host still uses.
-  return dedupeMentionRoots(
-    binding.entries.map((entry) =>
-      entry.mode === "worktree" &&
-      entry.worktreePath !== null &&
-      entry.worktreePath.length > 0
-        ? entry.worktreePath
-        : entry.workspacePath,
-    ),
+  return dedupeMentionRoots(binding.entries.map(bindingEntryRoot));
+}
+
+// Mirror the host's `entryRunDirectory`: an empty-string worktreePath falls
+// back to the workspacePath (where the turn actually runs), so a malformed
+// worktree row doesn't drop the folder's mention root the host still uses.
+function bindingEntryRoot(entry: WorktreeBindingEntry): string {
+  return entry.mode === "worktree" &&
+    entry.worktreePath !== null &&
+    entry.worktreePath.length > 0
+    ? entry.worktreePath
+    : entry.workspacePath;
+}
+
+/**
+ * Composer-scoped roots for a chat: the staged (not-yet-materialized) worktree
+ * intent layers over the committed binding per folder - `stagedEntry ??
+ * bindingEntry`, the same precedence the workspace selector renders and the
+ * send path materializes. This keeps next-message surfaces (mention search,
+ * slash-command discovery) from probing a path the staged selection has
+ * superseded, e.g. a deleted worktree the user just replaced from the
+ * composer.
+ *
+ * A staged `worktree` (create) entry resolves to its source `workspacePath` -
+ * the materialized checkout that stands in until the host creates the worktree
+ * at send - and a staged `import` to its existing on-disk worktree. Staged
+ * entries for folders absent from the binding contribute their roots too.
+ */
+export function mentionRootsFromWorktreeBindingAndIntent(
+  binding: WorktreeBinding | null,
+  intent: WorktreeIntent | null,
+): ReadonlyArray<string> {
+  if (binding !== null && binding.workspaceMode === "folderless") return [];
+  if (intent === null || intent.entries.length === 0) {
+    return mentionRootsFromWorktreeBinding(binding);
+  }
+  const stagedByWorkspacePath = new Map(
+    intent.entries.map((entry) => [entry.workspacePath, entry]),
   );
+  const bindingEntries = binding === null ? [] : binding.entries;
+  const bindingRoots = bindingEntries.map((entry) => {
+    const staged = stagedByWorkspacePath.get(entry.workspacePath);
+    if (staged === undefined) return bindingEntryRoot(entry);
+    stagedByWorkspacePath.delete(entry.workspacePath);
+    return folderIntentRoot(staged);
+  });
+  const stagedOnlyRoots = Array.from(stagedByWorkspacePath.values()).map(
+    folderIntentRoot,
+  );
+  return dedupeMentionRoots([...bindingRoots, ...stagedOnlyRoots]);
+}
+
+function folderIntentRoot(entry: WorktreeFolderIntent): string {
+  return entry.kind === "import" ? entry.worktreePath : entry.workspacePath;
 }
 
 export function worktreeBindingIsFolderless(
@@ -103,10 +147,7 @@ export function mentionRootsFromWorktreeIntent(
         intent?.entries.find(
           (intentEntry) => intentEntry.workspacePath === workspacePath,
         ) ?? null;
-      if (entry !== null && entry.kind === "import") {
-        return entry.worktreePath;
-      }
-      return workspacePath;
+      return entry === null ? workspacePath : folderIntentRoot(entry);
     }),
   );
 }

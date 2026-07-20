@@ -87,6 +87,7 @@ export function ComposerBody({
   onSnapshot,
 }: ComposerBodyProps) {
   const harnessId = useStore(toolbarStore, (s) => s.selection.harnessId);
+  const chatPasteActive = composerMode === "chat";
   const hiddenInTerminal = cn(composerMode !== "chat" && "hidden");
   const hiddenInChat = cn(composerMode !== "terminal" && "hidden");
   const showLandingAgentModeTooltip = true;
@@ -97,11 +98,11 @@ export function ComposerBody({
       {topBanner}
       <ComposerShell
         pickerStore={pickerStore}
-        onDragOver={paste.onDragOver}
-        onDrop={paste.onDrop}
-        onDragEnter={paste.onDragEnter}
-        onDragLeave={paste.onDragLeave}
-        isDraggingFiles={paste.isDraggingFiles}
+        onDragOver={chatPasteActive ? paste.onDragOver : NOOP}
+        onDrop={chatPasteActive ? paste.onDrop : NOOP}
+        onDragEnter={chatPasteActive ? paste.onDragEnter : NOOP}
+        onDragLeave={chatPasteActive ? paste.onDragLeave : NOOP}
+        dragOverlayVariant={chatPasteActive ? paste.dragOverlayVariant : null}
         attachmentsStrip={composerMode === "chat" ? attachmentsStrip : null}
         editor={
           <>
@@ -120,9 +121,9 @@ export function ComposerBody({
                 stabilizeImageAttachmentCaret={false}
                 onSnapshot={onSnapshot}
                 onSubmit={onSubmit}
-                onPaste={paste.onPaste}
-                onDragOver={paste.onDragOver}
-                onDrop={paste.onDrop}
+                onPaste={chatPasteActive ? paste.onPaste : NOOP}
+                onDragOver={chatPasteActive ? paste.onDragOver : NOOP}
+                onDrop={chatPasteActive ? paste.onDrop : NOOP}
                 onKeyDown={undefined}
                 onFocus={NOOP}
                 onBlur={NOOP}

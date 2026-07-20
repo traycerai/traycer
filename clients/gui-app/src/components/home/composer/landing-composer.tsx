@@ -27,7 +27,9 @@ import { useSurfaceActivity } from "@/components/home/composer/surface-activity-
 import { useComposerDictation } from "@/hooks/composer/use-composer-dictation";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useLandingComposerPaste } from "@/hooks/composer/use-landing-composer-paste";
+import { isAttachmentIngestPending } from "@/hooks/composer/use-composer-paste";
 import { useLandingComposerMentionRoots } from "@/hooks/composer/use-workspace-mention-roots";
+import { useRunnerHost } from "@/providers/use-runner-host";
 import { useEpicCreate } from "@/hooks/epic/use-epic-create-mutation";
 import { useCreateTuiAgent } from "@/hooks/agent/use-create-tui-agent";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
@@ -216,8 +218,13 @@ export function LandingComposer(props: LandingComposerProps) {
     ],
   );
   const workspaceCanStart = workspaceComposerCanStart(workspaceAvailability);
-  const paste = useLandingComposerPaste(editorRef);
-  const attachmentPending = paste.isIngestingImages;
+  const runnerHost = useRunnerHost();
+  const paste = useLandingComposerPaste(
+    editorRef,
+    runnerHost.fileDrops,
+    mentionRoots,
+  );
+  const attachmentPending = isAttachmentIngestPending(paste);
   const canSubmit =
     !isSubmitting &&
     !attachmentPending &&
@@ -318,6 +325,7 @@ export function LandingComposer(props: LandingComposerProps) {
             profiles={rateLimitPrompt.profiles}
             destinations={rateLimitPrompt.destinations}
             primaryTarget={rateLimitPrompt.primaryTarget}
+            probeTarget={rateLimitPrompt.probeTarget}
             // Landing has no tab of its own; `null` resolves the usage
             // sidecar/R-key refresh to the app-wide default host, matching
             // `ComposerToolbar`'s own `runTargetHostId={null}` for this

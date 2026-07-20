@@ -238,6 +238,7 @@ function LandingRateLimitBannerHarness(props: {
             profiles={prompt.profiles}
             destinations={prompt.destinations}
             primaryTarget={prompt.primaryTarget}
+            probeTarget={prompt.probeTarget}
             runTargetHostId={null}
             onSwitchProfile={(nextProfileId) => {
               commitProfileSelection(props.toolbarStore, nextProfileId);
@@ -281,6 +282,7 @@ function ChatSurfaceDismissHarness(props: {
             profiles={prompt.profiles}
             destinations={prompt.destinations}
             primaryTarget={prompt.primaryTarget}
+            probeTarget={prompt.probeTarget}
             runTargetHostId={null}
             onSwitchProfile={() => undefined}
             affectedChatCount={1}
@@ -346,6 +348,7 @@ function LoadingSeedHarness(props: {
             profiles={prompt.profiles}
             destinations={prompt.destinations}
             primaryTarget={prompt.primaryTarget}
+            probeTarget={prompt.probeTarget}
             runTargetHostId={null}
             onSwitchProfile={() => undefined}
             affectedChatCount={0}

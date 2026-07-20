@@ -212,6 +212,8 @@ describe("composer mention flow", () => {
       step: pickerStore.getState().step,
       items: [],
       loading: false,
+      loadFailed: false,
+      retryLoad: null,
     });
     pickerStore.getState().close();
     expect(pickerStore.getState().open).toBe(false);

@@ -10,7 +10,10 @@ import { createStore } from "zustand/vanilla";
 import type { ReactNode } from "react";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import type { ModelOption } from "@/components/home/data/landing-options";
-import type { ProfileRateLimitSwitchPrompt } from "@/components/chat/composer/use-profile-rate-limit-switch-prompt";
+import type {
+  ProfileRateLimitDestination,
+  ProfileRateLimitSwitchPrompt,
+} from "@/components/chat/composer/use-profile-rate-limit-switch-prompt";
 
 import { LandingComposer } from "../landing-composer";
 
@@ -24,6 +27,7 @@ interface CapturedPromptArgs {
 
 interface CapturedBannerProps {
   readonly runTargetHostId: string | null;
+  readonly probeTarget: ProfileRateLimitDestination | null;
   readonly affectedChatCount: number;
   readonly onSwitchProfile: (profileId: string | null) => void;
   readonly onSwitchProfileForTask: (profileId: string | null) => void;
@@ -184,6 +188,16 @@ vi.mock("@/components/home/hooks/use-landing-composer-actions", () => ({
   }),
 }));
 
+vi.mock("@/providers/use-runner-host", () => ({
+  useRunnerHost: () => ({
+    fileDrops: {
+      resolveDroppedFilePaths: () => Promise.resolve([]),
+      copyDroppedFilePaths: (paths: readonly string[]) =>
+        Promise.resolve(paths),
+    },
+  }),
+}));
+
 vi.mock("@/hooks/composer/use-landing-composer-paste", () => ({
   useLandingComposerPaste: () => ({
     onPaste: vi.fn(),
@@ -307,6 +321,7 @@ describe("LandingComposer rate-limit banner wiring", () => {
         profileId: "profile-b",
         selectable: true,
       },
+      probeTarget: null,
       dismiss,
     };
 
@@ -320,6 +335,7 @@ describe("LandingComposer rate-limit banner wiring", () => {
     // Landing has no tab; the usage sidecar/R-key refresh must resolve to
     // the app-wide default host, never a stray non-null id.
     expect(bannerProps.runTargetHostId).toBeNull();
+    expect(bannerProps.probeTarget).toBeNull();
 
     bannerProps.onSwitchProfile("profile-b");
     expect(testState.commitProfileSelection).toHaveBeenCalledTimes(1);
