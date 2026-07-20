@@ -1013,13 +1013,20 @@ export class HostController {
       expectedRuntimeVersion,
     );
     await this.stampIfNullRuntime(expectedInstallGeneration, readiness);
-    this.hostLifecycle.ensureWatcherInstalled();
-    const surfaced = await this.hostLifecycle.reloadSnapshotFromDisk();
-    if (surfaced === null) {
+    if (!(await this.publishReachableHostSnapshot())) {
       throw new HostReadinessError(
         "Traycer Host became unavailable while activation was being published - run `traycer host doctor` to recover.",
       );
     }
+  }
+
+  // Success paths which start, cycle, or otherwise claim a live host publish
+  // through this one gate. A service manager acknowledgement or a readiness
+  // handshake is not sufficient by itself: the renderer-facing snapshot must
+  // still derive as reachable at the moment we report a live outcome.
+  private async publishReachableHostSnapshot(): Promise<boolean> {
+    this.hostLifecycle.ensureWatcherInstalled();
+    return (await this.hostLifecycle.reloadSnapshotFromDisk()) !== null;
   }
 
   private async reloadAfterServiceCycleFailure(): Promise<void> {
@@ -1212,8 +1219,11 @@ export class HostController {
     } catch (err) {
       return this.failedAfterServiceCycle(err);
     }
-    this.hostLifecycle.ensureWatcherInstalled();
-    await this.hostLifecycle.reloadSnapshotFromDisk();
+    if (!(await this.publishReachableHostSnapshot())) {
+      return this.failedAfterServiceCycle(
+        "Traycer Host became unavailable while activation was being published - run `traycer host doctor` to recover.",
+      );
+    }
     return { kind: "ok", value: { activated: true } };
   }
 
@@ -1469,8 +1479,11 @@ export class HostController {
       version: readiness.version ?? currentVersion,
       pid: readiness.pid,
     });
-    this.hostLifecycle.ensureWatcherInstalled();
-    await this.hostLifecycle.reloadSnapshotFromDisk();
+    if (!(await this.publishReachableHostSnapshot())) {
+      return this.failedAfterServiceCycle(
+        "Traycer Host became unavailable while the pending LaunchAgent revision was being published - run `traycer host doctor` to recover.",
+      );
+    }
     return {
       kind: "ok",
       value: { running: true, version: readiness.version ?? currentVersion },
@@ -1574,12 +1587,15 @@ export class HostController {
         return this.failedAfterServiceCycle(err);
       }
     }
-    this.hostLifecycle.ensureWatcherInstalled();
-    await this.hostLifecycle.reloadSnapshotFromDisk();
+    if (!(await this.publishReachableHostSnapshot())) {
+      return this.failedAfterServiceCycle(
+        "Traycer Host became unavailable while ensure was being published - run `traycer host doctor` to recover.",
+      );
+    }
     return {
       kind: "ok",
       value: {
-        running: result.running,
+        running: true,
         version: result.runtimeVersion ?? result.version,
       },
     };
@@ -1639,9 +1655,14 @@ export class HostController {
       this.layout,
       this.reachabilityProbe,
     );
+    if (version === null) {
+      return this.failedAfterServiceCycle(
+        "Traycer Host became unavailable while ensure was being published - run `traycer host doctor` to recover.",
+      );
+    }
     return {
       kind: "ok",
-      value: { running: true, version: version ?? result.version },
+      value: { running: true, version },
     };
   }
 
@@ -1928,6 +1949,24 @@ export class HostController {
     await this.downloadTail;
   }
 
+  private async noOpApplyOutcome(
+    appliedVersion: string,
+  ): Promise<MutationOutcome<ApplyStagedOk>> {
+    const runningRuntimeVersion = await readRunningRuntimeVersion(
+      this.layout,
+      this.reachabilityProbe,
+    );
+    if (runningRuntimeVersion === null) {
+      return this.installedNotConverged(
+        "No staged host update was available, but the current host is not reachable. Open Doctor or run 'traycer host doctor' to recover.",
+      );
+    }
+    return {
+      kind: "ok",
+      value: { appliedVersion, runningActivated: true },
+    };
+  }
+
   // ---- applyStaged -----------------------------------------------------
 
   applyStaged(
@@ -1965,13 +2004,7 @@ export class HostController {
           const staged = await readDesktopHostStagedRecord(this.layout);
           if (eligibleStage === null) {
             if (staged === null) {
-              return {
-                kind: "ok",
-                value: {
-                  appliedVersion: installed?.version ?? "",
-                  runningActivated: true,
-                },
-              };
+              return this.noOpApplyOutcome(installed?.version ?? "");
             }
             return {
               kind: "deferred",
@@ -2034,13 +2067,7 @@ export class HostController {
       };
     }
     if (result.outcome === "no-op") {
-      return {
-        kind: "ok",
-        value: {
-          appliedVersion: result.installedVersion ?? "",
-          runningActivated: true,
-        },
-      };
+      return this.noOpApplyOutcome(result.installedVersion ?? "");
     }
     if (result.postSwapError !== null) {
       return this.installedNotConverged(
@@ -2100,13 +2127,7 @@ export class HostController {
       };
     }
     if (result.outcome === "no-op") {
-      return {
-        kind: "ok",
-        value: {
-          appliedVersion: result.installedVersion ?? "",
-          runningActivated: true,
-        },
-      };
+      return this.noOpApplyOutcome(result.installedVersion ?? "");
     }
     // Bytes are committed unconditionally at this point - any busy/failure
     // from here on is POST-COMMIT (continuation: "activate").
@@ -2256,8 +2277,6 @@ export class HostController {
     } catch (err) {
       return this.failedAfterServiceCycle(err);
     }
-    this.hostLifecycle.ensureWatcherInstalled();
-    await this.hostLifecycle.reloadSnapshotFromDisk();
     return { kind: "ok", value: { activated: true } };
   }
 
@@ -2579,8 +2598,6 @@ export class HostController {
         } catch (err) {
           return this.failedAfterServiceCycle(err);
         }
-        this.hostLifecycle.ensureWatcherInstalled();
-        await this.hostLifecycle.reloadSnapshotFromDisk();
         return { kind: "ok", value: { activated: true } };
       },
     );
@@ -2648,8 +2665,6 @@ export class HostController {
         } catch (err) {
           return this.failedAfterServiceCycle(err);
         }
-        this.hostLifecycle.ensureWatcherInstalled();
-        await this.hostLifecycle.reloadSnapshotFromDisk();
         return { kind: "ok", value: { activated: true } };
       },
     );
@@ -2721,8 +2736,6 @@ export class HostController {
         } catch (err) {
           return this.failedAfterServiceCycle(err);
         }
-        this.hostLifecycle.ensureWatcherInstalled();
-        await this.hostLifecycle.reloadSnapshotFromDisk();
         return { kind: "ok", value: { activated: true } };
       },
     );

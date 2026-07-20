@@ -2041,6 +2041,7 @@ describe("yank/apply ordering", () => {
       version: "1.7.0",
       runtimeVersion: "1.7.0",
     });
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
     writeStagedRecord("production", "1.8.0", "1.8.0");
     const layout = getHostFsLayout("production");
     const reconcileGate = deferred<void>();
@@ -4209,6 +4210,199 @@ describe("hostLifecycle wiring on success (fixup C2)", () => {
     expect(outcome.kind).toBe("ok");
     expect(lifecycle.ensureWatcherInstalled).toHaveBeenCalled();
     expect(lifecycle.reloadSnapshotFromDisk).toHaveBeenCalled();
+  });
+
+  it("Class B: a null post-cycle reload prevents the packaged-mac activation cycle from reporting activated", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    const lifecycle = fakeHostLifecycle();
+    vi.mocked(lifecycle.reloadSnapshotFromDisk).mockResolvedValue(null);
+    const controller = new HostController({
+      environment: "production",
+      hostLifecycle: lifecycle,
+      reachabilityProbe: async () => true,
+      desktopLockWaitMs: DESKTOP_LOCK_WAIT_MS,
+      desktopLockPollIntervalMs: DESKTOP_LOCK_POLL_INTERVAL_MS,
+    });
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: { version: "1.8.0", installGeneration: null },
+    });
+    vi.mocked(waitForHostReady).mockResolvedValue({
+      ready: true,
+      version: "1.7.0",
+      pid: process.pid,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reason: "ready",
+    });
+
+    await expect(
+      controller.installVersion("1.8.0", false),
+    ).resolves.toMatchObject({
+      kind: "failed",
+      message: expect.stringContaining("became unavailable"),
+    });
+  });
+
+  it("Class B: a null post-ensure reload prevents CLI convergence from reporting running", async () => {
+    const lifecycle = fakeHostLifecycle();
+    vi.mocked(lifecycle.reloadSnapshotFromDisk).mockResolvedValue(null);
+    const controller = new HostController({
+      environment: "production",
+      hostLifecycle: lifecycle,
+      reachabilityProbe: async () => true,
+      desktopLockWaitMs: DESKTOP_LOCK_WAIT_MS,
+      desktopLockPollIntervalMs: DESKTOP_LOCK_POLL_INTERVAL_MS,
+    });
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: { action: "noop", version: "1.7.0", runtimeVersion: "1.7.0" },
+    });
+
+    await expect(controller.convergeReady(false)).resolves.toMatchObject({
+      kind: "failed",
+      message: expect.stringContaining("became unavailable"),
+    });
+  });
+
+  it("Class B: packaged-mac convergence refuses its post-activation branch when the live runtime disappears", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    const lifecycle = fakeHostLifecycle();
+    const controller = new HostController({
+      environment: "production",
+      hostLifecycle: lifecycle,
+      reachabilityProbe: async () => true,
+      desktopLockWaitMs: DESKTOP_LOCK_WAIT_MS,
+      desktopLockPollIntervalMs: DESKTOP_LOCK_POLL_INTERVAL_MS,
+    });
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: { action: "installed", version: "1.7.0", runtimeVersion: "1.7.0" },
+    });
+    vi.mocked(waitForHostReady).mockResolvedValue({
+      ready: true,
+      version: "1.7.0",
+      pid: process.pid,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reason: "ready",
+    });
+
+    await expect(controller.convergeReady(false)).resolves.toMatchObject({
+      kind: "failed",
+      message: expect.stringContaining("became unavailable"),
+    });
+  });
+
+  it("Class B: a pending LaunchAgent revision does not report running when its publication reload demotes", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    const lifecycle = fakeHostLifecycle();
+    vi.mocked(lifecycle.reloadSnapshotFromDisk).mockResolvedValue(null);
+    const controller = new HostController({
+      environment: "production",
+      hostLifecycle: lifecycle,
+      reachabilityProbe: async () => true,
+      desktopLockWaitMs: DESKTOP_LOCK_WAIT_MS,
+      desktopLockPollIntervalMs: DESKTOP_LOCK_POLL_INTERVAL_MS,
+    });
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+    vi.mocked(hasPendingLoginItemRevision).mockResolvedValue(true);
+    vi.mocked(waitForHostReady).mockResolvedValue({
+      ready: true,
+      version: "1.7.0",
+      pid: process.pid,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reason: "ready",
+    });
+
+    await expect(
+      controller.applyPendingLoginItemRevisionIfIdle(),
+    ).resolves.toMatchObject({
+      kind: "failed",
+      message: expect.stringContaining("became unavailable"),
+    });
+  });
+});
+
+describe("Class B no-op liveness", () => {
+  it("does not report an empty apply queue as running when no host endpoint is reachable", async () => {
+    const controller = newControllerWithReachability(
+      "production",
+      async () => false,
+    );
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+      availableSnapshotFixture("1.7.0", ["1.7.0"]),
+    );
+
+    await expect(
+      controller.applyStaged("manual", false),
+    ).resolves.toMatchObject({
+      kind: "installed-not-converged",
+    });
+  });
+
+  it("does not trust a CLI no-op apply to imply activation without a live endpoint", async () => {
+    const controller = newControllerWithReachability(
+      "production",
+      async () => false,
+    );
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writeStagedRecord("production", "1.8.0", "1.8.0");
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+      availableSnapshotFixture("1.8.0", ["1.8.0"]),
+    );
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: { outcome: "no-op", installedVersion: "1.7.0" },
+    });
+
+    await expect(
+      controller.applyStaged("manual", false),
+    ).resolves.toMatchObject({
+      kind: "installed-not-converged",
+    });
+  });
+
+  it("does not trust a packaged-mac no-op apply to imply activation without a live endpoint", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    const controller = newControllerWithReachability(
+      "production",
+      async () => false,
+    );
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writeStagedRecord("production", "1.8.0", "1.8.0");
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+      availableSnapshotFixture("1.8.0", ["1.8.0"]),
+    );
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: { outcome: "no-op", installedVersion: "1.7.0" },
+    });
+
+    await expect(
+      controller.applyStaged("manual", false),
+    ).resolves.toMatchObject({
+      kind: "installed-not-converged",
+    });
   });
 });
 
