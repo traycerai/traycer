@@ -369,4 +369,25 @@ describe("agent runtime stream schema", () => {
       }),
     ).toMatchObject({ approvalId: "approval-1" });
   });
+
+  it("leaves skillInvocations undefined for callers that omit it", () => {
+    const parsed = runtimeAgentRunInputSchema.parse({
+      harnessId: "claude",
+      prompt: "Build the thing",
+      model: "claude-sonnet-4-5",
+      reasoningEffort: "high",
+      permissionMode: "supervised",
+      providerWorkspace: {
+        workspaceKind: "provider",
+        primaryWorkspace: "/tmp/project",
+        secondaryWorkspaces: [],
+      },
+    });
+
+    // `skillInvocations` is `.optional()` with no `.default()` - an older
+    // caller created before multi-skill composer support omits the field
+    // entirely, and the schema must not backfill it with `[]`.
+    expect(parsed.skillInvocations).toBeUndefined();
+    expect("skillInvocations" in parsed).toBe(false);
+  });
 });

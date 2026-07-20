@@ -377,6 +377,37 @@ describe("<UserMessageBody /> agent messages", () => {
     });
   });
 
+  it("ignores populated workspace roots for the inline edit skill picker when global fallback is disabled", async () => {
+    useWorkspaceFoldersStore.setState({ folders: ["/workspace/project"] });
+    const actions = editingUserActions(INLINE_EDIT_INITIAL_CONTENT);
+    const baseEditing = actions.editing;
+    if (baseEditing === null) throw new Error("expected editing actions");
+    render(
+      <TooltipProvider>
+        <UserMessageBody
+          actions={{
+            ...actions,
+            editing: { ...baseEditing, fallbackToGlobalMentionRoots: false },
+          }}
+          message={{
+            ...plainUserMessage("Edit this message"),
+            structuredContent: INLINE_EDIT_INITIAL_CONTENT,
+          }}
+        />
+      </TooltipProvider>,
+    );
+
+    await waitFor(() => {
+      expect(composerPickerMocks.useComposerPickerItems).toHaveBeenCalledWith(
+        expect.objectContaining({
+          harnessId: "claude",
+          mentionRoots: [],
+          isActive: true,
+        }),
+      );
+    });
+  });
+
   it("adds multiple pasted images to the edit strip and submits base64 nodes", async () => {
     const onSubmit = vi.fn<(content: JsonContent) => void>();
     render(<InlineEditAttachmentHarness onSubmit={onSubmit} />);

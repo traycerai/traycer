@@ -34,6 +34,13 @@ function namesAndReasons(
   return items.map((item) => [item.id, item.disabledReason ?? null]);
 }
 
+/**
+ * This projection takes a scope, not a trigger, so nothing here can distinguish
+ * `/` from `$` - they reach it through the same argument. The rule that scope
+ * follows the caret rather than the trigger lives in `slashScopeForRange`, and
+ * is covered end to end by "scopes a mid-paragraph $ the same way as /" and
+ * "offers the whole catalog when $ starts the prompt" in composer-slash-flow.
+ */
 describe("slashItemsForScope", () => {
   it("leaves everything selectable at the start of the prompt", () => {
     expect(namesAndReasons(slashItemsForScope(CATALOG, "all"))).toEqual([
@@ -47,15 +54,6 @@ describe("slashItemsForScope", () => {
   it("keeps native commands listed but disabled under an inline slash", () => {
     expect(namesAndReasons(slashItemsForScope(CATALOG, "skills"))).toEqual([
       ["slash:plan", NATIVE_COMMAND_DISABLED_REASON],
-      ["slash:frontend-design", null],
-    ]);
-  });
-
-  // Scope follows the caret, never the trigger: `$` is a second way into the
-  // same catalog, so it projects exactly what `/` would at that position.
-  it("projects the same rows whichever trigger opened the picker", () => {
-    expect(namesAndReasons(slashItemsForScope(CATALOG, "all"))).toEqual([
-      ["slash:plan", null],
       ["slash:frontend-design", null],
     ]);
   });
