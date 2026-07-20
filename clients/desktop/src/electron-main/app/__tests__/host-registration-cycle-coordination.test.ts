@@ -122,14 +122,22 @@ const labelForEnvironmentMock = vi.fn<
   displayName: "Traycer Host",
   appSupportDirName: "Traycer",
 }));
-// Real `host-login-item.ts` imports both of these - mocking the module means
-// supplying both, even though only `getHostFsLayout` matters to the
-// assertions below (the marker-clear `rm` in `registerHostLoginItem`
+// Real `host-login-item.ts` imports all four of these - mocking the module
+// means supplying them all, even though only `getHostFsLayout` matters to
+// the assertions below (the marker-clear `rm` in `registerHostLoginItem`
 // targets a nonexistent path under `force: true`, which is a safe no-op).
+// `userLaunchAgentPlistPath` MUST stay sandboxed under ROOT: the real
+// derivation resolves `~/Library/LaunchAgents/<label>.plist`, and the REAL
+// register cycle exercised here deletes that file (legacy-label cleanup) -
+// pointing it at the invoking user's home would remove a live host
+// manifest. Under ROOT the path never exists, so the cleanup no-ops.
 vi.mock("../../host/host-paths", () => ({
   getHostFsLayout: (environment: string) => getHostFsLayoutMock(environment),
   labelForEnvironment: (environment: string) =>
     labelForEnvironmentMock(environment),
+  smAppServiceAgentLabelId: (cliLabelId: string) => `${cliLabelId}.agent`,
+  userLaunchAgentPlistPath: (labelId: string) =>
+    `${ROOT}/Library/LaunchAgents/${labelId}.plist`,
 }));
 
 interface ReadinessResult {
@@ -413,20 +421,24 @@ describe("shared registration-cycle lock: respawnHost vs runEnsureHost", () => {
 
     await vi.waitFor(
       () => {
-        if (setLoginItemSettingsMock.mock.calls.length < 2) {
+        if (setLoginItemSettingsMock.mock.calls.length < 3) {
           throw new Error("waiting for the first cycle's register calls");
         }
       },
       { timeout: 2000 },
     );
     // Exactly one cycle has reached the SMAppService boundary and made its
-    // full unregister->register pair; the other caller is still queued
-    // behind the lock.
-    expect(setLoginItemSettingsMock).toHaveBeenCalledTimes(2);
+    // three calls (legacy-serviceName unregister, then the agent
+    // unregister->register pair); the other caller is still queued behind
+    // the lock.
+    expect(setLoginItemSettingsMock).toHaveBeenCalledTimes(3);
     expect(setLoginItemSettingsMock.mock.calls[0]?.[0]).toMatchObject({
       openAtLogin: false,
     });
     expect(setLoginItemSettingsMock.mock.calls[1]?.[0]).toMatchObject({
+      openAtLogin: false,
+    });
+    expect(setLoginItemSettingsMock.mock.calls[2]?.[0]).toMatchObject({
       openAtLogin: true,
     });
 
@@ -442,21 +454,21 @@ describe("shared registration-cycle lock: respawnHost vs runEnsureHost", () => {
     // make the check pass against a premature second-cycle call.
     const midpointDeadline = Date.now() + 150;
     while (Date.now() < midpointDeadline) {
-      expect(setLoginItemSettingsMock).toHaveBeenCalledTimes(2);
+      expect(setLoginItemSettingsMock).toHaveBeenCalledTimes(3);
       await new Promise<void>((resolve) => setTimeout(resolve, 15));
     }
 
     await vi.waitFor(
       () => {
-        if (setLoginItemSettingsMock.mock.calls.length < 4) {
+        if (setLoginItemSettingsMock.mock.calls.length < 6) {
           throw new Error("waiting for the second cycle's register calls");
         }
       },
       { timeout: 3000 },
     );
     // Only once the first cycle's promise fully settled did the second
-    // cycle's own unregister->register pair begin.
-    expect(setLoginItemSettingsMock).toHaveBeenCalledTimes(4);
+    // cycle's own three-call sequence begin.
+    expect(setLoginItemSettingsMock).toHaveBeenCalledTimes(6);
 
     const [, ensureResult] = await Promise.all([respawnPromise, ensurePromise]);
 
@@ -467,7 +479,7 @@ describe("shared registration-cycle lock: respawnHost vs runEnsureHost", () => {
     });
     expect(respawnFakeHost.notifyRespawningCalls).toBe(1);
     expect(respawnFakeHost.respawnCalls).toBe(0);
-    expect(setLoginItemSettingsMock).toHaveBeenCalledTimes(4);
+    expect(setLoginItemSettingsMock).toHaveBeenCalledTimes(6);
     expect(getLoginItemSettingsMock).toHaveBeenCalledTimes(6);
   });
 });
