@@ -298,8 +298,12 @@ export interface ComposerFilePathIngestArgs {
   readonly beginPathInsertion: () => PathInsertionCommit | null;
 }
 
+function isImageFile(file: File): boolean {
+  return file.type.startsWith(IMAGE_MIME_PREFIX);
+}
+
 function isNonImageFile(file: File): boolean {
-  return !file.type.startsWith(IMAGE_MIME_PREFIX);
+  return !isImageFile(file);
 }
 
 interface FilePathResolution {
@@ -448,12 +452,15 @@ async function resolveAndInsertNativeClipboardFilePaths(
   filePaths: ComposerFilePathIngestArgs,
   commit: PathInsertionCommit,
 ): Promise<void> {
-  const resolvedPaths = await withResolutionTimeout(
-    filePaths.fileDrops.readNativeClipboardFilePaths(),
-    FILE_PATH_RESOLUTION_TIMEOUT_MS,
-    () => [] as readonly string[],
-  );
-  if (resolvedPaths.length === 0) return;
+  const resolvedPaths = await Promise.resolve()
+    .then(() =>
+      withResolutionTimeout(
+        filePaths.fileDrops.readNativeClipboardFilePaths(),
+        FILE_PATH_RESOLUTION_TIMEOUT_MS,
+        () => [] as readonly string[],
+      ),
+    )
+    .catch(() => [] as readonly string[]);
   const displayPaths = resolvedPaths.map((path) =>
     displayPathForInsertion(path, filePaths.mentionRoots),
   );
@@ -549,8 +556,9 @@ export function useComposerPasteEvents(
 
   const dispatchFileTransfer = useCallback(
     (files: ReadonlyArray<File>, fileUrlPaths: ReadonlyArray<string>) => {
+      const imageFiles = files.filter(isImageFile);
       const nonImageFiles = files.filter(isNonImageFile);
-      if (files.length > 0) attachImageFiles(files);
+      if (imageFiles.length > 0) attachImageFiles(imageFiles);
       attachFilePaths(nonImageFiles, fileUrlPaths);
     },
     [attachFilePaths, attachImageFiles],
@@ -598,6 +606,7 @@ export function useComposerPasteEvents(
   }, []);
 
   const onDragLeave = useCallback((event: DragEvent<HTMLElement>) => {
+    if (classifyFileTransferDrag(event.dataTransfer) === null) return;
     event.preventDefault();
     event.stopPropagation();
     setDragState((state) => {

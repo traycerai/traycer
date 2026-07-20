@@ -12,6 +12,7 @@ import {
   type KeyboardEventHandler,
   type Ref,
 } from "react";
+import type { Editor } from "@tiptap/core";
 import { EditorContent, useEditor } from "@tiptap/react";
 import { Selection, type Transaction } from "@tiptap/pm/state";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -112,6 +113,19 @@ export interface ComposerPromptEditorProps {
    */
   readonly onEditorReady: (() => void) | null;
   readonly ref?: Ref<ComposerPromptEditorHandle>;
+}
+
+interface ComposerTransactionEvent {
+  readonly transaction: Transaction;
+  readonly appendedTransactions: Transaction[];
+}
+
+function subscribeToComposerTransactions(
+  editor: Editor,
+  listener: (event: ComposerTransactionEvent) => void,
+): () => void {
+  editor.on("transaction", listener);
+  return () => editor.off("transaction", listener);
 }
 
 function usePastedImageBytesPresenceGetter(
@@ -350,20 +364,20 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     const onTransaction = ({
       transaction,
       appendedTransactions,
-    }: {
-      readonly transaction: Transaction;
-      readonly appendedTransactions: Transaction[];
-    }): void => {
+    }: ComposerTransactionEvent): void => {
       [transaction, ...appendedTransactions].forEach((tr) => {
         position = tr.mapping.map(position, -1);
       });
     };
-    editor.on("transaction", onTransaction);
+    const unsubscribeFromTransactions = subscribeToComposerTransactions(
+      editor,
+      onTransaction,
+    );
     let settled = false;
     return (paths): boolean => {
       if (settled) return false;
       settled = true;
-      editor.off("transaction", onTransaction);
+      unsubscribeFromTransactions();
       if (editor.isDestroyed) return false;
       if (paths.length > 0) {
         insertPathSpansCommand(editor, { paths, position });

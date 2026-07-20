@@ -26,6 +26,8 @@ interface BinaryPlistLength {
 
 type BinaryPlistValue = string | readonly BinaryPlistValue[];
 
+const MAX_BINARY_PLIST_DEPTH = 64;
+
 /**
  * Reads only the native formats that carry local file selections on macOS.
  * Chromium deliberately omits VS Code's `code/file-list` flavor from DOM
@@ -105,17 +107,17 @@ function decodeXmlString(value: string): string {
     .replace(/&#([0-9]+);/g, (_match, decimal: string) =>
       String.fromCodePoint(Number.parseInt(decimal, 10)),
     )
-    .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'");
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&");
 }
 
 function parseBinaryFilenamePlist(bytes: Uint8Array): readonly string[] {
   const context = binaryPlistContext(bytes);
   if (context === null) return [];
-  const root = parseBinaryPlistValue(context, context.topObject);
+  const root = parseBinaryPlistValue(context, context.topObject, 0);
   if (!Array.isArray(root)) return [];
   return root.filter(isString);
 }
@@ -158,8 +160,15 @@ function binaryPlistContext(bytes: Uint8Array): BinaryPlistContext | null {
 function parseBinaryPlistValue(
   context: BinaryPlistContext,
   objectIndex: number,
+  depth: number,
 ): BinaryPlistValue | null {
-  if (objectIndex < 0 || objectIndex >= context.objectCount) return null;
+  if (
+    depth > MAX_BINARY_PLIST_DEPTH ||
+    objectIndex < 0 ||
+    objectIndex >= context.objectCount
+  ) {
+    return null;
+  }
   const tableEntry =
     context.offsetTableOffset + objectIndex * context.offsetSize;
   const offset = readUnsignedInteger(
@@ -191,7 +200,7 @@ function parseBinaryPlistValue(
     );
     return reference === null
       ? null
-      : parseBinaryPlistValue(context, reference);
+      : parseBinaryPlistValue(context, reference, depth + 1);
   }).filter(isBinaryPlistValue);
 }
 
@@ -205,7 +214,7 @@ function binaryPlistLength(
   if (integerMarker === undefined || integerMarker >> 4 !== 0x1) return null;
   const byteLength = 2 ** (integerMarker & 0x0f);
   const value = readUnsignedInteger(bytes, offset + 2, byteLength);
-  return value === null ? null : { value, byteLength: byteLength + 1 };
+  return value === null ? null : { value, byteLength: byteLength + 2 };
 }
 
 function readUnsignedInteger(

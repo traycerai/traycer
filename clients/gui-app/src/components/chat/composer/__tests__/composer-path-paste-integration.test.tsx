@@ -7,8 +7,10 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
 } from "@testing-library/react";
 import { toast } from "sonner";
+import { Editor } from "@tiptap/core";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import {
@@ -88,6 +90,42 @@ describe("composer path paste/drop integration (real editor)", () => {
       await flushMicrotasks();
 
       expect(readNativeClipboardFilePaths).not.toHaveBeenCalled();
+      expect(pathSpanTexts(handleRef.current)).toEqual([]);
+    });
+
+    it("settles the editor job for repeated empty and failed native reads", async () => {
+      const readNativeClipboardFilePaths = vi
+        .fn<() => Promise<readonly string[]>>(() => Promise.resolve([]))
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([])
+        .mockRejectedValueOnce(new Error("native read failed"))
+        .mockImplementationOnce(() => {
+          throw new Error("native read threw");
+        });
+      const fileDrops: IFileDropHost = {
+        resolveDroppedFilePaths: () => Promise.resolve([]),
+        copyDroppedFilePaths: (paths) => Promise.resolve([...paths]),
+        readNativeClipboardFilePaths,
+      };
+      const handleRef = await mountedHandle(fileDrops, undefined);
+      const on = vi.spyOn(Editor.prototype, "on");
+      const off = vi.spyOn(Editor.prototype, "off");
+      const editorDom = screen.getByTestId("composer-editor");
+
+      [0, 1, 2, 3].forEach(() => {
+        fireEvent.paste(editorDom, { clipboardData: makeEmptyTransfer([]) });
+      });
+      await waitFor(() => {
+        expect(readNativeClipboardFilePaths).toHaveBeenCalledTimes(4);
+      });
+      await flushMicrotasks();
+
+      expect(
+        on.mock.calls.filter(([event]) => event === "transaction"),
+      ).toHaveLength(4);
+      expect(
+        off.mock.calls.filter(([event]) => event === "transaction"),
+      ).toHaveLength(4);
       expect(pathSpanTexts(handleRef.current)).toEqual([]);
     });
   });

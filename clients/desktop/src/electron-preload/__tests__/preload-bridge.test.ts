@@ -6,6 +6,10 @@ import {
 } from "../../ipc-contracts/ipc-channels";
 import type { AuthTokenValidationResult } from "@traycer-clients/shared/platform/runner-host";
 import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation-types";
+import {
+  buildFileDropsBridge,
+  createNativeClipboardReadGate,
+} from "../file-drops-bridge";
 
 /**
  * Preload replay-safety tests. The preload module wires `ipcRenderer.on` and
@@ -442,8 +446,10 @@ describe("preload new-capability wiring", () => {
       },
     );
 
-    await bridge.fileDrops.readNativeClipboardFilePaths();
-    expect(invokeFn).toHaveBeenCalledWith(
+    await expect(
+      bridge.fileDrops.readNativeClipboardFilePaths(),
+    ).resolves.toEqual([]);
+    expect(invokeFn).not.toHaveBeenCalledWith(
       RunnerHostInvoke.fileDropReadNativeClipboardPaths,
     );
 
@@ -459,6 +465,31 @@ describe("preload new-capability wiring", () => {
       type: "image/png",
       bytes,
     });
+  });
+
+  it("limits native clipboard reads to a recent trusted paste", async () => {
+    let now = 1_000;
+    const invokeFn = vi.fn(() => Promise.resolve(["/repo/notes.txt"]));
+    fakeElectron.invokeFn = invokeFn;
+    const gate = createNativeClipboardReadGate(() => now);
+    const bridge = buildFileDropsBridge(gate);
+
+    await expect(bridge.readNativeClipboardFilePaths()).resolves.toEqual([]);
+    expect(invokeFn).not.toHaveBeenCalled();
+
+    // jsdom-created events are always untrusted, so exercise the same
+    // capture-listener callback through its trusted-event boundary.
+    gate.observePaste({ isTrusted: true });
+    await expect(bridge.readNativeClipboardFilePaths()).resolves.toEqual([
+      "/repo/notes.txt",
+    ]);
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.fileDropReadNativeClipboardPaths,
+    );
+
+    now += 2_001;
+    await expect(bridge.readNativeClipboardFilePaths()).resolves.toEqual([]);
+    expect(invokeFn).toHaveBeenCalledOnce();
   });
 
   it("exposes menu-command and support bridges", async () => {

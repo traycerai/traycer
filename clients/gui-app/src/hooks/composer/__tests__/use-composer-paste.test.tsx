@@ -721,12 +721,7 @@ describe("useComposerPasteAdapter - isResolvingFilePaths / attachment pending", 
       }),
     ).toBe(true);
     expect(insertPaths).not.toHaveBeenCalled();
-
-    // Non-image paste still briefly touches the image pipeline (empty convert);
-    // wait for that to clear so the remaining pending flag is pure path work.
-    await waitFor(() => {
-      expect(zone.getAttribute("data-ingesting")).toBe("false");
-    });
+    expect(zone.getAttribute("data-ingesting")).toBe("false");
     expect(zone.getAttribute("data-resolving")).toBe("true");
     expect(
       isAttachmentIngestPending({
@@ -964,6 +959,18 @@ describe("useComposerPasteAdapter - drag-and-drop", () => {
       dataTransfer: makeEmptyTransfer(["text/plain"]),
     });
     expect(zone.getAttribute("data-dragging")).toBe("false");
+  });
+
+  it("does not claim a non-file drag leave", () => {
+    const inserted: ImageAttachmentAttrs[][] = [];
+    renderHarness(inserted, NOOP_FILE_PATHS);
+
+    const zone = screen.getByTestId("paste-zone");
+    expect(
+      fireEvent.dragLeave(zone, {
+        dataTransfer: makeEmptyTransfer(["text/plain"]),
+      }),
+    ).toBe(true);
   });
 
   // Round-3: drag-enter can only see type names, so an ordinary HTTPS URI

@@ -1,8 +1,49 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   parseNativeClipboardFilePaths,
   readNativeClipboardFilePaths,
 } from "../native-clipboard-file-paths";
+
+const MIXED_FILENAME_PATHS = [
+  "/tmp/short",
+  "/repo/a long ASCII filename.txt",
+  "/repo/naïve 文件.txt",
+  "/repo/item-01.txt",
+  "/repo/item-02.txt",
+  "/repo/item-03.txt",
+  "/repo/item-04.txt",
+  "/repo/item-05.txt",
+  "/repo/item-06.txt",
+  "/repo/item-07.txt",
+  "/repo/item-08.txt",
+  "/repo/item-09.txt",
+  "/repo/item-10.txt",
+  "/repo/item-11.txt",
+  "/repo/item-12.txt",
+  "/repo/item-13.txt",
+  "/repo/item-14.txt",
+  "/repo/&lt;literal.txt",
+] as const;
+
+const MIXED_FILENAME_BINARY_PLIST = Buffer.from(
+  readFileSync(
+    resolve(
+      process.cwd(),
+      "src/electron-main/clipboard/__tests__/fixtures/native-filenames-mixed.bplist.base64",
+    ),
+    "utf8",
+  ).trim(),
+  "base64",
+);
+
+const MIXED_FILENAME_XML_PLIST = readFileSync(
+  resolve(
+    process.cwd(),
+    "src/electron-main/clipboard/__tests__/fixtures/native-filenames-mixed.xml.plist",
+  ),
+);
 
 describe("native clipboard file paths", () => {
   it("parses a single VS Code file URI", () => {
@@ -47,6 +88,24 @@ describe("native clipboard file paths", () => {
         Buffer.from(plist),
       ),
     ).toEqual(["/repo/alpha one.txt", "/repo/folder&notes"]);
+  });
+
+  it("parses a plutil-generated binary NSFilenamesPboardType fixture", () => {
+    expect(
+      parseNativeClipboardFilePaths(
+        "NSFilenamesPboardType",
+        MIXED_FILENAME_BINARY_PLIST,
+      ),
+    ).toEqual(MIXED_FILENAME_PATHS);
+  });
+
+  it("decodes XML entities in a single pass without corrupting literal entity text", () => {
+    expect(
+      parseNativeClipboardFilePaths(
+        "NSFilenamesPboardType",
+        MIXED_FILENAME_XML_PLIST,
+      ),
+    ).toEqual(MIXED_FILENAME_PATHS);
   });
 
   it("reads only the bounded native file-flavor allowlist", () => {
