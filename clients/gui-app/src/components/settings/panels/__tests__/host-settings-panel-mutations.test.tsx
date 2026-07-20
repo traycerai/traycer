@@ -62,6 +62,46 @@ describe("<HostSettingsPanel /> - mutation flows", () => {
     expect(toast.success).toHaveBeenCalledWith("Host restart requested");
   });
 
+  it("closes the restart dialog optimistically on confirm - before the mutation settles - and still surfaces a later rejection via toast", async () => {
+    let rejectRestart: (error: Error) => void = () => undefined;
+    const restartHost = vi.fn(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          rejectRestart = reject;
+        }),
+    );
+    const { management } = makeManagement({ restartHost });
+
+    renderPanel(makeHost(management, makeLocalHostSnapshot()));
+
+    const restartButton = await waitForButton("Restart");
+    fireEvent.click(restartButton);
+
+    await screen.findByTestId("confirm-destructive-dialog");
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    // Closes synchronously at confirm time - the mutation below is still
+    // pending (never resolved/rejected yet), so this proves the dialog
+    // doesn't wait on onSuccess/onError to close.
+    expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+    await waitFor(() => {
+      expect(restartHost).toHaveBeenCalledTimes(1);
+    });
+
+    act(() => {
+      rejectRestart(new Error("host restart failed"));
+    });
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith(
+        "Couldn't restart host",
+        expect.objectContaining({ description: "host restart failed" }),
+      );
+    });
+    // The failure must not resurrect the dialog.
+    expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+  });
+
   it("saves a custom host name from the Host settings page", async () => {
     const setHostName = vi.fn((input: { readonly customName: string | null }) =>
       Promise.resolve({
