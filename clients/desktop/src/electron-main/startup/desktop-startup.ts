@@ -41,7 +41,9 @@ import {
   applyHostUpdateMenuState,
   refreshHostRegistryIfNotRemoved,
   runLaunchHostConvergeReconcile,
+  type HostUpdateMenuSurface,
 } from "./host-launch-converge";
+import type { IpcHostController } from "../ipc/runner-ipc-bridge";
 import { respawnIfDown } from "./host-health-respawn";
 import {
   checkForUpdatesAfterResume,
@@ -189,7 +191,7 @@ export async function runDesktopStartup(): Promise<void> {
 
   const services = await runWindowPhase(state);
 
-  runDeferred(state, services);
+  runDeferred(state, services, runDeferredBackground);
 }
 
 interface BootState {
@@ -563,9 +565,13 @@ const HOST_REGISTRY_PERIODIC_MAX_AGE_MS =
 const HOST_REGISTRY_RESUME_DEBOUNCE_MS = 30_000;
 let lastHostRegistryResumeCheckMs = 0;
 
-// Deferred, fire-and-forget work - runs after the window is loading and
-// never blocks first paint.
-function runDeferred(state: BootState, services: AppServices): void {
+// The non-converge deferred work is separate so `runDeferred` below remains
+// the narrow production entry point for the launch host-convergence policy.
+// It schedules this background work first (preserving the boot ordering),
+// then always schedules the real launch reconciliation through that entry
+// point. The generic boundary keeps the production types intact while letting
+// the startup composition test drive the entry point with a focused fake.
+function runDeferredBackground(state: BootState, services: AppServices): void {
   startRendererMemorySampler();
   state.bridge?.disposeFns.push(
     onHostRegistryUpdateStateChange((result) => {
@@ -645,18 +651,6 @@ function runDeferred(state: BootState, services: AppServices): void {
       updateAvailable: result.updateAvailable,
     });
   });
-
-  // Coordinated host auto-update + boot activation-debt convergence (Fixup
-  // B1 + B2): a launch with a ready stage applies it; a launch with none
-  // converges any pre-existing activation debt instead. `applyStaged` /
-  // `activateInstalled` already own every precondition this used to require
-  // wiring up by hand - the idle gate, removed-by-user, fail-open on a
-  // busy/failed attempt (the next launch retries) - so this call is
-  // unconditional; a launch with nothing staged and nothing to activate
-  // resolves as a cheap no-op.
-  void timed("deferred", "host-launch-converge", () =>
-    runLaunchHostConvergeReconcile(services.hostController, services.menu),
-  );
 
   void timed("deferred", "cli-reconcile", async () => {
     const outcome = await runLaunchTimeCliReconciliation({
@@ -746,6 +740,27 @@ function runDeferred(state: BootState, services: AppServices): void {
       },
     );
   }, HOST_REGISTRY_PERIODIC_CHECK_INTERVAL_MS);
+}
+
+// Deferred, fire-and-forget launch convergence. This is deliberately a
+// production entry point rather than a controller-level policy test: its
+// caller is `runDesktopStartup`, and it invokes the real reconciliation that
+// determines whether a launch is allowed to apply, activate, or do nothing.
+export function runDeferred<
+  TState,
+  TServices extends {
+    readonly hostController: IpcHostController;
+    readonly menu: HostUpdateMenuSurface;
+  },
+>(
+  state: TState,
+  services: TServices,
+  runBackground: (state: TState, services: TServices) => void,
+): void {
+  runBackground(state, services);
+  void timed("deferred", "host-launch-converge", () =>
+    runLaunchHostConvergeReconcile(services.hostController, services.menu),
+  );
 }
 
 interface LifecycleServices {

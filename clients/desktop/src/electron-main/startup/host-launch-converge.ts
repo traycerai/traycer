@@ -60,9 +60,25 @@ export async function runLaunchHostConvergeReconcile(
   menu: HostUpdateMenuSurface,
 ): Promise<void> {
   const status = await hostController.getStatus();
+  if (status.removedByUser) {
+    log.info("[host-controller] launch converge skipped for removed host");
+    return;
+  }
+
   const outcome = status.updateReady
     ? await hostController.applyStaged("launch", false)
-    : await hostController.activateInstalled(false);
+    : status.activation === "pendingActivation" ||
+        status.activation === "activationUnknown"
+      ? await hostController.activateInstalled(false)
+      : null;
+
+  if (outcome === null) {
+    log.info("[host-controller] launch converge has no activation debt", {
+      activation: status.activation,
+    });
+    return;
+  }
+
   log.info("[host-controller] launch converge reconcile complete", {
     updateReady: status.updateReady,
     kind: outcome.kind,

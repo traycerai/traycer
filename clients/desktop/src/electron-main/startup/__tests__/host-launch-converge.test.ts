@@ -9,6 +9,18 @@ import type {
 } from "../../host/host-controller-types";
 import type { HostRegistryUpdateState } from "../../../ipc-contracts/host-management-types";
 
+const electronMock = vi.hoisted(() => ({
+  app: {
+    getPath: vi.fn(() => "/tmp"),
+    getName: vi.fn(() => "Traycer"),
+    getVersion: vi.fn(() => "0.0.0"),
+    on: vi.fn(),
+  },
+  nativeImage: {},
+}));
+vi.mock("electron", () => electronMock);
+vi.mock("@sentry/electron/main", () => ({}));
+
 vi.mock("../../app/logger", () => ({
   log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
@@ -40,6 +52,7 @@ const {
   refreshHostRegistryIfNotRemoved,
   applyHostUpdateMenuState,
 } = await import("../host-launch-converge");
+const { runDeferred } = await import("../desktop-startup");
 
 function fakeMenu() {
   return {
@@ -47,7 +60,11 @@ function fakeMenu() {
   };
 }
 
-function fakeStatus(updateReady: boolean): HostControllerStatus {
+function fakeStatus(
+  updateReady: boolean,
+  activation: HostControllerStatus["activation"],
+  removedByUser: boolean,
+): HostControllerStatus {
   return {
     download: null,
     mutation: null,
@@ -57,9 +74,9 @@ function fakeStatus(updateReady: boolean): HostControllerStatus {
     installedRuntimeVersion: null,
     runningRuntimeVersion: null,
     updateReady,
-    activation: "unavailable",
+    activation,
     reachable: true,
-    removedByUser: false,
+    removedByUser,
     checkedAt: new Date().toISOString(),
   };
 }
@@ -179,7 +196,7 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
 
   it("B2: applies the stage instead of activating when a ready update is staged", async () => {
     const controller = fakeHostController(
-      fakeStatus(true),
+      fakeStatus(true, "unavailable", false),
       {
         kind: "ok",
         value: { appliedVersion: "1.4.1", runningActivated: true },
@@ -196,7 +213,7 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
 
   it("B2: activates pre-existing installed activation debt instead of applying when nothing is staged/ready", async () => {
     const controller = fakeHostController(
-      fakeStatus(false),
+      fakeStatus(false, "pendingActivation", false),
       {
         kind: "ok",
         value: { appliedVersion: "1.4.1", runningActivated: true },
@@ -212,9 +229,85 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
     expect(refreshRegistryUpdateStateMock).not.toHaveBeenCalled();
   });
 
+  it("P1: leaves an already activated healthy host running on launch", async () => {
+    const controller = fakeHostController(
+      fakeStatus(false, "activated", false),
+      {
+        kind: "ok",
+        value: { appliedVersion: "1.4.1", runningActivated: true },
+      },
+      { kind: "ok", value: { activated: true } },
+    );
+
+    await runLaunchHostConvergeReconcile(controller, fakeMenu());
+
+    expect(controller.applyStagedCalls).toEqual([]);
+    expect(controller.activateInstalledCalls).toEqual([]);
+  });
+
+  it("P1: does not resurrect a host removed by the user", async () => {
+    const controller = fakeHostController(
+      fakeStatus(false, "pendingActivation", true),
+      {
+        kind: "ok",
+        value: { appliedVersion: "1.4.1", runningActivated: true },
+      },
+      { kind: "ok", value: { activated: true } },
+    );
+
+    await runLaunchHostConvergeReconcile(controller, fakeMenu());
+
+    expect(controller.applyStagedCalls).toEqual([]);
+    expect(controller.activateInstalledCalls).toEqual([]);
+  });
+
+  it("V2/P1: the deferred desktop-startup entry activates launch one's debt but leaves launch two running", async () => {
+    const launchOneController = fakeHostController(
+      fakeStatus(false, "pendingActivation", false),
+      {
+        kind: "ok",
+        value: { appliedVersion: "1.4.1", runningActivated: true },
+      },
+      { kind: "ok", value: { activated: true } },
+    );
+    const launchTwoController = fakeHostController(
+      fakeStatus(false, "activated", false),
+      {
+        kind: "ok",
+        value: { appliedVersion: "1.4.1", runningActivated: true },
+      },
+      { kind: "ok", value: { activated: true } },
+    );
+    const background = vi.fn();
+
+    runDeferred(
+      undefined,
+      { hostController: launchOneController, menu: fakeMenu() },
+      background,
+    );
+
+    await vi.waitFor(() => {
+      expect(background).toHaveBeenCalledOnce();
+      expect(launchOneController.applyStagedCalls).toEqual([]);
+      expect(launchOneController.activateInstalledCalls).toEqual([false]);
+    });
+
+    runDeferred(
+      undefined,
+      { hostController: launchTwoController, menu: fakeMenu() },
+      background,
+    );
+
+    await vi.waitFor(() => {
+      expect(background).toHaveBeenCalledTimes(2);
+      expect(launchTwoController.applyStagedCalls).toEqual([]);
+      expect(launchTwoController.activateInstalledCalls).toEqual([]);
+    });
+  });
+
   it("B1: force-refreshes the registry and updates the menu after a successful apply", async () => {
     const controller = fakeHostController(
-      fakeStatus(true),
+      fakeStatus(true, "unavailable", false),
       {
         kind: "ok",
         value: { appliedVersion: "1.4.1", runningActivated: true },
@@ -242,7 +335,7 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
 
   it("B1: does not force-refresh when the apply outcome is not ok (busy/failed/deferred)", async () => {
     const controller = fakeHostController(
-      fakeStatus(true),
+      fakeStatus(true, "unavailable", false),
       { kind: "busy", continuation: "retry-with-force", message: "busy" },
       { kind: "ok", value: { activated: true } },
     );
@@ -254,7 +347,7 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
 
   it("B1: skips the post-apply refresh when the host was removed by the user mid-apply", async () => {
     const controller = fakeHostController(
-      fakeStatus(true),
+      fakeStatus(true, "unavailable", false),
       {
         kind: "ok",
         value: { appliedVersion: "1.4.1", runningActivated: true },
@@ -298,7 +391,7 @@ describe("refreshHostRegistryIfNotRemoved", () => {
   it("skips the refresh entirely when the host was removed by the user", async () => {
     isHostRemovedByUserMock.mockResolvedValue(true);
     const controller = fakeHostController(
-      fakeStatus(false),
+      fakeStatus(false, "unavailable", false),
       {
         kind: "ok",
         value: { appliedVersion: "1.4.1", runningActivated: true },
