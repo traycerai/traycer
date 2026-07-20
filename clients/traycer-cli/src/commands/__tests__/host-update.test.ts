@@ -322,6 +322,7 @@ describe("buildHostUpdateCommand composite", () => {
       environment: "production",
       force: false,
       noService: false,
+      expectedStageFingerprint: null,
       onProgress: expect.any(Function),
     });
     expect(result.human).toContain("updated host 1.0.0 → 2.0.0");
