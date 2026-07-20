@@ -39,6 +39,14 @@ export interface ComposerBodyProps {
   readonly attachmentPending: boolean;
   readonly workspaceDisabledHint: string | null;
   readonly header: ReactNode;
+  /**
+   * Rendered between `header` and the composer card (`ComposerShell`) - the
+   * decision-log-mandated slot for a banner that must sit flush above the
+   * card itself, below any mode-switch header. `null` for callers with
+   * nothing to show there (the chat composer routes its own rate-limit
+   * banner through a separate portal and never uses this slot).
+   */
+  readonly topBanner: ReactNode | null;
   readonly attachmentsStrip: ReactNode;
   readonly workspaceControls: ReactNode;
   readonly dictationControl: ComposerDictationControl | null;
@@ -67,6 +75,7 @@ export function ComposerBody({
   attachmentPending,
   workspaceDisabledHint,
   header,
+  topBanner,
   attachmentsStrip,
   workspaceControls,
   dictationControl,
@@ -86,6 +95,7 @@ export function ComposerBody({
   return (
     <div className="flex flex-col gap-3">
       {header}
+      {topBanner}
       <ComposerShell
         pickerStore={pickerStore}
         onDragOver={chatPasteActive ? paste.onDragOver : NOOP}
