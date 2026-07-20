@@ -16,8 +16,8 @@ vi.mock("@/components/chat/composer/composer-prompt-editor", () => ({
     readonly onDragOver: DragEventHandler<HTMLElement>;
     readonly onDrop: DragEventHandler<HTMLElement>;
   }) => (
-    <div
-      data-testid="prompt-editor"
+    <textarea
+      aria-label="Prompt editor"
       onPaste={props.onPaste}
       onDragOver={props.onDragOver}
       onDrop={props.onDrop}
@@ -35,7 +35,8 @@ vi.mock("@/components/home/composer/composer-shell", () => ({
     readonly editor: ReactNode;
   }) => (
     <div
-      data-testid="composer-shell"
+      role="region"
+      aria-label="Composer shell"
       data-overlay={props.dragOverlayVariant ?? "none"}
       onDragOver={props.onDragOver}
       onDrop={props.onDrop}
@@ -126,12 +127,14 @@ describe("ComposerBody file-transfer routing", () => {
     const paste = makePaste();
     renderComposerBody("terminal", paste);
 
-    const shell = screen.getByTestId("composer-shell");
+    const shell = screen.getByRole("region", { name: "Composer shell" });
     fireEvent.dragEnter(shell);
     fireEvent.dragOver(shell);
     fireEvent.dragLeave(shell);
     fireEvent.drop(shell);
-    fireEvent.paste(screen.getByTestId("prompt-editor"));
+    fireEvent.paste(
+      screen.getByRole("textbox", { name: "Prompt editor", hidden: true }),
+    );
 
     expect(paste.onDragEnter).not.toHaveBeenCalled();
     expect(paste.onDragOver).not.toHaveBeenCalled();
@@ -145,12 +148,12 @@ describe("ComposerBody file-transfer routing", () => {
     const paste = makePaste();
     renderComposerBody("chat", paste);
 
-    const shell = screen.getByTestId("composer-shell");
+    const shell = screen.getByRole("region", { name: "Composer shell" });
     fireEvent.dragEnter(shell);
     fireEvent.dragOver(shell);
     fireEvent.dragLeave(shell);
     fireEvent.drop(shell);
-    fireEvent.paste(screen.getByTestId("prompt-editor"));
+    fireEvent.paste(screen.getByRole("textbox", { name: "Prompt editor" }));
 
     expect(paste.onDragEnter).toHaveBeenCalledOnce();
     expect(paste.onDragOver).toHaveBeenCalledOnce();
