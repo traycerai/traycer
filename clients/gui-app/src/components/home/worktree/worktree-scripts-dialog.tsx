@@ -394,7 +394,7 @@ function describeTarget(input: {
       pathLabel: "New worktree branch",
       pathValue: input.resolved.branchName,
       description:
-        "These scripts ride the worktree request - the host writes them into the new worktree when the chat starts.",
+        "These scripts ride the worktree request - the host writes them into the new worktree when the agent starts.",
     };
   }
   if (input.resolved.kind === "checkout-branch-worktree") {

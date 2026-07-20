@@ -52,8 +52,10 @@ interface BackgroundTreeNode {
 
 function backgroundKindLabel(kind: BackgroundItem["kind"]): string {
   switch (kind) {
+    // A nested execution inside this turn, NOT a durable Agent in the Task.
+    // Bare "Agent" collided with that; "Sub-agent" keeps the two apart.
     case "subagent":
-      return "Agent";
+      return "Sub-agent";
     case "command":
       return "Command";
     case "monitor":

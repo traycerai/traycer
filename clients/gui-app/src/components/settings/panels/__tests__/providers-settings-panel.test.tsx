@@ -4232,7 +4232,7 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(screen.getByRole("button", { name: "Remove profile" }));
     expect(
       screen.getByText(
-        "Chats that ran on Work will show it as removed. Running sessions on this profile must be stopped first.",
+        "Agents that ran on Work will show it as removed. Running sessions on this profile must be stopped first.",
       ),
     ).toBeDefined();
     fireEvent.click(screen.getByTestId("confirm-action"));

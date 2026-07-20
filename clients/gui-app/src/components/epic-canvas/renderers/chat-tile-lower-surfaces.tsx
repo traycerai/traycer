@@ -512,7 +512,7 @@ function ComposerSlotShell(props: {
 function ReadOnlyComposerNotice() {
   return (
     <div className="rounded-md border border-canvas-border/70 bg-canvas px-3 py-2 text-ui-sm text-muted-foreground">
-      Read-only viewer. The chat owner can send prompts and manage this queue.
+      Read-only viewer. The agent owner can send prompts and manage this queue.
     </div>
   );
 }

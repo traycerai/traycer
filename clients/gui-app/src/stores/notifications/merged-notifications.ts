@@ -560,11 +560,10 @@ function hostNotificationPresentation(
     entry.kind,
     entry.payload,
   );
-  const { agentName, title, chatContext, isTerminalAgent } =
-    knownPresentationContext(known);
+  const { agentName, title, chatContext } = knownPresentationContext(known);
   switch (entry.kind) {
     case "agent.stopped": {
-      const context = notificationContext(agentName, title, isTerminalAgent);
+      const context = notificationContext(agentName, title);
       const reason = known === null ? null : knownStoppedReason(known);
       const providerId = known === null ? null : knownProviderId(known);
       return {
@@ -575,7 +574,7 @@ function hostNotificationPresentation(
     case "agent.stalled":
       return {
         title,
-        body: `${notificationContext(agentName, title, isTerminalAgent)} • ${agentStalledStatus(known)}`,
+        body: `${notificationContext(agentName, title)} • ${agentStalledStatus(known)}`,
       };
     case "workspace.operation.failed":
       return {
@@ -599,7 +598,8 @@ function knownPresentationContext(known: HostNotificationKnownPayload | null) {
   return {
     agentName,
     title,
-    chatContext: chatTitle !== null && chatTitle !== title ? chatTitle : "Chat",
+    chatContext:
+      chatTitle !== null && chatTitle !== title ? chatTitle : "Agent",
     isTerminalAgent: known?.kind === "epic",
   };
 }
@@ -759,13 +759,12 @@ function workspaceOperationFailedStatus(
   return "Workspace operation failed";
 }
 
-function notificationContext(
-  agentName: string | null,
-  title: string,
-  isTerminalAgent: boolean,
-): string {
+function notificationContext(agentName: string | null, title: string): string {
   if (agentName !== null && agentName !== title) return agentName;
-  return isTerminalAgent ? "Terminal agent" : "Chat";
+  // Fallbacks when no agent name is available. Nothing is being compared on
+  // screen here - a single notification renders one context line - so the
+  // durable entity name stands alone rather than being qualified by interface.
+  return "Agent";
 }
 
 function nonEmptyTitle(value: string | null): string | null {

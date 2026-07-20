@@ -49,6 +49,7 @@ export const MENTION_ATTRIBUTE_NAMES: ReadonlyArray<string> = [
   "artifactId",
   "artifactType",
   "chatId",
+  "terminalAgentId",
   "status",
 ];
 

@@ -56,7 +56,7 @@ describe("<ErrorSegment />", () => {
     expect(screen.getByText(hostileCode)).toBeDefined();
     fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
     expect(useDesktopDialogStore.getState().reportIssueContext).toEqual({
-      title: "Chat error",
+      title: "Agent error",
       message: null,
       code: null,
       source: "Chat",

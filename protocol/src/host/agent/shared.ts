@@ -31,12 +31,15 @@ export { DEFAULT_AGENT_MODE, agentModeSchema, type AgentMode };
 // `TuiHarnessId extends HarnessId` are both true at the type level, so a
 // surface-narrow value passes everywhere a `HarnessId` is expected.
 //
-// Cursor supports BOTH surfaces at the schema level: the GUI chat tab drives
-// the `@cursor/sdk` agent runtime in local mode, and the TUI tab can launch the
-// `cursor-agent` CLI in a PTY. It is therefore listed in `harnessIdSchema` and
-// in BOTH `guiHarnessIdSchema` and `tuiHarnessIdSchema`. The TUI surface is
-// hidden in the renderer for now (the adapter advertises only the GUI mode via
-// `listGuiHarnesses`'s `modes` field) until the CLI reaches feature parity.
+// Cursor is GUI-only in the product today: the GUI chat tab drives the
+// `@cursor/sdk` agent runtime in local mode. It is listed in `harnessIdSchema`
+// and `guiHarnessIdSchema`, and it stays in `tuiHarnessIdSchema` as a RESERVED
+// compatibility value only - a stable reserved id so existing persisted Cursor
+// Terminal-interface records keep parsing - NOT because a Cursor Terminal
+// launch path exists. There is none today: the host
+// adapter does not implement the TUI surface, the runtime TUI catalog omits
+// Cursor, and `epic.createTuiAgent` / `agent.create` reject `harnessId: "cursor"`
+// on the Terminal interface.
 export const harnessIdSchema = getRecordSchema(
   commonRecordRegistry,
   "harness-id",

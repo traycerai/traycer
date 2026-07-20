@@ -90,7 +90,7 @@ function hostErrorToastMessage(error: HostRpcError, fallback: string) {
     return "Please sign in again.";
   }
   if (error.code === "WORKTREE_BUSY") {
-    return "Worktree is in use by an active chat or terminal. Stop those runs and try again.";
+    return "Worktree is in use by an active agent or terminal. Stop those runs and try again.";
   }
   if (error.code === "WORKTREE_REBIND_BLOCKED") {
     return "Stop the active run before rebinding the worktree.";

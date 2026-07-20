@@ -150,6 +150,7 @@ export function TerminalTile(props: TerminalTileProps) {
     return (
       <TerminalDeadTileBanner
         hostLabel={reachability.hostLabel}
+        ownerKind="terminal"
         onClose={closeCanvasTile}
         testId={`terminal-tile-${props.tileId}`}
       />
