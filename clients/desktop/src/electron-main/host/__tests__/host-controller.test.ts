@@ -3879,11 +3879,10 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
 
   it("V3: the monitor caller and convergeReady's reentrant packaged-mac caller share the same failed revision cycle", async () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
-    let reachabilityCalls = 0;
-    const controller = newControllerWithReachability("production", async () => {
-      reachabilityCalls += 1;
-      return true;
-    });
+    const controller = newControllerWithReachability(
+      "production",
+      async () => true,
+    );
     writeInstallRecord("production", {
       version: "1.7.0",
       runtimeVersion: "1.7.0",
@@ -3908,19 +3907,20 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     // This is the production pair: the monitor's public standalone caller
     // starts the cycle, then convergeReadyPackagedMac reaches its reentrant
     // public caller while that cycle is still in flight.
+    const refresh = vi.spyOn(controller, "applyPendingLoginItemRevisionIfIdle");
     const monitorTick = controller.applyPendingLoginItemRevisionIfIdle();
     await vi.waitFor(() => {
       if (!registerCalled) throw new Error("revision cycle did not start");
     });
     const convergence = controller.convergeReady(false);
     await vi.waitFor(() => {
-      // The second probe is in convergeReadyPackagedMac, immediately before
-      // it calls the public in-flight cache. Releasing the register gate
-      // before this point would let the first cycle settle and turn this
-      // into two serial cycles instead of exercising the caller pair.
-      expect(reachabilityCalls).toBeGreaterThanOrEqual(2);
+      // A reachability probe is only an earlier asynchronous prerequisite.
+      // Wait for the real production join edge: the reentrant caller has
+      // invoked the public coalescing method, which synchronously observes
+      // the in-flight slot before its first await. Releasing the register
+      // gate earlier could turn this into two serial cycles instead.
+      expect(refresh).toHaveBeenCalledTimes(2);
     });
-    await flushMicrotasks();
 
     registerGate.resolve("requires-approval");
     const [monitorOutcome, convergenceOutcome] = await Promise.all([

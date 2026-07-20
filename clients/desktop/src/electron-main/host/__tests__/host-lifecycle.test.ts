@@ -66,6 +66,18 @@ import { __setAsyncProcessLivenessReaderForTest } from "../process-identity";
 import { DEV_LABEL } from "../host-paths";
 import { config } from "../../../config";
 
+// These fixtures deliberately use synthetic PIDs. Their endpoint listener is
+// the positive readiness evidence under test; an OS liveness result is
+// unavailable for a synthetic pid, just as it can be unavailable for a real
+// host because of permissions or a failed platform probe. Model that state
+// locally, so no unrelated test can inherit the test-only global seam.
+function useIndeterminateProcessLiveness(): () => void {
+  const restore = __setAsyncProcessLivenessReaderForTest(
+    async () => "indeterminate",
+  );
+  return () => __setAsyncProcessLivenessReaderForTest(restore);
+}
+
 describe("isCurrentHostWebsocketUrl", () => {
   it("accepts the canonical ws URL shape", () => {
     expect(isCurrentHostWebsocketUrl("ws://127.0.0.1:55555/rpc")).toBe(true);
@@ -326,6 +338,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       readyTimeoutMs: 5_000,
       reachabilityProbe: undefined,
     });
+    const restoreLiveness = useIndeterminateProcessLiveness();
     const errors: { code: string }[] = [];
     lifecycle.on("error", (err) => errors.push({ code: err.code }));
     try {
@@ -340,6 +353,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       expect(snapshot?.pid).toBe(12345);
       expect(snapshot?.version).toBe(config.version);
     } finally {
+      restoreLiveness();
       lifecycle.dispose();
       server.close();
       await rm(dir, { recursive: true, force: true });
@@ -476,6 +490,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       readyTimeoutMs: 300,
       reachabilityProbe: undefined,
     });
+    const restoreLiveness = useIndeterminateProcessLiveness();
     const errors: { code: string }[] = [];
     lifecycle.on("error", (err) => errors.push({ code: err.code }));
     try {
@@ -491,6 +506,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       expect(lifecycle.getSnapshot()?.hostId).toBe("different-version-host");
       expect(lifecycle.getSnapshot()?.version).toBe(`${config.version}-stale`);
     } finally {
+      restoreLiveness();
       lifecycle.dispose();
       server.close();
       await rm(dir, { recursive: true, force: true });
@@ -534,6 +550,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       readyTimeoutMs: 5_000,
       reachabilityProbe: undefined,
     });
+    const restoreLiveness = useIndeterminateProcessLiveness();
     const errors: { code: string }[] = [];
     lifecycle.on("error", (err) => errors.push({ code: err.code }));
     try {
@@ -544,6 +561,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       expect(errors).toEqual([]);
       expect(lifecycle.getSnapshot()?.hostId).toBe("busy-mismatched-host");
     } finally {
+      restoreLiveness();
       lifecycle.dispose();
       server.close();
       await rm(dir, { recursive: true, force: true });
@@ -584,6 +602,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       readyTimeoutMs: 5_000,
       reachabilityProbe: undefined,
     });
+    const restoreLiveness = useIndeterminateProcessLiveness();
     const errors: { code: string }[] = [];
     lifecycle.on("error", (err) => errors.push({ code: err.code }));
     try {
@@ -596,6 +615,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       expect(errors).toEqual([]);
       expect(lifecycle.getSnapshot()?.version).toBe(config.version);
     } finally {
+      restoreLiveness();
       lifecycle.dispose();
       server.close();
       await rm(dir, { recursive: true, force: true });
@@ -742,6 +762,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       reachabilityProbe: (url) =>
         Promise.resolve(url === websocketUrl && reachable),
     });
+    const restoreLiveness = useIndeterminateProcessLiveness();
     const changes: Array<string | null> = [];
     lifecycle.on("change", (snapshot) => {
       changes.push(snapshot?.hostId ?? null);
@@ -762,6 +783,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       expect(lifecycle.getSnapshot()?.websocketUrl).toBe(websocketUrl);
       expect(changes).toEqual(["same-host", null, "same-host"]);
     } finally {
+      restoreLiveness();
       lifecycle.dispose();
       await rm(dir, { recursive: true, force: true });
     }
