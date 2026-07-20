@@ -33,9 +33,12 @@ import type { MentionPreview } from "@/lib/composer/types";
 import { cn } from "@/lib/utils";
 
 import {
+  activePickerItemDisabledReason,
+  pickerItemDisabledReason,
   pickerItemPreview,
   type ComposerPickerItem,
   type ComposerPickerStore,
+  type ComposerSlashTrigger,
 } from "../picker/composer-picker-store";
 
 import { MentionMenuItem } from "./mention-menu-item";
@@ -59,6 +62,7 @@ type LockedPlacement = Extract<Placement, "bottom-start" | "top-start">;
 interface MenuSlice {
   readonly open: boolean;
   readonly kind: "mention" | "slash" | null;
+  readonly slashTrigger: ComposerSlashTrigger | null;
   readonly items: ReadonlyArray<ComposerPickerItem>;
   readonly activeIndex: number;
   readonly loading: boolean;
@@ -70,6 +74,7 @@ interface MenuSlice {
 function selectMenuSlice(state: {
   open: boolean;
   kind: "mention" | "slash" | null;
+  slashTrigger: ComposerSlashTrigger | null;
   items: ReadonlyArray<ComposerPickerItem>;
   activeIndex: number;
   loading: boolean;
@@ -80,6 +85,7 @@ function selectMenuSlice(state: {
   return {
     open: state.open,
     kind: state.kind,
+    slashTrigger: state.slashTrigger,
     items: state.items,
     activeIndex: state.activeIndex,
     loading: state.loading,
@@ -99,6 +105,7 @@ export function ComposerMenu(props: ComposerMenuProps) {
   const {
     open,
     kind,
+    slashTrigger,
     items,
     activeIndex,
     loading,
@@ -117,6 +124,7 @@ export function ComposerMenu(props: ComposerMenuProps) {
     <ComposerMenuPortal
       pickerStore={pickerStore}
       kind={kind}
+      slashTrigger={slashTrigger}
       items={items}
       activeIndex={activeIndex}
       loading={loading}
@@ -131,6 +139,7 @@ export function ComposerMenu(props: ComposerMenuProps) {
 interface ComposerMenuPortalProps {
   readonly pickerStore: ComposerPickerStore;
   readonly kind: "mention" | "slash" | null;
+  readonly slashTrigger: ComposerSlashTrigger | null;
   readonly items: ReadonlyArray<ComposerPickerItem>;
   readonly activeIndex: number;
   readonly loading: boolean;
@@ -144,6 +153,7 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
   const {
     pickerStore,
     kind,
+    slashTrigger,
     items,
     activeIndex,
     loading,
@@ -157,8 +167,11 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
   const previewPanelRef = useRef<HTMLDivElement | null>(null);
 
   const renderedItems = useMemo<ReadonlyArray<RenderedItem>>(
-    () => items.map((item, index) => renderPickerItem(item, index, menuId)),
-    [items, menuId],
+    () =>
+      items.map((item, index) =>
+        renderPickerItem(item, index, menuId, slashTrigger ?? "/"),
+      ),
+    [items, menuId, slashTrigger],
   );
 
   const activePreview = useMemo<MentionPreview | null>(() => {
@@ -166,9 +179,15 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
     return pickerItemPreview(items[activeIndex]);
   }, [items, activeIndex]);
 
+  const activeDisabledReason = useMemo<string | null>(
+    () => activePickerItemDisabledReason({ items, activeIndex }),
+    [items, activeIndex],
+  );
+
   const copy = useMemo(() => {
     if (kind === "mention") return mentionProviderRegistry.menuCopy(step);
-    if (kind === "slash") return SLASH_MENU_COPY;
+    // Both triggers list the same catalog, so the header does not vary with the
+    // trigger - only the row prefixes echo which character was typed.
     return SLASH_MENU_COPY;
   }, [kind, step]);
 
@@ -345,6 +364,7 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
         listRef={listRef}
         activeIndex={activeIndex}
         preview={activePreview}
+        disabledReason={activeDisabledReason}
       />
     </>
   );
@@ -381,23 +401,37 @@ function activeDialogContentShard(): HTMLElement | null {
 interface RenderedItem {
   readonly id: string;
   readonly node: ReactNode;
+  readonly disabledReason: string | null;
 }
 
 function renderPickerItem(
   item: ComposerPickerItem,
   index: number,
   menuId: string,
+  trigger: ComposerSlashTrigger,
 ): RenderedItem {
   if (item.kind === "mention") {
     return {
       id: `${menuId}-item-${index}`,
       node: <MentionMenuItem entry={item.entry} />,
+      disabledReason: null,
     };
   }
   return {
     id: `${menuId}-item-${index}`,
-    node: <SlashMenuItem command={item.command} />,
+    node: <SlashMenuItem command={item.command} trigger={trigger} />,
+    disabledReason: pickerItemDisabledReason(item),
   };
+}
+
+/**
+ * Inert rows still take the highlight as you arrow past them - skipping them
+ * makes the selection look like it teleports - but at a weaker weight so
+ * "selected" never reads as "actionable".
+ */
+function rowHighlightClass(isActive: boolean, disabled: boolean): string {
+  if (!isActive) return "hover:bg-accent/40";
+  return disabled ? "bg-accent/25" : "bg-accent/60";
 }
 
 interface ComposerMenuBodyProps {
@@ -457,6 +491,7 @@ function ComposerMenuBody(props: ComposerMenuBodyProps): ReactNode {
   }
   if (renderedItems.length === 0) return emptyRow(emptyLabel, false);
   const rows = renderedItems.map((item, index) => {
+    const disabled = item.disabledReason !== null;
     const isActive = index === activeIndex;
     return (
       <div
@@ -465,22 +500,33 @@ function ComposerMenuBody(props: ComposerMenuBodyProps): ReactNode {
         role="option"
         tabIndex={-1}
         aria-selected={isActive}
+        aria-disabled={disabled}
         data-active={isActive}
+        data-disabled={disabled}
         className={cn(
-          "cursor-pointer px-2 py-0.5 text-ui-sm outline-none",
-          isActive ? "bg-accent/60" : "hover:bg-accent/40",
+          "px-2 py-0.5 text-ui-sm outline-none",
+          disabled ? "cursor-default opacity-50" : "cursor-pointer",
+          rowHighlightClass(isActive, disabled),
         )}
         onMouseEnter={() => {
           pickerStore.getState().setActiveIndex(index);
         }}
         onMouseDown={(event) => {
           event.preventDefault();
+          if (disabled) return;
           const state = pickerStore.getState();
           state.setActiveIndex(index);
           state.commitActiveItem();
         }}
       >
         {item.node}
+        {item.disabledReason === null ? null : (
+          // `aria-disabled` says a row is unavailable but never why, and the
+          // preview panel that carries the reason is `aria-hidden` and drops
+          // out of view entirely when it cannot fit. Without this the reason
+          // reaches no screen reader at all.
+          <span className="sr-only">{`Disabled. ${item.disabledReason}`}</span>
+        )}
       </div>
     );
   });

@@ -415,7 +415,10 @@ export class RunnerIpcBridge {
     this.deliverToOwnedOrMru(epicId, RunnerHostEvent.trayEpicSelected, epicId);
   }
 
-  dispatchMenuCommand(command: MenuCommandId): boolean {
+  dispatchMenuCommand(
+    command: MenuCommandId,
+    hostUpdateVersion: string | null,
+  ): boolean {
     const target = this.resolveRendererHostedCommandTarget(command);
     if (target === null) {
       return false;
@@ -426,6 +429,7 @@ export class RunnerIpcBridge {
     return this.safeSendToWindow(target.windowId, RunnerHostEvent.menuCommand, {
       command,
       windowId: target.windowId,
+      hostUpdateVersion,
     } satisfies MenuCommandPayload);
   }
 

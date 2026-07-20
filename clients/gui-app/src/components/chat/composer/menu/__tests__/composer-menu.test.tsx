@@ -25,9 +25,14 @@ async function flush(): Promise<void> {
   });
 }
 
+const SESSION_ID = 1;
+
 function openSlashPicker(store: ComposerPickerStore): void {
   store.getState().openPicker({
+    sessionId: SESSION_ID,
     kind: "slash",
+    slashScope: "all",
+    slashTrigger: "/",
     range: { from: 1, to: 2 },
     query: "",
     commit: () => {},
@@ -43,8 +48,10 @@ function setSlashItems(
   },
 ): void {
   store.getState().setItems({
+    sessionId: SESSION_ID,
     kind: "slash",
     query: "",
+    slashScope: "all",
     step: { kind: "root" },
     items: [],
     loading: false,
