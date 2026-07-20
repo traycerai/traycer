@@ -54,6 +54,7 @@ import {
 } from "../host-lifecycle";
 import { DEV_LABEL } from "../host-paths";
 import { config } from "../../../config";
+import { streamTraycerCliJson } from "../../cli/traycer-cli";
 
 describe("isCurrentHostWebsocketUrl", () => {
   it("accepts the canonical ws URL shape", () => {
@@ -712,14 +713,15 @@ describe("HostLifecycle.respawn (CLI subprocess)", () => {
   it("shells out to `traycer host restart`", async () => {
     cliStreamCalls.length = 0;
     const { lifecycle, cleanup } = makeChannelLifecycleForChannel("production");
-    // `respawn()` ends with a `waitForReady` against a deliberately
-    // missing pid.json so the lifecycle emits a `HOST_NOT_READY`
-    // error after the CLI step. Subscribe a no-op listener so
-    // EventEmitter does not throw the unhandled `error` event - the
-    // assertion here is purely about which CLI args were issued.
+    // `respawn()` ends with a `waitForReady` against a deliberately missing
+    // pid.json, so the lifecycle both emits AND rejects with a
+    // `HOST_NOT_READY` error after the CLI step - it must not swallow that
+    // failure into a false success (the dialog-hang RCA's respawn-swallow
+    // bug). Subscribe a no-op listener so EventEmitter does not additionally
+    // throw the unhandled `error` event.
     lifecycle.on("error", () => undefined);
     try {
-      await lifecycle.respawn();
+      await expect(lifecycle.respawn()).rejects.toThrow();
       expect(cliStreamCalls).toHaveLength(1);
       // No --environment - the CLI resolves its slot from config.environment.
       expect(cliStreamCalls[0]?.args).toEqual(["host", "restart"]);
@@ -732,14 +734,36 @@ describe("HostLifecycle.respawn (CLI subprocess)", () => {
   it("shells out to `traycer host restart` for the dev label", async () => {
     cliStreamCalls.length = 0;
     const { lifecycle, cleanup } = makeChannelLifecycleForChannel("dev");
-    // See sibling test - pid.json is intentionally absent, so the
-    // post-CLI `waitForReady` emits a `HOST_NOT_READY` error.
+    // See sibling test - pid.json is intentionally absent, so the post-CLI
+    // `waitForReady` rejects with a `HOST_NOT_READY` error instead of
+    // resolving.
     lifecycle.on("error", () => undefined);
     try {
-      await lifecycle.respawn();
+      await expect(lifecycle.respawn()).rejects.toThrow();
       expect(cliStreamCalls).toHaveLength(1);
       // No --environment - the CLI resolves its slot from config.environment.
       expect(cliStreamCalls[0]?.args).toEqual(["host", "restart"]);
+    } finally {
+      lifecycle.dispose();
+      await cleanup();
+    }
+  });
+
+  // The dialog-hang RCA's "swallowed respawn failure" defect was the CLI
+  // subprocess step itself throwing (not just the readiness poll timing
+  // out afterward) - `respawn()`'s catch block used to log + emit + resolve
+  // regardless of which step failed. Pin that the CLI-step failure alone
+  // (readiness never even reached) still rejects the returned promise.
+  it("rejects respawn() when the CLI restart subprocess itself throws, before the readiness poll ever runs", async () => {
+    const { lifecycle, cleanup } = makeChannelLifecycleForChannel("production");
+    lifecycle.on("error", () => undefined);
+    vi.mocked(streamTraycerCliJson).mockRejectedValueOnce(
+      new Error("traycer CLI exited with code 1"),
+    );
+    try {
+      await expect(lifecycle.respawn()).rejects.toThrow(
+        /traycer host restart failed/,
+      );
     } finally {
       lifecycle.dispose();
       await cleanup();

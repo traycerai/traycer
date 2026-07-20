@@ -86,6 +86,8 @@ import {
   reportShiftKeyHeld,
   useShiftKeyHeld,
 } from "@/hooks/use-shift-key-held";
+import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
+import { resolveAbsolutePath } from "@/lib/path/cross-platform-path";
 
 const EPIC_TAB_LAYOUT_TRANSITION = {
   type: "spring",
@@ -385,7 +387,7 @@ interface TabItemProps {
   readonly canRenameTabs: boolean;
   readonly menuProps: Omit<
     TabStripContextMenuProps,
-    "canRename" | "onEditTitle"
+    "canRename" | "onCopyFilePath" | "onEditTitle"
   >;
   readonly domRef: (el: HTMLElement | null) => void;
 }
@@ -513,6 +515,18 @@ function TabItem(props: TabItemProps) {
     canEdit: canRename,
     onCommit: handleRename,
   });
+  const { copy } = useClipboardCopy({
+    resetMs: 1500,
+    onSuccess: null,
+    onError: null,
+  });
+  const absoluteFilePath =
+    tab.type === "workspace-file"
+      ? resolveAbsolutePath(tab.workspacePath, tab.filePath)
+      : null;
+  const handleCopyFilePath = useCallback(() => {
+    if (absoluteFilePath !== null) copy(absoluteFilePath);
+  }, [absoluteFilePath, copy]);
 
   const selectTab = useCallback(() => {
     if (rename.isEditing) return;
@@ -623,6 +637,7 @@ function TabItem(props: TabItemProps) {
       <TabStripContextMenu
         {...menuProps}
         canRename={canRename}
+        onCopyFilePath={absoluteFilePath === null ? null : handleCopyFilePath}
         onEditTitle={rename.startEditing}
       />
     </ContextMenu>

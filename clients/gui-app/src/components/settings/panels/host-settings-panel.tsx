@@ -37,6 +37,7 @@ import {
 } from "@/lib/query-keys/runner-mutation-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
 import { useRunnerHost } from "@/providers/use-runner-host";
+import { useRunnerHostOperationStatusQuery } from "@/hooks/runner/use-runner-host-operation-status-query";
 import { useHostUpdateBannerStore } from "@/stores/settings/host-update-banner-store";
 import { useDesktopAppUpdates } from "@/hooks/runner/use-desktop-app-updates";
 import type {
@@ -45,7 +46,6 @@ import type {
   HostInstalledRecord,
   HostInstallResult,
   HostNameSettings,
-  HostOperationStatus,
   HostRegistryUpdateState,
   IHostManagement,
   IRunnerHost,
@@ -182,13 +182,8 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
   // auto-update reconciler) actually started the operation - so this panel no
   // longer needs its own per-mutation `onProgress` callback or local
   // `progress` state.
-  const { data: operationStatus } = useQuery(
-    queryOptions<HostOperationStatus | null>({
-      queryKey: runnerQueryKeys.hostOperationStatus(management),
-      queryFn: () => management.getOperationStatus(),
-      staleTime: Infinity,
-    }),
-  );
+  const { data: operationStatus } =
+    useRunnerHostOperationStatusQuery(management);
   const sharedOperationActive =
     operationStatus !== undefined && operationStatus !== null;
   const progress: HostProgressState | null =
@@ -320,7 +315,6 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
     mutationKey: runnerMutationKeys.hostRestart(),
     mutationFn: () => management.restartHost(),
     onSuccess: () => {
-      setRestartConfirmOpen(false);
       toast.success("Host restart requested");
       void queryClient.invalidateQueries({
         queryKey: runnerQueryKeys.hostInstalledRecord(management),
@@ -328,7 +322,6 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
       invalidate();
     },
     onError: (err) => {
-      setRestartConfirmOpen(false);
       toastFromRunnerError(err, "Couldn't restart host");
     },
   });
@@ -418,6 +411,11 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
     (operationStatus !== undefined &&
       operationStatus !== null &&
       operationStatus.kind === "register-service");
+  const restartPending =
+    restartMutation.isPending ||
+    (operationStatus !== undefined &&
+      operationStatus !== null &&
+      operationStatus.kind === "restart");
 
   const status = deriveStatus(localHost, installedRecord);
   const statusPending = status === undefined;
@@ -462,7 +460,7 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
         pending={statusPending}
         anyPending={anyPending}
         installPending={installPending}
-        restartPending={restartMutation.isPending}
+        restartPending={restartPending}
         onInstall={() => installMutation.mutate(null)}
         onRestart={() => setRestartConfirmOpen(true)}
         onOpenDoctor={() => setDoctorOpen(true)}
@@ -473,7 +471,14 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
           if (!open) setRestartConfirmOpen(false);
         }}
         isPending={restartMutation.isPending}
-        onConfirm={() => restartMutation.mutate()}
+        onConfirm={() => {
+          // Close optimistically instead of waiting for onSuccess/onError -
+          // the mutation can legitimately run tens of seconds, and holding
+          // the dialog open+locked for that whole window is what made it
+          // read as "stuck". Progress/failure still surface via toast.
+          setRestartConfirmOpen(false);
+          restartMutation.mutate();
+        }}
       />
       {status?.state === "not-installed" ? null : (
         <UpdatesRow

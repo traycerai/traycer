@@ -77,6 +77,9 @@ export function HostTrayCommandListener() {
     },
     onSuccess: () => {
       toast.success("Host restart requested");
+      // Belt-and-braces: the dialog already closed optimistically at
+      // confirm time, but this guarantees the open flag can never survive
+      // settlement even if something else set it in between.
       setPendingRestart(false);
       if (management !== null) {
         void queryClient.invalidateQueries({
@@ -135,6 +138,21 @@ export function HostTrayCommandListener() {
           void navigate({ to: "/settings/host" });
           return;
         case "restartHost":
+          // A restart already in flight (from this or an earlier confirm)
+          // must not reopen the dialog - it would mount with
+          // `isPending=true`, which locks Cancel/Esc for the rest of that
+          // mutation's lifetime (the exact lockout this fix removed).
+          // Read the mutation cache directly (not a ref synced from
+          // `restartMutation.isPending`) - `isMutating` reflects `mutate()`
+          // the instant it's called, synchronously, with no render/effect
+          // delay for a queued native command to slip through.
+          if (
+            queryClient.isMutating({
+              mutationKey: runnerMutationKeys.hostRestart(),
+            }) > 0
+          ) {
+            return;
+          }
           Analytics.getInstance().track(AnalyticsEvent.CommandExecuted, {
             source: "system_tray",
             command: "restart_host",
@@ -169,7 +187,7 @@ export function HostTrayCommandListener() {
     return () => {
       subscription.dispose();
     };
-  }, [navigate, openLogs, runnerHost]);
+  }, [navigate, openLogs, runnerHost, queryClient]);
 
   return (
     <>
@@ -179,7 +197,16 @@ export function HostTrayCommandListener() {
           if (!open) setPendingRestart(false);
         }}
         isPending={restartMutation.isPending}
-        onConfirm={() => restartMutation.mutate()}
+        onConfirm={() => {
+          // Close optimistically - see host-settings-panel.tsx for why. This
+          // listener also lives inside HostReadyGate and can unmount
+          // mid-restart (the gate swaps to "Setting up Traycer Host…" once
+          // the snapshot goes null), which would otherwise discard this
+          // mutation's onSuccess/onError toasts - closing eagerly means the
+          // dialog never depends on those callbacks firing.
+          setPendingRestart(false);
+          restartMutation.mutate();
+        }}
       />
       <ConfirmDestructiveDialog
         open={pendingInstallVersion !== null}
