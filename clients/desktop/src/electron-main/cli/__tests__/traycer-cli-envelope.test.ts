@@ -104,8 +104,32 @@ class FakeChild extends EventEmitter {
   }
 }
 
-let spawnImpl: ((cmd: string, args: readonly string[]) => FakeChild) | null =
-  null;
+// Fixup C4: unlike `FakeChild`, never settles on its own - stands in for a
+// subprocess still running a long download, so a test can assert `kill()`
+// only happens once the caller's `AbortSignal` fires, not before.
+class HangingFakeChild extends EventEmitter {
+  readonly stdout = new EventEmitter() as EventEmitter & {
+    setEncoding: (enc: string) => void;
+  };
+  readonly stderr = new EventEmitter() as EventEmitter & {
+    setEncoding: (enc: string) => void;
+  };
+  killed = false;
+  killSignal: NodeJS.Signals | null = null;
+  constructor() {
+    super();
+    this.stdout.setEncoding = () => undefined;
+    this.stderr.setEncoding = () => undefined;
+  }
+  kill(signal: NodeJS.Signals): void {
+    this.killed = true;
+    this.killSignal = signal;
+  }
+}
+
+let spawnImpl:
+  | ((cmd: string, args: readonly string[]) => FakeChild | HangingFakeChild)
+  | null = null;
 let execFileImpl:
   | ((
       cmd: string,
@@ -402,6 +426,7 @@ describe("streamTraycerCliJson resolves data, fans progress, and converts error 
       },
       env: null,
       timeoutMs: 5_000,
+      signal: null,
     });
     expect(capturedArgs).toContain("--json");
     expect(progressEvents).toEqual([
@@ -437,6 +462,7 @@ describe("streamTraycerCliJson resolves data, fans progress, and converts error 
         onEvent: () => undefined,
         env: null,
         timeoutMs: 5_000,
+        signal: null,
       });
     } catch (err) {
       thrown = err;
@@ -446,6 +472,60 @@ describe("streamTraycerCliJson resolves data, fans progress, and converts error 
       expect(thrown.code).toBe("E_HOST_INSTALL_FAILED");
       expect(thrown.message).toContain("verification failed");
     }
+  });
+});
+
+// Fixup C4: `streamBundledTraycerCliJson`'s only cancellable caller
+// (`runDownloadLane`'s `AbortController`) used to abort a signal nothing
+// downstream ever read - the spawned subprocess ran to completion
+// regardless, so `removeTraycer`'s "abort the in-flight download" claim was
+// cosmetic. The subprocess must actually be killed the moment the signal
+// fires, and the awaited call must reject rather than hang.
+describe("streamTraycerCliJson kills the subprocess when its signal aborts", () => {
+  it("kills the still-running child and rejects once the AbortSignal fires, not before", async () => {
+    const child = new HangingFakeChild();
+    spawnImpl = () => child;
+    const { streamTraycerCliJson } = await import("../traycer-cli");
+    const abortController = new AbortController();
+
+    const promise = streamTraycerCliJson<unknown>({
+      args: ["host", "download", "--automatic"],
+      onEvent: () => undefined,
+      env: null,
+      timeoutMs: 5_000,
+      signal: abortController.signal,
+    });
+
+    // Give the promise executor a turn to spawn and subscribe before
+    // asserting nothing has happened yet.
+    await Promise.resolve();
+    expect(child.killed).toBe(false);
+
+    abortController.abort();
+
+    await expect(promise).rejects.toThrow();
+    expect(child.killed).toBe(true);
+    expect(child.killSignal).toBe("SIGKILL");
+  });
+
+  it("kills immediately when the signal is already aborted before the call starts", async () => {
+    const child = new HangingFakeChild();
+    spawnImpl = () => child;
+    const { streamTraycerCliJson } = await import("../traycer-cli");
+    const abortController = new AbortController();
+    abortController.abort();
+
+    await expect(
+      streamTraycerCliJson<unknown>({
+        args: ["host", "download", "--automatic"],
+        onEvent: () => undefined,
+        env: null,
+        timeoutMs: 5_000,
+        signal: abortController.signal,
+      }),
+    ).rejects.toThrow();
+    expect(child.killed).toBe(true);
+    expect(child.killSignal).toBe("SIGKILL");
   });
 });
 

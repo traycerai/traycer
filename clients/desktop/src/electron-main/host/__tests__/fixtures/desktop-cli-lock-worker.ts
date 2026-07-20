@@ -1,4 +1,4 @@
-import { stat, writeFile } from "node:fs/promises";
+import { rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { acquireDesktopCliLock } from "../../desktop-cli-lock";
 
@@ -24,14 +24,26 @@ async function waitForFile(path: string): Promise<void> {
 // in-process `HostController` mutation genuinely blocks on a lock held by a
 // DIFFERENT process, not just an in-process promise. Acquires the same
 // `acquireDesktopCliLock` primitive `HostController` itself uses, signals
-// `<dir>/held` once acquired, then blocks until `<dir>/release` appears
-// before releasing and exiting.
+// `<dir>/held`, then - only once the test tells it to via `<dir>/mutate`, by
+// which point the desktop side is already blocked waiting on the lock -
+// performs a REAL competing terminal mutation: removes the install record on
+// disk, the same disk change a genuine `traycer host uninstall --all`
+// commits under this same lock. This is fixup C1: the desktop side must
+// re-read state after it acquires the lock and detect this superseding
+// change landing mid-wait, not act on whatever it observed before it started
+// waiting. Signals `<dir>/mutated` once the deletion has landed, then blocks
+// until `<dir>/release` appears before releasing and exiting.
 async function main(): Promise<void> {
   const lockPath = process.env.WORKER_LOCK_PATH;
   const barrierDir = process.env.WORKER_BARRIER_DIR;
-  if (lockPath === undefined || barrierDir === undefined) {
+  const installRecordPath = process.env.WORKER_INSTALL_RECORD_PATH;
+  if (
+    lockPath === undefined ||
+    barrierDir === undefined ||
+    installRecordPath === undefined
+  ) {
     throw new Error(
-      "desktop-cli-lock-worker: WORKER_LOCK_PATH and WORKER_BARRIER_DIR are required",
+      "desktop-cli-lock-worker: WORKER_LOCK_PATH, WORKER_BARRIER_DIR, and WORKER_INSTALL_RECORD_PATH are required",
     );
   }
   const outcome = await acquireDesktopCliLock({
@@ -44,6 +56,9 @@ async function main(): Promise<void> {
     throw new Error("desktop-cli-lock-worker: failed to acquire the lock");
   }
   await writeFile(join(barrierDir, "held"), "");
+  await waitForFile(join(barrierDir, "mutate"));
+  await rm(installRecordPath, { force: true });
+  await writeFile(join(barrierDir, "mutated"), "");
   await waitForFile(join(barrierDir, "release"));
   await outcome.handle.release();
 }

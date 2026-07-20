@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -498,6 +499,11 @@ describe("mutation lane: wait-never-reject", () => {
       version: "1.7.0",
       runtimeVersion: "1.7.0",
     });
+    // Fixup C2: `applyStaged` short-circuits to a synthetic "ok" without
+    // ever invoking the CLI when there's no staged version - a staged
+    // record is required for `applyStagedCliOwned` (and therefore this
+    // test's `order` tracking) to run at all.
+    writeStagedRecord("production", "1.8.0", "1.8.0");
 
     let concurrentHolders = 0;
     let maxConcurrentHolders = 0;
@@ -518,6 +524,11 @@ describe("mutation lane: wait-never-reject", () => {
     ]);
 
     expect(maxConcurrentHolders).toBe(1);
+    // Fixup C2: the title's own "FIFO order" claim was never checked - only
+    // mutual exclusion was. The second `respawn()` coalesces with the first
+    // (same key, still in flight), so exactly two CLI invocations happen;
+    // this pins the order they run in, not just that they don't overlap.
+    expect(order).toEqual(["host restart", "host apply"]);
   });
 });
 
@@ -842,14 +853,77 @@ describe("two lanes: mutation vs download independence", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Fixup C5: the download lane's `finally` used to unconditionally null
+// `downloadStatus` right after the `catch` block above wrote `lastError`
+// into it - the terminal error was written and erased in the same tick, so
+// `getStatus().download` could never observe a failed download (ticket 4
+// needs this to render download-lane failures).
+// ---------------------------------------------------------------------------
+describe("download lane: terminal lastError is observable via canonical status (fixup C5)", () => {
+  it("keeps lastError readable from getStatus() after a failed download, until the next attempt starts fresh", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
+      if (args.includes("available")) {
+        return availableSnapshotFixture("1.8.0", ["1.8.0"]);
+      }
+      return {};
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args.includes("download")) {
+        throw new Error("network unreachable");
+      }
+      return { data: {} };
+    });
+
+    await controller.stageLatest();
+
+    const status = await controller.getStatus();
+    expect(status.download).toEqual({
+      version: "1.8.0",
+      progress: null,
+      lastError: "network unreachable",
+    });
+
+    // A clean settle (this attempt succeeds) clears the lane rather than
+    // leaving a stale error behind.
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args.includes("download")) {
+        return { data: {} };
+      }
+      return { data: {} };
+    });
+    await controller.stageLatest();
+    expect((await controller.getStatus()).download).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Desktop-held cli-lock sections (Tech Plan "cli-lock" rule 3): the SAME
 // file-lock protocol the CLI itself uses, so a real cross-process CLI
 // mutation and a desktop-driven SMAppService cycle exclude each other.
 // ---------------------------------------------------------------------------
 describe("desktop-held cli-lock: two-process test", () => {
-  it("a packaged-macOS registerService call blocks on a lock genuinely held by a separate OS process, then proceeds once it releases", async () => {
+  // Fixup C1: the worker used to only hold/release the lock and exercise
+  // register - disk state never changed, so this couldn't catch any of the
+  // races it exists to cover (nested stamp reacquisition (A7), missing
+  // post-acquisition state reread (B12), supersession (A4)). The worker now
+  // performs a REAL terminal mutation - deleting the install record, the
+  // same disk change a genuine competing `traycer host uninstall --all`
+  // commits - only once this test signals it to, by which point desktop is
+  // already blocked mid-wait for the lock. This test asserts the desktop
+  // side re-reads state after it acquires the lock and detects that
+  // superseding change, rather than acting on what it observed before it
+  // started waiting (the mutation deliberately lands AFTER desktop's call
+  // has already started and is blocked - not before it - so a stale
+  // pre-wait read and a genuine post-acquisition reread would disagree).
+  it("a packaged-macOS registerService call blocks on a lock genuinely held by a separate OS process, then re-reads state after acquiring and detects the competing uninstall that landed while it waited", async () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
     const controller = newController("production");
+    const installRecordFile = getHostFsLayout("production").installRecordFile;
     writeInstallRecord("production", {
       version: "1.7.0",
       runtimeVersion: "1.7.0",
@@ -870,6 +944,7 @@ describe("desktop-held cli-lock: two-process test", () => {
         ...process.env,
         WORKER_LOCK_PATH: lockPath,
         WORKER_BARRIER_DIR: barrierDir,
+        WORKER_INSTALL_RECORD_PATH: installRecordFile,
       },
     });
     const workerExit = new Promise<number | null>((resolve) => {
@@ -890,6 +965,9 @@ describe("desktop-held cli-lock: two-process test", () => {
     };
 
     await waitForFile(join(barrierDir, "held"));
+    // The worker holds the lock but hasn't mutated yet - the install is
+    // still exactly what desktop would see if it read right now.
+    expect(existsSync(installRecordFile)).toBe(true);
 
     let registerSettled = false;
     const registerPromise = controller.registerService().then((outcome) => {
@@ -897,14 +975,28 @@ describe("desktop-held cli-lock: two-process test", () => {
       return outcome;
     });
     // Give the controller's own lock-acquisition poll a few cycles to run
-    // against the worker's still-held lock.
+    // against the worker's still-held lock - desktop's call is now genuinely
+    // in flight and blocked, exactly the moment a superseding mutation would
+    // land in production.
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(registerSettled).toBe(false);
 
+    // Only now - with desktop's call already blocked mid-wait - does the
+    // competing uninstall land.
+    writeFileSync(join(barrierDir, "mutate"), "");
+    await waitForFile(join(barrierDir, "mutated"));
+    expect(existsSync(installRecordFile)).toBe(false);
+
     writeFileSync(join(barrierDir, "release"), "");
     const outcome = await registerPromise;
-    expect(outcome.kind).toBe("ok");
-    expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
+    // Proves the post-acquisition reread (fixup B12): if desktop had acted
+    // on the pre-wait snapshot it could only have read before this point
+    // (when the install still existed) instead of re-reading after
+    // acquiring the lock, this would be `{kind: "ok"}` and
+    // `registerHostLoginItem` would have been called against an install
+    // that no longer exists.
+    expect(outcome).toEqual({ kind: "failed", message: "No host installed." });
+    expect(registerHostLoginItem).not.toHaveBeenCalled();
 
     expect(await workerExit).toBe(0);
   }, 30_000);
@@ -1380,6 +1472,43 @@ describe("platform matrix", () => {
     expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
   });
 
+  // Fixup C6: `runLockedMacActivationCycle`'s readiness-timeout diagnosis
+  // used to classify the failure using `registerResult` - captured BEFORE
+  // `waitForHostReady` even started - so a user disabling the login item in
+  // System Settings mid-wait still surfaced the generic Doctor-text timeout
+  // message instead of the actionable approval one. The pre-wait register
+  // call here returns "enabled" (not requires-approval); only the POST-wait
+  // reread reports requires-approval, proving the diagnosis uses a fresh
+  // read rather than the stale pre-wait result. Restores the deleted
+  // `respawnHost` test's exact pin.
+  it("substitutes the approval message on a readiness timeout when the user toggled login-item approval off mid-wait", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: { version: "1.8.0", installGeneration: null },
+    });
+    vi.mocked(registerHostLoginItem).mockResolvedValue("enabled");
+    vi.mocked(waitForHostReady).mockResolvedValueOnce({
+      ready: false,
+      version: null,
+      pid: null,
+      reason: "pid metadata never appeared",
+    });
+    vi.mocked(readHostLoginItemStatus).mockReturnValue("requires-approval");
+
+    const outcome = await controller.installVersion("1.8.0", false);
+
+    expect(outcome.kind).toBe("failed");
+    if (outcome.kind === "failed") {
+      expect(outcome.message).toContain("disabled by macOS");
+    }
+  });
+
   // Fixup B6: `convergeReadyPackagedMac`'s "already reachable, skip
   // activation" fast-path used to key off reachability ALONE - a live OLD
   // process still answering pings made "reachable" true regardless of what
@@ -1504,6 +1633,15 @@ describe("platform matrix", () => {
     expect(await isHostRemovedByUser()).toBe(true);
   });
 
+  // Fixup C4: `abortInFlightDownload`'s `AbortController` used to flip
+  // `.aborted` with nothing downstream ever wired to it - a mock that just
+  // awaits a manually-resolved gate can't tell the difference between a real
+  // abort and a lucky race, so the original version of this test could pass
+  // even with the abort completely disconnected (which it was). This mock
+  // races the gate against `opts.signal`'s own "abort" event, so the test
+  // only passes if `removeTraycer()` genuinely fires the SAME signal
+  // `streamBundledTraycerCliJson` was given for this download - proving the
+  // wiring, not just the eventual "no resurrection" outcome.
   it("removeTraycer aborts an in-flight download's AbortController (no resurrection: the download lane's own removed-by-user gate then blocks any further staging)", async () => {
     const controller = newController("production");
     writeInstallRecord("production", {
@@ -1511,7 +1649,7 @@ describe("platform matrix", () => {
       runtimeVersion: "1.7.0",
     });
     const downloadGate = deferred<unknown>();
-    let observedAbortedBeforeSettle = false;
+    let observedAbortedBeforeGateSettled = false;
     vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
       if (args.includes("available")) {
         return availableSnapshotFixture("1.8.0", ["1.8.0"]);
@@ -1520,7 +1658,24 @@ describe("platform matrix", () => {
     });
     vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
       if (opts.args.includes("download")) {
-        await downloadGate.promise;
+        const aborted = new Promise<"aborted">((resolve) => {
+          if (opts.signal === null) return;
+          if (opts.signal.aborted) {
+            resolve("aborted");
+            return;
+          }
+          opts.signal.addEventListener("abort", () => resolve("aborted"), {
+            once: true,
+          });
+        });
+        const settled = await Promise.race([
+          aborted,
+          downloadGate.promise.then((): "resolved" => "resolved"),
+        ]);
+        if (settled === "aborted") {
+          observedAbortedBeforeGateSettled = true;
+          throw new Error("aborted");
+        }
         return { data: {} };
       }
       return { data: {} };
@@ -1532,6 +1687,10 @@ describe("platform matrix", () => {
     await controller.removeTraycer();
     // The removal itself completed without waiting for the download.
     expect(await isHostRemovedByUser()).toBe(true);
+    // The abort fired (and the in-flight download observed it) BEFORE the
+    // gate was ever manually resolved below - the download's own signal is
+    // genuinely wired to `removeTraycer`'s abort call, not merely present.
+    expect(observedAbortedBeforeGateSettled).toBe(true);
 
     downloadGate.resolve(undefined);
     await stagePromise;
@@ -1546,7 +1705,6 @@ describe("platform matrix", () => {
     expect(vi.mocked(runBundledTraycerCliJson).mock.calls.length).toBe(
       runCallsBefore,
     );
-    void observedAbortedBeforeSettle;
   });
 
   it("uninstallHost never touches the removed-by-user sentinel", async () => {
@@ -1863,10 +2021,26 @@ describe("Windows bundled-host --from fallback", () => {
 
 // ---------------------------------------------------------------------------
 // applyPendingLoginItemRevisionIfIdle - the production-incident-driven
-// pending-LaunchAgent-revision refresh. Retargeted here after
-// `host-ensure-ipc.ts`'s deletion folded its "mutual exclusion with a
-// concurrent renderer-triggered ensure" coverage in (Ticket instruction:
-// "keep the integration-style coverage, retargeted at the controller").
+// pending-LaunchAgent-revision refresh, retargeted here after the deletion
+// of `host-ensure-ipc.ts`'s `ensureHost` fast path (the same login-item
+// register/quarantine choreography, now a controller method instead of an
+// IPC handler).
+//
+// Fixup C3: the comment this replaces claimed the deleted
+// `pending-login-item-revision-monitor.test.ts`'s "mutual exclusion with a
+// concurrent renderer-triggered ensure" coverage was folded in here - it was
+// not. Every collaborator below (`hasPendingLoginItemRevision`,
+// `registerHostLoginItem`, `readHostLoginItemStatus`, `waitForHostReady`) is
+// mocked, and every test drives exactly one caller. The old suite proved
+// TWO concurrent callers (the monitor's tick + a renderer-triggered
+// `convergeReady`) coalesce onto a single underlying cycle via
+// `runEnsureHost`'s own in-flight promise cache. `applyPendingLoginItemRevisionIfIdle`
+// has no equivalent coalescing - each caller independently passes the
+// pre-lock checks and then serializes on the desktop lock, so two
+// concurrent callers run the disruptive SMAppService cycle TWICE, not once
+// (confirmed empirically, not from documentation). Flagged to the epic
+// parent rather than silently fixed or silently dropped - this is a
+// production gap, not a portable test case.
 // ---------------------------------------------------------------------------
 describe("applyPendingLoginItemRevisionIfIdle", () => {
   it("returns null when the host is not reachable", async () => {
@@ -1917,6 +2091,189 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     vi.mocked(readHostLoginItemStatus).mockClear();
     expect(await controller.applyPendingLoginItemRevisionIfIdle()).toBeNull();
     expect(readHostLoginItemStatus).not.toHaveBeenCalled();
+  });
+
+  // Fixup C3: ported from the deleted `host-ensure-ipc.test.ts` ("throws
+  // the approval-required error when the idle refresh cycle ends
+  // requires-approval") - distinct from the pre-flight case above: here
+  // the login item read as fine BEFORE the cycle, but the register call
+  // ITSELF comes back requires-approval (the user revoked approval during
+  // the disruptive bootout/reregister window).
+  it("registerHostLoginItem returning requires-approval post-cycle fails and quarantines the refresh", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+    vi.mocked(hasPendingLoginItemRevision).mockResolvedValue(true);
+    vi.mocked(registerHostLoginItem).mockResolvedValue("requires-approval");
+
+    const outcome = await controller.applyPendingLoginItemRevisionIfIdle();
+
+    expect(outcome).toEqual({
+      kind: "failed",
+      message: expect.stringContaining("disabled by macOS"),
+    });
+    expect(controller.isPendingRevisionRefreshQuarantined()).toBe(true);
+    expect(waitForHostReady).not.toHaveBeenCalled();
+  });
+
+  // Fixup C3: ported from the deleted `host-ensure-ipc.test.ts` ("throws
+  // the login-item error when the idle refresh cycle ends a non-enabled,
+  // non-approval status" + "quarantines the refresh for the rest of the
+  // session after a cycle that did not land enabled").
+  it("registerHostLoginItem returning a non-enabled, non-approval status fails, quarantines, and a second attempt never re-runs the cycle", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+    vi.mocked(hasPendingLoginItemRevision).mockResolvedValue(true);
+    vi.mocked(registerHostLoginItem).mockResolvedValue("not-registered");
+
+    const outcome = await controller.applyPendingLoginItemRevisionIfIdle();
+
+    expect(outcome).toEqual({
+      kind: "failed",
+      message: expect.stringContaining(
+        "could not be enabled (status: not-registered)",
+      ),
+    });
+    expect(controller.isPendingRevisionRefreshQuarantined()).toBe(true);
+    expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
+
+    // The register cycle's leading step is a bootout - that failed attempt
+    // already killed the running host once. A later attempt (e.g. the
+    // monitor's next 30s tick) must not run the disruptive cycle again for
+    // the same terminal outcome.
+    const second = await controller.applyPendingLoginItemRevisionIfIdle();
+    expect(second).toBeNull();
+    expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
+  });
+
+  // Fixup C3: ported from the deleted `host-ensure-ipc.test.ts` ("throws
+  // the reachability-timeout error when waitForHostReady times out after
+  // an idle refresh"). Contrasts with the case above: a readiness timeout
+  // does NOT quarantine - it's a transient condition (the host may still
+  // come up), unlike a register status that can only change if the user
+  // acts.
+  it("a readiness timeout after a successful register fails WITHOUT quarantining - a later attempt can still retry", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+    vi.mocked(hasPendingLoginItemRevision).mockResolvedValue(true);
+    vi.mocked(registerHostLoginItem).mockResolvedValue("enabled");
+    vi.mocked(waitForHostReady).mockResolvedValueOnce({
+      ready: false,
+      version: null,
+      pid: null,
+      reason: "pid metadata never appeared",
+    });
+
+    const outcome = await controller.applyPendingLoginItemRevisionIfIdle();
+
+    expect(outcome).toEqual({
+      kind: "failed",
+      message: expect.stringContaining("did not become reachable in time"),
+    });
+    expect(controller.isPendingRevisionRefreshQuarantined()).toBe(false);
+
+    vi.mocked(waitForHostReady).mockResolvedValueOnce({
+      ready: true,
+      version: "1.7.0",
+      pid: process.pid,
+      reason: "ready",
+    });
+    const second = await controller.applyPendingLoginItemRevisionIfIdle();
+    expect(second?.kind).toBe("ok");
+    expect(registerHostLoginItem).toHaveBeenCalledTimes(2);
+  });
+
+  // Fixup C3: "deferred-busy + desktop-lock retryability" - two distinct
+  // non-terminal busy outcomes, neither of which the old suite pinned:
+  // contention on the desktop-held lock itself (a different controller-
+  // driven SMAppService section is mid-cycle), and `registerHostLoginItem`'s
+  // own revalidation guard reporting the host went busy while queued on the
+  // shared registration lock. Both must be silent (no quarantine) and
+  // retryable once the transient condition clears.
+  it("desktop-lock contention returns null (silent, no quarantine); a later attempt succeeds once the lock frees", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    const controller = newControllerWithLockTiming(
+      "production",
+      async () => true,
+      50,
+      10,
+    );
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+    vi.mocked(hasPendingLoginItemRevision).mockResolvedValue(true);
+    vi.mocked(registerHostLoginItem).mockResolvedValue("enabled");
+    vi.mocked(waitForHostReady).mockResolvedValue({
+      ready: true,
+      version: "1.7.0",
+      pid: process.pid,
+      reason: "ready",
+    });
+
+    const lockPath = cliLockPath("production");
+    const held = await acquireDesktopCliLock({
+      lockPath,
+      reason: "test-held-elsewhere",
+      waitMs: 0,
+      pollIntervalMs: 25,
+    });
+    if (held.kind !== "acquired") {
+      throw new Error("failed to seed a held lock for this test");
+    }
+
+    const outcome = await controller.applyPendingLoginItemRevisionIfIdle();
+    expect(outcome).toBeNull();
+    expect(controller.isPendingRevisionRefreshQuarantined()).toBe(false);
+    expect(registerHostLoginItem).not.toHaveBeenCalled();
+
+    await held.handle.release();
+    const second = await controller.applyPendingLoginItemRevisionIfIdle();
+    expect(second?.kind).toBe("ok");
+  });
+
+  it("registerHostLoginItem's revalidation guard reporting deferred-busy returns null (silent, no quarantine); a later attempt can still succeed", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+    vi.mocked(hasPendingLoginItemRevision).mockResolvedValue(true);
+    vi.mocked(registerHostLoginItem).mockResolvedValueOnce("deferred-busy");
+    vi.mocked(waitForHostReady).mockResolvedValue({
+      ready: true,
+      version: "1.7.0",
+      pid: process.pid,
+      reason: "ready",
+    });
+
+    const outcome = await controller.applyPendingLoginItemRevisionIfIdle();
+    expect(outcome).toBeNull();
+    expect(controller.isPendingRevisionRefreshQuarantined()).toBe(false);
+
+    vi.mocked(registerHostLoginItem).mockResolvedValueOnce("enabled");
+    const second = await controller.applyPendingLoginItemRevisionIfIdle();
+    expect(second).toEqual({
+      kind: "ok",
+      value: { running: true, version: "1.7.0" },
+    });
   });
 
   it("idle + pending revision: runs the locked register cycle and returns ok with the refreshed identity", async () => {
@@ -2169,6 +2526,76 @@ describe("respawn (fixup B14)", () => {
 
     expect(outcome.kind).toBe("deferred");
     expect(lifecycle.reloadSnapshotFromDisk).toHaveBeenCalled();
+    // Fixup C2: `notifyRespawningCalls` was instrumented specifically to
+    // observe this - `notifyRespawning()` clearing the renderer snapshot
+    // BEFORE the busy gate resolves is the exact behavior this test's own
+    // header comment describes - but nothing ever read it.
+    expect(lifecycle.notifyRespawningCalls).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fixup C2: `newControllerWithLockTiming` builds its `HostController` with a
+// `fakeHostLifecycle()` constructed inline and immediately discarded - every
+// test that goes through `newController`/`newControllerWithReachability` has
+// no way to observe `ensureWatcherInstalled`/`reloadSnapshotFromDisk`, so the
+// suite passed with those calls removed entirely. B14 (above) already proves
+// the lane is wired for the busy/"heals without restarting" path; these
+// prove it for a genuine success on each of the two platform families -
+// CLI-owned (`convergeReadyCliOwned`) and packaged-macOS
+// (`runLockedMacActivationCycle`, the single cycle shared by every
+// packaged-mac mutation per fixup B3) - using the same direct-construction
+// pattern as B14 to keep a live reference to the fake.
+// ---------------------------------------------------------------------------
+describe("hostLifecycle wiring on success (fixup C2)", () => {
+  it("convergeReady (CLI-owned) reinstalls the watcher and reloads the snapshot", async () => {
+    const lifecycle = fakeHostLifecycle();
+    const controller = new HostController({
+      environment: "production",
+      hostLifecycle: lifecycle,
+      reachabilityProbe: async () => true,
+      desktopLockWaitMs: DESKTOP_LOCK_WAIT_MS,
+      desktopLockPollIntervalMs: DESKTOP_LOCK_POLL_INTERVAL_MS,
+    });
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: { action: "noop", version: "1.7.0", runtimeVersion: "1.7.0" },
+    });
+
+    const outcome = await controller.convergeReady(false);
+
+    expect(outcome.kind).toBe("ok");
+    expect(lifecycle.ensureWatcherInstalled).toHaveBeenCalled();
+    expect(lifecycle.reloadSnapshotFromDisk).toHaveBeenCalled();
+  });
+
+  it("the packaged-macOS locked activation cycle reinstalls the watcher and reloads the snapshot", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    const lifecycle = fakeHostLifecycle();
+    const controller = new HostController({
+      environment: "production",
+      hostLifecycle: lifecycle,
+      reachabilityProbe: async () => true,
+      desktopLockWaitMs: DESKTOP_LOCK_WAIT_MS,
+      desktopLockPollIntervalMs: DESKTOP_LOCK_POLL_INTERVAL_MS,
+    });
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: { version: "1.8.0", installGeneration: null },
+    });
+
+    const outcome = await controller.installVersion("1.8.0", false);
+
+    expect(outcome.kind).toBe("ok");
+    expect(lifecycle.ensureWatcherInstalled).toHaveBeenCalled();
+    expect(lifecycle.reloadSnapshotFromDisk).toHaveBeenCalled();
   });
 });
 
@@ -2407,5 +2834,18 @@ describe("installVersion busy/force continuation (CLI-owned)", () => {
     });
     const respawnOutcome = await controller.respawn();
     expect(respawnOutcome.kind).toBe("ok");
+
+    // Fixup C2: the title's own claim - "no durable pending-pin state" -
+    // was never actually exercised against the SAME pin; an unrelated
+    // intent succeeding doesn't prove that. Re-submit the identical pin and
+    // confirm it genuinely re-executes against the CLI rather than
+    // resolving from (or being blocked by) stale coalescing state left over
+    // from the earlier busy attempt.
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValueOnce({
+      data: { version: "1.8.0", installGeneration: null },
+    });
+    const retryOutcome = await controller.installVersion("1.8.0", false);
+    expect(retryOutcome.kind).toBe("ok");
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledTimes(3);
   });
 });

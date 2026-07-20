@@ -603,6 +603,12 @@ export interface StreamTraycerCliOptions {
   readonly onEvent: (event: NdjsonEvent) => void;
   readonly env: Readonly<Record<string, string>> | null;
   readonly timeoutMs: number;
+  // Fixup C4: killed the moment this fires (SIGKILL, same as the timeout/
+  // stdout-overflow paths below) instead of only flipping `.aborted` on a
+  // controller nothing downstream ever consulted. `null` for callers with
+  // no cancellation surface (every mutation-lane call via `streamBundled` -
+  // only the download lane's `AbortController` ever aborts).
+  readonly signal: AbortSignal | null;
 }
 
 export interface StreamTraycerCliResult<T> {
@@ -659,9 +665,15 @@ async function streamTraycerCliJsonWithInvocation<T>(
     let sawTerminalOk = false;
     let terminalError: TraycerCliError | null = null;
     let settled = false;
+    const cleanupAbortListener = (): void => {
+      if (opts.signal !== null) {
+        opts.signal.removeEventListener("abort", onAbort);
+      }
+    };
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
+      cleanupAbortListener();
       try {
         child.kill("SIGKILL");
       } catch {
@@ -680,6 +692,42 @@ async function streamTraycerCliJsonWithInvocation<T>(
         ),
       );
     }, opts.timeoutMs);
+    // Fixup C4: the ONLY current caller (`runDownloadLane`'s
+    // `abortInFlightDownload`) used to flip `AbortController.signal.aborted`
+    // with nothing downstream ever wired to it - the spawned CLI subprocess
+    // ran to completion regardless, so Remove Traycer's cancellation was
+    // cosmetic (a download could burn network/CPU for up to
+    // `CLI_JSON_TIMEOUT_MS` after removal). Killed the same way the
+    // timeout/overflow paths already do.
+    const onAbort = (): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // ignore - already exited
+      }
+      reject(
+        new TraycerCliError(
+          {
+            message: `traycer-cli aborted: ${augmentedArgs.join(" ")}`,
+            code: null,
+            details: null,
+            exitCode: null,
+            stderrTail,
+          },
+          null,
+        ),
+      );
+    };
+    if (opts.signal !== null) {
+      if (opts.signal.aborted) {
+        onAbort();
+      } else {
+        opts.signal.addEventListener("abort", onAbort, { once: true });
+      }
+    }
 
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
@@ -736,6 +784,7 @@ async function streamTraycerCliJsonWithInvocation<T>(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      cleanupAbortListener();
       reject(
         new TraycerCliError(
           {
@@ -754,6 +803,7 @@ async function streamTraycerCliJsonWithInvocation<T>(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      cleanupAbortListener();
       if (terminalError !== null) {
         reject(
           new TraycerCliError(

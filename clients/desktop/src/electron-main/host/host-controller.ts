@@ -645,6 +645,10 @@ export class HostController {
       args,
       env: null,
       timeoutMs: CLI_STREAM_TIMEOUT_MS,
+      // Every mutation-lane call goes through here - none of them are
+      // cancellable (only the download lane's `runDownloadLane`, below, has
+      // an `AbortController`).
+      signal: null,
       onEvent: (event) => {
         if (event.type === "progress") {
           this.setMutationProgress(progressFromNdjson(event));
@@ -899,8 +903,19 @@ export class HostController {
       prePid,
     );
     if (!readiness.ready) {
+      // Fixup C6: re-read the login-item status HERE rather than trusting
+      // the pre-wait `registerResult` - macOS can flip the agent to
+      // `requires-approval` mid-wait (the user toggled it off in System
+      // Settings during the poll), and that's indistinguishable from a
+      // generic readiness timeout without a fresh check. Mirrors the
+      // deleted `respawnHost`'s reread.
+      const postWaitStatus = readHostLoginItemStatus();
+      log.warn("[host-controller] host did not become ready after activation", {
+        reason: readiness.reason,
+        loginItemStatus: postWaitStatus,
+      });
       const message =
-        registerResult === "requires-approval"
+        postWaitStatus === "requires-approval"
           ? approvalRequiredMessage()
           : `Traycer Host did not start within ${HOST_READY_TIMEOUT_MS}ms - run \`traycer host doctor\` to recover.`;
       return { kind: "failed", message };
@@ -1372,6 +1387,11 @@ export class HostController {
           args,
           env: null,
           timeoutMs: CLI_STREAM_TIMEOUT_MS,
+          // Fixup C4: this download's own `AbortController` - `abortInFlightDownload`
+          // (only called by `removeTraycer`) now actually kills the spawned CLI
+          // subprocess instead of only flipping `.aborted` on a signal nothing
+          // downstream read.
+          signal: controller.signal,
           onEvent: (event) => {
             if (event.type !== "progress" || this.downloadStatus === null)
               return;
@@ -1401,7 +1421,22 @@ export class HostController {
         if (this.downloadAbortController === controller) {
           this.downloadAbortController = null;
         }
-        this.downloadStatus = null;
+        // Fixup C5: this used to unconditionally null `downloadStatus` right
+        // after the catch block above wrote `lastError` into it - the
+        // terminal download-lane error was written and erased in the same
+        // tick, so `getStatus().download` could never observe it (ticket 4
+        // needs this to render download-lane failures). A clean settle (no
+        // error - success, or an abort, which the catch block above
+        // deliberately leaves `lastError: null` for) still clears the lane;
+        // only a genuine `lastError` survives, until the next download
+        // attempt's own start (`this.downloadStatus = { ...,
+        // lastError: null }` above) overwrites it with a fresh record.
+        if (
+          this.downloadStatus !== null &&
+          this.downloadStatus.lastError === null
+        ) {
+          this.downloadStatus = null;
+        }
       }
     });
     this.downloadTail = job;
