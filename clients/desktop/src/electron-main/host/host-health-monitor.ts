@@ -79,6 +79,48 @@ export function startHostHealthMonitor(
   let ticking = false;
   let disposed = false;
 
+  const isDisposed = (): boolean => disposed || deps.host.isDisposed;
+
+  const reloadRecoverySnapshot = async (): Promise<boolean> => {
+    const surfaced = await deps.host.reloadSnapshotFromDisk();
+    if (isDisposed()) return false;
+    if (surfaced === null) {
+      recoveryPending = true;
+      return false;
+    }
+    recoveryPending = false;
+    respawnsSinceRecovery = 0;
+    log.info(
+      "[host-health] recovery converged onto a reachable host snapshot",
+      { pid: surfaced.pid },
+    );
+    return true;
+  };
+
+  const attemptRecovery = async (
+    metadata: DesktopLocalHostSnapshot,
+  ): Promise<void> => {
+    if (respawnsSinceRecovery >= MAX_AUTO_RESPAWNS_WITHOUT_RECOVERY) {
+      log.warn(
+        "[host-health] endpoint down but auto-respawn budget exhausted - leaving recovery to the renderer",
+        { pid: metadata.pid },
+      );
+      return;
+    }
+    respawnsSinceRecovery += 1;
+    // The prior reload demoted the lifecycle snapshot. Retain ownership
+    // through this attempt (including a generic failure) until a subsequent
+    // reload proves that a host is actually published again.
+    recoveryPending = true;
+    log.warn(
+      "[host-health] endpoint down with live pid metadata - auto-respawning",
+      { pid: metadata.pid, attempt: respawnsSinceRecovery },
+    );
+    await respawn();
+    if (isDisposed()) return;
+    await reloadRecoverySnapshot();
+  };
+
   const tick = async (): Promise<void> => {
     // A tick that outlives its interval (slow probe + slow respawn) must
     // not stack a second concurrent tick on top.
@@ -96,12 +138,12 @@ export function startHostHealthMonitor(
           return;
         }
         const metadata = await readMetadata(deps.host.pidMetadataFile);
+        if (isDisposed()) return;
         if (metadata === null) {
           recoveryPending = false;
           return;
         }
-        await respawn();
-        recoveryPending = false;
+        await attemptRecovery(metadata);
         return;
       }
       if (await probe(snapshot.websocketUrl)) {
@@ -112,7 +154,7 @@ export function startHostHealthMonitor(
       // Re-check after every await: dispose() landing during a slow probe
       // or metadata read (app quit) must not let this in-flight tick spawn
       // a host the app is tearing down.
-      if (disposed || deps.host.isDisposed) return;
+      if (isDisposed()) return;
       consecutiveFailures += 1;
       if (consecutiveFailures < CONFIRMED_DOWN_AFTER_FAILURES) return;
       consecutiveFailures = 0;
@@ -122,7 +164,7 @@ export function startHostHealthMonitor(
       // the host on a new port and the watcher edge was missed) - converge on
       // it instead of restarting a host that is actually alive.
       const surfaced = await deps.host.reloadSnapshotFromDisk();
-      if (disposed || deps.host.isDisposed) return;
+      if (isDisposed()) return;
       if (surfaced !== null) {
         log.info(
           "[host-health] stale snapshot converged onto a reachable host - no respawn needed",
@@ -138,28 +180,14 @@ export function startHostHealthMonitor(
       // (`traycer host stop`, uninstall) unlinks pid.json, and resurrecting it
       // off a stale "still present" read would fight the user.
       const metadata = await readMetadata(deps.host.pidMetadataFile);
-      if (disposed || deps.host.isDisposed) return;
+      if (isDisposed()) return;
       if (metadata === null) {
         log.info(
           "[host-health] endpoint down and pid metadata gone - treating as a deliberate stop",
         );
         return;
       }
-      if (respawnsSinceRecovery >= MAX_AUTO_RESPAWNS_WITHOUT_RECOVERY) {
-        // The reload above already demoted the snapshot; nothing else to do.
-        log.warn(
-          "[host-health] endpoint down but auto-respawn budget exhausted - leaving recovery to the renderer",
-          { pid: metadata.pid },
-        );
-        return;
-      }
-      respawnsSinceRecovery += 1;
-      log.warn(
-        "[host-health] endpoint down with live pid metadata - auto-respawning",
-        { pid: metadata.pid, attempt: respawnsSinceRecovery },
-      );
-      await respawn();
-      recoveryPending = false;
+      await attemptRecovery(metadata);
     } catch (err) {
       if (err instanceof HostRecoveryDeferredError) {
         respawnsSinceRecovery = Math.max(0, respawnsSinceRecovery - 1);

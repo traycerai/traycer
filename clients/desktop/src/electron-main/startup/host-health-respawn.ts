@@ -23,8 +23,14 @@ export async function respawnIfDown(
   hostController: IpcHostController,
 ): Promise<void> {
   const outcome = await hostController.recoverIfDown();
-  if (outcome.kind === "ok" || outcome.kind === "suppressed") {
+  if (outcome.kind === "ok") {
     return;
+  }
+  // A caller cannot infer that an arbitrary in-flight mutation will reload
+  // the lifecycle (register-service, for example, does not). Keep monitor
+  // ownership until its own reload observes a reachable snapshot.
+  if (outcome.kind === "suppressed") {
+    throw new HostRecoveryDeferredError();
   }
   if (outcome.kind === "deferred") {
     if (outcome.message.includes("removed by the user")) return;

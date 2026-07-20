@@ -83,11 +83,13 @@ describe("respawnIfDown (fixup B3: automatic-intent lock-contention class)", () 
     await expect(respawnIfDown(controller)).resolves.toBeUndefined();
   });
 
-  it("resolves without throwing on 'suppressed' (lane already busy at head-of-lane check)", async () => {
+  it("F5: treats 'suppressed' as deferred until the monitor confirms lifecycle publication", async () => {
     const controller = fakeControllerWithRecoverOutcome({
       kind: "suppressed",
     });
-    await expect(respawnIfDown(controller)).resolves.toBeUndefined();
+    await expect(respawnIfDown(controller)).rejects.toBeInstanceOf(
+      HostRecoveryDeferredError,
+    );
   });
 
   it("throws a retryable signal on lock-contention deferred so the monitor retains recovery ownership", async () => {
