@@ -7,10 +7,7 @@ import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/in
 import { probeHostActivityBusy } from "@traycer-clients/shared/host-client/host-activity-probe";
 import type { HostFsLayout } from "./host-paths";
 import { readPidMetadataState } from "./host-lifecycle";
-import {
-  isProcessAlive,
-  isPublishedProcessIdentityCurrent,
-} from "./process-identity";
+import { getPublishedProcessIdentityVerdict } from "./process-identity";
 
 /** Real-endpoint-reachability probe signature - see `readRunningRuntimeVersion`. */
 export type HostEndpointReachabilityProbe = (
@@ -134,14 +131,14 @@ export async function readRunningRuntimeVersion(
   const state = await readPidMetadataState(layout.pidMetadataFile);
   if (state.kind !== "parsed") return null;
   const { snapshot, startedAt } = state;
+  if (!(await reachabilityProbe(snapshot.websocketUrl))) return null;
   if (
-    startedAt !== null
-      ? !isPublishedProcessIdentityCurrent(snapshot.pid, startedAt)
-      : !isProcessAlive(snapshot.pid)
+    startedAt !== null &&
+    (await getPublishedProcessIdentityVerdict(snapshot.pid, startedAt)) ===
+      "mismatch"
   ) {
     return null;
   }
-  if (!(await reachabilityProbe(snapshot.websocketUrl))) return null;
   return snapshot.version;
 }
 
@@ -257,7 +254,6 @@ export async function probeHostBusyVerdict(
 ): Promise<HostBusyVerdict> {
   const identity = await readRunningHostIdentity(layout);
   if (identity === null) return "no-host";
-  if (!isProcessAlive(identity.pid)) return "no-host";
   const websocketUrl = await readWebsocketUrl(layout);
   if (websocketUrl === null) return "no-host";
   return (await probeHostActivityBusy(websocketUrl)) ? "busy" : "idle";

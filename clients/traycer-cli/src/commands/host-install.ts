@@ -189,6 +189,7 @@ export function buildHostInstallCommand(args: HostInstallArgs): CommandFn {
     return {
       data: {
         version: result.record.version,
+        runtimeVersion: result.record.runtimeVersion,
         installedAt: result.record.installedAt,
         executablePath: result.record.executablePath,
         source: result.record.source,

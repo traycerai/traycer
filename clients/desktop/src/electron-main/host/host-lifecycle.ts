@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { watch, type FSWatcher } from "node:fs";
 import { EventEmitter } from "node:events";
 import { createConnection } from "node:net";
+import { connect as createTlsConnection } from "node:tls";
 import { basename } from "node:path";
 import { log } from "../app/logger";
 import {
@@ -14,7 +15,7 @@ import {
   withDefaultHostName,
 } from "./host-display-name";
 import type { DesktopLocalHostSnapshot } from "../../ipc-contracts/host-types";
-import { isPublishedProcessIdentityCurrent } from "./process-identity";
+import { getPublishedProcessIdentityVerdict } from "./process-identity";
 
 /**
  * Snapshot of the OS-supervised host's runtime state, as projected by
@@ -477,14 +478,15 @@ export class HostLifecycle extends EventEmitter {
     if (!isCurrentHostWebsocketUrl(raw.websocketUrl)) {
       return null;
     }
-    if (
-      publishedAt !== null &&
-      !isPublishedProcessIdentityCurrent(raw.pid, publishedAt)
-    ) {
-      return null;
-    }
     const probe = this.options.reachabilityProbe ?? canReachHostWebsocketUrl;
     if (!(await probe(raw.websocketUrl))) {
+      return null;
+    }
+    if (
+      publishedAt !== null &&
+      (await getPublishedProcessIdentityVerdict(raw.pid, publishedAt)) ===
+        "mismatch"
+    ) {
       return null;
     }
     return withConfiguredHostName(this.options.layout, raw);
@@ -600,10 +602,21 @@ export function canReachHostWebsocketUrl(url: string): Promise<boolean> {
   }
 
   return new Promise((resolve) => {
-    const socket = createConnection({
-      host: parsed.hostname,
-      port,
-    });
+    const socket =
+      parsed.protocol === "wss:"
+        ? createTlsConnection({
+            host: parsed.hostname,
+            port,
+            // The host's loopback endpoint is authenticated by the
+            // pid-record contract, not a public CA. TLS is still required
+            // here: writing an HTTP upgrade before its handshake completes
+            // would make a `wss://` host look unreachable.
+            rejectUnauthorized: false,
+          })
+        : createConnection({
+            host: parsed.hostname,
+            port,
+          });
 
     const settle = (reachable: boolean): void => {
       socket.removeAllListeners();
@@ -613,20 +626,23 @@ export function canReachHostWebsocketUrl(url: string): Promise<boolean> {
 
     socket.setTimeout(HOST_ENDPOINT_CHECK_TIMEOUT_MS);
     let response = "";
-    socket.once("connect", () => {
-      socket.write(
-        [
-          `GET ${parsed.pathname} HTTP/1.1`,
-          `Host: ${parsed.host}`,
-          "Upgrade: websocket",
-          "Connection: Upgrade",
-          "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
-          "Sec-WebSocket-Version: 13",
-          "",
-          "",
-        ].join("\r\n"),
-      );
-    });
+    socket.once(
+      parsed.protocol === "wss:" ? "secureConnect" : "connect",
+      () => {
+        socket.write(
+          [
+            `GET ${parsed.pathname} HTTP/1.1`,
+            `Host: ${parsed.host}`,
+            "Upgrade: websocket",
+            "Connection: Upgrade",
+            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+            "Sec-WebSocket-Version: 13",
+            "",
+            "",
+          ].join("\r\n"),
+        );
+      },
+    );
     socket.on("data", (chunk: Buffer) => {
       response += chunk.toString("utf8");
       if (!response.includes("\r\n\r\n")) return;

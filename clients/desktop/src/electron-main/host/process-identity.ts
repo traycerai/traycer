@@ -7,8 +7,10 @@
 // keeps working unchanged.
 export {
   __parseElapsedSecondsForTest,
+  __setAsyncProcessStartTimeReaderForTest,
   computeProcessIdentityVerdict,
   currentProcessIdentityToken,
+  getPublishedProcessIdentityVerdict,
   isPublishedProcessIdentityCurrent,
   isProcessAlive,
   readProcessStartTimeMs,
@@ -16,4 +18,5 @@ export {
   type ProcessIdentityToken,
   type ProcessIdentityVerdict,
   type ProcessLivenessVerdict,
+  type PublishedProcessIdentityVerdict,
 } from "@traycer-clients/shared/host-lock/process-identity";

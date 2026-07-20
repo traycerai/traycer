@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { EventEmitter } from "node:events";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
@@ -44,6 +45,13 @@ vi.mock("electron-log", () => ({
     error: vi.fn(),
     debug: vi.fn(),
   },
+}));
+
+const tlsConnect = vi.hoisted(() => vi.fn());
+
+vi.mock("node:tls", () => ({
+  connect: tlsConnect,
+  default: { connect: tlsConnect },
 }));
 
 import {
@@ -235,6 +243,45 @@ describe("canReachHostWebsocketUrl", () => {
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
+  });
+
+  it("uses a completed TLS handshake before probing a wss endpoint", async () => {
+    class TestTlsSocket extends EventEmitter {
+      setTimeout = vi.fn();
+      destroy = vi.fn();
+
+      write(_request: string): boolean {
+        this.emit(
+          "data",
+          Buffer.from(
+            [
+              "HTTP/1.1 101 Switching Protocols",
+              "Upgrade: websocket",
+              "Connection: Upgrade",
+              "Sec-WebSocket-Accept: test",
+              "",
+              "",
+            ].join("\r\n"),
+          ),
+        );
+        return true;
+      }
+    }
+
+    const socket = new TestTlsSocket();
+    tlsConnect.mockImplementationOnce((options: unknown) => {
+      queueMicrotask(() => socket.emit("secureConnect"));
+      return socket;
+    });
+
+    expect(await canReachHostWebsocketUrl("wss://127.0.0.1:45678/rpc")).toBe(
+      true,
+    );
+    expect(tlsConnect).toHaveBeenCalledWith({
+      host: "127.0.0.1",
+      port: 45678,
+      rejectUnauthorized: false,
+    });
   });
 });
 

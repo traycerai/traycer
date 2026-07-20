@@ -121,6 +121,7 @@ import {
   isHostRemovedByUser,
   markHostRemovedByUser,
 } from "../host-removal-state";
+import { __setAsyncProcessStartTimeReaderForTest } from "../process-identity";
 
 const ORIGINAL_HOME = process.env.HOME;
 const ORIGINAL_USERPROFILE = process.env.USERPROFILE;
@@ -1367,7 +1368,38 @@ describe("canonical status: activation-state derivation", () => {
     expect(status.activation).toBe("unavailable");
   });
 
-  it("V5: rejects legacy pid metadata whose named process is no longer alive", async () => {
+  // F3: endpoint reachability is the positive liveness proof. A failed
+  // process-start probe cannot turn that proof into a false "down" result;
+  // identity only rejects a positively established recycled PID.
+  it("F3: keeps a handshake-reachable host online when its OS identity probe is indeterminate", async () => {
+    const restore = __setAsyncProcessStartTimeReaderForTest(async () => null);
+    try {
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      writePidMetadata("production", {
+        version: "1.7.0",
+        pid: process.pid,
+      });
+
+      const status = await newControllerWithReachability(
+        "production",
+        async () => true,
+      ).getStatus();
+
+      expect(status.reachable).toBe(true);
+      expect(status.activation).toBe("activated");
+    } finally {
+      __setAsyncProcessStartTimeReaderForTest(restore);
+    }
+  });
+
+  // A legacy record has no `startedAt`, so it cannot positively establish a
+  // recycled PID mismatch. The endpoint handshake remains the authoritative
+  // liveness evidence; an unsuccessful `ps`/tasklist probe is indeterminate,
+  // not a reason to incorrectly declare that reachable host down.
+  it("keeps a handshake-reachable legacy pid record online without identity evidence", async () => {
     writeInstallRecord("production", {
       version: "1.7.0",
       runtimeVersion: "1.7.0",
@@ -1389,8 +1421,8 @@ describe("canonical status: activation-state derivation", () => {
       async () => true,
     ).getStatus();
 
-    expect(status.reachable).toBe(false);
-    expect(status.runningRuntimeVersion).toBeNull();
+    expect(status.reachable).toBe(true);
+    expect(status.runningRuntimeVersion).toBe("1.7.0");
   });
 
   it("activationUnknown when the install record's runtimeVersion is null but the host is reachable", async () => {
@@ -2052,6 +2084,45 @@ describe("applyStagedCliOwned stamping decision (fixup B9)", () => {
     });
   });
 
+  it("F8: reports a failed apply when an already-stamped pending activation never becomes ready", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writeStagedRecord("production", "1.8.0", "1.8.0");
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+      availableSnapshotFixture("1.8.0", ["1.8.0"]),
+    );
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args.includes("download")) return { data: {} };
+      return {
+        data: {
+          outcome: "applied",
+          record: { version: "1.8.0", runtimeVersion: "1.8.0" },
+          runningActivated: true,
+          installGeneration: "already-stamped-generation",
+        },
+      };
+    });
+    vi.mocked(waitForHostReady).mockResolvedValue({
+      ready: false,
+      version: null,
+      pid: null,
+      reason: "endpoint never bound",
+    });
+
+    const outcome = await controller.applyStaged("manual", false);
+
+    expect(outcome).toMatchObject({
+      kind: "failed",
+      message: expect.stringContaining("doctor"),
+    });
+    expect(runBundledTraycerCliJson).not.toHaveBeenCalledWith(
+      expect.arrayContaining(["host", "stamp-runtime"]),
+    );
+  });
+
   it("P9: reports superseded stamping as non-converged after re-deriving the newer generation", async () => {
     const controller = newController("production");
     writeInstallRecord("production", {
@@ -2082,7 +2153,7 @@ describe("applyStagedCliOwned stamping decision (fixup B9)", () => {
           version: "1.9.0",
           runtimeVersion: null,
         });
-        return { outcome: "superseded" };
+        return { outcome: "superseded", reason: "generation-mismatch" };
       }
       return availableSnapshotFixture("1.8.0", ["1.8.0"]);
     });
@@ -2093,7 +2164,35 @@ describe("applyStagedCliOwned stamping decision (fixup B9)", () => {
       kind: "failed",
       message: expect.stringContaining("activationUnknown"),
     });
+    if (outcome.kind === "failed") {
+      expect(outcome.message).not.toContain(
+        "activation could not be confirmed:",
+      );
+    }
     expect(stampCalls).toBe(1);
+  });
+
+  it("F2: explicit install of an already-stamped record waits for readiness but skips the CAS", async () => {
+    const controller = newController("production");
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: {
+        version: "1.8.0",
+        runtimeVersion: "1.8.0",
+        installGeneration: "already-stamped-generation",
+        serviceLifecycle: {
+          postSwapAction: "restart",
+          postSwapError: null,
+        },
+      },
+    });
+
+    const outcome = await controller.installVersion("1.8.0", false);
+
+    expect(outcome.kind).toBe("ok");
+    expect(waitForHostReady).toHaveBeenCalledTimes(1);
+    expect(runBundledTraycerCliJson).not.toHaveBeenCalledWith(
+      expect.arrayContaining(["host", "stamp-runtime"]),
+    );
   });
 
   it("V4: stamps an applied null-runtime generation using the apply command's attested generation", async () => {

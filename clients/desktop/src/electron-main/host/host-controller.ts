@@ -194,6 +194,7 @@ function parseApplyResult(raw: unknown): ApplyResultShape {
 
 interface InstallResultShape {
   readonly version: string | null;
+  readonly runtimeVersion: string | null;
   readonly installGeneration: string | null;
   readonly postSwapError: string | null;
   readonly postSwapAction: string | null;
@@ -203,6 +204,7 @@ function parseInstallResult(raw: unknown): InstallResultShape {
   if (!isPlainObject(raw)) {
     return {
       version: null,
+      runtimeVersion: null,
       installGeneration: null,
       postSwapError: null,
       postSwapAction: null,
@@ -213,6 +215,8 @@ function parseInstallResult(raw: unknown): InstallResultShape {
     : null;
   return {
     version: typeof raw.version === "string" ? raw.version : null,
+    runtimeVersion:
+      typeof raw.runtimeVersion === "string" ? raw.runtimeVersion : null,
     installGeneration:
       typeof raw.installGeneration === "string" ? raw.installGeneration : null,
     postSwapError:
@@ -275,14 +279,31 @@ function parseEnsureResult(raw: unknown): EnsureResultShape {
 
 interface StampRuntimeResultShape {
   readonly outcome: "stamped" | "superseded" | null;
+  readonly reason:
+    | "no-install-record"
+    | "runtime-already-stamped"
+    | "generation-mismatch"
+    | "no-live-host"
+    | "pid-evidence-mismatch"
+    | "pid-not-live"
+    | null;
 }
 
 function parseStampRuntimeResult(raw: unknown): StampRuntimeResultShape {
-  if (!isPlainObject(raw)) return { outcome: null };
+  if (!isPlainObject(raw)) return { outcome: null, reason: null };
   return {
     outcome:
       raw.outcome === "stamped" || raw.outcome === "superseded"
         ? raw.outcome
+        : null,
+    reason:
+      raw.reason === "no-install-record" ||
+      raw.reason === "runtime-already-stamped" ||
+      raw.reason === "generation-mismatch" ||
+      raw.reason === "no-live-host" ||
+      raw.reason === "pid-evidence-mismatch" ||
+      raw.reason === "pid-not-live"
+        ? raw.reason
         : null,
   };
 }
@@ -781,33 +802,36 @@ export class HostController {
   // pid observed running before this cycle (or null) so `waitForHostReady`
   // skips a stale snapshot from the process being replaced.
 
-  private async stampIfNullRuntime(
-    expectedInstallGeneration: string | null,
+  private async confirmActivationReadiness(
     prePid: number | null,
-    readiness: HostReadinessResult | null,
-  ): Promise<void> {
-    if (expectedInstallGeneration === null) return;
-    const observedReadiness =
-      readiness ??
-      (await waitForHostReady(
-        HOST_READY_TIMEOUT_MS,
-        this.layout.pidMetadataFile,
-        HOST_READY_POLL_MS,
-        prePid,
-      ));
-    if (!observedReadiness.ready) {
+  ): Promise<HostReadinessResult> {
+    const readiness = await waitForHostReady(
+      HOST_READY_TIMEOUT_MS,
+      this.layout.pidMetadataFile,
+      HOST_READY_POLL_MS,
+      prePid,
+    );
+    if (!readiness.ready) {
       throw new Error(
-        `Traycer Host did not become reachable after activation (${observedReadiness.reason}) - run \`traycer host doctor\` to recover.`,
+        `Traycer Host did not become reachable after activation (${readiness.reason}) - run \`traycer host doctor\` to recover.`,
       );
     }
+    return readiness;
+  }
+
+  private async stampIfNullRuntime(
+    expectedInstallGeneration: string | null,
+  ): Promise<void> {
+    if (expectedInstallGeneration === null) return;
     const identity = await readRunningHostIdentity(this.layout);
     if (identity === null) {
       throw new Error(
         "Traycer Host did not publish a running identity after activation - run `traycer host doctor` to recover.",
       );
     }
+    let outcome: StampRuntimeResultShape;
     try {
-      const outcome = parseStampRuntimeResult(
+      outcome = parseStampRuntimeResult(
         await this.runBundled<unknown>([
           "host",
           "stamp-runtime",
@@ -821,25 +845,31 @@ export class HostController {
           identity.version,
         ]),
       );
-      if (outcome.outcome === "superseded") {
-        const status = await this.getStatus();
-        throw new Error(
-          `The host installation changed while activation was being confirmed (current activation: ${status.activation}). Retry to converge the current installation.`,
-        );
-      }
-      if (outcome.outcome !== "stamped") {
-        throw new Error(
-          "Traycer Host activation could not be confirmed - run `traycer host doctor` to recover.",
-        );
-      }
-      log.info("[host-controller] stamp-runtime completed", {
-        outcome: outcome.outcome,
-      });
     } catch (err) {
       throw new Error(
-        `Traycer Host activation could not be confirmed: ${describeError(err)}`,
+        `Traycer Host stamp-runtime command failed: ${describeError(err)}`,
       );
     }
+    if (
+      outcome.outcome === "stamped" ||
+      (outcome.outcome === "superseded" &&
+        outcome.reason === "runtime-already-stamped")
+    ) {
+      log.info("[host-controller] stamp-runtime completed", {
+        outcome: outcome.outcome,
+        reason: outcome.reason,
+      });
+      return;
+    }
+    if (outcome.outcome === "superseded") {
+      const status = await this.getStatus();
+      throw new Error(
+        `The host installation changed while activation was being confirmed (current activation: ${status.activation}). Retry to converge the current installation.`,
+      );
+    }
+    throw new Error(
+      "Traycer Host activation could not be confirmed - run `traycer host doctor` to recover.",
+    );
   }
 
   // ---- Shared locked macOS SMAppService activation cycle ------------------
@@ -982,7 +1012,7 @@ export class HostController {
           : `Traycer Host did not start within ${HOST_READY_TIMEOUT_MS}ms - run \`traycer host doctor\` to recover.`;
       return { kind: "failed", message };
     }
-    await this.stampIfNullRuntime(expectedGeneration, prePid, readiness);
+    await this.stampIfNullRuntime(expectedGeneration);
     this.hostLifecycle.ensureWatcherInstalled();
     await this.hostLifecycle.reloadSnapshotFromDisk();
     return { kind: "ok", value: { activated: true } };
@@ -1213,7 +1243,7 @@ export class HostController {
       };
     }
     try {
-      await this.stampIfNullRuntime(expectedGeneration, prePid, readiness);
+      await this.stampIfNullRuntime(expectedGeneration);
     } catch (err) {
       return { kind: "failed", message: describeError(err) };
     }
@@ -1308,27 +1338,12 @@ export class HostController {
     if (result.action !== "noop") {
       const expectedInstallGeneration =
         result.runtimeVersion === null ? result.installGeneration : null;
-      // `stampIfNullRuntime` only waits for readiness on the CAS path
-      // (`expectedInstallGeneration !== null`) - an already-stamped
-      // service-starting branch skipped that wait entirely and reported
-      // `ok` before the endpoint had actually bound. Require it explicitly
-      // here so every action that starts/cycles the service is confirmed
-      // reachable before this call converges.
-      if (expectedInstallGeneration === null) {
-        const readiness = await waitForHostReady(
-          HOST_READY_TIMEOUT_MS,
-          this.layout.pidMetadataFile,
-          HOST_READY_POLL_MS,
-          prePid,
-        );
-        if (!readiness.ready) {
-          return {
-            kind: "failed",
-            message: `Traycer Host did not become reachable after ensure (${readiness.reason}) - run \`traycer host doctor\` to recover.`,
-          };
-        }
+      try {
+        await this.confirmActivationReadiness(prePid);
+        await this.stampIfNullRuntime(expectedInstallGeneration);
+      } catch (err) {
+        return { kind: "failed", message: describeError(err) };
       }
-      await this.stampIfNullRuntime(expectedInstallGeneration, prePid, null);
     }
     this.hostLifecycle.ensureWatcherInstalled();
     await this.hostLifecycle.reloadSnapshotFromDisk();
@@ -1672,12 +1687,19 @@ export class HostController {
         },
       };
     }
-    // Fixup B9: decide stamping off the NEWLY COMMITTED record's own
-    // runtime stamp, not the pre-apply record's - applying a null-runtime
-    // archive over an already-stamped install must still stamp; the
-    // reverse (re-stamping an already-stamped fresh record) must not.
-    if (result.runtimeVersion === null) {
-      await this.stampIfNullRuntime(result.installGeneration, prePid, null);
+    // A CLI-owned apply can itself restart the supervisor. Readiness is
+    // required for that cycle regardless of whether the committed record
+    // needs a runtime CAS backfill; stamping is a separate null-runtime-only
+    // concern.
+    if (result.runningActivated) {
+      try {
+        await this.confirmActivationReadiness(prePid);
+        await this.stampIfNullRuntime(
+          result.runtimeVersion === null ? result.installGeneration : null,
+        );
+      } catch (err) {
+        return { kind: "failed", message: describeError(err) };
+      }
     }
     this.hostLifecycle.ensureWatcherInstalled();
     await this.hostLifecycle.reloadSnapshotFromDisk();
@@ -1824,7 +1846,12 @@ export class HostController {
       }
       return { kind: "failed", message: describeError(err) };
     }
-    await this.stampIfNullRuntime(expectedGeneration, prePid, null);
+    try {
+      await this.confirmActivationReadiness(prePid);
+      await this.stampIfNullRuntime(expectedGeneration);
+    } catch (err) {
+      return { kind: "failed", message: describeError(err) };
+    }
     this.hostLifecycle.ensureWatcherInstalled();
     await this.hostLifecycle.reloadSnapshotFromDisk();
     return { kind: "ok", value: { activated: true } };
@@ -1869,7 +1896,16 @@ export class HostController {
       return this.classifyApplyLikeError(err, "retry-with-force");
     }
     const result = parseInstallResult(raw);
-    await this.stampIfNullRuntime(result.installGeneration, prePid, null);
+    if (result.postSwapAction !== null && result.postSwapAction !== "none") {
+      try {
+        await this.confirmActivationReadiness(prePid);
+        await this.stampIfNullRuntime(
+          result.runtimeVersion === null ? result.installGeneration : null,
+        );
+      } catch (err) {
+        return { kind: "failed", message: describeError(err) };
+      }
+    }
     this.hostLifecycle.ensureWatcherInstalled();
     await this.hostLifecycle.reloadSnapshotFromDisk();
     const runningRuntimeVersion = await readRunningRuntimeVersion(
@@ -2069,7 +2105,12 @@ export class HostController {
             return this.lockBusyOutcome(false);
           return { kind: "failed", message: describeError(err) };
         }
-        await this.stampIfNullRuntime(expectedGeneration, prePid, null);
+        try {
+          await this.confirmActivationReadiness(prePid);
+          await this.stampIfNullRuntime(expectedGeneration);
+        } catch (err) {
+          return { kind: "failed", message: describeError(err) };
+        }
         this.hostLifecycle.ensureWatcherInstalled();
         await this.hostLifecycle.reloadSnapshotFromDisk();
         return { kind: "ok", value: { activated: true } };
@@ -2133,7 +2174,12 @@ export class HostController {
             return this.lockBusyOutcome(false);
           return { kind: "failed", message: describeError(err) };
         }
-        await this.stampIfNullRuntime(expectedGeneration, prePid, null);
+        try {
+          await this.confirmActivationReadiness(prePid);
+          await this.stampIfNullRuntime(expectedGeneration);
+        } catch (err) {
+          return { kind: "failed", message: describeError(err) };
+        }
         this.hostLifecycle.ensureWatcherInstalled();
         await this.hostLifecycle.reloadSnapshotFromDisk();
         return { kind: "ok", value: { activated: true } };
@@ -2200,7 +2246,12 @@ export class HostController {
             return this.lockBusyOutcome(false);
           return { kind: "failed", message: describeError(err) };
         }
-        await this.stampIfNullRuntime(expectedGeneration, prePid, null);
+        try {
+          await this.confirmActivationReadiness(prePid);
+          await this.stampIfNullRuntime(expectedGeneration);
+        } catch (err) {
+          return { kind: "failed", message: describeError(err) };
+        }
         this.hostLifecycle.ensureWatcherInstalled();
         await this.hostLifecycle.reloadSnapshotFromDisk();
         return { kind: "ok", value: { activated: true } };

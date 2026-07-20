@@ -442,7 +442,7 @@ describe("buildHostInstallCommand", () => {
       sampleLifecycleHandle(),
     );
     mocks.commitHostInstallSourceMock.mockResolvedValue({
-      record: sampleRecord("2.0.0"),
+      record: { ...sampleRecord("2.0.0"), runtimeVersion: "2.0.0" },
       previous: sampleRecord("1.0.0"),
       installGeneration: "id:install-2.0.0:attested",
     });
@@ -453,6 +453,7 @@ describe("buildHostInstallCommand", () => {
     expect(result.data).toMatchObject({
       installGeneration: "id:install-2.0.0:attested",
       version: "2.0.0",
+      runtimeVersion: "2.0.0",
       previousVersion: "1.0.0",
     });
   });

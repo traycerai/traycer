@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 
 // Cross-platform process liveness + identity probing. Shared by the CLI's
 // `cli-lock` hardening (holder identity - Host Update Layer Redesign Tech
@@ -111,6 +111,28 @@ export function isPublishedProcessIdentityCurrent(
   return (
     processStartedAtMs <= publishedAtMs + PID_METADATA_PUBLICATION_ALLOWANCE_MS
   );
+}
+
+export type PublishedProcessIdentityVerdict =
+  "current" | "mismatch" | "indeterminate";
+
+// Electron-main checks an advertised endpoint first. Once the handshake has
+// established positive liveness, identity only rules out a positively
+// demonstrated recycled-PID impostor; a failed OS probe is deliberately
+// inconclusive rather than evidence the healthy endpoint is down.
+export async function getPublishedProcessIdentityVerdict(
+  pid: number,
+  publishedAt: string | null,
+): Promise<PublishedProcessIdentityVerdict> {
+  if (publishedAt === null) return "indeterminate";
+  const publishedAtMs = Date.parse(publishedAt);
+  if (!Number.isFinite(publishedAtMs)) return "indeterminate";
+  const processStartedAtMs = await asyncProcessStartTimeReader(pid);
+  if (processStartedAtMs === null) return "indeterminate";
+  return processStartedAtMs >
+    publishedAtMs + PID_METADATA_PUBLICATION_ALLOWANCE_MS
+    ? "mismatch"
+    : "current";
 }
 
 // ---- Identity (pid + process-start-time) -----------------------------------
@@ -255,6 +277,8 @@ export function verifyProcessIdentity(
 // Production code never calls `__setProcessStartTimeReaderForTest`.
 let processStartTimeReader: (pid: number) => number | null =
   readProcessStartTimeMsImpl;
+let asyncProcessStartTimeReader: (pid: number) => Promise<number | null> =
+  readProcessStartTimeMsAsyncImpl;
 
 // Test-only seam - pass `null` to restore the default reader. Returns the
 // previous reader so tests can save/restore symmetrically.
@@ -263,6 +287,15 @@ export function __setProcessStartTimeReaderForTest(
 ): (pid: number) => number | null {
   const previous = processStartTimeReader;
   processStartTimeReader = next === null ? readProcessStartTimeMsImpl : next;
+  return previous;
+}
+
+export function __setAsyncProcessStartTimeReaderForTest(
+  next: ((pid: number) => Promise<number | null>) | null,
+): (pid: number) => Promise<number | null> {
+  const previous = asyncProcessStartTimeReader;
+  asyncProcessStartTimeReader =
+    next === null ? readProcessStartTimeMsAsyncImpl : next;
   return previous;
 }
 
@@ -332,6 +365,50 @@ function readWindowsProcessStartTimeMs(pid: number): number | null {
   }
   const parsed = Date.parse(stdout.trim());
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function execFileOutput(
+  command: string,
+  args: readonly string[],
+  timeout: number,
+): Promise<string | null> {
+  return new Promise((resolve) => {
+    execFile(
+      command,
+      args,
+      { encoding: "utf8", windowsHide: true, timeout },
+      (err, stdout) => resolve(err === null ? stdout : null),
+    );
+  });
+}
+
+async function readProcessStartTimeMsAsyncImpl(
+  pid: number,
+): Promise<number | null> {
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  if (process.platform === "win32") {
+    const stdout = await execFileOutput(
+      "powershell",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().ToString("o")`,
+      ],
+      5_000,
+    );
+    if (stdout === null) return null;
+    const parsed = Date.parse(stdout.trim());
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  const stdout = await execFileOutput(
+    "ps",
+    ["-p", String(pid), "-o", "etime="],
+    3_000,
+  );
+  if (stdout === null) return null;
+  const elapsedSeconds = parseElapsedSeconds(stdout.trim());
+  return elapsedSeconds === null ? null : Date.now() - elapsedSeconds * 1000;
 }
 
 // Exported for tests so the fixed-format parser can be exercised directly
