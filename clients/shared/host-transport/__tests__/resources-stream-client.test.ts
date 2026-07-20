@@ -265,6 +265,41 @@ describe("ResourcesStreamClient", () => {
     client.close();
   });
 
+  it("backfills harnessId to null for a pre-1.3 (harnessId-less) frame", () => {
+    const { factory, sockets } = makeFactory();
+    const snapshots: ResourcesProjectionPayload[] = [];
+    const client = new ResourcesStreamClient({
+      wsStreamClient: makeWsStreamClient(factory),
+      scope: { kind: "epic", epicId: "epic-1" },
+      callbacks: {
+        onSnapshot: (p) => snapshots.push(p),
+        onUpdate: () => {},
+        onConnectionStatus: () => {},
+      },
+    });
+    completeHandshake(sockets[0]);
+
+    // An older host emits a `@1.2` frame whose owner carries NO harnessId. It
+    // fails the `@1.3` parse, falls back to `@1.2`, and `toPayload` normalizes
+    // the missing field to `null` so downstream always reads a defined value.
+    const { harnessId: _omit, ...ownerWithoutHarness } = OWNER;
+    sockets[0].fireText({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      sampledAt: 1_000,
+      app: APP,
+      owners: [ownerWithoutHarness],
+      epic: EPIC,
+      hostTree: HOST_TREE,
+      other: OTHER,
+    });
+
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0].owners[0].harnessId).toBeNull();
+    client.close();
+  });
+
   it("ignores pong and malformed frames without invoking callbacks", () => {
     const { factory, sockets } = makeFactory();
     const snapshots: ResourcesProjectionPayload[] = [];

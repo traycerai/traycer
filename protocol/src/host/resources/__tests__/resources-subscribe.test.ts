@@ -347,8 +347,9 @@ describe("resources.subscribe@1.3 owner harnessId", () => {
       ownerResourceSnapshotSchemaV13.parse({ ...base, harnessId: null })
         .harnessId,
     ).toBeNull();
-    // Frozen `@1.2` frame ignores/rejects harnessId presence on its owner shape.
-    const framed = resourcesSubscribeServerFrameSchemaV13.parse({
+    // The frozen `@1.2` frame strips `harnessId` from its owner shape (Zod
+    // drops unknown object keys), proving a pre-`@1.3` client never surfaces it.
+    const framedV12 = resourcesSubscribeServerFrameSchemaV12.parse({
       kind: "snapshot",
       epicId: "epic-1",
       sampledAt: 1,
@@ -359,7 +360,24 @@ describe("resources.subscribe@1.3 owner harnessId", () => {
       epic: null,
       hasBinaryPayload: false,
     });
-    expect(framed.kind).toBe("snapshot");
+    expect(framedV12.kind).toBe("snapshot");
+    if (framedV12.kind !== "snapshot") throw new Error("expected snapshot");
+    expect(framedV12.owners[0]).not.toHaveProperty("harnessId");
+    // `@1.3` keeps it.
+    const framedV13 = resourcesSubscribeServerFrameSchemaV13.parse({
+      kind: "snapshot",
+      epicId: "epic-1",
+      sampledAt: 1,
+      app: null,
+      owners: [{ ...base, harnessId: "codex" }],
+      hostTree: null,
+      other: null,
+      epic: null,
+      hasBinaryPayload: false,
+    });
+    expect(framedV13.kind).toBe("snapshot");
+    if (framedV13.kind !== "snapshot") throw new Error("expected snapshot");
+    expect(framedV13.owners[0].harnessId).toBe("codex");
   });
 });
 
