@@ -62,6 +62,7 @@ import {
   readPidMetadata,
   readPidMetadataState,
 } from "../host-lifecycle";
+import { __setAsyncProcessLivenessReaderForTest } from "../process-identity";
 import { DEV_LABEL } from "../host-paths";
 import { config } from "../../../config";
 
@@ -341,6 +342,54 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
     } finally {
       lifecycle.dispose();
       server.close();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("A1: rejects a handshake-reachable legacy pid record when liveness proves its PID dead", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lifecycle-test-"));
+    const layout = {
+      rootDir: dir,
+      pidMetadataFile: join(dir, "host.pid.json"),
+      logFile: join(dir, "host.log"),
+      installDir: join(dir, "install"),
+      installRecordFile: join(dir, "install", "install.json"),
+      stagedDir: join(dir, "staged"),
+      stagedRecordFile: join(dir, "staged", "staged.json"),
+      pendingLoginItemRevisionFile: join(
+        dir,
+        "pending-login-item-revision.json",
+      ),
+      environment: "production" as const,
+    };
+    const reachabilityProbe = vi.fn(async () => true);
+    const restoreLiveness = __setAsyncProcessLivenessReaderForTest(
+      async () => "dead",
+    );
+    const lifecycle = new HostLifecycle({
+      layout,
+      bundledBinaryPath: null,
+      label: PRODUCTION_LABEL,
+      readyTimeoutMs: 300,
+      reachabilityProbe,
+    });
+    try {
+      await writeFile(
+        layout.pidMetadataFile,
+        JSON.stringify({
+          hostId: "stale-host",
+          websocketUrl: "ws://127.0.0.1:55555/rpc",
+          version: "1.0.0",
+          pid: 999_999,
+        }),
+        "utf8",
+      );
+
+      await expect(lifecycle.reloadSnapshotFromDisk()).resolves.toBeNull();
+      expect(reachabilityProbe).toHaveBeenCalledOnce();
+    } finally {
+      lifecycle.dispose();
+      __setAsyncProcessLivenessReaderForTest(restoreLiveness);
       await rm(dir, { recursive: true, force: true });
     }
   });

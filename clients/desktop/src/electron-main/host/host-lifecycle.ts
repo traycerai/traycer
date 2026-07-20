@@ -15,7 +15,12 @@ import {
   withDefaultHostName,
 } from "./host-display-name";
 import type { DesktopLocalHostSnapshot } from "../../ipc-contracts/host-types";
-import { getPublishedProcessIdentityVerdict } from "./process-identity";
+import {
+  isCurrentHostWebsocketUrl,
+  isPublishedHostEndpointReachable,
+} from "./host-endpoint-reachability";
+
+export { isCurrentHostWebsocketUrl } from "./host-endpoint-reachability";
 
 /**
  * Snapshot of the OS-supervised host's runtime state, as projected by
@@ -28,17 +33,6 @@ export interface ServiceStatus {
   readonly listenUrl: string | null;
   readonly pid: number | null;
 }
-
-/**
- * Committed WS-only endpoint path published by the bundled host.
- *
- * Mirrors the `WS_RPC_PATH` published by the host (the external
- * Traycer Host) - kept as a local constant because desktop-main is
- * CommonJS-isolated and must not import the host workspace. If the host
- * changes its path, update both sides.
- */
-const WS_RPC_PATH = "/rpc";
-const WS_RPC_HOST = "127.0.0.1";
 
 /**
  * How long we wait for the OS-supervised host to publish its PID
@@ -475,18 +469,15 @@ export class HostLifecycle extends EventEmitter {
     if (raw === null) {
       return null;
     }
-    if (!isCurrentHostWebsocketUrl(raw.websocketUrl)) {
-      return null;
-    }
     const probe = this.options.reachabilityProbe ?? canReachHostWebsocketUrl;
-    if (!(await probe(raw.websocketUrl))) {
-      return null;
-    }
-    const identityVerdict =
-      publishedAt === null
-        ? "indeterminate"
-        : await getPublishedProcessIdentityVerdict(raw.pid, publishedAt);
-    if (identityVerdict === "mismatch" || identityVerdict === "dead") {
+    if (
+      !(await isPublishedHostEndpointReachable(
+        raw.websocketUrl,
+        raw.pid,
+        publishedAt,
+        probe,
+      ))
+    ) {
       return null;
     }
     return withConfiguredHostName(this.options.layout, raw);
@@ -558,29 +549,6 @@ export class HostLifecycle extends EventEmitter {
     const message = cause instanceof Error ? cause.message : String(cause);
     return { code: "UNKNOWN", message, logTail };
   }
-}
-
-/**
- * Returns `true` only when `url` matches the committed WS-only host
- * endpoint contract: `ws://127.0.0.1:<port>/rpc` (or the `wss://` variant).
- */
-export function isCurrentHostWebsocketUrl(url: string): boolean {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return false;
-  }
-  if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
-    return false;
-  }
-  if (parsed.hostname !== WS_RPC_HOST) {
-    return false;
-  }
-  if (parsed.port === "") {
-    return false;
-  }
-  return parsed.pathname === WS_RPC_PATH;
 }
 
 export function canReachHostWebsocketUrl(url: string): Promise<boolean> {

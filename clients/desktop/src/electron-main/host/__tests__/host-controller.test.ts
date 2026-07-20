@@ -1414,6 +1414,27 @@ describe("canonical status: activation-state derivation", () => {
     expect(status.runningRuntimeVersion).toBeNull();
   });
 
+  it("A1: rejects a wrong-shape pid endpoint before the status probe can bless it", async () => {
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writePidMetadata("production", {
+      version: "1.7.0",
+      pid: process.pid,
+      websocketUrl: "ws://127.0.0.1:55555/not-rpc",
+    });
+    const probe = vi.fn(async () => true);
+
+    const status = await newControllerWithReachability(
+      "production",
+      probe,
+    ).getStatus();
+
+    expect(status.reachable).toBe(false);
+    expect(probe).not.toHaveBeenCalled();
+  });
+
   it("P7/V5: rejects a recycled PID whose current process started after the published host identity", async () => {
     writeInstallRecord("production", {
       version: "1.7.0",
@@ -1524,34 +1545,64 @@ describe("canonical status: activation-state derivation", () => {
     }
   });
 
-  // A legacy record has no `startedAt`, so it cannot positively establish a
-  // recycled PID mismatch. The endpoint handshake remains the authoritative
-  // liveness evidence; an unsuccessful `ps`/tasklist probe is indeterminate,
-  // not a reason to incorrectly declare that reachable host down.
-  it("keeps a handshake-reachable legacy pid record online without identity evidence", async () => {
-    writeInstallRecord("production", {
-      version: "1.7.0",
-      runtimeVersion: "1.7.0",
-    });
-    const layout = getHostFsLayout("production");
-    mkdirSync(layout.rootDir, { recursive: true });
-    writeFileSync(
-      layout.pidMetadataFile,
-      JSON.stringify({
-        hostId: "host-1",
-        websocketUrl: "ws://127.0.0.1:55555/rpc",
+  it("A1: rejects a handshake-reachable legacy pid record when liveness proves its PID dead", async () => {
+    const restoreLiveness = __setAsyncProcessLivenessReaderForTest(
+      async () => "dead",
+    );
+    try {
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      const layout = getHostFsLayout("production");
+      mkdirSync(layout.rootDir, { recursive: true });
+      writeFileSync(
+        layout.pidMetadataFile,
+        JSON.stringify({
+          hostId: "host-1",
+          websocketUrl: "ws://127.0.0.1:55555/rpc",
+          version: "1.7.0",
+          pid: 999_999,
+        }),
+      );
+
+      const status = await newControllerWithReachability(
+        "production",
+        async () => true,
+      ).getStatus();
+
+      expect(status.reachable).toBe(false);
+      expect(status.runningRuntimeVersion).toBeNull();
+    } finally {
+      __setAsyncProcessLivenessReaderForTest(restoreLiveness);
+    }
+  });
+
+  it("A1: rejects a handshake-reachable malformed-publication record when liveness proves its PID dead", async () => {
+    const restoreLiveness = __setAsyncProcessLivenessReaderForTest(
+      async () => "dead",
+    );
+    try {
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      writePidMetadata("production", {
         version: "1.7.0",
         pid: 999_999,
-      }),
-    );
+        startedAt: "not-a-timestamp",
+      });
 
-    const status = await newControllerWithReachability(
-      "production",
-      async () => true,
-    ).getStatus();
+      const status = await newControllerWithReachability(
+        "production",
+        async () => true,
+      ).getStatus();
 
-    expect(status.reachable).toBe(true);
-    expect(status.runningRuntimeVersion).toBe("1.7.0");
+      expect(status.reachable).toBe(false);
+      expect(status.runningRuntimeVersion).toBeNull();
+    } finally {
+      __setAsyncProcessLivenessReaderForTest(restoreLiveness);
+    }
   });
 
   it("activationUnknown when the install record's runtimeVersion is null but the host is reachable", async () => {

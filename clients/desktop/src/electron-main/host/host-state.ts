@@ -7,12 +7,12 @@ import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/in
 import { probeHostActivityBusy } from "@traycer-clients/shared/host-client/host-activity-probe";
 import type { HostFsLayout } from "./host-paths";
 import { readPidMetadataState } from "./host-lifecycle";
-import { getPublishedProcessIdentityVerdict } from "./process-identity";
+import {
+  isPublishedHostEndpointReachable,
+  type HostEndpointReachabilityProbe,
+} from "./host-endpoint-reachability";
 
-/** Real-endpoint-reachability probe signature - see `readRunningRuntimeVersion`. */
-export type HostEndpointReachabilityProbe = (
-  websocketUrl: string,
-) => Promise<boolean>;
+export type { HostEndpointReachabilityProbe } from "./host-endpoint-reachability";
 
 // Observed on-disk state readers + derived readiness/activation logic for
 // `HostController` (Host Update Layer Redesign Tech Plan, "Desktop main:
@@ -131,15 +131,14 @@ export async function readRunningRuntimeVersion(
   const state = await readPidMetadataState(layout.pidMetadataFile);
   if (state.kind !== "parsed") return null;
   const { snapshot, startedAt } = state;
-  if (!(await reachabilityProbe(snapshot.websocketUrl))) return null;
-  const identityVerdict =
-    startedAt === null
-      ? "indeterminate"
-      : await getPublishedProcessIdentityVerdict(snapshot.pid, startedAt);
-  if (identityVerdict === "mismatch" || identityVerdict === "dead") {
-    return null;
-  }
-  return snapshot.version;
+  return (await isPublishedHostEndpointReachable(
+    snapshot.websocketUrl,
+    snapshot.pid,
+    startedAt,
+    reachabilityProbe,
+  ))
+    ? snapshot.version
+    : null;
 }
 
 /**

@@ -32,6 +32,17 @@ describe("getPublishedProcessIdentityVerdict", () => {
     ).resolves.toBe("dead");
   });
 
+  it("reports dead before considering a missing or malformed publication time", async () => {
+    __setAsyncProcessLivenessReaderForTest(async () => "dead");
+
+    await expect(
+      getPublishedProcessIdentityVerdict(999_999, null),
+    ).resolves.toBe("dead");
+    await expect(
+      getPublishedProcessIdentityVerdict(999_999, "not-a-timestamp"),
+    ).resolves.toBe("dead");
+  });
+
   it("reports mismatch for a live recycled PID which started after publication", async () => {
     __setAsyncProcessLivenessReaderForTest(async () => "alive");
     __setAsyncProcessStartTimeReaderForTest(

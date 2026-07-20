@@ -124,12 +124,12 @@ export async function getPublishedProcessIdentityVerdict(
   pid: number,
   publishedAt: string | null,
 ): Promise<PublishedProcessIdentityVerdict> {
-  if (publishedAt === null) return "indeterminate";
-  const publishedAtMs = Date.parse(publishedAt);
-  if (!Number.isFinite(publishedAtMs)) return "indeterminate";
   const liveness = await asyncProcessLivenessReader(pid);
   if (liveness === "dead") return "dead";
   if (liveness !== "alive") return "indeterminate";
+  if (publishedAt === null) return "indeterminate";
+  const publishedAtMs = Date.parse(publishedAt);
+  if (!Number.isFinite(publishedAtMs)) return "indeterminate";
   const processStartedAtMs = await asyncProcessStartTimeReader(pid);
   if (processStartedAtMs === null) return "indeterminate";
   return processStartedAtMs >
