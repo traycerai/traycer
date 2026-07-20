@@ -60,9 +60,9 @@ export interface ComposerPromptEditorHandle {
     attrs: ReadonlyArray<ImageAttachmentAttrs>,
   ) => void;
   /**
-   * Starts a path-insertion job anchored to the current selection. The
-   * returned one-shot `commit` maps that range through intervening editor
-   * changes and returns `false` if the editor was destroyed before resolution.
+   * Starts a path-insertion job anchored to the current caret. The returned
+   * one-shot `commit` maps that position through intervening editor changes
+   * and returns `false` if the editor was destroyed before resolution.
    */
   readonly beginPathInsertion: () => PathInsertionCommit | null;
   readonly removeImageAttachmentById: (id: string) => void;
@@ -363,30 +363,13 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
 
   const beginPathInsertion = useCallback((): PathInsertionCommit | null => {
     if (editor === null || editor.isDestroyed) return null;
-    let from = editor.state.selection.from;
-    let to = editor.state.selection.to;
+    let position = editor.state.selection.to;
     const onTransaction = ({
       transaction,
       appendedTransactions,
     }: ComposerTransactionEvent): void => {
       [transaction, ...appendedTransactions].forEach((tr) => {
-        if (from === to) {
-          from = tr.mapping.map(from, -1);
-          to = from;
-          return;
-        }
-        const mappedFrom = tr.mapping.mapResult(from, 1);
-        const mappedTo = tr.mapping.mapResult(to, -1);
-        // Typing while resolution is pending may already replace the captured
-        // range. Collapse to its leading edge so the eventual path lands
-        // before that new text instead of replacing the user's newer input.
-        if (mappedFrom.deletedAfter && mappedTo.deletedBefore) {
-          from = tr.mapping.map(from, -1);
-          to = from;
-          return;
-        }
-        from = mappedFrom.pos;
-        to = Math.max(from, mappedTo.pos);
+        position = tr.mapping.map(position, -1);
       });
     };
     const unsubscribeFromTransactions = subscribeToComposerTransactions(
@@ -400,7 +383,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
       unsubscribeFromTransactions();
       if (editor.isDestroyed) return false;
       if (paths.length > 0) {
-        insertPathSpansCommand(editor, { paths, from, to });
+        insertPathSpansCommand(editor, { paths, position });
         editor.commands.focus();
       }
       return true;

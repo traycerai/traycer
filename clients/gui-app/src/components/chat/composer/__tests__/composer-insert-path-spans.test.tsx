@@ -64,7 +64,7 @@ describe("insertPathSpansCommand via the real composer editor", () => {
     ).toHaveLength(2);
   });
 
-  it("replaces the selection captured when path insertion begins", async () => {
+  it("preserves a selection and inserts at its caret end", async () => {
     const handleRef = await mountedHandle();
 
     act(() => {
@@ -75,27 +75,11 @@ describe("insertPathSpansCommand via the real composer editor", () => {
       handleRef.current?.beginPathInsertion()?.(["src/app.ts"]);
     });
 
-    expect(composerText(handleRef.current)).toBe("asrc/app.ts ef");
+    expect(composerText(handleRef.current)).toBe("abcdsrc/app.ts ef");
     expect(pathSpanRuns(handleRef.current)).toContainEqual({
       text: "src/app.ts",
       code: true,
     });
-  });
-
-  it("preserves text appended while a selected-range insertion resolves", async () => {
-    const handleRef = await mountedHandle();
-
-    act(() => {
-      handleRef.current?.setContent(paragraphText("abcdef"), {
-        from: 2,
-        to: 5,
-      });
-      const commit = handleRef.current?.beginPathInsertion();
-      handleRef.current?.insertDictatedText("typed");
-      commit?.(["src/app.ts"]);
-    });
-
-    expect(composerText(handleRef.current)).toBe("asrc/app.ts eftyped ");
   });
 
   it("does nothing for an empty path list", async () => {
