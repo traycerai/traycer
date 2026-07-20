@@ -260,6 +260,11 @@ function writeInstallRecord(
       archiveSha256: fields.archiveSha256 ?? "a".repeat(64),
       platform: process.platform,
       arch: process.arch,
+      source: { kind: "registry", value: fields.version },
+      signatureVerifiedAt: "2026-01-01T00:00:00.000Z",
+      signatureKeyId: "test-key",
+      sizeBytes: 1,
+      executablePath: join(layout.installDir, "traycer-host"),
     }),
   );
 }
@@ -1046,26 +1051,35 @@ describe("desktop-held cli-lock: two-process test", () => {
   // register - disk state never changed, so this couldn't catch any of the
   // races it exists to cover (nested stamp reacquisition (A7), missing
   // post-acquisition state reread (B12), supersession (A4)). The worker now
-  // performs a REAL terminal mutation - deleting the install record, the
-  // same disk change a genuine competing `traycer host uninstall --all`
-  // commits - only once this test signals it to, by which point desktop is
-  // already blocked mid-wait for the lock. This test asserts the desktop
-  // side re-reads state after it acquires the lock and detects that
-  // superseding change, rather than acting on what it observed before it
-  // started waiting (the mutation deliberately lands AFTER desktop's call
-  // has already started and is blocked - not before it - so a stale
-  // pre-wait read and a genuine post-acquisition reread would disagree).
-  it("a packaged-macOS registerService call blocks on a lock genuinely held by a separate OS process, then re-reads state after acquiring and detects the competing uninstall that landed while it waited", async () => {
+  // starts a real terminal `traycer host uninstall` process while it holds
+  // that lock. This test asserts both lock participation (the real CLI has
+  // not changed disk state while the worker lock is held) and the desktop
+  // post-acquisition reread after the terminal mutation wins the lock.
+  it("V1: a packaged-macOS registerService call yields to a real terminal host uninstall, then detects its post-lock supersession", async () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
-    const controller = newController("production");
-    const installRecordFile = getHostFsLayout("production").installRecordFile;
-    writeInstallRecord("production", {
+    // The checked-in real CLI source is a dev build, so exercise the dev
+    // slot: that makes the terminal command and desktop controller address
+    // the identical live lock and install record without a test-only CLI.
+    // The terminal CLI is queued first. Give this desktop contender a
+    // deliberately slower polling cadence so the test deterministically
+    // exercises the CLI winning the next lock turn, rather than relying on
+    // two 100ms timers happening to fire in the desired order.
+    const controller = newControllerWithLockTiming(
+      "dev",
+      async () => true,
+      DESKTOP_LOCK_WAIT_MS,
+      1_000,
+    );
+    const installRecordFile = getHostFsLayout("dev").installRecordFile;
+    writeInstallRecord("dev", {
       version: "1.7.0",
       runtimeVersion: "1.7.0",
     });
 
-    const lockPath = cliLockPath("production");
-    mkdirSync(join(workHome, ".traycer", "cli"), { recursive: true });
+    const lockPath = cliLockPath("dev");
+    mkdirSync(join(workHome, ".traycer", "cli", "dev"), {
+      recursive: true,
+    });
     const barrierDir = join(workHome, "barrier");
     mkdirSync(barrierDir, { recursive: true });
 
@@ -1079,7 +1093,13 @@ describe("desktop-held cli-lock: two-process test", () => {
         ...process.env,
         WORKER_LOCK_PATH: lockPath,
         WORKER_BARRIER_DIR: barrierDir,
-        WORKER_INSTALL_RECORD_PATH: installRecordFile,
+        WORKER_CLI_ENTRY: join(
+          process.cwd(),
+          "..",
+          "traycer-cli",
+          "src",
+          "index.ts",
+        ),
       },
     });
     const workerExit = new Promise<number | null>((resolve) => {
@@ -1100,29 +1120,36 @@ describe("desktop-held cli-lock: two-process test", () => {
     };
 
     await waitForFile(join(barrierDir, "held"));
-    // The worker holds the lock but hasn't mutated yet - the install is
-    // still exactly what desktop would see if it read right now.
+    // The worker holds the shared lock before it starts the terminal CLI.
     expect(existsSync(installRecordFile)).toBe(true);
+    writeFileSync(join(barrierDir, "mutate"), "");
+    await waitForFile(join(barrierDir, "cli-started"));
+    // The real CLI process is running, but must still be blocked on the
+    // worker-held lock. Removing `withCliLock` from host uninstall makes
+    // this assertion fail because the record disappears here.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(existsSync(installRecordFile)).toBe(true);
+    writeFileSync(join(barrierDir, "cli-verified-blocked"), "");
 
     let registerSettled = false;
     const registerPromise = controller.registerService().then((outcome) => {
       registerSettled = true;
       return outcome;
     });
-    // Give the controller's own lock-acquisition poll a few cycles to run
-    // against the worker's still-held lock - desktop's call is now genuinely
-    // in flight and blocked, exactly the moment a superseding mutation would
-    // land in production.
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(registerSettled).toBe(false);
-
-    // Only now - with desktop's call already blocked mid-wait - does the
-    // competing uninstall land.
-    writeFileSync(join(barrierDir, "mutate"), "");
+    writeFileSync(join(barrierDir, "desktop-waiting"), "");
+    await waitForFile(join(barrierDir, "cli-exit"));
+    const cliExit = JSON.parse(
+      readFileSync(join(barrierDir, "cli-exit"), "utf8"),
+    ) as { exitCode: number | null; stdout: string; stderr: string };
+    if (cliExit.exitCode !== 0) {
+      throw new Error(
+        `terminal host uninstall failed (${cliExit.exitCode}): ${cliExit.stdout}${cliExit.stderr}`,
+      );
+    }
     await waitForFile(join(barrierDir, "mutated"));
     expect(existsSync(installRecordFile)).toBe(false);
-
-    writeFileSync(join(barrierDir, "release"), "");
     const outcome = await registerPromise;
     // Proves the post-acquisition reread (fixup B12): if desktop had acted
     // on the pre-wait snapshot it could only have read before this point
@@ -1513,7 +1540,7 @@ describe("yank/apply ordering", () => {
     );
   });
 
-  it("P2/V9: apply joins an in-flight yank reconcile and re-reads the stage before consuming it", async () => {
+  it("P2/V8/V9: apply joins an in-flight yank reconcile, uses automatic staging, and re-reads the stage before consuming it", async () => {
     const controller = newController("production");
     writeInstallRecord("production", {
       version: "1.7.0",
@@ -2405,6 +2432,31 @@ describe("Windows bundled-host --from fallback", () => {
     );
   });
 
+  it("V7: omits --from when a valid bundled CLI has no sibling archive", async () => {
+    setPlatform("win32");
+    setArch("x64");
+    const cliDir = join(workHome, "cli");
+    mkdirSync(cliDir, { recursive: true });
+    const bundledCli = join(cliDir, "traycer.exe");
+    writeFileSync(bundledCli, "");
+    vi.mocked(resolveBundledCliPath).mockResolvedValue(bundledCli);
+
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: { running: true, version: "1.7.0", action: "noop" },
+    });
+
+    await controller.convergeReady(false);
+
+    expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+      expect.objectContaining({ args: ["host", "ensure"] }),
+    );
+  });
+
   it("omits --from on macOS/Linux even when a bundled CLI path resolves (POSIX symlink self-resolution)", async () => {
     setPlatform("darwin");
     const cliDir = join(workHome, "cli");
@@ -2861,6 +2913,14 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
       registerCalled = true;
       return registerGate.promise;
     });
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: {
+        action: "noop",
+        running: true,
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      },
+    });
 
     const refreshPromise = controller.applyPendingLoginItemRevisionIfIdle();
     // Real fs reads precede the disruptive step (readRunningRuntimeVersion,
@@ -2947,6 +3007,68 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     const third = await controller.applyPendingLoginItemRevisionIfIdle();
     expect(third).toEqual(expected);
     expect(registerHostLoginItem).toHaveBeenCalledTimes(2);
+  });
+
+  it("V3: the monitor caller and convergeReady's reentrant packaged-mac caller share the same failed revision cycle", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    let reachabilityCalls = 0;
+    const controller = newControllerWithReachability("production", async () => {
+      reachabilityCalls += 1;
+      return true;
+    });
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+    vi.mocked(hasPendingLoginItemRevision).mockResolvedValue(true);
+    const registerGate = deferred<"requires-approval">();
+    let registerCalled = false;
+    vi.mocked(registerHostLoginItem).mockImplementation(async () => {
+      registerCalled = true;
+      return registerGate.promise;
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: {
+        action: "noop",
+        running: true,
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      },
+    });
+
+    // This is the production pair: the monitor's public standalone caller
+    // starts the cycle, then convergeReadyPackagedMac reaches its reentrant
+    // public caller while that cycle is still in flight.
+    const monitorTick = controller.applyPendingLoginItemRevisionIfIdle();
+    await vi.waitFor(() => {
+      if (!registerCalled) throw new Error("revision cycle did not start");
+    });
+    const convergence = controller.convergeReady(false);
+    await vi.waitFor(() => {
+      // The second probe is in convergeReadyPackagedMac, immediately before
+      // it calls the public in-flight cache. Releasing the register gate
+      // before this point would let the first cycle settle and turn this
+      // into two serial cycles instead of exercising the caller pair.
+      expect(reachabilityCalls).toBeGreaterThanOrEqual(2);
+    });
+    await flushMicrotasks();
+
+    registerGate.resolve("requires-approval");
+    const [monitorOutcome, convergenceOutcome] = await Promise.all([
+      monitorTick,
+      convergence,
+    ]);
+
+    expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
+    expect(monitorOutcome).toEqual({
+      kind: "failed",
+      message: expect.stringContaining("disabled by macOS"),
+    });
+    expect(convergenceOutcome).toEqual({
+      kind: "failed",
+      message: expect.stringContaining("disabled by macOS"),
+    });
   });
 
   // Fixup D1 defense-in-depth: the locked closure now re-checks the pending-

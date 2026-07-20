@@ -1,4 +1,5 @@
-import { rm, stat, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { acquireDesktopCliLock } from "../../desktop-cli-lock";
 
@@ -26,24 +27,24 @@ async function waitForFile(path: string): Promise<void> {
 // `acquireDesktopCliLock` primitive `HostController` itself uses, signals
 // `<dir>/held`, then - only once the test tells it to via `<dir>/mutate`, by
 // which point the desktop side is already blocked waiting on the lock -
-// performs a REAL competing terminal mutation: removes the install record on
-// disk, the same disk change a genuine `traycer host uninstall --all`
-// commits under this same lock. This is fixup C1: the desktop side must
-// re-read state after it acquires the lock and detect this superseding
-// change landing mid-wait, not act on whatever it observed before it started
-// waiting. Signals `<dir>/mutated` once the deletion has landed, then blocks
-// until `<dir>/release` appears before releasing and exiting.
+// starts the real terminal CLI's `host uninstall` command while that lock is
+// still held. The command cannot enter its critical section until this worker
+// releases the lock, proving the actual CLI command (not Desktop's wrapper)
+// participates in the shared lock. It then deletes the install record under
+// its real critical section. This is fixup C1: the desktop side must re-read
+// state after it acquires the lock and detect the terminal supersession that
+// landed mid-wait, not act on whatever it observed before it started waiting.
 async function main(): Promise<void> {
   const lockPath = process.env.WORKER_LOCK_PATH;
   const barrierDir = process.env.WORKER_BARRIER_DIR;
-  const installRecordPath = process.env.WORKER_INSTALL_RECORD_PATH;
+  const cliEntry = process.env.WORKER_CLI_ENTRY;
   if (
     lockPath === undefined ||
     barrierDir === undefined ||
-    installRecordPath === undefined
+    cliEntry === undefined
   ) {
     throw new Error(
-      "desktop-cli-lock-worker: WORKER_LOCK_PATH, WORKER_BARRIER_DIR, and WORKER_INSTALL_RECORD_PATH are required",
+      "desktop-cli-lock-worker: WORKER_LOCK_PATH, WORKER_BARRIER_DIR, and WORKER_CLI_ENTRY are required",
     );
   }
   const outcome = await acquireDesktopCliLock({
@@ -57,10 +58,34 @@ async function main(): Promise<void> {
   }
   await writeFile(join(barrierDir, "held"), "");
   await waitForFile(join(barrierDir, "mutate"));
-  await rm(installRecordPath, { force: true });
-  await writeFile(join(barrierDir, "mutated"), "");
-  await waitForFile(join(barrierDir, "release"));
+  const cli = spawn("bun", ["run", cliEntry, "host", "uninstall", "--json"], {
+    env: process.env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let cliStdout = "";
+  cli.stdout.on("data", (chunk: Buffer) => {
+    cliStdout += chunk.toString();
+  });
+  let cliStderr = "";
+  cli.stderr.on("data", (chunk: Buffer) => {
+    cliStderr += chunk.toString();
+  });
+  const cliExit = new Promise<number | null>((resolve) => {
+    cli.once("exit", (code) => resolve(code));
+  });
+  await writeFile(join(barrierDir, "cli-started"), "");
+  await waitForFile(join(barrierDir, "cli-verified-blocked"));
+  await waitForFile(join(barrierDir, "desktop-waiting"));
   await outcome.handle.release();
+  const exitCode = await cliExit;
+  await writeFile(
+    join(barrierDir, "cli-exit"),
+    JSON.stringify({ exitCode, stdout: cliStdout, stderr: cliStderr }),
+  );
+  if (exitCode !== 0) {
+    throw new Error("desktop-cli-lock-worker: terminal host uninstall failed");
+  }
+  await writeFile(join(barrierDir, "mutated"), "");
 }
 
 main()

@@ -62,9 +62,9 @@ vi.mock("../cli-discovery", async (importOriginal) => {
     ...actual,
     discoverCli: async () => ({
       kind: "bundled" as const,
-      binaryPath: "/tmp/traycer-test/fake-cli/traycer",
+      binaryPath: "/tmp/traycer-test/discovered-cli/traycer",
     }),
-    resolveBundledCliPath: async () => "/tmp/traycer-test/fake-cli/traycer",
+    resolveBundledCliPath: async () => "/tmp/traycer-test/bundled-cli/traycer",
   };
 });
 
@@ -194,9 +194,12 @@ interface ExecFileSetupArgs {
 
 function configureExecFile(args: ExecFileSetupArgs): {
   readonly capturedArgs: readonly string[][];
+  readonly capturedCommands: readonly string[];
 } {
   const capturedArgs: string[][] = [];
-  execFileImpl = (_cmd, calledArgs, _opts, callback) => {
+  const capturedCommands: string[] = [];
+  execFileImpl = (cmd, calledArgs, _opts, callback) => {
+    capturedCommands.push(cmd);
     capturedArgs.push([...calledArgs]);
     if (args.exitCode === 0) {
       callback(null, args.stdout, args.stderr);
@@ -218,7 +221,7 @@ function configureExecFile(args: ExecFileSetupArgs): {
     err.code = args.exitCode;
     callback(err, args.stdout, args.stderr);
   };
-  return { capturedArgs };
+  return { capturedArgs, capturedCommands };
 }
 
 describe("runTraycerCliJson unwraps result envelopes", () => {
@@ -398,6 +401,45 @@ describe("runTraycerCliJson unwraps result envelopes", () => {
 });
 
 describe("streamTraycerCliJson resolves data, fans progress, and converts error envelopes", () => {
+  it("V10: bundled wrappers invoke the bundled CLI instead of the discovered CLI", async () => {
+    const terminalLine = JSON.stringify({
+      type: "result",
+      status: "ok",
+      data: { version: "1.5.0" },
+      timestamp: "2026-05-15T00:00:00Z",
+    });
+    const runSetup = configureExecFile({
+      stdout: `${terminalLine}\n`,
+      stderr: "",
+      exitCode: 0,
+    });
+    let streamCommand = "";
+    spawnImpl = (cmd) => {
+      streamCommand = cmd;
+      return new FakeChild({
+        stdoutLines: [terminalLine],
+        stderr: "",
+        exitCode: 0,
+      });
+    };
+    const { runBundledTraycerCliJson, streamBundledTraycerCliJson } =
+      await import("../traycer-cli");
+
+    await runBundledTraycerCliJson<{ version: string }>(["host", "status"]);
+    await streamBundledTraycerCliJson<{ version: string }>({
+      args: ["host", "download", "--automatic"],
+      onEvent: () => undefined,
+      env: null,
+      timeoutMs: 5_000,
+      signal: null,
+    });
+
+    expect(runSetup.capturedCommands).toEqual([
+      "/tmp/traycer-test/bundled-cli/traycer",
+    ]);
+    expect(streamCommand).toBe("/tmp/traycer-test/bundled-cli/traycer");
+  });
+
   it("forces --json onto args and emits each progress event before resolving with unwrapped data", async () => {
     const lines = [
       JSON.stringify({
