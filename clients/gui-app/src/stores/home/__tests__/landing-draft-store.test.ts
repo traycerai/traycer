@@ -95,16 +95,19 @@ const WORKSPACE_A = {
   path: "/tmp/workspace-a",
   name: "workspace-a",
   repoIdentifier: { owner: "traycerai", repo: "workspace-a" },
+  hostId: null,
 };
 const WORKSPACE_B = {
   path: "/tmp/workspace-b",
   name: "workspace-b",
   repoIdentifier: { owner: "traycerai", repo: "workspace-b" },
+  hostId: null,
 };
 const WORKSPACE_C = {
   path: "/tmp/workspace-c",
   name: "workspace-c",
   repoIdentifier: { owner: "traycerai", repo: "workspace-c" },
+  hostId: null,
 };
 function resetStore(): void {
   useLandingDraftStore.setState({
@@ -165,6 +168,7 @@ function numberedWorkspace(index: number) {
     path: `/tmp/workspace-${index}`,
     name: `workspace-${index}`,
     repoIdentifier: null,
+    hostId: null,
   };
 }
 
@@ -231,6 +235,7 @@ describe("removeLandingDraftWorkspaceFolder / setLandingDraftWorkspacePrimary (p
       path: "/tmp/non-git",
       name: "non-git",
       repoIdentifier: null,
+      hostId: null,
     };
     const workspace = workspaceOf([WORKSPACE_A, nonGitFolder]);
     const switched = setLandingDraftWorkspacePrimary(

@@ -654,7 +654,7 @@ function TokenReauthForm({
           hostQueryKeys.method<HostRpcRegistry, "providers.list">(
             tabHostId,
             "providers.list",
-            {},
+            { native: null },
           ),
         );
         const providerState = data?.providers.find(

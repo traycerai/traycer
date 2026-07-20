@@ -31,7 +31,7 @@ export function useTabProvidersList(
     cacheKeyIdentity: undefined,
     client,
     method: "providers.list",
-    params: {},
+    params: { native: null },
     options: {
       enabled: activity.enabled,
       subscribed: activity.subscribed,

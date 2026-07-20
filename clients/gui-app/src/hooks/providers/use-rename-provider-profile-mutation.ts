@@ -57,6 +57,7 @@ export function useRenameProviderProfileForClient(
       ({
         providerId: variables.providerId,
         enabled: true,
+        native: null,
         profileAction: {
           type: "rename",
           profileId: variables.profileId,

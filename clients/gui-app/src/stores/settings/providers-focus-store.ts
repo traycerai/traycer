@@ -18,6 +18,12 @@ interface ProvidersFocusState {
     readonly startSignIn: boolean;
   }) => void;
   clearFocusHarnessId: () => void;
+  // Optional tab within that provider to open (e.g. "env", "mcp"). Consumed
+  // once alongside `focusHarnessId`; ignored when the target provider does not
+  // advertise the tab in `nativeCapabilities.supportedTabs`.
+  readonly focusTab: string | null;
+  setFocusTab: (tab: string) => void;
+  clearFocusTab: () => void;
 }
 
 export const useProvidersFocusStore = create<ProvidersFocusState>((set) => ({
@@ -25,6 +31,7 @@ export const useProvidersFocusStore = create<ProvidersFocusState>((set) => ({
   focusHostId: null,
   focusProfileId: null,
   startSignIn: false,
+  focusTab: null,
   setFocusHarnessId: (harnessId) =>
     set({
       focusHarnessId: harnessId,
@@ -46,4 +53,6 @@ export const useProvidersFocusStore = create<ProvidersFocusState>((set) => ({
       focusProfileId: null,
       startSignIn: false,
     }),
+  setFocusTab: (tab) => set({ focusTab: tab }),
+  clearFocusTab: () => set({ focusTab: null }),
 }));

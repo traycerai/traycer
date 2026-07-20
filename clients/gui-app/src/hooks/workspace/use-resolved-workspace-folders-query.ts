@@ -109,9 +109,14 @@ export function useResolvedWorkspaceFolders(
     return map;
   }, [query.data]);
 
+  const boundHostId = client?.getActiveHostId() ?? null;
+
   const resolved = useMemo<ReadonlyArray<ResolvedFolder>>(
-    () => folderInfos.map((info) => projectFolder(info, resolvedByKey)),
-    [folderInfos, resolvedByKey],
+    () =>
+      folderInfos.map((info) =>
+        projectFolder(info, resolvedByKey, boundHostId),
+      ),
+    [folderInfos, resolvedByKey, boundHostId],
   );
 
   return useMemo(() => {
@@ -134,13 +139,33 @@ export function useResolvedWorkspaceFolders(
   ]);
 }
 
-function projectFolder(
+/**
+ * Project one persisted folder against a bound host. Exported for B6 tests:
+ * non-git (`local-only`) rows must not cross hosts.
+ */
+export function projectWorkspaceFolderForHost(
   info: WorkspaceFolderInfo,
   resolvedByKey: ReadonlyMap<string, ReadonlySet<string>>,
+  boundHostId: string | null,
 ): ResolvedFolder {
   const repoIdentifier = info.repoIdentifier;
   if (repoIdentifier === null) {
-    return { kind: "local-only", path: info.path, name: info.name };
+    // Non-git folders are host-local: only the host that prepared them may
+    // claim them. Legacy rows without hostId stay unresolved under multi-host
+    // so they never cross machines (B6).
+    if (
+      boundHostId !== null &&
+      info.hostId !== null &&
+      info.hostId === boundHostId
+    ) {
+      return { kind: "local-only", path: info.path, name: info.name };
+    }
+    return {
+      kind: "unresolved",
+      path: info.path,
+      name: info.name,
+      repoIdentifier: null,
+    };
   }
   const hostPaths = resolvedByKey.get(formatRepoIdentifier(repoIdentifier));
   if (hostPaths !== undefined && hostPaths.has(info.path)) {
@@ -157,4 +182,12 @@ function projectFolder(
     name: info.name,
     repoIdentifier,
   };
+}
+
+function projectFolder(
+  info: WorkspaceFolderInfo,
+  resolvedByKey: ReadonlyMap<string, ReadonlySet<string>>,
+  boundHostId: string | null,
+): ResolvedFolder {
+  return projectWorkspaceFolderForHost(info, resolvedByKey, boundHostId);
 }

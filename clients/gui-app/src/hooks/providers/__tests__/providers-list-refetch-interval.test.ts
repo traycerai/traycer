@@ -59,6 +59,12 @@ function providerState(overrides: Partial<ProviderCliState>): ProviderCliState {
     envOverrides: [],
     loginCapability: null,
     availabilityPending: false,
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+    },
     profiles: [],
     ...overrides,
   };
@@ -85,6 +91,7 @@ describe("providersListRefetchInterval", () => {
     expect(
       providersListRefetchInterval(
         {
+          native: null,
           providers: [providerState({ profiles: [profile("ok")] })],
         },
         0,
@@ -96,6 +103,7 @@ describe("providersListRefetchInterval", () => {
     expect(
       providersListRefetchInterval(
         {
+          native: null,
           providers: [providerState({ authPending: true })],
         },
         0,
@@ -107,6 +115,7 @@ describe("providersListRefetchInterval", () => {
     expect(
       providersListRefetchInterval(
         {
+          native: null,
           providers: [providerState({ availabilityPending: true })],
         },
         0,
@@ -118,6 +127,7 @@ describe("providersListRefetchInterval", () => {
     expect(
       providersListRefetchInterval(
         {
+          native: null,
           providers: [providerState({ candidates: candidateVersionPending })],
         },
         0,
@@ -129,6 +139,7 @@ describe("providersListRefetchInterval", () => {
     expect(
       providersListRefetchInterval(
         {
+          native: null,
           providers: [providerState({ profiles: [profile("near_limit")] })],
         },
         0,
@@ -140,6 +151,7 @@ describe("providersListRefetchInterval", () => {
     expect(
       providersListRefetchInterval(
         {
+          native: null,
           providers: [providerState({ profiles: [profile("hard_limit")] })],
         },
         0,
@@ -151,6 +163,7 @@ describe("providersListRefetchInterval", () => {
     expect(
       providersListRefetchInterval(
         {
+          native: null,
           providers: [
             providerState({
               authPending: true,
@@ -165,6 +178,7 @@ describe("providersListRefetchInterval", () => {
 
   it("ignores a DISABLED provider's pending probes so it never drives the fast-poll", () => {
     const disabledPending = {
+      native: null,
       providers: [
         providerState({
           enabled: false,
@@ -181,6 +195,7 @@ describe("providersListRefetchInterval", () => {
 
   it("still fast-polls an enabled provider alongside a disabled pending one", () => {
     const mixed = {
+      native: null,
       providers: [
         providerState({ providerId: "claude-code", availabilityPending: true }),
         providerState({
@@ -197,6 +212,7 @@ describe("providersListRefetchInterval", () => {
 
   it("keeps fast-polling right up to the budget, then backs off to the bounded cadence", () => {
     const pending = {
+      native: null,
       providers: [providerState({ availabilityPending: true })],
     };
     expect(
@@ -221,14 +237,20 @@ describe("providersListRefetchIntervalForQuery", () => {
 
   // Stand-in for the shared TanStack Query every observer of one providers.list
   // query receives; the budget is keyed to this object identity.
-  function queryWith(data: { providers: ProviderCliState[] }): {
-    state: { data: { providers: ProviderCliState[] } };
+  function queryWith(data: { providers: ProviderCliState[]; native: null }): {
+    state: { data: { providers: ProviderCliState[]; native: null } };
   } {
     return { state: { data } };
   }
 
-  const pending = { providers: [providerState({ availabilityPending: true })] };
-  const calm = { providers: [providerState({ profiles: [profile("ok")] })] };
+  const pending = {
+    native: null,
+    providers: [providerState({ availabilityPending: true })],
+  };
+  const calm = {
+    native: null,
+    providers: [providerState({ profiles: [profile("ok")] })],
+  };
 
   it("caps a stuck pending flag: fast-poll within budget, bounded past it, budget resets when pending clears", () => {
     vi.useFakeTimers();

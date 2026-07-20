@@ -54,7 +54,7 @@ describe("useRefreshProvidersListOnTurn", () => {
     fireTurn("claude");
     expect(invalidateSpy).toHaveBeenCalledTimes(1);
     expect(invalidateSpy).toHaveBeenCalledWith({
-      queryKey: ["host", "host-a", "providers.list", {}],
+      queryKey: ["host", "host-a", "providers.list"],
     });
   });
 

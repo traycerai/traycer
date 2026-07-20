@@ -4,6 +4,7 @@ import {
   PROVIDER_DISPLAY_NAMES,
   type ProviderCliState,
 } from "@traycer/protocol/host/provider-schemas";
+import type { ProviderSettingsTab } from "@traycer/protocol/host/provider-native-schemas";
 import type {
   HostRpcError,
   ResponseOfMethod,
@@ -23,6 +24,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ProviderList } from "@/components/providers/provider-list";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { useProvidersSetEnabled } from "@/hooks/providers/use-providers-set-enabled-mutation";
@@ -43,6 +45,10 @@ import {
 import { ProviderAuthBadge, ProviderAuthLine } from "./provider-auth-display";
 import { TraycerSubscriptionSection } from "./traycer-subscription-section";
 import { ProviderRateLimitForProvider } from "./provider-rate-limit-section";
+import { ProviderMcpTab } from "./provider-mcp-tab";
+import { ProviderPluginsTab } from "./provider-plugins-tab";
+import { ProviderSkillsTab } from "./provider-skills-tab";
+import { isRateLimitCapableProvider } from "@/lib/rate-limit-providers";
 import {
   AddProviderProfileDialog,
   type FailedProviderProfileAttempt,
@@ -60,6 +66,33 @@ type ProvidersListQuery = UseQueryResult<
   HostRpcError
 >;
 
+// Stable display order for the capability-driven tab bar. Unsupported tabs are
+// filtered out per provider via `nativeCapabilities.supportedTabs`.
+const PROVIDER_TAB_ORDER: readonly ProviderSettingsTab[] = [
+  "general",
+  "env",
+  "usage",
+  "mcp",
+  "plugins",
+  "skills",
+];
+
+const PROVIDER_TAB_LABELS: Record<ProviderSettingsTab, string> = {
+  general: "General",
+  env: "Env",
+  usage: "Usage limits",
+  mcp: "MCP",
+  plugins: "Plugins",
+  skills: "Skills",
+};
+
+function supportedTabsFor(
+  state: ProviderCliState,
+): readonly ProviderSettingsTab[] {
+  const advertised = new Set(state.nativeCapabilities.supportedTabs);
+  return PROVIDER_TAB_ORDER.filter((tab) => advertised.has(tab));
+}
+
 // The provider to select on mount: the deep-link focus target (mapped from its
 // GUI harness id) when one was requested and is present,
 // otherwise the first provider in the list.
@@ -74,6 +107,61 @@ function initialActiveProviderId(
     if (match !== undefined) return match.providerId;
   }
   return providers[0].providerId;
+}
+
+// Initial tab for the deep-linked (or first) provider: honor `focusTab` when
+// the target advertises it, else the first supported tab.
+function initialActiveTab(
+  providers: readonly ProviderCliState[],
+  providerId: ProviderId,
+): ProviderSettingsTab {
+  const state =
+    providers.find((p) => p.providerId === providerId) ?? providers[0];
+  const tabs = supportedTabsFor(state);
+  const focusTab = useProvidersFocusStore.getState().focusTab;
+  if (focusTab !== null) {
+    const match = tabs.find((tab) => tab === focusTab);
+    if (match !== undefined) return match;
+  }
+  return tabs[0] ?? "general";
+}
+
+// When switching providers, keep the current tab if the new provider supports
+// it; otherwise fall back to that provider's first tab.
+function resolveTabForProvider(
+  state: ProviderCliState,
+  preferred: ProviderSettingsTab,
+): ProviderSettingsTab {
+  const tabs = supportedTabsFor(state);
+  if (tabs.includes(preferred)) return preferred;
+  return tabs[0] ?? "general";
+}
+
+function tabHasContent(
+  tab: ProviderSettingsTab,
+  state: ProviderCliState,
+): boolean {
+  switch (tab) {
+    case "general":
+      return (
+        state.candidates.length > 0 ||
+        state.terminalAgentArgs.trim().length > 0 ||
+        state.profiles.length > 0
+      );
+    case "env":
+      return state.envOverrides.length > 0;
+    case "usage":
+      return (
+        isRateLimitCapableProvider(state.providerId) ||
+        state.providerId === "traycer"
+      );
+    case "mcp":
+    case "plugins":
+    case "skills":
+      // Truthful content dots need cached list length; without a cheap cache
+      // probe here we keep false (honest "unknown / empty").
+      return false;
+  }
 }
 
 const PROVIDER_DESCRIPTIONS: Record<ProviderId, string> = {
@@ -359,18 +447,36 @@ function ProvidersRailLayout({
     };
   });
   // A deep-link entry point (e.g. the model picker's "Add API key" CTA) can ask
-  // the panel to open on a specific provider via the focus store. Read it once
-  // for the initial selection, then clear it so a later manual open starts on
-  // the first provider again.
+  // the panel to open on a specific provider (and optional tab) via the focus
+  // store. Read both once for the initial selection, then clear so a later
+  // manual open starts on the first provider / first tab again.
   const [activeId, setActiveId] = useState<ProviderId>(() =>
     initialActiveProviderId(orderedProviders, initialFocus.harnessId),
   );
+  const [activeTab, setActiveTab] = useState<ProviderSettingsTab>(() =>
+    initialActiveTab(
+      orderedProviders,
+      initialActiveProviderId(orderedProviders, null),
+    ),
+  );
   useEffect(() => {
-    useProvidersFocusStore.getState().clearFocusHarnessId();
+    const store = useProvidersFocusStore.getState();
+    store.clearFocusHarnessId();
+    store.clearFocusTab();
   }, []);
   const active =
     orderedProviders.find((p) => p.providerId === activeId) ??
     orderedProviders[0];
+  const resolvedTab = resolveTabForProvider(active, activeTab);
+
+  const onSelectProvider = (providerId: ProviderId): void => {
+    setInitialFocus({ harnessId: null, profileId: null, startSignIn: false });
+    setActiveId(providerId);
+    const next =
+      orderedProviders.find((p) => p.providerId === providerId) ??
+      orderedProviders[0];
+    setActiveTab(resolveTabForProvider(next, activeTab));
+  };
 
   return (
     // Fill the panel body (the shell stretches it to the settings scroll
@@ -395,14 +501,7 @@ function ProvidersRailLayout({
             badge: null,
             description: null,
             trailing: null,
-            onSelect: (providerId) => {
-              setInitialFocus({
-                harnessId: null,
-                profileId: null,
-                startSignIn: false,
-              });
-              setActiveId(providerId);
-            },
+            onSelect: onSelectProvider,
           }))}
         />
       </nav>
@@ -411,6 +510,8 @@ function ProvidersRailLayout({
           key={`${hostId}:${active.providerId}`}
           state={active}
           providers={orderedProviders}
+          activeTab={resolvedTab}
+          onActiveTabChange={setActiveTab}
           hostId={hostId}
           isSelectedHostLocal={isSelectedHostLocal}
           initialProfileId={initialFocus.profileId}
@@ -465,6 +566,8 @@ function ProviderEnableSwitch(props: {
 function ProviderDetail({
   state,
   providers,
+  activeTab,
+  onActiveTabChange,
   hostId,
   isSelectedHostLocal,
   initialProfileId,
@@ -472,6 +575,8 @@ function ProviderDetail({
 }: {
   readonly state: ProviderCliState;
   readonly providers: readonly ProviderCliState[];
+  readonly activeTab: ProviderSettingsTab;
+  readonly onActiveTabChange: (tab: ProviderSettingsTab) => void;
   readonly hostId: string | null;
   readonly isSelectedHostLocal: boolean;
   readonly initialProfileId: string | null;
@@ -502,7 +607,6 @@ function ProviderDetail({
         ? initialProfileId
         : defaultSelectedProfileId(state.profiles),
   );
-
   const setEnabled = useProvidersSetEnabled();
   const canAddProfile = providerCanStartProfileOauth(
     state,
@@ -516,6 +620,21 @@ function ProviderDetail({
   const enabledProviderCount = providers.filter(
     (provider) => provider.enabled,
   ).length;
+  const tabs = supportedTabsFor(state);
+  // Bundled once here (rather than threaded as eight separate props) since
+  // only the "general" tab body needs the profile-management surface - the
+  // provider-level tabs (env/usage/mcp/plugins/skills) never see it.
+  const profileTab: ProviderProfileTabProps = {
+    hostId,
+    isSelectedHostLocal,
+    canAddProfile,
+    startInReauth: shouldStartInReauth,
+    failedAttempt: failedProfileAttempt,
+    onAddProfile: () => setAddProfileOpen(true),
+    onDismissFailedAttempt: () => setFailedProfileAttempt(null),
+    selectedProfileId,
+    onSelectedProfileIdChange: setSelectedProfileId,
+  };
 
   return (
     <div className="flex flex-col gap-4">
@@ -549,52 +668,64 @@ function ProviderDetail({
             isPending={setEnabled.isPending}
             enabledProviderCount={enabledProviderCount}
             onSetEnabled={(id, enabled) =>
-              // No profile management UI yet - this call never renames/removes
-              // a profile.
+              // Plain enable/disable - never a native mutation or profile
+              // rename/remove/recolor/drift-ack.
               setEnabled.mutate({
                 providerId: id,
                 enabled,
+                native: null,
                 profileAction: null,
               })
             }
           />
         </div>
       </div>
-
-      <TraycerSubscriptionForProvider providerId={providerId} />
-      {state.profiles.length === 0 ? (
-        <ProviderRateLimitForProvider
-          providerId={providerId}
-          profileId={null}
-          usageUpdatedAt={null}
-        />
-      ) : null}
-      <ProviderProfileScopedSection
-        state={state}
-        hostId={hostId}
-        isSelectedHostLocal={isSelectedHostLocal}
-        canAddProfile={canAddProfile}
-        startInReauth={shouldStartInReauth}
-        failedAttempt={failedProfileAttempt}
-        onAddProfile={() => setAddProfileOpen(true)}
-        onDismissFailedAttempt={() => setFailedProfileAttempt(null)}
-        selectedProfileId={selectedProfileId}
-        onSelectedProfileIdChange={setSelectedProfileId}
-      />
-
       <div
         className={cn(
           "flex flex-col transition-opacity",
           state.enabled ? "" : "pointer-events-none opacity-50",
         )}
+        {...(!state.enabled ? { inert: true } : {})}
       >
         <ProviderApiKeySection state={state} />
-        <ProviderCliCandidatesSection state={state} providers={providers} />
-        <TerminalAgentArgsSection key={state.terminalAgentArgs} state={state} />
-        <ProviderEnvOverridesSection
-          providerId={providerId}
-          overrides={state.envOverrides}
-        />
+
+        <Tabs
+          value={activeTab}
+          onValueChange={(value) => {
+            const next = tabs.find((tab) => tab === value);
+            if (next !== undefined) onActiveTabChange(next);
+          }}
+          className="gap-3"
+        >
+          <TabsList className="h-auto w-full max-w-full flex-wrap justify-start">
+            {tabs.map((tab) => (
+              <TabsTrigger
+                key={tab}
+                value={tab}
+                className="flex-none px-3 text-ui-xs"
+              >
+                <span>{PROVIDER_TAB_LABELS[tab]}</span>
+                {tabHasContent(tab, state) ? (
+                  <span
+                    aria-hidden
+                    className="size-1.5 rounded-full bg-primary"
+                  />
+                ) : null}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+
+          {tabs.map((tab) => (
+            <TabsContent key={tab} value={tab} className="mt-0">
+              <ProviderTabBody
+                tab={tab}
+                state={state}
+                providers={providers}
+                profileTab={profileTab}
+              />
+            </TabsContent>
+          ))}
+        </Tabs>
       </div>
       {addProfileOpen ? (
         <AddProviderProfileDialog
@@ -607,6 +738,104 @@ function ProviderDetail({
           onProfileCreated={setSelectedProfileId}
         />
       ) : null}
+    </div>
+  );
+}
+
+// Profile-management surface handed to the "general" tab body - the only tab
+// that needs to render `ProviderProfileScopedSection` (add/rename/remove/
+// recolor, switch active profile). Bundled into one object rather than eight
+// individual props on `ProviderTabBody`, since the other five tabs
+// (env/usage/mcp/plugins/skills) are provider-level and never touch it.
+interface ProviderProfileTabProps {
+  readonly hostId: string | null;
+  readonly isSelectedHostLocal: boolean;
+  readonly canAddProfile: boolean;
+  readonly startInReauth: boolean;
+  readonly failedAttempt: FailedProviderProfileAttempt | null;
+  readonly onAddProfile: () => void;
+  readonly onDismissFailedAttempt: () => void;
+  readonly selectedProfileId: string | null;
+  readonly onSelectedProfileIdChange: (profileId: string | null) => void;
+}
+
+function ProviderTabBody({
+  tab,
+  state,
+  providers,
+  profileTab,
+}: {
+  readonly tab: ProviderSettingsTab;
+  readonly state: ProviderCliState;
+  readonly providers: readonly ProviderCliState[];
+  readonly profileTab: ProviderProfileTabProps;
+}): ReactNode {
+  switch (tab) {
+    case "general":
+      return (
+        <div className="flex flex-col gap-3">
+          <ProviderProfileScopedSection state={state} {...profileTab} />
+          <ProviderCliCandidatesSection state={state} providers={providers} />
+          <TerminalAgentArgsSection
+            key={state.terminalAgentArgs}
+            state={state}
+          />
+        </div>
+      );
+    case "env":
+      return (
+        <ProviderEnvOverridesSection
+          providerId={state.providerId}
+          overrides={state.envOverrides}
+        />
+      );
+    case "usage":
+      return (
+        <div className="flex flex-col gap-3">
+          <TraycerSubscriptionForProvider providerId={state.providerId} />
+          <ProviderRateLimitForProvider
+            providerId={state.providerId}
+            profileId={null}
+            usageUpdatedAt={null}
+          />
+        </div>
+      );
+    case "mcp": {
+      const mcp = state.nativeCapabilities.mcp;
+      if (mcp === null) {
+        return (
+          <ProviderTabPlaceholder
+            title="MCP servers"
+            description="This provider does not support MCP servers."
+          />
+        );
+      }
+      return (
+        <ProviderMcpTab
+          providerId={state.providerId}
+          capabilities={mcp}
+          providerLabel={PROVIDER_DISPLAY_NAMES[state.providerId]}
+        />
+      );
+    }
+    case "plugins":
+      return <ProviderPluginsTab state={state} />;
+    case "skills":
+      return <ProviderSkillsTab state={state} />;
+  }
+}
+
+function ProviderTabPlaceholder({
+  title,
+  description,
+}: {
+  readonly title: string;
+  readonly description: string;
+}): ReactNode {
+  return (
+    <div className="flex flex-col gap-1 rounded-lg border border-border/60 p-4">
+      <div className="text-ui-sm font-medium text-foreground">{title}</div>
+      <p className="text-ui-xs text-muted-foreground">{description}</p>
     </div>
   );
 }

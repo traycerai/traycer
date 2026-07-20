@@ -1,7 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
-import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { subscribeChatTurnCompletions } from "@/lib/chats/chat-turn-completions";
 import { queryKeys } from "@/lib/query-keys";
 import { PROVIDER_RATE_LIMITS_STALE_TIME_MS } from "@/lib/rate-limit-providers";
@@ -52,11 +51,7 @@ export function useRefreshProvidersListOnTurn(
       }
       lastInvalidatedAtRef.current = now;
       void queryClient.invalidateQueries({
-        queryKey: queryKeys.hostMethod<HostRpcRegistry, "providers.list">(
-          hostId,
-          "providers.list",
-          {},
-        ),
+        queryKey: queryKeys.hostMethodScope(hostId, "providers.list"),
       });
     });
   }, [queryClient, hostId, harnessId]);

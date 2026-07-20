@@ -12,7 +12,7 @@ import {
   providerCliStateSchemaV10,
   providerCliStateSchemaV20,
   providerCliStateSchemaV30,
-  providerMutationCliStateSchemaV20,
+  providerCliStateSchemaMutationV20,
   providerProfileActionSchema,
   providersListResponseSchemaV20,
   providersListResponseSchemaV30,
@@ -23,7 +23,7 @@ import {
 // import alone asserts the new `providers.startLogin@1.1` /
 // `providers.setEnabled@2.1` lines and their bridges are well-formed.
 import {
-  providersAwaitLoginDowngradeV2ToV1,
+  providersAwaitLoginDowngradeV21ToV10,
   providersSetEnabledDowngradeV2ToV1,
 } from "@traycer/protocol/host/registry";
 import { prepareTuiLaunchRequestSchema } from "@traycer/protocol/host/agent/tui/unary-schemas";
@@ -325,13 +325,14 @@ describe("providers.list latest -> v2.0 downgrade strips profiles[]", () => {
 
   it("downgradeProviderCliStateListToV20 never leaks profile identity to a v2.0 caller", () => {
     // Latest major carries profiles[]; the path from latest → v2.0 must strip
-    // them (whether latest is v3.0 or v4.0). Use 4 explicitly - providers.list
-    // latest after the Devin/Pi freeze is v4.0.
+    // them. providers.list's latest is major 4 (profiles, nativeCapabilities,
+    // and Devin/Pi all ship at v4.0 - a genuine major bump, since v3.0
+    // predates profiles entirely and never reached a released host with it).
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
       4,
       2,
-      { providers: [stateWithProfile] },
+      { providers: [stateWithProfile], native: null },
     );
     expect(downgraded.ok).toBe(true);
     if (!downgraded.ok) return;
@@ -388,7 +389,7 @@ describe("providers.list v3.0 line predates profiles[]", () => {
       hostRpcRegistry["providers.list"],
       4,
       3,
-      { providers: [stateWithProfile] },
+      { providers: [stateWithProfile], native: null },
     );
     expect(downgraded.ok).toBe(true);
     if (!downgraded.ok) return;
@@ -401,12 +402,12 @@ describe("providers.list v3.0 line predates profiles[]", () => {
 });
 
 describe("provider.* mutation major-2 lines predate profiles[]", () => {
-  it("providerMutationCliStateSchemaV20 drops an unmodeled profiles key on parse", () => {
+  it("providerCliStateSchemaMutationV20 drops an unmodeled profiles key on parse", () => {
     // The released 2.0 mutation responses reused the live state and silently
     // gained `profiles` - the frozen shape must stay pinned to what released
     // 2.0 hosts actually send (and what host-side projection onto 2.0 may
     // put on the wire).
-    const parsed = providerMutationCliStateSchemaV20.parse(stateWithProfile);
+    const parsed = providerCliStateSchemaMutationV20.parse(stateWithProfile);
     expect(parsed).not.toHaveProperty("profiles");
   });
 
@@ -416,7 +417,7 @@ describe("provider.* mutation major-2 lines predate profiles[]", () => {
       { major: 2, minor: 0 },
       { major: 2, minor: 1 },
       {
-        state: providerMutationCliStateSchemaV20.parse(
+        state: providerCliStateSchemaMutationV20.parse(
           providerState("claude-code"),
         ),
       },
@@ -443,7 +444,7 @@ describe("provider.* mutation major-2 lines predate profiles[]", () => {
       { major: 2, minor: 0 },
       { major: 2, minor: 1 },
       {
-        state: providerMutationCliStateSchemaV20.parse(
+        state: providerCliStateSchemaMutationV20.parse(
           providerState("claude-code"),
         ),
       },
@@ -461,14 +462,18 @@ describe("provider.* mutation major-2 lines predate profiles[]", () => {
     expect(upgradedNull.existingProfileId).toBeNull();
   });
 
-  it("upgrades a released 2.0 awaitLogin request to 2.1 with profileId: null", () => {
+  it("upgrades a released 2.0 awaitLogin request to 2.1 with profileId: null and mcpAuth: null", () => {
     const upgraded = upgradeRequestToVersion(
       hostRpcRegistry["providers.awaitLogin"],
       { major: 2, minor: 0 },
       { major: 2, minor: 1 },
       { providerId: "claude-code" },
     );
-    expect(upgraded).toEqual({ providerId: "claude-code", profileId: null });
+    expect(upgraded).toEqual({
+      providerId: "claude-code",
+      profileId: null,
+      mcpAuth: null,
+    });
   });
 
   it("2.1 -> 1.0 downgrade still strips profiles and profile identity", () => {
@@ -495,6 +500,7 @@ describe("providers.startLogin@1.1 (create profile / re-login to a profile)", ()
     );
     expect(upgradedRequest).toEqual({
       providerId: "claude-code",
+      mcpAuth: null,
       profileId: null,
       createProfile: null,
     });
@@ -508,15 +514,17 @@ describe("providers.startLogin@1.1 (create profile / re-login to a profile)", ()
     expect(upgradedResponse).toEqual({
       url: null,
       started: true,
+      mcpAuth: null,
       profileId: null,
     });
   });
 });
 
 describe("providers.awaitLogin v2->v1 downgrade strips profileId", () => {
-  it("drops profileId before the strict v1.0 request parse", () => {
-    const downgraded = providersAwaitLoginDowngradeV2ToV1.downgradeRequest({
+  it("drops mcpAuth/profileId before the strict v1.0 request parse", () => {
+    const downgraded = providersAwaitLoginDowngradeV21ToV10.downgradeRequest({
       providerId: "claude-code",
+      mcpAuth: null,
       profileId: "profile-1",
     });
     expect(downgraded).toEqual({
@@ -530,14 +538,14 @@ describe("providers.awaitLogin v2->v1 downgrade strips profileId", () => {
       hostRpcRegistry["providers.awaitLogin"],
       2,
       1,
-      { providerId: "codex", profileId: "profile-1" },
+      { providerId: "codex", mcpAuth: null, profileId: "profile-1" },
     );
     expect(downgraded).toEqual({ ok: true, value: { providerId: "codex" } });
   });
 });
 
 describe("providers.setEnabled@2.1 (profile rename/remove/recolor)", () => {
-  it("upgrades a v2.0 request to v2.1 with profileAction defaulted to null", () => {
+  it("upgrades a v2.0 request to v2.1 with profileAction/native defaulted to null", () => {
     const upgraded = upgradeRequestToVersion(
       hostRpcRegistry["providers.setEnabled"],
       { major: 2, minor: 0 },
@@ -548,6 +556,7 @@ describe("providers.setEnabled@2.1 (profile rename/remove/recolor)", () => {
       providerId: "claude-code",
       enabled: true,
       profileAction: null,
+      native: null,
     });
   });
 
@@ -572,6 +581,7 @@ describe("providers.setEnabled@2.1 (profile rename/remove/recolor)", () => {
     const rename = providersSetEnabledDowngradeV2ToV1.downgradeRequest({
       providerId: "claude-code",
       enabled: true,
+      native: null,
       profileAction: { type: "rename", profileId: "profile-1", label: "Work" },
     });
     expect(rename).toEqual({
@@ -582,6 +592,7 @@ describe("providers.setEnabled@2.1 (profile rename/remove/recolor)", () => {
     const remove = providersSetEnabledDowngradeV2ToV1.downgradeRequest({
       providerId: "claude-code",
       enabled: true,
+      native: null,
       profileAction: { type: "remove", profileId: "profile-1" },
     });
     expect(remove).toEqual({
@@ -592,6 +603,7 @@ describe("providers.setEnabled@2.1 (profile rename/remove/recolor)", () => {
     const recolor = providersSetEnabledDowngradeV2ToV1.downgradeRequest({
       providerId: "claude-code",
       enabled: true,
+      native: null,
       profileAction: {
         type: "recolor",
         profileId: "profile-1",
@@ -609,7 +621,7 @@ describe("providers.setEnabled@2.1 (profile rename/remove/recolor)", () => {
       hostRpcRegistry["providers.setEnabled"],
       2,
       1,
-      { providerId: "codex", enabled: false, profileAction: null },
+      { providerId: "codex", enabled: false, profileAction: null, native: null },
     );
     expect(downgraded).toEqual({
       ok: true,
@@ -644,6 +656,7 @@ describe("acknowledgeAmbientDrift profileAction (rides the unreleased @2.1)", ()
     const downgraded = providersSetEnabledDowngradeV2ToV1.downgradeRequest({
       providerId: "claude-code",
       enabled: true,
+      native: null,
       profileAction: { type: "acknowledgeAmbientDrift" },
     });
     expect(downgraded).toEqual({
@@ -660,6 +673,7 @@ describe("acknowledgeAmbientDrift profileAction (rides the unreleased @2.1)", ()
       {
         providerId: "codex",
         enabled: true,
+        native: null,
         profileAction: { type: "acknowledgeAmbientDrift" },
       },
     );

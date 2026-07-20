@@ -220,6 +220,7 @@ function workspaceSource(fixture: WorkspaceFixture) {
         path: fixture.workspacePath,
         name: "traycer",
         repoIdentifier: fixture.repoIdentifier,
+        hostId: null,
       },
     },
   };

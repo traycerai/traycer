@@ -440,7 +440,7 @@ export function useProviderProfileLoginFlow(
     (profileId: string | null): void => {
       if (cancelledRef.current) return;
       cancelledRef.current = true;
-      cancelLogin.mutate({ providerId, profileId });
+      cancelLogin.mutate({ providerId, mcpAuth: null, profileId });
     },
     [cancelLogin, providerId],
   );
@@ -610,6 +610,7 @@ export function useProviderProfileLoginFlow(
       startLogin.mutate(
         {
           providerId,
+          mcpAuth: null,
           profileId: existingProfileId,
           createProfile:
             mode === "create"
@@ -711,7 +712,7 @@ export function useProviderProfileLoginFlow(
             };
             const awaitOnce = (): void => {
               awaitLogin.mutate(
-                { providerId, profileId: nextProfileId },
+                { providerId, mcpAuth: null, profileId: nextProfileId },
                 { onSuccess: handleAwaitSuccess, onError: handleAwaitError },
               );
             };

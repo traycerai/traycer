@@ -40,7 +40,7 @@ export function useTabRefreshProviders(): () => Promise<void> {
           hostQueryKeys.method<HostRpcRegistry, "providers.list">(
             tabHostId,
             "providers.list",
-            {},
+            { native: null },
           ),
           data,
         );
@@ -60,6 +60,6 @@ export function useTabRefreshProviders(): () => Promise<void> {
   const { mutateAsync } = mutation;
   return useCallback(async () => {
     if (client === null) return;
-    await mutateAsync({ forceAuthRefresh: true });
+    await mutateAsync({ forceAuthRefresh: true, native: null });
   }, [client, mutateAsync]);
 }

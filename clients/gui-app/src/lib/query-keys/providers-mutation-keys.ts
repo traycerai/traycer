@@ -17,6 +17,11 @@ export const providersMutationKeys = {
   recolorProfile: () => ["providers.recolorProfile"] as const,
   removeProfile: () => ["providers.removeProfile"] as const,
   refresh: () => ["providers.refresh"] as const,
+  mcpMutate: () => ["providers.mcpMutate"] as const,
+  mcpDiscover: () => ["providers.mcpDiscover"] as const,
+  mcpAuth: () => ["providers.mcpAuth"] as const,
+  pluginsMutate: () => ["providers.pluginsMutate"] as const,
+  skillsMutate: () => ["providers.skillsMutate"] as const,
   acknowledgeAmbientDrift: () => ["providers.acknowledgeAmbientDrift"] as const,
   consumeRateLimitResetCredit: () =>
     ["providers.consumeRateLimitResetCredit"] as const,

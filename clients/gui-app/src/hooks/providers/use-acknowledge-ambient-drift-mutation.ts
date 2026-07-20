@@ -53,6 +53,7 @@ export function useAcknowledgeAmbientDriftForClient(
       ({
         providerId: variables.providerId,
         enabled: true,
+        native: null,
         profileAction: { type: "acknowledgeAmbientDrift" },
       }) satisfies RequestOfMethod<HostRpcRegistry, "providers.setEnabled">,
     options: {

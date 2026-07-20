@@ -48,6 +48,7 @@ export function useRemoveProviderProfileForClient(
       ({
         providerId: variables.providerId,
         enabled: true,
+        native: null,
         profileAction: {
           type: "remove",
           profileId: variables.profileId,

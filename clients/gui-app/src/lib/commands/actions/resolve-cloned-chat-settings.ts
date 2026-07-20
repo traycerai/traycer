@@ -79,25 +79,29 @@ export async function resolveClonedChatSettings(input: {
   const sourceAccountUuid =
     input.sourceClient === null
       ? null
-      : await input.sourceClient.request("providers.list", {}).then(
-          (response) =>
-            findAccountUuid(
-              response.providers.find((p) => p.providerId === providerId)
-                ?.profiles ?? [],
-              sourceSettings.profileId,
-            ),
-          () => null,
-        );
+      : await input.sourceClient
+          .request("providers.list", { native: null })
+          .then(
+            (response) =>
+              findAccountUuid(
+                response.providers.find((p) => p.providerId === providerId)
+                  ?.profiles ?? [],
+                sourceSettings.profileId,
+              ),
+            () => null,
+          );
 
   const targetProfiles =
     sourceAccountUuid === null
       ? []
-      : await input.targetClient.request("providers.list", {}).then(
-          (response) =>
-            response.providers.find((p) => p.providerId === providerId)
-              ?.profiles ?? [],
-          () => [],
-        );
+      : await input.targetClient
+          .request("providers.list", { native: null })
+          .then(
+            (response) =>
+              response.providers.find((p) => p.providerId === providerId)
+                ?.profiles ?? [],
+            () => [],
+          );
 
   const mappedProfileId = mapProfileIdAcrossHosts(
     sourceAccountUuid,

@@ -111,7 +111,7 @@ export function useProvidersAwaitLoginForClient(args: {
           hostQueryKeys.method<HostRpcRegistry, "providers.list">(
             context.hostId,
             "providers.list",
-            {},
+            { native: null },
           ),
           (prev) => {
             if (prev === undefined) return prev;
@@ -119,6 +119,7 @@ export function useProvidersAwaitLoginForClient(args: {
               providers: prev.providers.map((p) =>
                 p.providerId === next.providerId ? next : p,
               ),
+              native: prev.native,
             };
           },
         );

@@ -99,13 +99,20 @@ function claudeState(profiles: ProviderProfile[]): ProviderCliState {
     envOverrides: [],
     loginCapability: null,
     availabilityPending: false,
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+    },
     profiles,
   };
 }
 
 function buildClient(
   hostId: string,
-  providersListHandler: (() => { providers: ProviderCliState[] }) | null,
+  providersListHandler:
+    (() => { providers: ProviderCliState[]; native: null }) | null,
 ): HostClient<HostRpcRegistry> {
   const client = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
@@ -139,9 +146,11 @@ describe("resolveClonedChatSettings: additional adversarial edges", () => {
       providers: [
         claudeState([profile("source-work-uuid", "managed", "Work", "acct-1")]),
       ],
+      native: null,
     }));
     const targetClient = buildClient("target-host", () => ({
       providers: [claudeState([])],
+      native: null,
     }));
 
     const result = await resolveClonedChatSettings({
@@ -161,6 +170,7 @@ describe("resolveClonedChatSettings: additional adversarial edges", () => {
       providers: [
         claudeState([profile("source-work-uuid", "managed", "Work", "acct-1")]),
       ],
+      native: null,
     }));
     // No handler registered on the target -> every request rejects, exactly
     // like a transient client failure reaching the host mid-mapping.
@@ -208,7 +218,10 @@ function baseCloneArgs(
     directory: fakeDirectory([]),
     createChat: vi.fn<CreateChatCommand>(),
     sourceSettings: BASE_SETTINGS,
-    globalClient: buildClient("global", () => ({ providers: [] })),
+    globalClient: buildClient("global", () => ({
+      providers: [],
+      native: null,
+    })),
     onProfileFallbackToAmbient: vi.fn(),
     navigateNestedFocus: null,
     ...overrides,

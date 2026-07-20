@@ -32,6 +32,12 @@ function state(
       label: null,
       detail: null,
     },
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+    },
     ...overrides,
   };
 }

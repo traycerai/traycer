@@ -598,6 +598,12 @@ function providerCliState(input: {
     envOverrides: [],
     loginCapability: null,
     availabilityPending: false,
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+    },
     profiles: [],
   };
 }
@@ -632,6 +638,12 @@ function providerCliStateWithProfiles(input: {
         ? { oauthArgs: ["auth", "login"], token: null, codePaste: null }
         : input.loginCapability,
     availabilityPending: false,
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+    },
     profiles: input.profiles,
   };
 }

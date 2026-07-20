@@ -228,6 +228,12 @@ function claudeState(profiles: ProviderProfile[]): ProviderCliState {
     envOverrides: [],
     loginCapability: null,
     availabilityPending: false,
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+    },
     profiles,
   };
 }
@@ -290,6 +296,7 @@ function seedLiveForkWorkspace(): void {
     path: "/repo/lifecycle",
     name: "lifecycle",
     repoIdentifier: null,
+    hostId: null,
   };
   useSeededWorkspaceSnapshotStore.getState().setSnapshot(stagingKey, {
     folders: [folder.path],
@@ -358,6 +365,7 @@ describe("D4: ChatForkDialog seeded from a tombstoned profile", () => {
       path: "/repo/added-after-open",
       name: "added-after-open",
       repoIdentifier: null,
+      hostId: null,
     };
     const stagedEntry = {
       kind: "worktree" as const,

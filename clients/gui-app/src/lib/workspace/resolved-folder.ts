@@ -32,5 +32,6 @@ export type ResolvedFolder =
       readonly kind: "unresolved";
       readonly path: string;
       readonly name: string;
-      readonly repoIdentifier: TaskRepoIdentifier;
+      /** Null when a non-git folder is foreign/legacy and has no repo identity. */
+      readonly repoIdentifier: TaskRepoIdentifier | null;
     };

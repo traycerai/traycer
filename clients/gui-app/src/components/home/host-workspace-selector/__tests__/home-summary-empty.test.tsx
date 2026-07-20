@@ -191,14 +191,18 @@ vi.mock("@/hooks/host/use-host-queries", () => ({
 }));
 
 vi.mock("@/hooks/workspace/use-workspace-folder-actions", () => ({
-  preparedWorkspaceFolderToWorkspaceFolderInfo: (folder: {
-    readonly workspacePath: string;
-    readonly workspaceName: string;
-    readonly repoIdentifier: unknown;
-  }) => ({
+  preparedWorkspaceFolderToWorkspaceFolderInfo: (
+    folder: {
+      readonly workspacePath: string;
+      readonly workspaceName: string;
+      readonly repoIdentifier: unknown;
+    },
+    hostId: string | null,
+  ) => ({
     path: folder.workspacePath,
     name: folder.workspaceName,
     repoIdentifier: folder.repoIdentifier,
+    hostId,
   }),
   useWorkspaceFolderActions: () => ({
     pickAndPrepareFolders: mocks.pickAndPrepareFolders,

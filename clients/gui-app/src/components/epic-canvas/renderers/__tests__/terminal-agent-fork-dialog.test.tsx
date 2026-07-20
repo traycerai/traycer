@@ -134,6 +134,7 @@ describe("<TerminalAgentForkDialog />", () => {
       path: "/workspace",
       name: "workspace",
       repoIdentifier: null,
+      hostId: null,
     };
     const workspaceSeed: ForkWorkspaceSeed = {
       workspace: {
@@ -493,16 +494,19 @@ const REPO_A: WorkspaceFolderInfo = {
   path: "/repo-a",
   name: "repo-a",
   repoIdentifier: null,
+  hostId: null,
 };
 const REPO_A_EXTRA: WorkspaceFolderInfo = {
   path: "/repo-a-extra",
   name: "repo-a-extra",
   repoIdentifier: null,
+  hostId: null,
 };
 const REPO_B: WorkspaceFolderInfo = {
   path: "/repo-b",
   name: "repo-b",
   repoIdentifier: null,
+  hostId: null,
 };
 
 function localIntentEntry(

@@ -37,7 +37,7 @@ export function useResolvedSeededProfileId(
     cacheKeyIdentity: undefined,
     client,
     method: "providers.list",
-    params: {},
+    params: { native: null },
     options: {
       enabled: active,
       subscribed: active,
