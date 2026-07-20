@@ -231,6 +231,19 @@ function newControllerWithReachability(
   );
 }
 
+function newControllerWithLifecycle(
+  lifecycle: HostControllerHostLifecycle,
+  reachabilityProbe: (websocketUrl: string) => Promise<boolean>,
+): HostController {
+  return new HostController({
+    environment: "production",
+    hostLifecycle: lifecycle,
+    reachabilityProbe,
+    desktopLockWaitMs: DESKTOP_LOCK_WAIT_MS,
+    desktopLockPollIntervalMs: DESKTOP_LOCK_POLL_INTERVAL_MS,
+  });
+}
+
 // Fixup A9: the desktop-held cli-lock's wait/poll is now an injectable
 // `HostControllerOptions` field (production: `DESKTOP_LOCK_WAIT_MS`/
 // `DESKTOP_LOCK_POLL_INTERVAL_MS`, matching the CLI's own 30s `waitMs` -
@@ -4467,6 +4480,96 @@ describe("Class B no-op liveness", () => {
     ).resolves.toMatchObject({
       kind: "installed-not-converged",
     });
+  });
+});
+
+// `completeServiceStart` owns the one post-start publication reload. These
+// four CLI-owned callers used to repeat that reload and ignore its nullable
+// result, creating a second, unguarded success path. Keep the assertion at
+// each public entry point: reintroducing the vestigial caller reload makes
+// exactly that caller's test fail instead of relying on the helper in
+// isolation.
+describe("Class B CLI-owned caller publication", () => {
+  function configureRestartAndStamp(): void {
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: {
+        installGeneration: "restart-command-generation",
+        runtimeVersion: null,
+        runtimeWasNull: true,
+      },
+    });
+    vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
+      if (args.includes("available")) {
+        return availableSnapshotFixture("1.7.0", ["1.7.0"]);
+      }
+      return { outcome: "stamped" };
+    });
+  }
+
+  it("activateInstalledCliOwned performs only completeServiceStart's publication reload", async () => {
+    const lifecycle = fakeHostLifecycle();
+    const controller = newControllerWithLifecycle(lifecycle, async () => true);
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: null,
+    });
+    configureRestartAndStamp();
+
+    await expect(controller.activateInstalled(false)).resolves.toMatchObject({
+      kind: "ok",
+      value: { activated: true },
+    });
+    expect(lifecycle.reloadSnapshotFromDisk).toHaveBeenCalledTimes(1);
+  });
+
+  it("respawn performs only completeServiceStart's publication reload", async () => {
+    const lifecycle = fakeHostLifecycle();
+    const controller = newControllerWithLifecycle(lifecycle, async () => true);
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: null,
+    });
+    configureRestartAndStamp();
+
+    await expect(controller.respawn()).resolves.toMatchObject({
+      kind: "ok",
+      value: { activated: true },
+    });
+    expect(lifecycle.reloadSnapshotFromDisk).toHaveBeenCalledTimes(1);
+  });
+
+  it("recoverIfDown performs only completeServiceStart's publication reload", async () => {
+    const lifecycle = fakeHostLifecycle();
+    const controller = newControllerWithLifecycle(lifecycle, async () => false);
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: null,
+    });
+    configureRestartAndStamp();
+
+    await expect(controller.recoverIfDown()).resolves.toMatchObject({
+      kind: "ok",
+      value: { activated: true },
+    });
+    expect(lifecycle.reloadSnapshotFromDisk).toHaveBeenCalledTimes(1);
+  });
+
+  it("freePortAndRestart performs only completeServiceStart's publication reload", async () => {
+    const lifecycle = fakeHostLifecycle();
+    const controller = newControllerWithLifecycle(lifecycle, async () => true);
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: null,
+    });
+    configureRestartAndStamp();
+
+    await expect(
+      controller.freePortAndRestart(null, null),
+    ).resolves.toMatchObject({
+      kind: "ok",
+      value: { activated: true },
+    });
+    expect(lifecycle.reloadSnapshotFromDisk).toHaveBeenCalledTimes(1);
   });
 });
 
