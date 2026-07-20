@@ -246,7 +246,8 @@ describe("agent runtime stream schema", () => {
       title: "Model changed",
       message: "Codex switched from gpt-5 to gpt-5-safe.",
       details: [{ label: "Reason", value: "highRiskCyberActivity" }],
-      fallbackText: "Codex switched from gpt-5 to gpt-5-safe (highRiskCyberActivity).",
+      fallbackText:
+        "Codex switched from gpt-5 to gpt-5-safe (highRiskCyberActivity).",
       metadata: {
         type: "model_rerouted",
         fromModel: "gpt-5",
@@ -331,6 +332,18 @@ describe("agent runtime stream schema", () => {
             path: "/tmp/project/.agents/skills/frontend-design/SKILL.md",
           },
         },
+        skillInvocations: [
+          {
+            name: "frontend-design",
+            path: "/tmp/project/.agents/skills/frontend-design/SKILL.md",
+            metadata: {},
+          },
+          {
+            name: "react-best-practices",
+            path: "/tmp/project/.agents/skills/react-best-practices/SKILL.md",
+            metadata: {},
+          },
+        ],
       }),
     ).toMatchObject({
       harnessId: "claude",
@@ -341,6 +354,10 @@ describe("agent runtime stream schema", () => {
       },
       systemPrompt: null,
       slashInvocation: { kind: "skill", name: "frontend-design" },
+      skillInvocations: [
+        { name: "frontend-design" },
+        { name: "react-best-practices" },
+      ],
     });
 
     expect(
