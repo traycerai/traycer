@@ -67,6 +67,16 @@ export const settingsTabModule: TabKindModule<"settings", SystemTab> = {
   },
   descriptor: {
     kind: "settings",
+    surface: {
+      render: () => null,
+      canonicalRoute: (tab) => tab.route,
+      splitEligibility: "eligible",
+      duplication: "forbidden",
+      singleton: "per-window",
+      newWindow: "copy",
+      readinessScope: "none",
+      durableState: { owner: "tabs-store", eviction: "reconstruct" },
+    },
     duplicate: () => null,
     resolveIntent: (tab) =>
       settingsTabIntent(

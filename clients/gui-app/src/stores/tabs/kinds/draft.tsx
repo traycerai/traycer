@@ -30,6 +30,16 @@ export const draftTabModule: TabKindModule<"draft", LandingDraftTab> = {
   }),
   descriptor: {
     kind: "draft",
+    surface: {
+      render: () => null,
+      canonicalRoute: (tab) => tab.route,
+      splitEligibility: "eligible",
+      duplication: "forbidden",
+      singleton: "per-instance",
+      newWindow: "none",
+      readinessScope: "default-host",
+      durableState: { owner: "landing-draft", eviction: "reconstruct" },
+    },
     duplicate: () => null,
     resolveIntent: (tab) => draftTabIntent(tab.id),
     routeOptions: (intent) => draftRoute(intent.draftId),

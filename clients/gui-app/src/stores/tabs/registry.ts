@@ -4,7 +4,12 @@ import { draftTabModule } from "@/stores/tabs/kinds/draft";
 import { historyTabModule } from "@/stores/tabs/kinds/history";
 import { settingsTabModule } from "@/stores/tabs/kinds/settings";
 import type { TabNavigationIntent } from "@/lib/tab-navigation/intents";
-import type { HeaderTab, OpenInNewWindowDeps } from "@/stores/tabs/types";
+import type {
+  HeaderTab,
+  OpenInNewWindowDeps,
+  TabSurfaceCapabilities,
+  TabSurfaceDescriptor,
+} from "@/stores/tabs/types";
 
 /**
  * Registry of every tab kind. Adding a new kind:
@@ -31,6 +36,63 @@ export const TAB_KINDS = {
  * `TAB_KINDS` automatically extends this type - no manual edit required.
  */
 export type HeaderTabKind = keyof typeof TAB_KINDS;
+
+/**
+ * Compile-time audit over the existing registry itself. It creates no second
+ * registry: the value is the same `TAB_KINDS` object, checked to ensure every
+ * registered kind exposes the full surface contract.
+ */
+export const TAB_KINDS_SURFACE_CONTRACT = TAB_KINDS satisfies Record<
+  HeaderTabKind,
+  { readonly descriptor: { readonly surface: TabSurfaceCapabilities } }
+>;
+
+/** Runtime guard for persisted layout sanitization. */
+export function isRegisteredTabKind(kind: string): kind is HeaderTabKind {
+  return Object.hasOwn(TAB_KINDS, kind);
+}
+
+/**
+ * Surface-policy dispatch. This composes with the established behavioral
+ * descriptor rather than creating a parallel split-view registry.
+ */
+export function tabSurfaceDescriptor(
+  kind: "epic",
+): TabSurfaceDescriptor<"epic">;
+export function tabSurfaceDescriptor(
+  kind: "draft",
+): TabSurfaceDescriptor<"draft">;
+export function tabSurfaceDescriptor(
+  kind: "history",
+): TabSurfaceDescriptor<"history">;
+export function tabSurfaceDescriptor(
+  kind: "settings",
+): TabSurfaceDescriptor<"settings">;
+export function tabSurfaceDescriptor(
+  kind: HeaderTabKind,
+):
+  | TabSurfaceDescriptor<"epic">
+  | TabSurfaceDescriptor<"draft">
+  | TabSurfaceDescriptor<"history">
+  | TabSurfaceDescriptor<"settings">;
+export function tabSurfaceDescriptor(
+  kind: HeaderTabKind,
+):
+  | TabSurfaceDescriptor<"epic">
+  | TabSurfaceDescriptor<"draft">
+  | TabSurfaceDescriptor<"history">
+  | TabSurfaceDescriptor<"settings"> {
+  switch (kind) {
+    case "epic":
+      return TAB_KINDS.epic.descriptor.surface;
+    case "draft":
+      return TAB_KINDS.draft.descriptor.surface;
+    case "history":
+      return TAB_KINDS.history.descriptor.surface;
+    case "settings":
+      return TAB_KINDS.settings.descriptor.surface;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Per-concern dispatch functions (spec D28 - all switches live here)

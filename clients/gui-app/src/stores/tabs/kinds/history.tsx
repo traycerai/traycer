@@ -25,6 +25,16 @@ export const historyTabModule: TabKindModule<"history", SystemTab> = {
   }),
   descriptor: {
     kind: "history",
+    surface: {
+      render: () => null,
+      canonicalRoute: (tab) => tab.route,
+      splitEligibility: "eligible",
+      duplication: "forbidden",
+      singleton: "per-window",
+      newWindow: "copy",
+      readinessScope: "default-host",
+      durableState: { owner: "tabs-store", eviction: "reconstruct" },
+    },
     duplicate: () => null,
     resolveIntent: () => historyTabIntent(),
     routeOptions: () => ({ to: HISTORY_DEFAULT_PATH }),

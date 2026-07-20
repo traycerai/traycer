@@ -72,6 +72,8 @@ interface LandingDraftStoreState {
   readonly activeDraftId: string | null;
   /** Always creates a fresh draft, sets it as active, returns its id. */
   createDraft: (settings: ChatRunSettings | null) => string;
+  /** Coordinator-only stable-id source creation. */
+  createDraftWithId: (id: string, settings: ChatRunSettings | null) => string;
   /** Remove a draft by id. If it was the active draft, clears `activeDraftId`;
    *  strip-neighbor navigation in the close-flow handles where the user lands. */
   closeDraft: (id: string) => void;
@@ -296,8 +298,13 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
       activeDraftId: null,
 
       createDraft: (settings) => {
+        return get().createDraftWithId(uuidv4(), settings);
+      },
+
+      createDraftWithId: (id, settings) => {
+        if (get().drafts.some((draft) => draft.id === id)) return id;
         const next: LandingDraftTab = {
-          id: uuidv4(),
+          id,
           content: EMPTY_LANDING_DRAFT_CONTENT,
           selection: null,
           lastTouchedAt: Date.now(),

@@ -226,6 +226,12 @@ export interface EpicCanvasStore {
   readonly pendingChatTitles: Readonly<Record<string, PendingTitleEntry>>;
 
   openEpicTab: (epicId: string, name: string | undefined) => string;
+  /** Coordinator-only stable-id source creation. */
+  openEpicTabWithId: (
+    tabId: string,
+    epicId: string,
+    name: string | undefined,
+  ) => string;
   /**
    * Open an epic tab in the header strip WITHOUT activating it - the active
    * tab and current route are left untouched. Reuses an existing tab for the
@@ -921,6 +927,20 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
 
       openEpicTab: (epicId, name) => {
         const tab = createEpicViewTab(epicId, name);
+        set((state) => ({
+          ...appendedEpicTabState(state, tab),
+          activeTabId: tab.tabId,
+        }));
+        return tab.tabId;
+      },
+
+      openEpicTabWithId: (tabId, epicId, name) => {
+        if (get().tabsById[tabId] !== undefined) return tabId;
+        const tab: EpicViewTab = {
+          tabId,
+          epicId,
+          name: name ?? UNTITLED_EPIC_TITLE,
+        };
         set((state) => ({
           ...appendedEpicTabState(state, tab),
           activeTabId: tab.tabId,

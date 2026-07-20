@@ -31,6 +31,16 @@ export const epicTabModule: TabKindModule<"epic", EpicViewTab> = {
   }),
   descriptor: {
     kind: "epic",
+    surface: {
+      render: () => null,
+      canonicalRoute: (tab) => tab.route,
+      splitEligibility: "eligible",
+      duplication: "allowed",
+      singleton: "per-instance",
+      newWindow: "move",
+      readinessScope: "tab-host",
+      durableState: { owner: "epic-canvas", eviction: "reconstruct" },
+    },
     duplicate: (tab) => {
       const duplicated = duplicateEpicTab(tab.id);
       if (duplicated === null) return null;
