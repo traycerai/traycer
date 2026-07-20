@@ -36,7 +36,10 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Arch } from "electron-builder";
-import { labelForEnvironment } from "../../../src/electron-main/host/host-paths";
+import {
+  labelForEnvironment,
+  smAppServiceAgentLabelId,
+} from "../../../src/electron-main/host/host-paths";
 
 const require = createRequire(import.meta.url);
 
@@ -207,18 +210,21 @@ describe("inject-host-launch-agent afterPack", () => {
   describe.skipIf(process.platform !== "darwin")(
     "darwin production build (spawns real codesign/plutil against scaffolded temp .app fixtures only)",
     () => {
-      it("keeps the injected plist's filename and Label in lockstep with SMAppService's lookup (host-paths labelForEnvironment)", async () => {
+      it("keeps the injected plists' filenames and Labels in lockstep with SMAppService's lookup (host-paths labelForEnvironment + smAppServiceAgentLabelId)", async () => {
         // SMAppService resolves the login item strictly by the
         // `<label>.plist` filename under Contents/Library/LaunchAgents,
         // where <label> comes from host-login-item.ts via
-        // labelForEnvironment. The injector necessarily duplicates that
-        // string (a pack-time .cjs cannot import electron-main TS), so
-        // parity was previously pinned only by matching literals - drift
-        // would ship a plist SMAppService can never find while every
-        // literal-based assertion stayed green. This test crosses the
-        // boundary: the expected name comes from the REAL production
-        // lookup code, not a copied string.
-        const expectedLabel = labelForEnvironment("production").id;
+        // labelForEnvironment/smAppServiceAgentLabelId. The injector
+        // necessarily duplicates those strings (a pack-time .cjs cannot
+        // import electron-main TS), so parity was previously pinned only
+        // by matching literals - drift would ship a plist SMAppService can
+        // never find while every literal-based assertion stayed green.
+        // This test crosses the boundary: the expected names come from the
+        // REAL production lookup code, not copied strings. Both plists are
+        // asserted: the registered agent plist AND the inert old-label
+        // plist the desktop's transition cleanup resolves for unregister.
+        const cliLabel = labelForEnvironment("production").id;
+        const agentLabel = smAppServiceAgentLabelId(cliLabel);
         const { modulePath, appOutDir, appPath } = createFixture("production");
         const injected = loadModule(modulePath);
 
@@ -228,19 +234,21 @@ describe("inject-host-launch-agent afterPack", () => {
           arch: Arch.arm64,
         });
 
-        const agentPlistPath = path.join(
-          appPath,
-          "Contents",
-          "Library",
-          "LaunchAgents",
-          `${expectedLabel}.plist`,
-        );
-        expect(existsSync(agentPlistPath)).toBe(true);
-        expect(readFileSync(agentPlistPath, "utf8")).toMatch(
-          new RegExp(
-            `<key>Label</key>\\s*<string>${expectedLabel.replaceAll(".", "\\.")}</string>`,
-          ),
-        );
+        for (const expectedLabel of [agentLabel, cliLabel]) {
+          const plistPath = path.join(
+            appPath,
+            "Contents",
+            "Library",
+            "LaunchAgents",
+            `${expectedLabel}.plist`,
+          );
+          expect(existsSync(plistPath)).toBe(true);
+          expect(readFileSync(plistPath, "utf8")).toMatch(
+            new RegExp(
+              `<key>Label</key>\\s*<string>${expectedLabel.replaceAll(".", "\\.")}</string>`,
+            ),
+          );
+        }
       });
 
       it("stages a signed helper .app and a relocatable NumberOfFiles=8192 LaunchAgent plist, both valid via plutil -lint", async () => {
@@ -286,11 +294,24 @@ describe("inject-host-launch-agent afterPack", () => {
           "Contents",
           "Library",
           "LaunchAgents",
-          "ai.traycer.host.plist",
+          "ai.traycer.host.agent.plist",
         );
         expect(existsSync(agentPlistPath)).toBe(true);
         expect(() =>
           execFileSync("plutil", ["-lint", agentPlistPath]),
+        ).not.toThrow();
+        // The inert old-label plist must also be structurally valid - the
+        // desktop's transition unregister resolves it via SMAppService.
+        const inertOldPlistPath = path.join(
+          appPath,
+          "Contents",
+          "Library",
+          "LaunchAgents",
+          "ai.traycer.host.plist",
+        );
+        expect(existsSync(inertOldPlistPath)).toBe(true);
+        expect(() =>
+          execFileSync("plutil", ["-lint", inertOldPlistPath]),
         ).not.toThrow();
 
         const agentPlist = readFileSync(agentPlistPath, "utf8");
