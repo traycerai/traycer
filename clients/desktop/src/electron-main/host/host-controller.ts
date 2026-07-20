@@ -482,6 +482,13 @@ export class HostController {
   // section itself).
   private pendingRevisionTail: Promise<void> = Promise.resolve();
 
+  // Fixup D1: coalescing slot for `applyPendingLoginItemRevisionIfIdle` -
+  // see that method's doc comment. Mirrors the deleted `runEnsureHost`'s
+  // module-scoped `inFlight` slot, instance-scoped here since each
+  // `HostController` already owns its own long-lived state.
+  private pendingRevisionCycleInFlight: Promise<MutationOutcome<ConvergeReadyOk> | null> | null =
+    null;
+
   private downloadTail: Promise<void> = Promise.resolve();
   private downloadStatus: DownloadLaneStatus | null = null;
   private downloadAbortController: AbortController | null = null;
@@ -941,11 +948,43 @@ export class HostController {
   // `withDesktopCliLock`, the same cross-process exclusion any other
   // controller-driven SMAppService section uses; going through the
   // mutation lane would additionally force a `host ensure` CLI round trip on
-  // every poll tick just to reach this check. Returns the converged result
-  // when this path fully handled the call (refreshed, removed-by-user, or a
-  // terminal refresh failure), or `null` when there was nothing to do (not
-  // reachable, no marker, quarantined, or the host is busy).
+  // every poll tick just to reach this check, AND (the more serious reason)
+  // `convergeReadyPackagedMac` calls this reentrantly from INSIDE an already-
+  // running `enqueueMutation` job - routing through `enqueueMutation` here
+  // would deadlock that caller against its own tail. Returns the converged
+  // result when this path fully handled the call (refreshed, removed-by-
+  // user, or a terminal refresh failure), or `null` when there was nothing
+  // to do (not reachable, no marker, quarantined, or the host is busy).
+  //
+  // Fixup D1: the monitor's tick and the reentrant `convergeReadyPackagedMac`
+  // caller used to each independently pass every pre-check and run their own
+  // disruptive SMAppService bootout+reregister when they landed concurrently
+  // - two genuine cycles instead of one, the exact double-bootout the
+  // deleted `runEnsureHost`'s module-scoped in-flight slot existed to
+  // prevent. `enqueueMutation`'s own coalescing can't be reused here for the
+  // same reentrancy reason it can't provide exclusivity (above), so this
+  // gate is a SEPARATE, instance-scoped in-flight slot, checked and set
+  // synchronously (no `await` in between) so two calls landing in the same
+  // JS turn can't both see it empty. Whichever caller arrives first owns the
+  // slot for the ENTIRE call - including its own pre-checks - the other
+  // joins its result outright, exactly mirroring how `runEnsureHost` gated
+  // before any of its own logic ran.
   async applyPendingLoginItemRevisionIfIdle(): Promise<MutationOutcome<ConvergeReadyOk> | null> {
+    if (this.pendingRevisionCycleInFlight !== null) {
+      return this.pendingRevisionCycleInFlight;
+    }
+    const run = this.applyPendingLoginItemRevisionIfIdleUncoalesced();
+    this.pendingRevisionCycleInFlight = run;
+    const clearInFlight = (): void => {
+      if (this.pendingRevisionCycleInFlight === run) {
+        this.pendingRevisionCycleInFlight = null;
+      }
+    };
+    run.then(clearInFlight, clearInFlight);
+    return run;
+  }
+
+  private async applyPendingLoginItemRevisionIfIdleUncoalesced(): Promise<MutationOutcome<ConvergeReadyOk> | null> {
     const currentVersion = await readRunningRuntimeVersion(
       this.layout,
       this.reachabilityProbe,
@@ -974,17 +1013,11 @@ export class HostController {
     }
     // Fixup B15: everything from here on acquires the desktop lock and
     // cycles SMAppService - a genuine host mutation the quit-time drain
-    // (`awaitMutationLaneIdle`) must be able to wait for. This method is
-    // reachable BOTH standalone (the pending-login-item-revision monitor's
-    // poll loop, entirely outside the FIFO mutation lane) AND reentrantly
-    // from `convergeReadyPackagedMac`, itself already running INSIDE an
-    // active `enqueueMutation` job - routing through `enqueueMutation`
-    // here would deadlock the second case (it would chain onto
-    // `mutationTail`, which by then already points at the very job this
-    // call is running inside of). Track it on an independent tail instead,
-    // joined (not overwritten) with whatever the tail already covers, so
-    // an overlapping call never drops visibility of an earlier one still
-    // in flight.
+    // (`awaitMutationLaneIdle`) must be able to wait for. Track it on an
+    // independent tail (not the FIFO mutation lane - see the doc comment on
+    // `applyPendingLoginItemRevisionIfIdle`), joined (not overwritten) with
+    // whatever the tail already covers, so an overlapping call never drops
+    // visibility of an earlier one still in flight.
     const priorTail = this.pendingRevisionTail;
     const cycle = this.runPendingLoginItemRevisionCycle(currentVersion);
     this.pendingRevisionTail = Promise.all([
@@ -1031,6 +1064,22 @@ export class HostController {
         if (record === null) {
           return { status: null, prePid, expectedGeneration: null };
         }
+        // Fixup D1 defense-in-depth: the in-flight coalescing gate on
+        // `applyPendingLoginItemRevisionIfIdle` is the primary fix for two
+        // concurrent callers double-cycling SMAppService, but this closure
+        // only runs once per acquisition regardless of how many callers are
+        // waiting on the desktop lock - re-check the marker itself here,
+        // under the lock, the same lock-rule-3 discipline B12 applies to
+        // the install record above. Catches the marker resolving through
+        // any OTHER path between the pre-lock check and acquisition, not
+        // just the specific race the coalescing gate closes.
+        if (!(await hasPendingLoginItemRevision(this.environment))) {
+          return {
+            status: "no-longer-pending" as const,
+            prePid,
+            expectedGeneration: null,
+          };
+        }
         const expectedGeneration =
           record.runtimeVersion === null
             ? attestedInstallGenerationFromDisk(record)
@@ -1060,6 +1109,12 @@ export class HostController {
     if (status === null) {
       log.debug(
         "[host-controller] pending LaunchAgent revision skipped - install absent after lock acquisition",
+      );
+      return null;
+    }
+    if (status === "no-longer-pending") {
+      log.debug(
+        "[host-controller] pending LaunchAgent revision skipped - marker resolved before this cycle acquired the lock",
       );
       return null;
     }

@@ -342,6 +342,13 @@ describe("runTraycerCliJson unwraps result envelopes", () => {
   });
 
   it("ignores progress events before the terminal result line", async () => {
+    // Fixup D2: a progress line trails the result line here, deliberately -
+    // if the loop just took whatever line came last (rather than genuinely
+    // skipping progress-typed events), it would wrongly select this
+    // trailing progress event instead of the result. Positioning every
+    // progress line before the result (the old fixture) made this
+    // indistinguishable from "last line wins", since both implementations
+    // would land on the same line.
     const lines = [
       JSON.stringify({
         type: "progress",
@@ -353,18 +360,18 @@ describe("runTraycerCliJson unwraps result envelopes", () => {
         timestamp: "2026-05-15T00:00:00Z",
       }),
       JSON.stringify({
-        type: "progress",
-        stage: "download",
-        percent: 75,
-        bytes: 3000,
-        totalBytes: 4000,
-        message: "downloading",
-        timestamp: "2026-05-15T00:00:01Z",
-      }),
-      JSON.stringify({
         type: "result",
         status: "ok",
         data: { final: true, version: "1.5.0" },
+        timestamp: "2026-05-15T00:00:01Z",
+      }),
+      JSON.stringify({
+        type: "progress",
+        stage: "download",
+        percent: 100,
+        bytes: 4000,
+        totalBytes: 4000,
+        message: "finishing up",
         timestamp: "2026-05-15T00:00:02Z",
       }),
     ];
@@ -817,12 +824,15 @@ describe("CLI_UPGRADE_PENDING preservation through Desktop projection", () => {
     const data = await runTraycerCliJson<{
       issues: ReadonlyArray<typeof pendingIssue>;
     }>(["host", "doctor"]);
-    // The projection step from host-management-ipc.ts walks `data.issues`
-    // and maps each issue into the HostDoctorReport shape. We mirror
-    // the salient field reads here so a regression in the unwrap layer
-    // surfaces as a missing issue rather than a generic typing error.
-    expect(Array.isArray(data.issues)).toBe(true);
-    const issue = data.issues.find((i) => i.code === "CLI_UPGRADE_PENDING");
+    // Fixup D2: call the real projector instead of re-implementing its
+    // field reads inline - the earlier version manually mirrored the
+    // mapping logic, so a regression inside `projectDoctorReport` itself
+    // (e.g. silently dropping `fixAction`/`terminalCommand`) would not
+    // have been caught here.
+    const { projectDoctorReport } =
+      await import("../../ipc/host-management-ipc");
+    const report = projectDoctorReport(data);
+    const issue = report.issues.find((i) => i.code === "CLI_UPGRADE_PENDING");
     expect(issue).toBeDefined();
     expect(issue?.fixAction).toBe("host-restart");
     expect(issue?.terminalCommand).toBe("traycer host restart");

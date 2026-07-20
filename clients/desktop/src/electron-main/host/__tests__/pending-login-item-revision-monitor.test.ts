@@ -46,7 +46,12 @@ describe("startPendingLoginItemRevisionMonitor", () => {
     }
   }
 
-  it("calls applyPendingLoginItemRevisionIfIdle on every tick and resets the failure budget on an ok outcome", async () => {
+  // Fixup D2: title narrowed - every outcome here is "ok", so there is never
+  // a spent failure budget for this test to reset. The reset-on-success
+  // claim is actually exercised (failure -> success -> failure again all
+  // still running) by the test below, "resets the failure budget after a
+  // successful refresh".
+  it("calls applyPendingLoginItemRevisionIfIdle on every tick", async () => {
     const refresh = vi.fn(async (): Promise<Outcome> => ({
       kind: "ok",
       value: { running: true, version: SERVICE_VERSION },

@@ -65,7 +65,14 @@ describe("runUpdateInstallQuitSequence", () => {
   it("still drains and quits when the host mutation drain throws (fail-open)", async () => {
     const order: string[] = [];
     await runUpdateInstallQuitSequence({
-      drainHostMutation: () => Promise.reject(new Error("drain blew up")),
+      // Fixup D2: push a marker before rejecting - a plain
+      // `Promise.reject(...)` leaves no trace that `drainHostMutation` was
+      // ever invoked, so a regression that dropped the call entirely would
+      // still produce the same ["drain", "authorize"] order.
+      drainHostMutation: () => {
+        order.push("host-drain-attempt");
+        return Promise.reject(new Error("drain blew up"));
+      },
       isInstallPending: () => true,
       drainRendererProjection: async () => {
         order.push("drain");
@@ -79,7 +86,7 @@ describe("runUpdateInstallQuitSequence", () => {
       },
     });
 
-    expect(order).toEqual(["drain", "authorize"]);
+    expect(order).toEqual(["host-drain-attempt", "drain", "authorize"]);
   });
 
   it("still quits when the renderer drain rejects (fail-open)", async () => {
@@ -87,8 +94,13 @@ describe("runUpdateInstallQuitSequence", () => {
     await runUpdateInstallQuitSequence({
       drainHostMutation: async () => true,
       isInstallPending: () => true,
-      drainRendererProjection: () =>
-        Promise.reject(new Error("renderer went away")),
+      // Fixup D2: same gap as above - mark the attempt before rejecting so a
+      // dropped call to `drainRendererProjection` can't masquerade as one
+      // that ran and was caught.
+      drainRendererProjection: () => {
+        order.push("renderer-drain-attempt");
+        return Promise.reject(new Error("renderer went away"));
+      },
       authorizeQuitAfterFlush: () => {
         order.push("authorize");
       },
@@ -97,7 +109,7 @@ describe("runUpdateInstallQuitSequence", () => {
       },
     });
 
-    expect(order).toEqual(["authorize"]);
+    expect(order).toEqual(["renderer-drain-attempt", "authorize"]);
   });
 
   it("stays open without draining when the install failed during the host mutation drain", async () => {

@@ -2469,6 +2469,80 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
 
     expect(await controller.awaitMutationLaneIdle(20)).toBe(true);
   });
+
+  // Fixup D1: two concurrent callers (the monitor's standalone tick and a
+  // reentrant call from `convergeReadyPackagedMac`) used to each pass every
+  // pre-check independently and run their own disruptive SMAppService
+  // bootout+reregister - confirmed empirically in Batch C via this exact
+  // scenario (`registerHostLoginItem` called twice). The in-flight
+  // coalescing gate now makes the second caller join the first's result
+  // instead of starting its own cycle.
+  it("two concurrent callers coalesce onto a single disruptive cycle - registerHostLoginItem runs once, both resolve", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+    vi.mocked(hasPendingLoginItemRevision).mockResolvedValue(true);
+    vi.mocked(registerHostLoginItem).mockResolvedValue("enabled");
+    vi.mocked(waitForHostReady).mockResolvedValue({
+      ready: true,
+      version: "1.7.0",
+      pid: process.pid,
+      reason: "ready",
+    });
+
+    const [first, second] = await Promise.all([
+      controller.applyPendingLoginItemRevisionIfIdle(),
+      controller.applyPendingLoginItemRevisionIfIdle(),
+    ]);
+
+    expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
+    const expected = {
+      kind: "ok",
+      value: { running: true, version: "1.7.0" },
+    };
+    expect(first).toEqual(expected);
+    expect(second).toEqual(expected);
+
+    // The slot clears once settled - a later, independent call can still
+    // run its own cycle rather than being stuck joined forever.
+    vi.mocked(hasPendingLoginItemRevision).mockResolvedValue(true);
+    const third = await controller.applyPendingLoginItemRevisionIfIdle();
+    expect(third).toEqual(expected);
+    expect(registerHostLoginItem).toHaveBeenCalledTimes(2);
+  });
+
+  // Fixup D1 defense-in-depth: the locked closure now re-checks the pending-
+  // revision marker itself after acquisition, not just the install record
+  // (B12). This proves that reread independent of the coalescing gate above -
+  // by the time the lock is acquired, the marker is gone even though the
+  // pre-lock check (mocked here, so it can't see the file the marker itself
+  // would live at) still reported it as pending.
+  it("skips the bootout and returns null when the pending-revision marker resolves before lock acquisition", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+    let hasPendingCallCount = 0;
+    vi.mocked(hasPendingLoginItemRevision).mockImplementation(async () => {
+      hasPendingCallCount += 1;
+      // First call: the pre-lock check (still pending). Second call: the
+      // defense-in-depth reread inside the locked closure (resolved).
+      return hasPendingCallCount === 1;
+    });
+
+    const outcome = await controller.applyPendingLoginItemRevisionIfIdle();
+
+    expect(outcome).toBeNull();
+    expect(registerHostLoginItem).not.toHaveBeenCalled();
+    expect(hasPendingCallCount).toBe(2);
+  });
 });
 
 // ---------------------------------------------------------------------------

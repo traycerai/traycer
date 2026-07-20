@@ -356,7 +356,7 @@ function projectAvailableSnapshot(raw: unknown): HostAvailableSnapshot {
   };
 }
 
-function projectDoctorReport(raw: unknown): HostDoctorReport {
+export function projectDoctorReport(raw: unknown): HostDoctorReport {
   const ranAt = new Date().toISOString();
   if (!isPlainObject(raw) || !Array.isArray(raw.issues)) {
     return { issues: [], ranAt };
