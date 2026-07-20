@@ -292,56 +292,56 @@ export function LandingComposer(props: LandingComposerProps) {
   );
 
   return (
-    <div className="flex flex-col gap-3">
-      {rateLimitPrompt.kind === "visible" ? (
-        <ProfileRateLimitSwitchBanner
-          key={rateLimitPrompt.warningKey}
-          harnessId={harnessId}
-          providerId={rateLimitPrompt.providerId}
-          severity={rateLimitPrompt.severity}
-          limitedFamilies={rateLimitPrompt.limitedFamilies}
-          current={rateLimitPrompt.current}
-          profiles={rateLimitPrompt.profiles}
-          destinations={rateLimitPrompt.destinations}
-          primaryTarget={rateLimitPrompt.primaryTarget}
-          // Landing has no tab of its own; `null` resolves the usage
-          // sidecar/R-key refresh to the app-wide default host, matching
-          // `ComposerToolbar`'s own `runTargetHostId={null}` for this
-          // surface (composer-body.tsx).
-          runTargetHostId={null}
-          onSwitchProfile={onSwitchRateLimitedProfile}
-          affectedChatCount={0}
-          onSwitchProfileForTask={noopSwitchProfileForTask}
-          onDismiss={rateLimitPrompt.dismiss}
-        />
-      ) : null}
-      <ComposerBody
-        pickerStore={pickerStore}
-        editorRef={editorRef}
-        toolbarStore={toolbarStore}
-        composerMode={composerMode}
-        chatEditorIsActive={chatComposerActive}
-        editorClassName={COMPOSER_EDITOR_CLASSNAME}
-        initialContent={initialContent}
-        initialSelection={initialSelection}
-        canSubmit={canSubmit}
-        isSubmitting={isSubmitting}
-        attachmentPending={attachmentPending}
-        workspaceDisabledHint={workspaceAvailability.disabledHint}
-        header={<div className="flex justify-end">{switcher}</div>}
-        attachmentsStrip={
-          <LandingComposerAttachmentStrip onRemoveImage={handleRemoveImage} />
-        }
-        workspaceControls={props.workspaceControls}
-        dictationControl={dictationControl}
-        dictationPreparing={dictationPreparing}
-        paste={paste}
-        hasPastedImageBytes={null}
-        onSubmit={handleSubmit}
-        onStartTerminal={handleStartTerminal}
-        onSnapshot={handleSnapshot}
-      />
-    </div>
+    <ComposerBody
+      pickerStore={pickerStore}
+      editorRef={editorRef}
+      toolbarStore={toolbarStore}
+      composerMode={composerMode}
+      chatEditorIsActive={chatComposerActive}
+      editorClassName={COMPOSER_EDITOR_CLASSNAME}
+      initialContent={initialContent}
+      initialSelection={initialSelection}
+      canSubmit={canSubmit}
+      isSubmitting={isSubmitting}
+      attachmentPending={attachmentPending}
+      workspaceDisabledHint={workspaceAvailability.disabledHint}
+      header={<div className="flex justify-end">{switcher}</div>}
+      topBanner={
+        rateLimitPrompt.kind === "visible" ? (
+          <ProfileRateLimitSwitchBanner
+            key={rateLimitPrompt.warningKey}
+            harnessId={harnessId}
+            providerId={rateLimitPrompt.providerId}
+            severity={rateLimitPrompt.severity}
+            limitedFamilies={rateLimitPrompt.limitedFamilies}
+            current={rateLimitPrompt.current}
+            profiles={rateLimitPrompt.profiles}
+            destinations={rateLimitPrompt.destinations}
+            primaryTarget={rateLimitPrompt.primaryTarget}
+            // Landing has no tab of its own; `null` resolves the usage
+            // sidecar/R-key refresh to the app-wide default host, matching
+            // `ComposerToolbar`'s own `runTargetHostId={null}` for this
+            // surface (composer-body.tsx).
+            runTargetHostId={null}
+            onSwitchProfile={onSwitchRateLimitedProfile}
+            affectedChatCount={0}
+            onSwitchProfileForTask={noopSwitchProfileForTask}
+            onDismiss={rateLimitPrompt.dismiss}
+          />
+        ) : null
+      }
+      attachmentsStrip={
+        <LandingComposerAttachmentStrip onRemoveImage={handleRemoveImage} />
+      }
+      workspaceControls={props.workspaceControls}
+      dictationControl={dictationControl}
+      dictationPreparing={dictationPreparing}
+      paste={paste}
+      hasPastedImageBytes={null}
+      onSubmit={handleSubmit}
+      onStartTerminal={handleStartTerminal}
+      onSnapshot={handleSnapshot}
+    />
   );
 }
 

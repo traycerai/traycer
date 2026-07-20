@@ -7,7 +7,9 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createStore } from "zustand/vanilla";
+import type { ReactNode } from "react";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
+import type { ModelOption } from "@/components/home/data/landing-options";
 import type { ProfileRateLimitSwitchPrompt } from "@/components/chat/composer/use-profile-rate-limit-switch-prompt";
 
 import { LandingComposer } from "../landing-composer";
@@ -15,7 +17,7 @@ import { LandingComposer } from "../landing-composer";
 interface CapturedPromptArgs {
   readonly harnessId: unknown;
   readonly profileId: unknown;
-  readonly selectedModel: unknown;
+  readonly selectedModel: ModelOption | null;
   readonly active: unknown;
   readonly client: unknown;
 }
@@ -34,19 +36,37 @@ const testState = vi.hoisted<{
   bannerProps: CapturedBannerProps | null;
   commitProfileSelection: Mock;
   surfaceActive: boolean;
+  seededModel: ModelOption;
 }>(() => ({
   prompt: { kind: "hidden", dismiss: vi.fn() },
   promptArgs: null as CapturedPromptArgs | null,
   bannerProps: null as CapturedBannerProps | null,
   commitProfileSelection: vi.fn(),
   surfaceActive: true,
+  seededModel: {
+    harnessId: "claude",
+    slug: "claude-sonnet",
+    label: "Sonnet",
+    description: null,
+    contextWindow: null,
+    maxOutputTokens: null,
+    defaultReasoningEffort: null,
+    supportedReasoningEfforts: [],
+    defaultServiceTier: null,
+    supportedServiceTiers: [],
+    metadata: {},
+  },
 }));
 
 vi.mock("@/components/home/composer/composer-body", async () => {
   const React = await import("react");
   return {
-    ComposerBody: () =>
-      React.createElement("div", { "data-testid": "composer-body" }),
+    ComposerBody: (props: { topBanner: ReactNode }) =>
+      React.createElement(
+        "div",
+        { "data-testid": "composer-body" },
+        props.topBanner,
+      ),
   };
 });
 
@@ -148,7 +168,7 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", () => {
       modelSlug: "claude-sonnet",
       profileId: null,
     },
-    selectedModel: null,
+    selectedModel: testState.seededModel,
     permission: "supervised",
     reasoning: "medium",
     serviceTier: "",
@@ -319,6 +339,7 @@ describe("LandingComposer rate-limit banner wiring", () => {
     if (args === null) throw new Error("expected prompt args");
     expect(args.harnessId).toBe("claude");
     expect(args.profileId).toBeNull();
+    expect(args.selectedModel).toBe(testState.seededModel);
     expect(args.client).toBeNull();
     expect(args.active).toBe(true);
   });
