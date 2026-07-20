@@ -233,7 +233,7 @@ export function useHeaderRateLimitBars(
   // Verified here - rather than just trusted from `GLYPH_PROVIDER_IDS`'s own
   // comment - so a future glyph provider on a different lane falls back to
   // `null` (TanStack's defaults) instead of silently borrowing an unrelated
-  // provider's refetch behavior.
+  // provider's polling participation.
   const glyphOptions = glyphProviders.map(
     (target) =>
       providerRateLimitQueryOptions(target.providerId, target.profileId)
@@ -244,8 +244,7 @@ export function useHeaderRateLimitBars(
   const sharedGlyphOptions =
     firstGlyphOptions !== null &&
     glyphOptions.every(
-      (options) =>
-        options.refetchInterval === firstGlyphOptions.refetchInterval,
+      (options) => options.poll === firstGlyphOptions.poll,
     )
       ? firstGlyphOptions
       : null;

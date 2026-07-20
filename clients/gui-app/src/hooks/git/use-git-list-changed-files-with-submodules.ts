@@ -13,7 +13,9 @@ import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
 import { useHostClientFor } from "@/hooks/host/use-host-client-for";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
+import { stampHostRpcMethod } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { gitQueryKeys } from "@/lib/query-keys/git-query-keys";
+import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
 import {
   bumpRichSlotOwnershipEpoch,
   createRichSlotRequest,
@@ -21,18 +23,6 @@ import {
   richSlotOrderingKey,
 } from "@/lib/git/git-rich-slot-ordering";
 import { useWsStreamClient } from "@/lib/host/stream-runtime-context";
-
-/**
- * FALLBACK-ONLY bounded poll interval used while any submodule is dirty. In
- * the fallback ownership state (stream negotiated at minor 0 / unknown) the
- * parent stream is blind to inner-only submodule edits (they don't move the
- * gitlink's dirty flags once already dirty) and the parent fingerprint
- * deliberately doesn't fold `submodules[]`, so a dirty submodule needs a
- * timer to pick up further inner edits. Under STREAM ownership (minor >= 1)
- * the query is disabled entirely - rich frames carry the nested snapshot and
- * this timer never runs.
- */
-const SUBMODULE_BOUNDED_REFRESH_MS = 5000;
 
 export interface GitListChangedFilesWithSubmodulesResult {
   readonly data: GitListChangedFilesResponseV11 | null;
@@ -290,6 +280,8 @@ export function useGitListChangedFilesWithSubmodules(args: {
   const client = useHostClientFor(entry);
   const readiness = useReactiveHostReadiness(client);
   const queryClient = useQueryClient();
+  const conditionPollCoordinator =
+    getConditionPollEpisodeCoordinator(queryClient);
   const wsStreamClient = useWsStreamClient();
   const streamOwnsRichSlot = useStreamOwnsRichSlot();
 
@@ -358,15 +350,17 @@ export function useGitListChangedFilesWithSubmodules(args: {
         ignoreWhitespace,
       ),
       queryFn: request,
+      meta: stampHostRpcMethod(undefined, "git.listChangedFiles"),
+      retry: false,
       enabled,
       staleTime: Infinity,
       refetchOnWindowFocus: false,
       // Fallback-only: inactive whenever the query is disabled (stream
-      // ownership), so the dirty timer runs only in the fallback state.
-      refetchInterval: (query) =>
-        hasDirtySubmodulesForRefresh(query.state.data)
-          ? SUBMODULE_BOUNDED_REFRESH_MS
-          : false,
+      // ownership), so the table-derived dirty-submodule timer runs only in
+      // the fallback state.
+      refetchInterval: conditionPollCoordinator.refetchIntervalFor(
+        "git.listChangedFiles",
+      ),
     }),
   );
 

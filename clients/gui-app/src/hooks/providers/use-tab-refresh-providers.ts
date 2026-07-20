@@ -9,6 +9,7 @@ import { useHostMutation } from "@/hooks/host/use-host-query";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { hostQueryKeys, providersMutationKeys } from "@/lib/query-keys";
+import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
 import { PROVIDER_INVALIDATIONS } from "@/hooks/providers/invalidations";
 import { toastFromHostError } from "@/lib/host-error-toast";
 
@@ -60,6 +61,13 @@ export function useTabRefreshProviders(): () => Promise<void> {
   const { mutateAsync } = mutation;
   return useCallback(async () => {
     if (client === null) return;
+    getConditionPollEpisodeCoordinator(queryClient).resetQueryByKey(
+      hostQueryKeys.method<HostRpcRegistry, "providers.list">(
+        tabHostId,
+        "providers.list",
+        {},
+      ),
+    );
     await mutateAsync({ forceAuthRefresh: true });
-  }, [client, mutateAsync]);
+  }, [client, mutateAsync, queryClient, tabHostId]);
 }

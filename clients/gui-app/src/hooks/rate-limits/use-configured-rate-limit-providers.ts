@@ -50,10 +50,9 @@ export const PASSIVE_PROVIDER_RATE_LIMIT_OPTIONS: ProviderRateLimitTanstackOptio
   {
     enabled: false,
     gcTime: Infinity,
+    poll: false,
     retry: false,
     staleTime: PROVIDER_RATE_LIMITS_STALE_TIME_MS,
-    refetchInterval: false,
-    refetchIntervalInBackground: false,
     refetchOnMount: false,
   };
 

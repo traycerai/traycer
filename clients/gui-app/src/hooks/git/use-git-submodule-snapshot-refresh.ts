@@ -4,7 +4,9 @@ import { withHostRpcErrorBoundary } from "@traycer-clients/shared/host-transport
 import type { GitListChangedFilesResponseV11 } from "@traycer/protocol/host";
 import { useHostClientFor } from "@/hooks/host/use-host-client-for";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
+import { stampHostRpcMethod } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { gitQueryKeys } from "@/lib/query-keys/git-query-keys";
+import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
 import { createRichSlotRequest } from "@/lib/git/git-rich-slot-ordering";
 
 /**
@@ -76,6 +78,7 @@ export function useGitSubmoduleSnapshotRefresh(args: {
     // stream-write-preservation reason as the ownership-transition cancel in
     // `useGitListChangedFilesWithSubmodules`.
     await queryClient.cancelQueries({ queryKey }, { revert: false });
+    getConditionPollEpisodeCoordinator(queryClient).resetQueryByKey(queryKey);
     // Failures land in the query's error state (surfaced by the passive
     // hook); the refresh affordance itself just stops spinning.
     await queryClient
@@ -83,6 +86,8 @@ export function useGitSubmoduleSnapshotRefresh(args: {
         queryOptions({
           queryKey,
           queryFn: request,
+          meta: stampHostRpcMethod(undefined, "git.listChangedFiles"),
+          retry: false,
           staleTime: 0,
         }),
       )

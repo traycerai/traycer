@@ -7,6 +7,7 @@ import { useCallback } from "react";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { hostQueryKeys, providersMutationKeys } from "@/lib/query-keys";
+import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
 import { PROVIDER_INVALIDATIONS } from "@/hooks/providers/invalidations";
 import { toastFromHostError } from "@/lib/host-error-toast";
 
@@ -68,7 +69,15 @@ export function useRefreshProviders(): () => Promise<void> {
   // refresh control on each provider-fetch tick.
   const { mutateAsync } = mutation;
   return useCallback(async () => {
-    if (client.getActiveHostId() === null) return;
+    const hostId = client.getActiveHostId();
+    if (hostId === null) return;
+    getConditionPollEpisodeCoordinator(queryClient).resetQueryByKey(
+      hostQueryKeys.method<HostRpcRegistry, "providers.list">(
+        hostId,
+        "providers.list",
+        {},
+      ),
+    );
     await mutateAsync({ forceAuthRefresh: true });
-  }, [client, mutateAsync]);
+  }, [client, mutateAsync, queryClient]);
 }

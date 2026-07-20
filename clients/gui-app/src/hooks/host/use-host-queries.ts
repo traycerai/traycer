@@ -4,7 +4,6 @@ import {
   useQueryClient,
   type QueryClient,
   type QueryKey,
-  type UseQueryOptions,
   type UseQueryResult,
 } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -14,22 +13,33 @@ import type {
   RequestOfMethod,
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
-import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
+import type { HostRpcRegistry } from "@/lib/host";
 import { queryKeys } from "@/lib/query-keys";
-import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
+import {
+  hostClientUnavailableError,
+  type HostQueryTanstackOptions,
+} from "@/hooks/host/use-host-query";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
+import {
+  HOST_METHOD_POLL_TABLE,
+  stampHostRpcMethod,
+} from "@/lib/host-rpc-policy/host-method-policy-table";
+import {
+  getConditionPollEpisodeCoordinator,
+  type ConditionPollRefetchInterval,
+} from "@/lib/query/condition-poll-episode-coordinator";
 
 export interface HostRequestSpec<
-  Registry extends VersionedRpcRegistry,
-  Method extends keyof Registry & string,
+  Registry extends HostRpcRegistry,
+  Method extends keyof Registry & keyof HostRpcRegistry & string,
 > {
   readonly method: Method;
   readonly params: RequestOfMethod<Registry, Method>;
 }
 
 export interface UseHostQueriesOptions<
-  Registry extends VersionedRpcRegistry,
-  Method extends keyof Registry & string,
+  Registry extends HostRpcRegistry,
+  Method extends keyof Registry & keyof HostRpcRegistry & string,
 > {
   readonly client: HostClient<Registry> | null;
   readonly requests: ReadonlyArray<HostRequestSpec<Registry, Method>>;
@@ -38,19 +48,15 @@ export interface UseHostQueriesOptions<
    * this for renderer-local dimensions such as the authenticated user.
    */
   readonly cacheKeyIdentity: string | undefined;
-  readonly options: Pick<
-    UseQueryOptions<
-      ResponseOfMethod<Registry, Method>,
-      HostRpcError,
-      ResponseOfMethod<Registry, Method>
-    >,
-    "staleTime" | "enabled" | "gcTime" | "refetchInterval" | "placeholderData"
+  readonly options: HostQueryTanstackOptions<
+    Method,
+    ResponseOfMethod<Registry, Method>
   > | null;
 }
 
 export interface UseHostQueriesWithCombineOptions<
-  Registry extends VersionedRpcRegistry,
-  Method extends keyof Registry & string,
+  Registry extends HostRpcRegistry,
+  Method extends keyof Registry & keyof HostRpcRegistry & string,
   TCombinedResult,
 > extends UseHostQueriesOptions<Registry, Method> {
   readonly combine: (
@@ -61,23 +67,23 @@ export interface UseHostQueriesWithCombineOptions<
 }
 
 export function useHostQueries<
-  Registry extends VersionedRpcRegistry,
-  Method extends keyof Registry & string,
+  Registry extends HostRpcRegistry,
+  Method extends keyof Registry & keyof HostRpcRegistry & string,
   TCombinedResult,
 >(
   args: UseHostQueriesWithCombineOptions<Registry, Method, TCombinedResult>,
 ): TCombinedResult;
 
 export function useHostQueries<
-  Registry extends VersionedRpcRegistry,
-  Method extends keyof Registry & string,
+  Registry extends HostRpcRegistry,
+  Method extends keyof Registry & keyof HostRpcRegistry & string,
 >(
   args: UseHostQueriesOptions<Registry, Method>,
 ): Array<UseQueryResult<ResponseOfMethod<Registry, Method>, HostRpcError>>;
 
 export function useHostQueries<
-  Registry extends VersionedRpcRegistry,
-  Method extends keyof Registry & string,
+  Registry extends HostRpcRegistry,
+  Method extends keyof Registry & keyof HostRpcRegistry & string,
 >(args: UseHostQueriesOptions<Registry, Method>): unknown {
   return useHostQueriesWithResponseMap<
     Registry,
@@ -90,17 +96,14 @@ export function useHostQueries<
 }
 
 export interface UseHostQueriesWithResponseMapOptions<
-  Registry extends VersionedRpcRegistry,
-  Method extends keyof Registry & string,
+  Registry extends HostRpcRegistry,
+  Method extends keyof Registry & keyof HostRpcRegistry & string,
   TData,
 > {
   readonly client: HostClient<Registry> | null;
   readonly requests: ReadonlyArray<HostRequestSpec<Registry, Method>>;
   readonly cacheKeyIdentity: string | undefined;
-  readonly options: Pick<
-    UseQueryOptions<TData, HostRpcError, TData>,
-    "staleTime" | "enabled" | "gcTime" | "refetchInterval" | "placeholderData"
-  > | null;
+  readonly options: HostQueryTanstackOptions<Method, TData> | null;
   /**
    * Same role as `UseHostQueryWithResponseMapOptions.mapResponse` in
    * `use-host-query.ts` (see that doc comment), applied per-request here -
@@ -116,8 +119,8 @@ export interface UseHostQueriesWithResponseMapOptions<
 }
 
 export interface UseHostQueriesWithResponseMapAndCombineOptions<
-  Registry extends VersionedRpcRegistry,
-  Method extends keyof Registry & string,
+  Registry extends HostRpcRegistry,
+  Method extends keyof Registry & keyof HostRpcRegistry & string,
   TData,
   TCombinedResult,
 > extends UseHostQueriesWithResponseMapOptions<Registry, Method, TData> {
@@ -131,8 +134,8 @@ export interface UseHostQueriesWithResponseMapAndCombineOptions<
  * transform, mirroring `useHostQueryWithResponseMap`'s singular counterpart.
  */
 export function useHostQueriesWithResponseMap<
-  Registry extends VersionedRpcRegistry,
-  Method extends keyof Registry & string,
+  Registry extends HostRpcRegistry,
+  Method extends keyof Registry & keyof HostRpcRegistry & string,
   TData,
   TCombinedResult,
 >(
@@ -145,23 +148,27 @@ export function useHostQueriesWithResponseMap<
 ): TCombinedResult;
 
 export function useHostQueriesWithResponseMap<
-  Registry extends VersionedRpcRegistry,
-  Method extends keyof Registry & string,
+  Registry extends HostRpcRegistry,
+  Method extends keyof Registry & keyof HostRpcRegistry & string,
   TData,
 >(
   args: UseHostQueriesWithResponseMapOptions<Registry, Method, TData>,
 ): Array<UseQueryResult<TData, HostRpcError>>;
 
 export function useHostQueriesWithResponseMap<
-  Registry extends VersionedRpcRegistry,
-  Method extends keyof Registry & string,
+  Registry extends HostRpcRegistry,
+  Method extends keyof Registry & keyof HostRpcRegistry & string,
   TData,
 >(
   args: UseHostQueriesWithResponseMapOptions<Registry, Method, TData>,
 ): unknown {
   const { client, requests, options, mapResponse } = args;
   const queryClient = useQueryClient();
+  const conditionPollCoordinator =
+    getConditionPollEpisodeCoordinator(queryClient);
   const readiness = useReactiveHostReadiness(client);
+  const baseOptions = options ?? {};
+  const { meta, poll, ...queryOptionsWithoutReservedFields } = baseOptions;
 
   const queries = requests.map((request) => {
     const queryKey: QueryKey = [
@@ -185,10 +192,38 @@ export function useHostQueriesWithResponseMap<
         const response = await client.request(request.method, request.params);
         return mapResponse({ response, queryClient, queryKey });
       });
+    const pollPolicy = HOST_METHOD_POLL_TABLE[request.method];
+    let tablePollingOptions:
+      | {
+          readonly refetchInterval: ConditionPollRefetchInterval | false;
+          readonly retry: false;
+        }
+      | {
+          readonly refetchInterval: number | false;
+          readonly refetchIntervalInBackground: false;
+        }
+      | Record<never, never> = {};
+    if (pollPolicy !== null && pollPolicy.kind === "condition") {
+      tablePollingOptions = {
+        refetchInterval:
+          poll === false
+            ? false
+            : conditionPollCoordinator.refetchIntervalFor(request.method),
+        retry: false,
+      };
+    } else if (pollPolicy !== null) {
+      tablePollingOptions = {
+        refetchInterval: poll === true ? pollPolicy.intervalMs : false,
+        refetchIntervalInBackground: false,
+      };
+    }
     return queryOptions<TData, HostRpcError, TData>({
-      ...(options ?? {}),
+      ...queryOptionsWithoutReservedFields,
+      ...tablePollingOptions,
       queryKey,
       queryFn: fetcher,
+      // Reserved key wins over caller meta; the coordinator latches it once.
+      meta: stampHostRpcMethod(meta, request.method),
       // A function-form `enabled` must still be evaluated per-query - not
       // collapsed to a boolean up front - or a caller's dynamic condition is
       // silently replaced by "always true" the moment a client is bound.
@@ -209,8 +244,8 @@ export function useHostQueriesWithResponseMap<
 }
 
 function hasCombine<
-  Registry extends VersionedRpcRegistry,
-  Method extends keyof Registry & string,
+  Registry extends HostRpcRegistry,
+  Method extends keyof Registry & keyof HostRpcRegistry & string,
   TData,
 >(
   args: UseHostQueriesWithResponseMapOptions<Registry, Method, TData>,

@@ -7,11 +7,13 @@ import {
   afterEach,
   type Mock,
 } from "vitest";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import {
   CancelledError,
-  QueryClient,
+  focusManager,
   QueryClientProvider,
+  type Query,
+  type QueryClient,
 } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
@@ -36,6 +38,9 @@ import {
   createRichSlotRequest,
   richSlotOrderingKey,
 } from "@/lib/git/git-rich-slot-ordering";
+import { GIT_DIRTY_SUBMODULE_POLL_LANE } from "@/lib/host-rpc-policy/host-method-policy-table";
+import { createAppQueryClient } from "@/lib/query-client";
+import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
 
 const streamState = vi.hoisted(() => ({
   client: null as MockWsStreamClient | null,
@@ -216,25 +221,184 @@ describe("hasDirtySubmodulesForRefresh", () => {
   });
 });
 
+function richSlotQuery(queryClient: QueryClient): Query {
+  const query = queryClient
+    .getQueryCache()
+    .getAll()
+    .find((entry) => entry.queryKey.includes("listChangedFilesWithSubmodules"));
+  if (query === undefined) {
+    throw new Error("Expected git rich-slot query");
+  }
+  return query;
+}
+
+function appliedDelay(query: Query): number | false | undefined {
+  const interval = refetchIntervalFor(query);
+  if (!isRefetchInterval(interval)) {
+    return typeof interval === "number" || interval === false
+      ? interval
+      : undefined;
+  }
+  return interval(query);
+}
+
+function refetchIntervalFor(query: Query): unknown {
+  const { options } = query;
+  return "refetchInterval" in options ? options.refetchInterval : undefined;
+}
+
+function isRefetchInterval(
+  value: unknown,
+): value is (query: Query) => number | false | undefined {
+  return typeof value === "function";
+}
+
 describe("useGitListChangedFilesWithSubmodules", () => {
   let queryClient: QueryClient;
 
   beforeEach(() => {
-    queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
-    });
+    queryClient = createAppQueryClient();
     requestByHost.clear();
     vi.clearAllMocks();
     streamState.client = new MockWsStreamClient();
+    focusManager.setFocused(true);
   });
 
   afterEach(() => {
     streamState.client = null;
+    getConditionPollEpisodeCoordinator(queryClient).dispose();
     queryClient.clear();
+    focusManager.setFocused(undefined);
+    vi.useRealTimers();
   });
 
   const wrapper = ({ children }: { children: ReactNode }) =>
     React.createElement(QueryClientProvider, { client: queryClient }, children);
+
+  it("stamps hostRpcMethod and brands dirty-submodule cadence without re-keying", async () => {
+    clientForHost("selected-host").request.mockResolvedValue({
+      ...snapshot("dirty"),
+      submodules: [
+        submodule({
+          pointer: { ...cleanPointer, modifiedContent: true },
+        }),
+      ],
+    });
+
+    renderHook(
+      () =>
+        useGitListChangedFilesWithSubmodules({
+          hostId: "selected-host",
+          runningDir: "/repo",
+          ignoreWhitespace: false,
+          enabled: true,
+          changeToken: "dirty",
+        }),
+      { wrapper },
+    );
+
+    await waitFor(() => {
+      expect(richSlotQuery(queryClient).state.data).toBeDefined();
+    });
+
+    const query = richSlotQuery(queryClient);
+    const expectedKey = gitQueryKeys.listChangedFilesWithSubmodules(
+      "selected-host",
+      "/repo",
+      false,
+    );
+    const branded = getConditionPollEpisodeCoordinator(
+      queryClient,
+    ).refetchIntervalFor("git.listChangedFiles");
+
+    expect(query.queryKey).toEqual(expectedKey);
+    expect(query.options.meta).toMatchObject({
+      hostRpcMethod: "git.listChangedFiles",
+    });
+    expect(query.options.retry).toBe(false);
+    expect(refetchIntervalFor(query)).toBe(branded);
+    expect(appliedDelay(query)).toBe(
+      GIT_DIRTY_SUBMODULE_POLL_LANE.initialDelayMs,
+    );
+  });
+
+  it("uses the production-client 5s/10s dirty cadence and stops once clean", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    clientForHost("h")
+      .request.mockResolvedValueOnce({
+        ...snapshot("dirty"),
+        submodules: [
+          submodule({
+            availability: { state: "unavailable", reason: "git-error" },
+          }),
+        ],
+      })
+      .mockResolvedValueOnce({
+        ...snapshot("still-dirty"),
+        submodules: [
+          submodule({
+            availability: { state: "unavailable", reason: "git-error" },
+          }),
+        ],
+      })
+      .mockResolvedValueOnce(snapshot("clean"));
+
+    renderHook(
+      () =>
+        useGitListChangedFilesWithSubmodules({
+          hostId: "h",
+          runningDir: "/repo",
+          ignoreWhitespace: false,
+          enabled: true,
+          changeToken: "token",
+        }),
+      { wrapper },
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+
+    expect(clientForHost("h").request).toHaveBeenCalledTimes(3);
+    expect(appliedDelay(richSlotQuery(queryClient))).toBe(false);
+  });
+
+  it("does not fall through to the production retry after a passive rich-slot failure", async () => {
+    vi.useFakeTimers();
+    clientForHost("h").request.mockRejectedValue(new Error("git unavailable"));
+
+    renderHook(
+      () =>
+        useGitListChangedFilesWithSubmodules({
+          hostId: "h",
+          runningDir: "/repo",
+          ignoreWhitespace: false,
+          enabled: true,
+          changeToken: "failure",
+        }),
+      { wrapper },
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(clientForHost("h").request).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4_999);
+    });
+    expect(clientForHost("h").request).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(clientForHost("h").request).toHaveBeenCalledTimes(2);
+  });
 
   it("routes the fetch through the selected worktree host, not the default host", async () => {
     clientForHost("selected-host").request.mockResolvedValue(snapshot("fp-1"));
