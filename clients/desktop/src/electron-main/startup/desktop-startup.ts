@@ -26,16 +26,23 @@ import {
   DESKTOP_LOCK_WAIT_MS,
   HostController,
 } from "../host/host-controller";
-import type { HostRegistryUpdateState } from "../../ipc-contracts/host-management-types";
 import { getHostFsLayout, labelForEnvironment } from "../host/host-paths";
 import {
   onHostRegistryUpdateStateChange,
   refreshRegistryUpdateState,
   setActiveEnvironment,
 } from "../ipc/host-management-ipc";
-import { isHostRemovedByUser } from "../host/host-removal-state";
-import { runUpdateInstallQuitSequence } from "./update-install-quit";
+import {
+  QUIT_HOST_MUTATION_DRAIN_TIMEOUT_MS,
+  runUpdateInstallQuitSequence,
+} from "./update-install-quit";
 import { RunnerIpcBridge } from "../ipc/register-runner-ipc";
+import {
+  applyHostUpdateMenuState,
+  refreshHostRegistryIfNotRemoved,
+  runLaunchHostConvergeReconcile,
+} from "./host-launch-converge";
+import { respawnIfDown } from "./host-health-respawn";
 import {
   checkForUpdatesAfterResume,
   checkForUpdatesNow,
@@ -146,15 +153,6 @@ import { DESKTOP_APP_NAME } from "../../config";
 // (where no timeout would help), and the cached ambient snapshot is the
 // fail-safe fallback on timeout.
 const QUIT_FRESH_UNSYNCED_SNAPSHOT_TIMEOUT_MS = 200;
-
-// Bound on the quit-time drain of a `HostController` mutation already in
-// flight (`awaitMutationLaneIdle`) - never starts a new one, only waits for
-// one already running so "Restart to install" doesn't tear down a subprocess
-// mid-swap. Matches the CLI runner's own generous per-call timeout headroom
-// while still keeping "Restart to install" from hanging indefinitely on a
-// wedged mutation; the launch-time reconcile is the guaranteed fallback if
-// this bound is hit.
-const QUIT_HOST_MUTATION_DRAIN_TIMEOUT_MS = 2 * 60_000;
 
 /**
  * Phased desktop boot.
@@ -540,20 +538,6 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
   };
 }
 
-// Reflects the host update availability into the app menu's "Update host"
-// affordance. Shared by the launch probe and the post-auto-update refresh so
-// both keep the menu in lockstep with the cached registry state.
-function applyHostUpdateMenuState(
-  menu: MenuController,
-  state: HostRegistryUpdateState,
-): void {
-  if (state.updateAvailable && state.latestVersion !== null) {
-    menu.setHostUpdateAvailableVersion(state.latestVersion);
-  } else {
-    menu.setHostUpdateAvailableVersion(null);
-  }
-}
-
 // Auto-check-for-updates gap (Ticket: host-update-race-conditions): the
 // launch probe used to be gated by the full 24h `REGISTRY_CACHE_TTL_MS`, so a
 // relaunch shortly after a release, or a machine waking from sleep, could
@@ -578,18 +562,6 @@ const HOST_REGISTRY_PERIODIC_MAX_AGE_MS =
 // single probe, without gating on how stale the cache is.
 const HOST_REGISTRY_RESUME_DEBOUNCE_MS = 30_000;
 let lastHostRegistryResumeCheckMs = 0;
-
-// Shared by the launch probe, the periodic timer, and the resume trigger.
-// `refreshRegistryUpdateState` never throws and is internally serialized
-// (`registryRefreshQueue`), so overlapping calls are safe.
-async function refreshHostRegistryIfNotRemoved(
-  services: AppServices,
-  opts: { readonly force: boolean; readonly maxAgeMs: number | null },
-): Promise<void> {
-  if (await isHostRemovedByUser()) return;
-  const result = await refreshRegistryUpdateState(opts);
-  applyHostUpdateMenuState(services.menu, result);
-}
 
 // Deferred, fire-and-forget work - runs after the window is loading and
 // never blocks first paint.
@@ -631,11 +603,7 @@ function runDeferred(state: BootState, services: AppServices): void {
       intervalMs: undefined,
       probe: undefined,
       readMetadata: undefined,
-      respawn: () =>
-        services.hostController.recoverIfDown().then((outcome) => {
-          if (outcome.kind === "ok" || outcome.kind === "suppressed") return;
-          throw new Error(outcome.message);
-        }),
+      respawn: () => respawnIfDown(services.hostController),
     });
     state.bridge?.disposeFns.push(() => healthMonitor.dispose());
   });
@@ -665,7 +633,7 @@ function runDeferred(state: BootState, services: AppServices): void {
     // `force: true` - matches the app's own `checkForUpdatesNow` on launch
     // (app/updater.ts): always a real probe, never a cache read, so a
     // relaunch shortly after a release still sees it immediately.
-    const result = await refreshRegistryUpdateState({
+    const result = await refreshRegistryUpdateState(services.hostController, {
       force: true,
       maxAgeMs: null,
     });
@@ -678,19 +646,17 @@ function runDeferred(state: BootState, services: AppServices): void {
     });
   });
 
-  // Coordinated host auto-update: the relaunch after a desktop self-update
-  // lands here, so an idle host tracks the app instead of drifting behind.
-  // `HostController.applyStaged` already owns every precondition this used
-  // to require wiring up by hand - the registry-eligibility reconcile, the
-  // idle gate, removed-by-user, fail-open on a busy/failed attempt (the next
-  // launch retries) - so this is unconditional; a launch with nothing staged
-  // and nothing eligible resolves as a cheap no-op.
-  void timed("deferred", "host-apply-staged", async () => {
-    const outcome = await services.hostController.applyStaged("launch", false);
-    log.info("[host-controller] launch apply reconcile complete", {
-      kind: outcome.kind,
-    });
-  });
+  // Coordinated host auto-update + boot activation-debt convergence (Fixup
+  // B1 + B2): a launch with a ready stage applies it; a launch with none
+  // converges any pre-existing activation debt instead. `applyStaged` /
+  // `activateInstalled` already own every precondition this used to require
+  // wiring up by hand - the idle gate, removed-by-user, fail-open on a
+  // busy/failed attempt (the next launch retries) - so this call is
+  // unconditional; a launch with nothing staged and nothing to activate
+  // resolves as a cheap no-op.
+  void timed("deferred", "host-launch-converge", () =>
+    runLaunchHostConvergeReconcile(services.hostController, services.menu),
+  );
 
   void timed("deferred", "cli-reconcile", async () => {
     const outcome = await runLaunchTimeCliReconciliation({
@@ -754,10 +720,11 @@ function runDeferred(state: BootState, services: AppServices): void {
         HOST_REGISTRY_RESUME_DEBOUNCE_MS
       ) {
         lastHostRegistryResumeCheckMs = nowMs;
-        void refreshHostRegistryIfNotRemoved(services, {
-          force: true,
-          maxAgeMs: null,
-        });
+        void refreshHostRegistryIfNotRemoved(
+          services.hostController,
+          services.menu,
+          { force: true, maxAgeMs: null },
+        );
       }
     }),
   );
@@ -770,10 +737,14 @@ function runDeferred(state: BootState, services: AppServices): void {
   // poll interval, so it only skips a network hit when a launch/resume probe
   // already refreshed the cache more recently than this tick's own cadence.
   setInterval(() => {
-    void refreshHostRegistryIfNotRemoved(services, {
-      force: false,
-      maxAgeMs: HOST_REGISTRY_PERIODIC_MAX_AGE_MS,
-    });
+    void refreshHostRegistryIfNotRemoved(
+      services.hostController,
+      services.menu,
+      {
+        force: false,
+        maxAgeMs: HOST_REGISTRY_PERIODIC_MAX_AGE_MS,
+      },
+    );
   }, HOST_REGISTRY_PERIODIC_CHECK_INTERVAL_MS);
 }
 

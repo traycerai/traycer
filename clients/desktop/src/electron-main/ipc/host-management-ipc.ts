@@ -3,7 +3,6 @@ import { homedir } from "node:os";
 import { readFile, stat, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { log } from "../app/logger";
-import { compareHostVersions } from "../cli/cli-discovery";
 import { runTraycerCliJson, TraycerCliError } from "../cli/traycer-cli";
 import {
   RunnerHostEvent,
@@ -40,7 +39,7 @@ import {
   readHostNameSettings,
   writeHostNameSettings,
 } from "../host/host-display-name";
-import type { RunnerIpcBridge } from "./runner-ipc-bridge";
+import type { IpcHostController, RunnerIpcBridge } from "./runner-ipc-bridge";
 
 export const LONG_OP_TIMEOUT_MS = 10 * 60_000;
 const REGISTRY_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -165,16 +164,60 @@ function setHostOperationStatus(
 }
 
 /**
+ * Fixup B16: `HostController`'s mutation lane is exclusive FIFO, so a
+ * second legacy-tracked call queued behind a first one doesn't start its
+ * OWN work until the first settles - but this shim used to treat every
+ * call as if it were the only one: it unconditionally overwrote
+ * `currentOperationStatus` with its own (still-queued) identity the moment
+ * it was invoked, and its `onMutationProgress` listener (registered before
+ * `run()` even submits to the lane) received the FIRST call's progress
+ * ticks too, mislabeling them under the second call's `operationId`. The
+ * first call's own `finally` then cleared the status to `null` while the
+ * second was still genuinely in flight. `legacyOperationQueue` mirrors the
+ * controller's real FIFO submission order (both are pushed to
+ * synchronously, in the same relative order, before either call's own
+ * `run()` yields) - only ever the FRONT entry's identity is broadcast,
+ * since that's the one the lane is actually executing.
+ */
+interface TrackedLegacyOperation {
+  readonly operationId: string;
+  readonly kind: HostOperationKind;
+  readonly startedAt: string;
+}
+
+let legacyOperationQueue: TrackedLegacyOperation[] = [];
+
+function announceLegacyOperationStatus(bridge: RunnerIpcBridge): void {
+  const front = legacyOperationQueue[0] ?? null;
+  setHostOperationStatus(
+    bridge,
+    front === null
+      ? null
+      : {
+          operationId: front.operationId,
+          kind: front.kind,
+          stage: null,
+          percent: null,
+          bytes: null,
+          totalBytes: null,
+          message: null,
+          startedAt: front.startedAt,
+        },
+  );
+}
+
+/**
  * Wraps a `HostController` mutation call for the four legacy-tracked kinds:
  * broadcasts `hostOperationStatusChange` on start, re-broadcasts every
  * `cliOperationProgress` / `hostOperationStatusChange` tick via
- * `HostController.onMutationProgress` (the mutation lane is exclusive FIFO,
- * so a listener registered here only ever observes progress for THIS call),
- * clears the status on settle (success or failure - a rejected operation
- * must never leave every surface permanently disabled), and lets `mapOutcome`
- * decide how the terminal `MutationOutcome` becomes this handler's return
- * value (or throws, for handlers where every non-"ok" kind should reject the
- * IPC invoke the way the old CLI-throw contract did).
+ * `HostController.onMutationProgress` (attributed to whichever legacy call
+ * is currently at the front of the lane - see `legacyOperationQueue`
+ * above), clears the status on settle only once no legacy call remains in
+ * flight (success or failure - a rejected operation must never leave every
+ * surface permanently disabled), and lets `mapOutcome` decide how the
+ * terminal `MutationOutcome` becomes this handler's return value (or
+ * throws, for handlers where every non-"ok" kind should reject the IPC
+ * invoke the way the old CLI-throw contract did).
  */
 async function runControllerMutationWithLegacyProgress<TOk, TResult>(
   bridge: RunnerIpcBridge,
@@ -183,21 +226,19 @@ async function runControllerMutationWithLegacyProgress<TOk, TResult>(
   run: () => Promise<MutationOutcome<TOk>>,
   mapOutcome: (outcome: MutationOutcome<TOk>) => TResult | Promise<TResult>,
 ): Promise<TResult> {
-  const startedAt = new Date().toISOString();
-  setHostOperationStatus(bridge, {
+  const entry: TrackedLegacyOperation = {
     operationId,
     kind,
-    stage: null,
-    percent: null,
-    bytes: null,
-    totalBytes: null,
-    message: null,
-    startedAt,
-  });
+    startedAt: new Date().toISOString(),
+  };
+  legacyOperationQueue.push(entry);
+  announceLegacyOperationStatus(bridge);
   const unsubscribe = bridge.options.hostController.onMutationProgress(
     (progress) => {
+      const front = legacyOperationQueue[0];
+      if (front === undefined) return;
       const payload: HostProgressEvent = {
-        operationId,
+        operationId: front.operationId,
         stage: progress.stage ?? "",
         percent: progress.percent,
         bytes: progress.bytes,
@@ -206,14 +247,14 @@ async function runControllerMutationWithLegacyProgress<TOk, TResult>(
       };
       bridge.fanOut(RunnerHostEvent.cliOperationProgress, payload);
       setHostOperationStatus(bridge, {
-        operationId,
-        kind,
+        operationId: front.operationId,
+        kind: front.kind,
         stage: progress.stage,
         percent: progress.percent,
         bytes: progress.bytes,
         totalBytes: progress.totalBytes,
         message: progress.message,
-        startedAt,
+        startedAt: front.startedAt,
       });
     },
   );
@@ -222,7 +263,8 @@ async function runControllerMutationWithLegacyProgress<TOk, TResult>(
     return mapOutcome(outcome);
   } finally {
     unsubscribe();
-    setHostOperationStatus(bridge, null);
+    legacyOperationQueue = legacyOperationQueue.filter((e) => e !== entry);
+    announceLegacyOperationStatus(bridge);
   }
 }
 
@@ -434,22 +476,38 @@ function desktopCacheDir(): string {
 }
 
 /**
- * Per-environment registry update cache (Ticket 398e84f4). Each environment
- * owns its own file under `~/.traycer/desktop/` - production has no suffix:
+ * Per-environment (and, for dev, per-slot) registry update cache (Ticket
+ * 398e84f4). Each environment owns its own file under `~/.traycer/desktop/` -
+ * production has no suffix:
  *
  *   - production → `registry-update-cache.json`
  *   - staging    → `registry-update-cache-staging.json`
  *   - dev        → `registry-update-cache-dev.json`
+ *   - dev (slot) → `registry-update-cache-dev-<slot>.json`
  *
  * `installedVersion` in the cache is derived from the active environment's
  * install record, so reusing one environment's cache in another would
  * surface the wrong "installed/latest" comparison on Settings → Host and
  * the tray. Per-environment scoping keeps them isolated.
+ *
+ * Fixup B5: dev runs are per-worktree ("Dev run slots" D1-D4/D7) - every
+ * other piece of dev state (`~/.traycer/{host,cli}/dev-runs/<slot>/...`, see
+ * `devDesktopSlotForEnvironment`'s other callers in this file and in
+ * `host-paths.ts`) is already slot-scoped so concurrent worktrees never
+ * collide. This cache was the one piece left keyed on environment alone -
+ * two dev worktrees running `make dev-desktop` simultaneously shared a
+ * single `registry-update-cache-dev.json`, so one worktree's registry probe
+ * (a different installed/latest pair, since each slot has its own install
+ * record) could overwrite the other's cached `updateAvailable` state.
  */
 function registryCacheFilePath(): string {
+  if (activeEnvironment === "production") {
+    return join(desktopCacheDir(), "registry-update-cache.json");
+  }
+  const devSlot = devDesktopSlotForEnvironment(activeEnvironment, process.env);
   const name =
-    activeEnvironment === "production"
-      ? "registry-update-cache.json"
+    devSlot !== null
+      ? `registry-update-cache-${activeEnvironment}-${devSlot}.json`
       : `registry-update-cache-${activeEnvironment}.json`;
   return join(desktopCacheDir(), name);
 }
@@ -524,27 +582,23 @@ async function writeRegistryCache(
   }
 }
 
+// Fixup B1: `updateAvailable` used to be pure registry detection (`latest >
+// installed`), so a long session advertised "Update host" the moment the
+// registry published a newer version - before any bytes were ever staged,
+// violating quiet-until-ready (Tech Plan D3: never advertise an update the
+// desktop hasn't actually downloaded yet). It's now projected from
+// `HostController`'s own `updateReady` (`staged > installed`, Tech Plan
+// "Version identity") - the menu/banner only lights up once there is
+// something to actually apply.
 function buildUpdateState(
   cache: RegistryUpdateCacheFile,
+  updateReady: boolean,
 ): HostRegistryUpdateState {
-  // An update is only available when the installed host is *older* than the
-  // registry's latest. `compareHostVersions` orders by full SemVer precedence,
-  // including pre-releases: `1.0.0-rc.1 < 1.0.0`, so a release-candidate host
-  // upgrades to its GA (a plain `!==` or a pre-release-stripping compare reads
-  // rc and GA as equal and leaves the host stranded on the rc). It also keeps a
-  // host *newer* than the registry pointer (a local/staging build ahead of GA,
-  // or a stale cache that never re-read the post-update install record) reading
-  // as "up to date" rather than advertising a phantom downgrade.
-  const updateAvailable =
-    cache.reachable &&
-    cache.installedVersion !== null &&
-    cache.latestVersion !== null &&
-    compareHostVersions(cache.installedVersion, cache.latestVersion) < 0;
   return {
     checkedAt: cache.checkedAt,
     latestVersion: cache.latestVersion,
     installedVersion: cache.installedVersion,
-    updateAvailable,
+    updateAvailable: updateReady,
     reachable: cache.reachable,
     errorMessage: cache.errorMessage,
   };
@@ -667,13 +721,16 @@ function emptyAvailableSnapshot(): HostAvailableSnapshot {
  * entirely), but still required so every call site states its intent
  * explicitly.
  */
-export async function refreshRegistryUpdateState(opts: {
-  readonly force: boolean;
-  readonly maxAgeMs: number | null;
-}): Promise<HostRegistryUpdateState> {
+export async function refreshRegistryUpdateState(
+  hostController: IpcHostController,
+  opts: {
+    readonly force: boolean;
+    readonly maxAgeMs: number | null;
+  },
+): Promise<HostRegistryUpdateState> {
   const run = registryRefreshQueue.then(
-    () => refreshRegistryUpdateStateSerial(opts),
-    () => refreshRegistryUpdateStateSerial(opts),
+    () => refreshRegistryUpdateStateSerial(hostController, opts),
+    () => refreshRegistryUpdateStateSerial(hostController, opts),
   );
   registryRefreshQueue = run.then(
     () => undefined,
@@ -682,23 +739,36 @@ export async function refreshRegistryUpdateState(opts: {
   return run;
 }
 
-async function refreshRegistryUpdateStateSerial(opts: {
-  readonly force: boolean;
-  readonly maxAgeMs: number | null;
-}): Promise<HostRegistryUpdateState> {
+async function refreshRegistryUpdateStateSerial(
+  hostController: IpcHostController,
+  opts: {
+    readonly force: boolean;
+    readonly maxAgeMs: number | null;
+  },
+): Promise<HostRegistryUpdateState> {
   const cache = await readRegistryCache();
   if (!opts.force && cache !== null && cache.reachable) {
     const ageMs = Date.now() - Date.parse(cache.checkedAt);
     const threshold = opts.maxAgeMs ?? REGISTRY_CACHE_TTL_MS;
     if (Number.isFinite(ageMs) && ageMs >= 0 && ageMs < threshold) {
-      const state = buildUpdateState(cache);
+      const status = await hostController.getStatus();
+      const state = buildUpdateState(cache, status.updateReady);
       emitHostRegistryUpdateState(state);
       return state;
     }
   }
   const fresh = await probeRegistry();
   await writeRegistryCache(fresh);
-  const state = buildUpdateState(fresh);
+  if (fresh.reachable) {
+    // Fixup B1: stage the eligible update in the background on every
+    // successful refresh (comparable `latest > installed`, or the
+    // yank-heal reconcile arm when a stage already exists - both decided
+    // by `stageLatest`'s own eligibility check) - never awaited here, so a
+    // registry check never blocks on a WAN download.
+    void hostController.stageLatest();
+  }
+  const status = await hostController.getStatus();
+  const state = buildUpdateState(fresh, status.updateReady);
   emitHostRegistryUpdateState(state);
   return state;
 }
@@ -775,7 +845,10 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
       // (and `updateAvailable`) reflect it - otherwise the 24h TTL cache
       // keeps the launch-time snapshot and the Updates row / banner stay
       // stuck advertising the version we just installed.
-      await refreshRegistryUpdateState({ force: true, maxAgeMs: null });
+      await refreshRegistryUpdateState(bridge.options.hostController, {
+        force: true,
+        maxAgeMs: null,
+      });
       return projectInstallResultFromRecord(
         await readInstalledHostRecord(),
         outcome.installedVersion,
@@ -800,7 +873,10 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
           (o) => o,
         ),
       );
-      await refreshRegistryUpdateState({ force: true, maxAgeMs: null });
+      await refreshRegistryUpdateState(bridge.options.hostController, {
+        force: true,
+        maxAgeMs: null,
+      });
       return projectInstallResultFromRecord(
         await readInstalledHostRecord(),
         outcome.appliedVersion,
@@ -833,7 +909,7 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
     // available" affordance - naturally no-op through their existing
     // `updateAvailable` guards. Tolerated: a failed probe must never fail an
     // otherwise-complete uninstall.
-    await refreshRegistryUpdateState({
+    await refreshRegistryUpdateState(bridge.options.hostController, {
       force: true,
       maxAgeMs: null,
     }).catch((err: unknown) => {
@@ -996,7 +1072,10 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
     RunnerHostInvoke.traycerRegistryCheck,
     async (_event, raw: unknown) => {
       const force = optionalBoolean(raw, "force");
-      return refreshRegistryUpdateState({ force, maxAgeMs: null });
+      return refreshRegistryUpdateState(bridge.options.hostController, {
+        force,
+        maxAgeMs: null,
+      });
     },
   );
 

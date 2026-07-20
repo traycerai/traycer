@@ -204,9 +204,27 @@ class FakeHostController implements IpcHostController {
     kind: "ok",
     value: { running: true, version: "1.7.0" },
   };
+  // Fixup B1: `refreshRegistryUpdateState` now reads `getStatus().updateReady`
+  // to project the legacy `updateAvailable` field - every handler that
+  // force-refreshes after a mutation calls it, so this fake must answer
+  // rather than throw.
+  getStatusResult: HostControllerStatus = {
+    download: null,
+    mutation: null,
+    installedVersion: null,
+    latestVersion: null,
+    stagedVersion: null,
+    installedRuntimeVersion: null,
+    runningRuntimeVersion: null,
+    updateReady: false,
+    activation: "unavailable",
+    reachable: false,
+    removedByUser: false,
+    checkedAt: "2026-01-01T00:00:00.000Z",
+  };
 
   async getStatus(): Promise<HostControllerStatus> {
-    throw new Error("FakeHostController.getStatus: not used by these tests");
+    return this.getStatusResult;
   }
   async convergeReady(
     force: boolean,
@@ -239,11 +257,17 @@ class FakeHostController implements IpcHostController {
     return this.applyStagedResult;
   }
 
-  /** Resolves every `applyStaged` call currently pending on the deferred gate. */
+  // Fixup B16: resolves exactly the OLDEST still-pending `applyStaged` call
+  // (FIFO), one per invocation - mirrors the real `HostController`'s
+  // exclusive mutation lane, where a second concurrent call doesn't settle
+  // until the first one's own job has. The previous version resolved every
+  // pending call at once regardless of submission order, which is why the
+  // concurrent-call test never actually exercised the legacy shim's
+  // cross-attribution bug (fixup B16) - nothing ever queued behind
+  // anything else's still-running progress window.
   resolveApplyStaged(outcome: MutationOutcome<ApplyStagedOk>): void {
-    const resolvers = this.pendingApplyStaged;
-    this.pendingApplyStaged = [];
-    for (const resolve of resolvers) resolve(outcome);
+    const resolve = this.pendingApplyStaged.shift();
+    if (resolve !== undefined) resolve(outcome);
   }
   async activateInstalled(
     _force: boolean,
@@ -1038,15 +1062,84 @@ describe("host-management IPC - legacy progress broadcast over HostController's 
     const second = updateHandler(null, { operationId: "op-second" });
     await waitForCallCount(hostController, "applyStaged", 2);
 
+    // Fixup B16: `resolveApplyStaged` now settles exactly one pending call
+    // per invocation, FIFO - mirrors HostController's real exclusive
+    // mutation lane, where the second call's own job doesn't settle until
+    // the first one's has. One call each, in submission order.
     hostController.resolveApplyStaged({
       kind: "ok",
       value: { appliedVersion: "1.7.0", runningActivated: true },
     });
     await expect(first).resolves.toBeDefined();
+    hostController.resolveApplyStaged({
+      kind: "ok",
+      value: { appliedVersion: "1.7.0", runningActivated: true },
+    });
     await expect(second).resolves.toBeDefined();
     expect(
       hostController.calls.filter((c) => c.method === "applyStaged"),
     ).toHaveLength(2);
+  });
+
+  // Fixup B16: a second legacy-tracked call queued behind a first one on
+  // HostController's real exclusive FIFO mutation lane used to overwrite
+  // `currentOperationStatus` with its own (still-queued) identity the
+  // moment it was invoked, and its progress listener received the FIRST
+  // call's progress ticks too (both listeners are registered on the same
+  // shared `onMutationProgress` source) - mislabeling A's progress as B's.
+  // The first call's own `finally` then cleared the status to `null` while
+  // the second was still genuinely in flight.
+  it("attributes progress to the queued-first call and doesn't clear status early when a second legacy call is still in flight", async () => {
+    installFakeCli({ runResult: {}, streamResult: {} });
+    const mgmt = await import("../host-management-ipc");
+    mgmt.setActiveEnvironment("production");
+    const { RunnerHostInvoke } =
+      await import("../../../ipc-contracts/ipc-channels");
+    const bridge = makeBridge();
+    mgmt.registerHostManagementIpc(bridge as never);
+    const hostController = bridge.options.hostController;
+    hostController.applyStagedDeferred = true;
+    const updateHandler = bridge.handlers.get(
+      RunnerHostInvoke.traycerHostUpdate,
+    )!;
+
+    const first = updateHandler(null, { operationId: "op-A" });
+    await waitForCallCount(hostController, "applyStaged", 1);
+    const second = updateHandler(null, { operationId: "op-B" });
+    await waitForCallCount(hostController, "applyStaged", 2);
+
+    // A progress tick while both are queued must be attributed to A - it's
+    // the one HostController's real lane is actually running (mirrored
+    // here by resolving strictly in submission order below).
+    hostController.emitProgress({
+      stage: "download",
+      percent: 40,
+      bytes: 40,
+      totalBytes: 100,
+      message: "downloading",
+    });
+    expect(mgmt.getHostOperationStatus()).toMatchObject({
+      operationId: "op-A",
+      percent: 40,
+    });
+
+    // A settles first - B is still legitimately in flight, so status must
+    // hand off to B's identity, never drop to null.
+    hostController.resolveApplyStaged({
+      kind: "ok",
+      value: { appliedVersion: "1.7.0", runningActivated: true },
+    });
+    await first;
+    expect(mgmt.getHostOperationStatus()).toMatchObject({
+      operationId: "op-B",
+    });
+
+    hostController.resolveApplyStaged({
+      kind: "ok",
+      value: { appliedVersion: "1.7.0", runningActivated: true },
+    });
+    await second;
+    expect(mgmt.getHostOperationStatus()).toBeNull();
   });
 
   it("broadcasts hostOperationStatusChange on start, re-broadcasts HostController's progress ticks, and clears status to null on settle", async () => {

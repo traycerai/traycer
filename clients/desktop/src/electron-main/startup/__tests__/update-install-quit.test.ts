@@ -4,7 +4,10 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PerWindowSnapshot } from "../../../ipc-contracts/window-types";
 import { DesktopStateStore } from "../../windows/desktop-state-store";
-import { runUpdateInstallQuitSequence } from "../update-install-quit";
+import {
+  QUIT_HOST_MUTATION_DRAIN_TIMEOUT_MS,
+  runUpdateInstallQuitSequence,
+} from "../update-install-quit";
 
 vi.mock("../../app/logger", () => ({
   log: {
@@ -22,6 +25,18 @@ function snapshotWithTab(tabId: string, name: string): PerWindowSnapshot {
     activeLandingDraftId: null,
   };
 }
+
+// Fixup B4: quit is instant everywhere else - the tech plan's ONE deliberate
+// bounded exception is "quit keeps a <=10s best-effort drain of an in-flight
+// mutation." This used to be 2 minutes (matching the CLI runner's own per-
+// call timeout headroom instead of the quit-time bound), so "Restart to
+// install" could hang the app open for two minutes behind a wedged mutation.
+describe("QUIT_HOST_MUTATION_DRAIN_TIMEOUT_MS", () => {
+  it("is bounded at 10 seconds, per the tech plan's quit-time drain exception", () => {
+    expect(QUIT_HOST_MUTATION_DRAIN_TIMEOUT_MS).toBeLessThanOrEqual(10_000);
+    expect(QUIT_HOST_MUTATION_DRAIN_TIMEOUT_MS).toBeGreaterThan(0);
+  });
+});
 
 describe("runUpdateInstallQuitSequence", () => {
   it("drains the host mutation, drains the renderer projection, then authorizes the quit - in that order", async () => {

@@ -9,6 +9,9 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { IpcHostController } from "../runner-ipc-bridge";
+import type { HostControllerStatus } from "../../host/host-controller-types";
+import { DEV_DESKTOP_SLOT_ENV } from "../../host/dev-desktop-slot";
 
 // `refreshRegistryUpdateState` is the launch-time host registry
 // probe (Flow 6). It owns the 24h cache the tray + Settings + banner
@@ -214,6 +217,99 @@ function deferred<T>(): {
   return { promise, resolve: resolveValue };
 }
 
+// Fixup B1: `refreshRegistryUpdateState` now takes an explicit
+// `IpcHostController` - `updateAvailable` is projected from its
+// `getStatus().updateReady` (bytes actually staged), not derived from the
+// registry probe's raw installed/latest comparison anymore, and a
+// successful fresh probe now triggers `stageLatest()` in the background.
+// This file is about the CACHE/PROBE mechanics, not the controller's own
+// staging decision (that's `host-controller.test.ts`'s job) - `updateReady`
+// is just a fixed, test-controlled input here.
+function fakeHostController(
+  updateReady: boolean,
+): IpcHostController & { readonly stageLatestCalls: number[] } {
+  const stageLatestCalls: number[] = [];
+  return {
+    get stageLatestCalls() {
+      return stageLatestCalls;
+    },
+    async getStatus(): Promise<HostControllerStatus> {
+      return {
+        download: null,
+        mutation: null,
+        installedVersion: null,
+        latestVersion: null,
+        stagedVersion: null,
+        installedRuntimeVersion: null,
+        runningRuntimeVersion: null,
+        updateReady,
+        activation: "unavailable",
+        reachable: false,
+        removedByUser: false,
+        checkedAt: new Date().toISOString(),
+      };
+    },
+    async stageLatest(): Promise<void> {
+      stageLatestCalls.push(1);
+    },
+    convergeReady: () => {
+      throw new Error(
+        "fakeHostController.convergeReady: not used by these tests",
+      );
+    },
+    applyStaged: () => {
+      throw new Error(
+        "fakeHostController.applyStaged: not used by these tests",
+      );
+    },
+    activateInstalled: () => {
+      throw new Error(
+        "fakeHostController.activateInstalled: not used by these tests",
+      );
+    },
+    installVersion: () => {
+      throw new Error(
+        "fakeHostController.installVersion: not used by these tests",
+      );
+    },
+    registerService: () => {
+      throw new Error(
+        "fakeHostController.registerService: not used by these tests",
+      );
+    },
+    deregisterService: () => {
+      throw new Error(
+        "fakeHostController.deregisterService: not used by these tests",
+      );
+    },
+    respawn: () => {
+      throw new Error("fakeHostController.respawn: not used by these tests");
+    },
+    recoverIfDown: () => {
+      throw new Error(
+        "fakeHostController.recoverIfDown: not used by these tests",
+      );
+    },
+    freePortAndRestart: () => {
+      throw new Error(
+        "fakeHostController.freePortAndRestart: not used by these tests",
+      );
+    },
+    uninstallHost: () => {
+      throw new Error(
+        "fakeHostController.uninstallHost: not used by these tests",
+      );
+    },
+    removeTraycer: () => {
+      throw new Error(
+        "fakeHostController.removeTraycer: not used by these tests",
+      );
+    },
+    isPendingRevisionRefreshQuarantined: () => false,
+    onMutationProgress: () => () => undefined,
+  };
+}
+
 // Pre-Ticket 398e84f4 cache layout. Used to assert that an upgraded
 // Desktop ignores the legacy unscoped file rather than projecting it
 // through as either environment's state.
@@ -234,7 +330,7 @@ describe("refreshRegistryUpdateState - launch-time probe", () => {
     });
     const { refreshRegistryUpdateState } =
       await import("../host-management-ipc");
-    const state = await refreshRegistryUpdateState({
+    const state = await refreshRegistryUpdateState(fakeHostController(true), {
       force: false,
       maxAgeMs: null,
     });
@@ -262,7 +358,10 @@ describe("refreshRegistryUpdateState - launch-time probe", () => {
     const listener = vi.fn();
     const unsubscribe = onHostRegistryUpdateStateChange(listener);
 
-    await refreshRegistryUpdateState({ force: false, maxAgeMs: null });
+    await refreshRegistryUpdateState(fakeHostController(true), {
+      force: false,
+      maxAgeMs: null,
+    });
     unsubscribe();
 
     expect(listener).toHaveBeenCalledWith(
@@ -298,7 +397,7 @@ describe("refreshRegistryUpdateState - launch-time probe", () => {
     const unsubscribeSucceeding =
       onHostRegistryUpdateStateChange(succeedingListener);
 
-    const state = await refreshRegistryUpdateState({
+    const state = await refreshRegistryUpdateState(fakeHostController(true), {
       force: false,
       maxAgeMs: null,
     });
@@ -340,7 +439,7 @@ describe("refreshRegistryUpdateState - launch-time probe", () => {
     });
     const { refreshRegistryUpdateState } =
       await import("../host-management-ipc");
-    const state = await refreshRegistryUpdateState({
+    const state = await refreshRegistryUpdateState(fakeHostController(false), {
       force: true,
       maxAgeMs: null,
     });
@@ -368,7 +467,7 @@ describe("refreshRegistryUpdateState - launch-time probe", () => {
     });
     const { refreshRegistryUpdateState } =
       await import("../host-management-ipc");
-    const state = await refreshRegistryUpdateState({
+    const state = await refreshRegistryUpdateState(fakeHostController(false), {
       force: false,
       maxAgeMs: null,
     });
@@ -399,7 +498,7 @@ describe("refreshRegistryUpdateState - launch-time probe", () => {
     });
     const { refreshRegistryUpdateState } =
       await import("../host-management-ipc");
-    const state = await refreshRegistryUpdateState({
+    const state = await refreshRegistryUpdateState(fakeHostController(false), {
       force: false,
       maxAgeMs: 60 * 60 * 1000,
     });
@@ -424,7 +523,7 @@ describe("refreshRegistryUpdateState - launch-time probe", () => {
     });
     const { refreshRegistryUpdateState } =
       await import("../host-management-ipc");
-    const state = await refreshRegistryUpdateState({
+    const state = await refreshRegistryUpdateState(fakeHostController(false), {
       force: false,
       maxAgeMs: 4 * 60 * 60 * 1000,
     });
@@ -451,7 +550,7 @@ describe("refreshRegistryUpdateState - launch-time probe", () => {
 
     const { refreshRegistryUpdateState } =
       await import("../host-management-ipc");
-    const state = await refreshRegistryUpdateState({
+    const state = await refreshRegistryUpdateState(fakeHostController(false), {
       force: true,
       maxAgeMs: null,
     });
@@ -480,9 +579,15 @@ describe("refreshRegistryUpdateState - launch-time probe", () => {
     const { refreshRegistryUpdateState } =
       await import("../host-management-ipc");
 
-    const first = refreshRegistryUpdateState({ force: true, maxAgeMs: null });
+    const first = refreshRegistryUpdateState(fakeHostController(false), {
+      force: true,
+      maxAgeMs: null,
+    });
     await firstProbeStarted.promise;
-    const second = refreshRegistryUpdateState({ force: true, maxAgeMs: null });
+    const second = refreshRegistryUpdateState(fakeHostController(false), {
+      force: true,
+      maxAgeMs: null,
+    });
 
     expect(probeSpy).toHaveBeenCalledTimes(1);
     firstProbe.resolve(registryProbeResult("1.4.2", true, null));
@@ -502,7 +607,7 @@ describe("refreshRegistryUpdateState - launch-time probe", () => {
     }));
     const { refreshRegistryUpdateState } =
       await import("../host-management-ipc");
-    const state = await refreshRegistryUpdateState({
+    const state = await refreshRegistryUpdateState(fakeHostController(false), {
       force: false,
       maxAgeMs: null,
     });
@@ -511,7 +616,42 @@ describe("refreshRegistryUpdateState - launch-time probe", () => {
     expect(state.errorMessage).toContain("registry unreachable");
   });
 
-  it("derives updateAvailable=false when installed equals latest", async () => {
+  // Fixup B1: `updateAvailable` is now a pure projection of
+  // `HostController.getStatus().updateReady` (bytes actually staged) - the
+  // registry probe's own installed/latest comparison (still exercised via
+  // `latestVersion`/`installedVersion` above, and via `compareHostVersions`'s
+  // own dedicated suite in `clients/shared/host-version/`) no longer feeds
+  // `updateAvailable` at all. These two cases prove real decoupling, not
+  // just "usually agrees with the old comparison": a registry-detected
+  // update with nothing staged yet reads as unavailable (quiet-until-ready,
+  // Tech Plan D3), and a case the OLD comparison would have called
+  // "up to date" reads as available once bytes are actually staged.
+  it("does not advertise an update the registry detected but nothing has staged yet (quiet-until-ready)", async () => {
+    const probeSpy = vi.fn();
+    vi.doMock("../../cli/traycer-cli", () => ({
+      runTraycerCliJson: probeSpy,
+      streamTraycerCliJson: vi.fn(),
+      TraycerCliError: class extends Error {},
+    }));
+    writeCache({
+      checkedAt: new Date().toISOString(),
+      latestVersion: "1.4.2",
+      installedVersion: "1.4.1",
+      reachable: true,
+      errorMessage: null,
+    });
+    const { refreshRegistryUpdateState } =
+      await import("../host-management-ipc");
+    const state = await refreshRegistryUpdateState(fakeHostController(false), {
+      force: false,
+      maxAgeMs: null,
+    });
+    expect(state.latestVersion).toBe("1.4.2");
+    expect(state.installedVersion).toBe("1.4.1");
+    expect(state.updateAvailable).toBe(false);
+  });
+
+  it("advertises an update once bytes are staged, even for a pair the raw registry comparison alone would call up to date", async () => {
     const probeSpy = vi.fn();
     vi.doMock("../../cli/traycer-cli", () => ({
       runTraycerCliJson: probeSpy,
@@ -527,91 +667,11 @@ describe("refreshRegistryUpdateState - launch-time probe", () => {
     });
     const { refreshRegistryUpdateState } =
       await import("../host-management-ipc");
-    const state = await refreshRegistryUpdateState({
+    const state = await refreshRegistryUpdateState(fakeHostController(true), {
       force: false,
       maxAgeMs: null,
     });
-    expect(state.updateAvailable).toBe(false);
-  });
-
-  it("derives updateAvailable=false when installed is newer than latest", async () => {
-    // A host ahead of the registry pointer (a local/staging build, or a
-    // stale cache that never re-read the post-update install record) must
-    // read as "up to date", not advertise a downgrade. `!==` got this
-    // wrong; the semver compare fixes it.
-    const probeSpy = vi.fn();
-    vi.doMock("../../cli/traycer-cli", () => ({
-      runTraycerCliJson: probeSpy,
-      streamTraycerCliJson: vi.fn(),
-      TraycerCliError: class extends Error {},
-    }));
-    writeCache({
-      checkedAt: new Date().toISOString(),
-      latestVersion: "0.0.2",
-      installedVersion: "0.0.3",
-      reachable: true,
-      errorMessage: null,
-    });
-    const { refreshRegistryUpdateState } =
-      await import("../host-management-ipc");
-    const state = await refreshRegistryUpdateState({
-      force: false,
-      maxAgeMs: null,
-    });
-    expect(probeSpy).not.toHaveBeenCalled();
-    expect(state.updateAvailable).toBe(false);
-  });
-
-  it("derives updateAvailable=true when a release-candidate host has a GA available", async () => {
-    // The reported bug: host installed from 1.0.0-rc.1, registry latest 1.0.0.
-    // The pre-release must sort below its GA so both the manual "Check for
-    // updates" and the launch auto-update see the upgrade.
-    const probeSpy = vi.fn();
-    vi.doMock("../../cli/traycer-cli", () => ({
-      runTraycerCliJson: probeSpy,
-      streamTraycerCliJson: vi.fn(),
-      TraycerCliError: class extends Error {},
-    }));
-    writeCache({
-      checkedAt: new Date().toISOString(),
-      latestVersion: "1.0.0",
-      installedVersion: "1.0.0-rc.1",
-      reachable: true,
-      errorMessage: null,
-    });
-    const { refreshRegistryUpdateState } =
-      await import("../host-management-ipc");
-    const state = await refreshRegistryUpdateState({
-      force: false,
-      maxAgeMs: null,
-    });
-    expect(probeSpy).not.toHaveBeenCalled();
     expect(state.updateAvailable).toBe(true);
-  });
-
-  it("derives updateAvailable=false when a GA host sees an older pre-release as latest", async () => {
-    // Don't advertise a downgrade from GA back to a release candidate.
-    const probeSpy = vi.fn();
-    vi.doMock("../../cli/traycer-cli", () => ({
-      runTraycerCliJson: probeSpy,
-      streamTraycerCliJson: vi.fn(),
-      TraycerCliError: class extends Error {},
-    }));
-    writeCache({
-      checkedAt: new Date().toISOString(),
-      latestVersion: "1.0.0-rc.1",
-      installedVersion: "1.0.0",
-      reachable: true,
-      errorMessage: null,
-    });
-    const { refreshRegistryUpdateState } =
-      await import("../host-management-ipc");
-    const state = await refreshRegistryUpdateState({
-      force: false,
-      maxAgeMs: null,
-    });
-    expect(probeSpy).not.toHaveBeenCalled();
-    expect(state.updateAvailable).toBe(false);
   });
 
   it("re-probes a fresh failed cache instead of replaying a stale error", async () => {
@@ -632,7 +692,7 @@ describe("refreshRegistryUpdateState - launch-time probe", () => {
     });
     const { refreshRegistryUpdateState } =
       await import("../host-management-ipc");
-    const state = await refreshRegistryUpdateState({
+    const state = await refreshRegistryUpdateState(fakeHostController(false), {
       force: false,
       maxAgeMs: null,
     });
@@ -640,6 +700,64 @@ describe("refreshRegistryUpdateState - launch-time probe", () => {
     expect(state.reachable).toBe(true);
     expect(state.latestVersion).toBe("1.4.3");
     expect(state.errorMessage).toBeNull();
+  });
+
+  // Fixup B1: successful registry refreshes never called `stageLatest()` -
+  // there was no production caller of it at all. A long session would
+  // advertise "Update host" (under the old registry-only detection) while
+  // never background-downloading the bytes that advertisement implied.
+  it("stages the eligible update in the background on a successful fresh probe, but not on a cache hit", async () => {
+    vi.doMock("../../cli/traycer-cli", () => ({
+      runTraycerCliJson: vi
+        .fn()
+        .mockResolvedValue(registryProbeResult("1.4.3", true, null)),
+      streamTraycerCliJson: vi.fn(),
+      TraycerCliError: class extends Error {},
+    }));
+    const { refreshRegistryUpdateState } =
+      await import("../host-management-ipc");
+
+    const cacheHitController = fakeHostController(false);
+    writeCache({
+      checkedAt: new Date().toISOString(),
+      latestVersion: "1.4.2",
+      installedVersion: "1.4.1",
+      reachable: true,
+      errorMessage: null,
+    });
+    await refreshRegistryUpdateState(cacheHitController, {
+      force: false,
+      maxAgeMs: null,
+    });
+    expect(cacheHitController.stageLatestCalls).toHaveLength(0);
+
+    const freshProbeController = fakeHostController(false);
+    await refreshRegistryUpdateState(freshProbeController, {
+      force: true,
+      maxAgeMs: null,
+    });
+    expect(freshProbeController.stageLatestCalls).toHaveLength(1);
+  });
+
+  it("does not stage anything after a failed registry probe", async () => {
+    vi.doMock("../../cli/traycer-cli", () => ({
+      runTraycerCliJson: vi
+        .fn()
+        .mockRejectedValue(new Error("registry unreachable: network")),
+      streamTraycerCliJson: vi.fn(),
+      TraycerCliError: class extends Error {},
+    }));
+    const { refreshRegistryUpdateState } =
+      await import("../host-management-ipc");
+    const controller = fakeHostController(false);
+
+    const state = await refreshRegistryUpdateState(controller, {
+      force: false,
+      maxAgeMs: null,
+    });
+
+    expect(state.reachable).toBe(false);
+    expect(controller.stageLatestCalls).toHaveLength(0);
   });
 });
 
@@ -677,10 +795,13 @@ describe("refreshRegistryUpdateState - environment-scoped cache", () => {
     });
     const mgmt = await import("../host-management-ipc");
     mgmt.setActiveEnvironment("production");
-    const state = await mgmt.refreshRegistryUpdateState({
-      force: false,
-      maxAgeMs: null,
-    });
+    const state = await mgmt.refreshRegistryUpdateState(
+      fakeHostController(false),
+      {
+        force: false,
+        maxAgeMs: null,
+      },
+    );
     expect(probeSpy).not.toHaveBeenCalled();
     expect(state.latestVersion).toBe("1.4.2");
     expect(state.installedVersion).toBe("1.4.1");
@@ -711,10 +832,13 @@ describe("refreshRegistryUpdateState - environment-scoped cache", () => {
     });
     const mgmt = await import("../host-management-ipc");
     mgmt.setActiveEnvironment("dev");
-    const state = await mgmt.refreshRegistryUpdateState({
-      force: false,
-      maxAgeMs: null,
-    });
+    const state = await mgmt.refreshRegistryUpdateState(
+      fakeHostController(false),
+      {
+        force: false,
+        maxAgeMs: null,
+      },
+    );
     expect(probeSpy).not.toHaveBeenCalled();
     expect(state.latestVersion).toBe("DEV-2.0.0");
     expect(state.installedVersion).toBe("DEV-1.0.0");
@@ -739,10 +863,13 @@ describe("refreshRegistryUpdateState - environment-scoped cache", () => {
     });
     const mgmt = await import("../host-management-ipc");
     mgmt.setActiveEnvironment("dev");
-    const state = await mgmt.refreshRegistryUpdateState({
-      force: false,
-      maxAgeMs: null,
-    });
+    const state = await mgmt.refreshRegistryUpdateState(
+      fakeHostController(false),
+      {
+        force: false,
+        maxAgeMs: null,
+      },
+    );
     expect(probeSpy).toHaveBeenCalledOnce();
     expect(state.latestVersion).toBe("DEV-2.0.0");
     // The freshly written cache must land in the dev file, not the
@@ -778,10 +905,13 @@ describe("refreshRegistryUpdateState - environment-scoped cache", () => {
     });
     const mgmt = await import("../host-management-ipc");
     mgmt.setActiveEnvironment("production");
-    const state = await mgmt.refreshRegistryUpdateState({
-      force: false,
-      maxAgeMs: null,
-    });
+    const state = await mgmt.refreshRegistryUpdateState(
+      fakeHostController(false),
+      {
+        force: false,
+        maxAgeMs: null,
+      },
+    );
     expect(probeSpy).toHaveBeenCalledOnce();
     expect(state.latestVersion).toBe("PROD-1.4.2");
     const prodPath = join(
@@ -821,10 +951,13 @@ describe("refreshRegistryUpdateState - environment-scoped cache", () => {
     );
     const mgmt = await import("../host-management-ipc");
     mgmt.setActiveEnvironment("production");
-    const state = await mgmt.refreshRegistryUpdateState({
-      force: false,
-      maxAgeMs: null,
-    });
+    const state = await mgmt.refreshRegistryUpdateState(
+      fakeHostController(false),
+      {
+        force: false,
+        maxAgeMs: null,
+      },
+    );
     expect(probeSpy).toHaveBeenCalledOnce();
     expect(state.latestVersion).toBe("PROD-1.4.2");
   });
@@ -840,10 +973,13 @@ describe("refreshRegistryUpdateState - environment-scoped cache", () => {
     }));
     const mgmt = await import("../host-management-ipc");
     mgmt.setActiveEnvironment("dev");
-    const state = await mgmt.refreshRegistryUpdateState({
-      force: false,
-      maxAgeMs: null,
-    });
+    const state = await mgmt.refreshRegistryUpdateState(
+      fakeHostController(false),
+      {
+        force: false,
+        maxAgeMs: null,
+      },
+    );
     expect(state.reachable).toBe(false);
     expect(state.updateAvailable).toBe(false);
     expect(state.errorMessage).toContain("registry unreachable");
@@ -857,5 +993,86 @@ describe("refreshRegistryUpdateState - environment-scoped cache", () => {
     const persisted = JSON.parse(readFileSync(devPath, "utf8"));
     expect(persisted.environment).toBe("dev");
     expect(persisted.reachable).toBe(false);
+  });
+
+  // Fixup B5: dev runs are per-worktree ("Dev run slots") - every other
+  // piece of dev state (install dir, pid file, CLI home) is already scoped
+  // under `dev-runs/<slot>/` so concurrent worktrees never collide. This
+  // cache was keyed on environment alone, so two dev worktrees running
+  // `make dev-desktop` at once (each with its own install/`DEV_DESKTOP_SLOT`)
+  // shared one `registry-update-cache-dev.json` and could overwrite each
+  // other's cached state. Two module instances stand in for two concurrent
+  // desktop processes, one per slot, exactly as two real `make dev-desktop`
+  // runs would never share a Node module registry either.
+  it("keeps registry caches for two concurrent dev slots separate", async () => {
+    const originalSlot = process.env[DEV_DESKTOP_SLOT_ENV];
+    try {
+      process.env[DEV_DESKTOP_SLOT_ENV] = "worktree-a";
+      const probeA = vi
+        .fn()
+        .mockResolvedValue(registryProbeResult("DEV-A-2.0.0", true, null));
+      vi.doMock("../../cli/traycer-cli", () => ({
+        runTraycerCliJson: probeA,
+        streamTraycerCliJson: vi.fn(),
+        TraycerCliError: class extends Error {},
+      }));
+      const mgmtA = await import("../host-management-ipc");
+      mgmtA.setActiveEnvironment("dev");
+      const stateA = await mgmtA.refreshRegistryUpdateState(
+        fakeHostController(false),
+        { force: false, maxAgeMs: null },
+      );
+      expect(stateA.latestVersion).toBe("DEV-A-2.0.0");
+
+      // A second, independently-resolved module instance for a different
+      // slot - mirrors a separate concurrent `make dev-desktop` process.
+      vi.resetModules();
+      vi.doUnmock("../../cli/traycer-cli");
+      process.env[DEV_DESKTOP_SLOT_ENV] = "worktree-b";
+      const probeB = vi
+        .fn()
+        .mockResolvedValue(registryProbeResult("DEV-B-3.0.0", true, null));
+      vi.doMock("../../cli/traycer-cli", () => ({
+        runTraycerCliJson: probeB,
+        streamTraycerCliJson: vi.fn(),
+        TraycerCliError: class extends Error {},
+      }));
+      const mgmtB = await import("../host-management-ipc");
+      mgmtB.setActiveEnvironment("dev");
+      const stateB = await mgmtB.refreshRegistryUpdateState(
+        fakeHostController(false),
+        { force: false, maxAgeMs: null },
+      );
+      expect(stateB.latestVersion).toBe("DEV-B-3.0.0");
+
+      const pathA = join(
+        workHome,
+        ".traycer",
+        "desktop",
+        "registry-update-cache-dev-worktree-a.json",
+      );
+      const pathB = join(
+        workHome,
+        ".traycer",
+        "desktop",
+        "registry-update-cache-dev-worktree-b.json",
+      );
+      expect(existsSync(pathA)).toBe(true);
+      expect(existsSync(pathB)).toBe(true);
+      // Slot A's own file must still hold slot A's data - proves slot B's
+      // write landed in a separate file rather than clobbering it.
+      expect(JSON.parse(readFileSync(pathA, "utf8")).latestVersion).toBe(
+        "DEV-A-2.0.0",
+      );
+      expect(JSON.parse(readFileSync(pathB, "utf8")).latestVersion).toBe(
+        "DEV-B-3.0.0",
+      );
+    } finally {
+      if (originalSlot === undefined) {
+        delete process.env[DEV_DESKTOP_SLOT_ENV];
+      } else {
+        process.env[DEV_DESKTOP_SLOT_ENV] = originalSlot;
+      }
+    }
   });
 });

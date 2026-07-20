@@ -13,6 +13,18 @@ import { log } from "../app/logger";
 // while the drain waited (up to its bound) would be lost on the post-install
 // relaunch.
 
+// Fixup B4: quit is instant everywhere else - this bound is the tech plan's
+// one deliberate, bounded exception ("quit keeps a <=10s best-effort drain of
+// an in-flight mutation"), never a download. It used to sit at 2 minutes
+// (`awaitMutationLaneIdle`'s call site in `desktop-startup.ts`), matching the
+// CLI runner's own generous per-call timeout headroom rather than the tech
+// plan's quit-time bound - a wedged mutation could hold the app open for two
+// minutes after the user asked to restart-and-install. Exported (and moved
+// here, not left as a private constant in the Electron-heavy startup module)
+// so its value is directly assertable in a unit test, since actually waiting
+// out a multi-second drain isn't practical for a unit suite.
+export const QUIT_HOST_MUTATION_DRAIN_TIMEOUT_MS = 10_000;
+
 export interface UpdateInstallQuitDeps {
   // Bounded wait for whatever `HostController` mutation is CURRENTLY in
   // flight to settle (`HostController.awaitMutationLaneIdle`) - never
