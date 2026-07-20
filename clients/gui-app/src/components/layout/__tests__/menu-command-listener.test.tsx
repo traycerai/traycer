@@ -24,6 +24,7 @@ import type {
   IHostManagement,
   IRunnerHost,
 } from "@traycer-clients/shared/platform/runner-host";
+import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
 import { MenuCommandListener } from "@/components/layout/bridges/menu-command-listener";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
@@ -144,36 +145,7 @@ function createRunnerHost(menu: FakeDesktopMenu): FakeRunnerHost {
   };
   const hostPickerRequestOpen: Mock<() => void> = vi.fn();
   return Object.assign(
-    {
-      signInUrl: "https://auth.example.invalid/sign-in",
-      authnBaseUrl: "https://auth.example.invalid",
-      hasLocalHost: true,
-      validateAuthToken: () => Promise.resolve({ kind: "rejected" as const }),
-      validateAuthTokenIdentity: () =>
-        Promise.resolve({ kind: "rejected" as const }),
-      refreshAuthToken: () =>
-        Promise.resolve({ kind: "network-error" as const }),
-      openExternalLink: () => Promise.resolve(),
-      getRegisteredUrlSchemes: () => Promise.resolve([]),
-      requestMicrophoneAccess: () => Promise.resolve("granted" as const),
-      openMicrophoneSettings: () => Promise.resolve(),
-      beginAuthAttempt: () => undefined,
-      onAuthCallback: () => ({ dispose: () => undefined }),
-      deviceFlow: { start: () => Promise.resolve(null) },
-      secureStorage: {
-        get: () => Promise.resolve(null),
-        set: () => Promise.resolve(),
-        delete: () => Promise.resolve(),
-      },
-      notifications: {
-        show: () => Promise.resolve(),
-        onClick: () => ({ dispose: () => undefined }),
-      },
-      tray: {
-        setEpics: () => Promise.resolve(),
-        setIndicator: () => Promise.resolve(),
-        onEpicSelected: () => ({ dispose: () => undefined }),
-      },
+    createFakeRunnerHost({
       hostPicker: {
         get isOpen() {
           return false;
@@ -182,29 +154,8 @@ function createRunnerHost(menu: FakeDesktopMenu): FakeRunnerHost {
         requestClose: vi.fn(),
         onChange: () => ({ dispose: () => undefined }),
       },
-      workspaceFolders: {
-        pickFolders: () => Promise.resolve([]),
-      },
-      fileDrops: {
-        resolveDroppedFilePaths: () => Promise.resolve([]),
-        copyDroppedFilePaths: (paths) => Promise.resolve(paths),
-        readNativeClipboardFilePaths: () => Promise.resolve([]),
-      },
-      tokenStore: {
-        get: () => Promise.resolve(null),
-        set: () => Promise.resolve(),
-        delete: () => Promise.resolve(),
-      },
-      onLocalHostChange: () => ({ dispose: () => undefined }),
-      onSystemResumed: () => ({ dispose: () => undefined }),
       requestHostRespawn: vi.fn(() => Promise.resolve()),
-      service: null,
-      traycerCli: null,
-      migration: null,
-      hostManagement: null,
-      hostTray: null,
-      zoom: null,
-    } satisfies IRunnerHost,
+    }),
     {
       menu,
       windows,

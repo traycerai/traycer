@@ -70,6 +70,7 @@ function buildFakeBridge(
   }> = [];
   const bridge: DesktopPreloadBridge = {
     authnBaseUrl: "http://localhost:5005",
+    relayBaseUrl: "ws://localhost:8787/attach",
     authRedirectUri: "",
     initialRoute: "/",
     sentryRendererDsn: "",
@@ -83,6 +84,13 @@ function buildFakeBridge(
     }),
     validateAuthTokenIdentity: async () => ({ kind: "rejected" as const }),
     refreshAuthToken: async () => ({ kind: "network-error" as const }),
+    listRegisteredHosts: async () => ({ kind: "network-error" as const }),
+    listUserSessions: async () => ({ kind: "network-error" as const }),
+    revokeUserSession: async () => ({ kind: "network-error" as const }),
+    revokeAllSessions: async () => ({ kind: "network-error" as const }),
+    requestStepUpChallenge: async () => ({ kind: "network-error" as const }),
+    verifyStepUpChallenge: async () => ({ kind: "network-error" as const }),
+    updateHostVersionPolicy: async () => ({ kind: "network-error" as const }),
     openExternalLink: async () => undefined,
     getRegisteredUrlSchemes: async () => [],
     requestMicrophoneAccess: async () => "granted" as const,
@@ -688,6 +696,56 @@ describe("DesktopRunnerHost.onLocalHostChange", () => {
     ).resolves.toEqual({
       kind: "rejected",
     });
+  });
+
+  it("delegates user sessions and step-up auth calls to the bridge", async () => {
+    const fake = buildFakeBridge(null);
+    const listUserSessions = vi.fn(async () => ({
+      kind: "network-error" as const,
+    }));
+    const revokeUserSession = vi.fn(async () => ({
+      kind: "network-error" as const,
+    }));
+    const revokeAllSessions = vi.fn(async () => ({
+      kind: "network-error" as const,
+    }));
+    const requestStepUpChallenge = vi.fn(async () => ({
+      kind: "network-error" as const,
+    }));
+    const verifyStepUpChallenge = vi.fn(async () => ({
+      kind: "network-error" as const,
+    }));
+    fake.bridge.listUserSessions = listUserSessions;
+    fake.bridge.revokeUserSession = revokeUserSession;
+    fake.bridge.revokeAllSessions = revokeAllSessions;
+    fake.bridge.requestStepUpChallenge = requestStepUpChallenge;
+    fake.bridge.verifyStepUpChallenge = verifyStepUpChallenge;
+    const host = new DesktopRunnerHost({
+      bridge: fake.bridge,
+      signInUrl: "https://auth.example.invalid/sign-in",
+    });
+
+    await expect(host.listUserSessions("jwt")).resolves.toEqual({
+      kind: "network-error",
+    });
+    await expect(
+      host.revokeUserSession("jwt", "family-1", true),
+    ).resolves.toEqual({ kind: "network-error" });
+    await expect(host.revokeAllSessions("jwt")).resolves.toEqual({
+      kind: "network-error",
+    });
+    await expect(host.requestStepUpChallenge("jwt")).resolves.toEqual({
+      kind: "network-error",
+    });
+    await expect(host.verifyStepUpChallenge("jwt", "123456")).resolves.toEqual({
+      kind: "network-error",
+    });
+
+    expect(listUserSessions).toHaveBeenCalledWith("jwt");
+    expect(revokeUserSession).toHaveBeenCalledWith("jwt", "family-1", true);
+    expect(revokeAllSessions).toHaveBeenCalledWith("jwt");
+    expect(requestStepUpChallenge).toHaveBeenCalledWith("jwt");
+    expect(verifyStepUpChallenge).toHaveBeenCalledWith("jwt", "123456");
   });
 
   it("exposes the desktop-only windows bridge without changing IRunnerHost", async () => {

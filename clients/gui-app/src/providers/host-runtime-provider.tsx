@@ -8,25 +8,30 @@ import {
   type ReactNode,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { v4 as uuidv4 } from "uuid";
 import type {
   HostClient,
   IHostQueryInvalidator,
 } from "@traycer-clients/shared/host-client/host-client";
 import { HostRuntime } from "@traycer-clients/shared/host-client/host-runtime";
 import type { IHostMessenger } from "@traycer-clients/shared/host-transport/host-messenger";
-import { WsRpcClient } from "@traycer-clients/shared/host-transport/ws-rpc-client";
-import { createWhatwgWebSocketFactory } from "@traycer-clients/shared/host-transport/whatwg-ws-factory";
 import { createAuthAwareMessenger } from "@traycer-clients/shared/host-transport/auth-aware-messenger";
 import {
   createRetryingMessenger,
   DEFAULT_TRANSPORT_RETRY_POLICY,
 } from "@traycer-clients/shared/host-transport/retrying-messenger";
-import { DEFAULT_DIAL_TIMEOUT_MS } from "@traycer-clients/shared/host-transport/transport-config";
-import type { RemoteHostFetcher } from "@traycer-clients/shared/host-client/remote-fetcher";
+import {
+  hostListItemToDirectoryEntry,
+  type RemoteHostFetcher,
+} from "@traycer-clients/shared/host-client/remote-fetcher";
+import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import { AuthService } from "@/lib/auth/auth-service";
 import { HostDirectoryService } from "@/lib/host/host-directory-service";
+import {
+  buildRuntimeHostMessenger,
+  defaultHostRpcRequestId,
+  type RuntimeHostMessengerBinding,
+} from "@/lib/host/host-messenger";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { appLogger } from "@/lib/logger";
 import { useRunnerHost } from "@/providers/use-runner-host";
@@ -91,14 +96,6 @@ export interface TypedHostRuntime<Registry extends VersionedRpcRegistry> {
 }
 
 /**
- * Per-frame timeout after a successful dial. 30 s covers slow downstream
- * work (e.g. the host waiting on an LLM call) without giving a stuck
- * socket an unbounded lease. Matches the host's post-open timeout
- * so neither side holds a dangling connection.
- */
-const DEFAULT_WS_FRAME_TIMEOUT_MS = 30_000;
-
-/**
  * Builds a typed host-runtime provider + hooks bound to a specific
  * versioned registry.
  *
@@ -159,7 +156,7 @@ export function createHostRuntime<
       return createHostQueryInvalidator(queryClient);
     }, [invalidatorProp, queryClient]);
 
-    const requestId = requestIdProp ?? defaultRequestId;
+    const requestId = requestIdProp ?? defaultHostRpcRequestId;
 
     useEffect(() => {
       const lifecycle: { disposed: boolean } = { disposed: false };
@@ -168,7 +165,8 @@ export function createHostRuntime<
       const auth = new AuthService({ runnerHost });
       const directory = new HostDirectoryService({
         runnerHost,
-        remoteFetcher,
+        remoteFetcher:
+          remoteFetcher ?? buildDefaultRemoteFetcher(auth, runnerHost),
       });
 
       let runtime: HostRuntime<Registry> | null = null;
@@ -182,19 +180,23 @@ export function createHostRuntime<
         runtime === null
           ? null
           : (runtime.hostClient.getRequestContext()?.credentials ?? null);
+      // Read live (mirrors `bearer`/`endpoint`) - the remote transport's
+      // `(hostId, userId)` session-cache key (Architecture §4 / S1).
+      const userId = () =>
+        runtime === null ? null : runtime.hostClient.getRequestContextUserId();
 
+      let runtimeMessenger: RuntimeHostMessengerBinding<Registry> | null = null;
       const rawMessenger: IHostMessenger<Registry> =
         messengerFactory !== null
           ? messengerFactory({ registry, endpoint, bearer })
-          : new WsRpcClient<Registry>({
+          : (runtimeMessenger = buildRuntimeHostMessenger({
               registry,
               endpoint,
               bearer,
+              userId,
+              authnBaseUrl: runnerHost.authnBaseUrl,
               requestId,
-              webSocketFactory: createWhatwgWebSocketFactory(),
-              dialTimeoutMs: DEFAULT_DIAL_TIMEOUT_MS,
-              frameTimeoutMs: DEFAULT_WS_FRAME_TIMEOUT_MS,
-            });
+            })).messenger;
       // Closes the unary-RPC auth-recovery loop: a mid-call 401 from
       // the Traycer cloud backend is surfaced by the host as
       // `HostRpcError { code: "UNAUTHORIZED" }`, and this wrapper drives
@@ -227,6 +229,12 @@ export function createHostRuntime<
       });
 
       const activeRuntime = runtime;
+      const runtimeTransportUnsubscribe =
+        runtimeMessenger === null
+          ? null
+          : activeRuntime.hostClient.onChange(() => {
+              runtimeMessenger.reset();
+            });
       void (async () => {
         let phase = "auth.start";
         try {
@@ -265,6 +273,8 @@ export function createHostRuntime<
           });
         } catch (error) {
           appLogger.error("[host-runtime] startup failed", { phase }, error);
+          runtimeMessenger?.dispose();
+          runtimeTransportUnsubscribe?.();
           auth.dispose();
           activeRuntime.dispose();
           directory.dispose();
@@ -278,6 +288,8 @@ export function createHostRuntime<
 
       return () => {
         lifecycle.disposed = true;
+        runtimeMessenger?.dispose();
+        runtimeTransportUnsubscribe?.();
         activeRuntime.dispose();
         directory.dispose();
         auth.dispose();
@@ -321,6 +333,42 @@ export function createHostRuntime<
   };
 }
 
-function defaultRequestId(): string {
-  return uuidv4();
+/**
+ * The production `RemoteHostFetcher` used whenever a caller does not override
+ * one (S2/T14): every shell today passes `remoteFetcher={null}` down through
+ * `TraycerApp`, which used to fall back to `HostDirectoryService`'s built-in
+ * always-empty stub (S1 - "visible in My Hosts, not in the selectable
+ * directory"). Reuses `AuthService.fetchRegisteredHosts()` - the same
+ * bearer-gated `GET /api/v3/hosts` call My Hosts already makes - rather than
+ * exposing a separate raw-bearer getter (the bearer deliberately never leaves
+ * `AuthService`).
+ *
+ * Maps `fetchRegisteredHosts()`'s contract onto `RemoteHostFetchOutcome`
+ * (T20 / audit P4): a `null` return (no bearer, or one the registry
+ * rejected - `AuthService` deliberately does not distinguish the two so a
+ * background poll never forces a sign-out) becomes `signed-out`; a thrown
+ * network error becomes `failed` so `HostDirectoryService.refresh()` retains
+ * the last-known remote entries instead of wiping the merged directory and
+ * unbinding an active remote selection.
+ */
+function buildDefaultRemoteFetcher(
+  auth: AuthService,
+  runnerHost: IRunnerHost,
+): RemoteHostFetcher {
+  return async () => {
+    try {
+      const response = await auth.fetchRegisteredHosts();
+      if (response === null) {
+        return { kind: "signed-out" };
+      }
+      return {
+        kind: "hosts",
+        entries: response.hosts.map((item) =>
+          hostListItemToDirectoryEntry(item, runnerHost.relayBaseUrl),
+        ),
+      };
+    } catch {
+      return { kind: "failed" };
+    }
+  };
 }

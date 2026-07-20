@@ -1306,6 +1306,50 @@ describe("WsRpcClient", () => {
       },
     });
 
+    // A same-major minor whose new capability genuinely can't project onto
+    // the older schema - the pattern `workspace.prepareFolders` v1.1 uses to
+    // fail closed against a v1.0 host instead of silently stripping to a
+    // misleading empty request (see the RPC backward-compat decision log).
+    const pingReqV10 = defineRpcContract({
+      method: "host.ping",
+      schemaVersion: { major: 1, minor: 0 } as const,
+      requestSchema: z.object({ note: z.string() }),
+      responseSchema: z.object({ ok: z.boolean() }),
+    });
+
+    const pingReqV11 = defineRpcContract({
+      method: "host.ping",
+      schemaVersion: { major: 1, minor: 1 } as const,
+      requestSchema: z.object({ note: z.string().nullable() }),
+      responseSchema: z.object({ ok: z.boolean() }),
+    });
+
+    const upgradePingV10ToV11 = defineUpgradePath<
+      typeof pingReqV10,
+      typeof pingReqV11
+    >({
+      from: pingReqV10.schemaVersion,
+      to: pingReqV11.schemaVersion,
+      upgradeRequest: (request) => ({ note: request.note }),
+      upgradeResponse: (response) => response,
+    });
+
+    const registryPingV1Line = defineVersionedRpcRegistry({
+      "host.ping": {
+        1: {
+          latestMinor: 1,
+          versions: {
+            0: { contract: pingReqV10, upgradeFromPreviousVersion: null },
+            1: {
+              contract: pingReqV11,
+              upgradeFromPreviousVersion: upgradePingV10ToV11,
+            },
+          },
+          downgradePathsFromLatest: {},
+        },
+      },
+    });
+
     const registryV2WithBridge = defineVersionedRpcRegistry({
       "host.echo": {
         1: {
@@ -1399,6 +1443,40 @@ describe("WsRpcClient", () => {
       });
 
       await expect(pending).resolves.toEqual({ echoed: "HI", volume: 0 });
+    });
+
+    it("same major, client newer minor: a request that doesn't project onto the older schema throws DOWNGRADE_UNSUPPORTED without sending the request frame", async () => {
+      const { factory, sockets } = makeFactory();
+      const client = buildClient(registryPingV1Line, {
+        factory,
+        requestId: "req-same-newer-no-project",
+      });
+
+      const pending = client.request("host.ping", { note: null });
+      await flush();
+
+      sockets[0].socket.fireOpen();
+      await flush();
+
+      sockets[0].socket.fireMessage({
+        kind: "openAck",
+        manifest: {},
+        optionalManifest: { "host.ping": { major: 1, minor: 0 } },
+      });
+
+      await expect(pending).rejects.toSatisfy((error: unknown) => {
+        return (
+          error instanceof HostRpcError &&
+          error.code === "DOWNGRADE_UNSUPPORTED" &&
+          error.method === "host.ping" &&
+          error.requestId === "req-same-newer-no-project" &&
+          error.fatalDetails === null
+        );
+      });
+
+      const kinds = sockets[0].sent.map((frame) => frame.kind);
+      expect(kinds).not.toContain("request");
+      expect(kinds).not.toContain("fatalError");
     });
 
     it("same major, client older minor: sends caller canonical unchanged and returns response unchanged", async () => {

@@ -103,6 +103,7 @@ export class HostRuntime<Registry extends VersionedRpcRegistry> {
 
     this.contextUnsubscribe = this.requestContextProvider.onChange((ctx) => {
       this.hostClient.setRequestContext(ctx);
+      void this.directory.refresh();
     });
 
     // Same-user token refresh rotates the lease in place (silent on `onChange`);

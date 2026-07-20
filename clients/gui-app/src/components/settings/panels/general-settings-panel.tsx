@@ -15,7 +15,7 @@ import { useRunnerUninstallTraycer } from "@/hooks/runner/use-runner-uninstall-t
 import { useDesktopAppUpdates } from "@/hooks/runner/use-desktop-app-updates";
 import { requestAppQuit } from "@/lib/desktop-app-lifecycle";
 import { useHostQuery, useHostMutation } from "@/hooks/host/use-host-query";
-import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import type { HostRpcRegistry } from "@/lib/host";
 import {
   hostQueryKeys,
   runnerMutationKeys,
@@ -41,6 +41,8 @@ import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useLocalSnapshotClearStore } from "@/stores/settings/local-snapshot-clear-store";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
+import { SettingsHostSelect } from "./settings-host-select";
+import { useSettingsHostScope } from "./use-settings-host-scope";
 import { trackSettingChanged, type AnalyticsSetting } from "@/lib/analytics";
 
 const MIGRATION_PROGRESS_LABEL = "Migrating tasks";
@@ -401,7 +403,8 @@ function RemoveTraycerDangerRow(props: {
 
 function SettingsFileEditSnapshotsSection() {
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const client = useHostClient();
+  const { hosts, effectiveId, setSelectedId, hostLabel, status, client } =
+    useSettingsHostScope();
   const queryClient = useQueryClient();
   const currentUserId = useAuthStore(
     (state) => state.contextMetadata?.userId ?? state.profile?.userId ?? null,
@@ -427,7 +430,7 @@ function SettingsFileEditSnapshotsSection() {
     options: {
       mutationKey: snapshotsMutationKeys.clearLocalSnapshots(),
       onMutate: () => ({
-        hostId: client.getActiveHostId(),
+        hostId: client === null ? null : client.getActiveHostId(),
         userId: currentUserId,
       }),
       onSuccess: (result, _variables, context) => {
@@ -462,9 +465,30 @@ function SettingsFileEditSnapshotsSection() {
     <>
       <SettingsRow
         label="File Edit Snapshots"
-        description="Pre-edit file snapshots for Undo and cached long plan content on this device. This data stays local and is not synced."
+        description={`Pre-edit file snapshots for Undo and cached long plan content on ${hostLabel}. This data stays local and is not synced.`}
         control={
           <div className="flex flex-col items-end gap-2">
+            {hosts.length > 0 ? (
+              <SettingsHostSelect
+                hosts={hosts}
+                value={effectiveId}
+                onChange={setSelectedId}
+                ariaLabel="File edit snapshots host"
+              />
+            ) : (
+              <span className="text-ui-xs text-muted-foreground">
+                Host: {hostLabel}
+              </span>
+            )}
+            {status === "unavailable" ? (
+              <span
+                className="text-ui-xs text-destructive"
+                data-testid="settings-file-edit-snapshots-host-unavailable"
+              >
+                {hostLabel} is no longer available - pick a different host
+                above.
+              </span>
+            ) : null}
             <div
               className="font-mono text-code-xs text-muted-foreground"
               data-testid="settings-local-snapshots-size"
@@ -475,7 +499,7 @@ function SettingsFileEditSnapshotsSection() {
               type="button"
               variant="destructive"
               size="sm"
-              disabled={clearSnapshotsMutation.isPending}
+              disabled={client === null || clearSnapshotsMutation.isPending}
               data-testid="settings-clear-file-edit-snapshots"
               onClick={() => {
                 setConfirmOpen(true);
@@ -496,8 +520,8 @@ function SettingsFileEditSnapshotsSection() {
       <ConfirmDestructiveDialog
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
-        title="Clear file edit snapshots?"
-        description="Cleared snapshots cannot be restored. Existing chat history and checkpoint records remain visible, but Undo will be disabled for your past turns on this device."
+        title={`Clear file edit snapshots for ${hostLabel}?`}
+        description={`Cleared snapshots on ${hostLabel} cannot be restored. Existing chat history and checkpoint records remain visible, but Undo will be disabled for past turns on that host.`}
         cascadeSummary={null}
         actionLabel="Clear file edit snapshots"
         isPending={clearSnapshotsMutation.isPending}

@@ -8,12 +8,14 @@ import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-m
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type {
-  PrepareWorkspaceFoldersRequest,
-  PrepareWorkspaceFoldersResponse,
   PreparedWorkspaceFolder,
   RemoveEpicRepoRequest,
   RemoveEpicRepoResponse,
 } from "@traycer/protocol/host/epic/unary-schemas";
+import type {
+  WorkspacePrepareFoldersRequestV11,
+  WorkspacePrepareFoldersResponseV11,
+} from "@traycer/protocol/host/workspace/unary-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useHostClient } from "@/lib/host/runtime";
 import { useHostMutation } from "@/hooks/host/use-host-query";
@@ -23,6 +25,7 @@ import {
   workspaceMutationKeys,
 } from "@/lib/query-keys";
 import { useRunnerHost } from "@/providers/use-runner-host";
+import { openRemoteWorkspacePathPicker } from "@/lib/host/remote-workspace-path-picker";
 import type { WorkspaceFolderInfo } from "@/stores/workspace/workspace-folders-store";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
@@ -34,9 +37,9 @@ export interface WorkspaceFolderActions {
   readonly isPreparing: boolean;
   readonly isRemoving: boolean;
   readonly prepareFoldersMutation: UseMutationResult<
-    PrepareWorkspaceFoldersResponse,
+    WorkspacePrepareFoldersResponseV11,
     HostRpcError,
-    PrepareWorkspaceFoldersRequest,
+    WorkspacePrepareFoldersRequestV11,
     MutationContext
   >;
   readonly removeEpicRepoMutation: UseMutationResult<
@@ -45,7 +48,7 @@ export interface WorkspaceFolderActions {
     RemoveEpicRepoRequest,
     MutationContext
   >;
-  readonly pickAndPrepareFolders: () => Promise<PrepareWorkspaceFoldersResponse | null>;
+  readonly pickAndPrepareFolders: () => Promise<WorkspacePrepareFoldersResponseV11 | null>;
 }
 
 export function useWorkspaceFolderActions(): WorkspaceFolderActions {
@@ -139,24 +142,38 @@ export function useWorkspaceFolderActionsForClient(
 
   const pickAndPrepareFolders = useCallback(async () => {
     const activeHost = client?.getActiveHost() ?? null;
-    if (!canAssociateLocalWorkspaces(activeHost)) {
-      reportableErrorToast("Select the local host to add folders.", undefined, {
+    if (client === null || activeHost === null) {
+      reportableErrorToast("Select a host to add folders.", undefined, {
         title: "Could not add workspace folders",
-        message: "The local host was not selected.",
+        message: "No host was selected.",
         code: null,
         source: "Workspace folders",
       });
       return null;
     }
 
-    const folderPaths = await runnerHost.workspaceFolders.pickFolders();
+    // A remote host has no native OS picker to reach onto its filesystem — the
+    // path-entry dialog resolves to the same `readonly string[]` shape
+    // (`IRunnerHost.workspaceFolders.pickFolders()`'s contract), so everything
+    // downstream (`workspace.prepareFolders`, `addResolvedFolders`, …) runs
+    // unchanged regardless of which picker produced the path (T14).
+    let folderPaths: readonly string[];
+    if (canAssociateLocalWorkspaces(activeHost)) {
+      folderPaths = await runnerHost.workspaceFolders.pickFolders();
+    } else if (activeHost.kind === "remote") {
+      folderPaths = await openRemoteWorkspacePathPicker(client);
+    } else {
+      folderPaths = [];
+    }
     if (folderPaths.length === 0) {
       return null;
     }
 
-    return prepareFoldersAsync({ folderPaths: [...folderPaths] }).catch(
-      () => null,
-    );
+    return prepareFoldersAsync({
+      operation: "prepare",
+      folderPaths: [...folderPaths],
+      path: null,
+    }).catch(() => null);
   }, [client, runnerHost, prepareFoldersAsync]);
 
   return {

@@ -7,6 +7,7 @@
 import { useMemo } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { DEFAULT_EPIC_NODE_NAMES } from "@/lib/artifacts/node-display";
+import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
@@ -21,8 +22,15 @@ import type { CommandContext, CommandItem } from "@/lib/commands/types";
 export function useChatsOpenerItems(
   ctx: CommandContext,
 ): ReadonlyArray<CommandItem> {
-  const defaultHostId = useReactiveActiveHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
+  const activeHostId = useReactiveActiveHostId();
+  const defaultHostId = activeHostId ?? UNKNOWN_HOST_PLACEHOLDER;
   const projection = useActiveEpicProjection(ctx.activeEpicId);
+  const directoryList = useHostDirectoryList();
+  const hostLabelById = useMemo(() => {
+    return new Map(
+      (directoryList.data ?? []).map((entry) => [entry.hostId, entry.label]),
+    );
+  }, [directoryList.data]);
 
   return useMemo<ReadonlyArray<CommandItem>>(() => {
     const newChat = openerActionLeaf({
@@ -46,14 +54,41 @@ export function useChatsOpenerItems(
     if (projection === null) return [newChat];
     const existing = projection.chats.allIds.map((id) => {
       const chat = projection.chats.byId[id];
-      return openerExistingLeaf("chats", ctx, {
-        id: chat.id,
-        instanceId: uuidv4(),
-        type: "chat",
-        name: chat.title.length > 0 ? chat.title : DEFAULT_EPIC_NODE_NAMES.chat,
-        hostId: chat.hostId ?? defaultHostId,
-      });
+      // A chat with no recorded hostId falls back to (and thus matches) the
+      // active host, so only a real, differing hostId ever earns a badge.
+      // Requires `activeHostId` to be genuinely resolved first - while it's
+      // still `null` (boot, host reconnect window) `defaultHostId` would be
+      // the `UNKNOWN_HOST_PLACEHOLDER` sentinel, which no real hostId can
+      // ever equal, false-badging every chat as cross-host.
+      const hostBadge =
+        activeHostId !== null &&
+        chat.hostId !== null &&
+        chat.hostId !== activeHostId
+          ? chatHostBadgeLabel(hostLabelById, chat.hostId)
+          : null;
+      return openerExistingLeaf(
+        "chats",
+        ctx,
+        {
+          id: chat.id,
+          instanceId: uuidv4(),
+          type: "chat",
+          name:
+            chat.title.length > 0 ? chat.title : DEFAULT_EPIC_NODE_NAMES.chat,
+          hostId: chat.hostId ?? defaultHostId,
+        },
+        hostBadge,
+      );
     });
     return [newChat, ...existing];
-  }, [ctx, projection, defaultHostId]);
+  }, [ctx, projection, activeHostId, defaultHostId, hostLabelById]);
+}
+
+/** Falls back to the raw hostId when the directory has no (or a blank) label for it. */
+function chatHostBadgeLabel(
+  hostLabelById: ReadonlyMap<string, string>,
+  hostId: string,
+): string {
+  const label = hostLabelById.get(hostId);
+  return label !== undefined && label.length > 0 ? label : hostId;
 }

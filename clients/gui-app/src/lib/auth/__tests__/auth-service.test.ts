@@ -633,12 +633,14 @@ describe("AuthService", () => {
     expect(await host.tokenStore.get()).toBeNull();
   });
 
-  it("attempts refresh then surfaces session-expired when startup validation stays unreachable", async () => {
+  it("keeps stored credentials when startup validation stays transient", async () => {
+    vi.useFakeTimers();
     const { service, host } = makeService();
-    await host.tokenStore.set({
+    const stored = {
       token: "offline-token",
       refreshToken: "offline-token-refresh",
-    });
+    };
+    await host.tokenStore.set(stored);
     restoreFetch();
     const calls: string[] = [];
     restoreFetch = installFetch((input, init) => {
@@ -646,6 +648,76 @@ describe("AuthService", () => {
         `${init?.method ?? "GET"} ${typeof input === "string" ? input : String(input)}`,
       );
       return Promise.reject(new Error("offline"));
+    });
+
+    const start = service.start();
+    await vi.runAllTimersAsync();
+    await start;
+
+    expect(useAuthStore.getState().status).toBe("signed-out");
+    expect(service.getCurrentSessionSnapshot().token).toBeNull();
+    expect(await host.tokenStore.get()).toEqual(stored);
+    expect(service.getLastError()).toBeNull();
+    expect(collapseConsecutiveCalls(calls)).toEqual([
+      `GET ${VALIDATION_URL}`,
+      `POST ${REFRESH_URL}`,
+    ]);
+  });
+
+  it("keeps stored credentials when startup user lookup fails closed and refresh is transient", async () => {
+    vi.useFakeTimers();
+    const { service, host } = makeService();
+    const stored = {
+      token: "fail-closed-token",
+      refreshToken: "fail-closed-token-refresh",
+    };
+    await host.tokenStore.set(stored);
+    restoreFetch();
+    const calls: string[] = [];
+    restoreFetch = installFetch((input, init) => {
+      const url = typeof input === "string" ? input : String(input);
+      calls.push(`${init?.method ?? "GET"} ${url}`);
+      if (url === VALIDATION_URL) {
+        return status(401);
+      }
+      if (url === REFRESH_URL) {
+        return status(503);
+      }
+      return status(500);
+    });
+
+    const start = service.start();
+    await vi.runAllTimersAsync();
+    await start;
+
+    expect(useAuthStore.getState().status).toBe("signed-out");
+    expect(service.getCurrentSessionSnapshot().token).toBeNull();
+    expect(await host.tokenStore.get()).toEqual(stored);
+    expect(service.getLastError()).toBeNull();
+    expect(collapseConsecutiveCalls(calls)).toEqual([
+      `GET ${VALIDATION_URL}`,
+      `POST ${REFRESH_URL}`,
+    ]);
+  });
+
+  it("clears stored credentials when startup user lookup and refresh are genuinely rejected", async () => {
+    const { service, host } = makeService();
+    await host.tokenStore.set({
+      token: "rejected-token",
+      refreshToken: "rejected-token-refresh",
+    });
+    restoreFetch();
+    const calls: string[] = [];
+    restoreFetch = installFetch((input, init) => {
+      const url = typeof input === "string" ? input : String(input);
+      calls.push(`${init?.method ?? "GET"} ${url}`);
+      if (url === VALIDATION_URL) {
+        return status(401);
+      }
+      if (url === REFRESH_URL) {
+        return status(401);
+      }
+      return status(500);
     });
 
     await service.start();
@@ -1185,6 +1257,48 @@ describe("AuthService", () => {
       expect(outcome?.kind).toBe("network-error");
       expect(useAuthStore.getState().status).toBe("signed-in");
       expect(service.getCurrentSessionSnapshot().token).toBe("still-valid");
+    });
+
+    it("preserves signed-in state when user lookup fails closed and refresh is transient", async () => {
+      const { service, host } = makeService();
+      await service.start();
+      await deviceSignIn(service, host, "fail-closed-token");
+
+      vi.useFakeTimers();
+      restoreFetch();
+      const calls: string[] = [];
+      restoreFetch = installFetch((input, init) => {
+        const url = typeof input === "string" ? input : String(input);
+        calls.push(`${init?.method ?? "GET"} ${url}`);
+        if (
+          url === VALIDATION_URL &&
+          init?.headers?.Authorization === "Bearer fail-closed-token"
+        ) {
+          return status(401);
+        }
+        if (
+          url === REFRESH_URL &&
+          init?.headers?.Authorization === "Bearer fail-closed-token"
+        ) {
+          return status(503);
+        }
+        return status(500);
+      });
+
+      const pending = service.revalidateCurrentContext();
+      await vi.runAllTimersAsync();
+      const outcome = await pending;
+
+      expect(outcome?.kind).toBe("network-error");
+      expect(useAuthStore.getState().status).toBe("signed-in");
+      expect(service.getCurrentSessionSnapshot().token).toBe(
+        "fail-closed-token",
+      );
+      expect(service.getLastError()).toBeNull();
+      expect(collapseConsecutiveCalls(calls)).toEqual([
+        `GET ${VALIDATION_URL}`,
+        `POST ${REFRESH_URL}`,
+      ]);
     });
 
     it("coalesces concurrent refresh revalidations so a spent sibling refresh token does not sign out", async () => {

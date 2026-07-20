@@ -16,6 +16,8 @@ import {
   hostLogPath,
   hostPidMetadataPath,
   hostStagingRoot,
+  hostUpdateProgressMarkerPath,
+  hostVersionsDir,
   traycerHomeDir,
 } from "../paths";
 import { withDevDesktopSlot } from "@traycer-clients/shared/test-fixtures/dev-desktop-slot";
@@ -89,6 +91,28 @@ describe("store/paths host helpers", () => {
     );
     expect(hostInstallRecordPath("dev")).toBe(
       join(hostInstallDir("dev"), "install.json"),
+    );
+  });
+
+  it("resolves the versioned-installs root as a sibling of install/, not nested under it", () => {
+    expect(hostVersionsDir("production")).toBe(join(HOST_HOME, "versions"));
+    expect(hostVersionsDir("dev")).toBe(join(HOST_HOME, "dev", "versions"));
+    expect(hostVersionsDir("production")).not.toBe(
+      hostInstallDir("production"),
+    );
+    expect(
+      hostVersionsDir("production").startsWith(
+        hostInstallDir("production") + "/",
+      ),
+    ).toBe(false);
+  });
+
+  it("resolves the update-progress marker directly under the environment host root", () => {
+    expect(hostUpdateProgressMarkerPath("production")).toBe(
+      join(HOST_HOME, "update-progress.json"),
+    );
+    expect(hostUpdateProgressMarkerPath("dev")).toBe(
+      join(HOST_HOME, "dev", "update-progress.json"),
     );
   });
 

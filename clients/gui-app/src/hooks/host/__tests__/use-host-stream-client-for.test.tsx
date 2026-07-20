@@ -26,6 +26,10 @@ vi.mock("@/lib/host/runtime", () => ({
   },
 }));
 
+vi.mock("@/providers/use-runner-host", () => ({
+  useRunnerHost: () => ({ authnBaseUrl: "http://localhost:5005" }),
+}));
+
 import { useHostStreamClientFor } from "@/hooks/host/use-host-stream-client-for";
 
 function buildGlobalClient(withContext: boolean): HostClient<HostRpcRegistry> {

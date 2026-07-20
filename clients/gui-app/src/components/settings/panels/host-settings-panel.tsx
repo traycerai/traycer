@@ -22,6 +22,7 @@ import {
   type HostProgressState,
 } from "@/components/settings/panels/host-settings-panel-model";
 import { HostProgressBanner } from "@/components/settings/panels/host-settings-progress-banner";
+import { MyHostsList } from "@/components/settings/panels/my-hosts-list";
 import { InstallationDetailsDisclosure } from "@/components/settings/panels/host-settings-installation-details";
 import { PackageManagerUpgradeHint } from "@/components/settings/panels/host-settings-package-manager-upgrade-hint";
 import { StatusRow } from "@/components/settings/panels/host-settings-status-row";
@@ -58,10 +59,12 @@ export function HostSettingsPanel() {
     return (
       <SettingsPanelShell
         title="Host"
-        description="Host management is only available on the desktop app."
+        description="Your hosts across every device."
       >
+        <MyHostsList />
         <div className="px-5 py-6 text-ui-sm text-muted-foreground">
-          This shell doesn&apos;t bundle the Traycer CLI.
+          Local host management is only available on the desktop app — this
+          shell doesn&apos;t bundle the Traycer CLI.
         </div>
       </SettingsPanelShell>
     );
@@ -432,94 +435,109 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
   return (
     <SettingsPanelShell
       title="Host"
-      description="Local background service that runs Traycer on your machine."
+      description="Your hosts across every device, plus this machine's local service."
     >
-      {progress !== null ? <HostProgressBanner progress={progress} /> : null}
-      {packageManagerUpgrade !== null ? (
-        <PackageManagerUpgradeHint hint={packageManagerUpgrade} />
-      ) : null}
+      <MyHostsList />
+      <section aria-labelledby="local-host-management-heading">
+        <div className="border-b border-border/40 px-5 py-4">
+          <h3
+            id="local-host-management-heading"
+            className="text-ui font-medium"
+          >
+            This machine
+          </h3>
+          <p className="mt-1 text-ui-sm text-muted-foreground">
+            Install, update, restart, register, deregister, and rename the
+            Traycer host service running on this machine.
+          </p>
+        </div>
+        {progress !== null ? <HostProgressBanner progress={progress} /> : null}
+        {packageManagerUpgrade !== null ? (
+          <PackageManagerUpgradeHint hint={packageManagerUpgrade} />
+        ) : null}
 
-      <HostNameRow
-        settings={hostNameSettings}
-        pending={hostNamePending}
-        draftName={hostNameDraft}
-        savePending={hostNameMutation.isPending}
-        onDraftNameChange={(value) => setHostNameDraftOverride(value)}
-        onSave={() => {
-          hostNameMutation.mutate(
-            customNameFromDraft(hostNameDraft, hostNameSettings),
-          );
-        }}
-        onReset={() => {
-          hostNameMutation.mutate(null);
-        }}
-      />
-      <StatusRow status={status} pending={statusPending} />
-      <ActionsRow
-        status={status}
-        pending={statusPending}
-        anyPending={anyPending}
-        installPending={installPending}
-        restartPending={restartPending}
-        onInstall={() => installMutation.mutate(null)}
-        onRestart={() => setRestartConfirmOpen(true)}
-        onOpenDoctor={() => setDoctorOpen(true)}
-      />
-      <RestartHostConfirmDialog
-        open={restartConfirmOpen}
-        onOpenChange={(open) => {
-          if (!open) setRestartConfirmOpen(false);
-        }}
-        isPending={restartMutation.isPending}
-        onConfirm={() => {
-          // Close optimistically instead of waiting for onSuccess/onError -
-          // the mutation can legitimately run tens of seconds, and holding
-          // the dialog open+locked for that whole window is what made it
-          // read as "stuck". Progress/failure still surface via toast.
-          setRestartConfirmOpen(false);
-          restartMutation.mutate();
-        }}
-      />
-      {status?.state === "not-installed" ? null : (
-        <UpdatesRow
-          registryState={registryState}
-          registryFetching={
-            registryFetching || refreshRegistryMutation.isPending
-          }
-          anyPending={anyPending}
-          updatePending={updatePending}
-          latestReleasedAt={latestReleasedAt}
-          nowMs={nowMs}
-          onUpdate={() =>
-            updateMutation.mutate(registryState?.latestVersion ?? null)
-          }
-          onRefresh={handleRefreshRegistry}
+        <HostNameRow
+          settings={hostNameSettings}
+          pending={hostNamePending}
+          draftName={hostNameDraft}
+          savePending={hostNameMutation.isPending}
+          onDraftNameChange={(value) => setHostNameDraftOverride(value)}
+          onSave={() => {
+            hostNameMutation.mutate(
+              customNameFromDraft(hostNameDraft, hostNameSettings),
+            );
+          }}
+          onReset={() => {
+            hostNameMutation.mutate(null);
+          }}
         />
-      )}
-
-      <InstallationDetailsDisclosure
-        record={installedRecord ?? null}
-        loading={installedPending}
-      />
-      <AdvancedDisclosure
-        installedVersion={installedRecord?.version ?? null}
-        availableSnapshot={availableSnapshot}
-        availablePending={availablePending}
-        availableErrorMessage={extractErrorMessage(
-          availableError,
-          registryState,
+        <StatusRow status={status} pending={statusPending} />
+        <ActionsRow
+          status={status}
+          pending={statusPending}
+          anyPending={anyPending}
+          installPending={installPending}
+          restartPending={restartPending}
+          onInstall={() => installMutation.mutate(null)}
+          onRestart={() => setRestartConfirmOpen(true)}
+          onOpenDoctor={() => setDoctorOpen(true)}
+        />
+        <RestartHostConfirmDialog
+          open={restartConfirmOpen}
+          onOpenChange={(open) => {
+            if (!open) setRestartConfirmOpen(false);
+          }}
+          isPending={restartMutation.isPending}
+          onConfirm={() => {
+            // Close optimistically instead of waiting for onSuccess/onError -
+            // the mutation can legitimately run tens of seconds, and holding
+            // the dialog open+locked for that whole window is what made it
+            // read as "stuck". Progress/failure still surface via toast.
+            setRestartConfirmOpen(false);
+            restartMutation.mutate();
+          }}
+        />
+        {status?.state === "not-installed" ? null : (
+          <UpdatesRow
+            registryState={registryState}
+            registryFetching={
+              registryFetching || refreshRegistryMutation.isPending
+            }
+            anyPending={anyPending}
+            updatePending={updatePending}
+            latestReleasedAt={latestReleasedAt}
+            nowMs={nowMs}
+            onUpdate={() =>
+              updateMutation.mutate(registryState?.latestVersion ?? null)
+            }
+            onRefresh={handleRefreshRegistry}
+          />
         )}
-        availableFetching={availableFetching}
-        registryState={registryState}
-        statusState={status?.state}
-        anyPending={anyPending}
-        registerPending={registerPending}
-        deregisterPending={deregisterServiceMutation.isPending}
-        onInstallVersion={(version) => installMutation.mutate(version)}
-        onRegisterService={() => registerServiceMutation.mutate()}
-        onDeregisterService={() => deregisterServiceMutation.mutate()}
-        onRefreshAvailable={handleRefreshRegistry}
-      />
+
+        <InstallationDetailsDisclosure
+          record={installedRecord ?? null}
+          loading={installedPending}
+        />
+        <AdvancedDisclosure
+          installedVersion={installedRecord?.version ?? null}
+          availableSnapshot={availableSnapshot}
+          availablePending={availablePending}
+          availableErrorMessage={extractErrorMessage(
+            availableError,
+            registryState,
+          )}
+          availableFetching={availableFetching}
+          registryState={registryState}
+          statusState={status?.state}
+          anyPending={anyPending}
+          registerPending={registerPending}
+          deregisterPending={deregisterServiceMutation.isPending}
+          onInstallVersion={(version) => installMutation.mutate(version)}
+          onRegisterService={() => registerServiceMutation.mutate()}
+          onDeregisterService={() => deregisterServiceMutation.mutate()}
+          onRefreshAvailable={handleRefreshRegistry}
+        />
+      </section>
 
       <DoctorSheet
         open={doctorOpen}

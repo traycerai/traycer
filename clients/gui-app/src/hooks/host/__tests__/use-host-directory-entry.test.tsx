@@ -1,6 +1,7 @@
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 
 /**
@@ -11,11 +12,11 @@ import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/moc
  * field delta - the respawn-in-place / new-pid case), `update()` changes a
  * field.
  */
-class ChurningDirectory {
-  state: HostDirectoryEntry;
+class ChurningDirectory<T extends HostDirectoryEntry = HostDirectoryEntry> {
+  state: T;
   private readonly listeners = new Set<() => void>();
 
-  constructor(entry: HostDirectoryEntry) {
+  constructor(entry: T) {
     this.state = entry;
   }
 
@@ -24,7 +25,7 @@ class ChurningDirectory {
     return { dispose: () => this.listeners.delete(listener) };
   }
 
-  findById(hostId: string): HostDirectoryEntry | null {
+  findById(hostId: string): T | null {
     if (this.state.hostId !== hostId) return null;
     // Fresh object every read - the worst case the hook must absorb.
     return { ...this.state };
@@ -34,7 +35,7 @@ class ChurningDirectory {
     for (const listener of this.listeners) listener();
   }
 
-  update(patch: Partial<HostDirectoryEntry>): void {
+  update(patch: Partial<T>): void {
     this.state = { ...this.state, ...patch };
     this.emit();
   }
@@ -100,5 +101,46 @@ describe("useHostDirectoryEntry", () => {
     expect(result.current).toBeNull();
     act(() => directory.emit());
     expect(result.current).toBeNull();
+  });
+
+  it("(R-1) returns a new reference when a remote host's public key rotates, even though every base field stays identical", () => {
+    const remoteEntry: RemoteHostDirectoryEntry = {
+      hostId: "remote-host-a",
+      label: "Remote Host A",
+      kind: "remote",
+      websocketUrl: "wss://relay.test/attach",
+      version: "1.2.3",
+      status: "available",
+      publicKey: "pubkey-a",
+      remoteStatus: {
+        presenceLease: "fresh",
+        hostRelayAttached: true,
+        viewerReachability: "ok",
+        clientCloud: "ok",
+        busy: false,
+        busySessionCount: 0,
+        updateState: "current",
+        appVersion: null,
+        lastSeenAt: null,
+      },
+    };
+    const directory = new ChurningDirectory(remoteEntry);
+    directoryRef.value = directory;
+    const { result } = renderHook(() =>
+      useHostDirectoryEntry(remoteEntry.hostId),
+    );
+    const first = result.current;
+    expect(first).not.toBeNull();
+
+    // hostId / label / kind / websocketUrl / version / status all held
+    // stable - the base-field equality check alone would (wrongly) treat
+    // this as benign churn and keep serving the stale key.
+    act(() => directory.update({ publicKey: "pubkey-b" }));
+    expect(result.current).not.toBe(first);
+    expect(
+      result.current !== null && "publicKey" in result.current
+        ? result.current.publicKey
+        : null,
+    ).toBe("pubkey-b");
   });
 });

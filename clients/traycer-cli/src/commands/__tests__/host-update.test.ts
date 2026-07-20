@@ -1,14 +1,30 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { Mock } from "vitest";
 
-// `host update` must refuse to restart a busy host unless `--force` is
-// passed - matching the same `assertHostNotBusy` gate `provisionHost`
-// already applies to install/uninstall/service-cycle. Before this change
-// `host-update.ts` skipped the gate entirely.
+// `host update --version <v> [--force]` is the exact invocation the host
+// daemon spawns detached (fire-and-forget, not waited on) once it decides
+// the host is idle (or the user forced past busy sessions). This suite
+// pins:
+//   - the version request is plumbed through to `installHost` verbatim
+//     (not hardcoded to "latest"),
+//   - the busy check is independently re-verified by THIS invocation and
+//     only skipped by THIS invocation's own `--force`,
+//   - the update-progress marker is written before anything is touched and
+//     cleared/rewritten based on the post-swap health probe outcome,
+//   - a failed health probe triggers a rollback (when a previous versioned
+//     dir exists) and cycles the service lifecycle again, and
+//   - a failed health probe with nothing to roll back to (first-ever
+//     install) still fails loudly instead of swallowing the failure.
 
 const mocks = vi.hoisted(() => ({
   assertHostNotBusyMock: vi.fn(),
   installHostMock: vi.fn(),
   readHostInstallRecordMock: vi.fn(),
+  rollbackToVersionedDirMock: vi.fn(),
+  probeHostHealthMock: vi.fn(),
+  writeUpdateProgressMarkerMock: vi.fn(),
+  deleteUpdateProgressMarkerMock: vi.fn(),
+  createServiceInstallLifecycleMock: vi.fn(),
 }));
 
 vi.mock("../../host/busy-check", () => ({
@@ -17,10 +33,20 @@ vi.mock("../../host/busy-check", () => ({
 
 vi.mock("../../installer", () => ({
   installHost: mocks.installHostMock,
+  rollbackToVersionedDir: mocks.rollbackToVersionedDirMock,
 }));
 
 vi.mock("../../manifest/host-install", () => ({
   readHostInstallRecord: mocks.readHostInstallRecordMock,
+}));
+
+vi.mock("../../service/health-probe", () => ({
+  probeHostHealth: mocks.probeHostHealthMock,
+}));
+
+vi.mock("../../host/update-progress-marker", () => ({
+  writeUpdateProgressMarker: mocks.writeUpdateProgressMarkerMock,
+  deleteUpdateProgressMarker: mocks.deleteUpdateProgressMarkerMock,
 }));
 
 vi.mock("../../store/cli-lock", () => ({
@@ -39,11 +65,24 @@ vi.mock("../../store/cli-lock", () => ({
     }),
 }));
 
-vi.mock("../../service/install-lifecycle", () => ({
-  createServiceInstallLifecycle: () => ({
+interface LifecycleHandleStub {
+  readonly lifecycle: {
+    readonly beforeSwap: Mock;
+    readonly afterSwap: Mock;
+  };
+  readonly state: {
+    priorState: string;
+    stoppedBeforeSwap: boolean;
+    postSwapAction: string;
+    postSwapError: string | null;
+  };
+}
+
+function freshLifecycleHandle(): LifecycleHandleStub {
+  return {
     lifecycle: {
-      beforeSwap: async () => {},
-      afterSwap: async () => {},
+      beforeSwap: vi.fn(async () => {}),
+      afterSwap: vi.fn(async () => {}),
     },
     state: {
       priorState: "stopped",
@@ -51,7 +90,11 @@ vi.mock("../../service/install-lifecycle", () => ({
       postSwapAction: "none",
       postSwapError: null,
     },
-  }),
+  };
+}
+
+vi.mock("../../service/install-lifecycle", () => ({
+  createServiceInstallLifecycle: mocks.createServiceInstallLifecycleMock,
 }));
 
 import { buildHostUpdateCommand } from "../host-update";
@@ -123,6 +166,8 @@ describe("buildHostUpdateCommand busy-check gating", () => {
     });
     expect(mocks.assertHostNotBusyMock).toHaveBeenCalledWith("production");
     expect(mocks.installHostMock).not.toHaveBeenCalled();
+    // The marker must not be written before the busy gate passes.
+    expect(mocks.writeUpdateProgressMarkerMock).not.toHaveBeenCalled();
   });
 
   it("skips the busy check and proceeds when --force is passed", async () => {
@@ -130,6 +175,14 @@ describe("buildHostUpdateCommand busy-check gating", () => {
     mocks.installHostMock.mockResolvedValue({
       record: sampleRecord("2.0.0"),
       previous: sampleRecord("1.0.0"),
+      previousVersionedDir: "/tmp/versions/1.0.0-abc",
+    });
+    mocks.createServiceInstallLifecycleMock.mockImplementation(
+      freshLifecycleHandle,
+    );
+    mocks.probeHostHealthMock.mockResolvedValue({
+      healthy: true,
+      detail: "ok",
     });
     const command = buildHostUpdateCommand({
       versionRequest: "latest",
@@ -147,6 +200,14 @@ describe("buildHostUpdateCommand busy-check gating", () => {
     mocks.installHostMock.mockResolvedValue({
       record: sampleRecord("1.0.0"),
       previous: sampleRecord("1.0.0"),
+      previousVersionedDir: null,
+    });
+    mocks.createServiceInstallLifecycleMock.mockImplementation(
+      freshLifecycleHandle,
+    );
+    mocks.probeHostHealthMock.mockResolvedValue({
+      healthy: true,
+      detail: "ok",
     });
     const command = buildHostUpdateCommand({
       versionRequest: "latest",
@@ -164,6 +225,13 @@ describe("buildHostUpdateCommand busy-check gating", () => {
     mocks.installHostMock.mockResolvedValue({
       record: sampleRecord("1.1.0-rc.2"),
       previous: sampleRecord("1.0.0"),
+    });
+    mocks.createServiceInstallLifecycleMock.mockImplementation(
+      freshLifecycleHandle,
+    );
+    mocks.probeHostHealthMock.mockResolvedValue({
+      healthy: true,
+      detail: "ok",
     });
 
     const command = buildHostUpdateCommand({
@@ -235,6 +303,13 @@ describe("buildHostUpdateCommand --release lower/equal guards", () => {
       record: sampleRecord("1.6.0"),
       previous: sampleRecord("1.5.0"),
     });
+    mocks.createServiceInstallLifecycleMock.mockImplementation(
+      freshLifecycleHandle,
+    );
+    mocks.probeHostHealthMock.mockResolvedValue({
+      healthy: true,
+      detail: "ok",
+    });
     const command = buildHostUpdateCommand({
       versionRequest: "1.6.0",
       force: false,
@@ -250,5 +325,203 @@ describe("buildHostUpdateCommand --release lower/equal guards", () => {
       }),
     );
     expect(result.data).toMatchObject({ version: "1.6.0" });
+  });
+});
+
+describe("buildHostUpdateCommand version plumbing", () => {
+  afterEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it("passes the requested version through to installHost instead of hardcoding 'latest'", async () => {
+    mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("1.0.0"));
+    mocks.assertHostNotBusyMock.mockResolvedValue(undefined);
+    mocks.installHostMock.mockResolvedValue({
+      record: sampleRecord("1.4.2"),
+      previous: sampleRecord("1.0.0"),
+      previousVersionedDir: "/tmp/versions/1.0.0-abc",
+    });
+    mocks.createServiceInstallLifecycleMock.mockImplementation(
+      freshLifecycleHandle,
+    );
+    mocks.probeHostHealthMock.mockResolvedValue({
+      healthy: true,
+      detail: "ok",
+    });
+    const command = buildHostUpdateCommand({
+      versionRequest: "1.4.2",
+      force: false,
+    });
+    await command(fakeCtx());
+    expect(mocks.installHostMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: { kind: "registry", versionRequest: "1.4.2" },
+      }),
+    );
+  });
+});
+
+describe("buildHostUpdateCommand progress marker + health probe", () => {
+  afterEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it("writes an 'updating' marker before installHost runs, and clears it on a healthy probe", async () => {
+    mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("1.0.0"));
+    mocks.assertHostNotBusyMock.mockResolvedValue(undefined);
+    const callOrder: string[] = [];
+    mocks.writeUpdateProgressMarkerMock.mockImplementation(
+      async (_env, progress) => {
+        callOrder.push(`write:${progress.state}`);
+      },
+    );
+    mocks.installHostMock.mockImplementation(async () => {
+      callOrder.push("installHost");
+      return {
+        record: sampleRecord("2.0.0"),
+        previous: sampleRecord("1.0.0"),
+        previousVersionedDir: "/tmp/versions/1.0.0-abc",
+      };
+    });
+    mocks.createServiceInstallLifecycleMock.mockImplementation(
+      freshLifecycleHandle,
+    );
+    mocks.probeHostHealthMock.mockImplementation(async () => {
+      callOrder.push("probe");
+      return { healthy: true, detail: "ok" };
+    });
+    mocks.deleteUpdateProgressMarkerMock.mockImplementation(async () => {
+      callOrder.push("delete");
+    });
+
+    const command = buildHostUpdateCommand({
+      versionRequest: "2.0.0",
+      force: false,
+    });
+    const result = await command(fakeCtx());
+
+    expect(callOrder).toEqual([
+      "write:updating",
+      "installHost",
+      "probe",
+      "delete",
+    ]);
+    expect(mocks.rollbackToVersionedDirMock).not.toHaveBeenCalled();
+    expect(result.data).toMatchObject({
+      version: "2.0.0",
+      healthCheck: { healthy: true },
+    });
+  });
+
+  it("rolls back to the previous versioned dir and cycles the service when the health probe fails", async () => {
+    mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("1.0.0"));
+    mocks.assertHostNotBusyMock.mockResolvedValue(undefined);
+    mocks.installHostMock.mockResolvedValue({
+      record: sampleRecord("2.0.0"),
+      previous: sampleRecord("1.0.0"),
+      previousVersionedDir: "/tmp/versions/1.0.0-abc",
+    });
+    const handles: LifecycleHandleStub[] = [];
+    mocks.createServiceInstallLifecycleMock.mockImplementation(() => {
+      const handle = freshLifecycleHandle();
+      handles.push(handle);
+      return handle;
+    });
+    mocks.probeHostHealthMock.mockResolvedValue({
+      healthy: false,
+      detail: "host process (pid 123) is not alive",
+    });
+
+    const command = buildHostUpdateCommand({
+      versionRequest: "2.0.0",
+      force: false,
+    });
+    await expect(command(fakeCtx())).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UPDATE_HEALTH_CHECK_FAILED,
+    });
+
+    expect(mocks.rollbackToVersionedDirMock).toHaveBeenCalledWith(
+      "production",
+      "/tmp/versions/1.0.0-abc",
+    );
+    // A second lifecycle handle was created for the rollback cycle, and its
+    // beforeSwap/afterSwap were both invoked to stop the failed process and
+    // restart on the reverted binary.
+    expect(handles).toHaveLength(2);
+    expect(handles[1].lifecycle.beforeSwap).toHaveBeenCalledTimes(1);
+    expect(handles[1].lifecycle.afterSwap).toHaveBeenCalledTimes(1);
+    // The marker is rewritten as failed with the probe's detail, not cleared.
+    expect(mocks.deleteUpdateProgressMarkerMock).not.toHaveBeenCalled();
+    const failedWrite = mocks.writeUpdateProgressMarkerMock.mock.calls.find(
+      ([, progress]) => progress.state === "failed",
+    );
+    expect(failedWrite).toBeDefined();
+    expect(failedWrite?.[1]).toMatchObject({
+      state: "failed",
+      error: "host process (pid 123) is not alive",
+      targetVersion: "2.0.0",
+    });
+  });
+
+  it("skips the rollback swap (but still marks failed) when there is nothing to roll back to", async () => {
+    mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("1.0.0"));
+    mocks.assertHostNotBusyMock.mockResolvedValue(undefined);
+    mocks.installHostMock.mockResolvedValue({
+      record: sampleRecord("2.0.0"),
+      previous: sampleRecord("1.0.0"),
+      previousVersionedDir: null,
+    });
+    mocks.createServiceInstallLifecycleMock.mockImplementation(
+      freshLifecycleHandle,
+    );
+    mocks.probeHostHealthMock.mockResolvedValue({
+      healthy: false,
+      detail: "host loopback port 4100 did not accept a TCP connection",
+    });
+
+    const command = buildHostUpdateCommand({
+      versionRequest: "2.0.0",
+      force: false,
+    });
+    await expect(command(fakeCtx())).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UPDATE_HEALTH_CHECK_FAILED,
+    });
+
+    expect(mocks.rollbackToVersionedDirMock).not.toHaveBeenCalled();
+    // Only the main handle was created - no rollback cycle to run.
+    expect(mocks.createServiceInstallLifecycleMock).toHaveBeenCalledTimes(1);
+    const failedWrite = mocks.writeUpdateProgressMarkerMock.mock.calls.find(
+      ([, progress]) => progress.state === "failed",
+    );
+    expect(failedWrite).toBeDefined();
+  });
+
+  it("writes a failed marker and never probes when installHost itself throws", async () => {
+    mocks.readHostInstallRecordMock.mockResolvedValue(sampleRecord("1.0.0"));
+    mocks.assertHostNotBusyMock.mockResolvedValue(undefined);
+    mocks.installHostMock.mockRejectedValue(
+      Object.assign(new Error("signature verification failed"), {
+        code: CLI_ERROR_CODES.HOST_VERIFY_FAILED,
+      }),
+    );
+    mocks.createServiceInstallLifecycleMock.mockImplementation(
+      freshLifecycleHandle,
+    );
+
+    const command = buildHostUpdateCommand({
+      versionRequest: "2.0.0",
+      force: false,
+    });
+    await expect(command(fakeCtx())).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_VERIFY_FAILED,
+    });
+
+    expect(mocks.probeHostHealthMock).not.toHaveBeenCalled();
+    expect(mocks.rollbackToVersionedDirMock).not.toHaveBeenCalled();
+    const failedWrite = mocks.writeUpdateProgressMarkerMock.mock.calls.find(
+      ([, progress]) => progress.state === "failed",
+    );
+    expect(failedWrite).toBeDefined();
+    expect(failedWrite?.[1].error).toContain("signature verification failed");
   });
 });

@@ -9,6 +9,7 @@ export {
   composerHarnessMemoryKey,
   composerRunSettingsKey,
   epicCanvasKey,
+  lastSelectedHostKey,
   interviewDraftKey,
   interviewDraftKeyPrefix,
   landingTerminalsKey,

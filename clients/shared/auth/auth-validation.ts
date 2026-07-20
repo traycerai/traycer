@@ -139,11 +139,7 @@ export async function validateAuthTokenViaHttp(
     refreshToken,
   );
   if (refresh.kind !== "refreshed") {
-    // A confirmed rejection from the initial lookup wins over a refresh error:
-    // a `5xx`/network failure on `/api/v3/auth/refresh` must not downgrade a known
-    // `rejected` token to `network-error`. Only a genuinely transient initial
-    // lookup (no prior rejection) stays `network-error`.
-    return initial.kind === "rejected" ? initial : refresh;
+    return validationFailureAfterRefresh(refresh);
   }
 
   const refreshed = await validateAuthTokenProfileViaHttp(
@@ -186,11 +182,7 @@ export async function validateAuthTokenIdentityViaHttp(
     refreshToken,
   );
   if (refresh.kind !== "refreshed") {
-    // A confirmed rejection from the initial lookup wins over a refresh error:
-    // a `5xx`/network failure on `/api/v3/auth/refresh` must not downgrade a known
-    // `rejected` token to `network-error`. Only a genuinely transient initial
-    // lookup (no prior rejection) stays `network-error`.
-    return initial.kind === "rejected" ? initial : refresh;
+    return validationFailureAfterRefresh(refresh);
   }
 
   const refreshed = await validateAuthTokenIdentityFetch(
@@ -206,6 +198,19 @@ export async function validateAuthTokenIdentityViaHttp(
     refreshedToken: refresh.token,
     refreshedRefreshToken: refresh.refreshToken,
   };
+}
+
+function validationFailureAfterRefresh(
+  refresh: { readonly kind: "rejected" } | { readonly kind: "network-error" },
+): { readonly kind: "rejected" } | { readonly kind: "network-error" } {
+  // `/api/v3/user` can fail closed as 401 during authn dependency outages.
+  // If the follow-up refresh reports a transient failure, preserve that
+  // retriable outcome so callers keep the session and back off instead of
+  // treating the initial lookup as a genuine revocation.
+  if (refresh.kind === "network-error") {
+    return refresh;
+  }
+  return { kind: "rejected" };
 }
 
 async function validateAuthTokenProfileViaHttp(

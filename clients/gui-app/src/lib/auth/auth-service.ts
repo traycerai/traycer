@@ -6,6 +6,18 @@ import type {
 } from "@traycer-clients/shared/platform/runner-host";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
+import type { ListUserSessionsResponse } from "@traycer/protocol/auth/devices-sessions";
+import type { HostListResponse } from "@traycer/protocol/host/host-status";
+import type {
+  RetainedStepUpVerifyFetchResult,
+  RevokeAllSessionsFetchResult,
+  RevokeUserSessionFetchResult,
+  StepUpChallengeFetchResult,
+} from "@traycer-clients/shared/auth/devices-sessions-fetcher";
+import type {
+  UpdateHostVersionPolicyFetchResult,
+  UpdateHostVersionPolicyInput,
+} from "@traycer-clients/shared/host-client/host-version-policy-fetcher";
 import type {
   AuthIdentityValidationResult,
   AuthIdentityValidResult,
@@ -463,6 +475,13 @@ export class AuthService {
         this.applySignedIn(accepted.token, outcome.user, undefined);
         return;
       }
+      if (outcome.kind === "network-error") {
+        appLogger.warn(
+          "[auth] stored session validation hit network error during startup",
+          {},
+        );
+        return;
+      }
       appLogger.warn("[auth] stored session validation failed during startup", {
         outcome: outcome.kind,
       });
@@ -791,6 +810,127 @@ export class AuthService {
     // so TanStack Query surfaces a retryable error on the panel (refresh button)
     // instead of a misleading "no subscription" empty state.
     throw new Error("Couldn't reach Traycer to load your subscription.");
+  }
+
+  /**
+   * Fetches the signed-in user's host registry + live status via the runner
+   * host (`GET /api/v3/hosts`, run in Electron main for CORS). Mirrors
+   * {@link fetchAuthenticatedUser}: the raw bearer stays inside this service
+   * (the auth boundary), so the My Hosts query hook consumes the parsed
+   * envelope without ever touching the token.
+   *
+   *   - signed-out / no bearer → `null` (the panel renders its signed-out state).
+   *   - `unauthorized`         → `null` (a rare mid-rotation 401; the proactive
+   *                              refresh keeps the bearer fresh and the ~15s poll
+   *                              recovers on the next tick — no forced sign-out
+   *                              from a background list poll).
+   *   - `network-error`        → throws so TanStack Query surfaces a retriable
+   *                              error instead of a misleading empty list.
+   */
+  async fetchRegisteredHosts(): Promise<HostListResponse | null> {
+    if (this.currentBearer === null) {
+      return null;
+    }
+    const result = await this.runnerHost.listRegisteredHosts(
+      this.currentBearer,
+    );
+    if (result.kind === "unauthorized") {
+      return null;
+    }
+    if (result.kind === "network-error") {
+      throw new Error("Couldn't reach Traycer to load your hosts.");
+    }
+    return result.response;
+  }
+
+  /**
+   * Fetches the signed-in user's device/session list via authn-v3. The raw
+   * bearer remains inside this auth boundary; callers consume a parsed DTO from
+   * TanStack Query and render signed-out as an empty state.
+   */
+  async fetchUserSessions(): Promise<ListUserSessionsResponse | null> {
+    if (this.currentBearer === null) {
+      return null;
+    }
+    const result = await this.runnerHost.listUserSessions(this.currentBearer);
+    if (result.kind === "unauthorized") {
+      return null;
+    }
+    if (result.kind === "network-error") {
+      throw new Error("Couldn't reach Traycer to load your sessions.");
+    }
+    return result.response;
+  }
+
+  /**
+   * Revokes one session family. `useStepUpCredential` is false for the first
+   * attempt; if authn responds `step-up-required`, the UI verifies an OTP and
+   * retries by asking the runner-host boundary to attach its retained step-up
+   * bearer internally.
+   */
+  async revokeUserSession(
+    familyId: string,
+    useStepUpCredential: boolean,
+  ): Promise<RevokeUserSessionFetchResult> {
+    if (this.currentBearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.revokeUserSession(
+      this.currentBearer,
+      familyId,
+      useStepUpCredential,
+    );
+  }
+
+  /**
+   * Global sign-out is intentionally tighter than per-session cleanup: callers
+   * verify a fresh step-up challenge for each invocation, then the runner-host
+   * boundary attaches and clears the retained step-up bearer internally.
+   */
+  async revokeAllSessions(): Promise<RevokeAllSessionsFetchResult> {
+    if (this.currentBearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.revokeAllSessions(this.currentBearer);
+  }
+
+  async requestStepUpChallenge(): Promise<StepUpChallengeFetchResult> {
+    if (this.currentBearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.requestStepUpChallenge(this.currentBearer);
+  }
+
+  async verifyStepUpChallenge(
+    code: string,
+  ): Promise<RetainedStepUpVerifyFetchResult> {
+    if (this.currentBearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.verifyStepUpChallenge(this.currentBearer, code);
+  }
+
+  /**
+   * "Update now" / auto-update policy toggle / "Apply now — ends N sessions"
+   * (Remote Host Support §13, T16): `PATCH /api/v3/hosts/:hostId` via the
+   * runner host (run in Electron main for CORS, mirroring
+   * {@link fetchRegisteredHosts}). Never returns `null` on signed-out —
+   * mutating while signed out is a caller bug, so this throws instead of
+   * silently no-oping (unlike the read path, which has a legitimate
+   * signed-out empty state to render).
+   */
+  async updateHostVersionPolicy(
+    hostId: string,
+    input: UpdateHostVersionPolicyInput,
+  ): Promise<UpdateHostVersionPolicyFetchResult> {
+    if (this.currentBearer === null) {
+      throw new Error("Sign in to update this host.");
+    }
+    return this.runnerHost.updateHostVersionPolicy(
+      this.currentBearer,
+      hostId,
+      input,
+    );
   }
 
   private async revalidateCurrentContextOnce(): Promise<ValidationOutcome | null> {

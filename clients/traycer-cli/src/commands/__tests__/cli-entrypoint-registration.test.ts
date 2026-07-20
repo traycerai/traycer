@@ -164,6 +164,69 @@ describe("traycer CLI entrypoint registration", () => {
     expect(findSubcommand(program, "service")).toBeNull();
   });
 
+  it("host update exposes --version and --force", () => {
+    const program = buildProgram();
+    const cmd = expectCommand(program, ["host", "update"]);
+    const flags = cmd.options.map((o) => o.long);
+    expect(flags).toContain("--version");
+    expect(flags).toContain("--force");
+  });
+
+  // Regression pin for the Commander quirk this ticket had to work around:
+  // by default, a root-level `program.version(...)` greedily claims ANY
+  // `--version` token anywhere in argv (even one meant for a deeply-nested
+  // subcommand's own `--version <value>` option), because Commander scans
+  // the full argv for options it recognizes rather than stopping at the
+  // first subcommand boundary. The host daemon spawns `host update` as
+  // exactly `traycer host update --version <v> [--force]` (fixed contract,
+  // not ours to change) - without `program.enablePositionalOptions()` in
+  // `buildProgram()`, that invocation would silently print the CLI's own
+  // version and exit 0 instead of running the update.
+  it("`host update --version <v> --force` reaches host update's own action instead of printing the root CLI version", async () => {
+    const program = buildProgram();
+    program.exitOverride();
+    program.configureOutput({
+      writeErr: () => undefined,
+      writeOut: () => undefined,
+    });
+    const update = expectCommand(program, ["host", "update"]);
+    let capturedOpts: Record<string, unknown> | null = null;
+    update.action((opts: Record<string, unknown>) => {
+      capturedOpts = opts;
+    });
+    let thrown: unknown = null;
+    try {
+      await program.parseAsync(
+        ["host", "update", "--version", "1.4.2", "--force"],
+        { from: "user" },
+      );
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeNull();
+    expect(capturedOpts).toMatchObject({ version: "1.4.2", force: true });
+  });
+
+  it("top-level `traycer --version` still prints the CLI's own version (unaffected by enablePositionalOptions)", async () => {
+    const program = buildProgram();
+    program.exitOverride();
+    let printed = "";
+    program.configureOutput({
+      writeErr: () => undefined,
+      writeOut: (str: string) => {
+        printed += str;
+      },
+    });
+    let thrown: unknown = null;
+    try {
+      await program.parseAsync(["--version"], { from: "user" });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).not.toBeNull();
+    expect(printed.trim().length).toBeGreaterThan(0);
+  });
+
   it("host available exposes --include-pre-releases for RC registry inspection", () => {
     const program = buildProgram();
     const cmd = expectCommand(program, ["host", "available"]);

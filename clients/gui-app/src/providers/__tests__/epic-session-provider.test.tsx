@@ -7,12 +7,31 @@ import type {
   ListTasksResponse,
   TaskLight,
 } from "@traycer/protocol/host/epic/unary-schemas";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+import {
+  hostRpcRegistry,
+  type HostRpcRegistry,
+} from "@traycer/protocol/host/index";
 
 const hostState = vi.hoisted((): { id: string | null } => ({ id: "host-a" }));
 const authServiceStub = vi.hoisted(() => ({
   revalidateCurrentContext: () => Promise.resolve({ kind: "valid" as const }),
 }));
 const navigateMock = vi.hoisted(() => vi.fn());
+// Real (non-null) `useHostBinding()` for the R-1 owner-identity rotation test
+// below - every other test in this file relies on the default `null` (no
+// `HostClient` needed to drive `sessionKey`, which is `activeHostId` +
+// `sessionUserId` only), so this stays `null` until that test opts in.
+const hostBindingRef = vi.hoisted(
+  (): {
+    value: { readonly hostClient: HostClient<HostRpcRegistry> } | null;
+  } => ({
+    value: null,
+  }),
+);
 
 // The provider now opens its own durable transport via this factory, but every
 // test installs an `__setEpicStreamClientFactoryForTests` override that
@@ -34,7 +53,7 @@ vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
 }));
 
 vi.mock("@/lib/host", () => ({
-  useHostBinding: () => null,
+  useHostBinding: () => hostBindingRef.value,
   useAuthService: () => authServiceStub,
 }));
 
@@ -231,10 +250,63 @@ function makeHistoryTask(
   };
 }
 
+/** Matches `createRequestContextFixture`'s default identity. */
+const OWNER_IDENTITY_FIXTURE_USER_ID = "user-fixture-1";
+const OWNER_IDENTITY_RELAY_URL = "wss://relay.test/attach";
+const OWNER_IDENTITY_HOST_ID = "epic-session-test-remote-host";
+
+function buildOwnerIdentityHostClient(): HostClient<HostRpcRegistry> {
+  const client = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: { invalidateHostScope: () => undefined },
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "req-1",
+      handlers: {},
+    }),
+  });
+  client.setRequestContext(
+    createRequestContextFixture({
+      origin: "renderer",
+      bearerToken: "tok-1",
+    }),
+  );
+  return client;
+}
+
+// Every field but `publicKey` is held byte-identical across the two calls the
+// rotation test makes with this - the isolation the R-1 discriminator depends
+// on (a coincident URL/version/status move would mask the gap it closes).
+function ownerIdentityRemoteTarget(
+  publicKey: string,
+): RemoteHostDirectoryEntry {
+  return {
+    hostId: OWNER_IDENTITY_HOST_ID,
+    label: OWNER_IDENTITY_HOST_ID,
+    kind: "remote",
+    websocketUrl: OWNER_IDENTITY_RELAY_URL,
+    version: "1.0.0",
+    status: "available",
+    publicKey,
+    remoteStatus: {
+      presenceLease: "fresh",
+      hostRelayAttached: true,
+      viewerReachability: "ok",
+      clientCloud: "ok",
+      busy: false,
+      busySessionCount: 0,
+      updateState: "current",
+      appVersion: null,
+      lastSeenAt: null,
+    },
+  };
+}
+
 describe("<EpicSessionProvider />", () => {
   beforeEach(() => {
     window.localStorage.clear();
     hostState.id = "host-a";
+    hostBindingRef.value = null;
     navigateMock.mockClear();
     resetCanvasStore();
     __getOpenEpicRegistryForTests().disposeAll();
@@ -250,6 +322,7 @@ describe("<EpicSessionProvider />", () => {
     setDesktopEpicOwnershipBridge(null);
     resetCanvasStore();
     resetAuth("signed-out", null);
+    hostBindingRef.value = null;
   });
 
   it("reacquires a fresh handle when the signed-in identity changes", async () => {
@@ -359,6 +432,70 @@ describe("<EpicSessionProvider />", () => {
           />
         </EpicSessionProvider>,
       );
+    });
+
+    await waitFor(() => {
+      expect(seenHandles.at(-1)).not.toBe(firstHandle);
+    });
+
+    expect(streams).toHaveLength(2);
+    expect(streams[0].closeCount).toBe(1);
+    expect(__getOpenEpicRegistryForTests().size()).toBe(1);
+  });
+
+  it("(R-1) reacquires a fresh handle on a same-host remote public-key rotation, isolated from every other field", async () => {
+    const streams: ControlledStream[] = [];
+    const seenHandles: OpenEpicStoreHandle[] = [];
+    __setEpicStreamClientFactoryForTests((_epicId, _callbacks) => {
+      const stream: ControlledStream = { closeCount: 0 };
+      streams.push(stream);
+      return {
+        applyUpdate: () => undefined,
+        awareness: () => undefined,
+        applyArtifactRoomUpdate: () => undefined,
+        artifactRoomAwareness: () => undefined,
+        retryMigration: () => undefined,
+        close: () => {
+          stream.closeCount += 1;
+        },
+      };
+    });
+
+    const hostClient = buildOwnerIdentityHostClient();
+    expect(hostClient.getRequestContextUserId()).toBe(
+      OWNER_IDENTITY_FIXTURE_USER_ID,
+    );
+    hostBindingRef.value = { hostClient };
+    hostState.id = OWNER_IDENTITY_HOST_ID;
+    act(() => {
+      hostClient.bind(ownerIdentityRemoteTarget("pubkey-a"));
+    });
+
+    render(
+      <EpicSessionProvider epicId="epic-session-test" tabId="epic-session-test">
+        <HandleProbe
+          onHandle={(handle) => {
+            seenHandles.push(handle);
+          }}
+        />
+      </EpicSessionProvider>,
+    );
+
+    await waitFor(() => {
+      expect(seenHandles).toHaveLength(1);
+    });
+    const firstHandle = seenHandles.at(-1);
+    if (firstHandle === undefined) {
+      throw new Error("expected initial handle");
+    }
+
+    // Same hostId (`activeHostId` never changes), same signed-in user, same
+    // websocketUrl/version/status - ONLY the remote host's public key rotates
+    // (re-enrollment / corruption recovery). `sessionKey` is unaffected by
+    // this, so a pass here proves `ownerIdentityKey` alone drives the
+    // release+reacquire, not a coincident `sessionKey`/hostId churn.
+    act(() => {
+      hostClient.bind(ownerIdentityRemoteTarget("pubkey-b"));
     });
 
     await waitFor(() => {

@@ -39,6 +39,19 @@ const INNER_SUBPAGE: CommandSubpage = {
       subpage: null,
       run: () => undefined,
     },
+    {
+      id: "open:cat:badged",
+      label: "Badged Leaf",
+      description: null,
+      keywords: ["badged"],
+      group: "open",
+      scope: "actions",
+      shortcut: null,
+      actionId: null,
+      subpage: null,
+      run: () => undefined,
+      hostBadge: "Remote Box",
+    },
   ],
 };
 
@@ -204,5 +217,25 @@ describe("PaneOpener", () => {
     expect(within(paneA).getByText("Inner Leaf")).not.toBeNull();
     expect(within(paneB).queryByText("Inner Leaf")).toBeNull();
     expect(within(paneB).getByText("Category")).not.toBeNull();
+  });
+
+  it("renders a host badge only on a sub-page row that carries one", () => {
+    render(
+      <PaneOpener
+        epicId="epic-1"
+        tabId="tab-badge"
+        groupId="group-badge"
+        active={false}
+      />,
+    );
+    fireEvent.click(screen.getByText("Category"));
+
+    expect(screen.getByText("Badged Leaf")).not.toBeNull();
+    expect(screen.getByText("Remote Box")).not.toBeNull();
+    // The unbadged row's own container carries no badge text.
+    const innerLeafRow = screen
+      .getByText("Inner Leaf")
+      .closest('[data-slot="command-item"]');
+    expect(innerLeafRow?.textContent).not.toContain("Remote Box");
   });
 });

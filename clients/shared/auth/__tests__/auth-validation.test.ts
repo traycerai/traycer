@@ -15,6 +15,7 @@ import {
   AUTH_FETCH_MAX_ATTEMPTS,
   exchangeCodeForTokens,
   refreshAuthTokenViaHttp,
+  validateAuthTokenViaHttp,
   validateAuthTokenIdentityViaHttp,
   type AuthIdentityValidationResult,
 } from "../auth-validation";
@@ -195,6 +196,29 @@ describe("validateAuthTokenIdentityViaHttp - full AuthenticatedUser", () => {
     expect(result.kind).toBe("rejected");
   });
 
+  it("returns network-error when initial lookup is unauthorized but refresh is transient", async () => {
+    vi.useFakeTimers();
+    installMockFetch([
+      { status: 401, body: { error: "Unauthorized" } },
+      { status: 503, body: { error: "unavailable" } },
+    ]);
+
+    const pending = validateAuthTokenIdentityViaHttp(
+      AUTHN_BASE_URL,
+      "fail-closed-bearer",
+      "fail-closed-refresh",
+    );
+    await vi.runAllTimersAsync();
+    const result = await pending;
+
+    expect(result.kind).toBe("network-error");
+    expect(calls).toHaveLength(1 + AUTH_FETCH_MAX_ATTEMPTS);
+    expect(calls[0].url).toBe(USER_ENDPOINT);
+    expect(calls.slice(1).every((call) => call.url === REFRESH_ENDPOINT)).toBe(
+      true,
+    );
+  });
+
   it("returns network-error when transport fails after exhausting retries", async () => {
     vi.useFakeTimers();
     let attempts = 0;
@@ -309,6 +333,31 @@ describe("validateAuthTokenIdentityViaHttp - full AuthenticatedUser", () => {
     );
 
     expect(result.kind).toBe("rejected");
+  });
+});
+
+describe("validateAuthTokenViaHttp - refresh failure classification", () => {
+  it("keeps a transient refresh failure retriable after a fail-closed user lookup", async () => {
+    vi.useFakeTimers();
+    installMockFetch([
+      { status: 401, body: { error: "Unauthorized" } },
+      { status: 503, body: { error: "unavailable" } },
+    ]);
+
+    const pending = validateAuthTokenViaHttp(
+      AUTHN_BASE_URL,
+      "fail-closed-bearer",
+      "fail-closed-refresh",
+    );
+    await vi.runAllTimersAsync();
+    const result = await pending;
+
+    expect(result.kind).toBe("network-error");
+    expect(calls).toHaveLength(1 + AUTH_FETCH_MAX_ATTEMPTS);
+    expect(calls[0].url).toBe(USER_ENDPOINT);
+    expect(calls.slice(1).every((call) => call.url === REFRESH_ENDPOINT)).toBe(
+      true,
+    );
   });
 });
 

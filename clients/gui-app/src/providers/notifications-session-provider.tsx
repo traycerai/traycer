@@ -6,10 +6,11 @@ import {
   type ReactNode,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import { NotificationsStreamClient } from "@traycer-clients/shared/host-transport/notifications-stream-client";
-import type { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
-import { useWsStreamClient } from "@/lib/host/stream-runtime-context";
+import { useHostStreamClientFor } from "@/hooks/host/use-host-stream-client-for";
+import { useStreamAuthRevalidator } from "@/lib/host/stream-auth-revalidator";
 import {
   openNotificationsStream,
   useNotificationsStore,
@@ -23,7 +24,7 @@ import type { HostNotificationPresenceFrame } from "@/lib/notifications/notifica
 import { getNotificationsStreamFactoryOverride } from "@/providers/notifications-stream-factory-override";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useAuthService } from "@/lib/host";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useReactiveLocalHostEntry } from "@/hooks/host/use-reactive-local-host-entry";
 import { useNotificationShow } from "@/hooks/notifications/use-notifications";
 import { useNotificationMarkEntityRead } from "@/hooks/notifications/use-notification-mark-entity-read-mutation";
 import { useWindowsBridge } from "@/providers/windows-bridge-context";
@@ -60,13 +61,21 @@ export interface NotificationsSessionProviderProps {
  * expiry. On sign-out - and on transitions between two distinct signed-in
  * users - the local notifications replica is reset so the incoming user
  * does not see the previous user's entries.
+ *
+ * Per the G8 decision, notifications always come from the **local host** -
+ * never whichever host happens to be active in a composer/tab elsewhere in
+ * the app. The stream is therefore bound to `useReactiveLocalHostEntry()` (a
+ * transient, non-rebinding client via `useHostStreamClientFor`), not
+ * `useReactiveActiveHostId()` / the app-wide `useWsStreamClient()`.
  */
 export function NotificationsSessionProvider(
   props: NotificationsSessionProviderProps,
 ): ReactNode {
-  const wsStreamClient = useWsStreamClient();
+  const localHostEntry = useReactiveLocalHostEntry();
+  const streamAuth = useStreamAuthRevalidator();
+  const localStreamClient = useHostStreamClientFor(localHostEntry, streamAuth);
+  const localHostId = localHostEntry?.hostId ?? null;
   const queryClient = useQueryClient();
-  const activeHostId = useReactiveActiveHostId();
   const authService = useAuthService();
   const showNotification = useNotificationShow();
   const recordInAppClick = useNotificationEventsStore(
@@ -76,6 +85,8 @@ export function NotificationsSessionProvider(
   const status = useAuthStore((state) => state.status);
   const email = useAuthStore((state) => state.profile?.email ?? null);
   const disposerRef = useRef<(() => void) | null>(null);
+  const previousStreamClientRef =
+    useRef<IHostStreamClient<HostStreamRpcRegistry> | null>(localStreamClient);
   const hostDisposerRef = useRef<(() => void) | null>(null);
   // The stream client BOTH notification streams were opened against. Stream
   // ownership follows the client instance: when the provider context serves a
@@ -83,8 +94,7 @@ export function NotificationsSessionProvider(
   // replacement), the old client's sessions are already dead, so the streams
   // must be torn down and reopened against the new client.
   const openedStreamClientRef =
-    useRef<WsStreamClient<HostStreamRpcRegistry> | null>(null);
-  const previousHostIdRef = useRef<string | null>(activeHostId);
+    useRef<IHostStreamClient<HostStreamRpcRegistry> | null>(null);
   const [fallbackWindowId] = useState(createFallbackNotificationsWindowId);
   const windowId = windowsBridge?.windowId ?? fallbackWindowId;
   const markEntityReadMutation = useNotificationMarkEntityRead();
@@ -112,7 +122,7 @@ export function NotificationsSessionProvider(
   );
   const onPresenceChanged = useCallback(
     (frame: HostNotificationPresenceFrame, hostId: string): void => {
-      if (activeHostId !== hostId) return;
+      if (localHostId !== hostId) return;
       const nextEntity = entityFromFocusedPresence(frame);
       const previousEntity = activeEntityRef.current;
       if (
@@ -125,11 +135,11 @@ export function NotificationsSessionProvider(
       activeEntityRef.current = nextEntity;
       if (nextEntity !== null) consumeEntity(nextEntity);
     },
-    [activeHostId, consumeEntity],
+    [localHostId, consumeEntity],
   );
   const onFeedFrame = useCallback(
     (frame: HostNotificationsFeedFrame, hostId: string): void => {
-      if (activeHostId !== hostId) return;
+      if (localHostId !== hostId) return;
       if (frame.kind === "snapshot" || frame.kind === "cleared") {
         invalidateNotificationIndicators(queryClient, hostId);
         return;
@@ -158,7 +168,7 @@ export function NotificationsSessionProvider(
       if (!isTerminalSeverity) return;
       consumeEntity(entity);
     },
-    [activeHostId, consumeEntity, queryClient],
+    [localHostId, consumeEntity, queryClient],
   );
   const onHostStreamOpened = useCallback((): void => {
     activeEntityRef.current = null;
@@ -207,7 +217,7 @@ export function NotificationsSessionProvider(
   const openForCurrentUser = useCallback((): void => {
     if (
       getNotificationsStreamFactoryOverride() === null &&
-      wsStreamClient === null
+      localStreamClient === null
     ) {
       return;
     }
@@ -218,31 +228,31 @@ export function NotificationsSessionProvider(
     const onAuthError = (): void => {
       void authService.revalidateCurrentContext();
     };
-    if (activeHostId === null) return;
-    const streamHostId = activeHostId;
-    openedStreamClientRef.current = wsStreamClient;
+    if (localHostId === null) return;
+    const streamHostId = localHostId;
+    openedStreamClientRef.current = localStreamClient;
     disposerRef.current = openNotificationsStream((callbacks) => {
       const override = getNotificationsStreamFactoryOverride();
       if (override !== null) {
         return override(callbacks);
       }
-      if (wsStreamClient === null) {
+      if (localStreamClient === null) {
         throw new Error(
-          "NotificationsSessionProvider: WsStreamClient missing at open time.",
+          "NotificationsSessionProvider: local host stream client missing at open time.",
         );
       }
       return new NotificationsStreamClient({
-        wsStreamClient,
+        wsStreamClient: localStreamClient,
         callbacks,
       });
     }, onAuthError);
     if (
       hostDisposerRef.current === null &&
       getNotificationsStreamFactoryOverride() === null &&
-      wsStreamClient !== null
+      localStreamClient !== null
     ) {
       hostDisposerRef.current = openHostNotificationsStream(
-        wsStreamClient,
+        localStreamClient,
         onAuthError,
         {
           windowId,
@@ -262,9 +272,9 @@ export function NotificationsSessionProvider(
       );
     }
   }, [
-    wsStreamClient,
+    localStreamClient,
     authService,
-    activeHostId,
+    localHostId,
     windowId,
     showNotification,
     onFeedFrame,
@@ -289,27 +299,33 @@ export function NotificationsSessionProvider(
   );
   useAuthIdentityTransition(status, email, onAuthTransition);
 
-  // Open / reopen the stream on signed-in + active-host transitions.
-  // `activeHostId` flips to `null` when the desktop host restarts or the
-  // IPC channel drops - we teardown so the next reconnect lands on a fresh
-  // client, and reset the replica so the re-landed snapshot isn't merged
-  // into a stale local doc.
+  // Open / reopen the stream on signed-in + local-host-client transitions.
+  // `localStreamClient` flips to `null` when there is no local host (browser/
+  // mobile shells) or the local host's IPC channel drops - we teardown so the
+  // next reconnect lands on a fresh client. It becomes a NEW object when the
+  // local host respawns at a fresh endpoint under the SAME `hostId`
+  // (`useHostStreamClientFor` rebuilds the transport on an endpoint move) -
+  // that reference change, not a `hostId` comparison, is what drives
+  // teardown/reopen here, so a respawn is followed even though "the local
+  // host" identity never changed. Switching the app-wide ACTIVE host leaves
+  // `localStreamClient` untouched, so this effect intentionally does not
+  // re-run for that transition (per the G8 decision).
   useEffect(() => {
     const isSignedIn = status === "signed-in";
-    const priorHostId = previousHostIdRef.current;
-    previousHostIdRef.current = activeHostId;
+    const priorStreamClient = previousStreamClientRef.current;
+    previousStreamClientRef.current = localStreamClient;
 
     if (!isSignedIn) {
       // `useAuthIdentityTransition`'s onTransition already tore down on the
       // signedOut path; no-op here.
       return;
     }
-    if (activeHostId === null) {
+    if (localStreamClient === null) {
       tearDown();
       resetReplica();
       return;
     }
-    if (priorHostId !== null && priorHostId !== activeHostId) {
+    if (priorStreamClient !== null && priorStreamClient !== localStreamClient) {
       tearDown();
       resetReplica();
     }
@@ -320,7 +336,7 @@ export function NotificationsSessionProvider(
     // is kept - the re-landed snapshot merges into the same doc.
     if (
       disposerRef.current !== null &&
-      openedStreamClientRef.current !== wsStreamClient
+      openedStreamClientRef.current !== localStreamClient
     ) {
       tearDown();
     }
@@ -328,10 +344,9 @@ export function NotificationsSessionProvider(
       openForCurrentUser();
     }
   }, [
-    activeHostId,
+    localStreamClient,
     status,
     email,
-    wsStreamClient,
     tearDown,
     resetReplica,
     openForCurrentUser,

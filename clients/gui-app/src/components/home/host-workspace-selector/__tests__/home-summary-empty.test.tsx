@@ -253,6 +253,11 @@ describe("landing workspace summary empty state", () => {
 
     expect(screen.getByTestId("home-workspace-summary-control")).toBeTruthy();
     expect(screen.getByTestId("composer-host-trigger")).toBeTruthy();
+    expect(
+      screen
+        .getByTestId("composer-host-local-chip-host-home")
+        .className.includes("[[data-slot=select-trigger]_&]:hidden"),
+    ).toBe(true);
     expect(screen.queryByTestId("workspace-summary-trigger")).toBeNull();
     expect(screen.getByTestId("folder-add").textContent).toContain(
       "Add folder",

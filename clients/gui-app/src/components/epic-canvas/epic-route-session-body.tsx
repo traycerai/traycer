@@ -3,6 +3,7 @@ import { EpicShell } from "@/components/epic-canvas/epic-shell";
 import { useInitialChatHandoff } from "@/components/epic-canvas/hooks/use-initial-chat-handoff";
 import { useEpicRouteSynchronization } from "@/components/epic-canvas/hooks/use-epic-route-synchronization";
 import { NewConversationModalHost } from "@/components/epic-canvas/sidebar/new-conversation-modal";
+import { NewTerminalDialogHost } from "@/components/epic-canvas/sidebar/new-terminal-dialog";
 import { EpicSessionGate } from "@/providers/epic-session-gate";
 
 export interface EpicRouteSessionBodyProps {
@@ -53,6 +54,7 @@ function EpicRouteActiveEffects(props: EpicRouteSessionBodyProps) {
     <>
       <EpicMigrationModal tabId={props.tabId} />
       <NewConversationModalHost epicId={props.epicId} tabId={props.tabId} />
+      <NewTerminalDialogHost epicId={props.epicId} tabId={props.tabId} />
     </>
   );
 }

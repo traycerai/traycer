@@ -1,20 +1,19 @@
 import { createContext, use, useCallback, useSyncExternalStore } from "react";
-import type {
-  StreamMethodSupport,
-  WsStreamClient,
-} from "@traycer-clients/shared/host-transport/ws-stream-client";
+import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
+import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 
 /**
- * Streaming-transport seam. The single `WsStreamClient<HostStreamRpcRegistry>`
+ * Streaming-transport seam. The single `IHostStreamClient<HostStreamRpcRegistry>`
  * exposed here rides next to the unary host runtime and powers every
- * Epic / notifications subscription the GUI opens. Tests bypass this entire
- * provider by mounting the per-Epic / notifications stores with injected
- * stream-client factories.
+ * Epic / notifications subscription the GUI opens — a `WsStreamClient` for a
+ * local active host, a `RemoteStreamClient` for a remote one (T14). Tests
+ * bypass this entire provider by mounting the per-Epic / notifications stores
+ * with injected stream-client factories.
  */
 export interface StreamRuntimeBinding {
-  readonly wsStreamClient: WsStreamClient<HostStreamRpcRegistry>;
+  readonly wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>;
 }
 
 export const StreamRuntimeContext = createContext<StreamRuntimeBinding | null>(
@@ -26,7 +25,7 @@ export const StreamRuntimeContext = createContext<StreamRuntimeBinding | null>(
  * immediately while `HostStreamProvider` rebuilds it, so consumers detach from
  * dead sessions and rebind when the replacement reaches context.
  */
-export function useWsStreamClient(): WsStreamClient<HostStreamRpcRegistry> | null {
+export function useWsStreamClient(): IHostStreamClient<HostStreamRpcRegistry> | null {
   const value = use(StreamRuntimeContext);
   const client = value?.wsStreamClient ?? null;
   const subscribe = useCallback(
@@ -54,7 +53,7 @@ export function useWsStreamClient(): WsStreamClient<HostStreamRpcRegistry> | nul
 function useStreamMethodValue<T>(
   method: keyof HostStreamRpcRegistry & string,
   read: (
-    client: WsStreamClient<HostStreamRpcRegistry>,
+    client: IHostStreamClient<HostStreamRpcRegistry>,
     method: keyof HostStreamRpcRegistry & string,
   ) => T,
 ): T | null {
@@ -78,12 +77,12 @@ function useStreamMethodValue<T>(
 }
 
 const readMethodSupport = (
-  client: WsStreamClient<HostStreamRpcRegistry>,
+  client: IHostStreamClient<HostStreamRpcRegistry>,
   method: keyof HostStreamRpcRegistry & string,
 ) => client.getMethodSupport(method);
 
 const readMethodSchemaVersion = (
-  client: WsStreamClient<HostStreamRpcRegistry>,
+  client: IHostStreamClient<HostStreamRpcRegistry>,
   method: keyof HostStreamRpcRegistry & string,
 ) => client.getMethodSchemaVersion(method);
 

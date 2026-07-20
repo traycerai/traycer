@@ -43,6 +43,8 @@ export interface WorktreeFolderListProps {
    * Enter-to-select while focus stays in the input.
    */
   readonly autoFocusSearch: boolean;
+  /** Shown when `rows` is empty. Callers own the copy since "no rows" means something different per surface (e.g. no worktrees at all vs. no directories in this epic). */
+  readonly emptyMessage: string;
 }
 
 export function WorktreeFolderList(props: WorktreeFolderListProps): ReactNode {
@@ -83,7 +85,7 @@ export function WorktreeFolderList(props: WorktreeFolderListProps): ReactNode {
           placeholder="Search repo, branch, or path…"
         />
         <CommandList>
-          <CommandEmpty>No worktrees found.</CommandEmpty>
+          <CommandEmpty>{props.emptyMessage}</CommandEmpty>
           <CommandGroup>
             {props.rows.map((row) => {
               const label = formatGitWorktreeLabel(row);

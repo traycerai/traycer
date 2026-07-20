@@ -10,6 +10,10 @@ import type { WorktreeBindingSelectorRowV12 } from "@traycer/protocol/host";
 import { FileTreeWorkspacePicker } from "../file-tree-workspace-picker";
 
 const selectById = vi.fn();
+const refreshDirectory = vi.fn(() => Promise.resolve([]));
+const hostBinding = {
+  directory: { refresh: refreshDirectory, selectById },
+};
 
 interface ListQueryStub {
   readonly data: { readonly rows: WorktreeBindingSelectorRowV12[] } | undefined;
@@ -45,7 +49,7 @@ vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
 }));
 
 vi.mock("@/lib/host", () => ({
-  useHostBinding: () => ({ directory: { selectById } }),
+  useHostBinding: () => hostBinding,
 }));
 
 function makeRows(): WorktreeBindingSelectorRowV12[] {
@@ -139,6 +143,7 @@ describe("<FileTreeWorkspacePicker />", () => {
   beforeEach(() => {
     cleanup();
     selectById.mockClear();
+    refreshDirectory.mockClear();
     stubLoadedWorkspaces();
   });
 
@@ -149,6 +154,7 @@ describe("<FileTreeWorkspacePicker />", () => {
   it("opens a popover with the host section and flat workspace rows", () => {
     openPicker("/work/traycer", () => undefined);
 
+    expect(refreshDirectory).toHaveBeenCalledTimes(1);
     expect(
       screen.getByTestId("file-tree-workspace-picker-popover"),
     ).toBeDefined();
@@ -166,6 +172,32 @@ describe("<FileTreeWorkspacePicker />", () => {
       screen.getByRole("option", { name: /traycer.*redesign/i }),
     ).toBeDefined();
     expect(screen.getByRole("option", { name: /feature-x/i })).toBeDefined();
+  });
+
+  it("refreshes the host directory once per picker open", () => {
+    render(
+      <FileTreeWorkspacePicker
+        epicId="epic-1"
+        hostId="host-1"
+        selectedPath="/work/traycer"
+        onSelectPath={() => undefined}
+      />,
+    );
+
+    const trigger = screen.getByTestId("file-tree-workspace-picker-trigger");
+    expect(refreshDirectory).toHaveBeenCalledTimes(0);
+
+    fireEvent.click(trigger);
+    expect(refreshDirectory).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(trigger);
+    expect(refreshDirectory).toHaveBeenCalledTimes(1);
+    expect(
+      screen.queryByTestId("file-tree-workspace-picker-popover"),
+    ).toBeNull();
+
+    fireEvent.click(trigger);
+    expect(refreshDirectory).toHaveBeenCalledTimes(2);
   });
 
   it("uses the git-diff picker trigger style without a changes badge", () => {

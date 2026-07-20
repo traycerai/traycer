@@ -10,7 +10,10 @@ import { ChatStreamClient } from "@traycer-clients/shared/host-transport/chat-st
 import { useAuthService, useHostClient } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
-import { authenticatedHostStreamKey } from "@/hooks/host/use-host-stream-client-for";
+import {
+  authenticatedHostStreamKey,
+  authenticatedOwnerIdentityKey,
+} from "@/hooks/host/use-host-stream-client-for";
 import { useDurableStreamTransportFactory } from "@/lib/host/use-durable-stream-transport";
 import { openOwnedDurableStreamClient } from "@/lib/host/owned-durable-stream-client";
 import { useOpenEpicId } from "@/lib/epic-selectors";
@@ -111,6 +114,17 @@ export function useChatSessionHandle(
     streamClientFactoryOverride !== null
       ? "test-stream-client-factory"
       : authenticatedHostStreamKey(globalClient, hostEntry);
+  // Owner-identity discriminator (R-1): `transportKey` deliberately omits a
+  // remote host's public key (dialability, not identity), so a same-host
+  // remote public-key rotation would otherwise leave this session pinned to
+  // a `ChatStreamClient` built against the stale key. Folded into the scope
+  // key alongside `transportKey`, not in place of it, so every existing
+  // rebuild trigger (host swap, user switch, endpoint dialability) is
+  // preserved unchanged.
+  const ownerIdentityKey =
+    streamClientFactoryOverride !== null
+      ? "test-stream-client-factory"
+      : authenticatedOwnerIdentityKey(globalClient, hostEntry);
 
   const [handle, setHandle] = useReducer(
     (
@@ -135,7 +149,10 @@ export function useChatSessionHandle(
     }
     // `transportKey` is null until there is an authenticated request context and
     // a dialable host endpoint (or "test-..." when the factory is overridden).
-    if (transportKey === null) {
+    // `ownerIdentityKey` is null under that same gate (both derive from the
+    // same `globalClient` + `hostEntry`), so this never masks a ready session
+    // behind a not-yet-known identity.
+    if (transportKey === null || ownerIdentityKey === null) {
       setHandle(null);
       return;
     }
@@ -145,6 +162,7 @@ export function useChatSessionHandle(
       userId,
       hostId,
       transportKey,
+      ownerIdentityKey,
     });
 
     // The session OWNS its transport: the factory builds it (socket + auth +
@@ -225,13 +243,16 @@ export function useChatSessionHandle(
     // `openTransport` is referentially stable and reads its deps (auth, runner
     // host, credential source, directory) live, so the recovery wiring is never
     // a stale-capture risk and does not belong in this array. `transportKey`
-    // already encodes user + host + endpoint identity. `queryClient` is the
-    // stable TanStack client used by the provider-reauth invalidation.
+    // already encodes user + host + endpoint identity; `ownerIdentityKey`
+    // additionally discriminates a remote host's public-key rotation (R-1).
+    // `queryClient` is the stable TanStack client used by the
+    // provider-reauth invalidation.
   }, [
     chatId,
     hostId,
     epicId,
     transportKey,
+    ownerIdentityKey,
     userId,
     enabled,
     openTransport,
@@ -262,6 +283,7 @@ function chatSessionScopeKey(input: {
   readonly userId: string | null;
   readonly hostId: string;
   readonly transportKey: string;
+  readonly ownerIdentityKey: string;
 }): string {
   return [
     input.epicId,
@@ -269,5 +291,6 @@ function chatSessionScopeKey(input: {
     input.userId ?? "anonymous",
     input.hostId,
     input.transportKey,
+    input.ownerIdentityKey,
   ].join(CHAT_SESSION_SCOPE_SEPARATOR);
 }

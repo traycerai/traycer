@@ -136,6 +136,15 @@ interface PreloadBridge {
   validateAuthTokenIdentity(
     token: string,
   ): Promise<AuthIdentityValidationResult>;
+  listUserSessions(bearerToken: string): Promise<unknown>;
+  revokeUserSession(
+    bearerToken: string,
+    familyId: string,
+    useStepUpCredential: boolean,
+  ): Promise<unknown>;
+  revokeAllSessions(bearerToken: string): Promise<unknown>;
+  requestStepUpChallenge(bearerToken: string): Promise<unknown>;
+  verifyStepUpChallenge(bearerToken: string, code: string): Promise<unknown>;
   onAuthCallback(handler: () => void): {
     dispose: () => void;
   };
@@ -376,6 +385,47 @@ describe("preload new-capability wiring", () => {
     await expect(
       bridge.validateAuthTokenIdentity("jwt-identity"),
     ).resolves.toEqual({ kind: "rejected" });
+  });
+
+  it("forwards devices and step-up auth calls through ipcRenderer.invoke", async () => {
+    const invokeFn = vi.fn(async () => ({ kind: "network-error" }));
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn,
+      sendSyncFn: undefined,
+    });
+
+    await bridge.listUserSessions("jwt");
+    await bridge.revokeUserSession("jwt", "family-1", true);
+    await bridge.revokeAllSessions("jwt");
+    await bridge.requestStepUpChallenge("jwt");
+    await bridge.verifyStepUpChallenge("jwt", "123456");
+
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.listUserSessions,
+      "jwt",
+    );
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.revokeUserSession,
+      "jwt",
+      "family-1",
+      true,
+    );
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.revokeAllSessions,
+      "jwt",
+    );
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.requestStepUpChallenge,
+      "jwt",
+    );
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.verifyStepUpChallenge,
+      "jwt",
+      "123456",
+    );
   });
 
   it("exposes the build-time DESKTOP_AUTHN_BASE_URL constant", async () => {

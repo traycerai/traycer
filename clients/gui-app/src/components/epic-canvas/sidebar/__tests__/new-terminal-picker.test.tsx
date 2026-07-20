@@ -19,6 +19,7 @@ import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 
 const selectById = vi.fn();
+const refreshDirectory = vi.fn(() => Promise.resolve([]));
 
 interface BindingsQueryStub {
   readonly data:
@@ -73,7 +74,9 @@ vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
 }));
 
 vi.mock("@/lib/host", () => ({
-  useHostBinding: () => ({ directory: { selectById } }),
+  useHostBinding: () => ({
+    directory: { refresh: refreshDirectory, selectById },
+  }),
 }));
 
 function makeRow(
@@ -126,6 +129,7 @@ describe("<NewTerminalPicker />", () => {
     cleanup();
     resetCanvas();
     selectById.mockClear();
+    refreshDirectory.mockClear();
     stubLoadedBindings();
   });
 
@@ -278,7 +282,11 @@ describe("<NewTerminalPicker />", () => {
     };
     const tabId = openPicker();
 
-    expect(screen.getByText("No worktrees found.")).toBeDefined();
+    expect(
+      screen.getByText(
+        "No directories available. Open a workspace in the epic first.",
+      ),
+    ).toBeDefined();
     expect(
       screen.getByRole("button", { name: "Launch" }).hasAttribute("disabled"),
     ).toBe(false);

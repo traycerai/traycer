@@ -1,6 +1,7 @@
-import type { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { BearerSourceProvider } from "@traycer-clients/shared/auth/bearer-source";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { HostEndpointProvider } from "@traycer-clients/shared/host-transport/ws-rpc-client";
 import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-revalidator";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
@@ -9,7 +10,7 @@ import { subscribeStreamWakeReconnect } from "@/lib/host/stream-wake-reconnect";
 import { appLogger } from "@/lib/logger";
 
 export interface DurableStreamTransport {
-  readonly wsStreamClient: WsStreamClient<HostStreamRpcRegistry>;
+  readonly wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>;
   /**
    * Tears down wake + endpoint-change wiring then the socket. The owning session
    * calls it exactly once - when it disposes, or before rebuilding on `retry()`.
@@ -49,6 +50,9 @@ export interface DurableStreamTransport {
  * top must likewise `close()` this transport if THAT construction throws.
  */
 export function openDurableStreamTransport(params: {
+  readonly target: HostDirectoryEntry;
+  /** The signed-in user this transport is built for (Architecture §4 / S1 cache key). */
+  readonly userId: string;
   readonly endpoint: HostEndpointProvider;
   readonly bearer: BearerSourceProvider;
   readonly auth: StreamAuthRevalidator;
@@ -67,10 +71,23 @@ export function openDurableStreamTransport(params: {
   readonly subscribeEndpointChange: (onChange: () => void) => () => void;
 }): DurableStreamTransport {
   const wsStreamClient = buildHostStreamClient({
+    target: params.target,
     endpoint: params.endpoint,
     bearer: params.bearer,
+    authnBaseUrl: params.runnerHost.authnBaseUrl,
     auth: params.auth,
+    userId: params.userId,
+    // Owned-lifetime transport: eager warm-connect is correct here.
+    autoStart: true,
   });
+  if (wsStreamClient === null) {
+    // Only reachable for a remote target whose registry-published public key
+    // does not decode (a corrupt row) — genuinely exceptional, unlike the
+    // ordinary "no target yet" case callers already gate on before opening.
+    throw new Error(
+      `Remote host ${params.target.hostId} has an invalid public key; cannot open a durable stream`,
+    );
+  }
   appLogger.debug("[stream] durable transport opened", {
     hasEndpoint: params.endpoint() !== null,
   });
@@ -125,7 +142,7 @@ export function openDurableStreamTransport(params: {
  * away) is recorded but not nudged - the next non-null move fires it.
  */
 function subscribeEndpointRedial(
-  client: WsStreamClient<HostStreamRpcRegistry>,
+  client: IHostStreamClient<HostStreamRpcRegistry>,
   endpoint: HostEndpointProvider,
   subscribeEndpointChange: (onChange: () => void) => () => void,
 ): () => void {

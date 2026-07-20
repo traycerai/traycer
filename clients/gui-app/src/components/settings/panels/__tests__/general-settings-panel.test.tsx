@@ -33,6 +33,7 @@ import {
 
 interface CapturedHostQueryArgs {
   readonly method: string;
+  readonly client: TestHostClient | null;
 }
 
 interface ClearLocalSnapshotsContext {
@@ -51,6 +52,7 @@ interface CapturedClearLocalSnapshotsOptions {
 
 interface CapturedHostMutationArgs {
   readonly method: string;
+  readonly client: TestHostClient | null;
   readonly options: CapturedClearLocalSnapshotsOptions;
 }
 
@@ -67,6 +69,18 @@ interface HostQueryMocks {
   capturedQueryArgs: CapturedHostQueryArgs | null;
   capturedMutationArgs: CapturedHostMutationArgs | null;
   getActiveHostId: Mock<() => string | null>;
+  activeHostId: string;
+  lastTransientTarget: { readonly hostId: string } | null;
+  directoryEntries: ReadonlyArray<{
+    readonly hostId: string;
+    readonly label: string;
+    readonly status: string;
+    readonly websocketUrl: string;
+  }>;
+}
+
+interface TestHostClient {
+  readonly getActiveHostId: () => string | null;
 }
 
 const INITIAL_COUNTS = {
@@ -147,6 +161,22 @@ const hostQueryMocks = vi.hoisted((): HostQueryMocks => ({
   capturedQueryArgs: null,
   capturedMutationArgs: null,
   getActiveHostId: vi.fn(() => "host-test"),
+  activeHostId: "host-test",
+  lastTransientTarget: null,
+  directoryEntries: [
+    {
+      hostId: "host-test",
+      label: "Local host",
+      status: "available",
+      websocketUrl: "ws://local.invalid",
+    },
+    {
+      hostId: "remote-host",
+      label: "Remote host",
+      status: "available",
+      websocketUrl: "ws://remote.invalid",
+    },
+  ],
 }));
 
 vi.mock("@/components/migration/migration-run-handle", () => ({
@@ -162,6 +192,25 @@ vi.mock("@/lib/host", () => ({
   useHostClient: () => ({
     getActiveHostId: hostQueryMocks.getActiveHostId,
   }),
+  useHostBinding: () => null,
+}));
+
+vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
+  useReactiveActiveHostId: () => hostQueryMocks.activeHostId,
+}));
+
+vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
+  useHostDirectoryList: () => ({ data: hostQueryMocks.directoryEntries }),
+}));
+
+vi.mock("@/hooks/host/use-host-client-for", () => ({
+  useHostClientFor: (target: { readonly hostId: string } | null) => {
+    hostQueryMocks.lastTransientTarget = target;
+    if (target === null) return null;
+    return {
+      getActiveHostId: () => target.hostId,
+    };
+  },
 }));
 
 vi.mock("@/hooks/host/use-host-query", () => ({
@@ -241,7 +290,23 @@ describe("GeneralSettingsPanel", () => {
     hostQueryMocks.mutationResult.isPending = false;
     hostQueryMocks.capturedQueryArgs = null;
     hostQueryMocks.capturedMutationArgs = null;
+    hostQueryMocks.activeHostId = "host-test";
+    hostQueryMocks.lastTransientTarget = null;
     hostQueryMocks.getActiveHostId.mockReturnValue("host-test");
+    hostQueryMocks.directoryEntries = [
+      {
+        hostId: "host-test",
+        label: "Local host",
+        status: "available",
+        websocketUrl: "ws://local.invalid",
+      },
+      {
+        hostId: "remote-host",
+        label: "Remote host",
+        status: "available",
+        websocketUrl: "ws://remote.invalid",
+      },
+    ];
     navigateMock.mockReset();
     windowsBridgeMock.current = null;
     runnerHostMock.current = { hostManagement: null };
@@ -507,13 +572,110 @@ describe("GeneralSettingsPanel", () => {
       screen.getByRole("button", { name: "Clear file edit snapshots" }),
     );
 
-    expect(screen.getByText("Clear file edit snapshots?")).toBeTruthy();
+    expect(
+      screen.getByText("Clear file edit snapshots for Local host?"),
+    ).toBeTruthy();
     fireEvent.click(getDialogButton("Clear file edit snapshots"));
 
     expect(hostQueryMocks.mutationResult.mutate).toHaveBeenCalledWith({});
     expect(hostQueryMocks.capturedMutationArgs?.method).toBe(
       "snapshots.clearLocalSnapshots",
     );
+  });
+
+  it("switches file edit snapshots to a panel-local host without changing the active host", async () => {
+    const queryClient = renderPanel();
+    expect(queryClient).toBeTruthy();
+    expect(
+      screen
+        .getByTestId("active-host-probe")
+        .getAttribute("data-bound-host-id"),
+    ).toBe("host-test");
+
+    fireEvent.click(
+      screen.getByRole("combobox", { name: "File edit snapshots host" }),
+    );
+    fireEvent.click(await screen.findByRole("option", { name: "Remote host" }));
+
+    await waitFor(() => {
+      expect(hostQueryMocks.lastTransientTarget?.hostId).toBe("remote-host");
+      expect(hostQueryMocks.capturedQueryArgs?.client?.getActiveHostId()).toBe(
+        "remote-host",
+      );
+    });
+    expect(
+      screen
+        .getByTestId("active-host-probe")
+        .getAttribute("data-bound-host-id"),
+    ).toBe("host-test");
+    expect(
+      screen.getByText(
+        "Pre-edit file snapshots for Undo and cached long plan content on Remote host. This data stays local and is not synced.",
+      ),
+    ).toBeTruthy();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Clear file edit snapshots" }),
+    );
+
+    expect(
+      screen.getByText("Clear file edit snapshots for Remote host?"),
+    ).toBeTruthy();
+    const captured = hostQueryMocks.capturedMutationArgs;
+    if (captured === null) {
+      throw new Error("expected snapshots mutation");
+    }
+    expect(captured.options.onMutate()).toEqual({
+      hostId: "remote-host",
+      userId: "owner-test",
+    });
+  });
+
+  it("disables clearing and shows an unavailable notice when the picked host vanishes from the directory", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { rerender } = render(
+      <QueryClientProvider client={queryClient}>
+        <GeneralSettingsPanel />
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(
+      screen.getByRole("combobox", { name: "File edit snapshots host" }),
+    );
+    fireEvent.click(await screen.findByRole("option", { name: "Remote host" }));
+
+    await waitFor(() => {
+      expect(hostQueryMocks.lastTransientTarget?.hostId).toBe("remote-host");
+    });
+
+    // The picked host is deregistered - it drops out of the directory
+    // entirely (not merely marked "unavailable" while still listed).
+    hostQueryMocks.directoryEntries = [hostQueryMocks.directoryEntries[0]];
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <GeneralSettingsPanel />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      // The label can no longer be resolved once the entry drops out of the
+      // directory - `settingsHostLabelFor` falls back to the raw hostId.
+      expect(
+        screen.getByTestId("settings-file-edit-snapshots-host-unavailable")
+          .textContent,
+      ).toBe(
+        "remote-host is no longer available - pick a different host above.",
+      );
+    });
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", {
+        name: "Clear file edit snapshots",
+      }).disabled,
+    ).toBe(true);
+    // Must not silently fall back to reading/writing through the active host.
+    expect(hostQueryMocks.capturedQueryArgs?.client).toBeNull();
   });
 
   it("invalidates size and shows a toast after clearing file edit snapshots", () => {
@@ -706,6 +868,11 @@ function renderPanel(): QueryClient {
   });
   render(
     <QueryClientProvider client={queryClient}>
+      <span
+        aria-hidden
+        data-testid="active-host-probe"
+        data-bound-host-id={hostQueryMocks.activeHostId}
+      />
       <GeneralSettingsPanel />
     </QueryClientProvider>,
   );

@@ -83,7 +83,11 @@ import {
   commentsListThreadsV10,
   commentsSetThreadStatusV10,
 } from "@traycer/protocol/host/comments/contracts";
-import { hostStatusV10 } from "@traycer/protocol/host/status/contracts";
+import {
+  hostStatusV10,
+  hostStatusV11,
+  hostStatusUpgradeV10ToV11,
+} from "@traycer/protocol/host/status/contracts";
 import { hostGetRuntimeCapabilitiesV10 } from "@traycer/protocol/host/runtime-capabilities/contracts";
 import {
   hostGetRateLimitUsageV10,
@@ -153,6 +157,7 @@ import {
   workspaceListDirectoryV10,
   workspaceListFileTreeV10,
   workspacePrepareFoldersV10,
+  workspacePrepareFoldersV11,
   workspaceReadFileV10,
   workspaceResolvePathsByRepoIdentifiersV10,
 } from "@traycer/protocol/host/workspace/contracts";
@@ -2012,14 +2017,46 @@ export const worktreeListBindingsForEpicUpgradeV11ToV12 = defineUpgradePath<
 // Note: git contract definitions are imported from git-contracts.ts above
 // and registered inline in hostRpcRegistry and hostStreamRpcRegistry below.
 
+// v1.1 folds the 4 standalone workspace-picker methods (T14) onto
+// `workspace.prepareFolders` instead of shipping new names (T18) - see the
+// RPC backward-compat decision log. An older peer's request only ever
+// carries the "prepare" shape, so the bridge maps it 1:1 onto the new
+// `operation` envelope; a v1.0 peer's response likewise only ever carried
+// `folders`/`repoIdentifiers`, so the new operation-specific fields default
+// to `null`.
+export const workspacePrepareFoldersUpgradeV10ToV11 = defineUpgradePath<
+  typeof workspacePrepareFoldersV10,
+  typeof workspacePrepareFoldersV11
+>({
+  from: workspacePrepareFoldersV10.schemaVersion,
+  to: workspacePrepareFoldersV11.schemaVersion,
+  upgradeRequest: (request) => ({
+    operation: "prepare",
+    folderPaths: request.folderPaths,
+    path: null,
+  }),
+  upgradeResponse: (response) => ({
+    operation: "prepare",
+    folders: response.folders,
+    repoIdentifiers: response.repoIdentifiers,
+    homeDir: null,
+    validation: null,
+    recentWorkspaces: null,
+  }),
+});
+
 const HOST_RPC_REGISTRY_DEFINITION = {
   "host.status": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: hostStatusV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: hostStatusV11,
+          upgradeFromPreviousVersion: hostStatusUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -2713,11 +2750,15 @@ const HOST_RPC_REGISTRY_DEFINITION = {
   },
   "workspace.prepareFolders": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: workspacePrepareFoldersV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: workspacePrepareFoldersV11,
+          upgradeFromPreviousVersion: workspacePrepareFoldersUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},

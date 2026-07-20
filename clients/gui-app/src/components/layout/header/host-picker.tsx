@@ -14,6 +14,7 @@ import {
   registerHostPickerDirectory,
   useHostPickerList,
 } from "@/hooks/host/use-host-picker-list";
+import { useRefreshHostDirectoryOnOpen } from "@/hooks/host/use-refresh-host-directory-on-open";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
@@ -37,6 +38,8 @@ export function HostPicker() {
   const runnerHost = useRunnerHost();
   const binding = useHostBinding();
   const [isOpen, setIsOpen] = useState<boolean>(runnerHost.hostPicker.isOpen);
+  const directory = binding === null ? null : binding.directory;
+  useRefreshHostDirectoryOnOpen(isOpen, directory);
 
   useEffect(() => {
     const subscription = runnerHost.hostPicker.onChange((next) => {
@@ -236,7 +239,7 @@ function HostPickerOption(props: HostPickerOptionProps) {
 }
 
 function HostKindBadge(props: { readonly kind: string }) {
-  const label = props.kind === "local" ? "Local" : props.kind;
+  const label = hostKindLabel(props.kind);
   return (
     <Badge
       variant="outline"
@@ -245,4 +248,14 @@ function HostKindBadge(props: { readonly kind: string }) {
       {label}
     </Badge>
   );
+}
+
+function hostKindLabel(kind: string): string {
+  if (kind === "local") {
+    return "Local";
+  }
+  if (kind === "remote") {
+    return "Remote";
+  }
+  return kind;
 }

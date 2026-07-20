@@ -20,6 +20,7 @@
 export * from "./user";
 export * from "./token";
 export * from "./mcp-servers";
+export * from "./devices-sessions";
 export type {
   AuthenticatedUser,
   BundleSummary,

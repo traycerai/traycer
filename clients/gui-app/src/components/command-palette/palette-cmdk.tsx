@@ -5,6 +5,7 @@
  * opener root view. Non-component helpers (filter, row value, controller hook)
  * live in `palette-cmdk-controller.ts`.
  */
+import { Badge } from "@/components/ui/badge";
 import { CommandEmpty, CommandGroup } from "@/components/ui/command";
 import { PaletteItemRow } from "@/components/command-palette/palette-item-row";
 import { buildCmdkValue } from "@/components/command-palette/palette-cmdk-controller";
@@ -59,6 +60,14 @@ export function SubpageView(props: SubpageViewProps) {
             onSelect={() => onSelect(item)}
           >
             <SubpageItemLabel label={item.label} />
+            {item.hostBadge !== undefined ? (
+              <Badge
+                variant="outline"
+                className="ml-auto shrink-0 border-border/70 bg-background/60 text-muted-foreground"
+              >
+                {item.hostBadge}
+              </Badge>
+            ) : null}
           </PaletteItemRow>
         ))}
       </CommandGroup>

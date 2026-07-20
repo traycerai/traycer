@@ -121,6 +121,9 @@ function createHostQueriesFixture(): {
             ready: true,
             hostVersion: "1.2.3",
             protocolVersion: { major: 1, minor: 0 },
+            busy: false,
+            busySessionCount: 0,
+            updateProgress: null,
           };
         },
       },

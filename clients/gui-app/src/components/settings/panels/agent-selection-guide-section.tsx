@@ -14,10 +14,15 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useAgentSelectionGuideGlobalQuery } from "@/hooks/agent/use-agent-selection-guide-global-query";
 import { useAgentSelectionGuideSetGlobalMutation } from "@/hooks/agent/use-agent-selection-guide-set-global-mutation";
 import { useAgentSelectionGuideResetGlobalMutation } from "@/hooks/agent/use-agent-selection-guide-reset-global-mutation";
+import { HostRuntimeContext, useHostBinding } from "@/lib/host/runtime";
+import { SettingsHostSelect } from "./settings-host-select";
+import {
+  useSettingsHostScope,
+  type SettingsHostScopeStatus,
+} from "./use-settings-host-scope";
 
 const SAVE_DEBOUNCE_MS = 600;
 
@@ -97,15 +102,79 @@ function agentsGuideEditorReducer(
 }
 
 export function AgentSelectionGuideSection() {
+  const scope = useSettingsHostScope();
+  const realBinding = useHostBinding();
+  const hostPicker =
+    scope.hosts.length > 0 ? (
+      <SettingsHostSelect
+        hosts={scope.hosts}
+        value={scope.effectiveId}
+        onChange={scope.setSelectedId}
+        ariaLabel="Agent instructions host"
+      />
+    ) : (
+      <span className="text-ui-xs text-muted-foreground">
+        Host: {scope.hostLabel}
+      </span>
+    );
+
+  // Only a fully-resolved override re-provides the scoped client - a
+  // still-connecting or vanished override falls through to
+  // `AgentSelectionGuideSectionInner`'s own status branches instead of
+  // silently reading/writing through the ambient active-host client.
+  const scopedBinding =
+    scope.status === "ready" && realBinding !== null && scope.client !== null
+      ? { ...realBinding, hostClient: scope.client }
+      : null;
+
+  const inner = (
+    <AgentSelectionGuideSectionInner
+      hostId={scope.effectiveId}
+      hostLabel={scope.hostLabel}
+      status={scope.status}
+      hostPicker={hostPicker}
+    />
+  );
+  if (scopedBinding === null) return inner;
+  return (
+    <HostRuntimeContext.Provider value={scopedBinding}>
+      {inner}
+    </HostRuntimeContext.Provider>
+  );
+}
+
+function AgentSelectionGuideSectionInner(props: {
+  readonly hostId: string | null;
+  readonly hostLabel: string;
+  readonly status: SettingsHostScopeStatus;
+  readonly hostPicker: ReactNode;
+}) {
+  const { hostId, hostLabel, status, hostPicker } = props;
   // Device-scoped file: remount the editor with fresh content whenever the
-  // active host changes so a host swap never carries one machine's edits.
-  const hostId = useReactiveActiveHostId();
+  // selected host changes so one machine's edits never carry to another.
+  // The query itself always runs (against whatever client the ambient
+  // context currently provides) - only its result is trusted below, and only
+  // once `status` confirms that client is actually the picked host's.
   const query = useAgentSelectionGuideGlobalQuery();
 
   let panelContent: ReactNode;
-  if (query.isError) {
+  if (status === "unavailable") {
     panelContent = (
-      <AgentSelectionGuideMessage>
+      <AgentSelectionGuideMessage hostPicker={hostPicker}>
+        <div className="text-ui-sm text-muted-foreground">
+          {hostLabel} is no longer available. Pick a different host above.
+        </div>
+      </AgentSelectionGuideMessage>
+    );
+  } else if (status === "connecting") {
+    panelContent = (
+      <AgentSelectionGuideMessage hostPicker={hostPicker}>
+        <EditorSkeleton />
+      </AgentSelectionGuideMessage>
+    );
+  } else if (query.isError) {
+    panelContent = (
+      <AgentSelectionGuideMessage hostPicker={hostPicker}>
         <div className="text-ui-sm text-muted-foreground">
           Couldn't load agent instructions for this host.
           <ReportIssueAction
@@ -123,24 +192,45 @@ export function AgentSelectionGuideSection() {
     );
   } else if (query.data === undefined) {
     panelContent = (
-      <AgentSelectionGuideMessage>
+      <AgentSelectionGuideMessage hostPicker={hostPicker}>
         <EditorSkeleton />
       </AgentSelectionGuideMessage>
     );
   } else {
     panelContent = (
-      <AgentsGuideEditor
-        key={hostId}
-        initialContent={query.data.content}
-        generatedDefaultContent={query.data.generatedDefaultContent}
-      />
+      <>
+        <AgentSelectionGuideHostPicker hostPicker={hostPicker} />
+        <AgentsGuideEditor
+          key={hostId}
+          hostLabel={hostLabel}
+          initialContent={query.data.content}
+          generatedDefaultContent={query.data.generatedDefaultContent}
+        />
+      </>
     );
   }
 
   return <div className="h-full min-h-0 p-5">{panelContent}</div>;
 }
 
-function AgentSelectionGuideMessage(props: { readonly children: ReactNode }) {
+function AgentSelectionGuideHostPicker(props: {
+  readonly hostPicker: ReactNode;
+}) {
+  if (props.hostPicker === null) return null;
+  return (
+    <div className="mb-3 flex justify-end">
+      <div className="flex items-center gap-2">
+        <span className="text-ui-xs text-muted-foreground">Host</span>
+        {props.hostPicker}
+      </div>
+    </div>
+  );
+}
+
+function AgentSelectionGuideMessage(props: {
+  readonly children: ReactNode;
+  readonly hostPicker: ReactNode;
+}) {
   return (
     <section
       aria-labelledby="agent-selection-guide-heading"
@@ -157,16 +247,18 @@ function AgentSelectionGuideMessage(props: { readonly children: ReactNode }) {
           {AGENT_SELECTION_GUIDE_DESCRIPTION}
         </p>
       </div>
+      <AgentSelectionGuideHostPicker hostPicker={props.hostPicker} />
       {props.children}
     </section>
   );
 }
 
 function AgentsGuideEditor(props: {
+  readonly hostLabel: string;
   readonly initialContent: string;
   readonly generatedDefaultContent: string;
 }) {
-  const { initialContent, generatedDefaultContent } = props;
+  const { hostLabel, initialContent, generatedDefaultContent } = props;
   const setMutation = useAgentSelectionGuideSetGlobalMutation();
   const resetMutation = useAgentSelectionGuideResetGlobalMutation();
   const [state, dispatch] = useReducer(
@@ -327,7 +419,7 @@ function AgentsGuideEditor(props: {
           dispatch({ type: "confirm-open-changed", open })
         }
         title="Revert to default instructions?"
-        description="This replaces your global agent selection instructions with defaults based on the providers currently available on this device. Your custom instructions will be lost. Workspace-level files are not affected."
+        description={`This replaces your global agent selection instructions with defaults based on the providers currently available on ${hostLabel}. Your custom instructions will be lost. Workspace-level files are not affected.`}
         cascadeSummary={null}
         actionLabel="Revert to default"
         isPending={state.resetInFlight}

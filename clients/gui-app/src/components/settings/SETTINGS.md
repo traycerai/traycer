@@ -52,7 +52,10 @@ must be added in BOTH places - the route file under `src/routes/` AND the modal
 - `General` App-level preferences: chat turn-completion notifications, prevent
   sleep while running, pin context usage breakdown (global toggle for the
   always-visible chat context-window breakdown, default off), voice input,
-  local snapshot storage management, and data migration.
+  host-scoped file edit snapshot storage management, and data migration. The
+  snapshot row has its own host selector and clear confirmation names the
+  selected host; picking there uses a transient client and does not rebind the
+  app-wide active host.
 - `Appearance` Theme, global artifact icon color mode, type-color customization,
   and typography controls.
   - **Typography.** Three structurally identical rows - `UI font`, `Code font`,
@@ -261,13 +264,15 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
   footer, no Save button. A **Revert to default** button (disabled while the
   content already equals the provider-based default) calls
   `agent.selectionGuide.resetGlobalToDefault` behind a `ConfirmDestructiveDialog`.
-  Default-host scope: the editor remounts (keyed on the active host id) so a host
-  swap reseeds from that device's file. Backed by `agent.selectionGuide.getGlobal`
-  (returns `{ content, generatedDefaultContent }`), `agent.selectionGuide.setGlobal`,
-  and `agent.selectionGuide.resetGlobalToDefault` through the agent selection
-  guide hooks. Settings only edits the global scope; the panel hint points users
-  at per-workspace `.traycer/agent-selection-guide.md` files, which layer on top
-  of the global guide (see the agent selection guide hierarchy in the host).
+  The editor has its own host selector; it reaches non-active hosts with a
+  transient `useHostClientFor` context override and remounts when that local
+  selection changes so one device's file never carries into another. Backed by
+  `agent.selectionGuide.getGlobal` (returns `{ content, generatedDefaultContent }`),
+  `agent.selectionGuide.setGlobal`, and
+  `agent.selectionGuide.resetGlobalToDefault` through the agent selection guide
+  hooks. Settings only edits the global scope; the panel hint points users at
+  per-workspace `.traycer/agent-selection-guide.md` files, which layer on top of
+  the global guide (see the agent selection guide hierarchy in the host).
 - `Keybindings` Keyboard shortcut customization.
 - `Shell` Shell binary + args used for every terminal PTY
   (`TerminalSessionManager` reads the effective config per spawn, file-watched,
@@ -456,8 +461,10 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     aggregate merge progress across every worktree it owns - deliberately
     plain muted text, not a colored badge, so it never competes with or is
     mistaken for the row's own tier pill.
-- `Host` The active host-management surface for the native-packaging flow.
-  Three top-level rows - **Status** (running / stopped / not-installed, with
+- `Host` Cross-device **My Hosts** plus a clearly labeled **This machine**
+  local lifecycle-management section for the native-packaging flow. Local rows
+  act only on the host service running on this machine. Three top-level rows -
+  **Status** (running / stopped / not-installed, with
   version + listen URL + pid), **Actions** (Restart, or Install host when
   not-installed; plus Run doctor which opens a side `Sheet` mounting
   `HostDoctorCard`), and **Updates** (Update / Check now / Retry depending on

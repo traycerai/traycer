@@ -48,7 +48,7 @@ function buildMobileHost(): MockRunnerHost {
 }
 
 function fetcherFor(entries: readonly HostDirectoryEntry[]): RemoteHostFetcher {
-  return () => Promise.resolve(entries);
+  return () => Promise.resolve({ kind: "hosts", entries });
 }
 
 describe("<TraycerApp /> mobile cardinality behavior", () => {

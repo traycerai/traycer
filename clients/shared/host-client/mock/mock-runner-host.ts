@@ -28,12 +28,34 @@ import type {
 } from "../../platform/runner-host";
 import { defaultShellArgs } from "@traycer/protocol/config/shell-family";
 import {
+  listUserSessionsViaHttp,
+  requestStepUpChallengeViaHttp,
+  revokeAllSessionsViaHttp,
+  revokeUserSessionViaHttp,
+  toRetainedStepUpVerifyResult,
+  verifyStepUpChallengeViaHttp,
+  type ListUserSessionsFetchResult,
+  type RetainedStepUpVerifyFetchResult,
+  type RevokeAllSessionsFetchResult,
+  type RevokeUserSessionFetchResult,
+  type StepUpChallengeFetchResult,
+} from "../../auth/devices-sessions-fetcher";
+import {
   refreshAuthTokenViaHttp,
   validateAuthTokenIdentityViaHttp,
   validateAuthTokenViaHttp,
 } from "../../auth/auth-validation";
 import type { AuthIdentityValidationResult } from "../../auth/auth-validation-types";
 import type { HostDirectoryEntry } from "../host-directory";
+import {
+  fetchRegisteredHostsViaHttp,
+  type HostListFetchResult,
+} from "../remote-fetcher";
+import {
+  updateHostVersionPolicyViaHttp,
+  type UpdateHostVersionPolicyFetchResult,
+  type UpdateHostVersionPolicyInput,
+} from "../host-version-policy-fetcher";
 
 export interface MockRunnerHostOptions {
   readonly signInUrl: string;
@@ -59,6 +81,12 @@ export interface MockRunnerHostOptions {
 }
 
 const MOCK_TOKEN_STORE_KEY = "traycer.token";
+const STEP_UP_EXPIRY_SKEW_MS = 5_000;
+
+interface RetainedStepUpCredential {
+  readonly accessToken: string;
+  readonly expiresAtMs: number;
+}
 
 /** Ordered flag-list equality, for the mock's family-default canonicalisation. */
 function sameFlags(a: readonly string[], b: readonly string[]): boolean {
@@ -78,6 +106,10 @@ function sameFlags(a: readonly string[], b: readonly string[]): boolean {
 export class MockRunnerHost implements IRunnerHost {
   readonly signInUrl: string;
   readonly authnBaseUrl: string;
+  // Fixed test-only value: no test constructs a real remote transport against
+  // this mock (remote hosts flow through `hosts`/`HostDirectoryEntry` fixtures
+  // instead), so this never needs to vary per test the way `authnBaseUrl` does.
+  readonly relayBaseUrl: string = "wss://relay.test.invalid/attach";
   readonly hasLocalHost: boolean;
   readonly openedExternalLinks: string[] = [];
   readonly notificationsSent: Array<{
@@ -101,6 +133,7 @@ export class MockRunnerHost implements IRunnerHost {
   >();
   private readonly systemResumedHandlers = new Set<() => void>();
   private localHost: LocalHostSnapshot | null;
+  private retainedStepUpCredential: RetainedStepUpCredential | null = null;
 
   readonly tray: MockTrayState = new MockTrayState();
   readonly hostPicker: MockHostPicker = new MockHostPicker();
@@ -189,6 +222,97 @@ export class MockRunnerHost implements IRunnerHost {
     refreshToken: string,
   ): Promise<AuthTokenRefreshResult> {
     return refreshAuthTokenViaHttp(this.authnBaseUrl, token, refreshToken);
+  }
+
+  listRegisteredHosts(bearerToken: string): Promise<HostListFetchResult> {
+    // The in-memory shell has no CORS boundary, so it calls the shared HTTP
+    // helper directly (browser/dev parity with the auth validators above).
+    return fetchRegisteredHostsViaHttp(this.authnBaseUrl, bearerToken);
+  }
+
+  listUserSessions(bearerToken: string): Promise<ListUserSessionsFetchResult> {
+    // Same no-CORS-boundary parity as `listRegisteredHosts` above.
+    return listUserSessionsViaHttp(this.authnBaseUrl, bearerToken);
+  }
+
+  revokeUserSession(
+    bearerToken: string,
+    familyId: string,
+    useStepUpCredential: boolean,
+  ): Promise<RevokeUserSessionFetchResult> {
+    const stepUpToken = useStepUpCredential
+      ? this.activeRetainedStepUpToken()
+      : null;
+    return revokeUserSessionViaHttp(
+      this.authnBaseUrl,
+      stepUpToken ?? bearerToken,
+      familyId,
+    );
+  }
+
+  async revokeAllSessions(
+    bearerToken: string,
+  ): Promise<RevokeAllSessionsFetchResult> {
+    const result = await revokeAllSessionsViaHttp(
+      this.authnBaseUrl,
+      this.activeRetainedStepUpToken() ?? bearerToken,
+    );
+    this.retainedStepUpCredential = null;
+    return result;
+  }
+
+  requestStepUpChallenge(
+    bearerToken: string,
+  ): Promise<StepUpChallengeFetchResult> {
+    return requestStepUpChallengeViaHttp(this.authnBaseUrl, bearerToken);
+  }
+
+  async verifyStepUpChallenge(
+    bearerToken: string,
+    code: string,
+  ): Promise<RetainedStepUpVerifyFetchResult> {
+    const result = await verifyStepUpChallengeViaHttp(
+      this.authnBaseUrl,
+      bearerToken,
+      code,
+    );
+    if (result.kind === "ok") {
+      this.retainedStepUpCredential = {
+        accessToken: result.response.access_token,
+        expiresAtMs:
+          Date.now() +
+          Math.max(
+            0,
+            result.response.expires_in * 1_000 - STEP_UP_EXPIRY_SKEW_MS,
+          ),
+      };
+    }
+    return toRetainedStepUpVerifyResult(result);
+  }
+
+  private activeRetainedStepUpToken(): string | null {
+    if (this.retainedStepUpCredential === null) {
+      return null;
+    }
+    if (this.retainedStepUpCredential.expiresAtMs <= Date.now()) {
+      this.retainedStepUpCredential = null;
+      return null;
+    }
+    return this.retainedStepUpCredential.accessToken;
+  }
+
+  updateHostVersionPolicy(
+    bearerToken: string,
+    hostId: string,
+    input: UpdateHostVersionPolicyInput,
+  ): Promise<UpdateHostVersionPolicyFetchResult> {
+    // Same no-CORS-boundary parity as `listRegisteredHosts` above.
+    return updateHostVersionPolicyViaHttp(
+      this.authnBaseUrl,
+      bearerToken,
+      hostId,
+      input,
+    );
   }
 
   async openExternalLink(url: string): Promise<void> {

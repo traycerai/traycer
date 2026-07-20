@@ -1,22 +1,12 @@
 import { BrandMark, PhotoBloom } from "@/components/auth/cinematic-backdrop";
 import { SignInButton } from "@/components/layout/header/sign-in-button";
+import { getClientAppVersionLabel } from "@/lib/app-version";
 import { cn } from "@/lib/utils";
 
 const SIGN_IN_COLOR_VARS =
   "[--primary:#f8f7f2] [--primary-foreground:#050505] [--ring:#f8f7f2]";
 const SIGN_IN_LANE_CLASS =
   "w-[min(100%,31rem)] pt-[clamp(0.35rem,1.2vh,0.8rem)]";
-
-/**
- * Reads the build-time app version injected by Vite as `VITE_APP_VERSION`.
- * Shells that don't define the variable fall back to an empty label so the
- * footer renders without a stale hardcoded version string.
- */
-function resolveAppVersionLabel(): string {
-  const raw = import.meta.env.VITE_APP_VERSION;
-  if (typeof raw !== "string" || raw.length === 0) return "";
-  return raw.startsWith("v") ? raw : `v${raw}`;
-}
 
 export function AuthLandingPage() {
   return (
@@ -36,7 +26,7 @@ export function AuthLandingPage() {
       </section>
 
       <footer className="pointer-events-none absolute right-0 bottom-0 z-10 flex items-center justify-end px-[clamp(1.25rem,4vw,4rem)] pb-[clamp(1rem,3vh,2rem)] font-mono text-overline text-white/[0.42]">
-        <span>{resolveAppVersionLabel()}</span>
+        <span>{getClientAppVersionLabel()}</span>
       </footer>
     </main>
   );

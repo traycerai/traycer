@@ -6,25 +6,55 @@ import {
   screen,
   within,
 } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
 import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
 import type { ProviderRateLimits } from "@traycer/protocol/host";
 import type { ProviderRateLimitEnvelope } from "@/lib/rate-limits/rate-limit-envelope";
 import { envelopeFromRateLimits } from "@/lib/rate-limits/__tests__/rate-limit-envelope-fixtures";
 import { formatResetFullDateTime } from "@/lib/relative-time";
 
-const mocks = vi.hoisted(() => ({
-  data: undefined as ProviderRateLimitEnvelope | undefined,
-  isPending: false,
-  isError: false,
-  isFetching: false,
-  refetch: vi.fn(() => Promise.resolve({})),
-  draining: false,
-  queueScope: { hostId: "host-b" },
-  enqueue: vi.fn((..._args: unknown[]) => Promise.resolve()),
-  refreshProviders: vi.fn(() => Promise.resolve()),
-  refreshOnMount: vi.fn(),
-}));
+type TurnRefreshCall = {
+  readonly providerId: string | null;
+  readonly hostId: string | null;
+};
+
+const mocks = vi.hoisted(
+  (): {
+    data: ProviderRateLimitEnvelope | undefined;
+    isPending: boolean;
+    isError: boolean;
+    isFetching: boolean;
+    refetch: Mock<() => Promise<Record<string, never>>>;
+    draining: boolean;
+    enqueue: Mock<(...args: unknown[]) => Promise<unknown>>;
+    hostId: string;
+    turnRefreshCalls: TurnRefreshCall[];
+    queueScope: { hostId: string };
+    refreshProviders: Mock<() => Promise<void>>;
+    refreshOnMount: Mock<(...args: unknown[]) => void>;
+  } => ({
+    data: undefined,
+    isPending: false,
+    isError: false,
+    isFetching: false,
+    refetch: vi.fn(() => Promise.resolve({})),
+    draining: false,
+    enqueue: vi.fn((..._args: unknown[]) => Promise.resolve()),
+    hostId: "host-1",
+    turnRefreshCalls: [],
+    queueScope: { hostId: "host-b" },
+    refreshProviders: vi.fn(() => Promise.resolve()),
+    refreshOnMount: vi.fn(),
+  }),
+);
 
 // A fresh, cold-start envelope wrapping a single response - matches what the
 // production `mapResponseToProviderRateLimitEnvelope` wrapper would produce
@@ -43,7 +73,12 @@ vi.mock("@/hooks/host/use-host-provider-rate-limits-query", () => ({
   }),
 }));
 vi.mock("@/hooks/host/use-refresh-provider-rate-limits-on-turn", () => ({
-  useRefreshProviderRateLimitsOnTurn: () => {},
+  useRefreshProviderRateLimitsOnTurn: (
+    providerId: string | null,
+    hostId: string | null,
+  ) => {
+    mocks.turnRefreshCalls.push({ providerId, hostId });
+  },
 }));
 vi.mock("@/hooks/host/use-refresh-provider-rate-limits-on-mount", () => ({
   useRefreshProviderRateLimitsOnMount: (...args: unknown[]) => {
@@ -51,7 +86,7 @@ vi.mock("@/hooks/host/use-refresh-provider-rate-limits-on-mount", () => ({
   },
 }));
 vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
-  useReactiveActiveHostId: () => "host-1",
+  useReactiveActiveHostId: () => mocks.hostId,
 }));
 vi.mock("@/hooks/rate-limits/use-is-rate-limit-queue-draining", () => ({
   useIsRateLimitQueueDraining: () => mocks.draining,
@@ -144,6 +179,8 @@ describe("ProviderRateLimitForProvider", () => {
     mocks.isFetching = false;
     mocks.draining = false;
     mocks.enqueue = vi.fn((..._args: unknown[]) => Promise.resolve());
+    mocks.hostId = "host-1";
+    mocks.turnRefreshCalls = [];
     mocks.refreshProviders.mockClear();
     mocks.refreshOnMount.mockClear();
   });
@@ -196,6 +233,21 @@ describe("ProviderRateLimitForProvider", () => {
     );
     expect(screen.getByText("Usage limits")).toBeTruthy();
     expect(screen.getByText("Loading usage limits")).toBeTruthy();
+  });
+
+  it("routes turn-completion refreshes through the current profile id", () => {
+    render(
+      <ProviderRateLimitForProvider
+        providerId="codex"
+        profileId="work-profile"
+        usageUpdatedAt={null}
+      />,
+    );
+
+    expect(mocks.turnRefreshCalls).toContainEqual({
+      providerId: "codex",
+      hostId: "work-profile",
+    });
   });
 
   it("renders nothing (not an eternal spinner) while pending but not fetching", () => {

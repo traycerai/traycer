@@ -50,7 +50,9 @@ describe("workspace folder resolution cache", () => {
 
     await act(async () => {
       await rendered.result.current.actions.prepareFoldersMutation.mutateAsync({
+        operation: "prepare",
         folderPaths: [fixture.workspacePath],
+        path: null,
       });
     });
 
@@ -87,7 +89,11 @@ describe("workspace folder resolution cache", () => {
     let mutation = Promise.resolve();
     act(() => {
       mutation = rendered.result.current.actions.prepareFoldersMutation
-        .mutateAsync({ folderPaths: [fixture.workspacePath] })
+        .mutateAsync({
+          operation: "prepare",
+          folderPaths: [fixture.workspacePath],
+          path: null,
+        })
         .then(() => undefined);
     });
 
@@ -270,6 +276,7 @@ function createFixture(options: WorkspaceFixtureOptions): WorkspaceFixture {
       "workspace.prepareFolders": () => {
         prepared = true;
         return {
+          operation: "prepare",
           folders: [
             {
               workspacePath,
@@ -279,6 +286,9 @@ function createFixture(options: WorkspaceFixtureOptions): WorkspaceFixture {
             },
           ],
           repoIdentifiers: [repoIdentifier],
+          homeDir: null,
+          validation: null,
+          recentWorkspaces: null,
         };
       },
     },

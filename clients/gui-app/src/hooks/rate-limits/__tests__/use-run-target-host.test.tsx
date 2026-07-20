@@ -36,6 +36,12 @@ vi.mock("@/lib/host/runtime", () => ({
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
   useHostDirectoryList: () => ({ data: directoryRef.entries }),
 }));
+// The remote transport in `useHostClientFor` reads `runnerHost.authnBaseUrl`
+// for attach-grant minting; local targets never touch it. Stub the minimum
+// shape, mirroring `use-host-client-for.test.tsx`.
+vi.mock("@/providers/use-runner-host", () => ({
+  useRunnerHost: () => ({ authnBaseUrl: "https://authn.test" }),
+}));
 
 import { useRunTargetHost } from "@/hooks/rate-limits/use-run-target-host";
 

@@ -1,4 +1,5 @@
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import type { HostTransportEndpoint } from "@traycer-clients/shared/host-transport/ws-rpc-client";
 
 // NUL byte: a separator that cannot appear inside any host field value, so
@@ -56,4 +57,62 @@ export function dialableHostEndpoint(
   if (entry === null || entry.websocketUrl === null) return null;
   if (entry.status !== "available") return null;
   return { hostId: entry.hostId, websocketUrl: entry.websocketUrl };
+}
+
+/**
+ * Canonical identity a long-lived REMOTE-AWARE stream OWNER - the app-wide
+ * `HostStreamProvider`, the durable chat/terminal registries, and the epic
+ * session mount - rebuilds on (R-1: closing the S1 rotation gap). Mode-aware:
+ *
+ *  - `remote`: `hostId + userId + publicKey + relay attach identity
+ *    (websocketUrl)`, mirroring the `RemoteSessionIdentity` the shared
+ *    `(hostId, userId, hostPublicKey, relayAttachUrl)` session cache keys on
+ *    (`active-remote-sessions.ts`). Every remote host shares one fixed relay
+ *    attach URL, so a same-host public-key rotation (re-enrollment /
+ *    corruption recovery - `registerOrAdoptHost` overwrites the key on the
+ *    same `hostId`) is a genuine identity change here, not something a URL
+ *    move happens to also cover.
+ *  - anything else (`local` / `mock`): `hostId + userId` only - a websocket
+ *    URL move under a stable `hostId` is healed LIVE by the owned transport's
+ *    endpoint re-dial (`dialableHostEndpoint` / `reconnectAll`), not by
+ *    rebuilding the owner; folding the URL in here would turn a routine
+ *    same-host respawn into full owner churn.
+ *
+ * Deliberately separate from `hostTransportKey` / `hostStreamTransportKeyFor`,
+ * which encode DIALABILITY (can a socket be opened right now - and
+ * deliberately omit the public key so a same-content directory re-emit does
+ * not churn a live transport). This key encodes IDENTITY (should the owner
+ * that decides whether to `acquireRemoteSession` again keep or replace what
+ * it holds) and must not be conflated with dialability.
+ */
+export function remoteAwareOwnerIdentity(
+  target: HostDirectoryEntry,
+  userId: string,
+): string {
+  if (isRemoteHostDirectoryEntry(target)) {
+    return [
+      "remote",
+      target.hostId,
+      userId,
+      target.publicKey,
+      target.websocketUrl ?? "",
+    ].join(SEPARATOR);
+  }
+  return ["local", target.hostId, userId].join(SEPARATOR);
+}
+
+/**
+ * Nullable convenience wrapper over {@link remoteAwareOwnerIdentity} for
+ * callers that only have a possibly-absent target / signed-in user on hand.
+ * Returns `null` when there is no target or no signed-in user - "not ready
+ * to own a stream" for every caller.
+ */
+export function remoteAwareOwnerIdentityKey(
+  target: HostDirectoryEntry | null,
+  userId: string | null,
+): string | null {
+  if (target === null || userId === null) {
+    return null;
+  }
+  return remoteAwareOwnerIdentity(target, userId);
 }

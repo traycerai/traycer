@@ -60,6 +60,28 @@ export function MobileHostGate(props: MobileHostGateProps): ReactNode {
   const pickerRequestedRef = useRef<boolean>(false);
   const directory = binding === null ? null : binding.directory;
   const state = useDirectoryState(directory);
+  const shouldRefreshForCardinality =
+    authStatus === "signed-in" && !props.bypass && binding !== null;
+  // `directory.start()` already performs its own initial refresh before
+  // `binding` is ever published, so the first render where this condition is
+  // true is never a real transition - only refresh here from the SECOND time
+  // onward (e.g. a later sign-in while the directory already existed), or
+  // this would double the startup fetch on every signed-in mobile boot.
+  const hasEvaluatedCardinalityRefreshRef = useRef<boolean>(false);
+  useEffect(() => {
+    if (directory === null) {
+      return;
+    }
+    if (!shouldRefreshForCardinality) {
+      hasEvaluatedCardinalityRefreshRef.current = true;
+      return;
+    }
+    if (!hasEvaluatedCardinalityRefreshRef.current) {
+      hasEvaluatedCardinalityRefreshRef.current = true;
+      return;
+    }
+    void directory.refresh();
+  }, [shouldRefreshForCardinality, directory]);
 
   useEffect(() => {
     if (binding === null) {

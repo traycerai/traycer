@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-revalidator";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 
 // `openDurableStreamTransport` is the single place "durable stream = transport +
 // auth + bearer rotation + wake" is assembled. These tests pin its load-bearing
@@ -35,6 +36,18 @@ const AUTH: StreamAuthRevalidator = {
   revalidateForReconnect: () => Promise.resolve("rotated"),
 };
 
+// `buildHostStreamClient` is mocked in these tests, so `target` only needs to
+// satisfy the type — its content plays no role in the assembly contract these
+// tests pin.
+const FAKE_TARGET: HostDirectoryEntry = {
+  hostId: "host-a",
+  label: "host-a",
+  kind: "local",
+  websocketUrl: "ws://host-a/rpc",
+  version: null,
+  status: "available",
+};
+
 function buildParams(closeWs: () => void) {
   const order: string[] = [];
   const fakeWs = {
@@ -50,6 +63,8 @@ function buildParams(closeWs: () => void) {
     order,
     fakeWs,
     params: {
+      target: FAKE_TARGET,
+      userId: "user-a",
       endpoint: () => null,
       bearer: () => null,
       auth: AUTH,
@@ -132,6 +147,15 @@ describe("openDurableStreamTransport", () => {
     expect(fakeWs.notifyBearerRotated).toHaveBeenCalledTimes(1);
   });
 
+  it("throws when buildHostStreamClient returns null (invalid remote public key)", () => {
+    const { params } = buildParams(() => undefined);
+    mocks.buildHostStreamClient.mockReturnValue(null);
+
+    expect(() => openDurableStreamTransport(params)).toThrow(
+      /invalid public key/,
+    );
+  });
+
   it("closes the half-built socket and rethrows if wiring wake throws", () => {
     const closeWs = vi.fn();
     const { order, params, fakeWs } = buildParams(closeWs);
@@ -157,6 +181,8 @@ describe("openDurableStreamTransport", () => {
     let websocketUrl: string | null = "ws://host-a/rpc";
     let fireDirectoryChange: () => void = () => undefined;
     const params = {
+      target: FAKE_TARGET,
+      userId: "user-a",
       endpoint: () =>
         websocketUrl === null ? null : { hostId: "host-a", websocketUrl },
       bearer: () => null,

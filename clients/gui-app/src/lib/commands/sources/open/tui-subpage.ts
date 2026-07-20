@@ -41,13 +41,22 @@ export function useTuiOpenerItems(
     if (projection === null) return [newTui];
     const existing = projection.tuiAgents.allIds.map((id) => {
       const agent = projection.tuiAgents.byId[id];
-      return openerExistingLeaf("tui", ctx, {
-        id: agent.id,
-        instanceId: uuidv4(),
-        type: "terminal-agent",
-        name: agent.title.length > 0 ? agent.title : "Untitled terminal agent",
-        hostId: agent.hostId,
-      });
+      return openerExistingLeaf(
+        "tui",
+        ctx,
+        {
+          id: agent.id,
+          instanceId: uuidv4(),
+          type: "terminal-agent",
+          name:
+            agent.title.length > 0 ? agent.title : "Untitled terminal agent",
+          hostId: agent.hostId,
+        },
+        // TUI agents carry a real hostId and can be host-mismatched too, but
+        // badging them is outside T22's scope (chats/terminals/artifacts
+        // only) - flagged back as a follow-up.
+        null,
+      );
     });
     return [newTui, ...existing];
   }, [ctx, projection]);

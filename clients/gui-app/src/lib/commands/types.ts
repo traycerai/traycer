@@ -81,6 +81,15 @@ export interface CommandItem {
   readonly actionId: ActionId | null;
   readonly run: CommandRun;
   readonly subpage: CommandSubpage | null;
+  /**
+   * Trailing badge text for an "open existing" row whose resolved host
+   * differs from the active host (e.g. a chat/terminal listed from a
+   * non-active host) - `SubpageView` renders it, everything else ignores it.
+   * Deliberately optional (unlike every other field here) rather than
+   * `string | null` so the ~20 unrelated command sources that build plain
+   * `CommandItem` literals don't need a no-op `hostBadge: null` added.
+   */
+  readonly hostBadge?: string;
 }
 
 /**

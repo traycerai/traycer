@@ -77,6 +77,12 @@ export type EpicStreamClientFactory = (
 export interface SnapshotFetchError {
   readonly code: FatalErrorDetails["code"];
   readonly message: string;
+  /**
+   * Direction-aware version-skew signal (R4-D2), carried through only for an
+   * `INCOMPATIBLE` close — `null` for every other fatal code. See
+   * `describeVersionSkew` (`@/lib/host/version-skew-copy`).
+   */
+  readonly upgradeGuidance: FatalErrorDetails["upgradeGuidance"];
 }
 
 /**
@@ -159,6 +165,7 @@ function snapshotFetchErrorFrom(
   return {
     code: details.code,
     message: details.reason,
+    upgradeGuidance: details.upgradeGuidance,
   };
 }
 
