@@ -917,6 +917,7 @@ describe("useComposerPasteAdapter - drag-and-drop", () => {
       dataTransfer: makeEmptyTransfer(["Files"]),
     });
     expect(zone.getAttribute("data-dragging")).toBe("true");
+    expect(zone.getAttribute("data-drag-variant")).toBe("paths");
 
     fireEvent.dragEnter(zone, {
       dataTransfer: makeEmptyTransfer(["Files"]),
@@ -930,6 +931,22 @@ describe("useComposerPasteAdapter - drag-and-drop", () => {
       dataTransfer: makeEmptyTransfer(["Files"]),
     });
     expect(zone.getAttribute("data-dragging")).toBe("false");
+  });
+
+  it("refreshes the drag overlay variant from metadata on enter and over", () => {
+    const inserted: ImageAttachmentAttrs[][] = [];
+    renderHarness(inserted, NOOP_FILE_PATHS);
+
+    const zone = screen.getByTestId("paste-zone");
+    fireEvent.dragEnter(zone, {
+      dataTransfer: makeDragMetadataTransfer("application/pdf"),
+    });
+    expect(zone.getAttribute("data-drag-variant")).toBe("paths");
+
+    fireEvent.dragOver(zone, {
+      dataTransfer: makeDragMetadataTransfer("image/png"),
+    });
+    expect(zone.getAttribute("data-drag-variant")).toBe("images");
   });
 
   it("does not raise drag depth for non-file drags", () => {
@@ -1044,6 +1061,7 @@ function PasteHarness(props: {
     <div
       data-testid="paste-zone"
       data-dragging={handlers.isDraggingFiles ? "true" : "false"}
+      data-drag-variant={handlers.dragOverlayVariant ?? ""}
       onPaste={handlers.onPaste}
       onDrop={handlers.onDrop}
       onDragOver={handlers.onDragOver}
@@ -1109,6 +1127,7 @@ interface FileTransferLike {
   readonly types: ReadonlyArray<string>;
   readonly items: ReadonlyArray<{
     readonly kind: string;
+    readonly type: string;
     getAsFile: () => File | null;
   }>;
   getData: (type: string) => string;
@@ -1118,7 +1137,11 @@ function makeFileTransfer(files: ReadonlyArray<File>): FileTransferLike {
   return {
     files,
     types: files.length > 0 ? ["Files"] : [],
-    items: files.map((file) => ({ kind: "file", getAsFile: () => file })),
+    items: files.map((file) => ({
+      kind: "file",
+      type: file.type,
+      getAsFile: () => file,
+    })),
     getData: () => "",
   };
 }
@@ -1146,8 +1169,8 @@ function makeStringOnlyTransfer(): FileTransferLike {
     files: [],
     types: [],
     items: [
-      { kind: "string", getAsFile: () => null },
-      { kind: "string", getAsFile: () => null },
+      { kind: "string", type: "text/plain", getAsFile: () => null },
+      { kind: "string", type: "text/plain", getAsFile: () => null },
     ],
     getData: () => "",
   };
@@ -1155,6 +1178,15 @@ function makeStringOnlyTransfer(): FileTransferLike {
 
 function makeEmptyTransfer(types: ReadonlyArray<string>): FileTransferLike {
   return { files: [], types, items: [], getData: () => "" };
+}
+
+function makeDragMetadataTransfer(type: string): FileTransferLike {
+  return {
+    files: [],
+    types: ["Files"],
+    items: [{ kind: "file", type, getAsFile: () => null }],
+    getData: () => "",
+  };
 }
 
 /** Files list populated, items empty - exercises collectDroppedFiles' files-first path. */
@@ -1174,7 +1206,7 @@ function makeFileAndUriListTransfer(file: File, uri: string): FileTransferLike {
   return {
     files: [file],
     types: ["Files", "text/uri-list", "public.file-url"],
-    items: [{ kind: "file", getAsFile: () => file }],
+    items: [{ kind: "file", type: file.type, getAsFile: () => file }],
     getData: (type) => {
       if (type === "text/uri-list" || type === "public.file-url") return uri;
       return "";

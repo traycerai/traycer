@@ -5,6 +5,18 @@ export interface FileTransferEntries {
   readonly fileUrlPaths: readonly string[];
 }
 
+export type FileTransferDragOverlayVariant = "images" | "paths" | "mixed";
+
+export interface FileTransferDragItem {
+  readonly kind: string;
+  readonly type: string;
+}
+
+export interface FileTransferDragMetadata {
+  readonly types: ArrayLike<string>;
+  readonly items: ArrayLike<FileTransferDragItem | null | undefined>;
+}
+
 /**
  * True when `dataTransfer` carries a file-like payload: real `File` items, or
  * a URI-only flavor a source without a `File` object still exposes (macOS
@@ -12,14 +24,36 @@ export interface FileTransferEntries {
  * paste/drop surface (terminal, composer) so URI-only clipboards get the same
  * detection as a real Finder drag.
  */
-export function dataTransferHasFiles(dataTransfer: DataTransfer): boolean {
+export function dataTransferHasFiles(
+  dataTransfer: FileTransferDragMetadata,
+): boolean {
   const types = Array.from(dataTransfer.types);
   return (
     types.includes("Files") ||
     types.includes("text/uri-list") ||
     types.includes("public.file-url") ||
-    dataTransferItems(dataTransfer).some((item) => item.kind === "file")
+    fileTransferDragItems(dataTransfer).some((item) => item.kind === "file")
   );
+}
+
+/**
+ * Classifies a file-like drag from metadata the browser exposes before drop.
+ * This must not inspect file contents (`getAsFile`/`getData`), which are not
+ * reliably readable during dragover. A URI-only transfer remains a path
+ * candidate while its URI content is unavailable.
+ */
+export function classifyFileTransferDrag(
+  dataTransfer: FileTransferDragMetadata,
+): FileTransferDragOverlayVariant | null {
+  if (!dataTransferHasFiles(dataTransfer)) return null;
+  const fileItems = fileTransferDragItems(dataTransfer).filter(
+    (item) => item.kind === "file",
+  );
+  if (fileItems.length === 0) return "paths";
+  const hasImages = fileItems.some((item) => item.type.startsWith("image/"));
+  const hasPaths = fileItems.some((item) => !item.type.startsWith("image/"));
+  if (hasImages && hasPaths) return "mixed";
+  return hasImages ? "images" : "paths";
 }
 
 export function collectDroppedFiles(
@@ -130,6 +164,20 @@ function dataTransferItems(
   return Array.from({ length: dataTransfer.items.length }, (_value, index) => {
     return dataTransfer.items[index];
   }).filter(isDataTransferItem);
+}
+
+function fileTransferDragItems(
+  dataTransfer: FileTransferDragMetadata,
+): readonly FileTransferDragItem[] {
+  return Array.from({ length: dataTransfer.items.length }, (_value, index) => {
+    return dataTransfer.items[index];
+  }).filter(isFileTransferDragItem);
+}
+
+function isFileTransferDragItem(
+  value: FileTransferDragItem | null | undefined,
+): value is FileTransferDragItem {
+  return value !== null && value !== undefined;
 }
 
 function isDataTransferItem(

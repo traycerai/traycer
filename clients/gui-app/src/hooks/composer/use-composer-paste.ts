@@ -20,9 +20,10 @@ import {
   analyticsBlockerFromError,
 } from "@/lib/analytics";
 import {
+  classifyFileTransferDrag,
   collectFileTransferEntries,
-  dataTransferHasFiles,
   hasClaimableFileTransfer,
+  type FileTransferDragOverlayVariant,
 } from "@/lib/files/file-transfer-paths";
 import {
   getBasename,
@@ -238,6 +239,7 @@ export interface UseComposerPasteResult {
   onDragLeave: (event: DragEvent<HTMLElement>) => void;
   attachImageFiles: (files: ReadonlyArray<File>) => void;
   isDraggingFiles: boolean;
+  dragOverlayVariant: FileTransferDragOverlayVariant | null;
   isIngestingImages: boolean;
   /**
    * True while a paste/drop's non-image file(s) are still resolving to real
@@ -247,6 +249,16 @@ export interface UseComposerPasteResult {
    */
   isResolvingFilePaths: boolean;
 }
+
+interface ComposerDragState {
+  readonly depth: number;
+  readonly overlayVariant: FileTransferDragOverlayVariant | null;
+}
+
+const IDLE_COMPOSER_DRAG_STATE: ComposerDragState = {
+  depth: 0,
+  overlayVariant: null,
+};
 
 /**
  * Whether a composer surface should hold submission open while either ingest
@@ -445,7 +457,9 @@ export function useComposerPasteEvents(
   insertAttrs: (attrs: ReadonlyArray<ImageAttachmentAttrs>) => number,
   filePaths: ComposerFilePathIngestArgs,
 ): UseComposerPasteResult {
-  const [dragDepth, setDragDepth] = useState(0);
+  const [dragState, setDragState] = useState<ComposerDragState>(
+    IDLE_COMPOSER_DRAG_STATE,
+  );
   const [pendingImageCount, setPendingImageCount] = useState(0);
   const [pendingPathCount, setPendingPathCount] = useState(0);
   const activeRef = useRef(true);
@@ -526,23 +540,41 @@ export function useComposerPasteEvents(
   );
 
   const onDragOver = useCallback((event: DragEvent<HTMLElement>) => {
-    if (!dataTransferHasFiles(event.dataTransfer)) return;
+    const overlayVariant = classifyFileTransferDrag(event.dataTransfer);
+    if (overlayVariant === null) return;
     event.preventDefault();
     event.stopPropagation();
     event.dataTransfer.dropEffect = "copy";
+    setDragState((state) => {
+      if (state.depth === 0 || state.overlayVariant === overlayVariant) {
+        return state;
+      }
+      return { ...state, overlayVariant };
+    });
   }, []);
 
   const onDragEnter = useCallback((event: DragEvent<HTMLElement>) => {
-    if (!dataTransferHasFiles(event.dataTransfer)) return;
+    const overlayVariant = classifyFileTransferDrag(event.dataTransfer);
+    if (overlayVariant === null) return;
     event.preventDefault();
     event.stopPropagation();
-    setDragDepth((depth) => depth + 1);
+    setDragState((state) => ({
+      depth: state.depth + 1,
+      overlayVariant,
+    }));
   }, []);
 
   const onDragLeave = useCallback((event: DragEvent<HTMLElement>) => {
     event.preventDefault();
     event.stopPropagation();
-    setDragDepth((depth) => Math.max(0, depth - 1));
+    setDragState((state) => {
+      const depth = Math.max(0, state.depth - 1);
+      if (depth === state.depth) return state;
+      return {
+        depth,
+        overlayVariant: depth === 0 ? null : state.overlayVariant,
+      };
+    });
   }, []);
 
   const onDrop = useCallback(
@@ -552,7 +584,7 @@ export function useComposerPasteEvents(
       // payload is readable here. A drop does not reliably emit dragleave,
       // therefore it must always clear the affordance before deciding whether
       // this hook owns the content.
-      setDragDepth(0);
+      setDragState(IDLE_COMPOSER_DRAG_STATE);
       if (!hasClaimableFileTransfer(event.dataTransfer)) return;
       event.preventDefault();
       event.stopPropagation();
@@ -571,7 +603,8 @@ export function useComposerPasteEvents(
     onDragEnter,
     onDragLeave,
     attachImageFiles,
-    isDraggingFiles: dragDepth > 0,
+    isDraggingFiles: dragState.depth > 0,
+    dragOverlayVariant: dragState.depth > 0 ? dragState.overlayVariant : null,
     isIngestingImages: pendingImageCount > 0,
     isResolvingFilePaths: pendingPathCount > 0,
   };

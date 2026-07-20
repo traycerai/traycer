@@ -91,7 +91,7 @@ export function ComposerBody({
         onDrop={paste.onDrop}
         onDragEnter={paste.onDragEnter}
         onDragLeave={paste.onDragLeave}
-        isDraggingFiles={paste.isDraggingFiles}
+        dragOverlayVariant={paste.dragOverlayVariant}
         attachmentsStrip={composerMode === "chat" ? attachmentsStrip : null}
         editor={
           <>

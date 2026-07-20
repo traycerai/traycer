@@ -132,6 +132,7 @@ vi.mock("@/hooks/composer/use-landing-composer-paste", () => ({
     onDragLeave: vi.fn(),
     attachImageFiles: vi.fn(),
     isDraggingFiles: false,
+    dragOverlayVariant: null,
     isIngestingImages: testState.ingesting,
     isResolvingFilePaths: testState.resolvingPaths,
   }),

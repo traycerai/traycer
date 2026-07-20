@@ -288,7 +288,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     onDragEnter,
     onDragLeave,
     attachImageFiles,
-    isDraggingFiles,
+    dragOverlayVariant,
     isIngestingImages,
     isResolvingFilePaths,
   } = useComposerPaste(editorRef, runnerHost.fileDrops, resolvedMentionRoots);
@@ -422,7 +422,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
               onDrop={onDrop}
               onDragEnter={onDragEnter}
               onDragLeave={onDragLeave}
-              isDraggingFiles={isDraggingFiles}
+              dragOverlayVariant={dragOverlayVariant}
               attachmentsStrip={
                 <ChatComposerAttachmentsStrip
                   content={draftContent}
