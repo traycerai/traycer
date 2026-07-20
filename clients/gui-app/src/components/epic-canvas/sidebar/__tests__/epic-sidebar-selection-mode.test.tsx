@@ -9,6 +9,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import type { Mock } from "vitest";
+import type { ProviderId } from "@/components/home/data/landing-options";
 
 interface TestTreeNode {
   readonly id: string;
@@ -66,6 +67,8 @@ interface TestState {
   indicatorChats: Readonly<Record<string, TestIndicatorState>>;
   activeAgentIds: ReadonlySet<string>;
   activityTierById: Map<string, "turn" | "background">;
+  chatHarnessIds: Readonly<Partial<Record<string, ProviderId>>>;
+  tuiHarnessIds: Readonly<Partial<Record<string, ProviderId>>>;
   permissionRole: "owner" | "editor" | "viewer" | null;
   rowHostId: string | null;
   rowHostEntry: unknown;
@@ -106,6 +109,8 @@ const testState = vi.hoisted<TestState>(() => ({
   indicatorChats: {},
   activeAgentIds: new Set<string>(),
   activityTierById: new Map<string, "turn" | "background">(),
+  chatHarnessIds: {},
+  tuiHarnessIds: {},
   permissionRole: "owner",
   rowHostId: "host-1",
   rowHostEntry: { hostId: "host-1" },
@@ -172,7 +177,9 @@ vi.mock(
 );
 
 vi.mock("@/components/chat/chat-progress-icon", () => ({
-  ChatProgressIcon: () => <span data-testid="chat-sidebar-spinner" />,
+  ChatProgressIcon: (props: {
+    readonly defaultIcon: ReactNode | undefined;
+  }) => <span data-testid="chat-sidebar-spinner">{props.defaultIcon}</span>,
 }));
 
 vi.mock("@/components/worktree/worktree-owner-metadata", () => ({
@@ -437,6 +444,8 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicArtifactRecords: () => testState.records,
   useEpicArtifactStatus: (artifactId: string) =>
     testState.tree.nodeById[artifactId]?.status ?? null,
+  useEpicChatHarnessId: (nodeId: string) =>
+    testState.chatHarnessIds[nodeId] ?? null,
   useEpicConnectionStatus: () => "open",
   useEpicNodeHostId: () => testState.rowHostId,
   useEpicNodeOwnerKind: () => "chat",
@@ -447,7 +456,8 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicSnapshotMeta: () => ({ epicLight: { title: "Test epic" } }),
   useEpicTreeIndex: () => testState.tree,
   useEpicTreeNode: (nodeId: string) => testState.tree.nodeById[nodeId] ?? null,
-  useMaybeEpicTuiAgentHarnessId: () => null,
+  useMaybeEpicTuiAgentHarnessId: (nodeId: string) =>
+    testState.tuiHarnessIds[nodeId] ?? null,
   useRootIds: () => testState.tree.rootIds,
 }));
 
@@ -561,6 +571,8 @@ describe("epic sidebar selection mode", () => {
     testState.indicatorChats = {};
     testState.activeAgentIds = new Set<string>();
     testState.activityTierById = new Map();
+    testState.chatHarnessIds = {};
+    testState.tuiHarnessIds = {};
     testState.permissionRole = "owner";
     testState.rowHostId = "host-1";
     testState.rowHostEntry = { hostId: "host-1" };
@@ -730,6 +742,74 @@ describe("epic sidebar selection mode", () => {
     expect(screen.getByTestId("epic-sidebar-rename-agent-root")).not.toBeNull();
     expect(screen.getByTestId("epic-sidebar-delete-agent-root")).not.toBeNull();
     expect(screen.getByTestId("epic-sidebar-more-chat-root")).not.toBeNull();
+  });
+
+  it("subscripts only TUI harness brands", () => {
+    seedChatTree();
+    testState.chatHarnessIds = {
+      "chat-root": "codex",
+      "chat-child": "claude",
+    };
+    testState.tuiHarnessIds = { "agent-root": "codex" };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    expect(
+      screen
+        .getByTestId("sidebar-agent-harness-chat-root")
+        .getAttribute("data-agent-surface"),
+    ).toBe("gui");
+    expect(screen.queryByTestId("sidebar-agent-surface-chat-root")).toBeNull();
+    expect(
+      screen
+        .getByTestId("sidebar-agent-harness-agent-root")
+        .getAttribute("data-agent-surface"),
+    ).toBe("tui");
+    expect(
+      screen
+        .getByTestId("sidebar-agent-surface-agent-root")
+        .getAttribute("data-agent-surface"),
+    ).toBe("tui");
+  });
+
+  it("does not subscript harness brands in a GUI-only task", () => {
+    seedGuiChatTree();
+    testState.chatHarnessIds = {
+      "chat-root": "codex",
+      "chat-child": "claude",
+    };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    expect(screen.queryByTestId("sidebar-agent-surface-chat-root")).toBeNull();
+    expect(screen.queryByTestId("sidebar-agent-surface-chat-child")).toBeNull();
+  });
+
+  it("subscripts harness brands in a TUI-only task", () => {
+    seedTuiAgentTree();
+    testState.tuiHarnessIds = { "agent-root": "codex" };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    const terminalSubscript = screen.getByTestId(
+      "sidebar-agent-surface-agent-root",
+    );
+    const terminalHarness = screen.getByTestId(
+      "sidebar-agent-harness-agent-root",
+    );
+    expect(terminalSubscript.getAttribute("data-agent-surface")).toBe("tui");
+    expect(terminalSubscript.tagName.toLowerCase()).toBe("svg");
+    expect(terminalSubscript.getAttribute("stroke-width")).toBe("3");
+    expect(terminalSubscript.getAttribute("class")).toContain("-right-1");
+    expect(terminalSubscript.getAttribute("class")).toContain("-bottom-1.5");
+    expect(terminalSubscript.getAttribute("class")).toContain(
+      "text-muted-foreground",
+    );
+    expect(terminalSubscript.getAttribute("class")).not.toContain(
+      "bg-background",
+    );
+    expect(terminalSubscript.getAttribute("class")).not.toContain("ring");
+    expect(terminalHarness.getAttribute("class")).toContain("w-[1.125rem]");
   });
 
   it("keeps chat add inline and exposes ellipsis actions on right-click", async () => {
@@ -1541,6 +1621,22 @@ function seedGuiChatTree(): void {
     },
   };
   testState.records = [chatRoot, chatChild].map(recordFromNode);
+}
+
+function seedTuiAgentTree(): void {
+  const agentRoot = treeNode(
+    "agent-root",
+    null,
+    "Terminal agent",
+    "terminal-agent",
+  );
+  testState.activePanelId = "chats";
+  testState.tree = {
+    rootIds: ["agent-root"],
+    childrenByParent: {},
+    nodeById: { "agent-root": agentRoot },
+  };
+  testState.records = [recordFromNode(agentRoot)];
 }
 
 function seedArtifactTree(): void {
