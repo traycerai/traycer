@@ -38,13 +38,15 @@ async function main(): Promise<void> {
   const lockPath = process.env.WORKER_LOCK_PATH;
   const barrierDir = process.env.WORKER_BARRIER_DIR;
   const cliEntry = process.env.WORKER_CLI_ENTRY;
+  const cliLockAcquiredMarker = process.env.WORKER_CLI_LOCK_ACQUIRED_MARKER;
   if (
     lockPath === undefined ||
     barrierDir === undefined ||
-    cliEntry === undefined
+    cliEntry === undefined ||
+    cliLockAcquiredMarker === undefined
   ) {
     throw new Error(
-      "desktop-cli-lock-worker: WORKER_LOCK_PATH, WORKER_BARRIER_DIR, and WORKER_CLI_ENTRY are required",
+      "desktop-cli-lock-worker: WORKER_LOCK_PATH, WORKER_BARRIER_DIR, WORKER_CLI_ENTRY, and WORKER_CLI_LOCK_ACQUIRED_MARKER are required",
     );
   }
   const outcome = await acquireDesktopCliLock({
@@ -59,7 +61,10 @@ async function main(): Promise<void> {
   await writeFile(join(barrierDir, "held"), "");
   await waitForFile(join(barrierDir, "mutate"));
   const cli = spawn("bun", ["run", cliEntry, "host", "uninstall", "--json"], {
-    env: process.env,
+    env: {
+      ...process.env,
+      TRAYCER_CLI_LOCK_ACQUIRED_MARKER: cliLockAcquiredMarker,
+    },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let cliStdout = "";
@@ -73,8 +78,6 @@ async function main(): Promise<void> {
   const cliExit = new Promise<number | null>((resolve) => {
     cli.once("exit", (code) => resolve(code));
   });
-  await writeFile(join(barrierDir, "cli-started"), "");
-  await waitForFile(join(barrierDir, "cli-verified-blocked"));
   await waitForFile(join(barrierDir, "desktop-waiting"));
   await outcome.handle.release();
   const exitCode = await cliExit;

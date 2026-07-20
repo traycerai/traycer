@@ -170,6 +170,23 @@ const QUIT_FRESH_UNSYNCED_SNAPSHOT_TIMEOUT_MS = 200;
  * the logs.
  */
 export async function runDesktopStartup(): Promise<void> {
+  const testHooks = desktopStartupTestHooks;
+  if (testHooks !== null) {
+    initLogger();
+    const state: BootState = {
+      config: testHooks.config,
+      pendingAuthReturnSignal: false,
+      bridge: null,
+    };
+    testHooks.runPreReady();
+    await testHooks.whenReady();
+    await testHooks.runOnReady();
+    const services = await testHooks.runWindowPhase();
+    // Keep this on the real startup entry's path: tests replace the costly
+    // Electron phases, never the deferred convergence edge itself.
+    runDeferred(state, services, testHooks.runDeferredBackground);
+    return;
+  }
   initLogger();
   const config = resolveDesktopConfig();
 
@@ -201,6 +218,28 @@ interface BootState {
   // a payload-free nudge, so repeated cold-start arrivals collapse.
   pendingAuthReturnSignal: boolean;
   bridge: RunnerIpcBridge | null;
+}
+
+export interface DesktopStartupTestHooks {
+  readonly config: DesktopConfig;
+  runPreReady(): void;
+  whenReady(): Promise<void>;
+  runOnReady(): Promise<void>;
+  runWindowPhase(): Promise<{
+    readonly hostController: IpcHostController;
+    readonly menu: HostUpdateMenuSurface;
+  }>;
+  runDeferredBackground(): void;
+}
+
+let desktopStartupTestHooks: DesktopStartupTestHooks | null = null;
+
+/** Test-only phase replacement used to exercise `runDesktopStartup`'s real
+ * handoff into `runDeferred` without constructing an Electron window. */
+export function __setDesktopStartupTestHooks(
+  hooks: DesktopStartupTestHooks | null,
+): void {
+  desktopStartupTestHooks = hooks;
 }
 
 // Single delivery path for the browser-return signal: focus + nudge the

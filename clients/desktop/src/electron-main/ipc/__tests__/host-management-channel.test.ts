@@ -29,6 +29,7 @@ import type {
   MutationOutcome,
   MutationProgress,
   MutationKind,
+  MutationLaneStatus,
   RemoveTraycerOk,
   ServiceRegistrationOk,
   UninstallOk,
@@ -350,6 +351,89 @@ class FakeHostController implements IpcHostController {
   }
 }
 
+// Mirrors the production controller's explicit lane identity without making
+// every IPC wiring test simulate the mutation scheduler. This lets the F9
+// test drive a same-kind launch apply and a renderer update independently.
+class AttributedFakeHostController extends FakeHostController {
+  private attributedProgressListeners = new Set<
+    (
+      progress: MutationProgress,
+      kind: MutationKind,
+      operationId: string | null,
+    ) => void
+  >();
+  private mutationStatusListeners = new Set<
+    (status: MutationLaneStatus | null) => void
+  >();
+
+  async applyStagedForOperation(
+    trigger: ApplyStagedTrigger,
+    force: boolean,
+    _operationId: string,
+  ): Promise<MutationOutcome<ApplyStagedOk>> {
+    return super.applyStaged(trigger, force);
+  }
+
+  async convergeReadyForOperation(
+    force: boolean,
+    _operationId: string,
+  ): Promise<MutationOutcome<ConvergeReadyOk>> {
+    return super.convergeReady(force);
+  }
+
+  async installVersionForOperation(
+    pin: string,
+    force: boolean,
+    _operationId: string,
+  ): Promise<MutationOutcome<InstallVersionOk>> {
+    return super.installVersion(pin, force);
+  }
+
+  async registerServiceForOperation(
+    _operationId: string,
+  ): Promise<MutationOutcome<ServiceRegistrationOk>> {
+    return super.registerService();
+  }
+
+  onMutationProgressWithKind(
+    listener: (
+      progress: MutationProgress,
+      kind: MutationKind,
+      operationId: string | null,
+    ) => void,
+  ): () => void {
+    this.attributedProgressListeners.add(listener);
+    return () => {
+      this.attributedProgressListeners.delete(listener);
+    };
+  }
+
+  onMutationStatus(
+    listener: (status: MutationLaneStatus | null) => void,
+  ): () => void {
+    this.mutationStatusListeners.add(listener);
+    return () => {
+      this.mutationStatusListeners.delete(listener);
+    };
+  }
+
+  emitAttributedProgress(
+    progress: MutationProgress,
+    kind: MutationKind,
+    operationId: string | null,
+  ): void {
+    for (const listener of this.attributedProgressListeners) {
+      listener(progress, kind, operationId);
+    }
+  }
+
+  emitMutationStatus(status: MutationLaneStatus | null): void {
+    for (const listener of this.mutationStatusListeners) {
+      listener(status);
+    }
+  }
+}
+
 interface FakeBridge {
   readonly handlers: Map<
     string,
@@ -371,6 +455,12 @@ interface FakeBridge {
 }
 
 function makeBridge(): FakeBridge {
+  return makeBridgeWithHostController(new FakeHostController());
+}
+
+function makeBridgeWithHostController(
+  hostController: FakeHostController,
+): FakeBridge {
   const handlers = new Map<
     string,
     (event: unknown, raw: unknown) => Promise<unknown>
@@ -384,7 +474,7 @@ function makeBridge(): FakeBridge {
         reloadSnapshotFromDisk: vi.fn(() => Promise.resolve(null)),
         getSnapshot: vi.fn(() => ({ version: "1.7.0" })),
       },
-      hostController: new FakeHostController(),
+      hostController,
     },
     handleInvoke(environment, handler) {
       handlers.set(environment, async (event, raw) => handler(event, raw));
@@ -1180,6 +1270,85 @@ describe("host-management IPC - legacy progress broadcast over HostController's 
     });
     await second;
     expect(mgmt.getHostOperationStatus()).toBeNull();
+  });
+
+  it("F9: ignores same-kind progress from a non-legacy lane operation until the renderer update owns the lane", async () => {
+    installFakeCli({ runResult: {}, streamResult: {} });
+    const mgmt = await import("../host-management-ipc");
+    mgmt.setActiveEnvironment("production");
+    const { RunnerHostEvent, RunnerHostInvoke } =
+      await import("../../../ipc-contracts/ipc-channels");
+    const hostController = new AttributedFakeHostController();
+    hostController.applyStagedDeferred = true;
+    const bridge = makeBridgeWithHostController(hostController);
+    mgmt.registerHostManagementIpc(bridge as never);
+    const updateHandler = bridge.handlers.get(
+      RunnerHostInvoke.traycerHostUpdate,
+    )!;
+
+    const update = updateHandler(null, { operationId: "renderer-update" });
+    await waitForCallCount(hostController, "applyStaged", 1);
+
+    // A launch apply has the same MutationKind as a renderer update, but it
+    // carries no renderer operation identity. It must not light up the
+    // renderer's update progress or status just because a legacy update is
+    // waiting behind it.
+    hostController.emitMutationStatus({
+      kind: "apply",
+      operationId: null,
+      progress: null,
+      startedAt: "2026-01-01T00:00:00.000Z",
+    });
+    hostController.emitAttributedProgress(
+      {
+        stage: "apply",
+        percent: 20,
+        bytes: 20,
+        totalBytes: 100,
+        message: "launch apply",
+      },
+      "apply",
+      null,
+    );
+    const progressCalls = () =>
+      bridge.fanOut.mock.calls.filter(
+        ([channel]) => channel === RunnerHostEvent.cliOperationProgress,
+      );
+    expect(progressCalls()).toHaveLength(0);
+    expect(mgmt.getHostOperationStatus()).toBeNull();
+
+    hostController.emitMutationStatus({
+      kind: "apply",
+      operationId: "renderer-update",
+      progress: null,
+      startedAt: "2026-01-01T00:00:01.000Z",
+    });
+    hostController.emitAttributedProgress(
+      {
+        stage: "apply",
+        percent: 70,
+        bytes: 70,
+        totalBytes: 100,
+        message: "renderer apply",
+      },
+      "apply",
+      "renderer-update",
+    );
+    expect(progressCalls()).toHaveLength(1);
+    expect(progressCalls()[0]?.[1]).toMatchObject({
+      operationId: "renderer-update",
+      percent: 70,
+    });
+    expect(mgmt.getHostOperationStatus()).toMatchObject({
+      operationId: "renderer-update",
+      percent: 70,
+    });
+
+    hostController.resolveApplyStaged({
+      kind: "ok",
+      value: { appliedVersion: "1.7.0", runningActivated: true },
+    });
+    await update;
   });
 
   it("broadcasts hostOperationStatusChange on start, re-broadcasts HostController's progress ticks, and clears status to null on settle", async () => {

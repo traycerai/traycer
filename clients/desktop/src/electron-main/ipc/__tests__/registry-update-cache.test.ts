@@ -776,6 +776,63 @@ describe("refreshRegistryUpdateState - launch-time probe", () => {
     unsubscribe();
   });
 
+  it("F10: an older background stage cannot republish over a newer completed refresh", async () => {
+    const probeSpy = vi
+      .fn()
+      .mockResolvedValueOnce(registryProbeResult("1.4.2", true, null))
+      .mockResolvedValueOnce(registryProbeResult("1.4.3", true, null));
+    vi.doMock("../../cli/traycer-cli", () => ({
+      runTraycerCliJson: probeSpy,
+      streamTraycerCliJson: vi.fn(),
+      TraycerCliError: class extends Error {},
+    }));
+    const { onHostRegistryUpdateStateChange, refreshRegistryUpdateState } =
+      await import("../host-management-ipc");
+    const controller = fakeHostController(false);
+    const firstStage = deferred<void>();
+    const secondStage = deferred<void>();
+    let stageCalls = 0;
+    controller.stageLatest = async () => {
+      stageCalls += 1;
+      if (stageCalls === 1) {
+        await firstStage.promise;
+        return;
+      }
+      await secondStage.promise;
+      controller.setUpdateReady(true);
+    };
+    const publications: HostRegistryUpdateState[] = [];
+    const unsubscribe = onHostRegistryUpdateStateChange((state) => {
+      publications.push(state);
+    });
+
+    await refreshRegistryUpdateState(controller, {
+      force: true,
+      maxAgeMs: null,
+    });
+    await refreshRegistryUpdateState(controller, {
+      force: true,
+      maxAgeMs: null,
+    });
+    expect(stageCalls).toBe(2);
+
+    secondStage.resolve(undefined);
+    await vi.waitFor(() => {
+      expect(
+        publications.filter((state) => state.latestVersion === "1.4.3"),
+      ).toHaveLength(2);
+    });
+
+    firstStage.resolve(undefined);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(publications.at(-1)).toMatchObject({
+      latestVersion: "1.4.3",
+      updateAvailable: true,
+    });
+    unsubscribe();
+  });
+
   it("does not stage anything after a failed registry probe", async () => {
     vi.doMock("../../cli/traycer-cli", () => ({
       runTraycerCliJson: vi

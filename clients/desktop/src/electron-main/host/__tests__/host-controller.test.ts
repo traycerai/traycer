@@ -544,6 +544,59 @@ describe("mutation lane: wait-never-reject", () => {
       "host apply",
     ]);
   });
+
+  it("F9: carries the IPC operation identity on the actual apply lane status and progress", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writeStagedRecord("production", "1.8.0", "1.8.0");
+    const statuses: Array<{ readonly operationId: string | null }> = [];
+    const progressOperationIds: Array<string | null> = [];
+    const unsubscribeStatus = controller.onMutationStatus((status) => {
+      if (status !== null) statuses.push({ operationId: status.operationId });
+    });
+    const unsubscribeProgress = controller.onMutationProgressWithKind(
+      (_progress, _kind, operationId) => {
+        progressOperationIds.push(operationId);
+      },
+    );
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+      availableSnapshotFixture("1.8.0", ["1.8.0"]),
+    );
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args.includes("download")) return { data: {} };
+      opts.onEvent({
+        type: "progress",
+        stage: "apply",
+        percent: 50,
+        bytes: 50,
+        totalBytes: 100,
+        message: "applying",
+      });
+      return {
+        data: {
+          outcome: "applied",
+          record: { version: "1.8.0", runtimeVersion: "1.8.0" },
+          runningActivated: true,
+          installGeneration: null,
+        },
+      };
+    });
+
+    const outcome = await controller.applyStagedForOperation(
+      "manual",
+      false,
+      "renderer-update",
+    );
+    unsubscribeProgress();
+    unsubscribeStatus();
+
+    expect(outcome.kind).toBe("ok");
+    expect(statuses).toContainEqual({ operationId: "renderer-update" });
+    expect(progressOperationIds).toEqual(["renderer-update"]);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1102,6 +1155,7 @@ describe("desktop-held cli-lock: two-process test", () => {
           "src",
           "index.ts",
         ),
+        WORKER_CLI_LOCK_ACQUIRED_MARKER: join(barrierDir, "cli-lock-acquired"),
       },
     });
     const workerExit = new Promise<number | null>((resolve) => {
@@ -1125,22 +1179,14 @@ describe("desktop-held cli-lock: two-process test", () => {
     // The worker holds the shared lock before it starts the terminal CLI.
     expect(existsSync(installRecordFile)).toBe(true);
     writeFileSync(join(barrierDir, "mutate"), "");
-    await waitForFile(join(barrierDir, "cli-started"));
-    // The real CLI process is running, but must still be blocked on the
-    // worker-held lock. Removing `withCliLock` from host uninstall makes
-    // this assertion fail because the record disappears here.
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    expect(existsSync(installRecordFile)).toBe(true);
-    writeFileSync(join(barrierDir, "cli-verified-blocked"), "");
 
-    let registerSettled = false;
-    const registerPromise = controller.registerService().then((outcome) => {
-      registerSettled = true;
-      return outcome;
-    });
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    expect(registerSettled).toBe(false);
+    const registerPromise = controller.registerService();
     writeFileSync(join(barrierDir, "desktop-waiting"), "");
+    // This marker is written by the REAL CLI's `withCliLock` callback,
+    // immediately after it acquires the shared lock and before host-uninstall
+    // enters its critical section. It is a boundary proof, unlike the old
+    // spawn-time marker plus a timing sleep.
+    await waitForFile(join(barrierDir, "cli-lock-acquired"));
     await waitForFile(join(barrierDir, "cli-exit"));
     const cliExit = JSON.parse(
       readFileSync(join(barrierDir, "cli-exit"), "utf8"),
@@ -2304,6 +2350,83 @@ describe("applyStagedCliOwned stamping decision (fixup B9)", () => {
     }
     expect(stampCalls[0]?.[generationIndex + 1]).toBe(
       "apply-command-generation",
+    );
+  });
+
+  it("V4: stamps an ensured null-runtime generation using ensure's attested generation", async () => {
+    const controller = newController("production");
+    writePidMetadata("production", { version: "1.8.0", pid: process.pid });
+    const stampCalls: (readonly string[])[] = [];
+    vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
+      if (args.includes("stamp-runtime")) {
+        stampCalls.push(args);
+        return { outcome: "stamped" };
+      }
+      return {};
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: {
+        action: "started",
+        installed: true,
+        registered: true,
+        running: true,
+        version: "1.8.0",
+        runtimeVersion: null,
+        installGeneration: "ensure-command-generation",
+        postSwapError: null,
+      },
+    });
+
+    const outcome = await controller.convergeReady(false);
+
+    expect(outcome.kind).toBe("ok");
+    expect(stampCalls).toHaveLength(1);
+    const generationIndex = stampCalls[0]?.indexOf(
+      "--expected-install-generation",
+    );
+    if (generationIndex === undefined || generationIndex < 0) {
+      throw new Error("stamp-runtime did not receive an expected generation");
+    }
+    expect(stampCalls[0]?.[generationIndex + 1]).toBe(
+      "ensure-command-generation",
+    );
+  });
+
+  it("V4: stamps an installed null-runtime generation using install's attested generation", async () => {
+    const controller = newController("production");
+    writePidMetadata("production", { version: "1.8.0", pid: process.pid });
+    const stampCalls: (readonly string[])[] = [];
+    vi.mocked(runBundledTraycerCliJson).mockImplementation(async (args) => {
+      if (args.includes("stamp-runtime")) {
+        stampCalls.push(args);
+        return { outcome: "stamped" };
+      }
+      return {};
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: {
+        version: "1.8.0",
+        runtimeVersion: null,
+        installGeneration: "install-command-generation",
+        serviceLifecycle: {
+          postSwapAction: "restart",
+          postSwapError: null,
+        },
+      },
+    });
+
+    const outcome = await controller.installVersion("1.8.0", false);
+
+    expect(outcome.kind).toBe("ok");
+    expect(stampCalls).toHaveLength(1);
+    const generationIndex = stampCalls[0]?.indexOf(
+      "--expected-install-generation",
+    );
+    if (generationIndex === undefined || generationIndex < 0) {
+      throw new Error("stamp-runtime did not receive an expected generation");
+    }
+    expect(stampCalls[0]?.[generationIndex + 1]).toBe(
+      "install-command-generation",
     );
   });
 

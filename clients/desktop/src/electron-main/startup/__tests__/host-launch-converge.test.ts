@@ -8,6 +8,7 @@ import type {
   MutationOutcome,
 } from "../../host/host-controller-types";
 import type { HostRegistryUpdateState } from "../../../ipc-contracts/host-management-types";
+import type { DesktopStartupTestHooks } from "../desktop-startup";
 
 const electronMock = vi.hoisted(() => ({
   app: {
@@ -22,6 +23,7 @@ vi.mock("electron", () => electronMock);
 vi.mock("@sentry/electron/main", () => ({}));
 
 vi.mock("../../app/logger", () => ({
+  initLogger: vi.fn(),
   log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
@@ -52,7 +54,8 @@ const {
   refreshHostRegistryIfNotRemoved,
   applyHostUpdateMenuState,
 } = await import("../host-launch-converge");
-const { runDeferred } = await import("../desktop-startup");
+const { __setDesktopStartupTestHooks, runDesktopStartup } =
+  await import("../desktop-startup");
 
 function fakeMenu() {
   return {
@@ -287,7 +290,7 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
     expect(controller.activateInstalledCalls).toEqual([]);
   });
 
-  it("V2/P1: the deferred desktop-startup entry activates launch one's debt but leaves launch two running", async () => {
+  it("V2/P1: runDesktopStartup reaches deferred launch convergence, activating debt once and leaving the next launch running", async () => {
     const launchOneController = fakeHostController(
       fakeStatus(false, "pendingActivation", false),
       {
@@ -305,30 +308,43 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
       { kind: "ok", value: { activated: true } },
     );
     const background = vi.fn();
-
-    runDeferred(
-      undefined,
-      { hostController: launchOneController, menu: fakeMenu() },
-      background,
-    );
-
-    await vi.waitFor(() => {
-      expect(background).toHaveBeenCalledOnce();
-      expect(launchOneController.applyStagedCalls).toEqual([]);
-      expect(launchOneController.activateInstalledCalls).toEqual([false]);
+    const config = {
+      environment: "production" as const,
+      isDev: false,
+      preloadPath: "/tmp/preload.js",
+      iconPath: "/tmp/icon.png",
+      authnBaseUrl: "https://auth.example.test",
+    };
+    const hooks = (
+      hostController: IpcHostController,
+    ): DesktopStartupTestHooks => ({
+      config,
+      runPreReady: () => undefined,
+      whenReady: async () => undefined,
+      runOnReady: async () => undefined,
+      runWindowPhase: async () => ({ hostController, menu: fakeMenu() }),
+      runDeferredBackground: background,
     });
 
-    runDeferred(
-      undefined,
-      { hostController: launchTwoController, menu: fakeMenu() },
-      background,
-    );
+    try {
+      __setDesktopStartupTestHooks(hooks(launchOneController));
+      await runDesktopStartup();
+      await vi.waitFor(() => {
+        expect(background).toHaveBeenCalledOnce();
+        expect(launchOneController.applyStagedCalls).toEqual([]);
+        expect(launchOneController.activateInstalledCalls).toEqual([false]);
+      });
 
-    await vi.waitFor(() => {
-      expect(background).toHaveBeenCalledTimes(2);
-      expect(launchTwoController.applyStagedCalls).toEqual([]);
-      expect(launchTwoController.activateInstalledCalls).toEqual([]);
-    });
+      __setDesktopStartupTestHooks(hooks(launchTwoController));
+      await runDesktopStartup();
+      await vi.waitFor(() => {
+        expect(background).toHaveBeenCalledTimes(2);
+        expect(launchTwoController.applyStagedCalls).toEqual([]);
+        expect(launchTwoController.activateInstalledCalls).toEqual([]);
+      });
+    } finally {
+      __setDesktopStartupTestHooks(null);
+    }
   });
 
   it("B1: force-refreshes the registry and updates the menu after a successful apply", async () => {

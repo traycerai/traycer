@@ -622,6 +622,7 @@ export class HostController {
   private enqueueMutation<T>(
     kind: MutationKind,
     coalesceKey: string,
+    operationId: string | null,
     fn: () => Promise<MutationOutcome<T>>,
   ): Promise<MutationOutcome<T>> {
     const existing = this.inFlightMutations.get(coalesceKey);
@@ -631,9 +632,11 @@ export class HostController {
     const job = this.mutationTail.then(async () => {
       this.mutationStatus = {
         kind,
+        operationId,
         progress: null,
         startedAt: new Date().toISOString(),
       };
+      this.publishMutationStatus();
       try {
         return await fn();
       } catch (err) {
@@ -644,6 +647,7 @@ export class HostController {
         } as MutationOutcome<T>;
       } finally {
         this.mutationStatus = null;
+        this.publishMutationStatus();
         this.inFlightMutations.delete(coalesceKey);
         if (this.stageLatestPending) {
           this.stageLatestPending = false;
@@ -665,6 +669,7 @@ export class HostController {
   private setMutationProgress(progress: MutationProgress): void {
     if (this.mutationStatus === null) return;
     this.mutationStatus = { ...this.mutationStatus, progress };
+    this.publishMutationStatus();
     for (const listener of this.progressListeners) {
       try {
         listener(progress);
@@ -676,7 +681,11 @@ export class HostController {
     }
     for (const listener of this.progressListenersWithKind) {
       try {
-        listener(progress, this.mutationStatus.kind);
+        listener(
+          progress,
+          this.mutationStatus.kind,
+          this.mutationStatus.operationId,
+        );
       } catch (err) {
         log.warn("[host-controller] mutation progress listener threw", {
           err: describeError(err),
@@ -695,8 +704,27 @@ export class HostController {
   // so the IPC shim cannot label a non-legacy mutation as a legacy one.
   private progressListeners = new Set<(progress: MutationProgress) => void>();
   private progressListenersWithKind = new Set<
-    (progress: MutationProgress, kind: MutationKind) => void
+    (
+      progress: MutationProgress,
+      kind: MutationKind,
+      operationId: string | null,
+    ) => void
   >();
+  private mutationStatusListeners = new Set<
+    (status: MutationLaneStatus | null) => void
+  >();
+
+  private publishMutationStatus(): void {
+    for (const listener of this.mutationStatusListeners) {
+      try {
+        listener(this.mutationStatus);
+      } catch (err) {
+        log.warn("[host-controller] mutation status listener threw", {
+          err: describeError(err),
+        });
+      }
+    }
+  }
 
   onMutationProgress(
     listener: (progress: MutationProgress) => void,
@@ -708,11 +736,24 @@ export class HostController {
   }
 
   onMutationProgressWithKind(
-    listener: (progress: MutationProgress, kind: MutationKind) => void,
+    listener: (
+      progress: MutationProgress,
+      kind: MutationKind,
+      operationId: string | null,
+    ) => void,
   ): () => void {
     this.progressListenersWithKind.add(listener);
     return () => {
       this.progressListenersWithKind.delete(listener);
+    };
+  }
+
+  onMutationStatus(
+    listener: (status: MutationLaneStatus | null) => void,
+  ): () => void {
+    this.mutationStatusListeners.add(listener);
+    return () => {
+      this.mutationStatusListeners.delete(listener);
     };
   }
 
@@ -1290,9 +1331,17 @@ export class HostController {
   async convergeReady(
     force: boolean,
   ): Promise<MutationOutcome<ConvergeReadyOk>> {
+    return this.convergeReadyForOperation(force, null);
+  }
+
+  async convergeReadyForOperation(
+    force: boolean,
+    operationId: string | null,
+  ): Promise<MutationOutcome<ConvergeReadyOk>> {
     return this.enqueueMutation<ConvergeReadyOk>(
       "ensure",
       `ensure:${force}`,
+      operationId,
       async () => {
         if (await isHostRemovedByUser()) {
           return { kind: "ok", value: { running: false, version: null } };
@@ -1615,6 +1664,14 @@ export class HostController {
     trigger: ApplyStagedTrigger,
     force: boolean,
   ): Promise<MutationOutcome<ApplyStagedOk>> {
+    return this.applyStagedForOperation(trigger, force, null);
+  }
+
+  applyStagedForOperation(
+    trigger: ApplyStagedTrigger,
+    force: boolean,
+    operationId: string | null,
+  ): Promise<MutationOutcome<ApplyStagedOk>> {
     // Fixup A6: reconcile BEFORE entering the exclusive mutation lane. The
     // ordering edge ("apply awaits any in-flight-or-due eligibility
     // reconcile for the staged version") still holds - it's just no longer
@@ -1635,6 +1692,7 @@ export class HostController {
         return this.enqueueMutation<ApplyStagedOk>(
           "apply",
           `apply:${trigger}:${force}`,
+          operationId,
           async () => {
             if (trigger === "launch" && (await isHostRemovedByUser())) {
               return {
@@ -1802,6 +1860,7 @@ export class HostController {
         return this.enqueueMutation<ActivateInstalledOk>(
           "activate",
           `activate:${force}`,
+          null,
           async () => {
             // A ready update supersedes activation debt - prevents the
             // restart-old -> stamp -> restart-new double cycle. The reconcile
@@ -1876,9 +1935,18 @@ export class HostController {
     pin: string,
     force: boolean,
   ): Promise<MutationOutcome<InstallVersionOk>> {
+    return this.installVersionForOperation(pin, force, null);
+  }
+
+  async installVersionForOperation(
+    pin: string,
+    force: boolean,
+    operationId: string | null,
+  ): Promise<MutationOutcome<InstallVersionOk>> {
     return this.enqueueMutation<InstallVersionOk>(
       "install",
       `install:${pin}:${force}`,
+      operationId,
       async () => {
         // Explicit reinstall clears the removed-by-user sentinel (host-
         // removal-state.ts: "Cleared by an explicit reinstall").
@@ -1978,9 +2046,16 @@ export class HostController {
   // ---- registerService / deregisterService --------------------------------
 
   async registerService(): Promise<MutationOutcome<ServiceRegistrationOk>> {
+    return this.registerServiceForOperation(null);
+  }
+
+  async registerServiceForOperation(
+    operationId: string | null,
+  ): Promise<MutationOutcome<ServiceRegistrationOk>> {
     return this.enqueueMutation<ServiceRegistrationOk>(
       "register",
       "register",
+      operationId,
       async () => {
         if (await this.isPackagedMacOwned()) {
           const outcome = await withDesktopCliLock(
@@ -2036,6 +2111,7 @@ export class HostController {
     return this.enqueueMutation<ServiceRegistrationOk>(
       "deregister",
       "deregister",
+      null,
       async () => {
         if (await this.isPackagedMacOwned()) {
           const outcome = await withDesktopCliLock(
@@ -2075,6 +2151,7 @@ export class HostController {
     return this.enqueueMutation<ActivateInstalledOk>(
       "respawn",
       "respawn",
+      null,
       async () => {
         // Fixup B14: Remove Traycer may have persisted the removed-by-user
         // sentinel but failed/been interrupted mid-uninstall, leaving
@@ -2154,6 +2231,7 @@ export class HostController {
     return this.enqueueMutation<ActivateInstalledOk>(
       "recoverIfDown",
       "recoverIfDown",
+      null,
       async () => {
         const runningRuntimeVersion = await readRunningRuntimeVersion(
           this.layout,
@@ -2216,6 +2294,7 @@ export class HostController {
     return this.enqueueMutation<ActivateInstalledOk>(
       "freePortAndRestart",
       `freePortAndRestart:${pid}:${port}`,
+      null,
       async () => {
         if (await this.isPackagedMacOwned()) {
           if (pid !== null && port !== null) {
@@ -2278,6 +2357,7 @@ export class HostController {
     return this.enqueueMutation<UninstallOk>(
       "uninstallHost",
       `uninstallHost:${all}`,
+      null,
       async () => {
         if (all && (await this.isPackagedMacOwned())) {
           const outcome = await withDesktopCliLock(
@@ -2327,6 +2407,7 @@ export class HostController {
     return this.enqueueMutation<RemoveTraycerOk>(
       "removeTraycer",
       "removeTraycer",
+      null,
       async () => {
         // The abort asks the child to exit; wait for the stream's `close`
         // before unregistering or uninstalling, and let queued automatic

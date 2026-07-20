@@ -1,4 +1,5 @@
 import type { Environment } from "../runner/environment";
+import { writeFile } from "node:fs/promises";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import { cliLockPath, ensureCliInstallHomeDir } from "./paths";
 import {
@@ -124,7 +125,16 @@ export async function withCliLock<T>(
       waitMs: opts.waitMs,
       pollIntervalMs: opts.pollIntervalMs,
     },
-    fn,
+    async (handle) => {
+      // Test-only process boundary: the desktop lock integration test needs
+      // to distinguish a spawned CLI from one which has actually acquired
+      // this shared lock. Production never sets this variable.
+      const acquiredMarker = process.env.TRAYCER_CLI_LOCK_ACQUIRED_MARKER;
+      if (acquiredMarker !== undefined) {
+        await writeFile(acquiredMarker, "");
+      }
+      return fn(handle);
+    },
   );
   if (outcome.kind === "busy") {
     throw lockBusyError(path, outcome.holder);
