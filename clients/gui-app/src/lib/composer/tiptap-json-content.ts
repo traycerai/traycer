@@ -302,12 +302,37 @@ function literalTextInlineNodes(text: string): JsonContent[] {
 export function slashCommandPlainTextFromAttrs(
   attrs: Record<string, unknown> | undefined,
 ): string {
+  const name = slashCommandNameFromAttrs(attrs);
+  if (name === null) return "";
+  return `/${name}`;
+}
+
+/**
+ * What the chip reads on screen, which is not always what it serializes to.
+ *
+ * A skill picked with `$` keeps that character in its label so the composer
+ * shows back what was typed, while `slashCommandPlainTextFromAttrs` still emits
+ * the canonical `/name` the provider and the round-trip parser expect. Skills
+ * reach the host through `skillInvocations`, keyed off the node's `kind` rather
+ * than this text, so the trigger stays a purely local affordance.
+ */
+export function slashCommandLabelFromAttrs(
+  attrs: Record<string, unknown> | undefined,
+): string {
+  const name = slashCommandNameFromAttrs(attrs);
+  if (name === null) return "";
+  return `${stringValue(attrs?.trigger) === "$" ? "$" : "/"}${name}`;
+}
+
+function slashCommandNameFromAttrs(
+  attrs: Record<string, unknown> | undefined,
+): string | null {
   const name =
     stringValue(attrs?.commandName) ??
     stringValue(attrs?.name) ??
     stringValue(attrs?.id);
-  if (name === null) return "";
-  return `/${name.replace(/^\/+/, "")}`;
+  if (name === null) return null;
+  return name.replace(/^[/$]+/, "");
 }
 
 function entityMentionId(

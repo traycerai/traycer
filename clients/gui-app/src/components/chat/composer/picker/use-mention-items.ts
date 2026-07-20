@@ -60,18 +60,24 @@ export interface UseMentionItemsParams {
 
 interface MentionPickerSlice {
   readonly active: boolean;
+  readonly sessionId: number | null;
   readonly query: string;
   readonly step: MentionFlowStep;
 }
 
 function selectMentionSlice(state: {
   open: boolean;
+  sessionId: number | null;
   kind: "mention" | "slash" | null;
   query: string;
   step: MentionFlowStep;
 }): MentionPickerSlice {
   return {
     active: state.open && state.kind === "mention",
+    // Watched so a swap to a session with an identical query and step still
+    // republishes the rows `openPicker` just dropped. See the slash picker's
+    // slice for the swap this guards.
+    sessionId: state.kind === "mention" ? state.sessionId : null,
     query: state.kind === "mention" ? state.query : "",
     step: state.kind === "mention" ? state.step : ROOT_MENTION_STEP,
   };
@@ -81,7 +87,7 @@ export function useMentionItems(params: UseMentionItemsParams): void {
   const { pickerStore, hostClient, mentionRoots, currentEpicId } = params;
 
   const slice = useStore(pickerStore, useShallow(selectMentionSlice));
-  const { active, query, step } = slice;
+  const { active, sessionId, query, step } = slice;
   const debouncedQuery = useDebouncedValue(query, MENTION_QUERY_DEBOUNCE_MS);
 
   // The @-mention chat list is the ONLY consumer of the open-epic chat records,
@@ -311,15 +317,19 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       (epicRequests.length > 0 && epicFetching));
 
   useEffect(() => {
-    if (!active) return;
+    if (!active || sessionId === null) return;
     pickerStore.getState().setItems({
+      sessionId,
       kind: "mention",
       query,
+      // Mentions have no scope; the store holds null for a mention picker, so
+      // this matches its guard rather than opting out of it.
+      slashScope: null,
       step,
       items,
       loading,
     });
-  }, [active, items, loading, pickerStore, query, step]);
+  }, [active, items, loading, pickerStore, query, sessionId, step]);
 
   useEffect(() => {
     if (!active) return;
