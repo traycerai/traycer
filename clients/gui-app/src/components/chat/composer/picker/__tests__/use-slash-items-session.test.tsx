@@ -10,18 +10,26 @@ import {
 } from "../composer-picker-store";
 import { useSlashItems } from "../use-slash-items";
 
-const CATALOG: ReadonlyArray<SlashCommand> = [
-  {
-    harnessId: "claude",
-    name: "plan",
-    description: "",
-    argumentHint: null,
-    kind: "slash-command",
-    metadata: {},
-    source: "provider",
-    preview: { kind: "text", primary: "", secondary: null, mono: false },
-  },
-];
+// Hoisted alongside the `vi.mock` that closes over it. Only the returned hook
+// reads `CATALOG`, and it is not called until a test renders, so a plain
+// top-level const would also work - but reading it in the factory body itself
+// would throw, and keeping the fixture hoisted removes that edge entirely.
+const { CATALOG } = vi.hoisted(
+  (): { CATALOG: ReadonlyArray<SlashCommand> } => ({
+    CATALOG: [
+      {
+        harnessId: "claude",
+        name: "plan",
+        description: "",
+        argumentHint: null,
+        kind: "slash-command",
+        metadata: {},
+        source: "provider",
+        preview: { kind: "text", primary: "", secondary: null, mono: false },
+      },
+    ],
+  }),
+);
 
 // The catalog is deliberately constant across renders: the bug under test is
 // about the hook not re-running, so any per-render identity change would mask
