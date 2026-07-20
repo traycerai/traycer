@@ -484,6 +484,15 @@ async function uninstallService(
       { label: agentLabelId, loadedPath: agentOwnership.path },
     );
   }
+  // Attempt both targets even when one fails hard: a hard failure on the
+  // agent label (iterated first, since it's the live job on migrated
+  // machines) must not skip the CLI-label bootout - `host uninstall --all`
+  // promises best-effort-per-target cleanup, not "stop at the first
+  // failure". The manifest `rm` below stays gated on BOTH attempts being
+  // clean (success or benign not-loaded): `statusService` treats a missing
+  // manifest as "not-installed", so deleting it after a genuinely failed
+  // bootout would misreport a still-loaded job as gone.
+  const bootoutFailures: Array<{ labelId: string; cause: unknown }> = [];
   for (const [labelId, target] of [
     [agentLabelId, agentTarget],
     [options.label.id, serviceTarget],
@@ -501,14 +510,18 @@ async function uninstallService(
       });
     } catch (cause) {
       if (!isBenignBootoutFailure(cause)) {
-        throw cliError({
-          code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
-          message: `launchctl bootout failed for ${labelId}: ${describeCause(cause)}`,
-          details: { label: labelId, cause: describeCause(cause) },
-          exitCode: 1,
-        });
+        bootoutFailures.push({ labelId, cause });
       }
     }
+  }
+  if (bootoutFailures.length > 0) {
+    const [{ labelId, cause }] = bootoutFailures;
+    throw cliError({
+      code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+      message: `launchctl bootout failed for ${labelId}: ${describeCause(cause)}`,
+      details: { label: labelId, cause: describeCause(cause) },
+      exitCode: 1,
+    });
   }
   await rm(serviceManifestPath(options.label), { force: true });
 }

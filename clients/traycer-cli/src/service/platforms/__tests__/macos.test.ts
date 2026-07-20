@@ -948,6 +948,45 @@ describe("macOS service lifecycle", () => {
     expect(MOCKS.cliLoggerWarn.mock.calls[0]?.[0]).toContain("Login Items");
   });
 
+  it("attempts the CLI-label bootout even when the agent-label bootout fails hard, and preserves the manifest since teardown is unconfirmed", async () => {
+    // Agent label is iterated first (it's the live job on migrated
+    // machines); a hard failure there must not skip the CLI-label bootout -
+    // "best-effort per target", not "stop at the first failure". The
+    // manifest survives because teardown never fully confirmed - deleting
+    // it here would make a still-loaded CLI job misreport as not-installed.
+    createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
+    await writeFile(createdPlistPath, "test manifest", "utf8");
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (args[0] === "bootout" && args.some((a) => a.endsWith(".agent"))) {
+        throw buildLaunchctlError({
+          command,
+          cmdArgs: args,
+          stderr: "Boot-out failed: 1: Operation not permitted\n",
+          stdout: "",
+          exitCode: 1,
+        });
+      }
+      return buildSuccessResult();
+    };
+    const controller = createMacosController(runner);
+
+    await expect(controller.uninstall({ label })).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+      message: expect.stringContaining(`${label.id}.agent`),
+    });
+    expect(calls.map((c) => c.args[0])).toEqual([
+      "print",
+      "print",
+      "bootout",
+      "bootout",
+    ]);
+    await expect(readFile(createdPlistPath, "utf8")).resolves.toBe(
+      "test manifest",
+    );
+  });
+
   it("refuses install when the label is already loaded from an SMAppService path", async () => {
     const calls: RecordedCall[] = [];
     const smPath =
@@ -1094,7 +1133,9 @@ describe("macOS service lifecycle", () => {
   it("stop/start/restart proceed normally when the agent probe reads not-loaded (CLI-managed machine)", async () => {
     // The guard must never block a genuinely CLI-managed machine - the
     // probe is advisory and a not-loaded agent label falls through to the
-    // normal launchctl path.
+    // normal launchctl path. Exercises all three operations (not just
+    // start): a regression where the guard incorrectly blocks a legitimate
+    // stop/restart on a CLI-managed machine must be caught here too.
     const calls: RecordedCall[] = [];
     const runner: ProcessRunner = async (command, args) => {
       calls.push({ command, args });
@@ -1108,10 +1149,23 @@ describe("macOS service lifecycle", () => {
       return buildSuccessResult();
     };
     const controller = createMacosController(runner);
+    // `readHostPidMetadata` resolves null throughout - stop's own
+    // wait-for-exit path is exercised separately below; here it's enough
+    // that `before === null` lets stop return right after the kill call.
     MOCKS.readHostPidMetadata.mockResolvedValue(null);
 
-    await expect(controller.start(label)).resolves.toBeUndefined();
-    expect(calls.map((c) => c.args[0])).toEqual(["print", "kickstart"]);
+    for (const [op, expectedSecondCall] of [
+      [() => controller.stop(label), "kill"],
+      [() => controller.start(label), "kickstart"],
+      [() => controller.restart(label), "kickstart"],
+    ] as const) {
+      calls.length = 0;
+      await expect(op()).resolves.toBeUndefined();
+      expect(calls.map((c) => c.args[0])).toEqual([
+        "print",
+        expectedSecondCall,
+      ]);
+    }
   });
 
   it("still reports stopped for a CLI-owned LaunchAgents registration", async () => {
