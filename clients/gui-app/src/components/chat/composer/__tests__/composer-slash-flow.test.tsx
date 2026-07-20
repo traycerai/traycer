@@ -1,8 +1,13 @@
 import "../../../../../__tests__/test-browser-apis";
 import { afterEach, describe, expect, it } from "vitest";
 import { Editor } from "@tiptap/core";
+import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
 
 import type { SlashCommand } from "@/lib/composer/types";
+import {
+  extractPlainTextFromComposerJSONContent,
+  slashCommandLabelFromAttrs,
+} from "@/lib/composer/tiptap-json-content";
 import { insertImageAttachmentsCommand } from "@/hooks/composer/use-composer-paste";
 
 import { buildComposerExtensions } from "../editor/editor-config";
@@ -352,6 +357,75 @@ describe("composer slash flow", () => {
     expect(pickerStore.getState().slashScope).toBe("skills");
   });
 
+  // `$` is a skills trigger wherever it appears, so unlike `/` its scope never
+  // consults the caret position - the start of the prompt is not special.
+  it("opens a skills-exclusive picker when $ is typed mid-paragraph", async () => {
+    const { editor, pickerStore } = makeFixture();
+    editor.commands.insertContent("hello $");
+    await flush();
+    expect(pickerStore.getState().open).toBe(true);
+    expect(pickerStore.getState().kind).toBe("slash");
+    expect(pickerStore.getState().slashScope).toBe("skills-only");
+  });
+
+  it("opens a skills-exclusive picker when $ starts the prompt", async () => {
+    const { editor, pickerStore } = makeFixture();
+    editor.commands.insertContent("$");
+    await flush();
+    expect(pickerStore.getState().open).toBe(true);
+    expect(pickerStore.getState().slashScope).toBe("skills-only");
+  });
+
+  // The decision behind the `$` trigger: the chip reads back as what was typed,
+  // but still serializes to the canonical `/name`. The host reads skills off
+  // the node's `kind`, never out of the prompt text, so the trigger stays a
+  // local affordance and nothing downstream has to learn about `$`.
+  it("commits a $ skill chip that renders as $name but serializes to /name", async () => {
+    const { editor, pickerStore } = makeFixture();
+    editor.commands.insertContent("Review this with $front");
+    await flush();
+
+    const commit = pickerStore.getState().commit;
+    if (commit === null) throw new Error("commit missing");
+    commit({
+      id: "frontend-design",
+      kind: "slash",
+      command: skillCommand("frontend-design"),
+      disabledReason: null,
+    });
+    await flush();
+
+    expect(slashCount(editor)).toBe(1);
+    const chip = firstSlashChip(editor);
+    expect(chip.attrs.trigger).toBe("$");
+    expect(chip.attrs.kind).toBe("skill");
+    expect(slashCommandLabelFromAttrs(chip.attrs)).toBe("$frontend-design");
+    // Trailing space is the usual chip-commit affordance, not part of the token.
+    expect(extractPlainTextFromComposerJSONContent(editor.getJSON())).toBe(
+      "Review this with /frontend-design ",
+    );
+  });
+
+  it("leaves a / skill chip reading as /name", async () => {
+    const { editor, pickerStore } = makeFixture();
+    editor.commands.insertContent("Review this with /front");
+    await flush();
+
+    const commit = pickerStore.getState().commit;
+    if (commit === null) throw new Error("commit missing");
+    commit({
+      id: "frontend-design",
+      kind: "slash",
+      command: skillCommand("frontend-design"),
+      disabledReason: null,
+    });
+    await flush();
+
+    const chip = firstSlashChip(editor);
+    expect(chip.attrs.trigger).toBe("/");
+    expect(slashCommandLabelFromAttrs(chip.attrs)).toBe("/frontend-design");
+  });
+
   it("commits multiple skill chips anywhere in the prompt", async () => {
     const { editor, pickerStore } = makeFixture();
     editor.commands.insertContent("Review this with /front");
@@ -512,4 +586,13 @@ function slashCount(editor: Editor): number {
     if (node.type.name === "slashCommand") count += 1;
   });
   return count;
+}
+
+function firstSlashChip(editor: Editor): ProseMirrorNode {
+  const chips: ProseMirrorNode[] = [];
+  editor.state.doc.descendants((node) => {
+    if (node.type.name === "slashCommand") chips.push(node);
+  });
+  if (chips.length === 0) throw new Error("expected a slashCommand chip");
+  return chips[0];
 }

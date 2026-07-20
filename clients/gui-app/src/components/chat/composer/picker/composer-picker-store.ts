@@ -7,7 +7,20 @@ import {
 import type { MentionPreview, SlashCommand } from "@/lib/composer/types";
 
 export type ComposerPickerKind = "mention" | "slash";
-export type ComposerSlashScope = "all" | "skills";
+
+/**
+ * Which commands a slash picker offers, and how it treats the ones it cannot.
+ *
+ * - `all` - a leading `/`: every command is selectable.
+ * - `skills` - a `/` past the start: skills are selectable and native commands
+ *   stay listed but disabled, because the user asked for the whole catalog and
+ *   a row vanishing mid-typing reads as a bug.
+ * - `skills-only` - a `$`: skills are the whole point of the trigger, so native
+ *   commands are absent rather than disabled. Listing them would answer a
+ *   question nobody asked, and "only allowed at the start of the message" would
+ *   be a lie here - `$` never offers them at any position.
+ */
+export type ComposerSlashScope = "all" | "skills" | "skills-only";
 
 export interface ComposerPickerRange {
   readonly from: number;

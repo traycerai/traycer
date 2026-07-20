@@ -23,7 +23,10 @@ import { normalizeComposerContentWithSelection } from "@/lib/composer/composer-c
 
 import { buildComposerExtensions } from "./editor/editor-config";
 import { mentionSuggestionPluginKey } from "./editor/extensions/mention-extension";
-import { slashSuggestionPluginKey } from "./editor/extensions/slash-command-extension";
+import {
+  skillSuggestionPluginKey,
+  slashSuggestionPluginKey,
+} from "./editor/extensions/slash-command-extension";
 import { insertImageAttachmentsCommand } from "@/hooks/composer/use-composer-paste";
 import type { ImageAttachmentAttrs } from "./editor/extensions/image-attachment-extension";
 import type { ComposerPickerStore } from "./picker/composer-picker-store";
@@ -374,14 +377,15 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     if (editor === null) return false;
     // The store's `open` flips with the suggestion plugin's active state (the
     // render's onStart/onExit drive it), so this gates on a picker actually
-    // showing. Dispatch the suggestion-exit meta to both plugin keys; the
+    // showing. Dispatch the suggestion-exit meta to every plugin key; the
     // active one transitions to "stopped" - clearing its range/decoration and
-    // firing onExit, which closes the menu - and the inactive one ignores it.
+    // firing onExit, which closes the menu - and the inactive ones ignore it.
     if (!pickerStore.getState().open) return false;
     editor.view.dispatch(
       editor.state.tr
         .setMeta(mentionSuggestionPluginKey, { exit: true })
-        .setMeta(slashSuggestionPluginKey, { exit: true }),
+        .setMeta(slashSuggestionPluginKey, { exit: true })
+        .setMeta(skillSuggestionPluginKey, { exit: true }),
     );
     return true;
   }, [editor, pickerStore]);

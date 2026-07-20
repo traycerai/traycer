@@ -13,6 +13,7 @@ import { createComposerSuggestionRender } from "../../picker/suggestion-render";
 import type {
   ComposerPickerItem,
   ComposerPickerStore,
+  ComposerSlashScope,
 } from "../../picker/composer-picker-store";
 import {
   dataAttributeMap,
@@ -70,6 +71,14 @@ export const slashSuggestionPluginKey = new PluginKey(
   "composer-slash-suggestion",
 );
 
+/** The `$` sibling of {@link slashSuggestionPluginKey}, for skills only. */
+export const skillSuggestionPluginKey = new PluginKey(
+  "composer-skill-suggestion",
+);
+
+/** Character that opened a picker, recorded on the chip it inserts. */
+export type SlashCommandTrigger = "/" | "$";
+
 function slashLeadingGuardPlugin(): Plugin {
   return new Plugin({
     key: slashLeadingGuardKey,
@@ -123,30 +132,62 @@ export function createSlashSuggestionExtension(
 
     addProseMirrorPlugins() {
       return [
-        Suggestion({
+        // `/` offers the whole catalog at the start of the prompt and skills
+        // (with natives listed as disabled) anywhere else.
+        suggestionForTrigger({
           editor: this.editor,
+          pickerStore: deps.pickerStore,
+          trigger: "/",
           pluginKey: slashSuggestionPluginKey,
-          char: "/",
-          allowSpaces: false,
-          startOfLine: false,
-          decorationTag: "span",
-          decorationClass: "",
-          items: () => [],
-          render: createComposerSuggestionRender({
-            pickerStore: deps.pickerStore,
-            kind: "slash",
-            slashScopeForProps: ({ editor, range }) =>
-              isLeadingRange(editor.state, range.from, range.to)
-                ? "all"
-                : "skills",
-          }),
-          command: ({ editor, range, props }) => {
-            const item = props as ComposerPickerItem;
-            if (item.kind !== "slash") return;
-            commitSlashInsertion(editor, range, item.command);
-          },
+          slashScopeForProps: ({ editor, range }) =>
+            isLeadingRange(editor.state, range.from, range.to)
+              ? "all"
+              : "skills",
+        }),
+        // `$` is skills-only wherever it is typed, so its scope never consults
+        // the caret position - a skill is legal mid-sentence and at the start
+        // alike, because the host reads skills off the node's `kind` rather
+        // than out of the prompt text.
+        suggestionForTrigger({
+          editor: this.editor,
+          pickerStore: deps.pickerStore,
+          trigger: "$",
+          pluginKey: skillSuggestionPluginKey,
+          slashScopeForProps: () => "skills-only",
         }),
       ];
+    },
+  });
+}
+
+function suggestionForTrigger(args: {
+  readonly editor: Parameters<typeof Suggestion>[0]["editor"];
+  readonly pickerStore: ComposerPickerStore;
+  readonly trigger: SlashCommandTrigger;
+  readonly pluginKey: PluginKey;
+  readonly slashScopeForProps: (context: {
+    editor: { state: EditorState };
+    range: { from: number; to: number };
+  }) => ComposerSlashScope;
+}): Plugin {
+  return Suggestion({
+    editor: args.editor,
+    pluginKey: args.pluginKey,
+    char: args.trigger,
+    allowSpaces: false,
+    startOfLine: false,
+    decorationTag: "span",
+    decorationClass: "",
+    items: () => [],
+    render: createComposerSuggestionRender({
+      pickerStore: args.pickerStore,
+      kind: "slash",
+      slashScopeForProps: args.slashScopeForProps,
+    }),
+    command: ({ editor, range, props }) => {
+      const item = props as ComposerPickerItem;
+      if (item.kind !== "slash") return;
+      commitSlashInsertion(editor, range, item.command, args.trigger);
     },
   });
 }
@@ -305,6 +346,7 @@ function commitSlashInsertion(
   >[0]["editor"],
   range: { from: number; to: number },
   command: SlashCommand,
+  trigger: SlashCommandTrigger,
 ): void {
   if (
     command.kind === "slash-command" &&
@@ -338,6 +380,7 @@ function commitSlashInsertion(
               typeof command.metadata.path === "string"
                 ? command.metadata.path
                 : null,
+            trigger,
           },
         },
         { type: "text", text: " " },
