@@ -502,6 +502,38 @@ describe("ResourceMonitorPopover", () => {
     expect(screen.queryByText("Untitled chat")).toBeNull();
   });
 
+  it("uses the persisted Agent title when the live title is empty", async () => {
+    liveArtifactTitleMock.title = "";
+    canvasMock.state.artifactTreeByEpicId["epic-1"][0] = {
+      ...canvasMock.state.artifactTreeByEpicId["epic-1"][0],
+      name: "Persisted Agent title",
+    };
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [
+            owner({
+              owner: {
+                kind: "chat",
+                hostId: "host-1",
+                epicId: "epic-1",
+                ownerId: "chat-1",
+              },
+              activeProcessName: null,
+            }),
+          ],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+
+    expect(await screen.findByText("Persisted Agent title")).not.toBeNull();
+  });
+
   it("counts a nested tracked root once in owner tree totals", () => {
     const stub = installStubFactory();
     renderPopover();

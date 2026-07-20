@@ -284,7 +284,7 @@ export function ChatDeadTileBanner(props: ChatDeadTileBannerProps): ReactNode {
           title: "Agent host is offline",
           message: "The agent's bound host is offline.",
           code: null,
-          source: "Chat",
+          source: "Agent",
         })}
         presentation="icon"
         className="shrink-0 text-warning-foreground"

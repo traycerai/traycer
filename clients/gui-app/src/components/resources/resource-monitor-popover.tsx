@@ -1670,7 +1670,7 @@ function ownerLabel(
     // to "Untitled agent" (this light surface carries no first-user-message to
     // derive from).
     return displayTitle(
-      liveArtifactTitle ?? location?.ref.name ?? record?.name ?? "",
+      liveArtifactTitle || location?.ref.name || record?.name || "",
       "agent",
     );
   }
