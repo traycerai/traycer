@@ -767,19 +767,9 @@ function withoutCanvasByTabIds(
 
 /** Drop `ids` from `closedTilePayloadsByTabId` (permanent tab deletes). */
 function withoutClosedTilePayloadsByTabIds(
-  record: Readonly<
-    Record<
-      string,
-      Readonly<Record<string, ClosedTilePayload | undefined>> | undefined
-    >
-  >,
+  record: EpicCanvasStore["closedTilePayloadsByTabId"],
   ids: ReadonlySet<string>,
-): Readonly<
-  Record<
-    string,
-    Readonly<Record<string, ClosedTilePayload | undefined>> | undefined
-  >
-> {
+): EpicCanvasStore["closedTilePayloadsByTabId"] {
   if (ids.size === 0) return record;
   return Object.fromEntries(
     Object.entries(record).filter(([id]) => !ids.has(id)),
