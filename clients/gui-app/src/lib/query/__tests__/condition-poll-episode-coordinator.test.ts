@@ -135,7 +135,7 @@ describe("condition-poll episode coordinator", () => {
     observer.unsubscribe();
   });
 
-  it("keeps the latched method when an unstamped same-key fetchQuery clears meta and asserts", async () => {
+  it("keeps the latched method (no crash) when an unstamped same-key fetchQuery clears meta", async () => {
     const key = nextKey("unstamped-fetch");
     const interval = coordinator.refetchIntervalFor(HARNESS_METHOD);
     client.setQueryData(key, unavailable(0));
@@ -151,20 +151,68 @@ describe("condition-poll episode coordinator", () => {
     // and replaces options.meta (Infinity would short-circuit on fresh cache).
     vi.setSystemTime(Date.now() + 60_000);
 
-    // The coordinator assertion fires when the unstamped fetch replaces meta.
-    // After it propagates, TanStack may restore the observer's stamped options,
-    // so final meta is not asserted — only that the latch keeps the episode usable.
+    // A raw same-key fetch (an imperative `fetchQuery`/`ensureQueryData`, or the
+    // worktree-enrichment batched `useQueries` leg) clears the stamped meta.
+    // That is an ABSENT opinion, not a method change: the latch holds, the
+    // fetch resolves, and the app does NOT crash. Before the fix this rejected
+    // with the identity assertion — the crash that surfaced in <WorktreesBody>.
     await expect(
       client.fetchQuery({
         queryKey: key,
         queryFn: () => Promise.resolve(pending(1)),
         staleTime: 0,
       }),
-    ).rejects.toThrow(/changed hostRpcMethod|missing/);
+    ).resolves.toEqual(pending(1));
 
-    expect(currentDelay(key, interval)).toBe(UNAVAILABLE_INITIAL_MS);
+    // The latched HARNESS episode survives the unstamped write and reclassifies
+    // the freshly-fetched pending data through its own PENDING lane.
+    expect(currentDelay(key, interval)).toBe(PENDING_INITIAL_MS);
 
     observer.unsubscribe();
+  });
+
+  it("does not crash when a raw unstamped same-key observer (batched enrichment) clears meta", () => {
+    // Production shape: `useWorktreeOwnerMetadata` (a stamped `useHostQuery`)
+    // and `useBatchedEnrichmentQueries` (a RAW `useQueries` leg that omits the
+    // meta stamp for its coalesced transport) build the SAME host query key.
+    // TanStack's last-writer `query.options.meta` flips to unstamped when the
+    // raw leg mounts; the latch must hold rather than throw `→ missing`.
+    const key = nextKey("raw-unstamped-coobserver");
+    const interval = coordinator.refetchIntervalFor(HARNESS_METHOD);
+    client.setQueryData(key, unavailable(0));
+
+    const stamped = mountBrandedObserver({
+      key,
+      method: HARNESS_METHOD,
+      interval,
+      meta: undefined,
+    });
+    expect(currentDelay(key, interval)).toBe(UNAVAILABLE_INITIAL_MS);
+    expect(queryFor(key)?.options.meta).toMatchObject({
+      hostRpcMethod: HARNESS_METHOD,
+    });
+
+    let rawUnsubscribe: (() => void) | undefined;
+    expect(() => {
+      // No meta stamp, no branded interval — the raw enrichment leg.
+      const raw = new QueryObserver(client, {
+        queryKey: key,
+        queryFn: () => Promise.resolve(unavailable(1)),
+        retry: false,
+        staleTime: Infinity,
+        gcTime: Infinity,
+      });
+      rawUnsubscribe = raw.subscribe(() => undefined);
+      unsubscribes.push(rawUnsubscribe);
+    }).not.toThrow();
+
+    // Last-writer meta is now unstamped, yet the latched HARNESS episode is
+    // intact and still classifies its data through the latched method.
+    expect(queryFor(key)?.options.meta).toBeUndefined();
+    expect(currentDelay(key, interval)).toBe(UNAVAILABLE_INITIAL_MS);
+
+    rawUnsubscribe?.();
+    stamped.unsubscribe();
   });
 
   it("throws for a host-prefixed polling observer without a hostRpcMethod stamp", () => {

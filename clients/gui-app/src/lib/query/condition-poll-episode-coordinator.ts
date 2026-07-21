@@ -172,9 +172,17 @@ export class ConditionPollEpisodeCoordinator {
       return stampedMethod;
     }
 
+    // The latch - not the stamp - is the stable identity. `query.options.meta`
+    // is TanStack last-writer state, so a later UNSTAMPED writer on the same
+    // hash (a raw `useQueries` leg like worktree enrichment's batched transport,
+    // or an imperative `fetchQuery`/`ensureQueryData`) legitimately clears it to
+    // `undefined`. That is an absent opinion, not a changed method: fall back to
+    // the latch. Only a DIFFERENT concrete method - reachable solely via a
+    // custom `cacheKeyIdentity` that drops the method from the hash - is a real
+    // one-hash-two-methods violation worth crashing on.
     this.assertPolicy(
-      stampedMethod === latchedMethod,
-      `Query ${query.queryHash} changed hostRpcMethod from ${latchedMethod} to ${stampedMethod ?? "missing"}. A query hash maps to exactly one host RPC method.`,
+      stampedMethod === undefined || stampedMethod === latchedMethod,
+      `Query ${query.queryHash} changed hostRpcMethod from ${latchedMethod} to ${stampedMethod}. A query hash maps to exactly one host RPC method.`,
     );
     return latchedMethod;
   }
