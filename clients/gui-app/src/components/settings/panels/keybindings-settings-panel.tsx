@@ -99,6 +99,7 @@ export function KeybindingsSettingsPanel() {
           type="button"
           variant="outline"
           size="sm"
+          disabled={summonMutation.isPending}
           onClick={() => {
             resetAll();
             if (summonBridge !== null) {
@@ -107,6 +108,13 @@ export function KeybindingsSettingsPanel() {
           }}
         >
           Reset all to defaults
+          {summonMutation.isPending ? (
+            <AgentSpinningDots
+              className="size-3"
+              testId="reset-keybindings-pending-indicator"
+              variant={undefined}
+            />
+          ) : null}
         </Button>
       </div>
     </section>

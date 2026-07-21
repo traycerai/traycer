@@ -134,7 +134,7 @@ describe("KeybindingsSettingsPanel - Global shortcuts (T2)", () => {
   // R3: only the switch used to be gated on `mutation.isPending`; the
   // capture control must be gated too, or a user could fire an overlapping
   // rebind while a set-invoke is already in flight.
-  it("disables both the enable switch and the capture button while a mutation is pending", async () => {
+  it("disables every mutation trigger while a summon mutation is pending", async () => {
     const pendingSet: {
       release: ((status: GlobalShortcutStatus) => void) | null;
     } = { release: null };
@@ -167,7 +167,15 @@ describe("KeybindingsSettingsPanel - Global shortcuts (T2)", () => {
         name: "Rebind the summon shortcut",
       }).disabled,
     ).toBe(true);
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", {
+        name: "Reset all to defaults",
+      }).disabled,
+    ).toBe(true);
     expect(screen.getByTestId("summon-hotkey-pending-indicator")).toBeTruthy();
+    expect(
+      screen.getByTestId("reset-keybindings-pending-indicator"),
+    ).toBeTruthy();
 
     pendingSet.release?.(
       makeStatus({
@@ -179,6 +187,11 @@ describe("KeybindingsSettingsPanel - Global shortcuts (T2)", () => {
       expect(
         screen.getByRole<HTMLButtonElement>("switch", {
           name: "Enable summon shortcut",
+        }).disabled,
+      ).toBe(false);
+      expect(
+        screen.getByRole<HTMLButtonElement>("button", {
+          name: "Reset all to defaults",
         }).disabled,
       ).toBe(false);
     });

@@ -55,12 +55,14 @@ let intentMutationQueue: Promise<void> = Promise.resolve();
 
 function parseIntents(value: unknown): GlobalShortcutIntents {
   if (value === null || typeof value !== "object") return DEFAULT_INTENTS;
-  const next: Record<string, GlobalShortcutIntent> = {};
-  for (const id of GLOBAL_SHORTCUT_IDS) {
-    const parsed = globalShortcutIntentSchema.safeParse(Reflect.get(value, id));
-    next[id] = parsed.success ? sanitizeChord(parsed.data) : DEFAULT_INTENT;
-  }
-  return next as GlobalShortcutIntents;
+  return Object.fromEntries(
+    GLOBAL_SHORTCUT_IDS.map((id) => {
+      const parsed = globalShortcutIntentSchema.safeParse(
+        Reflect.get(value, id),
+      );
+      return [id, parsed.success ? sanitizeChord(parsed.data) : DEFAULT_INTENT];
+    }),
+  ) as GlobalShortcutIntents;
 }
 
 // Structural validation (the zod schema) only confirms `chord` is a string or

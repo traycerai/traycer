@@ -74,6 +74,22 @@ afterEach(() => {
 });
 
 describe("reconcileGlobalShortcuts", () => {
+  it("exposes a complete disabled snapshot before startup reconcile", async () => {
+    const shortcuts = await import("../shortcuts");
+
+    expect(shortcuts.getGlobalShortcutsSnapshot()).toEqual({
+      sequence: 0,
+      statuses: {
+        summon: {
+          id: "summon",
+          intent: DEFAULT_INTENT,
+          effectiveChord: "mod+shift+space",
+          status: "disabled",
+        },
+      },
+    });
+  });
+
   it("registers the effective default chord and reports status registered when the OS accepts", async () => {
     const shortcuts = await import("../shortcuts");
 

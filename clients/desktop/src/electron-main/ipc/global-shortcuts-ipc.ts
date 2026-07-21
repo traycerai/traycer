@@ -1,4 +1,8 @@
 import { isValidChordString } from "@traycer-clients/shared/keybindings/chord-core";
+import {
+  GLOBAL_SHORTCUT_IDS,
+  globalShortcutIntentSchema,
+} from "@traycer-clients/shared/keybindings/global-shortcuts";
 import type {
   GlobalShortcutId,
   GlobalShortcutIntent,
@@ -55,28 +59,19 @@ export function registerGlobalShortcutsIpc(bridge: RunnerIpcBridge): void {
 }
 
 function parseGlobalShortcutId(value: unknown): GlobalShortcutId {
-  if (value === "summon") return value;
+  const id = GLOBAL_SHORTCUT_IDS.find((candidate) => candidate === value);
+  if (id !== undefined) return id;
   throw new Error(`Unknown global shortcut id: ${String(value)}`);
 }
 
 function parseGlobalShortcutIntent(value: unknown): GlobalShortcutIntent {
-  if (value === null || typeof value !== "object") {
-    throw new Error("Malformed global shortcut intent");
-  }
-  const enabled = Reflect.get(value, "enabled");
-  const chord = Reflect.get(value, "chord");
-  if (typeof enabled !== "boolean") {
-    throw new Error("Malformed global shortcut intent: enabled");
-  }
-  if (chord !== null && typeof chord !== "string") {
-    throw new Error("Malformed global shortcut intent: chord");
-  }
+  const intent = globalShortcutIntentSchema.parse(value);
   // Structural validity (a string) isn't semantic validity - reject a
   // non-canonical chord (e.g. "mod+", wrong token order, an unsupported key)
   // here rather than letting it reach `reconcile()`/Electron (amended
   // decision 3).
-  if (chord !== null && !isValidChordString(chord)) {
+  if (intent.chord !== null && !isValidChordString(intent.chord)) {
     throw new Error("Malformed global shortcut intent: chord is not valid");
   }
-  return { enabled, chord };
+  return intent;
 }

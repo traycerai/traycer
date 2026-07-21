@@ -5,6 +5,7 @@ import {
 } from "@traycer-clients/shared/keybindings/chord-core";
 import {
   GLOBAL_SHORTCUT_DEFAULT_CHORDS,
+  GLOBAL_SHORTCUT_IDS,
   type GlobalShortcutId,
   type GlobalShortcutIntent,
   type GlobalShortcutRegistrationStatus,
@@ -71,7 +72,22 @@ let suppressed = false;
 // value that could drift) and the tray can display precisely what's live.
 const registeredAccelerators = new Map<GlobalShortcutId, string>();
 
-let statuses = {} as Record<GlobalShortcutId, GlobalShortcutStatus>;
+// The IPC handler is installed before the deferred startup reconcile runs.
+// Keep its type-level promise (`Record<GlobalShortcutId, ...>`) true from
+// module initialization so an early renderer snapshot always contains every
+// definition. Reconcile replaces these boot placeholders with persisted intent
+// plus the OS registration result and advances `sequence`.
+let statuses = Object.fromEntries(
+  GLOBAL_SHORTCUT_IDS.map((id) => [
+    id,
+    {
+      id,
+      intent: { enabled: true, chord: null },
+      effectiveChord: GLOBAL_SHORTCUT_DEFAULT_CHORDS[id],
+      status: "disabled",
+    },
+  ]),
+) as Record<GlobalShortcutId, GlobalShortcutStatus>;
 let sequence = 0;
 const listeners = new Set<ChangeListener>();
 let quitHandlerInstalled = false;
