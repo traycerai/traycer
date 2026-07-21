@@ -1754,7 +1754,7 @@ function WorktreeSelectAllToggle(props: {
         "flex h-7 shrink-0 items-center gap-1.5 rounded-sm border px-2 text-ui-xs font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-40",
         allSelected || indeterminate
           ? "border-border bg-muted text-foreground"
-          : "border-border bg-background text-muted-foreground hover:border-foreground hover:bg-muted hover:text-foreground",
+          : "border-border bg-background text-foreground hover:border-foreground hover:bg-muted",
       )}
     >
       <span
