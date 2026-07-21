@@ -1002,6 +1002,15 @@ describe("WorktreesList delete flow", () => {
     expect(scrollRegion.style.paddingBottom).toBe("128px");
   });
 
+  it("renders an actionable select-all control with enabled foreground contrast", () => {
+    renderDefault();
+
+    const selectAll = screen.getByTestId("worktrees-select-all");
+    expect(selectAll.hasAttribute("disabled")).toBe(false);
+    expect(selectAll.classList.contains("text-foreground")).toBe(true);
+    expect(selectAll.classList.contains("text-muted-foreground")).toBe(false);
+  });
+
   it("excludes an in-use row and a backgrounded-deleting row from selection and select-all", () => {
     renderDefault();
     confirmDelete("feat-dirty");

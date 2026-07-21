@@ -35,7 +35,15 @@ import {
   render,
   screen,
 } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
 import "../../../../__tests__/test-browser-apis";
 
 vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
@@ -46,6 +54,71 @@ vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
     error: null,
     refetch: () => Promise.resolve(),
   }),
+}));
+
+interface TestSetPinnedVariables {
+  readonly epicId: string;
+  readonly pinned: boolean;
+}
+
+interface TestSetPinnedOptions {
+  readonly onSuccess: () => void;
+}
+
+interface TestToastOptions {
+  readonly action: {
+    readonly label: string;
+    readonly onClick: () => void;
+  };
+}
+
+const pinTestState = vi.hoisted(
+  (): {
+    pinnedByEpicId: Map<string, boolean>;
+    pendingEpicIds: Set<string>;
+    mutate: Mock<
+      (
+        variables: TestSetPinnedVariables,
+        options: TestSetPinnedOptions | undefined,
+      ) => void
+    >;
+  } => ({
+    pinnedByEpicId: new Map(),
+    pendingEpicIds: new Set(),
+    mutate: vi.fn(),
+  }),
+);
+
+const toastTestState = vi.hoisted(
+  (): {
+    messages: string[];
+    actionLabel: string | null;
+    undo: (() => void) | null;
+  } => ({
+    messages: [],
+    actionLabel: null,
+    undo: null,
+  }),
+);
+
+vi.mock("@/hooks/epic/use-epic-task-pinned-states-query", () => ({
+  useEpicTaskPinnedStates: () => pinTestState.pinnedByEpicId,
+}));
+
+vi.mock("@/hooks/epic/use-epic-set-pinned-mutation", () => ({
+  useEpicSetPinned: () => ({ mutate: pinTestState.mutate }),
+  usePendingSetPinnedEpicIds: () => pinTestState.pendingEpicIds,
+}));
+
+vi.mock("sonner", () => ({
+  toast: {
+    success: (message: string, options: TestToastOptions) => {
+      toastTestState.messages.push(message);
+      toastTestState.actionLabel = options.action.label;
+      toastTestState.undo = options.action.onClick;
+    },
+    error: vi.fn(),
+  },
 }));
 
 interface EpicTab {
@@ -323,6 +396,18 @@ describe("<TabStrip />", () => {
       },
     });
     window.localStorage.clear();
+    pinTestState.pinnedByEpicId.clear();
+    pinTestState.pendingEpicIds.clear();
+    pinTestState.mutate.mockReset();
+    pinTestState.mutate.mockImplementation(
+      (
+        _variables: TestSetPinnedVariables,
+        options: TestSetPinnedOptions | undefined,
+      ) => options?.onSuccess(),
+    );
+    toastTestState.messages.length = 0;
+    toastTestState.actionLabel = null;
+    toastTestState.undo = null;
     resetStores();
   });
 
@@ -658,6 +743,58 @@ describe("<TabStrip />", () => {
 
     fireEvent.contextMenu(await screen.findByTestId("tab-epic-e-a"));
     expect(screen.queryByText("Edit Title")).toBeNull();
+    expect(screen.getByText("Pin Task in History")).toBeDefined();
+  });
+
+  it("pins a task from its tab context menu and offers Undo", async () => {
+    pinTestState.pinnedByEpicId.set(EPIC_A.id, false);
+    openEpicFixture(EPIC_A);
+    registerEpicHeader(EPIC_A, "owner");
+    const router = buildRouter("/epics/e-a/e-a");
+    render(<RouterProvider router={router} />);
+
+    fireEvent.contextMenu(await screen.findByTestId("tab-epic-e-a"));
+    fireEvent.click(await screen.findByText("Pin Task in History"));
+
+    expect(pinTestState.mutate).toHaveBeenCalledTimes(1);
+    const firstCall = pinTestState.mutate.mock.calls[0];
+    expect(firstCall[0]).toEqual({ epicId: EPIC_A.id, pinned: true });
+    expect(typeof firstCall[1]?.onSuccess).toBe("function");
+    expect(toastTestState.messages).toEqual([
+      "Pinned “Alpha” to the top of History",
+    ]);
+    expect(toastTestState.actionLabel).toBe("Undo");
+    expect(toastTestState.undo).not.toBeNull();
+
+    toastTestState.undo?.();
+
+    expect(pinTestState.mutate).toHaveBeenNthCalledWith(2, {
+      epicId: EPIC_A.id,
+      pinned: false,
+    });
+  });
+
+  it("shows the inverse task-history action for a pinned task", async () => {
+    pinTestState.pinnedByEpicId.set(EPIC_A.id, true);
+    openEpicFixture(EPIC_A);
+    registerEpicHeader(EPIC_A, "owner");
+    const router = buildRouter("/epics/e-a/e-a");
+    render(<RouterProvider router={router} />);
+
+    fireEvent.contextMenu(await screen.findByTestId("tab-epic-e-a"));
+
+    expect(await screen.findByText("Unpin Task in History")).toBeDefined();
+  });
+
+  it("does not expose the task-history pin action on system tabs", async () => {
+    ensureHistoryTab();
+    const router = buildRouter("/epics");
+    render(<RouterProvider router={router} />);
+
+    fireEvent.contextMenu(await screen.findByTestId("tab-history-history"));
+
+    expect(screen.queryByText("Pin Task in History")).toBeNull();
+    expect(screen.queryByText("Unpin Task in History")).toBeNull();
   });
 
   it("delays leader digit badges on header tabs", async () => {

@@ -1,4 +1,4 @@
-import type { QueryClient } from "@tanstack/react-query";
+import type { Query, QueryClient } from "@tanstack/react-query";
 import type {
   GetTaskContextsResponse,
   ListTaskLight,
@@ -142,17 +142,41 @@ export function setEpicPinnedInCloudTaskCaches(
   epicId: string,
   pinned: boolean,
 ): void {
-  for (const [
-    queryKey,
-    response,
-  ] of queryClient.getQueriesData<ListTasksResponse>({
-    predicate: (query) =>
-      cloudEpicTasksQueryKeyMatchesScope(query.queryKey, scope),
+  patchMatchingQueries(
+    queryClient,
+    (query) => cloudEpicTasksQueryKeyMatchesScope(query.queryKey, scope),
+    (response: ListTasksResponse) =>
+      setEpicPinnedInCloudTasksResponse(response, epicId, pinned),
+  );
+  setEpicPinnedInTaskContextsCaches(queryClient, scope, epicId, pinned);
+}
+
+export function setEpicPinnedInTaskContextsCaches(
+  queryClient: QueryClient,
+  scope: CloudEpicTasksCacheScope,
+  epicId: string,
+  pinned: boolean,
+): void {
+  patchMatchingQueries(
+    queryClient,
+    (query) => epicTaskContextsQueryKeyMatchesScope(query.queryKey, scope),
+    (response: GetTaskContextsResponse) =>
+      setEpicPinnedInTaskContextsResponse(response, epicId, pinned),
+  );
+}
+
+function patchMatchingQueries<TResponse>(
+  queryClient: QueryClient,
+  predicate: (query: Query) => boolean,
+  patch: (response: TResponse) => TResponse,
+): void {
+  for (const [queryKey, response] of queryClient.getQueriesData<TResponse>({
+    predicate,
   })) {
     if (response === undefined) continue;
-    const next = setEpicPinnedInCloudTasksResponse(response, epicId, pinned);
+    const next = patch(response);
     if (next === response) continue;
-    queryClient.setQueryData<ListTasksResponse>(queryKey, next);
+    queryClient.setQueryData<TResponse>(queryKey, next);
   }
 }
 
@@ -174,6 +198,26 @@ export function setEpicPinnedInCloudTasksResponse(
   });
   const changed = tasks.some((task, index) => task !== response.tasks[index]);
   return changed ? { ...response, tasks } : response;
+}
+
+function setEpicPinnedInTaskContextsResponse(
+  response: GetTaskContextsResponse,
+  epicId: string,
+  pinned: boolean,
+): GetTaskContextsResponse {
+  const entry = Object.entries(response.tasks).find(
+    ([, task]) => task?.epic?.light?.id === epicId,
+  );
+  if (entry === undefined) return response;
+  const [taskId, task] = entry;
+  if (task === null || (task.pinned ?? false) === pinned) return response;
+  return {
+    ...response,
+    tasks: {
+      ...response.tasks,
+      [taskId]: { ...task, pinned },
+    },
+  };
 }
 
 export function cloudEpicTasksQueryKeyMatchesScope(
