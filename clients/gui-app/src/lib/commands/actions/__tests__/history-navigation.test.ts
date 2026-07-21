@@ -176,7 +176,10 @@ describe("goBack / goForward", () => {
 
   it("calls go(-1) on the PASSED router's history when a controller reports canGoBack", () => {
     // index 1 of 2 entries → canGoBack() is true.
-    const history = seedPersistentHistory(["/epics/e1/t1", "/draft/d1"], 1);
+    const history = seedPersistentHistory(
+      ["/settings/general", "/draft/d1"],
+      1,
+    );
     const goSpy = vi.spyOn(history, "go");
 
     goBack({ history });
@@ -187,7 +190,10 @@ describe("goBack / goForward", () => {
 
   it("tracks successful back navigation off the navigation call stack", () => {
     vi.useFakeTimers();
-    const history = seedPersistentHistory(["/epics/e1/t1", "/draft/d1"], 1);
+    const history = seedPersistentHistory(
+      ["/settings/general", "/draft/d1"],
+      1,
+    );
     vi.spyOn(history, "go").mockImplementation(() => {});
     const trackSpy = vi.spyOn(Analytics.getInstance(), "track");
 
@@ -203,7 +209,10 @@ describe("goBack / goForward", () => {
 
   it("calls go(1) on the PASSED router's history when a controller reports canGoForward", () => {
     // index 0 of 2 entries → canGoForward() is true.
-    const history = seedPersistentHistory(["/epics/e1/t1", "/draft/d1"], 0);
+    const history = seedPersistentHistory(
+      ["/settings/general", "/draft/d1"],
+      0,
+    );
     const goSpy = vi.spyOn(history, "go");
 
     goForward({ history });
@@ -214,7 +223,10 @@ describe("goBack / goForward", () => {
 
   it("tracks successful forward navigation off the navigation call stack", () => {
     vi.useFakeTimers();
-    const history = seedPersistentHistory(["/epics/e1/t1", "/draft/d1"], 0);
+    const history = seedPersistentHistory(
+      ["/settings/general", "/draft/d1"],
+      0,
+    );
     vi.spyOn(history, "go").mockImplementation(() => {});
     const trackSpy = vi.spyOn(Analytics.getInstance(), "track");
 
@@ -230,7 +242,10 @@ describe("goBack / goForward", () => {
 
   it("keeps analytics failures from affecting navigation", () => {
     vi.useFakeTimers();
-    const history = seedPersistentHistory(["/epics/e1/t1", "/draft/d1"], 1);
+    const history = seedPersistentHistory(
+      ["/settings/general", "/draft/d1"],
+      1,
+    );
     const goSpy = vi.spyOn(history, "go").mockImplementation(() => {});
     vi.spyOn(Analytics.getInstance(), "track").mockImplementation(() => {
       throw new Error("analytics failed");
@@ -244,7 +259,10 @@ describe("goBack / goForward", () => {
   it("no-op at the start boundary: goBack does NOT call go when canGoBack is false", () => {
     // index 0 → canGoBack() is false; a boundary go(-1) would notify and re-load
     // the current route for nothing.
-    const history = seedPersistentHistory(["/epics/e1/t1", "/draft/d1"], 0);
+    const history = seedPersistentHistory(
+      ["/settings/general", "/draft/d1"],
+      0,
+    );
     const goSpy = vi.spyOn(history, "go");
 
     goBack({ history });
@@ -254,7 +272,10 @@ describe("goBack / goForward", () => {
 
   it("no-op at the end boundary: goForward does NOT call go when canGoForward is false", () => {
     // index 1 (last) → canGoForward() is false.
-    const history = seedPersistentHistory(["/epics/e1/t1", "/draft/d1"], 1);
+    const history = seedPersistentHistory(
+      ["/settings/general", "/draft/d1"],
+      1,
+    );
     const goSpy = vi.spyOn(history, "go");
 
     goForward({ history });

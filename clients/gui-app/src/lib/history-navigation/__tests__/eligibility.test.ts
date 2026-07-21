@@ -15,7 +15,12 @@ function state(
   tabsById: HistoryEligibilityState["tabsById"],
   openTabOrder: ReadonlyArray<string>,
 ): HistoryEligibilityState {
-  return { tabsById, openTabOrder };
+  return {
+    activeTabId: null,
+    mostRecentTabIdByEpicId: {},
+    tabsById,
+    openTabOrder,
+  };
 }
 
 beforeEach(() => {
@@ -34,10 +39,17 @@ describe("isHistoryEntryEligible", () => {
     expect(isHistoryEntryEligible("/settings/general", canvas)).toBe(true);
   });
 
-  it("treats unknown tabIds (absent from tabsById) as eligible", () => {
-    // Left to liveness/pruning rather than the skip scan.
+  it("treats an unknown tabId as eligible when its fallback tab is open", () => {
     const canvas = state({ t1: tab("t1", "e1") }, ["t1"]);
     expect(isHistoryEntryEligible("/epics/e1/unknown-tab", canvas)).toBe(true);
+  });
+
+  it("treats an unknown tabId as ineligible when its fallback tab is closed", () => {
+    const canvas = {
+      ...state({ t1: tab("t1", "e1") }, []),
+      mostRecentTabIdByEpicId: { e1: "t1" },
+    };
+    expect(isHistoryEntryEligible("/epics/e1/unknown-tab", canvas)).toBe(false);
   });
 
   it("treats open Tasks (in openTabOrder) as eligible", () => {

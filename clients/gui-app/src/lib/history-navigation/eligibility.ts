@@ -1,17 +1,20 @@
-import type { EpicCanvasStore } from "@/stores/epics/canvas/store";
+import {
+  resolveTabIdForEpic,
+  type EpicCanvasStore,
+} from "@/stores/epics/canvas/store";
 import { parseEpicTabHref } from "@/lib/history-navigation/liveness";
 
 export type HistoryEligibilityState = Pick<
   EpicCanvasStore,
-  "tabsById" | "openTabOrder"
+  "activeTabId" | "mostRecentTabIdByEpicId" | "tabsById" | "openTabOrder"
 >;
 
 /**
  * Eligible back/forward target per the "skip closed Tasks" rule: the entry's
- * route isn't an epic-tab route, or its tab is open, or the tab is unknown to
- * `tabsById` (left to the liveness/prune path rather than this skip scan).
- * Only a tab present in `tabsById` but absent from `openTabOrder` - a closed
- * Task - is ineligible.
+ * route isn't an epic-tab route, its tab is open, or an unknown tab id would
+ * resolve to an open fallback tab for the same epic. Exact and fallback tabs
+ * that are currently closed are both ineligible; their history entries remain
+ * retained so reopening the tab makes them reachable again.
  */
 export function isHistoryEntryEligible(
   href: string,
@@ -22,7 +25,8 @@ export function isHistoryEntryEligible(
     return true;
   }
   if (state.tabsById[epicTab.tabId] === undefined) {
-    return true;
+    const fallbackTabId = resolveTabIdForEpic(state, epicTab.epicId);
+    return fallbackTabId !== null && state.openTabOrder.includes(fallbackTabId);
   }
   return state.openTabOrder.includes(epicTab.tabId);
 }
