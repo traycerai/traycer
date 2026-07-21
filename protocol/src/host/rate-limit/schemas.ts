@@ -3,7 +3,10 @@ import {
   DEFAULT_ACCOUNT_CONTEXT,
   accountContextSchema,
 } from "@traycer/protocol/common/schemas";
-import { providerIdSchema } from "@traycer/protocol/host/provider-schemas";
+import {
+  providerIdSchema,
+  providerIdSchemaV40,
+} from "@traycer/protocol/host/provider-schemas";
 
 // `host.getRateLimitUsage` v1.0 request: no fields. Non-strict on purpose so a
 // v1.1 client can Zod-strip its `accountContext` away when projecting the request
@@ -317,6 +320,37 @@ export const providerRateLimitsSchema = z.union([
   unavailableProviderRateLimitsSchemaV2,
 ]);
 export type ProviderRateLimits = z.infer<typeof providerRateLimitsSchema>;
+
+// Frozen pre-Hermes unavailable arm: same v2 reason enum, but `provider` is
+// pinned to `providerIdSchemaV40` (the harness/provider id set as shipped in
+// host-v1.1.7, before Hermes) so an already-shipped
+// `agent.getProviderProfileRateLimits@1.0` caller's strict decode never sees
+// `provider: "hermes"` in the `available: false` arm.
+const unavailableProviderRateLimitsSchemaV40 = z.object({
+  provider: providerIdSchemaV40,
+  available: z.literal(false),
+  reason: rateLimitUnavailableReasonSchemaV2,
+});
+
+/**
+ * Frozen pre-Hermes provider union - identical to the latest `providerRateLimitsSchema`
+ * except the `available: false` arm's `provider` is pinned to `providerIdSchemaV40`.
+ * Feeds only `agent.getProviderProfileRateLimits@1.0`'s frozen response (see
+ * `host/agent/profiles.ts`) so that already-shipped v1.0 line never receives a
+ * Hermes provider id; the v2.0 line of that method carries it via the live
+ * `providerRateLimitsSchema` above, with a v2->v1 downgrade bridge that fails
+ * closed for a Hermes rate-limit read instead of silently mis-decoding it. Do
+ * NOT widen this schema - extend the latest schema and use that v2 bridge
+ * instead.
+ */
+export const providerRateLimitsSchemaV40 = z.union([
+  codexRateLimitsSchema,
+  claudeCodeRateLimitsSchema,
+  openRouterRateLimitsSchema,
+  kiloCodeRateLimitsSchema,
+  unavailableProviderRateLimitsSchemaV40,
+]);
+export type ProviderRateLimitsV40 = z.infer<typeof providerRateLimitsSchemaV40>;
 
 // v1.2 response = v1.0/v1.1 flat aperture fields (unchanged) + a nullable
 // provider-account snapshot, frozen at the v1 reason enum (see

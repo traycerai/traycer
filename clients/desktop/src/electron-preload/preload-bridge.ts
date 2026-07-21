@@ -15,6 +15,7 @@ import { buildWindowsBridge } from "./windows-bridge";
 import { buildMenuBridge } from "./menu-bridge";
 import { buildSupportBridge } from "./support-bridge";
 import { buildAppUpdateBridge } from "./app-update-bridge";
+import { buildGlobalShortcutsBridge } from "./global-shortcuts-bridge";
 import { buildLifecycleBridge } from "./lifecycle-bridge";
 import { buildMigrationBridge } from "./migration-bridge";
 import { buildServiceBridge } from "./service-bridge";
@@ -66,6 +67,7 @@ contextBridge.exposeInMainWorld("runnerHost", {
   ...buildMenuBridge(),
   ...buildSupportBridge(),
   ...buildAppUpdateBridge(),
+  ...buildGlobalShortcutsBridge(),
   ...buildLifecycleBridge(),
   fileDrops: buildFileDropsBridge(nativeClipboardReadGate),
   service: buildServiceBridge(),

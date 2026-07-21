@@ -12,6 +12,7 @@ import {
   useEpicCanvasStore,
   useEpicTab,
 } from "@/stores/epics/canvas/store";
+import { isTileRefRecordLive } from "@/stores/epics/canvas/canvas-selectors";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import {
   useEpicArtifactRecords,
@@ -22,7 +23,6 @@ import {
 import { resolveAutoOpenTarget } from "@/lib/epic-auto-open";
 import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
 import { useCommentThreadsStore } from "@/stores/comments/comment-threads-store";
-import { isTileRefRecordBacked } from "@/stores/epics/canvas/tile-schema";
 import { getHistoryController } from "@/lib/persistent-history";
 import {
   areNestedFocusTargetsEqual,
@@ -380,23 +380,21 @@ export function useEpicRouteSynchronization(
   // sidebar's optimistic Y.Doc delete unmounts the row before the mutation's
   // per-call `onSuccess` can fire (TanStack Query v5 drops observer-attached
   // callbacks on unmount), so the close has to be driven by record→canvas
-  // sync rather than by mutation callbacks. Plain `terminal` tabs and
-  // `git-diff` tiles aren't backed by Y.Doc records; pending-create ids cover
-  // the optimistic-open window where a tab exists before its record has
-  // projected. Those local/non-artifact tabs are excluded.
+  // sync rather than by mutation callbacks. `isTileRefRecordLive` is the same
+  // predicate back/forward's preview-reopen path uses before restoring a
+  // closed tile, so "is this tile's record gone" is answered in one place.
   useEffect(() => {
     if (!snapshotLoaded) return;
     if (canvas.root === null) return;
-    const liveIds = new Set(records.map((r) => r.id));
+    const liveIds = new Set(records.map((record) => record.id));
+    const hasLiveRecord = (id: string) => liveIds.has(id);
     for (const pane of collectPanes(canvas.root)) {
       for (const instanceId of pane.tabInstanceIds) {
         const tab = canvas.tilesByInstanceId[instanceId];
         if (tab === undefined) continue;
-        // Renderer-only tiles (terminal, workspace-file, git-diff) have no
-        // Y.Doc-backed record, so a `liveIds` miss is not a deletion.
-        if (!isTileRefRecordBacked(tab)) continue;
-        if (liveIds.has(tab.id)) continue;
-        if (pendingCreateArtifactIds.has(tab.id)) continue;
+        if (isTileRefRecordLive(tab, pendingCreateArtifactIds, hasLiveRecord)) {
+          continue;
+        }
         closeCanvasTab(tabId, pane.id, tab.instanceId);
       }
     }

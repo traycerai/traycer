@@ -116,6 +116,8 @@ export const RunnerHostInvoke = {
   appUpdateSetAllowPrerelease: "runnerHost:appUpdate:setAllowPrerelease",
   appUpdateDownload: "runnerHost:appUpdate:download",
   appUpdateInstall: "runnerHost:appUpdate:install",
+  globalShortcutsGetSnapshot: "runnerHost:globalShortcuts:getSnapshot",
+  globalShortcutsSet: "runnerHost:globalShortcuts:set",
   systemPreferencesAccentColor: "runnerHost:systemPreferences:accentColor",
   systemPreferencesAppearance: "runnerHost:systemPreferences:appearance",
   systemPreferencesAccessibilityTheme:
@@ -240,6 +242,7 @@ export const RunnerHostEvent = {
   // window's gate/banner/Settings/tray stay in lockstep.
   hostControllerStatusChange: "runnerHost:event:host:controllerStatusChange",
   zoomChange: "runnerHost:event:zoom:change",
+  globalShortcutsChange: "runnerHost:event:globalShortcuts:change",
 } as const;
 
 /**
