@@ -704,7 +704,6 @@ export class HostController {
   private enqueueMutation<T>(
     kind: MutationKind,
     coalesceKey: string,
-    operationId: string | null,
     fn: () => Promise<MutationOutcome<T>>,
   ): Promise<MutationOutcome<T>> {
     const existing = this.inFlightMutations.get(coalesceKey);
@@ -714,7 +713,6 @@ export class HostController {
     const job = this.mutationTail.then(async () => {
       this.mutationStatus = {
         kind,
-        operationId,
         progress: null,
         startedAt: new Date().toISOString(),
       };
@@ -761,37 +759,9 @@ export class HostController {
         });
       }
     }
-    for (const listener of this.progressListenersWithKind) {
-      try {
-        listener(
-          progress,
-          this.mutationStatus.kind,
-          this.mutationStatus.operationId,
-        );
-      } catch (err) {
-        log.warn("[host-controller] mutation progress listener threw", {
-          err: describeError(err),
-        });
-      }
-    }
   }
 
-  // Legacy renderer shim support: IPC handlers that used to broadcast
-  // `cliOperationProgress` / `hostOperationStatusChange` themselves (the
-  // now-removed `trackHostOperation`) subscribe here for the duration of
-  // their own call to keep re-emitting those events, without the controller
-  // needing to know anything about IPC channels or renderer-minted
-  // operation ids. The compatibility listener preserves the older
-  // progress-only contract; the attributed listener carries the lane kind
-  // so the IPC shim cannot label a non-legacy mutation as a legacy one.
   private progressListeners = new Set<(progress: MutationProgress) => void>();
-  private progressListenersWithKind = new Set<
-    (
-      progress: MutationProgress,
-      kind: MutationKind,
-      operationId: string | null,
-    ) => void
-  >();
   private mutationStatusListeners = new Set<
     (status: MutationLaneStatus | null) => void
   >();
@@ -814,19 +784,6 @@ export class HostController {
     this.progressListeners.add(listener);
     return () => {
       this.progressListeners.delete(listener);
-    };
-  }
-
-  onMutationProgressWithKind(
-    listener: (
-      progress: MutationProgress,
-      kind: MutationKind,
-      operationId: string | null,
-    ) => void,
-  ): () => void {
-    this.progressListenersWithKind.add(listener);
-    return () => {
-      this.progressListenersWithKind.delete(listener);
     };
   }
 
@@ -1521,17 +1478,9 @@ export class HostController {
   async convergeReady(
     force: boolean,
   ): Promise<MutationOutcome<ConvergeReadyOk>> {
-    return this.convergeReadyForOperation(force, null);
-  }
-
-  async convergeReadyForOperation(
-    force: boolean,
-    operationId: string | null,
-  ): Promise<MutationOutcome<ConvergeReadyOk>> {
     return this.enqueueMutation<ConvergeReadyOk>(
       "ensure",
       `ensure:${force}`,
-      operationId,
       async () => {
         if (await isHostRemovedByUser()) {
           return { kind: "ok", value: { running: false, version: null } };
@@ -1992,14 +1941,6 @@ export class HostController {
     trigger: ApplyStagedTrigger,
     force: boolean,
   ): Promise<MutationOutcome<ApplyStagedOk>> {
-    return this.applyStagedForOperation(trigger, force, null);
-  }
-
-  applyStagedForOperation(
-    trigger: ApplyStagedTrigger,
-    force: boolean,
-    operationId: string | null,
-  ): Promise<MutationOutcome<ApplyStagedOk>> {
     // Fixup A6: reconcile BEFORE entering the exclusive mutation lane. The
     // ordering edge ("apply awaits any in-flight-or-due eligibility
     // reconcile for the staged version") still holds - it's just no longer
@@ -2035,7 +1976,6 @@ export class HostController {
           const outcome = await this.enqueueMutation<ApplyStagedOk>(
             "apply",
             `apply:${trigger}:${force}`,
-            operationId,
             async () => {
               if (trigger === "launch" && (await isHostRemovedByUser())) {
                 return {
@@ -2205,7 +2145,6 @@ export class HostController {
           const outcome = await this.enqueueMutation<ActivateInstalledOk>(
             "activate",
             `activate:${force}`,
-            null,
             async () => {
               // A ready update supersedes activation debt - prevents the
               // restart-old -> stamp -> restart-new double cycle. The reconcile
@@ -2305,18 +2244,9 @@ export class HostController {
     pin: string,
     force: boolean,
   ): Promise<MutationOutcome<InstallVersionOk>> {
-    return this.installVersionForOperation(pin, force, null);
-  }
-
-  async installVersionForOperation(
-    pin: string,
-    force: boolean,
-    operationId: string | null,
-  ): Promise<MutationOutcome<InstallVersionOk>> {
     return this.enqueueMutation<InstallVersionOk>(
       "install",
       `install:${pin}:${force}`,
-      operationId,
       async () => {
         // Explicit reinstall clears the removed-by-user sentinel (host-
         // removal-state.ts: "Cleared by an explicit reinstall").
@@ -2421,16 +2351,9 @@ export class HostController {
   // ---- registerService / deregisterService --------------------------------
 
   async registerService(): Promise<MutationOutcome<ServiceRegistrationOk>> {
-    return this.registerServiceForOperation(null);
-  }
-
-  async registerServiceForOperation(
-    operationId: string | null,
-  ): Promise<MutationOutcome<ServiceRegistrationOk>> {
     return this.enqueueMutation<ServiceRegistrationOk>(
       "register",
       "register",
-      operationId,
       async () => {
         if (await this.isPackagedMacOwned()) {
           const outcome = await withDesktopCliLock(
@@ -2527,7 +2450,6 @@ export class HostController {
     return this.enqueueMutation<ServiceRegistrationOk>(
       "deregister",
       "deregister",
-      null,
       async () => {
         if (await this.isPackagedMacOwned()) {
           const outcome = await withDesktopCliLock(
@@ -2567,7 +2489,6 @@ export class HostController {
     return this.enqueueMutation<ActivateInstalledOk>(
       "respawn",
       "respawn",
-      null,
       async () => {
         // Fixup B14: Remove Traycer may have persisted the removed-by-user
         // sentinel but failed/been interrupted mid-uninstall, leaving
@@ -2645,7 +2566,6 @@ export class HostController {
     return this.enqueueMutation<ActivateInstalledOk>(
       "recoverIfDown",
       "recoverIfDown",
-      null,
       async () => {
         const runningRuntimeVersion = await readRunningRuntimeVersion(
           this.layout,
@@ -2705,7 +2625,6 @@ export class HostController {
     return this.enqueueMutation<ActivateInstalledOk>(
       "freePortAndRestart",
       `freePortAndRestart:${pid}:${port}`,
-      null,
       async () => {
         if (await this.isPackagedMacOwned()) {
           if (pid !== null && port !== null) {
@@ -2766,7 +2685,6 @@ export class HostController {
     return this.enqueueMutation<UninstallOk>(
       "uninstallHost",
       `uninstallHost:${all}`,
-      null,
       async () => {
         if (all && (await this.isPackagedMacOwned())) {
           const outcome = await withDesktopCliLock(
@@ -2816,7 +2734,6 @@ export class HostController {
     return this.enqueueMutation<RemoveTraycerOk>(
       "removeTraycer",
       "removeTraycer",
-      null,
       async () => {
         // The abort asks the child to exit; wait for the stream's `close`
         // before unregistering or uninstalling, and let queued automatic

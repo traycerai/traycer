@@ -115,6 +115,10 @@ import {
   HostController,
   type HostControllerHostLifecycle,
 } from "../host-controller";
+import type {
+  MutationLaneStatus,
+  MutationProgress,
+} from "../host-controller-types";
 import { getHostFsLayout, cliLockPath } from "../host-paths";
 import { DEV_DESKTOP_SLOT_ENV } from "../dev-desktop-slot";
 import { acquireDesktopCliLock } from "../desktop-cli-lock";
@@ -588,7 +592,7 @@ describe("mutation lane: wait-never-reject", () => {
     ]);
   });
 
-  it("F9: carries the IPC operation identity on the actual apply lane status and progress", async () => {
+  it("pushes the real apply lane's start, progress, and immediate settlement", async () => {
     const controller = newController("production");
     writeInstallRecord("production", {
       version: "1.7.0",
@@ -602,16 +606,14 @@ describe("mutation lane: wait-never-reject", () => {
       startedAt: "2026-01-01T00:00:00.000Z",
       reason: "ready",
     });
-    const statuses: Array<{ readonly operationId: string | null }> = [];
-    const progressOperationIds: Array<string | null> = [];
+    const statuses: Array<MutationLaneStatus | null> = [];
+    const progresses: MutationProgress[] = [];
     const unsubscribeStatus = controller.onMutationStatus((status) => {
-      if (status !== null) statuses.push({ operationId: status.operationId });
+      statuses.push(status);
     });
-    const unsubscribeProgress = controller.onMutationProgressWithKind(
-      (_progress, _kind, operationId) => {
-        progressOperationIds.push(operationId);
-      },
-    );
+    const unsubscribeProgress = controller.onMutationProgress((progress) => {
+      progresses.push(progress);
+    });
     vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
       availableSnapshotFixture("1.8.0", ["1.8.0"]),
     );
@@ -635,17 +637,22 @@ describe("mutation lane: wait-never-reject", () => {
       };
     });
 
-    const outcome = await controller.applyStagedForOperation(
-      "manual",
-      false,
-      "renderer-update",
-    );
+    const outcome = await controller.applyStaged("manual", false);
     unsubscribeProgress();
     unsubscribeStatus();
 
     expect(outcome.kind).toBe("ok");
-    expect(statuses).toContainEqual({ operationId: "renderer-update" });
-    expect(progressOperationIds).toEqual(["renderer-update"]);
+    expect(statuses).toEqual([
+      expect.objectContaining({ kind: "apply", progress: null }),
+      expect.objectContaining({
+        kind: "apply",
+        progress: expect.objectContaining({ stage: "apply", percent: 50 }),
+      }),
+      null,
+    ]);
+    expect(progresses).toEqual([
+      expect.objectContaining({ stage: "apply", percent: 50 }),
+    ]);
   });
 });
 

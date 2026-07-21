@@ -210,7 +210,6 @@ describe("host update - shared state across the banner and Settings → Host", (
           ...READY_STATUS,
           mutation: {
             kind: "apply",
-            operationId: "op-1",
             progress: {
               stage: "download",
               percent: 37,
@@ -274,7 +273,6 @@ describe("host update - shared state across the banner and Settings → Host", (
           ...READY_STATUS,
           mutation: {
             kind: "apply",
-            operationId: "op-2",
             progress: null,
             startedAt: "2026-05-15T00:00:00Z",
           },

@@ -215,7 +215,6 @@ export function formatProgressKind(kind: MutationKind): string {
     case "deregister":
       return "Deregistering service";
     case "respawn":
-    case "restart":
       return "Restarting host";
     case "recoverIfDown":
       return "Recovering host";

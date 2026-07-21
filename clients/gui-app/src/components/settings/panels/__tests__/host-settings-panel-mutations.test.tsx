@@ -178,7 +178,6 @@ describe("<HostSettingsPanel /> - mutation flows", () => {
           download: null,
           mutation: {
             kind: "ensure",
-            operationId: "op-1",
             progress: {
               stage: "download",
               percent: 42,

@@ -13,7 +13,6 @@ export type MutationKind =
   | "respawn"
   | "recoverIfDown"
   | "freePortAndRestart"
-  | "restart"
   | "uninstallHost"
   | "removeTraycer";
 
@@ -27,9 +26,6 @@ export interface MutationProgress {
 
 export interface MutationLaneStatus {
   readonly kind: MutationKind;
-  /** Renderer operation identity when this mutation originated from a
-   * legacy IPC request; `null` for controller-only work such as launch. */
-  readonly operationId: string | null;
   readonly progress: MutationProgress | null;
   readonly startedAt: string;
 }
