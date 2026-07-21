@@ -99,6 +99,7 @@ const PROVIDER_DESCRIPTIONS: Record<ProviderId, string> = {
   devin:
     "Devin agent - Cognition's coding CLI via Windsurf/Devin login or API key.",
   pi: "Pi agent - pi.dev coding agent via your configured model API key (BYOK).",
+  hermes: "Hermes Agent - Nous Research's coding CLI via your Hermes account.",
 };
 
 function hasPendingProviderProbe(

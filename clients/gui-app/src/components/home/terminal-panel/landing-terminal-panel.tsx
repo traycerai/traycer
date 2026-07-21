@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type ReactNode,
+  type TransitionEvent as ReactTransitionEvent,
 } from "react";
 import { useIsMutating } from "@tanstack/react-query";
 import {
@@ -31,17 +32,20 @@ import { getSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import {
   pointerDragHandleAxisClassName,
   usePointerDragCommit,
+  type PointerDragSliderProps,
 } from "@/components/epic-canvas/canvas/use-pointer-drag-commit";
 import { useHomeWorkspaceSource } from "@/components/home/host-workspace-selector/use-home-workspace-source";
 import { usePickAndAddWorkspaceFolders } from "@/components/home/host-workspace-selector/use-pick-and-add-folders";
 import type { WorktreeStagingKey } from "@/stores/worktree/worktree-intent-staging-store";
 import { workspaceMutationKeys } from "@/lib/query-keys";
 import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
+import { isPanelResizeInteractionActive } from "@/lib/layout/panel-resizing-class";
 import { focusActiveComposer } from "@/lib/composer/composer-focus-registry";
 import {
   clearPendingTerminalFocus,
   focusTerminalInstance,
 } from "@/lib/terminals/terminal-focus-registry";
+import { reconcileXtermHostAfterLayoutTransition } from "@/components/epic-canvas/renderers/xterm-host-registry";
 import { cn } from "@/lib/utils";
 import {
   DEFAULT_LANDING_TERMINAL_PANEL_WIDTH_FRACTION,
@@ -347,9 +351,15 @@ interface LandingTerminalPanelContentsProps {
 function LandingTerminalPanelContents(
   props: LandingTerminalPanelContentsProps,
 ): ReactNode {
-  const sliderProps = useLandingTerminalPanelResize({
+  const panelRef = useRef<HTMLElement | null>(null);
+  const scheduleTerminalLayoutReconcile = useLandingTerminalLayoutReconcile({
+    panelOpen: props.panelOpen,
+    activeInstanceId: props.activeInstanceId,
+  });
+  const { sliderProps, isDragging } = useLandingTerminalPanelResize({
     panelWidthFraction: props.panelWidthFraction,
     setPanelWidthFraction: props.onSetPanelWidthFraction,
+    onLayoutSettled: scheduleTerminalLayoutReconcile,
   });
   const createDisabledReason = landingTerminalCreateDisabledReason(
     props.availability,
@@ -374,6 +384,35 @@ function LandingTerminalPanelContents(
   const panelStyle = props.maximized
     ? undefined
     : { width: props.panelOpen ? `${props.panelWidthFraction * 100}%` : "0%" };
+  const handlePanelTransitionEnd = useCallback(
+    (event: ReactTransitionEvent<HTMLElement>): void => {
+      if (event.target !== event.currentTarget) return;
+      if (event.propertyName !== "width") return;
+      if (!props.panelOpen) return;
+      scheduleTerminalLayoutReconcile();
+    },
+    [props.panelOpen, scheduleTerminalLayoutReconcile],
+  );
+  const handlePanelTransitionCancel = useCallback(
+    (event: TransitionEvent): void => {
+      if (event.target !== panelRef.current) return;
+      if (event.propertyName !== "width") return;
+      if (!props.panelOpen || isDragging()) return;
+      scheduleTerminalLayoutReconcile();
+    },
+    [isDragging, props.panelOpen, scheduleTerminalLayoutReconcile],
+  );
+  useEffect(() => {
+    const panel = panelRef.current;
+    if (panel === null) return;
+    panel.addEventListener("transitioncancel", handlePanelTransitionCancel);
+    return () => {
+      panel.removeEventListener(
+        "transitioncancel",
+        handlePanelTransitionCancel,
+      );
+    };
+  }, [handlePanelTransitionCancel]);
 
   return (
     <>
@@ -401,6 +440,7 @@ function LandingTerminalPanelContents(
         )}
       />
       <aside
+        ref={panelRef}
         data-landing-terminal-panel
         data-testid="landing-terminal-panel"
         data-open={props.panelOpen ? "true" : "false"}
@@ -415,6 +455,7 @@ function LandingTerminalPanelContents(
           props.maximized && "absolute inset-0 z-20 w-full",
         )}
         style={panelStyle}
+        onTransitionEnd={handlePanelTransitionEnd}
       >
         <LandingTerminalPanelHeader
           maximized={props.maximized}
@@ -809,11 +850,19 @@ function isLandingTerminalPanelElement(
 interface LandingTerminalPanelResizeArgs {
   readonly panelWidthFraction: number;
   readonly setPanelWidthFraction: (fraction: number) => void;
+  readonly onLayoutSettled: () => void;
 }
 
-function useLandingTerminalPanelResize(args: LandingTerminalPanelResizeArgs) {
+interface LandingTerminalPanelResizeResult {
+  readonly sliderProps: PointerDragSliderProps;
+  readonly isDragging: () => boolean;
+}
+
+function useLandingTerminalPanelResize(
+  args: LandingTerminalPanelResizeArgs,
+): LandingTerminalPanelResizeResult {
   const dragRef = useRef<LandingTerminalDragState | null>(null);
-  return usePointerDragCommit({
+  const sliderProps = usePointerDragCommit({
     axis: "horizontal",
     onDragStart: (event) => {
       const panel = event.currentTarget.nextElementSibling;
@@ -850,18 +899,67 @@ function useLandingTerminalPanelResize(args: LandingTerminalPanelResizeArgs) {
       dragRef.current = null;
       if (drag === null) return;
       args.setPanelWidthFraction(drag.latestFraction);
+      args.onLayoutSettled();
     },
     onDragCancel: () => {
       const drag = dragRef.current;
       dragRef.current = null;
       if (drag === null) return;
       drag.panel.style.width = drag.initialWidth;
+      args.onLayoutSettled();
     },
     onReset: () => {
       args.setPanelWidthFraction(DEFAULT_LANDING_TERMINAL_PANEL_WIDTH_FRACTION);
+      args.onLayoutSettled();
     },
     onKeyNudge: (direction) => {
       args.setPanelWidthFraction(args.panelWidthFraction - direction * 0.03);
+      args.onLayoutSettled();
     },
   });
+  const isDragging = useCallback((): boolean => dragRef.current !== null, []);
+  return { sliderProps, isDragging };
+}
+
+function useLandingTerminalLayoutReconcile(args: {
+  readonly panelOpen: boolean;
+  readonly activeInstanceId: string | null;
+}): () => void {
+  const frameRef = useRef<number | null>(null);
+  const previousPanelOpenRef = useRef(args.panelOpen);
+  const cancelScheduledReconcile = useCallback((): void => {
+    if (frameRef.current === null) return;
+    window.cancelAnimationFrame(frameRef.current);
+    frameRef.current = null;
+  }, []);
+  const scheduleReconcile = useCallback((): void => {
+    cancelScheduledReconcile();
+    if (!args.panelOpen || args.activeInstanceId === null) return;
+    const instanceId = args.activeInstanceId;
+    frameRef.current = window.requestAnimationFrame(() => {
+      frameRef.current = null;
+      reconcileXtermHostAfterLayoutTransition(instanceId);
+    });
+  }, [args.activeInstanceId, args.panelOpen, cancelScheduledReconcile]);
+
+  useEffect(() => {
+    const reopened = args.panelOpen && !previousPanelOpenRef.current;
+    previousPanelOpenRef.current = args.panelOpen;
+    // A normal reveal reconciles on its final width transition. If another
+    // resize has globally suppressed transitions, the panel jumps straight to
+    // its target width and needs the next-frame fallback instead. An active-tab
+    // change while already open also lands here, including a delayed
+    // reconciliation that selects a different terminal after reveal.
+    if (args.panelOpen && (!reopened || isPanelResizeInteractionActive())) {
+      scheduleReconcile();
+    }
+    return cancelScheduledReconcile;
+  }, [
+    args.activeInstanceId,
+    args.panelOpen,
+    cancelScheduledReconcile,
+    scheduleReconcile,
+  ]);
+
+  return scheduleReconcile;
 }

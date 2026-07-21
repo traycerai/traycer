@@ -21,6 +21,7 @@ import { findPaneById } from "./tile-tree";
 import { EMPTY_CANVAS } from "./canvas-state";
 import { findPaneTabByContentId } from "./actions";
 import { EMPTY_RECORDS } from "./canvas-desktop-projection";
+import { isTileRefRecordBacked } from "./tile-schema";
 import {
   resolveTabIdForEpic,
   useEpicCanvasStore,
@@ -109,6 +110,33 @@ export function useEpicArtifactRecords(
     [epicId],
   );
   return useEpicCanvasStore(selector);
+}
+
+/**
+ * Whether `ref`'s backing artifact record is still live: not a record-backed
+ * kind at all (terminal, workspace-file, git-diff - nothing to go stale),
+ * still within the optimistic-create window (`pendingCreateArtifactIds`,
+ * before a just-created record has projected), or `hasLiveRecord` finds it.
+ *
+ * `hasLiveRecord` is a caller-supplied presence check rather than a fixed
+ * records array, because the two consumers reach live record data through
+ * genuinely different paths: `useEpicRouteSynchronization`'s cleanup effect
+ * (closes an OPEN tile whose record disappeared) has a React-context-bound
+ * live records array in hand, while the back/forward preview-reopen path
+ * (must not resurrect a CLOSED tile whose record disappeared while it was
+ * closed) has only an epicId and looks the session up imperatively via the
+ * open-Epic session registry. Sharing this predicate keeps the "record-
+ * backed + pending-create-exempt" decision itself from drifting between the
+ * two - only the presence lookup differs.
+ */
+export function isTileRefRecordLive(
+  ref: EpicCanvasTileRef,
+  pendingCreateArtifactIds: ReadonlySet<string>,
+  hasLiveRecord: (id: string) => boolean,
+): boolean {
+  if (!isTileRefRecordBacked(ref)) return true;
+  if (pendingCreateArtifactIds.has(ref.id)) return true;
+  return hasLiveRecord(ref.id);
 }
 
 export function makeSelectEpicCanvas(tabId: string | undefined) {

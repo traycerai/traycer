@@ -14,6 +14,7 @@ import { TerminalXtermHost } from "@/components/epic-canvas/renderers/terminal-t
 import {
   __disposeAllXtermHostsForTests,
   __getXtermHostEntryForTests,
+  reconcileXtermHostAfterLayoutTransition,
 } from "@/components/epic-canvas/renderers/xterm-host-registry";
 import { useFindInPageStore } from "@/stores/find-in-page/find-in-page-store";
 import { useTerminalFindStore } from "@/stores/find-in-page/terminal-find-store";
@@ -366,6 +367,36 @@ describe("<TerminalXtermHost /> terminal find", () => {
     rendered.unmount();
     expect(() => vi.runAllTimers()).not.toThrow();
     expect(xtermMocks.terminals[0].isDisposed()).toBe(true);
+  });
+
+  it("reconciles a registered engine after a layout transition and ignores a missing one", () => {
+    render(
+      <TerminalXtermHost
+        sessionId="test-session"
+        tileKind="terminal"
+        instanceId="test-instance"
+        effectiveCols={80}
+        effectiveRows={24}
+        onUserInput={vi.fn()}
+        onContainerResize={vi.fn()}
+        onWriterReady={vi.fn()}
+        shouldFocusOnActivePane={false}
+        findTargetId={null}
+        keepAlive={false}
+        chrome="padded"
+      />,
+    );
+    const entry = __getXtermHostEntryForTests("test-instance");
+    if (entry === null) throw new Error("Expected a registered xterm engine");
+    const reconcile = vi.spyOn(entry.controls, "reconcileWithHost");
+
+    reconcileXtermHostAfterLayoutTransition("test-instance");
+
+    expect(reconcile).toHaveBeenCalledOnce();
+    expect(reconcile).toHaveBeenCalledWith(entry.term.cols, entry.term.rows);
+    expect(() =>
+      reconcileXtermHostAfterLayoutTransition("missing-instance"),
+    ).not.toThrow();
   });
 
   it("clears the glyph atlas before refreshing when a hidden pane becomes visible", () => {

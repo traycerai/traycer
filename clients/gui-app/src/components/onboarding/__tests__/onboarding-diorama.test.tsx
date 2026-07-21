@@ -43,6 +43,7 @@ describe("OnboardingDiorama", () => {
       "Amp",
       "Devin",
       "Pi",
+      "Hermes Agent",
     ];
     const textOrEmpty = (text: string | null): string => text ?? "";
 

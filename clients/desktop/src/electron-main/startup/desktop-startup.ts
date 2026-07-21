@@ -1,4 +1,4 @@
-import { app, nativeImage, type BrowserWindow } from "electron";
+import { app, nativeImage } from "electron";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { initLogger, log } from "../app/logger";
@@ -56,7 +56,10 @@ import {
   maybePromptRelocateToApplications,
   UPDATE_BLOCKED_LOCATION_REASON,
 } from "../app/relocate-to-applications";
-import { WindowRegistry } from "../windows/window-registry";
+import {
+  WindowRegistry,
+  type RegistryManagedWindow,
+} from "../windows/window-registry";
 import {
   DesktopStateStore,
   resolveDesktopStateFilePath,
@@ -120,7 +123,14 @@ import {
   readDisplayTopology,
 } from "../app/screen-monitor";
 import { hardenDefaultSession } from "../app/security";
-import { registerGlobalShortcuts } from "../app/shortcuts";
+import {
+  getRegisteredAccelerator,
+  initGlobalShortcutsRegistry,
+  onGlobalShortcutsChange,
+  reconcileGlobalShortcuts,
+  type ShortcutTargetWindow,
+} from "../app/shortcuts";
+import { hydrateGlobalShortcutIntents } from "../app/global-shortcuts-preferences";
 import { enableSpellCheck } from "../app/spell-check";
 import { installWindowsJumplistTasks } from "../app/recent-documents";
 import {
@@ -357,6 +367,9 @@ async function runOnReady(state: BootState): Promise<void> {
     timed("on-ready", "preconnect", () => preconnectTraycerHosts()),
     timed("on-ready", "gpu-info", () => logGpuInfo()),
     timed("on-ready", "crash-dump-prune", () => pruneStaleCrashDumps()),
+    timed("on-ready", "global-shortcuts-preferences", () =>
+      hydrateGlobalShortcutIntents().then(() => undefined),
+    ),
   ]);
 }
 
@@ -759,13 +772,28 @@ function runDeferredBackground(state: BootState, services: AppServices): void {
     maybePromptRelocateToApplications(),
   );
 
-  void timed("deferred", "global-shortcuts", () =>
-    registerGlobalShortcuts(() => {
-      const records = services.windowRegistry.records();
-      if (records.length === 0) return null;
-      return records[0].window;
-    }),
-  );
+  void timed("deferred", "global-shortcuts", async () => {
+    const shortcutTargetWindow = createMruWindowProxy(services.windowRegistry);
+    initGlobalShortcutsRegistry(() => shortcutTargetWindow);
+    const applyTrayAccelerator = (): void => {
+      state.bridge?.options.tray?.setSummonAccelerator(
+        getRegisteredAccelerator("summon"),
+      );
+    };
+    // The tray's accelerator display and the IPC fan-out (`global-shortcuts-ipc.ts`)
+    // are independent subscribers to the same reconcile() output - decoupled the
+    // same way host-registry updates reach both the menu/tray and the renderer.
+    state.bridge?.disposeFns.push(
+      onGlobalShortcutsChange(applyTrayAccelerator),
+    );
+    const snapshot = await reconcileGlobalShortcuts({});
+    applyTrayAccelerator();
+    if (snapshot.statuses.summon.status === "rejected") {
+      log.warn("[global-shortcuts] summon shortcut refused at launch", {
+        effectiveChord: snapshot.statuses.summon.effectiveChord,
+      });
+    }
+  });
 
   void timed("deferred", "power-monitor", () =>
     // Bridge the OS wake pulse to every renderer so it force-reconnects its
@@ -1051,21 +1079,42 @@ async function createTraySafe(
   }
 }
 
-function createMruWindowProxy(registry: WindowRegistry): TrayManagedWindow {
-  const current = (): BrowserWindow | null =>
-    registry.getMruRecord()?.window ?? null;
+// Shared by the tray (`TrayManagedWindow`) and the global-shortcuts registry
+// (`ShortcutTargetWindow`, decision 10 in the tech plan: the summon action
+// resolves via `focusMru()` rather than the registry's first-inserted
+// record) - both just need "the window the user last used", so one proxy
+// backs both call sites. Exported so tests can exercise this exact proxy
+// against a real `WindowRegistry` instead of a hand-rolled copy. Generic over
+// `TWindow` (rather than hardcoding the default `BrowserWindow`) so a test's
+// `WindowRegistry<FakeRegistryWindow>` can be passed directly - the bound is
+// exactly the surface this function actually calls, nothing Electron-specific.
+export function createMruWindowProxy<
+  TWindow extends RegistryManagedWindow & {
+    isMinimized(): boolean;
+    restore(): void;
+  },
+>(registry: WindowRegistry<TWindow>): TrayManagedWindow & ShortcutTargetWindow {
+  const current = (): TWindow | null => registry.getMruRecord()?.window ?? null;
   return {
     isDestroyed: () => {
       const window = current();
       return window === null || window.isDestroyed();
     },
     isVisible: () => current()?.isVisible() ?? false,
+    isMinimized: () => current()?.isMinimized() ?? false,
     show: () => {
       const window = current();
       if (window === null || window.isDestroyed()) {
         return;
       }
       window.show();
+    },
+    restore: () => {
+      const window = current();
+      if (window === null || window.isDestroyed()) {
+        return;
+      }
+      window.restore();
     },
     focus: () => {
       registry.focusMru();
