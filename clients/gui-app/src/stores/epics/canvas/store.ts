@@ -352,7 +352,8 @@ export interface EpicCanvasStore {
    * its ORIGINAL `instanceId` (not a fresh one) so a landing history href
    * addressing that exact instanceId resolves directly after the reopen.
    * Evicts the now-live entry from `closedTilePayloadsByTabId` - a later
-   * close re-captures it. Back/forward's preview-reopen path
+   * close re-captures it - and restores its pending-create marker while the
+   * optimistic record is still projecting. Back/forward's preview-reopen path
    * (`history-navigation.ts`) is the only caller.
    */
   restoreClosedTilePreview: (
@@ -1512,13 +1513,17 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
       restoreClosedTilePreview: (tabId, preferredPaneId, node) => {
         set((state) => {
           const forTab = state.closedTilePayloadsByTabId[tabId];
+          const restoredPayload = forTab?.[node.instanceId];
           const withoutRestored =
-            forTab === undefined || forTab[node.instanceId] === undefined
+            forTab === undefined || restoredPayload === undefined
               ? state.closedTilePayloadsByTabId
               : {
                   ...state.closedTilePayloadsByTabId,
                   [tabId]: withoutClosedTilePayload(forTab, node.instanceId),
                 };
+          const pendingCreateArtifactIds = restoredPayload?.pendingCreate
+            ? withId(state.pendingCreateArtifactIds, node.id)
+            : state.pendingCreateArtifactIds;
           // Strip the entry being restored BEFORE the canvas update runs its
           // own eviction-capture: capturing against a map that still counts
           // the restored entry can push a same-transaction preview eviction
@@ -1527,6 +1532,7 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
           const baseState = {
             ...state,
             closedTilePayloadsByTabId: withoutRestored,
+            pendingCreateArtifactIds,
           };
           const canvasUpdate = updateTabCanvas(baseState, tabId, (canvas) =>
             restoreTilePreviewCanvas(canvas, node, preferredPaneId),
@@ -1536,7 +1542,9 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
               ? state
               : { closedTilePayloadsByTabId: withoutRestored };
           }
-          return canvasUpdate;
+          return pendingCreateArtifactIds === state.pendingCreateArtifactIds
+            ? canvasUpdate
+            : { ...canvasUpdate, pendingCreateArtifactIds };
         });
       },
 

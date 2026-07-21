@@ -796,6 +796,11 @@ describe("goBack / goForward — preview-reopen closed sub-tabs", () => {
     goBack({ history });
 
     expect(requirePreviewTabId(tabId)).toBe(SPEC_A.instanceId);
+    // The restored tile must regain its pending marker so record-to-canvas
+    // synchronization does not immediately close it before projection.
+    expect(
+      useEpicCanvasStore.getState().pendingCreateArtifactIds.has(SPEC_A.id),
+    ).toBe(true);
   });
 
   it("restores when the live session hasn't loaded its snapshot yet (can't prove the record is gone)", () => {
