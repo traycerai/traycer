@@ -164,7 +164,7 @@ export const PERSIST_STORES = [
     kind: "scoped",
   },
 
-  // ── Static zustand stores (19) ───────────────────────────────────────────
+  // ── Static zustand stores (20) ───────────────────────────────────────────
   { camelName: "onboarding", leaf: "onboarding", kind: "static" },
   { camelName: "commandPalette", leaf: "command-palette", kind: "static" },
   { camelName: "composerDraft", leaf: "composer-drafts", kind: "static" },
