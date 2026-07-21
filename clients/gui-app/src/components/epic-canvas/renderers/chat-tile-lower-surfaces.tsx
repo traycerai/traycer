@@ -68,6 +68,18 @@ export interface ChatLowerAccessState {
   readonly canAct: boolean;
 }
 
+/**
+ * Why the composer's send is blocked, for the send button's tooltip. `canAct`
+ * folds role and connection: a viewer can never act; a non-viewer with
+ * `canAct === false` means the chat stream is not open (host reconnecting
+ * after a drop / renderer resume).
+ */
+function chatSendDisabledHint(access: ChatLowerAccessState): string | null {
+  if (access.canAct) return null;
+  if (access.isViewer) return "You have view-only access to this chat";
+  return "Reconnecting to the host — sending is paused";
+}
+
 export interface ChatLowerTurnState {
   readonly activeTurnStatus: ChatActiveTurn["status"] | null;
   readonly stopDisabled: boolean;
@@ -445,6 +457,7 @@ function LiveChatComposer(props: {
       taskId={model.composer.nodeId}
       isActive={model.composer.isActive}
       sendDisabled={!model.access.canAct}
+      sendDisabledHint={chatSendDisabledHint(model.access)}
       mentionRoots={model.composer.mentionRoots}
       fallbackToGlobalMentionRoots={model.composer.fallbackToGlobalMentionRoots}
       currentEpicId={model.composer.currentEpicId}
