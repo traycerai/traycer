@@ -6,9 +6,13 @@ import {
 } from "@traycer/protocol/framework/index";
 import {
   agentConfigureRequestSchema,
+  agentConfigureRequestSchemaV20,
   agentConfigureResponseSchema,
+  agentConfigureDowngradeV20ToV10,
+  agentConfigureUpgradeV10ToV20,
   agentCreateDowngradeV20ToV10,
   agentCreateUpgradeV10ToV20,
+  agentCreateUpgradeV20ToV30,
   agentGetProviderProfileRateLimitsRequestSchema,
   agentGetProviderProfileRateLimitsResponseSchema,
   agentListProviderProfilesRequestSchema,
@@ -17,6 +21,7 @@ import {
   AMBIENT_PROFILE_ID_SENTINEL,
   concreteProfileSelectionSchema,
   createAgentRequestSchemaV20,
+  createAgentRequestSchemaV30,
   hostRpcRegistry,
   profileSelectionSchema,
 } from "@traycer/protocol/host/index";
@@ -119,6 +124,16 @@ const baseV1Request = {
   workspace: null,
 };
 
+const baseV2Request = {
+  ...baseV1Request,
+  profileSelection: { kind: "profile" as const, profileId: "profile-1" },
+};
+
+const baseV3Request = {
+  ...baseV2Request,
+  permissionMode: "full_access" as const,
+};
+
 describe("agent.create v1 <-> v2 profile-selection translation", () => {
   it("upgrades a v1.0 null profileId to inherit_sender", () => {
     const upgraded = agentCreateUpgradeV10ToV20.upgradeRequest({
@@ -126,6 +141,7 @@ describe("agent.create v1 <-> v2 profile-selection translation", () => {
       profileId: null,
     });
     expect(upgraded.profileSelection).toEqual({ kind: "inherit_sender" });
+    expect(upgraded).not.toHaveProperty("permissionMode");
   });
 
   it("upgrades a v1.0 profile id string to an explicit managed selection", () => {
@@ -141,7 +157,7 @@ describe("agent.create v1 <-> v2 profile-selection translation", () => {
 
   it("never silently downgrades ambient - it fails with actionable upgrade guidance, never profileId: null", () => {
     const downgraded = agentCreateDowngradeV20ToV10.downgradeRequest({
-      ...baseV1Request,
+      ...baseV2Request,
       profileSelection: { kind: "ambient" },
     });
     expect(downgraded.ok).toBe(false);
@@ -152,31 +168,31 @@ describe("agent.create v1 <-> v2 profile-selection translation", () => {
     expect(downgraded.error.message).not.toMatch(/or ambient/i);
   });
 
-  it("downgrades a v2.0 managed selection to the profile id string", () => {
+  it("preserves the released v2 -> v1 managed-profile downgrade", () => {
     const downgraded = agentCreateDowngradeV20ToV10.downgradeRequest({
-      ...baseV1Request,
+      ...baseV2Request,
       profileSelection: { kind: "profile", profileId: "profile-1" },
     });
-    expect(downgraded).toMatchObject({
+    expect(downgraded).toEqual({
       ok: true,
-      value: { profileId: "profile-1" },
+      value: { ...baseV1Request, profileId: "profile-1" },
     });
   });
 
-  it("downgrades a v2.0 compatibility-only inherit_sender selection to profileId: null", () => {
+  it("preserves the released v2 -> v1 sender-inheritance downgrade", () => {
     const downgraded = agentCreateDowngradeV20ToV10.downgradeRequest({
-      ...baseV1Request,
+      ...baseV2Request,
       profileSelection: { kind: "inherit_sender" },
     });
-    expect(downgraded).toMatchObject({
+    expect(downgraded).toEqual({
       ok: true,
-      value: { profileId: null },
+      value: { ...baseV1Request, profileId: null },
     });
   });
 
   it("never silently downgrades last_used - it fails with actionable upgrade guidance", () => {
     const downgraded = agentCreateDowngradeV20ToV10.downgradeRequest({
-      ...baseV1Request,
+      ...baseV2Request,
       profileSelection: { kind: "last_used" },
     });
     expect(downgraded.ok).toBe(false);
@@ -187,64 +203,58 @@ describe("agent.create v1 <-> v2 profile-selection translation", () => {
     expect(downgraded.error.message).not.toMatch(/or ambient/i);
   });
 
-  it("round-trips through the host registry (major 1 -> major 2 -> major 1)", () => {
+  it("upgrades released requests through v3 with compatibility-only permission inheritance", () => {
     const upgraded = upgradeRequestToVersion(
       hostRpcRegistry["agent.create"],
       { major: 1, minor: 0 },
-      { major: 2, minor: 0 },
+      { major: 3, minor: 0 },
       { ...baseV1Request, profileId: "profile-1" },
     );
     expect(upgraded.profileSelection).toEqual({
       kind: "profile",
       profileId: "profile-1",
     });
+    expect(upgraded.permissionMode).toBeNull();
 
-    const downgraded = downgradeRequestAcrossMajors(
-      hostRpcRegistry["agent.create"],
-      2,
-      1,
-      {
-        ...baseV1Request,
-        profileSelection: { kind: "profile", profileId: "profile-1" },
-      },
-    );
-    expect(downgraded).toMatchObject({
-      ok: true,
-      value: { profileId: "profile-1" },
-    });
-
-    // Explicit ambient has no v1.0-representable shape either, same as
-    // last_used - it must never silently project to profileId: null.
-    const ambientRejected = downgradeRequestAcrossMajors(
-      hostRpcRegistry["agent.create"],
-      2,
-      1,
-      { ...baseV1Request, profileSelection: { kind: "ambient" } },
-    );
-    expect(ambientRejected).toMatchObject({
-      ok: false,
-      error: { code: "DOWNGRADE_UNSUPPORTED" },
-    });
-
-    const lastUsedRejected = downgradeRequestAcrossMajors(
-      hostRpcRegistry["agent.create"],
-      2,
-      1,
-      { ...baseV1Request, profileSelection: { kind: "last_used" } },
-    );
-    expect(lastUsedRejected).toMatchObject({
-      ok: false,
-      error: { code: "DOWNGRADE_UNSUPPORTED" },
-    });
+    expect(
+      agentCreateUpgradeV20ToV30.upgradeRequest(baseV2Request).permissionMode,
+    ).toBeNull();
   });
 
-  it("accepts the v2.0 request shape directly", () => {
+  it("rejects v3 permission-mode downgrades to both released majors", () => {
+    const toV2 = downgradeRequestAcrossMajors(
+      hostRpcRegistry["agent.create"],
+      3,
+      2,
+      baseV3Request,
+    );
+    expect(toV2).toMatchObject({
+      ok: false,
+      error: { code: "DOWNGRADE_UNSUPPORTED" },
+    });
+    const toV1 = downgradeRequestAcrossMajors(
+      hostRpcRegistry["agent.create"],
+      3,
+      1,
+      baseV3Request,
+    );
+    expect(toV1).toMatchObject({
+      ok: false,
+      error: { code: "DOWNGRADE_UNSUPPORTED" },
+    });
+    if (!toV2.ok) expect(toV2.error.message).toContain("Upgrade the host");
+    if (!toV1.ok) expect(toV1.error.message).toContain("Upgrade the host");
+  });
+
+  it("keeps v2 frozen and requires permissionMode on v3", () => {
+    const parsedV2 = createAgentRequestSchemaV20.parse(baseV2Request);
+    expect(parsedV2).not.toHaveProperty("permissionMode");
+    expect(createAgentRequestSchemaV30.safeParse(baseV2Request).success).toBe(
+      false,
+    );
     expect(
-      createAgentRequestSchemaV20.safeParse({
-        ...baseV1Request,
-        profileSelection: { kind: "last_used" },
-      }).success,
-    ).toBe(true);
+      createAgentRequestSchemaV30.parse(baseV3Request).permissionMode,
+    ).toBe("full_access");
     // The frozen v1.0 shape carries `profileId`, not `profileSelection` - a
     // v2.0-shaped payload must not silently satisfy the v1.0 schema too.
     expect(
@@ -393,7 +403,7 @@ describe("agent.listProviderProfiles / agent.getProviderProfileRateLimits / agen
     ).toBe(false);
 
     expect(
-      agentConfigureRequestSchema.safeParse({
+      agentConfigureRequestSchemaV20.safeParse({
         epicId: "epic-1",
         senderAgentId: "agent-1",
         agentId: "agent-2",
@@ -405,6 +415,7 @@ describe("agent.listProviderProfiles / agent.getProviderProfileRateLimits / agen
         },
         reasoningEffort: "high",
         fastMode: false,
+        permissionMode: "full_access",
       }).success,
     ).toBe(false);
   });
@@ -443,18 +454,46 @@ describe("agent.listProviderProfiles / agent.getProviderProfileRateLimits / agen
   });
 
   it("accepts the agent.configure request/response shapes", () => {
+    const legacyRequest = agentConfigureRequestSchema.parse({
+      epicId: "epic-1",
+      senderAgentId: "agent-1",
+      agentId: "agent-2",
+      harnessId: "claude",
+      model: "opus-4.7",
+      profileSelection: { kind: "profile", profileId: "profile-1" },
+      reasoningEffort: "high",
+      fastMode: false,
+    });
+    expect(legacyRequest).not.toHaveProperty("permissionMode");
+
+    const request = agentConfigureRequestSchemaV20.parse({
+      ...legacyRequest,
+      permissionMode: "full_access",
+    });
+    expect(request).toMatchObject({
+      agentId: "agent-2",
+      harnessId: "claude",
+      permissionMode: "full_access",
+    });
     expect(
-      agentConfigureRequestSchema.parse({
-        epicId: "epic-1",
-        senderAgentId: "agent-1",
-        agentId: "agent-2",
-        harnessId: "claude",
-        model: "opus-4.7",
-        profileSelection: { kind: "profile", profileId: "profile-1" },
-        reasoningEffort: "high",
-        fastMode: false,
-      }),
-    ).toMatchObject({ agentId: "agent-2", harnessId: "claude" });
+      agentConfigureRequestSchemaV20.parse({
+        ...request,
+        permissionMode: "supervised",
+      }).permissionMode,
+    ).toBe("supervised");
+    expect(
+      agentConfigureRequestSchemaV20.safeParse(legacyRequest).success,
+    ).toBe(false);
+
+    const upgraded =
+      agentConfigureUpgradeV10ToV20.upgradeRequest(legacyRequest);
+    expect(upgraded.permissionMode).toBeNull();
+    const downgraded =
+      agentConfigureDowngradeV20ToV10.downgradeRequest(request);
+    expect(downgraded).toMatchObject({
+      ok: false,
+      error: { code: "DOWNGRADE_UNSUPPORTED" },
+    });
 
     expect(
       agentConfigureResponseSchema.parse({
@@ -529,18 +568,27 @@ describe("optional-method capability negotiation", () => {
       split.optionalManifest["agent.getProviderProfileRateLimits"],
     ).toEqual({ major: 1, minor: 0 });
     expect(split.optionalManifest["agent.configure"]).toEqual({
-      major: 1,
+      major: 2,
       minor: 0,
     });
   });
 
-  it("keeps agent.create registered on the released floor at v1.0, with v2.0 as an additive major", () => {
+  it("keeps released agent.create majors frozen and advertises v3.0", () => {
     expect(RELEASED_FLOOR_METHOD_NAMES).toContain("agent.create");
     expect(
       hostRpcRegistry["agent.create"][1].versions[0].contract.schemaVersion,
     ).toEqual({ major: 1, minor: 0 });
     expect(
       hostRpcRegistry["agent.create"][2].versions[0].contract.schemaVersion,
+    ).toEqual({ major: 2, minor: 0 });
+    expect(
+      hostRpcRegistry["agent.create"][3].versions[0].contract.schemaVersion,
+    ).toEqual({ major: 3, minor: 0 });
+    expect(
+      hostRpcRegistry["agent.configure"][1].versions[0].contract.schemaVersion,
+    ).toEqual({ major: 1, minor: 0 });
+    expect(
+      hostRpcRegistry["agent.configure"][2].versions[0].contract.schemaVersion,
     ).toEqual({ major: 2, minor: 0 });
   });
 });

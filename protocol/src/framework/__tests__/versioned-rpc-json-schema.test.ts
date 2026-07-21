@@ -402,7 +402,9 @@ describe("toJsonSchemas", () => {
 
 describe("validateVersionedRpcRegistry (Zod-level compatibility)", () => {
   it("accepts the echo fixture end-to-end", () => {
-    expect(() => validateVersionedRpcRegistry(makeEchoRegistry())).not.toThrow();
+    expect(() =>
+      validateVersionedRpcRegistry(makeEchoRegistry()),
+    ).not.toThrow();
   });
 
   it("tolerates minors that widen a field's scope without dropping it", () => {
@@ -489,8 +491,14 @@ describe("validateVersionedRpcRegistry (Zod-level compatibility)", () => {
     const additiveV20 = defineRpcContract({
       method: "additive",
       schemaVersion: { major: 2, minor: 0 } as const,
-      requestSchema: z.object({ text: z.string(), extra: z.boolean() }),
-      responseSchema: z.object({ ok: z.boolean(), more: z.string() }),
+      requestSchema: z.object({
+        text: z.string(),
+        extra: z.boolean().optional(),
+      }),
+      responseSchema: z.object({
+        ok: z.boolean(),
+        more: z.string().optional(),
+      }),
     });
     const additiveUpgrade = defineUpgradePath<
       typeof additiveV10,
@@ -529,6 +537,53 @@ describe("validateVersionedRpcRegistry (Zod-level compatibility)", () => {
     );
   });
 
+  it("accepts a major bump that adds a newly required field", () => {
+    const requiredV10 = defineRpcContract({
+      method: "required",
+      schemaVersion: { major: 1, minor: 0 } as const,
+      requestSchema: z.object({ text: z.string() }),
+      responseSchema: z.object({ ok: z.boolean() }),
+    });
+    const requiredV20 = defineRpcContract({
+      method: "required",
+      schemaVersion: { major: 2, minor: 0 } as const,
+      requestSchema: z.object({ text: z.string(), mode: z.string() }),
+      responseSchema: z.object({ ok: z.boolean() }),
+    });
+    const requiredUpgrade = defineUpgradePath<
+      typeof requiredV10,
+      typeof requiredV20
+    >({
+      from: requiredV10.schemaVersion,
+      to: requiredV20.schemaVersion,
+      upgradeRequest: (request) => ({ ...request, mode: "legacy" }),
+      upgradeResponse: (response) => response,
+    });
+    const registry = {
+      required: {
+        1: {
+          latestMinor: 0,
+          versions: {
+            0: { contract: requiredV10, upgradeFromPreviousVersion: null },
+          },
+          downgradePathsFromLatest: {},
+        },
+        2: {
+          latestMinor: 0,
+          versions: {
+            0: {
+              contract: requiredV20,
+              upgradeFromPreviousVersion: requiredUpgrade,
+            },
+          },
+          downgradePathsFromLatest: {},
+        },
+      },
+    } as const;
+
+    expect(() => validateVersionedRpcRegistry(registry)).not.toThrow();
+  });
+
   it("accepts major bumps that narrow a previously-nullable field", () => {
     const narrowV10 = defineRpcContract({
       method: "narrow",
@@ -542,12 +597,14 @@ describe("validateVersionedRpcRegistry (Zod-level compatibility)", () => {
       requestSchema: z.object({ locale: z.string() }),
       responseSchema: z.object({ ok: z.boolean() }),
     });
-    const narrowUpgrade = defineUpgradePath<typeof narrowV10, typeof narrowV20>({
-      from: narrowV10.schemaVersion,
-      to: narrowV20.schemaVersion,
-      upgradeRequest: (request) => ({ locale: request.locale ?? "en" }),
-      upgradeResponse: (response) => ({ ok: response.ok }),
-    });
+    const narrowUpgrade = defineUpgradePath<typeof narrowV10, typeof narrowV20>(
+      {
+        from: narrowV10.schemaVersion,
+        to: narrowV20.schemaVersion,
+        upgradeRequest: (request) => ({ locale: request.locale ?? "en" }),
+        upgradeResponse: (response) => ({ ok: response.ok }),
+      },
+    );
 
     const registry = {
       narrow: {
@@ -587,12 +644,14 @@ describe("validateVersionedRpcRegistry (Zod-level compatibility)", () => {
       requestSchema: z.object({ text: z.string() }),
       responseSchema: z.object({ ok: z.boolean() }),
     });
-    const removeUpgrade = defineUpgradePath<typeof removeV10, typeof removeV20>({
-      from: removeV10.schemaVersion,
-      to: removeV20.schemaVersion,
-      upgradeRequest: (request) => ({ text: request.text }),
-      upgradeResponse: (response) => ({ ok: response.ok }),
-    });
+    const removeUpgrade = defineUpgradePath<typeof removeV10, typeof removeV20>(
+      {
+        from: removeV10.schemaVersion,
+        to: removeV20.schemaVersion,
+        upgradeRequest: (request) => ({ text: request.text }),
+        upgradeResponse: (response) => ({ ok: response.ok }),
+      },
+    );
 
     const registry = {
       remove: {

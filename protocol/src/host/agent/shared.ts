@@ -6,6 +6,7 @@ import {
   type AgentMode,
 } from "@traycer/protocol/common/schemas";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
+import { permissionModeSchema } from "@traycer/protocol/persistence/epic/foundation";
 
 export { DEFAULT_AGENT_MODE, agentModeSchema, type AgentMode };
 
@@ -311,7 +312,8 @@ export type ConcreteProfileSelection = z.infer<
  * `model`, `agentMode`, `reasoningEffort`, and `fastMode` are explicit
  * nullable overrides. `null` means "not requested"; the resolver fills
  * defaults and returns warnings for currently unsupported combinations instead
- * of rejecting the whole create.
+ * of rejecting the whole create. `permissionMode` arrives in v3 below; v1 and
+ * v2 remain frozen to their released request shapes.
  *
  * The new agent's `parentId` is set to `senderAgentId` so the epic projection
  * can render the spawn lineage without a separate join.
@@ -348,7 +350,7 @@ export const createAgentResponseSchema = z.object({
 export type CreateAgentResponse = z.infer<typeof createAgentResponseSchema>;
 
 /**
- * `agent.create@2.0` request - identical to v1.0 except the nullable
+ * Frozen `agent.create@2.0` request - identical to v1.0 except the nullable
  * `profileId` override is replaced by an explicit `profileSelection` (see
  * `ProfileSelection` above). Removing `profileId` is why this ships as a new
  * major rather than an additive minor: v1.0 stays frozen and reachable
@@ -370,6 +372,18 @@ export const createAgentRequestSchemaV20 = z.object({
   profileSelection: profileSelectionSchema,
 });
 export type CreateAgentRequestV20 = z.infer<typeof createAgentRequestSchemaV20>;
+
+/**
+ * `agent.create@3.0` adds the required permission-mode choice. `null` is a
+ * compatibility-only sentinel emitted by the v2->v3 upgrade path so released
+ * callers retain their legacy sender-inheritance behavior; current tool/CLI
+ * callers always send a concrete mode. Making the field required keeps the
+ * released v2.0 wire immutable.
+ */
+export const createAgentRequestSchemaV30 = createAgentRequestSchemaV20.extend({
+  permissionMode: permissionModeSchema.nullable(),
+});
+export type CreateAgentRequestV30 = z.infer<typeof createAgentRequestSchemaV30>;
 
 export const agentSelectionGuideRequestSchema = z.object({
   epicId: z.string(),
