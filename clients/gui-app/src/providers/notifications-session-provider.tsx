@@ -22,7 +22,7 @@ import {
 import type { HostNotificationPresenceFrame } from "@/lib/notifications/notification-presence";
 import { getNotificationsStreamFactoryOverride } from "@/providers/notifications-stream-factory-override";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useAuthService } from "@/lib/host";
+import { useAuthService, useHostClient } from "@/lib/host";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useNotificationShow } from "@/hooks/notifications/use-notifications";
 import { useNotificationActivation } from "@/hooks/notifications/use-notification-activation";
@@ -72,6 +72,7 @@ export function NotificationsSessionProvider(
   const queryClient = useQueryClient();
   const activeHostId = useReactiveActiveHostId();
   const authService = useAuthService();
+  const hostClient = useHostClient();
   const showNotification = useNotificationShow();
   const { activate } = useNotificationActivation();
   const mergedActions = useMergedNotificationsActions();
@@ -149,7 +150,7 @@ export function NotificationsSessionProvider(
         frame.kind === "cleared" ||
         frame.kind === "removed"
       ) {
-        invalidateNotificationIndicators(queryClient, hostId);
+        invalidateNotificationIndicators(queryClient, hostId, hostClient);
         return;
       }
       if (frame.kind === "readStateChanged") {
@@ -157,12 +158,13 @@ export function NotificationsSessionProvider(
         // unrelated rows the protocol has no entity refs for - full-invalidate
         // rather than leave those entities' indicators stale.
         if (frame.removedIds.length > 0) {
-          invalidateNotificationIndicators(queryClient, hostId);
+          invalidateNotificationIndicators(queryClient, hostId, hostClient);
         } else {
           invalidateNotificationIndicatorsForEntities(
             queryClient,
             hostId,
             frame.entityRefs,
+            hostClient,
           );
         }
         return;
@@ -171,11 +173,14 @@ export function NotificationsSessionProvider(
       // Same reasoning as above: a surviving upsert's `removedIds` can name
       // entities this frame carries no ref for.
       if (frame.removedIds.length > 0) {
-        invalidateNotificationIndicators(queryClient, hostId);
+        invalidateNotificationIndicators(queryClient, hostId, hostClient);
       } else if (entity !== null) {
-        invalidateNotificationIndicatorsForEntities(queryClient, hostId, [
-          entity,
-        ]);
+        invalidateNotificationIndicatorsForEntities(
+          queryClient,
+          hostId,
+          [entity],
+          hostClient,
+        );
       }
       if (entity === null) return;
       const activeEntity = activeEntityRef.current;
@@ -189,7 +194,7 @@ export function NotificationsSessionProvider(
       if (!isTerminalSeverity) return;
       consumeEntity(entity);
     },
-    [activeHostId, consumeEntity, queryClient],
+    [activeHostId, consumeEntity, hostClient, queryClient],
   );
   const onHostStreamOpened = useCallback((): void => {
     activeEntityRef.current = null;

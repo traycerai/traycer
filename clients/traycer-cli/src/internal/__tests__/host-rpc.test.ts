@@ -105,7 +105,20 @@ describe("callHostRpc", () => {
     const result = await callHostRpc(METHOD, params);
     expect(result).toEqual({ agents: [] });
     expect(requestMock).toHaveBeenCalledTimes(1);
-    expect(requestMock).toHaveBeenCalledWith(METHOD, params);
+    expect(requestMock).toHaveBeenCalledWith(
+      METHOD,
+      params,
+      expect.objectContaining({
+        endpoint: {
+          hostId: "d1",
+          websocketUrl: "ws://127.0.0.1:9/rpc",
+        },
+        bearer: expect.objectContaining({
+          identity: { userId: "u1" },
+        }),
+        abortSignal: expect.any(AbortSignal),
+      }),
+    );
     expect(refreshMock).not.toHaveBeenCalled();
   });
 

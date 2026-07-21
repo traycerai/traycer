@@ -105,7 +105,10 @@ vi.mock("@/hooks/git/use-git-list-changed-files-with-submodules", () => ({
 }));
 
 vi.mock("@/hooks/git/use-git-submodule-snapshot-refresh", () => ({
-  useGitSubmoduleSnapshotRefresh: () => testState.refresh,
+  useGitSubmoduleSnapshotRefresh: () => ({
+    refresh: testState.refresh,
+    isRefreshing: false,
+  }),
 }));
 
 vi.mock("@/components/worktree/open-in-editor-button", () => ({
