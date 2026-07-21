@@ -12,6 +12,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IpcHostController } from "../runner-ipc-bridge";
 import type { HostControllerStatus } from "../../host/host-controller-types";
 import { DEV_DESKTOP_SLOT_ENV } from "../../host/dev-desktop-slot";
+import { registerHostControllerStatusBroadcast } from "../host-controller-status-broadcast";
+import { RunnerHostEvent } from "../../../ipc-contracts/ipc-channels";
 
 // `refreshRegistryUpdateState` is the launch-time host registry
 // probe (Flow 6). It owns the 24h cache the tray + Settings + banner
@@ -380,6 +382,48 @@ describe("refreshRegistryUpdateState - launch-time probe", () => {
     });
     expect(probeSpy).toHaveBeenCalledOnce();
     expect(state.latestVersion).toBe("1.4.3");
+  });
+
+  it("P6: republishes updateReady false to true after the background stage lands", async () => {
+    vi.useFakeTimers();
+    const probeSpy = vi
+      .fn()
+      .mockResolvedValue(registryProbeResult("1.4.3", true, null));
+    vi.doMock("../../cli/traycer-cli", () => ({
+      runTraycerCliJson: probeSpy,
+      streamTraycerCliJson: vi.fn(),
+      TraycerCliError: class extends Error {},
+    }));
+    const controller = fakeHostController(false);
+    controller.stageLatest = async (): Promise<void> => {
+      controller.setUpdateReady(true);
+    };
+    const fanOutCalls: Array<readonly [string, HostControllerStatus]> = [];
+    const bridge = {
+      options: { hostController: controller },
+      disposeFns: [] as Array<() => void>,
+      fanOut(channel: string, payload: HostControllerStatus): void {
+        fanOutCalls.push([channel, payload]);
+      },
+    };
+    registerHostControllerStatusBroadcast(bridge as never);
+    const { refreshRegistryUpdateState } =
+      await import("../host-management-ipc");
+
+    const beforeStage = await refreshRegistryUpdateState(controller, {
+      force: true,
+      maxAgeMs: null,
+    });
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(beforeStage.updateAvailable).toBe(false);
+    expect(fanOutCalls).toContainEqual([
+      RunnerHostEvent.hostControllerStatusChange,
+      expect.objectContaining({ updateReady: true }),
+    ]);
+    for (const dispose of bridge.disposeFns) dispose();
+    vi.useRealTimers();
   });
 
   it("re-probes when cache is stale (>= 24h)", async () => {

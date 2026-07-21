@@ -359,7 +359,9 @@ describe("<HostTrayCommandListener /> - mounted in __root", () => {
       },
     });
     renderListener(makeHost(tray.bridge, management));
-    await waitFor(() => expect(management.getHostControllerStatus).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(management.getHostControllerStatus).toHaveBeenCalled(),
+    );
 
     act(() => tray.emit({ kind: "installUpdate", version: "1.4.0" }));
     await screen.findByTestId("confirm-destructive-dialog");

@@ -93,20 +93,22 @@ describe("buildApplicationMenu", () => {
       focusWindow: () => undefined,
       openExternal: () => undefined,
     };
-    const appMenu = menuByLabel(
-      template(buildApplicationMenu(withUpdate, actions)),
-      "Traycer",
-    ).submenu ?? [];
+    const appMenu =
+      menuByLabel(
+        template(buildApplicationMenu(withUpdate, actions)),
+        "Traycer",
+      ).submenu ?? [];
 
     const update = menuByLabel(appMenu, "Update to 2.0.0");
     update.click?.(null, null);
     expect(commands).toEqual(["host.installUpdate"]);
 
-    const withoutUpdate = menuByLabel(
-      template(buildApplicationMenu(state, actions)),
-      "Traycer",
-    ).submenu ?? [];
-    expect(withoutUpdate.some((item) => item.label?.startsWith("Update to "))).toBe(false);
+    const withoutUpdate =
+      menuByLabel(template(buildApplicationMenu(state, actions)), "Traycer")
+        .submenu ?? [];
+    expect(
+      withoutUpdate.some((item) => item.label?.startsWith("Update to ")),
+    ).toBe(false);
   });
 
   it("maps macOS app and Help About to the rich details command", () => {

@@ -725,7 +725,9 @@ describe("<MenuCommandListener />", () => {
         </RunnerHostProvider>
       </QueryClientProvider>,
     );
-    await waitFor(() => expect(management.getHostControllerStatus).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(management.getHostControllerStatus).toHaveBeenCalled(),
+    );
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
