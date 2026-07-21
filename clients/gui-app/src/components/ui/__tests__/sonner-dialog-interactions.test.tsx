@@ -10,7 +10,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Toaster } from "@/components/ui/sonner";
-import { progressToast } from "@/lib/toast/progress-toast";
+import {
+  progressSuccessToast,
+  progressToast,
+} from "@/lib/toast/progress-toast";
 
 vi.mock("next-themes", () => ({
   useTheme: () => ({ theme: "dark" }),
@@ -80,5 +83,39 @@ describe("<Toaster /> dialog interactions", () => {
     await waitFor(() => {
       expect(screen.queryByText("Deleting worktrees")).toBeNull();
     });
+  });
+
+  it("auto-dismisses a success that replaces persistent progress", async () => {
+    render(<Toaster />);
+
+    act(() => {
+      progressToast("Deleting worktrees", {
+        id: "worktree-delete-progress",
+        description: "12/13 deleted",
+        duration: Infinity,
+        cancel: null,
+      });
+    });
+
+    act(() => {
+      progressSuccessToast("Deleted 13 worktrees", {
+        id: "worktree-delete-progress",
+        description: "13/13 deleted",
+        duration: 20,
+        cancel: null,
+      });
+    });
+
+    await screen.findByText("Deleted 13 worktrees");
+    expect(
+      document.querySelector("[data-icon] span[aria-hidden='true']"),
+    ).toBeNull();
+
+    await waitFor(
+      () => {
+        expect(screen.queryByText("Deleted 13 worktrees")).toBeNull();
+      },
+      { timeout: 500 },
+    );
   });
 });

@@ -7,7 +7,10 @@ import {
 } from "@/components/settings/panels/use-worktree-delete-run";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { createReportIssueContext } from "@/lib/report-issue-context";
-import { progressToast } from "@/lib/toast/progress-toast";
+import {
+  progressSuccessToast,
+  progressToast,
+} from "@/lib/toast/progress-toast";
 
 const WORKTREE_DELETE_PROGRESS_TOAST_ID = "worktree-delete-progress";
 const WORKTREE_DELETE_REPORT_CONTEXT = createReportIssueContext({
@@ -22,9 +25,9 @@ export function WorktreeDeleteProgressToastBridge(): null {
   const lastToastKeyRef = useRef<string | null>(null);
   // Whether the toast currently on screen is one that will NOT expire on its
   // own: the in-progress toast and the failure toast both use
-  // `duration: Infinity`. A plain success toast keeps its short default
-  // duration. Tracked so that when the runs drain we dismiss the former two but
-  // leave a success toast to live out its time.
+  // `duration: Infinity`. A terminal success resets to a short duration.
+  // Tracked so that when the runs drain we dismiss the former two but leave a
+  // success toast to live out its time.
   const lastToastPersistentRef = useRef<boolean>(false);
 
   useEffect(() => {
@@ -61,7 +64,7 @@ function showWorktreeDeleteProgressToast(
     return;
   }
   if (summary.failed === 0) {
-    toast.success(`Deleted ${worktreeCountLabel(summary.deleted)}`, {
+    progressSuccessToast(`Deleted ${worktreeCountLabel(summary.deleted)}`, {
       id: WORKTREE_DELETE_PROGRESS_TOAST_ID,
       description,
       cancel: null,
