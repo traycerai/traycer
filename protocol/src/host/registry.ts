@@ -223,6 +223,7 @@ import {
   gitGetCapabilitiesV10,
   gitSubscribeStatusV10,
   gitSubscribeStatusV11,
+  gitSubscribeStatusV12,
 } from "@traycer/protocol/host/git-contracts";
 import { defineRpcContract } from "@traycer/protocol/framework/index";
 import {
@@ -4199,7 +4200,7 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
   },
   "git.subscribeStatus": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: gitSubscribeStatusV10,
@@ -4210,6 +4211,12 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
         // the COMPAT POSTURE note on `gitSubscribeStatusV11`.
         1: {
           contract: gitSubscribeStatusV11,
+        },
+        // Guaranteed-fresh stream replacement: required `freshNonce` on the
+        // v1.2 open and snapshot/updated frames. Lower-minor projection stays
+        // explicit in the host resolver because streams have no bridges.
+        2: {
+          contract: gitSubscribeStatusV12,
         },
       },
     },

@@ -1,6 +1,8 @@
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import {
   HostRpcError,
+  HostRequestAbortedError,
+  type HostRequestAuthority,
   type IHostMessenger,
   type RequestOfMethod,
   type ResponseOfMethod,
@@ -108,6 +110,7 @@ export class MockHostMessenger<
     readonly method: string;
     readonly params: unknown;
     readonly requestId: string;
+    readonly authority: HostRequestAuthority;
   }> = [];
   readonly phases: MockPhaseEvent[] = [];
 
@@ -136,19 +139,21 @@ export class MockHostMessenger<
     method: Method,
     params: RequestOfMethod<Registry, Method>,
     responseTimeoutMs: number,
+    authority: HostRequestAuthority,
   ): Promise<ResponseOfMethod<Registry, Method>> {
     // The mock runs handlers inline with no transport timers, so the extended
     // response budget has nothing to bound - the call delegates unchanged.
     void responseTimeoutMs;
-    return this.request(method, params);
+    return this.request(method, params, authority);
   }
 
   async request<Method extends keyof Registry & string>(
     method: Method,
     params: RequestOfMethod<Registry, Method>,
+    authority: HostRequestAuthority,
   ): Promise<ResponseOfMethod<Registry, Method>> {
     const requestId = this.requestIdProvider();
-    this.calls.push({ method, params, requestId });
+    this.calls.push({ method, params, requestId, authority });
 
     this.emit({ kind: "open", method, requestId });
     this.emit({ kind: "auth", method, requestId });
@@ -176,9 +181,29 @@ export class MockHostMessenger<
     }
 
     let result: ResponseOfMethod<Registry, Method>;
+    let detachAbortListener = (): void => undefined;
     try {
-      result = await handler(params);
+      result = await awaitAbortableHandler(
+        handler(params),
+        authority,
+        requestId,
+        method,
+        (detach) => {
+          detachAbortListener = detach;
+        },
+      );
     } catch (cause) {
+      if (cause instanceof HostRequestAbortedError) {
+        this.emit({
+          kind: "response",
+          method,
+          requestId,
+          result: null,
+          error: cause,
+        });
+        this.emit({ kind: "close", method, requestId });
+        throw cause;
+      }
       if (cause instanceof HostRpcError) {
         const error = new HostRpcError({
           code: cause.code,
@@ -213,6 +238,8 @@ export class MockHostMessenger<
       });
       this.emit({ kind: "close", method, requestId });
       throw error;
+    } finally {
+      detachAbortListener();
     }
 
     this.emit({
@@ -232,4 +259,30 @@ export class MockHostMessenger<
       listener(event);
     }
   }
+}
+
+function awaitAbortableHandler<Response>(
+  handlerResult: Promise<Response> | Response,
+  authority: HostRequestAuthority,
+  requestId: string,
+  method: string,
+  setDetachAbortListener: (detach: () => void) => void,
+): Promise<Response> {
+  const abortError = (): HostRequestAbortedError =>
+    new HostRequestAbortedError({
+      message: "Mock host request authority was aborted",
+      requestId,
+      method,
+    });
+  if (authority.abortSignal.aborted) {
+    return Promise.reject(abortError());
+  }
+  return new Promise<Response>((resolve, reject) => {
+    const abort = (): void => reject(abortError());
+    authority.abortSignal.addEventListener("abort", abort, { once: true });
+    setDetachAbortListener(() => {
+      authority.abortSignal.removeEventListener("abort", abort);
+    });
+    Promise.resolve(handlerResult).then(resolve, reject);
+  });
 }

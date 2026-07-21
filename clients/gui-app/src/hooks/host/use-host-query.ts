@@ -4,30 +4,68 @@ import {
   useQuery,
   useQueryClient,
   type QueryClient,
+  type QueryFunctionContext,
   type QueryKey,
   type UseMutationOptions,
   type UseMutationResult,
   type UseQueryOptions,
   type UseQueryResult,
 } from "@tanstack/react-query";
-import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import {
   HostRpcError,
   toHostRpcError,
-  withHostRpcErrorBoundary,
   type RequestOfMethod,
   type ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
+import type { HostRpcRegistry } from "@/lib/host";
 import { queryKeys } from "@/lib/query-keys";
+import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
+import {
+  HOST_METHOD_POLL_TABLE,
+  stampHostRpcMethod,
+} from "@/lib/host-rpc-policy/host-method-policy-table";
+import {
+  getConditionPollEpisodeCoordinator,
+  type ConditionPollRefetchInterval,
+} from "@/lib/query/condition-poll-episode-coordinator";
+
+type ConditionHostRpcMethod = {
+  [
+    Method in keyof typeof HOST_METHOD_POLL_TABLE
+  ]: (typeof HOST_METHOD_POLL_TABLE)[Method]["poll"] extends {
+    readonly kind: "condition";
+  }
+    ? Method
+    : never;
+}[keyof typeof HOST_METHOD_POLL_TABLE];
+
+type BaseHostQueryTanstackOptions<TData> = Omit<
+  UseQueryOptions<TData, HostRpcError, TData>,
+  "queryKey" | "queryFn" | "refetchInterval"
+> & {
+  /**
+   * Condition queries participate in table-owned polling by default. Fixed
+   * queries opt in to their table-owned cadence with `poll: true`.
+   */
+  readonly poll?: boolean;
+};
+
+export type HostQueryTanstackOptions<
+  Method extends keyof HostRpcRegistry & string,
+  TData,
+> = Method extends ConditionHostRpcMethod
+  ? Omit<BaseHostQueryTanstackOptions<TData>, "retry">
+  : BaseHostQueryTanstackOptions<TData>;
 
 export interface UseHostQueryWithResponseMapOptions<
-  Registry extends VersionedRpcRegistry,
-  Method extends keyof Registry & string,
+  Registry extends HostRpcRegistry,
+  Method extends keyof Registry & keyof HostRpcRegistry & string,
   TData,
 > {
-  readonly client: HostClient<Registry> | null;
+  readonly client: HostRequester<Registry> | null;
   readonly method: Method;
   readonly params: RequestOfMethod<Registry, Method>;
   /**
@@ -40,10 +78,7 @@ export interface UseHostQueryWithResponseMapOptions<
    * Pass-through TanStack options (`enabled`, `staleTime`, etc.). Query key
    * and queryFn are owned by this hook so the invalidation contract holds.
    */
-  readonly options: Omit<
-    UseQueryOptions<TData, HostRpcError, TData>,
-    "queryKey" | "queryFn"
-  > | null;
+  readonly options: HostQueryTanstackOptions<Method, TData> | null;
   /**
    * Transforms the raw RPC response into what TanStack caches/returns for
    * this query. Runs inside the queryFn, so its return value - not the raw
@@ -70,8 +105,8 @@ export interface UseHostQueryWithResponseMapOptions<
  * two option shapes can't drift out of sync.
  */
 export type UseHostQueryOptions<
-  Registry extends VersionedRpcRegistry,
-  Method extends keyof Registry & string,
+  Registry extends HostRpcRegistry,
+  Method extends keyof Registry & keyof HostRpcRegistry & string,
 > = Omit<
   UseHostQueryWithResponseMapOptions<
     Registry,
@@ -92,8 +127,8 @@ export type UseHostQueryOptions<
  * `HostRpcError` blast.
  */
 export function useHostQuery<
-  Registry extends VersionedRpcRegistry,
-  Method extends keyof Registry & string,
+  Registry extends HostRpcRegistry,
+  Method extends keyof Registry & keyof HostRpcRegistry & string,
 >(
   args: UseHostQueryOptions<Registry, Method>,
 ): UseQueryResult<ResponseOfMethod<Registry, Method>, HostRpcError> {
@@ -114,37 +149,66 @@ export function useHostQuery<
  * the shared cache entry other observers of the same key read).
  */
 export function useHostQueryWithResponseMap<
-  Registry extends VersionedRpcRegistry,
-  Method extends keyof Registry & string,
+  Registry extends HostRpcRegistry,
+  Method extends keyof Registry & keyof HostRpcRegistry & string,
   TData,
 >(
   args: UseHostQueryWithResponseMapOptions<Registry, Method, TData>,
 ): UseQueryResult<TData, HostRpcError> {
   const { client, method, params, mapResponse } = args;
   const queryClient = useQueryClient();
+  const conditionPollCoordinator =
+    getConditionPollEpisodeCoordinator(queryClient);
   const readiness = useReactiveHostReadiness(client);
   const baseOptions = args.options ?? {};
+  const { meta, poll, select, ...queryOptionsWithoutReservedFields } =
+    baseOptions;
+  const pollPolicy = HOST_METHOD_POLL_TABLE[method].poll;
+  let tablePollingOptions:
+    | {
+        readonly refetchInterval: ConditionPollRefetchInterval | false;
+        readonly retry: false;
+      }
+    | {
+        readonly refetchInterval: number | false;
+        readonly refetchIntervalInBackground: false;
+      }
+    | Record<never, never> = {};
+  if (pollPolicy !== null && pollPolicy.kind === "condition") {
+    tablePollingOptions = {
+      refetchInterval:
+        poll === false
+          ? false
+          : conditionPollCoordinator.refetchIntervalFor(method),
+      retry: false,
+    };
+  } else if (pollPolicy !== null) {
+    tablePollingOptions = {
+      refetchInterval: poll === true ? pollPolicy.intervalMs : false,
+      refetchIntervalInBackground: false,
+    };
+  }
   const queryKey: QueryKey = [
     ...queryKeys.hostMethod<Registry, Method>(readiness.hostId, method, params),
     ...(args.cacheKeyIdentity ?? []),
   ];
 
-  // The boundary makes the declared `HostRpcError` generic true by
-  // construction: it also normalizes throws from the caller-supplied
-  // `mapResponse`, which the transport's own error discipline can't cover.
-  const request = (): Promise<TData> =>
-    withHostRpcErrorBoundary(method, async () => {
+  // The boundary normalizes every non-control-flow failure into the declared
+  // `HostRpcError`, including throws from caller-supplied `mapResponse`.
+  // Coordinator control flow deliberately remains TanStack cancellation.
+  const request = ({ signal }: QueryFunctionContext): Promise<TData> =>
+    withHostQueryErrorBoundary(method, async () => {
       if (client === null) {
         return Promise.reject<TData>(hostClientUnavailableError(method));
       }
-      const response = await client.request(method, params);
+      const response = await client.requestWithSignal(method, params, signal);
       return mapResponse({ response, queryClient, queryKey });
     });
 
-  const select = baseOptions.select;
   return useQuery<TData, HostRpcError, TData>(
     queryOptions<TData, HostRpcError, TData>({
-      ...baseOptions,
+      ...queryOptionsWithoutReservedFields,
+      ...tablePollingOptions,
       // A throw inside a caller-supplied `select` is stored by the observer
       // as `result.error` - the same `HostRpcError`-typed channel the queryFn
       // boundary protects - so it must be normalized too.
@@ -160,6 +224,9 @@ export function useHostQueryWithResponseMap<
             },
       queryKey,
       queryFn: request,
+      // The builder's stamp is an identity input to the coordinator. It must
+      // be written after caller meta so no observer can replace the method.
+      meta: stampHostRpcMethod(meta, method),
       // A function-form `enabled` must still be evaluated per-query - not
       // collapsed to a boolean up front - or a caller's dynamic condition is
       // silently replaced by "always true" the moment a client is bound.
@@ -180,7 +247,7 @@ export interface UseHostMutationOptions<
   TContext = unknown,
   TVariables = RequestOfMethod<Registry, Method>,
 > {
-  readonly client: HostClient<Registry> | null;
+  readonly client: HostRequester<Registry> | null;
   readonly method: Method;
   readonly options: Omit<
     UseMutationOptions<
@@ -224,7 +291,7 @@ export function useHostMutation<
     // Boundary-wrapped so a throw inside the caller-supplied `mapVariables`
     // (pre-flight validation) surfaces as the declared `HostRpcError`.
     mutationFn: (variables) =>
-      withHostRpcErrorBoundary(args.method, () => {
+      withHostQueryErrorBoundary(args.method, () => {
         if (args.client === null) {
           return Promise.reject<ResponseOfMethod<Registry, Method>>(
             hostClientUnavailableError(args.method),
@@ -267,7 +334,7 @@ export function useHostMutationWithResponseTimeout<
   >({
     ...withHostMutationLifecycleBoundary(args.method, baseOptions),
     mutationFn: (variables) =>
-      withHostRpcErrorBoundary(args.method, () => {
+      withHostQueryErrorBoundary(args.method, () => {
         if (args.client === null) {
           return Promise.reject<ResponseOfMethod<Registry, Method>>(
             hostClientUnavailableError(args.method),

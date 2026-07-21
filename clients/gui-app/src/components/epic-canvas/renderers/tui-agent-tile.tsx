@@ -66,7 +66,6 @@ import { useTuiSetupTerminalListRefreshDriver } from "@/hooks/agent/use-tui-setu
 import { useTuiSetupTerminalTabRegisterDriver } from "@/hooks/agent/use-tui-setup-terminal-tab-register-driver";
 import { SetupCardSegment } from "@/components/chat/segments/setup-card-segment";
 import { buildTuiAgentSetupCardModel } from "@/stores/chats/tui-agent-setup-card-model";
-import type { WorktreeBinding } from "@traycer/protocol/host/worktree-schemas";
 import { AgentModeReadonlyLabel } from "@/components/home/pickers/agent-mode-toggle";
 import type { AgentMode } from "@/components/home/data/landing-options";
 import { useAgentStopControls } from "@/hooks/agent/use-agent-stop-controls";
@@ -87,25 +86,6 @@ import { useCloseCanvasTileWithNestedFocus } from "./use-close-canvas-tile-with-
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
-
-// Poll cadence for the setup card's binding while a worktree setup script is
-// still in flight. The script runs in a background PTY server-side and only
-// mutates the binding, so without polling a completion/failure would not
-// surface until the next window refocus - the card would stay "setting up".
-const SETUP_BINDING_POLL_INTERVAL_MS = 2_000;
-
-// A created worktree whose setup script has neither settled nor failed yet.
-// `pending`/`running` are the only non-terminal setup states; every other
-// state (succeeded / not_required / failed / cancelled) is final, so polling
-// stops once no entry is in flight.
-function hasInFlightWorktreeSetup(binding: WorktreeBinding | null): boolean {
-  if (binding === null) return false;
-  return binding.entries.some(
-    (entry) =>
-      entry.mode === "worktree" &&
-      (entry.setupState === "pending" || entry.setupState === "running"),
-  );
-}
 
 /**
  * A bound worktree/folder is gone from disk. The host's prepare-launch
@@ -783,7 +763,7 @@ function TerminalAgentPreLaunchToolbar(
     refetchOnWindowFocus: paneVisible,
     // The nested setup notice owns the in-flight polling; this observer only
     // needs the binding for the chip, so it shares the cache without polling.
-    refetchInterval: false,
+    poll: false,
   });
   const binding = bindingQuery.data?.binding ?? null;
   const sourceStagingKey = useMemo<WorktreeStagingKey>(
@@ -949,12 +929,9 @@ function TerminalAgentWorktreeNotice(props: {
     refetchOnWindowFocus: paneVisible,
     // Poll while a setup script is in flight so a background completion/failure
     // surfaces on the card even while the agent PTY runs (no chat subscription
-    // to push binding transitions). TanStack re-runs this against the freshest
-    // binding after each fetch, so polling stops the moment every entry settles.
-    refetchInterval: (query) =>
-      hasInFlightWorktreeSetup(query.state.data?.binding ?? null)
-        ? SETUP_BINDING_POLL_INTERVAL_MS
-        : false,
+    // to push binding transitions). The table stops polling once every entry
+    // settles.
+    poll: true,
   });
   const binding = bindingQuery.data?.binding ?? null;
   // Setup PTYs are spawned server-side, so nothing invalidates the renderer's

@@ -7,7 +7,7 @@
  */
 import type { StoredAuthTokens } from "../platform/runner-host";
 import { refreshAuthTokenViaHttp } from "./auth-validation";
-import type { BearerLease } from "./bearer-source";
+import type { BearerLease, OpenFrameBearerSource } from "./bearer-source";
 
 /**
  * The recovery hook a host-RPC/stream messenger invokes after the host
@@ -18,6 +18,17 @@ import type { BearerLease } from "./bearer-source";
  */
 export interface AuthRevalidator {
   revalidateCurrentContext(): Promise<unknown>;
+}
+
+/**
+ * Unary-transport auth recovery is tied to the bearer object that produced the
+ * rejected `open` frame. Implementations must never refresh, rotate, or sign
+ * out a replacement context when that exact object is no longer current.
+ */
+export interface AuthorityBoundAuthRevalidator {
+  revalidateExpectedBearer(
+    expected: OpenFrameBearerSource,
+  ): Promise<RevalidateOutcome | "superseded">;
 }
 
 /**
@@ -136,119 +147,126 @@ export function createBearerRevalidator(args: {
   readonly store: BearerStore;
   readonly clearOnReject: boolean;
   readonly delay: (ms: number) => Promise<void>;
-}): AuthRevalidator & {
-  revalidateCurrentContext(): Promise<RevalidateOutcome>;
-} {
-  return {
-    async revalidateCurrentContext(): Promise<RevalidateOutcome> {
-      // Boundary helper contract: never throws - like `refreshAuthTokenViaHttp`,
-      // every failure (including store I/O errors) maps to an outcome so the
-      // single caller (auth-aware messenger / monitor) can decide recovery
-      // without a try/catch and without risking an unhandled rejection.
-      try {
-        const current = args.lease.getBearerToken();
-        // Adopt a concurrently-written token only when it belongs to the SAME
-        // user as this lease. The shared credentials file can be rewritten by a
-        // different account (a sibling `traycer login`), and blind-adopting that
-        // would rotate this process into a foreign session.
-        const leaseUserId = args.lease.identity.userId;
+}): AuthRevalidator &
+  AuthorityBoundAuthRevalidator & {
+    revalidateCurrentContext(): Promise<RevalidateOutcome>;
+  } {
+  const revalidateCurrentContext = async (): Promise<RevalidateOutcome> => {
+    // Boundary helper contract: never throws - like `refreshAuthTokenViaHttp`,
+    // every failure (including store I/O errors) maps to an outcome so the
+    // single caller (auth-aware messenger / monitor) can decide recovery
+    // without a try/catch and without risking an unhandled rejection.
+    try {
+      const current = args.lease.getBearerToken();
+      // Adopt a concurrently-written token only when it belongs to the SAME
+      // user as this lease. The shared credentials file can be rewritten by a
+      // different account (a sibling `traycer login`), and blind-adopting that
+      // would rotate this process into a foreign session.
+      const leaseUserId = args.lease.identity.userId;
 
-        const before = await args.store.read();
-        if (
-          before !== null &&
-          before.token.length > 0 &&
-          before.token !== current &&
-          before.userId === leaseUserId
-        ) {
-          args.lease.rotate(before.token);
-          return "rotated";
-        }
-
-        // The refresh token pairs with the persisted bearer; without it the
-        // `/api/v3/auth/refresh` body would be empty (a guaranteed 400). No stored
-        // refresh token means there is nothing to refresh against.
-        const refreshToken = before?.refreshToken;
-        if (refreshToken === undefined || refreshToken.length === 0) {
-          if (args.clearOnReject) {
-            await args.store.clear();
-          }
-          return "rejected";
-        }
-
-        const result = await refreshAuthTokenViaHttp(
-          args.authnBaseUrl,
-          current,
-          refreshToken,
-        );
-        if (result.kind === "network-error") {
-          return "network-error";
-        }
-        if (result.kind === "rejected") {
-          // A loser of a concurrent rotation can be rejected even though the
-          // winner already persisted a fresh token to the shared store. Re-read
-          // before treating the credential as dead; a bounded poll covers a
-          // slightly-delayed sibling write. Adopt any non-empty token that
-          // differs from `current` (same shape as the pre-/post-refresh adopt
-          // branches) and never clear - clearing would clobber the winner's pair
-          // and sign the user out. This is a sequential read/wait loop, not an
-          // array transform, so an explicit bounded loop reads clearest.
-          let adopted: string | null = null;
-          for (
-            let attempt = 0;
-            attempt < REJECT_REREAD_ATTEMPTS;
-            attempt += 1
-          ) {
-            const persisted = await args.store.read();
-            if (
-              persisted !== null &&
-              persisted.token.length > 0 &&
-              persisted.token !== current &&
-              persisted.userId === leaseUserId
-            ) {
-              adopted = persisted.token;
-              break;
-            }
-            if (attempt < REJECT_REREAD_ATTEMPTS - 1) {
-              await args.delay(REJECT_REREAD_POLL_INTERVAL_MS);
-            }
-          }
-          if (adopted !== null) {
-            args.lease.rotate(adopted);
-            return "rotated";
-          }
-          if (args.clearOnReject) {
-            await args.store.clear();
-          }
-          return "rejected";
-        }
-
-        const latest = await args.store.read();
-        // A non-empty token that differs from both our pre-refresh token and our
-        // freshly-minted one means a sibling rotated mid-round-trip - adopt
-        // theirs. The `length > 0` guard mirrors the `before` branch so a
-        // concurrent `logout`/partial-write that left an empty token can't make
-        // us rotate the live lease to "".
-        const siblingRotated =
-          latest !== null &&
-          latest.token.length > 0 &&
-          latest.token !== current &&
-          latest.token !== result.token &&
-          latest.userId === leaseUserId;
-        if (siblingRotated) {
-          args.lease.rotate(latest.token);
-          return "rotated";
-        }
-        await rotateAndPersistBearer({
-          newTokens: { token: result.token, refreshToken: result.refreshToken },
-          rotate: (token) => args.lease.rotate(token),
-          persist: (tokens) => args.store.write(tokens),
-        });
+      const before = await args.store.read();
+      if (
+        before !== null &&
+        before.token.length > 0 &&
+        before.token !== current &&
+        before.userId === leaseUserId
+      ) {
+        args.lease.rotate(before.token);
         return "rotated";
-      } catch {
-        // Local I/O failure (e.g. credentials write) - treat as a transient
-        // outcome that leaves the bearer untouched, never a thrown error.
+      }
+
+      // The refresh token pairs with the persisted bearer; without it the
+      // `/api/v3/auth/refresh` body would be empty (a guaranteed 400). No stored
+      // refresh token means there is nothing to refresh against.
+      const refreshToken = before?.refreshToken;
+      if (refreshToken === undefined || refreshToken.length === 0) {
+        if (args.clearOnReject) {
+          await args.store.clear();
+        }
+        return "rejected";
+      }
+
+      const result = await refreshAuthTokenViaHttp(
+        args.authnBaseUrl,
+        current,
+        refreshToken,
+      );
+      if (result.kind === "network-error") {
         return "network-error";
       }
+      if (result.kind === "rejected") {
+        // A loser of a concurrent rotation can be rejected even though the
+        // winner already persisted a fresh token to the shared store. Re-read
+        // before treating the credential as dead; a bounded poll covers a
+        // slightly-delayed sibling write. Adopt any non-empty token that
+        // differs from `current` (same shape as the pre-/post-refresh adopt
+        // branches) and never clear - clearing would clobber the winner's pair
+        // and sign the user out. This is a sequential read/wait loop, not an
+        // array transform, so an explicit bounded loop reads clearest.
+        let adopted: string | null = null;
+        for (let attempt = 0; attempt < REJECT_REREAD_ATTEMPTS; attempt += 1) {
+          const persisted = await args.store.read();
+          if (
+            persisted !== null &&
+            persisted.token.length > 0 &&
+            persisted.token !== current &&
+            persisted.userId === leaseUserId
+          ) {
+            adopted = persisted.token;
+            break;
+          }
+          if (attempt < REJECT_REREAD_ATTEMPTS - 1) {
+            await args.delay(REJECT_REREAD_POLL_INTERVAL_MS);
+          }
+        }
+        if (adopted !== null) {
+          args.lease.rotate(adopted);
+          return "rotated";
+        }
+        if (args.clearOnReject) {
+          await args.store.clear();
+        }
+        return "rejected";
+      }
+
+      const latest = await args.store.read();
+      // A non-empty token that differs from both our pre-refresh token and our
+      // freshly-minted one means a sibling rotated mid-round-trip - adopt
+      // theirs. The `length > 0` guard mirrors the `before` branch so a
+      // concurrent `logout`/partial-write that left an empty token can't make
+      // us rotate the live lease to "".
+      const siblingRotated =
+        latest !== null &&
+        latest.token.length > 0 &&
+        latest.token !== current &&
+        latest.token !== result.token &&
+        latest.userId === leaseUserId;
+      if (siblingRotated) {
+        args.lease.rotate(latest.token);
+        return "rotated";
+      }
+      await rotateAndPersistBearer({
+        newTokens: { token: result.token, refreshToken: result.refreshToken },
+        rotate: (token) => args.lease.rotate(token),
+        persist: (tokens) => args.store.write(tokens),
+      });
+      return "rotated";
+    } catch {
+      // Local I/O failure (e.g. credentials write) - treat as a transient
+      // outcome that leaves the bearer untouched, never a thrown error.
+      return "network-error";
+    }
+  };
+
+  return {
+    revalidateCurrentContext,
+    async revalidateExpectedBearer(
+      expected: OpenFrameBearerSource,
+    ): Promise<RevalidateOutcome | "superseded"> {
+      if (expected !== args.lease) {
+        return "superseded";
+      }
+      return revalidateCurrentContext();
     },
   };
 }

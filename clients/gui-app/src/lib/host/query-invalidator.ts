@@ -1,6 +1,7 @@
 import type { QueryClient } from "@tanstack/react-query";
 import type { IHostQueryInvalidator } from "@traycer-clients/shared/host-client/host-client";
 import { queryKeys } from "@/lib/query-keys";
+import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
 
 /**
  * Adapts the app's `QueryClient` to the `IHostQueryInvalidator` port.
@@ -19,7 +20,10 @@ export function createHostQueryInvalidator(
   client: QueryClient,
 ): IHostQueryInvalidator {
   return {
+    cancelHostScope: (hostId) =>
+      client.cancelQueries({ queryKey: queryKeys.hostScope(hostId) }),
     invalidateHostScope: (hostId, options) => {
+      getConditionPollEpisodeCoordinator(client).resetHostScope(hostId);
       const queryKey = queryKeys.hostScope(hostId);
       if (options.refetchActive) {
         void client.invalidateQueries({ queryKey });

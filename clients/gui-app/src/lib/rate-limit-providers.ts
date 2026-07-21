@@ -24,7 +24,7 @@ export type RateLimitProviderId = RateLimitCapableProviderId;
  *
  * - `"httpFetch"`: the host resolves a credential it already has and issues a
  *   plain GET (openrouter, kilocode). Cheap and safe to run concurrently, so
- *   these poll on their own independent `refetchInterval` and never enter the
+ *   their observers opt into the table-owned fixed cadence and never enter the
  *   serial queue.
  * - `"ephemeralProcess"`: the host spawns a real CLI subprocess to read usage
  *   (codex, claude-code). Expensive; these are funnelled through a shared
@@ -57,7 +57,7 @@ export function isRateLimitCapableProvider(
 
 /**
  * The one named home for the provider -> lane mapping. Load-bearing in the
- * query options (which lane gets a `refetchInterval`), the turn-completion
+ * query options (which lane enables the table-owned fixed cadence), the turn-completion
  * refresh hook (which trigger routes through the serial queue), and the
  * interval timer (which providers it walks) - so it lives here once rather
  * than being re-derived at each of those three sites.

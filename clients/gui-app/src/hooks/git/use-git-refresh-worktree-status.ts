@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { UseMutationResult } from "@tanstack/react-query";
-import { withHostRpcErrorBoundary } from "@traycer-clients/shared/host-transport/host-messenger";
+import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import { withHostMutationLifecycleBoundary } from "@/hooks/host/use-host-query";
 import type {
   HostRpcError,
@@ -74,7 +74,7 @@ export function useGitRefreshWorktreeStatus(): UseMutationResult<
     withHostMutationLifecycleBoundary("git.listChangedFiles", {
       mutationKey: gitMutationKeys.refreshWorktreeStatus(),
       mutationFn: (variables) =>
-        withHostRpcErrorBoundary("git.listChangedFiles", () => {
+        withHostQueryErrorBoundary("git.listChangedFiles", () => {
           const entry = directory.findById(variables.hostId);
           const client =
             entry === null
