@@ -51,8 +51,14 @@ import {
   agentConfigureV10,
   agentConfigureV20,
   agentConfigureUpgradeV10ToV20,
+  agentGetProviderProfileRateLimitsDowngradeV20ToV10,
   agentGetProviderProfileRateLimitsV10,
+  agentGetProviderProfileRateLimitsV20,
+  agentGetProviderProfileRateLimitsUpgradeV10ToV20,
+  agentListProviderProfilesDowngradeV20ToV10,
   agentListProviderProfilesV10,
+  agentListProviderProfilesV20,
+  agentListProviderProfilesUpgradeV10ToV20,
 } from "@traycer/protocol/host/agent/profiles";
 import {
   agentInboxReadV10,
@@ -4210,6 +4216,18 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       },
       downgradePathsFromLatest: {},
     },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentListProviderProfilesV20,
+          upgradeFromPreviousVersion: agentListProviderProfilesUpgradeV10ToV20,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentListProviderProfilesDowngradeV20ToV10,
+      },
+    },
   },
   "agent.getProviderProfileRateLimits": {
     degrade: { kind: "unsupported" },
@@ -4222,6 +4240,19 @@ const HOST_RPC_REGISTRY_DEFINITION = {
         },
       },
       downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentGetProviderProfileRateLimitsV20,
+          upgradeFromPreviousVersion:
+            agentGetProviderProfileRateLimitsUpgradeV10ToV20,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentGetProviderProfileRateLimitsDowngradeV20ToV10,
+      },
     },
   },
   "agent.configure": {
