@@ -58,6 +58,7 @@ import { registerTraycerCliIpc } from "./traycer-cli-ipc";
 import { registerPlatformIpc } from "./platform-ipc";
 import { registerPowerIpc } from "./power-ipc";
 import { registerAppUpdateIpc } from "./app-update-ipc";
+import { registerGlobalShortcutsIpc } from "./global-shortcuts-ipc";
 import { registerZoomIpc } from "./zoom-ipc";
 import { getAppUpdateSnapshot } from "../app/updater";
 import type { HostTrayCommand } from "../../ipc-contracts/host-management-types";
@@ -358,6 +359,7 @@ export class RunnerIpcBridge {
     // `disposeFns` / `ipcMain.removeHandler` sweep.
     registerPlatformIpc(this);
     registerAppUpdateIpc(this);
+    registerGlobalShortcutsIpc(this);
     registerZoomIpc(this);
     // Power IPC (renderer-driven sleep prevention) registers a `disposeFn`
     // that releases the OS power-save blocker on teardown.

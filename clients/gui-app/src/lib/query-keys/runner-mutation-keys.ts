@@ -54,6 +54,8 @@ export const runnerMutationKeys = {
   logLevelsSet: () => ["runner.logLevels.set"] as const,
   setAllowPrereleaseUpdates: () =>
     ["runner.appUpdates.setAllowPrerelease"] as const,
+  globalShortcutsSet: (id: string) =>
+    ["runner.globalShortcuts.set", id] as const,
 };
 
 export const runnerQueryKeys = {

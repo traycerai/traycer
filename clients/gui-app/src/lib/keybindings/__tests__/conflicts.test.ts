@@ -7,7 +7,7 @@ describe("findConflict", () => {
     const bindings = getDefaultBindings();
     // `group.split.vertical` ships as `mod+shift+d`; binding another action to
     // the same chord must report a duplicate.
-    const result = findConflict(bindings, "epic.new", "mod+shift+d");
+    const result = findConflict(bindings, "epic.new", "mod+shift+d", []);
     expect(result).not.toBeNull();
     expect(result?.severity).toBe("duplicate");
     expect(result?.conflictingActionId).toBe("group.split.vertical");
@@ -15,7 +15,7 @@ describe("findConflict", () => {
 
   it("returns null when the candidate is free", () => {
     const bindings = getDefaultBindings();
-    const result = findConflict(bindings, "epic.new", "mod+shift+o");
+    const result = findConflict(bindings, "epic.new", "mod+shift+o", []);
     expect(result).toBeNull();
   });
 
@@ -25,13 +25,14 @@ describe("findConflict", () => {
       bindings,
       "group.split.vertical",
       "mod+shift+d",
+      [],
     );
     expect(result).toBeNull();
   });
 
   it("warns on an OS-clash chord not otherwise bound", () => {
     const bindings = { ...getDefaultBindings(), "epic.new": null };
-    const result = findConflict(bindings, "epic.new", "mod+q");
+    const result = findConflict(bindings, "epic.new", "mod+q", []);
     expect(result?.severity).toBe("os-clash");
   });
 });
