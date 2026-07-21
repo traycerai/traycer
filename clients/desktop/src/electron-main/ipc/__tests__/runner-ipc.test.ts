@@ -602,6 +602,8 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.appUpdateDownload,
         RunnerHostInvoke.appUpdateGetSnapshot,
         RunnerHostInvoke.appUpdateInstall,
+        RunnerHostInvoke.globalShortcutsGetSnapshot,
+        RunnerHostInvoke.globalShortcutsSet,
         RunnerHostInvoke.windowsList,
         RunnerHostInvoke.windowsRequestNew,
         RunnerHostInvoke.windowsRequestFocus,

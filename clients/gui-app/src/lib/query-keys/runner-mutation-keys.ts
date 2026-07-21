@@ -1,3 +1,5 @@
+import type { GlobalShortcutId } from "@traycer-clients/shared/keybindings/global-shortcuts";
+
 export const runnerMutationKeys = {
   requestHostRespawn: () => ["runner.requestHostRespawn"] as const,
   serviceInstall: () => ["runner.serviceInstall"] as const,
@@ -55,6 +57,8 @@ export const runnerMutationKeys = {
   logLevelsSet: () => ["runner.logLevels.set"] as const,
   setAllowPrereleaseUpdates: () =>
     ["runner.appUpdates.setAllowPrerelease"] as const,
+  globalShortcutsSet: (id: GlobalShortcutId) =>
+    ["runner.globalShortcuts.set", id] as const,
 };
 
 export const runnerQueryKeys = {

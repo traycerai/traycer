@@ -1,6 +1,7 @@
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import type {
   DesktopAppUpdatesBridge,
+  DesktopGlobalShortcutsBridge,
   DesktopHostControllerStatusBridge,
   DesktopMenuBridge,
   DesktopPowerBridge,
@@ -50,6 +51,13 @@ export function resolveDesktopHostControllerStatusBridge(
   return isDesktopHostControllerStatusBridge(value) ? value : null;
 }
 
+export function resolveDesktopGlobalShortcutsBridge(
+  runnerHost: IRunnerHost,
+): DesktopGlobalShortcutsBridge | null {
+  const value: unknown = Reflect.get(runnerHost, "globalShortcuts");
+  return isDesktopGlobalShortcutsBridge(value) ? value : null;
+}
+
 function isDesktopMenuBridge(value: unknown): value is DesktopMenuBridge {
   return isRecord(value) && typeof value.onCommand === "function";
 }
@@ -90,6 +98,17 @@ function isDesktopZoomBridge(value: unknown): value is DesktopZoomBridge {
     typeof value.stepIn === "function" &&
     typeof value.stepOut === "function" &&
     typeof value.reset === "function" &&
+    typeof value.onChange === "function"
+  );
+}
+
+function isDesktopGlobalShortcutsBridge(
+  value: unknown,
+): value is DesktopGlobalShortcutsBridge {
+  return (
+    isRecord(value) &&
+    typeof value.getSnapshot === "function" &&
+    typeof value.set === "function" &&
     typeof value.onChange === "function"
   );
 }
