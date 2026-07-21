@@ -21,6 +21,7 @@ const testState = vi.hoisted(() => ({
   bodySubmit: null as (() => void) | null,
   installEditor: null as (() => void) | null,
   ingesting: false,
+  resolvingPaths: false,
   attachmentPresence: null as ((hash: string) => boolean) | null,
   bodyAttachmentPresence: null as ((hash: string) => boolean) | null,
 }));
@@ -85,18 +86,36 @@ vi.mock("@/hooks/use-epic-store", () => ({
   }),
 }));
 
-vi.mock("@/hooks/composer/use-composer-paste", () => ({
-  useComposerPaste: () => ({
-    onPaste: vi.fn(),
-    onDrop: vi.fn(),
-    onDragOver: vi.fn(),
-    onDragEnter: vi.fn(),
-    onDragLeave: vi.fn(),
-    attachImageFiles: vi.fn(),
-    isDraggingFiles: false,
-    isIngestingImages: testState.ingesting,
+vi.mock("@/providers/use-runner-host", () => ({
+  useRunnerHost: () => ({
+    fileDrops: {
+      resolveDroppedFilePaths: () => Promise.resolve([]),
+      copyDroppedFilePaths: (paths: readonly string[]) =>
+        Promise.resolve(paths),
+    },
   }),
 }));
+
+vi.mock("@/hooks/composer/use-composer-paste", async () => {
+  const actual = await vi.importActual<
+    typeof import("@/hooks/composer/use-composer-paste")
+  >("@/hooks/composer/use-composer-paste");
+  return {
+    ...actual,
+    useComposerPaste: () => ({
+      onPaste: vi.fn(),
+      onDrop: vi.fn(),
+      onDragOver: vi.fn(),
+      onDragEnter: vi.fn(),
+      onDragLeave: vi.fn(),
+      attachImageFiles: vi.fn(),
+      isDraggingFiles: false,
+      dragOverlayVariant: null,
+      isIngestingImages: testState.ingesting,
+      isResolvingFilePaths: testState.resolvingPaths,
+    }),
+  };
+});
 
 vi.mock("@/hooks/workspace/use-resolved-workspace-folders-query", () => ({
   useResolvedWorkspaceFolders: () => ({ folders: [], isLoading: false }),
@@ -171,6 +190,7 @@ afterEach(() => {
   testState.bodySubmit = null;
   testState.installEditor = null;
   testState.ingesting = false;
+  testState.resolvingPaths = false;
   testState.attachmentPresence = null;
   testState.bodyAttachmentPresence = null;
   useNewConversationModalStore.getState().resetForTests();
@@ -244,6 +264,45 @@ describe("NewConversationModalBody direct submit gate", () => {
     );
     expect(testState.createChat).toHaveBeenCalledTimes(1);
   });
+
+  // Finding 3: pure path-resolution must also hold submit open.
+  it("blocks the actual new-conversation submit path while file-path resolution is pending", () => {
+    testState.resolvingPaths = true;
+    const view = render(
+      <NewConversationModalBody
+        epicId="epic-1"
+        tabId="tab-1"
+        placement={ACTIVE_TILE_PLACEMENT}
+        parentId={null}
+        dismissPickerRef={createRef<(() => boolean) | null>()}
+        onSubmitted={() => undefined}
+      />,
+    );
+    const installEditor = testState.installEditor;
+    if (installEditor === null) throw new Error("expected ComposerBody seam");
+    installEditor();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Submit new conversation" }),
+    );
+    expect(testState.createChat).not.toHaveBeenCalled();
+
+    testState.resolvingPaths = false;
+    view.rerender(
+      <NewConversationModalBody
+        epicId="epic-1"
+        tabId="tab-1"
+        placement={ACTIVE_TILE_PLACEMENT}
+        parentId={null}
+        dismissPickerRef={createRef<(() => boolean) | null>()}
+        onSubmitted={() => undefined}
+      />,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Submit new conversation" }),
+    );
+    expect(testState.createChat).toHaveBeenCalledTimes(1);
+  });
 });
 
 function editorHandle(): ComposerPromptEditorHandle {
@@ -256,6 +315,7 @@ function editorHandle(): ComposerPromptEditorHandle {
     clear: () => undefined,
     setContent: () => undefined,
     insertImageAttachments: () => undefined,
+    beginPathInsertion: () => null,
     removeImageAttachmentById: () => undefined,
     insertDictatedText: () => undefined,
     dismissActiveSuggestion: () => false,

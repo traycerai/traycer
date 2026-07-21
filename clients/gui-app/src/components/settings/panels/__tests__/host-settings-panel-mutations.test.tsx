@@ -51,7 +51,7 @@ describe("<HostSettingsPanel /> - mutation flows", () => {
     fireEvent.click(restartButton);
 
     const dialog = await screen.findByTestId("confirm-destructive-dialog");
-    expect(dialog.textContent).toContain("in-progress chats");
+    expect(dialog.textContent).toContain("in-progress agents");
     expect(restartHost).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByTestId("confirm-action"));
@@ -60,6 +60,46 @@ describe("<HostSettingsPanel /> - mutation flows", () => {
       expect(restartHost).toHaveBeenCalledTimes(1);
     });
     expect(toast.success).toHaveBeenCalledWith("Host restart requested");
+  });
+
+  it("closes the restart dialog optimistically on confirm - before the mutation settles - and still surfaces a later rejection via toast", async () => {
+    let rejectRestart: (error: Error) => void = () => undefined;
+    const restartHost = vi.fn(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          rejectRestart = reject;
+        }),
+    );
+    const { management } = makeManagement({ restartHost });
+
+    renderPanel(makeHost(management, makeLocalHostSnapshot()));
+
+    const restartButton = await waitForButton("Restart");
+    fireEvent.click(restartButton);
+
+    await screen.findByTestId("confirm-destructive-dialog");
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    // Closes synchronously at confirm time - the mutation below is still
+    // pending (never resolved/rejected yet), so this proves the dialog
+    // doesn't wait on onSuccess/onError to close.
+    expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+    await waitFor(() => {
+      expect(restartHost).toHaveBeenCalledTimes(1);
+    });
+
+    act(() => {
+      rejectRestart(new Error("host restart failed"));
+    });
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith(
+        "Couldn't restart host",
+        expect.objectContaining({ description: "host restart failed" }),
+      );
+    });
+    // The failure must not resurrect the dialog.
+    expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
   });
 
   it("saves a custom host name from the Host settings page", async () => {
@@ -103,6 +143,7 @@ describe("<HostSettingsPanel /> - mutation flows", () => {
       updateAvailable: true,
       reachable: true,
       errorMessage: null,
+      includePreReleases: false,
     };
     const { management } = makeManagement({
       updateHost,
@@ -125,6 +166,13 @@ describe("<HostSettingsPanel /> - mutation flows", () => {
       expect(updateHost).toHaveBeenCalledTimes(1);
     });
     expect(toast.success).toHaveBeenCalledWith("Updated host to v2.0.0");
+    // Review finding 5: the Updates row pins the install to the exact
+    // version it is showing, so a channel switch elsewhere can't redirect
+    // this click to a different target.
+    expect(updateHost).toHaveBeenCalledWith({
+      expectedVersion: "2.0.0",
+      onProgress: null,
+    });
   });
 
   it("surfaces the install progress banner when the shared operation status reports progress", async () => {
@@ -209,7 +257,7 @@ describe("<HostSettingsPanel /> - mutation flows", () => {
     expect(screen.queryByRole("button", { name: /^Uninstall$/ })).toBeNull();
   });
 
-  it("passes the include prereleases filter when the Advanced version picker checkbox is selected", async () => {
+  it("uses the stable version filter by default and keeps release-channel configuration out of Advanced", async () => {
     const availableVersions = vi.fn(
       (_input: { readonly includePreReleases: boolean }) =>
         Promise.resolve(makeAvailableSnapshot()),
@@ -224,17 +272,11 @@ describe("<HostSettingsPanel /> - mutation flows", () => {
       });
     });
     await openAdvancedDisclosure();
-    fireEvent.click(
-      screen.getByRole("checkbox", {
+    expect(
+      screen.queryByRole("checkbox", {
         name: /include release candidates/i,
       }),
-    );
-
-    await waitFor(() => {
-      expect(availableVersions).toHaveBeenCalledWith({
-        includePreReleases: true,
-      });
-    });
+    ).toBeNull();
   });
 
   it("disables advanced install when the registry asset is unavailable", async () => {
@@ -255,6 +297,7 @@ describe("<HostSettingsPanel /> - mutation flows", () => {
           updateAvailable: false,
           reachable: true,
           errorMessage: null,
+          includePreReleases: false,
         }),
       ),
     });
@@ -285,6 +328,7 @@ describe("<HostSettingsPanel /> - mutation flows", () => {
           updateAvailable: false,
           reachable: true,
           errorMessage: null,
+          includePreReleases: false,
         }),
       ),
     });
@@ -388,6 +432,7 @@ function makeManagement(
           updateAvailable: false,
           reachable: false,
           errorMessage: null,
+          includePreReleases: false,
         }),
       ),
     getOperationStatus: vi.fn(() => Promise.resolve(null)),

@@ -713,7 +713,7 @@ function ProfileEditDialog({
         open={confirmRemoveOpen}
         onOpenChange={setConfirmRemoveOpen}
         title={`Remove ${profileDisplayLabel(profile)}?`}
-        description={`Chats that ran on ${profileDisplayLabel(profile)} will show it as removed. Running sessions on this profile must be stopped first.`}
+        description={`Agents that ran on ${profileDisplayLabel(profile)} will show it as removed. Running sessions on this profile must be stopped first.`}
         cascadeSummary={null}
         actionLabel="Remove"
         isPending={removeProfile.isPending}

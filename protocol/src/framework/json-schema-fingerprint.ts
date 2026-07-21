@@ -53,10 +53,7 @@ export type ArrayJsonSchema = {
  * cases when a new shape is added.
  */
 export type JsonSchemaFingerprint =
-  | ObjectJsonSchema
-  | EnumJsonSchema
-  | AnyOfJsonSchema
-  | ArrayJsonSchema;
+  ObjectJsonSchema | EnumJsonSchema | AnyOfJsonSchema | ArrayJsonSchema;
 
 /**
  * Converts a Zod schema to its normalized fingerprint. Throws when
@@ -306,7 +303,11 @@ export type BreakingChange =
       readonly detail: string;
       readonly reason: "removed" | "schema-changed";
     }
-  | { readonly kind: "enum-value"; readonly detail: string; readonly reason: "removed" }
+  | {
+      readonly kind: "enum-value";
+      readonly detail: string;
+      readonly reason: "removed";
+    }
   | {
       readonly kind: "union-variant";
       readonly detail: string;
@@ -344,6 +345,17 @@ export function findBreakingChange(
   }
 
   if (previous.type === "object" && next.type === "object") {
+    const previousRequired = new Set(previous.required);
+    const newlyRequiredField = next.required.find(
+      (field) => !previousRequired.has(field),
+    );
+    if (newlyRequiredField !== undefined) {
+      return {
+        kind: "field",
+        detail: newlyRequiredField,
+        reason: "schema-changed",
+      };
+    }
     for (const field of Object.keys(previous.properties)) {
       if (
         JSON.stringify(previous.properties[field]) !==

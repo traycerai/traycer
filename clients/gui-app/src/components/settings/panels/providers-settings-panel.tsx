@@ -81,7 +81,7 @@ const PROVIDER_DESCRIPTIONS: Record<ProviderId, string> = {
   codex: "OpenAI's Codex CLI.",
   opencode: "OpenCode CLI agent.",
   cursor:
-    "Cursor agent - SDK-driven chats authenticated with your Cursor API key.",
+    "Cursor coding agent - SDK-driven agents authenticated with your Cursor API key.",
   traycer: "Traycer's managed harness uses the selected OpenCode CLI binary.",
   openrouter:
     "OpenRouter - OpenAI-compatible gateway authenticated with your OpenRouter API key.",
@@ -261,7 +261,7 @@ function ProvidersSettingsPanelInner({
   return (
     <SettingsPanelShell
       title="Providers"
-      description="Choose the CLI binary Traycer runs for each agent. Pick the bundled binary, one found on your PATH, or a custom install. Disable a provider to hide it from new chats."
+      description="Choose the CLI binary Traycer runs for each coding agent. Pick the bundled binary, one found on your PATH, or a custom install. Disable a provider to hide it when creating an agent."
       fillHeight
       bodyClassName="max-h-[min(85vh,52rem)]"
       headerAction={

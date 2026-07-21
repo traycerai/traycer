@@ -237,6 +237,125 @@ function intersectManifests(
   );
 }
 
+function createReleasedPeerClient(
+  bearer: string,
+  requestId: string,
+): {
+  readonly client: WsRpcClient<typeof hostRpcRegistry>;
+  readonly sockets: StubRpcWebSocket[];
+} {
+  const sockets: StubRpcWebSocket[] = [];
+  const factory: IWebSocketFactory = {
+    create(): WebSocketLike {
+      const socket = new StubRpcWebSocket();
+      sockets.push(socket);
+      return socket;
+    },
+  };
+  const ctx = makeRequestContext(bearer);
+  return {
+    sockets,
+    client: new WsRpcClient<typeof hostRpcRegistry>({
+      registry: hostRpcRegistry,
+      endpoint: () => mockLocalHostEntry,
+      bearer: () => ctx.credentials,
+      requestId: () => requestId,
+      webSocketFactory: factory,
+      dialTimeoutMs: 1000,
+      frameTimeoutMs: 1000,
+    }),
+  };
+}
+
+describe("host-v1.1.7 permission-mode downgrade protection", () => {
+  it("rejects agent.create@3.0 before sending to released agent.create@2.0", async () => {
+    const { client, sockets } = createReleasedPeerClient(
+      "token-v1.1.7-create",
+      "req-v1.1.7-create",
+    );
+
+    const pending = client.request("agent.create", {
+      senderAgentId: "agent-parent",
+      epicId: "epic-1",
+      name: null,
+      surface: "gui",
+      harnessId: "cursor",
+      model: "cursor-test",
+      agentMode: null,
+      reasoningEffort: null,
+      fastMode: null,
+      permissionMode: "full_access",
+      workspace: null,
+      profileSelection: { kind: "ambient" },
+    });
+    await flush();
+    const stub = sockets[0];
+    stub.fireOpen();
+    await flush();
+    const open = stub.sentFrames[0];
+    if (open.kind !== "open") throw new Error("expected open frame");
+    stub.fireMessage({
+      kind: "openAck",
+      manifest: {
+        ...open.manifest,
+        "agent.create": { major: 2, minor: 0 },
+      },
+      optionalManifest: open.optionalManifest,
+    });
+
+    await expect(pending).rejects.toSatisfy((error: unknown) => {
+      return (
+        error instanceof HostRpcError &&
+        error.code === "DOWNGRADE_UNSUPPORTED" &&
+        error.message.includes("Upgrade the host")
+      );
+    });
+    expect(stub.sentFrames.map((frame) => frame.kind)).toEqual(["open"]);
+  });
+
+  it("rejects agent.configure@2.0 before sending to released agent.configure@1.0", async () => {
+    const { client, sockets } = createReleasedPeerClient(
+      "token-v1.1.7-configure",
+      "req-v1.1.7-configure",
+    );
+
+    const pending = client.request("agent.configure", {
+      epicId: "epic-1",
+      senderAgentId: "agent-parent",
+      agentId: "agent-target",
+      harnessId: "cursor",
+      model: "cursor-test",
+      profileSelection: { kind: "ambient" },
+      reasoningEffort: null,
+      fastMode: false,
+      permissionMode: "full_access",
+    });
+    await flush();
+    const stub = sockets[0];
+    stub.fireOpen();
+    await flush();
+    const open = stub.sentFrames[0];
+    if (open.kind !== "open") throw new Error("expected open frame");
+    stub.fireMessage({
+      kind: "openAck",
+      manifest: open.manifest,
+      optionalManifest: {
+        ...open.optionalManifest,
+        "agent.configure": { major: 1, minor: 0 },
+      },
+    });
+
+    await expect(pending).rejects.toSatisfy((error: unknown) => {
+      return (
+        error instanceof HostRpcError &&
+        error.code === "DOWNGRADE_UNSUPPORTED" &&
+        error.message.includes("Upgrade the host")
+      );
+    });
+    expect(stub.sentFrames.map((frame) => frame.kind)).toEqual(["open"]);
+  });
+});
+
 describe.skipIf(baselines.length === 0)(
   "released-baseline handshake smoke (real transports vs released manifests)",
   () => {

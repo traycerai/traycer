@@ -130,10 +130,11 @@ function MentionSuggestionListContent({
   }, [getReferenceClientRect, items.length]);
 
   useLayoutEffect(() => {
-    const node = itemRefs.current[selectedIndex];
+    if (items.length === 0) return;
+    const node = itemRefs.current[selectedIndex] ?? null;
     if (node === null) return;
     node.scrollIntoView({ block: "nearest" });
-  }, [selectedIndex]);
+  }, [items.length, selectedIndex]);
 
   if (typeof document === "undefined") return null;
 

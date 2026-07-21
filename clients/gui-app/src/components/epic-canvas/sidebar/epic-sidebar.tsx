@@ -134,7 +134,7 @@ import {
   ARIA_DISABLED_TRIGGER_CLASS,
   resolveDisabledPresentation,
 } from "@/lib/disabled-presentation";
-import { displayTitle, tuiAgentDisplayTitle } from "@/lib/display-title";
+import { displayTitle } from "@/lib/display-title";
 import { useEpicDeleteChat } from "@/hooks/epic/use-epic-chat-mutations";
 import {
   useEpicCreateArtifact,
@@ -1322,19 +1322,15 @@ function SharingPanelBody(props: LeftPanelBodyProps) {
   return <SharingPanel epicId={props.epicId} />;
 }
 
-// Display title for a projection, discriminated structurally: artifacts carry
-// `kind`, tui-agents `harnessId`, else chat.
+// Display title for a projection: artifacts carry a `kind`; every Agent
+// projection (Chat- or Terminal-interface) falls back to "Untitled agent" -
+// the durable Agent identity - when its stored title is empty, never
+// "Untitled chat" or the harness label.
 function epicArtifactRecordDisplayTitle(
   record: EpicArtifactProjection | EpicChatProjection | EpicTuiAgentProjection,
 ): string {
   if ("kind" in record) return displayTitle(record.title, record.kind);
-  if ("harnessId" in record) {
-    return tuiAgentDisplayTitle({
-      title: record.title,
-      harnessId: record.harnessId,
-    });
-  }
-  return displayTitle(record.title, "chat");
+  return displayTitle(record.title, "agent");
 }
 
 function CommentsPanelSubtitle(props: LeftPanelSlotProps) {
@@ -1539,8 +1535,24 @@ function describeSidebarBulkDeleteTitle(
       ? "Delete selected item?"
       : `Delete "${record.name}"?`;
   }
-  const noun = panelId === "chats" ? "chat items" : "artifacts";
-  return `Delete ${ids.length} selected ${noun}?`;
+  return `Delete ${ids.length} selected ${panelRowNoun(panelId, ids.length)}?`;
+}
+
+/**
+ * Plural noun naming a panel's rows in user-facing copy.
+ *
+ * Deliberately NOT the panel `id`: the id is an internal identifier on the
+ * compatibility boundary (`"chats"`), and interpolating it directly produced
+ * "Delete 3 selected chats" - copy that silently drifts from the panel's own
+ * title. A mixed Chat/Terminal selection summarizes as **agents**, because
+ * Agent is the durable entity being deleted and the interface is incidental.
+ *
+ * `count` selects number: the delete button is enabled from one row, so a
+ * plural-only noun produced "Delete 1 selected agents".
+ */
+function panelRowNoun(panelId: LeftPanelId, count: number): string {
+  if (panelId === "chats") return count === 1 ? "agent" : "agents";
+  return count === 1 ? "artifact" : "artifacts";
 }
 
 function describeSidebarBulkDeleteDescription(
@@ -1791,7 +1803,7 @@ function TreePanelActions(props: TreePanelActionsProps) {
           disabledTooltip={mutationDisabledHint(
             permissionRole,
             isDisconnected,
-            "create chats",
+            "create agents",
           )}
           triggerLabel={props.addLabel}
           triggerTestId={props.triggerTestId}
@@ -1856,7 +1868,7 @@ function ChatsPanelActions(props: LeftPanelHeaderSlotProps) {
     <div className="flex items-center gap-0.5">
       <ChatFilterMenu epicId={props.epicId} disabled={props.collapsed} />
       <SidebarStartSelectionButton
-        label="Select chats"
+        label="Select agents"
         disabled={props.collapsed}
       />
       <TreePanelActions
@@ -1864,7 +1876,7 @@ function ChatsPanelActions(props: LeftPanelHeaderSlotProps) {
         tabId={props.tabId}
         panelId="chats"
         collapsed={props.collapsed}
-        addLabel="Add chat or agent"
+        addLabel="Add agent"
         menuTestId="epic-sidebar-add-chat-root-menu"
         triggerTestId="epic-sidebar-add-chat-root"
         itemTestId={(type) => `epic-sidebar-add-chat-root-${type}`}
@@ -2096,8 +2108,8 @@ function SidebarBulkSelectionActions() {
         size="icon-sm"
         aria-label={
           selection.selectedCount > 0
-            ? `Delete ${selection.selectedCount} selected ${selection.panelId}`
-            : `Delete selected ${selection.panelId}`
+            ? `Delete ${selection.selectedCount} selected ${panelRowNoun(selection.panelId, selection.selectedCount)}`
+            : `Delete selected ${panelRowNoun(selection.panelId, 0)}`
         }
         data-testid={`epic-sidebar-delete-selected-${selection.panelId}`}
         disabled={

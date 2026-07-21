@@ -5,16 +5,15 @@
  * sub-page stack); its leaves open into the bound target group via
  * `openTileIntoTargetGroup` (Decision 2/3 of the pane-opener tech plan).
  *
- * T5 fills Chats / TUI / Terminals / Artifacts (live projection + pinned
- * "New X", default-host bound). T6 fills Files / Diff (two-step workspace →
- * file).
+ * T5 fills Agents / Terminals / Artifacts (live projection + pinned
+ * creation leaves, default-host bound). T6 fills Files / Diff (two-step
+ * workspace → file).
  */
 import { useArtifactsOpenerItems } from "@/lib/commands/sources/open/artifacts-subpage";
-import { useChatsOpenerItems } from "@/lib/commands/sources/open/chats-subpage";
+import { useAgentsOpenerItems } from "@/lib/commands/sources/open/agents-subpage";
 import { useDiffOpenerItems } from "@/lib/commands/sources/open/diff-subpage";
 import { useFilesOpenerItems } from "@/lib/commands/sources/open/files-subpage";
 import { useTerminalsOpenerItems } from "@/lib/commands/sources/open/terminals-subpage";
-import { useTuiOpenerItems } from "@/lib/commands/sources/open/tui-subpage";
 import type {
   CommandContext,
   CommandItem,
@@ -31,16 +30,14 @@ interface OpenerCategory {
 
 const OPENER_CATEGORIES: ReadonlyArray<OpenerCategory> = [
   {
-    id: "chats",
-    title: "Chats",
-    keywords: ["chat", "chats"],
-    useItems: useChatsOpenerItems,
-  },
-  {
-    id: "tui",
-    title: "TUI agents",
-    keywords: ["tui", "agent", "agents"],
-    useItems: useTuiOpenerItems,
+    // ONE Agent category. Chat and Terminal are interfaces within it, not peer
+    // collections - splitting them here restated an interface as an entity.
+    // `chat`/`chats`/`tui` stay as keywords so users who learned the old
+    // vocabulary still land here: the label moves, discoverability does not.
+    id: "agents",
+    title: "Agents",
+    keywords: ["agent", "agents", "chat", "chats", "tui", "terminal"],
+    useItems: useAgentsOpenerItems,
   },
   {
     id: "terminals",

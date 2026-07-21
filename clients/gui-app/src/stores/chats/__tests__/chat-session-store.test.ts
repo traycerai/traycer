@@ -1644,7 +1644,7 @@ describe("createChatSessionStore", () => {
       clientActionId: frame.clientActionId,
       action: "send",
       status: "rejected",
-      reason: "Only the chat owner can perform this action.",
+      reason: "Only the agent owner can perform this action.",
       code: "NOT_OWNER",
       backgroundStopTaskIds: [],
     });
@@ -1653,7 +1653,7 @@ describe("createChatSessionStore", () => {
       {
         clientActionId: frame.clientActionId,
         content: CONTENT,
-        reason: "Only the chat owner can perform this action.",
+        reason: "Only the agent owner can perform this action.",
       },
     );
     expect(harness.handle.store.getState().pendingUserMessages).toEqual([]);

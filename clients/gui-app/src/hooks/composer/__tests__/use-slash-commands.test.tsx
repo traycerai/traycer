@@ -35,6 +35,7 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
       isPending: mockState.isPending,
       isFetching: mockState.isFetching,
       error: mockState.error,
+      refetch: () => Promise.resolve(),
     };
   },
 }));

@@ -426,7 +426,7 @@ describe("<TerminalAgentForkDialog />", () => {
     );
 
     const argsInput = screen.getByRole("textbox", {
-      name: "Terminal agent additional arguments",
+      name: "Terminal interface CLI arguments",
     });
     expect((argsInput as HTMLInputElement).value).toBe("--from-source");
     fireEvent.click(screen.getByRole("button", { name: "Fork" }));

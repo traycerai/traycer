@@ -20,7 +20,10 @@ import { buildServiceBridge } from "./service-bridge";
 import { buildTraycerCliBridge } from "./traycer-cli-bridge";
 import { buildPlatformBridge } from "./platform-bridge";
 import { buildPowerBridge } from "./power-bridge";
-import { buildFileDropsBridge } from "./file-drops-bridge";
+import {
+  buildFileDropsBridge,
+  createNativeClipboardReadGate,
+} from "./file-drops-bridge";
 import { buildZoomBridge } from "./zoom-bridge";
 import { readSyncString } from "./sync-bootstrap";
 
@@ -42,6 +45,9 @@ import { readSyncString } from "./sync-bootstrap";
 const windowId = readSyncString(RunnerHostSync.windowId, "primary");
 const sentryRendererDsn = readSyncString(RunnerHostSync.sentryRendererDsn, "");
 const initialRoute = readInitialRouteArg(process.argv);
+const nativeClipboardReadGate = createNativeClipboardReadGate(() => Date.now());
+
+window.addEventListener("paste", nativeClipboardReadGate.observePaste, true);
 
 contextBridge.exposeInMainWorld("runnerHost", {
   authnBaseUrl: config.authnBaseUrl,
@@ -60,7 +66,7 @@ contextBridge.exposeInMainWorld("runnerHost", {
   ...buildSupportBridge(),
   ...buildAppUpdateBridge(),
   ...buildLifecycleBridge(),
-  fileDrops: buildFileDropsBridge(),
+  fileDrops: buildFileDropsBridge(nativeClipboardReadGate),
   service: buildServiceBridge(),
   traycerCli: buildTraycerCliBridge(),
   migration: buildMigrationBridge(),

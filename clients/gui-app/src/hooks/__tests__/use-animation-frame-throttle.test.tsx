@@ -5,16 +5,22 @@ import { useAnimationFrameThrottle } from "@/hooks/use-animation-frame-throttle"
 describe("useAnimationFrameThrottle", () => {
   let frameCallbacks: Map<number, FrameRequestCallback>;
   let nextFrameHandle: number;
+  let requestAnimationFrameCallCount: number;
+  let cancelAnimationFrameCallCount: number;
 
   beforeEach(() => {
     frameCallbacks = new Map();
     nextFrameHandle = 0;
+    requestAnimationFrameCallCount = 0;
+    cancelAnimationFrameCallCount = 0;
     vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      requestAnimationFrameCallCount += 1;
       nextFrameHandle += 1;
       frameCallbacks.set(nextFrameHandle, callback);
       return nextFrameHandle;
     });
     vi.spyOn(window, "cancelAnimationFrame").mockImplementation((handle) => {
+      cancelAnimationFrameCallCount += 1;
       frameCallbacks.delete(handle);
     });
   });
@@ -38,7 +44,7 @@ describe("useAnimationFrameThrottle", () => {
     result.current("b");
     result.current("c");
     expect(callback).not.toHaveBeenCalled();
-    expect(window.requestAnimationFrame).toHaveBeenCalledTimes(1);
+    expect(requestAnimationFrameCallCount).toBe(1);
 
     flushFrame();
     expect(callback).toHaveBeenCalledTimes(1);
@@ -84,7 +90,7 @@ describe("useAnimationFrameThrottle", () => {
     flushFrame();
 
     expect(callback).not.toHaveBeenCalled();
-    expect(window.cancelAnimationFrame).toHaveBeenCalledTimes(1);
+    expect(cancelAnimationFrameCallCount).toBe(1);
   });
 
   it("keeps the schedule function identity stable across renders", () => {

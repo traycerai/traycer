@@ -13,6 +13,7 @@ import {
   type HostEndpointProvider,
 } from "./ws-rpc-client";
 import type { BearerSourceProvider } from "@traycer-clients/shared/auth/bearer-source";
+import { readAccessTokenExpiryMs } from "@traycer-clients/shared/auth/jwt-exp";
 import type {
   RevalidateOutcome,
   StreamAuthRevalidator,
@@ -633,6 +634,36 @@ class StreamSession<
         return;
       }
       throw cause;
+    }
+
+    // A bearer that is ALREADY expired cannot open a session - the host is
+    // guaranteed to reject it with UNAUTHORIZED before any stream state is
+    // built. This is the resume-after-suspension case: the renderer's
+    // proactive refresh timer was frozen along with the rest of its JS, so
+    // the first re-dial after wake would otherwise burn a round-trip on a
+    // certain rejection (surfacing a sign-in toast). Revalidate first and
+    // dial with the rotated bearer. The local `exp` read is unverified and
+    // advisory only - the reactive UNAUTHORIZED path stays the authority for
+    // everything it cannot see (revocation, clock skew, config mismatch),
+    // and an undecodable token falls through to a normal dial.
+    const auth = this.config.auth;
+    const expiresAtMs = readAccessTokenExpiryMs(token);
+    if (auth !== null && expiresAtMs !== null && expiresAtMs <= Date.now()) {
+      console.debug(
+        `[stream] pre-dial bearer already expired; revalidating before dial method=${String(this.config.method)}`,
+      );
+      this.transitionTo("reconnecting", null);
+      void this.revalidateThenReconnect(
+        auth,
+        {
+          code: "UNAUTHORIZED",
+          reason: "Bearer expired before dial (client resumed from suspension)",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        },
+        token,
+      );
+      return;
     }
 
     const dialUrl = toStreamDialUrl(selected.websocketUrl);

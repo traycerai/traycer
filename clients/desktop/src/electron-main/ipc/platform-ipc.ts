@@ -42,13 +42,20 @@ import {
   untrustCertificate,
 } from "../app/cert-trust";
 import { readDisplayTopology } from "../app/screen-monitor";
+import { readNativeClipboardFilePaths } from "../clipboard/native-clipboard-file-paths";
 import {
   getHardwareAccelerationPreference,
   setHardwareAccelerationPreference,
 } from "../app/gpu-acceleration";
 import { RunnerHostInvoke } from "../../ipc-contracts/ipc-channels";
 import type { FileSaveInput } from "../../ipc-contracts/platform-types";
-import { app, BrowserWindow, dialog, type ProxyConfig } from "electron";
+import {
+  app,
+  BrowserWindow,
+  clipboard,
+  dialog,
+  type ProxyConfig,
+} from "electron";
 import { randomUUID } from "node:crypto";
 import { copyFile, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -107,6 +114,14 @@ export function registerPlatformIpc(bridge: RunnerIpcBridge): void {
           copyDroppedFileToTemp(sourcePath, directory),
         ),
       );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.fileDropReadNativeClipboardPaths,
+    (): readonly string[] => {
+      if (process.platform !== "darwin") return [];
+      return readNativeClipboardFilePaths(clipboard);
     },
   );
 
