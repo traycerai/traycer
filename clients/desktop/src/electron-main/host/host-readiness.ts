@@ -622,6 +622,9 @@ export function categorizeHostCliError(err: unknown): HostEnsureError {
       err.code === "E_NETWORK" ||
       err.code === "E_OFFLINE" ||
       err.code === "E_DOWNLOAD_FAILED" ||
+      err.code === "E_REGISTRY_UNAVAILABLE" ||
+      // Older CLI builds used this spelling. Keep it as a compatibility alias
+      // while the current CLI contract uses E_REGISTRY_UNAVAILABLE.
       err.code === "E_REGISTRY_UNREACHABLE"
     ) {
       return {

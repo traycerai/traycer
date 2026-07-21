@@ -527,6 +527,9 @@ export interface StreamTraycerCliOptions {
   readonly args: readonly string[];
   readonly onEvent: (event: NdjsonEvent) => void;
   readonly env: Readonly<Record<string, string>> | null;
+  readonly timeoutPolicy: StreamTraycerCliTimeoutPolicy;
+  // Compatibility observation for callers/tests that record the historical
+  // scalar budget. Timeout enforcement is exclusively timeoutPolicy.
   readonly timeoutMs: number;
   /**
    * Explicit CLI binary + leading args. Pass `null` to resolve via the
@@ -537,6 +540,17 @@ export interface StreamTraycerCliOptions {
    */
   readonly invocation: TraycerCliInvocation | null;
 }
+
+export type StreamTraycerCliTimeoutPolicy =
+  | {
+      readonly kind: "absolute";
+      readonly absoluteCapMs: number;
+    }
+  | {
+      readonly kind: "progress-inactivity";
+      readonly inactivityMs: number;
+      readonly absoluteCapMs: number;
+    };
 
 export interface StreamTraycerCliResult<T> {
   readonly data: T;
@@ -573,9 +587,18 @@ export async function streamTraycerCliJson<T>(
     let sawTerminalOk = false;
     let terminalError: TraycerCliError | null = null;
     let settled = false;
-    const timer = setTimeout(() => {
+    let absoluteTimer: NodeJS.Timeout | null = null;
+    let inactivityTimer: NodeJS.Timeout | null = null;
+    const clearTimers = (): void => {
+      if (absoluteTimer !== null) clearTimeout(absoluteTimer);
+      if (inactivityTimer !== null) clearTimeout(inactivityTimer);
+      absoluteTimer = null;
+      inactivityTimer = null;
+    };
+    const rejectForTimeout = (reason: string): void => {
       if (settled) return;
       settled = true;
+      clearTimers();
       try {
         child.kill("SIGKILL");
       } catch {
@@ -584,7 +607,7 @@ export async function streamTraycerCliJson<T>(
       reject(
         new TraycerCliError(
           {
-            message: `traycer-cli timed out after ${opts.timeoutMs}ms (${augmentedArgs.join(" ")})`,
+            message: `traycer-cli ${reason} (${augmentedArgs.join(" ")})`,
             code: null,
             details: null,
             exitCode: null,
@@ -593,7 +616,24 @@ export async function streamTraycerCliJson<T>(
           null,
         ),
       );
-    }, opts.timeoutMs);
+    };
+    absoluteTimer = setTimeout(
+      () =>
+        rejectForTimeout(
+          `exceeded its ${opts.timeoutPolicy.absoluteCapMs}ms absolute timeout`,
+        ),
+      opts.timeoutPolicy.absoluteCapMs,
+    );
+    const resetInactivityTimeout = (): void => {
+      if (opts.timeoutPolicy.kind !== "progress-inactivity") return;
+      const inactivityMs = opts.timeoutPolicy.inactivityMs;
+      if (inactivityTimer !== null) clearTimeout(inactivityTimer);
+      inactivityTimer = setTimeout(
+        () => rejectForTimeout(`was inactive for ${inactivityMs}ms`),
+        inactivityMs,
+      );
+    };
+    resetInactivityTimeout();
 
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
@@ -618,6 +658,7 @@ export async function streamTraycerCliJson<T>(
         const event = parseNdjsonEvent(parsed);
         if (event === null) continue;
         if (event.type === "progress") {
+          resetInactivityTimeout();
           opts.onEvent(event);
           continue;
         }
@@ -649,7 +690,7 @@ export async function streamTraycerCliJson<T>(
     child.on("error", (err) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      clearTimers();
       reject(
         new TraycerCliError(
           {
@@ -667,7 +708,7 @@ export async function streamTraycerCliJson<T>(
     child.on("close", (exitCode) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      clearTimers();
       if (terminalError !== null) {
         reject(
           new TraycerCliError(

@@ -414,9 +414,40 @@ function streamCliWithinOperation(
     args,
     onEvent,
     env: null,
+    timeoutPolicy: timeoutPolicyForHostOperation(args, timeoutMs),
     timeoutMs,
     invocation,
   }).then((result: { readonly data: unknown }) => result.data);
+}
+
+// The CLI's internal network watchdog permits a 30s silent period plus a
+// short retry backoff. This deadline remains deliberately larger so the CLI
+// can report its bounded E_REGISTRY_UNAVAILABLE envelope before Desktop kills
+// it. The absolute cap protects a noisy or pathological subprocess forever.
+export const HOST_DOWNLOAD_INACTIVITY_TIMEOUT_MS = 45_000;
+export const HOST_DOWNLOAD_ABSOLUTE_CAP_MS = 60 * 60_000;
+
+function timeoutPolicyForHostOperation(
+  args: readonly string[],
+  timeoutMs: number,
+):
+  | { readonly kind: "absolute"; readonly absoluteCapMs: number }
+  | {
+      readonly kind: "progress-inactivity";
+      readonly inactivityMs: number;
+      readonly absoluteCapMs: number;
+    } {
+  const isDownloadCapable =
+    args[0] === "host" &&
+    (args[1] === "install" || args[1] === "update" || args[1] === "ensure");
+  if (isDownloadCapable) {
+    return {
+      kind: "progress-inactivity",
+      inactivityMs: HOST_DOWNLOAD_INACTIVITY_TIMEOUT_MS,
+      absoluteCapMs: HOST_DOWNLOAD_ABSOLUTE_CAP_MS,
+    };
+  }
+  return { kind: "absolute", absoluteCapMs: timeoutMs };
 }
 export function streamCliWithProgress(
   args: readonly string[],
@@ -859,55 +890,120 @@ async function probeRegistry(): Promise<RegistryUpdateCacheFile> {
   const checkedAt = new Date().toISOString();
   const includePreReleases = prereleaseUpdatesEnabled();
   try {
-    const snapshot = projectAvailableSnapshot(
-      await runTraycerCliJson<unknown>([
-        "host",
-        "available",
-        "--json",
-        ...(includePreReleases ? ["--include-pre-releases"] : []),
-      ]),
+    return reachableRegistryCache(
+      await runTraycerCliJson<unknown>(
+        availableRegistryArgs(includePreReleases),
+      ),
+      checkedAt,
+      includePreReleases,
     );
-    const installed = await readInstalledHostRecord();
-    const installedVersion = installed?.version ?? null;
-    return {
-      checkedAt,
-      includePreReleases,
-      latestVersion: availableLatestVersion(snapshot, includePreReleases),
-      installedVersion,
-      reachable: true,
-      errorMessage: null,
-    };
   } catch (err) {
-    const installed = await readInstalledHostRecord();
-    const installedVersion = installed?.version ?? null;
     if (isVerifyDisabledForBuild(err)) {
-      // Pin `latestVersion = installedVersion` so `buildUpdateState`'s
-      // diff yields `updateAvailable: false` - the Updates row reads
-      // "Up to date" instead of a generic error chip.
-      return {
-        checkedAt,
-        includePreReleases,
-        latestVersion: installedVersion,
-        installedVersion,
-        reachable: true,
-        errorMessage: null,
-      };
+      return verifyDisabledRegistryCache(checkedAt, includePreReleases);
     }
-    const message =
-      err instanceof TraycerCliError
-        ? err.message
-        : err instanceof Error
-          ? err.message
-          : String(err);
-    log.debug("[host-management] registry probe failed (silent)", { message });
-    return {
-      checkedAt,
-      includePreReleases,
-      latestVersion: null,
-      installedVersion,
-      reachable: false,
-      errorMessage: message,
-    };
+    return unreachableRegistryCache(err, checkedAt, includePreReleases);
+  }
+}
+
+function availableRegistryArgs(includePreReleases: boolean): string[] {
+  return [
+    "host",
+    "available",
+    "--json",
+    ...(includePreReleases ? ["--include-pre-releases"] : []),
+  ];
+}
+
+async function reachableRegistryCache(
+  raw: unknown,
+  checkedAt: string,
+  includePreReleases: boolean,
+): Promise<RegistryUpdateCacheFile> {
+  const snapshot = projectAvailableSnapshot(raw);
+  const installed = await readInstalledHostRecord();
+  const installedVersion = installed?.version ?? null;
+  return {
+    checkedAt,
+    includePreReleases,
+    latestVersion: availableLatestVersion(snapshot, includePreReleases),
+    installedVersion,
+    reachable: true,
+    errorMessage: null,
+  };
+}
+
+async function verifyDisabledRegistryCache(
+  checkedAt: string,
+  includePreReleases: boolean,
+): Promise<RegistryUpdateCacheFile> {
+  const installed = await readInstalledHostRecord();
+  const installedVersion = installed?.version ?? null;
+  // Pin `latestVersion = installedVersion` so `buildUpdateState`'s diff yields
+  // `updateAvailable: false` - Settings reads "Up to date" instead of a raw
+  // trusted-key configuration error.
+  return {
+    checkedAt,
+    includePreReleases,
+    latestVersion: installedVersion,
+    installedVersion,
+    reachable: true,
+    errorMessage: null,
+  };
+}
+
+async function unreachableRegistryCache(
+  err: unknown,
+  checkedAt: string,
+  includePreReleases: boolean,
+): Promise<RegistryUpdateCacheFile> {
+  const installed = await readInstalledHostRecord();
+  const installedVersion = installed?.version ?? null;
+  const message = registryErrorMessage(err);
+  log.debug("[host-management] registry probe failed (silent)", { message });
+  return {
+    checkedAt,
+    includePreReleases,
+    latestVersion: null,
+    installedVersion,
+    reachable: false,
+    errorMessage: message,
+  };
+}
+
+function registryErrorMessage(err: unknown): string {
+  if (err instanceof TraycerCliError) return err.message;
+  if (err instanceof Error) return err.message;
+  return String(err);
+}
+
+async function probeRegistryWithinHostOperation(
+  onEvent: HostOperationEventListener,
+): Promise<RegistryUpdateCacheFile> {
+  const checkedAt = new Date().toISOString();
+  const includePreReleases = prereleaseUpdatesEnabled();
+  try {
+    const result = await streamTraycerCliJson<unknown>({
+      args: availableRegistryArgs(includePreReleases),
+      onEvent,
+      env: null,
+      timeoutPolicy: {
+        kind: "progress-inactivity",
+        inactivityMs: HOST_DOWNLOAD_INACTIVITY_TIMEOUT_MS,
+        absoluteCapMs: HOST_DOWNLOAD_ABSOLUTE_CAP_MS,
+      },
+      timeoutMs: LONG_OP_TIMEOUT_MS,
+      invocation: null,
+    });
+    return reachableRegistryCache(result.data, checkedAt, includePreReleases);
+  } catch (err) {
+    if (isVerifyDisabledForBuild(err)) {
+      return verifyDisabledRegistryCache(checkedAt, includePreReleases);
+    }
+    // Settings install/update must carry the CLI's terminal registry error to
+    // the renderer. Converting it to `reachable: false` here loses
+    // E_REGISTRY_UNAVAILABLE and turns the bounded retry envelope into generic
+    // copy.
+    throw err;
   }
 }
 
@@ -997,9 +1093,27 @@ export async function refreshRegistryUpdateState(opts: {
   readonly force: boolean;
   readonly maxAgeMs: number | null;
 }): Promise<HostRegistryUpdateState> {
+  return refreshRegistryUpdateStateWithProbe(opts, probeRegistry);
+}
+
+async function refreshRegistryUpdateStateWithinHostOperation(
+  opts: { readonly force: boolean; readonly maxAgeMs: number | null },
+  onEvent: HostOperationEventListener,
+): Promise<HostRegistryUpdateState> {
+  return refreshRegistryUpdateStateWithProbe(opts, () =>
+    probeRegistryWithinHostOperation(onEvent),
+  );
+}
+
+type RegistryProbe = () => Promise<RegistryUpdateCacheFile>;
+
+function refreshRegistryUpdateStateWithProbe(
+  opts: { readonly force: boolean; readonly maxAgeMs: number | null },
+  probe: RegistryProbe,
+): Promise<HostRegistryUpdateState> {
   const run = registryRefreshQueue.then(
-    () => refreshRegistryUpdateStateSerial(opts),
-    () => refreshRegistryUpdateStateSerial(opts),
+    () => refreshRegistryUpdateStateSerial(opts, probe),
+    () => refreshRegistryUpdateStateSerial(opts, probe),
   );
   registryRefreshQueue = run.then(
     () => undefined,
@@ -1008,10 +1122,13 @@ export async function refreshRegistryUpdateState(opts: {
   return run;
 }
 
-async function refreshRegistryUpdateStateSerial(opts: {
-  readonly force: boolean;
-  readonly maxAgeMs: number | null;
-}): Promise<HostRegistryUpdateState> {
+async function refreshRegistryUpdateStateSerial(
+  opts: {
+    readonly force: boolean;
+    readonly maxAgeMs: number | null;
+  },
+  probe: RegistryProbe,
+): Promise<HostRegistryUpdateState> {
   const cache = await readRegistryCache();
   if (
     !opts.force &&
@@ -1027,7 +1144,7 @@ async function refreshRegistryUpdateStateSerial(opts: {
       return state;
     }
   }
-  const fresh = await probeRegistry();
+  const fresh = await probe();
   await writeRegistryCache(fresh);
   const state = buildUpdateState(fresh);
   emitHostRegistryUpdateState(state);
@@ -1201,10 +1318,10 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
           await clearHostRemovalIfSet();
           const updateState =
             requestedVersion === null || requestedVersion === "latest"
-              ? await refreshRegistryUpdateState({
-                  force: true,
-                  maxAgeMs: null,
-                })
+              ? await refreshRegistryUpdateStateWithinHostOperation(
+                  { force: true, maxAgeMs: null },
+                  onEvent,
+                )
               : null;
           const targetVersion =
             requestedVersion !== null && requestedVersion !== "latest"
@@ -1266,10 +1383,11 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
           await clearHostRemovalIfSet();
           // Always pin an exact registry target. Bare `host update` follows
           // the moving stable pointer and can silently downgrade an RC host.
-          const updateState = await refreshRegistryUpdateState({
-            force: true,
-            maxAgeMs: null,
-          });
+          const updateState =
+            await refreshRegistryUpdateStateWithinHostOperation(
+              { force: true, maxAgeMs: null },
+              onEvent,
+            );
           if (!updateState.reachable || updateState.latestVersion === null) {
             throw new Error(
               "Host update requires a reachable exact target version from the registry. Try again once the registry is reachable, or check for updates first.",

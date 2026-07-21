@@ -36,12 +36,20 @@ vi.mock("electron-log", () => ({
 // `HostLifecycle` shells out to the CLI for `respawn` (`traycer host
 // restart`). Mock the helper so a test exercising that path can assert
 // on the captured argv without spawning a real CLI subprocess.
-const cliStreamCalls: { args: readonly string[] }[] = [];
+const cliStreamCalls: {
+  args: readonly string[];
+  timeoutPolicy: unknown;
+}[] = [];
 vi.mock("../../cli/traycer-cli", () => ({
-  streamTraycerCliJson: vi.fn(async (opts: { args: readonly string[] }) => {
-    cliStreamCalls.push({ args: opts.args });
-    return { data: {} };
-  }),
+  streamTraycerCliJson: vi.fn(
+    async (opts: { args: readonly string[]; timeoutPolicy: unknown }) => {
+      cliStreamCalls.push({
+        args: opts.args,
+        timeoutPolicy: opts.timeoutPolicy,
+      });
+      return { data: {} };
+    },
+  ),
 }));
 
 import {
@@ -725,6 +733,12 @@ describe("HostLifecycle.respawn (CLI subprocess)", () => {
       expect(cliStreamCalls).toHaveLength(1);
       // No --environment - the CLI resolves its slot from config.environment.
       expect(cliStreamCalls[0]?.args).toEqual(["host", "restart"]);
+      const { HOST_RESTART_SUBPROCESS_TIMEOUT_MS } =
+        await import("@traycer/protocol/host/lifecycle-constants");
+      expect(cliStreamCalls[0]?.timeoutPolicy).toEqual({
+        kind: "absolute",
+        absoluteCapMs: HOST_RESTART_SUBPROCESS_TIMEOUT_MS,
+      });
     } finally {
       lifecycle.dispose();
       await cleanup();

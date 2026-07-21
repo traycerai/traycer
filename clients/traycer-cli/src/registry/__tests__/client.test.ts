@@ -1,4 +1,11 @@
+import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  createServer,
+  type IncomingMessage,
+  type Server,
+  type ServerResponse,
+} from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -14,6 +21,10 @@ import { createRegistryClient } from "../client";
 import type { RegistryTransport } from "../client";
 import { CliError } from "../../runner/errors";
 
+const manifestUrlMock = vi.hoisted(() => ({
+  url: "https://registry.example.test/versions.json",
+}));
+
 const loggerMock = vi.hoisted(() => ({
   debug: vi.fn(),
   error: vi.fn(),
@@ -27,6 +38,10 @@ vi.mock("../../logger", () => ({
     value instanceof Error ? value : new Error(String(value)),
 }));
 
+vi.mock("../manifest-url", () => ({
+  resolveManifestUrl: () => ({ url: manifestUrlMock.url }),
+}));
+
 // Smoke-level test that wires the client end-to-end against a fake
 // transport so we can assert manifest parsing, version resolution,
 // yanked refusal, and platform unavailability without spinning up a
@@ -34,6 +49,7 @@ vi.mock("../../logger", () => ({
 // `minisign.test.ts`; here we focus on resolution and error mapping.
 
 let tmpRoot: string;
+const faultServers: Server[] = [];
 
 beforeAll(() => {
   tmpRoot = mkdtempSync(join(tmpdir(), "traycer-registry-client-"));
@@ -44,11 +60,89 @@ beforeEach(() => {
   loggerMock.error.mockClear();
   loggerMock.info.mockClear();
   loggerMock.warn.mockClear();
+  manifestUrlMock.url = "https://registry.example.test/versions.json";
 });
 
-afterAll(() => {
+afterAll(async () => {
+  vi.useRealTimers();
+  await Promise.all(
+    faultServers.splice(0).map((server) => closeFaultServer(server)),
+  );
   rmSync(tmpRoot, { recursive: true, force: true });
 });
+
+async function startFaultServer(
+  handler: (request: IncomingMessage, response: ServerResponse) => void,
+): Promise<string> {
+  const server = createServer(handler);
+  faultServers.push(server);
+  await new Promise<void>((resolve, reject) => {
+    const onError = (error: Error): void => {
+      server.off("listening", onListening);
+      reject(error);
+    };
+    const onListening = (): void => {
+      server.off("error", onError);
+      resolve();
+    };
+    server.once("error", onError);
+    server.once("listening", onListening);
+    server.listen(0, "127.0.0.1");
+  });
+  const address = server.address();
+  if (address === null || typeof address === "string") {
+    throw new Error("fault server did not expose a TCP address");
+  }
+  return `http://127.0.0.1:${address.port}`;
+}
+
+async function closeFaultServer(server: Server): Promise<void> {
+  if (!server.listening) return;
+  await new Promise<void>((resolve, reject) => {
+    server.closeAllConnections();
+    server.close((error) => {
+      if (error === undefined) {
+        resolve();
+        return;
+      }
+      reject(error);
+    });
+  });
+}
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function faultManifest(baseUrl: string) {
+  return JSON.stringify({
+    schemaVersion: 1,
+    generatedAt: "2026-05-15T12:00:00Z",
+    latest: "1.5.0",
+    versions: [
+      {
+        version: "1.5.0",
+        releasedAt: "2026-05-15T12:00:00Z",
+        releaseNotesUrl: "https://example.com/notes/1.5.0",
+        yanked: false,
+        deprecationReason: null,
+        requiredCliVersion: null,
+        platforms: {
+          "darwin-arm64": {
+            available: true,
+            unavailableReason: null,
+            url: `${baseUrl}/archive`,
+            sizeBytes: 6,
+            sha256: sha256("abcdef"),
+            signatureUrl: `${baseUrl}/archive.minisig`,
+            signatureAlgorithm: "minisign",
+            publicKeyId: "deadbeefdeadbeef",
+          },
+        },
+      },
+    ],
+  });
+}
 
 const MANIFEST_DATA = {
   schemaVersion: 1,
@@ -128,10 +222,210 @@ function fakeTransport(): RegistryTransport {
 }
 
 describe("registry client", () => {
+  it("fails closed after a default-transport manifest blackhole", async () => {
+    vi.useFakeTimers();
+    let requestReceived: (() => void) | null = null;
+    const received = new Promise<void>((resolve) => {
+      requestReceived = resolve;
+    });
+    const baseUrl = await startFaultServer(() => {
+      if (requestReceived !== null) requestReceived();
+    });
+    manifestUrlMock.url = `${baseUrl}/versions.json`;
+    const progress: string[] = [];
+    let desktopInactivityExpired = false;
+    let desktopInactivityTimer: NodeJS.Timeout | null = null;
+    const resetDesktopInactivity = (): void => {
+      if (desktopInactivityTimer !== null) {
+        clearTimeout(desktopInactivityTimer);
+      }
+      desktopInactivityTimer = setTimeout(() => {
+        desktopInactivityExpired = true;
+      }, 45_000);
+    };
+    resetDesktopInactivity();
+    const client = await createRegistryClient({
+      environment: "production",
+      transport: null,
+      onProgress: (event) => {
+        progress.push(event.stage);
+        resetDesktopInactivity();
+      },
+      requireTrustedKeys: false,
+    });
+    const pending = client.fetchManifest();
+    const outcome = pending.then(
+      () => ({ kind: "ok" as const }),
+      (error: unknown) => ({ kind: "error" as const, error }),
+    );
+
+    await received;
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.advanceTimersByTimeAsync(750);
+    }
+
+    const settled = await outcome;
+    expect(settled.kind).toBe("error");
+    if (settled.kind === "error") {
+      expect(settled.error).toMatchObject({
+        name: "CliError",
+        code: "E_REGISTRY_UNAVAILABLE",
+      });
+    }
+    expect(progress).toContain("registry-manifest-watchdog");
+    expect(desktopInactivityExpired).toBe(false);
+  });
+
+  it("fails closed after a default-transport signature blackhole following a complete archive", async () => {
+    vi.useFakeTimers();
+    let signatureRequested: (() => void) | null = null;
+    const signatureRequest = new Promise<void>((resolve) => {
+      signatureRequested = resolve;
+    });
+    let archiveCompleted = false;
+    let baseUrl = "";
+    baseUrl = await startFaultServer((request, response) => {
+      if (request.url === "/versions.json") {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(faultManifest(baseUrl));
+        return;
+      }
+      if (request.url === "/archive") {
+        response.writeHead(200, { "content-length": "6", etag: '"etag-1"' });
+        response.end("abcdef", () => {
+          archiveCompleted = true;
+        });
+        return;
+      }
+      if (request.url === "/archive.minisig") {
+        if (signatureRequested !== null) signatureRequested();
+      }
+    });
+    manifestUrlMock.url = `${baseUrl}/versions.json`;
+    const progress: string[] = [];
+    let desktopInactivityExpired = false;
+    let desktopInactivityTimer: NodeJS.Timeout | null = null;
+    const resetDesktopInactivity = (): void => {
+      if (desktopInactivityTimer !== null) {
+        clearTimeout(desktopInactivityTimer);
+      }
+      desktopInactivityTimer = setTimeout(() => {
+        desktopInactivityExpired = true;
+      }, 45_000);
+    };
+    resetDesktopInactivity();
+    const client = await createRegistryClient({
+      environment: "production",
+      transport: null,
+      onProgress: (event) => {
+        progress.push(event.stage);
+        resetDesktopInactivity();
+      },
+      requireTrustedKeys: false,
+    });
+    const { entry, asset } = await client.resolveAsset(
+      "latest",
+      "darwin-arm64",
+    );
+    const pending = client.downloadAndVerify(entry, asset, () => undefined);
+    const outcome = pending.then(
+      () => ({ kind: "ok" as const }),
+      (error: unknown) => ({ kind: "error" as const, error }),
+    );
+
+    await signatureRequest;
+    expect(archiveCompleted).toBe(true);
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.advanceTimersByTimeAsync(750);
+    }
+
+    const settled = await outcome;
+    expect(settled.kind).toBe("error");
+    if (settled.kind === "error") {
+      expect(settled.error).toMatchObject({
+        name: "CliError",
+        code: "E_REGISTRY_UNAVAILABLE",
+      });
+    }
+    expect(progress).toContain("registry-signature-watchdog");
+    expect(desktopInactivityExpired).toBe(false);
+  });
+
+  it("surfaces manifest watchdog heartbeats through CLI progress", async () => {
+    const progress: Array<{ stage: string; message: string }> = [];
+    const client = await createRegistryClient({
+      environment: "production",
+      transport: {
+        fetchText: async ({ onHeartbeat }) => {
+          onHeartbeat?.({ phase: "watchdog", attempt: 1, maxAttempts: 4 });
+          return MANIFEST_BODY;
+        },
+        downloadToFile: async () => ({ downloadedBytes: 0, sha256: "" }),
+      },
+      onProgress: (event) => {
+        if (event.message !== null) {
+          progress.push({ stage: event.stage, message: event.message });
+        }
+      },
+      requireTrustedKeys: false,
+    });
+
+    await client.fetchManifest();
+
+    expect(progress).toContainEqual({
+      stage: "registry-manifest-watchdog",
+      message: "fetching manifest stalled; retrying",
+    });
+  });
+
+  it("surfaces signature watchdog heartbeats before verification fails closed", async () => {
+    const progress: Array<{ stage: string; message: string }> = [];
+    const client = await createRegistryClient({
+      environment: "production",
+      transport: {
+        fetchText: async ({ url, onHeartbeat }) => {
+          if (url.endsWith(".minisig")) {
+            onHeartbeat?.({ phase: "watchdog", attempt: 1, maxAttempts: 4 });
+            return "";
+          }
+          return MANIFEST_BODY;
+        },
+        downloadToFile: async (opts) => {
+          writeFileSync(opts.destPath, Buffer.alloc(opts.expectedSizeBytes));
+          return {
+            downloadedBytes: opts.expectedSizeBytes,
+            sha256: opts.expectedSha256,
+          };
+        },
+      },
+      onProgress: (event) => {
+        if (event.message !== null) {
+          progress.push({ stage: event.stage, message: event.message });
+        }
+      },
+      requireTrustedKeys: false,
+    });
+    const { entry, asset } = await client.resolveAsset(
+      "latest",
+      "darwin-arm64",
+    );
+
+    await expect(
+      client.downloadAndVerify(entry, asset, () => undefined),
+    ).rejects.toThrow();
+    expect(progress).toContainEqual({
+      stage: "registry-signature-watchdog",
+      message: "fetching signature stalled; retrying",
+    });
+  });
+
   it("fetches and parses the manifest", async () => {
     const client = await createRegistryClient({
       environment: "production",
       transport: fakeTransport(),
+      onProgress: null,
       requireTrustedKeys: false,
     });
     const manifest = await client.fetchManifest();
@@ -150,6 +444,7 @@ describe("registry client", () => {
         fetchText: async () => JSON.stringify(manifestWithDupe),
         downloadToFile: async () => ({ downloadedBytes: 0, sha256: "" }),
       },
+      onProgress: null,
       requireTrustedKeys: false,
     });
 
@@ -169,6 +464,7 @@ describe("registry client", () => {
     const client = await createRegistryClient({
       environment: "production",
       transport: fakeTransport(),
+      onProgress: null,
       requireTrustedKeys: false,
     });
     const { entry, asset } = await client.resolveAsset(
@@ -183,6 +479,7 @@ describe("registry client", () => {
     const client = await createRegistryClient({
       environment: "production",
       transport: fakeTransport(),
+      onProgress: null,
       requireTrustedKeys: false,
     });
     await expect(client.resolveAsset("1.4.0", "darwin-arm64")).rejects.toThrow(
@@ -194,6 +491,7 @@ describe("registry client", () => {
     const client = await createRegistryClient({
       environment: "production",
       transport: fakeTransport(),
+      onProgress: null,
       requireTrustedKeys: false,
     });
     await expect(client.resolveAsset("latest", "linux-x64")).rejects.toThrow(
@@ -205,6 +503,7 @@ describe("registry client", () => {
     const client = await createRegistryClient({
       environment: "production",
       transport: fakeTransport(),
+      onProgress: null,
       requireTrustedKeys: false,
     });
     let caught: unknown = null;
@@ -226,6 +525,7 @@ describe("registry client", () => {
         fetchText: async () => "{ not valid json",
         downloadToFile: async () => ({ downloadedBytes: 0, sha256: "" }),
       },
+      onProgress: null,
       requireTrustedKeys: false,
     });
     let caught: unknown = null;
@@ -244,6 +544,7 @@ describe("registry client", () => {
     const client = await createRegistryClient({
       environment: "production",
       transport: fakeTransport(),
+      onProgress: null,
       requireTrustedKeys: false,
     });
     const { entry, asset } = await client.resolveAsset(
