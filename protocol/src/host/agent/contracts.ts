@@ -28,9 +28,11 @@ import {
   listAgentsResponseSchemaV10,
   listAgentsResponseSchemaV20,
   listAgentsResponseSchemaV30,
+  listAgentsResponseSchemaV40,
   agentSummarySchemaV10,
   agentSummarySchemaV20,
   agentSummarySchemaV30,
+  agentSummarySchemaV40,
   sendAgentMessageRequestSchema,
   sendAgentMessageResponseSchema,
   stopAgentRequestSchema,
@@ -407,7 +409,7 @@ export const agentListV40 = defineRpcContract({
   method: "agent.list",
   schemaVersion: { major: 4, minor: 0 } as const,
   requestSchema: listAgentsRequestSchema,
-  responseSchema: listAgentsResponseSchema,
+  responseSchema: listAgentsResponseSchemaV40,
 });
 
 export const agentListUpgradeV3ToV4 = defineUpgradePath<
@@ -466,6 +468,102 @@ export const agentListDowngradeV4ToV1 = defineDowngradePath<
   typeof agentListV10
 >({
   from: { major: 4, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listAgentsResponseSchemaV10.parse({
+      ...response,
+      agents: response.agents.filter(
+        (agent) => agentSummarySchemaV10.safeParse(agent).success,
+      ),
+    }),
+  }),
+});
+
+export const agentListV50 = defineRpcContract({
+  method: "agent.list",
+  schemaVersion: { major: 5, minor: 0 } as const,
+  requestSchema: listAgentsRequestSchema,
+  responseSchema: listAgentsResponseSchema,
+});
+
+export const agentListUpgradeV4ToV5 = defineUpgradePath<
+  typeof agentListV40,
+  typeof agentListV50
+>({
+  from: { major: 4, minor: 0 },
+  to: { major: 5, minor: 0 },
+  // A v4.0 response without Hermes agents is a valid v5.0 response (purely
+  // additive), and the request shape is identical - both upgrades are
+  // identity.
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const agentListDowngradeV5ToV4 = defineDowngradePath<
+  typeof agentListV50,
+  typeof agentListV40
+>({
+  from: { major: 5, minor: 0 },
+  to: { major: 4, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  // Drop Hermes agents so an already-shipped v4.0 client's strict decode
+  // never sees one.
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listAgentsResponseSchemaV40.parse({
+      ...response,
+      agents: response.agents.filter(
+        (agent) => agentSummarySchemaV40.safeParse(agent).success,
+      ),
+    }),
+  }),
+});
+
+export const agentListDowngradeV5ToV3 = defineDowngradePath<
+  typeof agentListV50,
+  typeof agentListV30
+>({
+  from: { major: 5, minor: 0 },
+  to: { major: 3, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  // Drop Devin/Pi/Hermes agents so an already-shipped v3.0 client's strict
+  // decode never sees one.
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listAgentsResponseSchemaV30.parse({
+      ...response,
+      agents: response.agents.filter(
+        (agent) => agentSummarySchemaV30.safeParse(agent).success,
+      ),
+    }),
+  }),
+});
+
+export const agentListDowngradeV5ToV2 = defineDowngradePath<
+  typeof agentListV50,
+  typeof agentListV20
+>({
+  from: { major: 5, minor: 0 },
+  to: { major: 2, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listAgentsResponseSchemaV20.parse({
+      ...response,
+      agents: response.agents.filter(
+        (agent) => agentSummarySchemaV20.safeParse(agent).success,
+      ),
+    }),
+  }),
+});
+
+export const agentListDowngradeV5ToV1 = defineDowngradePath<
+  typeof agentListV50,
+  typeof agentListV10
+>({
+  from: { major: 5, minor: 0 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
