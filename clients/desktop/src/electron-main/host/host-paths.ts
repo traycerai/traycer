@@ -140,6 +140,8 @@ export interface HostFsLayout {
   readonly logFile: string;
   readonly installDir: string;
   readonly installRecordFile: string;
+  readonly stagedDir: string;
+  readonly stagedRecordFile: string;
   readonly pendingLoginItemRevisionFile: string;
   readonly environment: Environment;
 }
@@ -165,16 +167,42 @@ export function getHostFsLayout(environment: Environment): HostFsLayout {
   const base = join(homedir(), ".traycer", "host");
   const rootDir = hostSlotRoot(base, environment);
   const installDir = join(rootDir, "install");
+  const stagedDir = join(rootDir, "staged");
   return {
     rootDir,
     pidMetadataFile: join(rootDir, "pid.json"),
     logFile: join(rootDir, "host.log"),
     installDir,
     installRecordFile: join(installDir, "install.json"),
+    stagedDir,
+    stagedRecordFile: join(stagedDir, "staged.json"),
     pendingLoginItemRevisionFile: join(
       rootDir,
       "pending-login-item-revision.json",
     ),
     environment,
   };
+}
+
+/**
+ * The CLI's own home root (`~/.traycer/cli[/dev|/dev-runs/<slot>]/`), the
+ * same dev-slot rule as `hostSlotRoot` above but rooted at `cli/` instead of
+ * `host/` - mirrors `cliInstallHomeDir` in
+ * `clients/traycer-cli/src/store/paths.ts` (separate bundle, can't be
+ * imported here; same duplication precedent as `environmentSubdir`).
+ */
+export function cliSlotRootForEnvironment(environment: Environment): string {
+  const cliRoot = join(homedir(), ".traycer", "cli");
+  return hostSlotRoot(cliRoot, environment);
+}
+
+/**
+ * Path to the CLI's cross-process `cli-lock` file
+ * (`clients/traycer-cli/src/store/paths.ts:cliLockPath`). The desktop-held
+ * lock sections (Host Update Layer Redesign Tech Plan, "cli-lock" rule 3)
+ * acquire the SAME file via `desktop-cli-lock.ts`, so this must resolve
+ * byte-for-byte identically to the CLI's own resolution.
+ */
+export function cliLockPath(environment: Environment): string {
+  return join(cliSlotRootForEnvironment(environment), ".lock");
 }

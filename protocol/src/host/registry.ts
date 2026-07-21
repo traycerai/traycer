@@ -187,11 +187,15 @@ import {
   hostNotificationsClearAll,
   hostNotificationsGetConfig,
   hostNotificationsIndicatorState,
-  hostNotificationsList,
+  hostNotificationsListDowngradeV20ToV10,
+  hostNotificationsListUpgradeV10ToV20,
+  hostNotificationsListV10,
+  hostNotificationsListV20,
   hostNotificationsMarkAllRead,
   hostNotificationsMarkRead,
   hostNotificationsSetConfig,
-  hostNotificationsSubscribe,
+  hostNotificationsFeedSubscribeV10,
+  hostNotificationsSubscribeV10,
   notificationsSubscribeV10,
 } from "@traycer/protocol/host/notifications/contracts";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
@@ -223,6 +227,7 @@ import {
   gitGetCapabilitiesV10,
   gitSubscribeStatusV10,
   gitSubscribeStatusV11,
+  gitSubscribeStatusV12,
 } from "@traycer/protocol/host/git-contracts";
 import { defineRpcContract } from "@traycer/protocol/framework/index";
 import {
@@ -2097,11 +2102,23 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       latestMinor: 0,
       versions: {
         0: {
-          contract: hostNotificationsList,
+          contract: hostNotificationsListV10,
           upgradeFromPreviousVersion: null,
         },
       },
       downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationsListV20,
+          upgradeFromPreviousVersion: hostNotificationsListUpgradeV10ToV20,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: hostNotificationsListDowngradeV20ToV10,
+      },
     },
   },
   "host.notificationHooks.status": {
@@ -4170,7 +4187,17 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
       latestMinor: 0,
       versions: {
         0: {
-          contract: hostNotificationsSubscribe,
+          contract: hostNotificationsSubscribeV10,
+        },
+      },
+    },
+  },
+  "host.notifications.feed.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationsFeedSubscribeV10,
         },
       },
     },
@@ -4199,7 +4226,7 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
   },
   "git.subscribeStatus": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: gitSubscribeStatusV10,
@@ -4210,6 +4237,12 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
         // the COMPAT POSTURE note on `gitSubscribeStatusV11`.
         1: {
           contract: gitSubscribeStatusV11,
+        },
+        // Guaranteed-fresh stream replacement: required `freshNonce` on the
+        // v1.2 open and snapshot/updated frames. Lower-minor projection stays
+        // explicit in the host resolver because streams have no bridges.
+        2: {
+          contract: gitSubscribeStatusV12,
         },
       },
     },

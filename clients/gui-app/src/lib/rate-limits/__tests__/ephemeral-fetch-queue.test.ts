@@ -117,6 +117,11 @@ describe("ephemeral-fetch-queue", () => {
     // started - the second is queued behind it, not spawned in parallel.
     expect(request).toHaveBeenCalledTimes(1);
     expect(calls).toEqual(["codex"]);
+    expect(
+      queryClient
+        .getQueryCache()
+        .find({ queryKey: keyFor("codex"), exact: true })?.options.meta,
+    ).toMatchObject({ hostRpcMethod: "host.getRateLimitUsage" });
 
     // Release the first; only now may the second run.
     settlers[0].ok();

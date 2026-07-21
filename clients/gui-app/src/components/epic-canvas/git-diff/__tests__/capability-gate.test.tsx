@@ -8,8 +8,10 @@ import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messen
 import type { GitGetCapabilitiesResponse } from "@traycer/protocol/host";
 import { CapabilityGate } from "../capability-gate";
 
+const request = vi.fn();
 const mockHostClient = {
-  request: vi.fn(),
+  request,
+  requestWithSignal: request,
 };
 
 vi.mock("@/lib/host", () => ({

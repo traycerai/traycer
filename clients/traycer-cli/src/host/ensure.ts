@@ -1,6 +1,7 @@
 import { config } from "../config";
-import type { InstallSourceArg } from "../installer";
+import { currentInstallPlatform, type InstallSourceArg } from "../installer";
 import { resolveBundledHostArchive } from "../installer/bundled-host";
+import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { ProgressInfo } from "../runner/output";
 import type { RuntimeContext } from "../runner/runtime";
 import { provisionHost, type HostProvisionResult } from "./provision";
@@ -44,6 +45,14 @@ export interface EnsureHostOptions {
 export async function ensureHost(
   opts: EnsureHostOptions,
 ): Promise<HostEnsureResult> {
+  if (opts.noServiceRegister && currentInstallPlatform() === "win32") {
+    throw cliError({
+      code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+      message: "host ensure: --no-service-register is not supported on Windows",
+      details: { environment: opts.runtime.environment },
+      exitCode: 1,
+    });
+  }
   opts.runtime.logger.info("Host ensure started", {
     environment: opts.runtime.environment,
     hasExplicitVersion: opts.versionRequest !== null,

@@ -15,3 +15,14 @@ regexTarget = "secret"
 regexes = [
   '''eff2c8c42294f62b09cebd99d82c8c93b25URVNUO2V4OTk5OTk5OTk5OTk5OQ==''',
 ]
+
+[[allowlists]]
+description = "RFC 6455's public sample client nonce in the historic loopback handshake probe. Require both the exact nonce and its source path so unrelated findings remain reportable."
+condition = "AND"
+regexTarget = "secret"
+paths = [
+  '''^clients/desktop/src/electron-main/host/host-lifecycle\.ts$''',
+]
+regexes = [
+  '''^dGhlIHNhbXBsZSBub25jZQ==$''',
+]

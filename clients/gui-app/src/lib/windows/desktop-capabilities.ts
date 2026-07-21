@@ -1,8 +1,7 @@
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import type {
   DesktopAppUpdatesBridge,
-  DesktopHostOperationStatusBridge,
-  DesktopHostRegistryUpdatesBridge,
+  DesktopHostControllerStatusBridge,
   DesktopMenuBridge,
   DesktopPowerBridge,
   DesktopSupportBridge,
@@ -44,18 +43,11 @@ export function resolveDesktopZoomBridge(
   return isDesktopZoomBridge(value) ? value : null;
 }
 
-export function resolveDesktopHostRegistryUpdatesBridge(
+export function resolveDesktopHostControllerStatusBridge(
   runnerHost: IRunnerHost,
-): DesktopHostRegistryUpdatesBridge | null {
-  const value: unknown = Reflect.get(runnerHost, "hostRegistryUpdates");
-  return isDesktopHostRegistryUpdatesBridge(value) ? value : null;
-}
-
-export function resolveDesktopHostOperationStatusBridge(
-  runnerHost: IRunnerHost,
-): DesktopHostOperationStatusBridge | null {
-  const value: unknown = Reflect.get(runnerHost, "hostOperationStatus");
-  return isDesktopHostOperationStatusBridge(value) ? value : null;
+): DesktopHostControllerStatusBridge | null {
+  const value: unknown = Reflect.get(runnerHost, "hostControllerStatus");
+  return isDesktopHostControllerStatusBridge(value) ? value : null;
 }
 
 function isDesktopMenuBridge(value: unknown): value is DesktopMenuBridge {
@@ -102,15 +94,9 @@ function isDesktopZoomBridge(value: unknown): value is DesktopZoomBridge {
   );
 }
 
-function isDesktopHostRegistryUpdatesBridge(
+function isDesktopHostControllerStatusBridge(
   value: unknown,
-): value is DesktopHostRegistryUpdatesBridge {
-  return isRecord(value) && typeof value.onChange === "function";
-}
-
-function isDesktopHostOperationStatusBridge(
-  value: unknown,
-): value is DesktopHostOperationStatusBridge {
+): value is DesktopHostControllerStatusBridge {
   return isRecord(value) && typeof value.onChange === "function";
 }
 

@@ -18,8 +18,9 @@ import {
   HostRpcError,
   type RequestOfMethod,
   type ResponseOfMethod,
+  HostRequestAuthority,
+  HostTransportEndpoint,
 } from "../../../shared/host-transport/host-messenger";
-import type { HostTransportEndpoint } from "../../../shared/host-transport/ws-rpc-client";
 import { WsRpcClient } from "../../../shared/host-transport/ws-rpc-client";
 import { createWhatwgWebSocketFactory } from "../../../shared/host-transport/whatwg-ws-factory";
 import { config } from "../config";
@@ -200,21 +201,24 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
     createAuthAwareMessenger<HostRpcRegistry>(
       new WsRpcClient<HostRpcRegistry>({
         registry: hostRpcRegistry,
-        endpoint: () => endpoint,
-        bearer: () => lease,
         requestId: () => randomUUID(),
         webSocketFactory: createWhatwgWebSocketFactory(),
         dialTimeoutMs: DEFAULT_DIAL_TIMEOUT_MS,
         frameTimeoutMs: FRAME_TIMEOUT_MS,
       }),
       revalidator,
-      { retry: { bearer: () => lease } },
     ),
     retryPolicy,
   );
 
+  const callLifetime = new AbortController();
+  const authority: HostRequestAuthority = {
+    endpoint,
+    bearer: lease,
+    abortSignal: callLifetime.signal,
+  };
   try {
-    const response = await messenger.request(method, params);
+    const response = await messenger.request(method, params, authority);
     logger.debug("Host RPC completed", {
       environment: config.environment,
       method,
@@ -232,6 +236,8 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
       errorName: error.name,
     });
     throw err;
+  } finally {
+    callLifetime.abort("cli-call-settled");
   }
 }
 

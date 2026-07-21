@@ -188,6 +188,7 @@
     "hono": "^4.12.25",
     "fast-uri": "^4.0.0",
     "follow-redirects": "^1.16.0",
+    "prosemirror-model": "1.25.9",
     "yaml": "^2.9.0",
     "ip-address": "^10.2.0",
     "axios": "^1.17.0",

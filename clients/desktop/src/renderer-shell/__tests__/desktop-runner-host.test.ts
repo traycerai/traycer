@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type {
   AuthTokenValidationResult,
-  HostRegistryUpdateState,
+  HostControllerStatus,
   LocalHostSnapshot,
   TrayEpic,
   TrayIndicatorState,
@@ -307,12 +307,6 @@ function buildFakeBridge(
       },
     },
     service: {
-      status: async () => ({
-        state: "not-installed" as const,
-        version: null,
-        listenUrl: null,
-        pid: null,
-      }),
       install: async () => undefined,
       uninstall: async (_purge: boolean) => undefined,
       start: async () => undefined,
@@ -438,11 +432,20 @@ function buildFakeBridge(
       onChange: (_handler) => ({ dispose: () => undefined }),
     },
     hostManagement: {
-      installHost: async () => {
-        throw new Error("installHost not used in test");
+      getHostControllerStatus: async () => {
+        throw new Error("getHostControllerStatus not used in test");
       },
-      updateHost: async () => {
-        throw new Error("updateHost not used in test");
+      convergeReady: async () => {
+        throw new Error("convergeReady not used in test");
+      },
+      applyStaged: async () => {
+        throw new Error("applyStaged not used in test");
+      },
+      activateInstalled: async () => {
+        throw new Error("activateInstalled not used in test");
+      },
+      installVersion: async () => {
+        throw new Error("installVersion not used in test");
       },
       uninstallHost: async () => {
         throw new Error("uninstallHost not used in test");
@@ -459,11 +462,9 @@ function buildFakeBridge(
         throw new Error("availableVersions not used in test");
       },
       installedRecord: async () => null,
-      registerService: async () => undefined,
-      ensureHost: async () => ({
-        action: "already-ready" as const,
-        running: true,
-        version: null,
+      registerService: async () => ({
+        kind: "ok" as const,
+        value: { registered: true },
       }),
       deregisterService: async () => undefined,
       registryCheck: async () => ({
@@ -475,9 +476,6 @@ function buildFakeBridge(
         errorMessage: null,
         includePreReleases: false,
       }),
-      onRegistryUpdateState: () => ({ dispose: () => undefined }),
-      getOperationStatus: async () => null,
-      onOperationStatus: () => ({ dispose: () => undefined }),
       freePortAndRestart: async (input) => input,
       cliManifest: async () => null,
       getHostName: async () => ({
@@ -493,6 +491,9 @@ function buildFakeBridge(
     },
     hostTray: {
       onCommand: () => ({ dispose: () => undefined }),
+    },
+    hostControllerStatus: {
+      onChange: () => ({ dispose: () => undefined }),
     },
   };
 
@@ -724,22 +725,22 @@ describe("DesktopRunnerHost.onLocalHostChange", () => {
     expect(host.authnBaseUrl).toBe("http://localhost:5005");
   });
 
-  it("passes host registry update subscriptions through to host management", () => {
+  it("passes host controller status subscriptions through to the bridge", () => {
     const fake = buildFakeBridge(null);
     const disposer = { dispose: vi.fn() };
-    const onRegistryUpdateState = vi.fn(
-      (_handler: (state: HostRegistryUpdateState) => void) => disposer,
+    const onChange = vi.fn(
+      (_handler: (status: HostControllerStatus) => void) => disposer,
     );
-    fake.bridge.hostManagement.onRegistryUpdateState = onRegistryUpdateState;
+    fake.bridge.hostControllerStatus.onChange = onChange;
     const host = new DesktopRunnerHost({
       bridge: fake.bridge,
       signInUrl: "https://auth.example.invalid/sign-in",
     });
     const handler = vi.fn();
 
-    const subscription = host.hostRegistryUpdates.onChange(handler);
+    const subscription = host.hostControllerStatus.onChange(handler);
 
-    expect(onRegistryUpdateState).toHaveBeenCalledWith(handler);
+    expect(onChange).toHaveBeenCalledWith(handler);
     expect(subscription).toBe(disposer);
   });
 

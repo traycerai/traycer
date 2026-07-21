@@ -10,6 +10,7 @@ import {
   describeLogErrorSummary,
   type AppLogValue,
 } from "@/lib/logger";
+import { installConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
 
 const SAFE_QUERY_KEY_MARKERS = new Set([
   "auth",
@@ -29,7 +30,7 @@ const SAFE_QUERY_KEY_MARKERS = new Set([
  * different behavior than production.
  */
 export function createAppQueryClient(): QueryClient {
-  return new QueryClient({
+  const client = new QueryClient({
     queryCache: new QueryCache({
       onError: (error, query) => {
         appLogger.warn("[query] request failed", {
@@ -65,6 +66,8 @@ export function createAppQueryClient(): QueryClient {
       },
     },
   });
+  installConditionPollEpisodeCoordinator(client);
+  return client;
 }
 
 export const queryClient = createAppQueryClient();

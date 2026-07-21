@@ -15,6 +15,7 @@ import {
   type RequestContextProvider,
 } from "@traycer-clients/shared/auth/request-context-provider";
 import { rotateAndPersistBearer } from "@traycer-clients/shared/auth/bearer-revalidator";
+import type { OpenFrameBearerSource } from "@traycer-clients/shared/auth/bearer-source";
 import {
   createProactiveRefreshScheduler,
   DEFAULT_REFRESH_LEAD_MS,
@@ -240,6 +241,7 @@ export class AuthService {
   private callbackDisposable: Disposable | null = null;
   private pendingTimeoutHandle: number | null = null;
   private currentRevalidation: Promise<ValidationOutcome | null> | null = null;
+  private currentRevalidationBearer: OpenFrameBearerSource | null = null;
   // Single-flight guard for the proactive force-refresh path so the refresh
   // scheduler can't stack overlapping `/api/v3/auth/refresh` rotations.
   private currentForceRefresh: Promise<void> | null = null;
@@ -500,6 +502,25 @@ export class AuthService {
     return !this.disposed && generation === this.identityGeneration;
   }
 
+  private isExpectedBearerCurrent(expected: OpenFrameBearerSource): boolean {
+    const current = this.contextProvider.current();
+    return (
+      current !== null &&
+      current.credentials === expected &&
+      !current.credentials.isReleased
+    );
+  }
+
+  private isExpectedBearerLive(
+    expected: OpenFrameBearerSource,
+    generation: number,
+  ): boolean {
+    return (
+      this.isIdentityCurrent(generation) &&
+      this.isExpectedBearerCurrent(expected)
+    );
+  }
+
   /**
    * Primary (and only) interactive sign-in: the OAuth 2.0 Device Authorization
    * Grant (RFC 8628). `beginAttempt` first supersedes any in-flight attempt (a
@@ -733,17 +754,61 @@ export class AuthService {
    * No-op when the user is not currently signed-in.
    */
   async revalidateCurrentContext(): Promise<ValidationOutcome | null> {
-    if (this.currentRevalidation !== null) {
-      return this.currentRevalidation;
+    const expected = this.contextProvider.current()?.credentials ?? null;
+    if (expected === null) {
+      return null;
     }
-    const revalidation = this.revalidateAfterPendingForceRefresh().finally(
-      () => {
-        if (this.currentRevalidation === revalidation) {
-          this.currentRevalidation = null;
-        }
-      },
-    );
+    return this.revalidateExpectedContext(expected);
+  }
+
+  /**
+   * Revalidates only the credential object that produced an unauthorized host
+   * frame. A session replacement never joins the old single-flight operation
+   * and cannot be mutated by its eventual result.
+   */
+  async revalidateExpectedBearer(
+    expected: OpenFrameBearerSource,
+  ): Promise<"rotated" | "rejected" | "network-error" | "superseded"> {
+    const generation = this.identityGeneration;
+    if (!this.isExpectedBearerLive(expected, generation)) {
+      return "superseded";
+    }
+    if (
+      this.currentRevalidation !== null &&
+      this.currentRevalidationBearer !== expected
+    ) {
+      return "superseded";
+    }
+    const outcome = await this.revalidateExpectedContext(expected);
+    if (!this.isIdentityCurrent(generation) || outcome === null) {
+      return "superseded";
+    }
+    if (outcome.kind === "rejected" || outcome.kind === "network-error") {
+      return outcome.kind;
+    }
+    return this.isExpectedBearerLive(expected, generation)
+      ? "rotated"
+      : "superseded";
+  }
+
+  private revalidateExpectedContext(
+    expected: OpenFrameBearerSource,
+  ): Promise<ValidationOutcome | null> {
+    if (this.currentRevalidation !== null) {
+      return this.currentRevalidationBearer === expected
+        ? this.currentRevalidation
+        : Promise.resolve(null);
+    }
+    const revalidation = this.revalidateAfterPendingForceRefresh(
+      expected,
+    ).finally(() => {
+      if (this.currentRevalidation === revalidation) {
+        this.currentRevalidation = null;
+        this.currentRevalidationBearer = null;
+      }
+    });
     this.currentRevalidation = revalidation;
+    this.currentRevalidationBearer = expected;
     return revalidation;
   }
 
@@ -756,14 +821,16 @@ export class AuthService {
    * Runs inside the `currentRevalidation` single-flight, so concurrent callers
    * coalesce onto this one promise.
    */
-  private async revalidateAfterPendingForceRefresh(): Promise<ValidationOutcome | null> {
+  private async revalidateAfterPendingForceRefresh(
+    expected: OpenFrameBearerSource,
+  ): Promise<ValidationOutcome | null> {
     if (this.currentForceRefresh !== null) {
       await this.currentForceRefresh;
-      if (this.isDisposed()) {
+      if (this.isDisposed() || !this.isExpectedBearerCurrent(expected)) {
         return null;
       }
     }
-    return this.revalidateCurrentContextOnce();
+    return this.revalidateCurrentContextOnce(expected);
   }
 
   /**
@@ -793,7 +860,9 @@ export class AuthService {
     throw new Error("Couldn't reach Traycer to load your subscription.");
   }
 
-  private async revalidateCurrentContextOnce(): Promise<ValidationOutcome | null> {
+  private async revalidateCurrentContextOnce(
+    expected: OpenFrameBearerSource,
+  ): Promise<ValidationOutcome | null> {
     if (this.isDisposed()) {
       return null;
     }
@@ -802,7 +871,12 @@ export class AuthService {
     // not re-persist or re-project the identity it started with.
     const generation = this.identityGeneration;
     const ctx = this.contextProvider.current();
-    if (ctx === null || this.currentBearer === null) {
+    if (
+      ctx === null ||
+      ctx.credentials !== expected ||
+      ctx.credentials.isReleased ||
+      this.currentBearer === null
+    ) {
       return null;
     }
     const currentUserId = ctx.identity.userId;
@@ -814,7 +888,7 @@ export class AuthService {
       currentToken,
       fallbackRefreshToken,
     );
-    if (!this.isIdentityCurrent(generation)) {
+    if (!this.isExpectedBearerLive(expected, generation)) {
       return null;
     }
 
@@ -827,37 +901,27 @@ export class AuthService {
         // The bearer revalidates to a different user - treat as a fresh
         // sign-in so the cross-user path aborts the old context cleanly.
         await this.tokenStore.save(accepted);
-        if (!this.isIdentityCurrent(generation)) {
+        if (!this.isExpectedBearerLive(expected, generation)) {
           return null;
         }
         this.applySignedIn(accepted.token, outcome.user, undefined);
         return outcome;
       }
       if (accepted.token !== currentToken) {
-        await this.applyRevalidatedBearerRotation(
+        await this.applyRevalidatedBearerRotation({
           accepted,
-          outcome.user,
+          user: outcome.user,
           currentUserId,
           generation,
-        );
+          expected,
+        });
       }
       return outcome;
     }
     if (outcome.kind === "rejected") {
-      appLogger.warn("[auth] current session rejected during revalidation", {});
-      await this.clearStoredAuth();
-      if (!this.isIdentityCurrent(generation)) {
-        return outcome;
-      }
-      this.setLastError(AUTH_ERROR_SESSION_EXPIRED);
-      this.applySignedOut();
+      return this.applyExpectedBearerRejection(expected, generation, outcome);
     }
-    if (outcome.kind === "network-error") {
-      appLogger.warn(
-        "[auth] current session revalidation hit network error",
-        {},
-      );
-    }
+    appLogger.warn("[auth] current session revalidation hit network error", {});
     return outcome;
   }
 
@@ -878,17 +942,19 @@ export class AuthService {
    * check returning early) keeps the "graceful no-op on teardown" behavior
    * without leaking supersession awareness into the shared helper.
    */
-  private async applyRevalidatedBearerRotation(
-    accepted: StoredAuthTokens,
-    user: AuthenticatedUser,
-    currentUserId: string,
-    generation: number,
-  ): Promise<void> {
+  private async applyRevalidatedBearerRotation(args: {
+    readonly accepted: StoredAuthTokens;
+    readonly user: AuthenticatedUser;
+    readonly currentUserId: string;
+    readonly generation: number;
+    readonly expected: OpenFrameBearerSource;
+  }): Promise<void> {
+    const { accepted, user, currentUserId, generation, expected } = args;
     await rotateAndPersistBearer({
       newTokens: accepted,
       persist: (tokens) => this.tokenStore.save(tokens),
       rotate: (token) => {
-        if (!this.isIdentityCurrent(generation)) {
+        if (!this.isExpectedBearerLive(expected, generation)) {
           return;
         }
         this.contextProvider.rotateCurrentBearer({
@@ -897,7 +963,7 @@ export class AuthService {
         });
       },
     });
-    if (!this.isIdentityCurrent(generation)) {
+    if (!this.isExpectedBearerLive(expected, generation)) {
       return;
     }
     this.currentBearer = accepted.token;
@@ -920,6 +986,24 @@ export class AuthService {
       accepted.refreshToken,
       () => this.isDisposed() || this.currentBearer !== accepted.token,
     );
+  }
+
+  private async applyExpectedBearerRejection(
+    expected: OpenFrameBearerSource,
+    generation: number,
+    outcome: Extract<ValidationOutcome, { readonly kind: "rejected" }>,
+  ): Promise<ValidationOutcome | null> {
+    appLogger.warn("[auth] current session rejected during revalidation", {});
+    if (!this.isExpectedBearerLive(expected, generation)) {
+      return null;
+    }
+    await this.clearStoredAuth();
+    if (!this.isExpectedBearerLive(expected, generation)) {
+      return null;
+    }
+    this.setLastError(AUTH_ERROR_SESSION_EXPIRED);
+    this.applySignedOut();
+    return outcome;
   }
 
   /**

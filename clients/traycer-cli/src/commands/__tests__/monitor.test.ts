@@ -49,6 +49,19 @@ const { subscribeMock, revalidateMock, sessions, streamClientOptions } =
     };
   });
 
+const loggerMock = vi.hoisted(() => ({
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+}));
+
+// The recovery assertions use console diagnostics, not persistent logging.
+// Stub the CLI logger so this state-machine test never appends to ~/.traycer.
+vi.mock("../../logger", () => ({
+  createCliLogger: () => loggerMock,
+}));
+
 vi.mock("../../../../shared/host-transport/ws-stream-client", () => ({
   WsStreamClient: class {
     constructor(options: CapturedStreamClientOptions) {
