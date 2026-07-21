@@ -72,6 +72,8 @@ export function registerHostControllerStatusBroadcast(
   const hostController = bridge.options.hostController;
   let activeTimer: NodeJS.Timeout | null = null;
   let disposed = false;
+  let nextPublicationGeneration = 0;
+  let lastPublishedGeneration = 0;
 
   const stopActivePolling = (): void => {
     if (activeTimer === null) return;
@@ -88,9 +90,11 @@ export function registerHostControllerStatusBroadcast(
 
   const broadcast = async (): Promise<void> => {
     if (disposed) return;
+    const publicationGeneration = ++nextPublicationGeneration;
     try {
       const status = await hostController.getStatus();
-      if (disposed) return;
+      if (disposed || publicationGeneration < lastPublishedGeneration) return;
+      lastPublishedGeneration = publicationGeneration;
       bridge.fanOut(RunnerHostEvent.hostControllerStatusChange, status);
       for (const listener of extraListeners.get(bridge) ?? []) {
         try {
@@ -101,7 +105,7 @@ export function registerHostControllerStatusBroadcast(
           });
         }
       }
-      if (status.download !== null) {
+      if (status.download !== null && status.download.lastError === null) {
         ensureActivePolling();
       } else {
         stopActivePolling();

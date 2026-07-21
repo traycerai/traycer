@@ -147,6 +147,41 @@ describe("registerHostControllerStatusBroadcast", () => {
     expect(bridge.fanOutCalls).toHaveLength(1);
   });
 
+  it("does not publish an older status read after a newer mutation tick has settled", async () => {
+    const progressListeners = new Set<() => void>();
+    const resolvers: Array<(status: HostControllerStatus) => void> = [];
+    const hostController = {
+      getStatus: () =>
+        new Promise<HostControllerStatus>((resolve) => {
+          resolvers.push(resolve);
+        }),
+      onMutationProgress(listener: () => void): () => void {
+        progressListeners.add(listener);
+        return () => progressListeners.delete(listener);
+      },
+      emitProgress(): void {
+        for (const listener of progressListeners) listener();
+      },
+    } as IpcHostController & { emitProgress(): void };
+    const bridge = fakeBridge(hostController);
+    registerHostControllerStatusBroadcast(bridge);
+
+    hostController.emitProgress();
+    hostController.emitProgress();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(resolvers).toHaveLength(2);
+
+    const newer = { ...fakeStatus(null), stagedVersion: "2.0.0" };
+    resolvers[1]!(newer);
+    await vi.advanceTimersByTimeAsync(0);
+    resolvers[0]!(fakeStatus(null));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(bridge.fanOutCalls).toEqual([
+      ["runnerHost:event:host:controllerStatusChange", newer],
+    ]);
+  });
+
   it("registers without throwing when the controller does not expose onMutationStatus", () => {
     const hostController = fakeHostController(false);
     const bridge = fakeBridge(hostController);
@@ -230,6 +265,24 @@ describe("registerHostControllerStatusBroadcast", () => {
     expect(afterClearTick).toBeGreaterThan(afterDownloadCleared);
     await vi.advanceTimersByTimeAsync(1_900);
     expect(bridge.fanOutCalls.length).toBe(afterClearTick);
+  });
+
+  it("uses the idle poll floor after a terminal download error", async () => {
+    const hostController = fakeHostController(false);
+    const bridge = fakeBridge(hostController);
+    registerHostControllerStatusBroadcast(bridge);
+    hostController.status = fakeStatus({
+      version: "1.5.0",
+      progress: null,
+      lastError: "download failed",
+    });
+
+    hostController.emitProgress();
+    await vi.advanceTimersByTimeAsync(0);
+    const afterError = bridge.fanOutCalls.length;
+    await vi.advanceTimersByTimeAsync(1_900);
+
+    expect(bridge.fanOutCalls).toHaveLength(afterError);
   });
 
   it("disposing stops both timers and the extra-listener registration", async () => {
