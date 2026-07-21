@@ -227,7 +227,12 @@ export function MenuCommandListener() {
     const installHostUpdate = (): void => {
       if (status?.updateReady === true) {
         runApply(false);
-      } else {
+        return;
+      }
+      if (
+        status?.activation === "pendingActivation" ||
+        status?.activation === "activationUnknown"
+      ) {
         runActivate(false);
       }
     };

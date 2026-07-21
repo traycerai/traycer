@@ -257,7 +257,10 @@ export function HostTrayCommandListener() {
           // this confirm submits.
           if (status?.updateReady === true) {
             runApply(false);
-          } else {
+          } else if (
+            status?.activation === "pendingActivation" ||
+            status?.activation === "activationUnknown"
+          ) {
             runActivate(false);
           }
         }}
