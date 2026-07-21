@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toAccelerator } from "@traycer-clients/shared/keybindings/chord-core";
 import type { GlobalShortcutIntent } from "../../../ipc-contracts/global-shortcuts-types";
+import {
+  WindowRegistry,
+  type RegistryManagedWindow,
+} from "../../windows/window-registry";
+import type { ShortcutTargetWindow } from "../shortcuts";
 
 const electron = vi.hoisted(() => ({
   register: vi.fn(),
@@ -228,5 +233,271 @@ describe("applyGlobalShortcutIntent (transactional rebind)", () => {
       DEFAULT_ACCELERATOR,
     );
     expect(preferences.get("summon")).toEqual(DEFAULT_INTENT);
+  });
+
+  // Review P1: only disk writes were serialized, so a rejected window-1
+  // rebind and an accepted window-2 rebind could interleave their trial and
+  // rollback reads. Amended decision 7 moves the ENTIRE transaction (trial,
+  // persist-or-revert, fan-out) onto one queue. This reproduces the
+  // reviewer's mermaid scenario: window 1's rebind is refused by the OS,
+  // window 2's rebind is accepted with its persistence write deliberately
+  // held open, both fired without awaiting either first.
+  it("serializes end to end: window 2's OS registration never starts until window 1's rejected transaction fully settles", async () => {
+    const shortcuts = await import("../shortcuts");
+    await shortcuts.reconcileGlobalShortcuts({});
+    expect(shortcuts.getRegisteredAccelerator("summon")).toBe(
+      DEFAULT_ACCELERATOR,
+    );
+
+    const rejectedAccelerator = toAccelerator("mod+alt+b", platform);
+    const acceptedAccelerator = toAccelerator("mod+alt+c", platform);
+
+    let w1Settled = false;
+    let acceptedRegisteredBeforeW1Settled = false;
+    electron.register.mockImplementation((accelerator: string) => {
+      if (accelerator === acceptedAccelerator && !w1Settled) {
+        acceptedRegisteredBeforeW1Settled = true;
+      }
+      return accelerator !== rejectedAccelerator;
+    });
+
+    const window2Persist: { release: (() => void) | null } = { release: null };
+    const window2PersistHeldOpen = new Promise<void>((resolve) => {
+      window2Persist.release = resolve;
+    });
+    preferences.set.mockImplementation(
+      async (id: string, intent: GlobalShortcutIntent) => {
+        // Window 2's disk write is deliberately held open - if the queue
+        // didn't serialize the whole transaction, window 1's trial/rollback
+        // could interleave in this gap instead of having already finished.
+        await window2PersistHeldOpen;
+        preferences.intents[id] = intent;
+      },
+    );
+
+    const p1 = shortcuts
+      .applyGlobalShortcutIntent("summon", {
+        enabled: true,
+        chord: "mod+alt+b",
+      })
+      .then((status) => {
+        w1Settled = true;
+        return status;
+      });
+    const p2 = shortcuts.applyGlobalShortcutIntent("summon", {
+      enabled: true,
+      chord: "mod+alt+c",
+    });
+
+    // Flush microtasks so window 1 (which has no pending external promise)
+    // gets every chance to run to completion while window 2 stays blocked
+    // on its held-open persistence write.
+    for (let i = 0; i < 20; i += 1) {
+      await Promise.resolve();
+    }
+    expect(w1Settled).toBe(true);
+    // Window 2 never even attempted its OS registration before window 1
+    // fully settled - proof the queue serialized the whole transaction, not
+    // just the disk write.
+    expect(acceptedRegisteredBeforeW1Settled).toBe(false);
+
+    window2Persist.release?.();
+    const [status1, status2] = await Promise.all([p1, p2]);
+
+    expect(status1.status).toBe("rejected");
+    expect(status2.status).toBe("registered");
+    // No split-brain: OS state, persisted intent, and the returned status
+    // all agree on window 2's accepted chord as the final winner.
+    expect(shortcuts.getRegisteredAccelerator("summon")).toBe(
+      acceptedAccelerator,
+    );
+    expect(preferences.intents.summon).toEqual({
+      enabled: true,
+      chord: "mod+alt+c",
+    });
+    expect(
+      shortcuts.getGlobalShortcutsSnapshot().statuses.summon,
+    ).toMatchObject({
+      status: "registered",
+      effectiveChord: "mod+alt+c",
+    });
+  });
+
+  // P2's "failed rollback can strand the user" scenario, at its actual edge:
+  // if nothing has ever been registered yet (fresh startup, no prior
+  // reconcile), a rejected trial's "revert to previous" is not a no-op - it
+  // has no already-held accelerator to just leave alone, so it must attempt
+  // a real registration too, which can also be refused.
+  it("never persists and reports rejected when both the trial and the revert-to-previous registration are refused", async () => {
+    const shortcuts = await import("../shortcuts");
+    electron.register.mockReturnValue(false);
+
+    const result = await shortcuts.applyGlobalShortcutIntent("summon", {
+      enabled: true,
+      chord: "mod+alt+d",
+    });
+
+    expect(result.status).toBe("rejected");
+    expect(preferences.set).not.toHaveBeenCalled();
+    expect(shortcuts.getRegisteredAccelerator("summon")).toBeNull();
+    expect(shortcuts.getGlobalShortcutsSnapshot().statuses.summon.status).toBe(
+      "rejected",
+    );
+  });
+});
+
+describe("MRU resolver wiring (decision 10)", () => {
+  // `createMruWindowProxy` (desktop-startup.ts) is module-private, so this
+  // rebuilds the identical shape it hands to `initGlobalShortcutsRegistry`:
+  // a `focus()` that delegates to `WindowRegistry.focusMru()` rather than
+  // targeting a fixed window. What's under test is real - the registered
+  // `globalShortcut.register` callback (`DEFINITIONS[0].run`, captured from
+  // the mock) actually resolving through a real `WindowRegistry` and
+  // focusing whichever window is currently most-recently-used.
+  class FakeRegistryWindow implements RegistryManagedWindow {
+    readonly webContents: { readonly id: number };
+    private readonly listeners = new Map<string, Set<() => void>>();
+    private destroyed = false;
+    private visible = false;
+    private minimized = false;
+    focusCalls = 0;
+    showCalls = 0;
+    restoreCalls = 0;
+
+    constructor(webContentsId: number) {
+      this.webContents = { id: webContentsId };
+    }
+
+    close(): void {
+      this.destroyed = true;
+      this.emit("closed");
+    }
+    destroy(): void {
+      this.destroyed = true;
+      this.emit("closed");
+    }
+    focus(): void {
+      this.focusCalls += 1;
+      this.emit("focus");
+    }
+    getTitle(): string {
+      return "";
+    }
+    isMaximized(): boolean {
+      return false;
+    }
+    minimize(): void {
+      this.minimized = true;
+    }
+    maximize(): void {}
+    unmaximize(): void {}
+    isDestroyed(): boolean {
+      return this.destroyed;
+    }
+    isFocused(): boolean {
+      return false;
+    }
+    isVisible(): boolean {
+      return this.visible;
+    }
+    isMinimized(): boolean {
+      return this.minimized;
+    }
+    show(): void {
+      this.showCalls += 1;
+      this.visible = true;
+      this.emit("show");
+    }
+    restore(): void {
+      this.restoreCalls += 1;
+      this.minimized = false;
+    }
+    on(event: string, listener: () => void): void {
+      const bucket = this.listeners.get(event) ?? new Set<() => void>();
+      bucket.add(listener);
+      this.listeners.set(event, bucket);
+    }
+    off(event: string, listener: () => void): void {
+      this.listeners.get(event)?.delete(listener);
+    }
+    emit(event: string): void {
+      for (const listener of this.listeners.get(event) ?? []) {
+        listener();
+      }
+    }
+  }
+
+  function createMruWindowProxy(
+    registry: WindowRegistry<FakeRegistryWindow>,
+  ): ShortcutTargetWindow {
+    const current = () => registry.getMruRecord()?.window ?? null;
+    return {
+      isDestroyed: () => {
+        const window = current();
+        return window === null || window.isDestroyed();
+      },
+      isVisible: () => current()?.isVisible() ?? false,
+      isMinimized: () => current()?.isMinimized() ?? false,
+      show: () => current()?.show(),
+      restore: () => current()?.restore(),
+      focus: () => {
+        registry.focusMru();
+      },
+    };
+  }
+
+  it("focuses the most-recently-used window, not the first-inserted one, when the summon action fires", async () => {
+    let nextWebContentsId = 1;
+    const created: FakeRegistryWindow[] = [];
+    const registry = new WindowRegistry<FakeRegistryWindow>({
+      createWindow: () => {
+        const window = new FakeRegistryWindow(nextWebContentsId);
+        nextWebContentsId += 1;
+        created.push(window);
+        return window;
+      },
+      loadWindow: async () => undefined,
+    });
+    const windowA = await registry.create({
+      initialRoute: "/",
+      beforeLoad: null,
+    });
+    const windowB = await registry.create({
+      initialRoute: "/",
+      beforeLoad: null,
+    });
+    // Third window, inserted last and never explicitly focused - its
+    // presence rules out "always focuses the last-inserted window" as an
+    // alternative explanation for the assertion below.
+    await registry.create({ initialRoute: "/", beforeLoad: null });
+    const [fakeA, fakeB, fakeC] = created;
+
+    // Focus A, then B last - B is now MRU, and it is neither the
+    // first-inserted (A) nor the last-inserted (C) window, so focusing B
+    // specifically can only be explained by real MRU tracking.
+    registry.focusById(windowA);
+    registry.focusById(windowB);
+    expect(registry.mostRecentlyFocusedId()).toBe(windowB);
+
+    const shortcuts = await import("../shortcuts");
+    shortcuts.initGlobalShortcutsRegistry(() => createMruWindowProxy(registry));
+    await shortcuts.reconcileGlobalShortcuts({});
+
+    const runCallback = electron.register.mock.calls[0]?.[1] as
+      (() => void) | undefined;
+    if (runCallback === undefined) {
+      throw new Error("expected the summon definition's run callback");
+    }
+
+    const focusCallsBefore = {
+      a: fakeA.focusCalls,
+      b: fakeB.focusCalls,
+      c: fakeC.focusCalls,
+    };
+    runCallback();
+
+    expect(fakeB.focusCalls).toBe(focusCallsBefore.b + 1);
+    expect(fakeA.focusCalls).toBe(focusCallsBefore.a);
+    expect(fakeC.focusCalls).toBe(focusCallsBefore.c);
   });
 });
