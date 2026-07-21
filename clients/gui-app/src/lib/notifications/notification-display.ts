@@ -13,21 +13,26 @@ import {
   notificationEntityMatchesPresence,
 } from "@/lib/notifications/notification-entity";
 import { readFocusedHostNotificationPresenceEntity } from "@/lib/notifications/notification-presence";
+import { buildNotificationActivationEnvelope } from "@/lib/notifications/notification-activation-envelope";
+import type { NotificationPayload } from "@/lib/notifications/payload";
 
 export interface NotificationDisplayTarget {
   readonly showNotification: NotificationShow;
   readonly playChime: () => void;
-  readonly onToastClick: (
-    row: MergedNotificationRow,
-    activatedAt: number,
-  ) => void;
+  readonly onToastClick: (row: MergedNotificationRow) => void;
 }
 
 export function displayNotificationRows(
   rows: ReadonlyArray<MergedNotificationRow>,
   target: NotificationDisplayTarget,
+  originHostId: string | null,
 ): void {
-  void displayNotificationRowsAwaitNative(rows, target, null).catch(() => {
+  void displayNotificationRowsAwaitNative(
+    rows,
+    target,
+    null,
+    originHostId,
+  ).catch(() => {
     // The feed remains authoritative; a failed native toast is non-critical.
   });
 }
@@ -36,15 +41,24 @@ async function displayNotificationRowsAwaitNative(
   rows: ReadonlyArray<MergedNotificationRow>,
   target: NotificationDisplayTarget,
   deliveryKey: string | null,
+  originHostId: string | null,
 ): Promise<void> {
   if (rows.length === 0) return;
   const content = buildNotificationToastContent(rows);
+  const nativePayload =
+    content.payload === null
+      ? null
+      : buildNotificationActivationEnvelope({
+          route: content.payload,
+          feed: { source: content.row.source, id: content.row.sourceId },
+          originHostId,
+        });
   let nativeDisplay: Promise<void>;
   try {
     nativeDisplay = target.showNotification({
       title: content.title,
       body: content.body,
-      payload: content.payload,
+      payload: nativePayload,
       replaceKey: content.replaceKey,
       deliveryKey,
     });
@@ -69,9 +83,7 @@ function renderNotificationToast(
           "aria-label": `${content.title} ${content.body}`,
           "data-notification-toast-action": "",
           className: "min-w-0 text-left",
-          onClick: () => {
-            target.onToastClick(content.row, Date.now());
-          },
+          onClick: () => target.onToastClick(content.row),
         },
         createElement(
           "span",
@@ -106,6 +118,7 @@ function renderNotificationToast(
 export function displayHostChannelEmission(
   entries: ReadonlyArray<HostNotificationEntry>,
   target: NotificationDisplayTarget,
+  originHostId: string | null,
 ): void {
   const focusedEntity = readFocusedHostNotificationPresenceEntity();
   const visibleEntries =
@@ -118,7 +131,11 @@ export function displayHostChannelEmission(
             !notificationEntityMatchesPresence(entity, focusedEntity)
           );
         });
-  displayNotificationRows(visibleEntries.map(rowFromHostEntry), target);
+  displayNotificationRows(
+    visibleEntries.map(rowFromHostEntry),
+    target,
+    originHostId,
+  );
 }
 
 export function displayAppLocalNotification(
@@ -130,6 +147,7 @@ export function displayAppLocalNotification(
     [rowFromAppLocalEntry(entry)],
     target,
     deliveryKey,
+    null,
   );
 }
 
@@ -161,7 +179,7 @@ interface NotificationToastContent {
   readonly title: string;
   readonly body: string;
   readonly row: MergedNotificationRow;
-  readonly payload: unknown;
+  readonly payload: NotificationPayload | null;
   readonly replaceKey: string;
 }
 

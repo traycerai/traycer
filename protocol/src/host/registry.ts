@@ -199,11 +199,15 @@ import {
   hostNotificationsClearAll,
   hostNotificationsGetConfig,
   hostNotificationsIndicatorState,
-  hostNotificationsList,
+  hostNotificationsListDowngradeV20ToV10,
+  hostNotificationsListUpgradeV10ToV20,
+  hostNotificationsListV10,
+  hostNotificationsListV20,
   hostNotificationsMarkAllRead,
   hostNotificationsMarkRead,
   hostNotificationsSetConfig,
-  hostNotificationsSubscribe,
+  hostNotificationsFeedSubscribeV10,
+  hostNotificationsSubscribeV10,
   notificationsSubscribeV10,
 } from "@traycer/protocol/host/notifications/contracts";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
@@ -2194,11 +2198,23 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       latestMinor: 0,
       versions: {
         0: {
-          contract: hostNotificationsList,
+          contract: hostNotificationsListV10,
           upgradeFromPreviousVersion: null,
         },
       },
       downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationsListV20,
+          upgradeFromPreviousVersion: hostNotificationsListUpgradeV10ToV20,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: hostNotificationsListDowngradeV20ToV10,
+      },
     },
   },
   "host.notificationHooks.status": {
@@ -4312,7 +4328,17 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
       latestMinor: 0,
       versions: {
         0: {
-          contract: hostNotificationsSubscribe,
+          contract: hostNotificationsSubscribeV10,
+        },
+      },
+    },
+  },
+  "host.notifications.feed.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationsFeedSubscribeV10,
         },
       },
     },

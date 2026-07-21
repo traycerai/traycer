@@ -1,7 +1,16 @@
-import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { act, renderHook } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import {
+  mockLocalHostEntry,
+  mockRemoteHostEntry,
+} from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
+import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 
 type CapturedNavigate = {
   readonly to: string;
@@ -11,17 +20,21 @@ type CapturedNavigate = {
     readonly focusArtifactId: string | undefined;
     readonly focusThreadId: string | undefined;
     readonly migrationSource: string | undefined;
-    readonly focusPaneId: string | undefined;
-    readonly focusTileInstanceId: string | undefined;
   };
 };
 
 const navigateSpy = vi.hoisted(() =>
   vi.fn<(options: CapturedNavigate) => void>(),
 );
-const requestMock = vi.hoisted(() => vi.fn());
+const activeHostIdStub: { value: string | null } = vi.hoisted(() => ({
+  value: "stub-host",
+}));
 const bindingState = vi.hoisted<{
-  current: { readonly hostClient: { readonly request: Mock } } | null;
+  current: {
+    readonly hostClient: {
+      readonly getActiveHostId: () => string | null;
+    };
+  } | null;
 }>(() => ({ current: null }));
 
 vi.mock("@tanstack/react-router", async (importActual) => {
@@ -34,6 +47,10 @@ vi.mock("@tanstack/react-router", async (importActual) => {
 
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => bindingState.current,
+}));
+
+vi.mock("@/lib/host-error-toast", () => ({
+  toastFromHostError: vi.fn(),
 }));
 
 import { useNotificationActivation } from "@/hooks/notifications/use-notification-activation";
@@ -61,15 +78,20 @@ function createWrapper(): (props: {
   };
 }
 
+function bindStubClient(): void {
+  bindingState.current = {
+    hostClient: {
+      getActiveHostId: () => activeHostIdStub.value,
+    },
+  };
+}
+
 describe("useNotificationActivation", () => {
   beforeEach(() => {
     navigateSpy.mockReset();
-    requestMock.mockReset();
-    requestMock.mockResolvedValue({
-      collaborators: [],
-      collaboratorsAvailable: true,
-    });
-    bindingState.current = { hostClient: { request: requestMock } };
+    navigateSpy.mockImplementation(() => undefined);
+    activeHostIdStub.value = "stub-host";
+    bindStubClient();
     useEpicCanvasStore.setState({
       tabsById: {},
       openTabOrder: [],
@@ -78,64 +100,9 @@ describe("useNotificationActivation", () => {
     });
   });
 
-  it("routes shared epic notifications immediately while preflight remains pending", async () => {
-    const preflightResponse = {
-      collaborators: [],
-      collaboratorsAvailable: true,
-    };
-    let resolvePreflight: (value: typeof preflightResponse) => void = () =>
-      undefined;
-    requestMock.mockImplementation(
-      () =>
-        new Promise<typeof preflightResponse>((resolve) => {
-          resolvePreflight = resolve;
-        }),
-    );
-    const onActivated = vi.fn();
-    const hook = renderHook(() => useNotificationActivation(), {
-      wrapper: createWrapper(),
-    });
-
-    act(() => {
-      hook.result.current.activate({
-        payload: { kind: "epic", epicId: "epic-shared" },
-        receivedAt: 123,
-        onActivated,
-      });
-    });
-
-    const navigateArg = navigateSpy.mock.calls[0][0];
-    expect(navigateArg.to).toBe("/epics/$epicId/$tabId");
-    expect(navigateArg.params.epicId).toBe("epic-shared");
-    expect(navigateArg.params.tabId).toEqual(expect.any(String));
-    expect(navigateArg.search).toEqual({
-      focusedAt: 123,
-      focusArtifactId: undefined,
-      focusThreadId: undefined,
-      migrationSource: undefined,
-      focusPaneId: undefined,
-      focusTileInstanceId: undefined,
-    });
-    expect(onActivated).not.toHaveBeenCalled();
-
-    await waitFor(() => {
-      expect(requestMock).toHaveBeenCalledWith("epic.listCollaborators", {
-        epicId: "epic-shared",
-      });
-    });
-
-    await act(async () => {
-      resolvePreflight(preflightResponse);
-      await Promise.resolve();
-    });
-
-    await waitFor(() => {
-      expect(onActivated).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  it("routes without preflight when no host runtime is mounted", () => {
+  it("reports success synchronously when no host runtime is mounted", () => {
     bindingState.current = null;
+    const onResult = vi.fn();
     const hook = renderHook(() => useNotificationActivation(), {
       wrapper: createWrapper(),
     });
@@ -149,15 +116,16 @@ describe("useNotificationActivation", () => {
           threadId: "thread-1",
         },
         receivedAt: 456,
-        onActivated: null,
+        feedId: "global:g-1",
+        onResult,
       });
     });
 
-    expect(requestMock).not.toHaveBeenCalled();
+    expect(onResult).toHaveBeenCalledTimes(1);
+    expect(onResult).toHaveBeenCalledWith("success");
     const navigateArg = navigateSpy.mock.calls[0][0];
     expect(navigateArg.to).toBe("/epics/$epicId/$tabId");
     expect(navigateArg.params.epicId).toBe("epic-browser");
-    expect(navigateArg.params.tabId).toEqual(expect.any(String));
     expect(navigateArg.search).toEqual({
       focusedAt: 456,
       focusArtifactId: "artifact-1",
@@ -168,46 +136,86 @@ describe("useNotificationActivation", () => {
     });
   });
 
-  it("routes approval notifications to the owning chat artifact", async () => {
+  it("routes then reports success synchronously with no host RPC", () => {
+    const onResult = vi.fn();
     const hook = renderHook(() => useNotificationActivation(), {
       wrapper: createWrapper(),
     });
 
     act(() => {
       hook.result.current.activate({
-        payload: {
-          kind: "approval",
-          epicId: "epic-approval",
-          chatId: "chat-approval",
-          approvalId: "approval-1",
-          sessionId: undefined,
-          artifactId: undefined,
-        },
-        receivedAt: 789,
-        onActivated: null,
+        payload: { kind: "epic", epicId: "epic-shared" },
+        receivedAt: 123,
+        feedId: "host:n-1",
+        onResult,
       });
     });
 
+    // Same tick: route + onResult, no waitFor / no RPC gate.
+    expect(navigateSpy).toHaveBeenCalledTimes(1);
     const navigateArg = navigateSpy.mock.calls[0][0];
     expect(navigateArg.to).toBe("/epics/$epicId/$tabId");
-    expect(navigateArg.params.epicId).toBe("epic-approval");
-    expect(navigateArg.search).toEqual({
-      focusedAt: 789,
-      focusArtifactId: "chat-approval",
-      focusThreadId: undefined,
-      migrationSource: undefined,
-      focusPaneId: undefined,
-      focusTileInstanceId: undefined,
-    });
-
-    await waitFor(() => {
-      expect(requestMock).toHaveBeenCalledWith("epic.listCollaborators", {
-        epicId: "epic-approval",
-      });
-    });
+    expect(navigateArg.params.epicId).toBe("epic-shared");
+    expect(navigateArg.search.focusedAt).toBe(123);
+    expect(onResult).toHaveBeenCalledTimes(1);
+    expect(onResult).toHaveBeenCalledWith("success");
   });
 
-  it("routes terminal notifications to the exact canvas tile", async () => {
+  it("fires onResult synchronously after routing (no async gate)", () => {
+    const callOrder: string[] = [];
+    navigateSpy.mockImplementation(() => {
+      callOrder.push("navigate");
+    });
+    const onResult = vi.fn(() => {
+      callOrder.push("onResult");
+    });
+    const hook = renderHook(() => useNotificationActivation(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      hook.result.current.activate({
+        payload: { kind: "chat", epicId: "epic-sync", chatId: "chat-1" },
+        receivedAt: 10,
+        feedId: "host:sync-1",
+        onResult,
+      });
+    });
+
+    expect(callOrder).toEqual(["navigate", "onResult"]);
+    expect(onResult).toHaveBeenCalledWith("success");
+  });
+
+  it("completes each sequential activation independently", () => {
+    const onResult = vi.fn();
+    const hook = renderHook(() => useNotificationActivation(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      hook.result.current.activate({
+        payload: { kind: "epic", epicId: "epic-1" },
+        receivedAt: 1,
+        feedId: "host:1",
+        onResult,
+      });
+      hook.result.current.activate({
+        payload: { kind: "epic", epicId: "epic-2" },
+        receivedAt: 2,
+        feedId: "host:2",
+        onResult,
+      });
+    });
+
+    expect(navigateSpy).toHaveBeenCalledTimes(2);
+    expect(navigateSpy.mock.calls[0][0].params.epicId).toBe("epic-1");
+    expect(navigateSpy.mock.calls[1][0].params.epicId).toBe("epic-2");
+    expect(onResult).toHaveBeenCalledTimes(2);
+    expect(onResult).toHaveBeenNthCalledWith(1, "success");
+    expect(onResult).toHaveBeenNthCalledWith(2, "success");
+  });
+
+  it("routes terminal notifications to the exact canvas tile", () => {
     const store = useEpicCanvasStore.getState();
     const tabId = store.openEpicTab("epic-terminal", "Terminal epic");
     store.openTileInTab(tabId, {
@@ -224,6 +232,7 @@ describe("useNotificationActivation", () => {
       throw new Error("expected terminal canvas");
     }
     const paneId = canvas.activePaneId;
+    const onResult = vi.fn();
     const hook = renderHook(() => useNotificationActivation(), {
       wrapper: createWrapper(),
     });
@@ -239,7 +248,8 @@ describe("useNotificationActivation", () => {
           tileInstanceId: "terminal-instance",
         },
         receivedAt: 901,
-        onActivated: null,
+        feedId: "host:term-1",
+        onResult,
       });
     });
 
@@ -255,12 +265,8 @@ describe("useNotificationActivation", () => {
         focusTileInstanceId: "terminal-instance",
       },
     });
-
-    await waitFor(() => {
-      expect(requestMock).toHaveBeenCalledWith("epic.listCollaborators", {
-        epicId: "epic-terminal",
-      });
-    });
+    expect(onResult).toHaveBeenCalledTimes(1);
+    expect(onResult).toHaveBeenCalledWith("success");
   });
 
   it("routes persisted legacy terminal rows to their open canvas tile", () => {
@@ -280,6 +286,7 @@ describe("useNotificationActivation", () => {
     if (canvas === undefined || canvas.activePaneId === null) {
       throw new Error("expected legacy terminal canvas");
     }
+    const onResult = vi.fn();
     const hook = renderHook(() => useNotificationActivation(), {
       wrapper: createWrapper(),
     });
@@ -292,7 +299,8 @@ describe("useNotificationActivation", () => {
           chatId: terminalId,
         },
         receivedAt: 902,
-        onActivated: null,
+        feedId: "host:legacy-term",
+        onResult,
       });
     });
 
@@ -305,5 +313,111 @@ describe("useNotificationActivation", () => {
         focusTileInstanceId: "legacy-terminal-instance",
       },
     });
+    expect(onResult).toHaveBeenCalledWith("success");
+  });
+});
+
+describe("useNotificationActivation origin-host guard (P0-1)", () => {
+  const hostA = mockLocalHostEntry;
+  const hostB = {
+    ...mockRemoteHostEntry,
+    hostId: "host-b-switch",
+    label: "Switched Host B",
+  };
+
+  let messenger: MockHostMessenger<HostRpcRegistry>;
+  let client: HostClient<HostRpcRegistry>;
+
+  beforeEach(() => {
+    navigateSpy.mockReset();
+    navigateSpy.mockImplementation(() => undefined);
+    const queryClient = createTestQueryClient();
+    let requestSeq = 0;
+    messenger = new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => `origin-guard-${++requestSeq}`,
+      handlers: {
+        "host.notifications.markRead": () => ({}),
+      },
+    });
+    client = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: createHostQueryInvalidator(queryClient),
+      messenger,
+    });
+    client.bind(hostA);
+    client.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "token",
+      }),
+    );
+    bindingState.current = { hostClient: client };
+    useEpicCanvasStore.setState({
+      tabsById: {},
+      openTabOrder: [],
+      activeTabId: null,
+      mostRecentTabIdByEpicId: {},
+    });
+  });
+
+  it("reports failure when the active host rebinds during routing for a host feed", () => {
+    const onResult = vi.fn();
+    // Capture-before-route / check-after-route: rebind as a side effect of
+    // navigate so the post-route active-host check sees host B.
+    navigateSpy.mockImplementation(() => {
+      client.bind(hostB);
+    });
+    const hook = renderHook(() => useNotificationActivation(), {
+      wrapper: createWrapper(),
+    });
+
+    expect(client.getActiveHostId()).toBe(hostA.hostId);
+
+    act(() => {
+      hook.result.current.activate({
+        payload: { kind: "epic", epicId: "epic-shared" },
+        receivedAt: 100,
+        feedId: "host:n-1",
+        onResult,
+      });
+    });
+
+    expect(client.getActiveHostId()).toBe(hostB.hostId);
+    expect(navigateSpy).toHaveBeenCalledTimes(1);
+    expect(onResult).toHaveBeenCalledTimes(1);
+    expect(onResult).toHaveBeenCalledWith("failure");
+    // The hook itself never issues markRead; callers only mark on success.
+    expect(
+      messenger.calls.some(
+        (call) => call.method === "host.notifications.markRead",
+      ),
+    ).toBe(false);
+  });
+
+  it("reports success when the active host stays put during routing (control)", () => {
+    const onResult = vi.fn();
+    const hook = renderHook(() => useNotificationActivation(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      hook.result.current.activate({
+        payload: { kind: "epic", epicId: "epic-shared" },
+        receivedAt: 100,
+        feedId: "host:n-1",
+        onResult,
+      });
+    });
+
+    expect(client.getActiveHostId()).toBe(hostA.hostId);
+    expect(navigateSpy).toHaveBeenCalledTimes(1);
+    expect(onResult).toHaveBeenCalledTimes(1);
+    expect(onResult).toHaveBeenCalledWith("success");
+    expect(
+      messenger.calls.some(
+        (call) => call.method === "host.notifications.markRead",
+      ),
+    ).toBe(false);
   });
 });

@@ -1,6 +1,14 @@
 import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import { isValidElement, type ReactNode } from "react";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { NotificationEmissionController } from "@/components/layout/bridges/notification-emission-controller";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
@@ -14,18 +22,61 @@ import {
   type AppLocalNotificationEntry,
 } from "@/stores/notifications/app-local-notifications-store";
 import type { HostNotificationEntry } from "@traycer/protocol/host/notifications/contracts";
+import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { appLocalNotificationsKey } from "@/lib/persist";
 import {
   hasAppLocalDisplayReceipt,
   recordAppLocalDisplayReceipt,
 } from "@/lib/notifications/app-local-display-receipts";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 const activate = vi.hoisted(() => vi.fn());
+const markAsRead = vi.hoisted(() => vi.fn());
+
+const toastCalls = vi.hoisted(
+  (): Array<{
+    readonly title: ReactNode;
+    readonly options: { readonly id: string };
+  }> => [],
+);
+
+vi.mock("sonner", () => ({
+  toast: (title: ReactNode, options: { readonly id: string }): string => {
+    toastCalls.push({ title, options });
+    return options.id;
+  },
+}));
 
 vi.mock("@/hooks/notifications/use-notification-activation", () => ({
-  useNotificationActivation: () => ({ activate, isPending: false }),
+  useNotificationActivation: () => ({ activate, pendingFeedId: null }),
 }));
+
+vi.mock("@/stores/notifications/merged-notifications", async (importActual) => {
+  const actual =
+    await importActual<
+      typeof import("@/stores/notifications/merged-notifications")
+    >();
+  return {
+    ...actual,
+    useMergedNotificationsActions: () => ({
+      markAsRead,
+      markAllAsRead: vi.fn(),
+      loadMoreHost: vi.fn(),
+      canLoadMoreHost: false,
+      isLoadingMoreHost: false,
+      hasHostLoadError: false,
+      loadMoreAttention: vi.fn(),
+      canLoadMoreAttention: false,
+      isLoadingMoreAttention: false,
+      hasAttentionLoadError: false,
+      loadMoreUnreadRecent: vi.fn(),
+      canLoadMoreUnreadRecent: false,
+      isLoadingMoreUnreadRecent: false,
+      hasUnreadRecentLoadError: false,
+    }),
+  };
+});
 
 function createRunnerHost(): MockRunnerHost {
   return new MockRunnerHost({
@@ -215,9 +266,19 @@ function renderPersistedController(
   return runnerHost;
 }
 
+function renderLatestActionableToast(): void {
+  const title = toastCalls.at(-1)?.title;
+  if (!isValidElement(title)) {
+    throw new Error("Expected an actionable standard toast.");
+  }
+  render(title);
+}
+
 describe("NotificationEmissionController", () => {
   beforeEach(() => {
     activate.mockReset();
+    markAsRead.mockReset();
+    toastCalls.length = 0;
     window.localStorage.clear();
     resetAuthSignedIn("user-1", "user@example.com");
     __resetHostNotificationsStoreForTests();
@@ -240,13 +301,15 @@ describe("NotificationEmissionController", () => {
     });
 
     act(() => {
-      useHostNotificationsStore.getState().upsert(
+      useHostNotificationsStore.getState().applyUpsertFrame(
         hostEntry({
           id: "live-1",
           updatedAt: 30,
           readAt: null,
           kind: "agent.stopped",
         }),
+        [],
+        { unreadCount: 1, attentionCount: 0 },
       );
     });
 
@@ -612,5 +675,144 @@ describe("NotificationEmissionController", () => {
     expect(useAppLocalNotificationsStore.getState().activeUserId).toBe(
       "user-b",
     );
+  });
+
+  it("activates app-local toast clicks with success-only mark-read", async () => {
+    const runnerHost = createRunnerHost();
+    renderController(runnerHost);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    act(() => {
+      useAppLocalNotificationsStore.getState().upsert({
+        id: "stream.transport.error:chat-1:lost",
+        updatedAt: 50,
+        readAt: null,
+        kind: "stream.transport.error",
+        sourceRef: "chat-1",
+        payload: { kind: "epic", epicId: "epic-1" },
+        message: "Stream lost",
+        detail: "Reconnect",
+      });
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(toastCalls).toHaveLength(1);
+    renderLatestActionableToast();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Stream lost Reconnect" }),
+    );
+
+    expect(activate).toHaveBeenCalledTimes(1);
+    const input = activate.mock.calls[0]?.[0] as {
+      readonly feedId: string;
+      readonly payload: MergedNotificationRow["payload"];
+      readonly onResult: ((outcome: "success" | "failure") => void) | null;
+    };
+    expect(input.feedId).toBe("app-local:stream.transport.error:chat-1:lost");
+    expect(input.payload).toEqual({ kind: "epic", epicId: "epic-1" });
+    expect(markAsRead).not.toHaveBeenCalled();
+
+    act(() => {
+      input.onResult?.("failure");
+    });
+    expect(markAsRead).not.toHaveBeenCalled();
+
+    act(() => {
+      input.onResult?.("success");
+    });
+    expect(markAsRead).toHaveBeenCalledTimes(1);
+    expect(markAsRead).toHaveBeenCalledWith(
+      "app-local:stream.transport.error:chat-1:lost",
+    );
+  });
+
+  it("tracks toast activation analytics for app-local toast clicks", async () => {
+    const trackSpy = vi.spyOn(Analytics.getInstance(), "track");
+    const runnerHost = createRunnerHost();
+    renderController(runnerHost);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    act(() => {
+      useAppLocalNotificationsStore.getState().upsert({
+        id: "stream.transport.error:chat-1:lost",
+        updatedAt: 50,
+        readAt: null,
+        kind: "stream.transport.error",
+        sourceRef: "chat-1",
+        payload: { kind: "epic", epicId: "epic-1" },
+        message: "Stream lost",
+        detail: "Reconnect",
+      });
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(toastCalls).toHaveLength(1);
+    renderLatestActionableToast();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Stream lost Reconnect" }),
+    );
+
+    const input = activate.mock.calls[0]?.[0] as {
+      readonly onResult: ((outcome: "success" | "failure") => void) | null;
+    };
+
+    act(() => {
+      input.onResult?.("failure");
+    });
+    expect(
+      trackSpy.mock.calls.filter(
+        (call) => call[0] === AnalyticsEvent.NotificationActivationCompleted,
+      ),
+    ).toEqual([
+      [
+        AnalyticsEvent.NotificationActivationCompleted,
+        {
+          category: "system",
+          section: "attention",
+          surface: "toast",
+          outcome: "failure",
+        },
+      ],
+    ]);
+    expect(
+      trackSpy.mock.calls.filter(
+        (call) => call[0] === AnalyticsEvent.NotificationMarkedRead,
+      ),
+    ).toHaveLength(0);
+    expect(markAsRead).not.toHaveBeenCalled();
+
+    act(() => {
+      input.onResult?.("success");
+    });
+    expect(
+      trackSpy.mock.calls.filter(
+        (call) => call[0] === AnalyticsEvent.NotificationActivationCompleted,
+      ),
+    ).toHaveLength(2);
+    expect(
+      trackSpy.mock.calls.filter(
+        (call) => call[0] === AnalyticsEvent.NotificationMarkedRead,
+      ),
+    ).toEqual([
+      [
+        AnalyticsEvent.NotificationMarkedRead,
+        {
+          category: "system",
+          acknowledgment_source: "activation",
+        },
+      ],
+    ]);
+    expect(markAsRead).toHaveBeenCalledWith(
+      "app-local:stream.transport.error:chat-1:lost",
+    );
+    trackSpy.mockRestore();
   });
 });
