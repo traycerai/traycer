@@ -698,6 +698,44 @@ describe("<MenuCommandListener />", () => {
     expect(management.applyStaged).not.toHaveBeenCalled();
   });
 
+  it("does not treat an unavailable host as activation debt", async () => {
+    const menu = createMenu();
+    const status: HostControllerStatus = {
+      download: null,
+      mutation: null,
+      installedVersion: null,
+      latestVersion: null,
+      stagedVersion: null,
+      installedRuntimeVersion: null,
+      runningRuntimeVersion: null,
+      updateReady: false,
+      activation: "unavailable",
+      reachable: false,
+      removedByUser: false,
+      checkedAt: "2026-05-15T00:00:00Z",
+    };
+    const management = makeHostManagementFixture(status);
+    const runnerHost: FakeRunnerHost = Object.assign(createRunnerHost(menu), {
+      hostManagement: management,
+    });
+    render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <RunnerHostProvider runnerHost={runnerHost}>
+          <MenuCommandListener />
+        </RunnerHostProvider>
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(management.getHostControllerStatus).toHaveBeenCalled());
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    act(() => menu.emit("host.installUpdate"));
+
+    expect(management.applyStaged).not.toHaveBeenCalled();
+    expect(management.activateInstalled).not.toHaveBeenCalled();
+  });
+
   it("opens a confirmation dialog for host.restart and only respawns after confirm", async () => {
     const menu = createMenu();
     const requestHostRespawn = vi.fn(() => Promise.resolve());

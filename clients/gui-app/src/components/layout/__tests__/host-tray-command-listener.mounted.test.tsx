@@ -348,6 +348,27 @@ describe("<HostTrayCommandListener /> - mounted in __root", () => {
     expect(management.applyStaged).not.toHaveBeenCalled();
   });
 
+  it("does not treat an unavailable host as activation debt", async () => {
+    const tray = createTray();
+    const management = makeManagement({
+      status: {
+        ...DEBT_STATUS,
+        installedVersion: null,
+        activation: "unavailable",
+        reachable: false,
+      },
+    });
+    renderListener(makeHost(tray.bridge, management));
+    await waitFor(() => expect(management.getHostControllerStatus).toHaveBeenCalled());
+
+    act(() => tray.emit({ kind: "installUpdate", version: "1.4.0" }));
+    await screen.findByTestId("confirm-destructive-dialog");
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    expect(management.applyStaged).not.toHaveBeenCalled();
+    expect(management.activateInstalled).not.toHaveBeenCalled();
+  });
+
   it("opens the Force/Defer dialog on a busy outcome, and Force re-submits with force:true", async () => {
     const tray = createTray();
     const applyStaged = vi

@@ -150,6 +150,13 @@ interface PreloadBridge {
     saveFile(input: unknown): Promise<string | null>;
   };
   requestHostRespawn(): Promise<void>;
+  hostManagement: {
+    convergeReady(force: boolean): Promise<unknown>;
+    applyStaged(trigger: "launch" | "manual", force: boolean): Promise<unknown>;
+    activateInstalled(force: boolean): Promise<unknown>;
+    installVersion(pin: string, force: boolean): Promise<unknown>;
+    registerService(): Promise<unknown>;
+  };
   menu: {
     onCommand(handler: (payload: unknown) => void): { dispose: () => void };
   };
@@ -301,6 +308,57 @@ describe("preload auth-callback replay", () => {
 
     fakeElectron.emit(RunnerHostEvent.authCallback, undefined);
     expect(observed).toBe(1);
+  });
+});
+
+describe("preload host-management mutation invokes", () => {
+  beforeEach(() => {
+    fakeElectron.reset();
+  });
+
+  afterEach(() => {
+    fakeElectron.reset();
+  });
+
+  it("passes every mutation intent through its exact IPC channel and payload", async () => {
+    const calls: Array<{ readonly channel: string; readonly args: unknown[] }> =
+      [];
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn: (channel, ...args) => {
+        calls.push({ channel, args });
+        return Promise.resolve({ kind: "deferred", message: "not now" });
+      },
+      sendSyncFn: undefined,
+    });
+
+    await bridge.hostManagement.convergeReady(true);
+    await bridge.hostManagement.applyStaged("launch", false);
+    await bridge.hostManagement.activateInstalled(true);
+    await bridge.hostManagement.installVersion("2.0.0", false);
+    await bridge.hostManagement.registerService();
+
+    expect(calls).toEqual([
+      {
+        channel: RunnerHostInvoke.traycerHostConvergeReady,
+        args: [{ force: true }],
+      },
+      {
+        channel: RunnerHostInvoke.traycerHostApplyStaged,
+        args: [{ trigger: "launch", force: false }],
+      },
+      {
+        channel: RunnerHostInvoke.traycerHostActivateInstalled,
+        args: [{ force: true }],
+      },
+      {
+        channel: RunnerHostInvoke.traycerHostInstallVersion,
+        args: [{ pin: "2.0.0", force: false }],
+      },
+      { channel: RunnerHostInvoke.traycerServiceRegister, args: [] },
+    ]);
   });
 });
 

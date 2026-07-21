@@ -174,6 +174,10 @@ class FakeHostController implements IpcHostController {
     kind: "ok",
     value: { appliedVersion: "1.7.0", runningActivated: true },
   };
+  activateInstalledResult: MutationOutcome<ActivateInstalledOk> = {
+    kind: "ok",
+    value: { activated: true },
+  };
   uninstallHostResult: MutationOutcome<UninstallOk> = {
     kind: "ok",
     value: { removedInstallDir: true, deregisteredService: true },
@@ -280,11 +284,10 @@ class FakeHostController implements IpcHostController {
     if (resolve !== undefined) resolve(outcome);
   }
   async activateInstalled(
-    _force: boolean,
+    force: boolean,
   ): Promise<MutationOutcome<ActivateInstalledOk>> {
-    throw new Error(
-      "FakeHostController.activateInstalled: not used by these tests",
-    );
+    this.calls.push({ method: "activateInstalled", args: [force] });
+    return this.activateInstalledResult;
   }
   async installVersion(
     pin: string,
@@ -672,6 +675,86 @@ describe("host-management IPC - CLI subprocess argv carries NO --environment (CL
         force: false,
       }),
     ).resolves.toEqual(bridge.options.hostController.installVersionResult);
+  });
+
+  it("passes applyStaged's busy continuation through unchanged", async () => {
+    installFakeCli({ runResult: {}, streamResult: {} });
+    const mgmt = await import("../host-management-ipc");
+    const { RunnerHostInvoke } =
+      await import("../../../ipc-contracts/ipc-channels");
+    const bridge = makeBridge();
+    bridge.options.hostController.applyStagedResult = {
+      kind: "busy",
+      continuation: "activate",
+      message: "finish activating the installed host",
+    };
+    mgmt.registerHostManagementIpc(bridge as never);
+
+    await expect(
+      bridge.handlers.get(RunnerHostInvoke.traycerHostApplyStaged)!(null, {
+        trigger: "manual",
+        force: false,
+      }),
+    ).resolves.toEqual(bridge.options.hostController.applyStagedResult);
+  });
+
+  it("passes activateInstalled's deferred outcome through unchanged", async () => {
+    installFakeCli({ runResult: {}, streamResult: {} });
+    const mgmt = await import("../host-management-ipc");
+    const { RunnerHostInvoke } =
+      await import("../../../ipc-contracts/ipc-channels");
+    const bridge = makeBridge();
+    bridge.options.hostController.activateInstalledResult = {
+      kind: "deferred",
+      message: "the host is unavailable",
+    };
+    mgmt.registerHostManagementIpc(bridge as never);
+
+    await expect(
+      bridge.handlers.get(RunnerHostInvoke.traycerHostActivateInstalled)!(
+        null,
+        {
+          force: true,
+        },
+      ),
+    ).resolves.toEqual(bridge.options.hostController.activateInstalledResult);
+  });
+
+  it("passes installVersion's installed-not-converged outcome through unchanged", async () => {
+    installFakeCli({ runResult: {}, streamResult: {} });
+    const mgmt = await import("../host-management-ipc");
+    const { RunnerHostInvoke } =
+      await import("../../../ipc-contracts/ipc-channels");
+    const bridge = makeBridge();
+    bridge.options.hostController.installVersionResult = {
+      kind: "installed-not-converged",
+      message: "installed but not reachable",
+    };
+    mgmt.registerHostManagementIpc(bridge as never);
+
+    await expect(
+      bridge.handlers.get(RunnerHostInvoke.traycerHostInstallVersion)!(null, {
+        pin: "2.0.0",
+        force: true,
+      }),
+    ).resolves.toEqual(bridge.options.hostController.installVersionResult);
+  });
+
+  it("passes registerService's failed outcome through unchanged", async () => {
+    installFakeCli({ runResult: {}, streamResult: {} });
+    const mgmt = await import("../host-management-ipc");
+    const { RunnerHostInvoke } =
+      await import("../../../ipc-contracts/ipc-channels");
+    const bridge = makeBridge();
+    bridge.options.hostController.registerServiceResult = {
+      kind: "failed",
+      message: "service registration failed",
+    };
+    mgmt.registerHostManagementIpc(bridge as never);
+
+    await expect(
+      bridge.handlers.get(RunnerHostInvoke.traycerServiceRegister)!(null, null),
+    ).resolves.toEqual(bridge.options.hostController.registerServiceResult);
   });
 
   it("passes --include-pre-releases to host available only when requested", async () => {
