@@ -367,6 +367,10 @@ describe("<HostTrayCommandListener /> - mounted in __root", () => {
     await screen.findByTestId("confirm-destructive-dialog");
     fireEvent.click(screen.getByTestId("confirm-action"));
 
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
     expect(management.applyStaged).not.toHaveBeenCalled();
     expect(management.activateInstalled).not.toHaveBeenCalled();
   });

@@ -734,6 +734,10 @@ describe("<MenuCommandListener />", () => {
 
     act(() => menu.emit("host.installUpdate"));
 
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
     expect(management.applyStaged).not.toHaveBeenCalled();
     expect(management.activateInstalled).not.toHaveBeenCalled();
   });
