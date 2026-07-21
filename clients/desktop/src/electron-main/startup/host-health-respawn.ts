@@ -1,4 +1,5 @@
 import type { IpcHostController } from "../ipc/runner-ipc-bridge";
+import { HOST_REMOVED_BY_USER_MESSAGE } from "../host/host-controller-types";
 
 export class HostRecoveryDeferredError extends Error {
   constructor() {
@@ -33,7 +34,7 @@ export async function respawnIfDown(
     throw new HostRecoveryDeferredError();
   }
   if (outcome.kind === "deferred") {
-    if (outcome.message.includes("removed by the user")) return;
+    if (outcome.message === HOST_REMOVED_BY_USER_MESSAGE) return;
     throw new HostRecoveryDeferredError();
   }
   throw new Error(outcome.message);

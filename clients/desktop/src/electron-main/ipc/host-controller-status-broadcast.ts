@@ -4,7 +4,7 @@ import type {
   HostControllerStatus,
   MutationLaneStatus,
 } from "../host/host-controller-types";
-import type { IpcHostController, RunnerIpcBridge } from "./runner-ipc-bridge";
+import type { IpcHostController } from "./runner-ipc-bridge";
 
 // The download lane has no live push observer on `HostController` (by
 // design - `runDownloadLane` only mutates `this.downloadStatus` in place;
@@ -29,11 +29,24 @@ function hasMutationStatus(
 
 type StatusListener = (status: HostControllerStatus) => void;
 
+// Structural surface of `RunnerIpcBridge` this module depends on - declared
+// here (like `IpcHostController` itself) so tests can pass a lightweight
+// double instead of constructing the real class, whose private members make
+// it unsatisfiable structurally.
+export interface HostControllerStatusBroadcastBridge {
+  readonly options: { readonly hostController: IpcHostController };
+  readonly disposeFns: Array<() => void>;
+  fanOut(channel: string, payload: unknown): void;
+}
+
 // Extra in-process listeners keyed by bridge instance, so main-process code
 // outside the IPC layer (the app-menu "Update to X" gating in
 // `desktop-startup.ts`) can react to the same broadcast ticks that already
 // drive the renderer push, instead of standing up a second poll loop.
-const extraListeners = new WeakMap<RunnerIpcBridge, Set<StatusListener>>();
+const extraListeners = new WeakMap<
+  HostControllerStatusBroadcastBridge,
+  Set<StatusListener>
+>();
 
 /**
  * Subscribes to every status tick this module already computes (mutation
@@ -42,7 +55,7 @@ const extraListeners = new WeakMap<RunnerIpcBridge, Set<StatusListener>>();
  * set is created lazily.
  */
 export function onHostControllerStatusBroadcast(
-  bridge: RunnerIpcBridge,
+  bridge: HostControllerStatusBroadcastBridge,
   listener: StatusListener,
 ): () => void {
   let listeners = extraListeners.get(bridge);
@@ -67,7 +80,7 @@ export function onHostControllerStatusBroadcast(
  * module.
  */
 export function registerHostControllerStatusBroadcast(
-  bridge: RunnerIpcBridge,
+  bridge: HostControllerStatusBroadcastBridge,
 ): void {
   const hostController = bridge.options.hostController;
   let activeTimer: NodeJS.Timeout | null = null;
@@ -114,6 +127,10 @@ export function registerHostControllerStatusBroadcast(
       log.warn("[host-controller-status-broadcast] getStatus failed", {
         err,
       });
+      // Degrade to the idle floor while the controller is unhealthy - a
+      // repeatedly-throwing getStatus must not keep the tight download
+      // cadence (and its per-tick warn) alive indefinitely.
+      stopActivePolling();
     }
   };
 

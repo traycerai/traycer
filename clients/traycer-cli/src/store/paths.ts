@@ -210,7 +210,7 @@ export async function ensureHostHomeDirForStaged(
   // create `staged/` itself: the promote step renames a temp dir into
   // that exact path, so a pre-created empty dir would collide with the
   // rename.
-  await mkdir(hostHomeDir(environment), { recursive: true });
+  await ensureHostHomeDir(environment);
 }
 
 // Environment-aware CLI home mkdir. Non-environment callers pass undefined to

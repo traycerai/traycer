@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { readdir, rm, unlink } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import type { ILogger } from "../logger";
@@ -70,7 +71,10 @@ export async function invalidateAsideDir(
   sidecarFilename: string,
   logger: ILogger,
 ): Promise<boolean> {
-  const deadAside = `${target}.dead-${Date.now()}`;
+  // Unique per call: batch callers invalidate several asides in one tick
+  // (`Promise.all`), and a shared timestamp-only name would make every
+  // rename after the first hit ENOTEMPTY and burn its retry budget.
+  const deadAside = `${target}.dead-${Date.now()}-${randomUUID()}`;
   try {
     await renameWithRetry(aside, deadAside);
     return true;

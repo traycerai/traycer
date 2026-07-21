@@ -193,6 +193,10 @@ describe.skipIf(process.platform === "win32")(
         expect(mocks.controllerCalls).toEqual(["restart"]);
         expect(result.data).toMatchObject({ killed: true });
       } finally {
+        // Re-written unconditionally (idempotent): if an assertion above
+        // threw before the in-try release, the worker would otherwise hold
+        // the lock until the test timeout.
+        writeFileSync(join(holdBarrierDir, "release"), "");
         expect(await exited).toBe(0);
         rmSync(holdBarrierDir, { recursive: true, force: true });
       }

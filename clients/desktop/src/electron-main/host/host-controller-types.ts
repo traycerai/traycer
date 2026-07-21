@@ -67,6 +67,12 @@ export interface HostControllerStatus {
 // of the consumed apply/pin.
 export type BusyContinuation = "retry-with-force" | "activate";
 
+// Emitted verbatim by every removed-by-user deferred outcome. The automatic
+// recovery classifier (`respawnIfDown`) matches on this exact message to
+// treat the deferral as terminal, so emit sites and the matcher must share
+// one definition rather than risk wording drift.
+export const HOST_REMOVED_BY_USER_MESSAGE = "Host was removed by the user.";
+
 // Per-intent result. Every mutation intent resolves ONE of these - the
 // lane itself never rejects ("wait-never-reject"); a busy/deferred/failed
 // outcome is a normal resolved value the calling surface renders.

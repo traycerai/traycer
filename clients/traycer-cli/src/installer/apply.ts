@@ -33,7 +33,8 @@ export interface ApplyHostOptions {
   readonly environment: Environment;
   // Desktop receives this from its off-lane registry eligibility pass. The
   // value is checked after reconcile, while the caller holds cli-lock.
-  readonly expectedStageFingerprint?: string | null;
+  // Null means "no fingerprint pin" - callers state that explicitly.
+  readonly expectedStageFingerprint: string | null;
   // Skips the busy check. Does NOT affect `--no-service`'s own busy-check
   // skip below - the two flags are independent knobs with the same effect
   // on this one gate.
@@ -133,7 +134,7 @@ export async function applyHost(
   // to `installed` (proceeds - D6 parity) or strictly newer - there is no
   // separate "staged but not newer" case left to check.
   const staged = await readHostStagedRecord(opts.environment);
-  const expectedStageFingerprint = opts.expectedStageFingerprint ?? null;
+  const expectedStageFingerprint = opts.expectedStageFingerprint;
   if (
     expectedStageFingerprint !== null &&
     (staged === null || staged.stageId !== expectedStageFingerprint)

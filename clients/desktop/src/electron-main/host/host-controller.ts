@@ -51,23 +51,24 @@ import {
   type DesktopHostInstallRecord,
   type HostEndpointReachabilityProbe,
 } from "./host-state";
-import type {
-  ActivateInstalledOk,
-  ApplyStagedOk,
-  ApplyStagedTrigger,
-  BusyContinuation,
-  ConvergeReadyOk,
-  DownloadLaneStatus,
-  HostControllerIntent,
-  HostControllerStatus,
-  InstallVersionOk,
-  MutationKind,
-  MutationLaneStatus,
-  MutationOutcome,
-  MutationProgress,
-  RemoveTraycerOk,
-  ServiceRegistrationOk,
-  UninstallOk,
+import {
+  HOST_REMOVED_BY_USER_MESSAGE,
+  type ActivateInstalledOk,
+  type ApplyStagedOk,
+  type ApplyStagedTrigger,
+  type BusyContinuation,
+  type ConvergeReadyOk,
+  type DownloadLaneStatus,
+  type HostControllerIntent,
+  type HostControllerStatus,
+  type InstallVersionOk,
+  type MutationKind,
+  type MutationLaneStatus,
+  type MutationOutcome,
+  type MutationProgress,
+  type RemoveTraycerOk,
+  type ServiceRegistrationOk,
+  type UninstallOk,
 } from "./host-controller-types";
 
 // Single main-process owner of every host-lifecycle mutation (Host Update
@@ -1124,7 +1125,7 @@ export class HostController {
             phase: "terminal",
             outcome: {
               kind: "failed",
-              message: "Host was removed by the user.",
+              message: HOST_REMOVED_BY_USER_MESSAGE,
             },
           };
         }
@@ -2036,7 +2037,7 @@ export class HostController {
               if (trigger === "launch" && (await isHostRemovedByUser())) {
                 return {
                   kind: "deferred",
-                  message: "Host was removed by the user.",
+                  message: HOST_REMOVED_BY_USER_MESSAGE,
                 };
               }
               if (await this.isPackagedMacOwned()) {
@@ -2551,7 +2552,7 @@ export class HostController {
         // remaining bytes on disk - without this check, Restart/Retry would
         // resurrect them instead of respecting the removal.
         if (await isHostRemovedByUser()) {
-          return { kind: "deferred", message: "Host was removed by the user." };
+          return { kind: "deferred", message: HOST_REMOVED_BY_USER_MESSAGE };
         }
         this.hostLifecycle.notifyRespawning();
         if (await this.isPackagedMacOwned()) {
@@ -2631,7 +2632,7 @@ export class HostController {
           return { kind: "ok", value: { activated: true } };
         }
         if (await isHostRemovedByUser()) {
-          return { kind: "deferred", message: "Host was removed by the user." };
+          return { kind: "deferred", message: HOST_REMOVED_BY_USER_MESSAGE };
         }
         if (await this.isPackagedMacOwned()) {
           return this.runLockedMacActivationCycle(true, "activate", false);

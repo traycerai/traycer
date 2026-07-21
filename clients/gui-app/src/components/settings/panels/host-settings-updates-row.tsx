@@ -99,7 +99,7 @@ function UpdatesControl(props: {
           className="font-mono text-code-xs text-muted-foreground"
           data-testid="settings-host-staged-version"
         >
-          v{stagedVersion ?? "latest"}
+          {stagedVersion === null ? "latest" : `v${stagedVersion}`}
         </span>
         <Button
           variant="default"

@@ -1,12 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { IpcHostController, RunnerIpcBridge } from "../runner-ipc-bridge";
+import type { IpcHostController } from "../runner-ipc-bridge";
 import type {
   HostControllerStatus,
   MutationLaneStatus,
+  MutationProgress,
 } from "../../host/host-controller-types";
 import {
   onHostControllerStatusBroadcast,
   registerHostControllerStatusBroadcast,
+  type HostControllerStatusBroadcastBridge,
 } from "../host-controller-status-broadcast";
 
 vi.mock("../../app/logger", () => ({
@@ -32,44 +34,84 @@ function fakeStatus(
   };
 }
 
-// Only implements what the broadcaster reads (`getStatus`, `onMutationProgress`,
-// and optionally `onMutationStatus` - `hasMutationStatus` feature-detects it at
-// runtime). `emitProgress`/`emitMutationStatus` drive the module under test the
+// The broadcaster only exercises `getStatus`, `onMutationProgress`, and
+// optionally `onMutationStatus` (`hasMutationStatus` feature-detects it at
+// runtime); every other `IpcHostController` member is stubbed to throw so
+// the fake stays honestly typed without asserting.
+// `emitProgress`/`emitMutationStatus` drive the module under test the
 // same way `HostController`'s real observers would.
-function fakeHostController(withMutationStatus: boolean): IpcHostController & {
+type FakeHostController = IpcHostController & {
   status: HostControllerStatus;
   getStatusError: Error | null;
+  getStatusCallCount(): number;
   emitProgress(): void;
   emitMutationStatus(status: MutationLaneStatus | null): void;
-} {
-  const progressListeners = new Set<() => void>();
+};
+
+function notUsedByBroadcaster(): never {
+  throw new Error("not used by the status broadcaster");
+}
+
+function fakeHostController(withMutationStatus: boolean): FakeHostController {
+  const progressListeners = new Set<(progress: MutationProgress) => void>();
   const mutationStatusListeners = new Set<
     (status: MutationLaneStatus | null) => void
   >();
-  const base = {
+  let statusReads = 0;
+  const base: FakeHostController = {
     status: fakeStatus(null),
-    getStatusError: null as Error | null,
+    getStatusError: null,
+    getStatusCallCount(): number {
+      return statusReads;
+    },
     async getStatus(): Promise<HostControllerStatus> {
+      statusReads += 1;
       if (base.getStatusError !== null) throw base.getStatusError;
       return base.status;
     },
-    onMutationProgress(listener: () => void): () => void {
+    convergeReady: notUsedByBroadcaster,
+    stageLatest: notUsedByBroadcaster,
+    applyStaged: notUsedByBroadcaster,
+    activateInstalled: notUsedByBroadcaster,
+    installVersion: notUsedByBroadcaster,
+    registerService: notUsedByBroadcaster,
+    deregisterService: notUsedByBroadcaster,
+    respawn: notUsedByBroadcaster,
+    recoverIfDown: notUsedByBroadcaster,
+    freePortAndRestart: notUsedByBroadcaster,
+    uninstallHost: notUsedByBroadcaster,
+    removeTraycer: notUsedByBroadcaster,
+    isPendingRevisionRefreshQuarantined: notUsedByBroadcaster,
+    onMutationProgress(
+      listener: (progress: MutationProgress) => void,
+    ): () => void {
       progressListeners.add(listener);
       return () => {
         progressListeners.delete(listener);
       };
     },
     emitProgress(): void {
-      for (const listener of progressListeners) listener();
+      const progress: MutationProgress = {
+        stage: null,
+        percent: null,
+        bytes: null,
+        totalBytes: null,
+        message: null,
+      };
+      for (const listener of progressListeners) listener(progress);
     },
     emitMutationStatus(status: MutationLaneStatus | null): void {
       for (const listener of mutationStatusListeners) listener(status);
     },
   };
   if (!withMutationStatus) {
-    return base as never;
+    return base;
   }
-  return {
+  const withStatusObserver: FakeHostController & {
+    onMutationStatus(
+      listener: (status: MutationLaneStatus | null) => void,
+    ): () => void;
+  } = {
     ...base,
     onMutationStatus(
       listener: (status: MutationLaneStatus | null) => void,
@@ -79,10 +121,13 @@ function fakeHostController(withMutationStatus: boolean): IpcHostController & {
         mutationStatusListeners.delete(listener);
       };
     },
-  } as never;
+  };
+  return withStatusObserver;
 }
 
-function fakeBridge(hostController: IpcHostController): RunnerIpcBridge & {
+function fakeBridge(
+  hostController: IpcHostController,
+): HostControllerStatusBroadcastBridge & {
   readonly fanOutCalls: Array<readonly [string, unknown]>;
 } {
   const fanOutCalls: Array<readonly [string, unknown]> = [];
@@ -92,10 +137,8 @@ function fakeBridge(hostController: IpcHostController): RunnerIpcBridge & {
     fanOut(channel: string, payload: unknown): void {
       fanOutCalls.push([channel, payload]);
     },
-    get fanOutCalls() {
-      return fanOutCalls;
-    },
-  } as never;
+    fanOutCalls,
+  };
 }
 
 function dispose(bridge: { readonly disposeFns: Array<() => void> }): void {
@@ -312,5 +355,31 @@ describe("registerHostControllerStatusBroadcast", () => {
     await vi.advanceTimersByTimeAsync(0);
 
     expect(bridge.fanOutCalls).toHaveLength(0);
+  });
+
+  it("falls back to the idle cadence when getStatus keeps failing during active polling", async () => {
+    const hostController = fakeHostController(false);
+    const bridge = fakeBridge(hostController);
+    registerHostControllerStatusBroadcast(bridge);
+    hostController.status = fakeStatus({
+      version: "1.5.0",
+      progress: null,
+      lastError: null,
+    });
+
+    // Engage the 750ms active cadence via an in-flight download tick.
+    hostController.emitProgress();
+    await vi.advanceTimersByTimeAsync(0);
+
+    // The next active tick observes the failure and must drop the tight
+    // cadence rather than keep hammering an unhealthy controller.
+    hostController.getStatusError = new Error("controller unreachable");
+    await vi.advanceTimersByTimeAsync(750);
+    const readsAfterFailure = hostController.getStatusCallCount();
+
+    // Still short of the 5s idle floor: an intact active timer would have
+    // produced several more reads here.
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(hostController.getStatusCallCount()).toBe(readsAfterFailure);
   });
 });

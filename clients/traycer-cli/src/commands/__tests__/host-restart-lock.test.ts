@@ -228,6 +228,10 @@ describe.skipIf(process.platform === "win32")(
         expect(mocks.controllerCalls).toEqual(["stop", "start"]);
         expect(result.data).toMatchObject({ restarted: true });
       } finally {
+        // Re-written unconditionally (idempotent): if an assertion above
+        // threw before the in-try release, the worker would otherwise hold
+        // the lock until the test timeout.
+        writeFileSync(join(holdBarrierDir, "release"), "");
         expect(await exited).toBe(0);
         rmSync(holdBarrierDir, { recursive: true, force: true });
       }
@@ -267,6 +271,10 @@ describe.skipIf(process.platform === "win32")(
         await expect(pending).rejects.toMatchObject({ code: "E_HOST_BUSY" });
         expect(mocks.controllerCalls).toEqual([]);
       } finally {
+        // Re-written unconditionally (idempotent): if an assertion above
+        // threw before the in-try release, the worker would otherwise hold
+        // the lock until the test timeout.
+        writeFileSync(join(holdBarrierDir, "release"), "");
         expect(await exited).toBe(0);
         rmSync(holdBarrierDir, { recursive: true, force: true });
       }

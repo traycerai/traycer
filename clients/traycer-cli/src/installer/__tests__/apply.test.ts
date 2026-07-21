@@ -207,6 +207,7 @@ describe("applyHost", () => {
       environment: ENV,
       force: false,
       noService: false,
+      expectedStageFingerprint: null,
       onProgress: () => {},
     });
 
@@ -300,6 +301,7 @@ describe("applyHost", () => {
       environment: ENV,
       force: false,
       noService: false,
+      expectedStageFingerprint: null,
       onProgress: () => {},
     });
 
@@ -318,6 +320,7 @@ describe("applyHost", () => {
       environment: ENV,
       force: false,
       noService: false,
+      expectedStageFingerprint: null,
       onProgress: () => {},
     });
 
@@ -330,6 +333,7 @@ describe("applyHost", () => {
         environment: ENV,
         force: false,
         noService: false,
+        expectedStageFingerprint: null,
         onProgress: () => {},
       }),
     ).rejects.toMatchObject({ code: "E_HOST_NOT_INSTALLED" });
@@ -345,6 +349,7 @@ describe("applyHost", () => {
         environment: ENV,
         force: false,
         noService: false,
+        expectedStageFingerprint: null,
         onProgress: () => {},
       }),
     ).rejects.toMatchObject({ code: "E_HOST_BUSY" });
@@ -362,6 +367,7 @@ describe("applyHost", () => {
       environment: ENV,
       force: true,
       noService: false,
+      expectedStageFingerprint: null,
       onProgress: () => {},
     });
 
@@ -377,6 +383,7 @@ describe("applyHost", () => {
       environment: ENV,
       force: false,
       noService: true,
+      expectedStageFingerprint: null,
       onProgress: () => {},
     });
 
@@ -401,6 +408,7 @@ describe("applyHost", () => {
         environment: ENV,
         force: false,
         noService: true,
+        expectedStageFingerprint: null,
         onProgress: () => {},
       }),
     ).rejects.toMatchObject({ code: "E_INVALID_ARGUMENT" });
@@ -416,6 +424,7 @@ describe("applyHost", () => {
       environment: ENV,
       force: false,
       noService: false,
+      expectedStageFingerprint: null,
       onProgress: () => {},
     });
 
@@ -438,6 +447,7 @@ describe("applyHost", () => {
       environment: ENV,
       force: false,
       noService: false,
+      expectedStageFingerprint: null,
       onProgress: () => {},
     });
 
@@ -464,6 +474,7 @@ describe("applyHost", () => {
       environment: ENV,
       force: false,
       noService: false,
+      expectedStageFingerprint: null,
       onProgress: () => {},
     });
 
@@ -487,6 +498,7 @@ describe("applyHost", () => {
         environment: ENV,
         force: false,
         noService: false,
+        expectedStageFingerprint: null,
         onProgress: () => {},
       }),
     ).rejects.toThrow("simulated stop failure");
@@ -505,6 +517,7 @@ describe("applyHost", () => {
       environment: ENV,
       force: false,
       noService: false,
+      expectedStageFingerprint: null,
       onProgress: () => {},
     });
 
@@ -535,6 +548,7 @@ describe("applyHost", () => {
       environment: ENV,
       force: false,
       noService: false,
+      expectedStageFingerprint: null,
       onProgress: () => {},
     });
 
@@ -570,6 +584,7 @@ describe("applyHost", () => {
         environment: ENV,
         force: false,
         noService: false,
+        expectedStageFingerprint: null,
         onProgress: () => {},
       }),
     ).rejects.toMatchObject({ code: "E_HOST_BUSY" });
