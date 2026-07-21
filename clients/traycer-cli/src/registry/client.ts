@@ -17,6 +17,14 @@ import type {
   RegistryClient,
 } from "./types";
 
+const YANK_LOOKUP_TIMEOUT_MS = 10_000;
+
+export interface RegistryYankLookup {
+  // Returns false for an entry missing from the manifest and for every
+  // registry failure. Those conditions must preserve a newer installed host.
+  isVersionYanked(version: string): Promise<boolean>;
+}
+
 // Real registry client. Replaces the NP-2 stub now that NP-4 ships the
 // hosted versions.json fetcher, asset resolver, and minisign + sha256
 // verification chain.
@@ -386,6 +394,54 @@ export async function createDefaultRegistryClient(
     transport: null,
     requireTrustedKeys: true,
   });
+}
+
+// Create one lookup per provisioning run. It shares only a manifest promise
+// and its result; every state snapshot still asks whether its installed
+// version is yanked. This read is advisory, unlike installer manifest fetches:
+// offline, malformed, and timed-out responses all intentionally fail open.
+export function createRegistryYankLookup(
+  environment: Environment,
+): RegistryYankLookup {
+  const logger = createCliLogger(environment);
+  const manifestUrl = resolveManifestUrl().url;
+  let manifestPromise: Promise<HostVersionsManifest | null> | null = null;
+
+  const fetchManifest = async (): Promise<HostVersionsManifest | null> => {
+    const controller = new AbortController();
+    let watchdogExpired = false;
+    const watchdog = setTimeout(() => {
+      watchdogExpired = true;
+      controller.abort();
+    }, YANK_LOOKUP_TIMEOUT_MS);
+    try {
+      const body = await fetchText(manifestUrl, { signal: controller.signal });
+      const parsed: unknown = JSON.parse(body);
+      return parseHostVersionsManifestWithWarnings(parsed, manifestUrl)
+        .manifest;
+    } catch (err) {
+      logger.warn("Registry yank lookup failed open", {
+        environment,
+        manifestUrl,
+        watchdogExpired,
+        errorName: errorFromUnknown(err).name,
+      });
+      return null;
+    } finally {
+      clearTimeout(watchdog);
+    }
+  };
+
+  return {
+    async isVersionYanked(version: string): Promise<boolean> {
+      manifestPromise ??= fetchManifest();
+      const manifest = await manifestPromise;
+      return (
+        manifest?.versions.find((entry) => entry.version === version)
+          ?.yanked === true
+      );
+    },
+  };
 }
 
 function archiveBasenameFromUrl(url: string): string {

@@ -17,6 +17,14 @@ import {
 import { resolveServiceCliInvocation } from "../service/cli-binary";
 import { createServiceInstallLifecycle } from "../service/install-lifecycle";
 import { withCliLock } from "../store/cli-lock";
+import {
+  createRegistryYankLookup,
+  type RegistryYankLookup,
+} from "../registry/client";
+import {
+  compareHostVersions,
+  isHostSemanticVersion,
+} from "@traycer-clients/shared/platform/runner-host";
 import { assertHostNotBusy } from "./busy-check";
 
 // The single host-provisioning core shared by `host ensure` (the
@@ -27,7 +35,7 @@ import { assertHostNotBusy } from "./busy-check";
 //
 // Source resolution and idempotency policy differ per caller, so both are
 // injected: `resolveInstallSource` is only invoked on the install branch,
-// and `targetVersion` (null = presence-based) controls the fast no-op.
+// and `satisfaction` controls the fast no-op.
 
 export type HostProvisionAction =
   "noop" | "installed" | "service-registered" | "started";
@@ -55,20 +63,23 @@ export interface HostProvisionResult {
   readonly postSwapError: string | null;
 }
 
+export type HostSatisfactionPolicy =
+  | { readonly kind: "presence" }
+  | { readonly kind: "exact"; readonly version: string }
+  | { readonly kind: "implicit-registry-minimum"; readonly version: string };
+
 export interface ProvisionHostOptions {
   readonly runtime: RuntimeContext;
   // Invoked only when an install is actually required.
   readonly resolveInstallSource: () => Promise<InstallSourceArg>;
-  // The idempotency key. A concrete value re-installs whenever the install
-  // record's version differs; `null` falls back to presence-only. The
-  // bundled-host callers pass this build's `config.version` so a rebuilt
-  // (same-channel) host is detected and replaced even though there is no
-  // semver bump. A registry `--release <semver>` passes that semver.
-  readonly targetVersion: string | null;
+  // The installed-version predicate for this provisioning run. Local files
+  // and explicit `--release` requests use exact matching; the build-stamped
+  // registry default accepts a newer non-yanked SemVer install.
+  readonly satisfaction: HostSatisfactionPolicy;
   // Recorded as the install version for a local-file install (the
   // bundled-host callers pass `config.version` so the recorded version
-  // equals `targetVersion` and the next launch is a no-op until the build
-  // changes). `null` keeps the installer's derived default.
+  // matches the exact satisfaction policy and the next launch is a no-op
+  // until the build changes). `null` keeps the installer's derived default.
   readonly recordVersionOverride: string | null;
   readonly enableLinger: boolean;
   readonly allowSelfInvocation: boolean;
@@ -99,11 +110,19 @@ export async function provisionHost(
   const progress = opts.onProgress ?? noopProgress;
   const controller = createServiceController();
   const label = serviceLabelFor(opts.runtime.environment);
+  // The manifest fetch is shareable across state snapshots within this run,
+  // but its answer is not: a lock-race loser must re-evaluate the winner's
+  // install record after acquiring the lock.
+  const yankLookup = createRegistryYankLookup(opts.runtime.environment);
   opts.runtime.logger.info("Host provisioning started", {
     environment: opts.runtime.environment,
     registerService: opts.registerService,
     force: opts.force,
-    targetVersion: opts.targetVersion ?? "presence-only",
+    satisfactionKind: opts.satisfaction.kind,
+    satisfactionVersion:
+      opts.satisfaction.kind === "presence"
+        ? "presence-only"
+        : opts.satisfaction.version,
     recordVersionOverride: opts.recordVersionOverride !== null,
     lockReason: opts.lockReason,
   });
@@ -123,7 +142,12 @@ export async function provisionHost(
   // no-op fast path.
   if (
     !opts.force &&
-    isSatisfied(fast, opts.targetVersion, opts.registerService)
+    (await isSatisfied(
+      fast,
+      opts.satisfaction,
+      opts.registerService,
+      yankLookup,
+    ))
   ) {
     opts.runtime.logger.debug("Host provisioning fast-path satisfied", {
       environment: opts.runtime.environment,
@@ -161,7 +185,12 @@ export async function provisionHost(
       });
       if (
         !opts.force &&
-        isSatisfied(state, opts.targetVersion, opts.registerService)
+        (await isSatisfied(
+          state,
+          opts.satisfaction,
+          opts.registerService,
+          yankLookup,
+        ))
       ) {
         opts.runtime.logger.debug(
           "Host provisioning satisfied after lock recheck",
@@ -179,7 +208,7 @@ export async function provisionHost(
       if (
         !opts.force &&
         state.installed &&
-        versionSatisfied(state, opts.targetVersion) &&
+        (await versionSatisfied(state, opts.satisfaction, yankLookup)) &&
         !opts.registerService
       ) {
         opts.runtime.logger.debug(
@@ -222,13 +251,13 @@ export async function provisionHost(
       if (
         opts.force ||
         !state.installed ||
-        !versionSatisfied(state, opts.targetVersion)
+        !(await versionSatisfied(state, opts.satisfaction, yankLookup))
       ) {
         opts.runtime.logger.debug("Host provisioning selected install branch", {
           environment: opts.runtime.environment,
           force: opts.force,
           installed: state.installed,
-          versionSatisfied: versionSatisfied(state, opts.targetVersion),
+          satisfactionKind: opts.satisfaction.kind,
         });
         return runInstall(opts, controller, label, progress);
       }
@@ -479,25 +508,40 @@ async function readProvisionState(
   };
 }
 
-// "latest", `--from`, and the packaged archive carry synthetic local
-// versions that can't be string-compared, so presence is the only
-// idempotency signal for them (targetVersion === null). A concrete semver
-// can be matched against the install record without a registry probe.
-function versionSatisfied(
+async function versionSatisfied(
   state: ProvisionState,
-  targetVersion: string | null,
-): boolean {
+  satisfaction: HostSatisfactionPolicy,
+  yankLookup: RegistryYankLookup,
+): Promise<boolean> {
   if (!state.installed) return false;
-  if (targetVersion === null) return true;
-  return state.version === targetVersion;
+  if (satisfaction.kind === "presence") return true;
+  if (satisfaction.kind === "exact") {
+    return state.version === satisfaction.version;
+  }
+  if (
+    state.version === null ||
+    !isHostSemanticVersion(state.version) ||
+    !isHostSemanticVersion(satisfaction.version)
+  ) {
+    // `compareHostVersions` returns 0 for invalid input. Validate both sides
+    // before comparing so a malformed install record can never look current.
+    return false;
+  }
+  const comparison = compareHostVersions(state.version, satisfaction.version);
+  if (comparison < 0) return false;
+  if (comparison === 0) return true;
+  // A newer install is normally accepted. The registry may explicitly revoke
+  // it, but an absent entry or a failed/expired lookup deliberately fails open.
+  return !(await yankLookup.isVersionYanked(state.version));
 }
 
-function isSatisfied(
+async function isSatisfied(
   state: ProvisionState,
-  targetVersion: string | null,
+  satisfaction: HostSatisfactionPolicy,
   registerService: boolean,
-): boolean {
-  if (!versionSatisfied(state, targetVersion)) {
+  yankLookup: RegistryYankLookup,
+): Promise<boolean> {
+  if (!(await versionSatisfied(state, satisfaction, yankLookup))) {
     return false;
   }
   // Host-owned registration: only the bytes are the CLI's concern.

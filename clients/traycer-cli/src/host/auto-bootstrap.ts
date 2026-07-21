@@ -7,7 +7,11 @@ import { CliError } from "../runner/errors";
 import type { ProgressInfo } from "../runner/output";
 import type { RuntimeContext } from "../runner/runtime";
 import { createServiceController, serviceLabelFor } from "../service";
-import { provisionHost, type HostProvisionResult } from "./provision";
+import {
+  provisionHost,
+  type HostProvisionResult,
+  type HostSatisfactionPolicy,
+} from "./provision";
 import { defaultRegistryHostVersionRequest } from "./supported-host-version";
 import { installSourceLogFields } from "./install-source-log-fields";
 
@@ -256,21 +260,25 @@ export async function maybeAutoBootstrap(
       ...installSourceLogFields(source),
     });
     const isOwnBuild = source.kind === "local-file";
-    const targetVersion =
-      source.kind === "registry" && source.versionRequest !== "latest"
-        ? source.versionRequest
-        : null;
-    const installTargetVersion = isServiceOnly
-      ? null
-      : isOwnBuild
-        ? config.version
-        : targetVersion;
+    const sourceSatisfaction: HostSatisfactionPolicy = isOwnBuild
+      ? { kind: "exact", version: config.version }
+      : source.kind === "registry" && source.versionRequest !== "latest"
+        ? {
+            kind: "implicit-registry-minimum",
+            version: source.versionRequest,
+          }
+        : { kind: "presence" };
+    // A service-only bootstrap repairs registration for existing bytes. It
+    // must never replace those bytes just because its source policy differs.
+    const satisfaction: HostSatisfactionPolicy = isServiceOnly
+      ? { kind: "presence" }
+      : sourceSatisfaction;
     const recordVersionOverride =
       isServiceOnly || !isOwnBuild ? null : config.version;
     const result = await provisionHost({
       runtime: opts.runtime,
       resolveInstallSource: () => Promise.resolve(source),
-      targetVersion: installTargetVersion,
+      satisfaction,
       recordVersionOverride,
       enableLinger: true,
       // First-run via standalone CLI: the SEA binary is the running
