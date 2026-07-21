@@ -7,6 +7,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { HostOperationKind } from "@traycer-clients/shared/platform/runner-host";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 
 // The host-boot splash now reuses the shared <AppHeader>, which
@@ -70,6 +71,7 @@ function mountLoading(host: MockRunnerHost, stage: "loading" | "slow"): void {
           <LocalHostLoading
             stage={stage}
             progress={null}
+            operationKind={null}
             onConfigureShell={() => undefined}
           />
         </TooltipProvider>
@@ -77,6 +79,17 @@ function mountLoading(host: MockRunnerHost, stage: "loading" | "slow"): void {
     </QueryClientProvider>,
   );
 }
+
+const NON_ENSURE_OPERATION_HEADINGS: ReadonlyArray<{
+  readonly kind: HostOperationKind;
+  readonly heading: string;
+}> = [
+  { kind: "install", heading: "Installing Traycer Host…" },
+  { kind: "update", heading: "Updating Traycer Host…" },
+  { kind: "register-service", heading: "Registering Traycer Host…" },
+  { kind: "restart", heading: "Restarting Traycer Host…" },
+  { kind: "free-port-and-restart", heading: "Restarting Traycer Host…" },
+];
 
 describe("<LocalHostLoading />", () => {
   afterEach(() => {
@@ -200,6 +213,7 @@ describe("<LocalHostLoading />", () => {
                 totalBytes: 250_609_664,
                 message: "downloading host 1.2.3",
               }}
+              operationKind="ensure"
               onConfigureShell={() => undefined}
             />
           </TooltipProvider>
@@ -240,6 +254,7 @@ describe("<LocalHostLoading />", () => {
                 totalBytes: null,
                 message: "extracting host runtime",
               }}
+              operationKind="ensure"
               onConfigureShell={() => undefined}
             />
           </TooltipProvider>
@@ -253,4 +268,38 @@ describe("<LocalHostLoading />", () => {
     expect(root.textContent).toContain("80%");
     expect(root.textContent).not.toContain("Downloading…");
   });
+
+  it.each(NON_ENSURE_OPERATION_HEADINGS)(
+    "renders kind-appropriate copy for $kind progress",
+    ({ kind, heading }) => {
+      render(
+        <QueryClientProvider client={buildQueryClient()}>
+          <RunnerHostProvider runnerHost={buildHost()}>
+            <TooltipProvider>
+              <LocalHostLoading
+                stage="loading"
+                progress={{
+                  operationId: `op-${kind}`,
+                  stage: "applying",
+                  percent: 50,
+                  bytes: 50,
+                  totalBytes: 100,
+                  message: "operation progress",
+                }}
+                operationKind={kind}
+                onConfigureShell={() => undefined}
+              />
+            </TooltipProvider>
+          </RunnerHostProvider>
+        </QueryClientProvider>,
+      );
+
+      expect(screen.getByTestId("local-host-loading").textContent).toContain(
+        heading,
+      );
+      expect(screen.getByTestId("local-host-loading").textContent).not.toContain(
+        "Setting up Traycer Host…",
+      );
+    },
+  );
 });

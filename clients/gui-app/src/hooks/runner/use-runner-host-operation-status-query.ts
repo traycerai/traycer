@@ -7,6 +7,8 @@ import type {
   HostOperationStatusEnvelope,
   IHostManagement,
 } from "@traycer-clients/shared/platform/runner-host";
+import { resolveDesktopHostOperationStatusBridge } from "@/lib/windows/desktop-capabilities";
+import { useRunnerHost } from "@/providers/use-runner-host";
 import { runnerQueryKeys } from "@/lib/query-keys";
 
 function isHostOperationStatusEnvelope(
@@ -38,13 +40,24 @@ export function selectNewestHostOperationStatusEnvelope(
  * (the push listener applies the same monotonic rule on its own writes).
  */
 export function useRunnerHostOperationStatusQuery(
-  management: IHostManagement,
+  management: IHostManagement | null,
 ): UseQueryResult<HostOperationStatusEnvelope> {
-  const queryKey = runnerQueryKeys.hostOperationStatus(management);
+  const runnerHost = useRunnerHost();
+  const hasDesktopStatusBridge =
+    resolveDesktopHostOperationStatusBridge(runnerHost) !== null;
+  const queryKey =
+    management !== null
+      ? runnerQueryKeys.hostOperationStatus(management)
+      : ["runner.host.operationStatus", "disabled"];
   return useQuery(
     queryOptions<HostOperationStatusEnvelope>({
       queryKey,
-      queryFn: () => management.getOperationStatus(),
+      queryFn: () => {
+        if (management === null) {
+          throw new Error("Host management unavailable on this runner host");
+        }
+        return management.getOperationStatus();
+      },
       structuralSharing: (oldData, newData) => {
         if (!isHostOperationStatusEnvelope(newData)) return newData;
         const previous = isHostOperationStatusEnvelope(oldData)
@@ -52,7 +65,16 @@ export function useRunnerHostOperationStatusQuery(
           : undefined;
         return selectNewestHostOperationStatusEnvelope(previous, newData);
       },
-      staleTime: Infinity,
+      // Desktop renderers subscribe before their initial snapshot through
+      // HostOperationStatusListener. Non-desktop/test runners have no push
+      // bridge, so this query owns a bounded-backoff snapshot retry instead.
+      // Either path stays unknown until an envelope arrives; a cache entry is
+      // never used as an eternal substitute for main's revisioned source.
+      enabled: management !== null && !hasDesktopStatusBridge,
+      retry: true,
+      retryDelay: (attemptIndex) =>
+        Math.min(30_000, 1_000 * 2 ** Math.min(attemptIndex, 5)),
+      staleTime: 0,
     }),
   );
 }

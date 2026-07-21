@@ -101,8 +101,10 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
   const { data: operationEnvelope } =
     useRunnerHostOperationStatusQuery(management);
   const operationStatus = operationEnvelope?.status;
-  const sharedOperationActive =
-    operationStatus !== undefined && operationStatus !== null;
+  // A missing envelope is still hydrating (or retrying its snapshot), not an
+  // authoritative idle state. Keep the mutation trigger closed until main has
+  // published an explicit null or active operation.
+  const sharedOperationActive = operationStatus !== null;
   const sharedPercent =
     operationStatus !== undefined && operationStatus !== null
       ? operationStatus.percent

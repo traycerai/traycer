@@ -182,6 +182,10 @@ function queryHostUpdateBanner(): HTMLElement | null {
   });
 }
 
+function neverResolves<T>(): Promise<T> {
+  return new Promise<T>(() => undefined);
+}
+
 describe("HostUpdateBanner (Flow 6)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -210,6 +214,48 @@ describe("HostUpdateBanner (Flow 6)", () => {
     expect(await findHostUpdateBanner()).toBeTruthy();
     expect(screen.getByText(/1\.4\.2/)).toBeTruthy();
     expect(screen.getByRole("button", { name: /Install/i })).toBeTruthy();
+  });
+
+  it("holds Install disabled while the operation envelope is unresolved", async () => {
+    const updateHost = vi.fn(() =>
+      Promise.resolve<HostInstallResult>({
+        version: "1.4.2",
+        installedAt: "2026-05-15T00:00:00Z",
+        executablePath: "/tmp/traycerd",
+        source: { kind: "registry", value: "1.4.2" },
+        archiveSha256: "deadbeef",
+        signatureKeyId: "stub",
+        sizeBytes: 1024,
+        previousVersion: "1.4.1",
+        serviceLifecycle: {
+          priorServiceState: "running",
+          stoppedBeforeSwap: true,
+          postSwapAction: "restart",
+          postSwapError: null,
+        },
+      }),
+    );
+    const management = makeManagement({
+      updateHost,
+      getOperationStatus: () => neverResolves<HostOperationStatusEnvelope>(),
+      registryCheck: () =>
+        Promise.resolve<HostRegistryUpdateState>({
+          checkedAt: "2026-05-15T00:00:00Z",
+          latestVersion: "1.4.2",
+          installedVersion: "1.4.1",
+          updateAvailable: true,
+          reachable: true,
+          errorMessage: null,
+          includePreReleases: false,
+        }),
+    });
+
+    renderBanner(makeHost(management));
+
+    const install = await screen.findByRole("button", { name: /Install/i });
+    expect(install.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(install);
+    expect(updateHost).not.toHaveBeenCalled();
   });
 
   it("stays hidden when no update is available", async () => {

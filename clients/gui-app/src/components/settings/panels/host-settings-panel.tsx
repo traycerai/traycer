@@ -185,8 +185,10 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
   const { data: operationEnvelope } =
     useRunnerHostOperationStatusQuery(management);
   const operationStatus = operationEnvelope?.status;
-  const sharedOperationActive =
-    operationStatus !== undefined && operationStatus !== null;
+  // `undefined` is an unresolved/retrying envelope read, not proof that the
+  // slot is idle. All mutating Settings controls fail closed until main sends
+  // an explicit idle null or active status.
+  const sharedOperationActive = operationStatus !== null;
   const progress: HostProgressState | null =
     operationStatus !== undefined && operationStatus !== null
       ? {

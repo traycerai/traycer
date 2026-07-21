@@ -62,6 +62,24 @@ describe("<HostSettingsPanel /> - mutation flows", () => {
     expect(toast.success).toHaveBeenCalledWith("Host restart requested");
   });
 
+  it("holds mutating Settings controls disabled while the operation envelope is unresolved", async () => {
+    const restartHost = vi.fn(() => Promise.resolve());
+    const { management } = makeManagement({
+      restartHost,
+      getOperationStatus: vi.fn(() =>
+        new Promise<HostOperationStatusEnvelope>(() => undefined),
+      ),
+    });
+
+    renderPanel(makeHost(management, makeLocalHostSnapshot()));
+
+    const restart = await screen.findByRole("button", { name: "Restart" });
+    expect(restart.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(restart);
+    expect(restartHost).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+  });
+
   it("closes the restart dialog optimistically on confirm - before the mutation settles - and still surfaces a later rejection via toast", async () => {
     let rejectRestart: (error: Error) => void = () => undefined;
     const restartHost = vi.fn(
@@ -394,6 +412,7 @@ interface ManagementOverrides {
   readonly cliManifest: Mock | undefined;
   readonly getHostName: Mock | undefined;
   readonly setHostName: Mock | undefined;
+  readonly getOperationStatus: Mock | undefined;
 }
 
 interface ManagementResult {
@@ -443,11 +462,15 @@ function makeManagement(
           includePreReleases: false,
         }),
       ),
-    getOperationStatus: vi.fn(() => Promise.resolve({
-  revision: 0,
-  status: null,
-  lastEnsureOutcome: null,
-})),
+    getOperationStatus:
+      overrides.getOperationStatus ??
+      vi.fn(() =>
+        Promise.resolve({
+          revision: 0,
+          status: null,
+          lastEnsureOutcome: null,
+        }),
+      ),
     freePortAndRestart: vi.fn((input) => Promise.resolve(input)),
     cliManifest: overrides.cliManifest ?? vi.fn(() => Promise.resolve(null)),
     getHostName:
