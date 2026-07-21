@@ -659,10 +659,16 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
         // version. Re-probe the registry so the cached `installedVersion`
         // (and `updateAvailable`) reflect it - otherwise the 24h TTL cache
         // keeps the pre-apply snapshot and the Updates row stays stuck
-        // advertising the version we just installed.
-        await refreshRegistryUpdateState(bridge.options.hostController, {
+        // advertising the version we just installed. Fire-and-forget: the
+        // apply already committed, so a rejection in this secondary probe
+        // must never turn a successful outcome into a rejected invoke.
+        void refreshRegistryUpdateState(bridge.options.hostController, {
           force: true,
           maxAgeMs: null,
+        }).catch((err: unknown) => {
+          log.warn("[host-management] registry refresh after apply failed", {
+            err,
+          });
         });
       }
       return outcome;
@@ -688,9 +694,17 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
         force,
       );
       if (outcome.kind === "ok") {
-        await refreshRegistryUpdateState(bridge.options.hostController, {
+        // Fire-and-forget for the same reason as `traycerHostApplyStaged`
+        // above: the pin already committed, so this secondary probe must
+        // never turn a successful outcome into a rejected invoke.
+        void refreshRegistryUpdateState(bridge.options.hostController, {
           force: true,
           maxAgeMs: null,
+        }).catch((err: unknown) => {
+          log.warn(
+            "[host-management] registry refresh after installVersion failed",
+            { err },
+          );
         });
       }
       return outcome;

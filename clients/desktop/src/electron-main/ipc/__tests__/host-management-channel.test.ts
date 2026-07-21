@@ -225,7 +225,15 @@ class FakeHostController implements IpcHostController {
     checkedAt: "2026-01-01T00:00:00.000Z",
   };
 
+  // Lets a test simulate the forced post-mutation registry refresh's
+  // `getStatus()` read rejecting (fs/identity/endpoint work can genuinely
+  // fail) without touching the mutation call itself.
+  getStatusError: Error | null = null;
+
   async getStatus(): Promise<HostControllerStatus> {
+    if (this.getStatusError !== null) {
+      throw this.getStatusError;
+    }
     return this.getStatusResult;
   }
   async convergeReady(
@@ -618,6 +626,52 @@ describe("host-management IPC - CLI subprocess argv carries NO --environment (CL
       { method: "deregisterService", args: [] },
       { method: "freePortAndRestart", args: [1234, 7000] },
     ]);
+  });
+
+  it("returns applyStaged's committed ok outcome when its post-apply registry projection rejects", async () => {
+    installFakeCli({ runResult: {}, streamResult: {} });
+    const mgmt = await import("../host-management-ipc");
+    const { RunnerHostInvoke } =
+      await import("../../../ipc-contracts/ipc-channels");
+    const bridge = makeBridge();
+    bridge.options.hostController.getStatusError = new Error(
+      "status projection failed",
+    );
+    bridge.options.hostController.applyStagedResult = {
+      kind: "ok",
+      value: { appliedVersion: "2.0.0", runningActivated: true },
+    };
+    mgmt.registerHostManagementIpc(bridge as never);
+
+    await expect(
+      bridge.handlers.get(RunnerHostInvoke.traycerHostApplyStaged)!(null, {
+        trigger: "manual",
+        force: false,
+      }),
+    ).resolves.toEqual(bridge.options.hostController.applyStagedResult);
+  });
+
+  it("returns installVersion's committed ok outcome when its post-pin registry projection rejects", async () => {
+    installFakeCli({ runResult: {}, streamResult: {} });
+    const mgmt = await import("../host-management-ipc");
+    const { RunnerHostInvoke } =
+      await import("../../../ipc-contracts/ipc-channels");
+    const bridge = makeBridge();
+    bridge.options.hostController.getStatusError = new Error(
+      "status projection failed",
+    );
+    bridge.options.hostController.installVersionResult = {
+      kind: "ok",
+      value: { installedVersion: "2.0.0", runningActivated: true },
+    };
+    mgmt.registerHostManagementIpc(bridge as never);
+
+    await expect(
+      bridge.handlers.get(RunnerHostInvoke.traycerHostInstallVersion)!(null, {
+        pin: "2.0.0",
+        force: false,
+      }),
+    ).resolves.toEqual(bridge.options.hostController.installVersionResult);
   });
 
   it("passes --include-pre-releases to host available only when requested", async () => {
