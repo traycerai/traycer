@@ -35,6 +35,12 @@ const mocks = vi.hoisted(() => ({
   dataUpdatedAt: 1,
   primaryWorkspacePath: null as string | null,
   pickAndAddFolders: vi.fn(() => Promise.resolve(true)),
+  // The (host client, workspace draft) the folder picker was last wired with,
+  // so a test can assert it targets the CAPTURED host/draft, not live focus.
+  pickArgs: null as {
+    readonly clientHostId: string | null;
+    readonly workspaceDraftId: string | null;
+  } | null,
   folderPickPending: 0,
   kill: vi.fn(),
   killAsync: vi.fn(() => Promise.resolve({ killed: true })),
@@ -46,6 +52,15 @@ const mocks = vi.hoisted(() => ({
     getActiveHostId: () => mocks.activeHostId,
     onChange: () => () => undefined,
   },
+  buildTransientHostClient: vi.fn<
+    (
+      client: unknown,
+      entry: { readonly hostId: string },
+    ) => { getActiveHostId: () => string; onChange: () => () => void } | null
+  >((_client, entry) => ({
+    getActiveHostId: () => entry.hostId,
+    onChange: () => () => undefined,
+  })),
 }));
 
 vi.mock("@tanstack/react-query", async (importOriginal) => {
@@ -59,7 +74,21 @@ vi.mock("@tanstack/react-query", async (importOriginal) => {
 vi.mock(
   "@/components/home/host-workspace-selector/use-pick-and-add-folders",
   () => ({
-    usePickAndAddWorkspaceFolders: () => mocks.pickAndAddFolders,
+    usePickAndAddWorkspaceFolders: (
+      client: { getActiveHostId?: () => string | null } | null,
+      workspaceSource: { draftId: string | null },
+    ) => {
+      // Record the host client + workspace source the picker was wired with, so
+      // a test can assert both address the CAPTURED host/draft (finding 3).
+      mocks.pickArgs = {
+        clientHostId:
+          client === null || client.getActiveHostId === undefined
+            ? null
+            : client.getActiveHostId(),
+        workspaceDraftId: workspaceSource.draftId,
+      };
+      return mocks.pickAndAddFolders;
+    },
   }),
 );
 
@@ -75,12 +104,24 @@ vi.mock("@/hooks/terminal/use-terminal-list-for-query", () => ({
 }));
 vi.mock("@/lib/host", () => ({
   useHostClient: () => mocks.defaultClient,
+  useHostDirectory: () => ({
+    findById: (hostId: string) => ({ hostId, websocketUrl: "ws://test" }),
+  }),
+}));
+vi.mock("@/hooks/host/use-host-client-for", () => ({
+  buildTransientHostClient: mocks.buildTransientHostClient,
 }));
 vi.mock(
   "@/components/home/host-workspace-selector/use-home-workspace-source",
   () => ({
-    useHomeWorkspaceSource: () => ({
+    useHomeWorkspaceSource: (key: {
+      readonly surface: string;
+      readonly draftId: string | null;
+    }) => ({
       primaryWorkspacePath: mocks.primaryWorkspacePath,
+      // Tag the source with the draft it was keyed by so a test can assert the
+      // provider keys it to the CAPTURED draft while a gesture pins.
+      draftId: key.surface === "landing" ? key.draftId : null,
     }),
   }),
 );
@@ -114,16 +155,26 @@ vi.mock("@/components/home/terminal-panel/landing-terminal-tile", () => ({
 }));
 
 import { LandingTerminalPanel } from "@/components/home/terminal-panel/landing-terminal-panel";
+import { LandingTerminalGestureProvider } from "@/components/home/terminal-panel/landing-terminal-gesture-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 /**
  * The app mounts one `TooltipProvider` at the root; the strip's disabled "+"
- * tooltip needs it, so every render goes through this wrapper.
+ * tooltip needs it, so every render goes through this wrapper. The gesture
+ * provider (the single live-value reader) wraps the panel exactly as
+ * `LandingTerminalHost` does in production; `draftId` models the focused draft
+ * the host projects, so a rerender with a new `draftId` models a focus switch.
  */
 function panelUi() {
+  return panelUiForDraft(null);
+}
+
+function panelUiForDraft(draftId: string | null) {
   return (
     <TooltipProvider>
-      <LandingTerminalPanel draftId={null} />
+      <LandingTerminalGestureProvider draftId={draftId}>
+        <LandingTerminalPanel />
+      </LandingTerminalGestureProvider>
     </TooltipProvider>
   );
 }
@@ -212,9 +263,20 @@ describe("<LandingTerminalPanel />", () => {
     mocks.dataUpdatedAt = 1;
     mocks.primaryWorkspacePath = null;
     mocks.pickAndAddFolders.mockClear();
+    mocks.pickArgs = null;
     mocks.folderPickPending = 0;
     mocks.kill.mockReset();
     mocks.killAsync.mockClear();
+    // Reset (not just clear): a test may override the return with a fail-closed
+    // `null`, and mockClear would leak that override into later tests. Restore
+    // the default host-pinned client here.
+    mocks.buildTransientHostClient.mockReset();
+    mocks.buildTransientHostClient.mockImplementation(
+      (_client: unknown, entry: { readonly hostId: string }) => ({
+        getActiveHostId: () => entry.hostId,
+        onChange: () => () => undefined,
+      }),
+    );
     mocks.queryClient.cancelQueries.mockClear();
     mocks.queryClient.fetchQuery.mockReset();
     mocks.queryClient.fetchQuery.mockImplementation(() =>
@@ -851,18 +913,10 @@ describe("<LandingTerminalPanel />", () => {
     });
   });
 
-  it("an unfulfilled open intent lands on the folder pinned at settle time", async () => {
+  it("keeps an opening gesture on draft A when focus switches to draft B before terminal.list settles", async () => {
     mocks.activeHostId = "host-a";
-    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.primaryWorkspacePath = "/workspace/draft-a";
     mocks.probeData = { sessions: [] };
-    useLandingTerminalStore.getState().addTab({
-      instanceId: "tab-1",
-      sessionId: "session-1",
-      hostId: "host-a",
-      cwd: "/workspace/project",
-      name: "project",
-      titleSource: "default",
-    });
     const resolvers: Array<(value: unknown) => void> = [];
     mocks.queryClient.fetchQuery.mockImplementation(
       () =>
@@ -870,30 +924,307 @@ describe("<LandingTerminalPanel />", () => {
           resolvers.push(resolve);
         }),
     );
-    const view = render(panelUi());
+    const view = render(panelUiForDraft("draft-a"));
     const router = fakeKeybindingRouter();
 
-    // Expand while the list fetch is still in flight, then repoint the pinned
-    // folder before anything settles. The open gesture was never fulfilled,
-    // so the surviving generation honors it against the folder pinned NOW -
-    // nothing had landed yet, so nothing is disrupted.
+    // The top-level host projects the focused draft into its one terminal host.
+    // Focus moves to B while A's terminal.list generation is pending.
     act(() => {
       dispatchAction("app.terminal.toggle", router);
     });
-    mocks.primaryWorkspacePath = "/workspace/other";
-    view.rerender(panelUi());
+    mocks.primaryWorkspacePath = "/workspace/draft-b";
+    view.rerender(panelUiForDraft("draft-b"));
     await drainDeferredListFetches(resolvers);
 
     await waitFor(() => {
-      expect(useLandingTerminalStore.getState().tabs).toHaveLength(2);
+      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
     });
-    const spawned = useLandingTerminalStore
-      .getState()
-      .tabs.find((tab) => tab.instanceId !== "tab-1");
-    expect(spawned?.cwd).toBe("/workspace/other");
+    const [spawned] = useLandingTerminalStore.getState().tabs;
+    expect(spawned.cwd).toBe("/workspace/draft-a");
     expect(useLandingTerminalStore.getState().activeInstanceId).toBe(
-      spawned?.instanceId,
+      spawned.instanceId,
     );
+  });
+
+  it("preserves a folderless opening gesture when focus switches to a foldered draft", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.primaryWorkspacePath = null;
+    mocks.probeData = { sessions: [] };
+    const resolvers: Array<(value: unknown) => void> = [];
+    mocks.queryClient.fetchQuery.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    const view = render(panelUiForDraft("draft-a"));
+    const router = fakeKeybindingRouter();
+
+    act(() => {
+      dispatchAction("app.terminal.toggle", router);
+    });
+    mocks.primaryWorkspacePath = "/workspace/draft-b";
+    view.rerender(panelUiForDraft("draft-b"));
+    await drainDeferredListFetches(resolvers);
+
+    expect(useLandingTerminalStore.getState().tabs).toHaveLength(0);
+  });
+
+  it("reconciles through the host client captured at the opening gesture", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/draft-a";
+    mocks.probeData = { sessions: [] };
+    const resolvers: Array<(value: unknown) => void> = [];
+    mocks.queryClient.fetchQuery.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    const view = render(panelUiForDraft("draft-a"));
+    const router = fakeKeybindingRouter();
+
+    act(() => {
+      dispatchAction("app.terminal.toggle", router);
+    });
+    mocks.activeHostId = "host-b";
+    view.rerender(panelUiForDraft("draft-b"));
+    await drainDeferredListFetches(resolvers);
+
+    expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+    expect(useLandingTerminalStore.getState().tabs[0]).toMatchObject({
+      hostId: "host-a",
+      cwd: "/workspace/draft-a",
+    });
+  });
+
+  it("disables the create action when the host client cannot be pinned, never falling back to the default client", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = { sessions: [] };
+    mocks.freshProbeData = mocks.probeData;
+    // Directory churn / missing ws url: the transient client cannot be pinned.
+    mocks.buildTransientHostClient.mockReturnValue(null);
+    render(panelUiForDraft("draft-a"));
+    const router = fakeKeybindingRouter();
+
+    // Opening captures a gesture whose pinned client is null -> fail-closed.
+    act(() => {
+      dispatchAction("app.terminal.toggle", router);
+    });
+
+    const plus = await screen.findByRole("button", { name: "New terminal" });
+    // Fail-closed: disabled, and NOT silently reconciling on the default client
+    // (which would auto-spawn a terminal into the empty panel).
+    expect(plus.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(plus);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(useLandingTerminalStore.getState().tabs).toHaveLength(0);
+    expect(mocks.queryClient.fetchQuery).not.toHaveBeenCalled();
+  });
+
+  it("creates from the captured host's supported verdict when the live host becomes unavailable before terminal.list settles", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/draft-a";
+    mocks.probeData = { sessions: [] };
+    const resolvers: Array<(value: unknown) => void> = [];
+    mocks.queryClient.fetchQuery.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    const view = render(panelUiForDraft("draft-a"));
+    const router = fakeKeybindingRouter();
+
+    // Capture the gesture while host-a is supported...
+    act(() => {
+      dispatchAction("app.terminal.toggle", router);
+    });
+    // ...then the default host switches to host-b whose probe has not resolved,
+    // so the LIVE availability is "unknown". The captured supported verdict must
+    // still drive creation on host-a; the live host's verdict must not gate it.
+    mocks.activeHostId = "host-b";
+    mocks.probeData = undefined;
+    view.rerender(panelUiForDraft("draft-b"));
+    await drainDeferredListFetches(resolvers);
+
+    expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+    expect(useLandingTerminalStore.getState().tabs[0]).toMatchObject({
+      hostId: "host-a",
+      cwd: "/workspace/draft-a",
+    });
+  });
+
+  it("clears a settled opening gesture so the + button follows focus to a folderless draft", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/draft-a";
+    mocks.probeData = { sessions: [] };
+    mocks.freshProbeData = mocks.probeData;
+    const view = render(panelUiForDraft("draft-a"));
+    const router = fakeKeybindingRouter();
+
+    // Open on foldered draft A: the gesture settles and auto-spawns A's terminal.
+    act(() => {
+      dispatchAction("app.terminal.toggle", router);
+    });
+    await waitFor(() => {
+      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+    });
+    expect(
+      screen
+        .getByRole("button", { name: "New terminal" })
+        .getAttribute("aria-disabled"),
+    ).toBeNull();
+
+    // Focus moves to a folderless draft B AFTER the gesture settled. A stale A
+    // snapshot would keep + enabled from A's pinned folder; the cleared gesture
+    // makes + reflect the live folderless B instead.
+    mocks.primaryWorkspacePath = null;
+    view.rerender(panelUiForDraft("draft-b"));
+
+    await waitFor(() => {
+      expect(
+        screen
+          .getByRole("button", { name: "New terminal" })
+          .getAttribute("aria-disabled"),
+      ).toBe("true");
+    });
+    // The A terminal survives; focus-following must not have spawned in B.
+    expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+    expect(useLandingTerminalStore.getState().tabs[0]?.cwd).toBe(
+      "/workspace/draft-a",
+    );
+  });
+
+  it("creates a + terminal on the captured host and folder even after focus moved to a folderless draft", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/draft-a";
+    mocks.probeData = { sessions: [] };
+    const resolvers: Array<(value: unknown) => void> = [];
+    mocks.queryClient.fetchQuery.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    const view = render(panelUiForDraft("draft-a"));
+    const router = fakeKeybindingRouter();
+
+    // Open on draft A (the gesture pins host-a + /workspace/draft-a); the list
+    // fetch is deferred, so the gesture is still pending.
+    act(() => {
+      dispatchAction("app.terminal.toggle", router);
+    });
+    // Focus moves to a folderless draft B before the list settles.
+    mocks.primaryWorkspacePath = null;
+    view.rerender(panelUiForDraft("draft-b"));
+
+    // The + button must create against the pinned A gesture, not the folderless
+    // B the panel now happens to be focused on. It must NOT re-capture.
+    const plus = await screen.findByRole("button", { name: "New terminal" });
+    fireEvent.click(plus);
+
+    await waitFor(() => {
+      expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+    });
+    expect(useLandingTerminalStore.getState().tabs[0]).toMatchObject({
+      hostId: "host-a",
+      cwd: "/workspace/draft-a",
+    });
+  });
+
+  it("honors fail-closed on the tab.new chord: an unpinnable host creates nothing via the default client", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = { sessions: [] };
+    mocks.freshProbeData = mocks.probeData;
+    // The transient client cannot be pinned to the host.
+    mocks.buildTransientHostClient.mockReturnValue(null);
+    render(panelUiForDraft("draft-a"));
+    const router = fakeKeybindingRouter();
+
+    // tab.new opens the panel (capturing a fail-closed gesture) and creates. It
+    // must NOT fall back to the default client to spawn a terminal.
+    act(() => {
+      dispatchAction("tab.new", router);
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(useLandingTerminalStore.getState().tabs).toHaveLength(0);
+  });
+
+  it("wires the folder picker to the captured host and draft, not the focused partner", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.primaryWorkspacePath = null;
+    mocks.probeData = { sessions: [] };
+    const resolvers: Array<(value: unknown) => void> = [];
+    mocks.queryClient.fetchQuery.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    const view = render(panelUiForDraft("draft-a"));
+    const router = fakeKeybindingRouter();
+
+    // Open on a folderless draft A (the gesture pins host-a + draft-a), then
+    // focus moves to draft B on a different host with a folder.
+    act(() => {
+      dispatchAction("app.terminal.toggle", router);
+    });
+    mocks.activeHostId = "host-b";
+    mocks.primaryWorkspacePath = "/workspace/draft-b";
+    view.rerender(panelUiForDraft("draft-b"));
+
+    // The empty-state picker must add folders to the CAPTURED host + draft, so a
+    // picked folder lands where the gesture opened, not on the focused partner.
+    await screen.findByTestId("landing-terminal-select-folder");
+    expect(mocks.pickArgs).toEqual({
+      clientHostId: "host-a",
+      workspaceDraftId: "draft-a",
+    });
+  });
+
+  it("remembers a captured host's availability downgrade after focus switches away", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/draft-a";
+    mocks.probeData = { sessions: [] };
+    const resolvers: Array<(value: unknown) => void> = [];
+    mocks.queryClient.fetchQuery.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    const view = render(panelUiForDraft("draft-a"));
+    const router = fakeKeybindingRouter();
+
+    // Capture the gesture while host-a is supported.
+    act(() => {
+      dispatchAction("app.terminal.toggle", router);
+    });
+    // host-a's capability then downgrades while host-a is STILL selected.
+    mocks.probeData = undefined;
+    view.rerender(panelUiForDraft("draft-a"));
+    // Focus then moves to draft B on a different host.
+    mocks.activeHostId = "host-b";
+    view.rerender(panelUiForDraft("draft-b"));
+
+    // The + button must reflect host-a's LAST observed (downgraded) verdict, not
+    // the initial captured "supported": a forgotten downgrade would leave it
+    // enabled.
+    await waitFor(() => {
+      expect(
+        screen
+          .getByRole("button", { name: "New terminal" })
+          .getAttribute("aria-disabled"),
+      ).toBe("true");
+    });
   });
 
   it("cancels the open intent once the user interacts with the panel", async () => {

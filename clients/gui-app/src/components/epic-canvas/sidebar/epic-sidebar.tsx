@@ -10,6 +10,7 @@
 import { useDroppable } from "@dnd-kit/core";
 import {
   getLeftPanelGroupDropId,
+  getPaneScopedDndId,
   getSidebarReparentPanelDropId,
   getWorkspaceFileDragId,
   WORKSPACE_FILE_DND_TYPE,
@@ -671,22 +672,27 @@ function GroupedPanelBody(props: {
     panelIds[0] ?? DEFAULT_LEFT_PANEL_ID,
   );
   const groupDropData = useMemo<EpicCanvasDropTargetData>(
-    () => ({ kind: "left-panel-group", panelIds }),
-    [panelIds],
+    () => ({ kind: "left-panel-group", viewTabId: props.tabId, panelIds }),
+    [panelIds, props.tabId],
   );
   const { setNodeRef: groupDropRef } = useDroppable({
-    id: groupDropId,
+    id: getPaneScopedDndId(props.tabId, groupDropId),
     data: groupDropData,
   });
   // Narrow selector: only a left-panel-section preview tick re-renders this
   // group body; canvas strip/body preview ticks never reach it.
   const sectionDropPreview = useEpicDndStore((s) =>
-    s.dropPreview?.kind === "left-panel-section" ? s.dropPreview : null,
+    s.dropPreview?.kind === "left-panel-section" &&
+    s.dropPreview.viewTabId === props.tabId &&
+    s.activeSource?.kind === "left-panel-rail-item" &&
+    s.activeSource.viewTabId === props.tabId
+      ? s.dropPreview
+      : null,
   );
   return (
     <div
       ref={groupDropRef}
-      data-dnd-droppable-id={groupDropId}
+      data-dnd-droppable-id={getPaneScopedDndId(props.tabId, groupDropId)}
       className="flex min-h-0 flex-1 flex-col overflow-hidden"
     >
       {sectionRuns.map((run, runIndex) => (
@@ -931,10 +937,10 @@ function SidebarReparentPanelDropZone(props: {
     [epicId, viewTabId, panelId],
   );
   const { setNodeRef } = useDroppable({
-    id: getSidebarReparentPanelDropId(panelId),
+    id: getPaneScopedDndId(viewTabId, getSidebarReparentPanelDropId(panelId)),
     data: dropData,
   });
-  const isRootTarget = useSidebarReparentRootActive(panelId);
+  const isRootTarget = useSidebarReparentRootActive(viewTabId, panelId);
   return (
     <div
       ref={setNodeRef}
@@ -1256,7 +1262,10 @@ function FileTreePanelBodyForWorkspace(props: {
     [epicId, viewTabId, workspaceFileRefForTreePath],
   );
   const bridge = usePierreCanvasDragBridge({
-    id: getWorkspaceFileDragId(props.workspacePath),
+    id: getPaneScopedDndId(
+      props.tabId,
+      getWorkspaceFileDragId(props.workspacePath),
+    ),
     resolveSourceData: resolveDragSourceData,
   });
 

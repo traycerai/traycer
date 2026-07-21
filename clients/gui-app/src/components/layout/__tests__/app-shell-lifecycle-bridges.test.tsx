@@ -100,6 +100,12 @@ describe("<AppShell />", () => {
     expect(screen.getByTestId("resource-monitor-header-button")).not.toBeNull();
     expect(screen.getByTestId("app-shell-child")).not.toBeNull();
     expect(screen.getByTestId("tile-find-owner-bridge")).not.toBeNull();
+    const routeLayer = screen.getByTestId("route-adapter-layer");
+    expect(routeLayer.className).toContain("pointer-events-none");
+    expect(routeLayer.className).toContain("[&>*]:pointer-events-auto");
+    expect(routeLayer.className).toContain("flex");
+    expect(routeLayer.className).toContain("h-full");
+    expect(routeLayer.className).toContain("min-h-0");
     expect(screen.queryByTestId("legacy-find-in-page-bar")).toBeNull();
     // Host status footer was removed; the combined chip on the
     // composer is now the host-state surface.

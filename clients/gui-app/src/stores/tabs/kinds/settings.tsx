@@ -1,3 +1,4 @@
+import { createElement, lazy } from "react";
 import { Settings } from "lucide-react";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { useTabsStore } from "@/stores/tabs/store";
@@ -12,6 +13,12 @@ const SETTINGS_TAB_LABEL = "Settings";
 const SETTINGS_PATH_PREFIX = "/settings";
 const SETTINGS_DEFAULT_PATH = "/settings/general";
 const LEGACY_SERVICE_PATH = "/settings/service";
+
+const settingsSurface = lazy(() =>
+  import("@/components/settings/settings-surface").then((module) => ({
+    default: module.SettingsSurface,
+  })),
+);
 
 function settingsRouteOptions(section: SettingsSectionId) {
   switch (section) {
@@ -68,7 +75,8 @@ export const settingsTabModule: TabKindModule<"settings", SystemTab> = {
   descriptor: {
     kind: "settings",
     surface: {
-      render: () => null,
+      render: (tab) =>
+        createElement(settingsSurface, { lastPath: tab.lastPath }),
       canonicalRoute: (tab) => tab.route,
       splitEligibility: "eligible",
       duplication: "forbidden",

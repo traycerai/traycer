@@ -19,6 +19,7 @@ import { artifactOperationVerb } from "@/lib/chat/artifact-operation-verb";
 import { cn } from "@/lib/utils";
 import type { ArtifactSegmentChange } from "@/stores/composer/chat-store";
 import { useArtifactDragSource } from "@/components/epic-canvas/dnd/use-artifact-drag-source";
+import { useEpicViewTabId } from "@/components/epic-canvas/view-tab-context";
 import { OpenFullDiffControl } from "./open-full-diff-control";
 import { SnapshotHashInlineDiff } from "./snapshot-hash-inline-diff";
 
@@ -497,6 +498,7 @@ function ArtifactCardSegmentContent(props: ArtifactCardSegmentProps) {
   });
   const status = isDeleted ? null : (resolved?.status ?? null);
   const openTitle = title ?? EPIC_NODE_LABELS[displayKind];
+  const viewTabId = useEpicViewTabId();
 
   // Only a live artifact can open in the canvas; a tombstone has no body, and a
   // not-yet-resolved id has no host binding target.
@@ -509,8 +511,8 @@ function ArtifactCardSegmentContent(props: ArtifactCardSegmentProps) {
   // Drag source (mirrors the sidebar): the card opens its artifact in the
   // canvas. Identity is present only when a host is bound (`activeHostId`);
   // `enabled` reuses the `canOpen` gate (live artifact + host + not deleted).
-  // The shared hook owns the pure `viewTabId` resolution (C1), the
-  // occurrence-unique drag id (C3), and the identity-only payload (C2). The card
+  // The surrounding Epic surface supplies the exact owning view tab (C1); the
+  // shared hook owns the occurrence-unique drag id (C3) and identity payload (C2). The card
   // attaches `setNodeRef` + `listeners` to the whole header row (no
   // `attributes`).
   const {
@@ -520,7 +522,7 @@ function ArtifactCardSegmentContent(props: ArtifactCardSegmentProps) {
     isDragging,
   } = useArtifactDragSource({
     epicId,
-    viewTabId: undefined,
+    viewTabId,
     identity:
       activeHostId === null
         ? null

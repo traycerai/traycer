@@ -5,6 +5,7 @@
 import { useDraggable } from "@dnd-kit/core";
 import {
   getLeftPanelSectionDragId,
+  getPaneScopedDndId,
   LEFT_PANEL_RAIL_ITEM_DND_TYPE,
   type EpicCanvasLeftPanelRailDragData,
 } from "@/components/epic-canvas/dnd/dnd";
@@ -35,17 +36,21 @@ export function PanelGroupSectionHeader(props: PanelGroupSectionHeaderProps) {
   const dragData = useMemo<EpicCanvasLeftPanelRailDragData>(
     () => ({
       kind: LEFT_PANEL_RAIL_ITEM_DND_TYPE,
+      viewTabId: props.tabId,
       panelId: props.panel.id,
       origin: "panel-section",
     }),
-    [props.panel.id],
+    [props.panel.id, props.tabId],
   );
   const {
     listeners,
     setNodeRef: dragRef,
     isDragging,
   } = useDraggable({
-    id: getLeftPanelSectionDragId(props.panel.id),
+    id: getPaneScopedDndId(
+      props.tabId,
+      getLeftPanelSectionDragId(props.panel.id),
+    ),
     data: dragData,
   });
   return (

@@ -1,6 +1,7 @@
 import {
   GIT_DIFF_TILE_DND_TYPE,
   getGitDiffTileDragId,
+  getPaneScopedDndId,
   type EpicCanvasGitDiffTileDragData,
 } from "@/components/epic-canvas/dnd/dnd";
 import { Button } from "@/components/ui/button";
@@ -54,7 +55,7 @@ export function BundleOpenButton(props: BundleOpenButtonProps): ReactNode {
     [props.epicId, props.viewTabId, tile],
   );
   const { listeners, setNodeRef: dragRef } = useDraggable({
-    id: getGitDiffTileDragId(tile.id),
+    id: getPaneScopedDndId(props.viewTabId, getGitDiffTileDragId(tile.id)),
     data: dragData,
     disabled: props.disabled,
   });

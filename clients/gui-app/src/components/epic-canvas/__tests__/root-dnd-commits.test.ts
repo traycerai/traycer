@@ -185,7 +185,12 @@ function railSource(
   EpicCanvasDragSourceData,
   { readonly kind: "left-panel-rail-item" }
 > {
-  return { kind: "left-panel-rail-item", panelId, origin };
+  return {
+    kind: "left-panel-rail-item",
+    viewTabId: "test-view-tab",
+    panelId,
+    origin,
+  };
 }
 
 function makeRectElement(
@@ -668,6 +673,28 @@ describe("root dnd commits - artifact tab commit routing", () => {
 describe("root dnd commits - tile source commit routing", () => {
   beforeEach(resetStores);
   afterEach(resetStores);
+
+  it("rejects a cross-pane canvas target without mutating either pane", () => {
+    commitResolvedCanvasDrop(
+      {
+        source: {
+          kind: "terminal-tile",
+          epicId: EPIC_ID,
+          viewTabId: "source-view",
+          tile: TERMINAL_TILE,
+        },
+        target: {
+          kind: "empty-shell",
+          epicId: "other-epic",
+          viewTabId: "target-view",
+        },
+        preview: { kind: "empty-shell" },
+      },
+      rawNestedFocus,
+    );
+
+    expect(testState.canvasStore.openTileInTab).not.toHaveBeenCalled();
+  });
 
   it("opens a dragged terminal tile on an empty canvas", () => {
     commitResolvedCanvasDrop(

@@ -12,6 +12,7 @@ import {
   getLeftPanelRailDragId,
   getLeftPanelRailDropId,
   getLeftPanelRailListDropId,
+  getPaneScopedDndId,
   LEFT_PANEL_RAIL_ITEM_DND_TYPE,
   type EpicCanvasDropPreview,
   type EpicCanvasDropTargetData,
@@ -167,17 +168,17 @@ function EpicLeftPanelRailContent(props: EpicLeftPanelRailContentProps) {
     [commentsPanelRevealed, hasActiveCommentableArtifact, panelGroups],
   );
   const railListDropData = useMemo<EpicCanvasDropTargetData>(
-    () => ({ kind: "left-panel-rail-list" }),
-    [],
+    () => ({ kind: "left-panel-rail-list", viewTabId: tabId }),
+    [tabId],
   );
   const { setNodeRef: railDropRef } = useDroppable({
-    id: getLeftPanelRailListDropId(epicId),
+    id: getPaneScopedDndId(tabId, getLeftPanelRailListDropId(epicId)),
     data: railListDropData,
   });
   // Narrow selector hooks: a rail drag preview tick re-renders ONLY the rail,
   // and a canvas-source preview tick (pane bodies / strips) never reaches it.
-  const railPanelDropPreview = useLeftPanelRailDropPreview();
-  const panelSectionDragSource = useLeftPanelSectionDragSource();
+  const railPanelDropPreview = useLeftPanelRailDropPreview(tabId);
+  const panelSectionDragSource = useLeftPanelSectionDragSource(tabId);
   const panelSectionDropDefinition =
     panelSectionDragSource === null
       ? null
@@ -232,6 +233,7 @@ function EpicLeftPanelRailContent(props: EpicLeftPanelRailContentProps) {
               <RailGroupButton
                 panelIds={group.panelIds}
                 primaryPanel={group.primaryPanel}
+                tabId={tabId}
                 orientation={orientation}
                 active={group.panelIds.includes(activePanelId) && !collapsed}
                 onClick={() => handleClick(group.panelIds)}
@@ -306,6 +308,7 @@ function RailPanelDropLine(props: { readonly orientation: RailOrientation }) {
 }
 
 interface RailGroupButtonProps {
+  readonly tabId: string;
   readonly panelIds: ReadonlyArray<LeftPanelId>;
   readonly primaryPanel: LeftPanelMetadataDefinition;
   readonly orientation: RailOrientation;
@@ -315,33 +318,42 @@ interface RailGroupButtonProps {
 }
 
 function RailGroupButton(props: RailGroupButtonProps) {
-  const { panelIds, primaryPanel, orientation, active, onClick, dropPosition } =
-    props;
+  const {
+    tabId,
+    panelIds,
+    primaryPanel,
+    orientation,
+    active,
+    onClick,
+    dropPosition,
+  } = props;
   const dragData = useMemo<EpicCanvasLeftPanelRailDragData>(
     () => ({
       kind: LEFT_PANEL_RAIL_ITEM_DND_TYPE,
+      viewTabId: tabId,
       panelId: primaryPanel.id,
       origin: "rail",
     }),
-    [primaryPanel.id],
+    [primaryPanel.id, tabId],
   );
   const {
     listeners,
     setNodeRef: dragRef,
     isDragging,
   } = useDraggable({
-    id: getLeftPanelRailDragId(primaryPanel.id),
+    id: getPaneScopedDndId(tabId, getLeftPanelRailDragId(primaryPanel.id)),
     data: dragData,
   });
   const dropData = useMemo<EpicCanvasDropTargetData>(
     () => ({
       kind: "left-panel-rail-item",
+      viewTabId: tabId,
       panelId: primaryPanel.id,
     }),
-    [primaryPanel.id],
+    [primaryPanel.id, tabId],
   );
   const { setNodeRef: dropRef, isOver } = useDroppable({
-    id: getLeftPanelRailDropId(primaryPanel.id),
+    id: getPaneScopedDndId(tabId, getLeftPanelRailDropId(primaryPanel.id)),
     data: dropData,
   });
   const setButtonRef = useMemo(

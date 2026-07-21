@@ -114,7 +114,9 @@ function armSpringLoadForRow(
 export function clearSidebarReparentPreview(refs: ReparentRefs): void {
   useEpicDndStore.getState().sidebarReparentPreviewChanged({
     targetNodeId: null,
+    targetViewTabId: null,
     rootPanelId: null,
+    rootViewTabId: null,
   });
   refs.lastReparent.current = null;
   clearSpringLoad(refs.springLoad);
@@ -165,6 +167,13 @@ export function updateSidebarReparentPreview(
 
   const newParentId =
     target.kind === "sidebar-reparent-row" ? target.nodeId : null;
+  if (
+    source.epicId !== target.epicId ||
+    source.viewTabId !== target.viewTabId
+  ) {
+    clearSidebarReparentPreview(refs);
+    return;
+  }
   const handle = getOpenEpicRegistry().peek(source.epicId);
   const doc = handle === null ? null : handle.store.getState().doc;
   if (
@@ -177,8 +186,12 @@ export function updateSidebarReparentPreview(
 
   dndStore.sidebarReparentPreviewChanged({
     targetNodeId: target.kind === "sidebar-reparent-row" ? target.nodeId : null,
+    targetViewTabId:
+      target.kind === "sidebar-reparent-row" ? target.viewTabId : null,
     rootPanelId:
       target.kind === "sidebar-reparent-panel" ? target.panelId : null,
+    rootViewTabId:
+      target.kind === "sidebar-reparent-panel" ? target.viewTabId : null,
   });
   refs.lastReparent.current = {
     epicId: source.epicId,

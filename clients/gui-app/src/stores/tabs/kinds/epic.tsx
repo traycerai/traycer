@@ -1,3 +1,4 @@
+import { createElement, lazy } from "react";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import {
@@ -10,6 +11,12 @@ import { existingEpicTabIntent } from "@/lib/tab-navigation/intents";
 import { duplicateEpicTab } from "@/lib/commands/actions/duplicate-tab";
 import type { EpicViewTab } from "@/stores/epics/canvas/types";
 import type { TabKindModule } from "@/stores/tabs/types";
+
+const epicSurface = lazy(() =>
+  import("@/components/epic-tabs/epic-surface").then((module) => ({
+    default: module.EpicSurface,
+  })),
+);
 
 /**
  * Module for `kind: "epic"` tabs. Data lives in the epic-canvas
@@ -32,7 +39,8 @@ export const epicTabModule: TabKindModule<"epic", EpicViewTab> = {
   descriptor: {
     kind: "epic",
     surface: {
-      render: () => null,
+      render: (tab) =>
+        createElement(epicSurface, { epicId: tab.epicId, tabId: tab.id }),
       canonicalRoute: (tab) => tab.route,
       splitEligibility: "eligible",
       duplication: "allowed",

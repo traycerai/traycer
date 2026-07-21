@@ -460,10 +460,19 @@ export function useActiveLandingDraftShell(): {
   readonly workspaceFolders: ReadonlyArray<string> | null;
   readonly settings: ChatRunSettings | null;
 } {
+  const activeDraftId = useLandingDraftStore((state) => state.activeDraftId);
+  return useLandingDraftShell(activeDraftId);
+}
+
+/** Stable draft-shell projection for one retained top-level draft surface. */
+export function useLandingDraftShell(draftId: string | null): {
+  readonly draftId: string | null;
+  readonly workspaceFolders: ReadonlyArray<string> | null;
+  readonly settings: ChatRunSettings | null;
+} {
   return useLandingDraftStore(
     useShallow((state) => {
-      const draft =
-        state.drafts.find((d) => d.id === state.activeDraftId) ?? null;
+      const draft = state.drafts.find((d) => d.id === draftId) ?? null;
       return {
         draftId: draft?.id ?? null,
         workspaceFolders: draft?.workspace.folders ?? null,

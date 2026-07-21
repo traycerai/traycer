@@ -12,6 +12,7 @@ import { FilePathTooltip } from "@/components/file-path-tooltip";
 import {
   GIT_DIFF_TILE_DND_TYPE,
   getGitDiffTileDragId,
+  getPaneScopedDndId,
   type EpicCanvasGitDiffTileDragData,
 } from "@/components/epic-canvas/dnd/dnd";
 import { GitChangedFileRow } from "./git-changed-file-row";
@@ -82,7 +83,7 @@ export function FileRow(props: FileRowProps): ReactNode {
     [props.epicId, props.viewTabId, tile],
   );
   const { listeners, setNodeRef: dragRef } = useDraggable({
-    id: getGitDiffTileDragId(tile.id),
+    id: getPaneScopedDndId(props.viewTabId, getGitDiffTileDragId(tile.id)),
     data: dragData,
   });
 

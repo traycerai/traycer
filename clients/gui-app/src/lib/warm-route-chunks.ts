@@ -24,11 +24,8 @@ export function warmRouteChunks(): void {
   if (typeof window === "undefined") return;
 
   const warm = () => {
-    // The epic-canvas graph spans two split routes: the `/epics` layout
-    // (EpicTabHost -> EpicSessionProvider -> EpicRouteSessionBody) and the
-    // detail route (EpicRoute -> EpicShell -> TileCanvas/DnD/sidebar). Warming
-    // both source modules covers the bulk of the cost; the thin per-route split
-    // wrappers the router imports later re-use these already-warm deps.
+    // The top-level host imports the retained surface graph. Warming the route
+    // adapters still primes their route chunks before a deep-link navigation.
     void import("@/routes/epics-layout-route-components");
     void import("@/routes/epic-tab-route-components");
     void import("@/routes/draft-route-components");

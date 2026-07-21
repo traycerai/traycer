@@ -153,6 +153,7 @@ import {
 } from "./epic-sidebar-selection";
 import {
   getSidebarNodeDragId,
+  getPaneScopedDndId,
   SIDEBAR_NODE_DND_TYPE,
   type EpicCanvasSidebarNodeDragData,
 } from "@/components/epic-canvas/dnd/dnd";
@@ -1454,7 +1455,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
     setNodeRef: dragRef,
     isDragging,
   } = useDraggable({
-    id: getSidebarNodeDragId(nodeId),
+    id: getPaneScopedDndId(viewTabId, getSidebarNodeDragId(nodeId)),
     disabled: selectionMode,
     data: dragData,
   });

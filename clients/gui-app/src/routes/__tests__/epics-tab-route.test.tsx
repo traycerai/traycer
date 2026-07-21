@@ -159,17 +159,17 @@ describe("/epics/$epicId/$tabId route", () => {
     useOnboardingStore.setState({ completedAt: null });
   });
 
-  it("renders an existing tab route without the parent creating another tab", async () => {
+  it("adapts an existing tab route without creating another tab body", async () => {
     seedOpenEpicTab();
 
     const router = renderAt(`/epics/${EPIC_ID}/${TAB_ID}`);
 
-    await screen.findByTestId("epic-route-session-body");
     await waitFor(() => {
       expect(router.state.location.pathname).toBe(
         `/epics/${EPIC_ID}/${TAB_ID}`,
       );
     });
+    expect(screen.queryByTestId("epic-route-session-body")).toBeNull();
     const state = useEpicCanvasStore.getState();
     expect(state.openTabOrder).toEqual([TAB_ID]);
     expect(Object.keys(state.tabsById)).toEqual([TAB_ID]);

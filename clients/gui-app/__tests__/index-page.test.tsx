@@ -38,7 +38,7 @@ describe("RootLandingPage", () => {
     expect(screen.queryByTestId("home-page-stub")).toBeNull();
   });
 
-  it("renders the normal landing workspace after sign-in", () => {
+  it("leaves the signed-in landing body to the top-level tab host", () => {
     useAuthStore.getState().setSignedIn(
       {
         userId: "test-user",
@@ -52,6 +52,6 @@ describe("RootLandingPage", () => {
     render(<RootLandingPage />);
 
     expect(screen.queryByTestId("auth-landing-stub")).toBeNull();
-    expect(screen.queryByTestId("home-page-stub")).not.toBeNull();
+    expect(screen.queryByTestId("home-page-stub")).toBeNull();
   });
 });

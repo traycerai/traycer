@@ -1,3 +1,4 @@
+import { createElement, lazy } from "react";
 import { History } from "lucide-react";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { useTabsStore } from "@/stores/tabs/store";
@@ -6,6 +7,12 @@ import type { SystemTab, TabKindModule } from "@/stores/tabs/types";
 
 const HISTORY_TAB_LABEL = "History";
 const HISTORY_DEFAULT_PATH = "/epics";
+
+const historySurface = lazy(() =>
+  import("@/components/epics/history-surface").then((module) => ({
+    default: module.HistorySurface,
+  })),
+);
 
 /**
  * Module for `kind: "history"` tabs. Singleton; no duplication.
@@ -26,7 +33,7 @@ export const historyTabModule: TabKindModule<"history", SystemTab> = {
   descriptor: {
     kind: "history",
     surface: {
-      render: () => null,
+      render: () => createElement(historySurface),
       canonicalRoute: (tab) => tab.route,
       splitEligibility: "eligible",
       duplication: "forbidden",

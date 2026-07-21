@@ -62,6 +62,13 @@ const canvas = vi.hoisted(() => ({
       return null;
     },
   ),
+  // The removed global/MRU resolver (constraint C1). It returns a DIFFERENT tab
+  // than the card's owning `useEpicViewTabId` context ("tab-1"), modelling a
+  // same-Epic split where a different pane is globally focused. The card must
+  // read its owning context, never this resolver: the drag test asserts the
+  // payload carries the owner and that this spy is never called, so any regress
+  // to MRU resolution flips the emitted tab and goes red.
+  resolveTabIdForEpic: vi.fn(() => "tab-focused-partner"),
 }));
 
 const rawNestedFocus: NavigateNestedFocus = (_epicId, _tabId, prepare) =>
@@ -86,6 +93,9 @@ vi.mock("@/lib/epic-selectors", () => ({
 vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
   useReactiveActiveHostId: () => projection.hostId,
 }));
+vi.mock("@/components/epic-canvas/view-tab-context", () => ({
+  useEpicViewTabId: () => projection.resolvedTabId,
+}));
 
 vi.mock("@/stores/epics/canvas/store", () => {
   const useEpicCanvasStore = (selector: (state: typeof canvas) => unknown) =>
@@ -93,8 +103,10 @@ vi.mock("@/stores/epics/canvas/store", () => {
   useEpicCanvasStore.getState = () => canvas;
   return {
     useEpicCanvasStore,
-    // Pure, non-side-effecting resolver read reactively by the card (C1).
-    resolveTabIdForEpic: () => projection.resolvedTabId,
+    // The global/MRU resolver the card must NOT consult (it reads its owning
+    // `useEpicViewTabId` context instead). Distinct from the owner so the drag
+    // test discriminates owner vs MRU.
+    resolveTabIdForEpic: canvas.resolveTabIdForEpic,
   };
 });
 
@@ -132,6 +144,7 @@ describe("<ArtifactCardSegment />", () => {
     dnd.draggables = [];
     canvas.resolveTargetTabForEpic.mockClear();
     canvas.openTileInTab.mockClear();
+    canvas.resolveTabIdForEpic.mockClear();
   });
   afterEach(() => {
     cleanup();
@@ -542,6 +555,12 @@ describe("<ArtifactCardSegment />", () => {
     if (drag === null) return;
     expect(drag.disabled).toBe(false);
     expect(drag.id.startsWith("chat-artifact:")).toBe(true);
+    // The payload carries the card's OWNING view tab ("tab-1", from
+    // `useEpicViewTabId`), never the global/MRU resolver's "tab-focused-partner".
+    // In a same-Epic split with a different pane focused, an MRU-resolving drag
+    // source would emit the partner's tab and reject its own drop; asserting the
+    // owner here (distinct from MRU) is what makes that regression go red.
+    expect(canvas.resolveTabIdForEpic).not.toHaveBeenCalled();
     expect(drag.data).toMatchObject({
       kind: "chat-artifact",
       epicId: "epic-1",

@@ -68,6 +68,26 @@ export interface ResolvedEpicCanvasDrop {
   readonly preview: EpicCanvasDropPreview;
 }
 
+/** Reject cross-pane drops before preview or mutation under the root DnD tree. */
+export function isCanvasDropCompatible(
+  source: EpicCanvasDragSourceData,
+  target: EpicCanvasDropTargetData,
+): boolean {
+  // Direct unit callers predate pane-scoped target data. Runtime targets are
+  // parsed through `readEpicCanvasDropTargetData`, which requires this field.
+  if (target.viewTabId === undefined) return true;
+  if (source.kind === LEFT_PANEL_RAIL_ITEM_DND_TYPE) {
+    return (
+      (target.kind === "left-panel-rail-item" ||
+        target.kind === "left-panel-rail-list" ||
+        target.kind === "left-panel-group") &&
+      target.viewTabId === source.viewTabId
+    );
+  }
+  if (source.viewTabId !== target.viewTabId) return false;
+  return true;
+}
+
 export function canDropOnHeaderStrip(
   source: EpicCanvasDragSourceData | null,
 ): source is Extract<
@@ -455,6 +475,7 @@ export function commitResolvedCanvasDrop(
   navigateNested: NavigateNestedFocus,
 ): void {
   if (drop.preview === null) return;
+  if (!isCanvasDropCompatible(drop.source, drop.target)) return;
   if (drop.source.kind === ARTIFACT_TAB_DND_TYPE) {
     commitArtifactTabDrop(
       drop.source,

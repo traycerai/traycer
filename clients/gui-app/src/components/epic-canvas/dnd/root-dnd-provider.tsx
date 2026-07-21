@@ -18,6 +18,7 @@ import {
   readEpicCanvasDragSourceData,
   readEpicCanvasDropTargetData,
   type EpicCanvasDragSourceData,
+  type EpicCanvasDropTargetData,
   type PointLike,
   type RectLike,
 } from "@/components/epic-canvas/dnd/dnd";
@@ -38,6 +39,7 @@ import {
   commitHeaderStripDrop,
   commitResolvedCanvasDrop,
   commitSidebarReparentDrop,
+  isCanvasDropCompatible,
   isLeftPanelDropNoop,
   resolveCanvasDropPreview,
   resolveOverlayTileForSource,
@@ -110,6 +112,18 @@ function findDroppableElement(id: string | number): Element | null {
 
 type DragUpdateEvent = DragMoveEvent | DragOverEvent | DragEndEvent;
 
+function compatibleCanvasTarget(
+  source: EpicCanvasDragSourceData,
+  target: EpicCanvasDropTargetData | null,
+  point: PointLike | null,
+): {
+  readonly target: EpicCanvasDropTargetData;
+  readonly point: PointLike;
+} | null {
+  if (target === null || point === null) return null;
+  return isCanvasDropCompatible(source, target) ? { target, point } : null;
+}
+
 /**
  * Preview resolution for a typed canvas/rail source: header-slot hovers feed
  * the header strip index; everything else resolves through
@@ -151,16 +165,21 @@ function updateCanvasSourcePreview(
     return;
   }
   dndStore.headerStripDropIndexChanged(null);
-  const target = over === null ? null : readEpicCanvasDropTargetData(overData);
-  if (target === null || point === null) {
+  const targetAtPoint = compatibleCanvasTarget(
+    source,
+    over === null ? null : readEpicCanvasDropTargetData(overData),
+    point,
+  );
+  if (targetAtPoint === null) {
     refs.lastResolved.current = null;
     dndStore.dropPreviewChanged(null);
     return;
   }
+  const { target, point: resolvedPoint } = targetAtPoint;
   const preview = resolveCanvasDropPreview({
     source,
     target,
-    point,
+    point: resolvedPoint,
     targetRect: readOverRect(event),
     targetElement:
       target.kind === "left-panel-group" && over !== null

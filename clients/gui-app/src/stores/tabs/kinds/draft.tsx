@@ -1,3 +1,4 @@
+import { lazy } from "react";
 import { LayersPlus } from "lucide-react";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import type { LandingDraftTab } from "@/stores/home/landing-draft-store";
@@ -7,6 +8,18 @@ import { draftTabIntent } from "@/lib/tab-navigation/intents";
 import type { TabKindModule } from "@/stores/tabs/types";
 
 const DRAFT_LABEL_FALLBACK = "Start Page";
+
+const landingDraftSurface = lazy(() =>
+  import("@/components/home/landing-draft-surface").then((module) => ({
+    default: module.LandingDraftSurface,
+  })),
+);
+
+const draftSurfaceProvider = lazy(() =>
+  import("@/providers/draft-surface-provider").then((module) => ({
+    default: module.DraftSurfaceProvider,
+  })),
+);
 
 /**
  * Module for `kind: "draft"` tabs. Each draft has its own
@@ -31,7 +44,7 @@ export const draftTabModule: TabKindModule<"draft", LandingDraftTab> = {
   descriptor: {
     kind: "draft",
     surface: {
-      render: () => null,
+      render: (tab) => renderDraftSurface(tab.id),
       canonicalRoute: (tab) => tab.route,
       splitEligibility: "eligible",
       duplication: "forbidden",
@@ -54,6 +67,16 @@ export const draftTabModule: TabKindModule<"draft", LandingDraftTab> = {
     matchesPath: (tab, pathname) => pathname === tab.route,
   },
 };
+
+function renderDraftSurface(draftId: string) {
+  const DraftSurfaceProvider = draftSurfaceProvider;
+  const LandingDraftSurface = landingDraftSurface;
+  return (
+    <DraftSurfaceProvider draftId={draftId}>
+      <LandingDraftSurface />
+    </DraftSurfaceProvider>
+  );
+}
 
 function draftTabName(content: LandingDraftTab["content"]): string {
   const text = extractPlainTextFromComposerJSONContent(content).trim();

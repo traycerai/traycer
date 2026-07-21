@@ -7,6 +7,7 @@ import {
   useArtifactDragSource,
   type ArtifactDragIdentity,
 } from "@/components/epic-canvas/dnd/use-artifact-drag-source";
+import { useEpicViewTabId } from "@/components/epic-canvas/view-tab-context";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import { isEpicArtifactKind } from "@/lib/artifacts/node-display";
 import { cn } from "@/lib/utils";
@@ -89,6 +90,7 @@ function DraggableReferenceChip(
   },
 ) {
   const { refKind, sameEpicNodeRef, epicId } = props;
+  const viewTabId = useEpicViewTabId();
   // Build the artifact identity from the resolved same-epic ref, guarding the
   // kind to the artifact-only payload type. `null` when the ref is absent or is
   // not an artifact kind, which disables the drag surface. This component only
@@ -106,7 +108,7 @@ function DraggableReferenceChip(
   const { isDraggable, setNodeRef, listeners, attributes, isDragging } =
     useArtifactDragSource({
       epicId,
-      viewTabId: undefined,
+      viewTabId,
       identity,
       enabled: true,
     });

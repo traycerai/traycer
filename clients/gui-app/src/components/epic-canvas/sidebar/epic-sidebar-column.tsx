@@ -1,15 +1,6 @@
 /**
- * The ONE app-level epic sidebar. Mounted by the `/epics` layout route as a
- * flex sibling of the keep-alive pane container, so the sidebar lives
- * OUTSIDE every pane: switching tabs re-projects this single instance
- * (panel host remounts per epic via `key`) instead of mounting one sidebar
- * per keep-alive pane.
- *
- * Session plumbing: `ActiveEpicSessionProvider` projects the live session
- * handle for the route's epic straight from the registry (read-only, no
- * refcount). Until the active pane's `EpicSessionProvider` has acquired the
- * session, the handle is null and the column renders the static rail +
- * loading host - the same fallback the per-pane `EpicSessionGate` used.
+ * Per-pane Epic sidebar. It is mounted beneath the same `EpicSessionProvider`
+ * as its canvas, so split Epics retain independent sidebar/session ownership.
  *
  * Collapse is CSS-only for the panel column (`hidden`, stays mounted) so
  * expanding is instant and panel DOM/scroll state survives; nothing in the
@@ -44,7 +35,6 @@ import {
   pointerDragHandleAxisClassName,
   usePointerDragCommit,
 } from "@/components/epic-canvas/canvas/use-pointer-drag-commit";
-import { ActiveEpicSessionProvider } from "@/providers/active-epic-session-provider";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import {
   DEFAULT_SIDEBAR_WIDTH_PX,
@@ -70,11 +60,7 @@ export interface EpicSidebarColumnProps {
 }
 
 export function EpicSidebarColumn(props: EpicSidebarColumnProps): ReactNode {
-  return (
-    <ActiveEpicSessionProvider epicId={props.epicId}>
-      <EpicSidebarColumnBody epicId={props.epicId} tabId={props.tabId} />
-    </ActiveEpicSessionProvider>
-  );
+  return <EpicSidebarColumnBody epicId={props.epicId} tabId={props.tabId} />;
 }
 
 function EpicSidebarColumnBody(props: EpicSidebarColumnProps): ReactNode {

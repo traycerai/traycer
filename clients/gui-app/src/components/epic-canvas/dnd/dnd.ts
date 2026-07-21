@@ -117,6 +117,7 @@ export interface EpicCanvasWorkspaceFileDragData {
 
 export interface EpicCanvasLeftPanelRailDragData {
   readonly kind: typeof LEFT_PANEL_RAIL_ITEM_DND_TYPE;
+  readonly viewTabId: string;
   readonly panelId: LeftPanelId;
   readonly origin: "rail" | "panel-section";
 }
@@ -183,13 +184,16 @@ export type EpicCanvasDropTargetData =
     }
   | {
       readonly kind: "left-panel-rail-item";
+      readonly viewTabId?: string;
       readonly panelId: LeftPanelId;
     }
   | {
       readonly kind: "left-panel-rail-list";
+      readonly viewTabId?: string;
     }
   | {
       readonly kind: "left-panel-group";
+      readonly viewTabId?: string;
       readonly panelIds: ReadonlyArray<LeftPanelId>;
     }
   | {
@@ -216,13 +220,16 @@ export type EpicCanvasDropTargetData =
 type EpicCanvasLeftPanelDropTargetData =
   | {
       readonly kind: "left-panel-rail-item";
+      readonly viewTabId?: string;
       readonly panelId: LeftPanelId;
     }
   | {
       readonly kind: "left-panel-rail-list";
+      readonly viewTabId?: string;
     }
   | {
       readonly kind: "left-panel-group";
+      readonly viewTabId?: string;
       readonly panelIds: ReadonlyArray<LeftPanelId>;
     };
 
@@ -239,17 +246,21 @@ export type EpicCanvasDropPreview =
     }
   | {
       readonly kind: "empty-shell";
+      readonly viewTabId?: string;
     }
   | {
       readonly kind: "left-panel-rail";
+      readonly viewTabId?: string;
       readonly panelId: LeftPanelId;
       readonly position: LeftPanelRailDropPosition;
     }
   | {
       readonly kind: "left-panel-rail-list";
+      readonly viewTabId?: string;
     }
   | {
       readonly kind: "left-panel-section";
+      readonly viewTabId?: string;
       readonly panelId: LeftPanelId;
       readonly position: Exclude<LeftPanelRailDropPosition, "combine">;
     }
@@ -299,6 +310,11 @@ export function getWorkspaceFileDragId(fileId: string): string {
  */
 export function getChatArtifactDragId(occurrenceKey: string): string {
   return `chat-artifact:${occurrenceKey}`;
+}
+
+/** Prevent one root dnd-kit registry from colliding across retained Epic panes. */
+export function getPaneScopedDndId(viewTabId: string, id: string): string {
+  return `${id}:pane:${viewTabId}`;
 }
 
 export function getLeftPanelRailDragId(panelId: string): string {
@@ -470,10 +486,12 @@ function readChatArtifactSource(
 function readLeftPanelRailItemSource(
   value: Record<string, unknown>,
 ): EpicCanvasDragSourceData | null {
+  if (!isNonEmptyString(value.viewTabId)) return null;
   if (!isLeftPanelId(value.panelId)) return null;
   if (!isLeftPanelRailDragOrigin(value.origin)) return null;
   return {
     kind: LEFT_PANEL_RAIL_ITEM_DND_TYPE,
+    viewTabId: value.viewTabId,
     panelId: value.panelId,
     origin: value.origin,
   };
@@ -599,22 +617,29 @@ function readLeftPanelDropTargetData(
   value: Record<string, unknown>,
 ): EpicCanvasLeftPanelDropTargetData | null {
   if (value.kind === "left-panel-rail-item") {
-    if (!isLeftPanelId(value.panelId)) return null;
+    if (!isNonEmptyString(value.viewTabId) || !isLeftPanelId(value.panelId)) {
+      return null;
+    }
     return {
       kind: "left-panel-rail-item",
+      viewTabId: value.viewTabId,
       panelId: value.panelId,
     };
   }
   if (value.kind === "left-panel-rail-list") {
+    if (!isNonEmptyString(value.viewTabId)) return null;
     return {
       kind: "left-panel-rail-list",
+      viewTabId: value.viewTabId,
     };
   }
   if (value.kind === "left-panel-group") {
+    if (!isNonEmptyString(value.viewTabId)) return null;
     const panelIds = readLeftPanelIds(value.panelIds);
     if (panelIds === null) return null;
     return {
       kind: "left-panel-group",
+      viewTabId: value.viewTabId,
       panelIds,
     };
   }
@@ -730,6 +755,7 @@ export function getLeftPanelGroupDropPreview(
   );
   return {
     kind: "left-panel-section",
+    viewTabId: target.viewTabId,
     panelId: nearestBoundary.panelId,
     position: nearestBoundary.position,
   };
@@ -743,6 +769,7 @@ export function getEpicCanvasDropPreview(
   if (target.kind === "empty-shell") {
     return {
       kind: "empty-shell",
+      viewTabId: target.viewTabId,
     };
   }
   if (target.kind === "artifact-tab-group-body") {
@@ -756,6 +783,7 @@ export function getEpicCanvasDropPreview(
   if (target.kind === "left-panel-rail-item") {
     return {
       kind: "left-panel-rail",
+      viewTabId: target.viewTabId,
       panelId: target.panelId,
       position: getLeftPanelRailDropPositionFromPoint(point, rect),
     };
@@ -763,6 +791,7 @@ export function getEpicCanvasDropPreview(
   if (target.kind === "left-panel-rail-list") {
     return {
       kind: "left-panel-rail-list",
+      viewTabId: target.viewTabId,
     };
   }
   if (target.kind === "left-panel-group") return null;

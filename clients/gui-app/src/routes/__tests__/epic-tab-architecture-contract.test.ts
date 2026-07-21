@@ -90,8 +90,8 @@ describe("epic tab architecture contracts", () => {
     expect(
       routeFileNames.some((filePath) => filePath.endsWith("epics.$epicId.tsx")),
     ).toBe(false);
-    // The detail route nests under the `/epics` layout (which mounts the
-    // keep-alive `EpicTabHost`), so the file dropped its layout-opt-out `_`.
+    // The detail route nests under the `/epics` layout; `TopLevelTabHost`
+    // mounts the retained surface above this route adapter.
     expect(
       routeFileNames.some((filePath) =>
         filePath.endsWith("epics.$epicId.$tabId.tsx"),
