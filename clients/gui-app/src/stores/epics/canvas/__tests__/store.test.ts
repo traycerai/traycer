@@ -1171,3 +1171,356 @@ describe("makeSelectTabActivation", () => {
     ).toBe(false);
   });
 });
+
+describe("closedTilePayloadsByTabId", () => {
+  it("captures a tile payload when the tile is closed via closeCanvasTab", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-closed-payload", "Closed Payload");
+    store.openTileInTab(tabId, SPEC_A);
+    store.openTileInTab(tabId, SPEC_B);
+    const paneId = requireCanvas(tabId).activePaneId;
+    if (paneId === null) throw new Error("expected pane");
+
+    store.closeCanvasTab(tabId, paneId, SPEC_A.instanceId);
+
+    expect(
+      useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
+        SPEC_A.instanceId
+      ],
+    ).toEqual(SPEC_A);
+    expect(
+      useEpicCanvasStore.getState().canvasByTabId[tabId]?.tilesByInstanceId[
+        SPEC_A.instanceId
+      ],
+    ).toBeUndefined();
+  });
+
+  it("discardClosedTilePayload drops a single cached entry", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-discard-payload", "Discard Payload");
+    store.openTileInTab(tabId, SPEC_A);
+    store.openTileInTab(tabId, SPEC_B);
+    const paneId = requireCanvas(tabId).activePaneId;
+    if (paneId === null) throw new Error("expected pane");
+    store.closeCanvasTab(tabId, paneId, SPEC_A.instanceId);
+    expect(
+      useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
+        SPEC_A.instanceId
+      ],
+    ).toEqual(SPEC_A);
+
+    store.discardClosedTilePayload(tabId, SPEC_A.instanceId);
+
+    expect(
+      useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
+        SPEC_A.instanceId
+      ],
+    ).toBeUndefined();
+  });
+
+  it("discardClosedTilePayload is a no-op for a tabId/instanceId that isn't cached", () => {
+    const store = useEpicCanvasStore.getState();
+    const before = useEpicCanvasStore.getState().closedTilePayloadsByTabId;
+
+    store.discardClosedTilePayload("no-such-tab", "no-such-instance");
+
+    expect(useEpicCanvasStore.getState().closedTilePayloadsByTabId).toBe(
+      before,
+    );
+  });
+
+  it("captures a preview tile when successive preview opens evict the prior", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-preview-evict", "Preview Evict");
+    store.openTilePreviewInTab(tabId, SPEC_A);
+    store.openTilePreviewInTab(tabId, SPEC_B);
+
+    expect(
+      useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
+        SPEC_A.instanceId
+      ],
+    ).toEqual(SPEC_A);
+    expect(
+      useEpicCanvasStore.getState().canvasByTabId[tabId]?.tilesByInstanceId[
+        SPEC_A.instanceId
+      ],
+    ).toBeUndefined();
+  });
+
+  it("preserves closed-tile payloads across a plain Task close (closeTab)", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-task-close", "Task Close");
+    store.openTileInTab(tabId, SPEC_A);
+    store.openTileInTab(tabId, SPEC_B);
+    const paneId = requireCanvas(tabId).activePaneId;
+    if (paneId === null) throw new Error("expected pane");
+    store.closeCanvasTab(tabId, paneId, SPEC_A.instanceId);
+
+    store.closeTab(tabId);
+
+    // Task is hidden but preserved, including its closed-tile cache.
+    expect(useEpicCanvasStore.getState().openTabOrder).not.toContain(tabId);
+    expect(useEpicCanvasStore.getState().tabsById[tabId]).toBeDefined();
+    expect(
+      useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
+        SPEC_A.instanceId
+      ],
+    ).toEqual(SPEC_A);
+  });
+
+  it("GC's closed-tile payloads on permanent tab discard", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-discard", "Discard");
+    store.openTileInTab(tabId, SPEC_A);
+    store.openTileInTab(tabId, SPEC_B);
+    const paneId = requireCanvas(tabId).activePaneId;
+    if (paneId === null) throw new Error("expected pane");
+    store.closeCanvasTab(tabId, paneId, SPEC_A.instanceId);
+    expect(
+      useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId],
+    ).toBeDefined();
+
+    store.discardTabState(tabId);
+
+    expect(
+      useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId],
+    ).toBeUndefined();
+  });
+
+  it("GC's closed-tile payloads on closeTabsForEpics", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-delete", "Delete Epic");
+    store.openTileInTab(tabId, SPEC_A);
+    store.openTileInTab(tabId, SPEC_B);
+    const paneId = requireCanvas(tabId).activePaneId;
+    if (paneId === null) throw new Error("expected pane");
+    store.closeCanvasTab(tabId, paneId, SPEC_A.instanceId);
+
+    store.closeTabsForEpics(["epic-delete"]);
+
+    expect(
+      useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId],
+    ).toBeUndefined();
+  });
+
+  it("FIFO-evicts the oldest closed-tile payload past the per-tab cap of 20", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-fifo", "FIFO");
+    // Seed a pinned base tile so the pane never empties.
+    store.openTileInTab(tabId, {
+      id: "art-base",
+      instanceId: "inst-base",
+      type: "spec",
+      name: "Base",
+      hostId: TEST_HOST_ID,
+    });
+    const paneId = requireCanvas(tabId).activePaneId;
+    if (paneId === null) throw new Error("expected pane");
+
+    // Open+close 21 distinct tiles; the first closed should be FIFO-evicted.
+    for (let i = 0; i < 21; i += 1) {
+      const ref: EpicCanvasTileRef = {
+        id: `art-fifo-${i}`,
+        instanceId: `inst-fifo-${i}`,
+        type: "spec",
+        name: `FIFO ${i}`,
+        hostId: TEST_HOST_ID,
+      };
+      store.openTileInTab(tabId, ref);
+      store.closeCanvasTab(tabId, paneId, ref.instanceId);
+    }
+
+    const cached =
+      useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId] ?? {};
+    expect(Object.keys(cached)).toHaveLength(20);
+    expect(cached["inst-fifo-0"]).toBeUndefined();
+    expect(cached["inst-fifo-1"]).toEqual({
+      id: "art-fifo-1",
+      instanceId: "inst-fifo-1",
+      type: "spec",
+      name: "FIFO 1",
+      hostId: TEST_HOST_ID,
+    });
+    expect(cached["inst-fifo-20"]).toEqual({
+      id: "art-fifo-20",
+      instanceId: "inst-fifo-20",
+      type: "spec",
+      name: "FIFO 20",
+      hostId: TEST_HOST_ID,
+    });
+  });
+
+  it("restoring at a full cache does not evict an unrelated payload (removal is layered before capture)", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-fifo-restore", "FIFO Restore");
+    store.openTileInTab(tabId, {
+      id: "art-base",
+      instanceId: "inst-base",
+      type: "spec",
+      name: "Base",
+      hostId: TEST_HOST_ID,
+    });
+    const paneId = requireCanvas(tabId).activePaneId;
+    if (paneId === null) throw new Error("expected pane");
+
+    // Fill the cache to EXACTLY the cap (20), no eviction needed yet.
+    for (let i = 0; i < 20; i += 1) {
+      const ref: EpicCanvasTileRef = {
+        id: `art-fifo-${i}`,
+        instanceId: `inst-fifo-${i}`,
+        type: "spec",
+        name: `FIFO ${i}`,
+        hostId: TEST_HOST_ID,
+      };
+      store.openTileInTab(tabId, ref);
+      store.closeCanvasTab(tabId, paneId, ref.instanceId);
+    }
+    const oldest = "inst-fifo-0";
+    const beingRestored = "inst-fifo-19";
+    expect(
+      useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[oldest],
+    ).toBeDefined();
+    const restoredPayload =
+      useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
+        beingRestored
+      ];
+    if (restoredPayload === undefined) {
+      throw new Error("expected cached payload for " + beingRestored);
+    }
+
+    // A live preview tile occupies the destination pane; restoring R will
+    // evict (and thus capture) it in the SAME transaction as R's removal.
+    const previewTile: EpicCanvasTileRef = {
+      id: "art-preview-occupant",
+      instanceId: "inst-preview-occupant",
+      type: "spec",
+      name: "Preview Occupant",
+      hostId: TEST_HOST_ID,
+    };
+    store.openTilePreviewInTab(tabId, previewTile);
+
+    store.restoreClosedTilePreview(tabId, paneId, restoredPayload);
+
+    const cached =
+      useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId] ?? {};
+    // Atomic result: R removed (now live), P added, Q (oldest) retained -
+    // still exactly 20, not 19 (an over-eviction) and not 21.
+    expect(Object.keys(cached)).toHaveLength(20);
+    expect(cached[beingRestored]).toBeUndefined();
+    expect(cached[oldest]).toEqual({
+      id: "art-fifo-0",
+      instanceId: oldest,
+      type: "spec",
+      name: "FIFO 0",
+      hostId: TEST_HOST_ID,
+    });
+    expect(cached[previewTile.instanceId]).toEqual(previewTile);
+  });
+
+  it("is session-only: not written into the zustand persist partialize surface", async () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-session-only", "Session Only");
+    store.openTileInTab(tabId, SPEC_A);
+    store.openTileInTab(tabId, SPEC_B);
+    const paneId = requireCanvas(tabId).activePaneId;
+    if (paneId === null) throw new Error("expected pane");
+    store.closeCanvasTab(tabId, paneId, SPEC_A.instanceId);
+    expect(
+      useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
+        SPEC_A.instanceId
+      ],
+    ).toEqual(SPEC_A);
+
+    // Flush any pending persist write.
+    await useEpicCanvasStore.persist.rehydrate();
+    const raw = window.localStorage.getItem(epicCanvasKey(null));
+    expect(raw).not.toBeNull();
+    if (raw === null) return;
+    const parsed: unknown = JSON.parse(raw);
+    expect(isRecord(parsed)).toBe(true);
+    if (!isRecord(parsed)) return;
+    const state = parsed.state;
+    expect(isRecord(state)).toBe(true);
+    if (!isRecord(state)) return;
+    expect(state.closedTilePayloadsByTabId).toBeUndefined();
+  });
+});
+
+describe("restoreClosedTilePreview", () => {
+  it("reopens under the original instanceId into the preferred pane and evicts the cache entry", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-restore", "Restore");
+    // A pinned sibling so the pane survives SPEC_A's close instead of
+    // collapsing (a single-tab pane closes itself along with its last tab).
+    store.openTileInTab(tabId, {
+      id: "art-pinned",
+      instanceId: "inst-pinned",
+      type: "spec",
+      name: "Pinned",
+      hostId: TEST_HOST_ID,
+    });
+    store.openTileInTab(tabId, SPEC_A);
+    const paneId = requireCanvas(tabId).activePaneId;
+    if (paneId === null) throw new Error("expected pane");
+    store.closeCanvasTab(tabId, paneId, SPEC_A.instanceId);
+    const preserved =
+      useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
+        SPEC_A.instanceId
+      ];
+    expect(preserved).toEqual(SPEC_A);
+    if (preserved === undefined) return;
+
+    store.restoreClosedTilePreview(tabId, paneId, preserved);
+
+    const canvas = requireCanvas(tabId);
+    expect(canvas.activePaneId).toBe(paneId);
+    expect(canvas.tilesByInstanceId[SPEC_A.instanceId]).toEqual(SPEC_A);
+    expect(
+      useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
+        SPEC_A.instanceId
+      ],
+    ).toBeUndefined();
+  });
+
+  it("falls back to the active pane when the preferred pane id doesn't exist", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-restore-fallback", "Fallback");
+    store.openTileInTab(tabId, SPEC_A);
+    const activePaneId = requireCanvas(tabId).activePaneId;
+    if (activePaneId === null) throw new Error("expected pane");
+
+    store.restoreClosedTilePreview(tabId, "pane-never-existed", SPEC_B);
+
+    const canvas = requireCanvas(tabId);
+    expect(canvas.activePaneId).toBe(activePaneId);
+    expect(canvas.tilesByInstanceId[SPEC_B.instanceId]).toEqual(SPEC_B);
+  });
+
+  it("captures the evicted preview tile into the cache while restoring another", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-restore-evict", "Restore Evict");
+    // A pinned permanent tile plus SPEC_A as the current preview.
+    store.openTileInTab(tabId, {
+      id: "art-pinned",
+      instanceId: "inst-pinned",
+      type: "spec",
+      name: "Pinned",
+      hostId: TEST_HOST_ID,
+    });
+    store.openTilePreviewInTab(tabId, SPEC_A);
+    const paneId = requireCanvas(tabId).activePaneId;
+    if (paneId === null) throw new Error("expected pane");
+
+    store.restoreClosedTilePreview(tabId, paneId, SPEC_B);
+
+    // SPEC_A (the prior preview) was evicted and captured; SPEC_B is live.
+    expect(
+      useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
+        SPEC_A.instanceId
+      ],
+    ).toEqual(SPEC_A);
+    const canvas = requireCanvas(tabId);
+    expect(canvas.tilesByInstanceId[SPEC_A.instanceId]).toBeUndefined();
+    expect(canvas.tilesByInstanceId[SPEC_B.instanceId]).toEqual(SPEC_B);
+  });
+});

@@ -474,6 +474,7 @@ export function openTile(
   state: EpicCanvasState,
   node: EpicCanvasTileRef,
   preview: boolean,
+  preferredPaneId: string | null,
 ): EpicCanvasState {
   if (state.root === null) return seedRootPane(node, preview);
   const existing = findPaneTabByContentId(state, node.id);
@@ -492,7 +493,12 @@ export function openTile(
     }
     return { ...state, root, activePaneId: existing.pane.id };
   }
-  const target = activePaneOrFirst(state);
+  // Prefer `preferredPaneId` (e.g. a history entry's original pane) when it
+  // still exists in the tree; otherwise fall back to the active pane, same
+  // as every other caller.
+  const preferredPane =
+    preferredPaneId === null ? null : findPaneById(state.root, preferredPaneId);
+  const target = preferredPane ?? activePaneOrFirst(state);
   if (target === null) return state;
 
   // Fill-in-place: a permanent open while the active tab is a blank "New tab"

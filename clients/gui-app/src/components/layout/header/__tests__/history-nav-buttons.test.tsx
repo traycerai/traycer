@@ -1,6 +1,12 @@
 import "../../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import {
   RouterContextProvider,
   createMemoryHistory,
@@ -14,6 +20,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { createPersistentMemoryHistory } from "@/lib/persistent-history";
 import { HistoryNavButtons } from "@/components/layout/header/history-nav-buttons";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 
 const WINDOW_ID = "history-nav-buttons-test-window";
 
@@ -59,12 +66,14 @@ function renderButtons(router: AppRouter) {
 
 beforeEach(() => {
   window.localStorage.clear();
+  useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
 });
 
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   window.localStorage.clear();
+  useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
 });
 
 describe("HistoryNavButtons", () => {
@@ -117,5 +126,75 @@ describe("HistoryNavButtons", () => {
     fireEvent.click(screen.getByRole("button", { name: "Go forward" }));
 
     expect(goSpy).toHaveBeenCalledWith(1);
+  });
+
+  it("disables back when only closed-task entries remain behind", () => {
+    const store = useEpicCanvasStore.getState();
+    const openId = store.openEpicTab("e1", "Open");
+    const closedId = store.openEpicTab("e1", "Closed");
+    store.closeTab(closedId);
+
+    renderButtons(
+      makeRouter(
+        seedPersistentHistory(
+          [`/epics/e1/${closedId}`, `/epics/e1/${openId}`],
+          1,
+        ),
+      ),
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Go back" }).hasAttribute("disabled"),
+    ).toBe(true);
+    expect(
+      screen
+        .getByRole("button", { name: "Go forward" })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+  });
+
+  it("re-enables back after the closed Task is reopened", () => {
+    const store = useEpicCanvasStore.getState();
+    const openId = store.openEpicTab("e1", "Open");
+    const closedId = store.openEpicTab("e1", "Closed");
+    store.closeTab(closedId);
+
+    renderButtons(
+      makeRouter(
+        seedPersistentHistory(
+          [`/epics/e1/${closedId}`, `/epics/e1/${openId}`],
+          1,
+        ),
+      ),
+    );
+    expect(
+      screen.getByRole("button", { name: "Go back" }).hasAttribute("disabled"),
+    ).toBe(true);
+
+    act(() => {
+      useEpicCanvasStore.getState().setActiveTab(closedId);
+    });
+
+    expect(
+      screen.getByRole("button", { name: "Go back" }).hasAttribute("disabled"),
+    ).toBe(false);
+  });
+
+  it("skips a closed-task entry when the back arrow is clicked", () => {
+    const store = useEpicCanvasStore.getState();
+    const openId = store.openEpicTab("e1", "Open");
+    const closedId = store.openEpicTab("e1", "Closed");
+    store.closeTab(closedId);
+
+    const history = seedPersistentHistory(
+      [`/epics/e1/${openId}`, `/epics/e1/${closedId}`, `/epics/e1/${openId}`],
+      2,
+    );
+    const goSpy = vi.spyOn(history, "go").mockImplementation(() => {});
+    renderButtons(makeRouter(history));
+
+    fireEvent.click(screen.getByRole("button", { name: "Go back" }));
+
+    expect(goSpy).toHaveBeenCalledWith(-2);
   });
 });

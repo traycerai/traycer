@@ -82,6 +82,7 @@ import {
   type EpicViewTab,
   type GitDiffTileViewState,
   type SplitDirection,
+  type TilesByInstanceId,
 } from "@/stores/epics/canvas/types";
 import {
   EMPTY_TREES,
@@ -197,6 +198,21 @@ export interface EpicCanvasStore {
    * its `tabsById` entry.
    */
   readonly canvasByTabId: Readonly<Record<string, EpicCanvasState | undefined>>;
+  /**
+   * Payloads of tiles closed out of a tab's canvas, keyed by `tabId` then by
+   * the closed tile's (now-defunct) `instanceId`. Lets back/forward reopen a
+   * closed sub-tab as a preview (`openTilePreviewInTab`) even though
+   * `tilesByInstanceId` itself discards the payload on close - the href/search
+   * params alone don't carry enough to reconstruct a tile node. Session-only
+   * (not in `partialize`) and bounded per tab (`captureClosedTilePayloads`),
+   * so a stale miss just falls back to the existing stale-route restore.
+   */
+  readonly closedTilePayloadsByTabId: Readonly<
+    Record<
+      string,
+      Readonly<Record<string, EpicCanvasTileRef | undefined>> | undefined
+    >
+  >;
   /**
    * Header-strip order for tabs currently visible in this window. Removing an
    * id from this list closes the visible tab without necessarily discarding its
@@ -323,6 +339,31 @@ export interface EpicCanvasStore {
     node: EpicCanvasTileRef,
     source: AnalyticsSource,
   ) => NestedFocusTarget | null;
+  /**
+   * Reopens a preserved `closedTilePayloadsByTabId` entry as a preview,
+   * preferring `preferredPaneId` (the history entry's original pane) when it
+   * still exists and falling back to the active pane otherwise. `node` keeps
+   * its ORIGINAL `instanceId` (not a fresh one) so a landing history href
+   * addressing that exact instanceId resolves directly after the reopen.
+   * Evicts the now-live entry from `closedTilePayloadsByTabId` - a later
+   * close re-captures it. Back/forward's preview-reopen path
+   * (`history-navigation.ts`) is the only caller.
+   */
+  restoreClosedTilePreview: (
+    tabId: string,
+    preferredPaneId: string | null,
+    node: EpicCanvasTileRef,
+  ) => void;
+  /**
+   * Drops one entry from `closedTilePayloadsByTabId` without reopening it.
+   * Back/forward's preview-reopen path calls this when a preserved payload's
+   * backing record has since been permanently deleted (checked via
+   * `isTileRefRecordLive`) - the entry is unusable, so it's discarded and the
+   * landing treats it as a cache miss (existing stale-target fallback takes
+   * over) rather than resurrecting a tile the record-sync effect would
+   * immediately close again.
+   */
+  discardClosedTilePayload: (tabId: string, instanceId: string) => void;
   /**
    * Add `node` as a tab in the active pane without changing the active
    * tab/pane (persists a server-created terminal as a saved tab without
@@ -718,6 +759,99 @@ function withoutCanvasByTabIds(
   );
 }
 
+/** Drop `ids` from `closedTilePayloadsByTabId` (permanent tab deletes). */
+function withoutClosedTilePayloadsByTabIds(
+  record: Readonly<
+    Record<
+      string,
+      Readonly<Record<string, EpicCanvasTileRef | undefined>> | undefined
+    >
+  >,
+  ids: ReadonlySet<string>,
+): Readonly<
+  Record<
+    string,
+    Readonly<Record<string, EpicCanvasTileRef | undefined>> | undefined
+  >
+> {
+  if (ids.size === 0) return record;
+  return Object.fromEntries(
+    Object.entries(record).filter(([id]) => !ids.has(id)),
+  );
+}
+
+/**
+ * Per-tab cap on preserved closed-tile payloads. Bounds
+ * `closedTilePayloadsByTabId` memory growth across a long session of
+ * open/close churn; a payload evicted before its history entry is just a
+ * cache miss - the preview-reopen lookup falls back to the existing
+ * stale-route restore.
+ */
+const MAX_CLOSED_TILE_PAYLOADS_PER_TAB = 20;
+
+/** Adds `ref` to a tab's closed-tile payload map, FIFO-evicting the oldest
+ * entry once the per-tab cap is exceeded. */
+function withClosedTilePayload(
+  forTab: Readonly<Record<string, EpicCanvasTileRef | undefined>>,
+  ref: EpicCanvasTileRef,
+): Readonly<Record<string, EpicCanvasTileRef | undefined>> {
+  const withoutDuplicate = Object.entries(forTab).filter(
+    ([instanceId]) => instanceId !== ref.instanceId,
+  );
+  const entries = [...withoutDuplicate, [ref.instanceId, ref] as const];
+  const bounded =
+    entries.length > MAX_CLOSED_TILE_PAYLOADS_PER_TAB
+      ? entries.slice(entries.length - MAX_CLOSED_TILE_PAYLOADS_PER_TAB)
+      : entries;
+  return Object.fromEntries(bounded);
+}
+
+/** Drops a single `instanceId` entry from a tab's closed-tile payload map -
+ * used once `restoreClosedTilePreview` brings it back to life. */
+function withoutClosedTilePayload(
+  forTab: Readonly<Record<string, EpicCanvasTileRef | undefined>>,
+  instanceId: string,
+): Readonly<Record<string, EpicCanvasTileRef | undefined>> {
+  return Object.fromEntries(
+    Object.entries(forTab).filter(([id]) => id !== instanceId),
+  );
+}
+
+/**
+ * Diffs a tab's `tilesByInstanceId` before/after a canvas update and folds
+ * every removed tile's payload into `closedTilePayloadsByTabId`, so a later
+ * back/forward navigation can reopen it as a preview
+ * (`openTilePreviewInTab`). Returns the SAME map reference when nothing was
+ * removed, matching the no-op-skips-the-write convention `updateTabCanvas`
+ * relies on.
+ */
+function captureClosedTilePayloads(
+  closedTilePayloadsByTabId: Readonly<
+    Record<
+      string,
+      Readonly<Record<string, EpicCanvasTileRef | undefined>> | undefined
+    >
+  >,
+  tabId: string,
+  before: TilesByInstanceId,
+  after: TilesByInstanceId,
+): Readonly<
+  Record<
+    string,
+    Readonly<Record<string, EpicCanvasTileRef | undefined>> | undefined
+  >
+> {
+  const removed = Object.entries(before).flatMap(([instanceId, ref]) =>
+    ref !== undefined && after[instanceId] === undefined ? [ref] : [],
+  );
+  if (removed.length === 0) return closedTilePayloadsByTabId;
+  const nextForTab = removed.reduce(
+    (forTab, ref) => withClosedTilePayload(forTab, ref),
+    closedTilePayloadsByTabId[tabId] ?? {},
+  );
+  return { ...closedTilePayloadsByTabId, [tabId]: nextForTab };
+}
+
 function withoutRecentTabIds(
   record: Readonly<Record<string, string | undefined>>,
   removedTabIds: ReadonlySet<string>,
@@ -824,6 +958,12 @@ function updateTabCanvas(
       ...state.canvasByTabId,
       [tabId]: next,
     },
+    closedTilePayloadsByTabId: captureClosedTilePayloads(
+      state.closedTilePayloadsByTabId,
+      tabId,
+      current.tilesByInstanceId,
+      next.tilesByInstanceId,
+    ),
   };
 }
 
@@ -908,6 +1048,7 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
     (set, get) => ({
       tabsById: {},
       canvasByTabId: {},
+      closedTilePayloadsByTabId: {},
       openTabOrder: [],
       activeTabId: null,
       mostRecentTabIdByEpicId: {},
@@ -994,6 +1135,10 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
             tabsById: withoutTabIds(state.tabsById, removedTabIds),
             canvasByTabId: withoutCanvasByTabIds(
               state.canvasByTabId,
+              removedTabIds,
+            ),
+            closedTilePayloadsByTabId: withoutClosedTilePayloadsByTabIds(
+              state.closedTilePayloadsByTabId,
               removedTabIds,
             ),
             openTabOrder,
@@ -1245,6 +1390,10 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
           return {
             tabsById: withoutTabIds(state.tabsById, removed),
             canvasByTabId: withoutCanvasByTabIds(state.canvasByTabId, removed),
+            closedTilePayloadsByTabId: withoutClosedTilePayloadsByTabIds(
+              state.closedTilePayloadsByTabId,
+              removed,
+            ),
             openTabOrder: state.openTabOrder.filter((id) => id !== tabId),
             activeTabId:
               state.activeTabId === tabId
@@ -1283,7 +1432,7 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
       openTileInTab: (tabId, node) => {
         set((state) =>
           updateTabCanvas(state, tabId, (canvas) =>
-            openTile(canvas, node, false),
+            openTile(canvas, node, false, null),
           ),
         );
       },
@@ -1305,7 +1454,7 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
       openTilePreviewInTab: (tabId, node) => {
         set((state) =>
           updateTabCanvas(state, tabId, (canvas) =>
-            openTile(canvas, node, true),
+            openTile(canvas, node, true, null),
           ),
         );
       },
@@ -1326,6 +1475,52 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
         const canvas = canvasForExistingTab(get(), tabId);
         if (before !== canvas) trackOpenedCanvasTile(node, source);
         return currentNestedFocusTargetForTab(get(), tabId);
+      },
+
+      restoreClosedTilePreview: (tabId, preferredPaneId, node) => {
+        set((state) => {
+          const forTab = state.closedTilePayloadsByTabId[tabId];
+          const withoutRestored =
+            forTab === undefined || forTab[node.instanceId] === undefined
+              ? state.closedTilePayloadsByTabId
+              : {
+                  ...state.closedTilePayloadsByTabId,
+                  [tabId]: withoutClosedTilePayload(forTab, node.instanceId),
+                };
+          // Strip the entry being restored BEFORE the canvas update runs its
+          // own eviction-capture: capturing against a map that still counts
+          // the restored entry can push a same-transaction preview eviction
+          // (e.g. the destination pane's prior preview) past the per-tab FIFO
+          // cap and needlessly evict an unrelated payload.
+          const baseState = {
+            ...state,
+            closedTilePayloadsByTabId: withoutRestored,
+          };
+          const canvasUpdate = updateTabCanvas(baseState, tabId, (canvas) =>
+            openTile(canvas, node, true, preferredPaneId),
+          );
+          if (canvasUpdate === baseState) {
+            return withoutRestored === state.closedTilePayloadsByTabId
+              ? state
+              : { closedTilePayloadsByTabId: withoutRestored };
+          }
+          return canvasUpdate;
+        });
+      },
+
+      discardClosedTilePayload: (tabId, instanceId) => {
+        set((state) => {
+          const forTab = state.closedTilePayloadsByTabId[tabId];
+          if (forTab === undefined || forTab[instanceId] === undefined) {
+            return state;
+          }
+          return {
+            closedTilePayloadsByTabId: {
+              ...state.closedTilePayloadsByTabId,
+              [tabId]: withoutClosedTilePayload(forTab, instanceId),
+            },
+          };
+        });
       },
 
       openTileInBackgroundTab: (tabId, node) => {
@@ -1928,7 +2123,7 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
           return {
             ...result.patch,
             ...updateTabCanvas(state, tabId, (canvas) =>
-              openTile(canvas, node, false),
+              openTile(canvas, node, false, null),
             ),
           };
         });
@@ -2183,6 +2378,7 @@ export {
   epicTabName,
   findOpenArtifactInTab,
   getCanvasRootForTab,
+  isTileRefRecordLive,
   makeSelectActiveEpicArtifactId,
   makeSelectEpicArtifactRecords,
   makeSelectEpicCanvas,
