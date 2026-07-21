@@ -197,28 +197,35 @@ export function useNotificationCenterGeometry(
     const wrapper = shell.closest<HTMLElement>(POPPER_WRAPPER_SELECTOR);
     if (wrapper === null) return;
 
+    function nextLock(
+      prev: NotificationCenterGeometryLock | null,
+    ): NotificationCenterGeometryLock | null {
+      if (prev !== null) return prev;
+      const el = shellRef.current;
+      if (el === null) return prev;
+      const rect = el.getBoundingClientRect();
+      return computeInitialNotificationCenterGeometryLock({
+        measuredWidthPx: rect.width,
+        measuredHeightPx: rect.height,
+        caps: readCurrentCaps(el),
+        isColdOpen: coldOpenAtOpen,
+        rootFontSizePx: readRootFontSizePx(),
+      });
+    }
+
     function attemptLock(): void {
       if (wrapper === null || !isPopperWrapperPlaced(wrapper)) return;
-      // The MutationObserver callback runs as a microtask outside React's
-      // own commit call stack, so a plain `setLock` here is not guaranteed
-      // to flush before the browser's next paint. `flushSync` forces the
-      // reveal to land in the same pre-paint window every time, matching
-      // the layout-effect timing used for the synchronous first attempt
-      // below.
+      setLock(nextLock);
+    }
+
+    function handlePlacementMutation(): void {
+      if (wrapper === null || !isPopperWrapperPlaced(wrapper)) return;
+      // MutationObserver runs as a microtask outside React's commit call
+      // stack. Force this later placement update into the same pre-paint
+      // window; the synchronous layout-effect attempt above uses plain state
+      // because React is already committing there.
       flushSync(() => {
-        setLock((prev) => {
-          if (prev !== null) return prev;
-          const el = shellRef.current;
-          if (el === null) return prev;
-          const rect = el.getBoundingClientRect();
-          return computeInitialNotificationCenterGeometryLock({
-            measuredWidthPx: rect.width,
-            measuredHeightPx: rect.height,
-            caps: readCurrentCaps(el),
-            isColdOpen: coldOpenAtOpen,
-            rootFontSizePx: readRootFontSizePx(),
-          });
-        });
+        setLock(nextLock);
       });
     }
 
@@ -226,7 +233,7 @@ export function useNotificationCenterGeometry(
     // effect runs (e.g. a cached floating-ui position on reopen); the
     // observer then covers every subsequent placement.
     attemptLock();
-    const observer = new MutationObserver(attemptLock);
+    const observer = new MutationObserver(handlePlacementMutation);
     observer.observe(wrapper, { attributes: true, attributeFilter: ["style"] });
     return () => {
       observer.disconnect();

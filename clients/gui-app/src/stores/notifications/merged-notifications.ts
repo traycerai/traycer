@@ -215,13 +215,23 @@ interface AttentionOrderEntry {
 export function useAttentionNotificationIds(): ReadonlyArray<string> {
   const rows = useMergedNotificationRows();
   return useMemo(() => {
-    const attentionRows: AttentionOrderEntry[] = [];
-    for (const row of rows) {
-      const classification = classifyNotificationLifecycle(row);
-      if (classification.section === "attention") {
-        attentionRows.push({ row, tier: classification.tier });
-      }
-    }
+    const attentionRows: AttentionOrderEntry[] = rows
+      .map((row) => ({
+        row,
+        classification: classifyNotificationLifecycle(row),
+      }))
+      .filter(
+        (
+          entry,
+        ): entry is {
+          row: MergedNotificationRow;
+          classification: {
+            section: "attention";
+            tier: NotificationAttentionTier;
+          };
+        } => entry.classification.section === "attention",
+      )
+      .map(({ row, classification }) => ({ row, tier: classification.tier }));
     attentionRows.sort((a, b) =>
       compareAttentionOrder(
         { tier: a.tier, createdAt: a.row.createdAt, feedId: a.row.feedId },

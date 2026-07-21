@@ -1607,6 +1607,16 @@ function analyticsPropertiesAreRelationallyValid(
   return true;
 }
 
+const NOTIFICATION_STRICT_EVENTS = new Set<AnalyticsEvent>([
+  AnalyticsEvent.NotificationCenterOpened,
+  AnalyticsEvent.NotificationFilterChanged,
+  AnalyticsEvent.NotificationActivationCompleted,
+  AnalyticsEvent.NotificationMarkedRead,
+  AnalyticsEvent.NotificationsMarkedAllRead,
+  AnalyticsEvent.NotificationPageLoaded,
+  AnalyticsEvent.NotificationNewRevealed,
+]);
+
 export function sanitizeAnalyticsProperties(
   event: AnalyticsEvent,
   properties: object | null,
@@ -1621,7 +1631,7 @@ export function sanitizeAnalyticsProperties(
   // sites already rely on (see "strips identifiers, paths, content, queries,
   // and raw errors at runtime").
   if (
-    event.startsWith("notification") &&
+    NOTIFICATION_STRICT_EVENTS.has(event) &&
     Object.keys(record).length !== expectedKeys.length
   ) {
     return null;
