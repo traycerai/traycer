@@ -99,9 +99,11 @@ describe("useHistoryNavState", () => {
 
   it("derives canGoBack/canGoForward from the seeded stack position", () => {
     // Stack of 3 sitting in the middle: can go both ways.
-    // Unknown tab ids are eligible (left to liveness), so both directions open.
     const router = makeRouter(
-      seedPersistentHistory(["/epics/e1/t1", "/draft/d1", "/epics/e1/t2"], 1),
+      seedPersistentHistory(
+        ["/settings/general", "/draft/d1", "/settings/appearance"],
+        1,
+      ),
     );
     const { result } = renderHook(() => useHistoryNavState(), {
       wrapper: wrapperFor(router),

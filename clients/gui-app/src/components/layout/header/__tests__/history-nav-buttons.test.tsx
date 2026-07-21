@@ -79,7 +79,7 @@ afterEach(() => {
 describe("HistoryNavButtons", () => {
   it("exposes back and forward buttons by accessible name", () => {
     renderButtons(
-      makeRouter(seedPersistentHistory(["/draft/d1", "/epics/e1/t2"], 1)),
+      makeRouter(seedPersistentHistory(["/draft/d1", "/settings/general"], 1)),
     );
     expect(screen.getByRole("button", { name: "Go back" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Go forward" })).toBeTruthy();
@@ -88,7 +88,7 @@ describe("HistoryNavButtons", () => {
   it("reflects canGoBack/canGoForward in the disabled state", () => {
     // Index 0 of 2: only forward is navigable.
     renderButtons(
-      makeRouter(seedPersistentHistory(["/draft/d1", "/epics/e1/t2"], 0)),
+      makeRouter(seedPersistentHistory(["/draft/d1", "/settings/general"], 0)),
     );
     expect(
       screen.getByRole("button", { name: "Go back" }).hasAttribute("disabled"),
@@ -107,7 +107,10 @@ describe("HistoryNavButtons", () => {
   });
 
   it("steps the current router history back when the enabled back arrow is clicked", () => {
-    const history = seedPersistentHistory(["/draft/d1", "/epics/e1/t2"], 1);
+    const history = seedPersistentHistory(
+      ["/draft/d1", "/settings/general"],
+      1,
+    );
     const router = makeRouter(history);
     const goSpy = vi.spyOn(history, "go").mockImplementation(() => {});
     renderButtons(router);
@@ -118,7 +121,10 @@ describe("HistoryNavButtons", () => {
   });
 
   it("steps the current router history forward when the enabled forward arrow is clicked", () => {
-    const history = seedPersistentHistory(["/draft/d1", "/epics/e1/t2"], 0);
+    const history = seedPersistentHistory(
+      ["/draft/d1", "/settings/general"],
+      0,
+    );
     const router = makeRouter(history);
     const goSpy = vi.spyOn(history, "go").mockImplementation(() => {});
     renderButtons(router);

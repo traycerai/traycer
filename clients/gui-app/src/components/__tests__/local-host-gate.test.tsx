@@ -1244,17 +1244,17 @@ describe("LocalHostGate + system tab modal guard integration", () => {
     const windowId = "real-gate-promote-back";
     window.localStorage.setItem(
       `traycer-gui-app:last-route:${windowId}`,
-      JSON.stringify({ entries: ["/epics/e/t0", "/epics/e/t1"], index: 1 }),
+      JSON.stringify({ entries: ["/draft/d0", "/draft/d1"], index: 1 }),
     );
 
     const rootRoute = createRootRoute({
       validateSearch: (raw) => systemTabOverlaySearchSchema.parse(raw),
       component: GuardedRootWithRealGate,
     });
-    const epicRoute = createRoute({
+    const draftRoute = createRoute({
       getParentRoute: () => rootRoute,
-      path: "/epics/$epicId/$tabId",
-      component: () => <div data-testid="epic-route" />,
+      path: "/draft/$draftId",
+      component: () => <div data-testid="draft-route" />,
     });
     const settingsRoute = createRoute({
       getParentRoute: () => rootRoute,
@@ -1262,7 +1262,7 @@ describe("LocalHostGate + system tab modal guard integration", () => {
       component: () => <div data-testid="settings-route" />,
     });
     const router = createRouter({
-      routeTree: rootRoute.addChildren([epicRoute, settingsRoute]),
+      routeTree: rootRoute.addChildren([draftRoute, settingsRoute]),
       history: createPersistentMemoryHistory(null, windowId),
     });
 
@@ -1290,7 +1290,7 @@ describe("LocalHostGate + system tab modal guard integration", () => {
     );
 
     await waitFor(() => {
-      expect(router.state.location.pathname).toBe("/epics/e/t1");
+      expect(router.state.location.pathname).toBe("/draft/d1");
     });
     await waitFor(() => expect(modalProbe.current).not.toBeNull());
 
@@ -1343,7 +1343,7 @@ describe("LocalHostGate + system tab modal guard integration", () => {
 
     // One click: leaves settings AND the overlay entry is fully collapsed -
     // no lingering search flag, no dead forward/back step remains.
-    expect(router.state.location.pathname).toBe("/epics/e/t1");
+    expect(router.state.location.pathname).toBe("/draft/d1");
     expect(router.state.location.search).not.toHaveProperty("settingsOverlay");
 
     const controller = getHistoryController(router.history);
@@ -1351,8 +1351,8 @@ describe("LocalHostGate + system tab modal guard integration", () => {
       throw new Error("expected a persistent controller");
     }
     expect(controller.getEntries()).toEqual([
-      "/epics/e/t0",
-      "/epics/e/t1",
+      "/draft/d0",
+      "/draft/d1",
       "/settings/general",
     ]);
     expect(controller.getIndex()).toBe(1);
