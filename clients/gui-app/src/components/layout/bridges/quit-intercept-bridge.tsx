@@ -14,6 +14,7 @@ import {
   type UnsyncedEditsEntry,
 } from "@/stores/epics/open-epic/session-registry";
 import { flushActiveDesktopPerWindowProjection } from "@/lib/windows/per-window-projection-debounce";
+import { drainDesktopTabsPersistence } from "@/stores/tabs/desktop-tabs-persistence";
 import { appLogger } from "@/lib/logger";
 
 /**
@@ -140,8 +141,11 @@ export function QuitInterceptBridge(): null | React.ReactElement {
       const snapshot = registry.getUnsyncedEdits();
       const reply = (): Promise<void> =>
         respond({ requestId: request.requestId, snapshot });
-      void flushActiveDesktopPerWindowProjection()
-        .then(reply, reply)
+      void Promise.allSettled([
+        flushActiveDesktopPerWindowProjection(),
+        drainDesktopTabsPersistence(),
+      ])
+        .then(reply)
         .catch((error: unknown) => {
           // `reply()` itself is an `ipcRenderer.invoke` that can reject (main
           // handler removed / sender gone). Never rethrow - main's own

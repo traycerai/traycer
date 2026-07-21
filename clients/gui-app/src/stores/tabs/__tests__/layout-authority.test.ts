@@ -1096,7 +1096,7 @@ describe("layout reducers preserve invariants", () => {
             id: "wrong",
             kind: "history",
             name: "H",
-            lastPath: "/history",
+            lastPath: "/epics",
           },
           settings: {
             id: "wrong",
@@ -1156,7 +1156,7 @@ describe("migrateTabsPersistedState", () => {
           id: "history",
           kind: "history",
           name: "History",
-          lastPath: "/history",
+          lastPath: "/epics",
         },
         settings: null,
       },
@@ -1170,7 +1170,41 @@ describe("migrateTabsPersistedState", () => {
     ]);
     expect(flattenLayoutRefs(migrated)).toEqual([EPIC_A, DRAFT_A, HISTORY]);
     expect(migrated.activeItemId).toBe(tabItemId(HISTORY));
-    expect(migrated.systemTabs.history?.lastPath).toBe("/history");
+    expect(migrated.systemTabs.history?.lastPath).toBe("/epics");
+  });
+
+  it("wraps the real v1 tabs payload without inventing source-owned active fields", () => {
+    const migrated = migrateTabsPersistedState({
+      stripOrder: [EPIC_A, DRAFT_A],
+    });
+
+    // v1 persisted only stripOrder. activeTabId and activeDraftId belonged to
+    // the canvas / landing-draft payloads, whose hydrated values are consumed
+    // later by TabCommandCoordinator.
+    expect(migrated.activeItemId).toBe(tabItemId(DRAFT_A));
+  });
+
+  it("drops system tabs whose persisted route proof does not match their kind", () => {
+    const migrated = migrateTabsPersistedState({
+      stripOrder: [HISTORY, SETTINGS],
+      systemTabs: {
+        history: {
+          id: "history",
+          kind: "history",
+          name: "History",
+          lastPath: "/settings/general",
+        },
+        settings: {
+          id: "settings",
+          kind: "settings",
+          name: "Settings",
+          lastPath: "/settings-invalid",
+        },
+      },
+    });
+
+    expect(migrated.systemTabs).toEqual(emptySystemTabs());
+    expect(migrated.items).toEqual([]);
   });
 
   it("repairs malformed v1 stripOrder (unknown kinds, bad ids, duplicates)", () => {

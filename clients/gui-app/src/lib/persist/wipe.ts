@@ -21,6 +21,7 @@
 
 import { PERSIST_PREFIX } from "@/lib/persist/keys";
 import { flushActiveDesktopPerWindowProjection } from "@/lib/windows/per-window-projection-debounce";
+import { drainDesktopTabsPersistence } from "@/stores/tabs/desktop-tabs-persistence";
 import { appLogger, describeLogError } from "@/lib/logger";
 
 // The `:` boundary is load-bearing: a bare `startsWith(PERSIST_PREFIX)` would
@@ -135,6 +136,7 @@ export async function clearAllPersistedStores(args: {
   //    fired during the reload below can't re-push pre-wipe state and re-create
   //    the snapshot we're about to clear.
   await flushActiveDesktopPerWindowProjection();
+  await drainDesktopTabsPersistence().catch(() => undefined);
   // Then the authoritative host clear when the RPC exists. On a shell without
   // it (older preload) the drain above is the degraded fallback; in web mode
   // `hostClear` is null and there is nothing host-side to clear.

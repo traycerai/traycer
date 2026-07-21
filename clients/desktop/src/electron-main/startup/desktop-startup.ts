@@ -814,9 +814,9 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
 
   const flushShellState = async (): Promise<void> => {
     await Promise.all([
-      // No .catch: the store's write chain never rejects (persist failures
-      // are retried once, then surrendered with an error log inside it).
-      services.desktopStateStore.flush(),
+      services.desktopStateStore.flush().catch((err) => {
+        log.warn("[desktop] per-window state flush failed", err);
+      }),
       services.windowGeometryPersistence.flushLatest().catch((err) => {
         log.warn("[desktop] window-geometry flush failed", err);
       }),

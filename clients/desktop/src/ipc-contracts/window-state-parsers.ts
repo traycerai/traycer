@@ -7,7 +7,17 @@
  */
 import type { JsonValue, PerWindowLandingDraft } from "./window-types";
 
+const MAX_JSON_VALUE_DEPTH = 64;
+
 export function parseJsonValue(value: unknown): JsonValue | undefined {
+  return parseJsonValueAtDepth(value, 0);
+}
+
+function parseJsonValueAtDepth(
+  value: unknown,
+  depth: number,
+): JsonValue | undefined {
+  if (depth > MAX_JSON_VALUE_DEPTH) return undefined;
   if (
     value === null ||
     typeof value === "string" ||
@@ -19,7 +29,9 @@ export function parseJsonValue(value: unknown): JsonValue | undefined {
     return Number.isFinite(value) ? value : undefined;
   }
   if (Array.isArray(value)) {
-    const parsed = value.map(parseJsonValue);
+    const parsed = value.map((entry) =>
+      parseJsonValueAtDepth(entry, depth + 1),
+    );
     if (parsed.some((entry) => entry === undefined)) {
       return undefined;
     }
@@ -30,7 +42,7 @@ export function parseJsonValue(value: unknown): JsonValue | undefined {
     for (const [key, entry] of Object.entries(
       value as Record<string, unknown>,
     )) {
-      const parsed = parseJsonValue(entry);
+      const parsed = parseJsonValueAtDepth(entry, depth + 1);
       if (parsed !== undefined) {
         out[key] = parsed;
       }

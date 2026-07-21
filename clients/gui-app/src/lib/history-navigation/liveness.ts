@@ -9,12 +9,10 @@ import { hrefPathname } from "@/lib/routes";
 /**
  * Conservative liveness predicate for a persisted history entry.
  *
- * Returns `true` (entry is dead → prunable) ONLY when a backing store can prove
- * the entry's source is gone. Everything else is KEPT, including `/`,
- * `/onboarding`, `/draft/new`, `/epics`, `/settings*`, overlay routes, and any
- * unknown / unparseable href. This is the destroy-only-what-a-store-proves-dead
- * rule from the tech plan (§3.2): pruning must never make valid back/forward
- * targets disappear.
+ * Returns `true` (entry is dead → prunable) when either its source is gone or
+ * its pathname cannot be a persistent app route. This makes the restored
+ * stack safe before it is navigable: Back never feeds an unknown/dead target
+ * into T3's materializing external-Epic branch.
  *
  * Two route shapes are prunable, read from the SAME stores the route
  * `beforeLoad` / committed-effect guards consult:
@@ -33,7 +31,9 @@ import { hrefPathname } from "@/lib/routes";
  * against the live stores at execution, not at install time.
  */
 export function isHistoryEntryDead(href: string): boolean {
-  const segments = parsePathSegments(href);
+  const pathname = hrefPathname(href);
+  const segments = parsePathSegments(pathname);
+  if (!isKnownPersistentRoute(pathname, segments)) return true;
 
   // /epics/$epicId/$tabId — nested pane/tile targets are exact to this tab's
   // canvas. Only top-level entries without nested params keep the legacy
@@ -74,13 +74,48 @@ export function isHistoryEntryDead(href: string): boolean {
     return !exists;
   }
 
-  // Unknown / unparseable / every other route shape: keep.
+  // The remaining known persistent route shapes (`/`, onboarding, Epics
+  // index, and Settings) have no source-owned identity to validate.
   return false;
 }
 
 /** Split an href into its non-empty pathname segments (query/hash stripped). */
-function parsePathSegments(href: string): ReadonlyArray<string> {
-  return hrefPathname(href)
-    .split("/")
-    .filter((segment) => segment.length > 0);
+function parsePathSegments(pathname: string): ReadonlyArray<string> {
+  return pathname.split("/").filter((segment) => segment.length > 0);
+}
+
+const SETTINGS_SEGMENTS = new Set([
+  "agents",
+  "appearance",
+  "diagnostics",
+  "general",
+  "host",
+  "keybindings",
+  "notifications",
+  "providers",
+  "service",
+  "shell",
+  "worktrees",
+]);
+
+function isKnownPersistentRoute(
+  pathname: string,
+  segments: ReadonlyArray<string>,
+): boolean {
+  if (!pathname.startsWith("/") || pathname.startsWith("//")) return false;
+  if (segments.length === 0) return pathname === "/";
+  if (segments.length === 1) {
+    return (
+      segments[0] === "onboarding" ||
+      segments[0] === "epics" ||
+      segments[0] === "settings"
+    );
+  }
+  if (segments[0] === "epics") return segments.length === 3;
+  if (segments[0] === "draft") return segments.length === 2;
+  return (
+    segments[0] === "settings" &&
+    segments.length === 2 &&
+    SETTINGS_SEGMENTS.has(segments[1])
+  );
 }

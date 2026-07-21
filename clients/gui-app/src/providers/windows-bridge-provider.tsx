@@ -23,6 +23,18 @@ import {
   DESKTOP_PER_WINDOW_PROJECTION_DEBOUNCE_MS,
   setActiveDesktopPerWindowProjectionBridge,
 } from "@/lib/windows/per-window-projection-debounce";
+import {
+  clearDesktopTabsPersistence,
+  commitAppliedDesktopTabsSnapshot,
+  configureBrowserTabsPersistence,
+  configureDesktopTabsAuthority,
+  drainDesktopTabsPersistence,
+  hydrateDesktopTabs,
+  installDesktopTabsPersistence,
+  isDesktopTabsCapabilitySupported,
+  shouldApplyDesktopTabsSnapshot,
+} from "@/stores/tabs/desktop-tabs-persistence";
+import { readPersistedCurrentRoute } from "@/lib/persistent-history";
 import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
 import type {
   DesktopPerWindowSnapshot,
@@ -53,6 +65,15 @@ interface WindowsBridgeProviderProps {
 
 interface WindowsBridgeHydrationRequest {
   readonly bridge: DesktopWindowsBridge;
+}
+
+interface DesktopTabsVerification {
+  readonly supported: boolean;
+  readonly acknowledgedRevision: number | null;
+}
+
+interface DesktopSnapshotObservation {
+  latest: DesktopPerWindowSnapshot | null;
 }
 
 // Module-level hydration gate. The tab-sync coordinator subscribes
@@ -150,6 +171,7 @@ export function WindowsBridgeProvider(
 
 function installMissingDesktopWindowsBridge(): () => void {
   clearDesktopWindowsBridge();
+  configureBrowserTabsPersistence();
   queueMicrotask(() => {
     trackAppOpenedOnce(false);
     markHydrated();
@@ -162,6 +184,7 @@ function installDesktopWindowsBridge(
   hydrationRequest: WindowsBridgeHydrationRequest,
 ): () => void {
   const lifecycle = { cancelled: false };
+  let tabsCompatible = false;
   const projectionBridge = createDebouncedDesktopPerWindowProjectionBridge(
     bridge.perWindowState,
     DESKTOP_PER_WINDOW_PROJECTION_DEBOUNCE_MS,
@@ -179,7 +202,8 @@ function installDesktopWindowsBridge(
   // The deliberate quit path (Cmd+Q / "Quit Traycer") does not rely on this - it
   // uses the awaited fresh-snapshot flush - so this remains a fallback only.
   const flushProjection = (): void => {
-    void projectionBridge.flush();
+    void projectionBridge.flush().catch(() => undefined);
+    void drainDesktopTabsPersistence().catch(() => undefined);
   };
   setDesktopEpicOwnershipBridge(bridge);
   setActiveDesktopPerWindowProjectionBridge(projectionBridge);
@@ -190,9 +214,25 @@ function installDesktopWindowsBridge(
     window.addEventListener("beforeunload", flushProjection);
   }
 
-  const perWindowSubscription = bridge.perWindowState.onChange((snapshot) => {
+  const snapshotObservation: DesktopSnapshotObservation = { latest: null };
+
+  const applyNewestSnapshot = (snapshot: DesktopPerWindowSnapshot): void => {
+    if (
+      snapshotObservation.latest !== null &&
+      (snapshot.revision ?? 0) < (snapshotObservation.latest.revision ?? 0)
+    ) {
+      return;
+    }
+    snapshotObservation.latest = snapshot;
     applyPerWindowSnapshot(snapshot);
-  });
+    if (tabsCompatible && shouldApplyDesktopTabsSnapshot(snapshot)) {
+      hydrateDesktopTabs(snapshot, true, null);
+      commitAppliedDesktopTabsSnapshot(snapshot);
+    }
+  };
+
+  const perWindowSubscription =
+    bridge.perWindowState.onChange(applyNewestSnapshot);
 
   const isCancelled = (): boolean => lifecycle.cancelled;
 
@@ -201,9 +241,29 @@ function installDesktopWindowsBridge(
     try {
       const snapshot = await bridge.perWindowState.get();
       if (isCancelled()) return;
-      applyPerWindowSnapshot(snapshot);
+      applyNewestSnapshot(snapshot);
+      const verification = await verifyDesktopTabsCompatibility(
+        bridge,
+        () => snapshotObservation.latest?.revision ?? 0,
+      );
+      if (isCancelled()) return;
+      tabsCompatible = verification.supported;
+      configureDesktopTabsAuthority(tabsCompatible);
+      const hydrationSnapshot = snapshotObservation.latest ?? snapshot;
+      const hydratedTabs = hydrateDesktopTabs(
+        hydrationSnapshot,
+        tabsCompatible,
+        readPersistedCurrentRoute(bridge.windowId),
+      );
+      if (tabsCompatible && verification.acknowledgedRevision !== null) {
+        installDesktopTabsPersistence(
+          bridge,
+          Math.max(hydratedTabs.revision, verification.acknowledgedRevision),
+        );
+      }
       trackAppOpenedOnce(
-        snapshot.epicTabs.length > 0 || snapshot.landingDrafts.length > 0,
+        hydrationSnapshot.epicTabs.length > 0 ||
+          hydrationSnapshot.landingDrafts.length > 0,
       );
     } catch (error) {
       if (isCancelled()) return;
@@ -216,6 +276,8 @@ function installDesktopWindowsBridge(
         {},
         error,
       );
+      tabsCompatible = false;
+      configureDesktopTabsAuthority(false);
     }
     queueMicrotask(() => {
       if (!lifecycle.cancelled) {
@@ -232,10 +294,41 @@ function installDesktopWindowsBridge(
       window.removeEventListener("pagehide", flushProjection);
       window.removeEventListener("beforeunload", flushProjection);
     }
-    void projectionBridge.flush();
+    flushProjection();
     projectionBridge.dispose();
+    clearDesktopTabsPersistence();
     clearDesktopWindowsBridge();
   };
+}
+
+async function verifyDesktopTabsCompatibility(
+  bridge: DesktopWindowsBridge,
+  minimumRevision: () => number,
+): Promise<DesktopTabsVerification> {
+  if (typeof bridge.perWindowState.capabilities !== "function") {
+    return { supported: false, acknowledgedRevision: null };
+  }
+  try {
+    const capabilities = await bridge.perWindowState.capabilities();
+    if (!isDesktopTabsCapabilitySupported(capabilities)) {
+      return { supported: false, acknowledgedRevision: null };
+    }
+    const acknowledgement = await bridge.perWindowState.update({});
+    const supported =
+      acknowledgement !== undefined &&
+      Number.isSafeInteger(acknowledgement.revision) &&
+      acknowledgement.revision > minimumRevision() &&
+      isDesktopTabsCapabilitySupported(acknowledgement.capabilities);
+    return {
+      supported,
+      acknowledgedRevision: supported ? acknowledgement.revision : null,
+    };
+  } catch (error) {
+    appLogger.warn("[windows-bridge] desktop tab persistence unavailable", {
+      error: error instanceof Error ? error.message : "unknown error",
+    });
+    return { supported: false, acknowledgedRevision: null };
+  }
 }
 
 function clearDesktopWindowsBridge(): void {

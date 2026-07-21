@@ -73,8 +73,8 @@ afterEach(() => {
   useLandingDraftStore.setState(useLandingDraftStore.getInitialState(), true);
 });
 
-describe("isHistoryEntryDead — conservative liveness", () => {
-  it("keeps routes no store can prove dead", () => {
+describe("isHistoryEntryDead — persistent-route liveness", () => {
+  it("keeps valid routes with no source-owned identity", () => {
     for (const href of [
       "/",
       "/onboarding",
@@ -83,10 +83,21 @@ describe("isHistoryEntryDead — conservative liveness", () => {
       "/settings",
       "/settings/general",
       "/settings/keybindings",
-      "/totally-unknown/route/shape",
-      "",
     ]) {
       expect(isHistoryEntryDead(href)).toBe(false);
+    }
+  });
+
+  it("prunes malformed or unknown routes before they can be traversed", () => {
+    for (const href of [
+      "/totally-unknown/route/shape",
+      "",
+      "//host/path",
+      "/epics/only-an-epic",
+      "/draft/a/b",
+      "/settings/not-a-panel",
+    ]) {
+      expect(isHistoryEntryDead(href)).toBe(true);
     }
   });
 

@@ -18,6 +18,7 @@ import type {
 } from "../../ipc-contracts/window-types";
 import {
   parseJsonRecord,
+  parseJsonValue,
   parseLandingDrafts,
 } from "../../ipc-contracts/window-state-parsers";
 
@@ -203,6 +204,16 @@ export function parsePerWindowStatePatch(value: unknown): PerWindowStatePatch {
           : null,
     });
   }
+  if ("tabStripLayout" in obj) {
+    Object.assign(patch, {
+      tabStripLayout: parseJsonValue(obj.tabStripLayout) ?? null,
+    });
+  }
+  if ("activeRoute" in obj) {
+    Object.assign(patch, {
+      activeRoute: typeof obj.activeRoute === "string" ? obj.activeRoute : null,
+    });
+  }
   return patch;
 }
 
@@ -235,8 +246,31 @@ export function parsePerWindowEpicTabs(
       return [];
     }
     seen.add(obj.id);
-    return [{ id: obj.id, epicId: obj.epicId, name: obj.name }];
+    const surfaceMode = parsePerWindowEpicSurfaceMode(obj.surfaceMode);
+    return [
+      surfaceMode === null
+        ? { id: obj.id, epicId: obj.epicId, name: obj.name }
+        : { id: obj.id, epicId: obj.epicId, name: obj.name, surfaceMode },
+    ];
   });
+}
+
+function parsePerWindowEpicSurfaceMode(
+  value: unknown,
+): { readonly kind: "phase-migration"; readonly phaseId: string } | null {
+  if (!isPlainRecord(value)) return null;
+  if (
+    value.kind === "phase-migration" &&
+    typeof value.phaseId === "string" &&
+    value.phaseId.length > 0
+  ) {
+    return { kind: "phase-migration", phaseId: value.phaseId };
+  }
+  return null;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 export function parseDesktopAuthSession(

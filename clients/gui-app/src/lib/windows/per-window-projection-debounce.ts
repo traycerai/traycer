@@ -9,7 +9,7 @@ export interface DesktopPerWindowProjectionBridge {
 }
 
 interface DesktopPerWindowProjectionTarget {
-  update(patch: DesktopPerWindowStatePatch): Promise<void>;
+  update(patch: DesktopPerWindowStatePatch): Promise<unknown>;
 }
 
 let activeProjectionBridge: DesktopPerWindowProjectionBridge | null = null;
@@ -34,7 +34,9 @@ export function createDebouncedDesktopPerWindowProjectionBridge(
     const patch = pendingPatch;
     pendingPatch = null;
     if (patch === null) return writeChain;
-    writeChain = writeChain.then(() => target.update(patch));
+    writeChain = writeChain
+      .then(() => target.update(patch))
+      .then(() => undefined);
     return writeChain;
   };
 

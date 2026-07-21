@@ -29,6 +29,22 @@ export interface DesktopPerWindowEpicViewTab {
   readonly id: string;
   readonly epicId: string;
   readonly name: string;
+  readonly surfaceMode?:
+    | { readonly kind: "epic" }
+    | { readonly kind: "phase-migration"; readonly phaseId: string };
+}
+
+export type DesktopPerWindowStateFeature =
+  "tab-strip-layout-v2" | "active-route-v1";
+
+export interface DesktopPerWindowStateCapabilities {
+  readonly schemaVersion: number;
+  readonly features: readonly DesktopPerWindowStateFeature[];
+}
+
+export interface DesktopPerWindowStateUpdateAcknowledgement {
+  readonly capabilities: DesktopPerWindowStateCapabilities;
+  readonly revision: number;
 }
 
 export interface DesktopPerWindowLandingDraft {
@@ -48,11 +64,14 @@ export interface DesktopPerWindowLandingDraft {
 }
 
 export interface DesktopPerWindowSnapshot {
+  readonly revision?: number;
   readonly epicTabs: readonly DesktopPerWindowEpicViewTab[];
   readonly activeTabId: string | null;
   readonly canvasByTabId: Readonly<Record<string, DesktopJsonValue>>;
   readonly landingDrafts: readonly DesktopPerWindowLandingDraft[];
   readonly activeLandingDraftId: string | null;
+  readonly tabStripLayout?: DesktopJsonValue | null;
+  readonly activeRoute?: string | null;
 }
 
 export interface DesktopPerWindowStatePatch {
@@ -61,6 +80,8 @@ export interface DesktopPerWindowStatePatch {
   readonly canvasByTabId?: Readonly<Record<string, DesktopJsonValue>>;
   readonly landingDrafts?: readonly DesktopPerWindowLandingDraft[];
   readonly activeLandingDraftId?: string | null;
+  readonly tabStripLayout?: DesktopJsonValue | null;
+  readonly activeRoute?: string | null;
 }
 
 export type DesktopAuthSessionStatus =
@@ -306,7 +327,10 @@ export interface DesktopWindowsBridge {
   };
   perWindowState: {
     get(): Promise<DesktopPerWindowSnapshot>;
-    update(patch: DesktopPerWindowStatePatch): Promise<void>;
+    capabilities?(): Promise<DesktopPerWindowStateCapabilities>;
+    update(
+      patch: DesktopPerWindowStatePatch,
+    ): Promise<DesktopPerWindowStateUpdateAcknowledgement | void>;
     // Optional + capability-probed: a desktop shell built before the per-window
     // `clear` RPC was added has no `clear`. Keeping it optional lets the wipe
     // site probe `typeof clear === "function"` and degrade gracefully without

@@ -10,7 +10,10 @@ import {
   isRegisteredTabKind,
   tabSurfaceDescriptor,
 } from "@/stores/tabs/registry";
-import { useTabsStore } from "@/stores/tabs/store";
+import {
+  consumeLegacyTabsSourceActiveSelection,
+  useTabsStore,
+} from "@/stores/tabs/store";
 import {
   createEmptySplit,
   createLayoutItem,
@@ -31,6 +34,7 @@ import {
   type StripItem,
 } from "@/stores/tabs/layout";
 import type { TabRef } from "@/stores/tabs/types";
+import { canMutateTabSplits } from "@/stores/tabs/tab-split-compatibility";
 
 /**
  * The observable transaction ledger. A source-owned ref may be absent from
@@ -246,7 +250,10 @@ function sourceHasRef(ref: TabRef): boolean {
 }
 
 function canSplitRef(ref: TabRef): boolean {
-  return tabSurfaceDescriptor(ref.kind).splitEligibility === "eligible";
+  return (
+    canMutateTabSplits() &&
+    tabSurfaceDescriptor(ref.kind).splitEligibility === "eligible"
+  );
 }
 
 function focusedRef(layout: PersistedTabStripLayout): TabRef | null {
@@ -416,7 +423,10 @@ export class TabCommandCoordinator {
     this.ready = false;
     void readyPromise.then(() => {
       this.ready = true;
-      if (this.installed) this.reconcileFromSourceStores();
+      if (this.installed) {
+        this.reconcileFromSourceStores();
+        this.restoreLegacySourceActiveSelection();
+      }
     });
   }
 
@@ -430,7 +440,10 @@ export class TabCommandCoordinator {
   installSourceReconciliation(): void {
     if (this.installed) return;
     this.installed = true;
-    if (this.ready) this.reconcileFromSourceStores();
+    if (this.ready) {
+      this.reconcileFromSourceStores();
+      this.restoreLegacySourceActiveSelection();
+    }
     useEpicCanvasStore.subscribe((next, previous) => {
       if (
         next.openTabOrder === previous.openTabOrder &&
@@ -869,6 +882,64 @@ export class TabCommandCoordinator {
       // fields until T3 converts every activation entry point. Hydration and
       // external source reconciliation therefore repair layout only; they
       // must not echo a source snapshot back through desktop persistence.
+      projectSourceCompatibility: false,
+      applySources: () => undefined,
+      applyRemovals: () => undefined,
+    });
+  }
+
+  /**
+   * Hydration-only layout installation. Source snapshots have already landed;
+   * this command reserves every ref newly placed into the authoritative layout
+   * before the normal transaction finalizer projects compatibility state.
+   */
+  restoreHydratedLayout(layout: PersistedTabStripLayout): void {
+    const sourceKeys = new Set(sourceRefs().map(tabRefKey));
+    const current = currentLayout();
+    const missing = flattenLayoutRefs(layout).filter(
+      (ref) =>
+        ref.kind !== "history" &&
+        ref.kind !== "settings" &&
+        !sourceKeys.has(tabRefKey(ref)),
+    );
+    const repaired = repairLayout(
+      missing.reduce(removeLayoutRef, layout),
+      isRegisteredTabKind,
+    );
+    const currentKeys = new Set(flattenLayoutRefs(current).map(tabRefKey));
+    const reservedAdditions = flattenLayoutRefs(repaired).filter(
+      (ref) =>
+        !currentKeys.has(tabRefKey(ref)) &&
+        ref.kind !== "history" &&
+        ref.kind !== "settings",
+    );
+    this.execute({
+      layout: repaired,
+      reservedAdditions,
+      pendingRemovals: [],
+      projectSourceCompatibility: false,
+      applySources: () => undefined,
+      applyRemovals: () => undefined,
+    });
+  }
+
+  private restoreLegacySourceActiveSelection(): void {
+    if (!consumeLegacyTabsSourceActiveSelection()) return;
+    const layout = currentLayout();
+    const canvasActiveId = useEpicCanvasStore.getState().activeTabId;
+    const draftActiveId = useLandingDraftStore.getState().activeDraftId;
+    const sourceActive = flattenLayoutRefs(layout)
+      .filter(
+        (ref) =>
+          (ref.kind === "epic" && ref.id === canvasActiveId) ||
+          (ref.kind === "draft" && ref.id === draftActiveId),
+      )
+      .at(-1);
+    if (sourceActive === undefined) return;
+    this.execute({
+      layout: focusLayoutRef(layout, sourceActive),
+      reservedAdditions: [],
+      pendingRemovals: [],
       projectSourceCompatibility: false,
       applySources: () => undefined,
       applyRemovals: () => undefined,

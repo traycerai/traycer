@@ -20,11 +20,10 @@ export function registerPerWindowStateIpc(bridge: RunnerIpcBridge): void {
   // update we suppress the "change" push back to that window; MAIN-initiated
   // changes (initial restore, move-tab) carry no origin and still push normally.
   //
-  // `PerWindowState.update` emits "change" synchronously, so the listener below
-  // observes this set within the same call and the `finally` clears the entry
-  // before control returns. A per-window Set (rather than a single scalar)
-  // keeps suppression correct if two windows' updates ever interleave - e.g. if
-  // `update` becomes async - without one window clobbering another's flag.
+  // `PerWindowState.update` emits only after its disk write succeeds. Keep the
+  // suppression entry through that await so the durable acknowledgement cannot
+  // race its own echo back into the renderer. A per-window Set (rather than a
+  // single scalar) keeps suppression correct when two windows update at once.
   const suppressEchoWindowIds = new Set<string>();
 
   bridge.handleInvoke(RunnerHostInvoke.perWindowStateGet, (event) => {
@@ -34,9 +33,13 @@ export function registerPerWindowStateIpc(bridge: RunnerIpcBridge): void {
       : bridge.perWindowState.get(windowId);
   });
 
+  bridge.handleInvoke(RunnerHostInvoke.perWindowStateCapabilities, () =>
+    bridge.perWindowState.capabilities(),
+  );
+
   bridge.handleInvoke(
     RunnerHostInvoke.perWindowStateUpdate,
-    (event, patch: unknown) => {
+    async (event, patch: unknown) => {
       const windowId = bridge.resolveSenderWindowId(event);
       if (windowId === null) {
         log.warn("[runner-ipc] perWindowState.update from unknown window", {});
@@ -44,7 +47,10 @@ export function registerPerWindowStateIpc(bridge: RunnerIpcBridge): void {
       }
       suppressEchoWindowIds.add(windowId);
       try {
-        bridge.perWindowState.update(windowId, parsePerWindowStatePatch(patch));
+        return await bridge.perWindowState.update(
+          windowId,
+          parsePerWindowStatePatch(patch),
+        );
       } finally {
         suppressEchoWindowIds.delete(windowId);
       }

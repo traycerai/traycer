@@ -7,9 +7,15 @@ import type { Mock } from "vitest";
 const flushActiveDesktopPerWindowProjection = vi.fn<() => Promise<void>>(() =>
   Promise.resolve(),
 );
+const drainDesktopTabsPersistence = vi.fn<() => Promise<void>>(() =>
+  Promise.resolve(),
+);
 vi.mock("@/lib/windows/per-window-projection-debounce", () => ({
   flushActiveDesktopPerWindowProjection: () =>
     flushActiveDesktopPerWindowProjection(),
+}));
+vi.mock("@/stores/tabs/desktop-tabs-persistence", () => ({
+  drainDesktopTabsPersistence: () => drainDesktopTabsPersistence(),
 }));
 
 import { clearAllPersistedStores } from "@/lib/persist/wipe";
@@ -93,6 +99,7 @@ let reloadSpy: Mock<() => void>;
 
 beforeEach(() => {
   flushActiveDesktopPerWindowProjection.mockClear();
+  drainDesktopTabsPersistence.mockClear();
 
   localStorageMock = createMockStorage(LOCAL_SEED);
   sessionStorageMock = createMockStorage(SESSION_SEED);
@@ -138,10 +145,14 @@ describe("clearAllPersistedStores — blanket-prefix sweep", () => {
     );
   });
 
-  it("drains the pending projection (flush) BEFORE the provided `hostClear`", async () => {
+  it("drains source and tabs projections BEFORE the provided `hostClear`", async () => {
     const order: string[] = [];
     flushActiveDesktopPerWindowProjection.mockImplementation(() => {
-      order.push("drain");
+      order.push("source-drain");
+      return Promise.resolve();
+    });
+    drainDesktopTabsPersistence.mockImplementation(() => {
+      order.push("tabs-drain");
       return Promise.resolve();
     });
     const hostClear = vi.fn(() => {
@@ -152,10 +163,11 @@ describe("clearAllPersistedStores — blanket-prefix sweep", () => {
     await clearAllPersistedStores({ hostClear });
 
     expect(flushActiveDesktopPerWindowProjection).toHaveBeenCalledTimes(1);
+    expect(drainDesktopTabsPersistence).toHaveBeenCalledTimes(1);
     expect(hostClear).toHaveBeenCalledTimes(1);
     // Drain MUST precede the clear so the unload-time flush can't re-push
     // pre-wipe state and resurrect the snapshot we just cleared.
-    expect(order).toEqual(["drain", "hostClear"]);
+    expect(order).toEqual(["source-drain", "tabs-drain", "hostClear"]);
   });
 
   it("falls back to `flushActiveDesktopPerWindowProjection` when `hostClear` is null", async () => {

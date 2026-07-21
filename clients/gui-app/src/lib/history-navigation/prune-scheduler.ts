@@ -22,6 +22,8 @@ export interface PruneSchedulerOptions {
    * on the next frame once the load settles (tech plan §3.3).
    */
   readonly isLoadInFlight: () => boolean;
+  /** Schedules one sanitation pass even when no source store changes. */
+  readonly scheduleInitialPrune: boolean;
 }
 
 /**
@@ -46,7 +48,12 @@ export interface PruneSchedulerOptions {
 export function installPruneScheduler(
   options: PruneSchedulerOptions,
 ): () => void {
-  const { getController, subscribeStores, isLoadInFlight } = options;
+  const {
+    getController,
+    subscribeStores,
+    isLoadInFlight,
+    scheduleInitialPrune,
+  } = options;
 
   let pending = false;
   let running = false;
@@ -91,6 +98,7 @@ export function installPruneScheduler(
   };
 
   const unsubscribe = subscribeStores(schedule);
+  if (scheduleInitialPrune) schedule();
 
   return () => {
     uninstalled = true;

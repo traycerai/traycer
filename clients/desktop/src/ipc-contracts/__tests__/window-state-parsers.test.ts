@@ -1,5 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { parseLandingDraft, parseLandingDrafts } from "../window-state-parsers";
+import {
+  parseJsonValue,
+  parseLandingDraft,
+  parseLandingDrafts,
+} from "../window-state-parsers";
+
+describe("parseJsonValue", () => {
+  it("repairs hostile nesting without throwing or overflowing the stack", () => {
+    let nested: unknown = "leaf";
+    for (let index = 0; index < 20_000; index += 1) {
+      nested = [nested];
+    }
+
+    expect(() => parseJsonValue(nested)).not.toThrow();
+    expect(parseJsonValue(nested)).toBeUndefined();
+  });
+});
 
 describe("parseLandingDraft", () => {
   it("rejects a legacy prompt-only entry (no `content`)", () => {

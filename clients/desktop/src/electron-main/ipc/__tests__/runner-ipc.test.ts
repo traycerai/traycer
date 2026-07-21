@@ -504,6 +504,7 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.ownershipClaim,
         RunnerHostInvoke.ownershipRelease,
         RunnerHostInvoke.perWindowStateGet,
+        RunnerHostInvoke.perWindowStateCapabilities,
         RunnerHostInvoke.perWindowStateUpdate,
         RunnerHostInvoke.perWindowStateClear,
         RunnerHostInvoke.authSessionGet,
@@ -881,11 +882,14 @@ describe("RunnerIpcBridge", () => {
       activeTabId: "tab-a",
     });
     expect(perWindowState.get("window-b")).toEqual({
+      revision: 0,
       epicTabs: [],
       activeTabId: null,
       canvasByTabId: {},
       landingDrafts: [],
       activeLandingDraftId: null,
+      tabStripLayout: null,
+      activeRoute: null,
     });
     expect(ownership.snapshot()).toEqual([
       { tabId: "tab-a", epicId: "epic-a", windowId: "window-a" },
@@ -1063,11 +1067,14 @@ describe("RunnerIpcBridge", () => {
     });
     expect(perWindowState.get("window-a").canvasByTabId).toEqual({});
     expect(perWindowState.get("created-1")).toEqual({
+      revision: 1,
       epicTabs: [{ id: "tab-a", epicId: "epic-a", name: "Alpha" }],
       activeTabId: "tab-a",
       canvasByTabId: { "tab-a": { root: null, activeTileId: null } },
       landingDrafts: [],
       activeLandingDraftId: null,
+      tabStripLayout: null,
+      activeRoute: null,
     });
     bridge.dispose();
   });
@@ -1121,6 +1128,7 @@ describe("RunnerIpcBridge", () => {
       { tabId: "tab-a", epicId: "epic-a", windowId: "window-a" },
     ]);
     expect(perWindowState.get("window-a")).toEqual({
+      revision: 1,
       epicTabs: [
         { id: "tab-a", epicId: "epic-a", name: "Alpha" },
         { id: "tab-b", epicId: "epic-b", name: "Beta" },
@@ -1129,13 +1137,18 @@ describe("RunnerIpcBridge", () => {
       canvasByTabId: { "tab-a": { root: null, activeTileId: null } },
       landingDrafts: [],
       activeLandingDraftId: null,
+      tabStripLayout: null,
+      activeRoute: null,
     });
     expect(perWindowState.get("created-1")).toEqual({
+      revision: 0,
       epicTabs: [],
       activeTabId: null,
       canvasByTabId: {},
       landingDrafts: [],
       activeLandingDraftId: null,
+      tabStripLayout: null,
+      activeRoute: null,
     });
     bridge.dispose();
   });
@@ -1767,6 +1780,7 @@ describe("RunnerIpcBridge", () => {
     });
 
     const snapshot = {
+      revision: 1,
       epicTabs: [{ id: "tab-a", epicId: "epic-a", name: "Alpha" }],
       activeTabId: "tab-a",
       canvasByTabId: { "tab-a": { layout: "left" } },
@@ -1782,14 +1796,19 @@ describe("RunnerIpcBridge", () => {
         },
       ],
       activeLandingDraftId: "draft-a",
+      tabStripLayout: null,
+      activeRoute: null,
     };
     expect(await getHandler(sender(101))).toEqual(snapshot);
     expect(await getHandler(sender(202))).toEqual({
+      revision: 0,
       epicTabs: [],
       activeTabId: null,
       canvasByTabId: {},
       landingDrafts: [],
       activeLandingDraftId: null,
+      tabStripLayout: null,
+      activeRoute: null,
     });
     // window-a's OWN update is not echoed back to it (it already holds the
     // state it just sent); other windows never see it either.
@@ -1801,11 +1820,14 @@ describe("RunnerIpcBridge", () => {
     windowA.sentMessages.length = 0;
     windowB.sentMessages.length = 0;
     const empty = {
+      revision: 0,
       epicTabs: [],
       activeTabId: null,
       canvasByTabId: {},
       landingDrafts: [],
       activeLandingDraftId: null,
+      tabStripLayout: null,
+      activeRoute: null,
     };
     await clearHandler(sender(101));
     expect(await getHandler(sender(101))).toEqual(empty);
@@ -2540,11 +2562,14 @@ describe("RunnerIpcBridge", () => {
       {
         channel: RunnerHostEvent.perWindowStateChange,
         payload: {
+          revision: 1,
           epicTabs: [{ id: "tab-a", epicId: "epic-a", name: "Alpha" }],
           activeTabId: "tab-a",
           canvasByTabId: {},
           landingDrafts: [],
           activeLandingDraftId: null,
+          tabStripLayout: null,
+          activeRoute: null,
         },
       },
       {

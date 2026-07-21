@@ -209,15 +209,22 @@ async function openEpicInNewWindow(
         } else {
           bridge.ownership.claim(movedTabId, epicId, windowId);
         }
-        bridge.perWindowState.update(windowId, {
-          epicTabs: [destinationTab],
-          activeTabId: movedTabId,
-          canvasByTabId:
-            destinationCanvas === undefined
-              ? {}
-              : { [movedTabId]: destinationCanvas },
-          landingDrafts: [],
-          activeLandingDraftId: null,
+        void Promise.resolve(
+          bridge.perWindowState.update(windowId, {
+            epicTabs: [destinationTab],
+            activeTabId: movedTabId,
+            canvasByTabId:
+              destinationCanvas === undefined
+                ? {}
+                : { [movedTabId]: destinationCanvas },
+            landingDrafts: [],
+            activeLandingDraftId: null,
+          }),
+        ).catch((error: unknown) => {
+          log.warn("[windows-ipc] destination move state persistence failed", {
+            windowId,
+            error,
+          });
         });
       },
     });
@@ -232,10 +239,17 @@ async function openEpicInNewWindow(
     throw err;
   }
 
-  bridge.perWindowState.update(sourceWindowId, {
-    epicTabs: remainingTabs,
-    activeTabId: nextSourceActiveTabId,
-    canvasByTabId: { [movedTabId]: null },
+  void Promise.resolve(
+    bridge.perWindowState.update(sourceWindowId, {
+      epicTabs: remainingTabs,
+      activeTabId: nextSourceActiveTabId,
+      canvasByTabId: { [movedTabId]: null },
+    }),
+  ).catch((error: unknown) => {
+    log.warn("[windows-ipc] source move state persistence failed", {
+      windowId: sourceWindowId,
+      error,
+    });
   });
   bridge.windowRegistry.focusById(destinationWindowId);
   return { result: "moved", windowId: destinationWindowId };

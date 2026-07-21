@@ -2,7 +2,9 @@ import { EventEmitter } from "node:events";
 import type {
   PerWindowLandingDraft,
   PerWindowSnapshot,
+  PerWindowStateCapabilities,
   PerWindowStatePatch,
+  PerWindowStateUpdateAcknowledgement,
 } from "../../ipc-contracts/window-types";
 import type { DesktopStateStore } from "./desktop-state-store";
 
@@ -15,13 +17,21 @@ type PerWindowStateListener = (change: PerWindowStateChange) => void;
 
 export function createEmptyPerWindowSnapshot(): PerWindowSnapshot {
   return {
+    revision: 0,
     epicTabs: [],
     activeTabId: null,
     canvasByTabId: {},
     landingDrafts: [],
     activeLandingDraftId: null,
+    tabStripLayout: null,
+    activeRoute: null,
   };
 }
+
+export const PER_WINDOW_STATE_CAPABILITIES: PerWindowStateCapabilities = {
+  schemaVersion: 2,
+  features: ["tab-strip-layout-v2", "active-route-v1"],
+};
 
 export class PerWindowState {
   private readonly events = new EventEmitter();
@@ -43,7 +53,14 @@ export class PerWindowState {
     return this.snapshots.get(windowId) ?? createEmptyPerWindowSnapshot();
   }
 
-  update(windowId: string, patch: PerWindowStatePatch): void {
+  capabilities(): PerWindowStateCapabilities {
+    return PER_WINDOW_STATE_CAPABILITIES;
+  }
+
+  update(
+    windowId: string,
+    patch: PerWindowStatePatch,
+  ): Promise<PerWindowStateUpdateAcknowledgement> {
     const current = this.get(windowId);
     const landingDrafts =
       "landingDrafts" in patch
@@ -54,6 +71,7 @@ export class PerWindowState {
         ? (patch.activeLandingDraftId ?? null)
         : current.activeLandingDraftId;
     const next: PerWindowSnapshot = {
+      revision: (current.revision ?? 0) + 1,
       epicTabs:
         "epicTabs" in patch
           ? uniquePerWindowTabs(patch.epicTabs ?? [])
@@ -68,10 +86,33 @@ export class PerWindowState {
           : current.canvasByTabId,
       landingDrafts,
       activeLandingDraftId,
+      tabStripLayout:
+        "tabStripLayout" in patch
+          ? (patch.tabStripLayout ?? null)
+          : current.tabStripLayout,
+      activeRoute:
+        "activeRoute" in patch
+          ? (patch.activeRoute ?? null)
+          : current.activeRoute,
     };
     this.snapshots.set(windowId, next);
-    this.store?.setWindowSnapshot(windowId, next);
-    this.events.emit("change", { windowId, snapshot: next });
+    const acknowledgement: PerWindowStateUpdateAcknowledgement = {
+      capabilities: this.capabilities(),
+      revision: next.revision ?? 0,
+    };
+    if (this.store === null) {
+      this.events.emit("change", { windowId, snapshot: next });
+      return Promise.resolve(acknowledgement);
+    }
+    // `DesktopStateStore` serializes and recovers its own disk writes. Invoke
+    // it in this turn so a concurrent `store.flush()` observes this revision;
+    // delaying the call through a second microtask queue used to let `flush`
+    // race ahead of an acknowledged renderer update.
+    const durableWrite = this.store.setWindowSnapshot(windowId, next);
+    return durableWrite.then(() => {
+      this.events.emit("change", { windowId, snapshot: next });
+      return acknowledgement;
+    });
   }
 
   clear(windowId: string): void {

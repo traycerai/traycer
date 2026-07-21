@@ -1,5 +1,9 @@
 import { create } from "zustand";
-import { createJSONStorage, persist } from "zustand/middleware";
+import {
+  createJSONStorage,
+  persist,
+  type StateStorage,
+} from "zustand/middleware";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 import {
   isRegisteredTabKind,
@@ -38,6 +42,7 @@ import {
   type SystemTabs,
 } from "@/stores/tabs/layout";
 import type { SystemTab, TabRef } from "@/stores/tabs/types";
+import { canMutateTabSplits } from "@/stores/tabs/tab-split-compatibility";
 
 export type PersistedTabsStoreState = PersistedTabStripLayout;
 
@@ -87,9 +92,58 @@ export interface TabsStoreState extends PersistedTabsStoreState {
 }
 
 const TABS_PERSIST_KEY = persistKey(STORE_KEYS.tabs);
+const SETTINGS_PATHS = new Set([
+  "agents",
+  "appearance",
+  "diagnostics",
+  "general",
+  "host",
+  "keybindings",
+  "notifications",
+  "providers",
+  "service",
+  "shell",
+  "worktrees",
+]);
+
+let tabsLocalPersistenceEnabled = true;
+let pendingLegacySourceActiveSelection = false;
+
+const tabsStorage: StateStorage = {
+  getItem: (name) => window.localStorage.getItem(name),
+  setItem: (name, value) => {
+    if (!tabsLocalPersistenceEnabled) return;
+    window.localStorage.setItem(name, value);
+  },
+  removeItem: (name) => window.localStorage.removeItem(name),
+};
+
+/** Desktop enables this only after its capability + acknowledgement handshake. */
+export function setTabsLocalPersistenceEnabled(enabled: boolean): void {
+  tabsLocalPersistenceEnabled = enabled;
+}
+
+/**
+ * v1 tab payloads only persisted strip order. Their active surface lived in
+ * the canvas / landing-draft stores, so the coordinator consumes this one-shot
+ * marker after those stores have hydrated and applies the source-backed focus.
+ */
+export function consumeLegacyTabsSourceActiveSelection(): boolean {
+  const pending = pendingLegacySourceActiveSelection;
+  pendingLegacySourceActiveSelection = false;
+  return pending;
+}
+
+/** Desktop hydration always supersedes browser-local v1 focus selection. */
+export function discardLegacyTabsSourceActiveSelection(): void {
+  pendingLegacySourceActiveSelection = false;
+}
 
 function canSplitRef(ref: TabRef): boolean {
-  return tabSurfaceDescriptor(ref.kind).splitEligibility === "eligible";
+  return (
+    canMutateTabSplits() &&
+    tabSurfaceDescriptor(ref.kind).splitEligibility === "eligible"
+  );
 }
 
 function committedLayout(layout: PersistedTabStripLayout): CommittedTabsLayout {
@@ -206,6 +260,23 @@ export function migrateTabsPersistedState(
   return committedLayout(legacyLayout);
 }
 
+function migrateTabsPersistedStorageState(
+  value: unknown,
+): PersistedTabsStoreState {
+  if (isLegacyTabsPersistedPayload(value)) {
+    pendingLegacySourceActiveSelection = true;
+  }
+  return migrateTabsPersistedState(value);
+}
+
+function isLegacyTabsPersistedPayload(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    !Array.isArray(value.items) &&
+    Array.isArray(value.stripOrder)
+  );
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -295,11 +366,28 @@ function parseSystemTab(
   if (
     value.kind !== kind ||
     typeof value.name !== "string" ||
-    (typeof value.lastPath !== "string" && value.lastPath !== null)
+    (typeof value.lastPath !== "string" && value.lastPath !== null) ||
+    !isValidSystemTabPath(kind, value.lastPath)
   ) {
     return null;
   }
   return { id: kind, kind, name: value.name, lastPath: value.lastPath };
+}
+
+function isValidSystemTabPath(
+  kind: "history" | "settings",
+  path: string | null,
+): boolean {
+  if (path === null) return true;
+  if (!path.startsWith("/") || path.startsWith("//")) return false;
+  const queryIndex = path.search(/[?#]/);
+  const pathname = queryIndex === -1 ? path : path.slice(0, queryIndex);
+  if (kind === "history") {
+    return pathname === "/epics" || pathname === "/epics/";
+  }
+  if (pathname === "/settings" || pathname === "/settings/") return true;
+  if (!pathname.startsWith("/settings/")) return false;
+  return SETTINGS_PATHS.has(pathname.slice("/settings/".length));
 }
 
 export const useTabsStore = create<TabsStoreState>()(
@@ -470,10 +558,10 @@ export const useTabsStore = create<TabsStoreState>()(
     {
       ...basePersistOptions(TABS_PERSIST_KEY),
       version: 2,
-      storage: createJSONStorage(() => window.localStorage),
+      storage: createJSONStorage(() => tabsStorage),
       partialize: (state): PersistedTabsStoreState =>
         committedLayout(layoutFromState(state)),
-      migrate: (persisted) => migrateTabsPersistedState(persisted),
+      migrate: (persisted) => migrateTabsPersistedStorageState(persisted),
       merge: (persisted, current) => ({
         ...current,
         ...migrateTabsPersistedState(persisted),

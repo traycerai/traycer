@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -34,6 +34,88 @@ afterEach(async () => {
 });
 
 describe("PerWindowState + EpicWindowOwnership persistence", () => {
+  it("acknowledges the persisted revision and preserves opaque layout with its route", async () => {
+    const perWindowState = new PerWindowState(null);
+
+    const acknowledgement = await perWindowState.update("window-a", {
+      tabStripLayout: {
+        version: 2,
+        items: [],
+        activeItemId: null,
+        systemTabs: { history: null, settings: null },
+      },
+      activeRoute: "/settings/general",
+    });
+
+    expect(acknowledgement).toEqual({
+      capabilities: {
+        schemaVersion: 2,
+        features: ["tab-strip-layout-v2", "active-route-v1"],
+      },
+      revision: 1,
+    });
+    expect(perWindowState.get("window-a")).toMatchObject({
+      revision: 1,
+      tabStripLayout: {
+        version: 2,
+        items: [],
+        activeItemId: null,
+        systemTabs: { history: null, settings: null },
+      },
+      activeRoute: "/settings/general",
+    });
+  });
+
+  it("acknowledges a revision only after its snapshot is durable", async () => {
+    const filePath = join(tempDir, "durable-ack.json");
+    const store = new DesktopStateStore({ filePath, logger });
+    await store.load();
+    const perWindowState = new PerWindowState(store);
+
+    const acknowledgement = await perWindowState.update("window-a", {
+      activeRoute: "/settings/general",
+      tabStripLayout: {
+        version: 2,
+        items: [],
+        activeItemId: null,
+        systemTabs: { history: null, settings: null },
+      },
+    });
+
+    const raw = await readFile(filePath, "utf8");
+    expect(acknowledgement.revision).toBe(1);
+    expect(JSON.parse(raw)).toMatchObject({
+      windows: {
+        "window-a": {
+          revision: 1,
+          activeRoute: "/settings/general",
+        },
+      },
+    });
+  });
+
+  it("propagates one failed durable update and recovers the following revision", async () => {
+    const filePath = join(tempDir, "durable-retry.json");
+    const store = new DesktopStateStore({ filePath, logger });
+    await store.load();
+    const perWindowState = new PerWindowState(store);
+    const failure = new Error("disk unavailable");
+    const write = vi
+      .spyOn(store, "setWindowSnapshot")
+      .mockRejectedValueOnce(failure);
+
+    await expect(
+      perWindowState.update("window-a", { activeRoute: "/epics" }),
+    ).rejects.toBe(failure);
+
+    const acknowledgement = await perWindowState.update("window-a", {
+      activeRoute: "/settings",
+    });
+    expect(acknowledgement.revision).toBe(2);
+    await expect(store.flush()).resolves.toBeUndefined();
+    expect(write).toHaveBeenCalledTimes(2);
+  });
+
   it("persists per-window snapshots and ownership in the desktop state file", async () => {
     const filePath = join(tempDir, "desktop-windows.json");
     const store = new DesktopStateStore({ filePath, logger });
@@ -76,6 +158,7 @@ describe("PerWindowState + EpicWindowOwnership persistence", () => {
     const reloadedOwnership = new EpicWindowOwnership(reloaded);
 
     expect(reloadedState.get("window-a")).toEqual({
+      revision: 2,
       epicTabs: [{ id: "tab-a", epicId: "epic-a", name: "Alpha" }],
       activeTabId: "tab-a",
       canvasByTabId: {
@@ -94,13 +177,18 @@ describe("PerWindowState + EpicWindowOwnership persistence", () => {
         },
       ],
       activeLandingDraftId: "draft-a",
+      tabStripLayout: null,
+      activeRoute: null,
     });
     expect(reloadedState.get("missing")).toEqual({
+      revision: 0,
       epicTabs: [],
       activeTabId: null,
       canvasByTabId: {},
       landingDrafts: [],
       activeLandingDraftId: null,
+      tabStripLayout: null,
+      activeRoute: null,
     });
     expect(reloadedOwnership.getOwner("tab-a")).toBe("window-a");
     expect(observedSnapshots).toEqual(["window-a", "window-a"]);
@@ -139,11 +227,14 @@ describe("PerWindowState + EpicWindowOwnership persistence", () => {
     perWindowState.clear("window-a");
 
     const empty = {
+      revision: 0,
       epicTabs: [],
       activeTabId: null,
       canvasByTabId: {},
       landingDrafts: [],
       activeLandingDraftId: null,
+      tabStripLayout: null,
+      activeRoute: null,
     };
     // In-memory snapshot is gone -> get falls back to the empty snapshot.
     expect(perWindowState.get("window-a")).toEqual(empty);

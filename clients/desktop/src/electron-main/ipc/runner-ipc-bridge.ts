@@ -20,7 +20,9 @@ import type {
   OwnershipEntry,
   PerWindowLandingDraft,
   PerWindowSnapshot,
+  PerWindowStateCapabilities,
   PerWindowStatePatch,
+  PerWindowStateUpdateAcknowledgement,
   SupportLogTarget,
   SupportLogTailResult,
   SupportRevealLogResult,
@@ -125,7 +127,14 @@ export interface IpcEpicWindowOwnership {
 
 export interface IpcPerWindowState {
   get(windowId: string): PerWindowSnapshot;
-  update(windowId: string, patch: PerWindowStatePatch): void;
+  capabilities(): PerWindowStateCapabilities;
+  update(
+    windowId: string,
+    patch: PerWindowStatePatch,
+  ):
+    | PerWindowStateUpdateAcknowledgement
+    | void
+    | Promise<PerWindowStateUpdateAcknowledgement | void>;
   clear(windowId: string): void;
   on(event: "change", listener: (change: PerWindowStateChange) => void): void;
   off(event: "change", listener: (change: PerWindowStateChange) => void): void;
@@ -1039,7 +1048,17 @@ class NullPerWindowState implements IpcPerWindowState {
     return this.snapshots.get(windowId) ?? createEmptyPerWindowSnapshot();
   }
 
-  update(windowId: string, patch: PerWindowStatePatch): void {
+  capabilities(): PerWindowStateCapabilities {
+    return {
+      schemaVersion: 2,
+      features: ["tab-strip-layout-v2", "active-route-v1"],
+    };
+  }
+
+  update(
+    windowId: string,
+    patch: PerWindowStatePatch,
+  ): PerWindowStateUpdateAcknowledgement {
     const current = this.get(windowId);
     const landingDrafts =
       "landingDrafts" in patch
@@ -1049,7 +1068,8 @@ class NullPerWindowState implements IpcPerWindowState {
       "activeLandingDraftId" in patch
         ? (patch.activeLandingDraftId ?? null)
         : current.activeLandingDraftId;
-    this.snapshots.set(windowId, {
+    const next: PerWindowSnapshot = {
+      revision: (current.revision ?? 0) + 1,
       epicTabs:
         "epicTabs" in patch
           ? uniquePerWindowTabs(patch.epicTabs ?? [])
@@ -1064,7 +1084,17 @@ class NullPerWindowState implements IpcPerWindowState {
           : current.canvasByTabId,
       landingDrafts,
       activeLandingDraftId,
-    });
+      tabStripLayout:
+        "tabStripLayout" in patch
+          ? (patch.tabStripLayout ?? null)
+          : current.tabStripLayout,
+      activeRoute:
+        "activeRoute" in patch
+          ? (patch.activeRoute ?? null)
+          : current.activeRoute,
+    };
+    this.snapshots.set(windowId, next);
+    return { capabilities: this.capabilities(), revision: next.revision ?? 0 };
   }
 
   clear(windowId: string): void {
