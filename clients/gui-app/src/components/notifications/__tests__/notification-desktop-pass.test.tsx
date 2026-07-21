@@ -1044,30 +1044,29 @@ describe("notification desktop-pass design corrections", () => {
       expect(onUnderlyingClick).toHaveBeenCalledTimes(0);
     });
 
-    it("closes everything in one physical outside click (pointerdown peels menu; trailing click peels popover)", async () => {
+    it("closes everything in one physical outside click (both layers dismiss on pointerdown)", async () => {
+      // Under Radix dismissable-layer 1.1.16 the nested modal menu is the only
+      // layer that receives the outside pointerdown while its lock is active.
+      // Production adaptation: the menu reports coordinates before releasing
+      // the lock; the popover closes itself immediately when those coords are
+      // truly outside the shell. One physical outside gesture still closes
+      // everything - both layers on pointerdown, not menu-then-trailing-click.
       await openCenter({ onUnderlyingClick: undefined });
       await openFilterMenu();
       const restoreShell = mockShellRect();
 
-      // Intermediate state after pointerdown alone — documents event-layer
-      // peeling within a single physical click sequence.
       fireEvent.pointerDown(document.body, OUTSIDE_SHELL_COORDS);
       await waitFor(() => {
         expect(screen.queryByTestId("notifications-filter-menu")).toBeNull();
+        expect(screen.queryByTestId("notifications-popover")).toBeNull();
       });
-      // Preferred user-visible contract is still "one physical click closes
-      // everything": the menu is gone after pointerdown, but the popover is
-      // still open until the same click's trailing events run.
-      expect(screen.getByTestId("notifications-popover")).not.toBeNull();
-      expect(useNotificationsPopoverStore.getState().open).toBe(true);
+      expect(useNotificationsPopoverStore.getState().open).toBe(false);
 
+      // Trailing events of the same physical click must not reopen anything.
       fireEvent.pointerUp(document.body, OUTSIDE_SHELL_COORDS);
       fireEvent.click(document.body, OUTSIDE_SHELL_COORDS);
       restoreShell();
-
-      await waitFor(() => {
-        expect(screen.queryByTestId("notifications-popover")).toBeNull();
-      });
+      expect(screen.queryByTestId("notifications-popover")).toBeNull();
       expect(useNotificationsPopoverStore.getState().open).toBe(false);
     });
 

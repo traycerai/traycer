@@ -110,6 +110,23 @@ export function NotificationsPopover(
   const resetFilters = useNotificationsPopoverStore(
     (state) => state.resetFilters,
   );
+  const setOpen = useNotificationsPopoverStore((state) => state.setOpen);
+  const handleFilterPointerDownOutside = useCallback(
+    (point: { readonly clientX: number; readonly clientY: number }) => {
+      const shell = shellRef.current;
+      if (shell === null) return;
+      const rect = shell.getBoundingClientRect();
+      const isInsideShell =
+        point.clientX >= rect.left &&
+        point.clientX <= rect.right &&
+        point.clientY >= rect.top &&
+        point.clientY <= rect.bottom;
+      if (!isInsideShell) {
+        setOpen(false);
+      }
+    },
+    [setOpen, shellRef],
+  );
 
   // Combined render order (Attention section, then Recent) - must match DOM
   // order exactly, since scroll anchoring measures rows by this sequence.
@@ -286,6 +303,7 @@ export function NotificationsPopover(
                 onUnreadOnlyChange={handleUnreadOnlyChange}
                 onToggleCategory={handleToggleCategory}
                 onOpenChange={onFilterMenuOpenChange}
+                onPointerDownOutside={handleFilterPointerDownOutside}
               />
               <TooltipWrapper
                 label="Mark all as read"

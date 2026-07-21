@@ -36,6 +36,12 @@ interface NotificationFilterMenuProps {
    * ref instead of re-deriving it, without controlling `open` here (see
    * below). */
   readonly onOpenChange: (open: boolean) => void;
+  /** Reports the physical pointer location before the modal menu releases
+   * its body lock, while the ancestor popover is still pointer-disabled. */
+  readonly onPointerDownOutside: (point: {
+    readonly clientX: number;
+    readonly clientY: number;
+  }) => void;
 }
 
 /**
@@ -92,6 +98,10 @@ export function NotificationFilterMenu(
         align="end"
         data-testid="notifications-filter-menu"
         className="w-52"
+        onPointerDownOutside={(event) => {
+          const { clientX, clientY } = event.detail.originalEvent;
+          props.onPointerDownOutside({ clientX, clientY });
+        }}
       >
         <DropdownMenuCheckboxItem
           checked={props.unreadOnly}
