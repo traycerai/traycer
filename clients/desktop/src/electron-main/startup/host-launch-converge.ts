@@ -1,7 +1,8 @@
 import { log } from "../app/logger";
-import type { HostRegistryUpdateState } from "../../ipc-contracts/host-management-types";
 import { refreshRegistryUpdateState } from "../ipc/host-management-ipc";
 import { isHostRemovedByUser } from "../host/host-removal-state";
+import type { HostControllerStatus } from "../host/host-controller-types";
+import type { HostActivationState } from "../host/host-state";
 import type { IpcHostController } from "../ipc/runner-ipc-bridge";
 
 // Narrowed to the one method this module actually drives - declared here
@@ -13,34 +14,58 @@ export interface HostUpdateMenuSurface {
   setHostUpdateAvailableVersion(version: string | null): void;
 }
 
-// Reflects the host update availability into the app menu's "Update host"
-// affordance. Shared by the launch probe, the periodic/resume refreshes, and
-// the launch converge reconcile below so all of them keep the menu in
-// lockstep with the cached registry state.
+const ACTIVATION_DEBT_STATES: ReadonlySet<HostActivationState> = new Set([
+  "pendingActivation",
+  "activationUnknown",
+]);
+
+// "Update to X" gates on `updateReady` OR activation debt (Renderer
+// surfaces cutover ticket, D4/D5): a ready update supersedes debt (its own
+// version is the label); debt alone labels the already-installed version,
+// since activating it is the available action - never the same intent as
+// applying a newer stage. `null` (up to date, no debt, or `activation:
+// "unavailable"` - that's the gate's domain, never a menu affordance) hides
+// the row entirely.
+export function deriveHostUpdateMenuVersion(
+  status: HostControllerStatus,
+): string | null {
+  if (status.updateReady) {
+    return status.stagedVersion;
+  }
+  if (ACTIVATION_DEBT_STATES.has(status.activation)) {
+    return status.installedVersion;
+  }
+  return null;
+}
+
+// Reflects the host update/activation-debt availability into the app menu's
+// "Update to X" affordance. Shared by the launch probe, the periodic/resume
+// refreshes, and the launch converge reconcile below so all of them keep the
+// menu in lockstep with the canonical two-lane controller status.
 export function applyHostUpdateMenuState(
   menu: HostUpdateMenuSurface,
-  state: HostRegistryUpdateState,
+  status: HostControllerStatus,
 ): void {
-  if (state.updateAvailable && state.latestVersion !== null) {
-    menu.setHostUpdateAvailableVersion(state.latestVersion);
-  } else {
-    menu.setHostUpdateAvailableVersion(null);
-  }
+  menu.setHostUpdateAvailableVersion(deriveHostUpdateMenuVersion(status));
 }
 
 // Shared by the launch probe, the periodic timer, the resume trigger, and the
 // launch converge reconcile below. `refreshRegistryUpdateState` never throws
 // and is internally serialized (`registryRefreshQueue`), so overlapping calls
 // are safe. Narrow params (not `AppServices`) so callers can exercise this
-// with lightweight fakes in a test.
+// with lightweight fakes in a test. The registry probe's own result only
+// carries version-comparison state (no activation domain), so the menu label
+// is derived from a fresh `getStatus()` read taken right after - the probe's
+// background `stageLatest()` may have just changed `stagedVersion`.
 export async function refreshHostRegistryIfNotRemoved(
   hostController: IpcHostController,
   menu: HostUpdateMenuSurface,
   opts: { readonly force: boolean; readonly maxAgeMs: number | null },
 ): Promise<void> {
   if (await isHostRemovedByUser()) return;
-  const result = await refreshRegistryUpdateState(hostController, opts);
-  applyHostUpdateMenuState(menu, result);
+  await refreshRegistryUpdateState(hostController, opts);
+  const status = await hostController.getStatus();
+  applyHostUpdateMenuState(menu, status);
 }
 
 // Launch-time boot reconcile (Fixup B1 + B2): converges any pre-existing

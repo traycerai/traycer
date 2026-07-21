@@ -165,9 +165,6 @@ interface RecordedControllerCall {
 class FakeHostController implements IpcHostController {
   readonly calls: RecordedControllerCall[] = [];
   private progressListeners = new Set<(progress: MutationProgress) => void>();
-  private progressListenersWithKind = new Set<
-    (progress: MutationProgress, kind: MutationKind) => void
-  >();
 
   installVersionResult: MutationOutcome<InstallVersionOk> = {
     kind: "ok",
@@ -332,124 +329,6 @@ class FakeHostController implements IpcHostController {
     return () => {
       this.progressListeners.delete(listener);
     };
-  }
-  onMutationProgressWithKind(
-    listener: (progress: MutationProgress, kind: MutationKind) => void,
-  ): () => void {
-    this.progressListenersWithKind.add(listener);
-    return () => {
-      this.progressListenersWithKind.delete(listener);
-    };
-  }
-  emitProgress(progress: MutationProgress, kind: MutationKind): void {
-    for (const listener of this.progressListeners) {
-      listener(progress);
-    }
-    for (const listener of this.progressListenersWithKind) {
-      listener(progress, kind);
-    }
-  }
-}
-
-// Mirrors the production controller's explicit lane identity without making
-// every IPC wiring test simulate the mutation scheduler. This lets the F9
-// test drive a same-kind launch apply and a renderer update independently.
-class AttributedFakeHostController extends FakeHostController {
-  private applyOperationId: string | null = null;
-  private attributedProgressListeners = new Set<
-    (
-      progress: MutationProgress,
-      kind: MutationKind,
-      operationId: string | null,
-    ) => void
-  >();
-  private mutationStatusListeners = new Set<
-    (status: MutationLaneStatus | null) => void
-  >();
-
-  async applyStagedForOperation(
-    trigger: ApplyStagedTrigger,
-    force: boolean,
-    operationId: string,
-  ): Promise<MutationOutcome<ApplyStagedOk>> {
-    // Preserve the identity production handed this operation. The F9 test
-    // emits its renderer-owned lane state through the helpers below, so
-    // dropping the IPC argument to null cannot be papered over by a manually
-    // supplied test literal.
-    this.applyOperationId = operationId;
-    return super.applyStaged(trigger, force);
-  }
-
-  async convergeReadyForOperation(
-    force: boolean,
-    _operationId: string,
-  ): Promise<MutationOutcome<ConvergeReadyOk>> {
-    return super.convergeReady(force);
-  }
-
-  async installVersionForOperation(
-    pin: string,
-    force: boolean,
-    _operationId: string,
-  ): Promise<MutationOutcome<InstallVersionOk>> {
-    return super.installVersion(pin, force);
-  }
-
-  async registerServiceForOperation(
-    _operationId: string,
-  ): Promise<MutationOutcome<ServiceRegistrationOk>> {
-    return super.registerService();
-  }
-
-  onMutationProgressWithKind(
-    listener: (
-      progress: MutationProgress,
-      kind: MutationKind,
-      operationId: string | null,
-    ) => void,
-  ): () => void {
-    this.attributedProgressListeners.add(listener);
-    return () => {
-      this.attributedProgressListeners.delete(listener);
-    };
-  }
-
-  onMutationStatus(
-    listener: (status: MutationLaneStatus | null) => void,
-  ): () => void {
-    this.mutationStatusListeners.add(listener);
-    return () => {
-      this.mutationStatusListeners.delete(listener);
-    };
-  }
-
-  emitAttributedProgress(
-    progress: MutationProgress,
-    kind: MutationKind,
-    operationId: string | null,
-  ): void {
-    for (const listener of this.attributedProgressListeners) {
-      listener(progress, kind, operationId);
-    }
-  }
-
-  emitMutationStatus(status: MutationLaneStatus | null): void {
-    for (const listener of this.mutationStatusListeners) {
-      listener(status);
-    }
-  }
-
-  emitCurrentApplyStatus(startedAt: string): void {
-    this.emitMutationStatus({
-      kind: "apply",
-      operationId: this.applyOperationId,
-      progress: null,
-      startedAt,
-    });
-  }
-
-  emitCurrentApplyProgress(progress: MutationProgress): void {
-    this.emitAttributedProgress(progress, "apply", this.applyOperationId);
   }
 }
 
@@ -700,12 +579,13 @@ describe("host-management IPC - CLI subprocess argv carries NO --environment (CL
     mgmt.registerHostManagementIpc(bridge as never);
     const hostController = bridge.options.hostController;
 
-    await bridge.handlers.get(RunnerHostInvoke.traycerHostInstall)!(null, {
-      version: "1.7.0",
-      operationId: "op-install",
-    });
-    await bridge.handlers.get(RunnerHostInvoke.traycerHostUpdate)!(null, {
-      operationId: "op-update",
+    await bridge.handlers.get(RunnerHostInvoke.traycerHostInstallVersion)!(
+      null,
+      { pin: "1.7.0", force: true },
+    );
+    await bridge.handlers.get(RunnerHostInvoke.traycerHostApplyStaged)!(null, {
+      trigger: "manual",
+      force: false,
     });
     await bridge.handlers.get(RunnerHostInvoke.traycerHostUninstall)!(null, {
       all: true,
@@ -715,9 +595,10 @@ describe("host-management IPC - CLI subprocess argv carries NO --environment (CL
       null,
     );
     await bridge.handlers.get(RunnerHostInvoke.traycerHostRestart)!(null, null);
-    await bridge.handlers.get(RunnerHostInvoke.traycerServiceRegister)!(null, {
-      operationId: "op-register",
-    });
+    await bridge.handlers.get(RunnerHostInvoke.traycerServiceRegister)!(
+      null,
+      null,
+    );
     await bridge.handlers.get(RunnerHostInvoke.traycerServiceDeregister)!(
       null,
       null,
@@ -812,17 +693,18 @@ describe("host-management IPC - CLI subprocess argv carries NO --environment (CL
     mgmt.registerHostManagementIpc(bridge as never);
     const hostController = bridge.options.hostController;
 
-    await bridge.handlers.get(RunnerHostInvoke.traycerHostInstall)!(null, {
-      version: "latest",
-      operationId: "op-install",
-    });
+    await bridge.handlers.get(RunnerHostInvoke.traycerHostInstallVersion)!(
+      null,
+      { pin: "latest", force: true },
+    );
     await bridge.handlers.get(RunnerHostInvoke.traycerHostUninstall)!(null, {
       all: true,
     });
     await bridge.handlers.get(RunnerHostInvoke.traycerHostRestart)!(null, null);
-    await bridge.handlers.get(RunnerHostInvoke.traycerServiceRegister)!(null, {
-      operationId: "op-register",
-    });
+    await bridge.handlers.get(RunnerHostInvoke.traycerServiceRegister)!(
+      null,
+      null,
+    );
     await bridge.handlers.get(RunnerHostInvoke.traycerServiceDeregister)!(
       null,
       null,
@@ -1039,16 +921,24 @@ describe("host-management IPC - verify-disabled normalisation for dev builds", (
   });
 });
 
-// `traycerHostEnsure` was collapsed in from the deleted `host-ensure-ipc.ts`
-// (Host Update Layer Redesign Tech Plan, "Single-writer cutover"): every
-// branch it used to hand-roll (fast reachability check, macOS SMAppService
-// registration, busy detection, readiness polling, the pending-LaunchAgent-
-// revision opportunistic refresh) now lives in `HostController.convergeReady`
-// - covered by `host-controller.test.ts`. This only pins the IPC layer's
-// re-shaping of `MutationOutcome<ConvergeReadyOk>` into the legacy
-// `HostEnsureResult` union the renderer still expects.
-describe("host-management IPC - traycerHostEnsure delegates to HostController.convergeReady", () => {
-  it("maps an ok outcome with running=true to action 'provisioned'", async () => {
+// Renderer surfaces cutover (Host Update Layer Redesign Tech Plan): the old
+// `traycerHostEnsure` handler (collapsed in from the deleted
+// `host-ensure-ipc.ts`) re-shaped `HostController.convergeReady`'s outcome
+// into a bespoke `HostEnsureResult` union (`action: "provisioned" |
+// "removed" | "host-busy"`) and rejected the invoke on a deferred/failed
+// outcome. `traycerHostConvergeReady` replaces it with a raw pass-through of
+// `MutationOutcome<ConvergeReadyOk>` - every renderer surface branches on
+// `kind` itself now, so there is no re-shaping left to pin, and "wait-never-
+// reject" means a failed/deferred outcome resolves rather than rejects. The
+// busy-outcome-triggers-a-disk-reload side effect is gone too: the old
+// mapping needed a live `version` to synthesize a plausible
+// `HostEnsureResult`; the new outcome only needs to forward `continuation`
+// and `message`, so nothing needs re-reading from disk. What every branch
+// still owned by `HostController.convergeReady` itself (reachability,
+// SMAppService registration, busy detection, readiness polling) does is
+// covered by `host-controller.test.ts`.
+describe("host-management IPC - traycerHostConvergeReady delegates to HostController.convergeReady", () => {
+  it("forwards force and returns the raw ok outcome unchanged", async () => {
     installFakeCli({ runResult: {}, streamResult: {} });
     const mgmt = await import("../host-management-ipc");
     const { RunnerHostInvoke } =
@@ -1061,13 +951,12 @@ describe("host-management IPC - traycerHostEnsure delegates to HostController.co
     };
 
     const result = await bridge.handlers.get(
-      RunnerHostInvoke.traycerHostEnsure,
-    )!(null, { operationId: "op-ensure", force: true });
+      RunnerHostInvoke.traycerHostConvergeReady,
+    )!(null, { force: true });
 
     expect(result).toEqual({
-      action: "provisioned",
-      running: true,
-      version: "1.7.0",
+      kind: "ok",
+      value: { running: true, version: "1.7.0" },
     });
     expect(bridge.options.hostController.calls).toContainEqual({
       method: "convergeReady",
@@ -1075,7 +964,7 @@ describe("host-management IPC - traycerHostEnsure delegates to HostController.co
     });
   });
 
-  it("maps an ok outcome with running=false (removed-by-user short-circuit) to action 'removed'", async () => {
+  it("defaults force to false when omitted", async () => {
     installFakeCli({ runResult: {}, streamResult: {} });
     const mgmt = await import("../host-management-ipc");
     const { RunnerHostInvoke } =
@@ -1088,17 +977,20 @@ describe("host-management IPC - traycerHostEnsure delegates to HostController.co
     };
 
     const result = await bridge.handlers.get(
-      RunnerHostInvoke.traycerHostEnsure,
+      RunnerHostInvoke.traycerHostConvergeReady,
     )!(null, null);
 
     expect(result).toEqual({
-      action: "removed",
-      running: false,
-      version: null,
+      kind: "ok",
+      value: { running: false, version: null },
+    });
+    expect(bridge.options.hostController.calls).toContainEqual({
+      method: "convergeReady",
+      args: [false],
     });
   });
 
-  it("maps a busy outcome to action 'host-busy', surfacing the reloaded snapshot's version", async () => {
+  it("forwards a busy outcome unchanged, with no disk-reload side effect", async () => {
     installFakeCli({ runResult: {}, streamResult: {} });
     const mgmt = await import("../host-management-ipc");
     const { RunnerHostInvoke } =
@@ -1112,18 +1004,18 @@ describe("host-management IPC - traycerHostEnsure delegates to HostController.co
     };
 
     const result = await bridge.handlers.get(
-      RunnerHostInvoke.traycerHostEnsure,
+      RunnerHostInvoke.traycerHostConvergeReady,
     )!(null, null);
 
     expect(result).toEqual({
-      action: "host-busy",
-      running: true,
-      version: "1.7.0",
+      kind: "busy",
+      continuation: "activate",
+      message: "host busy",
     });
-    expect(bridge.options.host.reloadSnapshotFromDisk).toHaveBeenCalled();
+    expect(bridge.options.host.reloadSnapshotFromDisk).not.toHaveBeenCalled();
   });
 
-  it("rejects the invoke on a deferred/failed outcome", async () => {
+  it("resolves (never rejects) a deferred/failed outcome", async () => {
     installFakeCli({ runResult: {}, streamResult: {} });
     const mgmt = await import("../host-management-ipc");
     const { RunnerHostInvoke } =
@@ -1135,349 +1027,41 @@ describe("host-management IPC - traycerHostEnsure delegates to HostController.co
       message: "no host installed",
     };
 
-    await expect(
-      bridge.handlers.get(RunnerHostInvoke.traycerHostEnsure)!(null, null),
-    ).rejects.toThrow(/no host installed/);
-  });
-});
+    const result = await bridge.handlers.get(
+      RunnerHostInvoke.traycerHostConvergeReady,
+    )!(null, null);
 
-// Host Update Layer Redesign Tech Plan ("Single-writer cutover") - Ticket:
-// host-update-race-conditions originally fixed the banner/Settings-→-Host
-// double-click race with an IPC-layer single-flight guard that rejected a
-// second concurrent call outright ("Another host operation (…) is already
-// in progress"). That guard is now GONE from this file entirely -
-// `HostController`'s own two-lane mutation scheduler is the single writer,
-// and it queues a concurrent submission (wait-never-reject) instead of
-// rejecting it. These tests pin the replacement contract: a second
-// concurrent call is served, not rejected, and the legacy
-// `hostOperationStatusChange` / `cliOperationProgress` broadcast still works
-// by re-emitting `HostController.onMutationProgress` ticks.
-async function waitForCallCount(
-  hostController: FakeHostController,
-  method: string,
-  count: number,
-): Promise<void> {
-  await vi.waitFor(() => {
-    if (
-      hostController.calls.filter((c) => c.method === method).length < count
-    ) {
-      throw new Error(`${method} call not reached yet`);
-    }
-  });
-}
-
-describe("host-management IPC - legacy progress broadcast over HostController's mutation lane", () => {
-  it("no longer rejects a second concurrent host update - both calls reach HostController instead of one being refused synchronously", async () => {
-    installFakeCli({ runResult: {}, streamResult: {} });
-    const mgmt = await import("../host-management-ipc");
-    mgmt.setActiveEnvironment("production");
-    const { RunnerHostInvoke } =
-      await import("../../../ipc-contracts/ipc-channels");
-    const bridge = makeBridge();
-    mgmt.registerHostManagementIpc(bridge as never);
-    const hostController = bridge.options.hostController;
-    hostController.applyStagedDeferred = true;
-    const updateHandler = bridge.handlers.get(
-      RunnerHostInvoke.traycerHostUpdate,
-    )!;
-
-    const first = updateHandler(null, { operationId: "op-first" });
-    await waitForCallCount(hostController, "applyStaged", 1);
-    const second = updateHandler(null, { operationId: "op-second" });
-    await waitForCallCount(hostController, "applyStaged", 2);
-
-    // Fixup B16: `resolveApplyStaged` now settles exactly one pending call
-    // per invocation, FIFO - mirrors HostController's real exclusive
-    // mutation lane, where the second call's own job doesn't settle until
-    // the first one's has. One call each, in submission order.
-    hostController.resolveApplyStaged({
-      kind: "ok",
-      value: { appliedVersion: "1.7.0", runningActivated: true },
-    });
-    await expect(first).resolves.toBeDefined();
-    hostController.resolveApplyStaged({
-      kind: "ok",
-      value: { appliedVersion: "1.7.0", runningActivated: true },
-    });
-    await expect(second).resolves.toBeDefined();
-    expect(
-      hostController.calls.filter((c) => c.method === "applyStaged"),
-    ).toHaveLength(2);
-  });
-
-  // Fixup B16: a second legacy-tracked call queued behind a first one on
-  // HostController's real exclusive FIFO mutation lane used to overwrite
-  // `currentOperationStatus` with its own (still-queued) identity the
-  // moment it was invoked, and its progress listener received the FIRST
-  // call's progress ticks too (both listeners are registered on the same
-  // shared `onMutationProgress` source) - mislabeling A's progress as B's.
-  // The first call's own `finally` then cleared the status to `null` while
-  // the second was still genuinely in flight.
-  it("attributes progress to the queued-first call and doesn't clear status early when a second legacy call is still in flight", async () => {
-    installFakeCli({ runResult: {}, streamResult: {} });
-    const mgmt = await import("../host-management-ipc");
-    mgmt.setActiveEnvironment("production");
-    const { RunnerHostEvent, RunnerHostInvoke } =
-      await import("../../../ipc-contracts/ipc-channels");
-    const bridge = makeBridge();
-    mgmt.registerHostManagementIpc(bridge as never);
-    const hostController = bridge.options.hostController;
-    hostController.applyStagedDeferred = true;
-    const updateHandler = bridge.handlers.get(
-      RunnerHostInvoke.traycerHostUpdate,
-    )!;
-
-    const first = updateHandler(null, { operationId: "op-A" });
-    await waitForCallCount(hostController, "applyStaged", 1);
-    const second = updateHandler(null, { operationId: "op-B" });
-    await waitForCallCount(hostController, "applyStaged", 2);
-
-    // A progress tick while both are queued must be attributed to A - it's
-    // the one HostController's real lane is actually running (mirrored
-    // here by resolving strictly in submission order below).
-    hostController.emitProgress(
-      {
-        stage: "download",
-        percent: 40,
-        bytes: 40,
-        totalBytes: 100,
-        message: "downloading",
-      },
-      "apply",
-    );
-    const progressCalls = () =>
-      bridge.fanOut.mock.calls.filter(
-        ([channel]) => channel === RunnerHostEvent.cliOperationProgress,
-      );
-    // The shared controller emitter has two registered legacy calls here,
-    // but exactly one front-of-lane legacy update may publish A's progress.
-    expect(progressCalls()).toHaveLength(1);
-    expect(progressCalls()[0]?.[1]).toMatchObject({ operationId: "op-A" });
-    expect(mgmt.getHostOperationStatus()).toMatchObject({
-      operationId: "op-A",
-      percent: 40,
-    });
-
-    // A non-legacy mutation must not be attributed to the queued legacy
-    // update merely because the legacy listener is currently registered.
-    hostController.emitProgress(
-      {
-        stage: "activate",
-        percent: null,
-        bytes: null,
-        totalBytes: null,
-        message: "non-legacy respawn",
-      },
-      "respawn",
-    );
-    expect(progressCalls()).toHaveLength(1);
-
-    // A settles first - B is still legitimately in flight, so status must
-    // hand off to B's identity, never drop to null.
-    hostController.resolveApplyStaged({
-      kind: "ok",
-      value: { appliedVersion: "1.7.0", runningActivated: true },
-    });
-    await first;
-    expect(mgmt.getHostOperationStatus()).toMatchObject({
-      operationId: "op-B",
-    });
-
-    hostController.resolveApplyStaged({
-      kind: "ok",
-      value: { appliedVersion: "1.7.0", runningActivated: true },
-    });
-    await second;
-    expect(mgmt.getHostOperationStatus()).toBeNull();
-  });
-
-  it("F9: ignores same-kind progress from a non-legacy lane operation until the renderer update owns the lane", async () => {
-    installFakeCli({ runResult: {}, streamResult: {} });
-    const mgmt = await import("../host-management-ipc");
-    mgmt.setActiveEnvironment("production");
-    const { RunnerHostEvent, RunnerHostInvoke } =
-      await import("../../../ipc-contracts/ipc-channels");
-    const hostController = new AttributedFakeHostController();
-    hostController.applyStagedDeferred = true;
-    const bridge = makeBridgeWithHostController(hostController);
-    mgmt.registerHostManagementIpc(bridge as never);
-    const updateHandler = bridge.handlers.get(
-      RunnerHostInvoke.traycerHostUpdate,
-    )!;
-
-    const update = updateHandler(null, { operationId: "renderer-update" });
-    await waitForCallCount(hostController, "applyStaged", 1);
-
-    // A launch apply has the same MutationKind as a renderer update, but it
-    // carries no renderer operation identity. It must not light up the
-    // renderer's update progress or status just because a legacy update is
-    // waiting behind it.
-    hostController.emitMutationStatus({
-      kind: "apply",
-      operationId: null,
-      progress: null,
-      startedAt: "2026-01-01T00:00:00.000Z",
-    });
-    hostController.emitAttributedProgress(
-      {
-        stage: "apply",
-        percent: 20,
-        bytes: 20,
-        totalBytes: 100,
-        message: "launch apply",
-      },
-      "apply",
-      null,
-    );
-    const progressCalls = () =>
-      bridge.fanOut.mock.calls.filter(
-        ([channel]) => channel === RunnerHostEvent.cliOperationProgress,
-      );
-    expect(progressCalls()).toHaveLength(0);
-    expect(mgmt.getHostOperationStatus()).toBeNull();
-
-    hostController.emitCurrentApplyStatus("2026-01-01T00:00:01.000Z");
-    hostController.emitCurrentApplyProgress({
-      stage: "apply",
-      percent: 70,
-      bytes: 70,
-      totalBytes: 100,
-      message: "renderer apply",
-    });
-    expect(progressCalls()).toHaveLength(1);
-    expect(progressCalls()[0]?.[1]).toMatchObject({
-      operationId: "renderer-update",
-      percent: 70,
-    });
-    expect(mgmt.getHostOperationStatus()).toMatchObject({
-      operationId: "renderer-update",
-      percent: 70,
-    });
-
-    hostController.resolveApplyStaged({
-      kind: "ok",
-      value: { appliedVersion: "1.7.0", runningActivated: true },
-    });
-    await update;
-  });
-
-  it("broadcasts hostOperationStatusChange on start, re-broadcasts HostController's progress ticks, and clears status to null on settle", async () => {
-    installFakeCli({ runResult: {}, streamResult: {} });
-    const mgmt = await import("../host-management-ipc");
-    mgmt.setActiveEnvironment("production");
-    const { RunnerHostInvoke, RunnerHostEvent } =
-      await import("../../../ipc-contracts/ipc-channels");
-    const bridge = makeBridge();
-    mgmt.registerHostManagementIpc(bridge as never);
-    const hostController = bridge.options.hostController;
-    hostController.applyStagedDeferred = true;
-
-    const updatePromise = bridge.handlers.get(
-      RunnerHostInvoke.traycerHostUpdate,
-    )!(null, { operationId: "op-update" });
-    await waitForCallCount(hostController, "applyStaged", 1);
-
-    const statusCalls = () =>
-      bridge.fanOut.mock.calls.filter(
-        ([channel]) => channel === RunnerHostEvent.hostOperationStatusChange,
-      );
-    expect(statusCalls()[0]?.[1]).toMatchObject({
-      kind: "update",
-      percent: null,
-    });
-    expect(mgmt.getHostOperationStatus()).toMatchObject({ kind: "update" });
-
-    hostController.emitProgress(
-      {
-        stage: "download",
-        percent: 50,
-        bytes: 50,
-        totalBytes: 100,
-        message: "downloading",
-      },
-      "apply",
-    );
-    hostController.resolveApplyStaged({
-      kind: "ok",
-      value: { appliedVersion: "1.7.0", runningActivated: true },
-    });
-    await updatePromise;
-
-    const afterSettle = statusCalls();
-    const progressCall = afterSettle.find(
-      ([, payload]) =>
-        payload !== null &&
-        typeof payload === "object" &&
-        (payload as { percent: number | null }).percent === 50,
-    );
-    expect(progressCall).toBeDefined();
-    expect(afterSettle[afterSettle.length - 1]?.[1]).toBeNull();
-    expect(mgmt.getHostOperationStatus()).toBeNull();
-  });
-
-  it("a failed operation still clears the status so a retry isn't permanently blocked", async () => {
-    installFakeCli({ runResult: {}, streamResult: {} });
-    const mgmt = await import("../host-management-ipc");
-    mgmt.setActiveEnvironment("production");
-    const { RunnerHostInvoke } =
-      await import("../../../ipc-contracts/ipc-channels");
-    const bridge = makeBridge();
-    mgmt.registerHostManagementIpc(bridge as never);
-    const hostController = bridge.options.hostController;
-    hostController.applyStagedDeferred = true;
-
-    const updatePromise = bridge.handlers.get(
-      RunnerHostInvoke.traycerHostUpdate,
-    )!(null, { operationId: "op-update" });
-    await waitForCallCount(hostController, "applyStaged", 1);
-    hostController.resolveApplyStaged({
+    expect(result).toEqual({
       kind: "failed",
-      message: "network unreachable",
+      message: "no host installed",
     });
-    await expect(updatePromise).rejects.toThrow(/network unreachable/);
-    expect(mgmt.getHostOperationStatus()).toBeNull();
-
-    // A subsequent attempt is served normally - the failed op left no wedge.
-    hostController.applyStagedResult = {
-      kind: "ok",
-      value: { appliedVersion: "1.7.0", runningActivated: true },
-    };
-    hostController.applyStagedDeferred = false;
-    const retry = bridge.handlers.get(RunnerHostInvoke.traycerHostUpdate)!(
-      null,
-      { operationId: "op-retry" },
-    );
-    await expect(retry).resolves.toBeDefined();
-    expect(mgmt.getHostOperationStatus()).toBeNull();
-  });
-
-  it("traycerHostOperationStatusGet reflects the in-flight operation for a component that mounts mid-operation", async () => {
-    installFakeCli({ runResult: {}, streamResult: {} });
-    const mgmt = await import("../host-management-ipc");
-    mgmt.setActiveEnvironment("production");
-    const { RunnerHostInvoke } =
-      await import("../../../ipc-contracts/ipc-channels");
-    const bridge = makeBridge();
-    mgmt.registerHostManagementIpc(bridge as never);
-    const hostController = bridge.options.hostController;
-    hostController.applyStagedDeferred = true;
-
-    const statusHandler = bridge.handlers.get(
-      RunnerHostInvoke.traycerHostOperationStatusGet,
-    )!;
-    expect(await statusHandler(null, null)).toBeNull();
-
-    const updatePromise = bridge.handlers.get(
-      RunnerHostInvoke.traycerHostUpdate,
-    )!(null, { operationId: "op-update" });
-    await waitForCallCount(hostController, "applyStaged", 1);
-    expect(await statusHandler(null, null)).toMatchObject({ kind: "update" });
-
-    hostController.resolveApplyStaged({
-      kind: "ok",
-      value: { appliedVersion: "1.7.0", runningActivated: true },
-    });
-    await updatePromise;
-    expect(await statusHandler(null, null)).toBeNull();
   });
 });
+
+// Renderer surfaces cutover (Host Update Layer Redesign Tech Plan): this
+// whole describe block ("legacy progress broadcast over HostController's
+// mutation lane") pinned the caller-supplied-`operationId` attribution layer
+// - `cliOperationProgress`/`hostOperationStatusChange` events,
+// `getHostOperationStatus()`/`traycerHostOperationStatusGet`, and the
+// `*ForOperation` fake-controller overloads that carried a renderer-chosen id
+// through to progress ticks. None of it exists in production
+// `host-management-ipc.ts` anymore (`registerHostManagementIpc` no longer
+// registers those channels or exports `getHostOperationStatus`) - it's
+// superseded by `host-controller-status-broadcast.ts`, which pushes the
+// single canonical `HostControllerStatus.mutation` value (no caller-supplied
+// id) to every window.
+//
+// The "attribution" problem these tests solved (which of several concurrent
+// legacy calls does a progress tick belong to?) does not exist in the new
+// model: `HostController`'s mutation lane is exclusive - there is only ever
+// one lane-owning operation, so there is nothing to attribute between. That
+// exclusivity, and "a second concurrent submission is served (FIFO), never
+// rejected," are pinned at the source in `host-controller.test.ts` (see "two
+// concurrent applyStaged submissions both resolve - no 'Another host
+// operation' rejection" and the "P10: ... coalesce" cluster). "Status clears
+// so a retry isn't blocked" is structural in the new design too: the
+// broadcaster always re-reads `hostController.getStatus()` fresh, so a
+// settled/failed mutation is reflected as `mutation: null` on the very next
+// tick, with no separate clear-up step that could leave a wedge.
+// `host-controller-status-broadcast.test.ts` covers the broadcaster's own
+// push/poll behavior directly.

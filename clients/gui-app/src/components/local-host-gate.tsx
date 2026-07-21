@@ -12,10 +12,11 @@ import { useQueryClient } from "@tanstack/react-query";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type {
   BootstrapMarkerEntry,
-  HostEnsureResult,
-  HostProgressEvent,
+  ConvergeReadyOk,
   IRunnerHost,
   LocalHostSnapshot,
+  MutationOutcome,
+  MutationProgress,
 } from "@traycer-clients/shared/platform/runner-host";
 import { Button } from "@/components/ui/button";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
@@ -25,7 +26,8 @@ import { AppHeader } from "@/components/layout/header/app-header";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useRunnerRequestHostRespawn } from "@/hooks/runner/use-runner-request-host-respawn-mutation";
-import { useRunnerEnsureHost } from "@/hooks/runner/use-runner-ensure-host-mutation";
+import { useRunnerConvergeReady } from "@/hooks/runner/use-runner-converge-ready-mutation";
+import { useRunnerHostControllerStatusQuery } from "@/hooks/runner/use-runner-host-controller-status-query";
 import { useRunnerHostRemovalStateQuery } from "@/hooks/runner/use-runner-host-removal-state-query";
 import { useRunnerTraycerHostStatusQuery } from "@/hooks/runner/use-runner-traycer-host-status-query";
 import {
@@ -44,21 +46,24 @@ import {
 
 type HostSetupReason = "launch" | "recovery" | "reinstall" | "update";
 
-// Best-effort setup telemetry around the `ensureHost` mutation. Emitted from
-// mutation events, never renders. `host-busy`/`removed` results are neither
-// success nor failure - the user resolves them through their own surfaces.
+// Best-effort setup telemetry around the `convergeReady` mutation. Emitted
+// from mutation events, never renders. The mutation hook already rejects
+// non-"ok"/"busy" outcomes (see `useRunnerConvergeReady`), so `onSuccess`
+// here only ever sees those two kinds - a `"busy"` outcome, or an `"ok"`
+// outcome with `running: false` (removed-by-user short-circuit), is neither
+// success nor failure; the user resolves it through its own surface.
 function hostSetupAnalyticsCallbacks(
   reason: HostSetupReason,
-  onSuccess: (result: HostEnsureResult) => void,
+  onSuccess: (result: MutationOutcome<ConvergeReadyOk>) => void,
 ): {
-  readonly onSuccess: (result: HostEnsureResult) => void;
+  readonly onSuccess: (result: MutationOutcome<ConvergeReadyOk>) => void;
   readonly onError: (error: unknown) => void;
 } {
   Analytics.getInstance().track(AnalyticsEvent.HostSetupStarted, { reason });
   return {
     onSuccess: (result) => {
       onSuccess(result);
-      if (result.action !== "host-busy" && result.action !== "removed") {
+      if (result.kind === "ok" && result.value.running) {
         Analytics.getInstance().track(AnalyticsEvent.HostSetupSucceeded, {
           reason,
         });
@@ -362,49 +367,55 @@ function computeGateEligibility(args: {
 }
 
 interface ProvisioningLoadingProps {
-  readonly progress: HostProgressEvent | null;
+  readonly progress: MutationProgress | null;
 }
 
 interface HostProvisioning {
   readonly isProvisioning: boolean;
   readonly error: Error | null;
-  readonly progress: HostProgressEvent | null;
-  // True once `ensureHost` returned `action: "host-busy"`: the CLI kept a
+  readonly progress: MutationProgress | null;
+  // True once `convergeReady` returned a `"busy"` outcome: the CLI kept a
   // running host that has work in progress, and the desktop surfaced it for
   // the renderer's compat probe.
   readonly hostBusy: boolean;
-  // True once `ensureHost` returned `action: "removed"`: the user removed
-  // Traycer's background components on this device, so the desktop refused to
+  // True once `convergeReady` returned `{kind: "ok", value: {running: false}}`
+  // (the removed-by-user short-circuit): the user removed Traycer's
+  // background components on this device, so the desktop refused to
   // reinstall. The gate shows the removed surface instead of spinning.
   readonly removed: boolean;
   readonly canManageHost: boolean;
   readonly retry: () => void;
-  // Forced update: re-run ensure with `force`, skipping the busy check, to
-  // reinstall + restart onto this build (can end in-progress work).
+  // Forced update: re-run convergeReady with `force`, skipping the busy
+  // check, to reinstall + restart onto this build (can end in-progress work).
   readonly force: () => void;
   // Reinstall escape hatch from the removed surface: clear the removal
-  // sentinel, then re-run ensure to provision the host again.
+  // sentinel, then re-run convergeReady to provision the host again.
   readonly reinstall: () => void;
 }
 
-// Fires `ensureHost` once per session when a signed-in local-host shell
+// Fires `convergeReady` once per session when a signed-in local-host shell
 // has no reachable host, and exposes manual `retry` / `force`. A `useRef`
-// guard keeps a transient Ready → not-ready disconnect from re-triggering an
-// install (that case routes to the existing slow/respawn path instead).
+// guard keeps a transient Ready → not-ready disconnect from re-triggering a
+// converge (that case routes to the existing slow/respawn path instead).
 function useHostProvisioning(args: {
   readonly enabled: boolean;
   readonly isReady: boolean;
 }): HostProvisioning {
   const runnerHost = useRunnerHost();
   const queryClient = useQueryClient();
-  const ensure = useRunnerEnsureHost();
+  const convergeReady = useRunnerConvergeReady();
+  // Live boot-time progress is sourced from the shared two-lane status push
+  // (`HostControllerStatusListener`), not a per-call callback - the mutation
+  // lane's `kind` tags which intent is in flight, so this stays indifferent
+  // to any concurrent download-lane activity by construction (it only ever
+  // reads `mutation`, never `download`).
+  const statusQuery = useRunnerHostControllerStatusQuery();
   const attemptedRef = useRef(false);
-  const [progress, setProgress] = useState<HostProgressEvent | null>(null);
   const [inBusyKeepFlow, setInBusyKeepFlow] = useState(false);
   const [removed, setRemoved] = useState(false);
   const canProvision = args.enabled && runnerHost.hostManagement !== null;
   const hasManagement = runnerHost.hostManagement !== null;
-  const { mutate, reset } = ensure;
+  const { mutate, reset } = convergeReady;
 
   // Kept in sync so the stable `markBusyKeep` callback below can read the
   // latest management instance without widening its dependency array (see
@@ -416,51 +427,50 @@ function useHostProvisioning(args: {
 
   // Latch the busy-keep flow from the settled mutation RESULT (a mutation
   // event, not a render effect or a ref read), so it survives the surfaced
-  // host flipping `isReady` true and survives Retry/forced update `reset()` (which
-  // clears `ensure.data`). A `host-busy` result enters the flow; any other
-  // success exits it. An ERROR deliberately leaves the latch untouched: a
-  // failed Retry/forced update must keep us in the busy flow (so we never fall through
-  // to rendering children against the still-unprobed busy host), and a failed
-  // initial provision leaves the latch at its `false` default (normal error
-  // path). Stable handler keeps the provision effect from re-running.
+  // host flipping `isReady` true and survives Retry/forced update `reset()`
+  // (which clears `convergeReady.data`). A `"busy"` outcome enters the flow;
+  // any other success exits it. An ERROR deliberately leaves the latch
+  // untouched: a failed Retry/forced update must keep us in the busy flow (so
+  // we never fall through to rendering children against the still-unprobed
+  // busy host), and a failed initial provision leaves the latch at its
+  // `false` default (normal error path). Stable handler keeps the provision
+  // effect from re-running.
   const markBusyKeep = useCallback(
-    (result: HostEnsureResult): void => {
-      setInBusyKeepFlow(result.action === "host-busy");
-      // The desktop refused to reinstall a user-removed host; latch the removed
-      // surface. Any other settled result (provisioned/already-ready after a
-      // reinstall) clears it.
-      setRemoved(result.action === "removed");
-      // `ensureHost`'s own removal check is the freshest possible truth, so
-      // write it straight into the removal-state query cache too - a
+    (result: MutationOutcome<ConvergeReadyOk>): void => {
+      setInBusyKeepFlow(result.kind === "busy");
+      // The desktop refused to reinstall a user-removed host; latch the
+      // removed surface. Any other settled result (an `"ok"` outcome with
+      // `running: true`, after a reinstall) clears it.
+      const isRemovedOutcome = result.kind === "ok" && !result.value.running;
+      setRemoved(isRemovedOutcome);
+      // `convergeReady`'s own removal check is the freshest possible truth,
+      // so write it straight into the removal-state query cache too - a
       // response-equals-state cache write (not a guess) that keeps the
       // direct removal-sentinel query (below) from re-asserting a stale
       // `true` it fetched before this settle.
       const management = hostManagementRef.current;
       if (management !== null) {
         queryClient.setQueryData(runnerQueryKeys.hostRemovalState(management), {
-          removedByUser: result.action === "removed",
+          removedByUser: isRemovedOutcome,
         });
       }
     },
     [queryClient],
   );
 
-  // Retry/forced update: clear any prior error/progress, then re-run ensure. Only
-  // `onSuccess` transitions the busy-keep latch; an error leaves it untouched
-  // (see markBusyKeep).
+  // Retry/forced update: clear any prior error, then re-run convergeReady.
+  // Only `onSuccess` transitions the busy-keep latch; an error leaves it
+  // untouched (see markBusyKeep).
   const run = (force: boolean, reason: HostSetupReason): void => {
     reset();
-    setProgress(null);
-    mutate(
-      { force, onProgress: (event) => setProgress(event) },
-      hostSetupAnalyticsCallbacks(reason, markBusyKeep),
-    );
+    mutate({ force }, hostSetupAnalyticsCallbacks(reason, markBusyKeep));
   };
 
   // Reinstall from the removed surface: clear the persisted removal sentinel
-  // (so the desktop's ensure stops short-circuiting to `removed`), then re-run
-  // a normal ensure. Optimistically drop the removed latch so the surface
-  // flips to the provisioning spinner immediately.
+  // (so the desktop's convergeReady stops short-circuiting to the removed
+  // outcome), then re-run a normal convergeReady. Optimistically drop the
+  // removed latch so the surface flips to the provisioning spinner
+  // immediately.
   const reinstall = (): void => {
     const management = runnerHost.hostManagement;
     if (management === null) return;
@@ -475,9 +485,10 @@ function useHostProvisioning(args: {
     void management.clearRemoval().then(
       () => run(false, "reinstall"),
       () => {
-        // The sentinel couldn't be cleared, so ensure would just short-circuit
-        // back to `removed`. Restore the removed surface instead of flashing a
-        // spinner through a wasted round-trip; the user can retry Reinstall.
+        // The sentinel couldn't be cleared, so convergeReady would just
+        // short-circuit back to the removed outcome. Restore the removed
+        // surface instead of flashing a spinner through a wasted round-trip;
+        // the user can retry Reinstall.
         setRemoved(true);
         queryClient.setQueryData(runnerQueryKeys.hostRemovalState(management), {
           removedByUser: true,
@@ -492,12 +503,12 @@ function useHostProvisioning(args: {
     }
     attemptedRef.current = true;
     mutate(
-      { force: false, onProgress: (event) => setProgress(event) },
+      { force: false },
       hostSetupAnalyticsCallbacks("launch", markBusyKeep),
     );
   }, [canProvision, args.isReady, mutate, markBusyKeep]);
 
-  // Direct removal-sentinel check, independent of the one-shot `ensureHost`
+  // Direct removal-sentinel check, independent of the one-shot `convergeReady`
   // effect above. That effect never re-fires once `attemptedRef` is set -
   // typically right after the very first sign-in, long before the user ever
   // visits Settings -> Danger Zone - so it cannot notice a removal that
@@ -512,16 +523,22 @@ function useHostProvisioning(args: {
   });
   const isRemoved = removed || removalState.data?.removedByUser === true;
 
+  const mutationLane = statusQuery.data?.mutation ?? null;
+  const progress =
+    convergeReady.isPending && mutationLane?.kind === "ensure"
+      ? mutationLane.progress
+      : null;
+
   return {
     // Report provisioning/error whenever this shell manages the host - NOT
     // gated on `canProvision`, which collapses to false the instant a busy
     // host is surfaced (its snapshot flips `isReady` true). Gating on
-    // `canProvision` would hide Retry/forced update progress and swallow their
-    // errors. `ensure.isPending`/`ensure.error` are only meaningful after a
-    // mutation that already required management, so `hasManagement` is the
-    // correct gate.
-    isProvisioning: hasManagement && ensure.isPending,
-    error: hasManagement ? ensure.error : null,
+    // `canProvision` would hide Retry/forced update progress and swallow
+    // their errors. `convergeReady.isPending`/`.error` are only meaningful
+    // after a mutation that already required management, so `hasManagement`
+    // is the correct gate.
+    isProvisioning: hasManagement && convergeReady.isPending,
+    error: hasManagement ? convergeReady.error : null,
     progress,
     hostBusy: hasManagement && inBusyKeepFlow,
     removed: hasManagement && isRemoved,

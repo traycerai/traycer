@@ -916,6 +916,121 @@ export interface HostRegistryUpdateState {
   readonly errorMessage: string | null;
 }
 
+/**
+ * Renderer-facing mirror of `HostController`'s canonical two-lane status
+ * (Host Update Layer Redesign Tech Plan, "Desktop main: HostController" >
+ * "Canonical status"). Source of truth is
+ * `clients/desktop/src/electron-main/host/host-controller-types.ts`; this is
+ * the renderer-safe copy, following the same duplication pattern as every
+ * other host-management type in this file (mirrors the NDJSON/controller
+ * shape so `gui-app` never imports across the desktop-main boundary).
+ */
+export interface MutationProgress {
+  readonly stage: string | null;
+  readonly percent: number | null;
+  readonly bytes: number | null;
+  readonly totalBytes: number | null;
+  readonly message: string | null;
+}
+
+export type MutationKind =
+  | "ensure"
+  | "apply"
+  | "activate"
+  | "install"
+  | "register"
+  | "deregister"
+  | "respawn"
+  | "recoverIfDown"
+  | "freePortAndRestart"
+  | "restart"
+  | "uninstallHost"
+  | "removeTraycer";
+
+export interface MutationLaneStatus {
+  readonly kind: MutationKind;
+  readonly operationId: string | null;
+  readonly progress: MutationProgress | null;
+  readonly startedAt: string;
+}
+
+export interface DownloadProgress {
+  readonly percent: number | null;
+  readonly bytes: number | null;
+  readonly totalBytes: number | null;
+}
+
+export interface DownloadLaneStatus {
+  readonly version: string;
+  readonly progress: DownloadProgress | null;
+  readonly lastError: string | null;
+}
+
+export type HostActivationState =
+  "activated" | "pendingActivation" | "activationUnknown" | "unavailable";
+
+export interface HostControllerStatus {
+  readonly download: DownloadLaneStatus | null;
+  readonly mutation: MutationLaneStatus | null;
+  readonly installedVersion: string | null;
+  readonly latestVersion: string | null;
+  readonly stagedVersion: string | null;
+  readonly installedRuntimeVersion: string | null;
+  readonly runningRuntimeVersion: string | null;
+  readonly updateReady: boolean;
+  readonly activation: HostActivationState;
+  readonly reachable: boolean;
+  readonly removedByUser: boolean;
+  readonly checkedAt: string;
+}
+
+// Pre-commit busy (CLI-owned apply/pin refused before the stop):
+// `"retry-with-force"` - Force re-submits the same intent with `force`.
+// Post-commit busy (packaged macOS, bytes already committed):
+// `"activate"` - Force submits `activateInstalled{force}`, never a retry
+// of the consumed apply/pin.
+export type BusyContinuation = "retry-with-force" | "activate";
+
+// Per-intent result. Every mutation intent resolves ONE of these - the
+// lane itself never rejects ("wait-never-reject"); a busy/deferred/failed
+// outcome is a normal resolved value the calling surface renders.
+export type MutationOutcome<TOk> =
+  | { readonly kind: "ok"; readonly value: TOk }
+  | {
+      readonly kind: "busy";
+      readonly continuation: BusyContinuation;
+      readonly message: string;
+    }
+  | { readonly kind: "deferred"; readonly message: string }
+  | { readonly kind: "stage-fingerprint-mismatch"; readonly message: string }
+  | { readonly kind: "installed-not-converged"; readonly message: string }
+  | { readonly kind: "failed"; readonly message: string };
+
+export interface ConvergeReadyOk {
+  readonly running: boolean;
+  readonly version: string | null;
+}
+
+export interface ApplyStagedOk {
+  readonly appliedVersion: string;
+  readonly runningActivated: boolean;
+}
+
+export interface ActivateInstalledOk {
+  readonly activated: boolean;
+}
+
+export interface InstallVersionOk {
+  readonly installedVersion: string;
+  readonly runningActivated: boolean;
+}
+
+export interface ServiceRegistrationOk {
+  readonly registered: boolean;
+}
+
+export type ApplyStagedTrigger = "launch" | "manual";
+
 export interface HostUninstallResult {
   readonly removedInstallDir: boolean;
   readonly deregisteredService: boolean;
@@ -995,13 +1110,42 @@ export interface CliInstallManifestSnapshot {
  * for every NDJSON `progress` event the CLI emits along the way.
  */
 export interface IHostManagement {
-  readonly installHost: (input: {
-    readonly version: string | null;
-    readonly onProgress: ((event: HostProgressEvent) => void) | null;
-  }) => Promise<HostInstallResult>;
-  readonly updateHost: (input: {
-    readonly onProgress: ((event: HostProgressEvent) => void) | null;
-  }) => Promise<HostInstallResult>;
+  // Two-lane canonical status (Host Update Layer Redesign Tech Plan). Read
+  // once on mount to prime the shared query cache; live updates arrive via
+  // the desktop-only `hostControllerStatus` push bridge (see
+  // `HostControllerStatusListener`) - the mutation lane pushes on every
+  // progress/status change, the download lane is polled internally by the
+  // desktop main process (it has no live subscription in `HostController`
+  // itself; see `host-controller-status-broadcast.ts`).
+  readonly getHostControllerStatus: () => Promise<HostControllerStatus>;
+  // Idempotently converges the host to reachable (post-auth provisioning,
+  // manual retry, Force restart). `force` skips the busy check.
+  readonly convergeReady: (
+    force: boolean,
+  ) => Promise<MutationOutcome<ConvergeReadyOk>>;
+  // Applies the currently-staged version. `trigger` distinguishes a
+  // boot-time/idle-gated apply from a manual (banner/menu) click - both
+  // resolve the same `MutationOutcome`, but the caller's UI treats a busy
+  // outcome differently (gate progress vs. Force/Defer dialog).
+  readonly applyStaged: (
+    trigger: ApplyStagedTrigger,
+    force: boolean,
+  ) => Promise<MutationOutcome<ApplyStagedOk>>;
+  // Activates an already-installed-but-not-running-activated record
+  // (packaged-macOS post-commit activation, or clearing
+  // pendingActivation/activationUnknown debt). `force` is the Force
+  // continuation after a busy `applyStaged`/pin outcome that carried
+  // `continuation: "activate"`.
+  readonly activateInstalled: (
+    force: boolean,
+  ) => Promise<MutationOutcome<ActivateInstalledOk>>;
+  // Pins an explicit version (incl. downgrades), bypassing the staged
+  // update. `force` is the Force continuation after a busy outcome that
+  // carried `continuation: "retry-with-force"`.
+  readonly installVersion: (
+    pin: string,
+    force: boolean,
+  ) => Promise<MutationOutcome<InstallVersionOk>>;
   readonly uninstallHost: (input: {
     readonly all: boolean;
   }) => Promise<HostUninstallResult>;
@@ -1024,28 +1168,19 @@ export interface IHostManagement {
     input: HostAvailableVersionsInput,
   ) => Promise<HostAvailableSnapshot>;
   readonly installedRecord: () => Promise<HostInstalledRecord | null>;
-  readonly registerService: (input: {
-    readonly onProgress: ((event: HostProgressEvent) => void) | null;
-  }) => Promise<void>;
-  // Post-auth provisioning: idempotently ensure the host is installed,
-  // registered, and running. The desktop delegates the whole lifecycle to
-  // the CLI (`traycer host ensure`) and streams progress; a fast no-op
-  // when the persistent host is already reachable.
-  readonly ensureHost: (input: {
-    readonly onProgress: ((event: HostProgressEvent) => void) | null;
-    // `true` = the desktop "Force restart" (skip the busy check and restart a
-    // running host unconditionally). Normal/Retry ensures pass `false`.
-    readonly force: boolean;
-  }) => Promise<HostEnsureResult>;
+  readonly registerService: () => Promise<
+    MutationOutcome<ServiceRegistrationOk>
+  >;
   readonly deregisterService: () => Promise<void>;
+  // Forces (or, on cache hit, reuses) a network registry probe -
+  // "Check now"/"Retry" on Settings → Host's Updates row. Distinct from
+  // `getHostControllerStatus`: this hits the network and reports
+  // probe-specific reachability/error state; it does not gate any
+  // surface's visibility (that's `HostControllerStatus.updateReady` /
+  // `.activation` now - "quiet until ready", Tech Plan D5).
   readonly registryCheck: (input: {
     readonly force: boolean;
   }) => Promise<HostRegistryUpdateState>;
-  // Current cross-surface host operation status (or `null` when idle), read
-  // once on mount to prime the shared query cache; live updates arrive via
-  // the desktop-only `hostOperationStatus` push bridge (see
-  // `HostOperationStatusListener`).
-  readonly getOperationStatus: () => Promise<HostOperationStatus | null>;
   readonly freePortAndRestart: (
     input: FreePortAndRestartInput,
   ) => Promise<FreePortAndRestartInput>;

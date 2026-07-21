@@ -28,10 +28,10 @@ import {
 } from "../host/host-controller";
 import { getHostFsLayout, labelForEnvironment } from "../host/host-paths";
 import {
-  onHostRegistryUpdateStateChange,
   refreshRegistryUpdateState,
   setActiveEnvironment,
 } from "../ipc/host-management-ipc";
+import { onHostControllerStatusBroadcast } from "../ipc/host-controller-status-broadcast";
 import {
   QUIT_HOST_MUTATION_DRAIN_TIMEOUT_MS,
   runUpdateInstallQuitSequence,
@@ -639,11 +639,14 @@ let lastHostRegistryResumeCheckMs = 0;
 // the startup composition test drive the entry point with a focused fake.
 function runDeferredBackground(state: BootState, services: AppServices): void {
   startRendererMemorySampler();
-  state.bridge?.disposeFns.push(
-    onHostRegistryUpdateStateChange((result) => {
-      applyHostUpdateMenuState(services.menu, result);
-    }),
-  );
+  if (state.bridge !== null) {
+    const bridge = state.bridge;
+    bridge.disposeFns.push(
+      onHostControllerStatusBroadcast(bridge, (status) => {
+        applyHostUpdateMenuState(services.menu, status);
+      }),
+    );
+  }
 
   // Captured (not just fire-and-forget) so the host auto-update idle gate can
   // wait for discovery to settle before trusting the host snapshot - `timed`
@@ -709,7 +712,12 @@ function runDeferredBackground(state: BootState, services: AppServices): void {
       force: true,
       maxAgeMs: null,
     });
-    applyHostUpdateMenuState(services.menu, result);
+    // The registry probe's own result only carries version-comparison state
+    // (no activation domain) - the menu label is derived from a fresh
+    // `getStatus()` read taken right after, since the probe's background
+    // `stageLatest()` may have just changed `stagedVersion`.
+    const status = await services.hostController.getStatus();
+    applyHostUpdateMenuState(services.menu, status);
     log.debug("[host-registry] launch probe complete", {
       reachable: result.reachable,
       latestVersion: result.latestVersion,

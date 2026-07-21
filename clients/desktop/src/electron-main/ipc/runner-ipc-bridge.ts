@@ -51,6 +51,7 @@ import { registerOwnershipIpc } from "./ownership-ipc";
 import { registerPerWindowStateIpc } from "./per-window-state-ipc";
 import { registerHostIpc } from "./host-ipc";
 import { registerHostManagementIpc } from "./host-management-ipc";
+import { registerHostControllerStatusBroadcast } from "./host-controller-status-broadcast";
 import { registerMigrationIpc } from "./migration-ipc";
 import { registerSupportIpc } from "./support-ipc";
 import { registerTraycerCliIpc } from "./traycer-cli-ipc";
@@ -398,6 +399,7 @@ export class RunnerIpcBridge {
     registerSupportIpc(this);
     registerHostIpc(this);
     registerHostManagementIpc(this);
+    registerHostControllerStatusBroadcast(this);
     registerMigrationIpc(this);
     registerTraycerCliIpc(this);
     // Platform IPC (recent docs, window effects, diagnostics, etc.) is wired

@@ -1,10 +1,13 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type {
-  HostInstallResult,
+  ActivateInstalledOk,
+  ApplyStagedOk,
+  BusyContinuation,
   IRunnerHost,
+  MutationOutcome,
 } from "@traycer-clients/shared/platform/runner-host";
 import type { AuthService } from "@/lib/auth/auth-service";
 import { useCloseTabFlow } from "@/components/layout/dialogs/use-close-tab-flow";
@@ -26,11 +29,19 @@ import {
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { RestartHostConfirmDialog } from "@/components/host/restart-host-confirm-dialog";
-import {
-  Analytics,
-  AnalyticsEvent,
-  analyticsBlockerFromError,
-} from "@/lib/analytics";
+import { HostBusyForceDeferDialog } from "@/components/host/host-busy-force-defer-dialog";
+import { useRunnerHostControllerStatusQuery } from "@/hooks/runner/use-runner-host-controller-status-query";
+import { useRunnerApplyStaged } from "@/hooks/runner/use-runner-apply-staged-mutation";
+import { useRunnerActivateInstalled } from "@/hooks/runner/use-runner-activate-installed-mutation";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+
+type MenuUpdateIntent = "apply" | "activate";
+
+interface MenuBusyState {
+  readonly intent: MenuUpdateIntent;
+  readonly continuation: BusyContinuation;
+  readonly message: string;
+}
 
 interface HostWithRequestClose extends IRunnerHost {
   readonly windows: {
@@ -87,7 +98,9 @@ export function MenuCommandListener() {
   );
   const management = runnerHost.hostManagement;
   const traycerCli = runnerHost.traycerCli;
+  const status = useRunnerHostControllerStatusQuery().data;
   const [pendingHostRestart, setPendingHostRestart] = useState<boolean>(false);
+  const [busy, setBusy] = useState<MenuBusyState | null>(null);
 
   const restartHostMutation = useMutation<void>({
     mutationKey: runnerMutationKeys.requestHostRespawn(),
@@ -107,48 +120,117 @@ export function MenuCommandListener() {
     },
   });
 
-  const installUpdateMutation = useMutation<HostInstallResult>({
-    mutationKey: runnerMutationKeys.hostUpdate(),
-    mutationFn: () => {
-      if (management === null) {
-        return Promise.reject(new Error("Host management unavailable"));
+  const applyStagedMutation = useRunnerApplyStaged();
+  const activateInstalledMutation = useRunnerActivateInstalled();
+
+  const invalidateHostUpdateQueries = useCallback((): void => {
+    if (management === null) return;
+    void queryClient.invalidateQueries({
+      queryKey: runnerQueryKeys.hostAvailableVersionsScope(management),
+    });
+    void queryClient.invalidateQueries({
+      queryKey: runnerQueryKeys.hostRegistryUpdate(management),
+    });
+    void queryClient.invalidateQueries({
+      queryKey: runnerQueryKeys.hostInstalledRecord(management),
+    });
+  }, [management, queryClient]);
+
+  const handleApplyOutcome = useCallback(
+    (outcome: MutationOutcome<ApplyStagedOk>): void => {
+      if (outcome.kind === "ok") {
+        Analytics.getInstance().track(AnalyticsEvent.HostUpdateSucceeded, null);
+        toast.success(`Updated host to v${outcome.value.appliedVersion}`);
+        setBusy(null);
+        invalidateHostUpdateQueries();
+        return;
       }
-      return management.updateHost({ onProgress: null });
+      if (outcome.kind === "busy") {
+        setBusy({
+          intent: "apply",
+          continuation: outcome.continuation,
+          message: outcome.message,
+        });
+        return;
+      }
+      Analytics.getInstance().track(AnalyticsEvent.HostUpdateFailed, {
+        blocker: "unknown",
+      });
+      setBusy(null);
+      toast.error(outcome.message);
     },
-    onMutate: () => {
+    [invalidateHostUpdateQueries],
+  );
+
+  const handleActivateOutcome = useCallback(
+    (outcome: MutationOutcome<ActivateInstalledOk>): void => {
+      if (outcome.kind === "ok") {
+        Analytics.getInstance().track(AnalyticsEvent.HostUpdateSucceeded, null);
+        toast.success("Host activated");
+        setBusy(null);
+        invalidateHostUpdateQueries();
+        return;
+      }
+      if (outcome.kind === "busy") {
+        setBusy({
+          intent: "activate",
+          continuation: outcome.continuation,
+          message: outcome.message,
+        });
+        return;
+      }
+      Analytics.getInstance().track(AnalyticsEvent.HostUpdateFailed, {
+        blocker: "unknown",
+      });
+      setBusy(null);
+      toast.error(outcome.message);
+    },
+    [invalidateHostUpdateQueries],
+  );
+
+  const runApply = useCallback(
+    (force: boolean): void => {
       Analytics.getInstance().track(AnalyticsEvent.HostUpdateStarted, {
         source: "native_menu",
       });
+      applyStagedMutation.mutate(
+        { trigger: "manual", force },
+        { onSuccess: handleApplyOutcome },
+      );
     },
-    onSuccess: (data) => {
-      Analytics.getInstance().track(AnalyticsEvent.HostUpdateSucceeded, null);
-      toast.success(`Updated host to v${data.version}`);
-      if (management !== null) {
-        void queryClient.invalidateQueries({
-          queryKey: runnerQueryKeys.hostAvailableVersionsScope(management),
-        });
-        void queryClient.invalidateQueries({
-          queryKey: runnerQueryKeys.hostRegistryUpdate(management),
-        });
-        void queryClient.invalidateQueries({
-          queryKey: runnerQueryKeys.hostInstalledRecord(management),
-        });
-      }
-    },
-    onError: (err) => {
-      Analytics.getInstance().track(AnalyticsEvent.HostUpdateFailed, {
-        blocker: analyticsBlockerFromError(err),
-      });
-      toastFromRunnerError(err, "Couldn't install host update");
-    },
-  });
+    [applyStagedMutation, handleApplyOutcome],
+  );
 
-  const { mutate: mutateInstallUpdate } = installUpdateMutation;
+  const runActivate = useCallback(
+    (force: boolean): void => {
+      Analytics.getInstance().track(AnalyticsEvent.HostUpdateStarted, {
+        source: "native_menu",
+      });
+      activateInstalledMutation.mutate(
+        { force },
+        { onSuccess: handleActivateOutcome },
+      );
+    },
+    [activateInstalledMutation, handleActivateOutcome],
+  );
+
   useEffect(() => {
     const menu = resolveDesktopMenuBridge(runnerHost);
     if (menu === null) {
       return;
     }
+    // "Update to X" gates on `updateReady`/activation debt (see
+    // `deriveHostUpdateMenuVersion` in the main-process menu state), and a
+    // ready update always supersedes debt - so the click here follows the
+    // same priority without needing the command payload to carry which one
+    // it was.
+    const installHostUpdate = (): void => {
+      if (status?.updateReady === true) {
+        runApply(false);
+      } else {
+        runActivate(false);
+      }
+    };
     const subscription = menu.onCommand((payload) => {
       handleMenuCommand(payload, {
         authService,
@@ -175,9 +257,7 @@ export function MenuCommandListener() {
         advanceFind: (forward) => {
           advanceActiveTileFind(forward ? 1 : -1);
         },
-        installHostUpdate: () => {
-          mutateInstallUpdate();
-        },
+        installHostUpdate,
         requestHostRestart: () => {
           setPendingHostRestart(true);
         },
@@ -199,7 +279,9 @@ export function MenuCommandListener() {
     openEpicInNewWindow,
     openLogs,
     runnerHost,
-    mutateInstallUpdate,
+    status,
+    runApply,
+    runActivate,
   ]);
 
   return (
@@ -212,6 +294,31 @@ export function MenuCommandListener() {
         }}
         isPending={restartHostMutation.isPending}
         onConfirm={() => restartHostMutation.mutate()}
+      />
+      <HostBusyForceDeferDialog
+        open={busy !== null}
+        message={busy?.message ?? ""}
+        isForcing={
+          applyStagedMutation.isPending || activateInstalledMutation.isPending
+        }
+        forceLabel={
+          busy?.continuation === "activate" ? "Force restart" : "Force update"
+        }
+        onForce={() => {
+          if (busy === null) return;
+          if (busy.continuation === "activate") {
+            runActivate(true);
+            return;
+          }
+          if (busy.intent === "apply") {
+            runApply(true);
+          } else {
+            runActivate(true);
+          }
+        }}
+        onDefer={() => {
+          setBusy(null);
+        }}
       />
     </>
   );

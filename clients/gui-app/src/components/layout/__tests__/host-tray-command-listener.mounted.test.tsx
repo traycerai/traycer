@@ -10,11 +10,13 @@ import {
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type {
-  HostInstallResult,
+  HostControllerStatus,
   HostTrayCommand,
   IHostManagement,
   IHostTray,
   IRunnerHost,
+  MutationOutcome,
+  ServiceRegistrationOk,
 } from "@traycer-clients/shared/platform/runner-host";
 import { HostTrayCommandListener } from "@/components/layout/bridges/host-tray-command-listener";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
@@ -25,10 +27,12 @@ vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => navigateMock,
 }));
 
+const toastErrorMock = vi.hoisted(() => vi.fn());
+
 vi.mock("sonner", () => ({
   toast: {
     success: vi.fn(),
-    error: vi.fn(),
+    error: toastErrorMock,
     message: vi.fn(),
   },
 }));
@@ -59,26 +63,63 @@ function createTray(): FakeTray {
   return ref;
 }
 
-function makeManagement(): IHostManagement {
-  const installResult: HostInstallResult = {
-    version: "1.5.0",
-    installedAt: "2026-05-15T00:00:00Z",
-    executablePath: "/tmp/fake/traycerd",
-    source: { kind: "registry", value: "1.5.0" },
-    archiveSha256: "",
-    signatureKeyId: "",
-    sizeBytes: 0,
-    previousVersion: null,
-    serviceLifecycle: {
-      priorServiceState: "not-installed",
-      stoppedBeforeSwap: false,
-      postSwapAction: "install",
-      postSwapError: null,
-    },
-  };
+const READY_STATUS: HostControllerStatus = {
+  download: null,
+  mutation: null,
+  installedVersion: "1.4.0",
+  latestVersion: "1.5.0",
+  stagedVersion: "1.5.0",
+  installedRuntimeVersion: null,
+  runningRuntimeVersion: null,
+  updateReady: true,
+  activation: "activated",
+  reachable: true,
+  removedByUser: false,
+  checkedAt: "2026-05-15T00:00:00Z",
+};
+
+const DEBT_STATUS: HostControllerStatus = {
+  ...READY_STATUS,
+  stagedVersion: null,
+  updateReady: false,
+  activation: "pendingActivation",
+};
+
+interface ManagementOverrides {
+  readonly status?: HostControllerStatus;
+  readonly applyStaged?: IHostManagement["applyStaged"];
+  readonly activateInstalled?: IHostManagement["activateInstalled"];
+}
+
+function makeManagement(overrides: ManagementOverrides): IHostManagement {
+  const status = overrides.status ?? READY_STATUS;
   return {
-    installHost: vi.fn(() => Promise.resolve(installResult)),
-    updateHost: vi.fn(() => Promise.resolve(installResult)),
+    getHostControllerStatus: vi.fn(() => Promise.resolve(status)),
+    convergeReady: vi.fn(() =>
+      Promise.resolve({
+        kind: "ok" as const,
+        value: { running: true, version: status.installedVersion },
+      }),
+    ),
+    applyStaged:
+      overrides.applyStaged ??
+      vi.fn(() =>
+        Promise.resolve({
+          kind: "ok" as const,
+          value: { appliedVersion: "1.5.0", runningActivated: true },
+        }),
+      ),
+    activateInstalled:
+      overrides.activateInstalled ??
+      vi.fn(() =>
+        Promise.resolve({ kind: "ok" as const, value: { activated: true } }),
+      ),
+    installVersion: vi.fn(() =>
+      Promise.resolve({
+        kind: "ok" as const,
+        value: { installedVersion: "1.5.0", runningActivated: true },
+      }),
+    ),
     uninstallHost: vi.fn(() =>
       Promise.resolve({
         removedInstallDir: true,
@@ -107,12 +148,10 @@ function makeManagement(): IHostManagement {
       }),
     ),
     installedRecord: vi.fn(() => Promise.resolve(null)),
-    registerService: vi.fn(() => Promise.resolve()),
-    ensureHost: vi.fn(() =>
-      Promise.resolve({
-        action: "already-ready" as const,
-        running: true,
-        version: null,
+    registerService: vi.fn(() =>
+      Promise.resolve<MutationOutcome<ServiceRegistrationOk>>({
+        kind: "ok",
+        value: { registered: true },
       }),
     ),
     deregisterService: vi.fn(() => Promise.resolve()),
@@ -126,7 +165,6 @@ function makeManagement(): IHostManagement {
         errorMessage: null,
       }),
     ),
-    getOperationStatus: vi.fn(() => Promise.resolve(null)),
     freePortAndRestart: vi.fn((input) => Promise.resolve(input)),
     cliManifest: vi.fn(() => Promise.resolve(null)),
     getHostName: vi.fn(() =>
@@ -225,6 +263,7 @@ function renderListener(host: IRunnerHost): QueryClient {
 describe("<HostTrayCommandListener /> - mounted in __root", () => {
   beforeEach(() => {
     navigateMock.mockClear();
+    toastErrorMock.mockClear();
   });
   afterEach(() => {
     cleanup();
@@ -232,7 +271,7 @@ describe("<HostTrayCommandListener /> - mounted in __root", () => {
 
   it("subscribes to hostTray.onCommand and navigates on openSettingsHost", () => {
     const tray = createTray();
-    const management = makeManagement();
+    const management = makeManagement({});
     renderListener(makeHost(tray.bridge, management));
 
     act(() => {
@@ -244,7 +283,7 @@ describe("<HostTrayCommandListener /> - mounted in __root", () => {
 
   it("opens a confirmation dialog for restartHost and only invokes restartHost after confirm", async () => {
     const tray = createTray();
-    const management = makeManagement();
+    const management = makeManagement({});
     renderListener(makeHost(tray.bridge, management));
 
     act(() => {
@@ -261,10 +300,16 @@ describe("<HostTrayCommandListener /> - mounted in __root", () => {
     });
   });
 
-  it("opens a confirmation dialog previewing the version for installUpdate and only installs after confirm", async () => {
+  it("previews the version, submits applyStaged after confirm when a stage is updateReady", async () => {
     const tray = createTray();
-    const management = makeManagement();
+    const management = makeManagement({ status: READY_STATUS });
     renderListener(makeHost(tray.bridge, management));
+
+    // Let the controller-status query prime before the command lands, so the
+    // updateReady-vs-debt branch reads real data rather than `undefined`.
+    await waitFor(() => {
+      expect(management.getHostControllerStatus).toHaveBeenCalled();
+    });
 
     act(() => {
       tray.emit({ kind: "installUpdate", version: "1.5.0" });
@@ -272,14 +317,102 @@ describe("<HostTrayCommandListener /> - mounted in __root", () => {
 
     const dialog = await screen.findByTestId("confirm-destructive-dialog");
     expect(dialog.textContent).toContain("v1.5.0");
-    expect(management.installHost).not.toHaveBeenCalled();
+    expect(management.applyStaged).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByTestId("confirm-action"));
     await waitFor(() => {
-      expect(management.installHost).toHaveBeenCalledWith({
-        version: "1.5.0",
-        onProgress: null,
-      });
+      expect(management.applyStaged).toHaveBeenCalledWith("manual", false);
     });
+    expect(management.activateInstalled).not.toHaveBeenCalled();
+  });
+
+  it("submits activateInstalled instead of applyStaged when only activation debt is present", async () => {
+    const tray = createTray();
+    const management = makeManagement({ status: DEBT_STATUS });
+    renderListener(makeHost(tray.bridge, management));
+
+    await waitFor(() => {
+      expect(management.getHostControllerStatus).toHaveBeenCalled();
+    });
+
+    act(() => {
+      tray.emit({ kind: "installUpdate", version: "1.4.0" });
+    });
+
+    await screen.findByTestId("confirm-destructive-dialog");
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    await waitFor(() => {
+      expect(management.activateInstalled).toHaveBeenCalledWith(false);
+    });
+    expect(management.applyStaged).not.toHaveBeenCalled();
+  });
+
+  it("opens the Force/Defer dialog on a busy outcome, and Force re-submits with force:true", async () => {
+    const tray = createTray();
+    const applyStaged = vi
+      .fn()
+      .mockResolvedValueOnce({
+        kind: "busy" as const,
+        continuation: "retry-with-force" as const,
+        message: "Another Traycer process is applying an update.",
+      })
+      .mockResolvedValueOnce({
+        kind: "ok" as const,
+        value: { appliedVersion: "1.5.0", runningActivated: true },
+      });
+    const management = makeManagement({ status: READY_STATUS, applyStaged });
+    renderListener(makeHost(tray.bridge, management));
+
+    await waitFor(() => {
+      expect(management.getHostControllerStatus).toHaveBeenCalled();
+    });
+
+    act(() => {
+      tray.emit({ kind: "installUpdate", version: "1.5.0" });
+    });
+    await screen.findByTestId("confirm-destructive-dialog");
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    const busyDialog = await screen.findByTestId(
+      "host-busy-force-defer-dialog",
+    );
+    expect(busyDialog.textContent).toContain(
+      "Another Traycer process is applying an update.",
+    );
+
+    fireEvent.click(screen.getByTestId("host-busy-force"));
+    await waitFor(() => {
+      expect(applyStaged).toHaveBeenCalledWith("manual", true);
+    });
+  });
+
+  it("renders its own deferred-lock outcome as a toast, without hanging", async () => {
+    const tray = createTray();
+    const applyStaged = vi.fn(() =>
+      Promise.resolve({
+        kind: "deferred" as const,
+        message: "Another Traycer process is managing the host.",
+      }),
+    );
+    const management = makeManagement({ status: READY_STATUS, applyStaged });
+    renderListener(makeHost(tray.bridge, management));
+
+    await waitFor(() => {
+      expect(management.getHostControllerStatus).toHaveBeenCalled();
+    });
+
+    act(() => {
+      tray.emit({ kind: "installUpdate", version: "1.5.0" });
+    });
+    await screen.findByTestId("confirm-destructive-dialog");
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    await waitFor(() => {
+      expect(toastErrorMock).toHaveBeenCalledWith(
+        "Another Traycer process is managing the host.",
+      );
+    });
+    expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
   });
 });

@@ -198,6 +198,11 @@ function fakeHostController(
 describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
   afterEach(() => {
     vi.clearAllMocks();
+    // `clearAllMocks` only wipes call history, not implementations set via
+    // `mockResolvedValue` - a test that opts into the removed-by-user branch
+    // would otherwise leave that override in place for every test after it,
+    // in this describe and the next.
+    isHostRemovedByUserMock.mockResolvedValue(false);
   });
 
   it("B2: applies the stage instead of activating when a ready update is staged", async () => {
@@ -348,20 +353,27 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
   });
 
   it("B1: force-refreshes the registry and updates the menu after a successful apply", async () => {
+    const readyStatus = fakeStatus(true, "unavailable", false);
+    const convergedStatus = fakeStatus(false, "activated", false);
     const controller = fakeHostController(
-      fakeStatus(true, "unavailable", false),
+      readyStatus,
       {
         kind: "ok",
         value: { appliedVersion: "1.4.1", runningActivated: true },
       },
       { kind: "ok", value: { activated: true } },
     );
-    const refreshedState: HostRegistryUpdateState = {
-      ...fakeRegistryState(),
-      installedVersion: "1.4.1",
-      updateAvailable: false,
-    };
-    refreshRegistryUpdateStateMock.mockResolvedValue(refreshedState);
+    // `runLaunchHostConvergeReconcile` reads status twice before deciding to
+    // apply (initial removed-by-user check, then the post-stageLatest
+    // decision read) - both must still show `updateReady` for the apply
+    // branch to run at all. The third read (inside
+    // `refreshHostRegistryIfNotRemoved`, after the apply committed) is what
+    // this test is actually exercising.
+    vi.spyOn(controller, "getStatus")
+      .mockResolvedValueOnce(readyStatus)
+      .mockResolvedValueOnce(readyStatus)
+      .mockResolvedValue(convergedStatus);
+    refreshRegistryUpdateStateMock.mockResolvedValue(fakeRegistryState());
     const menu = fakeMenu();
 
     await runLaunchHostConvergeReconcile(controller, menu);
@@ -370,8 +382,8 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
       force: true,
       maxAgeMs: null,
     });
-    // updateAvailable: false, latestVersion present -> menu cleared, not
-    // left advertising the update that was just applied.
+    // The stage was consumed by the apply and the record is now activated -
+    // menu cleared, not left advertising the update that was just applied.
     expect(menu.setHostUpdateAvailableVersion).toHaveBeenCalledWith(null);
   });
 
@@ -405,22 +417,51 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
 });
 
 describe("applyHostUpdateMenuState", () => {
-  it("sets the latest version when an update is available", () => {
+  it("sets the staged version when a ready update is available", () => {
     const menu = fakeMenu();
-    applyHostUpdateMenuState(menu, {
-      ...fakeRegistryState(),
-      updateAvailable: true,
-      latestVersion: "1.4.2",
-    });
-    expect(menu.setHostUpdateAvailableVersion).toHaveBeenCalledWith("1.4.2");
+    applyHostUpdateMenuState(menu, fakeStatus(true, "unavailable", false));
+    expect(menu.setHostUpdateAvailableVersion).toHaveBeenCalledWith("1.4.1");
   });
 
-  it("clears the menu state when no update is available", () => {
+  it("sets the installed version for pendingActivation debt (no ready update)", () => {
     const menu = fakeMenu();
-    applyHostUpdateMenuState(menu, {
-      ...fakeRegistryState(),
-      updateAvailable: false,
-    });
+    applyHostUpdateMenuState(
+      menu,
+      fakeStatus(false, "pendingActivation", false),
+    );
+    expect(menu.setHostUpdateAvailableVersion).toHaveBeenCalledWith("1.4.0");
+  });
+
+  it("sets the installed version for activationUnknown debt (no ready update)", () => {
+    const menu = fakeMenu();
+    applyHostUpdateMenuState(
+      menu,
+      fakeStatus(false, "activationUnknown", false),
+    );
+    expect(menu.setHostUpdateAvailableVersion).toHaveBeenCalledWith("1.4.0");
+  });
+
+  it("a ready update supersedes activation debt", () => {
+    // updateReady + pendingActivation both true is the coexistence case the
+    // reconcile explicitly prioritizes - the menu must show the ready
+    // update's version, not the installed one.
+    const menu = fakeMenu();
+    applyHostUpdateMenuState(
+      menu,
+      fakeStatus(true, "pendingActivation", false),
+    );
+    expect(menu.setHostUpdateAvailableVersion).toHaveBeenCalledWith("1.4.1");
+  });
+
+  it("clears the menu state when up to date with no activation debt", () => {
+    const menu = fakeMenu();
+    applyHostUpdateMenuState(menu, fakeStatus(false, "activated", false));
+    expect(menu.setHostUpdateAvailableVersion).toHaveBeenCalledWith(null);
+  });
+
+  it("never renders debt UI for activation:unavailable", () => {
+    const menu = fakeMenu();
+    applyHostUpdateMenuState(menu, fakeStatus(false, "unavailable", false));
     expect(menu.setHostUpdateAvailableVersion).toHaveBeenCalledWith(null);
   });
 });
@@ -428,6 +469,11 @@ describe("applyHostUpdateMenuState", () => {
 describe("refreshHostRegistryIfNotRemoved", () => {
   afterEach(() => {
     vi.clearAllMocks();
+    // `clearAllMocks` only wipes call history, not implementations set via
+    // `mockResolvedValue` - a test that opts into the removed-by-user branch
+    // would otherwise leave that override in place for every test after it,
+    // in this describe and the next.
+    isHostRemovedByUserMock.mockResolvedValue(false);
   });
 
   it("skips the refresh entirely when the host was removed by the user", async () => {
@@ -449,5 +495,29 @@ describe("refreshHostRegistryIfNotRemoved", () => {
 
     expect(refreshRegistryUpdateStateMock).not.toHaveBeenCalled();
     expect(menu.setHostUpdateAvailableVersion).not.toHaveBeenCalled();
+  });
+
+  it("re-derives the menu label from a fresh status read after refreshing", async () => {
+    const controller = fakeHostController(
+      fakeStatus(true, "unavailable", false),
+      {
+        kind: "ok",
+        value: { appliedVersion: "1.4.1", runningActivated: true },
+      },
+      { kind: "ok", value: { activated: true } },
+    );
+    refreshRegistryUpdateStateMock.mockResolvedValue(fakeRegistryState());
+    const menu = fakeMenu();
+
+    await refreshHostRegistryIfNotRemoved(controller, menu, {
+      force: true,
+      maxAgeMs: null,
+    });
+
+    expect(refreshRegistryUpdateStateMock).toHaveBeenCalledWith(controller, {
+      force: true,
+      maxAgeMs: null,
+    });
+    expect(menu.setHostUpdateAvailableVersion).toHaveBeenCalledWith("1.4.1");
   });
 });

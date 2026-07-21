@@ -11,7 +11,6 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IpcHostController } from "../runner-ipc-bridge";
 import type { HostControllerStatus } from "../../host/host-controller-types";
-import type { HostRegistryUpdateState } from "../../../ipc-contracts/host-management-types";
 import { DEV_DESKTOP_SLOT_ENV } from "../../host/dev-desktop-slot";
 
 // `refreshRegistryUpdateState` is the launch-time host registry
@@ -346,86 +345,16 @@ describe("refreshRegistryUpdateState - launch-time probe", () => {
     expect(state.installedVersion).toBe("1.4.1");
   });
 
-  it("notifies registry update listeners when state is read from cache", async () => {
-    vi.doMock("../../cli/traycer-cli", () => ({
-      runTraycerCliJson: vi.fn(),
-      streamTraycerCliJson: vi.fn(),
-      TraycerCliError: class extends Error {},
-    }));
-    writeCache({
-      checkedAt: new Date().toISOString(),
-      latestVersion: "1.4.2",
-      installedVersion: "1.4.1",
-      reachable: true,
-      errorMessage: null,
-    });
-    const { refreshRegistryUpdateState, onHostRegistryUpdateStateChange } =
-      await import("../host-management-ipc");
-    const listener = vi.fn();
-    const unsubscribe = onHostRegistryUpdateStateChange(listener);
-
-    await refreshRegistryUpdateState(fakeHostController(true), {
-      force: false,
-      maxAgeMs: null,
-    });
-    unsubscribe();
-
-    expect(listener).toHaveBeenCalledWith(
-      expect.objectContaining({
-        latestVersion: "1.4.2",
-        installedVersion: "1.4.1",
-        updateAvailable: true,
-      }),
-    );
-  });
-
-  it("keeps refresh successful when a registry update listener throws", async () => {
-    vi.doMock("../../cli/traycer-cli", () => ({
-      runTraycerCliJson: vi.fn(),
-      streamTraycerCliJson: vi.fn(),
-      TraycerCliError: class extends Error {},
-    }));
-    writeCache({
-      checkedAt: new Date().toISOString(),
-      latestVersion: "1.4.2",
-      installedVersion: "1.4.1",
-      reachable: true,
-      errorMessage: null,
-    });
-    const { refreshRegistryUpdateState, onHostRegistryUpdateStateChange } =
-      await import("../host-management-ipc");
-    const throwingListener = vi.fn(() => {
-      throw new Error("listener failed");
-    });
-    const succeedingListener = vi.fn();
-    const unsubscribeThrowing =
-      onHostRegistryUpdateStateChange(throwingListener);
-    const unsubscribeSucceeding =
-      onHostRegistryUpdateStateChange(succeedingListener);
-
-    const state = await refreshRegistryUpdateState(fakeHostController(true), {
-      force: false,
-      maxAgeMs: null,
-    });
-    unsubscribeThrowing();
-    unsubscribeSucceeding();
-
-    expect(state).toEqual(
-      expect.objectContaining({
-        latestVersion: "1.4.2",
-        installedVersion: "1.4.1",
-        updateAvailable: true,
-      }),
-    );
-    expect(throwingListener).toHaveBeenCalledOnce();
-    expect(succeedingListener).toHaveBeenCalledWith(
-      expect.objectContaining({
-        latestVersion: "1.4.2",
-        installedVersion: "1.4.1",
-        updateAvailable: true,
-      }),
-    );
-  });
+  // Renderer surfaces cutover (Host Update Layer Redesign): the in-process
+  // `onHostRegistryUpdateStateChange` listener this pair exercised was the
+  // push side-channel for the old registry-only `HostRegistryUpdateState`
+  // model and has been retired along with it - `host-management-ipc.ts` no
+  // longer exports it. Every renderer surface now reads the canonical
+  // two-lane `HostControllerStatus` from `host-controller-status-broadcast.ts`
+  // instead, which re-reads `hostController.getStatus()` fresh on every tick
+  // rather than replaying a captured value, so "does a refresh notify
+  // listeners" and "does a throwing listener still let refresh succeed" no
+  // longer have a production analogue to test.
 
   it("re-probes when force is true even with a fresh cache", async () => {
     const probeSpy = vi
@@ -745,93 +674,18 @@ describe("refreshRegistryUpdateState - launch-time probe", () => {
     expect(freshProbeController.stageLatestCalls).toHaveLength(1);
   });
 
-  it("P6: republishes updateReady after the production background stage completes", async () => {
-    vi.doMock("../../cli/traycer-cli", () => ({
-      runTraycerCliJson: vi
-        .fn()
-        .mockResolvedValue(registryProbeResult("1.4.3", true, null)),
-      streamTraycerCliJson: vi.fn(),
-      TraycerCliError: class extends Error {},
-    }));
-    const { onHostRegistryUpdateStateChange, refreshRegistryUpdateState } =
-      await import("../host-management-ipc");
-    const controller = fakeHostController(false);
-    controller.stageLatest = async () => {
-      controller.setUpdateReady(true);
-    };
-    const publications: HostRegistryUpdateState[] = [];
-    const unsubscribe = onHostRegistryUpdateStateChange((state) => {
-      publications.push(state);
-    });
-
-    await refreshRegistryUpdateState(controller, {
-      force: true,
-      maxAgeMs: null,
-    });
-
-    await vi.waitFor(() => {
-      expect(publications.at(-1)?.updateAvailable).toBe(true);
-    });
-    expect(publications[0]?.updateAvailable).toBe(false);
-    unsubscribe();
-  });
-
-  it("F10: an older background stage cannot republish over a newer completed refresh", async () => {
-    const probeSpy = vi
-      .fn()
-      .mockResolvedValueOnce(registryProbeResult("1.4.2", true, null))
-      .mockResolvedValueOnce(registryProbeResult("1.4.3", true, null));
-    vi.doMock("../../cli/traycer-cli", () => ({
-      runTraycerCliJson: probeSpy,
-      streamTraycerCliJson: vi.fn(),
-      TraycerCliError: class extends Error {},
-    }));
-    const { onHostRegistryUpdateStateChange, refreshRegistryUpdateState } =
-      await import("../host-management-ipc");
-    const controller = fakeHostController(false);
-    const firstStage = deferred<void>();
-    const secondStage = deferred<void>();
-    let stageCalls = 0;
-    controller.stageLatest = async () => {
-      stageCalls += 1;
-      if (stageCalls === 1) {
-        await firstStage.promise;
-        return;
-      }
-      await secondStage.promise;
-      controller.setUpdateReady(true);
-    };
-    const publications: HostRegistryUpdateState[] = [];
-    const unsubscribe = onHostRegistryUpdateStateChange((state) => {
-      publications.push(state);
-    });
-
-    await refreshRegistryUpdateState(controller, {
-      force: true,
-      maxAgeMs: null,
-    });
-    await refreshRegistryUpdateState(controller, {
-      force: true,
-      maxAgeMs: null,
-    });
-    expect(stageCalls).toBe(2);
-
-    secondStage.resolve(undefined);
-    await vi.waitFor(() => {
-      expect(
-        publications.filter((state) => state.latestVersion === "1.4.3"),
-      ).toHaveLength(2);
-    });
-
-    firstStage.resolve(undefined);
-    await new Promise<void>((resolve) => setImmediate(resolve));
-
-    expect(publications.at(-1)).toMatchObject({
-      latestVersion: "1.4.3",
-      updateAvailable: true,
-    });
-    unsubscribe();
-  });
+  // Renderer surfaces cutover: P6 and F10 exercised `onHostRegistryUpdateStateChange`
+  // republishing `updateReady` once a fire-and-forget background `stageLatest()`
+  // completed, and guarded against an older, slower stage's completion
+  // clobbering a newer one's published state. That listener is retired (see
+  // the comment above "re-probes when force is true even with a fresh
+  // cache"). The staleness guard F10 exercised now lives one layer down, in
+  // `HostController.stageLatest()`'s own in-flight coalescing
+  // (`stageLatestInFlight`/`stageLatestPending`) - see
+  // "P10: concurrent stageLatest calls share the production reconcile and
+  // download" in `host-controller.test.ts`, which pins exactly this
+  // concurrent-call ordering guarantee at the source instead of at a
+  // since-deleted IPC-layer push.
 
   it("does not stage anything after a failed registry probe", async () => {
     vi.doMock("../../cli/traycer-cli", () => ({

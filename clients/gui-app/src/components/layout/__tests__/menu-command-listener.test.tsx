@@ -19,7 +19,7 @@ import {
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type {
-  HostInstallResult,
+  HostControllerStatus,
   IHostManagement,
   IRunnerHost,
 } from "@traycer-clients/shared/platform/runner-host";
@@ -542,28 +542,27 @@ describe("<MenuCommandListener />", () => {
     expect(navigateMock).toHaveBeenCalledWith({ to: "/" });
   });
 
-  it("invokes hostManagement.updateHost when host.installUpdate is dispatched", async () => {
-    const menu = createMenu();
-    const installResult: HostInstallResult = {
-      version: "1.2.3",
-      installedAt: "2026-05-15T00:00:00Z",
-      executablePath: "/tmp/fake/traycerd",
-      source: { kind: "registry", value: "1.2.3" },
-      archiveSha256: "",
-      signatureKeyId: "",
-      sizeBytes: 0,
-      previousVersion: null,
-      serviceLifecycle: {
-        priorServiceState: "not-installed",
-        stoppedBeforeSwap: false,
-        postSwapAction: "install",
-        postSwapError: null,
-      },
-    };
-    const updateHost = vi.fn(() => Promise.resolve(installResult));
-    const management: IHostManagement = {
-      installHost: vi.fn(() => Promise.reject(new Error("not used"))),
-      updateHost,
+  function makeHostManagementFixture(
+    status: HostControllerStatus,
+  ): IHostManagement {
+    return {
+      getHostControllerStatus: vi.fn(() => Promise.resolve(status)),
+      convergeReady: vi.fn(() =>
+        Promise.resolve({
+          kind: "ok" as const,
+          value: { running: true, version: status.installedVersion },
+        }),
+      ),
+      applyStaged: vi.fn(() =>
+        Promise.resolve({
+          kind: "ok" as const,
+          value: { appliedVersion: "1.2.3", runningActivated: true },
+        }),
+      ),
+      activateInstalled: vi.fn(() =>
+        Promise.resolve({ kind: "ok" as const, value: { activated: true } }),
+      ),
+      installVersion: vi.fn(() => Promise.reject(new Error("not used"))),
       uninstallHost: vi.fn(() => Promise.reject(new Error("not used"))),
       restartHost: vi.fn(() => Promise.resolve()),
       uninstallTraycer: vi.fn(() => Promise.reject(new Error("not used"))),
@@ -573,17 +572,11 @@ describe("<MenuCommandListener />", () => {
       runDoctor: vi.fn(() => Promise.reject(new Error("not used"))),
       availableVersions: vi.fn(() => Promise.reject(new Error("not used"))),
       installedRecord: vi.fn(() => Promise.resolve(null)),
-      registerService: vi.fn(() => Promise.resolve()),
-      ensureHost: vi.fn(() =>
-        Promise.resolve({
-          action: "already-ready" as const,
-          running: true,
-          version: null,
-        }),
+      registerService: vi.fn(() =>
+        Promise.resolve({ kind: "ok" as const, value: { registered: true } }),
       ),
       deregisterService: vi.fn(() => Promise.resolve()),
       registryCheck: vi.fn(() => Promise.reject(new Error("not used"))),
-      getOperationStatus: vi.fn(() => Promise.resolve(null)),
       freePortAndRestart: vi.fn(() => Promise.reject(new Error("not used"))),
       cliManifest: vi.fn(() => Promise.resolve(null)),
       getHostName: vi.fn(() =>
@@ -601,6 +594,25 @@ describe("<MenuCommandListener />", () => {
         }),
       ),
     };
+  }
+
+  it("submits applyStaged when host.installUpdate is dispatched and a stage is updateReady", async () => {
+    const menu = createMenu();
+    const status: HostControllerStatus = {
+      download: null,
+      mutation: null,
+      installedVersion: "1.1.0",
+      latestVersion: "1.2.3",
+      stagedVersion: "1.2.3",
+      installedRuntimeVersion: null,
+      runningRuntimeVersion: null,
+      updateReady: true,
+      activation: "activated",
+      reachable: true,
+      removedByUser: false,
+      checkedAt: "2026-05-15T00:00:00Z",
+    };
+    const management = makeHostManagementFixture(status);
     const baseHost = createRunnerHost(menu);
     const runnerHost: FakeRunnerHost = Object.assign(baseHost, {
       hostManagement: management,
@@ -614,14 +626,76 @@ describe("<MenuCommandListener />", () => {
       </QueryClientProvider>,
     );
 
+    await waitFor(() => {
+      expect(management.getHostControllerStatus).toHaveBeenCalled();
+    });
+    // Being *called* only proves the query fired - the component reads
+    // `status` from the query's *result*, so the resolved promise and its
+    // resulting re-render must also land before dispatching, or the command
+    // is evaluated against the still-`undefined` initial status.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
     act(() => {
       menu.emit("host.installUpdate");
     });
 
     await waitFor(() => {
-      expect(updateHost).toHaveBeenCalledTimes(1);
+      expect(management.applyStaged).toHaveBeenCalledWith("manual", false);
     });
-    expect(updateHost).toHaveBeenCalledWith({ onProgress: null });
+    expect(management.activateInstalled).not.toHaveBeenCalled();
+  });
+
+  it("submits activateInstalled when host.installUpdate is dispatched with only activation debt", async () => {
+    const menu = createMenu();
+    const status: HostControllerStatus = {
+      download: null,
+      mutation: null,
+      installedVersion: "1.1.0",
+      latestVersion: "1.1.0",
+      stagedVersion: null,
+      installedRuntimeVersion: null,
+      runningRuntimeVersion: null,
+      updateReady: false,
+      activation: "activationUnknown",
+      reachable: true,
+      removedByUser: false,
+      checkedAt: "2026-05-15T00:00:00Z",
+    };
+    const management = makeHostManagementFixture(status);
+    const baseHost = createRunnerHost(menu);
+    const runnerHost: FakeRunnerHost = Object.assign(baseHost, {
+      hostManagement: management,
+    });
+
+    render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <RunnerHostProvider runnerHost={runnerHost}>
+          <MenuCommandListener />
+        </RunnerHostProvider>
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(management.getHostControllerStatus).toHaveBeenCalled();
+    });
+    // Being *called* only proves the query fired - the component reads
+    // `status` from the query's *result*, so the resolved promise and its
+    // resulting re-render must also land before dispatching, or the command
+    // is evaluated against the still-`undefined` initial status.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    act(() => {
+      menu.emit("host.installUpdate");
+    });
+
+    await waitFor(() => {
+      expect(management.activateInstalled).toHaveBeenCalledWith(false);
+    });
+    expect(management.applyStaged).not.toHaveBeenCalled();
   });
 
   it("opens a confirmation dialog for host.restart and only respawns after confirm", async () => {

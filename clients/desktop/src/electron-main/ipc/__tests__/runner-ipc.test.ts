@@ -644,9 +644,11 @@ describe("RunnerIpcBridge", () => {
         // Native-packaging host-management bridge (Flow 4 / Flow 6).
         // These channels are registered by `registerHostManagementIpc`
         // which the bridge invokes during `install()`.
-        RunnerHostInvoke.traycerHostInstall,
-        RunnerHostInvoke.traycerHostEnsure,
-        RunnerHostInvoke.traycerHostUpdate,
+        RunnerHostInvoke.traycerHostControllerStatusGet,
+        RunnerHostInvoke.traycerHostConvergeReady,
+        RunnerHostInvoke.traycerHostApplyStaged,
+        RunnerHostInvoke.traycerHostActivateInstalled,
+        RunnerHostInvoke.traycerHostInstallVersion,
         RunnerHostInvoke.traycerHostUninstall,
         RunnerHostInvoke.traycerAppUninstall,
         RunnerHostInvoke.traycerHostRemovalGet,
@@ -661,7 +663,6 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.traycerServiceRegister,
         RunnerHostInvoke.traycerServiceDeregister,
         RunnerHostInvoke.traycerRegistryCheck,
-        RunnerHostInvoke.traycerHostOperationStatusGet,
         RunnerHostInvoke.traycerFreePortAndRestart,
         RunnerHostInvoke.traycerCliManifestRead,
         // Platform IPC channels installed by `registerPlatformIpc(bridge)`,

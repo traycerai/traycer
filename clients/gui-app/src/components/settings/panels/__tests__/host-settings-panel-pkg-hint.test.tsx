@@ -34,8 +34,26 @@ function makeManagement(
       Promise.reject(new Error(`${method} not implemented in mock`));
   const cliManifestMock = vi.fn(() => Promise.resolve(cliManifest));
   const management: IHostManagement = {
-    installHost: vi.fn(notImplemented("installHost")),
-    updateHost: vi.fn(notImplemented("updateHost")),
+    getHostControllerStatus: vi.fn(() =>
+      Promise.resolve({
+        download: null,
+        mutation: null,
+        installedVersion: null,
+        latestVersion: null,
+        stagedVersion: null,
+        installedRuntimeVersion: null,
+        runningRuntimeVersion: null,
+        updateReady: false,
+        activation: "unavailable" as const,
+        reachable: false,
+        removedByUser: false,
+        checkedAt: "2026-05-15T00:00:00Z",
+      }),
+    ),
+    convergeReady: vi.fn(notImplemented("convergeReady")),
+    applyStaged: vi.fn(notImplemented("applyStaged")),
+    activateInstalled: vi.fn(notImplemented("activateInstalled")),
+    installVersion: vi.fn(notImplemented("installVersion")),
     uninstallHost: vi.fn(notImplemented("uninstallHost")),
     restartHost: vi.fn(() => Promise.resolve()),
     uninstallTraycer: vi.fn(notImplemented("uninstallTraycer")),
@@ -56,9 +74,7 @@ function makeManagement(
     ),
     installedRecord: vi.fn(() => Promise.resolve(null)),
     registerService: vi.fn(notImplemented("registerService")),
-    ensureHost: vi.fn(notImplemented("ensureHost")),
     deregisterService: vi.fn(notImplemented("deregisterService")),
-    getOperationStatus: vi.fn(() => Promise.resolve(null)),
     registryCheck: vi.fn(() =>
       Promise.resolve({
         checkedAt: null,

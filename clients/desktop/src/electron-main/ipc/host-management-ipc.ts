@@ -4,40 +4,22 @@ import { readFile, stat, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { log } from "../app/logger";
 import { runTraycerCliJson, TraycerCliError } from "../cli/traycer-cli";
-import {
-  RunnerHostEvent,
-  RunnerHostInvoke,
-} from "../../ipc-contracts/ipc-channels";
+import { RunnerHostInvoke } from "../../ipc-contracts/ipc-channels";
 import type {
   HostAvailableSnapshot,
   HostAvailableVersionEntry,
   HostDoctorReport,
-  HostEnsureResult,
-  HostInstallResult,
   HostInstalledRecord,
   HostLogsTailResult,
-  HostOperationKind,
-  HostOperationStatus,
-  HostProgressEvent,
   HostRegistryUpdateState,
   HostRemovalState,
   FreePortAndRestartInput,
 } from "../../ipc-contracts/host-management-types";
+import type { MutationOutcome } from "../host/host-controller-types";
 import {
   clearHostRemovedByUser,
   isHostRemovedByUser,
 } from "../host/host-removal-state";
-import type {
-  ApplyStagedOk,
-  ApplyStagedTrigger,
-  ConvergeReadyOk,
-  InstallVersionOk,
-  MutationKind,
-  MutationLaneStatus,
-  MutationOutcome,
-  MutationProgress,
-  ServiceRegistrationOk,
-} from "../host/host-controller-types";
 import {
   environmentSubdir,
   getHostFsLayout,
@@ -53,27 +35,6 @@ import type { IpcHostController, RunnerIpcBridge } from "./runner-ipc-bridge";
 
 export const LONG_OP_TIMEOUT_MS = 10 * 60_000;
 const REGISTRY_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
-type HostRegistryUpdateStateListener = (state: HostRegistryUpdateState) => void;
-const registryUpdateStateListeners = new Set<HostRegistryUpdateStateListener>();
-
-export function onHostRegistryUpdateStateChange(
-  listener: HostRegistryUpdateStateListener,
-): () => void {
-  registryUpdateStateListeners.add(listener);
-  return () => {
-    registryUpdateStateListeners.delete(listener);
-  };
-}
-
-function emitHostRegistryUpdateState(state: HostRegistryUpdateState): void {
-  for (const listener of registryUpdateStateListeners) {
-    try {
-      listener(state);
-    } catch (err) {
-      log.warn("[host-management] registry update listener failed", err);
-    }
-  }
-}
 
 /**
  * Active host environment for this Desktop process. Set at boot via
@@ -140,272 +101,6 @@ function nullableString(raw: unknown, key: string): string | null {
   if (value === null || value === undefined) return null;
   if (typeof value === "string") return value;
   throw new Error(`${key} must be a string or null`);
-}
-
-/**
- * Canonical cross-surface "is a host mutation running" snapshot (Ticket:
- * host-update-race-conditions). Main is the single writer; every renderer
- * window reads it via `traycerHostOperationStatusGet` on mount and
- * `hostOperationStatusChange` thereafter.
- *
- * Host Update Layer Redesign Tech Plan ("Single-writer cutover"): this is now
- * a pure STATUS MIRROR, not a guard. The single-flight throw that used to
- * live here ("Another host operation … is already in progress") is gone -
- * `HostController`'s own mutation lane is the actual single writer, and it
- * queues a concurrent submission instead of rejecting it. Set/cleared only by
- * `runControllerMutationWithLegacyProgress` below, and only for the four
- * kinds the legacy contract knows about (`install` / `update` /
- * `register-service` / `ensure`) - every other mutation (uninstall, restart,
- * deregister, free-port-and-restart, remove) never broadcast progress under
- * the old contract either, so they don't touch this.
- */
-let currentOperationStatus: HostOperationStatus | null = null;
-
-export function getHostOperationStatus(): HostOperationStatus | null {
-  return currentOperationStatus;
-}
-
-function setHostOperationStatus(
-  bridge: RunnerIpcBridge,
-  status: HostOperationStatus | null,
-): void {
-  currentOperationStatus = status;
-  bridge.fanOut(RunnerHostEvent.hostOperationStatusChange, status);
-}
-
-/**
- * Fixup B16: `HostController`'s mutation lane is exclusive FIFO, so a
- * second legacy-tracked call queued behind a first one doesn't start its
- * OWN work until the first settles - but this shim used to treat every
- * call as if it were the only one: it unconditionally overwrote
- * `currentOperationStatus` with its own (still-queued) identity the moment
- * it was invoked, and its `onMutationProgress` listener (registered before
- * `run()` even submits to the lane) received the FIRST call's progress
- * ticks too, mislabeling them under the second call's `operationId`. The
- * first call's own `finally` then cleared the status to `null` while the
- * second was still genuinely in flight. `legacyOperationQueue` mirrors the
- * controller's real FIFO submission order (both are pushed to
- * synchronously, in the same relative order, before either call's own
- * `run()` yields) - only ever the FRONT entry's identity is broadcast,
- * since that's the one the lane is actually executing.
- */
-interface TrackedLegacyOperation {
-  readonly operationId: string;
-  readonly kind: HostOperationKind;
-  readonly startedAt: string;
-}
-
-let legacyOperationQueue: TrackedLegacyOperation[] = [];
-
-function announceLegacyOperationStatus(bridge: RunnerIpcBridge): void {
-  const front = legacyOperationQueue[0] ?? null;
-  setHostOperationStatus(
-    bridge,
-    front === null
-      ? null
-      : {
-          operationId: front.operationId,
-          kind: front.kind,
-          stage: null,
-          percent: null,
-          bytes: null,
-          totalBytes: null,
-          message: null,
-          startedAt: front.startedAt,
-        },
-  );
-}
-
-function legacyKindMatchesMutation(
-  legacyKind: HostOperationKind,
-  mutationKind: MutationKind,
-): boolean {
-  return (
-    (legacyKind === "install" && mutationKind === "install") ||
-    (legacyKind === "update" && mutationKind === "apply") ||
-    (legacyKind === "register-service" && mutationKind === "register") ||
-    (legacyKind === "ensure" && mutationKind === "ensure")
-  );
-}
-
-type MutationProgressKindObserver = {
-  onMutationProgressWithKind(
-    listener: (
-      progress: MutationProgress,
-      kind: MutationKind,
-      operationId: string | null,
-    ) => void,
-  ): () => void;
-};
-
-function hasMutationProgressKinds(
-  hostController: IpcHostController,
-): hostController is IpcHostController & MutationProgressKindObserver {
-  return "onMutationProgressWithKind" in hostController;
-}
-
-type MutationStatusObserver = {
-  onMutationStatus(
-    listener: (status: MutationLaneStatus | null) => void,
-  ): () => void;
-};
-
-function hasMutationStatus(
-  hostController: IpcHostController,
-): hostController is IpcHostController & MutationStatusObserver {
-  return "onMutationStatus" in hostController;
-}
-
-type OperationAwareHostController = {
-  convergeReadyForOperation(
-    force: boolean,
-    operationId: string,
-  ): Promise<MutationOutcome<ConvergeReadyOk>>;
-  applyStagedForOperation(
-    trigger: ApplyStagedTrigger,
-    force: boolean,
-    operationId: string,
-  ): Promise<MutationOutcome<ApplyStagedOk>>;
-  installVersionForOperation(
-    pin: string,
-    force: boolean,
-    operationId: string,
-  ): Promise<MutationOutcome<InstallVersionOk>>;
-  registerServiceForOperation(
-    operationId: string,
-  ): Promise<MutationOutcome<ServiceRegistrationOk>>;
-};
-
-function hasOperationAwareMutations(
-  hostController: IpcHostController,
-): hostController is IpcHostController & OperationAwareHostController {
-  return (
-    "convergeReadyForOperation" in hostController &&
-    "applyStagedForOperation" in hostController &&
-    "installVersionForOperation" in hostController &&
-    "registerServiceForOperation" in hostController
-  );
-}
-
-/**
- * Wraps a `HostController` mutation call for the four legacy-tracked kinds:
- * broadcasts `hostOperationStatusChange` on start, re-broadcasts every
- * `cliOperationProgress` / `hostOperationStatusChange` tick via
- * `HostController.onMutationProgress` (attributed to whichever legacy call
- * is currently at the front of the lane - see `legacyOperationQueue`
- * above), clears the status on settle only once no legacy call remains in
- * flight (success or failure - a rejected operation must never leave every
- * surface permanently disabled), and lets `mapOutcome` decide how the
- * terminal `MutationOutcome` becomes this handler's return value (or
- * throws, for handlers where every non-"ok" kind should reject the IPC
- * invoke the way the old CLI-throw contract did).
- */
-async function runControllerMutationWithLegacyProgress<TOk, TResult>(
-  bridge: RunnerIpcBridge,
-  kind: HostOperationKind,
-  operationId: string,
-  run: () => Promise<MutationOutcome<TOk>>,
-  mapOutcome: (outcome: MutationOutcome<TOk>) => TResult | Promise<TResult>,
-): Promise<TResult> {
-  const entry: TrackedLegacyOperation = {
-    operationId,
-    kind,
-    startedAt: new Date().toISOString(),
-  };
-  const hostController = bridge.options.hostController;
-  // Real HostController calls carry the operation identity into its lane,
-  // so the IPC shim can attribute only the mutation that actually started.
-  // Older/test doubles retain the queue fallback below.
-  const hasLaneIdentity =
-    hasMutationProgressKinds(hostController) &&
-    hasMutationStatus(hostController);
-  if (!hasLaneIdentity) {
-    legacyOperationQueue.push(entry);
-    announceLegacyOperationStatus(bridge);
-  }
-  const onProgress = (
-    progress: MutationProgress,
-    mutationKind: MutationKind | null,
-    mutationOperationId: string | null,
-  ): void => {
-    let attributedEntry: TrackedLegacyOperation | undefined;
-    if (hasLaneIdentity) {
-      if (mutationOperationId !== entry.operationId) return;
-      attributedEntry = entry;
-    } else {
-      const front = legacyOperationQueue[0];
-      if (
-        front !== entry ||
-        (mutationKind !== null &&
-          !legacyKindMatchesMutation(entry.kind, mutationKind))
-      ) {
-        return;
-      }
-      attributedEntry = front;
-    }
-    if (attributedEntry === undefined) return;
-    const payload: HostProgressEvent = {
-      operationId: attributedEntry.operationId,
-      stage: progress.stage ?? "",
-      percent: progress.percent,
-      bytes: progress.bytes,
-      totalBytes: progress.totalBytes,
-      message: progress.message,
-    };
-    bridge.fanOut(RunnerHostEvent.cliOperationProgress, payload);
-    setHostOperationStatus(bridge, {
-      operationId: attributedEntry.operationId,
-      kind: attributedEntry.kind,
-      stage: progress.stage,
-      percent: progress.percent,
-      bytes: progress.bytes,
-      totalBytes: progress.totalBytes,
-      message: progress.message,
-      startedAt: attributedEntry.startedAt,
-    });
-  };
-  const unsubscribe = hasMutationProgressKinds(hostController)
-    ? hostController.onMutationProgressWithKind(onProgress)
-    : hostController.onMutationProgress((progress) =>
-        onProgress(progress, null, null),
-      );
-  const unsubscribeStatus = hasMutationStatus(hostController)
-    ? hostController.onMutationStatus((status) => {
-        if (
-          !hasLaneIdentity ||
-          status === null ||
-          status.operationId !== entry.operationId ||
-          status.progress !== null
-        ) {
-          return;
-        }
-        setHostOperationStatus(bridge, {
-          operationId: entry.operationId,
-          kind: entry.kind,
-          stage: null,
-          percent: null,
-          bytes: null,
-          totalBytes: null,
-          message: null,
-          startedAt: entry.startedAt,
-        });
-      })
-    : () => undefined;
-  try {
-    const outcome = await run();
-    return mapOutcome(outcome);
-  } finally {
-    unsubscribe();
-    unsubscribeStatus();
-    if (hasLaneIdentity) {
-      if (currentOperationStatus?.operationId === entry.operationId) {
-        setHostOperationStatus(bridge, null);
-      }
-    } else {
-      legacyOperationQueue = legacyOperationQueue.filter((e) => e !== entry);
-      announceLegacyOperationStatus(bridge);
-    }
-  }
 }
 
 /** Every non-"ok" outcome rejects the IPC invoke - matches the legacy
@@ -610,23 +305,6 @@ interface RegistryUpdateCacheFile {
 }
 
 let registryRefreshQueue: Promise<void> = Promise.resolve();
-let nextRegistryRefreshPublication = 0;
-let latestRegistryRefreshPublication = 0;
-
-function emitRegistryRefreshState(
-  state: HostRegistryUpdateState,
-  publication: number,
-): void {
-  // Stage completion is deliberately asynchronous. A newer refresh may have
-  // already published while an older stage was still downloading, so its
-  // completion may only republish if it is still the newest refresh. This is
-  // a logical freshness clock rather than a timestamp comparison: two probes
-  // may share wall-clock granularity, but their serialized completion order
-  // is unambiguous.
-  if (publication < latestRegistryRefreshPublication) return;
-  latestRegistryRefreshPublication = publication;
-  emitHostRegistryUpdateState(state);
-}
 
 function desktopCacheDir(): string {
   return join(homedir(), ".traycer", "desktop");
@@ -903,43 +581,33 @@ async function refreshRegistryUpdateStateSerial(
     readonly maxAgeMs: number | null;
   },
 ): Promise<HostRegistryUpdateState> {
-  const publication = ++nextRegistryRefreshPublication;
   const cache = await readRegistryCache();
   if (!opts.force && cache !== null && cache.reachable) {
     const ageMs = Date.now() - Date.parse(cache.checkedAt);
     const threshold = opts.maxAgeMs ?? REGISTRY_CACHE_TTL_MS;
     if (Number.isFinite(ageMs) && ageMs >= 0 && ageMs < threshold) {
       const status = await hostController.getStatus();
-      const state = buildUpdateState(cache, status.updateReady);
-      emitRegistryRefreshState(state, publication);
-      return state;
+      return buildUpdateState(cache, status.updateReady);
     }
   }
   const fresh = await probeRegistry();
   await writeRegistryCache(fresh);
   const status = await hostController.getStatus();
   const state = buildUpdateState(fresh, status.updateReady);
-  emitRegistryRefreshState(state, publication);
   if (fresh.reachable) {
     // Fixup B1: stage the eligible update in the background on every
     // successful refresh (comparable `latest > installed`, or the
     // yank-heal reconcile arm when a stage already exists - both decided
     // by `stageLatest`'s own eligibility check) - never awaited here, so a
-    // registry check never blocks on a WAN download.
-    void hostController
-      .stageLatest()
-      .then(async () => {
-        const stagedStatus = await hostController.getStatus();
-        emitRegistryRefreshState(
-          buildUpdateState(fresh, stagedStatus.updateReady),
-          publication,
-        );
-      })
-      .catch((err) => {
-        log.debug("[host-registry] background stage completion failed", {
-          err,
-        });
+    // registry check never blocks on a WAN download. The status broadcast
+    // (`host-controller-status-broadcast.ts`) picks up the staged version
+    // via its own poll once the download lane shows activity; no explicit
+    // republish needed here.
+    void hostController.stageLatest().catch((err) => {
+      log.debug("[host-registry] background stage completion failed", {
+        err,
       });
+    });
   }
   return state;
 }
@@ -956,120 +624,76 @@ async function clearHostRemovalIfSet(): Promise<void> {
   }
 }
 
-/**
- * Projects a freshly re-read install record into the legacy `HostInstallResult`
- * IPC shape after an install/update mutation. `HostController`'s
- * `InstallVersionOk` / `ApplyStagedOk` outcomes intentionally don't carry
- * `previousVersion` or `serviceLifecycle` - those were raw CLI-response
- * fields the old IPC layer parsed directly out of `host install`/`host
- * apply`'s JSON, and no production renderer code reads them (confirmed: both
- * fields appear only in test fixtures, never in a live component). Accepted
- * legacy-shim gap - default them rather than plumbing CLI internals back
- * through the controller's typed outcome.
- */
-function projectInstallResultFromRecord(
-  record: HostInstalledRecord | null,
-  fallbackVersion: string,
-): HostInstallResult {
-  return {
-    version: record?.version ?? fallbackVersion,
-    installedAt: record?.installedAt ?? "",
-    executablePath: record?.executablePath ?? "",
-    source: record?.source ?? { kind: "registry", value: "" },
-    archiveSha256: record?.archiveSha256 ?? "",
-    signatureKeyId: record?.signatureKeyId ?? "",
-    sizeBytes: record?.sizeBytes ?? 0,
-    previousVersion: null,
-    serviceLifecycle: {
-      priorServiceState: "not-installed",
-      stoppedBeforeSwap: false,
-      postSwapAction: "none",
-      postSwapError: null,
-    },
-  };
-}
-
 export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
-  bridge.disposeFns.push(
-    onHostRegistryUpdateStateChange((state) => {
-      bridge.fanOut(RunnerHostEvent.hostRegistryUpdateStateChange, state);
-    }),
-  );
-
   bridge.handleInvoke(
-    RunnerHostInvoke.traycerHostInstall,
-    async (_event, raw: unknown) => {
-      await clearHostRemovalIfSet();
-      const version = optionalString(raw, "version") ?? "latest";
-      const operationId = optionalString(raw, "operationId") ?? randomUUID();
-      const outcome = okOrThrow(
-        await runControllerMutationWithLegacyProgress(
-          bridge,
-          "install",
-          operationId,
-          () => {
-            const hostController = bridge.options.hostController;
-            return hasOperationAwareMutations(hostController)
-              ? hostController.installVersionForOperation(
-                  version,
-                  true,
-                  operationId,
-                )
-              : hostController.installVersion(version, true);
-          },
-          (o) => o,
-        ),
-      );
-      // The install record on disk now points at the freshly installed
-      // version. Re-probe the registry so the cached `installedVersion`
-      // (and `updateAvailable`) reflect it - otherwise the 24h TTL cache
-      // keeps the launch-time snapshot and the Updates row / banner stay
-      // stuck advertising the version we just installed.
-      await refreshRegistryUpdateState(bridge.options.hostController, {
-        force: true,
-        maxAgeMs: null,
-      });
-      return projectInstallResultFromRecord(
-        await readInstalledHostRecord(),
-        outcome.installedVersion,
-      );
+    RunnerHostInvoke.traycerHostControllerStatusGet,
+    async () => {
+      return bridge.options.hostController.getStatus();
     },
   );
 
   bridge.handleInvoke(
-    RunnerHostInvoke.traycerHostUpdate,
+    RunnerHostInvoke.traycerHostConvergeReady,
+    async (_event, raw: unknown) => {
+      const force = optionalBoolean(raw, "force");
+      return bridge.options.hostController.convergeReady(force);
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.traycerHostApplyStaged,
     async (_event, raw: unknown) => {
       await clearHostRemovalIfSet();
-      const operationId = optionalString(raw, "operationId") ?? randomUUID();
-      const outcome = okOrThrow(
-        await runControllerMutationWithLegacyProgress(
-          bridge,
-          "update",
-          operationId,
-          // `applyStaged`'s own preflight reconciles/downloads the eligible
-          // stage before applying it - no separate `stageLatest()` call
-          // needed here.
-          () => {
-            const hostController = bridge.options.hostController;
-            return hasOperationAwareMutations(hostController)
-              ? hostController.applyStagedForOperation(
-                  "manual",
-                  false,
-                  operationId,
-                )
-              : hostController.applyStaged("manual", false);
-          },
-          (o) => o,
-        ),
+      const trigger =
+        optionalString(raw, "trigger") === "launch" ? "launch" : "manual";
+      const force = optionalBoolean(raw, "force");
+      // `applyStaged`'s own preflight reconciles/downloads the eligible
+      // stage before applying it - no separate `stageLatest()` call needed
+      // here.
+      const outcome = await bridge.options.hostController.applyStaged(
+        trigger,
+        force,
       );
-      await refreshRegistryUpdateState(bridge.options.hostController, {
-        force: true,
-        maxAgeMs: null,
-      });
-      return projectInstallResultFromRecord(
-        await readInstalledHostRecord(),
-        outcome.appliedVersion,
+      if (outcome.kind === "ok") {
+        // The install record on disk now points at the freshly applied
+        // version. Re-probe the registry so the cached `installedVersion`
+        // (and `updateAvailable`) reflect it - otherwise the 24h TTL cache
+        // keeps the pre-apply snapshot and the Updates row stays stuck
+        // advertising the version we just installed.
+        await refreshRegistryUpdateState(bridge.options.hostController, {
+          force: true,
+          maxAgeMs: null,
+        });
+      }
+      return outcome;
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.traycerHostActivateInstalled,
+    async (_event, raw: unknown) => {
+      const force = optionalBoolean(raw, "force");
+      return bridge.options.hostController.activateInstalled(force);
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.traycerHostInstallVersion,
+    async (_event, raw: unknown) => {
+      await clearHostRemovalIfSet();
+      const pin = optionalString(raw, "pin") ?? "";
+      const force = optionalBoolean(raw, "force");
+      const outcome = await bridge.options.hostController.installVersion(
+        pin,
+        force,
       );
+      if (outcome.kind === "ok") {
+        await refreshRegistryUpdateState(bridge.options.hostController, {
+          force: true,
+          maxAgeMs: null,
+        });
+      }
+      return outcome;
     },
   );
 
@@ -1130,62 +754,6 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
     okOrThrow(await bridge.options.hostController.respawn());
   });
 
-  // Post-auth host provisioning (Core Flow: auth-first boot). The renderer
-  // invokes this once after sign-in when no host is reachable, and again on
-  // any subsequent "make the host ready" need. `HostController.convergeReady`
-  // owns every branch the old `host-ensure-ipc.ts` hand-rolled here (fast
-  // reachability check, macOS SMAppService registration, busy detection,
-  // readiness polling, the pending-LaunchAgent-revision opportunistic
-  // refresh) - this handler only re-shapes its `MutationOutcome` into the
-  // legacy `HostEnsureResult` union the renderer still expects.
-  bridge.handleInvoke(
-    RunnerHostInvoke.traycerHostEnsure,
-    async (_event, raw: unknown) => {
-      const operationId = optionalString(raw, "operationId") ?? randomUUID();
-      const force = optionalBoolean(raw, "force");
-      return runControllerMutationWithLegacyProgress(
-        bridge,
-        "ensure",
-        operationId,
-        () => {
-          const hostController = bridge.options.hostController;
-          return hasOperationAwareMutations(hostController)
-            ? hostController.convergeReadyForOperation(force, operationId)
-            : hostController.convergeReady(force);
-        },
-        async (outcome): Promise<HostEnsureResult> => {
-          if (outcome.kind === "ok") {
-            // `running: false` only ever comes back from the removed-by-user
-            // short-circuit (see `HostController.convergeReady`) - every
-            // other "ok" path exists precisely to make the host running.
-            // Renderer code (`local-host-gate.tsx`) never distinguishes
-            // "already-ready" from "provisioned" (confirmed: neither string
-            // appears in production gui-app code), so collapsing both into
-            // "provisioned" is not a behavioural loss.
-            return outcome.value.running
-              ? {
-                  action: "provisioned",
-                  running: true,
-                  version: outcome.value.version,
-                }
-              : { action: "removed", running: false, version: null };
-          }
-          if (outcome.kind === "busy") {
-            // Post-commit busy (continuation is always "activate" here): the
-            // running host has work in progress, so the controller kept it
-            // rather than restarting it. Surface it for the renderer's
-            // compat probe, mirroring the pre-HostController
-            // `surfaceBusyHostKeep` path.
-            await bridge.options.host.reloadSnapshotFromDisk();
-            const version = bridge.options.host.getSnapshot()?.version ?? null;
-            return { action: "host-busy", running: version !== null, version };
-          }
-          throw new Error(outcome.message);
-        },
-      );
-    },
-  );
-
   bridge.handleInvoke(
     RunnerHostInvoke.traycerHostLogs,
     async (_event, raw: unknown) => {
@@ -1237,31 +805,13 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
     },
   );
 
-  bridge.handleInvoke(
-    RunnerHostInvoke.traycerServiceRegister,
-    async (_event, raw: unknown) => {
-      await clearHostRemovalIfSet();
-      const operationId = optionalString(raw, "operationId") ?? randomUUID();
-      // Dev-slot CLI argv (the staged wrapper / self-invocation flags,
-      // Ticket f0ae4530) is now owned by `HostController.registerService()`
-      // itself, environment-aware since the controller already carries
-      // `environment`.
-      okOrThrow(
-        await runControllerMutationWithLegacyProgress(
-          bridge,
-          "register-service",
-          operationId,
-          () => {
-            const hostController = bridge.options.hostController;
-            return hasOperationAwareMutations(hostController)
-              ? hostController.registerServiceForOperation(operationId)
-              : hostController.registerService();
-          },
-          (o) => o,
-        ),
-      );
-    },
-  );
+  bridge.handleInvoke(RunnerHostInvoke.traycerServiceRegister, async () => {
+    await clearHostRemovalIfSet();
+    // Dev-slot CLI argv (the staged wrapper / self-invocation flags, Ticket
+    // f0ae4530) is owned by `HostController.registerService()` itself,
+    // environment-aware since the controller already carries `environment`.
+    return bridge.options.hostController.registerService();
+  });
 
   bridge.handleInvoke(RunnerHostInvoke.traycerServiceDeregister, async () => {
     okOrThrow(await bridge.options.hostController.deregisterService());
@@ -1275,13 +825,6 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
         force,
         maxAgeMs: null,
       });
-    },
-  );
-
-  bridge.handleInvoke(
-    RunnerHostInvoke.traycerHostOperationStatusGet,
-    async () => {
-      return getHostOperationStatus();
     },
   );
 

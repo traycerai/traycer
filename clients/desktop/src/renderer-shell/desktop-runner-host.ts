@@ -1,23 +1,27 @@
 import type {
+  ActivateInstalledOk,
+  ApplyStagedOk,
+  ApplyStagedTrigger,
   AuthTokenRefreshResult,
   AuthTokenValidationResult,
   CliInstallManifestSnapshot,
+  ConvergeReadyOk,
   DeviceFlowSession,
   IDeviceFlowHost,
   HostAvailableSnapshot,
   HostAvailableVersionsInput,
+  HostControllerStatus,
   HostDoctorReport,
-  HostEnsureResult,
-  HostInstallResult,
   HostInstalledRecord,
   HostLogsTailResult,
   HostNameSettings,
-  HostOperationStatus,
-  HostProgressEvent,
   HostRegistryUpdateState,
   HostRemovalState,
   HostTrayCommand,
   HostUninstallResult,
+  InstallVersionOk,
+  MutationOutcome,
+  ServiceRegistrationOk,
   TraycerUninstallResult,
   FreePortAndRestartInput,
   IHostManagement,
@@ -189,6 +193,7 @@ export interface DesktopPreloadBridge {
   zoom: DesktopZoomBridge;
   hostManagement: DesktopHostManagementBridge;
   hostTray: DesktopHostTrayBridge;
+  hostControllerStatus: DesktopHostControllerStatusBridge;
 }
 
 export interface DesktopFileDropsBridge {
@@ -209,13 +214,19 @@ export interface DesktopFileDropsBridge {
  * `buildHostManagementBridge()`.
  */
 export interface DesktopHostManagementBridge {
-  installHost(input: {
-    readonly version: string | null;
-    readonly onProgress: ((event: HostProgressEvent) => void) | null;
-  }): Promise<HostInstallResult>;
-  updateHost(input: {
-    readonly onProgress: ((event: HostProgressEvent) => void) | null;
-  }): Promise<HostInstallResult>;
+  getHostControllerStatus(): Promise<HostControllerStatus>;
+  convergeReady(force: boolean): Promise<MutationOutcome<ConvergeReadyOk>>;
+  applyStaged(
+    trigger: ApplyStagedTrigger,
+    force: boolean,
+  ): Promise<MutationOutcome<ApplyStagedOk>>;
+  activateInstalled(
+    force: boolean,
+  ): Promise<MutationOutcome<ActivateInstalledOk>>;
+  installVersion(
+    pin: string,
+    force: boolean,
+  ): Promise<MutationOutcome<InstallVersionOk>>;
   uninstallHost(input: { readonly all: boolean }): Promise<HostUninstallResult>;
   uninstallTraycer(): Promise<TraycerUninstallResult>;
   getRemovalState(): Promise<HostRemovalState>;
@@ -229,24 +240,11 @@ export interface DesktopHostManagementBridge {
     input: HostAvailableVersionsInput,
   ): Promise<HostAvailableSnapshot>;
   installedRecord(): Promise<HostInstalledRecord | null>;
-  registerService(input: {
-    readonly onProgress: ((event: HostProgressEvent) => void) | null;
-  }): Promise<void>;
-  ensureHost(input: {
-    readonly onProgress: ((event: HostProgressEvent) => void) | null;
-    readonly force: boolean;
-  }): Promise<HostEnsureResult>;
+  registerService(): Promise<MutationOutcome<ServiceRegistrationOk>>;
   deregisterService(): Promise<void>;
   registryCheck(input: {
     readonly force: boolean;
   }): Promise<HostRegistryUpdateState>;
-  onRegistryUpdateState(handler: (state: HostRegistryUpdateState) => void): {
-    dispose: () => void;
-  };
-  getOperationStatus(): Promise<HostOperationStatus | null>;
-  onOperationStatus(handler: (status: HostOperationStatus | null) => void): {
-    dispose: () => void;
-  };
   freePortAndRestart(
     input: FreePortAndRestartInput,
   ): Promise<FreePortAndRestartInput>;
@@ -263,14 +261,8 @@ export interface DesktopHostTrayBridge {
   };
 }
 
-export interface DesktopHostRegistryUpdatesBridge {
-  onChange(handler: (state: HostRegistryUpdateState) => void): {
-    dispose: () => void;
-  };
-}
-
-export interface DesktopHostOperationStatusBridge {
-  onChange(handler: (status: HostOperationStatus | null) => void): {
+export interface DesktopHostControllerStatusBridge {
+  onChange(handler: (status: HostControllerStatus) => void): {
     dispose: () => void;
   };
 }
@@ -529,8 +521,7 @@ export class DesktopRunnerHost implements IRunnerHost {
   readonly zoom: IZoomHost;
   readonly hostManagement: IHostManagement;
   readonly hostTray: IHostTray;
-  readonly hostRegistryUpdates: DesktopHostRegistryUpdatesBridge;
-  readonly hostOperationStatus: DesktopHostOperationStatusBridge;
+  readonly hostControllerStatus: DesktopHostControllerStatusBridge;
   readonly deviceFlow: IDeviceFlowHost;
 
   private readonly bridge: DesktopPreloadBridge;
@@ -683,8 +674,13 @@ export class DesktopRunnerHost implements IRunnerHost {
     };
     const managementBridge = this.bridge.hostManagement;
     this.hostManagement = {
-      installHost: (input) => managementBridge.installHost(input),
-      updateHost: (input) => managementBridge.updateHost(input),
+      getHostControllerStatus: () => managementBridge.getHostControllerStatus(),
+      convergeReady: (force) => managementBridge.convergeReady(force),
+      applyStaged: (trigger, force) =>
+        managementBridge.applyStaged(trigger, force),
+      activateInstalled: (force) => managementBridge.activateInstalled(force),
+      installVersion: (pin, force) =>
+        managementBridge.installVersion(pin, force),
       uninstallHost: (input) => managementBridge.uninstallHost(input),
       uninstallTraycer: () => managementBridge.uninstallTraycer(),
       getRemovalState: () => managementBridge.getRemovalState(),
@@ -694,21 +690,16 @@ export class DesktopRunnerHost implements IRunnerHost {
       runDoctor: () => managementBridge.runDoctor(),
       availableVersions: (input) => managementBridge.availableVersions(input),
       installedRecord: () => managementBridge.installedRecord(),
-      registerService: (input) => managementBridge.registerService(input),
-      ensureHost: (input) => managementBridge.ensureHost(input),
+      registerService: () => managementBridge.registerService(),
       deregisterService: () => managementBridge.deregisterService(),
       registryCheck: (input) => managementBridge.registryCheck(input),
-      getOperationStatus: () => managementBridge.getOperationStatus(),
       freePortAndRestart: (input) => managementBridge.freePortAndRestart(input),
       cliManifest: () => managementBridge.cliManifest(),
       getHostName: () => managementBridge.getHostName(),
       setHostName: (input) => managementBridge.setHostName(input),
     };
-    this.hostRegistryUpdates = {
-      onChange: (handler) => managementBridge.onRegistryUpdateState(handler),
-    };
-    this.hostOperationStatus = {
-      onChange: (handler) => managementBridge.onOperationStatus(handler),
+    this.hostControllerStatus = {
+      onChange: (handler) => this.bridge.hostControllerStatus.onChange(handler),
     };
     this.hostTray = {
       onCommand: (handler) =>
