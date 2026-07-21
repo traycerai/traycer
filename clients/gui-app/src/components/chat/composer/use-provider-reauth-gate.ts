@@ -10,6 +10,10 @@ import { useTabProvidersList } from "@/hooks/providers/use-tab-providers-list-qu
 import type { ComposerSeedSourceKind } from "@/lib/composer/composer-seed-source";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { providerCliIdForHarness } from "@/lib/provider-ordering";
+import {
+  isProviderAmbientAuthenticated,
+  isProviderAmbientSignedOut,
+} from "@/lib/providers/provider-ambient-auth";
 
 /**
  * - `provider_unauthenticated`: the ambient/host login itself is signed out
@@ -113,7 +117,13 @@ function deriveReauthReason(input: {
 }): ProviderReauthReason | null {
   if (!input.enabled) return null;
   if (input.profileId === null) {
-    return input.state?.auth.status === "unauthenticated"
+    // Ambient/terminal account: reconcile the provider-level probe with the
+    // ambient profile row so a definitive logout on either source blocks send,
+    // matching the model picker's degraded state (see
+    // `isProviderAmbientSignedOut`). Reading only `state.auth` here is what let
+    // a doomed turn launch in the convergence window (summary `unavailable`,
+    // ambient row already `unauthenticated`).
+    return input.state !== null && isProviderAmbientSignedOut(input.state)
       ? "provider_unauthenticated"
       : null;
   }
@@ -190,7 +200,13 @@ export function useProviderReauthGate(
   // was written for) - the profile-specific reasons block send via the banner
   // without this connection-level toast.
   const providerUnauthenticated = reason === "provider_unauthenticated";
-  const authStatus = state?.auth.status ?? null;
+  // Reconnect edge reads the same two-source ambient verdict the sign-out edge
+  // now does (`isProviderAmbientAuthenticated`), not a bare provider-level
+  // `auth.status`: a reconnect that lands on the ambient profile row first
+  // (summary still lagging) must still clear the latch. A transient `unknown`
+  // keeps this false, so the success toast never phantom-fires mid-reprobe.
+  const providerAuthenticated =
+    state !== null && isProviderAmbientAuthenticated(state);
   const signedOutProviderRef = useRef<ProviderId | null>(null);
   useEffect(() => {
     if (providerUnauthenticated && providerId !== null) {
@@ -208,14 +224,14 @@ export function useProviderReauthGate(
         );
       }
     } else if (
-      authStatus === "authenticated" &&
+      providerAuthenticated &&
       providerId !== null &&
       signedOutProviderRef.current === providerId
     ) {
       signedOutProviderRef.current = null;
       toast.success(`${PROVIDER_DISPLAY_NAMES[providerId]} reconnected`);
     }
-  }, [providerUnauthenticated, authStatus, providerId]);
+  }, [providerUnauthenticated, providerAuthenticated, providerId]);
 
   return { providerId, profileId, state, signedOut, reason, profileLabel };
 }

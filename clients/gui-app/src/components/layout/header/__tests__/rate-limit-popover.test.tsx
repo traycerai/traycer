@@ -39,7 +39,10 @@ import type {
 } from "@/lib/rate-limits/rate-limit-envelope";
 import { accountContextValue } from "@/lib/auth/traycer-subscription-content";
 import { queryKeys } from "@/lib/query-keys";
-import { PROVIDER_RATE_LIMITS_STALE_TIME_MS } from "@/lib/rate-limit-providers";
+import {
+  PROVIDER_RATE_LIMITS_STALE_TIME_MS,
+  type RateLimitFetchEligibility,
+} from "@/lib/rate-limit-providers";
 import { formatResetFullDateTime } from "@/lib/relative-time";
 
 type QueryResult = {
@@ -65,6 +68,7 @@ type MockState = {
     providerId: string;
     lane: string;
     profiles: ReadonlyArray<ProviderProfile> | undefined;
+    fetchEligibility?: RateLimitFetchEligibility;
   }>;
   results: Record<string, QueryResult>;
   draining: boolean;
@@ -136,11 +140,19 @@ vi.mock("@/hooks/rate-limits/use-configured-rate-limit-providers", () => ({
   useConfiguredRateLimitProviders: () =>
     mocks.configured.map((provider) => ({
       ...provider,
+      fetchEligibility: provider.fetchEligibility ?? {
+        ambient: true,
+        managedProfiles: true,
+      },
       profiles: provider.profiles ?? [],
     })),
   useVisibleRateLimitProviders: () =>
     mocks.configured.map((provider) => ({
       ...provider,
+      fetchEligibility: provider.fetchEligibility ?? {
+        ambient: true,
+        managedProfiles: true,
+      },
       profiles: provider.profiles ?? [],
     })),
 }));
@@ -385,6 +397,24 @@ function providerProfile(input: {
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
+  };
+}
+
+function unauthenticatedAmbientProfile(): ProviderProfile {
+  return {
+    ...providerProfile({
+      profileId: "ambient",
+      kind: "ambient",
+      label: "Terminal",
+      tier: "Pro",
+      usageUpdatedAt: null,
+    }),
+    auth: {
+      status: "unauthenticated",
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
   };
 }
 
@@ -1187,6 +1217,85 @@ describe("<RateLimitPopover /> rail", () => {
     expect(screen.getByText("Current session")).toBeTruthy();
     expect(screen.getByText("Work")).toBeTruthy();
     expect(screen.getByText("Pro 5x")).toBeTruthy();
+  });
+
+  it("keeps an unauthenticated ambient row with cached lastGood data visible without a refresh action", () => {
+    mocks.configured = [
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [unauthenticatedAmbientProfile()],
+        fetchEligibility: { ambient: false, managedProfiles: true },
+      },
+    ];
+    mocks.results = {
+      codex: degradedRetainedResult(codexReady(), "usage_fetch_failed"),
+    };
+
+    renderPopover();
+
+    expect(screen.getByText("Terminal")).toBeTruthy();
+    expect(screen.getByText("4% used")).toBeTruthy();
+    expect(screen.queryByText("No logged-in profiles")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Refresh all" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
+    expect(screen.queryByRole("button", { name: "Refresh Codex" })).toBeNull();
+    expect(mocks.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("keeps the ambient row passive while making the authenticated managed row refreshable", () => {
+    const ambient = unauthenticatedAmbientProfile();
+    const managed: ProviderProfile = {
+      ...ambient,
+      profileId: "work-profile",
+      kind: "managed",
+      label: "Work",
+      auth: {
+        status: "authenticated",
+        badgeText: null,
+        label: null,
+        detail: null,
+      },
+      identity: {
+        email: "work@example.com",
+        tier: "Pro 5x",
+        accountUuid: "work-profile-uuid",
+      },
+      usageUpdatedAt: NOW - 1_000,
+    };
+    mocks.configured = [
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [ambient, managed],
+        fetchEligibility: { ambient: false, managedProfiles: true },
+      },
+    ];
+    mocks.results = {
+      [resultKey("codex", "work-profile")]: readyResult(codexReady()),
+    };
+
+    renderPopover();
+
+    expect(screen.getByText("Terminal")).toBeTruthy();
+    expect(screen.getByText("Work")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Refresh all" })).toBeTruthy();
+    expect(mocks.enqueue).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
+    expect(screen.getByRole("button", { name: "Refresh Codex" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Refresh Codex" }));
+    expect(mocks.enqueueBatch).toHaveBeenCalledWith(
+      [
+        {
+          providerId: "codex",
+          accountContext: { type: "PERSONAL" },
+          profileId: "work-profile",
+        },
+      ],
+      { force: true },
+    );
   });
 
   it("enqueues open-time refresh only for stale multi-profile rows", async () => {

@@ -8,6 +8,7 @@ import type { ReactNode } from "react";
 import type {
   ProviderRateLimits,
   ProviderRateLimitWindow,
+  RateLimitUnavailableReason,
 } from "@traycer/protocol/host";
 import { classifyProviderRateLimitWindow } from "@traycer/protocol/host/rate-limit";
 import type { ProviderRateLimitEnvelope } from "@/lib/rate-limits/rate-limit-envelope";
@@ -34,6 +35,7 @@ import {
 import {
   formatResetFullDateTime,
   useIsFarReset,
+  useRelativeTimestamp,
   useResetCountdown,
   useSampledNow,
 } from "@/lib/relative-time";
@@ -1025,12 +1027,62 @@ export function ProviderRateLimitBody(
       </p>
     );
   }
-  return (
+  const detail = (
     <ProviderRateLimitDetail
       data={data}
       variant="settings"
       codexResetAction={props.codexResetAction}
     />
+  );
+  // Fresh reading: render as-is. The Providers panel header already carries a
+  // "Checked Xm ago" for provider status, so a healthy usage card needs no
+  // second timestamp.
+  if (!state.degraded) return detail;
+  // Degraded: a retained last-known-good reading is being shown after the
+  // latest poll failed. Surface the ORIGINAL update time plus a failed-refresh
+  // note and dim the reading in place - the same treatment the header popover
+  // gives this state, so the stale numbers can't be mistaken for fresh.
+  return (
+    <div className="flex flex-col gap-2">
+      <StaleUsageRefreshNote
+        lastGoodAt={state.lastGoodAt}
+        degradedReason={state.degradedReason}
+      />
+      <div className="opacity-60">{detail}</div>
+    </div>
+  );
+}
+
+/**
+ * The failed-refresh / stale line the Settings usage card shows while it's
+ * displaying a retained last-known-good reading after the latest poll failed
+ * (Core Flows degraded state): the ORIGINAL `lastGoodAt` as "Updated Xm ago"
+ * (never the failed attempt's time, so it can't read as fresh) followed by a
+ * note - the specific transient reason's plain-language copy when the envelope
+ * itself is why (`degradedReason` non-null), otherwise the generic "refresh
+ * failed" for a thrown query-level exception with no specific reason. Mirrors
+ * the header popover's `UsageLimitUpdatedLabel` copy verbatim; kept a local
+ * component so neither component-only file has to import the other. Renders the
+ * note alone in the (production-unreachable) case where an available degraded
+ * reading somehow carries no timestamp, keeping the single relative-time hook
+ * call unconditional.
+ */
+function StaleUsageRefreshNote({
+  lastGoodAt,
+  degradedReason,
+}: {
+  readonly lastGoodAt: number | null;
+  readonly degradedReason: RateLimitUnavailableReason | null;
+}): ReactNode {
+  const ago = useRelativeTimestamp(lastGoodAt ?? 0);
+  const note =
+    degradedReason !== null
+      ? formatUnavailableReason(degradedReason)
+      : "refresh failed";
+  return (
+    <p className="text-ui-xs text-muted-foreground">
+      {lastGoodAt !== null ? `Updated ${ago} · ${note}` : note}
+    </p>
   );
 }
 

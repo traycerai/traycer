@@ -1,11 +1,14 @@
 import type {
+  ProviderAuthStatus,
   ProviderCliState,
   ProviderId,
+  ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
 import {
   rateLimitCapableProviderIdSchema,
   type RateLimitCapableProviderId,
 } from "@traycer/protocol/host/rate-limit";
+import { isProviderAmbientSignedOut } from "@/lib/providers/provider-ambient-auth";
 
 /**
  * The two providers `host.getRateLimitUsage @1.2`'s `providerRateLimits`
@@ -33,6 +36,16 @@ export type RateLimitProviderId = RateLimitCapableProviderId;
  *   out its configured profiles together before the next item begins.
  */
 export type RateLimitFetchLane = "httpFetch" | "ephemeralProcess";
+
+/**
+ * Credential eligibility is scoped to the target that owns the credential:
+ * terminal/ambient usage reads depend on the provider's ambient auth summary,
+ * while managed profiles own and report their own credentials.
+ */
+export interface RateLimitFetchEligibility {
+  readonly ambient: boolean;
+  readonly managedProfiles: boolean;
+}
 
 /**
  * Shared "how fresh is fresh enough" floor for provider rate-limit reads: the
@@ -76,15 +89,13 @@ export function rateLimitFetchLane(
 }
 
 /**
- * Whether `state` currently reports valid credentials for a rate-limit pull -
- * the gate both polling lanes share, read from the same `providers.list` auth
- * state the popover rail keys off. A provider enters a lane only while this is
- * `true`; because these subscriptions are now persistent (app-shell level, not
- * the transient Settings card that re-gates on every mount), a credential
- * removed mid-session drops the provider out on the very next tick.
+ * Whether the terminal/ambient credential is currently valid for a rate-limit
+ * pull. This gates the persistent ambient app-shell queue; managed profiles
+ * instead use `resolveRateLimitFetchEligibility` plus their own profile auth.
  *
- * - `authPending` / `availabilityPending`: the host has not settled a verdict
- *   yet, so acting on the row would be premature - treated as not-yet-eligible.
+ * - `availabilityPending`: provider availability has not settled, so no target
+ *   may use it yet. `authPending` is deliberately target-local: it is an
+ *   aggregate bit once profiles exist, and must not suppress a settled sibling.
  * - `"authenticated"`: verified good credentials.
  * - `"configured"`: credentials are present but unverified (e.g. an API key set
  *   for openrouter/kilocode before the first probe) - included because the pull
@@ -94,12 +105,64 @@ export function rateLimitFetchLane(
  * - `enabled: false`: the user turned the provider off; don't spend a fetch on
  *   a provider they have disabled.
  */
-export function isRateLimitProviderConfigured(
+function isRateLimitProviderAvailableForUsage(
   state: ProviderCliState,
 ): boolean {
   if (!state.enabled) return false;
-  if (state.authPending || state.availabilityPending) return false;
-  return (
-    state.auth.status === "authenticated" || state.auth.status === "configured"
+  if (state.availabilityPending) return false;
+  return true;
+}
+
+function hasUsableCredential(status: ProviderAuthStatus): boolean {
+  return status === "authenticated" || status === "configured";
+}
+
+function hasUsableProfileCredential(profile: ProviderProfile): boolean {
+  return hasUsableCredential(profile.auth.status);
+}
+
+function ambientFetchEligible(state: ProviderCliState): boolean {
+  if (!isRateLimitProviderAvailableForUsage(state)) return false;
+  if (isProviderAmbientSignedOut(state)) return false;
+  const ambientProfile = state.profiles.find(
+    (profile) => profile.kind === "ambient",
   );
+  if (ambientProfile !== undefined) {
+    return hasUsableProfileCredential(ambientProfile);
+  }
+  if (state.authPending) return false;
+  return hasUsableCredential(state.auth.status);
+}
+
+export function resolveRateLimitFetchEligibility(
+  state: ProviderCliState,
+): RateLimitFetchEligibility {
+  const managedProfiles = isRateLimitProviderAvailableForUsage(state);
+  return {
+    managedProfiles,
+    ambient: ambientFetchEligible(state),
+  };
+}
+
+/**
+ * Whether a profile can perform its own usage read under the provider's
+ * settled availability state. Managed profiles deliberately do not inherit
+ * terminal/ambient sign-out: they authenticate independently.
+ */
+export function isRateLimitProfileFetchEligible(
+  eligibility: RateLimitFetchEligibility,
+  profile: ProviderProfile,
+): boolean {
+  return (
+    (profile.kind === "ambient"
+      ? eligibility.ambient
+      : eligibility.managedProfiles) && hasUsableProfileCredential(profile)
+  );
+}
+
+/** Backward-compatible ambient/legacy alias for the app-shell queue. */
+export function isRateLimitProviderConfigured(
+  state: ProviderCliState,
+): boolean {
+  return resolveRateLimitFetchEligibility(state).ambient;
 }

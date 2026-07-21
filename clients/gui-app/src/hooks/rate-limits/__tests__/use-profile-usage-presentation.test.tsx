@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
-import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
+import type {
+  ProviderAuthStatus,
+  ProviderCliState,
+  ProviderProfile,
+} from "@traycer/protocol/host/provider-schemas";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -24,6 +28,9 @@ import type { RateLimitUsageResponse } from "@/lib/rate-limits/rate-limit-envelo
 const scopesRef = vi.hoisted(() => ({
   byHostId: new Map<string | null, RunTargetHost>(),
 }));
+const providerStateRef = vi.hoisted(() => ({
+  providers: [] as ReadonlyArray<ProviderCliState>,
+}));
 vi.mock("@/hooks/rate-limits/use-run-target-host", () => ({
   useRunTargetHost: (runTargetHostId: string | null) => {
     const scope = scopesRef.byHostId.get(runTargetHostId);
@@ -34,6 +41,11 @@ vi.mock("@/hooks/rate-limits/use-run-target-host", () => ({
     }
     return scope;
   },
+}));
+vi.mock("@/hooks/providers/use-providers-list-query", () => ({
+  useProvidersListForClient: () => ({
+    data: { providers: providerStateRef.providers },
+  }),
 }));
 
 import { useProfileUsagePresentation } from "@/hooks/rate-limits/use-profile-usage-presentation";
@@ -63,6 +75,33 @@ function profile(
     ambientDriftNotice: null,
     accentColor: null,
     ...overrides,
+  };
+}
+
+function providerState(
+  providerId: "claude-code" | "openrouter",
+  status: ProviderAuthStatus,
+): ProviderCliState {
+  return {
+    enabled: true,
+    disabledBy: null,
+    selected: { kind: "bundled" },
+    candidates: [],
+    authPending: false,
+    checkedAt: null,
+    apiKey: { supported: false, configured: false, source: null },
+    terminalAgentArgs: "",
+    envOverrides: [],
+    loginCapability: null,
+    availabilityPending: false,
+    providerId,
+    auth: {
+      status,
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    profiles: [],
   };
 }
 
@@ -136,11 +175,15 @@ describe("useProfileUsagePresentation", () => {
   beforeEach(() => {
     __resetRateLimitQueueForTests();
     scopesRef.byHostId.clear();
+    providerStateRef.providers = [
+      providerState("claude-code", "authenticated"),
+    ];
   });
   afterEach(() => {
     cleanup();
     __resetRateLimitQueueForTests();
     scopesRef.byHostId.clear();
+    providerStateRef.providers = [];
   });
 
   it("issues zero host.getRateLimitUsage calls purely from mounting (cache-only observation)", () => {
