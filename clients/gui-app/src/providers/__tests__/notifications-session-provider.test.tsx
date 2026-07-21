@@ -428,7 +428,7 @@ async function renderHostNotificationsProvider(): Promise<{
 
   await waitFor(() => {
     expect(streamClient.subscribedMethods).toContain(
-      "host.notifications.subscribe",
+      "host.notifications.feed.subscribe",
     );
   });
   // Presence is only sent after the stream reports open; the mock does not
@@ -1202,7 +1202,7 @@ describe("<NotificationsSessionProvider />", () => {
 
     await waitFor(() => {
       expect(firstClient.subscribedMethods).toContain(
-        "host.notifications.subscribe",
+        "host.notifications.feed.subscribe",
       );
     });
     act(() => {
@@ -1212,7 +1212,7 @@ describe("<NotificationsSessionProvider />", () => {
       expect(firstClient.session.clientFrames).toHaveLength(1);
     });
     expect([...firstClient.subscribedMethods].sort()).toEqual([
-      "host.notifications.subscribe",
+      "host.notifications.feed.subscribe",
       "notifications.subscribe",
     ]);
 
@@ -1241,7 +1241,7 @@ describe("<NotificationsSessionProvider />", () => {
 
     await waitFor(() => {
       expect(secondClient.subscribedMethods).toContain(
-        "host.notifications.subscribe",
+        "host.notifications.feed.subscribe",
       );
     });
     act(() => {
@@ -1251,7 +1251,7 @@ describe("<NotificationsSessionProvider />", () => {
       expect(secondClient.session.clientFrames).toHaveLength(1);
     });
     expect([...secondClient.subscribedMethods].sort()).toEqual([
-      "host.notifications.subscribe",
+      "host.notifications.feed.subscribe",
       "notifications.subscribe",
     ]);
     // Both streams shared `firstClient.session` in this mock, so both old

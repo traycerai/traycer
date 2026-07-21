@@ -509,10 +509,13 @@ export function openHostNotificationsStream(
 
   function openSession(): void {
     if (disposed) return;
-    const session = wsStreamClient.subscribe("host.notifications.subscribe", {
-      initialAttentionLimit: HOST_NOTIFICATIONS_INITIAL_ATTENTION_LIMIT,
-      initialRecentLimit: HOST_NOTIFICATIONS_INITIAL_RECENT_LIMIT,
-    });
+    const session = wsStreamClient.subscribe(
+      "host.notifications.feed.subscribe",
+      {
+        initialAttentionLimit: HOST_NOTIFICATIONS_INITIAL_ATTENTION_LIMIT,
+        initialRecentLimit: HOST_NOTIFICATIONS_INITIAL_RECENT_LIMIT,
+      },
+    );
     currentSession = session;
     session.onServerFrame((envelope, binaryPayload) => {
       // Notification frames are contractually text-only; an unexpected

@@ -1870,12 +1870,12 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
     session.close();
   });
 
-  it("proves the real host.notifications.subscribe retry sequence: retryable snapshot failure skips auth recovery, redials, and accepts the replacement snapshot", async () => {
+  it("proves the real host.notifications.feed.subscribe retry sequence: retryable snapshot failure skips auth recovery, redials, and accepts the replacement snapshot", async () => {
     const { factory, sockets } = makeFactory();
     const revalidator = makeAuthRevalidator(["rotated"]);
     const client = makeAuthClient(factory, revalidator.auth, 5);
     const frames: StreamFrameEnvelope[] = [];
-    const session = client.subscribe("host.notifications.subscribe", {
+    const session = client.subscribe("host.notifications.feed.subscribe", {
       initialAttentionLimit: 50,
       initialRecentLimit: 50,
     });
@@ -1886,14 +1886,14 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
     await flush();
     expect(sockets).toHaveLength(1);
     // Complete the real open/openAck handshake so the client actually emits
-    // `host.notifications.subscribe` on socket 0 before the host rejects the
-    // snapshot init - the failure must land on a real subscription attempt,
-    // not a pre-subscribe open-only socket.
+    // `host.notifications.feed.subscribe` on socket 0 before the host rejects
+    // the snapshot init - the failure must land on a real subscription
+    // attempt, not a pre-subscribe open-only socket.
     completeHandshake(sockets[0].socket);
     expect(sockets[0].socket.textSent).toHaveLength(2);
     expect(parseText(sockets[0].socket.textSent[1])).toEqual({
       kind: "subscribe",
-      method: "host.notifications.subscribe",
+      method: "host.notifications.feed.subscribe",
       schemaVersion: { major: 1, minor: 0 },
       params: {
         initialAttentionLimit: 50,
@@ -1926,7 +1926,7 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
     expect(sockets[1].socket.textSent).toHaveLength(2);
     expect(parseText(sockets[1].socket.textSent[1])).toEqual({
       kind: "subscribe",
-      method: "host.notifications.subscribe",
+      method: "host.notifications.feed.subscribe",
       schemaVersion: { major: 1, minor: 0 },
       params: {
         initialAttentionLimit: 50,

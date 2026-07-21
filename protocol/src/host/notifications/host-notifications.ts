@@ -1,13 +1,17 @@
-/**
- * `host.notifications.*@1.0` - host-local notification feed contracts.
+/** Host-local notification contracts.
  *
- * The notifications surface was never released. Its one flat version therefore
- * carries the complete feed, stream, and indicator shapes; the unary methods
- * advertise through the optional-capabilities channel rather than the released
- * RPC floor.
+ * `host.notifications.list@1.0` and `host.notifications.subscribe@1.0`
+ * shipped in host v1.1.7 and are frozen below. The partitioned feed is a
+ * breaking projection cutover: unary list rides a bridged v2 major, while the
+ * stream uses the successor method `host.notifications.feed.subscribe@1.0`
+ * because the stream framework deliberately has no cross-major bridges.
  */
 import { z } from "zod";
-import { defineRpcContract } from "@traycer/protocol/framework/index";
+import {
+  defineDowngradePath,
+  defineRpcContract,
+  defineUpgradePath,
+} from "@traycer/protocol/framework/index";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 
 const textFrameFields = {
@@ -15,6 +19,11 @@ const textFrameFields = {
 } as const;
 
 export const HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP = 500;
+
+export const hostNotificationFilterSchemaV10 = z.enum(["all", "unread"]);
+export type HostNotificationFilterV10 = z.infer<
+  typeof hostNotificationFilterSchemaV10
+>;
 
 export const hostNotificationKindSchema = z.enum([
   "agent.stopped",
@@ -118,6 +127,14 @@ export const hostNotificationEntrySchema = z.discriminatedUnion("kind", [
 ]);
 export type HostNotificationEntry = z.infer<typeof hostNotificationEntrySchema>;
 
+export const hostNotificationCursorSchemaV10 = z.object({
+  updatedAt: z.number().int().nonnegative(),
+  id: z.string(),
+});
+export type HostNotificationCursorV10 = z.infer<
+  typeof hostNotificationCursorSchemaV10
+>;
+
 export const hostNotificationsChronologicalCursorSchema = z.object({
   kind: z.literal("chronological"),
   updatedAt: z.number().int().nonnegative(),
@@ -168,6 +185,23 @@ function nonDuplicateIdArraySchema(min: number) {
       message: "removedIds must not contain duplicate ids",
     });
 }
+
+export const hostNotificationsListRequestSchemaV10 = z.object({
+  filter: hostNotificationFilterSchemaV10,
+  limit: z.number().int().min(1).max(500),
+  cursor: hostNotificationCursorSchemaV10.optional(),
+});
+export type HostNotificationsListRequestV10 = z.infer<
+  typeof hostNotificationsListRequestSchemaV10
+>;
+
+export const hostNotificationsListResponseSchemaV10 = z.object({
+  entries: z.array(hostNotificationEntrySchema),
+  nextCursor: hostNotificationCursorSchemaV10.nullable(),
+});
+export type HostNotificationsListResponseV10 = z.infer<
+  typeof hostNotificationsListResponseSchemaV10
+>;
 
 export const hostNotificationsListRequestSchema = z.discriminatedUnion(
   "filter",
@@ -260,6 +294,14 @@ export type HostNotificationsClearAllResponse = z.infer<
   typeof hostNotificationsClearAllResponseSchema
 >;
 
+export const hostNotificationsSubscribeOpenRequestSchemaV10 = z.object({
+  filter: hostNotificationFilterSchemaV10,
+  initialLimit: z.number().int().min(1).max(500),
+});
+export type HostNotificationsSubscribeOpenRequestV10 = z.infer<
+  typeof hostNotificationsSubscribeOpenRequestSchemaV10
+>;
+
 export const hostNotificationsSubscribeOpenRequestSchema = z.object({
   initialAttentionLimit: z.number().int().min(1).max(500),
   initialRecentLimit: z.number().int().min(1).max(500),
@@ -282,6 +324,49 @@ export const hostNotificationsPresenceEntitySchema = z.object({
 });
 export type HostNotificationsPresenceEntity = z.infer<
   typeof hostNotificationsPresenceEntitySchema
+>;
+
+export const hostNotificationsSubscribeServerFrameSchemaV10 =
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("snapshot"),
+      ...textFrameFields,
+      entries: z.array(hostNotificationEntrySchema),
+    }),
+    z.object({
+      kind: z.literal("upserted"),
+      ...textFrameFields,
+      entry: hostNotificationEntrySchema,
+    }),
+    z.object({
+      kind: z.literal("readStateChanged"),
+      ...textFrameFields,
+      ids: z.array(z.string()).min(1),
+      entityRefs: z.array(hostNotificationsEntityRefSchema),
+      readAt: z.number().int().nonnegative().nullable(),
+      resolvedAt: z.number().int().nonnegative().nullable(),
+    }),
+    z.object({
+      kind: z.literal("cleared"),
+      ...textFrameFields,
+      beforeUpdatedAt: z.number().int().nonnegative(),
+    }),
+    z.object({
+      kind: z.literal("channelEmission"),
+      ...textFrameFields,
+      emissionId: z.string(),
+      channelId: hostNotificationChannelIdSchema,
+      severity: hostNotificationSeveritySchema,
+      rows: z.array(hostNotificationEntrySchema).min(1),
+      reason: hostNotificationsChannelEmissionReasonSchema,
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      ...textFrameFields,
+    }),
+  ]);
+export type HostNotificationsSubscribeServerFrameV10 = z.infer<
+  typeof hostNotificationsSubscribeServerFrameSchemaV10
 >;
 
 export const hostNotificationsSubscribeServerFrameSchema = z.discriminatedUnion(
@@ -477,11 +562,85 @@ export type HostNotificationsConfigResponse = z.infer<
   typeof hostNotificationsConfigResponseSchema
 >;
 
-export const hostNotificationsList = defineRpcContract({
+export const hostNotificationsListV10 = defineRpcContract({
   method: "host.notifications.list",
   schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: hostNotificationsListRequestSchemaV10,
+  responseSchema: hostNotificationsListResponseSchemaV10,
+});
+
+export const hostNotificationsListV20 = defineRpcContract({
+  method: "host.notifications.list",
+  schemaVersion: { major: 2, minor: 0 } as const,
   requestSchema: hostNotificationsListRequestSchema,
   responseSchema: hostNotificationsListResponseSchema,
+});
+
+export const hostNotificationsListUpgradeV10ToV20 = defineUpgradePath<
+  typeof hostNotificationsListV10,
+  typeof hostNotificationsListV20
+>({
+  from: hostNotificationsListV10.schemaVersion,
+  to: hostNotificationsListV20.schemaVersion,
+  upgradeRequest: (request) => ({
+    filter: request.filter === "all" ? "recent" : "unreadRecent",
+    limit: request.limit,
+    ...(request.cursor === undefined
+      ? {}
+      : { cursor: { kind: "chronological" as const, ...request.cursor } }),
+  }),
+  upgradeResponse: (response) => ({
+    entries: response.entries,
+    nextCursor:
+      response.nextCursor === null
+        ? null
+        : { kind: "chronological" as const, ...response.nextCursor },
+  }),
+});
+
+export const hostNotificationsListDowngradeV20ToV10 = defineDowngradePath<
+  typeof hostNotificationsListV20,
+  typeof hostNotificationsListV10
+>({
+  from: hostNotificationsListV20.schemaVersion,
+  to: hostNotificationsListV10.schemaVersion,
+  downgradeRequest: (request) => {
+    if (request.filter === "attention") {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "The attention projection has no representation in host.notifications.list@1.0",
+        },
+      };
+    }
+    const { cursor, ...rest } = request;
+    return {
+      ok: true,
+      value: {
+        ...rest,
+        filter:
+          request.filter === "recent" ? ("all" as const) : ("unread" as const),
+        ...(cursor === undefined
+          ? {}
+          : { cursor: { updatedAt: cursor.updatedAt, id: cursor.id } }),
+      },
+    };
+  },
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: {
+      entries: response.entries,
+      nextCursor:
+        response.nextCursor === null
+          ? null
+          : {
+              updatedAt: response.nextCursor.updatedAt,
+              id: response.nextCursor.id,
+            },
+    },
+  }),
 });
 
 export const hostNotificationsMarkRead = defineRpcContract({
@@ -505,8 +664,16 @@ export const hostNotificationsClearAll = defineRpcContract({
   responseSchema: hostNotificationsClearAllResponseSchema,
 });
 
-export const hostNotificationsSubscribe = defineStreamRpcContract({
+export const hostNotificationsSubscribeV10 = defineStreamRpcContract({
   method: "host.notifications.subscribe",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  openRequestSchema: hostNotificationsSubscribeOpenRequestSchemaV10,
+  serverFrameSchema: hostNotificationsSubscribeServerFrameSchemaV10,
+  clientFrameSchema: hostNotificationsSubscribeClientFrameSchema,
+});
+
+export const hostNotificationsFeedSubscribeV10 = defineStreamRpcContract({
+  method: "host.notifications.feed.subscribe",
   schemaVersion: { major: 1, minor: 0 } as const,
   openRequestSchema: hostNotificationsSubscribeOpenRequestSchema,
   serverFrameSchema: hostNotificationsSubscribeServerFrameSchema,
