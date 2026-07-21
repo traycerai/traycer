@@ -81,6 +81,13 @@ interface ChatComposerProps {
    */
   readonly isActive: boolean;
   readonly sendDisabled: boolean | undefined;
+  /**
+   * Why `sendDisabled` is true, shown as the send button's hover/focus
+   * tooltip (e.g. "Reconnecting to the host…"). Without it a blocked send
+   * button is silently grey and reads as broken. `null`/absent when
+   * `sendDisabled` is false or the caller has no reason to give.
+   */
+  readonly sendDisabledHint: string | null | undefined;
   readonly mentionRoots: ReadonlyArray<string> | null;
   readonly fallbackToGlobalMentionRoots: boolean;
   readonly currentEpicId: string | null;
@@ -126,6 +133,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     taskId,
     isActive,
     sendDisabled,
+    sendDisabledHint,
     mentionRoots,
     fallbackToGlobalMentionRoots,
     currentEpicId,
@@ -233,6 +241,12 @@ function ChatComposerImpl(props: ChatComposerProps) {
     seedSource.kind,
   );
   const sendBlocked = sendDisabled === true || reauthGate.signedOut;
+  const sendBlockedHint = resolveSendBlockedHint({
+    workspaceDisabledHint: workspaceAvailability.disabledHint,
+    signedOut: reauthGate.signedOut,
+    sendDisabled,
+    sendDisabledHint,
+  });
   const selectedModel = useStore(toolbarStore, (s) => s.selectedModel);
   // Rate-limit switch prompt: purely informational + user-confirmed, so it
   // never blocks send the way the reauth gate does. Scoped to the selected
@@ -461,7 +475,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
                   hasPendingApprovals={hasPendingApprovals}
                   stopDisabled={stopDisabled}
                   onStopTurn={onStopTurn}
-                  composerDisabledHint={workspaceAvailability.disabledHint}
+                  composerDisabledHint={sendBlockedHint}
                   dictation={dictationControl}
                   dictationPreparing={dictationPreparing}
                   settingsLocked={false}
@@ -571,6 +585,27 @@ interface CanSubmitDraftArgs {
   readonly attachmentPreparationPending: boolean;
   readonly draftHasText: boolean;
   readonly draftHasImages: boolean;
+}
+
+/**
+ * Every blocked-send reason gets a hover/focus hint on the send button — a
+ * silently grey button reads as broken. Priority mirrors severity: the
+ * workspace gate (can't run anywhere), then the signed-out gate (the reauth
+ * banner has the full story), then the caller's reason (connection loss /
+ * view-only access).
+ */
+function resolveSendBlockedHint(args: {
+  readonly workspaceDisabledHint: string | null;
+  readonly signedOut: boolean;
+  readonly sendDisabled: boolean | undefined;
+  readonly sendDisabledHint: string | null | undefined;
+}): string | null {
+  if (args.workspaceDisabledHint !== null) return args.workspaceDisabledHint;
+  if (args.signedOut) {
+    return "Signed out of the provider — sign in to send messages";
+  }
+  if (args.sendDisabled === true) return args.sendDisabledHint ?? null;
+  return null;
 }
 
 function canSubmitDraft(args: CanSubmitDraftArgs): boolean {
