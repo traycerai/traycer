@@ -98,6 +98,64 @@ describe("resolveQuoteSelection - endpoint resolution", () => {
     expect(snapshot?.range.endOffset).toBe(root.childNodes.length);
   });
 
+  it("clamps a double-click on the LAST block whose word-selection tail lands at offset 0 of an out-of-root TEXT node", () => {
+    // A real double-click's word selection absorbs the block's trailing
+    // whitespace and finalizes the end at offset 0 of the NEXT text node - for
+    // a turn's last paragraph that node is the elapsed footer's label text,
+    // OUTSIDE the quotable root. This is the text-node analogue of the
+    // triple-click element@0 tail above; the element@0 clamp did not cover it,
+    // so the final paragraph was unquotable by double-click on every turn.
+    const segment = document.createElement("div");
+    const root = document.createElement("div");
+    root.setAttribute("data-quotable", "true");
+    const paragraph = document.createElement("p");
+    paragraph.textContent = "Third.";
+    root.appendChild(paragraph);
+    segment.appendChild(root);
+    const footer = document.createElement("button");
+    footer.setAttribute("data-testid", "assistant-elapsed-footer");
+    footer.textContent = "Mulled for 4s";
+    segment.appendChild(footer);
+    document.body.appendChild(segment);
+
+    const range = document.createRange();
+    range.setStart(firstText(paragraph), 0);
+    // End at offset 0 of the footer's TEXT node (not the element) - the
+    // double-click finalization shape the element@0 branch never reaches.
+    range.setEnd(firstText(footer), 0);
+
+    // Browser-shaped: the word plus the absorbed trailing block-boundary
+    // blank line the double-click synthesizes at the selection's end.
+    const snapshot = resolveQuoteSelection(range, "Third.\n\n");
+    expect(snapshot).not.toBeNull();
+    // End clamped to the root's end, so the range never reaches the footer.
+    expect(snapshot?.range.endContainer).toBe(root);
+    expect(snapshot?.range.endOffset).toBe(root.childNodes.length);
+  });
+
+  it("rejects a double-click tail that genuinely selected out-of-root TEXT (offset > 0)", () => {
+    // Offset > 0 in an out-of-root text node means the browser actually
+    // captured characters past the root (a real cross-root selection), not the
+    // empty offset-0 tail landing. The clamp must not fire and swallow it.
+    const segment = document.createElement("div");
+    const root = document.createElement("div");
+    root.setAttribute("data-quotable", "true");
+    const paragraph = document.createElement("p");
+    paragraph.textContent = "Third.";
+    root.appendChild(paragraph);
+    segment.appendChild(root);
+    const footer = document.createElement("div");
+    footer.textContent = "Mulled for 4s";
+    segment.appendChild(footer);
+    document.body.appendChild(segment);
+
+    const range = document.createRange();
+    range.setStart(firstText(paragraph), 0);
+    range.setEnd(firstText(footer), "Mulled".length);
+
+    expect(resolveQuoteSelection(range, "Third.\n\nMulled")).toBeNull();
+  });
+
   it("rejects a clamp whose clamped-away region holds real text (no cross-root text leak)", () => {
     const segment = document.createElement("div");
     const root = document.createElement("div");

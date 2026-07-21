@@ -275,10 +275,18 @@ function quotableRootForEnd(
   startRoot: Element,
 ): EndResolution {
   if (isTextNode(container)) {
-    return {
-      root: closestQuotable(container.parentElement),
-      clampToRootEnd: false,
-    };
+    const here = closestQuotable(container.parentElement);
+    // A double-click's word selection can absorb the block's trailing
+    // whitespace and finalize at offset 0 of the NEXT text node - on a turn's
+    // LAST block that node sits outside the quotable root. offset 0 means no
+    // character of this text node is selected, so it's the same tail landing
+    // as the triple-click element@0 case below: clamp back into the root
+    // rather than rejecting, and let the caller's clamped-away guard reject a
+    // drag that genuinely selected content past the root.
+    if (here !== startRoot && offset === 0) {
+      return { root: startRoot, clampToRootEnd: true };
+    }
+    return { root: here, clampToRootEnd: false };
   }
   const element = asElement(container);
   if (element === null) return { root: null, clampToRootEnd: false };
