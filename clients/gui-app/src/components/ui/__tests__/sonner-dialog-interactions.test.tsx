@@ -29,6 +29,7 @@ describe("<Toaster /> dialog interactions", () => {
   afterEach(() => {
     toast.dismiss();
     cleanup();
+    vi.restoreAllMocks();
   });
 
   it("does not dismiss an open dialog when a toast close button is clicked", async () => {
@@ -85,6 +86,22 @@ describe("<Toaster /> dialog interactions", () => {
     });
   });
 
+  it("uses a four-second duration for completed progress", () => {
+    const success = vi.spyOn(toast, "success").mockReturnValue("success");
+
+    progressSuccessToast("Deleted 13 worktrees", {
+      id: "worktree-delete-progress",
+      cancel: null,
+    });
+
+    expect(success).toHaveBeenCalledWith("Deleted 13 worktrees", {
+      id: "worktree-delete-progress",
+      cancel: null,
+      duration: 4000,
+      icon: undefined,
+    });
+  });
+
   it("auto-dismisses a success that replaces persistent progress", async () => {
     render(<Toaster />);
 
@@ -110,6 +127,9 @@ describe("<Toaster /> dialog interactions", () => {
     expect(
       document.querySelector("[data-icon] span[aria-hidden='true']"),
     ).toBeNull();
+    expect(
+      document.querySelector("[data-icon] .lucide-circle-check"),
+    ).not.toBeNull();
 
     await waitFor(
       () => {
