@@ -166,6 +166,7 @@ interface RecordedCall {
 
 interface FakeCli {
   readonly calls: RecordedCall[];
+  readonly timeoutPolicies: unknown[];
   readonly runResult: unknown;
   readonly streamResult: unknown;
 }
@@ -204,11 +205,46 @@ function fakeHostAvailablePayload(latest: string): unknown {
   };
 }
 
+function unavailableHostAvailablePayload(): unknown {
+  return {
+    manifest: {
+      schemaVersion: 1,
+      generatedAt: "2026-05-15T00:00:00Z",
+      latest: "1.7.0",
+      versions: [
+        {
+          version: "1.7.0",
+          releasedAt: "2026-05-15T00:00:00Z",
+          releaseNotesUrl: "https://example.invalid/notes",
+          yanked: false,
+          deprecationReason: null,
+          requiredCliVersion: null,
+          platforms: {
+            "darwin-arm64": {
+              available: false,
+              unavailableReason: "not published for platform",
+              url: "https://example.invalid/host.tar.gz",
+              sizeBytes: 1024,
+              sha256: "abc",
+              signatureUrl: "https://example.invalid/host.tar.gz.minisig",
+              signatureAlgorithm: "minisign",
+              publicKeyId: "test-key",
+            },
+          },
+        },
+      ],
+    },
+    platformKey: "darwin-arm64",
+    manifestUrl: "https://example.invalid/versions.json",
+  };
+}
+
 function installFakeCli(opts: {
   readonly runResult: unknown;
   readonly streamResult: unknown;
 }): FakeCli {
   const calls: RecordedCall[] = [];
+  const timeoutPolicies: unknown[] = [];
   vi.doMock("../../cli/traycer-cli", () => ({
     runTraycerCliJson: vi.fn((args: readonly string[]) => {
       calls.push({ kind: "run", args: [...args], timeoutMs: undefined });
@@ -224,11 +260,17 @@ function installFakeCli(opts: {
       ({
         args,
         timeoutMs,
+        timeoutPolicy,
       }: {
         readonly args: readonly string[];
         readonly timeoutMs: number;
+        readonly timeoutPolicy: unknown;
       }) => {
         calls.push({ kind: "stream", args: [...args], timeoutMs });
+        timeoutPolicies.push(timeoutPolicy);
+        if (args[0] === "host" && args[1] === "available") {
+          return Promise.resolve({ data: fakeHostAvailablePayload("1.7.0") });
+        }
         return Promise.resolve({ data: opts.streamResult });
       },
     ),
@@ -238,7 +280,12 @@ function installFakeCli(opts: {
     }),
     TraycerCliError: class extends Error {},
   }));
-  return { calls, runResult: opts.runResult, streamResult: opts.streamResult };
+  return {
+    calls,
+    timeoutPolicies,
+    runResult: opts.runResult,
+    streamResult: opts.streamResult,
+  };
 }
 
 interface FakeBridge {
@@ -603,6 +650,10 @@ describe("host-management IPC - CLI subprocess argv carries NO --environment (CL
     // ever sends it again the CLI will reject the call with
     // `unknown option '--cli-bin'`.
     expect(call.args).not.toContain("--cli-bin");
+    expect(fake.timeoutPolicies[0]).toEqual({
+      kind: "absolute",
+      absoluteCapMs: mgmt.LONG_OP_TIMEOUT_MS,
+    });
   });
 
   it("prod service register does NOT pass --allow-self-invocation even if dev wrapper exists on disk", async () => {
@@ -929,6 +980,9 @@ function installFakeCliWithDeferredStream(): {
         readonly timeoutMs: number;
       }) => {
         calls.push({ kind: "stream", args: [...args], timeoutMs });
+        if (args[0] === "host" && args[1] === "available") {
+          return Promise.resolve({ data: fakeHostAvailablePayload("1.7.0") });
+        }
         return new Promise((resolve, reject) => {
           resolveStream = (data: unknown) => {
             onEvent({
@@ -954,6 +1008,16 @@ function installFakeCliWithDeferredStream(): {
   };
 }
 
+function operationStreamCalls(
+  calls: readonly RecordedCall[],
+): readonly RecordedCall[] {
+  return calls.filter(
+    (call) =>
+      call.kind === "stream" &&
+      !(call.args[0] === "host" && call.args[1] === "available"),
+  );
+}
+
 // Both `traycerHostUpdate` et al. and `trackHostOperation`'s single-flight
 // check are separated by an `await clearHostRemovalIfSet()`, so a call's
 // promise being created doesn't guarantee the guard has run yet. Poll for the
@@ -965,7 +1029,7 @@ async function waitForStreamCallCount(
   count: number,
 ): Promise<void> {
   await vi.waitFor(() => {
-    if (fake.calls.filter((c) => c.kind === "stream").length < count) {
+    if (operationStreamCalls(fake.calls).length < count) {
       throw new Error("stream call not reached yet");
     }
   });
@@ -1029,6 +1093,9 @@ describe("host-management IPC - exact host update target safety", () => {
       streamTraycerCliJson: vi.fn(
         ({ args }: { readonly args: readonly string[] }) => {
           calls.push({ kind: "stream", args: [...args], timeoutMs: undefined });
+          if (args[0] === "host" && args[1] === "available") {
+            return Promise.reject(new Error("registry unreachable: network"));
+          }
           return Promise.resolve({ data: {} });
         },
       ),
@@ -1049,9 +1116,78 @@ describe("host-management IPC - exact host update target safety", () => {
       bridge.handlers.get(RunnerHostInvoke.traycerHostUpdate)!(null, {
         operationId: "op-unreachable",
       }),
-    ).rejects.toThrow(/reachable exact target version/i);
+    ).rejects.toThrow(/registry unreachable: network/i);
 
-    expect(calls.filter((c) => c.kind === "stream")).toHaveLength(0);
+    expect(operationStreamCalls(calls)).toHaveLength(0);
+  });
+
+  it("keeps the Settings update registry preflight inside the download timeout envelope", async () => {
+    const terminalRegistryFailure = Object.assign(
+      new Error("host registry: manifest blackholed after bounded retries"),
+      { code: "E_REGISTRY_UNAVAILABLE" },
+    );
+    const streamCalls: Array<{
+      readonly args: readonly string[];
+      readonly timeoutPolicy:
+        | { readonly kind: "absolute"; readonly absoluteCapMs: number }
+        | {
+            readonly kind: "progress-inactivity";
+            readonly inactivityMs: number;
+            readonly absoluteCapMs: number;
+          };
+    }> = [];
+    const runTraycerCliJson = vi.fn(() =>
+      Promise.reject(
+        new Error("Settings preflight must not use the 10s runner"),
+      ),
+    );
+    vi.doMock("../../cli/traycer-cli", () => ({
+      runTraycerCliJson,
+      streamTraycerCliJson: vi.fn(
+        ({
+          args,
+          timeoutPolicy,
+        }: {
+          readonly args: readonly string[];
+          readonly timeoutPolicy: (typeof streamCalls)[number]["timeoutPolicy"];
+        }) => {
+          streamCalls.push({ args, timeoutPolicy });
+          if (args[0] === "host" && args[1] === "available") {
+            return Promise.reject(terminalRegistryFailure);
+          }
+          return Promise.resolve({ data: {} });
+        },
+      ),
+      resolveTraycerCliInvocation: vi.fn().mockResolvedValue({
+        command: "/mock/traycer",
+        args: [],
+      }),
+      TraycerCliError: class extends Error {},
+    }));
+    const mgmt = await import("../host-management-ipc");
+    mgmt.setActiveEnvironment("production");
+    const { RunnerHostInvoke } =
+      await import("../../../ipc-contracts/ipc-channels");
+    const bridge = makeBridge();
+    mgmt.registerHostManagementIpc(bridge as never);
+
+    await expect(
+      bridge.handlers.get(RunnerHostInvoke.traycerHostUpdate)!(null, {
+        operationId: "op-update-blackholed-manifest",
+      }),
+    ).rejects.toMatchObject({ code: "E_REGISTRY_UNAVAILABLE" });
+
+    expect(runTraycerCliJson).not.toHaveBeenCalled();
+    expect(streamCalls).toEqual([
+      {
+        args: ["host", "available", "--json"],
+        timeoutPolicy: {
+          kind: "progress-inactivity",
+          inactivityMs: 45_000,
+          absoluteCapMs: 60 * 60_000,
+        },
+      },
+    ]);
   });
 
   it("refuses manual update when latestVersion is null (no consented target)", async () => {
@@ -1061,44 +1197,16 @@ describe("host-management IPC - exact host update target safety", () => {
       runTraycerCliJson: vi.fn((args: readonly string[]) => {
         calls.push({ kind: "run", args: [...args], timeoutMs: undefined });
         if (args[0] === "host" && args[1] === "available") {
-          return Promise.resolve({
-            manifest: {
-              schemaVersion: 1,
-              generatedAt: "2026-05-15T00:00:00Z",
-              latest: "1.7.0",
-              versions: [
-                {
-                  version: "1.7.0",
-                  releasedAt: "2026-05-15T00:00:00Z",
-                  releaseNotesUrl: "https://example.invalid/notes",
-                  yanked: false,
-                  deprecationReason: null,
-                  requiredCliVersion: null,
-                  platforms: {
-                    "darwin-arm64": {
-                      available: false,
-                      unavailableReason: "not published for platform",
-                      url: "https://example.invalid/host.tar.gz",
-                      sizeBytes: 1024,
-                      sha256: "abc",
-                      signatureUrl:
-                        "https://example.invalid/host.tar.gz.minisig",
-                      signatureAlgorithm: "minisign",
-                      publicKeyId: "test-key",
-                    },
-                  },
-                },
-              ],
-            },
-            platformKey: "darwin-arm64",
-            manifestUrl: "https://example.invalid/versions.json",
-          });
+          return Promise.resolve(unavailableHostAvailablePayload());
         }
         return Promise.resolve({});
       }),
       streamTraycerCliJson: vi.fn(
         ({ args }: { readonly args: readonly string[] }) => {
           calls.push({ kind: "stream", args: [...args], timeoutMs: undefined });
+          if (args[0] === "host" && args[1] === "available") {
+            return Promise.resolve({ data: unavailableHostAvailablePayload() });
+          }
           return Promise.resolve({ data: {} });
         },
       ),
@@ -1121,7 +1229,7 @@ describe("host-management IPC - exact host update target safety", () => {
       }),
     ).rejects.toThrow(/reachable exact target version/i);
 
-    expect(calls.filter((c) => c.kind === "stream")).toHaveLength(0);
+    expect(operationStreamCalls(calls)).toHaveLength(0);
   });
 
   // Review finding 5: the surface that triggered this update (banner,
@@ -1160,7 +1268,7 @@ describe("host-management IPC - exact host update target safety", () => {
       }),
     ).rejects.toThrow(/changed from 1\.4\.2 to 1\.7\.0/i);
 
-    expect(fake.calls.filter((c) => c.kind === "stream")).toHaveLength(0);
+    expect(operationStreamCalls(fake.calls)).toHaveLength(0);
   });
 
   it("proceeds when expectedVersion agrees with the freshly-resolved latestVersion", async () => {
@@ -1254,7 +1362,7 @@ describe("host-management IPC - single-flight guard on concurrent host mutations
 
     // Only ONE CLI subprocess was ever spawned - the second click never
     // reached the CLI lock at all.
-    expect(fake.calls.filter((c) => c.kind === "stream")).toHaveLength(1);
+    expect(operationStreamCalls(fake.calls)).toHaveLength(1);
 
     fake.resolveStream({
       version: "1.7.0",
@@ -1466,13 +1574,13 @@ describe("host-management IPC - single-flight guard on concurrent host mutations
       operationId: "op-prework-first",
     });
     // Still in prework - stream has not started.
-    expect(fake.calls.filter((c) => c.kind === "stream")).toHaveLength(0);
+    expect(operationStreamCalls(fake.calls)).toHaveLength(0);
 
     await expect(
       updateHandler(null, { operationId: "op-prework-second" }),
     ).rejects.toThrow(/already in progress/i);
 
-    expect(fake.calls.filter((c) => c.kind === "stream")).toHaveLength(0);
+    expect(operationStreamCalls(fake.calls)).toHaveLength(0);
 
     releaseCapability();
     await waitForStreamCallCount(fake, 1);
@@ -1486,7 +1594,7 @@ describe("host-management IPC - single-flight guard on concurrent host mutations
       sizeBytes: 0,
     });
     await first;
-    expect(fake.calls.filter((c) => c.kind === "stream")).toHaveLength(1);
+    expect(operationStreamCalls(fake.calls)).toHaveLength(1);
   });
 });
 
@@ -1589,6 +1697,11 @@ describe("host-management IPC - channel admission after readiness/capability awa
       streamTraycerCliJson: vi.fn(
         ({ args }: { readonly args: readonly string[] }) => {
           calls.push({ kind: "stream", args: [...args], timeoutMs: undefined });
+          if (args[0] === "host" && args[1] === "available") {
+            return Promise.resolve({
+              data: fakeHostAvailablePayload("1.7.0-rc.1"),
+            });
+          }
           return Promise.resolve({
             data: {
               version: "1.7.0-rc.1",
@@ -1638,7 +1751,7 @@ describe("host-management IPC - channel admission after readiness/capability awa
     releaseCapability();
 
     await expect(updatePromise).rejects.toThrow(/channel changed/i);
-    expect(calls.filter((c) => c.kind === "stream")).toHaveLength(0);
+    expect(operationStreamCalls(calls)).toHaveLength(0);
   });
 
   it("rejects an ABA-captured admission after A→B→A (first generation never re-admits)", async () => {
@@ -1768,7 +1881,7 @@ describe("automatic host update - channel admission race", () => {
     releaseReady();
 
     await expect(outcomePromise).resolves.toBe("failed");
-    expect(fake.calls.filter((c) => c.kind === "stream")).toHaveLength(0);
+    expect(operationStreamCalls(fake.calls)).toHaveLength(0);
     expect(refreshAfter).not.toHaveBeenCalled();
   });
 
@@ -1846,7 +1959,7 @@ describe("automatic host update - channel admission race", () => {
     releaseCapability();
 
     await expect(outcomePromise).resolves.toBe("failed");
-    expect(fake.calls.filter((c) => c.kind === "stream")).toHaveLength(0);
+    expect(operationStreamCalls(fake.calls)).toHaveLength(0);
     expect(refreshAfter).not.toHaveBeenCalled();
   });
 });
@@ -1919,6 +2032,9 @@ describe("host-management IPC - app-facing stable/RC-only lists and installs", (
       streamTraycerCliJson: vi.fn(
         ({ args }: { readonly args: readonly string[] }) => {
           calls.push({ kind: "stream", args: [...args], timeoutMs: undefined });
+          if (args[0] === "host" && args[1] === "available") {
+            return Promise.resolve({ data: fakeHostAvailablePayload("1.5.0") });
+          }
           return Promise.resolve({ data: {} });
         },
       ),
@@ -1943,7 +2059,7 @@ describe("host-management IPC - app-facing stable/RC-only lists and installs", (
         install(null, { version, operationId: `op-install-${version}` }),
       ).rejects.toThrow(/outside the currently selected release channel/i);
     }
-    expect(calls.filter((c) => c.kind === "stream")).toHaveLength(0);
+    expect(operationStreamCalls(calls)).toHaveLength(0);
     expect(calls.filter((c) => c.kind === "run")).toHaveLength(0);
   });
 
@@ -2069,7 +2185,7 @@ describe("host-management IPC - app-facing stable/RC-only lists and installs", (
     ).rejects.toThrow(/outside the currently selected release channel/i);
 
     // Rejected before clearHostRemoval / runHostOperation / streamCliWithProgress.
-    expect(fake.calls.filter((c) => c.kind === "stream")).toHaveLength(0);
+    expect(operationStreamCalls(fake.calls)).toHaveLength(0);
     expect(fake.calls.filter((c) => c.kind === "run")).toHaveLength(0);
     expect(mgmt.getHostOperationStatus()).toBeNull();
     expect(
@@ -2097,7 +2213,7 @@ describe("host-management IPC - app-facing stable/RC-only lists and installs", (
         expectedVersion: "1.7.0-alpha.1",
       }),
     ).rejects.toThrow(/stable and release-candidate channels/i);
-    expect(fake.calls.filter((c) => c.kind === "stream")).toHaveLength(0);
+    expect(operationStreamCalls(fake.calls)).toHaveLength(0);
   });
 });
 
@@ -2143,6 +2259,9 @@ describe("host-management IPC - final admission hardening", () => {
       streamTraycerCliJson: vi.fn(
         ({ args }: { readonly args: readonly string[] }) => {
           calls.push({ kind: "stream", args: [...args], timeoutMs: undefined });
+          if (args[0] === "host" && args[1] === "available") {
+            return Promise.resolve({ data: fakeHostAvailablePayload("1.5.0") });
+          }
           return Promise.resolve({ data: {} });
         },
       ),
@@ -2163,12 +2282,14 @@ describe("host-management IPC - final admission hardening", () => {
       }),
     ).rejects.toThrow(/No newer host update is available/i);
 
-    expect(calls.filter((c) => c.kind === "stream")).toHaveLength(0);
+    expect(operationStreamCalls(calls)).toHaveLength(0);
     // Force-refresh must have re-probed the registry rather than serving cache.
     expect(
       calls.some(
         (c) =>
-          c.kind === "run" && c.args[0] === "host" && c.args[1] === "available",
+          c.kind === "stream" &&
+          c.args[0] === "host" &&
+          c.args[1] === "available",
       ),
     ).toBe(true);
   });
@@ -2266,6 +2387,9 @@ describe("host-management IPC - final admission hardening", () => {
       streamTraycerCliJson: vi.fn(
         ({ args }: { readonly args: readonly string[] }) => {
           calls.push({ kind: "stream", args: [...args], timeoutMs: undefined });
+          if (args[0] === "host" && args[1] === "available") {
+            return Promise.resolve({ data: rcAheadPayload });
+          }
           return Promise.resolve({
             data: {
               version: "1.8.0-rc.1",
@@ -2326,44 +2450,16 @@ describe("host-management IPC - final admission hardening", () => {
       runTraycerCliJson: vi.fn((args: readonly string[]) => {
         calls.push({ kind: "run", args: [...args], timeoutMs: undefined });
         if (args[0] === "host" && args[1] === "available") {
-          return Promise.resolve({
-            manifest: {
-              schemaVersion: 1,
-              generatedAt: "2026-05-15T00:00:00Z",
-              latest: "1.7.0",
-              versions: [
-                {
-                  version: "1.7.0",
-                  releasedAt: "2026-05-15T00:00:00Z",
-                  releaseNotesUrl: "https://example.invalid/notes",
-                  yanked: false,
-                  deprecationReason: null,
-                  requiredCliVersion: null,
-                  platforms: {
-                    "darwin-arm64": {
-                      available: false,
-                      unavailableReason: "not published for platform",
-                      url: "https://example.invalid/host.tar.gz",
-                      sizeBytes: 1024,
-                      sha256: "abc",
-                      signatureUrl:
-                        "https://example.invalid/host.tar.gz.minisig",
-                      signatureAlgorithm: "minisign",
-                      publicKeyId: "test-key",
-                    },
-                  },
-                },
-              ],
-            },
-            platformKey: "darwin-arm64",
-            manifestUrl: "https://example.invalid/versions.json",
-          });
+          return Promise.resolve(unavailableHostAvailablePayload());
         }
         return Promise.resolve({});
       }),
       streamTraycerCliJson: vi.fn(
         ({ args }: { readonly args: readonly string[] }) => {
           calls.push({ kind: "stream", args: [...args], timeoutMs: undefined });
+          if (args[0] === "host" && args[1] === "available") {
+            return Promise.resolve({ data: unavailableHostAvailablePayload() });
+          }
           return Promise.resolve({ data: {} });
         },
       ),
@@ -2382,7 +2478,7 @@ describe("host-management IPC - final admission hardening", () => {
         operationId: "op-install-unavailable",
       }),
     ).rejects.toThrow(/available exact target version/i);
-    expect(calls.filter((c) => c.kind === "stream")).toHaveLength(0);
+    expect(operationStreamCalls(calls)).toHaveLength(0);
   });
 
   it("refuses explicit RC install spawn when the channel flips during removal prework", async () => {
@@ -2489,7 +2585,7 @@ describe("host-management IPC - final admission hardening", () => {
     releaseDiscovery();
 
     await expect(installPromise).rejects.toThrow(/channel changed/i);
-    expect(calls.filter((c) => c.kind === "stream")).toHaveLength(0);
+    expect(operationStreamCalls(calls)).toHaveLength(0);
   });
 
   it("rejects a concurrent install while install registry prework is still reserved", async () => {
@@ -2516,6 +2612,12 @@ describe("host-management IPC - final admission hardening", () => {
       streamTraycerCliJson: vi.fn(
         ({ args }: { readonly args: readonly string[] }) => {
           calls.push({ kind: "stream", args: [...args], timeoutMs: undefined });
+          if (args[0] === "host" && args[1] === "available") {
+            markAvailableEntered();
+            return availableGate.then(() => ({
+              data: fakeHostAvailablePayload("1.7.0"),
+            }));
+          }
           return Promise.resolve({
             data: {
               version: "1.7.0",
@@ -2552,7 +2654,7 @@ describe("host-management IPC - final admission hardening", () => {
       kind: "install",
       operationId: "op-install-prework-first",
     });
-    expect(calls.filter((c) => c.kind === "stream")).toHaveLength(0);
+    expect(operationStreamCalls(calls)).toHaveLength(0);
 
     await expect(
       install(null, {
@@ -2563,7 +2665,7 @@ describe("host-management IPC - final admission hardening", () => {
 
     releaseAvailable();
     await first;
-    expect(calls.filter((c) => c.kind === "stream")).toHaveLength(1);
+    expect(operationStreamCalls(calls)).toHaveLength(1);
   });
 });
 
@@ -2591,6 +2693,10 @@ describe("host-management IPC - restart timeout budget", () => {
     expect(fake.calls[0]?.kind).toBe("stream");
     expect(fake.calls[0]?.args).toEqual(["host", "restart"]);
     expect(fake.calls[0]?.timeoutMs).toBe(HOST_RESTART_SUBPROCESS_TIMEOUT_MS);
+    expect(fake.timeoutPolicies[0]).toEqual({
+      kind: "absolute",
+      absoluteCapMs: HOST_RESTART_SUBPROCESS_TIMEOUT_MS,
+    });
   });
 
   it("keeps the restart budget comfortably above the macOS CLI's stop-grace so a slow drain can't regress into a mid-restart SIGKILL", async () => {
@@ -2653,6 +2759,10 @@ describe("host-management IPC - restart timeout budget", () => {
       "free-port-and-restart",
     ]);
     expect(fake.calls[0]?.timeoutMs).toBe(HOST_RESTART_SUBPROCESS_TIMEOUT_MS);
+    expect(fake.timeoutPolicies[0]).toEqual({
+      kind: "absolute",
+      absoluteCapMs: HOST_RESTART_SUBPROCESS_TIMEOUT_MS,
+    });
   });
 });
 

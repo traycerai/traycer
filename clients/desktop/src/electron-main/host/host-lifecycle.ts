@@ -580,6 +580,10 @@ export class HostLifecycle extends EventEmitter {
     await streamTraycerCliJson<unknown>({
       args: ["host", "restart"],
       env: null,
+      timeoutPolicy: {
+        kind: "absolute",
+        absoluteCapMs: HOST_RESTART_SUBPROCESS_TIMEOUT_MS,
+      },
       timeoutMs: HOST_RESTART_SUBPROCESS_TIMEOUT_MS,
       invocation: null,
       onEvent: () => {

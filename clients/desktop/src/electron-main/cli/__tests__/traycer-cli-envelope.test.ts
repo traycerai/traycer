@@ -104,6 +104,28 @@ class FakeChild extends EventEmitter {
   }
 }
 
+class StallingChild extends EventEmitter {
+  readonly stdout = new EventEmitter() as EventEmitter & {
+    setEncoding: (enc: string) => void;
+  };
+  readonly stderr = new EventEmitter() as EventEmitter & {
+    setEncoding: (enc: string) => void;
+  };
+  killed = false;
+  killSignal: NodeJS.Signals | null = null;
+
+  constructor() {
+    super();
+    this.stdout.setEncoding = () => undefined;
+    this.stderr.setEncoding = () => undefined;
+  }
+
+  kill(signal: NodeJS.Signals): void {
+    this.killed = true;
+    this.killSignal = signal;
+  }
+}
+
 let spawnImpl: ((cmd: string, args: readonly string[]) => FakeChild) | null =
   null;
 let execFileImpl:
@@ -401,6 +423,7 @@ describe("streamTraycerCliJson resolves data, fans progress, and converts error 
         }
       },
       env: null,
+      timeoutPolicy: { kind: "absolute", absoluteCapMs: 5_000 },
       timeoutMs: 5_000,
       invocation: null,
     });
@@ -437,6 +460,7 @@ describe("streamTraycerCliJson resolves data, fans progress, and converts error 
         args: ["host", "install", "latest", "--json"],
         onEvent: () => undefined,
         env: null,
+        timeoutPolicy: { kind: "absolute", absoluteCapMs: 5_000 },
         timeoutMs: 5_000,
         invocation: null,
       });
@@ -448,6 +472,99 @@ describe("streamTraycerCliJson resolves data, fans progress, and converts error 
       expect(thrown.code).toBe("E_HOST_INSTALL_FAILED");
       expect(thrown.message).toContain("verification failed");
     }
+  });
+
+  it("preserves E_REGISTRY_UNAVAILABLE from the actual CLI error envelope", async () => {
+    const errorLine = JSON.stringify({
+      type: "result",
+      status: "error",
+      error: {
+        code: "E_REGISTRY_UNAVAILABLE",
+        message: "host registry: manifest fetch failed after retries",
+        details: {
+          attempts: 4,
+          url: "https://registry.example.test/versions.json",
+        },
+      },
+    });
+    spawnImpl = () =>
+      new FakeChild({
+        stdoutLines: [errorLine],
+        stderr: "error: host registry unavailable\n",
+        exitCode: 1,
+      });
+
+    const { streamTraycerCliJson, TraycerCliError } =
+      await import("../traycer-cli");
+    let thrown: unknown = null;
+    try {
+      await streamTraycerCliJson<unknown>({
+        args: ["host", "available"],
+        onEvent: () => undefined,
+        env: null,
+        timeoutPolicy: { kind: "absolute", absoluteCapMs: 5_000 },
+        timeoutMs: 5_000,
+        invocation: null,
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(TraycerCliError);
+    expect(thrown).toMatchObject({
+      code: "E_REGISTRY_UNAVAILABLE",
+      message: "host registry: manifest fetch failed after retries",
+    });
+  });
+
+  it("resets progress-inactivity timeout for watchdog heartbeats, then fails closed", async () => {
+    vi.useFakeTimers();
+    const child = new StallingChild();
+    spawnImpl = () => child;
+    const { streamTraycerCliJson, TraycerCliError } =
+      await import("../traycer-cli");
+    const pending = streamTraycerCliJson<unknown>({
+      args: ["host", "install", "latest"],
+      onEvent: () => undefined,
+      env: null,
+      timeoutPolicy: {
+        kind: "progress-inactivity",
+        inactivityMs: 45_000,
+        absoluteCapMs: 180_000,
+      },
+      timeoutMs: 45_000,
+      invocation: null,
+    });
+    const settled = pending.then(
+      () => ({ kind: "ok" as const }),
+      (error: unknown) => ({ kind: "error" as const, error }),
+    );
+
+    await vi.advanceTimersByTimeAsync(40_000);
+    child.stdout.emit(
+      "data",
+      `${JSON.stringify({
+        type: "progress",
+        stage: "registry-manifest-watchdog",
+        percent: null,
+        bytes: 1,
+        totalBytes: 4,
+        message: "manifest stalled; retrying",
+      })}\n`,
+    );
+    await vi.advanceTimersByTimeAsync(40_000);
+    expect(child.killed).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(45_000);
+    const outcome = await settled;
+    expect(outcome.kind).toBe("error");
+    if (outcome.kind === "error") {
+      expect(outcome.error).toBeInstanceOf(TraycerCliError);
+      if (outcome.error instanceof Error) {
+        expect(outcome.error.message).toContain("inactive for 45000ms");
+      }
+    }
+    expect(child.killed).toBe(true);
+    expect(child.killSignal).toBe("SIGKILL");
   });
 });
 
