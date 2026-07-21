@@ -2621,7 +2621,7 @@ describe("host-management IPC - restart timeout budget", () => {
     // regresses to the same class of bug - SIGKILL lands the instant the
     // sequence would have finished. Require real headroom above it.
     expect(HOST_RESTART_SUBPROCESS_TIMEOUT_MS).toBeGreaterThanOrEqual(
-      WINDOWS_RESTART_SEQUENCE_TIMEOUT_MS + 15_000,
+      WINDOWS_RESTART_SEQUENCE_TIMEOUT_MS + 30_000,
     );
   });
 

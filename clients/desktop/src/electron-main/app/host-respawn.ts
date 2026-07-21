@@ -7,6 +7,7 @@ import {
   type HostLoginItemStatus,
 } from "./host-login-item";
 import {
+  HOST_READY_EXTENDED_TIMEOUT_MS,
   HOST_READY_POLL_MS,
   HOST_READY_TIMEOUT_MS,
   waitForHostReady,
@@ -137,11 +138,17 @@ async function respawnViaLoginItem(host: IpcHostLifecycle): Promise<void> {
     throw new Error(notEnabledMessage(status));
   }
 
+  // Respawn is the SMAppService register cycle — no win32 spawn-evidence
+  // extension here (T6 owns launchctl-gated authority on darwin).
   const readiness = await waitForHostReady(
     HOST_READY_TIMEOUT_MS,
     host.pidMetadataFile,
     HOST_READY_POLL_MS,
     prePid,
+    {
+      spawnEvidenceBaseline: null,
+      extendedTimeoutMs: HOST_READY_EXTENDED_TIMEOUT_MS,
+    },
   );
   if (host.isDisposed) return;
   if (!readiness.ready) {

@@ -40,6 +40,10 @@ const waitForHostReady = vi.fn<
     pidPath: string,
     pollIntervalMs: number,
     skipPid: number | null,
+    options: {
+      spawnEvidenceBaseline: unknown;
+      extendedTimeoutMs: number;
+    },
   ) => Promise<{
     ready: boolean;
     version: string | null;
@@ -54,9 +58,14 @@ vi.mock("../../host/host-readiness", () => ({
     pidPath: string,
     pollIntervalMs: number,
     skipPid: number | null,
-  ) => waitForHostReady(timeoutMs, pidPath, pollIntervalMs, skipPid),
+    options: {
+      spawnEvidenceBaseline: unknown;
+      extendedTimeoutMs: number;
+    },
+  ) => waitForHostReady(timeoutMs, pidPath, pollIntervalMs, skipPid, options),
   HOST_READY_TIMEOUT_MS: 60_000,
   HOST_READY_POLL_MS: 250,
+  HOST_READY_EXTENDED_TIMEOUT_MS: 5 * 60_000,
 }));
 
 const { respawnHost, approvalRequiredMessage } =
@@ -201,6 +210,10 @@ describe("respawnHost - host-owned login item path", () => {
       host.pidMetadataFile,
       250,
       42,
+      {
+        spawnEvidenceBaseline: null,
+        extendedTimeoutMs: 5 * 60_000,
+      },
     );
     // Defense-in-depth: don't rely on fs.watch - force-refresh.
     expect(host.ensureWatcherCalls).toBe(1);
@@ -300,6 +313,10 @@ describe("respawnHost - host-owned login item path", () => {
       host.pidMetadataFile,
       250,
       null,
+      {
+        spawnEvidenceBaseline: null,
+        extendedTimeoutMs: 5 * 60_000,
+      },
     );
   });
 });

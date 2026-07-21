@@ -6,6 +6,7 @@ import {
 import { readHostInstallRecord } from "../manifest/host-install";
 import type { ProgressInfo } from "../runner/output";
 import type { RuntimeContext } from "../runner/runtime";
+import { CLI_ERROR_CODES, CliError } from "../runner/errors";
 import { errorFromUnknown } from "../logger";
 import {
   createServiceController,
@@ -440,7 +441,101 @@ async function runStart(
     bytes: null,
     totalBytes: null,
   });
-  await controller.start(label);
+  // First attempt: plain start (on win32 this already polls for post-baseline
+  // spawn evidence and surfaces Last Run Result on failure).
+  try {
+    await controller.start(label);
+  } catch (firstError) {
+    // Escalate once: full task/launcher rewrite (the install-branch
+    // registration — the field-proven manual recovery "we had to manually
+    // `service install`") → retry start → then an honest error. Exactly one
+    // rewrite; a second failure does not loop.
+    opts.runtime.logger.warn(
+      "Host provisioning start failed; escalating once with full service re-register",
+      {
+        environment: opts.runtime.environment,
+        errorName: errorFromUnknown(firstError).name,
+        errorMessage: errorFromUnknown(firstError).message,
+      },
+    );
+    progress({
+      stage: "host-provision",
+      message: "repairing host service definition and retrying start",
+      percent: null,
+      bytes: null,
+      totalBytes: null,
+    });
+    const cli = await resolveServiceCliInvocation({
+      environment: opts.runtime.environment,
+      override: null,
+      allowSelfInvocation: opts.allowSelfInvocation,
+    });
+    let rewriteError: unknown = null;
+    try {
+      await controller.install({
+        label,
+        cli,
+        enableLinger: opts.enableLinger,
+      });
+    } catch (cause) {
+      // A retry is valid only after the rewritten task was successfully
+      // registered and its own `/Run`/verification failed. Retrying after a
+      // failed definition write would start the stale task and mask the repair
+      // failure as success.
+      if (
+        !(cause instanceof CliError) ||
+        cause.code !== CLI_ERROR_CODES.SERVICE_CONTROL_FAILED
+      ) {
+        opts.runtime.logger.error(
+          "Host provisioning service definition rewrite failed after start failure",
+          {
+            environment: opts.runtime.environment,
+            firstErrorName: errorFromUnknown(firstError).name,
+            firstErrorMessage: errorFromUnknown(firstError).message,
+          },
+          errorFromUnknown(cause),
+        );
+        throw cause;
+      }
+      rewriteError = cause;
+      opts.runtime.logger.error(
+        "Host provisioning service rewrite launch failed after start failure; retrying the rewritten service once",
+        {
+          environment: opts.runtime.environment,
+          firstErrorName: errorFromUnknown(firstError).name,
+          firstErrorMessage: errorFromUnknown(firstError).message,
+        },
+        errorFromUnknown(cause),
+      );
+    }
+    // Service installation is itself the recovery launch: Windows verifies
+    // the `/Run` issued while recreating its task, and the other controllers
+    // start as part of registration. A second Windows `/Run` would baseline
+    // after that evidence; IgnoreNew then suppresses it and reports a healthy
+    // repaired host as failed. Only retry when install's own launch failed.
+    if (rewriteError !== null) {
+      try {
+        await controller.start(label);
+      } catch (retryError) {
+        opts.runtime.logger.error(
+          "Host provisioning start still failed after service rewrite",
+          {
+            environment: opts.runtime.environment,
+            firstErrorName: errorFromUnknown(firstError).name,
+            firstErrorMessage: errorFromUnknown(firstError).message,
+          },
+          errorFromUnknown(retryError),
+        );
+        throw retryError;
+      }
+    }
+    opts.runtime.logger.info(
+      "Host provisioning start recovered via one-shot service rewrite",
+      {
+        environment: opts.runtime.environment,
+      },
+    );
+  }
   const post = await readProvisionState(controller, label, opts.runtime);
   opts.runtime.logger.info("Host provisioning service-start branch completed", {
     environment: opts.runtime.environment,

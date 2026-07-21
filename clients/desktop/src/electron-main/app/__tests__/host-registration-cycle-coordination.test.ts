@@ -146,15 +146,18 @@ interface ReadinessResult {
   readonly pid: number | null;
   readonly reason: string;
 }
-const waitForHostReadyMock =
-  vi.fn<
-    (
-      timeoutMs: number,
-      pidPath: string,
-      pollIntervalMs: number,
-      skipPid: number | null,
-    ) => Promise<ReadinessResult>
-  >();
+const waitForHostReadyMock = vi.fn<
+  (
+    timeoutMs: number,
+    pidPath: string,
+    pollIntervalMs: number,
+    skipPid: number | null,
+    options: {
+      spawnEvidenceBaseline: unknown;
+      extendedTimeoutMs: number;
+    },
+  ) => Promise<ReadinessResult>
+>();
 interface ServiceLifecycleShape {
   readonly priorServiceState: string | null;
   readonly postSwapAction: string | null;
@@ -163,16 +166,29 @@ interface ServiceLifecycleShape {
 const readServiceLifecycleMock =
   vi.fn<(payload: unknown) => ServiceLifecycleShape>();
 const categorizeHostCliErrorMock = vi.fn();
+const readEnsureRunningMock = vi
+  .fn<(payload: unknown) => boolean | null>()
+  .mockReturnValue(null);
+const captureHostSpawnEvidenceBaselineMock = vi.fn().mockResolvedValue(null);
 vi.mock("../../host/host-readiness", () => ({
   HOST_READY_TIMEOUT_MS: 60_000,
   HOST_READY_POLL_MS: 250,
+  HOST_READY_EXTENDED_TIMEOUT_MS: 5 * 60_000,
   waitForHostReady: (
     timeoutMs: number,
     pidPath: string,
     pollIntervalMs: number,
     skipPid: number | null,
-  ) => waitForHostReadyMock(timeoutMs, pidPath, pollIntervalMs, skipPid),
+    options: {
+      spawnEvidenceBaseline: unknown;
+      extendedTimeoutMs: number;
+    },
+  ) =>
+    waitForHostReadyMock(timeoutMs, pidPath, pollIntervalMs, skipPid, options),
   readServiceLifecycle: (payload: unknown) => readServiceLifecycleMock(payload),
+  readEnsureRunning: (payload: unknown) => readEnsureRunningMock(payload),
+  captureHostSpawnEvidenceBaseline: (logPath: string, pidPath: string) =>
+    captureHostSpawnEvidenceBaselineMock(logPath, pidPath),
   categorizeHostCliError: (err: unknown) => categorizeHostCliErrorMock(err),
 }));
 
