@@ -62,6 +62,33 @@ export async function hasPendingLoginItemRevision(
 }
 
 /**
+ * Whether the in-memory pending-cycle flag is set for `environment`. This is
+ * exactly the volatile write-failure state above: it is left when the register
+ * cycle deferred and its centralized marker write exhausted its retries
+ * (`defer-busy-unpersisted`), leaving no on-disk trace. The register-cycle
+ * state machine reads it as a `definitionChange` cause so a later ensure — with
+ * a noop CLI action, a current stamp, and a viable pid — still evaluates
+ * `needCycle` and does not lose the deferred repair. Cleared only by a
+ * successful cycle ({@link resolvePendingLoginItemRevisionAfterCycle}) or a
+ * later successful marker write (which supersedes it with durable state).
+ */
+export function isPendingCycleFlagSet(environment: Environment): boolean {
+  return volatilePendingRevision?.environment === environment;
+}
+
+/**
+ * Disk marker ∨ in-memory pending-cycle flag — the wake predicate for the 30s
+ * monitor, which must act on a deferral whose marker write failed (no disk
+ * trace) as well as a persisted one.
+ */
+export async function hasPendingLoginItemRevisionOrPendingCycle(
+  environment: Environment,
+): Promise<boolean> {
+  if (isPendingCycleFlagSet(environment)) return true;
+  return hasPendingLoginItemRevision(environment);
+}
+
+/**
  * Writes the cross-process marker used by both the immediate post-update
  * ensure and the 30s monitor. A failure cannot be allowed to make already
  * downloaded bytes look applied, so it remains visible as a volatile pending

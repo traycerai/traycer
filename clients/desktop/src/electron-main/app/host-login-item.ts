@@ -13,6 +13,11 @@ import {
   hasPendingLoginItemRevision,
   resolvePendingLoginItemRevisionAfterCycle,
 } from "../host/pending-login-item-revision";
+import {
+  markRegistrationIdentityApplied,
+  writeRegistrationStamp,
+} from "../host/registration-stamp";
+import type { RegisterCycleDecision } from "../host/host-register-cycle-decision";
 import { isHostRemovedByUser } from "../host/host-removal-state";
 import { log } from "./logger";
 
@@ -42,8 +47,10 @@ const CLI_HOST_LABEL = labelForEnvironment(config.environment).id;
 // `smAppServiceAgentLabelId`'s doc for the full mechanism and the lockstep
 // sites. Matches the in-bundle plist written by `desktop-install-cloud.js`
 // (`hostAgentLabel`) and `scripts/prepack/inject-host-launch-agent.cjs`;
-// SMAppService resolves the plist by this exact filename.
-const HOST_AGENT_LABEL = smAppServiceAgentLabelId(CLI_HOST_LABEL);
+// SMAppService resolves the plist by this exact filename. Exported so the
+// register-cycle state machine can query `launchctl print gui/<uid>/<label>` -
+// the sole darwin viable-spawn authority (Finding F).
+export const HOST_AGENT_LABEL = smAppServiceAgentLabelId(CLI_HOST_LABEL);
 const HOST_SERVICE_NAME = `${HOST_AGENT_LABEL}.plist`;
 // The serviceName this app registered BEFORE the label split. The bundle
 // keeps shipping this plist inert (never registered) for a few releases so
@@ -102,15 +109,29 @@ export type HostLoginItemStatus =
   | "not-supported";
 
 /**
- * `registerHostLoginItem`'s result: the SMAppService status the cycle
- * settled on, `removed-by-user` when the locked section found the removal
- * sentinel set and refused to run the cycle at all, or `deferred-busy` when
- * the caller's own `revalidateBeforeBootout` guard failed once the cycle
- * reached the front of the registration lock's queue (see the re-check
- * rationale in `registerHostLoginItemUnserialized`).
+ * `registerHostLoginItem`'s result:
+ * - a `HostLoginItemStatus` — the cycle ran and settled on that status;
+ * - `removed-by-user` — the locked section found the removal sentinel set and
+ *   refused to run the cycle at all;
+ * - `skip-join` — the state machine found a viable current-generation agent
+ *   spawn and nothing to apply, so no cycle ran; the caller joins its
+ *   readiness instead of failing;
+ * - `deferred-busy` — the cycle was needed but the host is busy, so it was
+ *   deferred and its pending-cycle marker persisted durably (the 30s monitor
+ *   or next launch applies it);
+ * - `deferred-busy-unpersisted` — same deferral, but the marker write failed;
+ *   an in-memory pending-cycle flag drives the repair this launch (cross-launch
+ *   durability is lost until the write later succeeds, surfaced never silent).
+ *
+ * See the reason-bearing state machine in `host-register-cycle-decision.ts`,
+ * evaluated via `revalidateBeforeBootout` inside the registration lock.
  */
 export type RegisterHostLoginItemResult =
-  HostLoginItemStatus | "removed-by-user" | "deferred-busy";
+  | HostLoginItemStatus
+  | "removed-by-user"
+  | "skip-join"
+  | "deferred-busy"
+  | "deferred-busy-unpersisted";
 
 // True only when this is a shipped macOS build that ships the in-bundle
 // LaunchAgent plist. Used by the ensure flow to decide whether the desktop
@@ -238,17 +259,20 @@ const REGISTER_STATUS_POLL_INTERVAL_MS = 100;
  * synchronous status read can transiently say `not-registered` for
  * <100ms on cold-BTM (first-install) machines.
  */
-// `revalidateBeforeBootout`, when provided, is called INSIDE the locked
-// section immediately before `bootoutStaleAgent()` - not just at the call
-// site - because a caller's own idle/busy check (e.g. the pending-revision
-// fast path's `probeHostActivityBusy`) can go stale while queued behind
-// another in-flight cycle (`respawnHost` and `runEnsureHost` share this same
-// lock). Without a re-check here, a cycle that was idle when queued could
-// still boot out a host that picked up real work while waiting its turn.
-// Return `false` from the callback to defer without mutating anything;
-// `registerHostLoginItemUnserialized` reports that back as `"deferred-busy"`.
+// `revalidateBeforeBootout`, when provided, evaluates the register-cycle state
+// machine (`host-register-cycle-decision.ts`) INSIDE the locked section
+// immediately before `bootoutStaleAgent()` - not just at the call site -
+// because a caller's own idle/busy check (e.g. the pending-revision fast path's
+// `probeHostActivityBusy`) can go stale while queued behind another in-flight
+// cycle (`respawnHost` and `runEnsureHost` share this same lock). Without a
+// re-check here, a cycle that was idle when queued could still boot out a host
+// that picked up real work while waiting its turn. The callback returns a
+// reason-bearing `RegisterCycleDecision`: `cycle` proceeds; `skip-join`,
+// `defer-busy`, and `defer-busy-unpersisted` each return without mutating
+// anything (see the mapping below). `undefined` means an unconditional cycle -
+// the explicit `respawnHost` restart path, which always cycles.
 export function registerHostLoginItem(
-  revalidateBeforeBootout: (() => Promise<boolean>) | undefined,
+  revalidateBeforeBootout: (() => Promise<RegisterCycleDecision>) | undefined,
 ): Promise<RegisterHostLoginItemResult> {
   return withHostLoginItemRegistrationLock(() =>
     registerHostLoginItemUnserialized(revalidateBeforeBootout),
@@ -256,7 +280,7 @@ export function registerHostLoginItem(
 }
 
 async function registerHostLoginItemUnserialized(
-  revalidateBeforeBootout: (() => Promise<boolean>) | undefined,
+  revalidateBeforeBootout: (() => Promise<RegisterCycleDecision>) | undefined,
 ): Promise<RegisterHostLoginItemResult> {
   // Re-checked HERE, inside the locked section, not only at the callers'
   // entry points: an ensure can spend minutes streaming the CLI before its
@@ -272,14 +296,29 @@ async function registerHostLoginItemUnserialized(
     return "removed-by-user";
   }
 
-  if (
-    revalidateBeforeBootout !== undefined &&
-    !(await revalidateBeforeBootout())
-  ) {
-    log.info(
-      "[host-login-item] register cycle deferred - caller's guard failed once dequeued from the registration lock (host is no longer idle)",
-    );
-    return "deferred-busy";
+  if (revalidateBeforeBootout !== undefined) {
+    const decision = await revalidateBeforeBootout();
+    if (decision.kind === "skip-join") {
+      log.info(
+        "[host-login-item] register cycle skipped - a viable current-generation agent spawn exists and nothing needs applying; joining its readiness",
+      );
+      return "skip-join";
+    }
+    if (decision.kind === "defer-busy") {
+      log.info(
+        "[host-login-item] register cycle deferred - host busy once dequeued from the registration lock; pending-cycle marker persisted, the 30s monitor or next launch applies it",
+        { cause: decision.cause },
+      );
+      return "deferred-busy";
+    }
+    if (decision.kind === "defer-busy-unpersisted") {
+      log.warn(
+        "[host-login-item] register cycle deferred (host busy) but the pending-cycle marker write failed - the in-memory pending-cycle flag drives the repair this launch; cross-launch durability is lost until the write later succeeds",
+        { cause: decision.cause, error: decision.error },
+      );
+      return "deferred-busy-unpersisted";
+    }
+    // decision.kind === "cycle": fall through and run the cycle below.
   }
 
   const plistPath = inAppLaunchAgentPlistPath();
@@ -325,6 +364,22 @@ async function registerHostLoginItemUnserialized(
     // one active in launchd - any pending-revision marker the installer
     // left behind is resolved.
     await resolvePendingLoginItemRevisionAfterCycle(config.environment);
+    // Restamp the build identity so a matching later ensure skips the
+    // stamp-mismatch cause. A failed persist must not silently re-cycle every
+    // ensure this launch: latch the applied identity in memory (which
+    // suppresses ONLY the stamp-mismatch reason - a later no-agent repair still
+    // cycles), and persistence is retried at the next ensure / next launch.
+    const restamped = await writeRegistrationStamp(
+      config.environment,
+      config.version,
+    );
+    if (!restamped) {
+      markRegistrationIdentityApplied(config.version);
+      log.warn(
+        "[host-login-item] register cycle succeeded but the registration stamp write failed - suppressing the stamp-mismatch cause in-memory for this launch; retrying persistence next ensure/launch",
+        { identity: config.version },
+      );
+    }
   }
   return status;
 }

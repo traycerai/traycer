@@ -141,6 +141,7 @@ export interface HostFsLayout {
   readonly installDir: string;
   readonly installRecordFile: string;
   readonly pendingLoginItemRevisionFile: string;
+  readonly registrationStampFile: string;
   readonly environment: Environment;
 }
 
@@ -175,6 +176,7 @@ export function getHostFsLayout(environment: Environment): HostFsLayout {
       rootDir,
       "pending-login-item-revision.json",
     ),
+    registrationStampFile: join(rootDir, "registration-stamp.json"),
     environment,
   };
 }

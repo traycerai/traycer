@@ -53,6 +53,7 @@ const waitForHostReady = vi.fn<
 >();
 
 vi.mock("../../host/host-readiness", () => ({
+  buildDarwinAgentAuthority: () => Promise.resolve(null),
   waitForHostReady: (
     timeoutMs: number,
     pidPath: string,
@@ -213,6 +214,7 @@ describe("respawnHost - host-owned login item path", () => {
       {
         spawnEvidenceBaseline: null,
         extendedTimeoutMs: 5 * 60_000,
+        darwinAgentAuthority: null,
       },
     );
     // Defense-in-depth: don't rely on fs.watch - force-refresh.
@@ -316,6 +318,7 @@ describe("respawnHost - host-owned login item path", () => {
       {
         spawnEvidenceBaseline: null,
         extendedTimeoutMs: 5 * 60_000,
+        darwinAgentAuthority: null,
       },
     );
   });

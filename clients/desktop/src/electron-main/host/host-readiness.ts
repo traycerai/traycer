@@ -5,6 +5,8 @@ import {
   isCurrentHostWebsocketUrl,
   sleep,
 } from "./host-lifecycle";
+import { readAgentLabelPid } from "./launchctl-agent-pid";
+import { HOST_AGENT_LABEL } from "../app/host-login-item";
 import { TraycerCliError } from "../cli/traycer-cli";
 
 // Host-readiness + CLI-error helpers used by the post-auth host-ensure
@@ -53,14 +55,60 @@ export interface HostSpawnEvidenceBaseline {
   readonly markerAuthoritySinceMs: number | null;
 }
 
-export interface WaitForHostReadyOptions {
-  // null disables spawn-evidence extension / terminal fail-fast (darwin
-  // SMAppService path today; T6 wires launchctl-gated authority there).
-  readonly spawnEvidenceBaseline: HostSpawnEvidenceBaseline | null;
-  // Absolute hard cap when extending past `timeoutMs` on post-baseline
-  // spawn evidence. Ignored when baseline is null.
-  readonly extendedTimeoutMs: number;
+/**
+ * Darwin readiness authority (Finding F). The SMAppService cohort has no win32
+ * spawn-evidence baseline; the ONLY authority for extending past the base
+ * budget is a live agent-label pid via `launchctl print`. Post-baseline
+ * terminal markers NEVER authorize an extension and fail-fast ONLY once the
+ * agent generation is CONFIRMED GONE (launchctl yields no live agent pid across
+ * consecutive probes); the newest OWNED marker (its `supervisorPid` was observed
+ * under the agent label this attempt) is then the death reason. While launchctl
+ * still yields a live pid the marker is subordinate - a superseded generation's
+ * crash, or a throttle-cached pid that happens to match an older marker, must
+ * never fail a live, recovering attempt (e.g. launchd KeepAlive crash-recovery).
+ * (The legacy and agent labels exec the same `host start` into the same log, so
+ * an UNOWNED terminal marker never fails an agent-label attempt - it only
+ * decorates the generic timeout with a diagnostic hint.)
+ */
+export interface DarwinAgentAuthority {
+  readonly agentLabel: string;
+  readonly readAgentLabelPid: (agentLabel: string) => Promise<number | null>;
+  // Log baseline for reading post-baseline terminal markers (reason strings +
+  // ownership correlation only - never skip/extend authority).
+  readonly terminalMarkerBaseline: HostSpawnEvidenceBaseline | null;
+  // How often to re-check the live agent pid via `launchctl print`. Coarser
+  // than the pid.json poll (each check spawns a subprocess). Carried on the
+  // authority so tests can drive it deterministically.
+  readonly probeIntervalMs: number;
 }
+
+export interface WaitForHostReadyOptions {
+  // null disables win32 spawn-evidence extension / terminal fail-fast.
+  readonly spawnEvidenceBaseline: HostSpawnEvidenceBaseline | null;
+  // Absolute hard cap when extending past `timeoutMs` on post-baseline spawn
+  // evidence (win32) or a live agent-label pid (darwin). Ignored when neither
+  // a baseline nor a darwin authority is set.
+  readonly extendedTimeoutMs: number;
+  // Darwin SMAppService authority - mutually exclusive with
+  // `spawnEvidenceBaseline` (the two cohorts never overlap).
+  readonly darwinAgentAuthority: DarwinAgentAuthority | null;
+}
+
+// How often the darwin readiness path re-checks the live agent-label pid via
+// `launchctl print`. Coarser than the pid.json poll (each check spawns a
+// subprocess), fine enough to accumulate ownership evidence and bound the
+// extension-death detection latency.
+const DARWIN_AGENT_PROBE_INTERVAL_MS = 3_000;
+
+// A single `launchctl print` miss is ambiguous: a subprocess timeout / transient
+// launchd hiccup and a real "job not loaded" both surface as a null pid, and a
+// crash→KeepAlive-relaunch leaves a brief no-pid gap between generations.
+// Require this many CONSECUTIVE probe misses before treating the current agent
+// generation as gone, so one transient null never fails a live, recovering
+// attempt (Finding F). Two is the minimum that distinguishes a flap from a
+// sustained absence; at DARWIN_AGENT_PROBE_INTERVAL_MS spacing that is a
+// ~3-6s confirmation delay, negligible against the extended readiness budget.
+const DARWIN_AGENT_MISS_CONFIRM_THRESHOLD = 2;
 
 export async function captureHostSpawnEvidenceBaseline(
   logPath: string,
@@ -82,6 +130,33 @@ export async function captureHostSpawnEvidenceBaseline(
     pidMtimeMs: pidStat === null ? null : pidStat.mtimeMs,
     pid: pidSnapshot === null ? null : pidSnapshot.pid,
     markerAuthoritySinceMs: null,
+  };
+}
+
+/**
+ * Build the darwin SMAppService readiness authority (Finding F): the live
+ * agent-label pid via `launchctl print`, plus a fresh log baseline used ONLY
+ * for owned terminal-marker reasons (never skip/extend authority). Returns null
+ * off the cohort (win32 / linux / dev), where `launchctl` and the agent label
+ * have nothing to report and the win32 spawn-evidence baseline governs instead.
+ * The `markerAuthoritySinceMs` stamp scopes terminal-marker reads to this
+ * attempt; ownership (supervisor pid ∈ observed agent pids) is the real filter.
+ */
+export async function buildDarwinAgentAuthority(
+  hostOwnsLoginItem: boolean,
+  logPath: string,
+  pidPath: string,
+): Promise<DarwinAgentAuthority | null> {
+  if (!hostOwnsLoginItem) return null;
+  const baseline = await captureHostSpawnEvidenceBaseline(logPath, pidPath);
+  return {
+    agentLabel: HOST_AGENT_LABEL,
+    readAgentLabelPid,
+    terminalMarkerBaseline: {
+      ...baseline,
+      markerAuthoritySinceMs: Date.now(),
+    },
+    probeIntervalMs: DARWIN_AGENT_PROBE_INTERVAL_MS,
   };
 }
 
@@ -111,10 +186,12 @@ export async function waitForHostReady(
   options: WaitForHostReadyOptions,
 ): Promise<HostReadinessResult> {
   const baseDeadline = Date.now() + timeoutMs;
-  const hardDeadline =
-    options.spawnEvidenceBaseline === null
-      ? baseDeadline
-      : Date.now() + options.extendedTimeoutMs;
+  const hasExtensionAuthority =
+    options.spawnEvidenceBaseline !== null ||
+    options.darwinAgentAuthority !== null;
+  const hardDeadline = hasExtensionAuthority
+    ? Date.now() + options.extendedTimeoutMs
+    : baseDeadline;
   let lastReason = "pid metadata never appeared";
   let extended = false;
   const markerReader =
@@ -122,34 +199,181 @@ export async function waitForHostReady(
       ? null
       : createPostBaselineMarkerReader(options.spawnEvidenceBaseline);
 
+  // Darwin (Finding F): the live agent-label pid via `launchctl print` is the
+  // SOLE authority. It is the only signal that extends past the base budget, and
+  // a terminal marker fails-fast ONLY once launchctl yields no live pid (the
+  // generation is confirmed gone); an owned marker then supplies the death reason
+  // (`darwinOwnedTerminalReason`), while an unowned one only decorates the
+  // generic timeout (`decorateWithUnownedTerminal`).
+  const darwin = options.darwinAgentAuthority;
+  const darwinTerminalBaseline = darwin?.terminalMarkerBaseline ?? null;
+  const darwinMarkerReader =
+    darwinTerminalBaseline === null
+      ? null
+      : createPostBaselineMarkerReader(darwinTerminalBaseline);
+  const observedAgentPids = new Set<number>();
+  let lastAgentPid: number | null = null;
+  let nextAgentProbeAt = 0;
+  // Consecutive `launchctl print` misses (see DARWIN_AGENT_MISS_CONFIRM_THRESHOLD).
+  // Only updated on a REAL probe (not the throttled cached-value path), so it
+  // counts probe intervals of sustained absence, not poll iterations.
+  let consecutiveAgentPidMisses = 0;
+  const probeDarwinAgentPid = async (nowMs: number): Promise<number | null> => {
+    if (darwin === null) return null;
+    if (nowMs < nextAgentProbeAt) return lastAgentPid;
+    nextAgentProbeAt = nowMs + darwin.probeIntervalMs;
+    const pid = await darwin.readAgentLabelPid(darwin.agentLabel);
+    if (pid === null) {
+      consecutiveAgentPidMisses += 1;
+    } else {
+      observedAgentPids.add(pid);
+      consecutiveAgentPidMisses = 0;
+    }
+    lastAgentPid = pid;
+    return pid;
+  };
+  // The current agent generation counts as gone only after the confirmation
+  // threshold of consecutive misses - never on a single transient null (a
+  // launchctl hiccup or the crash→relaunch gap). This gates every darwin
+  // fail path that keys off "no live pid".
+  const agentGenerationConfirmedGone = (): boolean =>
+    lastAgentPid === null &&
+    consecutiveAgentPidMisses >= DARWIN_AGENT_MISS_CONFIRM_THRESHOLD;
+
+  // Post-baseline terminal markers within this attempt's authority window.
+  const readDarwinTerminalMarkers = async (): Promise<
+    readonly ParsedMarker[]
+  > => {
+    if (darwinMarkerReader === null) return [];
+    return (await darwinMarkerReader.read()).filter((marker) =>
+      darwinTerminalBaseline === null
+        ? true
+        : isMarkerInAuthorityWindow(marker, darwinTerminalBaseline),
+    );
+  };
+  // The reason from the newest OWNED terminal marker: its supervisor pid was
+  // observed under the agent label this attempt (never a forgeable legacy-label
+  // start's pid). Consulted ONLY once the agent generation is CONFIRMED GONE, so
+  // the newest owned marker is the death reason of the generation that just ran.
+  // While launchctl still yields a live agent pid the caller never asks - the
+  // live pid is the sole authority (LANDMINE), so a marker can never fail a live,
+  // recovering attempt, and there is no pid-identity match against the
+  // (throttle-cached, possibly stale) probe value that a superseded crash could
+  // ride in on (Finding F / launchd KeepAlive crash-recovery).
+  const darwinOwnedTerminalReason = async (): Promise<string | null> => {
+    if (observedAgentPids.size === 0) return null;
+    const markers = await readDarwinTerminalMarkers();
+    for (let i = markers.length - 1; i >= 0; i -= 1) {
+      const marker = markers[i];
+      if (marker === undefined || !TERMINAL_PHASES.has(marker.phase)) continue;
+      const supervisorPid = Number.parseInt(
+        marker.fields.supervisorPid ?? "",
+        10,
+      );
+      if (
+        Number.isInteger(supervisorPid) &&
+        observedAgentPids.has(supervisorPid)
+      ) {
+        return terminalMarkerReason(marker);
+      }
+    }
+    return null;
+  };
+  // The newest UNOWNED terminal marker's reason: a supervisor pid never observed
+  // under the agent label (a legacy-label start's crash into the shared log) or
+  // an unattributable marker. Used ONLY to decorate a generic timeout as a
+  // diagnostic hint. Deliberately EXCLUDES owned markers: an owned marker is
+  // either authoritative (surfaced by `darwinOwnedTerminalReason` when the
+  // generation is gone) or superseded by a live newer pid - and decorating a
+  // live-but-slow generation's timeout with a superseded crash reason would
+  // misattribute its cause (Finding F review).
+  const darwinUnownedTerminalReason = async (): Promise<string | null> => {
+    const markers = await readDarwinTerminalMarkers();
+    for (let i = markers.length - 1; i >= 0; i -= 1) {
+      const marker = markers[i];
+      if (marker === undefined || !TERMINAL_PHASES.has(marker.phase)) continue;
+      const supervisorPid = Number.parseInt(
+        marker.fields.supervisorPid ?? "",
+        10,
+      );
+      if (
+        !Number.isInteger(supervisorPid) ||
+        !observedAgentPids.has(supervisorPid)
+      ) {
+        return terminalMarkerReason(marker);
+      }
+    }
+    return null;
+  };
+  const decorateWithUnownedTerminal = async (
+    baseReason: string,
+  ): Promise<string> => {
+    const unowned = await darwinUnownedTerminalReason();
+    return unowned === null
+      ? baseReason
+      : `${baseReason}; last observed host terminal marker: ${unowned}`;
+  };
+
   while (true) {
     const now = Date.now();
     if (now >= hardDeadline) {
-      return { ready: false, version: null, pid: null, reason: lastReason };
+      // Generic timeout. On darwin, decorate with the newest UNOWNED terminal
+      // marker (if any) so a legacy-label crash that never earned a fail-fast is
+      // still surfaced as a diagnostic hint instead of being silently lost. Owned
+      // markers are excluded: a live-but-slow generation timing out here must not
+      // be misattributed to a superseded generation's crash (Finding F review).
+      const reason =
+        darwin === null
+          ? lastReason
+          : await decorateWithUnownedTerminal(lastReason);
+      return { ready: false, version: null, pid: null, reason };
     }
     if (now >= baseDeadline && !extended) {
-      if (options.spawnEvidenceBaseline === null) {
+      if (options.spawnEvidenceBaseline !== null) {
+        const evidence = await inspectPostBaselineSpawnEvidence(
+          options.spawnEvidenceBaseline,
+          markerReader,
+        );
+        if (evidence.kind === "terminal") {
+          return {
+            ready: false,
+            version: null,
+            pid: null,
+            reason: evidence.reason,
+          };
+        }
+        if (evidence.kind === "none") {
+          return { ready: false, version: null, pid: null, reason: lastReason };
+        }
+        // Post-baseline spawn evidence (starting marker or fresh pid
+        // metadata): keep polling up to the extended hard cap.
+        extended = true;
+        lastReason = `${lastReason}; extending wait on ${evidence.reason}`;
+      } else if (darwin !== null) {
+        // Darwin: extend ONLY on a live agent-label pid. If the pid is null but
+        // not yet CONFIRMED gone (a transient launchctl miss or the brief
+        // crash→relaunch gap), don't decide yet - fall through, keep polling,
+        // and re-probe next iteration (this branch re-runs while `!extended`).
+        // Once confirmed gone, fail with an owned terminal marker's reason if
+        // one exists, else the generic timeout decorated with any unowned marker
+        // (the caller adds login-item status).
+        const agentPid = await probeDarwinAgentPid(now);
+        if (agentPid !== null) {
+          extended = true;
+          lastReason = `${lastReason}; extending wait on live agent-label pid ${agentPid}`;
+        } else if (agentGenerationConfirmedGone()) {
+          const ownedReason = await darwinOwnedTerminalReason();
+          return {
+            ready: false,
+            version: null,
+            pid: null,
+            reason:
+              ownedReason ?? (await decorateWithUnownedTerminal(lastReason)),
+          };
+        }
+      } else {
         return { ready: false, version: null, pid: null, reason: lastReason };
       }
-      const evidence = await inspectPostBaselineSpawnEvidence(
-        options.spawnEvidenceBaseline,
-        markerReader,
-      );
-      if (evidence.kind === "terminal") {
-        return {
-          ready: false,
-          version: null,
-          pid: null,
-          reason: evidence.reason,
-        };
-      }
-      if (evidence.kind === "none") {
-        return { ready: false, version: null, pid: null, reason: lastReason };
-      }
-      // Post-baseline spawn evidence (starting marker or fresh pid
-      // metadata): keep polling up to the extended hard cap.
-      extended = true;
-      lastReason = `${lastReason}; extending wait on ${evidence.reason}`;
     }
 
     const snapshot = await readPidMetadataForReady(pidPath);
@@ -184,6 +408,38 @@ export async function waitForHostReady(
           pid: null,
           reason: evidence.reason,
         };
+      }
+    }
+
+    // Darwin: accumulate observed agent pids + the live/gone signal, then decide
+    // fail-fast. While launchctl still yields a live agent pid, NO terminal
+    // marker fails the attempt - the live pid is the sole authority, so a
+    // superseded generation's marker (or a throttle-cached pid that happens to
+    // match an older marker) can never fail a live, recovering attempt
+    // (Finding F). Only once the generation is CONFIRMED GONE - no live pid
+    // across consecutive probes, not a single transient miss - does an owned
+    // terminal marker become the precise death reason, or a lost extension an
+    // extension death.
+    if (darwin !== null) {
+      await probeDarwinAgentPid(now);
+      if (agentGenerationConfirmedGone()) {
+        const ownedReason = await darwinOwnedTerminalReason();
+        if (ownedReason !== null) {
+          return {
+            ready: false,
+            version: null,
+            pid: null,
+            reason: ownedReason,
+          };
+        }
+        if (extended) {
+          return {
+            ready: false,
+            version: null,
+            pid: null,
+            reason: `${lastReason}; agent-label pid exited during the extended wait`,
+          };
+        }
       }
     }
 

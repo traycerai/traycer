@@ -96,6 +96,7 @@ interface HostFsLayoutShape {
   readonly installDir: string;
   readonly installRecordFile: string;
   readonly pendingLoginItemRevisionFile: string;
+  readonly registrationStampFile: string;
   readonly environment: string;
 }
 interface ServiceLabelShape {
@@ -112,6 +113,7 @@ const getHostFsLayoutMock = vi.fn<(environment: string) => HostFsLayoutShape>(
     installDir: `${ROOT}/install`,
     installRecordFile: `${ROOT}/install/install.json`,
     pendingLoginItemRevisionFile: `${ROOT}/pending-login-item-revision.json`,
+    registrationStampFile: `${ROOT}/registration-stamp.json`,
     environment: "production",
   }),
 );
@@ -174,6 +176,7 @@ vi.mock("../../host/host-readiness", () => ({
   HOST_READY_TIMEOUT_MS: 60_000,
   HOST_READY_POLL_MS: 250,
   HOST_READY_EXTENDED_TIMEOUT_MS: 5 * 60_000,
+  buildDarwinAgentAuthority: () => Promise.resolve(null),
   waitForHostReady: (
     timeoutMs: number,
     pidPath: string,
@@ -190,6 +193,21 @@ vi.mock("../../host/host-readiness", () => ({
   captureHostSpawnEvidenceBaseline: (logPath: string, pidPath: string) =>
     captureHostSpawnEvidenceBaselineMock(logPath, pidPath),
   categorizeHostCliError: (err: unknown) => categorizeHostCliErrorMock(err),
+}));
+
+// The register-cycle state machine (Finding F) runs the real decision here.
+// Mock its side-effecting leaves: `launchctl print` (never spawn a real
+// launchctl on this host) reports no agent pid, so `noViableAgentSpawn` keeps
+// `needCycle` true (the cycle behavior this coordination test asserts); the
+// registration stamp reads as a mismatch and its writes are inert.
+vi.mock("../../host/launchctl-agent-pid", () => ({
+  readAgentLabelPid: vi.fn().mockResolvedValue(null),
+}));
+vi.mock("../../host/registration-stamp", () => ({
+  registrationStampMatches: vi.fn().mockResolvedValue(false),
+  writeRegistrationStamp: vi.fn().mockResolvedValue(true),
+  isRegistrationIdentityApplied: vi.fn().mockReturnValue(false),
+  markRegistrationIdentityApplied: vi.fn(),
 }));
 
 const canReachHostWebsocketUrlMock = vi.fn<(url: string) => Promise<boolean>>();
@@ -232,10 +250,7 @@ type HostEnsureOutcome =
       readonly revision: number;
       readonly result: {
         readonly action:
-          | "already-ready"
-          | "provisioned"
-          | "host-busy"
-          | "removed";
+          "already-ready" | "provisioned" | "host-busy" | "removed";
         readonly running: boolean;
         readonly version: string | null;
       };
@@ -271,10 +286,7 @@ type PendingEnsureOutcome =
       readonly operationId: string;
       readonly result: {
         readonly action:
-          | "already-ready"
-          | "provisioned"
-          | "host-busy"
-          | "removed";
+          "already-ready" | "provisioned" | "host-busy" | "removed";
         readonly running: boolean;
         readonly version: string | null;
       };
@@ -788,10 +800,10 @@ describe("runEnsureHost force-coalescing (individual semantics unchanged)", () =
     // The force call ran its OWN cycle rather than sharing the non-force
     // result - proof `--force` was never silently dropped.
     expect(streamCliWithinReservedOperationMock).toHaveBeenCalledTimes(2);
-    const firstArgs = streamCliWithinReservedOperationMock.mock.calls[0]?.[0] as
-      readonly string[] | undefined;
-    const secondArgs = streamCliWithinReservedOperationMock.mock.calls[1]?.[0] as
-      readonly string[] | undefined;
+    const firstArgs = streamCliWithinReservedOperationMock.mock
+      .calls[0]?.[0] as readonly string[] | undefined;
+    const secondArgs = streamCliWithinReservedOperationMock.mock
+      .calls[1]?.[0] as readonly string[] | undefined;
     expect(firstArgs).not.toContain("--force");
     expect(secondArgs).toContain("--force");
   });
@@ -871,8 +883,8 @@ describe("runEnsureHost force-coalescing (individual semantics unchanged)", () =
     // Exactly one MORE cycle ran (the two force callers shared it) - not two.
     expect(streamCliWithinReservedOperationMock).toHaveBeenCalledTimes(2);
     expect(forceResultA).toEqual(forceResultB);
-    const secondArgs = streamCliWithinReservedOperationMock.mock.calls[1]?.[0] as
-      readonly string[] | undefined;
+    const secondArgs = streamCliWithinReservedOperationMock.mock
+      .calls[1]?.[0] as readonly string[] | undefined;
     expect(secondArgs).toContain("--force");
   });
 

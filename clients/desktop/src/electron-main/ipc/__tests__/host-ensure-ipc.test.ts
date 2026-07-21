@@ -107,6 +107,7 @@ vi.mock("../../host/host-readiness", () => ({
   HOST_READY_TIMEOUT_MS: 60_000,
   HOST_READY_POLL_MS: 250,
   HOST_READY_EXTENDED_TIMEOUT_MS: 5 * 60_000,
+  buildDarwinAgentAuthority: () => Promise.resolve(null),
   categorizeHostCliError: (err: unknown) => categorizeHostCliError(err),
   readServiceLifecycle: (payload: HostEnsureResultPayload | null | undefined) =>
     readServiceLifecycle(payload),
@@ -471,6 +472,8 @@ beforeEach(() => {
     installRecordFile: "/tmp/traycer-host-ensure-ipc-test/install/install.json",
     pendingLoginItemRevisionFile:
       "/tmp/traycer-host-ensure-ipc-test/pending-login-item-revision.json",
+    registrationStampFile:
+      "/tmp/traycer-host-ensure-ipc-test/registration-stamp.json",
     environment: "production",
   });
   getActiveEnvironment.mockReset().mockReturnValue("production");
@@ -538,6 +541,7 @@ describe("ensureHost fast path - pending LaunchAgent revision (applyPendingLogin
       {
         spawnEvidenceBaseline: null,
         extendedTimeoutMs: 5 * 60_000,
+        darwinAgentAuthority: null,
       },
     );
   });
@@ -802,6 +806,93 @@ describe("ensureHost running:false readiness gating (CLI-registered cohort only)
   });
 });
 
+describe("ensureHost full-install skip-join wiring (Finding F / T6)", () => {
+  const runningStatus: FakeServiceStatus = {
+    state: "running",
+    version: SERVICE_VERSION,
+    listenUrl: SERVICE_LISTEN_URL,
+    pid: SERVICE_PID,
+  };
+
+  // Shared full-install setup: a host is RUNNING but its endpoint is
+  // unreachable, so the ensure falls through the reachable fast path and runs a
+  // full install + SMAppService register cycle with prePid = the running pid.
+  function primeUnreachableRunningInstall(): void {
+    canReachHostWebsocketUrl.mockResolvedValue(false);
+    readServiceLifecycle.mockReturnValue({
+      priorServiceState: null,
+      postSwapAction: null,
+      postSwapError: null,
+    });
+    streamCliWithinReservedOperation.mockResolvedValue({
+      action: "installed",
+      running: false,
+      registered: false,
+      version: "1.5.0",
+      serviceLifecycle: null,
+    });
+  }
+
+  it("skip-join makes readiness JOIN the running spawn (skipPid null, not prePid)", async () => {
+    // The register cycle finds a viable current-generation agent spawn and
+    // returns "skip-join", so readiness must join it: waitForHostReady is handed
+    // skipPid=null (accept the current pid) rather than prePid, which would skip
+    // the only host there is and wait forever for a fresh spawn that never comes.
+    primeUnreachableRunningInstall();
+    registerHostLoginItem.mockResolvedValue("skip-join");
+    waitForHostReady.mockResolvedValue({
+      ready: true,
+      version: "1.5.0",
+      pid: SERVICE_PID,
+      reason: "ready",
+    });
+
+    const result = await invokeEnsureWithServiceStatus(runningStatus);
+
+    expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
+    expect(waitForHostReady).toHaveBeenCalledTimes(1);
+    // The load-bearing wiring: skip-join => joinExistingSpawn => skipPid null.
+    expect(waitForHostReady).toHaveBeenCalledWith(
+      60_000,
+      PID_METADATA_FILE,
+      250,
+      null,
+      expect.anything(),
+    );
+    expect(result).toEqual({
+      action: "provisioned",
+      running: true,
+      version: "1.5.0",
+    });
+  });
+
+  it("a cycling register (enabled) still skips the stale prePid - the contrast that makes the null load-bearing", async () => {
+    // Same full-install path, but the cycle actually ran (returns "enabled" -
+    // the old host was booted out). The lingering pid.json now belongs to the
+    // displaced host, so readiness MUST skip prePid and wait for the freshly
+    // spawned process. Pairing this with the skip-join case pins the
+    // `joinExistingSpawn ? null : prePid` wiring from both sides.
+    primeUnreachableRunningInstall();
+    registerHostLoginItem.mockResolvedValue("enabled");
+    waitForHostReady.mockResolvedValue({
+      ready: true,
+      version: "1.5.0",
+      pid: 4242,
+      reason: "ready",
+    });
+
+    await invokeEnsureWithServiceStatus(runningStatus);
+
+    expect(waitForHostReady).toHaveBeenCalledWith(
+      60_000,
+      PID_METADATA_FILE,
+      250,
+      SERVICE_PID,
+      expect.anything(),
+    );
+  });
+});
+
 describe("T2 whole-ensure reservation + revisioned envelope", () => {
   const runningStatus: FakeServiceStatus = {
     state: "running",
@@ -995,13 +1086,11 @@ describe("T2 whole-ensure reservation + revisioned envelope", () => {
     });
     const lateJoin = ensure({ observedOperationId: "op-active" });
     releaseNextReady();
-    await expect(lateJoin).resolves.toEqual(
-      {
-        action: "superseded",
-        running: false,
-        version: null,
-      },
-    );
+    await expect(lateJoin).resolves.toEqual({
+      action: "superseded",
+      running: false,
+      version: null,
+    });
     await expect(next).resolves.toEqual({
       action: "already-ready",
       running: true,
@@ -1127,5 +1216,4 @@ describe("T2 whole-ensure reservation + revisioned envelope", () => {
       currentEnvelope.revision,
     );
   });
-
 });

@@ -261,3 +261,48 @@ describe("pending-login-item-revision - durable marker write/read/clear", () => 
     });
   });
 });
+
+describe("pending-cycle flag query helpers (Finding F)", () => {
+  it("are both false on a clean slate", async () => {
+    const mod = await import("../pending-login-item-revision");
+    expect(mod.isPendingCycleFlagSet("production")).toBe(false);
+    await expect(
+      mod.hasPendingLoginItemRevisionOrPendingCycle("production"),
+    ).resolves.toBe(false);
+  });
+
+  it("a failed marker write sets the in-memory pending-cycle flag with no disk trace", async () => {
+    blockMarkerDirectoryWithAFile("production");
+    const mod = await import("../pending-login-item-revision");
+    await mod.writePendingLoginItemRevision("production", "no-agent-spawn");
+
+    expect(mod.isPendingCycleFlagSet("production")).toBe(true);
+    // The OR-helper wakes the 30s monitor even though nothing was persisted.
+    await expect(
+      mod.hasPendingLoginItemRevisionOrPendingCycle("production"),
+    ).resolves.toBe(true);
+  });
+
+  it("a durable marker (no flag) still satisfies the OR-helper", async () => {
+    const mod = await import("../pending-login-item-revision");
+    await mod.writePendingLoginItemRevision("production", "update");
+
+    expect(mod.isPendingCycleFlagSet("production")).toBe(false);
+    await expect(
+      mod.hasPendingLoginItemRevisionOrPendingCycle("production"),
+    ).resolves.toBe(true);
+  });
+
+  it("resolving the cycle clears the flag even when the marker unlink cannot run", async () => {
+    blockMarkerDirectoryWithAFile("production");
+    const mod = await import("../pending-login-item-revision");
+    await mod.writePendingLoginItemRevision("production", "no-agent-spawn");
+    expect(mod.isPendingCycleFlagSet("production")).toBe(true);
+
+    await mod.resolvePendingLoginItemRevisionAfterCycle("production");
+    expect(mod.isPendingCycleFlagSet("production")).toBe(false);
+    await expect(
+      mod.hasPendingLoginItemRevisionOrPendingCycle("production"),
+    ).resolves.toBe(false);
+  });
+});

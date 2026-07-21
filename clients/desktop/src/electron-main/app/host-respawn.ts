@@ -1,3 +1,4 @@
+import { dirname, join } from "node:path";
 import { log } from "./logger";
 import { isHostRemovedByUser } from "../host/host-removal-state";
 import {
@@ -7,6 +8,7 @@ import {
   type HostLoginItemStatus,
 } from "./host-login-item";
 import {
+  buildDarwinAgentAuthority,
   HOST_READY_EXTENDED_TIMEOUT_MS,
   HOST_READY_POLL_MS,
   HOST_READY_TIMEOUT_MS,
@@ -101,6 +103,15 @@ async function respawnViaLoginItem(host: IpcHostLifecycle): Promise<void> {
   const preStatus = await host.getServiceStatus();
   const prePid = preStatus.state === "running" ? preStatus.pid : null;
 
+  // Capture the darwin readiness authority BEFORE the register cycle so this
+  // respawn's post-baseline terminal markers are attributable to its spawn.
+  // `respawnViaLoginItem` runs only on the SMAppService cohort.
+  const darwinAgentAuthority = await buildDarwinAgentAuthority(
+    true,
+    join(dirname(host.pidMetadataFile), "host.log"),
+    host.pidMetadataFile,
+  );
+
   // Clear the renderer's host snapshot so the loading state shows
   // immediately. The pid-file watcher will re-fill it when the cycled
   // host publishes pid.json under its fresh LWCR; we also force a
@@ -123,11 +134,18 @@ async function respawnViaLoginItem(host: IpcHostLifecycle): Promise<void> {
   if (status === "requires-approval") {
     throw new Error(approvalRequiredMessage());
   }
-  if (status === "deferred-busy") {
-    // Unreachable: this call site passes no revalidation guard (see above),
-    // so `registerHostLoginItemUnserialized` never produces this outcome.
+  if (
+    status === "deferred-busy" ||
+    status === "deferred-busy-unpersisted" ||
+    status === "skip-join"
+  ) {
+    // Unreachable: this call site passes no revalidation guard (undefined =
+    // unconditional cycle), so the register-cycle state machine is never
+    // consulted and cannot produce a defer / skip-join outcome. Guard
+    // defensively so a future caller change surfaces loudly instead of falling
+    // through to `notEnabledMessage`.
     throw new Error(
-      "[host-respawn] registerHostLoginItem reported deferred-busy without a revalidation guard",
+      `[host-respawn] registerHostLoginItem reported ${status} without a revalidation guard`,
     );
   }
   if (status !== "enabled") {
@@ -148,6 +166,7 @@ async function respawnViaLoginItem(host: IpcHostLifecycle): Promise<void> {
     {
       spawnEvidenceBaseline: null,
       extendedTimeoutMs: HOST_READY_EXTENDED_TIMEOUT_MS,
+      darwinAgentAuthority,
     },
   );
   if (host.isDisposed) return;

@@ -240,6 +240,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
         dir,
         "pending-login-item-revision.json",
       ),
+      registrationStampFile: join(dir, "registration-stamp.json"),
       environment: "production" as const,
     };
     const { server, port } = await listenOnEphemeralPort();
@@ -292,6 +293,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
         dir,
         "pending-login-item-revision.json",
       ),
+      registrationStampFile: join(dir, "registration-stamp.json"),
       environment: "production" as const,
     };
     const lifecycle = new HostLifecycle({
@@ -338,6 +340,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
         dir,
         "pending-login-item-revision.json",
       ),
+      registrationStampFile: join(dir, "registration-stamp.json"),
       environment: "dev" as const,
     };
     const { server, port } = await listenOnEphemeralPort();
@@ -394,6 +397,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
         dir,
         "pending-login-item-revision.json",
       ),
+      registrationStampFile: join(dir, "registration-stamp.json"),
       environment: "production" as const,
     };
     const { server, port } = await listenOnEphemeralPort();
@@ -442,6 +446,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
         dir,
         "pending-login-item-revision.json",
       ),
+      registrationStampFile: join(dir, "registration-stamp.json"),
       environment: "dev" as const,
     };
     const { server, port } = await listenOnEphemeralPort();
@@ -492,6 +497,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
         dir,
         "pending-login-item-revision.json",
       ),
+      registrationStampFile: join(dir, "registration-stamp.json"),
       environment: "production" as const,
     };
     await writeFile(
@@ -541,6 +547,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
         dir,
         "pending-login-item-revision.json",
       ),
+      registrationStampFile: join(dir, "registration-stamp.json"),
       environment: "production" as const,
     };
     await writeFile(
@@ -589,6 +596,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
         dir,
         "pending-login-item-revision.json",
       ),
+      registrationStampFile: join(dir, "registration-stamp.json"),
       environment: "production" as const,
     };
     const websocketUrl = "ws://127.0.0.1:54321/rpc";
@@ -653,6 +661,7 @@ describe("HostLifecycle.getServiceStatus", () => {
         dir,
         "pending-login-item-revision.json",
       ),
+      registrationStampFile: join(dir, "registration-stamp.json"),
       environment: "production" as const,
     };
     await writeFile(
@@ -703,6 +712,7 @@ describe("HostLifecycle.respawn (CLI subprocess)", () => {
           installRecordFile: "/tmp/no-such-dir/install/install.json",
           pendingLoginItemRevisionFile:
             "/tmp/no-such-dir/pending-login-item-revision.json",
+          registrationStampFile: "/tmp/no-such-dir/registration-stamp.json",
           environment,
         },
         bundledBinaryPath: null,

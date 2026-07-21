@@ -204,6 +204,7 @@ function buildTestHostFsLayout(environment: string): {
   installDir: string;
   installRecordFile: string;
   pendingLoginItemRevisionFile: string;
+  registrationStampFile: string;
   environment: string;
 } {
   const rootDir = join(workHome, ".traycer", "host");
@@ -214,6 +215,7 @@ function buildTestHostFsLayout(environment: string): {
     installDir: join(rootDir, "install"),
     installRecordFile: join(rootDir, "install", "install.json"),
     pendingLoginItemRevisionFile: pendingRevisionMarkerPath(),
+    registrationStampFile: join(rootDir, "registration-stamp.json"),
     environment,
   };
 }
@@ -368,7 +370,9 @@ describe("registerHostLoginItem", () => {
     // host with no backing file (no auto-restart after crash/reboot)
     // before any agent registration exists to replace it.
     writeLegacyCliManifest();
-    const revalidate = vi.fn().mockResolvedValue(false);
+    const revalidate = vi
+      .fn()
+      .mockResolvedValue({ kind: "defer-busy", cause: "busy" });
 
     await expect(registerHostLoginItem(revalidate)).resolves.toBe(
       "deferred-busy",
@@ -380,7 +384,7 @@ describe("registerHostLoginItem", () => {
   });
 
   it("proceeds with the cycle when the revalidation guard passes", async () => {
-    const revalidate = vi.fn().mockResolvedValue(true);
+    const revalidate = vi.fn().mockResolvedValue({ kind: "cycle", causes: [] });
     getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" });
     getLoginItemSettings.mockReturnValueOnce({ status: "enabled" });
 

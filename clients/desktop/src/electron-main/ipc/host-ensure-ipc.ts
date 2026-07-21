@@ -22,19 +22,35 @@ import {
   streamCliWithinReservedOperation,
   type HostOperationReservation,
 } from "./host-management-ipc";
+import { config } from "../../config";
 import { getHostFsLayout } from "../host/host-paths";
 import type { Environment } from "../host/host-paths";
 import { isHostRemovedByUser } from "../host/host-removal-state";
 import {
   hasPendingLoginItemRevision,
   hostManagesHostLoginItem,
+  HOST_AGENT_LABEL,
   readHostLoginItemStatus,
   registerHostLoginItem,
 } from "../app/host-login-item";
+import {
+  isPendingCycleFlagSet,
+  writePendingLoginItemRevision,
+} from "../host/pending-login-item-revision";
+import { readAgentLabelPid } from "../host/launchctl-agent-pid";
+import {
+  isRegistrationIdentityApplied,
+  registrationStampMatches,
+} from "../host/registration-stamp";
+import {
+  evaluateRegisterCycleDecision,
+  type RegisterCycleDecision,
+} from "../host/host-register-cycle-decision";
 import { approvalRequiredMessage } from "../app/host-respawn";
 import { probeHostActivityBusy } from "@traycer-clients/shared/host-client/host-activity-probe";
 import { canReachHostWebsocketUrl } from "../host/host-lifecycle";
 import {
+  buildDarwinAgentAuthority,
   captureHostSpawnEvidenceBaseline,
   categorizeHostCliError,
   HOST_READY_EXTENDED_TIMEOUT_MS,
@@ -244,6 +260,36 @@ async function joinEnsureHost(
   return outcome.result;
 }
 
+// Build the register-cycle state-machine callback (Finding F) that
+// `registerHostLoginItem` evaluates as `revalidateBeforeBootout` INSIDE the
+// registration lock immediately before bootout - so its busy probe and its
+// `launchctl print` agent-label authority reflect the moment the cycle would
+// actually run, not the caller's (possibly stale) entry-point check.
+function buildRegisterCycleRevalidate(params: {
+  readonly force: boolean;
+  readonly environment: Environment;
+  readonly cliActionInstalled: boolean;
+  readonly busyProbeUrl: string | null;
+}): () => Promise<RegisterCycleDecision> {
+  return () =>
+    evaluateRegisterCycleDecision({
+      force: params.force,
+      environment: params.environment,
+      agentLabel: HOST_AGENT_LABEL,
+      identity: config.version,
+      cliActionInstalled: params.cliActionInstalled,
+      readAgentLabelPid,
+      hasPendingRevisionMarker: hasPendingLoginItemRevision,
+      isPendingCycleFlagSet,
+      registrationStampMatches,
+      isRegistrationIdentityApplied,
+      probeBusy: async () =>
+        params.busyProbeUrl !== null &&
+        (await probeHostActivityBusy(params.busyProbeUrl)),
+      persistPendingCycle: writePendingLoginItemRevision,
+    });
+}
+
 async function ensureHost(
   bridge: RunnerIpcBridge,
   reservation: HostOperationReservation,
@@ -395,6 +441,15 @@ async function ensureHost(
   // bounded authority for all three phases; a verifier-only 15s cutoff can
   // discard the genuine final marker before readiness starts. Legacy markers
   // retain their pre-action baseline fallback.
+  // Darwin SMAppService cohort: extend readiness on the live agent-label pid
+  // via launchctl (Finding F). Captured here, before the register cycle below,
+  // so its terminal-marker baseline predates this attempt's spawn. Null on
+  // win32/linux, where the spawn-evidence baseline governs instead.
+  const darwinAgentAuthority = await buildDarwinAgentAuthority(
+    hostOwnsLoginItem,
+    layout.logFile,
+    layout.pidMetadataFile,
+  );
   const readinessOptions: WaitForHostReadyOptions = {
     spawnEvidenceBaseline:
       spawnEvidenceBaseline === null
@@ -408,6 +463,7 @@ async function ensureHost(
               WINDOWS_SCHTASKS_QUERY_TIMEOUT_MS,
           },
     extendedTimeoutMs: HOST_READY_EXTENDED_TIMEOUT_MS,
+    darwinAgentAuthority,
   };
   const lifecycle = readServiceLifecycle(ensurePayload);
   if (lifecycle.postSwapError !== null) {
@@ -459,6 +515,7 @@ async function ensureHost(
   // refuses to spawn the new helper with `EX_CONFIG` and the readiness
   // poll below times out against an empty `host.log`. See
   // `host-login-item.ts:registerHostLoginItem` for the full rationale.
+  let joinExistingSpawn = false;
   if (hostOwnsLoginItem) {
     // Pre-flight, only when a host was running at ensure start: `requires-
     // approval` means the user has the login item toggled off in System
@@ -471,11 +528,19 @@ async function ensureHost(
     if (prePid !== null && readHostLoginItemStatus() === "requires-approval") {
       throw new Error(approvalRequiredMessage());
     }
-    // No revalidation guard here (unlike the pending-revision fast path
-    // below): this call follows a full CLI provisioning round-trip, and the
-    // busy re-check a few lines up already surfaces a host that became busy
-    // before reaching this point. Scoped out for now - see PR discussion.
-    const loginItemStatus = await registerHostLoginItem(undefined);
+    // Evaluate the register-cycle state machine (Finding F) INSIDE the
+    // registration lock: it re-checks host activity and the launchctl
+    // agent-label authority at the bootout boundary, so an old host that
+    // became busy during the long CLI install (or that already has a viable
+    // current-generation spawn) is handled correctly rather than booted out.
+    const loginItemStatus = await registerHostLoginItem(
+      buildRegisterCycleRevalidate({
+        force,
+        environment,
+        cliActionInstalled: ensurePayload.action === "installed",
+        busyProbeUrl: serviceStatus.listenUrl,
+      }),
+    );
     if (loginItemStatus === "removed-by-user") {
       // The user hit "Remove Traycer" while this ensure was in flight; the
       // locked register cycle refused to resurrect the login item. Mirror
@@ -490,7 +555,48 @@ async function ensureHost(
     if (loginItemStatus === "requires-approval") {
       throw new Error(approvalRequiredMessage());
     }
-    if (loginItemStatus !== "enabled") {
+    if (
+      loginItemStatus === "deferred-busy" ||
+      loginItemStatus === "deferred-busy-unpersisted"
+    ) {
+      // The cycle was needed but the old host was busy at the bootout boundary
+      // (it picked up work during the install / while queued on the lock). The
+      // freshly installed bytes stay on disk; the persisted pending-cycle
+      // marker (or, for `deferred-busy-unpersisted`, the in-memory flag) drives
+      // the 30s monitor to apply them once the host goes idle. Keep the busy
+      // host for the renderer's compat probe instead of failing.
+      if (prePid !== null && serviceStatus.version !== null) {
+        const kept = await surfaceBusyHostKeep(
+          bridge,
+          serviceStatus.version,
+          prePid,
+        );
+        if (kept !== null) {
+          log.info(
+            "[host-ensure] register cycle deferred - old host busy; kept it for the renderer compat probe; the monitor applies the new bytes at idle",
+            { deferred: loginItemStatus },
+          );
+          return kept;
+        }
+      }
+      log.warn(
+        "[host-ensure] register cycle deferred (busy) but no reachable host remained to keep - routing to recovery",
+        { deferred: loginItemStatus },
+      );
+      throw new Error(
+        "The host was updated but could not be applied while it was busy. It applies automatically once the host goes idle; open Doctor or run 'traycer host doctor' to apply it now.",
+      );
+    }
+    if (loginItemStatus === "skip-join") {
+      // A viable current-generation agent spawn already exists and nothing
+      // needed applying, so no cycle ran. Join that spawn's readiness (accept
+      // its current pid) rather than skipping it and waiting for a fresh one
+      // that will never come.
+      log.info(
+        "[host-ensure] register cycle skipped - joining the existing viable agent spawn's readiness",
+      );
+      joinExistingSpawn = true;
+    } else if (loginItemStatus !== "enabled") {
       // `not-registered` / `not-found` / `not-supported` here all mean
       // SMAppService refused to load our in-bundle plist - there is no
       // amount of waiting that will publish pid metadata. Fail fast so
@@ -517,7 +623,9 @@ async function ensureHost(
     HOST_READY_TIMEOUT_MS,
     layout.pidMetadataFile,
     HOST_READY_POLL_MS,
-    prePid,
+    // `skip-join` did not cycle, so the "old" pid IS the current host - accept
+    // it rather than skipping it and waiting for a fresh spawn that never comes.
+    joinExistingSpawn ? null : prePid,
     readinessOptions,
   );
   if (!readiness.ready) {
@@ -638,16 +746,40 @@ async function applyPendingLoginItemRevisionIfIdle(
   // ensure can be mid-cycle right now) - re-check right before the bootout
   // actually runs, so a host that picked up real work while queued isn't
   // killed anyway.
+  // Capture the darwin readiness authority BEFORE the register cycle so this
+  // attempt's post-baseline terminal markers are attributable to its spawn.
+  const layout = getHostFsLayout(environment);
+  const darwinAgentAuthority = await buildDarwinAgentAuthority(
+    hostOwnsLoginItem,
+    layout.logFile,
+    layout.pidMetadataFile,
+  );
   const status = await registerHostLoginItem(
-    async () => !(await probeHostActivityBusy(listenUrl)),
+    buildRegisterCycleRevalidate({
+      force: false,
+      environment,
+      cliActionInstalled: false,
+      busyProbeUrl: listenUrl,
+    }),
   );
   if (status === "removed-by-user") {
     log.info("[host-ensure] skipped - host removed by user mid-ensure");
     return { action: "removed", running: false, version: null };
   }
-  if (status === "deferred-busy") {
+  if (status === "deferred-busy" || status === "deferred-busy-unpersisted") {
     log.debug(
       "[host-ensure] pending LaunchAgent revision deferred - host became busy while queued behind another registration cycle",
+      { deferred: status },
+    );
+    return null;
+  }
+  if (status === "skip-join") {
+    // Defensive: the fast path only runs with a pending marker present, so the
+    // state machine sees a definitionChange and returns `cycle`/`defer`, never
+    // `skip-join`. If it somehow does, the host is already viable and nothing
+    // needs applying - fall through to the normal already-ready return.
+    log.info(
+      "[host-ensure] pending LaunchAgent revision: state machine reported a viable existing spawn, nothing to apply",
     );
     return null;
   }
@@ -665,18 +797,18 @@ async function applyPendingLoginItemRevisionIfIdle(
       `The host's macOS login item could not be enabled (status: ${status}). Open Doctor or run 'traycer host doctor' to recover.`,
     );
   }
-  const pidPath = getHostFsLayout(environment).pidMetadataFile;
-  // Pending-revision refresh is darwin SMAppService only — no win32 spawn-
-  // evidence extension (T6 owns launchctl-gated authority there).
+  // Pending-revision refresh is darwin SMAppService: extend readiness on the
+  // live agent-label pid via launchctl (Finding F), not win32 spawn evidence.
   publishHostOperationStage(reservation, "waiting-ready");
   const readiness = await waitForHostReady(
     HOST_READY_TIMEOUT_MS,
-    pidPath,
+    layout.pidMetadataFile,
     HOST_READY_POLL_MS,
     prePid,
     {
       spawnEvidenceBaseline: null,
       extendedTimeoutMs: HOST_READY_EXTENDED_TIMEOUT_MS,
+      darwinAgentAuthority,
     },
   );
   if (!readiness.ready) {

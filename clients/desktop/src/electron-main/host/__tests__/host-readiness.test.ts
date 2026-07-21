@@ -95,6 +95,7 @@ describe("waitForHostReady spawn-evidence extension (Finding F)", () => {
     const result = await waitForHostReady(60_000, pidPath, 20, null, {
       spawnEvidenceBaseline: baseline,
       extendedTimeoutMs: 5 * 60_000,
+      darwinAgentAuthority: null,
     });
     const elapsed = Date.now() - started;
 
@@ -116,6 +117,7 @@ describe("waitForHostReady spawn-evidence extension (Finding F)", () => {
     const waitPromise = waitForHostReady(80, pidPath, 15, null, {
       spawnEvidenceBaseline: baseline,
       extendedTimeoutMs: 2_000,
+      darwinAgentAuthority: null,
     });
 
     // Publish pid only after base budget would have expired.
@@ -142,6 +144,7 @@ describe("waitForHostReady spawn-evidence extension (Finding F)", () => {
     const result = await waitForHostReady(60, pidPath, 15, null, {
       spawnEvidenceBaseline: baseline,
       extendedTimeoutMs: 5_000,
+      darwinAgentAuthority: null,
     });
     const elapsed = Date.now() - started;
 
@@ -162,6 +165,7 @@ describe("waitForHostReady spawn-evidence extension (Finding F)", () => {
     const waitPromise = waitForHostReady(80, pidPath, 15, null, {
       spawnEvidenceBaseline: baseline,
       extendedTimeoutMs: 2_000,
+      darwinAgentAuthority: null,
     });
 
     // Publish a fresh pid before base budget expires so extension sees
@@ -185,6 +189,7 @@ describe("waitForHostReady spawn-evidence extension (Finding F)", () => {
     const result = await waitForHostReady(50, pidPath, 10, null, {
       spawnEvidenceBaseline: null,
       extendedTimeoutMs: 5_000,
+      darwinAgentAuthority: null,
     });
     const elapsed = Date.now() - started;
 
@@ -208,6 +213,7 @@ describe("waitForHostReady spawn-evidence extension (Finding F)", () => {
     const result = await waitForHostReady(50, pidPath, 10, null, {
       spawnEvidenceBaseline: baseline,
       extendedTimeoutMs: 2_000,
+      darwinAgentAuthority: null,
     });
 
     expect(result.ready).toBe(false);
@@ -232,6 +238,7 @@ describe("waitForHostReady spawn-evidence extension (Finding F)", () => {
     const result = await waitForHostReady(30, pidPath, 10, null, {
       spawnEvidenceBaseline: baseline,
       extendedTimeoutMs: 80,
+      darwinAgentAuthority: null,
     });
 
     expect(result.ready).toBe(false);
@@ -255,6 +262,7 @@ describe("waitForHostReady spawn-evidence extension (Finding F)", () => {
     const result = await waitForHostReady(30, pidPath, 10, null, {
       spawnEvidenceBaseline: baseline,
       extendedTimeoutMs: 80,
+      darwinAgentAuthority: null,
     });
 
     expect(result.ready).toBe(false);
@@ -278,6 +286,7 @@ describe("waitForHostReady spawn-evidence extension (Finding F)", () => {
     const result = await waitForHostReady(30, pidPath, 10, null, {
       spawnEvidenceBaseline: baseline,
       extendedTimeoutMs: 80,
+      darwinAgentAuthority: null,
     });
 
     expect(result.ready).toBe(false);
@@ -301,6 +310,7 @@ describe("waitForHostReady spawn-evidence extension (Finding F)", () => {
     const result = await waitForHostReady(30, pidPath, 10, null, {
       spawnEvidenceBaseline: baseline,
       extendedTimeoutMs: 80,
+      darwinAgentAuthority: null,
     });
 
     expect(result.ready).toBe(false);
@@ -323,6 +333,7 @@ describe("waitForHostReady spawn-evidence extension (Finding F)", () => {
         markerAuthoritySinceMs: Date.now() - 55_000,
       },
       extendedTimeoutMs: 80,
+      darwinAgentAuthority: null,
     });
 
     expect(result.ready).toBe(false);
@@ -345,6 +356,7 @@ describe("waitForHostReady spawn-evidence extension (Finding F)", () => {
     const waitPromise = waitForHostReady(500, pidPath, 20, null, {
       spawnEvidenceBaseline: baseline,
       extendedTimeoutMs: 1_000,
+      darwinAgentAuthority: null,
     });
     await delay(30);
     await writeFile(
@@ -374,6 +386,7 @@ describe("waitForHostReady spawn-evidence extension (Finding F)", () => {
         markerAuthoritySinceMs: Date.now() - 1_000,
       },
       extendedTimeoutMs: 2_000,
+      darwinAgentAuthority: null,
     });
 
     expect(result.ready).toBe(false);

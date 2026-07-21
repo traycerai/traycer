@@ -50,6 +50,7 @@ function layoutIn(dir: string): HostFsLayout {
     installDir: join(dir, "install"),
     installRecordFile: join(dir, "install", "install.json"),
     pendingLoginItemRevisionFile: join(dir, "pending-login-item-revision.json"),
+    registrationStampFile: join(dir, "registration-stamp.json"),
     environment: "production" as const,
   };
 }

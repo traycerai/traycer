@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { log } from "../app/logger";
-import { hasPendingLoginItemRevision } from "../app/host-login-item";
+import { hasPendingLoginItemRevisionOrPendingCycle } from "./pending-login-item-revision";
 import { canReachHostWebsocketUrl } from "./host-lifecycle";
 import { getActiveEnvironment } from "../ipc/host-management-ipc";
 import {
@@ -77,7 +77,7 @@ export function startPendingLoginItemRevisionMonitor(
 ): PendingLoginItemRevisionMonitor {
   const environment = deps.environment ?? getActiveEnvironment();
   const hasPendingRevision =
-    deps.hasPendingRevision ?? hasPendingLoginItemRevision;
+    deps.hasPendingRevision ?? hasPendingLoginItemRevisionOrPendingCycle;
   const canReach = deps.canReach ?? canReachHostWebsocketUrl;
   const isRefreshQuarantined =
     deps.isRefreshQuarantined ?? isPendingRevisionRefreshQuarantined;
