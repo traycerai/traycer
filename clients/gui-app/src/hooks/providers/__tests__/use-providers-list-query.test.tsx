@@ -227,13 +227,13 @@ describe("useProvidersListForClient table cadence", () => {
     const fetchTimes: number[] = [];
     vi.setSystemTime(0);
 
-    const originalList = fixture.client.request.bind(fixture.client);
-    vi.spyOn(fixture.client, "request").mockImplementation(
-      async (method, params) => {
+    const originalList = fixture.client.requestWithSignal.bind(fixture.client);
+    vi.spyOn(fixture.client, "requestWithSignal").mockImplementation(
+      async (method, params, signal) => {
         if (method === "providers.list") {
           fetchTimes.push(Date.now());
         }
-        return originalList(method, params);
+        return originalList(method, params, signal);
       },
     );
 
@@ -278,14 +278,7 @@ describe("useProvidersListForClient table cadence", () => {
       .slice(1)
       .map((time, index) => time - fetchTimes[index]);
     expect(deltas).toEqual([
-      800,
-      1_600,
-      3_200,
-      6_400,
-      12_800,
-      25_600,
-      30_000,
-      30_000,
+      800, 1_600, 3_200, 6_400, 12_800, 25_600, 30_000, 30_000,
     ]);
   });
 

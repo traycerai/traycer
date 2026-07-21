@@ -3,14 +3,17 @@ import {
   useMutation,
   useQuery,
   useQueryClient,
+  CancelledError,
   type QueryClient,
+  type QueryFunctionContext,
   type QueryKey,
   type UseMutationOptions,
   type UseMutationResult,
   type UseQueryOptions,
   type UseQueryResult,
 } from "@tanstack/react-query";
-import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
+import { isHostRequestControlFlowError } from "@traycer-clients/shared/host-client/host-request-coordinator";
 import {
   HostRpcError,
   toHostRpcError,
@@ -34,7 +37,7 @@ import {
 type ConditionHostRpcMethod = {
   [
     Method in keyof typeof HOST_METHOD_POLL_TABLE
-  ]: (typeof HOST_METHOD_POLL_TABLE)[Method] extends {
+  ]: (typeof HOST_METHOD_POLL_TABLE)[Method]["poll"] extends {
     readonly kind: "condition";
   }
     ? Method
@@ -64,7 +67,7 @@ export interface UseHostQueryWithResponseMapOptions<
   Method extends keyof Registry & keyof HostRpcRegistry & string,
   TData,
 > {
-  readonly client: HostClient<Registry> | null;
+  readonly client: HostRequester<Registry> | null;
   readonly method: Method;
   readonly params: RequestOfMethod<Registry, Method>;
   /**
@@ -162,7 +165,7 @@ export function useHostQueryWithResponseMap<
   const baseOptions = args.options ?? {};
   const { meta, poll, select, ...queryOptionsWithoutReservedFields } =
     baseOptions;
-  const pollPolicy = HOST_METHOD_POLL_TABLE[method];
+  const pollPolicy = HOST_METHOD_POLL_TABLE[method].poll;
   let tablePollingOptions:
     | {
         readonly refetchInterval: ConditionPollRefetchInterval | false;
@@ -195,14 +198,20 @@ export function useHostQueryWithResponseMap<
   // The boundary makes the declared `HostRpcError` generic true by
   // construction: it also normalizes throws from the caller-supplied
   // `mapResponse`, which the transport's own error discipline can't cover.
-  const request = (): Promise<TData> =>
-    withHostRpcErrorBoundary(method, async () => {
+  const request = async ({ signal }: QueryFunctionContext): Promise<TData> => {
+    try {
       if (client === null) {
-        return Promise.reject<TData>(hostClientUnavailableError(method));
+        return await Promise.reject<TData>(hostClientUnavailableError(method));
       }
-      const response = await client.request(method, params);
+      const response = await client.requestWithSignal(method, params, signal);
       return mapResponse({ response, queryClient, queryKey });
-    });
+    } catch (error) {
+      if (isHostRequestControlFlowError(error)) {
+        throw new CancelledError({ revert: true, silent: true });
+      }
+      throw toHostRpcError(error, method);
+    }
+  };
 
   return useQuery<TData, HostRpcError, TData>(
     queryOptions<TData, HostRpcError, TData>({
@@ -246,7 +255,7 @@ export interface UseHostMutationOptions<
   TContext = unknown,
   TVariables = RequestOfMethod<Registry, Method>,
 > {
-  readonly client: HostClient<Registry> | null;
+  readonly client: HostRequester<Registry> | null;
   readonly method: Method;
   readonly options: Omit<
     UseMutationOptions<

@@ -34,7 +34,7 @@ import type {
   WebSocketOpenEvent,
 } from "../ws-factory";
 import { WsRpcClient } from "../ws-rpc-client";
-import { HostRpcError } from "../host-messenger";
+import { HostRpcError, type HostRequestAuthority } from "../host-messenger";
 import type {
   IStreamWebSocketFactory,
   StreamWebSocketLike,
@@ -74,6 +74,17 @@ function loadBaselines(): { label: string; surfacePath: string }[] {
 }
 
 const baselines = loadBaselines();
+
+function authorityForContext(ctx: RequestContext): HostRequestAuthority {
+  return {
+    endpoint: {
+      hostId: mockLocalHostEntry.hostId,
+      websocketUrl: mockLocalHostEntry.websocketUrl,
+    },
+    bearer: ctx.credentials,
+    abortSignal: new AbortController().signal,
+  };
+}
 
 const baselineFallbackV10 = defineRpcContract({
   method: "synthetic.baselineFallback",
@@ -243,15 +254,17 @@ describe.skipIf(baselines.length === 0)(
         const ctx = makeRequestContext("token-smoke");
         const client = new WsRpcClient<typeof hostRpcRegistry>({
           registry: hostRpcRegistry,
-          endpoint: () => mockLocalHostEntry,
-          bearer: () => ctx.credentials,
           requestId: () => "req-smoke",
           webSocketFactory: factory,
           dialTimeoutMs: 1000,
           frameTimeoutMs: 1000,
         });
 
-        const pending = client.request("host.status", {});
+        const pending = client.request(
+          "host.status",
+          {},
+          authorityForContext(ctx),
+        );
         await flush();
         expect(sockets).toHaveLength(1);
         const stub = sockets[0];
@@ -300,17 +313,19 @@ describe.skipIf(baselines.length === 0)(
         const ctx = makeRequestContext("token-smoke");
         const client = new WsRpcClient<typeof baselineFallbackRegistry>({
           registry: baselineFallbackRegistry,
-          endpoint: () => mockLocalHostEntry,
-          bearer: () => ctx.credentials,
           requestId: () => "req-fallback-smoke",
           webSocketFactory: factory,
           dialTimeoutMs: 1000,
           frameTimeoutMs: 1000,
         });
 
-        const pending = client.request("synthetic.baselineFallback", {
-          label: "x",
-        });
+        const pending = client.request(
+          "synthetic.baselineFallback",
+          {
+            label: "x",
+          },
+          authorityForContext(ctx),
+        );
         await flush();
         expect(sockets).toHaveLength(1);
         const stub = sockets[0];
@@ -367,15 +382,17 @@ describe.skipIf(baselines.length === 0)(
         const ctx = makeRequestContext("token-smoke");
         const client = new WsRpcClient<typeof baselineUnsupportedRegistry>({
           registry: baselineUnsupportedRegistry,
-          endpoint: () => mockLocalHostEntry,
-          bearer: () => ctx.credentials,
           requestId: () => "req-unsupported-smoke",
           webSocketFactory: factory,
           dialTimeoutMs: 1000,
           frameTimeoutMs: 1000,
         });
 
-        const pending = client.request("synthetic.baselineUnsupported", {});
+        const pending = client.request(
+          "synthetic.baselineUnsupported",
+          {},
+          authorityForContext(ctx),
+        );
         await flush();
         expect(sockets).toHaveLength(1);
         const stub = sockets[0];

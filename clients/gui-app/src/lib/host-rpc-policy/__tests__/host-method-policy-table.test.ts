@@ -27,6 +27,7 @@ import {
   WORKTREE_SETUP_IN_FLIGHT_POLL_LANE,
   WORKTREE_SETUP_STALE_ERROR_POLL_LANE,
   assertExactHostMethodPollTableKeys,
+  hostRpcSchedulingPolicy,
 } from "@/lib/host-rpc-policy/host-method-policy-table";
 import type {
   ConditionPollLane,
@@ -67,11 +68,56 @@ describe("host method poll policy table", () => {
     expect(wrongKeyPolicy.method).toBe("providers.list");
   });
 
+  it("declares scheduling posture and a join timeout for every registry method", () => {
+    for (const entry of Object.values(HOST_METHOD_POLL_TABLE)) {
+      expect(
+        entry.mode === "latest" ||
+          entry.mode === "fifo" ||
+          entry.mode === "join" ||
+          typeof entry.mode === "function",
+      ).toBe(true);
+      expect(
+        entry.joinResponseTimeoutMs === null || entry.joinResponseTimeoutMs > 0,
+      ).toBe(true);
+    }
+  });
+
+  it("keeps ambiguous verbs on their declared side of the command/read boundary", () => {
+    expect(HOST_METHOD_POLL_TABLE["agent.tui.prepareLaunch"].mode).toBe("fifo");
+    expect(HOST_METHOD_POLL_TABLE["workspace.prepareFolders"].mode).toBe(
+      "fifo",
+    );
+    expect(HOST_METHOD_POLL_TABLE["speech.ensureModel"].mode).toBe("fifo");
+    expect(
+      HOST_METHOD_POLL_TABLE["workspace.resolvePathsByRepoIdentifiers"].mode,
+    ).toBe("latest");
+    expect(HOST_METHOD_POLL_TABLE["providers.touchLogin"].mode).toBe("fifo");
+    expect(HOST_METHOD_POLL_TABLE["worktree.retrySetup"].mode).toBe("fifo");
+  });
+
+  it("keeps ordinary provider listing latest but serializes forced auth refresh", () => {
+    expect(hostRpcSchedulingPolicy.modeFor("providers.list", {})).toBe(
+      "latest",
+    );
+    expect(
+      hostRpcSchedulingPolicy.modeFor("providers.list", {
+        forceAuthRefresh: true,
+      }),
+    ).toBe("fifo");
+  });
+
+  it("joins provider login waits under the fixed sixteen-minute response budget", () => {
+    expect(HOST_METHOD_POLL_TABLE["providers.awaitLogin"].mode).toBe("join");
+    expect(
+      hostRpcSchedulingPolicy.joinResponseTimeoutMs("providers.awaitLogin"),
+    ).toBe(16 * 60 * 1_000);
+  });
+
   it("narrows null and fixed policies", () => {
-    const neverPolled: null = HOST_METHOD_POLL_TABLE["host.status"];
+    const neverPolled: null = HOST_METHOD_POLL_TABLE["host.status"].poll;
     expect(neverPolled).toBeNull();
 
-    const fixed = HOST_METHOD_POLL_TABLE["host.getRateLimitUsage"];
+    const fixed = HOST_METHOD_POLL_TABLE["host.getRateLimitUsage"].poll;
     const intervalMs: number = fixed.intervalMs;
     expect(intervalMs).toBe(15 * 60 * 1_000);
   });
@@ -88,12 +134,12 @@ describe("host method poll policy table", () => {
         },
       ],
     };
-    const policy = HOST_METHOD_POLL_TABLE["providers.list"];
+    const policy = HOST_METHOD_POLL_TABLE["providers.list"].poll;
     expect(policy.classify(data)).toBe(PROVIDERS_PENDING_POLL_LANE);
   });
 
   it("orders providers lanes pending, limited, then steady", () => {
-    const policy = HOST_METHOD_POLL_TABLE["providers.list"];
+    const policy = HOST_METHOD_POLL_TABLE["providers.list"].poll;
 
     expect(policy.classify(undefined)).toBe(false);
     expect(
@@ -128,7 +174,7 @@ describe("host method poll policy table", () => {
   it("keeps condition error counters independent from their data lanes", () => {
     const policies = [
       {
-        policy: HOST_METHOD_POLL_TABLE["agent.gui.listHarnesses"],
+        policy: HOST_METHOD_POLL_TABLE["agent.gui.listHarnesses"].poll,
         dataLane: HARNESS_PENDING_POLL_LANE,
         initialErrorLane: HARNESS_INITIAL_ERROR_POLL_LANE,
         staleErrorLane: HARNESS_STALE_ERROR_POLL_LANE,
@@ -137,31 +183,31 @@ describe("host method poll policy table", () => {
         policy:
           HOST_METHOD_POLL_TABLE[
             "agent.selectionGuide.getGlobalOnboardingDraft"
-          ],
+          ].poll,
         dataLane: ONBOARDING_DRAFT_PROVIDERS_UNSETTLED_POLL_LANE,
         initialErrorLane: ONBOARDING_DRAFT_INITIAL_ERROR_POLL_LANE,
         staleErrorLane: ONBOARDING_DRAFT_STALE_ERROR_POLL_LANE,
       },
       {
-        policy: HOST_METHOD_POLL_TABLE["speech.getModelStatus"],
+        policy: HOST_METHOD_POLL_TABLE["speech.getModelStatus"].poll,
         dataLane: SPEECH_MODEL_DOWNLOADING_POLL_LANE,
         initialErrorLane: SPEECH_MODEL_INITIAL_ERROR_POLL_LANE,
         staleErrorLane: SPEECH_MODEL_STALE_ERROR_POLL_LANE,
       },
       {
-        policy: HOST_METHOD_POLL_TABLE["worktree.getBinding"],
+        policy: HOST_METHOD_POLL_TABLE["worktree.getBinding"].poll,
         dataLane: WORKTREE_SETUP_IN_FLIGHT_POLL_LANE,
         initialErrorLane: WORKTREE_SETUP_INITIAL_ERROR_POLL_LANE,
         staleErrorLane: WORKTREE_SETUP_STALE_ERROR_POLL_LANE,
       },
       {
-        policy: HOST_METHOD_POLL_TABLE["git.listChangedFiles"],
+        policy: HOST_METHOD_POLL_TABLE["git.listChangedFiles"].poll,
         dataLane: GIT_DIRTY_SUBMODULE_POLL_LANE,
         initialErrorLane: GIT_INITIAL_ERROR_POLL_LANE,
         staleErrorLane: GIT_STALE_ERROR_POLL_LANE,
       },
       {
-        policy: HOST_METHOD_POLL_TABLE["providers.list"],
+        policy: HOST_METHOD_POLL_TABLE["providers.list"].poll,
         dataLane: PROVIDERS_PENDING_POLL_LANE,
         initialErrorLane: PROVIDERS_INITIAL_ERROR_POLL_LANE,
         staleErrorLane: PROVIDERS_STALE_ERROR_POLL_LANE,
@@ -186,7 +232,7 @@ describe("host method poll policy table", () => {
   });
 
   it("orders harness lanes pending, unavailable, then all-available", () => {
-    const policy = HOST_METHOD_POLL_TABLE["agent.gui.listHarnesses"];
+    const policy = HOST_METHOD_POLL_TABLE["agent.gui.listHarnesses"].poll;
 
     expect(policy.classify(undefined)).toBe(false);
     expect(
@@ -211,7 +257,8 @@ describe("host method poll policy table", () => {
 
   it("polls onboarding drafts only while providers are unsettled and content is absent", () => {
     const policy =
-      HOST_METHOD_POLL_TABLE["agent.selectionGuide.getGlobalOnboardingDraft"];
+      HOST_METHOD_POLL_TABLE["agent.selectionGuide.getGlobalOnboardingDraft"]
+        .poll;
 
     expect(policy.classify({ content: null, providersSettled: false })).toBe(
       ONBOARDING_DRAFT_PROVIDERS_UNSETTLED_POLL_LANE,
@@ -225,7 +272,7 @@ describe("host method poll policy table", () => {
   });
 
   it("polls speech model status only while downloading", () => {
-    const policy = HOST_METHOD_POLL_TABLE["speech.getModelStatus"];
+    const policy = HOST_METHOD_POLL_TABLE["speech.getModelStatus"].poll;
 
     expect(policy.classify({ downloadState: "downloading" })).toBe(
       SPEECH_MODEL_DOWNLOADING_POLL_LANE,
@@ -234,7 +281,7 @@ describe("host method poll policy table", () => {
   });
 
   it("polls worktree bindings while any entry is pending or running", () => {
-    const policy = HOST_METHOD_POLL_TABLE["worktree.getBinding"];
+    const policy = HOST_METHOD_POLL_TABLE["worktree.getBinding"].poll;
 
     expect(
       policy.classify({
@@ -260,7 +307,7 @@ describe("host method poll policy table", () => {
   });
 
   it("polls dirty git submodule snapshots and stops when clean", () => {
-    const policy = HOST_METHOD_POLL_TABLE["git.listChangedFiles"];
+    const policy = HOST_METHOD_POLL_TABLE["git.listChangedFiles"].poll;
 
     expect(
       policy.classify({
@@ -276,7 +323,8 @@ describe("host method poll policy table", () => {
   });
 
   it("keeps notification indicator polling terminal until a future classifier is declared", () => {
-    const policy = HOST_METHOD_POLL_TABLE["host.notifications.indicatorState"];
+    const policy =
+      HOST_METHOD_POLL_TABLE["host.notifications.indicatorState"].poll;
 
     expect(policy.classify(undefined)).toBe(false);
     expect(policy.initialErrorLane).toBe(

@@ -2,17 +2,20 @@ import {
   queryOptions,
   useQueries,
   useQueryClient,
+  CancelledError,
   type QueryClient,
+  type QueryFunctionContext,
   type QueryKey,
   type UseQueryResult,
 } from "@tanstack/react-query";
-import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { withHostRpcErrorBoundary } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
+import { isHostRequestControlFlowError } from "@traycer-clients/shared/host-client/host-request-coordinator";
 import type {
   HostRpcError,
   RequestOfMethod,
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
+import { toHostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import { queryKeys } from "@/lib/query-keys";
 import {
@@ -41,7 +44,7 @@ export interface UseHostQueriesOptions<
   Registry extends HostRpcRegistry,
   Method extends keyof Registry & keyof HostRpcRegistry & string,
 > {
-  readonly client: HostClient<Registry> | null;
+  readonly client: HostRequester<Registry> | null;
   readonly requests: ReadonlyArray<HostRequestSpec<Registry, Method>>;
   /**
    * Extra cache identity which is not sent to the host. Batched callers use
@@ -100,7 +103,7 @@ export interface UseHostQueriesWithResponseMapOptions<
   Method extends keyof Registry & keyof HostRpcRegistry & string,
   TData,
 > {
-  readonly client: HostClient<Registry> | null;
+  readonly client: HostRequester<Registry> | null;
   readonly requests: ReadonlyArray<HostRequestSpec<Registry, Method>>;
   readonly cacheKeyIdentity: string | undefined;
   readonly options: HostQueryTanstackOptions<Method, TData> | null;
@@ -182,17 +185,29 @@ export function useHostQueriesWithResponseMap<
     // Boundary-wrapped like `useHostQueryWithResponseMap`'s request: the
     // declared `HostRpcError` generic must hold even when the caller's
     // `mapResponse` throws.
-    const fetcher = (): Promise<TData> =>
-      withHostRpcErrorBoundary(request.method, async () => {
+    const fetcher = async ({
+      signal,
+    }: QueryFunctionContext): Promise<TData> => {
+      try {
         if (client === null) {
-          return Promise.reject<TData>(
+          return await Promise.reject<TData>(
             hostClientUnavailableError(request.method),
           );
         }
-        const response = await client.request(request.method, request.params);
+        const response = await client.requestWithSignal(
+          request.method,
+          request.params,
+          signal,
+        );
         return mapResponse({ response, queryClient, queryKey });
-      });
-    const pollPolicy = HOST_METHOD_POLL_TABLE[request.method];
+      } catch (error) {
+        if (isHostRequestControlFlowError(error)) {
+          throw new CancelledError({ revert: true, silent: true });
+        }
+        throw toHostRpcError(error, request.method);
+      }
+    };
+    const pollPolicy = HOST_METHOD_POLL_TABLE[request.method].poll;
     let tablePollingOptions:
       | {
           readonly refetchInterval: ConditionPollRefetchInterval | false;

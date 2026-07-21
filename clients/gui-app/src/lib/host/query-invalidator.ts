@@ -20,6 +20,8 @@ export function createHostQueryInvalidator(
   client: QueryClient,
 ): IHostQueryInvalidator {
   return {
+    cancelHostScope: (hostId) =>
+      client.cancelQueries({ queryKey: queryKeys.hostScope(hostId) }),
     invalidateHostScope: (hostId, options) => {
       getConditionPollEpisodeCoordinator(client).resetHostScope(hostId);
       const queryKey = queryKeys.hostScope(hostId);

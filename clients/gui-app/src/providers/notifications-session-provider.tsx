@@ -22,7 +22,7 @@ import {
 import type { HostNotificationPresenceFrame } from "@/lib/notifications/notification-presence";
 import { getNotificationsStreamFactoryOverride } from "@/providers/notifications-stream-factory-override";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useAuthService } from "@/lib/host";
+import { useAuthService, useHostClient } from "@/lib/host";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useNotificationShow } from "@/hooks/notifications/use-notifications";
 import { useNotificationMarkEntityRead } from "@/hooks/notifications/use-notification-mark-entity-read-mutation";
@@ -68,6 +68,7 @@ export function NotificationsSessionProvider(
   const queryClient = useQueryClient();
   const activeHostId = useReactiveActiveHostId();
   const authService = useAuthService();
+  const hostClient = useHostClient();
   const showNotification = useNotificationShow();
   const recordInAppClick = useNotificationEventsStore(
     (state) => state.recordInAppClick,
@@ -131,7 +132,7 @@ export function NotificationsSessionProvider(
     (frame: HostNotificationsFeedFrame, hostId: string): void => {
       if (activeHostId !== hostId) return;
       if (frame.kind === "snapshot" || frame.kind === "cleared") {
-        invalidateNotificationIndicators(queryClient, hostId);
+        invalidateNotificationIndicators(queryClient, hostId, hostClient);
         return;
       }
       if (frame.kind === "readStateChanged") {
@@ -139,14 +140,18 @@ export function NotificationsSessionProvider(
           queryClient,
           hostId,
           frame.entityRefs,
+          hostClient,
         );
         return;
       }
       const entity = notificationEntityFromHostEntry(frame.entry);
       if (entity === null) return;
-      invalidateNotificationIndicatorsForEntities(queryClient, hostId, [
-        entity,
-      ]);
+      invalidateNotificationIndicatorsForEntities(
+        queryClient,
+        hostId,
+        [entity],
+        hostClient,
+      );
       const activeEntity = activeEntityRef.current;
       const isTerminalSeverity =
         frame.entry.severity === "done" || frame.entry.severity === "failure";
@@ -158,7 +163,7 @@ export function NotificationsSessionProvider(
       if (!isTerminalSeverity) return;
       consumeEntity(entity);
     },
-    [activeHostId, consumeEntity, queryClient],
+    [activeHostId, consumeEntity, hostClient, queryClient],
   );
   const onHostStreamOpened = useCallback((): void => {
     activeEntityRef.current = null;

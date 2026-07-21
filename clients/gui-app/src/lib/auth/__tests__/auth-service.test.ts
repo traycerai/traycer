@@ -1257,6 +1257,75 @@ describe("AuthService", () => {
       });
       expect(service.getLastError()).toBeNull();
     });
+
+    it("returns superseded when the expected lease is replaced during validation", async () => {
+      const { service, host } = makeService();
+      await service.start();
+      await deviceSignIn(service, host, "old-token");
+
+      const provider = service.getRequestContextProvider();
+      const oldContext = provider.current();
+      if (oldContext === null) {
+        throw new Error("expected the old session to be signed in");
+      }
+
+      const oldValidation = createDeferredResponse();
+      let oldValidationStarted = false;
+      restoreFetch();
+      restoreFetch = installFetch((input, init) => {
+        const url = typeof input === "string" ? input : String(input);
+        if (
+          url === VALIDATION_URL &&
+          init?.headers?.Authorization === "Bearer old-token"
+        ) {
+          oldValidationStarted = true;
+          return oldValidation.promise;
+        }
+        return okWithProfile();
+      });
+
+      const pending = service.revalidateExpectedBearer(oldContext.credentials);
+      await vi.waitFor(() => {
+        expect(oldValidationStarted).toBe(true);
+      });
+
+      let tokenStoreDeletes = 0;
+      const originalDelete = host.tokenStore.delete.bind(host.tokenStore);
+      host.tokenStore.delete = async (): Promise<void> => {
+        tokenStoreDeletes += 1;
+        await originalDelete();
+      };
+
+      // Replace the whole context/lease while the old AuthnV3 validation is
+      // still pending. The stale validation must not clear or mutate this new
+      // session when it eventually resolves.
+      await service.signOut();
+      await deviceSignIn(service, host, "replacement-token");
+
+      const replacementContext = provider.current();
+      if (replacementContext === null) {
+        throw new Error("expected the replacement session to be signed in");
+      }
+      const replacementBearer = replacementContext.credentials.getBearerToken();
+      const replacementSnapshot = service.getCurrentSessionSnapshot();
+      const deletesAfterReplacement = tokenStoreDeletes;
+
+      oldValidation.resolve(await okWithProfile());
+
+      await expect(pending).resolves.toBe("superseded");
+      expect(tokenStoreDeletes).toBe(deletesAfterReplacement);
+      expect(provider.current()).toBe(replacementContext);
+      expect(replacementContext.isAborted).toBe(false);
+      expect(replacementContext.credentials.getBearerToken()).toBe(
+        replacementBearer,
+      );
+      expect(service.getCurrentSessionSnapshot()).toEqual(replacementSnapshot);
+      expect(useAuthStore.getState().status).toBe("signed-in");
+      expect(await host.tokenStore.get()).toEqual({
+        token: "replacement-token",
+        refreshToken: "replacement-token-refresh",
+      });
+    });
   });
 
   describe("local CLI provisioning (host owner gate)", () => {

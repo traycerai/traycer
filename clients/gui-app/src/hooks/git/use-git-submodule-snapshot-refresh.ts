@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import { queryOptions, useQueryClient } from "@tanstack/react-query";
 import { withHostRpcErrorBoundary } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { GitListChangedFilesResponseV11 } from "@traycer/protocol/host";
@@ -8,6 +8,16 @@ import { stampHostRpcMethod } from "@/lib/host-rpc-policy/host-method-policy-tab
 import { gitQueryKeys } from "@/lib/query-keys/git-query-keys";
 import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
 import { createRichSlotRequest } from "@/lib/git/git-rich-slot-ordering";
+import { useWsStreamClient } from "@/lib/host/stream-runtime-context";
+import {
+  refreshGitSubscriptionWithFreshNonce,
+  useGitSubscriptionRefreshState,
+} from "./use-git-list-changed-files-subscription";
+
+export interface GitSubmoduleSnapshotRefreshResult {
+  readonly refresh: () => Promise<void>;
+  readonly isRefreshing: boolean;
+}
 
 /**
  * Manual refresh of the active root's nested snapshot slot (the panel's
@@ -30,19 +40,42 @@ export function useGitSubmoduleSnapshotRefresh(args: {
   readonly hostId: string | null;
   readonly rootRunningDir: string | null;
   readonly ignoreWhitespace: boolean;
-}): () => Promise<void> {
+}): GitSubmoduleSnapshotRefreshResult {
   const queryClient = useQueryClient();
   const entry = useHostDirectoryEntry(args.hostId ?? "");
   const client = useHostClientFor(entry);
+  const wsStreamClient = useWsStreamClient();
 
   const hostId = args.hostId;
   const rootRunningDir = args.rootRunningDir;
   const ignoreWhitespace = args.ignoreWhitespace;
+  const isRefreshing = useGitSubscriptionRefreshState({
+    wsStreamClient,
+    hostId,
+    runningDir: rootRunningDir,
+    ignoreWhitespace,
+  });
 
-  return useCallback(async () => {
+  const refresh = useCallback(async () => {
     if (client === null || hostId === null || rootRunningDir === null) {
       return;
     }
+    // v1.2 guarantees a post-registration snapshot. Replacing the shared
+    // stream session preserves its current cache data while the nonce frame is
+    // pending; a second toolbar/body gesture joins this exact promise.
+    const freshReplacement = refreshGitSubscriptionWithFreshNonce({
+      wsStreamClient,
+      queryClient,
+      hostId,
+      runningDir: rootRunningDir,
+      ignoreWhitespace,
+    });
+    if (freshReplacement !== null) {
+      await freshReplacement;
+      return;
+    }
+    // Minor <=1 (or no active stream) retains the established unary fallback
+    // and its rich-slot arbitration. It makes no freshness claim.
     const queryKey = gitQueryKeys.listChangedFilesWithSubmodules(
       hostId,
       rootRunningDir,
@@ -92,5 +125,14 @@ export function useGitSubmoduleSnapshotRefresh(args: {
         }),
       )
       .catch(() => undefined);
-  }, [client, hostId, ignoreWhitespace, queryClient, rootRunningDir]);
+  }, [
+    client,
+    hostId,
+    ignoreWhitespace,
+    queryClient,
+    rootRunningDir,
+    wsStreamClient,
+  ]);
+
+  return useMemo(() => ({ refresh, isRefreshing }), [isRefreshing, refresh]);
 }

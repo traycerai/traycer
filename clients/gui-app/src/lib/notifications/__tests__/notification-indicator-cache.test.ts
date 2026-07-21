@@ -103,9 +103,12 @@ describe("notification indicator cache invalidation", () => {
     queryClient.setQueryData(other, { epics: {}, chats: {} });
     queryClient.setQueryData(epicOnly, { epics: {}, chats: {} });
 
-    invalidateNotificationIndicatorsForEntities(queryClient, "host-a", [
-      { epicId: "epic-a", chatId: "chat-a" },
-    ]);
+    invalidateNotificationIndicatorsForEntities(
+      queryClient,
+      "host-a",
+      [{ epicId: "epic-a", chatId: "chat-a" }],
+      null,
+    );
 
     expect(queryClient.getQueryState(target)?.isInvalidated).toBe(true);
     expect(queryClient.getQueryState(epicOnly)?.isInvalidated).toBe(true);
@@ -177,6 +180,7 @@ describe("notification indicator cache invalidation", () => {
         queryClient,
         mockLocalHostEntry.hostId,
         [{ epicId: "epic-a", chatId: "chat-a" }],
+        client,
       );
     });
 

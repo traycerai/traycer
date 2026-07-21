@@ -223,13 +223,15 @@ describe("useWorktreeGetBinding condition cadence", () => {
       setupState: "running",
       fail: false,
     });
-    const originalRequest = fixture.client.request.bind(fixture.client);
-    vi.spyOn(fixture.client, "request").mockImplementation(
-      async (method, params) => {
+    const originalRequest = fixture.client.requestWithSignal.bind(
+      fixture.client,
+    );
+    vi.spyOn(fixture.client, "requestWithSignal").mockImplementation(
+      async (method, params, signal) => {
         if (method === "worktree.getBinding") {
           fetchTimes.push(Date.now());
         }
-        return originalRequest(method, params);
+        return originalRequest(method, params, signal);
       },
     );
 

@@ -79,7 +79,7 @@ describe("useGitSubmoduleSnapshotRefresh", () => {
       { wrapper: wrapperFor(queryClient) },
     );
 
-    await result.current();
+    await result.current.refresh();
 
     expect(testState.client.request).toHaveBeenCalledWith(
       "git.listChangedFiles",
@@ -121,7 +121,7 @@ describe("useGitSubmoduleSnapshotRefresh", () => {
       { wrapper: wrapperFor(queryClient) },
     );
 
-    const refresh = result.current();
+    const refresh = result.current.refresh();
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
@@ -192,7 +192,7 @@ describe("useGitSubmoduleSnapshotRefresh", () => {
         }),
       { wrapper: wrapperFor(queryClient) },
     );
-    await result.current();
+    await result.current.refresh();
 
     expect(interval(query)).toBe(5_000);
     unsubscribe();

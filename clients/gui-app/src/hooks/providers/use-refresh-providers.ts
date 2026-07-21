@@ -8,8 +8,8 @@ import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { hostQueryKeys, providersMutationKeys } from "@/lib/query-keys";
 import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
-import { PROVIDER_INVALIDATIONS } from "@/hooks/providers/invalidations";
 import { toastFromHostError } from "@/lib/host-error-toast";
+import { commitAuthoritativeProvidersList } from "@/hooks/providers/commit-authoritative-providers-list";
 
 type ProvidersListRequest = RequestOfMethod<HostRpcRegistry, "providers.list">;
 type ProvidersListResponse = ResponseOfMethod<
@@ -40,23 +40,13 @@ export function useRefreshProviders(): () => Promise<void> {
     options: {
       mutationKey: providersMutationKeys.refresh(),
       onMutate: () => ({ hostId: client.getActiveHostId() }),
-      onSuccess: (data: ProvidersListResponse, _variables, ctx) => {
+      onSuccess: async (data: ProvidersListResponse, _variables, ctx) => {
         if (ctx.hostId === null) return;
-        queryClient.setQueryData(
-          hostQueryKeys.method<HostRpcRegistry, "providers.list">(
-            ctx.hostId,
-            "providers.list",
-            {},
-          ),
-          data,
-        );
-        for (const method of PROVIDER_INVALIDATIONS.filter(
-          (entry) => entry !== "providers.list",
-        )) {
-          void queryClient.invalidateQueries({
-            queryKey: hostQueryKeys.methodScope(ctx.hostId, method),
-          });
-        }
+        await commitAuthoritativeProvidersList({
+          queryClient,
+          hostId: ctx.hostId,
+          update: () => data,
+        });
       },
       onError: (error) =>
         toastFromHostError(error, "Couldn't refresh providers."),
