@@ -93,6 +93,9 @@ describe("host method poll policy table", () => {
     ).toBe("latest");
     expect(HOST_METHOD_POLL_TABLE["providers.touchLogin"].mode).toBe("fifo");
     expect(HOST_METHOD_POLL_TABLE["worktree.retrySetup"].mode).toBe("fifo");
+    expect(HOST_METHOD_POLL_TABLE["agent.roles.claim"].mode).toBe("fifo");
+    expect(HOST_METHOD_POLL_TABLE["agent.roles.list"].mode).toBe("latest");
+    expect(HOST_METHOD_POLL_TABLE["agent.roles.relinquish"].mode).toBe("fifo");
   });
 
   it("keeps ordinary provider listing latest but serializes forced auth refresh", () => {
