@@ -76,7 +76,8 @@ export function useEpicCreateChat(): UseMutationResult<
       if (activeHostId === null) {
         throw new HostRpcError({
           code: "RPC_ERROR",
-          message: "No active host - connect to a host before creating a chat.",
+          message:
+            "No active host - connect to a host before creating an agent.",
           requestId: "client-pre-flight",
           method: "epic.createChat",
           fatalDetails: null,
@@ -93,7 +94,7 @@ export function useEpicCreateChat(): UseMutationResult<
         invalidateBindingsForEpic(queryClient, ctx.hostId);
       },
       onError: (error) => {
-        toastFromHostError(error, "Couldn't create chat.");
+        toastFromHostError(error, "Couldn't create agent.");
       },
     },
   });
@@ -159,7 +160,7 @@ export function useEpicCreateChatForHostClient(
         invalidateBindingsForEpic(queryClient, ctx.hostId);
       },
       onError: (error) => {
-        toastFromHostError(error, "Couldn't create chat.");
+        toastFromHostError(error, "Couldn't create agent.");
       },
     },
   });
@@ -253,7 +254,7 @@ export function useEpicRenameChat() {
     mapVariables: (variables) => variables,
     options: {
       onError: (error) => {
-        toastFromHostError(error, "Couldn't rename chat.");
+        toastFromHostError(error, "Couldn't rename agent.");
       },
     },
   });
@@ -278,7 +279,7 @@ export function useEpicDeleteChat() {
         );
       },
       onError: (error) => {
-        toastFromHostError(error, "Couldn't delete chat.");
+        toastFromHostError(error, "Couldn't delete agent.");
       },
     },
   });

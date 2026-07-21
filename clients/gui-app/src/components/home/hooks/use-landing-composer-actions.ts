@@ -370,7 +370,7 @@ export function useLandingComposerActions(): LandingComposerActions {
           chatId,
           parentId: null,
           hostId: activeHostId,
-          // Stored untitled; the "Untitled chat" / first-message fallback is a
+          // Stored untitled; the "Untitled agent" / first-message fallback is a
           // render concern, never baked into the stored title.
           title: "",
           workspaceMode: workspaceContext.workspaceMode,

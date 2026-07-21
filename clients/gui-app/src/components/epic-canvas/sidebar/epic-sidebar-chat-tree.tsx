@@ -16,6 +16,7 @@ import {
 } from "@/hooks/epic/use-epic-tui-agent-mutations";
 import {
   EPIC_NODE_ICONS,
+  EPIC_NODE_SENTENCE_NOUNS,
   type EpicNodeKind,
 } from "@/lib/artifacts/node-display";
 import {
@@ -574,8 +575,8 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     panelContent = (
       <SidebarPanelEmptyState
         icon={MessagesSquare}
-        title="No chats yet."
-        description={null}
+        title="No agents yet."
+        description="Add an agent and choose a Chat or Terminal interface."
         testId="epic-chat-sidebar-empty"
       />
     );
@@ -583,14 +584,17 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     panelContent = (
       <SidebarPanelEmptyState
         icon={MessagesSquare}
-        title="No chats match the filter."
+        // Names the INTERFACE as the thing with no matches. "No agents match"
+        // would imply the Task has none at all, when the filter is only hiding
+        // the other interface.
+        title="No agents use this interface."
         description={null}
         testId="epic-chat-sidebar-filter-empty"
       />
     );
   } else {
     panelContent = (
-      <ul role="tree" aria-label="Epic chats tree" className="space-y-0.5">
+      <ul role="tree" aria-label="Epic agents tree" className="space-y-0.5">
         {rootIds.map((nodeId) => (
           <ChatNode
             key={nodeId}
@@ -1174,7 +1178,7 @@ function ChatNodeShell(props: ChatNodeShellProps) {
             disabledTooltip={
               isDisconnected ? "Reconnect to make changes." : null
             }
-            triggerLabel="Add child chat or agent"
+            triggerLabel="Add child agent"
             triggerTestId={`epic-sidebar-add-${nodeId}`}
             actionRevealClassName={cn(
               "absolute right-7 top-1/2 -translate-y-1/2",
@@ -1209,7 +1213,7 @@ function ChatNodeShell(props: ChatNodeShellProps) {
       <ConfirmDestructiveDialog
         open={confirmDeleteOpen}
         onOpenChange={onConfirmDeleteOpenChange}
-        title={`Delete ${artifactType} "${nodeName}"?`}
+        title={`Delete ${EPIC_NODE_SENTENCE_NOUNS[artifactType]} "${nodeName}"?`}
         description="This action cannot be undone."
         cascadeSummary={cascadeSummary}
         actionLabel="Delete"
@@ -1966,7 +1970,7 @@ function ChatMoreMenu(props: {
           type="button"
           variant="ghost"
           size="icon-xs"
-          aria-label={`Chat actions for ${nodeName}`}
+          aria-label={`Agent actions for ${nodeName}`}
           data-testid={`epic-sidebar-more-${nodeId}`}
           className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 transition-opacity focus-visible:opacity-100 group-hover/tree-item:opacity-100 aria-expanded:opacity-100"
           onClick={(event) => {

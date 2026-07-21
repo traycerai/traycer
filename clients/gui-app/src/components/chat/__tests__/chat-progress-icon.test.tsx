@@ -15,7 +15,7 @@ const CHAT_ID = "chat-1";
 const TEST_ID = "chat-progress";
 const RUNNING_TEST_ID = `${TEST_ID}-activity-${CHAT_ID}`;
 const BACKGROUND_TEST_ID = `${TEST_ID}-background-activity-${CHAT_ID}`;
-const TURN_RUNNING_LABEL = "Chat in progress";
+const TURN_RUNNING_LABEL = "Agent in progress";
 const BACKGROUND_RUNNING_LABEL = "Background activity — agent idle";
 
 const MONITOR_ITEM = {
@@ -67,14 +67,14 @@ describe("<ChatProgressIcon />", () => {
     renderIcon();
 
     expect(screen.queryByTestId(RUNNING_TEST_ID)).not.toBeNull();
-    expect(screen.queryByTitle("Chat in progress")).not.toBeNull();
+    expect(screen.queryByTitle("Agent in progress")).not.toBeNull();
   });
 
   it("shows the static chat icon when an unopened chat is not active", () => {
     renderIcon();
 
     expect(screen.queryByTestId(RUNNING_TEST_ID)).toBeNull();
-    expect(screen.queryByTitle("Chat in progress")).toBeNull();
+    expect(screen.queryByTitle("Agent in progress")).toBeNull();
     expect(screen.queryByTitle("Waiting for your approval")).toBeNull();
   });
 
@@ -87,7 +87,7 @@ describe("<ChatProgressIcon />", () => {
     const { container } = renderIcon();
 
     expect(
-      screen.getByRole("status", { name: "Read-only chat" }),
+      screen.getByRole("status", { name: "Read-only agent" }),
     ).toBeDefined();
     const icon = container.querySelector(".lucide-message-square-lock");
     expect(icon).not.toBeNull();
@@ -103,7 +103,9 @@ describe("<ChatProgressIcon />", () => {
 
     const { container } = renderIcon();
 
-    expect(screen.queryByRole("status", { name: "Read-only chat" })).toBeNull();
+    expect(
+      screen.queryByRole("status", { name: "Read-only agent" }),
+    ).toBeNull();
     expect(container.querySelector(".lucide-message-square-lock")).toBeNull();
   });
 
@@ -115,7 +117,9 @@ describe("<ChatProgressIcon />", () => {
 
     const { container } = renderIcon();
 
-    expect(screen.queryByRole("status", { name: "Read-only chat" })).toBeNull();
+    expect(
+      screen.queryByRole("status", { name: "Read-only agent" }),
+    ).toBeNull();
     expect(container.querySelector(".lucide-message-square-lock")).toBeNull();
   });
 
@@ -125,7 +129,7 @@ describe("<ChatProgressIcon />", () => {
     renderIcon();
 
     expect(
-      screen.getByRole("status", { name: "Read-only chat" }),
+      screen.getByRole("status", { name: "Read-only agent" }),
     ).toBeDefined();
   });
 
@@ -137,7 +141,7 @@ describe("<ChatProgressIcon />", () => {
     renderIcon();
 
     expect(screen.queryByTestId(RUNNING_TEST_ID)).not.toBeNull();
-    expect(screen.queryByTitle("Chat in progress")).not.toBeNull();
+    expect(screen.queryByTitle("Agent in progress")).not.toBeNull();
   });
 
   it("shows the muted background indicator instead of the turn spinner when only background work runs", () => {
@@ -196,7 +200,7 @@ describe("<ChatProgressIcon />", () => {
 
     expect(screen.queryByTestId(RUNNING_TEST_ID)).not.toBeNull();
     expect(screen.queryByTitle("Waiting for your approval")).toBeNull();
-    expect(screen.queryByTitle("Chat in progress")).not.toBeNull();
+    expect(screen.queryByTitle("Agent in progress")).not.toBeNull();
   });
 });
 

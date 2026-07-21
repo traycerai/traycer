@@ -286,9 +286,10 @@ function runCanvasHandoffTransition(input: CanvasHandoffTransitionInput): void {
     instanceId: uuidv4(),
     type: "chat",
     // Snapshot fallback label for the node: the projected title when present,
-    // else the "Untitled chat" render fallback. Never the "New chat"
-    // placeholder.
-    name: displayTitle(input.projectedChatTitle ?? "", "chat"),
+    // else the "Untitled agent" render fallback (this is a durable Agent tab,
+    // addressed as an Agent regardless of its Chat interface). Never the
+    // "New chat" placeholder.
+    name: displayTitle(input.projectedChatTitle ?? "", "agent"),
     hostId: input.activeHostId ?? UNKNOWN_HOST_PLACEHOLDER,
   };
   const placement = input.handoffPlacement;

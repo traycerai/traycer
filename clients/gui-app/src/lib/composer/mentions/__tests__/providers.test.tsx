@@ -5,6 +5,11 @@ import type {
   MentionMenuEntry,
 } from "../providers";
 import { mentionProviderRegistry, ROOT_MENTION_STEP } from "../providers";
+import type {
+  EpicChatMentionEntry,
+  EpicTerminalAgentMentionEntry,
+} from "@/lib/composer/types";
+import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 
 function context(
   overrides: Partial<ComposerMentionProviderContext>,
@@ -16,8 +21,60 @@ function context(
     workspaceEntries: [],
     epicEntries: [],
     currentEpicId: null,
-    chatEntries: [],
+    agentEntries: [],
     ...overrides,
+  };
+}
+
+function chatAgent(
+  chatId: string,
+  label: string,
+  updatedAt: number,
+): EpicChatMentionEntry {
+  return {
+    kind: "epic-chat",
+    id: `chat:epic-1:${chatId}`,
+    token: `chat:epic-1/${chatId}`,
+    epicId: "epic-1",
+    epicTitle: "Auth epic",
+    chatId,
+    label,
+    description: "Auth epic",
+    parentId: null,
+    updatedAt,
+    agentInterface: "chat",
+    runtimeSupportsMessageDelivery: true,
+  };
+}
+
+function terminalAgent(fields: {
+  terminalAgentId: string;
+  label: string;
+  harnessId: TuiHarnessId;
+  runtimeSupportsMessageDelivery: boolean;
+  updatedAt: number;
+}): EpicTerminalAgentMentionEntry {
+  const {
+    terminalAgentId,
+    label,
+    harnessId,
+    runtimeSupportsMessageDelivery,
+    updatedAt,
+  } = fields;
+  return {
+    kind: "epic-terminal-agent",
+    id: `terminal-agent:epic-1:${terminalAgentId}`,
+    token: `terminal-agent:epic-1/${terminalAgentId}`,
+    epicId: "epic-1",
+    epicTitle: "Auth epic",
+    terminalAgentId,
+    harnessId,
+    label,
+    description: "Auth epic",
+    parentId: null,
+    updatedAt,
+    agentInterface: "terminal",
+    runtimeSupportsMessageDelivery,
   };
 }
 
@@ -56,26 +113,27 @@ describe("mention provider registry", () => {
     ]);
   });
 
-  it("adds chat as a current-epic provider", () => {
+  it("adds Agents as a current-epic provider covering both interfaces", () => {
+    const agentEntries = [
+      chatAgent("chat-1", "Kickoff chat", 10),
+      terminalAgent({
+        terminalAgentId: "tui-1",
+        label: "Refactor run",
+        harnessId: "claude",
+        runtimeSupportsMessageDelivery: true,
+        updatedAt: 20,
+      }),
+      terminalAgent({
+        terminalAgentId: "tui-2",
+        label: "Codex run",
+        harnessId: "codex",
+        runtimeSupportsMessageDelivery: false,
+        updatedAt: 5,
+      }),
+    ];
     const entries = mentionProviderRegistry.entries(
       ROOT_MENTION_STEP,
-      context({
-        currentEpicId: "epic-1",
-        chatEntries: [
-          {
-            kind: "epic-chat",
-            id: "chat:epic-1:chat-1",
-            token: "chat:epic-1/chat-1",
-            epicId: "epic-1",
-            epicTitle: "Auth epic",
-            chatId: "chat-1",
-            label: "Kickoff chat",
-            description: "Auth epic",
-            parentId: null,
-            updatedAt: 10,
-          },
-        ],
-      }),
+      context({ currentEpicId: "epic-1", agentEntries }),
     );
 
     expect(labels(entries)).toEqual([
@@ -84,41 +142,125 @@ describe("mention provider registry", () => {
       "Worktrees",
       "Git",
       "Task",
-      "Chat",
+      "Agents",
       "Spec",
       "Ticket",
       "Story",
       "Review",
     ]);
 
-    const chatRows = mentionProviderRegistry.entries(
+    const agentRows = mentionProviderRegistry.entries(
       navigateEntry(entries[5]),
-      context({
-        currentEpicId: "epic-1",
-        chatEntries: [
-          {
-            kind: "epic-chat",
-            id: "chat:epic-1:chat-1",
-            token: "chat:epic-1/chat-1",
-            epicId: "epic-1",
-            epicTitle: "Auth epic",
-            chatId: "chat-1",
-            label: "Kickoff chat",
-            description: "Auth epic",
-            parentId: null,
-            updatedAt: 10,
-          },
-        ],
-      }),
+      context({ currentEpicId: "epic-1", agentEntries }),
     );
 
-    expect(labels(chatRows)).toEqual(["Back", "Kickoff chat"]);
-    expect(completeEntry(chatRows[1])).toMatchObject({
+    // Chat- and Terminal-interface Agents sit in ONE category. With no query
+    // every row scores equally, so recency decides the order.
+    expect(labels(agentRows)).toEqual([
+      "Back",
+      "Refactor run",
+      "Kickoff chat",
+      "Codex run",
+    ]);
+    expect(mentionProviderRegistry.menuCopy(navigateEntry(entries[5]))).toEqual(
+      { header: "Agents", empty: "No agents available" },
+    );
+
+    expect(completeEntry(agentRows[2])).toMatchObject({
       contextType: "chat",
       path: "chat:epic-1/chat-1",
       epicId: "epic-1",
       chatId: "chat-1",
     });
+    expect(completeEntry(agentRows[1])).toMatchObject({
+      contextType: "terminal-agent",
+      path: "terminal-agent:epic-1/tui-1",
+      epicId: "epic-1",
+      terminalAgentId: "tui-1",
+    });
+  });
+
+  it("labels each Agent row by interface, and marks unsupported delivery without hiding it", () => {
+    const agentEntries = [
+      chatAgent("chat-1", "Kickoff", 10),
+      terminalAgent({
+        terminalAgentId: "tui-1",
+        label: "Claude run",
+        harnessId: "claude",
+        runtimeSupportsMessageDelivery: true,
+        updatedAt: 9,
+      }),
+      terminalAgent({
+        terminalAgentId: "tui-2",
+        label: "Codex run",
+        harnessId: "codex",
+        runtimeSupportsMessageDelivery: false,
+        updatedAt: 8,
+      }),
+      terminalAgent({
+        terminalAgentId: "tui-3",
+        label: "OpenCode run",
+        harnessId: "opencode",
+        runtimeSupportsMessageDelivery: false,
+        updatedAt: 7,
+      }),
+    ];
+    const rows = mentionProviderRegistry
+      .entries(
+        {
+          kind: "provider",
+          providerId: "chat",
+          stepId: "root",
+          workspacePath: null,
+        },
+        context({ currentEpicId: "epic-1", agentEntries }),
+      )
+      .slice(1);
+
+    expect(rows.map((row) => row.detail)).toEqual([
+      "Chat",
+      "Terminal · Claude Code",
+      "Terminal · Codex · Reference only",
+      "Terminal · OpenCode · Reference only",
+    ]);
+    // Reference-only Agents stay selectable - only delivery is unavailable.
+    expect(rows.every((row) => row.action.kind === "complete")).toBe(true);
+  });
+
+  it("filters mixed-interface Agents by query and falls back to untitled labels", () => {
+    const rows = mentionProviderRegistry
+      .entries(
+        {
+          kind: "provider",
+          providerId: "chat",
+          stepId: "root",
+          workspacePath: null,
+        },
+        context({
+          currentEpicId: "epic-1",
+          query: "untitled",
+          agentEntries: [
+            chatAgent("chat-1", "Untitled chat", 10),
+            terminalAgent({
+              terminalAgentId: "tui-1",
+              label: "Untitled terminal agent",
+              harnessId: "codex",
+              runtimeSupportsMessageDelivery: false,
+              updatedAt: 9,
+            }),
+            terminalAgent({
+              terminalAgentId: "tui-2",
+              label: "Refactor run",
+              harnessId: "claude",
+              runtimeSupportsMessageDelivery: true,
+              updatedAt: 8,
+            }),
+          ],
+        }),
+      )
+      .slice(1);
+
+    expect(labels(rows)).toEqual(["Untitled chat", "Untitled terminal agent"]);
   });
 
   it("uses provider search rows instead of static root providers when querying", () => {
@@ -171,20 +313,7 @@ describe("mention provider registry", () => {
             updatedAt: 20,
           },
         ],
-        chatEntries: [
-          {
-            kind: "epic-chat",
-            id: "chat:epic-1:chat-1",
-            token: "chat:epic-1/chat-1",
-            epicId: "epic-1",
-            epicTitle: "Auth epic",
-            chatId: "chat-1",
-            label: "Auth chat",
-            description: "Auth epic",
-            parentId: null,
-            updatedAt: 20,
-          },
-        ],
+        agentEntries: [chatAgent("chat-1", "Auth chat", 20)],
         currentEpicId: "epic-1",
       }),
     );
@@ -520,6 +649,44 @@ describe("mention preview payloads", () => {
       kind: "text",
       primary: "Auth spec",
       secondary: "Auth epic",
+      mono: false,
+    });
+  });
+
+  it("previews an Agent entry with its interface and delivery capability, not the epic title", () => {
+    const step: MentionFlowStep = {
+      kind: "provider",
+      providerId: "chat",
+      stepId: "root",
+      workspacePath: null,
+    };
+    const entries = mentionProviderRegistry.entries(
+      step,
+      context({
+        currentEpicId: "epic-1",
+        agentEntries: [
+          terminalAgent({
+            terminalAgentId: "tui-1",
+            label: "Codex run",
+            harnessId: "codex",
+            runtimeSupportsMessageDelivery: false,
+            updatedAt: 20,
+          }),
+          chatAgent("chat-1", "Kickoff", 10),
+        ],
+      }),
+    );
+
+    expect(entries[1].preview).toEqual({
+      kind: "text",
+      primary: "Codex run",
+      secondary: "Terminal · Codex · Reference only",
+      mono: false,
+    });
+    expect(entries[2].preview).toEqual({
+      kind: "text",
+      primary: "Kickoff",
+      secondary: "Chat",
       mono: false,
     });
   });

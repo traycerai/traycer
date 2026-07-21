@@ -34,11 +34,10 @@ export function formatHostNotificationPresentation(
     entry.kind,
     entry.payload,
   );
-  const { agentName, title, chatContext, isTerminalAgent } =
-    knownPresentationContext(known);
+  const { agentName, title, agentContext } = knownPresentationContext(known);
   switch (entry.kind) {
     case "agent.stopped": {
-      const context = notificationContext(agentName, title, isTerminalAgent);
+      const context = notificationContext(agentName, title);
       const reason = known === null ? null : knownStoppedReason(known);
       const providerId = known === null ? null : knownProviderId(known);
       return {
@@ -49,22 +48,22 @@ export function formatHostNotificationPresentation(
     case "agent.stalled":
       return {
         title,
-        body: `${notificationContext(agentName, title, isTerminalAgent)} • ${agentStalledStatus(known)}`,
+        body: `${notificationContext(agentName, title)} • ${agentStalledStatus(known)}`,
       };
     case "workspace.operation.failed":
       return {
         title,
-        body: `${chatContext} • ${workspaceOperationFailedStatus(known)}`,
+        body: `${agentContext} • ${workspaceOperationFailedStatus(known)}`,
       };
     case "approval.requested":
       return {
         title,
-        body: `${chatContext} • ${resolvableRequestStatus(entry.resolvedAt, "Approval requested", "Approval resolved")}`,
+        body: `${agentContext} • ${resolvableRequestStatus(entry.resolvedAt, "Approval requested", "Approval resolved")}`,
       };
     case "interview.requested":
       return {
         title,
-        body: `${chatContext} • ${resolvableRequestStatus(entry.resolvedAt, "Question waiting", "Question resolved")}`,
+        body: `${agentContext} • ${resolvableRequestStatus(entry.resolvedAt, "Question waiting", "Question resolved")}`,
       };
   }
 }
@@ -90,8 +89,7 @@ function knownPresentationContext(known: HostNotificationKnownPayload | null) {
   return {
     agentName,
     title,
-    chatContext: chatTitle !== null && chatTitle !== title ? chatTitle : "Chat",
-    isTerminalAgent: known?.kind === "epic",
+    agentContext: chatTitle !== null && chatTitle !== title ? chatTitle : "Agent",
   };
 }
 
@@ -250,13 +248,9 @@ function workspaceOperationFailedStatus(
   return "Workspace operation failed";
 }
 
-function notificationContext(
-  agentName: string | null,
-  title: string,
-  isTerminalAgent: boolean,
-): string {
+function notificationContext(agentName: string | null, title: string): string {
   if (agentName !== null && agentName !== title) return agentName;
-  return isTerminalAgent ? "Terminal agent" : "Chat";
+  return "Agent";
 }
 
 function nonEmptyTitle(value: string | null): string | null {

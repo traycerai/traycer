@@ -586,7 +586,7 @@ describe("epic sidebar selection mode", () => {
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
     const startSelectionButton = screen.getByRole("button", {
-      name: "Select chats",
+      name: "Select agents",
     });
     expect(startSelectionButton.textContent).toBe("");
     expect(screen.queryByTestId("epic-sidebar-select-chat-root")).toBeNull();
@@ -639,7 +639,7 @@ describe("epic sidebar selection mode", () => {
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Select chats" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select agents" }));
 
     // Nothing selected yet: the button offers "Select all".
     expect(screen.queryByRole("button", { name: "Deselect all" })).toBeNull();
@@ -678,25 +678,31 @@ describe("epic sidebar selection mode", () => {
     expect(screen.getByTestId("epic-sidebar")).not.toBeNull();
   });
 
-  it("shows the empty chat panel state when there are no chats", () => {
+  it("names the primary panel Agents and offers an interface choice when empty", () => {
     testState.activePanelId = "chats";
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
+    expect(screen.getByText("Agents")).not.toBeNull();
     expect(screen.getByTestId("epic-chat-sidebar-empty")).not.toBeNull();
-    expect(screen.getByText("No chats yet.")).not.toBeNull();
-    expect(screen.queryByText("No chats match the filter.")).toBeNull();
+    expect(screen.getByText("No agents yet.")).not.toBeNull();
+    expect(
+      screen.getByText("Add an agent and choose a Chat or Terminal interface."),
+    ).not.toBeNull();
+    expect(screen.queryByText("No agents use this interface.")).toBeNull();
   });
 
-  it("shows the filtered chat empty state when no chats match the filter", () => {
+  it("blames the interface filter, not the Task, when a filter hides every agent", () => {
     seedGuiChatTree();
     testState.chatFilterOrigin = "tui";
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
     expect(screen.getByTestId("epic-chat-sidebar-filter-empty")).not.toBeNull();
-    expect(screen.getByText("No chats match the filter.")).not.toBeNull();
-    expect(screen.queryByText("No chats yet.")).toBeNull();
+    // The Task HAS agents - they just use the other interface. The empty state
+    // must not read as "this Task has no agents".
+    expect(screen.getByText("No agents use this interface.")).not.toBeNull();
+    expect(screen.queryByText("No agents yet.")).toBeNull();
   });
 
   it("shows the empty artifact panel state when there are no artifacts", () => {
@@ -729,7 +735,7 @@ describe("epic sidebar selection mode", () => {
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
-    expect(screen.queryByRole("button", { name: "Select chats" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Select agents" })).toBeNull();
     expect(screen.queryByTestId("epic-sidebar-select-chat-root")).toBeNull();
   });
 
@@ -819,9 +825,7 @@ describe("epic sidebar selection mode", () => {
 
     const chatRow = screen.getByTestId("epic-sidebar-item-chat-root");
     expect(
-      chatRow.parentElement?.querySelector(
-        '[aria-label="Add child chat or agent"]',
-      ),
+      chatRow.parentElement?.querySelector('[aria-label="Add child agent"]'),
     ).not.toBeNull();
     fireEvent.contextMenu(chatRow);
 
@@ -875,7 +879,7 @@ describe("epic sidebar selection mode", () => {
       <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Select chats" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select agents" }));
     fireEvent.click(screen.getByTestId("epic-sidebar-select-chat-root"));
     expect(
       screen
@@ -892,7 +896,9 @@ describe("epic sidebar selection mode", () => {
       ).toBeNull();
     });
     expect(
-      screen.getByRole("button", { name: "Select chats" }).matches(":disabled"),
+      screen
+        .getByRole("button", { name: "Select agents" })
+        .matches(":disabled"),
     ).toBe(true);
   });
 
@@ -906,7 +912,9 @@ describe("epic sidebar selection mode", () => {
       screen.getByRole("button", { name: "Chat filter" }).matches(":disabled"),
     ).toBe(true);
     expect(
-      screen.getByRole("button", { name: "Select chats" }).matches(":disabled"),
+      screen
+        .getByRole("button", { name: "Select agents" })
+        .matches(":disabled"),
     ).toBe(true);
     expect(
       screen
@@ -914,9 +922,7 @@ describe("epic sidebar selection mode", () => {
         .matches(":disabled"),
     ).toBe(true);
     expect(
-      screen
-        .getByRole("button", { name: "Add chat or agent" })
-        .matches(":disabled"),
+      screen.getByRole("button", { name: "Add agent" }).matches(":disabled"),
     ).toBe(false);
   });
 
