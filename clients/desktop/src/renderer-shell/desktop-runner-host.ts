@@ -98,6 +98,12 @@ import type {
   DesktopAppUpdateSnapshot,
 } from "../ipc-contracts/app-update-types";
 import type {
+  GlobalShortcutId,
+  GlobalShortcutIntent,
+  GlobalShortcutsSnapshot,
+  GlobalShortcutStatus,
+} from "../ipc-contracts/global-shortcuts-types";
+import type {
   DesktopAuthSessionSnapshot,
   MenuCommandPayload,
   OpenEpicInNewWindowResult,
@@ -183,6 +189,7 @@ export interface DesktopPreloadBridge {
   fileDrops: DesktopFileDropsBridge;
   menu: DesktopMenuBridge;
   appUpdates: DesktopAppUpdatesBridge;
+  globalShortcuts: DesktopGlobalShortcutsBridge;
   support: DesktopSupportBridge;
   windows: DesktopWindowsBridge;
   service: DesktopServiceBridge;
@@ -434,6 +441,17 @@ export interface DesktopAppUpdatesBridge {
   };
 }
 
+export interface DesktopGlobalShortcutsBridge {
+  getSnapshot(): Promise<GlobalShortcutsSnapshot>;
+  set(
+    id: GlobalShortcutId,
+    intent: GlobalShortcutIntent,
+  ): Promise<GlobalShortcutStatus>;
+  onChange(handler: (snapshot: GlobalShortcutsSnapshot) => void): {
+    dispose: () => void;
+  };
+}
+
 export interface DesktopSupportBridge {
   getSnapshot(): Promise<SupportSnapshot>;
   revealLog(target: SupportLogTarget): Promise<SupportRevealLogResult>;
@@ -516,6 +534,7 @@ export class DesktopRunnerHost implements IRunnerHost {
   readonly windows: DesktopWindowsBridge;
   readonly menu: DesktopMenuBridge;
   readonly appUpdates: DesktopAppUpdatesBridge;
+  readonly globalShortcuts: DesktopGlobalShortcutsBridge;
   readonly support: DesktopSupportBridge;
   readonly service: IServiceHost;
   readonly traycerCli: ITraycerCli;
@@ -542,6 +561,7 @@ export class DesktopRunnerHost implements IRunnerHost {
     this.windows = options.bridge.windows;
     this.menu = options.bridge.menu;
     this.appUpdates = options.bridge.appUpdates;
+    this.globalShortcuts = options.bridge.globalShortcuts;
     this.support = options.bridge.support;
     this.platform = options.bridge.platform;
     this.power = options.bridge.power;

@@ -190,6 +190,8 @@ export type AnalyticsSetting =
   | "quoteReplyEnabled"
   | "showGlobalResourceMonitor"
   | "showNavigatorResourceStats"
+  | "summonHotkeyChord"
+  | "summonHotkeyEnabled"
   | "terminalCursorBlink"
   | "terminalCursorStyle"
   | "terminalFontFamily"
