@@ -44,6 +44,16 @@ describe("isHistoryEntryEligible", () => {
     expect(isHistoryEntryEligible("/epics/e1/unknown-tab", canvas)).toBe(true);
   });
 
+  it("treats an unknown nested target as ineligible despite an open fallback", () => {
+    const canvas = state({ t1: tab("t1", "e1") }, ["t1"]);
+    expect(
+      isHistoryEntryEligible(
+        "/epics/e1/unknown-tab?focusPaneId=p1&focusTileInstanceId=i1",
+        canvas,
+      ),
+    ).toBe(false);
+  });
+
   it("treats an unknown tabId as ineligible when its fallback tab is closed", () => {
     const canvas = {
       ...state({ t1: tab("t1", "e1") }, []),
