@@ -38,6 +38,7 @@ import type {
   HostOperationKind,
   HostOperationStatus,
   HostOperationStatusEnvelope,
+  HostPendingRevisionState,
   HostProgressEvent,
   HostRegistryUpdateState,
   HostRemovalState,
@@ -49,6 +50,7 @@ import {
   hostManagesHostLoginItem,
   unregisterHostLoginItem,
 } from "../app/host-login-item";
+import { respawnHost } from "../app/host-respawn";
 import {
   clearHostRemovedByUser,
   isHostRemovedByUser,
@@ -65,7 +67,13 @@ import {
   readHostNameSettings,
   writeHostNameSettings,
 } from "../host/host-display-name";
+import {
+  getPendingLoginItemRevisionState,
+  onPendingLoginItemRevisionChange,
+  writePendingLoginItemRevision,
+} from "../host/pending-login-item-revision";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
+import { runEnsureHost } from "./host-ensure-ipc";
 import {
   getUpdateChannelSnapshot,
   prereleaseUpdatesEnabled,
@@ -1448,6 +1456,11 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
       bridge.fanOut(RunnerHostEvent.hostRegistryUpdateStateChange, state);
     }),
   );
+  bridge.disposeFns.push(
+    onPendingLoginItemRevisionChange((state) => {
+      bridge.fanOut(RunnerHostEvent.hostPendingRevisionChange, state);
+    }),
+  );
 
   bridge.handleInvoke(
     RunnerHostInvoke.traycerHostInstall,
@@ -1522,7 +1535,10 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
     RunnerHostInvoke.traycerHostUpdate,
     async (_event, raw: unknown) => {
       const operationId = optionalString(raw, "operationId") ?? randomUUID();
-      return runHostOperation(
+      const applyState: { pending: HostPendingRevisionState | null } = {
+        pending: null,
+      };
+      const result = await runHostOperation(
         bridge,
         "update",
         operationId,
@@ -1577,10 +1593,36 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
             operationId,
             admission,
           );
+          // A shipped macOS build delegates service registration to
+          // SMAppService, so `host update` deliberately leaves the fresh
+          // LaunchAgent definition staged. Persist that fact before this
+          // tracked update settles: the marker remains available to the 30s
+          // monitor or next launch if another window wins the apply slot.
+          if (await hostManagesHostLoginItem()) {
+            applyState.pending = await writePendingLoginItemRevision(
+              activeEnvironment,
+              "update",
+            );
+          }
           await refreshRegistryUpdateState({ force: true, maxAgeMs: null });
           return projectInstallResult(data);
         },
       );
+      // `runHostOperation` released the update reservation in its `finally`
+      // above. Only now may the detached ensure reserve the whole-operation
+      // `ensure` slot; doing it inside the update would deterministically
+      // collide with our own reservation.
+      if (applyState.pending?.durable === true) {
+        void runEnsureHost(bridge, randomUUID(), false).catch(
+          (err: unknown) => {
+            log.warn(
+              "[host-management] apply-after-update ensure did not start or complete; the durable pending revision will be retried by the monitor or next launch",
+              { err },
+            );
+          },
+        );
+      }
+      return result;
     },
   );
 
@@ -1673,9 +1715,16 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
     // restart that lost on `cli-lock` with a spurious error. Routing through
     // the canonical seam gets the shared restart budget, the cross-window
     // single-flight guard, and the progress banner for free.
+    const operationId = randomUUID();
+    if (await hostManagesHostLoginItem()) {
+      await runTrackedHostOperation(bridge, "restart", operationId, () =>
+        respawnHost(bridge.options.host),
+      );
+      return;
+    }
     await streamCliWithProgress(
       ["host", "restart"],
-      randomUUID(),
+      operationId,
       "restart",
       HOST_RESTART_SUBPROCESS_TIMEOUT_MS,
       bridge,
@@ -1780,6 +1829,13 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
     RunnerHostInvoke.traycerHostOperationStatusGet,
     async () => {
       return getHostOperationStatus();
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.traycerHostPendingRevisionGet,
+    async (): Promise<HostPendingRevisionState> => {
+      return getPendingLoginItemRevisionState(activeEnvironment);
     },
   );
 

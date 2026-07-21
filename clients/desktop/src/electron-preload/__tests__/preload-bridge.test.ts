@@ -168,6 +168,10 @@ interface PreloadBridge {
       dispose: () => void;
     };
   };
+  hostPendingRevision: {
+    get(): Promise<unknown>;
+    onChange(handler: (state: unknown) => void): { dispose: () => void };
+  };
 }
 
 interface LoadPreloadOptions {
@@ -817,5 +821,65 @@ describe("preload hostManagement registry-update-state guard", () => {
       validRegistryState(true),
     );
     expect(observed).toEqual([]);
+  });
+});
+
+describe("preload pending host revision bridge", () => {
+  it("routes the snapshot invoke and every valid change through the composed preload surface", async () => {
+    const snapshot = {
+      pending: true,
+      durable: false,
+      cause: "update",
+      error: "ENOSPC: no space left on device",
+    };
+    const invokeFn = vi.fn((channel: string): Promise<unknown> => {
+      if (channel === RunnerHostInvoke.traycerHostPendingRevisionGet) {
+        return Promise.resolve(snapshot);
+      }
+      return Promise.resolve(undefined);
+    });
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn,
+      sendSyncFn: undefined,
+    });
+
+    await expect(bridge.hostPendingRevision.get()).resolves.toEqual(snapshot);
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.traycerHostPendingRevisionGet,
+    );
+
+    const observed: unknown[] = [];
+    const subscription = bridge.hostPendingRevision.onChange((state) => {
+      observed.push(state);
+    });
+    const durable = {
+      pending: true,
+      durable: true,
+      cause: null,
+      error: null,
+    };
+    const cleared = {
+      pending: false,
+      durable: false,
+      cause: null,
+      error: null,
+    };
+    fakeElectron.emit(RunnerHostEvent.hostPendingRevisionChange, snapshot);
+    fakeElectron.emit(RunnerHostEvent.hostPendingRevisionChange, durable);
+    fakeElectron.emit(RunnerHostEvent.hostPendingRevisionChange, cleared);
+    fakeElectron.emit(RunnerHostEvent.hostPendingRevisionChange, {
+      ...cleared,
+      durable: "false",
+    });
+
+    // Negative check: malformed pushes must not overwrite a legitimate
+    // non-durable warning before the renderer gets to display it.
+    expect(observed).toEqual([snapshot, durable, cleared]);
+    subscription.dispose();
+    fakeElectron.emit(RunnerHostEvent.hostPendingRevisionChange, snapshot);
+    expect(observed).toEqual([snapshot, durable, cleared]);
   });
 });

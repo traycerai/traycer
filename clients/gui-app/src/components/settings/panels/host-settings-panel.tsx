@@ -38,6 +38,7 @@ import {
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useRunnerHostOperationStatusQuery } from "@/hooks/runner/use-runner-host-operation-status-query";
+import { useRunnerHostPendingRevisionQuery } from "@/hooks/runner/use-runner-host-pending-revision-query";
 import { useHostUpdateBannerStore } from "@/stores/settings/host-update-banner-store";
 import { useDesktopAppUpdates } from "@/hooks/runner/use-desktop-app-updates";
 import type {
@@ -184,6 +185,7 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
   // `progress` state.
   const { data: operationEnvelope } =
     useRunnerHostOperationStatusQuery(management);
+  const { data: pendingRevision } = useRunnerHostPendingRevisionQuery();
   const operationStatus = operationEnvelope?.status;
   // `undefined` is an unresolved/retrying envelope read, not proof that the
   // slot is idle. All mutating Settings controls fail closed until main sends
@@ -458,6 +460,17 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
         }}
       />
       <StatusRow status={status} pending={statusPending} />
+      {pendingRevision?.pending === true ? (
+        <div
+          className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-950 dark:text-amber-100"
+          role="status"
+        >
+          {pendingRevision.durable
+            ? "Restart pending — the updated host applies when the host is idle."
+            : "Downloaded — press Restart to apply. The pending update could not be saved for automatic retry."}
+          {pendingRevision.error === null ? null : ` ${pendingRevision.error}`}
+        </div>
+      ) : null}
       <ActionsRow
         status={status}
         pending={statusPending}

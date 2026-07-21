@@ -124,6 +124,15 @@ function buildFakeBridge(
     requestHostRespawn: async () => {
       respawnCounter.count += 1;
     },
+    hostPendingRevision: {
+      get: async () => ({
+        pending: false,
+        durable: false,
+        cause: null,
+        error: null,
+      }),
+      onChange: (_handler) => ({ dispose: () => undefined }),
+    },
     trayState: {
       setEpics: async (_epics: readonly TrayEpic[]) => undefined,
       setIndicator: async (_state: TrayIndicatorState) => undefined,
@@ -477,10 +486,10 @@ function buildFakeBridge(
       }),
       onRegistryUpdateState: () => ({ dispose: () => undefined }),
       getOperationStatus: async () => ({
-  revision: 0,
-  status: null,
-  lastEnsureOutcome: null,
-}),
+        revision: 0,
+        status: null,
+        lastEnsureOutcome: null,
+      }),
       onOperationStatus: () => ({ dispose: () => undefined }),
       freePortAndRestart: async (input) => input,
       cliManifest: async () => null,

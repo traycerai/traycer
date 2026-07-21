@@ -13,6 +13,7 @@ import type {
   HostLogsTailResult,
   HostNameSettings,
   HostOperationStatusEnvelope,
+  HostPendingRevisionState,
   HostProgressEvent,
   HostRegistryUpdateState,
   HostRemovalState,
@@ -189,6 +190,7 @@ export interface DesktopPreloadBridge {
   power: DesktopPowerBridge;
   zoom: DesktopZoomBridge;
   hostManagement: DesktopHostManagementBridge;
+  hostPendingRevision: DesktopHostPendingRevisionBridge;
   hostTray: DesktopHostTrayBridge;
 }
 
@@ -275,6 +277,13 @@ export interface DesktopHostRegistryUpdatesBridge {
 
 export interface DesktopHostOperationStatusBridge {
   onChange(handler: (status: HostOperationStatusEnvelope) => void): {
+    dispose: () => void;
+  };
+}
+
+export interface DesktopHostPendingRevisionBridge {
+  get(): Promise<HostPendingRevisionState>;
+  onChange(handler: (state: HostPendingRevisionState) => void): {
     dispose: () => void;
   };
 }
@@ -539,6 +548,7 @@ export class DesktopRunnerHost implements IRunnerHost {
   readonly hostTray: IHostTray;
   readonly hostRegistryUpdates: DesktopHostRegistryUpdatesBridge;
   readonly hostOperationStatus: DesktopHostOperationStatusBridge;
+  readonly hostPendingRevision: DesktopHostPendingRevisionBridge;
   readonly deviceFlow: IDeviceFlowHost;
 
   private readonly bridge: DesktopPreloadBridge;
@@ -718,6 +728,10 @@ export class DesktopRunnerHost implements IRunnerHost {
     };
     this.hostOperationStatus = {
       onChange: (handler) => managementBridge.onOperationStatus(handler),
+    };
+    this.hostPendingRevision = {
+      get: () => this.bridge.hostPendingRevision.get(),
+      onChange: (handler) => this.bridge.hostPendingRevision.onChange(handler),
     };
     this.hostTray = {
       onCommand: (handler) =>

@@ -5,12 +5,14 @@ import { constants } from "node:fs";
 import { dirname, join } from "node:path";
 import { config, isDevBuild } from "../../config";
 import {
-  getHostFsLayout,
   labelForEnvironment,
   smAppServiceAgentLabelId,
   userLaunchAgentPlistPath,
 } from "../host/host-paths";
-import type { Environment } from "../host/host-paths";
+import {
+  hasPendingLoginItemRevision,
+  resolvePendingLoginItemRevisionAfterCycle,
+} from "../host/pending-login-item-revision";
 import { isHostRemovedByUser } from "../host/host-removal-state";
 import { log } from "./logger";
 
@@ -322,7 +324,7 @@ async function registerHostLoginItemUnserialized(
     // fast path applying a deferred install), the on-disk plist is now the
     // one active in launchd - any pending-revision marker the installer
     // left behind is resolved.
-    await clearPendingLoginItemRevision(config.environment);
+    await resolvePendingLoginItemRevisionAfterCycle(config.environment);
   }
   return status;
 }
@@ -379,26 +381,7 @@ async function retireLegacyLabelRegistrations(): Promise<void> {
  * (permissions, race) is treated as "no pending revision" so a transient FS
  * hiccup never blocks the ensure fast path.
  */
-export async function hasPendingLoginItemRevision(
-  environment: Environment,
-): Promise<boolean> {
-  return fileExists(getHostFsLayout(environment).pendingLoginItemRevisionFile);
-}
-
-async function clearPendingLoginItemRevision(
-  environment: Environment,
-): Promise<void> {
-  try {
-    await rm(getHostFsLayout(environment).pendingLoginItemRevisionFile, {
-      force: true,
-    });
-  } catch (err) {
-    log.warn(
-      "[host-login-item] failed to clear pending LaunchAgent revision marker",
-      { err },
-    );
-  }
-}
+export { hasPendingLoginItemRevision };
 
 /**
  * Tear down the host's SMAppService login-item registration during an in-app

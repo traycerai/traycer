@@ -1534,7 +1534,10 @@ describe("host-management IPC - single-flight guard on concurrent host mutations
       );
     const startEnvelope = statusCalls()[0]?.[1] as {
       readonly revision: number;
-      readonly status: { readonly kind: string; readonly percent: number | null };
+      readonly status: {
+        readonly kind: string;
+        readonly percent: number | null;
+      };
     };
     expect(startEnvelope).toMatchObject({
       status: { kind: "update", percent: null },
@@ -1579,7 +1582,9 @@ describe("host-management IPC - single-flight guard on concurrent host mutations
     expect(settleEnvelope.revision).toBeGreaterThan(startEnvelope.revision);
     // Every pushed envelope revision is strictly monotonic.
     const revisions = afterSettle.map(([, payload]) => {
-      expect(payload).toEqual(expect.objectContaining({ revision: expect.any(Number) }));
+      expect(payload).toEqual(
+        expect.objectContaining({ revision: expect.any(Number) }),
+      );
       return (payload as { revision: number }).revision;
     });
     for (let i = 1; i < revisions.length; i += 1) {
@@ -3034,5 +3039,419 @@ describe("host-management IPC - restart routes through the canonical operation-s
 
     fake.resolveStream({});
     await freePortPromise;
+  });
+});
+
+// Ticket T4 (Settings Restart + apply-after-update, findings B + C).
+describe("host-management IPC - Restart routing (finding B)", () => {
+  it("routes to respawnHost under the tracked 'restart' operation when the desktop owns the login item, without spawning a CLI restart subprocess", async () => {
+    const fake = installFakeCli({ runResult: {}, streamResult: {} });
+    const hostManagesHostLoginItem = vi.fn().mockResolvedValue(true);
+    vi.doMock("../../app/host-login-item", () => ({
+      hostManagesHostLoginItem: () => hostManagesHostLoginItem(),
+      unregisterHostLoginItem: vi.fn(),
+    }));
+    let resolveRespawn: () => void = () => undefined;
+    const respawnHost: Mock<(host: unknown) => Promise<void>> = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveRespawn = resolve;
+        }),
+    );
+    vi.doMock("../../app/host-respawn", () => ({
+      respawnHost: (host: unknown) => respawnHost(host),
+    }));
+    const mgmt = await import("../host-management-ipc");
+    mgmt.setActiveEnvironment("production");
+    const { RunnerHostInvoke } =
+      await import("../../../ipc-contracts/ipc-channels");
+    const bridge = makeBridge();
+    mgmt.registerHostManagementIpc(bridge as never);
+
+    const restartPromise = bridge.handlers.get(
+      RunnerHostInvoke.traycerHostRestart,
+    )!(null, null);
+    await vi.waitFor(() => {
+      expect(respawnHost).toHaveBeenCalledTimes(1);
+    });
+
+    // While respawn is in flight it must still be tracked through the same
+    // single-flight/status seam as the CLI restart path.
+    expect(mgmt.getHostOperationStatus().status).toMatchObject({
+      kind: "restart",
+    });
+    expect(respawnHost.mock.calls[0]?.[0]).toBe(bridge.options.host);
+
+    resolveRespawn();
+    await restartPromise;
+
+    expect(mgmt.getHostOperationStatus().status).toBeNull();
+    // The CLI `host restart` subprocess must never have been spawned on
+    // this branch - respawnHost owns the SMAppService cycle directly.
+    expect(
+      fake.calls.some(
+        (c) =>
+          c.kind === "stream" &&
+          c.args[0] === "host" &&
+          c.args[1] === "restart",
+      ),
+    ).toBe(false);
+  });
+
+  it("falls back to the CLI 'host restart' stream when the desktop does not own the login item", async () => {
+    const fake = installFakeCli({ runResult: {}, streamResult: {} });
+    const hostManagesHostLoginItem = vi.fn().mockResolvedValue(false);
+    vi.doMock("../../app/host-login-item", () => ({
+      hostManagesHostLoginItem: () => hostManagesHostLoginItem(),
+      unregisterHostLoginItem: vi.fn(),
+    }));
+    const respawnHost: Mock<(host: unknown) => Promise<void>> = vi
+      .fn()
+      .mockResolvedValue(undefined);
+    vi.doMock("../../app/host-respawn", () => ({
+      respawnHost: (host: unknown) => respawnHost(host),
+    }));
+    const mgmt = await import("../host-management-ipc");
+    mgmt.setActiveEnvironment("production");
+    const { RunnerHostInvoke } =
+      await import("../../../ipc-contracts/ipc-channels");
+    const bridge = makeBridge();
+    mgmt.registerHostManagementIpc(bridge as never);
+
+    await bridge.handlers.get(RunnerHostInvoke.traycerHostRestart)!(null, null);
+
+    expect(respawnHost).not.toHaveBeenCalled();
+    const restartCalls = fake.calls.filter(
+      (c) =>
+        c.kind === "stream" && c.args[0] === "host" && c.args[1] === "restart",
+    );
+    expect(restartCalls).toHaveLength(1);
+  });
+});
+
+describe("host-management IPC - update apply-after-update handoff (finding C)", () => {
+  it("releases the update reservation before firing the detached apply-ensure, and only when the marker is durable", async () => {
+    writeOlderInstalledHost("production");
+    installFakeCli({
+      runResult: {},
+      streamResult: {
+        version: "1.7.0",
+        installedAt: "2026-05-15T00:00:00Z",
+        executablePath: "/opt/traycer/host",
+        source: { kind: "registry", value: "1.7.0" },
+        archiveSha256: "a".repeat(64),
+        signatureKeyId: "k",
+        sizeBytes: 0,
+      },
+    });
+    const hostManagesHostLoginItem = vi.fn().mockResolvedValue(true);
+    vi.doMock("../../app/host-login-item", () => ({
+      hostManagesHostLoginItem: () => hostManagesHostLoginItem(),
+      unregisterHostLoginItem: vi.fn(),
+    }));
+    let statusAtInvocation: unknown;
+    const runEnsureHost: Mock<
+      (
+        bridgeArg: unknown,
+        operationId: string,
+        force: boolean,
+      ) => Promise<unknown>
+    > = vi.fn(() => {
+      // Captured synchronously - `void runEnsureHost(...)` invokes this
+      // mock before any further microtask runs, right after the tracked
+      // `update` operation's `finally` released its reservation.
+      statusAtInvocation = mgmt.getHostOperationStatus().status;
+      return Promise.resolve({
+        action: "already-ready",
+        running: true,
+        version: "1.7.0",
+      });
+    });
+    vi.doMock("../host-ensure-ipc", () => ({
+      runEnsureHost: (
+        bridgeArg: unknown,
+        operationId: string,
+        force: boolean,
+      ) => runEnsureHost(bridgeArg, operationId, force),
+    }));
+    const mgmt = await import("../host-management-ipc");
+    mgmt.setActiveEnvironment("production");
+    const { RunnerHostInvoke } =
+      await import("../../../ipc-contracts/ipc-channels");
+    const bridge = makeBridge();
+    mgmt.registerHostManagementIpc(bridge as never);
+
+    await bridge.handlers.get(RunnerHostInvoke.traycerHostUpdate)!(null, {
+      operationId: "op-update",
+    });
+
+    expect(runEnsureHost).toHaveBeenCalledTimes(1);
+    expect(runEnsureHost.mock.calls[0]?.[2]).toBe(false);
+    // The update reservation must already be released (status back to
+    // null) at the moment the detached apply-ensure is fired - not merely
+    // by the time it eventually settles.
+    expect(statusAtInvocation).toBeNull();
+
+    const { getHostFsLayout } = await import("../../host/host-paths");
+    const markerPath =
+      getHostFsLayout("production").pendingLoginItemRevisionFile;
+    expect(() => readFileSync(markerPath, "utf8")).not.toThrow();
+  });
+
+  it("publishes a non-durable pending update and never starts ensure when the real marker writer exhausts its retries", async () => {
+    writeOlderInstalledHost("production");
+    const fake = installFakeCliWithDeferredStream();
+    const hostManagesHostLoginItem = vi.fn().mockResolvedValue(true);
+    vi.doMock("../../app/host-login-item", () => ({
+      hostManagesHostLoginItem: () => hostManagesHostLoginItem(),
+      unregisterHostLoginItem: vi.fn(),
+    }));
+    const runEnsureHost: Mock<
+      (
+        bridgeArg: unknown,
+        operationId: string,
+        force: boolean,
+      ) => Promise<unknown>
+    > = vi.fn(() =>
+      Promise.resolve({
+        action: "already-ready",
+        running: true,
+        version: "1.7.0",
+      }),
+    );
+    vi.doMock("../host-ensure-ipc", () => ({
+      runEnsureHost: (
+        bridgeArg: unknown,
+        operationId: string,
+        force: boolean,
+      ) => runEnsureHost(bridgeArg, operationId, force),
+    }));
+    const mgmt = await import("../host-management-ipc");
+    mgmt.setActiveEnvironment("production");
+    const { RunnerHostInvoke } =
+      await import("../../../ipc-contracts/ipc-channels");
+    const bridge = makeBridge();
+    mgmt.registerHostManagementIpc(bridge as never);
+
+    const update = bridge.handlers.get(RunnerHostInvoke.traycerHostUpdate)!(
+      null,
+      { operationId: "op-update-marker-write-failure" },
+    );
+    await waitForStreamCallCount(fake, 1);
+
+    // Mutate the filesystem only after update admission/readiness work has
+    // completed. A plain file at the marker's parent is a real ENOTDIR fault
+    // for every retry, without mocking node:fs/promises.
+    const hostRoot = join(workHome, ".traycer", "host");
+    rmSync(hostRoot, { recursive: true, force: true });
+    writeFileSync(hostRoot, "not a directory", "utf8");
+    fake.resolveStream({
+      version: "1.7.0",
+      installedAt: "2026-05-15T00:00:00Z",
+      executablePath: "/opt/traycer/host",
+      source: { kind: "registry", value: "1.7.0" },
+      archiveSha256: "a".repeat(64),
+      signatureKeyId: "k",
+      sizeBytes: 0,
+    });
+    await update;
+
+    // Negative check: no durable marker means no automatic apply attempt.
+    // The Settings Restart button remains the explicit manual apply route.
+    expect(runEnsureHost).not.toHaveBeenCalled();
+    const getPending = bridge.handlers.get(
+      RunnerHostInvoke.traycerHostPendingRevisionGet,
+    )!;
+    const pending = await getPending(null, null);
+    expect(pending).toMatchObject({
+      pending: true,
+      durable: false,
+      cause: "update",
+    });
+    expect(pending).toEqual(
+      expect.objectContaining({ error: expect.any(String) }),
+    );
+  });
+
+  it("does not fire a detached apply-ensure when the desktop does not own the login item (no marker to apply)", async () => {
+    writeOlderInstalledHost("production");
+    installFakeCli({
+      runResult: {},
+      streamResult: {
+        version: "1.7.0",
+        installedAt: "2026-05-15T00:00:00Z",
+        executablePath: "/opt/traycer/host",
+        source: { kind: "registry", value: "1.7.0" },
+        archiveSha256: "a".repeat(64),
+        signatureKeyId: "k",
+        sizeBytes: 0,
+      },
+    });
+    const hostManagesHostLoginItem = vi.fn().mockResolvedValue(false);
+    vi.doMock("../../app/host-login-item", () => ({
+      hostManagesHostLoginItem: () => hostManagesHostLoginItem(),
+      unregisterHostLoginItem: vi.fn(),
+    }));
+    const runEnsureHost = vi.fn();
+    vi.doMock("../host-ensure-ipc", () => ({
+      runEnsureHost: (
+        bridgeArg: unknown,
+        operationId: string,
+        force: boolean,
+      ) => runEnsureHost(bridgeArg, operationId, force),
+    }));
+    const mgmt = await import("../host-management-ipc");
+    mgmt.setActiveEnvironment("production");
+    const { RunnerHostInvoke } =
+      await import("../../../ipc-contracts/ipc-channels");
+    const bridge = makeBridge();
+    mgmt.registerHostManagementIpc(bridge as never);
+
+    await bridge.handlers.get(RunnerHostInvoke.traycerHostUpdate)!(null, {
+      operationId: "op-update",
+    });
+
+    expect(runEnsureHost).not.toHaveBeenCalled();
+  });
+
+  it("a detached apply-ensure lost to a concurrent operation is caught and logged, and the durable marker survives for the monitor/next launch", async () => {
+    writeOlderInstalledHost("production");
+    installFakeCli({
+      runResult: {},
+      streamResult: {
+        version: "1.7.0",
+        installedAt: "2026-05-15T00:00:00Z",
+        executablePath: "/opt/traycer/host",
+        source: { kind: "registry", value: "1.7.0" },
+        archiveSha256: "a".repeat(64),
+        signatureKeyId: "k",
+        sizeBytes: 0,
+      },
+    });
+    const hostManagesHostLoginItem = vi.fn().mockResolvedValue(true);
+    vi.doMock("../../app/host-login-item", () => ({
+      hostManagesHostLoginItem: () => hostManagesHostLoginItem(),
+      unregisterHostLoginItem: vi.fn(),
+    }));
+    const runEnsureHost = vi
+      .fn()
+      .mockRejectedValue(
+        new Error("ensure slot lost to a concurrent operation"),
+      );
+    vi.doMock("../host-ensure-ipc", () => ({
+      runEnsureHost: (
+        bridgeArg: unknown,
+        operationId: string,
+        force: boolean,
+      ) => runEnsureHost(bridgeArg, operationId, force),
+    }));
+    const mgmt = await import("../host-management-ipc");
+    mgmt.setActiveEnvironment("production");
+    const { RunnerHostInvoke } =
+      await import("../../../ipc-contracts/ipc-channels");
+    const bridge = makeBridge();
+    mgmt.registerHostManagementIpc(bridge as never);
+
+    await bridge.handlers.get(RunnerHostInvoke.traycerHostUpdate)!(null, {
+      operationId: "op-update",
+    });
+
+    const { default: log } = await import("electron-log");
+    await vi.waitFor(() => {
+      expect(log.warn).toHaveBeenCalledWith(
+        expect.stringMatching(/apply-after-update ensure/i),
+        expect.objectContaining({ err: expect.anything() }),
+      );
+    });
+
+    // The rejection must not have thrown out of the update handler, and the
+    // durable marker (the monitor's / next launch's only recovery path)
+    // must still be on disk.
+    const pendingHandler = bridge.handlers.get(
+      RunnerHostInvoke.traycerHostPendingRevisionGet,
+    )!;
+    await expect(pendingHandler(null, null)).resolves.toEqual({
+      pending: true,
+      durable: true,
+      cause: null,
+      error: null,
+    });
+  });
+});
+
+describe("host-management IPC - traycerHostPendingRevisionGet", () => {
+  it("reflects the durable marker written by an update, and 'pending:false' once cleared", async () => {
+    const { getHostFsLayout } = await import("../../host/host-paths");
+    const mgmt = await import("../host-management-ipc");
+    mgmt.setActiveEnvironment("production");
+    const { RunnerHostInvoke } =
+      await import("../../../ipc-contracts/ipc-channels");
+    const bridge = makeBridge();
+    mgmt.registerHostManagementIpc(bridge as never);
+    const getHandler = bridge.handlers.get(
+      RunnerHostInvoke.traycerHostPendingRevisionGet,
+    )!;
+
+    await expect(getHandler(null, null)).resolves.toEqual({
+      pending: false,
+      durable: false,
+      cause: null,
+      error: null,
+    });
+
+    const { writePendingLoginItemRevision, clearPendingLoginItemRevision } =
+      await import("../../host/pending-login-item-revision");
+    await writePendingLoginItemRevision("production", "update");
+    await expect(getHandler(null, null)).resolves.toEqual({
+      pending: true,
+      durable: true,
+      cause: null,
+      error: null,
+    });
+
+    await clearPendingLoginItemRevision("production");
+    await expect(getHandler(null, null)).resolves.toEqual({
+      pending: false,
+      durable: false,
+      cause: null,
+      error: null,
+    });
+
+    // Sanity: the state really is disk-backed, not purely in-memory.
+    expect(() =>
+      readFileSync(
+        getHostFsLayout("production").pendingLoginItemRevisionFile,
+        "utf8",
+      ),
+    ).toThrow();
+  });
+
+  it("fans out hostPendingRevisionChange on every write, clear, and successful registration-cycle resolution", async () => {
+    const mgmt = await import("../host-management-ipc");
+    mgmt.setActiveEnvironment("production");
+    const { RunnerHostInvoke, RunnerHostEvent } =
+      await import("../../../ipc-contracts/ipc-channels");
+    const bridge = makeBridge();
+    mgmt.registerHostManagementIpc(bridge as never);
+
+    const {
+      clearPendingLoginItemRevision,
+      resolvePendingLoginItemRevisionAfterCycle,
+      writePendingLoginItemRevision,
+    } = await import("../../host/pending-login-item-revision");
+    await writePendingLoginItemRevision("production", "update");
+    await clearPendingLoginItemRevision("production");
+    await writePendingLoginItemRevision("production", "update");
+    await resolvePendingLoginItemRevisionAfterCycle("production");
+
+    const changeCalls = bridge.fanOut.mock.calls.filter(
+      ([channel]) => channel === RunnerHostEvent.hostPendingRevisionChange,
+    );
+    expect(changeCalls.map(([, state]) => state)).toEqual([
+      { pending: true, durable: true, cause: null, error: null },
+      { pending: false, durable: false, cause: null, error: null },
+      { pending: true, durable: true, cause: null, error: null },
+      { pending: false, durable: false, cause: null, error: null },
+    ]);
   });
 });

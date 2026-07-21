@@ -2,6 +2,7 @@ import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import type {
   DesktopAppUpdatesBridge,
   DesktopHostOperationStatusBridge,
+  DesktopHostPendingRevisionBridge,
   DesktopHostRegistryUpdatesBridge,
   DesktopMenuBridge,
   DesktopPowerBridge,
@@ -58,6 +59,13 @@ export function resolveDesktopHostOperationStatusBridge(
   return isDesktopHostOperationStatusBridge(value) ? value : null;
 }
 
+export function resolveDesktopHostPendingRevisionBridge(
+  runnerHost: IRunnerHost,
+): DesktopHostPendingRevisionBridge | null {
+  const value: unknown = Reflect.get(runnerHost, "hostPendingRevision");
+  return isDesktopHostPendingRevisionBridge(value) ? value : null;
+}
+
 function isDesktopMenuBridge(value: unknown): value is DesktopMenuBridge {
   return isRecord(value) && typeof value.onCommand === "function";
 }
@@ -112,6 +120,16 @@ function isDesktopHostOperationStatusBridge(
   value: unknown,
 ): value is DesktopHostOperationStatusBridge {
   return isRecord(value) && typeof value.onChange === "function";
+}
+
+function isDesktopHostPendingRevisionBridge(
+  value: unknown,
+): value is DesktopHostPendingRevisionBridge {
+  return (
+    isRecord(value) &&
+    typeof value.get === "function" &&
+    typeof value.onChange === "function"
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

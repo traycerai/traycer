@@ -16,6 +16,7 @@ import type {
   HostOperationKind,
   HostOperationStatus,
   HostOperationStatusEnvelope,
+  HostPendingRevisionState,
   HostProgressEvent,
   HostRegistryUpdateState,
   HostRemovalState,
@@ -73,6 +74,10 @@ export interface HostManagementBridgeSurface {
   };
   getOperationStatus(): Promise<HostOperationStatusEnvelope>;
   onOperationStatus(handler: (status: HostOperationStatusEnvelope) => void): {
+    dispose: () => void;
+  };
+  getPendingRevision(): Promise<HostPendingRevisionState>;
+  onPendingRevisionChange(handler: (state: HostPendingRevisionState) => void): {
     dispose: () => void;
   };
   freePortAndRestart(
@@ -223,6 +228,24 @@ export function buildHostManagementBridge(): HostManagementBridgeSurface {
         dispose: () =>
           ipcRenderer.removeListener(
             RunnerHostEvent.hostOperationStatusChange,
+            listener,
+          ),
+      };
+    },
+    getPendingRevision: () =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.traycerHostPendingRevisionGet,
+      ) as Promise<HostPendingRevisionState>,
+    onPendingRevisionChange(handler) {
+      const listener = (_event: IpcRendererEvent, payload: unknown): void => {
+        if (!isHostPendingRevisionState(payload)) return;
+        handler(payload);
+      };
+      ipcRenderer.on(RunnerHostEvent.hostPendingRevisionChange, listener);
+      return {
+        dispose: () =>
+          ipcRenderer.removeListener(
+            RunnerHostEvent.hostPendingRevisionChange,
             listener,
           ),
       };
@@ -378,6 +401,19 @@ function isHostOperationStatusEnvelope(
     candidate.revision >= 0 &&
     (candidate.status === null || isHostOperationStatus(candidate.status)) &&
     isHostEnsureOutcome(candidate.lastEnsureOutcome)
+  );
+}
+
+function isHostPendingRevisionState(
+  value: unknown,
+): value is HostPendingRevisionState {
+  if (value === null || typeof value !== "object") return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.pending === "boolean" &&
+    typeof candidate.durable === "boolean" &&
+    (typeof candidate.cause === "string" || candidate.cause === null) &&
+    (typeof candidate.error === "string" || candidate.error === null)
   );
 }
 

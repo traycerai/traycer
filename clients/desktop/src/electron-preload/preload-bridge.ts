@@ -1,4 +1,5 @@
 import { contextBridge } from "electron";
+import type { HostPendingRevisionState } from "@traycer-clients/shared/platform/runner-host";
 import { RunnerHostSync } from "../ipc-contracts/ipc-channels";
 import { config } from "../config";
 import { readInitialRouteArg } from "../ipc-contracts/window-bootstrap";
@@ -49,6 +50,8 @@ const nativeClipboardReadGate = createNativeClipboardReadGate(() => Date.now());
 
 window.addEventListener("paste", nativeClipboardReadGate.observePaste, true);
 
+const hostManagement = buildHostManagementBridge();
+
 contextBridge.exposeInMainWorld("runnerHost", {
   authnBaseUrl: config.authnBaseUrl,
   // Runtime-resolved in main (dev loopback port is dynamic), so it must be a
@@ -73,6 +76,11 @@ contextBridge.exposeInMainWorld("runnerHost", {
   platform: buildPlatformBridge(),
   power: buildPowerBridge(),
   ...buildZoomBridge(),
-  hostManagement: buildHostManagementBridge(),
+  hostManagement,
+  hostPendingRevision: {
+    get: () => hostManagement.getPendingRevision(),
+    onChange: (handler: (state: HostPendingRevisionState) => void) =>
+      hostManagement.onPendingRevisionChange(handler),
+  },
   hostTray: buildHostTrayCommandSubscriber(),
 });

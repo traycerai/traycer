@@ -32,6 +32,7 @@ export type {
   HostOperationKind,
   HostOperationStatus,
   HostOperationStatusEnvelope,
+  HostPendingRevisionState,
   HostProgressEvent,
   HostRegistryUpdateState,
   HostRemovalState,

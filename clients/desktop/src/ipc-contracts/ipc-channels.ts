@@ -188,6 +188,7 @@ export const RunnerHostInvoke = {
   // Settings opened after the banner already started an update) sees it
   // immediately instead of waiting for the next `hostOperationStatusChange`.
   traycerHostOperationStatusGet: "runnerHost:traycer:host:operationStatus:get",
+  traycerHostPendingRevisionGet: "runnerHost:traycer:host:pendingRevision:get",
   traycerFreePortAndRestart: "runnerHost:traycer:freePortAndRestart",
   traycerCliManifestRead: "runnerHost:traycer:cli:manifestRead",
   traycerHostNameGet: "runnerHost:traycer:host:name:get",
@@ -245,6 +246,7 @@ export const RunnerHostEvent = {
   // auto-update reconciler, so every open window's banner/Settings stay in
   // lockstep without racing the CLI's cross-process lock file.
   hostOperationStatusChange: "runnerHost:event:host:operationStatusChange",
+  hostPendingRevisionChange: "runnerHost:event:host:pendingRevisionChange",
   zoomChange: "runnerHost:event:zoom:change",
 } as const;
 

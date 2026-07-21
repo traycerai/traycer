@@ -105,6 +105,8 @@ export const runnerQueryKeys = {
   // TanStack's normal mechanisms, since it is entirely event-sourced.
   hostOperationStatus: (management: object) =>
     ["runner.host.operationStatus", management] as const,
+  hostPendingRevision: (bridge: object | null) =>
+    ["runner.host.pendingRevision", bridge] as const,
   hostInstalledRecord: (management: object) =>
     ["runner.host.installedRecord", management] as const,
   hostLogs: (management: object, tailLines: number) =>

@@ -831,6 +831,19 @@ export interface HostOperationStatusEnvelope {
   readonly lastEnsureOutcome: HostEnsureOutcome;
 }
 
+/**
+ * Desktop-local state for a staged SMAppService definition. `durable: true`
+ * means the cross-launch marker is on disk; `durable: false` preserves the
+ * write error for this main-process lifetime so Settings can steer the user to
+ * an explicit Restart instead of claiming an inert update was applied.
+ */
+export interface HostPendingRevisionState {
+  readonly pending: boolean;
+  readonly durable: boolean;
+  readonly cause: string | null;
+  readonly error: string | null;
+}
+
 export interface HostInstallSourceTag {
   readonly kind: "registry" | "local-file";
   readonly value: string;

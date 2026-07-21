@@ -559,6 +559,7 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.traycerServiceDeregister,
         RunnerHostInvoke.traycerRegistryCheck,
         RunnerHostInvoke.traycerHostOperationStatusGet,
+        RunnerHostInvoke.traycerHostPendingRevisionGet,
         RunnerHostInvoke.traycerFreePortAndRestart,
         RunnerHostInvoke.traycerCliManifestRead,
         // Platform IPC channels installed by `registerPlatformIpc(bridge)`,
