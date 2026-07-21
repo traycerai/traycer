@@ -62,9 +62,9 @@ vi.mock("../cli-discovery", async (importOriginal) => {
     ...actual,
     discoverCli: async () => ({
       kind: "bundled" as const,
-      binaryPath: "/tmp/traycer-test/fake-cli/traycer",
+      binaryPath: "/tmp/traycer-test/discovered-cli/traycer",
     }),
-    resolveBundledCliPath: async () => "/tmp/traycer-test/fake-cli/traycer",
+    resolveBundledCliPath: async () => "/tmp/traycer-test/bundled-cli/traycer",
   };
 });
 
@@ -102,10 +102,42 @@ class FakeChild extends EventEmitter {
     this.killed = true;
     this.killSignal = signal;
   }
+
+  close(exitCode: number | null): void {
+    this.emit("close", exitCode);
+  }
 }
 
-let spawnImpl: ((cmd: string, args: readonly string[]) => FakeChild) | null =
-  null;
+// Fixup C4: unlike `FakeChild`, never settles on its own - stands in for a
+// subprocess still running a long download, so a test can assert `kill()`
+// only happens once the caller's `AbortSignal` fires, not before.
+class HangingFakeChild extends EventEmitter {
+  readonly stdout = new EventEmitter() as EventEmitter & {
+    setEncoding: (enc: string) => void;
+  };
+  readonly stderr = new EventEmitter() as EventEmitter & {
+    setEncoding: (enc: string) => void;
+  };
+  killed = false;
+  killSignal: NodeJS.Signals | null = null;
+  constructor() {
+    super();
+    this.stdout.setEncoding = () => undefined;
+    this.stderr.setEncoding = () => undefined;
+  }
+  kill(signal: NodeJS.Signals): void {
+    this.killed = true;
+    this.killSignal = signal;
+  }
+
+  close(exitCode: number | null): void {
+    this.emit("close", exitCode);
+  }
+}
+
+let spawnImpl:
+  | ((cmd: string, args: readonly string[]) => FakeChild | HangingFakeChild)
+  | null = null;
 let execFileImpl:
   | ((
       cmd: string,
@@ -162,9 +194,12 @@ interface ExecFileSetupArgs {
 
 function configureExecFile(args: ExecFileSetupArgs): {
   readonly capturedArgs: readonly string[][];
+  readonly capturedCommands: readonly string[];
 } {
   const capturedArgs: string[][] = [];
-  execFileImpl = (_cmd, calledArgs, _opts, callback) => {
+  const capturedCommands: string[] = [];
+  execFileImpl = (cmd, calledArgs, _opts, callback) => {
+    capturedCommands.push(cmd);
     capturedArgs.push([...calledArgs]);
     if (args.exitCode === 0) {
       callback(null, args.stdout, args.stderr);
@@ -186,7 +221,7 @@ function configureExecFile(args: ExecFileSetupArgs): {
     err.code = args.exitCode;
     callback(err, args.stdout, args.stderr);
   };
-  return { capturedArgs };
+  return { capturedArgs, capturedCommands };
 }
 
 describe("runTraycerCliJson unwraps result envelopes", () => {
@@ -318,6 +353,13 @@ describe("runTraycerCliJson unwraps result envelopes", () => {
   });
 
   it("ignores progress events before the terminal result line", async () => {
+    // Fixup D2: a progress line trails the result line here, deliberately -
+    // if the loop just took whatever line came last (rather than genuinely
+    // skipping progress-typed events), it would wrongly select this
+    // trailing progress event instead of the result. Positioning every
+    // progress line before the result (the old fixture) made this
+    // indistinguishable from "last line wins", since both implementations
+    // would land on the same line.
     const lines = [
       JSON.stringify({
         type: "progress",
@@ -329,18 +371,18 @@ describe("runTraycerCliJson unwraps result envelopes", () => {
         timestamp: "2026-05-15T00:00:00Z",
       }),
       JSON.stringify({
-        type: "progress",
-        stage: "download",
-        percent: 75,
-        bytes: 3000,
-        totalBytes: 4000,
-        message: "downloading",
-        timestamp: "2026-05-15T00:00:01Z",
-      }),
-      JSON.stringify({
         type: "result",
         status: "ok",
         data: { final: true, version: "1.5.0" },
+        timestamp: "2026-05-15T00:00:01Z",
+      }),
+      JSON.stringify({
+        type: "progress",
+        stage: "download",
+        percent: 100,
+        bytes: 4000,
+        totalBytes: 4000,
+        message: "finishing up",
         timestamp: "2026-05-15T00:00:02Z",
       }),
     ];
@@ -359,6 +401,45 @@ describe("runTraycerCliJson unwraps result envelopes", () => {
 });
 
 describe("streamTraycerCliJson resolves data, fans progress, and converts error envelopes", () => {
+  it("V10: bundled wrappers invoke the bundled CLI instead of the discovered CLI", async () => {
+    const terminalLine = JSON.stringify({
+      type: "result",
+      status: "ok",
+      data: { version: "1.5.0" },
+      timestamp: "2026-05-15T00:00:00Z",
+    });
+    const runSetup = configureExecFile({
+      stdout: `${terminalLine}\n`,
+      stderr: "",
+      exitCode: 0,
+    });
+    let streamCommand = "";
+    spawnImpl = (cmd) => {
+      streamCommand = cmd;
+      return new FakeChild({
+        stdoutLines: [terminalLine],
+        stderr: "",
+        exitCode: 0,
+      });
+    };
+    const { runBundledTraycerCliJson, streamBundledTraycerCliJson } =
+      await import("../traycer-cli");
+
+    await runBundledTraycerCliJson<{ version: string }>(["host", "status"]);
+    await streamBundledTraycerCliJson<{ version: string }>({
+      args: ["host", "download", "--automatic"],
+      onEvent: () => undefined,
+      env: null,
+      timeoutMs: 5_000,
+      signal: null,
+    });
+
+    expect(runSetup.capturedCommands).toEqual([
+      "/tmp/traycer-test/bundled-cli/traycer",
+    ]);
+    expect(streamCommand).toBe("/tmp/traycer-test/bundled-cli/traycer");
+  });
+
   it("forces --json onto args and emits each progress event before resolving with unwrapped data", async () => {
     const lines = [
       JSON.stringify({
@@ -402,7 +483,7 @@ describe("streamTraycerCliJson resolves data, fans progress, and converts error 
       },
       env: null,
       timeoutMs: 5_000,
-      invocation: null,
+      signal: null,
     });
     expect(capturedArgs).toContain("--json");
     expect(progressEvents).toEqual([
@@ -438,7 +519,7 @@ describe("streamTraycerCliJson resolves data, fans progress, and converts error 
         onEvent: () => undefined,
         env: null,
         timeoutMs: 5_000,
-        invocation: null,
+        signal: null,
       });
     } catch (err) {
       thrown = err;
@@ -447,6 +528,123 @@ describe("streamTraycerCliJson resolves data, fans progress, and converts error 
     if (thrown instanceof TraycerCliError) {
       expect(thrown.code).toBe("E_HOST_INSTALL_FAILED");
       expect(thrown.message).toContain("verification failed");
+    }
+  });
+});
+
+// Fixup C4: `streamBundledTraycerCliJson`'s only cancellable caller
+// (`runDownloadLane`'s `AbortController`) used to abort a signal nothing
+// downstream ever read - the spawned subprocess ran to completion
+// regardless, so `removeTraycer`'s "abort the in-flight download" claim was
+// cosmetic. The subprocess must actually be killed the moment the signal
+// fires, and the awaited call must reject rather than hang.
+describe("streamTraycerCliJson kills the subprocess when its signal aborts", () => {
+  it("kills the still-running child but waits for close before rejecting", async () => {
+    const child = new HangingFakeChild();
+    spawnImpl = () => child;
+    const { streamTraycerCliJson } = await import("../traycer-cli");
+    const abortController = new AbortController();
+
+    const promise = streamTraycerCliJson<unknown>({
+      args: ["host", "download", "--automatic"],
+      onEvent: () => undefined,
+      env: null,
+      timeoutMs: 5_000,
+      signal: abortController.signal,
+    });
+
+    // Wait for the real stream wrapper to spawn and subscribe before
+    // asserting nothing has happened yet.
+    await vi.waitFor(() => {
+      expect(child.stdout.listenerCount("data")).toBeGreaterThan(0);
+    });
+    expect(child.killed).toBe(false);
+
+    abortController.abort();
+
+    expect(child.killed).toBe(true);
+    expect(child.killSignal).toBe("SIGKILL");
+
+    let settled = false;
+    void promise.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await vi.waitFor(() => {
+      expect(child.stdout.listenerCount("data")).toBeGreaterThan(0);
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    child.close(null);
+    await expect(promise).rejects.toThrow();
+  });
+
+  it("kills immediately when the signal is already aborted before the call starts", async () => {
+    const child = new HangingFakeChild();
+    spawnImpl = () => child;
+    const { streamTraycerCliJson } = await import("../traycer-cli");
+    const abortController = new AbortController();
+    abortController.abort();
+
+    const promise = streamTraycerCliJson<unknown>({
+      args: ["host", "download", "--automatic"],
+      onEvent: () => undefined,
+      env: null,
+      timeoutMs: 5_000,
+      signal: abortController.signal,
+    });
+    await vi.waitFor(() => {
+      expect(child.stdout.listenerCount("data")).toBeGreaterThan(0);
+    });
+    expect(child.killed).toBe(true);
+    expect(child.killSignal).toBe("SIGKILL");
+    child.close(null);
+    await expect(promise).rejects.toThrow();
+  });
+});
+
+describe("streamTraycerCliJson timeout waits for the child close", () => {
+  it("F11: keeps the download stream unsettled after timeout until the killed child closes", async () => {
+    vi.useFakeTimers();
+    try {
+      const child = new HangingFakeChild();
+      spawnImpl = () => child;
+      const { streamTraycerCliJson } = await import("../traycer-cli");
+
+      const promise = streamTraycerCliJson<unknown>({
+        args: ["host", "download", "--automatic"],
+        onEvent: () => undefined,
+        env: null,
+        timeoutMs: 5_000,
+        signal: null,
+      });
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(child.killed).toBe(true);
+      expect(child.killSignal).toBe("SIGKILL");
+
+      let settled = false;
+      void promise.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+      await Promise.resolve();
+      expect(settled).toBe(false);
+
+      child.close(null);
+      await expect(promise).rejects.toThrow("timed out");
+    } finally {
+      vi.useRealTimers();
     }
   });
 });
@@ -676,6 +874,36 @@ describe("runTraycerCliJson preserves successful envelopes on non-zero exit", ()
   });
 });
 
+describe("runTraycerCliJson timeout must exceed the CLI's own lock wait (fixup A8)", () => {
+  it("passes execFile a timeout that exceeds the CLI's 30s cli-lock wait, not merely matches or falls short of it", async () => {
+    // Every lock-taking CLI command this helper backs (`host service
+    // install/uninstall`, `host stamp-runtime`, `host free-port`, `host
+    // uninstall [--all]`) waits up to `waitMs: 30_000` internally on the
+    // shared cli-lock before terminally throwing `E_CLI_LOCK_BUSY`. A
+    // desktop subprocess timeout at or below that window SIGKILLs the CLI
+    // before it can ever emit that classification - and, worse, can kill
+    // it the instant after it wins the lock and enters its critical
+    // section (a torn install/staged/pid record).
+    let capturedTimeout: number | null = null;
+    execFileImpl = (_cmd, _args, opts, callback) => {
+      capturedTimeout = (opts as { readonly timeout: number }).timeout;
+      const envelope = {
+        type: "result",
+        status: "ok",
+        data: {},
+        timestamp: "2026-05-15T00:00:00Z",
+      };
+      callback(null, `${JSON.stringify(envelope)}\n`, "");
+    };
+    const { runTraycerCliJson } = await import("../traycer-cli");
+    await runTraycerCliJson(["host", "service", "uninstall"]);
+    if (capturedTimeout === null) {
+      throw new Error("execFile was never invoked");
+    }
+    expect(capturedTimeout).toBeGreaterThan(30_000);
+  });
+});
+
 describe("CLI_UPGRADE_PENDING preservation through Desktop projection", () => {
   it("survives projectDoctorReport after envelope unwrapping", async () => {
     // The bug we're guarding against: before this fix, the Doctor IPC
@@ -709,12 +937,15 @@ describe("CLI_UPGRADE_PENDING preservation through Desktop projection", () => {
     const data = await runTraycerCliJson<{
       issues: ReadonlyArray<typeof pendingIssue>;
     }>(["host", "doctor"]);
-    // The projection step from host-management-ipc.ts walks `data.issues`
-    // and maps each issue into the HostDoctorReport shape. We mirror
-    // the salient field reads here so a regression in the unwrap layer
-    // surfaces as a missing issue rather than a generic typing error.
-    expect(Array.isArray(data.issues)).toBe(true);
-    const issue = data.issues.find((i) => i.code === "CLI_UPGRADE_PENDING");
+    // Fixup D2: call the real projector instead of re-implementing its
+    // field reads inline - the earlier version manually mirrored the
+    // mapping logic, so a regression inside `projectDoctorReport` itself
+    // (e.g. silently dropping `fixAction`/`terminalCommand`) would not
+    // have been caught here.
+    const { projectDoctorReport } =
+      await import("../../ipc/host-management-ipc");
+    const report = projectDoctorReport(data);
+    const issue = report.issues.find((i) => i.code === "CLI_UPGRADE_PENDING");
     expect(issue).toBeDefined();
     expect(issue?.fixAction).toBe("host-restart");
     expect(issue?.terminalCommand).toBe("traycer host restart");

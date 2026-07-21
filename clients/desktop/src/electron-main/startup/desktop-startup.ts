@@ -16,23 +16,35 @@ import {
   loadTrayIconImage,
   type TrayManagedWindow,
 } from "../tray/tray";
-import { HostLifecycle, type HostStartupError } from "../host/host-lifecycle";
-import type { HostRegistryUpdateState } from "../../ipc-contracts/host-management-types";
+import {
+  canReachHostWebsocketUrl,
+  HostLifecycle,
+  type HostStartupError,
+} from "../host/host-lifecycle";
+import {
+  DESKTOP_LOCK_POLL_INTERVAL_MS,
+  DESKTOP_LOCK_WAIT_MS,
+  HostController,
+} from "../host/host-controller";
 import { getHostFsLayout, labelForEnvironment } from "../host/host-paths";
 import {
-  onHostRegistryUpdateStateChange,
   refreshRegistryUpdateState,
   setActiveEnvironment,
 } from "../ipc/host-management-ipc";
+import { onHostControllerStatusBroadcast } from "../ipc/host-controller-status-broadcast";
 import {
-  defaultHostAutoUpdateDeps,
-  reconcileHostAutoUpdate,
-  LAUNCH_HOST_UPDATE_TIMEOUT_MS,
-  QUIT_HOST_UPDATE_TIMEOUT_MS,
-} from "../host/host-auto-update";
-import { isHostRemovedByUser } from "../host/host-removal-state";
-import { runUpdateInstallQuitSequence } from "./update-install-quit";
+  QUIT_HOST_MUTATION_DRAIN_TIMEOUT_MS,
+  runUpdateInstallQuitSequence,
+} from "./update-install-quit";
 import { RunnerIpcBridge } from "../ipc/register-runner-ipc";
+import {
+  applyHostUpdateMenuState,
+  refreshHostRegistryIfNotRemoved,
+  runLaunchHostConvergeReconcile,
+  type HostUpdateMenuSurface,
+} from "./host-launch-converge";
+import type { IpcHostController } from "../ipc/runner-ipc-bridge";
+import { respawnIfDown } from "./host-health-respawn";
 import {
   checkForUpdatesAfterResume,
   checkForUpdatesNow,
@@ -129,7 +141,6 @@ import { startHostHealthMonitor } from "../host/host-health-monitor";
 import { startPendingLoginItemRevisionMonitor } from "../host/pending-login-item-revision-monitor";
 import { hostManagesHostLoginItem } from "../app/host-login-item";
 import { DESKTOP_APP_NAME } from "../../config";
-import { hydrateUpdatePreferences } from "../app/update-preferences";
 
 // Per-window fresh-snapshot query budget during `before-quit`. Each renderer,
 // on receiving `getFreshUnsyncedSnapshot`, first AWAITS its debounced per-window
@@ -159,28 +170,19 @@ const QUIT_FRESH_UNSYNCED_SNAPSHOT_TIMEOUT_MS = 200;
  * the logs.
  */
 export async function runDesktopStartup(): Promise<void> {
-  initLogger();
-  const config = resolveDesktopConfig();
+  const testHooks = desktopStartupTestHooks;
+  const deferredPlan =
+    testHooks === null
+      ? await runProductionStartupPhases()
+      : await runTestStartupPhases(testHooks);
 
-  const state: BootState = {
-    config,
-    pendingAuthReturnSignal: false,
-    bridge: null,
-  };
-
-  runPreReady(state);
-
-  await app.whenReady();
-
-  await runOnReady(state);
-  log.info("[desktop] app ready", {
-    platform: process.platform,
-    environment: config.environment,
-  });
-
-  const services = await runWindowPhase(state);
-
-  runDeferred(state, services);
+  // There is deliberately one startup → deferred handoff. Tests may replace
+  // expensive Electron phases, but they never get a separate convergence
+  // branch: removing this production call therefore leaves the composition
+  // test red rather than silently exercising a test-only equivalent.
+  runDeferred(deferredPlan.state, deferredPlan.services, () =>
+    deferredPlan.runBackground(),
+  );
 }
 
 interface BootState {
@@ -190,6 +192,28 @@ interface BootState {
   // a payload-free nudge, so repeated cold-start arrivals collapse.
   pendingAuthReturnSignal: boolean;
   bridge: RunnerIpcBridge | null;
+}
+
+export interface DesktopStartupTestHooks {
+  readonly config: DesktopConfig;
+  runPreReady(): void;
+  whenReady(): Promise<void>;
+  runOnReady(): Promise<void>;
+  runWindowPhase(): Promise<{
+    readonly hostController: IpcHostController;
+    readonly menu: HostUpdateMenuSurface;
+  }>;
+  runDeferredBackground(): void;
+}
+
+let desktopStartupTestHooks: DesktopStartupTestHooks | null = null;
+
+/** Test-only phase replacement used to exercise `runDesktopStartup`'s real
+ * handoff into `runDeferred` without constructing an Electron window. */
+export function __setDesktopStartupTestHooks(
+  hooks: DesktopStartupTestHooks | null,
+): void {
+  desktopStartupTestHooks = hooks;
 }
 
 // Single delivery path for the browser-return signal: focus + nudge the
@@ -205,9 +229,63 @@ function deliverAuthReturnSignal(state: BootState): void {
 
 interface AppServices {
   readonly host: HostLifecycle;
+  readonly hostController: HostController;
   readonly menu: MenuController;
   readonly windowRegistry: WindowRegistry;
   readonly zoomController: WindowZoomController;
+}
+
+interface DeferredStartupPlan {
+  readonly state: BootState;
+  readonly services: {
+    readonly hostController: IpcHostController;
+    readonly menu: HostUpdateMenuSurface;
+  };
+  runBackground(): void;
+}
+
+async function runTestStartupPhases(
+  testHooks: DesktopStartupTestHooks,
+): Promise<DeferredStartupPlan> {
+  initLogger();
+  const state: BootState = {
+    config: testHooks.config,
+    pendingAuthReturnSignal: false,
+    bridge: null,
+  };
+  testHooks.runPreReady();
+  await testHooks.whenReady();
+  await testHooks.runOnReady();
+  const services = await testHooks.runWindowPhase();
+  return {
+    state,
+    services,
+    runBackground: testHooks.runDeferredBackground,
+  };
+}
+
+async function runProductionStartupPhases(): Promise<DeferredStartupPlan> {
+  initLogger();
+  const config = resolveDesktopConfig();
+  const state: BootState = {
+    config,
+    pendingAuthReturnSignal: false,
+    bridge: null,
+  };
+
+  runPreReady(state);
+  await app.whenReady();
+  await runOnReady(state);
+  log.info("[desktop] app ready", {
+    platform: process.platform,
+    environment: config.environment,
+  });
+  const services = await runWindowPhase(state);
+  return {
+    state,
+    services,
+    runBackground: () => runDeferredBackground(state, services),
+  };
 }
 
 // Wrap a step in timing + a best-effort boundary. A non-fatal step throwing
@@ -279,9 +357,6 @@ async function runOnReady(state: BootState): Promise<void> {
     timed("on-ready", "preconnect", () => preconnectTraycerHosts()),
     timed("on-ready", "gpu-info", () => logGpuInfo()),
     timed("on-ready", "crash-dump-prune", () => pruneStaleCrashDumps()),
-    timed("on-ready", "update-preferences", () =>
-      hydrateUpdatePreferences().then(() => undefined),
-    ),
   ]);
 }
 
@@ -399,6 +474,18 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
     readyTimeoutMs: undefined,
     reachabilityProbe: undefined,
   });
+  // Single main-process owner of every host-lifecycle mutation (Host Update
+  // Layer Redesign Tech Plan, "Desktop main: HostController"). `host`
+  // (`HostLifecycle`) stays the read side - metadata-first discovery,
+  // reachability, the renderer-facing snapshot - `hostController` owns every
+  // write.
+  const hostController = new HostController({
+    environment: config.environment,
+    hostLifecycle: host,
+    reachabilityProbe: canReachHostWebsocketUrl,
+    desktopLockWaitMs: DESKTOP_LOCK_WAIT_MS,
+    desktopLockPollIntervalMs: DESKTOP_LOCK_POLL_INTERVAL_MS,
+  });
   const support = new DesktopSupportService({
     appName: appDisplayName,
     host,
@@ -416,6 +503,7 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
   log.debug("[desktop] authn base URL", { authnBaseUrl: config.authnBaseUrl });
   const bridge = new RunnerIpcBridge({
     host,
+    hostController,
     authnBaseUrl: config.authnBaseUrl,
     // Device flow is the only login - there is no loopback redirect_uri to
     // snapshot - so the renderer always falls back to the custom-scheme
@@ -452,8 +540,8 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
     perWindowState,
     tray,
     zoomController: createdZoomController,
-    dispatchRendererCommand: (command, hostUpdateVersion) =>
-      bridge.dispatchMenuCommand(command, hostUpdateVersion) ?? false,
+    dispatchRendererCommand: (command) =>
+      bridge.dispatchMenuCommand(command) ?? false,
     checkForUpdates: () =>
       checkForUpdatesNow(config.isDev, "manual").then(() => undefined),
   });
@@ -499,6 +587,7 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
 
   wireAppLifecycle(state, {
     host,
+    hostController,
     menu,
     windowRegistry,
     bridge,
@@ -508,21 +597,13 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
     quitState: shellQuitState,
   });
 
-  return { host, menu, windowRegistry, zoomController: createdZoomController };
-}
-
-// Reflects the host update availability into the app menu's "Update host"
-// affordance. Shared by the launch probe and the post-auto-update refresh so
-// both keep the menu in lockstep with the cached registry state.
-function applyHostUpdateMenuState(
-  menu: MenuController,
-  state: HostRegistryUpdateState,
-): void {
-  if (state.updateAvailable && state.latestVersion !== null) {
-    menu.setHostUpdateAvailableVersion(state.latestVersion);
-  } else {
-    menu.setHostUpdateAvailableVersion(null);
-  }
+  return {
+    host,
+    hostController,
+    menu,
+    windowRegistry,
+    zoomController: createdZoomController,
+  };
 }
 
 // Auto-check-for-updates gap (Ticket: host-update-race-conditions): the
@@ -550,27 +631,22 @@ const HOST_REGISTRY_PERIODIC_MAX_AGE_MS =
 const HOST_REGISTRY_RESUME_DEBOUNCE_MS = 30_000;
 let lastHostRegistryResumeCheckMs = 0;
 
-// Shared by the launch probe, the periodic timer, and the resume trigger.
-// `refreshRegistryUpdateState` never throws and is internally serialized
-// (`registryRefreshQueue`), so overlapping calls are safe.
-async function refreshHostRegistryIfNotRemoved(
-  services: AppServices,
-  opts: { readonly force: boolean; readonly maxAgeMs: number | null },
-): Promise<void> {
-  if (await isHostRemovedByUser()) return;
-  const result = await refreshRegistryUpdateState(opts);
-  applyHostUpdateMenuState(services.menu, result);
-}
-
-// Deferred, fire-and-forget work - runs after the window is loading and
-// never blocks first paint.
-function runDeferred(state: BootState, services: AppServices): void {
+// The non-converge deferred work is separate so `runDeferred` below remains
+// the narrow production entry point for the launch host-convergence policy.
+// It schedules this background work first (preserving the boot ordering),
+// then always schedules the real launch reconciliation through that entry
+// point. The generic boundary keeps the production types intact while letting
+// the startup composition test drive the entry point with a focused fake.
+function runDeferredBackground(state: BootState, services: AppServices): void {
   startRendererMemorySampler();
-  state.bridge?.disposeFns.push(
-    onHostRegistryUpdateStateChange((result) => {
-      applyHostUpdateMenuState(services.menu, result);
-    }),
-  );
+  if (state.bridge !== null) {
+    const bridge = state.bridge;
+    bridge.disposeFns.push(
+      onHostControllerStatusBroadcast(bridge, (status) => {
+        applyHostUpdateMenuState(services.menu, status);
+      }),
+    );
+  }
 
   // Captured (not just fire-and-forget) so the host auto-update idle gate can
   // wait for discovery to settle before trusting the host snapshot - `timed`
@@ -593,41 +669,36 @@ function runDeferred(state: BootState, services: AppServices): void {
   // respawns crashes itself, but the SUPERVISOR cannot fix the desktop's
   // stale snapshot when the respawned host binds a new port and the watcher
   // edge is missed - the monitor's reload-first convergence covers exactly
-  // that, and only falls back to `respawnHost` when the disk still names an
-  // unreachable host. Started after bootstrap so the initial 60s readiness
-  // wait can't register as an outage.
+  // that, and only falls back to `HostController.recoverIfDown()` when the
+  // disk still names an unreachable host. Started after bootstrap so the
+  // initial 60s readiness wait can't register as an outage.
   void hostReady.then(() => {
     const healthMonitor = startHostHealthMonitor({
       host: services.host,
       intervalMs: undefined,
       probe: undefined,
       readMetadata: undefined,
-      respawn: undefined,
+      respawn: () => respawnIfDown(services.hostController),
     });
     state.bridge?.disposeFns.push(() => healthMonitor.dispose());
   });
 
   // macOS-only: guarantees a busy-preserved install's pending LaunchAgent
-  // revision (see `desktop-install-cloud.js`'s marker + `host-ensure-ipc.ts`'s
-  // `applyPendingLoginItemRevisionIfIdle`) gets applied within this running
-  // session once the host goes idle, not only at the next relaunch - the
-  // renderer's ensure fast path only gets one shot at it per app launch.
-  // Gated on `hostManagesHostLoginItem()` since a non-macOS build, a dev
-  // build, or a build without the in-bundle plist never has SMAppService
-  // registration (or a marker) to refresh in the first place.
+  // revision (see `desktop-install-cloud.js`'s marker +
+  // `HostController.applyPendingLoginItemRevisionIfIdle`) gets applied
+  // within this running session once the host goes idle, not only at the
+  // next relaunch - a renderer-triggered `convergeReady` only gets one shot
+  // at it per app launch. Gated on `hostManagesHostLoginItem()` since a
+  // non-macOS build, a dev build, or a build without the in-bundle plist
+  // never has SMAppService registration (or a marker) to refresh in the
+  // first place.
   if (process.platform === "darwin") {
     void hostReady.then(async () => {
-      const bridge = state.bridge;
-      if (bridge === null) return;
+      if (state.bridge === null) return;
       if (!(await hostManagesHostLoginItem())) return;
       const revisionMonitor = startPendingLoginItemRevisionMonitor({
-        bridge,
+        hostController: services.hostController,
         intervalMs: undefined,
-        environment: undefined,
-        hasPendingRevision: undefined,
-        canReach: undefined,
-        isRefreshQuarantined: undefined,
-        runEnsure: undefined,
       });
       state.bridge?.disposeFns.push(() => revisionMonitor.dispose());
     });
@@ -637,48 +708,22 @@ function runDeferred(state: BootState, services: AppServices): void {
     // `force: true` - matches the app's own `checkForUpdatesNow` on launch
     // (app/updater.ts): always a real probe, never a cache read, so a
     // relaunch shortly after a release still sees it immediately.
-    const result = await refreshRegistryUpdateState({
+    const result = await refreshRegistryUpdateState(services.hostController, {
       force: true,
       maxAgeMs: null,
     });
-    applyHostUpdateMenuState(services.menu, result);
+    // The registry probe's own result only carries version-comparison state
+    // (no activation domain) - the menu label is derived from a fresh
+    // `getStatus()` read taken right after, since the probe's background
+    // `stageLatest()` may have just changed `stagedVersion`.
+    const status = await services.hostController.getStatus();
+    applyHostUpdateMenuState(services.menu, status);
     log.debug("[host-registry] launch probe complete", {
       reachable: result.reachable,
       latestVersion: result.latestVersion,
       installedVersion: result.installedVersion,
       updateAvailable: result.updateAvailable,
     });
-    // Coordinated host auto-update: the relaunch after a desktop self-update
-    // lands here, so an idle host tracks the app instead of drifting behind.
-    // Idle-gated and fail-open - a busy/failed attempt just retries next time.
-    // Skipped entirely once the user removed the host on this device, so a
-    // stray update probe never reinstalls what they uninstalled. Also
-    // skipped if the bridge somehow isn't installed yet (it always is by
-    // this deferred phase in practice) since the reconciler needs it to
-    // broadcast operation status.
-    const bridge = state.bridge;
-    if (
-      result.updateAvailable &&
-      bridge !== null &&
-      !(await isHostRemovedByUser())
-    ) {
-      const outcome = await reconcileHostAutoUpdate(
-        "launch",
-        defaultHostAutoUpdateDeps(
-          services.host,
-          LAUNCH_HOST_UPDATE_TIMEOUT_MS,
-          () => hostReady,
-          bridge,
-        ),
-      );
-      log.info("[host-auto-update] launch reconcile complete", { outcome });
-      if (outcome === "updated") {
-        applyHostUpdateMenuState(
-          services.menu,
-          await refreshRegistryUpdateState({ force: false, maxAgeMs: null }),
-        );
-      }
-    }
   });
 
   void timed("deferred", "cli-reconcile", async () => {
@@ -743,10 +788,11 @@ function runDeferred(state: BootState, services: AppServices): void {
         HOST_REGISTRY_RESUME_DEBOUNCE_MS
       ) {
         lastHostRegistryResumeCheckMs = nowMs;
-        void refreshHostRegistryIfNotRemoved(services, {
-          force: true,
-          maxAgeMs: null,
-        });
+        void refreshHostRegistryIfNotRemoved(
+          services.hostController,
+          services.menu,
+          { force: true, maxAgeMs: null },
+        );
       }
     }),
   );
@@ -759,15 +805,41 @@ function runDeferred(state: BootState, services: AppServices): void {
   // poll interval, so it only skips a network hit when a launch/resume probe
   // already refreshed the cache more recently than this tick's own cadence.
   setInterval(() => {
-    void refreshHostRegistryIfNotRemoved(services, {
-      force: false,
-      maxAgeMs: HOST_REGISTRY_PERIODIC_MAX_AGE_MS,
-    });
+    void refreshHostRegistryIfNotRemoved(
+      services.hostController,
+      services.menu,
+      {
+        force: false,
+        maxAgeMs: HOST_REGISTRY_PERIODIC_MAX_AGE_MS,
+      },
+    );
   }, HOST_REGISTRY_PERIODIC_CHECK_INTERVAL_MS);
+}
+
+// Deferred, fire-and-forget launch convergence. This is deliberately a
+// production entry point rather than a controller-level policy test: its
+// caller is `runDesktopStartup`, and it invokes the real reconciliation that
+// determines whether a launch is allowed to apply, activate, or do nothing.
+export function runDeferred<
+  TState,
+  TServices extends {
+    readonly hostController: IpcHostController;
+    readonly menu: HostUpdateMenuSurface;
+  },
+>(
+  state: TState,
+  services: TServices,
+  runBackground: (state: TState, services: TServices) => void,
+): void {
+  runBackground(state, services);
+  void timed("deferred", "host-launch-converge", () =>
+    runLaunchHostConvergeReconcile(services.hostController, services.menu),
+  );
 }
 
 interface LifecycleServices {
   readonly host: HostLifecycle;
+  readonly hostController: HostController;
   readonly menu: MenuController;
   readonly windowRegistry: WindowRegistry;
   readonly bridge: RunnerIpcBridge;
@@ -873,30 +945,23 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
         teardownShellObservers();
         return;
       }
-      // First pass: attempt a coordinated, idle-gated host update before the
-      // desktop swaps its own bytes, drain the renderer's freshest per-window
+      // First pass: never START a new host mutation this late - only drain
+      // whatever `HostController` mutation is already in flight (bounded),
+      // so the desktop doesn't swap its own bytes out from under a
+      // subprocess mid-swap. Drain the renderer's freshest per-window
       // projection into the state store, then re-quit. Fail-open at every
-      // step - a busy host, failure, or the bounded CLI timeout all fall
-      // through to the quit, with the next-launch reconcile as the guaranteed
-      // fallback. The host update runs as a subprocess that would die with
-      // us, so we must hold the quit until it settles rather than racing it.
+      // step - a wedged mutation, failure, or the bounded drain timeout all
+      // fall through to the quit; the launch-time `applyStaged` reconcile is
+      // the guaranteed fallback either way.
       quitTimeHostUpdateStarted = true;
       event.preventDefault();
       log.info(
-        "[desktop] before-quit - install pending; attempting idle host update first",
+        "[desktop] before-quit - install pending; draining any in-flight host mutation first",
       );
       void runUpdateInstallQuitSequence({
-        reconcileHostUpdate: () =>
-          reconcileHostAutoUpdate(
-            "quit-install",
-            defaultHostAutoUpdateDeps(
-              services.host,
-              QUIT_HOST_UPDATE_TIMEOUT_MS,
-              // The host was discovered long ago - no need to wait at quit
-              // time.
-              () => Promise.resolve(),
-              services.bridge,
-            ),
+        drainHostMutation: () =>
+          services.hostController.awaitMutationLaneIdle(
+            QUIT_HOST_MUTATION_DRAIN_TIMEOUT_MS,
           ),
         isInstallPending: isInstallingUpdate,
         drainRendererProjection: () =>

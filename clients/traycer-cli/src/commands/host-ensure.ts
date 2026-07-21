@@ -44,6 +44,7 @@ export function buildHostEnsureCommand(args: HostEnsureArgs): CommandFn {
         action: result.action,
         serviceLifecycle: result.serviceLifecycle,
         postSwapError: result.postSwapError,
+        installGeneration: result.installGeneration,
       },
       human: buildHuman(result),
       exitCode: 0,

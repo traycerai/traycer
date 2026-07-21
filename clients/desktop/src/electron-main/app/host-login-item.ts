@@ -53,16 +53,20 @@ const LEGACY_HOST_SERVICE_NAME = `${CLI_HOST_LABEL}.plist`;
 
 // Every SMAppService mutation for the host label must flow through this
 // promise tail. `registerHostLoginItem` is a non-atomic bootout → unregister
-// → register sequence; `ensureHost`, the pending-revision monitor, and
-// `respawnHost` can all need it independently. Letting any two of them cross
-// that boundary at the same time can leave BTM with the stale LWCR this module
-// is designed to clear.
+// → register sequence; `HostController`'s `convergeReady`, `applyStaged`,
+// `activateInstalled`, `installVersion`, `respawn`, `recoverIfDown`,
+// `freePortAndRestart` (all via `runLockedMacActivationCycle`), and
+// `applyPendingLoginItemRevisionIfIdle` can all need it independently.
+// Letting any two of them cross that boundary at the same time can leave BTM
+// with the stale LWCR this module is designed to clear.
 //
-// This intentionally serializes rather than coalesces. The callers own their
-// own policies (force-ensure handling, monitor failure budget, and respawn
-// dedup/backoff), so a second caller must receive its own eventual result
-// after the first cycle settles. The tail always resolves so a failed cycle
-// never wedges later callers.
+// This intentionally serializes rather than coalesces. Each caller is
+// already independently exclusive at the `HostController` level - the
+// mutation lane for enqueued intents, the desktop cli-lock for
+// `applyPendingLoginItemRevisionIfIdle` - so this tail is defense-in-depth
+// against the specific SMAppService boundary, not the primary exclusion
+// mechanism. The tail always resolves so a failed cycle never wedges later
+// callers.
 let hostLoginItemRegistrationTail: Promise<void> = Promise.resolve();
 
 export function withHostLoginItemRegistrationLock<Result>(
@@ -238,11 +242,12 @@ const REGISTER_STATUS_POLL_INTERVAL_MS = 100;
  */
 // `revalidateBeforeBootout`, when provided, is called INSIDE the locked
 // section immediately before `bootoutStaleAgent()` - not just at the call
-// site - because a caller's own idle/busy check (e.g. the pending-revision
-// fast path's `probeHostActivityBusy`) can go stale while queued behind
-// another in-flight cycle (`respawnHost` and `runEnsureHost` share this same
-// lock). Without a re-check here, a cycle that was idle when queued could
-// still boot out a host that picked up real work while waiting its turn.
+// site - because a caller's own idle/busy check (e.g.
+// `HostController.applyPendingLoginItemRevisionIfIdle`'s `probeHostBusyVerdict`
+// probe) can go stale while queued behind another in-flight cycle (every
+// `HostController` SMAppService section shares this same lock). Without a
+// re-check here, a cycle that was idle when queued could still boot out a
+// host that picked up real work while waiting its turn.
 // Return `false` from the callback to defer without mutating anything;
 // `registerHostLoginItemUnserialized` reports that back as `"deferred-busy"`.
 export function registerHostLoginItem(

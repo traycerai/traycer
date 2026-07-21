@@ -9,7 +9,6 @@ import {
   cliPostFinalizeMarkerPath,
   ensureCliInstallHomeDir,
 } from "../store/paths";
-import { windowsTaskName, type ServiceLabel } from "../service";
 
 // Pending CLI upgrade finalize - detached helper path.
 //
@@ -36,28 +35,41 @@ import { windowsTaskName, type ServiceLabel } from "../service";
 //      "scheduled-helper" and exits, releasing its lock on the live
 //      binary.
 //   3. The helper polls the parent pid (sub-second). Once the CLI
-//      process is gone it atomically replaces the live binary
-//      (`Move-Item -Force` / `mv -f`) and starts/restarts the OS
-//      service.
-//   4. The helper writes a marker file at
+//      process is gone it hands off to the STAGED binary's own hidden
+//      `cli finalize-upgrade` command (`commands/cli-finalize-upgrade.ts`)
+//      rather than swapping the binary and starting the service itself.
+//      The staged binary is a complete, independently-runnable
+//      executable distinct from the live path being replaced, so
+//      invoking it gives the swap its own PID + start-time identity to
+//      acquire the SAME `cli-lock` every other actor uses (Host Update
+//      Layer Redesign Tech Plan, "Windows CLI-finalize helper") -
+//      reimplementing the lock's breaking-arbitration protocol in raw
+//      PowerShell/shell would duplicate correctness-critical logic with
+//      no way to test it. The swap + service start can therefore never
+//      race another actor's apply/install/activation critical section.
+//   4. `cli finalize-upgrade` writes a marker file at
 //      `~/.traycer/cli/post-finalize.json` describing the outcome
-//      (swapped / swap-failed / parent-still-alive).
+//      (swapped / swap-failed), or writes nothing if it timed out
+//      waiting for the lock - `pendingUpgrade` stays populated in that
+//      case, so the next `host restart` retries the whole flow. The
+//      wrapping script writes its own "parent-still-alive" marker
+//      directly (the staged binary is never invoked in that case).
 //   5. The next CLI invocation - Doctor, `host restart`, etc. -
 //      calls `reconcilePostFinalizeMarker(environment)`, which folds the
 //      marker into the install manifest (clearing pendingUpgrade and
 //      updating version on success) and deletes the marker.
 //
 // Fail-safe: if the helper cannot complete (the script fails to
-// schedule, the move fails, the OS service start fails), the marker
-// either isn't written or records "swap-failed", and `pendingUpgrade`
-// stays populated. Doctor continues to emit `CLI_UPGRADE_PENDING` and
-// Settings/Doctor surface it via the existing card.
+// schedule, the swap fails, the lock times out, the OS service start
+// fails), the marker either isn't written or records "swap-failed", and
+// `pendingUpgrade` stays populated. Doctor continues to emit
+// `CLI_UPGRADE_PENDING` and Settings/Doctor surface it via the existing
+// card.
 
 export interface ScheduleHelperOptions {
   readonly environment: Environment;
   readonly stagedBinaryPath: string;
   readonly livePath: string;
-  readonly serviceLabel: ServiceLabel;
   // pid of the current CLI process. The helper waits for this pid to
   // exit before attempting the binary swap.
   readonly parentPid: number;
@@ -146,7 +158,6 @@ export async function scheduleFinalizationHelper(
           parentPid: opts.parentPid,
           stagedBinaryPath: opts.stagedBinaryPath,
           livePath: opts.livePath,
-          serviceLabel: opts.serviceLabel,
           markerPath,
           timeoutSeconds: opts.parentExitTimeoutSeconds,
         })
@@ -154,7 +165,6 @@ export async function scheduleFinalizationHelper(
           parentPid: opts.parentPid,
           stagedBinaryPath: opts.stagedBinaryPath,
           livePath: opts.livePath,
-          serviceLabel: opts.serviceLabel,
           markerPath,
           timeoutSeconds: opts.parentExitTimeoutSeconds,
         });
@@ -239,30 +249,24 @@ function buildSpawnDescriptor(opts: {
   return { command: "/bin/sh", args: [opts.scriptPath] };
 }
 
-// PowerShell helper. Polls `Get-Process -Id <pid>` until the parent
-// CLI exits, then `Move-Item -Force` swaps the binary and
-// `Start-Service` / schtasks /Run kicks the supervisor back up.
+// PowerShell helper. Polls `Get-Process -Id <pid>` until the parent CLI
+// exits, then hands off the binary swap + service start to the staged
+// CLI's own hidden `cli finalize-upgrade` command - see the module doc
+// comment above for why (own PID + start-time identity for the cli-lock
+// acquisition).
 function renderWindowsHelperScript(opts: {
   readonly parentPid: number;
   readonly stagedBinaryPath: string;
   readonly livePath: string;
-  readonly serviceLabel: ServiceLabel;
   readonly markerPath: string;
   readonly timeoutSeconds: number;
 }): string {
-  // The Windows service controller registers a Scheduled Task per
-  // ServiceLabel - schtasks /Run is the cross-version equivalent of
-  // Start-Service for a per-user task. We `try` Start-Service for
-  // forward-compat with future installs and fall back to schtasks.
-  const taskName = windowsTaskName(opts.serviceLabel);
   return `# traycer-cli pending-upgrade finalize helper (Windows)
 $ErrorActionPreference = "Continue"
 $ParentPid = ${opts.parentPid}
 $StagedBinary = ${psString(opts.stagedBinaryPath)}
 $LiveBinary = ${psString(opts.livePath)}
 $MarkerPath = ${psString(opts.markerPath)}
-$TaskName = ${psString(taskName)}
-$ServiceId = ${psString(opts.serviceLabel.id)}
 $TimeoutSec = ${opts.timeoutSeconds}
 
 function Write-Marker([hashtable]$Payload) {
@@ -293,40 +297,13 @@ if (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue) {
   exit 0
 }
 
-# 2. Swap the live binary. Move-Item -Force calls MoveFileEx with
-# MOVEFILE_REPLACE_EXISTING; atomic on NTFS for files on the same
-# volume - which they are, since cli-upgrade staged the binary
-# next to the live path on the same filesystem.
-try {
-  Move-Item -Force -LiteralPath $StagedBinary -Destination $LiveBinary
-} catch {
-  Write-Marker @{
-    status = "swap-failed";
-    errorMessage = $_.Exception.Message;
-  }
-  exit 0
-}
-
-# 3. Best-effort service start. The swap is already committed; if
-# we can't start the service the existing SERVICE_STOPPED Doctor
-# issue will surface it.
-$serviceErr = $null
-try {
-  Start-Service -Name $ServiceId -ErrorAction Stop
-} catch {
-  $serviceErr = $_.Exception.Message
-  try {
-    & schtasks.exe /Run /TN $TaskName | Out-Null
-    if ($LASTEXITCODE -eq 0) { $serviceErr = $null }
-  } catch {
-    # Keep the original Start-Service error message.
-  }
-}
-
-Write-Marker @{
-  status = "swapped";
-  serviceStartError = $serviceErr;
-}
+# 2. Hand off the binary swap + service start to the staged CLI's own
+# hidden 'cli finalize-upgrade' command. It acquires the cli-lock under
+# its own process identity (this invocation's PID + start time), swaps
+# the binary, starts the service, and writes its own post-finalize
+# marker (or writes nothing and defers to the next 'host restart' if
+# the lock acquisition times out) - this script's job ends here.
+& $StagedBinary cli finalize-upgrade *> $null
 exit 0
 `;
 }
@@ -341,12 +318,15 @@ function psString(value: string): string {
 // POSIX helper. We don't strictly need a detached helper on POSIX
 // (rename succeeds on open files there), but the same shape is
 // useful for read-only-install cases and lets test rigs exercise
-// the marker reconciler on a POSIX dev machine.
+// the marker reconciler on a POSIX dev machine. Once the parent CLI
+// exits, the binary swap + service start hand off to the staged CLI's
+// own hidden `cli finalize-upgrade` command - see the module doc
+// comment above for why (own PID + start-time identity for the
+// cli-lock acquisition).
 function renderPosixHelperScript(opts: {
   readonly parentPid: number;
   readonly stagedBinaryPath: string;
   readonly livePath: string;
-  readonly serviceLabel: ServiceLabel;
   readonly markerPath: string;
   readonly timeoutSeconds: number;
 }): string {
@@ -357,14 +337,14 @@ PARENT_PID=${shString(String(opts.parentPid))}
 STAGED=${shString(opts.stagedBinaryPath)}
 LIVE=${shString(opts.livePath)}
 MARKER=${shString(opts.markerPath)}
-SERVICE_ID=${shString(opts.serviceLabel.id)}
 TIMEOUT=${shString(String(opts.timeoutSeconds))}
 
-# JSON construction: prefer python3 (universally available on standard
-# macOS / Linux release runners, including hosted GitHub runners) so
-# trusted-comment edge characters in STAGED / LIVE never produce a
-# malformed marker. Falls back to a strict-escape printf path that
-# rejects \\b\\f\\r and replaces \\ " \\n \\t per RFC 8259 §7.
+# JSON construction for the parent-still-alive marker: prefer python3
+# (universally available on standard macOS / Linux release runners,
+# including hosted GitHub runners) so trusted-comment edge characters
+# in STAGED / LIVE never produce a malformed marker. Falls back to a
+# strict-escape printf path that rejects \\b\\f\\r and replaces
+# \\ " \\n \\t per RFC 8259 §7.
 write_marker() {
   status="$1"; errmsg="$2"
   ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -409,21 +389,13 @@ if kill -0 "$PARENT_PID" 2>/dev/null; then
   exit 0
 fi
 
-if mv -f "$STAGED" "$LIVE"; then
-  write_marker "swapped" ""
-else
-  write_marker "swap-failed" "mv -f $STAGED $LIVE failed"
-  exit 0
-fi
-
-# Best-effort service restart. macOS LaunchAgents and systemd user
-# units both expose the label-as-id; failure here is non-fatal -
-# the Doctor SERVICE_STOPPED issue surfaces it.
-if command -v launchctl >/dev/null 2>&1; then
-  launchctl kickstart -k "gui/$(id -u)/$SERVICE_ID" >/dev/null 2>&1 || true
-elif command -v systemctl >/dev/null 2>&1; then
-  systemctl --user restart "$SERVICE_ID" >/dev/null 2>&1 || true
-fi
+# Hand off the binary swap + service start to the staged CLI's own
+# hidden 'cli finalize-upgrade' command. It acquires the cli-lock under
+# its own process identity (this invocation's PID + start time), swaps
+# the binary, starts the service, and writes its own post-finalize
+# marker (or writes nothing and defers to the next 'host restart' if
+# the lock acquisition times out) - this script's job ends here.
+"$STAGED" cli finalize-upgrade >/dev/null 2>&1
 exit 0
 `;
 }

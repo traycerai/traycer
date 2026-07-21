@@ -293,12 +293,13 @@ export type MicrophoneAccessStatus = "granted" | "denied";
 export interface IFileDropHost {
   resolveDroppedFilePaths(files: readonly File[]): Promise<readonly string[]>;
   /**
-   * Return durable paths for drops that expose only a `file://` URL with no
-   * `File` object. Stable workspace paths pass through unchanged. Known
-   * ephemeral sources (e.g. the macOS screenshot thumbnail staging path) are
-   * copied into an app-managed temp location before the OS can reclaim them.
-   * Implementations that cannot copy return the original path so the caller is
-   * never worse off.
+   * Copy dropped source paths into a stable, app-managed temp file and return
+   * the copied paths. Used for drops that expose only a `file://` URL with no
+   * `File` object (e.g. the macOS screenshot thumbnail), whose source file is
+   * ephemeral - the OS may reclaim it before the terminal program reads the
+   * pasted path. Copying at drop time, while the source still exists, yields a
+   * durable path. Implementations that cannot copy (or whose source is gone)
+   * return the original path so the caller is never worse off.
    */
   copyDroppedFilePaths(paths: readonly string[]): Promise<readonly string[]>;
   /**
@@ -503,8 +504,8 @@ export interface ITraycerCli {
 }
 
 /**
- * Snapshot of the OS-managed host service, mirrored from the shell's
- * `ServiceController.status()` call. Field semantics:
+ * Renderer display snapshot derived from the local host publication and the
+ * committed install record. Field semantics:
  *   - `state`: `running` when the service is registered AND its PID
  *     metadata describes a live process; `stopped` when registered but the
  *     PID is missing or stale; `not-installed` when the manifest is absent.
@@ -520,7 +521,6 @@ export interface ServiceStatusSnapshot {
 }
 
 export interface IServiceHost {
-  status(): Promise<ServiceStatusSnapshot>;
   install(): Promise<void>;
   uninstall(purge: boolean): Promise<void>;
   start(): Promise<void>;
@@ -761,44 +761,6 @@ export interface LocalHostSnapshot {
  * shapes from the platform contract instead of reaching across into the
  * desktop workspace.
  */
-export interface HostProgressEvent {
-  readonly operationId: string;
-  readonly stage: string;
-  readonly percent: number | null;
-  readonly bytes: number | null;
-  readonly totalBytes: number | null;
-  readonly message: string | null;
-}
-
-export type HostOperationKind =
-  | "install"
-  | "update"
-  | "register-service"
-  | "ensure"
-  | "restart"
-  | "free-port-and-restart";
-
-/**
- * Canonical cross-surface snapshot of the single host mutation currently
- * running (if any), mirrored from Desktop main to every renderer window via
- * `hostOperationStatusChange`. Unlike `HostProgressEvent` - which is scoped to
- * the `operationId` of the caller that started it - this is the single source
- * of truth every UI surface (landing-page banner, Settings → Host, a second
- * window) reads to disable its trigger and render progress, regardless of
- * which surface (or the background auto-update reconciler) started the
- * operation. `null` means no host mutation is in flight.
- */
-export interface HostOperationStatus {
-  readonly operationId: string;
-  readonly kind: HostOperationKind;
-  readonly stage: string | null;
-  readonly percent: number | null;
-  readonly bytes: number | null;
-  readonly totalBytes: number | null;
-  readonly message: string | null;
-  readonly startedAt: string;
-}
-
 export interface HostInstallSourceTag {
   readonly kind: "registry" | "local-file";
   readonly value: string;
@@ -897,102 +859,6 @@ export interface HostAvailableSnapshot {
   readonly versions: readonly HostAvailableVersionEntry[];
 }
 
-/**
- * Desktop's user-facing Host update channel intentionally admits only stable
- * SemVer releases and the project's exact `rc.N` form. The CLI keeps its
- * broader operator-facing prerelease inspection surface.
- */
-const SEMVER_NUMERIC_IDENTIFIER = "(?:0|[1-9]\\d*)";
-const SEMVER_CORE = `${SEMVER_NUMERIC_IDENTIFIER}\\.${SEMVER_NUMERIC_IDENTIFIER}\\.${SEMVER_NUMERIC_IDENTIFIER}`;
-const SEMVER_BUILD_METADATA = "(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?";
-const CONSENTED_HOST_CHANNEL_VERSION = new RegExp(
-  `^${SEMVER_CORE}(?:-rc\\.${SEMVER_NUMERIC_IDENTIFIER})?${SEMVER_BUILD_METADATA}$`,
-);
-const RELEASE_CANDIDATE_HOST_VERSION = new RegExp(
-  `^${SEMVER_CORE}-rc\\.${SEMVER_NUMERIC_IDENTIFIER}${SEMVER_BUILD_METADATA}$`,
-);
-
-export function isConsentedHostChannelVersion(version: string): boolean {
-  return CONSENTED_HOST_CHANNEL_VERSION.test(version);
-}
-
-export function isReleaseCandidateHostVersion(version: string): boolean {
-  return RELEASE_CANDIDATE_HOST_VERSION.test(version);
-}
-
-interface HostSemanticVersion {
-  readonly core: readonly number[];
-  readonly prerelease: readonly string[];
-}
-
-const SEMVER_IDENTIFIER = "(?:0|[1-9]\\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)";
-const HOST_SEMVER = new RegExp(
-  `^${SEMVER_CORE}(?:-(${SEMVER_IDENTIFIER}(?:\\.${SEMVER_IDENTIFIER})*))?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$`,
-);
-
-function parseHostSemanticVersion(version: string): HostSemanticVersion | null {
-  const match = HOST_SEMVER.exec(version);
-  if (match === null) return null;
-  const coreEnd = version.search(/[-+]/);
-  const core = (coreEnd === -1 ? version : version.slice(0, coreEnd))
-    .split(".")
-    .map((identifier) => Number.parseInt(identifier, 10));
-  const prerelease = match[1]?.split(".") ?? [];
-  return { core, prerelease };
-}
-
-/**
- * Whether a version is a complete SemVer identifier. This is intentionally
- * broader than the app-facing stable/RC consent policy: CLI operator commands
- * may address other valid prerelease labels.
- */
-export function isHostSemanticVersion(version: string): boolean {
-  return parseHostSemanticVersion(version) !== null;
-}
-
-/**
- * Full SemVer precedence comparison (spec §11), including prereleases and
- * excluding build metadata. Invalid input returns 0 so discovery callers do
- * not advertise an update they cannot justify; callers that need validation
- * should pair this with {@link isHostSemanticVersion}.
- */
-export function compareHostVersions(a: string, b: string): number {
-  const left = parseHostSemanticVersion(a);
-  const right = parseHostSemanticVersion(b);
-  if (left === null || right === null) return 0;
-  for (let index = 0; index < left.core.length; index += 1) {
-    if (left.core[index] !== right.core[index]) {
-      return left.core[index] > right.core[index] ? 1 : -1;
-    }
-  }
-  if (left.prerelease.length === 0 && right.prerelease.length === 0) return 0;
-  if (left.prerelease.length === 0) return 1;
-  if (right.prerelease.length === 0) return -1;
-  const length = Math.max(left.prerelease.length, right.prerelease.length);
-  for (let index = 0; index < length; index += 1) {
-    if (index >= left.prerelease.length) return -1;
-    if (index >= right.prerelease.length) return 1;
-    const leftIdentifier = left.prerelease[index];
-    const rightIdentifier = right.prerelease[index];
-    const leftNumeric = /^\d+$/.test(leftIdentifier);
-    const rightNumeric = /^\d+$/.test(rightIdentifier);
-    if (leftNumeric && rightNumeric) {
-      const leftNumber = Number.parseInt(leftIdentifier, 10);
-      const rightNumber = Number.parseInt(rightIdentifier, 10);
-      if (leftNumber !== rightNumber) {
-        return leftNumber > rightNumber ? 1 : -1;
-      }
-    } else if (leftNumeric) {
-      return -1;
-    } else if (rightNumeric) {
-      return 1;
-    } else if (leftIdentifier !== rightIdentifier) {
-      return leftIdentifier > rightIdentifier ? 1 : -1;
-    }
-  }
-  return 0;
-}
-
 export interface HostAvailableVersionsInput {
   readonly includePreReleases: boolean;
 }
@@ -1021,14 +887,120 @@ export interface HostRegistryUpdateState {
   readonly updateAvailable: boolean;
   readonly reachable: boolean;
   readonly errorMessage: string | null;
-  // The release channel this state was resolved under. A push-based consumer
-  // must file the state against the channel that *produced* it rather than
-  // whichever channel the consumer currently believes is active - the two
-  // broadcasts that follow a channel change (the app-update snapshot, then
-  // this) are separate events, so a consumer can observe this one before it
-  // has re-rendered with the new channel.
-  readonly includePreReleases: boolean;
 }
+
+/**
+ * Renderer-facing mirror of `HostController`'s canonical two-lane status
+ * (Host Update Layer Redesign Tech Plan, "Desktop main: HostController" >
+ * "Canonical status"). Source of truth is
+ * `clients/desktop/src/electron-main/host/host-controller-types.ts`; this is
+ * the renderer-safe copy, following the same duplication pattern as every
+ * other host-management type in this file (mirrors the NDJSON/controller
+ * shape so `gui-app` never imports across the desktop-main boundary).
+ */
+export interface MutationProgress {
+  readonly stage: string | null;
+  readonly percent: number | null;
+  readonly bytes: number | null;
+  readonly totalBytes: number | null;
+  readonly message: string | null;
+}
+
+export type MutationKind =
+  | "ensure"
+  | "apply"
+  | "activate"
+  | "install"
+  | "register"
+  | "deregister"
+  | "respawn"
+  | "recoverIfDown"
+  | "freePortAndRestart"
+  | "uninstallHost"
+  | "removeTraycer";
+
+export interface MutationLaneStatus {
+  readonly kind: MutationKind;
+  readonly progress: MutationProgress | null;
+  readonly startedAt: string;
+}
+
+export interface DownloadProgress {
+  readonly percent: number | null;
+  readonly bytes: number | null;
+  readonly totalBytes: number | null;
+}
+
+export interface DownloadLaneStatus {
+  readonly version: string;
+  readonly progress: DownloadProgress | null;
+  readonly lastError: string | null;
+}
+
+export type HostActivationState =
+  "activated" | "pendingActivation" | "activationUnknown" | "unavailable";
+
+export interface HostControllerStatus {
+  readonly download: DownloadLaneStatus | null;
+  readonly mutation: MutationLaneStatus | null;
+  readonly installedVersion: string | null;
+  readonly latestVersion: string | null;
+  readonly stagedVersion: string | null;
+  readonly installedRuntimeVersion: string | null;
+  readonly runningRuntimeVersion: string | null;
+  readonly updateReady: boolean;
+  readonly activation: HostActivationState;
+  readonly reachable: boolean;
+  readonly removedByUser: boolean;
+  readonly checkedAt: string;
+}
+
+// Pre-commit busy (CLI-owned apply/pin refused before the stop):
+// `"retry-with-force"` - Force re-submits the same intent with `force`.
+// Post-commit busy (packaged macOS, bytes already committed):
+// `"activate"` - Force submits `activateInstalled{force}`, never a retry
+// of the consumed apply/pin.
+export type BusyContinuation = "retry-with-force" | "activate";
+
+// Per-intent result. Every mutation intent resolves ONE of these - the
+// lane itself never rejects ("wait-never-reject"); a busy/deferred/failed
+// outcome is a normal resolved value the calling surface renders.
+export type MutationOutcome<TOk> =
+  | { readonly kind: "ok"; readonly value: TOk }
+  | {
+      readonly kind: "busy";
+      readonly continuation: BusyContinuation;
+      readonly message: string;
+    }
+  | { readonly kind: "deferred"; readonly message: string }
+  | { readonly kind: "stage-fingerprint-mismatch"; readonly message: string }
+  | { readonly kind: "installed-not-converged"; readonly message: string }
+  | { readonly kind: "failed"; readonly message: string };
+
+export interface ConvergeReadyOk {
+  readonly running: boolean;
+  readonly version: string | null;
+}
+
+export interface ApplyStagedOk {
+  readonly appliedVersion: string;
+  readonly runningActivated: boolean;
+}
+
+export interface ActivateInstalledOk {
+  readonly activated: boolean;
+}
+
+export interface InstallVersionOk {
+  readonly installedVersion: string;
+  readonly runningActivated: boolean;
+}
+
+export interface ServiceRegistrationOk {
+  readonly registered: boolean;
+}
+
+export type ApplyStagedTrigger = "launch" | "manual";
 
 export interface HostUninstallResult {
   readonly removedInstallDir: boolean;
@@ -1109,20 +1081,42 @@ export interface CliInstallManifestSnapshot {
  * for every NDJSON `progress` event the CLI emits along the way.
  */
 export interface IHostManagement {
-  readonly installHost: (input: {
-    readonly version: string | null;
-    readonly onProgress: ((event: HostProgressEvent) => void) | null;
-  }) => Promise<HostInstallResult>;
-  // `expectedVersion` is the exact host version the surface that triggered
-  // this update was showing the user ("Update to 1.4.2", the Updates row's
-  // `v1.4.2`, the banner). The shell re-resolves the registry target under the
-  // *current* release channel and refuses when the two disagree, so a channel
-  // switch racing the click can never install a version the user never
-  // confirmed. `null` only for callers with no version on screen.
-  readonly updateHost: (input: {
-    readonly expectedVersion: string | null;
-    readonly onProgress: ((event: HostProgressEvent) => void) | null;
-  }) => Promise<HostInstallResult>;
+  // Two-lane canonical status (Host Update Layer Redesign Tech Plan). Read
+  // once on mount to prime the shared query cache; live updates arrive via
+  // the desktop-only `hostControllerStatus` push bridge (see
+  // `HostControllerStatusListener`) - the mutation lane pushes on every
+  // progress/status change, the download lane is polled internally by the
+  // desktop main process (it has no live subscription in `HostController`
+  // itself; see `host-controller-status-broadcast.ts`).
+  readonly getHostControllerStatus: () => Promise<HostControllerStatus>;
+  // Idempotently converges the host to reachable (post-auth provisioning,
+  // manual retry, Force restart). `force` skips the busy check.
+  readonly convergeReady: (
+    force: boolean,
+  ) => Promise<MutationOutcome<ConvergeReadyOk>>;
+  // Applies the currently-staged version. `trigger` distinguishes a
+  // boot-time/idle-gated apply from a manual (banner/menu) click - both
+  // resolve the same `MutationOutcome`, but the caller's UI treats a busy
+  // outcome differently (gate progress vs. Force/Defer dialog).
+  readonly applyStaged: (
+    trigger: ApplyStagedTrigger,
+    force: boolean,
+  ) => Promise<MutationOutcome<ApplyStagedOk>>;
+  // Activates an already-installed-but-not-running-activated record
+  // (packaged-macOS post-commit activation, or clearing
+  // pendingActivation/activationUnknown debt). `force` is the Force
+  // continuation after a busy `applyStaged`/pin outcome that carried
+  // `continuation: "activate"`.
+  readonly activateInstalled: (
+    force: boolean,
+  ) => Promise<MutationOutcome<ActivateInstalledOk>>;
+  // Pins an explicit version (incl. downgrades), bypassing the staged
+  // update. `force` is the Force continuation after a busy outcome that
+  // carried `continuation: "retry-with-force"`.
+  readonly installVersion: (
+    pin: string,
+    force: boolean,
+  ) => Promise<MutationOutcome<InstallVersionOk>>;
   readonly uninstallHost: (input: {
     readonly all: boolean;
   }) => Promise<HostUninstallResult>;
@@ -1145,28 +1139,19 @@ export interface IHostManagement {
     input: HostAvailableVersionsInput,
   ) => Promise<HostAvailableSnapshot>;
   readonly installedRecord: () => Promise<HostInstalledRecord | null>;
-  readonly registerService: (input: {
-    readonly onProgress: ((event: HostProgressEvent) => void) | null;
-  }) => Promise<void>;
-  // Post-auth provisioning: idempotently ensure the host is installed,
-  // registered, and running. The desktop delegates the whole lifecycle to
-  // the CLI (`traycer host ensure`) and streams progress; a fast no-op
-  // when the persistent host is already reachable.
-  readonly ensureHost: (input: {
-    readonly onProgress: ((event: HostProgressEvent) => void) | null;
-    // `true` = the desktop "Force restart" (skip the busy check and restart a
-    // running host unconditionally). Normal/Retry ensures pass `false`.
-    readonly force: boolean;
-  }) => Promise<HostEnsureResult>;
+  readonly registerService: () => Promise<
+    MutationOutcome<ServiceRegistrationOk>
+  >;
   readonly deregisterService: () => Promise<void>;
+  // Forces (or, on cache hit, reuses) a network registry probe -
+  // "Check now"/"Retry" on Settings → Host's Updates row. Distinct from
+  // `getHostControllerStatus`: this hits the network and reports
+  // probe-specific reachability/error state; it does not gate any
+  // surface's visibility (that's `HostControllerStatus.updateReady` /
+  // `.activation` now - "quiet until ready", Tech Plan D5).
   readonly registryCheck: (input: {
     readonly force: boolean;
   }) => Promise<HostRegistryUpdateState>;
-  // Current cross-surface host operation status (or `null` when idle), read
-  // once on mount to prime the shared query cache; live updates arrive via
-  // the desktop-only `hostOperationStatus` push bridge (see
-  // `HostOperationStatusListener`).
-  readonly getOperationStatus: () => Promise<HostOperationStatus | null>;
   readonly freePortAndRestart: (
     input: FreePortAndRestartInput,
   ) => Promise<FreePortAndRestartInput>;
