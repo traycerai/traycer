@@ -1,11 +1,13 @@
 import { useCallback } from "react";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
   ProviderId,
   ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type { ModelOption } from "@/components/home/data/landing-options";
-import { useTabProvidersList } from "@/hooks/providers/use-tab-providers-list-query";
+import { type HostRpcRegistry } from "@/lib/host";
+import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import { useRateLimitSwitchPromptDismissalsStore } from "@/stores/rate-limits/rate-limit-switch-prompt-dismissals-store";
 import { profileCommitId } from "@/components/providers/provider-profile-model";
 import {
@@ -15,7 +17,7 @@ import {
   rateLimitSeverityTier,
   type ProfileRateLimitSeverity,
 } from "@/lib/rate-limits/rate-limit-scope-match";
-import { providerIdForHarness } from "./use-provider-reauth-gate";
+import { providerCliIdForHarness } from "@/lib/provider-ordering";
 
 export type { ProfileRateLimitSeverity };
 
@@ -229,7 +231,7 @@ function warningProjection(input: {
       matchingScopes === null
         ? null
         : matchingScopes
-            .map((scope) => `${scope.family ?? ""} ${scope.severity}`)
+            .map((scope) => `${scope.family ?? ""}\u0000${scope.severity}`)
             .toSorted(),
       destinations
         .filter((destination) => destination.selectable)
@@ -253,29 +255,39 @@ function warningProjection(input: {
 
 /**
  * Composer-facing rate-limit warning projection. Its eligibility comes only
- * from the subscribed tab-host `providers.list` snapshot; detailed usage is a
- * separate, cache-only presentation concern in the banner. Eligibility is
- * scoped to the composer's selected model: a limit that only gates another
- * model family (per `rateLimitLimitedScopes`) neither shows the warning nor
- * disqualifies a destination. When per-scope data is unavailable (old host,
- * never-read gauge, unresolved model) it falls back to the profile-level
- * enum - every uncertain path shows the warning rather than hiding a real
- * one. The visible state deliberately remains representable with no
- * selectable alternative so the user can inspect profile limits instead of
- * losing the warning entirely.
+ * from the subscribed `providers.list` snapshot of `client`'s host; detailed
+ * usage is a separate, cache-only presentation concern in the banner.
+ * Eligibility is scoped to the composer's selected model: a limit that only
+ * gates another model family (per `rateLimitLimitedScopes`) neither shows the
+ * warning nor disqualifies a destination. When per-scope data is unavailable
+ * (old host, never-read gauge, unresolved model) it falls back to the
+ * profile-level enum - every uncertain path shows the warning rather than
+ * hiding a real one. The visible state deliberately remains representable
+ * with no selectable alternative so the user can inspect profile limits
+ * instead of losing the warning entirely.
+ *
+ * `client` is caller-resolved rather than looked up internally, so each
+ * surface can scope the read to the host it actually cares about (e.g. the
+ * chat composer's tab host vs. a future landing composer's default host) -
+ * mirrors `useResolvedSeededProfileId`'s identical `client` parameter.
  */
-export function useProfileRateLimitSwitchPrompt(
-  harnessId: GuiHarnessId,
-  profileId: string | null,
-  selectedModel: ModelOption | null,
-  active: boolean,
-): ProfileRateLimitSwitchPrompt {
+export function useProfileRateLimitSwitchPrompt(input: {
+  readonly harnessId: GuiHarnessId;
+  readonly profileId: string | null;
+  readonly selectedModel: ModelOption | null;
+  readonly active: boolean;
+  readonly client: HostClient<HostRpcRegistry> | null;
+}): ProfileRateLimitSwitchPrompt {
+  const { harnessId, profileId, selectedModel, active, client } = input;
   const dismissPromptKey = useRateLimitSwitchPromptDismissalsStore(
     (state) => state.dismiss,
   );
-  const providerId = providerIdForHarness(harnessId);
+  const providerId = providerCliIdForHarness(harnessId);
   const enabled = active && providerId !== null;
-  const query = useTabProvidersList({ enabled, subscribed: enabled });
+  const query = useProvidersListForClient(client, {
+    enabled,
+    subscribed: enabled,
+  });
   const profiles: ReadonlyArray<ProviderProfile> =
     query.data?.providers.find((provider) => provider.providerId === providerId)
       ?.profiles ?? NO_PROFILES;

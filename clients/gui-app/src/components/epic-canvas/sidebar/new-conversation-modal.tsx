@@ -836,6 +836,7 @@ export function NewConversationModalBody(props: {
       attachmentPending={attachmentPending}
       workspaceDisabledHint={composerDisabledHint}
       header={header}
+      topBanner={null}
       attachmentsStrip={
         <NewConversationModalAttachmentStrip
           epicId={epicId}
