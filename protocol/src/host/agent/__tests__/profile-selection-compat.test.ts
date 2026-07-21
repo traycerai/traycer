@@ -13,10 +13,14 @@ import {
   agentCreateDowngradeV20ToV10,
   agentCreateUpgradeV10ToV20,
   agentCreateUpgradeV20ToV30,
+  agentGetProviderProfileRateLimitsDowngradeV20ToV10,
   agentGetProviderProfileRateLimitsRequestSchema,
   agentGetProviderProfileRateLimitsResponseSchema,
+  agentGetProviderProfileRateLimitsUpgradeV10ToV20,
+  agentListProviderProfilesDowngradeV20ToV10,
   agentListProviderProfilesRequestSchema,
   agentListProviderProfilesResponseSchema,
+  agentListProviderProfilesUpgradeV10ToV20,
   agentProviderProfileSummarySchema,
   AMBIENT_PROFILE_ID_SENTINEL,
   concreteProfileSelectionSchema,
@@ -561,12 +565,12 @@ describe("optional-method capability negotiation", () => {
     ).toBeUndefined();
     expect(split.manifest["agent.configure"]).toBeUndefined();
     expect(split.optionalManifest["agent.listProviderProfiles"]).toEqual({
-      major: 1,
+      major: 2,
       minor: 0,
     });
     expect(
       split.optionalManifest["agent.getProviderProfileRateLimits"],
-    ).toEqual({ major: 1, minor: 0 });
+    ).toEqual({ major: 2, minor: 0 });
     expect(split.optionalManifest["agent.configure"]).toEqual({
       major: 2,
       minor: 0,
@@ -590,5 +594,143 @@ describe("optional-method capability negotiation", () => {
     expect(
       hostRpcRegistry["agent.configure"][2].versions[0].contract.schemaVersion,
     ).toEqual({ major: 2, minor: 0 });
+  });
+
+  it("keeps agent.listProviderProfiles@1.0 and agent.getProviderProfileRateLimits@1.0 frozen pre-hermes, and advertises their v2.0 hermes-inclusive line", () => {
+    expect(
+      hostRpcRegistry["agent.listProviderProfiles"][1].versions[0].contract
+        .schemaVersion,
+    ).toEqual({ major: 1, minor: 0 });
+    expect(
+      hostRpcRegistry["agent.listProviderProfiles"][2].versions[0].contract
+        .schemaVersion,
+    ).toEqual({ major: 2, minor: 0 });
+    expect(
+      hostRpcRegistry["agent.getProviderProfileRateLimits"][1].versions[0]
+        .contract.schemaVersion,
+    ).toEqual({ major: 1, minor: 0 });
+    expect(
+      hostRpcRegistry["agent.getProviderProfileRateLimits"][2].versions[0]
+        .contract.schemaVersion,
+    ).toEqual({ major: 2, minor: 0 });
+  });
+});
+
+describe("agent.listProviderProfiles v1 <-> v2 hermes-provider translation", () => {
+  const preHermesResponse = {
+    providerId: "codex" as const,
+    profiles: [
+      {
+        selection: { kind: "ambient" as const },
+        label: "Terminal account",
+        authStatus: "authenticated" as const,
+        rateLimitStatus: "unknown" as const,
+        usageUpdatedAt: null,
+        isEffectiveLastUsed: false,
+      },
+    ],
+  };
+
+  it("upgrades a frozen v1.0 response to v2.0 as a pure pass-through", () => {
+    expect(
+      agentListProviderProfilesUpgradeV10ToV20.upgradeResponse(
+        preHermesResponse,
+      ),
+    ).toEqual(preHermesResponse);
+  });
+
+  it("downgrades a pre-hermes v2.0 response to v1.0 as a pure pass-through", () => {
+    const downgraded =
+      agentListProviderProfilesDowngradeV20ToV10.downgradeResponse(
+        preHermesResponse,
+      );
+    expect(downgraded).toEqual({ ok: true, value: preHermesResponse });
+  });
+
+  it("fails closed (never silently mis-decodes) downgrading a hermes response to v1.0", () => {
+    const downgraded =
+      agentListProviderProfilesDowngradeV20ToV10.downgradeResponse({
+        ...preHermesResponse,
+        providerId: "hermes",
+      });
+    expect(downgraded.ok).toBe(false);
+    if (downgraded.ok) return;
+    expect(downgraded.error.code).toBe("DOWNGRADE_UNSUPPORTED");
+    expect(downgraded.error.message).toMatch(/hermes/i);
+  });
+});
+
+describe("agent.getProviderProfileRateLimits v1 <-> v2 hermes-provider translation", () => {
+  const preHermesResponse = {
+    rateLimits: {
+      provider: "codex" as const,
+      available: false as const,
+      reason: "timeout" as const,
+    },
+    usageUpdatedAt: null,
+  };
+
+  it("upgrades a frozen v1.0 response to v2.0 as a pure pass-through", () => {
+    expect(
+      agentGetProviderProfileRateLimitsUpgradeV10ToV20.upgradeResponse(
+        preHermesResponse,
+      ),
+    ).toEqual(preHermesResponse);
+  });
+
+  it("downgrades a pre-hermes v2.0 response to v1.0 as a pure pass-through", () => {
+    const downgraded =
+      agentGetProviderProfileRateLimitsDowngradeV20ToV10.downgradeResponse(
+        preHermesResponse,
+      );
+    expect(downgraded).toEqual({ ok: true, value: preHermesResponse });
+  });
+
+  it("fails closed (never silently mis-decodes) downgrading a hermes rate-limit read to v1.0", () => {
+    const downgraded =
+      agentGetProviderProfileRateLimitsDowngradeV20ToV10.downgradeResponse({
+        rateLimits: {
+          provider: "hermes",
+          available: false,
+          reason: "timeout",
+        },
+        usageUpdatedAt: null,
+      });
+    expect(downgraded.ok).toBe(false);
+    if (downgraded.ok) return;
+    expect(downgraded.error.code).toBe("DOWNGRADE_UNSUPPORTED");
+    expect(downgraded.error.message).toMatch(/hermes/i);
+  });
+});
+
+describe("agent.configure v1 <-> v2 hermes-harness response translation", () => {
+  const preHermesSettings = {
+    harnessId: "claude" as const,
+    model: "opus-4.7",
+    profileSelection: { kind: "ambient" as const },
+    reasoningEffort: null,
+    fastMode: false,
+    permissionMode: "supervised" as const,
+    agentMode: "regular" as const,
+  };
+
+  it("passes a pre-hermes configure response through the v2->v1 downgrade unchanged", () => {
+    const response = { settings: preHermesSettings, warnings: [] };
+    const downgraded =
+      agentConfigureDowngradeV20ToV10.downgradeResponse(response);
+    expect(downgraded).toEqual({ ok: true, value: response });
+  });
+
+  it("fails closed (never silently mis-decodes) downgrading a hermes-configured response to v1.0", () => {
+    const response = {
+      settings: { ...preHermesSettings, harnessId: "hermes" as const },
+      warnings: [],
+    };
+    const downgraded =
+      agentConfigureDowngradeV20ToV10.downgradeResponse(response);
+    expect(downgraded.ok).toBe(false);
+    if (downgraded.ok) return;
+    expect(downgraded.error.code).toBe("DOWNGRADE_UNSUPPORTED");
+    expect(downgraded.error.message).toMatch(/hermes/i);
   });
 });

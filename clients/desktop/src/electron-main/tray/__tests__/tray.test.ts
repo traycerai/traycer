@@ -30,6 +30,8 @@ interface CapturedMenuItemLike {
   enabled?: boolean;
   click?: () => void;
   submenu?: CapturedMenuItemLike[];
+  accelerator?: string;
+  registerAccelerator?: boolean;
 }
 
 /**
@@ -642,6 +644,61 @@ describe("DesktopTrayController menu structure", () => {
       { command: "host.installUpdate", hostUpdateVersion: "1.4.2" },
     ]);
     expect(commands[0]?.hostUpdateVersion).not.toBe("1.6.0-rc.1");
+  });
+
+  // Decision 9: the "Open Traycer" item is display-only for the summon
+  // chord - `registerAccelerator: false` means the OS never binds it from
+  // the menu, only the global-shortcuts registry does. Deleting either the
+  // `accelerator` assignment or the `registerAccelerator: false` line from
+  // `rebuildMenu()` must fail this test, not just checking the method exists.
+  it("shows the live summon accelerator on Open Traycer as display-only, and none when disabled", () => {
+    const controller = new DesktopTrayController(makeWindow(), trayImage(), {
+      onEpicSelected: null,
+      onCommand: null,
+    });
+
+    const beforeSet = latestMenuTemplate().find(
+      (entry) => entry.label === "Open Traycer",
+    );
+    expect(beforeSet?.accelerator).toBeUndefined();
+    expect(beforeSet?.registerAccelerator).toBe(false);
+
+    controller.setSummonAccelerator("CommandOrControl+Shift+Space");
+    const withAccelerator = latestMenuTemplate().find(
+      (entry) => entry.label === "Open Traycer",
+    );
+    expect(withAccelerator?.accelerator).toBe("CommandOrControl+Shift+Space");
+    expect(withAccelerator?.registerAccelerator).toBe(false);
+
+    controller.setSummonAccelerator(null);
+    const afterDisable = latestMenuTemplate().find(
+      (entry) => entry.label === "Open Traycer",
+    );
+    expect(afterDisable?.accelerator).toBeUndefined();
+    expect(afterDisable?.registerAccelerator).toBe(false);
+  });
+
+  it("rebuilds the menu when the summon accelerator changes, but not when it is set to the same value", () => {
+    const controller = new DesktopTrayController(makeWindow(), trayImage(), {
+      onEpicSelected: null,
+      onCommand: null,
+    });
+
+    controller.setSummonAccelerator("CommandOrControl+Shift+Space");
+    const templateAfterFirstSet = latestMenuTemplate();
+    mockMenuState.lastBuiltMenu = null;
+
+    controller.setSummonAccelerator("CommandOrControl+Shift+Space");
+    expect(mockMenuState.lastBuiltMenu).toBeNull();
+
+    controller.setSummonAccelerator("CommandOrControl+Alt+X");
+    expect(mockMenuState.lastBuiltMenu).not.toBeNull();
+    const templateAfterChange = latestMenuTemplate();
+    expect(
+      templateAfterChange.find((entry) => entry.label === "Open Traycer")
+        ?.accelerator,
+    ).toBe("CommandOrControl+Alt+X");
+    expect(templateAfterFirstSet).not.toBe(templateAfterChange);
   });
 
   it("does not render an update row when no host update is queued", () => {

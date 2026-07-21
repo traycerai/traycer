@@ -171,6 +171,13 @@ export class DesktopTrayController {
   private onEpicSelected: ((epicId: string) => void) | null;
   private onCommand:
     ((command: MenuCommandId, hostUpdateVersion: string | null) => void) | null;
+  // Display-only - `registerAccelerator: false` on the "Open Traycer" item's
+  // `accelerator` below means the OS never binds this key combo from the
+  // menu; the real registration lives solely in the global-shortcuts
+  // registry (`electron-main/app/shortcuts.ts`). `null` when the summon
+  // shortcut is disabled or the OS refused it, so the item shows no
+  // accelerator rather than one that wouldn't actually fire.
+  private summonAccelerator: string | null = null;
 
   constructor(
     window: TrayManagedWindow,
@@ -214,6 +221,14 @@ export class DesktopTrayController {
 
   setPresentation(presentation: DesktopTrayPresentation): void {
     this.presentation = presentation;
+    this.rebuildMenu();
+  }
+
+  setSummonAccelerator(accelerator: string | null): void {
+    if (this.summonAccelerator === accelerator) {
+      return;
+    }
+    this.summonAccelerator = accelerator;
     this.rebuildMenu();
   }
 
@@ -294,6 +309,12 @@ export class DesktopTrayController {
     const menu = Menu.buildFromTemplate([
       {
         label: "Open Traycer",
+        // Display-only: `registerAccelerator: false` means the OS never
+        // binds this from the menu - the global-shortcuts registry owns the
+        // real registration. `undefined` (not `null`) is what Electron's
+        // MenuItemConstructorOptions expects for "no accelerator".
+        accelerator: this.summonAccelerator ?? undefined,
+        registerAccelerator: false,
         click: () => this.showMainWindow(),
       },
       { type: "separator" },

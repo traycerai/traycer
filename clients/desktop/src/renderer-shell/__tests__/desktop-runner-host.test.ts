@@ -232,6 +232,26 @@ function buildFakeBridge(
       }),
       onChange: (_handler) => ({ dispose: () => undefined }),
     },
+    globalShortcuts: {
+      getSnapshot: async () => ({
+        sequence: 0,
+        statuses: {
+          summon: {
+            id: "summon" as const,
+            intent: { enabled: true, chord: null },
+            effectiveChord: "mod+shift+space",
+            status: "registered" as const,
+          },
+        },
+      }),
+      set: async (_id, intent) => ({
+        id: "summon" as const,
+        intent,
+        effectiveChord: intent.chord ?? "mod+shift+space",
+        status: "registered" as const,
+      }),
+      onChange: (_handler) => ({ dispose: () => undefined }),
+    },
     support: {
       getSnapshot: async () => ({
         appName: "Traycer",
@@ -816,6 +836,38 @@ describe("DesktopRunnerHost.onLocalHostChange", () => {
     expect(copyTemporaryFiles).toHaveBeenCalledOnce();
     expect(copyTemporaryFiles).toHaveBeenCalledWith([ephemeralPath]);
     await expect(host.fileDrops.copyDroppedFilePaths([])).resolves.toEqual([]);
+  });
+
+  it("forwards globalShortcuts from the bridge - regression for the dropped-bridge bug in PR #533's review", async () => {
+    const fake = buildFakeBridge(null);
+    const host = new DesktopRunnerHost({
+      bridge: fake.bridge,
+      signInUrl: "https://auth.example.invalid/sign-in",
+    });
+
+    // `host.globalShortcuts` must be the actual preload bridge, not
+    // `undefined` - if `DesktopRunnerHost` ever again forgets to assign it in
+    // its constructor, this call throws instead of the Settings row just
+    // silently never appearing.
+    await expect(host.globalShortcuts.getSnapshot()).resolves.toEqual({
+      sequence: 0,
+      statuses: {
+        summon: {
+          id: "summon",
+          intent: { enabled: true, chord: null },
+          effectiveChord: "mod+shift+space",
+          status: "registered",
+        },
+      },
+    });
+    await expect(
+      host.globalShortcuts.set("summon", { enabled: false, chord: null }),
+    ).resolves.toEqual({
+      id: "summon",
+      intent: { enabled: false, chord: null },
+      effectiveChord: "mod+shift+space",
+      status: "registered",
+    });
   });
 
   it("replays the latest snapshot - not the initial one - to subscribers added after a transition", () => {
