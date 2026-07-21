@@ -9,6 +9,7 @@ import { HostWorkspaceSelector } from "@/components/home/host-workspace-selector
 import { EpicsListPanel } from "@/components/epics/epics-list-panel";
 import { LandingTerminalPanel } from "@/components/home/terminal-panel/landing-terminal-panel";
 import { parseSystemTabOverlayView } from "@/lib/system-tab-overlay-search";
+import "./home-touch-targets.css";
 
 export function HomePage() {
   // Subscribe to the render-stable shell, NOT the full draft: the active
@@ -40,8 +41,17 @@ export function HomePage() {
   );
 
   return (
-    <div className="relative flex min-h-0 flex-1 overflow-hidden bg-background text-foreground">
-      <div className="grid min-h-0 min-w-0 flex-1 grid-rows-[auto_minmax(0,1fr)_minmax(0,1fr)] overflow-hidden">
+    <div
+      data-home-touch-scope
+      className="relative flex min-h-0 flex-1 overflow-hidden bg-background text-foreground"
+    >
+      {/* The column track must be minmax(0,1fr), not the implicit `auto`: an
+          auto track's minimum is its items' min-content, so the composer
+          toolbar's intrinsic width would lock the whole column wider than a
+          narrow viewport (or the space left beside the terminal panel) and
+          the outer overflow-hidden would clip the right edge instead of
+          letting content reflow. */}
+      <div className="grid min-h-0 min-w-0 flex-1 grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)_minmax(0,1fr)] overflow-hidden">
         <div className="mx-auto w-full max-w-3xl px-6 pt-3">
           <HostUpdateBanner className={undefined} />
         </div>

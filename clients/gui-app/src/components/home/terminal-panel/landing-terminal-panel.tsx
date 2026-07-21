@@ -33,6 +33,7 @@ import {
   usePointerDragCommit,
 } from "@/components/epic-canvas/canvas/use-pointer-drag-commit";
 import { useHomeWorkspaceSource } from "@/components/home/host-workspace-selector/use-home-workspace-source";
+import { useIsMobile } from "@/hooks/ui/use-mobile";
 import { usePickAndAddWorkspaceFolders } from "@/components/home/host-workspace-selector/use-pick-and-add-folders";
 import type { WorktreeStagingKey } from "@/stores/worktree/worktree-intent-staging-store";
 import { workspaceMutationKeys } from "@/lib/query-keys";
@@ -351,6 +352,15 @@ function LandingTerminalPanelContents(
     panelWidthFraction: props.panelWidthFraction,
     setPanelWidthFraction: props.onSetPanelWidthFraction,
   });
+  // Below the mobile breakpoint a side-by-side split leaves both halves
+  // unusably narrow and the drag handle has no pointer to serve, so an open
+  // panel always renders through the maximized full-overlay path instead.
+  // The overlay geometry applies only while actually open: a closed panel
+  // physically collapses to the 0%-width in-flow strip on every device
+  // rather than lingering as an invisible full-viewport layer.
+  const isMobile = useIsMobile();
+  const fullOverlay = props.maximized || isMobile;
+  const overlayActive = fullOverlay && props.panelOpen;
   const createDisabledReason = landingTerminalCreateDisabledReason(
     props.availability,
     props.primaryWorkspacePath,
@@ -371,7 +381,7 @@ function LandingTerminalPanelContents(
     onCloseTab: props.onCloseTab,
     onCloseAllTabs: props.onCloseAllTabs,
   });
-  const panelStyle = props.maximized
+  const panelStyle = overlayActive
     ? undefined
     : { width: props.panelOpen ? `${props.panelWidthFraction * 100}%` : "0%" };
 
@@ -396,8 +406,7 @@ function LandingTerminalPanelContents(
         className={cn(
           "relative z-10 shrink-0 bg-background ring-offset-background focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-hidden",
           pointerDragHandleAxisClassName("horizontal"),
-          (!props.panelOpen || props.maximized) &&
-            "invisible pointer-events-none",
+          (!props.panelOpen || fullOverlay) && "invisible pointer-events-none",
         )}
       />
       <aside
@@ -412,12 +421,13 @@ function LandingTerminalPanelContents(
           // the panel rubber-bands behind the pointer.
           "[.traycer-panel-resizing_&]:transition-none",
           !props.panelOpen && "invisible pointer-events-none",
-          props.maximized && "absolute inset-0 z-20 w-full",
+          overlayActive && "absolute inset-0 z-20 w-full",
         )}
         style={panelStyle}
       >
         <LandingTerminalPanelHeader
           maximized={props.maximized}
+          showMaximize={!isMobile}
           onToggleMaximized={props.onToggleMaximized}
           onTogglePanel={props.onTogglePanel}
         />
@@ -656,6 +666,12 @@ function LandingTerminalPanelToggle(props: {
 
 function LandingTerminalPanelHeader(props: {
   readonly maximized: boolean;
+  /**
+   * Mobile renders the open panel as a full overlay regardless of the
+   * maximized bit, so the Maximize/Restore toggle would be a no-op there
+   * and is hidden.
+   */
+  readonly showMaximize: boolean;
   readonly onToggleMaximized: () => void;
   readonly onTogglePanel: () => void;
 }): ReactNode {
@@ -666,23 +682,25 @@ function LandingTerminalPanelHeader(props: {
         <span className="truncate">Terminal</span>
       </div>
       <div className="flex shrink-0 items-center">
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          aria-label={
-            props.maximized
-              ? "Restore terminal panel"
-              : "Maximize terminal panel"
-          }
-          onClick={props.onToggleMaximized}
-        >
-          {props.maximized ? (
-            <Minimize2 className="size-4" />
-          ) : (
-            <Maximize2 className="size-4" />
-          )}
-        </Button>
+        {props.showMaximize ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label={
+              props.maximized
+                ? "Restore terminal panel"
+                : "Maximize terminal panel"
+            }
+            onClick={props.onToggleMaximized}
+          >
+            {props.maximized ? (
+              <Minimize2 className="size-4" />
+            ) : (
+              <Maximize2 className="size-4" />
+            )}
+          </Button>
+        ) : null}
         <Button
           type="button"
           variant="ghost"
