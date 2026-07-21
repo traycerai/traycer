@@ -52,6 +52,10 @@ class MockStreamSession implements IStreamSession {
     // No-op for this test.
   }
 
+  requestReconnect(): void {
+    // No-op for this test; reconnect is owned by the real StreamSession.
+  }
+
   close(): void {
     this.closed = true;
     this.statusChangeHandler?.("closed", { kind: "caller" });

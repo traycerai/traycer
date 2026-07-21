@@ -137,6 +137,7 @@ function createInertStreamSession(closedReason: string): IStreamSession {
         });
       });
     },
+    requestReconnect: () => undefined,
     close: () => {
       closed = true;
     },
@@ -532,6 +533,14 @@ class StreamSession<
 
   onStatusChange(handler: StatusChangeHandler): void {
     this.statusHandler = handler;
+  }
+
+  requestReconnect(): void {
+    if (this.disposed || this.activeSocket === null) {
+      return;
+    }
+    this.teardownSocket(1000, "reconnect-requested-by-consumer");
+    this.onTransportDrop();
   }
 
   close(): void {

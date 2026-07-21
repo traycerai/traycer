@@ -16,11 +16,6 @@ const textFrameFields = {
 
 export const HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP = 500;
 
-export const hostNotificationFilterSchema = z.enum(["all", "unread"]);
-export type HostNotificationFilter = z.infer<
-  typeof hostNotificationFilterSchema
->;
-
 export const hostNotificationKindSchema = z.enum([
   "agent.stopped",
   "agent.stalled",
@@ -123,26 +118,84 @@ export const hostNotificationEntrySchema = z.discriminatedUnion("kind", [
 ]);
 export type HostNotificationEntry = z.infer<typeof hostNotificationEntrySchema>;
 
-export const hostNotificationCursorSchema = z.object({
+export const hostNotificationsChronologicalCursorSchema = z.object({
+  kind: z.literal("chronological"),
   updatedAt: z.number().int().nonnegative(),
   id: z.string(),
 });
-export type HostNotificationCursor = z.infer<
-  typeof hostNotificationCursorSchema
+export type HostNotificationsChronologicalCursor = z.infer<
+  typeof hostNotificationsChronologicalCursorSchema
 >;
 
-export const hostNotificationsListRequestSchema = z.object({
-  filter: hostNotificationFilterSchema,
-  limit: z.number().int().min(1).max(500),
-  cursor: hostNotificationCursorSchema.optional(),
+export const hostNotificationsAttentionTierSchema = z.enum([
+  "blocking",
+  "failure",
+]);
+export type HostNotificationsAttentionTier = z.infer<
+  typeof hostNotificationsAttentionTierSchema
+>;
+
+export const hostNotificationsAttentionCursorSchema = z.object({
+  kind: z.literal("attention"),
+  tier: hostNotificationsAttentionTierSchema,
+  updatedAt: z.number().int().nonnegative(),
+  id: z.string(),
 });
+export type HostNotificationsAttentionCursor = z.infer<
+  typeof hostNotificationsAttentionCursorSchema
+>;
+
+export const hostNotificationsCursorSchema = z.discriminatedUnion("kind", [
+  hostNotificationsChronologicalCursorSchema,
+  hostNotificationsAttentionCursorSchema,
+]);
+
+export const hostNotificationsSummarySchema = z.object({
+  unreadCount: z.number().int().nonnegative(),
+  attentionCount: z.number().int().nonnegative(),
+});
+export type HostNotificationsSummary = z.infer<
+  typeof hostNotificationsSummarySchema
+>;
+
+/** Every exact-removal list on the wire must be duplicate-free: a repeated
+ * id would double-apply a deletion in the renderer's normalized replica. */
+function nonDuplicateIdArraySchema(min: number) {
+  return z
+    .array(z.string())
+    .min(min)
+    .refine((ids) => new Set(ids).size === ids.length, {
+      message: "removedIds must not contain duplicate ids",
+    });
+}
+
+export const hostNotificationsListRequestSchema = z.discriminatedUnion(
+  "filter",
+  [
+    z.object({
+      filter: z.literal("attention"),
+      limit: z.number().int().min(1).max(500),
+      cursor: hostNotificationsAttentionCursorSchema.optional(),
+    }),
+    z.object({
+      filter: z.literal("recent"),
+      limit: z.number().int().min(1).max(500),
+      cursor: hostNotificationsChronologicalCursorSchema.optional(),
+    }),
+    z.object({
+      filter: z.literal("unreadRecent"),
+      limit: z.number().int().min(1).max(500),
+      cursor: hostNotificationsChronologicalCursorSchema.optional(),
+    }),
+  ],
+);
 export type HostNotificationsListRequest = z.infer<
   typeof hostNotificationsListRequestSchema
 >;
 
 export const hostNotificationsListResponseSchema = z.object({
   entries: z.array(hostNotificationEntrySchema),
-  nextCursor: hostNotificationCursorSchema.nullable(),
+  nextCursor: hostNotificationsCursorSchema.nullable(),
 });
 export type HostNotificationsListResponse = z.infer<
   typeof hostNotificationsListResponseSchema
@@ -208,8 +261,8 @@ export type HostNotificationsClearAllResponse = z.infer<
 >;
 
 export const hostNotificationsSubscribeOpenRequestSchema = z.object({
-  filter: hostNotificationFilterSchema,
-  initialLimit: z.number().int().min(1).max(500),
+  initialAttentionLimit: z.number().int().min(1).max(500),
+  initialRecentLimit: z.number().int().min(1).max(500),
 });
 export type HostNotificationsSubscribeOpenRequest = z.infer<
   typeof hostNotificationsSubscribeOpenRequestSchema
@@ -237,12 +290,22 @@ export const hostNotificationsSubscribeServerFrameSchema = z.discriminatedUnion(
     z.object({
       kind: z.literal("snapshot"),
       ...textFrameFields,
-      entries: z.array(hostNotificationEntrySchema),
+      attention: z.object({
+        entries: z.array(hostNotificationEntrySchema),
+        nextCursor: hostNotificationsAttentionCursorSchema.nullable(),
+      }),
+      recent: z.object({
+        entries: z.array(hostNotificationEntrySchema),
+        nextCursor: hostNotificationsChronologicalCursorSchema.nullable(),
+      }),
+      summary: hostNotificationsSummarySchema,
     }),
     z.object({
       kind: z.literal("upserted"),
       ...textFrameFields,
       entry: hostNotificationEntrySchema,
+      removedIds: nonDuplicateIdArraySchema(0),
+      summary: hostNotificationsSummarySchema,
     }),
     z.object({
       kind: z.literal("readStateChanged"),
@@ -253,11 +316,24 @@ export const hostNotificationsSubscribeServerFrameSchema = z.discriminatedUnion(
       entityRefs: z.array(hostNotificationsEntityRefSchema),
       readAt: z.number().int().nonnegative().nullable(),
       resolvedAt: z.number().int().nonnegative().nullable(),
+      removedIds: nonDuplicateIdArraySchema(0),
+      summary: hostNotificationsSummarySchema,
+    }),
+    z.object({
+      // Removal-only lifecycle frame: emitted when a mutation prunes rows
+      // and no changed row survives retention, so there is no upsert/
+      // read-state payload to carry.
+      kind: z.literal("removed"),
+      ...textFrameFields,
+      removedIds: nonDuplicateIdArraySchema(1),
+      summary: hostNotificationsSummarySchema,
     }),
     z.object({
       kind: z.literal("cleared"),
       ...textFrameFields,
       beforeUpdatedAt: z.number().int().nonnegative(),
+      removedIds: nonDuplicateIdArraySchema(0),
+      summary: hostNotificationsSummarySchema,
     }),
     z.object({
       kind: z.literal("channelEmission"),

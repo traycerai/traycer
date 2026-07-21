@@ -57,10 +57,27 @@ export function formatHostNotificationPresentation(
         body: `${chatContext} • ${workspaceOperationFailedStatus(known)}`,
       };
     case "approval.requested":
-      return { title, body: `${chatContext} • Approval requested` };
+      return {
+        title,
+        body: `${chatContext} • ${resolvableRequestStatus(entry.resolvedAt, "Approval requested", "Approval resolved")}`,
+      };
     case "interview.requested":
-      return { title, body: `${chatContext} • Question waiting` };
+      return {
+        title,
+        body: `${chatContext} • ${resolvableRequestStatus(entry.resolvedAt, "Question waiting", "Question resolved")}`,
+      };
   }
+}
+
+// The protocol records only whether an approval/interview has resolved, not
+// how it resolved. Keep the canonical formatter honest and shared across the
+// in-app feed and external hook deliveries.
+function resolvableRequestStatus(
+  resolvedAt: number | null,
+  waitingLabel: string,
+  resolvedLabel: string,
+): string {
+  return resolvedAt === null ? waitingLabel : resolvedLabel;
 }
 
 function knownPresentationContext(known: HostNotificationKnownPayload | null) {

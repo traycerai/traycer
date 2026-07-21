@@ -17,6 +17,7 @@ import {
   hostNotificationsSubscribe,
   hostNotificationsSubscribeClientFrameSchema,
   hostNotificationsSubscribeServerFrameSchema,
+  hostNotificationsSummarySchema,
 } from "@traycer/protocol/host/notifications/contracts";
 
 const APPROVAL_ENTRY = {
@@ -57,6 +58,7 @@ const STOPPED_ENTRY = {
   },
 };
 
+
 const WORKSPACE_OPERATION_FAILED_ENTRY = {
   ...STOPPED_ENTRY,
   id: "notification-3",
@@ -73,6 +75,21 @@ const WORKSPACE_OPERATION_FAILED_ENTRY = {
     message: "Setup exited with code 1.",
     outcome: "errored" as const,
   },
+};
+
+const SUMMARY = { unreadCount: 2, attentionCount: 1 } as const;
+
+const ATTENTION_CURSOR = {
+  kind: "attention" as const,
+  tier: "blocking" as const,
+  updatedAt: 1_700_000_000_000,
+  id: "notification-1",
+};
+
+const CHRONOLOGICAL_CURSOR = {
+  kind: "chronological" as const,
+  updatedAt: 1_700_000_000_010,
+  id: "notification-2",
 };
 
 describe("flat host notification entry schema", () => {
@@ -141,18 +158,94 @@ describe("host.notifications.list@1.0", () => {
     ).toEqual({ entries: [APPROVAL_ENTRY, STOPPED_ENTRY], nextCursor: null });
   });
 
-  it("parses all/unread filters and keyset cursors", () => {
+  it("accepts matching filter/cursor pairings", () => {
     expect(
       hostNotificationsListRequestSchema.parse({
-        filter: "unread",
+        filter: "attention",
         limit: 25,
-        cursor: { updatedAt: 1_700_000_000_000, id: "notification-1" },
+        cursor: ATTENTION_CURSOR,
       }),
     ).toEqual({
-      filter: "unread",
+      filter: "attention",
       limit: 25,
-      cursor: { updatedAt: 1_700_000_000_000, id: "notification-1" },
+      cursor: ATTENTION_CURSOR,
     });
+    expect(
+      hostNotificationsListRequestSchema.parse({
+        filter: "recent",
+        limit: 25,
+        cursor: CHRONOLOGICAL_CURSOR,
+      }),
+    ).toEqual({
+      filter: "recent",
+      limit: 25,
+      cursor: CHRONOLOGICAL_CURSOR,
+    });
+    expect(
+      hostNotificationsListRequestSchema.parse({
+        filter: "unreadRecent",
+        limit: 25,
+        cursor: CHRONOLOGICAL_CURSOR,
+      }),
+    ).toEqual({
+      filter: "unreadRecent",
+      limit: 25,
+      cursor: CHRONOLOGICAL_CURSOR,
+    });
+  });
+
+  it("rejects mismatched filter/cursor pairs and legacy filters", () => {
+    expect(
+      hostNotificationsListRequestSchema.safeParse({
+        filter: "attention",
+        limit: 25,
+        cursor: CHRONOLOGICAL_CURSOR,
+      }).success,
+    ).toBe(false);
+    expect(
+      hostNotificationsListRequestSchema.safeParse({
+        filter: "recent",
+        limit: 25,
+        cursor: ATTENTION_CURSOR,
+      }).success,
+    ).toBe(false);
+    expect(
+      hostNotificationsListRequestSchema.safeParse({
+        filter: "unreadRecent",
+        limit: 25,
+        cursor: ATTENTION_CURSOR,
+      }).success,
+    ).toBe(false);
+    expect(
+      hostNotificationsListRequestSchema.safeParse({
+        filter: "all",
+        limit: 25,
+      }).success,
+    ).toBe(false);
+    expect(
+      hostNotificationsListRequestSchema.safeParse({
+        filter: "unread",
+        limit: 25,
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("host.notifications.summary", () => {
+  it("accepts nonnegative counts and rejects negatives", () => {
+    expect(hostNotificationsSummarySchema.parse(SUMMARY)).toEqual(SUMMARY);
+    expect(
+      hostNotificationsSummarySchema.safeParse({
+        unreadCount: -1,
+        attentionCount: 0,
+      }).success,
+    ).toBe(false);
+    expect(
+      hostNotificationsSummarySchema.safeParse({
+        unreadCount: 0,
+        attentionCount: -1,
+      }).success,
+    ).toBe(false);
   });
 });
 
@@ -237,13 +330,59 @@ describe("host.notifications.indicatorState@1.0", () => {
 });
 
 describe("host.notifications.subscribe@1.0", () => {
-  it("parses the full feed, emission, presence, and entity-bearing state frames", () => {
+  it("parses dual initial limits and rejects the legacy open request", () => {
     expect(
       hostNotificationsSubscribe.openRequestSchema.parse({
+        initialAttentionLimit: 50,
+        initialRecentLimit: 50,
+      }),
+    ).toEqual({ initialAttentionLimit: 50, initialRecentLimit: 50 });
+    expect(
+      hostNotificationsSubscribe.openRequestSchema.safeParse({
         filter: "all",
         initialLimit: 50,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("round-trips the atomic snapshot shape", () => {
+    const snapshot = hostNotificationsSubscribeServerFrameSchema.parse({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      attention: {
+        entries: [APPROVAL_ENTRY],
+        nextCursor: ATTENTION_CURSOR,
+      },
+      recent: {
+        entries: [STOPPED_ENTRY],
+        nextCursor: CHRONOLOGICAL_CURSOR,
+      },
+      summary: SUMMARY,
+    });
+    expect(snapshot.kind).toBe("snapshot");
+    if (snapshot.kind !== "snapshot") {
+      throw new Error("expected snapshot frame");
+    }
+    expect(snapshot.attention.entries).toEqual([APPROVAL_ENTRY]);
+    expect(snapshot.recent.entries).toEqual([STOPPED_ENTRY]);
+    expect(snapshot.summary).toEqual(SUMMARY);
+  });
+
+  it("round-trips each lifecycle frame with removedIds and summary", () => {
+    expect(
+      hostNotificationsSubscribeServerFrameSchema.parse({
+        kind: "upserted",
+        hasBinaryPayload: false,
+        entry: STOPPED_ENTRY,
+        removedIds: ["pruned-1"],
+        summary: SUMMARY,
       }),
-    ).toEqual({ filter: "all", initialLimit: 50 });
+    ).toMatchObject({
+      kind: "upserted",
+      removedIds: ["pruned-1"],
+      summary: SUMMARY,
+    });
+
     expect(
       hostNotificationsSubscribeServerFrameSchema.parse({
         kind: "readStateChanged",
@@ -252,8 +391,11 @@ describe("host.notifications.subscribe@1.0", () => {
         entityRefs: [{ epicId: "epic-1", chatId: "chat-1" }],
         readAt: 1_700_000_000_001,
         resolvedAt: 1_700_000_000_001,
+        removedIds: [],
+        summary: SUMMARY,
       }).kind,
     ).toBe("readStateChanged");
+
     const legacyReadState = hostNotificationsSubscribeServerFrameSchema.parse({
       kind: "readStateChanged",
       hasBinaryPayload: false,
@@ -261,18 +403,101 @@ describe("host.notifications.subscribe@1.0", () => {
       entityRefs: [],
       readAt: 1_700_000_000_001,
       resolvedAt: null,
+      removedIds: [],
+      summary: { unreadCount: 0, attentionCount: 0 },
     });
     if (legacyReadState.kind !== "readStateChanged") {
       throw new Error("expected read-state frame");
     }
     expect(legacyReadState.entityRefs).toEqual([]);
+
+    expect(
+      hostNotificationsSubscribeServerFrameSchema.parse({
+        kind: "removed",
+        hasBinaryPayload: false,
+        removedIds: ["pruned-only"],
+        summary: { unreadCount: 0, attentionCount: 0 },
+      }),
+    ).toMatchObject({
+      kind: "removed",
+      removedIds: ["pruned-only"],
+    });
+
     expect(
       hostNotificationsSubscribeServerFrameSchema.parse({
         kind: "cleared",
         hasBinaryPayload: false,
         beforeUpdatedAt: 1_700_000_000_000,
+        removedIds: ["notification-1"],
+        summary: { unreadCount: 0, attentionCount: 0 },
       }).kind,
     ).toBe("cleared");
+  });
+
+  it("rejects duplicate removedIds and malformed lifecycle frames", () => {
+    expect(
+      hostNotificationsSubscribeServerFrameSchema.safeParse({
+        kind: "upserted",
+        hasBinaryPayload: false,
+        entry: STOPPED_ENTRY,
+        removedIds: ["dup", "dup"],
+        summary: SUMMARY,
+      }).success,
+    ).toBe(false);
+    expect(
+      hostNotificationsSubscribeServerFrameSchema.safeParse({
+        kind: "removed",
+        hasBinaryPayload: false,
+        removedIds: [],
+        summary: SUMMARY,
+      }).success,
+    ).toBe(false);
+    expect(
+      hostNotificationsSubscribeServerFrameSchema.safeParse({
+        kind: "removed",
+        hasBinaryPayload: false,
+        removedIds: ["a", "a"],
+        summary: SUMMARY,
+      }).success,
+    ).toBe(false);
+    expect(
+      hostNotificationsSubscribeServerFrameSchema.safeParse({
+        kind: "cleared",
+        hasBinaryPayload: false,
+        beforeUpdatedAt: 1_700_000_000_000,
+        removedIds: ["x", "x"],
+        summary: SUMMARY,
+      }).success,
+    ).toBe(false);
+    expect(
+      hostNotificationsSubscribeServerFrameSchema.safeParse({
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        entries: [APPROVAL_ENTRY],
+      }).success,
+    ).toBe(false);
+    expect(
+      hostNotificationsSubscribeServerFrameSchema.safeParse({
+        kind: "upserted",
+        hasBinaryPayload: false,
+        entry: STOPPED_ENTRY,
+      }).success,
+    ).toBe(false);
+    expect(
+      hostNotificationsSubscribeServerFrameSchema.safeParse({
+        kind: "readStateChanged",
+        hasBinaryPayload: false,
+        ids: ["notification-1"],
+        entityRefs: [],
+        readAt: 1,
+        resolvedAt: null,
+        summary: { unreadCount: -1, attentionCount: 0 },
+        removedIds: [],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("parses emission, presence, and pong frames", () => {
     expect(
       hostNotificationsSubscribeServerFrameSchema.parse({
         kind: "channelEmission",
@@ -294,6 +519,12 @@ describe("host.notifications.subscribe@1.0", () => {
         at: 1_700_000_000_030,
       }).kind,
     ).toBe("presence");
+    expect(
+      hostNotificationsSubscribeServerFrameSchema.parse({
+        kind: "pong",
+        hasBinaryPayload: false,
+      }).kind,
+    ).toBe("pong");
   });
 });
 

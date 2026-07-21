@@ -162,6 +162,46 @@ const CASES: readonly {
     body: "Rate Limit Banner Implementation • Question waiting",
   },
   {
+    name: "resolved approval request",
+    entry: {
+      ...BASE,
+      kind: "approval.requested",
+      severity: "needs_action",
+      outcome: null,
+      resolvedAt: 1_700_000_000_100,
+      payload: {
+        kind: "approval",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        chatTitle: "Apply database migration",
+        taskTitle: "Production rollout",
+        approvalId: "approval-1",
+      },
+    },
+    title: "Production rollout",
+    body: "Apply database migration • Approval resolved",
+  },
+  {
+    name: "resolved interview request",
+    entry: {
+      ...BASE,
+      kind: "interview.requested",
+      severity: "needs_action",
+      outcome: null,
+      resolvedAt: 1_700_000_000_100,
+      payload: {
+        kind: "interview",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        chatTitle: "Rate Limit Banner Implementation",
+        taskTitle: "Rate Limit Indicator Implementation",
+        interviewBlockId: "interview-1",
+      },
+    },
+    title: "Rate Limit Indicator Implementation",
+    body: "Rate Limit Banner Implementation • Question resolved",
+  },
+  {
     name: "cross-kind malformed payload",
     entry: {
       ...BASE,
