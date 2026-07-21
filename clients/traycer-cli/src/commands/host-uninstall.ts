@@ -162,6 +162,7 @@ export async function runHostUninstall(
     environment: ctx.environment,
     serviceUninstalled,
     removedInstallDir: result.removedInstallDir,
+    removedStagedDir: result.removedStagedDir,
     purgedRuntime: result.purgedRuntime,
     hadInstallRecord: result.removedRecord !== null,
   });
@@ -169,6 +170,7 @@ export async function runHostUninstall(
     data: {
       removedRecord: result.removedRecord,
       removedInstallDir: result.removedInstallDir,
+      removedStagedDir: result.removedStagedDir,
       serviceUninstalled,
       purgedRuntime: result.purgedRuntime,
     },

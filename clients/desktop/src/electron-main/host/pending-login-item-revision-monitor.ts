@@ -1,71 +1,50 @@
-import { randomUUID } from "node:crypto";
 import { log } from "../app/logger";
-import { hasPendingLoginItemRevision } from "../app/host-login-item";
-import { canReachHostWebsocketUrl } from "./host-lifecycle";
-import { getActiveEnvironment } from "../ipc/host-management-ipc";
-import {
-  isPendingRevisionRefreshQuarantined,
-  runEnsureHost,
-  type HostEnsureIpcResult,
-} from "../ipc/host-ensure-ipc";
-import type { Environment } from "./host-paths";
-import type { RunnerIpcBridge } from "../ipc/runner-ipc-bridge";
+import type { ConvergeReadyOk, MutationOutcome } from "./host-controller-types";
 
-// `ensureHost()`'s already-ready fast path only gets a chance to apply a
-// deferred LaunchAgent revision (see `host-ensure-ipc.ts:
-// applyPendingLoginItemRevisionIfIdle`) once per app launch - the renderer's
-// `local-host-gate.tsx` fires `traycerHostEnsure` exactly once per mount,
-// gated by a ref that never resets. So a marker left behind because the host
-// was busy at that single check sits inert for the rest of the session; the
-// user would need to fully relaunch the app before the refreshed plist (e.g.
-// the 8,192 descriptor limit) ever takes effect.
+// `HostController.convergeReadyPackagedMac`'s already-reachable branch only
+// gets a chance to apply a deferred LaunchAgent revision
+// (`applyPendingLoginItemRevisionIfIdle`) once per renderer-triggered
+// `convergeReady` call - and the renderer's `local-host-gate.tsx` fires that
+// exactly once per mount, gated by a ref that never resets. So a marker left
+// behind because the host was busy at that single check sits inert for the
+// rest of the session; the user would need to fully relaunch the app before
+// the refreshed plist (e.g. the 8,192 descriptor limit) ever takes effect.
 //
-// This monitor closes that gap: it ticks on a bounded interval and, once it
-// observes a pending marker AND a reachable host, hands off to `ensureHost()`
-// itself - without ever provisioning a host that isn't already there.
-// Recovery of an unreachable host stays owned by the gate/ensure/respawn
-// flows; this monitor only ever acts on a host it can already reach. It
-// deliberately does NOT duplicate `ensureHost()`'s own removed-by-user or
-// host-busy checks - `runEnsure` re-runs both internally (the removed check
-// up front, the busy probe inside `applyPendingLoginItemRevisionIfIdle`) at
-// identical network cost, so a monitor-side copy would only be dead weight.
-//
-// Mutual exclusion with a renderer-triggered `ensureHost()` is achieved by
-// sharing `host-ensure-ipc.ts`'s own in-flight coalescing slot
-// (`runEnsureHost`) rather than re-running `registerHostLoginItem()` /
-// `waitForHostReady()` from a second, unguarded call site: whichever caller
-// gets there first runs the cycle, the other shares or waits on the result.
-// The registration helper also serializes this path with respawn's separate
-// in-flight policy, so no caller can overlap the SMAppService mutation itself.
+// This monitor closes that gap: it ticks on a bounded interval and hands off
+// to `HostController.applyPendingLoginItemRevisionIfIdle()` directly -
+// public, not run through the mutation lane, and fully self-locking via the
+// desktop cli-lock, so this poll loop and a renderer-triggered ensure can
+// never interleave SMAppService cycles. That method already owns every
+// precondition (pending marker, reachability, idle probe, quarantine) - this
+// monitor only owns the interval, the failure budget, and stopping once the
+// controller reports the refresh quarantined for the session.
 
 const PENDING_REVISION_POLL_INTERVAL_MS = 30_000;
-// A small bound, not a hot-loop backstop: `requires-approval` and other
-// terminal SMAppService failures don't resolve themselves by retrying, and a
-// host that keeps failing readiness after a register cycle is a Doctor-level
-// problem, not something this background monitor should keep hammering.
-// After the budget is spent the marker stays on disk for the next `ensure`
-// (a later tick will never look again this session) or the next relaunch.
-// This budget covers THROWN ensure failures; skips where ensure RESOLVES
-// without applying the refresh (requires-approval pre-flight, post-failure
-// quarantine) are terminal via the `isRefreshQuarantined` check in `tick`.
+// A small bound, not a hot-loop backstop: a refresh cycle that keeps
+// throwing isn't going to resolve itself by retrying every 30s - that's a
+// Doctor-level problem, not something this background monitor should keep
+// hammering. After the budget is spent the marker stays on disk for the next
+// launch's single `convergeReady` attempt. This budget covers THROWN
+// attempts; a cycle that RESOLVES without applying the refresh (busy, no
+// marker, not yet reachable) is not a failure and does not spend it -  only
+// `isPendingRevisionRefreshQuarantined()` reporting true is terminal for
+// those cases.
 const MAX_REFRESH_ATTEMPTS_WITHOUT_SUCCESS = 3;
 
+/**
+ * Narrow structural surface this monitor depends on - not the full
+ * `IpcHostController` - so tests can pin exactly these two calls without
+ * standing up every other `HostController` method.
+ */
+export interface PendingLoginItemRevisionMonitorHostController {
+  applyPendingLoginItemRevisionIfIdle(): Promise<MutationOutcome<ConvergeReadyOk> | null>;
+  isPendingRevisionRefreshQuarantined(): boolean;
+}
+
 export interface PendingLoginItemRevisionMonitorDeps {
-  readonly bridge: RunnerIpcBridge;
-  /** Test seams; production callers pass undefined. */
+  readonly hostController: PendingLoginItemRevisionMonitorHostController;
+  /** Test seam; production callers pass undefined. */
   readonly intervalMs: number | undefined;
-  readonly environment: Environment | undefined;
-  readonly hasPendingRevision:
-    ((environment: Environment) => Promise<boolean>) | undefined;
-  readonly canReach: ((listenUrl: string) => Promise<boolean>) | undefined;
-  readonly isRefreshQuarantined: (() => boolean) | undefined;
-  readonly runEnsure:
-    | ((
-        bridge: RunnerIpcBridge,
-        operationId: string,
-        force: boolean,
-      ) => Promise<HostEnsureIpcResult>)
-    | undefined;
 }
 
 export interface PendingLoginItemRevisionMonitor {
@@ -75,13 +54,6 @@ export interface PendingLoginItemRevisionMonitor {
 export function startPendingLoginItemRevisionMonitor(
   deps: PendingLoginItemRevisionMonitorDeps,
 ): PendingLoginItemRevisionMonitor {
-  const environment = deps.environment ?? getActiveEnvironment();
-  const hasPendingRevision =
-    deps.hasPendingRevision ?? hasPendingLoginItemRevision;
-  const canReach = deps.canReach ?? canReachHostWebsocketUrl;
-  const isRefreshQuarantined =
-    deps.isRefreshQuarantined ?? isPendingRevisionRefreshQuarantined;
-  const runEnsure = deps.runEnsure ?? runEnsureHost;
   let ticking = false;
   let disposed = false;
   let failedAttempts = 0;
@@ -91,13 +63,12 @@ export function startPendingLoginItemRevisionMonitor(
     // A tick that outlives its interval must not stack a second concurrent
     // tick on top of it.
     if (ticking || disposed || budgetExhausted) return;
-    // Once the ensure fast path has quarantined the refresh for this session
+    // Once the controller has quarantined the refresh for this session
     // (requires-approval pre-flight, or a cycle that ran and did not land
-    // enabled), every further handoff would no-op AND resolve successfully -
-    // resetting the failure budget below and turning this monitor into a
-    // session-long 30s churn loop. Treat the quarantine as terminal instead:
-    // stop ticking; the marker survives for the next launch's attempt.
-    if (isRefreshQuarantined()) {
+    // enabled), every further attempt would just resolve `null` (nothing to
+    // do) - stop ticking rather than churn a no-op call every 30s forever.
+    // The marker survives on disk for the next launch's attempt.
+    if (deps.hostController.isPendingRevisionRefreshQuarantined()) {
       budgetExhausted = true;
       log.info(
         "[pending-login-item-revision-monitor] refresh quarantined for this session - stopping; the marker will be retried at the next launch",
@@ -106,29 +77,22 @@ export function startPendingLoginItemRevisionMonitor(
     }
     ticking = true;
     try {
-      // Cheapest check first - no marker means nothing else in this tick is
-      // worth doing.
-      if (!(await hasPendingRevision(environment))) return;
+      const outcome =
+        await deps.hostController.applyPendingLoginItemRevisionIfIdle();
       if (disposed) return;
-      const serviceStatus = await deps.bridge.options.host.getServiceStatus();
-      if (disposed) return;
-      if (
-        serviceStatus.state !== "running" ||
-        serviceStatus.listenUrl === null
-      ) {
-        // Not reachable/installed - recovery belongs to the gate/ensure/
-        // respawn flows. This monitor must never spawn the CLI.
+      if (outcome === null) {
+        // Nothing to do this tick (no marker, not reachable, busy, or a
+        // desktop-lock contention this tick lost) - not a failure, doesn't
+        // spend the budget.
         return;
       }
-      if (!(await canReach(serviceStatus.listenUrl))) return;
-      if (disposed) return;
+      if (outcome.kind !== "ok") {
+        throw new Error(outcome.message);
+      }
       log.info(
-        "[pending-login-item-revision-monitor] host reachable with a pending LaunchAgent revision - handing off to ensureHost",
+        "[pending-login-item-revision-monitor] pending LaunchAgent revision applied",
+        { version: outcome.value.version },
       );
-      // Shares `host-ensure-ipc.ts`'s in-flight slot - if a renderer-
-      // triggered ensure is already running, this either returns its result
-      // (non-force) or waits for it to settle rather than racing it.
-      await runEnsure(deps.bridge, randomUUID(), false);
       failedAttempts = 0;
     } catch (err) {
       failedAttempts += 1;

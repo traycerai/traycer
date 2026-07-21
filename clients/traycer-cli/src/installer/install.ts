@@ -1,23 +1,16 @@
-import {
-  access,
-  mkdir,
-  mkdtemp,
-  readdir,
-  readFile,
-  rename,
-  rm,
-  stat,
-} from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { access, mkdir, readFile, rm, stat } from "node:fs/promises";
 import type { Stats } from "node:fs";
 import { arch as osArch, platform as osPlatform } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { dirname, join } from "node:path";
+import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/install-generation";
 import {
   type HostInstallArch,
   type HostInstallPlatform,
   type HostInstallRecord,
   type HostInstallSource,
   readHostInstallRecord,
-  writeHostInstallRecord,
+  writeHostInstallRecordAt,
 } from "../manifest/host-install";
 import {
   createDefaultRegistryClient,
@@ -26,16 +19,18 @@ import {
 import type { ProgressInfo } from "../runner/output";
 import type { Environment } from "../runner/environment";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
-import { createCliLogger, errorFromUnknown } from "../logger";
-import {
-  hostHomeDir,
-  hostInstallDir,
-  hostStagingRoot,
-  ensureHostHomeDir,
-  ensureHostStagingRoot,
-} from "../store/paths";
+import { createCliLogger, errorFromUnknown, type ILogger } from "../logger";
+import { createOwnedTempDir } from "../store/owned-temp";
+import { hostHomeDir, hostInstallDir, ensureHostHomeDir } from "../store/paths";
 import { extractHostSource, resolveHostExecutable } from "./extract";
 import { hashFileSha256 } from "./sha256";
+import {
+  invalidateAsideDir,
+  listAsideDirsNewestFirst,
+  sweepDeadAsideDirs,
+} from "./aside-dirs";
+import { renameWithRetry } from "./rename-retry";
+import { reconcileHostStage } from "./stage-reconcile";
 
 // Host installer - verify-before-replace per the Tech Plan.
 //
@@ -109,36 +104,94 @@ export interface InstallHostResult {
   readonly previous: HostInstallRecord | null;
 }
 
+// Convenience wrapper for callers that don't need the lock-scope split
+// below (tests only) - stages and commits back-to-back with no gap
+// between the two phases. `commands/host-install.ts` and `host/
+// provision.ts` (ensure's install branch) call `stageHostInstallSource` /
+// `commitHostInstallSource` directly instead, so only the commit phase
+// runs under `cli-lock` (Tech Plan, "Lock-scope restructure").
 export async function installHost(
   opts: InstallHostOptions,
 ): Promise<InstallHostResult> {
   const logger = createCliLogger(opts.environment);
-  const platform = currentInstallPlatform();
-  const arch = currentInstallArch();
-  const previous = await readHostInstallRecord(opts.environment);
   logger.info("Host install started", {
     environment: opts.environment,
-    platform,
-    arch,
+    platform: currentInstallPlatform(),
+    arch: currentInstallArch(),
     sourceKind: opts.source.kind,
     versionRequest:
       opts.source.kind === "registry"
         ? opts.source.versionRequest
         : "local-file",
-    hasPreviousInstall: previous !== null,
     lifecycleEnabled: opts.lifecycle !== null,
     recordVersionOverride: opts.recordVersionOverride !== null,
   });
 
-  await ensureHostHomeDir(opts.environment);
-  await ensureHostStagingRoot(opts.environment);
-
-  const staging = await stageInstall({
+  const staged = await stageHostInstallSource({
     environment: opts.environment,
     source: opts.source,
     onProgress: opts.onProgress,
     recordVersionOverride: opts.recordVersionOverride,
   });
+  const { record, previous } = await commitHostInstallSource({
+    environment: opts.environment,
+    staged,
+    onProgress: opts.onProgress,
+    lifecycle: opts.lifecycle,
+  });
+  logger.info("Host install completed", {
+    environment: opts.environment,
+    version: record.version,
+    previousVersion: previous?.version ?? null,
+  });
+  return { record, previous };
+}
+
+export interface StagedHostInstallSource {
+  readonly stagingDir: string;
+  readonly archivePath: string;
+  readonly archiveIsTemporary: boolean;
+  // Absolute path, INSIDE `stagingDir`, to the resolved host executable.
+  readonly executablePath: string;
+  readonly version: string;
+  readonly runtimeVersion: string | null;
+  readonly source: HostInstallSource;
+  readonly archiveSha256: string | null;
+  readonly signatureVerifiedAt: string;
+  readonly signatureKeyId: string;
+  readonly sizeBytes: number;
+}
+
+// Phase 1 (Tech Plan, "Lock-scope restructure"): download/verify/extract
+// OUTSIDE the `cli-lock`, into an owner-tokened temp dir under the host
+// staging root (`store/owned-temp.ts`) so a concurrent command's owned-
+// temp sweep spares it for the duration of a potentially-long download.
+// Callers commit the result under the lock via `commitHostInstallSource`,
+// or discard it via `discardStagedHostInstallSource` if they decide not
+// to commit (e.g. `host install --if-idle` found the host busy).
+export async function stageHostInstallSource(
+  opts: StageOptions,
+): Promise<StagedHostInstallSource> {
+  const logger = createCliLogger(opts.environment);
+  await ensureHostHomeDir(opts.environment);
+  const owned = await createOwnedTempDir(opts.environment, "install-");
+  const stagingDir = owned.path;
+
+  const staging =
+    opts.source.kind === "local-file"
+      ? await stageLocalFile({
+          environment: opts.environment,
+          sourcePath: opts.source.path,
+          stagingDir,
+          onProgress: opts.onProgress,
+          recordVersion: opts.recordVersionOverride,
+        })
+      : await stageRegistry({
+          environment: opts.environment,
+          versionRequest: opts.source.versionRequest,
+          stagingDir,
+          onProgress: opts.onProgress,
+        });
   logger.info("Host install staging completed", {
     environment: opts.environment,
     sourceKind: opts.source.kind,
@@ -148,11 +201,6 @@ export async function installHost(
     hasArchiveSha256: staging.archiveSha256 !== null,
   });
 
-  // Track whether the staging dir has been renamed into the install
-  // location. While `swapped === false` the staging dir is still
-  // exclusively owned by this attempt and needs explicit cleanup on a
-  // thrown extract/resolve/swap.
-  let swapped = false;
   try {
     opts.onProgress({
       stage: "extract",
@@ -190,149 +238,343 @@ export async function installHost(
       version: staging.version,
     });
 
-    // Stop the OS service immediately before the swap, never earlier:
-    // verify-before-replace means we must not disturb the running
-    // host if staging or verification would have failed.
-    if (opts.lifecycle !== null) {
-      opts.onProgress({
-        stage: "service-stop",
-        message: "stopping service before replacing install directory",
-        percent: null,
-        bytes: null,
-        totalBytes: null,
-      });
-      logger.info("Host install running lifecycle before swap", {
-        environment: opts.environment,
-        version: staging.version,
-      });
-      await opts.lifecycle.beforeSwap();
-    }
-
-    opts.onProgress({
-      stage: "swap",
-      message: "atomically replacing install directory",
-      percent: null,
-      bytes: null,
-      totalBytes: null,
-    });
-    await atomicSwap({
-      environment: opts.environment,
+    return {
       stagingDir: staging.stagingDir,
-    });
-    swapped = true;
-    logger.info("Host install atomic swap completed", {
-      environment: opts.environment,
-      version: staging.version,
-      replacedPreviousInstall: previous !== null,
-    });
-
-    const finalExecutablePath = executablePath.replace(
-      staging.stagingDir,
-      hostInstallDir(opts.environment),
-    );
-
-    const record: HostInstallRecord = {
+      archivePath: staging.archivePath,
+      archiveIsTemporary: staging.archiveIsTemporary,
+      executablePath,
       version: staging.version,
       runtimeVersion,
-      platform,
-      arch,
-      installedAt: new Date().toISOString(),
       source: staging.recordSource,
       archiveSha256: staging.archiveSha256,
       signatureVerifiedAt: staging.signatureVerifiedAt,
       signatureKeyId: staging.signatureKeyId,
       sizeBytes: staging.sizeBytes,
-      executablePath: finalExecutablePath,
     };
-    await writeHostInstallRecord(opts.environment, record);
-    logger.info("Host install record written", {
+  } catch (err) {
+    // The owner-tokened temp (and its archive, if separate) is
+    // exclusively ours until committed - a thrown extract/resolve must
+    // not leak it. Mirrors `discardStagedHostInstallSource`'s cleanup
+    // for the "staged but never committed" case.
+    await cleanupStagingArtifacts(
+      {
+        environment: opts.environment,
+        archivePath: staging.archivePath,
+        archiveIsTemporary: staging.archiveIsTemporary,
+        stagingDir: staging.stagingDir,
+        swapped: false,
+      },
+      logger,
+    );
+    throw err;
+  }
+}
+
+// Best-effort cleanup for a staged source the caller decided not to
+// commit (e.g. `host install --if-idle` found the host busy immediately
+// before the service stop - the Tech Plan requires the extracted temp
+// scrubbed on that path). Never call this after `commitHostInstallSource`
+// has run - it owns its own cleanup.
+export async function discardStagedHostInstallSource(
+  environment: Environment,
+  staged: StagedHostInstallSource,
+): Promise<void> {
+  const logger = createCliLogger(environment);
+  await cleanupStagingArtifacts(
+    {
+      environment,
+      archivePath: staged.archivePath,
+      archiveIsTemporary: staged.archiveIsTemporary,
+      stagingDir: staged.stagingDir,
+      swapped: false,
+    },
+    logger,
+  );
+}
+
+export interface CommitHostInstallSourceOptions {
+  readonly environment: Environment;
+  readonly staged: StagedHostInstallSource;
+  readonly onProgress: (info: ProgressInfo) => void;
+  readonly lifecycle: InstallHostLifecycle | null;
+}
+
+export interface CommitHostInstallSourceResult {
+  readonly record: HostInstallRecord;
+  readonly previous: HostInstallRecord | null;
+  // The attested, committed canonical install-generation fingerprint -
+  // read from the record this call itself just wrote, never a later disk
+  // re-read (Tech Plan, "Attested generation in results"), matching
+  // `applyHost`'s identical contract.
+  readonly installGeneration: string;
+}
+
+// Phase 2: assumes the caller already holds `cli-lock` (matches
+// `commitInstallFromSource`'s existing contract - see `applyHost` for the
+// same "core assumes caller holds lock" pattern). Reconciles BEFORE the
+// commit (mirrors `applyHost`'s own pre-reconcile call) - `atomicSwap`'s
+// entry sweep unconditionally invalidates any `install.old-*` trash before
+// it renames the new tree in, and if `install/` itself is ALSO missing
+// (a prior crash left neither a canonical install nor a yet-reconciled
+// aside), that sweep would destroy the only recovery copy before the new
+// rename even runs. Reconcile's step 1 (target-missing recovery) restores
+// a missing `install/` from the newest valid `.old-*` FIRST, so the entry
+// sweep only ever clears genuine litter. Then commits the pre-staged
+// source tree and re-runs stage reconcile so an explicit install over a
+// now-superseded `staged/` entry sweeps it (Tech Plan: "Install/ensure
+// re-run reconcile after a successful commit").
+export async function commitHostInstallSource(
+  opts: CommitHostInstallSourceOptions,
+): Promise<CommitHostInstallSourceResult> {
+  const logger = createCliLogger(opts.environment);
+  let swapped = false;
+  try {
+    await reconcileHostStage(opts.environment);
+    const { record, previous } = await commitInstallFromSource({
       environment: opts.environment,
-      version: record.version,
-      sourceKind: record.source.kind,
-      hasArchiveSha256: record.archiveSha256 !== null,
-      sizeBytes: record.sizeBytes,
+      sourceDir: opts.staged.stagingDir,
+      executablePath: opts.staged.executablePath,
+      version: opts.staged.version,
+      runtimeVersion: opts.staged.runtimeVersion,
+      source: opts.staged.source,
+      archiveSha256: opts.staged.archiveSha256,
+      signatureVerifiedAt: opts.staged.signatureVerifiedAt,
+      signatureKeyId: opts.staged.signatureKeyId,
+      sizeBytes: opts.staged.sizeBytes,
+      onProgress: opts.onProgress,
+      lifecycle: opts.lifecycle,
+      onCommitted: () => {
+        swapped = true;
+      },
     });
 
-    // Post-swap start/restart. Per the Tech Plan, failures here do
-    // not roll back the install: the new host stays in place and
-    // Doctor surfaces the non-readiness. The hook is responsible for
-    // swallowing start errors if it wants `installHost` to report
-    // success.
-    if (opts.lifecycle !== null) {
-      opts.onProgress({
-        stage: "service-start",
-        message: "starting service after replacing install directory",
-        percent: null,
-        bytes: null,
-        totalBytes: null,
-      });
-      logger.info("Host install running lifecycle after swap", {
-        environment: opts.environment,
-        version: record.version,
-      });
-      await opts.lifecycle.afterSwap();
-    }
+    await reconcileHostStage(opts.environment);
 
-    logger.info("Host install completed", {
+    const installGeneration = encodeInstallGeneration({
+      installId: record.installId,
+      installedAt: record.installedAt,
+      archiveSha256: record.archiveSha256,
+      version: record.version,
+    });
+
+    logger.info("Host install commit completed", {
       environment: opts.environment,
       version: record.version,
       previousVersion: previous?.version ?? null,
     });
-    return { record, previous };
+    return { record, previous, installGeneration };
   } finally {
-    // Best-effort sweep of the per-attempt staging archive (if any). The
-    // staging *directory* moved into the install dir on success - only
-    // clean up the leftover archive copy and (on a thrown attempt) the
-    // staging dir that never made it through `atomicSwap`.
-    if (staging.archiveIsTemporary) {
-      await rm(staging.archivePath, { force: true }).catch((err) => {
-        logger.warn("Host install failed to remove temporary archive", {
-          environment: opts.environment,
-          errorName: errorFromUnknown(err).name,
-          errorMessage: errorFromUnknown(err).message,
-        });
-      });
-    }
-    if (!swapped) {
-      await rm(staging.stagingDir, { recursive: true, force: true }).catch(
-        (err) => {
-          logger.warn("Host install failed to remove staging directory", {
-            environment: opts.environment,
-            errorName: errorFromUnknown(err).name,
-            errorMessage: errorFromUnknown(err).message,
-          });
-        },
-      );
-      logger.warn("Host install cleaned up unswapped staging attempt", {
+    await cleanupStagingArtifacts(
+      {
         environment: opts.environment,
-        version: staging.version,
-      });
-    }
+        archivePath: opts.staged.archivePath,
+        archiveIsTemporary: opts.staged.archiveIsTemporary,
+        stagingDir: opts.staged.stagingDir,
+        swapped,
+      },
+      logger,
+    );
   }
+}
+
+// Shared by `stageHostInstallSource`'s own catch (a thrown
+// extract/resolve), `discardStagedHostInstallSource` (caller decided not
+// to commit), and `commitHostInstallSource` (its own finally). Best-effort
+// sweep of the per-attempt staging archive (if any) - the staging
+// *directory* moved into the install dir on a successful commit, so it's
+// only cleaned up when `swapped` is false.
+async function cleanupStagingArtifacts(
+  opts: {
+    readonly environment: Environment;
+    readonly archivePath: string;
+    readonly archiveIsTemporary: boolean;
+    readonly stagingDir: string;
+    readonly swapped: boolean;
+  },
+  logger: ILogger,
+): Promise<void> {
+  if (opts.archiveIsTemporary) {
+    await rm(opts.archivePath, { force: true }).catch((err) => {
+      logger.warn("Host install failed to remove temporary archive", {
+        environment: opts.environment,
+        errorName: errorFromUnknown(err).name,
+        errorMessage: errorFromUnknown(err).message,
+      });
+    });
+  }
+  if (!opts.swapped) {
+    await rm(opts.stagingDir, { recursive: true, force: true }).catch((err) => {
+      logger.warn("Host install failed to remove staging directory", {
+        environment: opts.environment,
+        errorName: errorFromUnknown(err).name,
+        errorMessage: errorFromUnknown(err).message,
+      });
+    });
+  }
+}
+
+export interface CommitInstallFromSourceOptions {
+  readonly environment: Environment;
+  // A pre-staged tree ready to become `install/` wholesale - either a
+  // freshly extracted+verified staging dir (`installHost`'s own flow) or a
+  // promoted `staged/` tree (`host apply`, ticket 2's B1). Consumed by the
+  // commit rename; the caller owns pre/post cleanup around this call, not
+  // this function.
+  readonly sourceDir: string;
+  // Absolute path, INSIDE `sourceDir`, to the resolved host executable.
+  readonly executablePath: string;
+  readonly version: string;
+  readonly runtimeVersion: string | null;
+  readonly source: HostInstallSource;
+  readonly archiveSha256: string | null;
+  readonly signatureVerifiedAt: string;
+  readonly signatureKeyId: string;
+  readonly sizeBytes: number;
+  readonly onProgress: (info: ProgressInfo) => void;
+  readonly lifecycle: InstallHostLifecycle | null;
+  // Invoked the instant the atomic rename into `install/` completes, before
+  // `lifecycle.afterSwap()` runs - lets a caller that owns its own
+  // source-dir cleanup (`installHost`'s finally block) distinguish "bytes
+  // are committed, a later step failed" from "never swapped, the source dir
+  // still needs cleanup", without re-deriving that boundary itself.
+  readonly onCommitted: () => void;
+}
+
+export interface CommitInstallFromSourceResult {
+  readonly record: HostInstallRecord;
+  readonly previous: HostInstallRecord | null;
+}
+
+// The reusable stop -> swap -> start tail: everything from "a verified,
+// pre-staged source tree exists" through "the new install is committed and
+// the service is running again". Shared between `installHost` (which stages
+// and extracts its own source first) and `host apply`'s core (ticket 2's
+// B1, which promotes the already-extracted `staged/` tree with no
+// extraction step of its own).
+//
+// `install.json` is materialized INSIDE `sourceDir` before the commit
+// rename below - the record then moves atomically WITH the bytes in one
+// rename, instead of a separate post-swap write that could land bytes with
+// no record on a crash in between (the on-disk state the reconcile
+// "orphan"/target-missing rules are built to heal either side of, never a
+// bytes-with-no-record gap).
+export async function commitInstallFromSource(
+  opts: CommitInstallFromSourceOptions,
+): Promise<CommitInstallFromSourceResult> {
+  const logger = createCliLogger(opts.environment);
+  const previous = await readHostInstallRecord(opts.environment);
+
+  const finalExecutablePath = opts.executablePath.replace(
+    opts.sourceDir,
+    hostInstallDir(opts.environment),
+  );
+  const record: HostInstallRecord = {
+    installId: randomUUID(),
+    version: opts.version,
+    runtimeVersion: opts.runtimeVersion,
+    platform: currentInstallPlatform(),
+    arch: currentInstallArch(),
+    installedAt: new Date().toISOString(),
+    source: opts.source,
+    archiveSha256: opts.archiveSha256,
+    signatureVerifiedAt: opts.signatureVerifiedAt,
+    signatureKeyId: opts.signatureKeyId,
+    sizeBytes: opts.sizeBytes,
+    executablePath: finalExecutablePath,
+  };
+  await writeHostInstallRecordAt(opts.sourceDir, record);
+  logger.info("Host install record materialized in source tree", {
+    environment: opts.environment,
+    version: record.version,
+    installId: record.installId,
+  });
+
+  // Stop the OS service immediately before the swap, never earlier:
+  // verify-before-replace means we must not disturb the running host if
+  // staging or verification would have failed.
+  if (opts.lifecycle !== null) {
+    opts.onProgress({
+      stage: "service-stop",
+      message: "stopping service before replacing install directory",
+      percent: null,
+      bytes: null,
+      totalBytes: null,
+    });
+    logger.info("Host install running lifecycle before swap", {
+      environment: opts.environment,
+      version: record.version,
+    });
+    await opts.lifecycle.beforeSwap();
+  }
+
+  opts.onProgress({
+    stage: "swap",
+    message: "atomically replacing install directory",
+    percent: null,
+    bytes: null,
+    totalBytes: null,
+  });
+  await atomicSwap({
+    environment: opts.environment,
+    stagingDir: opts.sourceDir,
+  });
+  opts.onCommitted();
+  logger.info("Host install atomic swap completed", {
+    environment: opts.environment,
+    version: record.version,
+    replacedPreviousInstall: previous !== null,
+  });
+
+  // Post-swap start/restart. Per the Tech Plan, failures here do not roll
+  // back the install: the new host stays in place and Doctor surfaces the
+  // non-readiness. The hook is responsible for swallowing start errors if
+  // it wants the caller to report success.
+  if (opts.lifecycle !== null) {
+    opts.onProgress({
+      stage: "service-start",
+      message: "starting service after replacing install directory",
+      percent: null,
+      bytes: null,
+      totalBytes: null,
+    });
+    logger.info("Host install running lifecycle after swap", {
+      environment: opts.environment,
+      version: record.version,
+    });
+    await opts.lifecycle.afterSwap();
+  }
+
+  return { record, previous };
 }
 
 // Sweep `<target>.old-*` siblings left behind by atomicSwap if the CLI
 // crashed between a successful rename-aside and the fire-and-forget
-// `rm(trash)`. Called from `atomicSwap` on entry (so a repeated
-// install/update keeps the floor clean) and from the uninstaller. Best
+// invalidation. Called from `atomicSwap` on entry (so a repeated
+// install/update keeps the floor clean), from the uninstaller (for both
+// `install/` and, with `staged.json`, `staged/`), and from
+// `stage-reconcile.ts`. Layered invalidation (rename-to-`.dead-*` sibling
+// -> sidecar-unlink -> recursive removal -> accept-and-log residual)
+// shared with `stage-reconcile.ts`'s identical `staged.old-*` handling via
+// `aside-dirs.ts` - see that module's doc comment for the failure-mode
+// rationale (a single "unlink sidecar, then best-effort rm" pass could
+// leave a fully intact, restorable aside behind if both steps failed on
+// the same directory). `sidecarFilename` must match `target`'s own record
+// file (`install.json` for `install/`, `staged.json` for `staged/`) -
+// layer 2's unlink targets it by name, so the wrong name silently skips
+// straight to layer 3 instead of actually invalidating the record. Best
 // effort - a failed sweep never aborts the surrounding operation.
-export async function sweepOldTrash(target: string): Promise<void> {
-  const parent = dirname(target);
-  const prefix = `${basename(target)}.old-`;
-  let names: string[];
-  try {
-    names = await readdir(parent);
-  } catch {
-    return;
-  }
-  const matches = names
-    .filter((name) => name.startsWith(prefix))
-    .map((name) => join(parent, name));
+export async function sweepOldTrash(
+  target: string,
+  sidecarFilename: string,
+  logger: ILogger,
+): Promise<void> {
+  const matches = await listAsideDirsNewestFirst(target, "old-");
   await Promise.all(
-    matches.map((path) =>
-      rm(path, { recursive: true, force: true }).catch(() => undefined),
+    matches.map((match) =>
+      invalidateAsideDir(target, match, sidecarFilename, logger),
     ),
   );
+  await sweepDeadAsideDirs(target);
 }
 
 interface StageResult {
@@ -354,36 +596,6 @@ interface StageOptions {
   readonly source: InstallSourceArg;
   readonly onProgress: (info: ProgressInfo) => void;
   readonly recordVersionOverride: string | null;
-}
-
-async function stageInstall(opts: StageOptions): Promise<StageResult> {
-  const logger = createCliLogger(opts.environment);
-  const stagingRoot = hostStagingRoot(opts.environment);
-  const stagingDir = await mkdtemp(join(stagingRoot, "stage-"));
-  logger.debug("Host install staging directory created", {
-    environment: opts.environment,
-    sourceKind: opts.source.kind,
-  });
-  if (opts.source.kind === "local-file") {
-    return stageLocalFile({
-      environment: opts.environment,
-      sourcePath: opts.source.path,
-      stagingDir,
-      onProgress: opts.onProgress,
-      recordVersion: opts.recordVersionOverride,
-    });
-  }
-  // Registry-driven install. The client streams the archive into a
-  // temp directory under the OS tmpdir, verifies sha256 + minisign,
-  // and returns the verified archive path; the staging+extract step
-  // below then unpacks it into the per-environment staging dir before the
-  // atomic swap.
-  return stageRegistry({
-    environment: opts.environment,
-    versionRequest: opts.source.versionRequest,
-    stagingDir,
-    onProgress: opts.onProgress,
-  });
 }
 
 interface StageLocalOptions {
@@ -531,32 +743,6 @@ async function stageRegistry(opts: StageRegistryOptions): Promise<StageResult> {
   };
 }
 
-// Windows releases a terminated process's directory/file handles
-// asynchronously, so a rename issued right after the OS service stop
-// (which force-kills the host tree) can still observe EBUSY/EPERM for a
-// brief window even though the host is already dead. Retry a few times with
-// a short backoff (~2.5s total). POSIX renames don't raise these codes, so
-// this is a no-op there.
-const RENAME_RETRY_CODES = new Set(["EBUSY", "EPERM", "EACCES", "ENOTEMPTY"]);
-async function renameWithRetry(from: string, to: string): Promise<void> {
-  const delaysMs = [50, 100, 200, 400, 800, 1000];
-  for (let attempt = 0; ; attempt++) {
-    try {
-      await rename(from, to);
-      return;
-    } catch (cause) {
-      const code =
-        cause && typeof cause === "object" && "code" in cause
-          ? String((cause as { code?: unknown }).code)
-          : "";
-      if (attempt >= delaysMs.length || !RENAME_RETRY_CODES.has(code)) {
-        throw cause;
-      }
-      await new Promise((resolve) => setTimeout(resolve, delaysMs[attempt]));
-    }
-  }
-}
-
 interface AtomicSwapOptions {
   readonly environment: Environment;
   readonly stagingDir: string;
@@ -572,7 +758,7 @@ async function atomicSwap(opts: AtomicSwapOptions): Promise<void> {
   // create another one. Doesn't block the swap on sweep success - if
   // the sweep fails we log via the surrounding flow's progress and
   // continue.
-  await sweepOldTrash(target);
+  await sweepOldTrash(target, "install.json", logger);
 
   const targetExists = await access(target).then(
     () => true,
@@ -622,7 +808,16 @@ async function atomicSwap(opts: AtomicSwapOptions): Promise<void> {
     });
   }
   if (targetExists) {
-    await rm(trash, { recursive: true, force: true });
+    // Layered invalidation (rename-to-`.dead-*` -> sidecar-unlink ->
+    // recursive-rm -> accept-and-log), not a plain `rm`: mirrors
+    // `download-stage.ts`'s `replaceStagedDir`, which creates and discards
+    // asides via this identical explicit-replace shape. A bare `rm` that
+    // failed on every retry (e.g. a lingering Windows handle) would leave
+    // `trash` as a fully intact, restorable `install.old-*` copy -
+    // exactly the residual `sweepOldTrash` above exists to heal, so a
+    // failed deletion here must not be more recoverable than one caught by
+    // the next sweep.
+    await invalidateAsideDir(target, trash, "install.json", logger);
   }
 }
 
@@ -661,7 +856,10 @@ function deriveLocalVersion(sourcePath: string): string {
   return `local-${base}-${stamp}`;
 }
 
-function currentInstallPlatform(): HostInstallPlatform {
+// Exported so the stage reconcile helper can validate a staged/aside
+// candidate's `platform`/`arch` against the CURRENT machine without
+// duplicating this resolution.
+export function currentInstallPlatform(): HostInstallPlatform {
   const platform = osPlatform();
   if (platform === "darwin" || platform === "linux" || platform === "win32") {
     return platform;
@@ -674,7 +872,7 @@ function currentInstallPlatform(): HostInstallPlatform {
   });
 }
 
-function currentInstallArch(): HostInstallArch {
+export function currentInstallArch(): HostInstallArch {
   const arch = osArch();
   if (arch === "arm64" || arch === "x64") return arch;
   throw cliError({

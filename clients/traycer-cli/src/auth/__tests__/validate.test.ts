@@ -9,6 +9,19 @@ vi.mock("../../../../shared/auth/auth-validation", () => ({
   validateAuthTokenViaHttp: vi.fn(),
 }));
 
+const loggerMock = vi.hoisted(() => ({
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+}));
+
+// `validateStoredCredentials` emits diagnostic logs. Keep this unit test
+// hermetic rather than appending those diagnostics to the live CLI log.
+vi.mock("../../logger", () => ({
+  createCliLogger: () => loggerMock,
+}));
+
 vi.mock("../../store/credentials", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../store/credentials")>();

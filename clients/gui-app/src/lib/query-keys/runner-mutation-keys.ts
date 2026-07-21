@@ -15,11 +15,12 @@ export const runnerMutationKeys = {
   traycerEnvOverrideSet: () => ["runner.traycer.envOverrideSet"] as const,
   traycerEnvOverrideDelete: () => ["runner.traycer.envOverrideDelete"] as const,
   traycerCliLogin: () => ["runner.traycer.cliLogin"] as const,
-  // Host-management mutations consumed by Settings → Host and the
-  // Doctor failure card.
-  hostInstall: () => ["runner.host.install"] as const,
-  hostEnsure: () => ["runner.host.ensure"] as const,
-  hostUpdate: () => ["runner.host.update"] as const,
+  // Host-management mutations consumed by the host gate, update banner,
+  // Settings → Host, and the Doctor failure card.
+  hostInstallVersion: () => ["runner.host.installVersion"] as const,
+  hostConvergeReady: () => ["runner.host.convergeReady"] as const,
+  hostApplyStaged: () => ["runner.host.applyStaged"] as const,
+  hostActivateInstalled: () => ["runner.host.activateInstalled"] as const,
   hostRestart: () => ["runner.host.restart"] as const,
   hostRegisterService: () => ["runner.host.registerService"] as const,
   hostDeregisterService: () => ["runner.host.deregisterService"] as const,
@@ -57,8 +58,6 @@ export const runnerMutationKeys = {
 };
 
 export const runnerQueryKeys = {
-  serviceStatus: (service: object) =>
-    ["runner.serviceStatus", service] as const,
   serviceLogTail: (service: object, maxLines: number) =>
     ["runner.serviceLogTail", service, maxLines] as const,
   // `traycerCli: object` keys these queries to a specific runner-host
@@ -87,24 +86,14 @@ export const runnerQueryKeys = {
       ...runnerQueryKeys.hostAvailableVersionsScope(management),
       includePreReleases,
     ] as const,
-  // Channel-scoped: the registry resolves a different exact target under
-  // stable vs. release-candidate, so a channel switch must not let any window
-  // keep reading (or confirming) the previous channel's cached version. Keying
-  // on `allowPrerelease` retires the old entry the moment main pushes the new
-  // channel snapshot, ahead of the refreshed registry state that follows it.
-  hostRegistryUpdateScope: (management: object) =>
+  hostRegistryUpdate: (management: object) =>
     ["runner.host.registryUpdate", management] as const,
-  hostRegistryUpdate: (management: object, allowPrerelease: boolean) =>
-    [
-      ...runnerQueryKeys.hostRegistryUpdateScope(management),
-      allowPrerelease,
-    ] as const,
-  // Canonical cross-surface "is a host mutation running" status (Ticket:
-  // host-update-race-conditions). Primed once via `getOperationStatus()` on
-  // mount, then pushed by `HostOperationStatusListener` - never refetched by
-  // TanStack's normal mechanisms, since it is entirely event-sourced.
-  hostOperationStatus: (management: object) =>
-    ["runner.host.operationStatus", management] as const,
+  // Canonical two-lane `HostController` status (Host Update Layer Redesign
+  // Tech Plan). Primed once via `getHostControllerStatus()` on mount, then
+  // pushed by `HostControllerStatusListener` - never refetched by TanStack's
+  // normal mechanisms, since it is entirely event-sourced.
+  hostControllerStatus: (management: object) =>
+    ["runner.host.controllerStatus", management] as const,
   hostInstalledRecord: (management: object) =>
     ["runner.host.installedRecord", management] as const,
   hostLogs: (management: object, tailLines: number) =>

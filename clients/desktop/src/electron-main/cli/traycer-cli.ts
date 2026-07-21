@@ -7,6 +7,23 @@ import {
 } from "./cli-discovery";
 
 /**
+ * Fixup A8: every lock-taking CLI command (`host service install/uninstall`,
+ * `host stamp-runtime`, `host free-port`, `host uninstall [--all]`, `host
+ * restart`, `host apply`, `host install`, `host ensure`, ...) waits up to
+ * `waitMs: 30_000` internally on the shared `cli-lock` before terminally
+ * throwing `E_CLI_LOCK_BUSY` (every `withCliLock` call site under
+ * `traycer-cli/src/commands/`). `runTraycerCliJsonWithInvocation` used to
+ * SIGKILL at a flat 10s - well inside that 30s window - so desktop never
+ * saw the CLI's own busy classification (breaking the exhausted-lock ->
+ * `deferred` terminal contract) and, worse, could kill the CLI the instant
+ * AFTER it won the lock and entered its critical section: a torn
+ * install/staged/pid record, the single most dangerous defect class in
+ * this ticket. Must exceed the CLI's own lock wait with real margin for
+ * process spawn + stdio/IPC overhead, never merely match it.
+ */
+const CLI_JSON_TIMEOUT_MS = 45_000;
+
+/**
  * Structured error thrown when the CLI subprocess exits non-zero or emits
  * an NDJSON `error` event. Carries the CLI's stable error `code` (e.g.
  * `CLI_UPGRADE_REPLACE_FAILED`) when present so Desktop can render a
@@ -122,6 +139,28 @@ export async function resolveTraycerCliInvocation(): Promise<TraycerCliInvocatio
   );
 }
 
+/**
+ * Bundled-only resolution for `HostController` (Host Update Layer Redesign
+ * Tech Plan, D7: "The controller always invokes the desktop-bundled,
+ * version-matched CLI for host operations. The discovered
+ * package-manager/PATH CLI remains for terminal use and CLI
+ * self-management."). Skips the manifest/PATH steps `resolveTraycerCliInvocation`
+ * uses - a controller-driven host mutation must never race a differently
+ * versioned PATH/manifest CLI outside the lock's current-generation
+ * guarantee. `resolveBundledCliPath` already resolves to the staged dev
+ * wrapper in dev builds, so this covers both packaged and `make
+ * dev-desktop` transparently.
+ */
+export async function resolveBundledTraycerCliInvocation(): Promise<TraycerCliInvocation> {
+  const bundled = await resolveBundledCliPath();
+  if (bundled !== null) {
+    return { command: bundled, args: [] };
+  }
+  throw new Error(
+    `traycer CLI: no bundled CLI found (looked for ${cliBinaryName()} under app resources). This is a broken install - run \`traycer host doctor\` or reinstall Traycer.`,
+  );
+}
+
 export interface RunTraycerCliOptions {
   /**
    * Subcommand args appended after the resolved CLI command. E.g.
@@ -150,6 +189,21 @@ export async function runTraycerCli(
   opts: RunTraycerCliOptions,
 ): Promise<TraycerCliResult> {
   const inv = await resolveTraycerCliInvocation();
+  return runTraycerCliWithInvocation(inv, opts);
+}
+
+/**
+ * Same as `runTraycerCli`, but the caller supplies an already-resolved
+ * `TraycerCliInvocation` instead of letting this module resolve one via
+ * `resolveTraycerCliInvocation()`. Extracted so `runBundledTraycerCliJson`
+ * (D7: bundled-only invocation for `HostController`) can reuse the exact
+ * same spawn/error-decoration logic without re-resolving through the
+ * manifest/PATH steps.
+ */
+async function runTraycerCliWithInvocation(
+  inv: TraycerCliInvocation,
+  opts: RunTraycerCliOptions,
+): Promise<TraycerCliResult> {
   const allArgs = [...inv.args, ...opts.args];
   return new Promise((resolve, reject) => {
     execFile(
@@ -312,13 +366,34 @@ export async function runTraycerCliPlainJson<T>(
 export async function runTraycerCliJson<T>(
   args: readonly string[],
 ): Promise<T> {
+  const inv = await resolveTraycerCliInvocation();
+  return runTraycerCliJsonWithInvocation(inv, args);
+}
+
+/**
+ * Bundled-only counterpart to `runTraycerCliJson` (D7: `HostController`
+ * host operations always invoke the desktop-bundled, version-matched CLI -
+ * never the discovered manifest/PATH CLI `runTraycerCliJson` resolves).
+ * Same envelope contract; only the invocation resolution differs.
+ */
+export async function runBundledTraycerCliJson<T>(
+  args: readonly string[],
+): Promise<T> {
+  const inv = await resolveBundledTraycerCliInvocation();
+  return runTraycerCliJsonWithInvocation(inv, args);
+}
+
+async function runTraycerCliJsonWithInvocation<T>(
+  inv: TraycerCliInvocation,
+  args: readonly string[],
+): Promise<T> {
   const augmented = ensureJsonFlag(args);
   let result: TraycerCliResult;
   try {
-    result = await runTraycerCli({
+    result = await runTraycerCliWithInvocation(inv, {
       args: augmented,
       maxBuffer: 1024 * 1024,
-      timeoutMs: 10_000,
+      timeoutMs: CLI_JSON_TIMEOUT_MS,
     });
   } catch (err) {
     // execFile rejects on non-zero exit with an Error that carries
@@ -528,14 +603,12 @@ export interface StreamTraycerCliOptions {
   readonly onEvent: (event: NdjsonEvent) => void;
   readonly env: Readonly<Record<string, string>> | null;
   readonly timeoutMs: number;
-  /**
-   * Explicit CLI binary + leading args. Pass `null` to resolve via the
-   * standard discovery chain ({@link resolveTraycerCliInvocation}). Host
-   * exact updates pass a capability-negotiated invocation so an older
-   * authoritative external CLI can be replaced by a capable bundled CLI
-   * for `host update --release` only.
-   */
-  readonly invocation: TraycerCliInvocation | null;
+  // Fixup C4: killed the moment this fires (SIGKILL, same as the timeout/
+  // stdout-overflow paths below) instead of only flipping `.aborted` on a
+  // controller nothing downstream ever consulted. `null` for callers with
+  // no cancellation surface (every mutation-lane call via `streamBundled` -
+  // only the download lane's `AbortController` ever aborts).
+  readonly signal: AbortSignal | null;
 }
 
 export interface StreamTraycerCliResult<T> {
@@ -555,10 +628,29 @@ export interface StreamTraycerCliResult<T> {
 export async function streamTraycerCliJson<T>(
   opts: StreamTraycerCliOptions,
 ): Promise<StreamTraycerCliResult<T>> {
-  const inv =
-    opts.invocation !== null
-      ? opts.invocation
-      : await resolveTraycerCliInvocation();
+  const inv = await resolveTraycerCliInvocation();
+  return streamTraycerCliJsonWithInvocation(inv, opts);
+}
+
+/**
+ * Bundled-only counterpart to `streamTraycerCliJson` (D7: every CLI
+ * subprocess `HostController` spawns for a host mutation - apply, install,
+ * ensure, download, service register/deregister, restart, uninstall - uses
+ * the desktop-bundled, version-matched CLI, never the discovered
+ * manifest/PATH one). Same NDJSON progress/result contract; only the
+ * invocation resolution differs.
+ */
+export async function streamBundledTraycerCliJson<T>(
+  opts: StreamTraycerCliOptions,
+): Promise<StreamTraycerCliResult<T>> {
+  const inv = await resolveBundledTraycerCliInvocation();
+  return streamTraycerCliJsonWithInvocation(inv, opts);
+}
+
+async function streamTraycerCliJsonWithInvocation<T>(
+  inv: TraycerCliInvocation,
+  opts: StreamTraycerCliOptions,
+): Promise<StreamTraycerCliResult<T>> {
   const augmentedArgs = ensureJsonFlag(opts.args);
   const allArgs = [...inv.args, ...augmentedArgs];
   return new Promise<StreamTraycerCliResult<T>>((resolve, reject) => {
@@ -572,28 +664,70 @@ export async function streamTraycerCliJson<T>(
     let terminalResult: T | null = null;
     let sawTerminalOk = false;
     let terminalError: TraycerCliError | null = null;
+    let abortError: TraycerCliError | null = null;
+    let timeoutError: TraycerCliError | null = null;
     let settled = false;
+    const cleanupAbortListener = (): void => {
+      if (opts.signal !== null) {
+        opts.signal.removeEventListener("abort", onAbort);
+      }
+    };
     const timer = setTimeout(() => {
       if (settled) return;
-      settled = true;
+      // Killing a timed-out child does not mean it has released its files.
+      // Keep this stream promise pending until `close`, just like explicit
+      // cancellation, so Remove Traycer's download-drain cannot launch an
+      // uninstall while the child is still exiting.
+      timeoutError = new TraycerCliError(
+        {
+          message: `traycer-cli timed out after ${opts.timeoutMs}ms (${augmentedArgs.join(" ")})`,
+          code: null,
+          details: null,
+          exitCode: null,
+          stderrTail,
+        },
+        null,
+      );
       try {
         child.kill("SIGKILL");
       } catch {
         // ignore - already exited
       }
-      reject(
-        new TraycerCliError(
-          {
-            message: `traycer-cli timed out after ${opts.timeoutMs}ms (${augmentedArgs.join(" ")})`,
-            code: null,
-            details: null,
-            exitCode: null,
-            stderrTail,
-          },
-          null,
-        ),
-      );
     }, opts.timeoutMs);
+    // Fixup C4: the ONLY current caller (`runDownloadLane`'s
+    // `abortInFlightDownload`) used to flip `AbortController.signal.aborted`
+    // with nothing downstream ever wired to it - the spawned CLI subprocess
+    // ran to completion regardless, so Remove Traycer's cancellation was
+    // cosmetic (a download could burn network/CPU for up to
+    // `CLI_JSON_TIMEOUT_MS` after removal). The child is killed immediately,
+    // but this promise settles only after `close` so a follow-on uninstall
+    // cannot race a child still holding or promoting files.
+    const onAbort = (): void => {
+      if (settled || abortError !== null || timeoutError !== null) return;
+      clearTimeout(timer);
+      abortError = new TraycerCliError(
+        {
+          message: `traycer-cli aborted: ${augmentedArgs.join(" ")}`,
+          code: null,
+          details: null,
+          exitCode: null,
+          stderrTail,
+        },
+        null,
+      );
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // ignore - already exited
+      }
+    };
+    if (opts.signal !== null) {
+      if (opts.signal.aborted) {
+        onAbort();
+      } else {
+        opts.signal.addEventListener("abort", onAbort, { once: true });
+      }
+    }
 
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
@@ -647,9 +781,10 @@ export async function streamTraycerCliJson<T>(
     });
 
     child.on("error", (err) => {
-      if (settled) return;
+      if (settled || abortError !== null || timeoutError !== null) return;
       settled = true;
       clearTimeout(timer);
+      cleanupAbortListener();
       reject(
         new TraycerCliError(
           {
@@ -668,6 +803,15 @@ export async function streamTraycerCliJson<T>(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      cleanupAbortListener();
+      if (abortError !== null) {
+        reject(abortError);
+        return;
+      }
+      if (timeoutError !== null) {
+        reject(timeoutError);
+        return;
+      }
       if (terminalError !== null) {
         reject(
           new TraycerCliError(

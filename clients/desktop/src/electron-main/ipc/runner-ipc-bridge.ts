@@ -51,7 +51,7 @@ import { registerOwnershipIpc } from "./ownership-ipc";
 import { registerPerWindowStateIpc } from "./per-window-state-ipc";
 import { registerHostIpc } from "./host-ipc";
 import { registerHostManagementIpc } from "./host-management-ipc";
-import { registerHostEnsureIpc } from "./host-ensure-ipc";
+import { registerHostControllerStatusBroadcast } from "./host-controller-status-broadcast";
 import { registerMigrationIpc } from "./migration-ipc";
 import { registerSupportIpc } from "./support-ipc";
 import { registerTraycerCliIpc } from "./traycer-cli-ipc";
@@ -65,6 +65,19 @@ import {
   aggregateUnsyncedSnapshots,
   registerLifecycleIpc,
 } from "./lifecycle-ipc";
+import type {
+  ActivateInstalledOk,
+  ApplyStagedOk,
+  ApplyStagedTrigger,
+  ConvergeReadyOk,
+  HostControllerStatus,
+  InstallVersionOk,
+  MutationOutcome,
+  MutationProgress,
+  RemoveTraycerOk,
+  ServiceRegistrationOk,
+  UninstallOk,
+} from "../host/host-controller-types";
 
 /**
  * Minimal window surface the bridge needs. Declaring it structurally lets
@@ -198,13 +211,11 @@ export interface IpcHostLifecycle {
   getSnapshot(): DesktopLocalHostSnapshot | null;
   on(event: "change", listener: HostChangeListener): void;
   off(event: "change", listener: HostChangeListener): void;
-  respawn(): Promise<void>;
   /**
-   * Used by the macOS host-owned-login-item respawn path
-   * (`app/host-respawn.ts:respawnViaLoginItem`) to mark the host
-   * as "down" from the renderer's perspective before driving the
-   * SMAppService re-register cycle itself, without re-entering
-   * `respawn()`'s CLI-restart codepath.
+   * Used by `HostController`'s packaged-macOS activation cycle to mark the
+   * host as "down" from the renderer's perspective before driving the
+   * SMAppService re-register cycle, without going through a full mutation
+   * round-trip first.
    */
   notifyRespawning(): void;
   /**
@@ -236,17 +247,54 @@ export interface IpcHostLifecycle {
    * torn down by an FSEvents stream reset earlier in the session.
    */
   ensureWatcherInstalled(): void;
-  getServiceStatus(): Promise<{
-    state: "running" | "stopped" | "not-installed";
-    version: string | null;
-    listenUrl: string | null;
-    pid: number | null;
-  }>;
   getRecentLogTail(maxLines: number): Promise<string | null>;
+}
+
+/**
+ * Structural surface of `HostController` (Host Update Layer Redesign Tech
+ * Plan, "Desktop main: HostController") that IPC handlers and background
+ * monitors depend on. Declared here - not imported from `host-controller.ts`
+ * - so tests can pass a lightweight double instead of constructing the real
+ * class, the same pattern `IpcHostLifecycle` already uses for `HostLifecycle`.
+ * The real `HostController` satisfies this structurally; no explicit
+ * `implements` needed.
+ */
+export interface IpcHostController {
+  getStatus(): Promise<HostControllerStatus>;
+  convergeReady(force: boolean): Promise<MutationOutcome<ConvergeReadyOk>>;
+  stageLatest(): Promise<void>;
+  applyStaged(
+    trigger: ApplyStagedTrigger,
+    force: boolean,
+  ): Promise<MutationOutcome<ApplyStagedOk>>;
+  activateInstalled(
+    force: boolean,
+  ): Promise<MutationOutcome<ActivateInstalledOk>>;
+  installVersion(
+    pin: string,
+    force: boolean,
+  ): Promise<MutationOutcome<InstallVersionOk>>;
+  registerService(): Promise<MutationOutcome<ServiceRegistrationOk>>;
+  deregisterService(): Promise<MutationOutcome<ServiceRegistrationOk>>;
+  respawn(): Promise<MutationOutcome<ActivateInstalledOk>>;
+  recoverIfDown(): Promise<
+    MutationOutcome<ActivateInstalledOk> | { readonly kind: "suppressed" }
+  >;
+  freePortAndRestart(
+    pid: number | null,
+    port: number | null,
+  ): Promise<MutationOutcome<ActivateInstalledOk>>;
+  uninstallHost(all: boolean): Promise<MutationOutcome<UninstallOk>>;
+  removeTraycer(): Promise<MutationOutcome<RemoveTraycerOk>>;
+  isPendingRevisionRefreshQuarantined(): boolean;
+  onMutationProgress(
+    listener: (progress: MutationProgress) => void,
+  ): () => void;
 }
 
 export interface RunnerIpcOptions {
   readonly host: IpcHostLifecycle;
+  readonly hostController: IpcHostController;
   readonly authnBaseUrl: string;
   // Dev loopback redirect_uri; null when the build uses the custom-scheme
   // deep link (staging/prod). Snapshotted by the renderer to compose sign-in.
@@ -258,6 +306,7 @@ export interface RunnerIpcOptions {
 
 export interface RunnerIpcRegistryOptions {
   readonly host: IpcHostLifecycle;
+  readonly hostController: IpcHostController;
   readonly authnBaseUrl: string;
   readonly authRedirectUri: string | null;
   readonly tray: DesktopTrayController | null;
@@ -350,7 +399,7 @@ export class RunnerIpcBridge {
     registerSupportIpc(this);
     registerHostIpc(this);
     registerHostManagementIpc(this);
-    registerHostEnsureIpc(this);
+    registerHostControllerStatusBroadcast(this);
     registerMigrationIpc(this);
     registerTraycerCliIpc(this);
     // Platform IPC (recent docs, window effects, diagnostics, etc.) is wired
@@ -415,10 +464,7 @@ export class RunnerIpcBridge {
     this.deliverToOwnedOrMru(epicId, RunnerHostEvent.trayEpicSelected, epicId);
   }
 
-  dispatchMenuCommand(
-    command: MenuCommandId,
-    hostUpdateVersion: string | null,
-  ): boolean {
+  dispatchMenuCommand(command: MenuCommandId): boolean {
     const target = this.resolveRendererHostedCommandTarget(command);
     if (target === null) {
       return false;
@@ -429,7 +475,6 @@ export class RunnerIpcBridge {
     return this.safeSendToWindow(target.windowId, RunnerHostEvent.menuCommand, {
       command,
       windowId: target.windowId,
-      hostUpdateVersion,
     } satisfies MenuCommandPayload);
   }
 

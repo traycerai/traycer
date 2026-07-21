@@ -6,6 +6,7 @@ import { buildAuthBridge } from "./auth-bridge";
 import { buildDeviceFlowBridge } from "./device-flow-bridge";
 import { buildHostBridge } from "./host-bridge";
 import {
+  buildHostControllerStatusSubscriber,
   buildHostManagementBridge,
   buildHostTrayCommandSubscriber,
 } from "./host-management-bridge";
@@ -75,4 +76,5 @@ contextBridge.exposeInMainWorld("runnerHost", {
   ...buildZoomBridge(),
   hostManagement: buildHostManagementBridge(),
   hostTray: buildHostTrayCommandSubscriber(),
+  hostControllerStatus: buildHostControllerStatusSubscriber(),
 });

@@ -12,6 +12,7 @@ import {
   type RunHostStartDeps,
 } from "../host-start";
 import type { HostInstallRecord } from "../../manifest/host-install";
+import { noopLogger } from "../../logger";
 import { hostHomeDir } from "../../store/paths";
 import { withDevDesktopSlotAsync as withDevDesktopSlot } from "@traycer-clients/shared/test-fixtures/dev-desktop-slot";
 
@@ -26,6 +27,7 @@ import { withDevDesktopSlotAsync as withDevDesktopSlot } from "@traycer-clients/
 
 function sampleRecord(executablePath: string): HostInstallRecord {
   return {
+    installId: null,
     version: "1.0.0",
     runtimeVersion: null,
     platform: "darwin",
@@ -195,6 +197,12 @@ function makeRunStubs(
   const childAsUnknown: unknown = child;
   const childAsProcess: ChildProcess = childAsUnknown as ChildProcess;
   const deps: Partial<RunHostStartDeps> = {
+    // `runHostStart` falls back to the REAL `createCliLogger` (writing to
+    // the actual production `~/.traycer/cli/cli.log`) via `deps.logger ??
+    // createCliLogger(...)` whenever this is left unset - `??` treats
+    // `undefined` as nullish just like a missing key, so it must be
+    // supplied explicitly here, not left to the `Partial` default.
+    logger: noopLogger,
     readInstallRecord: async () => installRecord,
     pathExists: async (p: string) =>
       (existsOverride ?? ((q: string) => q === installRecord?.executablePath))(
