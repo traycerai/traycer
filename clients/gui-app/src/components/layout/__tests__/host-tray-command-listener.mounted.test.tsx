@@ -87,6 +87,7 @@ const DEBT_STATUS: HostControllerStatus = {
 
 interface ManagementOverrides {
   readonly status?: HostControllerStatus;
+  readonly getHostControllerStatus?: IHostManagement["getHostControllerStatus"];
   readonly applyStaged?: IHostManagement["applyStaged"];
   readonly activateInstalled?: IHostManagement["activateInstalled"];
 }
@@ -94,7 +95,8 @@ interface ManagementOverrides {
 function makeManagement(overrides: ManagementOverrides): IHostManagement {
   const status = overrides.status ?? READY_STATUS;
   return {
-    getHostControllerStatus: vi.fn(() => Promise.resolve(status)),
+    getHostControllerStatus:
+      overrides.getHostControllerStatus ?? vi.fn(() => Promise.resolve(status)),
     convergeReady: vi.fn(() =>
       Promise.resolve({
         kind: "ok" as const,
@@ -348,32 +350,42 @@ describe("<HostTrayCommandListener /> - mounted in __root", () => {
     expect(management.applyStaged).not.toHaveBeenCalled();
   });
 
-  it("does not treat an unavailable host as activation debt", async () => {
-    const tray = createTray();
-    const management = makeManagement({
-      status: {
-        ...DEBT_STATUS,
-        installedVersion: null,
-        activation: "unavailable",
-        reachable: false,
-      },
-    });
-    renderListener(makeHost(tray.bridge, management));
-    await waitFor(() =>
-      expect(management.getHostControllerStatus).toHaveBeenCalled(),
-    );
+  it.each([
+    ["unavailable", { ...DEBT_STATUS, activation: "unavailable" as const }],
+    ["activated", { ...DEBT_STATUS, activation: "activated" as const }],
+    ["undefined", undefined],
+  ] as const)(
+    "dismisses and refetches an invalid %s status on confirm",
+    async (_label, status) => {
+      const tray = createTray();
+      const getHostControllerStatus: IHostManagement["getHostControllerStatus"] =
+        status === undefined
+          ? () => new Promise<HostControllerStatus>(() => undefined)
+          : () => Promise.resolve(status);
+      const getStatusSpy = vi.fn(getHostControllerStatus);
+      const management = makeManagement({
+        status: READY_STATUS,
+        getHostControllerStatus: getStatusSpy,
+      });
+      renderListener(makeHost(tray.bridge, management));
+      await waitFor(() => expect(getStatusSpy).toHaveBeenCalledOnce());
 
-    act(() => tray.emit({ kind: "installUpdate", version: "1.4.0" }));
-    await screen.findByTestId("confirm-destructive-dialog");
-    fireEvent.click(screen.getByTestId("confirm-action"));
+      act(() => tray.emit({ kind: "installUpdate", version: "1.4.0" }));
+      await screen.findByTestId("confirm-destructive-dialog");
+      fireEvent.click(screen.getByTestId("confirm-action"));
 
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    });
-
-    expect(management.applyStaged).not.toHaveBeenCalled();
-    expect(management.activateInstalled).not.toHaveBeenCalled();
-  });
+      await waitFor(() => {
+        // An unresolved initial query deduplicates the explicit refetch; the
+        // fulfilled stale-status cases execute a second controller read.
+        expect(getStatusSpy).toHaveBeenCalledTimes(
+          status === undefined ? 1 : 2,
+        );
+      });
+      expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+      expect(management.applyStaged).not.toHaveBeenCalled();
+      expect(management.activateInstalled).not.toHaveBeenCalled();
+    },
+  );
 
   it("opens the Force/Defer dialog on a busy outcome, and Force re-submits with force:true", async () => {
     const tray = createTray();

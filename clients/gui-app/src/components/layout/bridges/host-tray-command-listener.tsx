@@ -62,7 +62,8 @@ export function HostTrayCommandListener() {
   const openLogs = useDesktopDialogStore((state) => state.openLogs);
   const queryClient = useQueryClient();
   const management = runnerHost.hostManagement;
-  const status = useRunnerHostControllerStatusQuery().data;
+  const { data: status, refetch: refetchStatus } =
+    useRunnerHostControllerStatusQuery();
   const [pendingRestart, setPendingRestart] = useState<boolean>(false);
   const [pendingInstallVersion, setPendingInstallVersion] = useState<
     string | null
@@ -262,6 +263,9 @@ export function HostTrayCommandListener() {
             status?.activation === "activationUnknown"
           ) {
             runActivate(false);
+          } else {
+            setPendingInstallVersion(null);
+            void refetchStatus({ cancelRefetch: true });
           }
         }}
       />
