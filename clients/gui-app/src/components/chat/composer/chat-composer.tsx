@@ -237,12 +237,13 @@ function ChatComposerImpl(props: ChatComposerProps) {
   // Rate-limit switch prompt: purely informational + user-confirmed, so it
   // never blocks send the way the reauth gate does. Scoped to the selected
   // model - a limit gating only another model family stays silent here.
-  const rateLimitPrompt = useProfileRateLimitSwitchPrompt(
+  const rateLimitPrompt = useProfileRateLimitSwitchPrompt({
     harnessId,
     profileId,
     selectedModel,
-    isActive,
-  );
+    active: isActive,
+    client: hostClient,
+  });
   // Keeps the switch prompt's own `providers.list` read converging with a
   // turn's passive rate-limit capture: without this, a turn that just pushed
   // this harness's profile into near/hard limit wouldn't surface the banner
