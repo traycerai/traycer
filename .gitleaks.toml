@@ -15,3 +15,10 @@ regexTarget = "secret"
 regexes = [
   '''eff2c8c42294f62b09cebd99d82c8c93b25URVNUO2V4OTk5OTk5OTk5OTk5OQ==''',
 ]
+
+[[allowlists]]
+description = "Historic WebSocket handshake test keys. These RFC 6455 fixture values are not credentials; allowlist only the two affected commits so the full-history scan remains strict elsewhere."
+commits = [
+  "89f06f265fc402b43d7261e77c51ee3fe5a34d58",
+  "62f701285fb2a74cec5460121c8b8b370396ea45",
+]
