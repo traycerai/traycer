@@ -1525,6 +1525,37 @@ describe("<RateLimitPopover /> Overview progressive reveal", () => {
     expect(screen.queryByText("4% used")).toBeNull();
   });
 
+  it("reveals an uncached signed-out provider instead of leaving Overview loading forever", async () => {
+    mocks.configured = [
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: undefined,
+        fetchEligibility: { ambient: false, managedProfiles: true },
+      },
+    ];
+    mocks.results = {
+      codex: {
+        data: undefined,
+        isPending: true,
+        isFetching: false,
+        isError: false,
+        dataUpdatedAt: 0,
+        refetch: vi.fn(() => Promise.resolve({})),
+      },
+    };
+
+    renderPopover();
+
+    await waitFor(() => {
+      expect(screen.queryByText("Fetching usage limits")).toBeNull();
+    });
+    expect(
+      screen.getByText("Codex").closest('[class*="gap-4"]')?.className,
+    ).not.toContain("hidden");
+    expect(screen.getByTestId("rate-limit-detail-skeleton")).toBeTruthy();
+  });
+
   it("reveals a provider in place as it resolves, hiding still-cold siblings, and drops the combined loader", () => {
     mocks.configured = [
       { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },

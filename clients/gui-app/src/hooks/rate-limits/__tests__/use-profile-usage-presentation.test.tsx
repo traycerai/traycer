@@ -3,7 +3,6 @@ import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
 import type {
-  ProviderAuthStatus,
   ProviderCliState,
   ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
@@ -20,6 +19,7 @@ import { queryKeys } from "@/lib/query-keys";
 import type { RunTargetHost } from "@/hooks/rate-limits/use-run-target-host";
 import { __resetRateLimitQueueForTests } from "@/lib/rate-limits/ephemeral-fetch-queue";
 import type { RateLimitUsageResponse } from "@/lib/rate-limits/rate-limit-envelope";
+import { rateLimitProviderState } from "./profile-usage-fixtures";
 
 // Mirrors `use-profile-usage-comparison.test.tsx`'s mocking approach:
 // `useProfileUsagePresentation` calls straight through to
@@ -75,33 +75,6 @@ function profile(
     ambientDriftNotice: null,
     accentColor: null,
     ...overrides,
-  };
-}
-
-function providerState(
-  providerId: "claude-code" | "openrouter",
-  status: ProviderAuthStatus,
-): ProviderCliState {
-  return {
-    enabled: true,
-    disabledBy: null,
-    selected: { kind: "bundled" },
-    candidates: [],
-    authPending: false,
-    checkedAt: null,
-    apiKey: { supported: false, configured: false, source: null },
-    terminalAgentArgs: "",
-    envOverrides: [],
-    loginCapability: null,
-    availabilityPending: false,
-    providerId,
-    auth: {
-      status,
-      badgeText: null,
-      label: null,
-      detail: null,
-    },
-    profiles: [],
   };
 }
 
@@ -176,7 +149,7 @@ describe("useProfileUsagePresentation", () => {
     __resetRateLimitQueueForTests();
     scopesRef.byHostId.clear();
     providerStateRef.providers = [
-      providerState("claude-code", "authenticated"),
+      rateLimitProviderState("claude-code", "authenticated"),
     ];
   });
   afterEach(() => {

@@ -1266,8 +1266,14 @@ function SingleProfileRateLimitProviderBlock({
       ? (query.data?.lastGoodAt ?? query.dataUpdatedAt)
       : query.dataUpdatedAt;
   useEffect(() => {
-    if (state.kind !== "cold" && onReady !== null) onReady();
-  }, [state.kind, onReady]);
+    // A disabled query with no cache stays pending forever by design: it is a
+    // passive observer for a signed-out provider, not a queue-owned cold
+    // read. Reveal that provider in Overview so its unavailable state cannot
+    // remain hidden behind the global loading indicator.
+    if ((!fetchEligible || state.kind !== "cold") && onReady !== null) {
+      onReady();
+    }
+  }, [fetchEligible, onReady, state.kind]);
 
   // Chip next to the name, single-provider tab only (Overview stays
   // condensed - same scoping the plan/tier line used before it moved into
