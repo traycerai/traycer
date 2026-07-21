@@ -67,6 +67,8 @@ export function ChordCaptureInput(props: ChordCaptureInputProps) {
     <ChordCaptureCore
       value={value}
       controlAware={controlAware}
+      requireModifier={false}
+      disabled={false}
       label={actionId}
       onCapture={onChange}
       onClear={onClear}

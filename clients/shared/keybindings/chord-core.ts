@@ -81,6 +81,53 @@ function keyToAcceleratorToken(key: ChordKey): string {
   return key;
 }
 
+const NAMED_KEYS = new Set<string>(Object.keys(KEY_TO_ACCELERATOR));
+const PUNCTUATION_KEYS = new Set<string>([
+  ",",
+  ".",
+  "/",
+  ";",
+  "'",
+  "`",
+  "-",
+  "=",
+  "[",
+  "]",
+  "\\",
+]);
+const FUNCTION_KEY_PATTERN = /^f([1-9]|1\d|2[0-4])$/;
+const LETTER_OR_DIGIT_KEY_PATTERN = /^[a-z0-9]$/;
+
+function isSupportedKey(key: ChordKey): boolean {
+  if (NAMED_KEYS.has(key)) return true;
+  if (FUNCTION_KEY_PATTERN.test(key)) return true;
+  if (key.length === 1) {
+    return LETTER_OR_DIGIT_KEY_PATTERN.test(key) || PUNCTUATION_KEYS.has(key);
+  }
+  return false;
+}
+
+/**
+ * Whether `chord` is a canonical `ChordString`: it round-trips through
+ * `parseChordString` -> `formatChord` back to the exact same string, and its
+ * key is in the supported vocabulary (the named keys `toAccelerator` maps,
+ * `f1`-`f24`, single letters/digits, and the punctuation keys
+ * `normalizeCode` produces).
+ *
+ * Used at both the persistence and IPC boundaries (amended decision 3, added
+ * after PR #533 review found `typeof chord === "string"` alone let malformed
+ * values like `"mod+"` or non-canonical token order reach Electron): a
+ * corrupt or hand-edited chord must resolve to the definition's default
+ * rather than becoming a confusing OS-refusal or a silently wrong
+ * registration.
+ */
+export function isValidChordString(chord: ChordString): boolean {
+  const parts = parseChordString(chord);
+  if (parts === null) return false;
+  if (!isSupportedKey(parts.key)) return false;
+  return formatChord(parts) === chord;
+}
+
 /**
  * Converts a canonical `ChordString` to Electron's `Accelerator` format (e.g.
  * `mod+shift+space` -> `CommandOrControl+Shift+Space`), the only place this

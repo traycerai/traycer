@@ -1,4 +1,5 @@
-import { useMutation } from "@tanstack/react-query";
+import { useState } from "react";
+import { useMutation, type UseMutationResult } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -18,7 +19,6 @@ import { runnerMutationKeys } from "@/lib/query-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
 import { trackSettingChanged } from "@/lib/analytics";
 import type {
-  DesktopGlobalShortcutsBridge,
   GlobalShortcutIntent,
   GlobalShortcutStatus,
 } from "@/lib/windows/types";
@@ -30,6 +30,12 @@ const SUB_LEADER_ACTION_IDS: ReadonlyArray<ActionId> = [
 
 const SUB_LEADER_ACTION_SET = new Set<ActionId>(SUB_LEADER_ACTION_IDS);
 
+type SummonHotkeyMutation = UseMutationResult<
+  GlobalShortcutStatus,
+  Error,
+  GlobalShortcutIntent
+>;
+
 export function KeybindingsSettingsPanel() {
   const bindings = useKeybindingStore((s) => s.bindings);
   const setBinding = useKeybindingStore((s) => s.setBinding);
@@ -39,6 +45,25 @@ export function KeybindingsSettingsPanel() {
   const primaryActionIds = ACTION_IDS.filter(
     (id) => !SUB_LEADER_ACTION_SET.has(id),
   );
+
+  // Lifted (rather than owned by `SummonHotkeyRow`) so the "Reset all to
+  // defaults" button below can share the exact same in-flight mutation - one
+  // request at a time, and the row's pending-disable (R3) also covers a
+  // reset triggered from here.
+  const { bridge: summonBridge, status: summonStatus } = useSummonHotkey();
+  const summonMutation: SummonHotkeyMutation = useMutation({
+    mutationKey: runnerMutationKeys.globalShortcutsSet("summon"),
+    mutationFn: (intent: GlobalShortcutIntent) => {
+      if (summonBridge === null) {
+        return Promise.reject(
+          new Error("Desktop global shortcuts are unavailable"),
+        );
+      }
+      return summonBridge.set("summon", intent);
+    },
+    onError: (error) =>
+      toastFromRunnerError(error, "Couldn't update the summon shortcut."),
+  });
 
   return (
     <section className="mx-auto w-full max-w-5xl px-8 py-10">
@@ -59,9 +84,24 @@ export function KeybindingsSettingsPanel() {
         setBinding={setBinding}
         clearBinding={clearBinding}
       />
-      <GlobalShortcutsSection />
+      {summonBridge === null ? null : (
+        <GlobalShortcutsSection
+          status={summonStatus}
+          mutation={summonMutation}
+        />
+      )}
       <div className="mt-6 flex items-center justify-end">
-        <Button type="button" variant="outline" size="sm" onClick={resetAll}>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            resetAll();
+            if (summonBridge !== null) {
+              summonMutation.mutate({ enabled: true, chord: null });
+            }
+          }}
+        >
           Reset all to defaults
         </Button>
       </div>
@@ -176,15 +216,17 @@ function DigitBindingDisplay(props: DigitBindingDisplayProps) {
   );
 }
 
+interface GlobalShortcutsSectionProps {
+  readonly status: GlobalShortcutStatus | null;
+  readonly mutation: SummonHotkeyMutation;
+}
+
 /**
  * Desktop-only: global (OS-level) shortcuts, backed by the main process
- * rather than `useKeybindingStore`/localStorage. Hidden entirely on shells
- * without the desktop bridge (browser tab, pre-registry builds).
+ * rather than `useKeybindingStore`/localStorage. The caller only renders this
+ * when the desktop global-shortcuts bridge is present.
  */
-function GlobalShortcutsSection() {
-  const { bridge, status } = useSummonHotkey();
-  if (bridge === null) return null;
-
+function GlobalShortcutsSection(props: GlobalShortcutsSectionProps) {
   return (
     <div className="mt-8">
       <header className="mb-3">
@@ -198,7 +240,7 @@ function GlobalShortcutsSection() {
       </header>
       <div className="overflow-hidden rounded-xl border border-border/60 bg-card/40">
         <ul className="divide-y divide-border/40">
-          <SummonHotkeyRow bridge={bridge} status={status} />
+          <SummonHotkeyRow status={props.status} mutation={props.mutation} />
         </ul>
       </div>
     </div>
@@ -206,22 +248,20 @@ function GlobalShortcutsSection() {
 }
 
 interface SummonHotkeyRowProps {
-  readonly bridge: DesktopGlobalShortcutsBridge;
   readonly status: GlobalShortcutStatus | null;
+  readonly mutation: SummonHotkeyMutation;
 }
 
 function SummonHotkeyRow(props: SummonHotkeyRowProps) {
-  const { bridge, status } = props;
+  const { status, mutation } = props;
   const bindings = useKeybindingStore((s) => s.bindings);
-  const mutation = useMutation({
-    mutationKey: runnerMutationKeys.globalShortcutsSet("summon"),
-    mutationFn: (intent: GlobalShortcutIntent) => bridge.set("summon", intent),
-    onSuccess: () => {
-      trackSettingChanged("keybindings", "summonHotkeyChord");
-    },
-    onError: (error) =>
-      toastFromRunnerError(error, "Couldn't update the summon shortcut."),
-  });
+  // Local, capture-session-scoped: a blocked ENABLE attempt (R1) is a
+  // distinct event from the OS `rejected` status and from a capture-time
+  // conflict (which `ChordCaptureCore` already renders itself) - it needs
+  // its own message slot, cleared on the next attempt.
+  const [enableConflictMessage, setEnableConflictMessage] = useState<
+    string | null
+  >(null);
 
   if (status === null) {
     return (
@@ -239,6 +279,9 @@ function SummonHotkeyRow(props: SummonHotkeyRowProps) {
   // than let the failure live only in logs.
   const rejected =
     mutation.data?.status === "rejected" || status.status === "rejected";
+  const statusMessage =
+    enableConflictMessage ??
+    (rejected ? "In use by another application." : null);
 
   return (
     <li className="flex items-center justify-between gap-6 px-5 py-3">
@@ -263,6 +306,24 @@ function SummonHotkeyRow(props: SummonHotkeyRowProps) {
             checked={status.intent.enabled}
             disabled={mutation.isPending}
             onCheckedChange={(checked) => {
+              if (checked) {
+                // Enabling makes `status.effectiveChord` live again - a
+                // renderer action may have claimed it while summon was off
+                // (it isn't reserved while disabled/rejected), so this is the
+                // one transition-to-live path `ChordCaptureCore`'s own
+                // capture-time check never sees.
+                const conflict = findConflict(
+                  bindings,
+                  null,
+                  status.effectiveChord,
+                  [],
+                );
+                if (conflict !== null && conflict.severity === "duplicate") {
+                  setEnableConflictMessage(conflict.message);
+                  return;
+                }
+              }
+              setEnableConflictMessage(null);
               trackSettingChanged("keybindings", "summonHotkeyEnabled");
               mutation.mutate({ enabled: checked, chord: status.intent.chord });
             }}
@@ -271,13 +332,17 @@ function SummonHotkeyRow(props: SummonHotkeyRowProps) {
           <ChordCaptureCore
             value={status.effectiveChord}
             controlAware={false}
+            requireModifier
+            disabled={mutation.isPending}
             label="the summon shortcut"
-            onCapture={(chord) =>
-              mutation.mutate({ enabled: status.intent.enabled, chord })
-            }
-            onClear={() =>
-              mutation.mutate({ enabled: status.intent.enabled, chord: null })
-            }
+            onCapture={(chord) => {
+              setEnableConflictMessage(null);
+              mutation.mutate({ enabled: status.intent.enabled, chord });
+            }}
+            onClear={() => {
+              setEnableConflictMessage(null);
+              mutation.mutate({ enabled: status.intent.enabled, chord: null });
+            }}
             checkConflict={(candidate) => {
               const result = findConflict(bindings, null, candidate, []);
               if (result === null) return null;
@@ -288,11 +353,9 @@ function SummonHotkeyRow(props: SummonHotkeyRowProps) {
             }}
           />
         </div>
-        {rejected ? (
-          <p className="text-ui-xs text-destructive">
-            In use by another application.
-          </p>
-        ) : null}
+        {statusMessage === null ? null : (
+          <p className="text-ui-xs text-destructive">{statusMessage}</p>
+        )}
       </div>
     </li>
   );

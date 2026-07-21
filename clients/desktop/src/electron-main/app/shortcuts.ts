@@ -75,6 +75,28 @@ let sequence = 0;
 const listeners = new Set<ChangeListener>();
 let quitHandlerInstalled = false;
 
+// Every mutation of OS registration state - a plain reconcile (startup, a
+// future suppression layer) or a settings-driven `applyGlobalShortcutIntent`
+// transaction - flows through this single tail, mirroring
+// `withHostLoginItemRegistrationLock`. Serializing only the persisted-intent
+// write (as `global-shortcuts-preferences.ts` does on its own) is not enough:
+// two concurrent transactions could still interleave their trial-register and
+// rollback-reconcile steps and leave OS state, persisted intent, and reported
+// status mutually divergent (the amended decision 7 "serialized end to end"
+// rule, added after PR #533 review exposed this).
+let globalShortcutsQueueTail: Promise<void> = Promise.resolve();
+
+function withGlobalShortcutsQueue<Result>(
+  operation: () => Promise<Result>,
+): Promise<Result> {
+  const result = globalShortcutsQueueTail.then(operation);
+  globalShortcutsQueueTail = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
+}
+
 function acceleratorPlatform(): "mac" | "other" {
   return process.platform === "darwin" ? "mac" : "other";
 }
@@ -99,15 +121,23 @@ export function initGlobalShortcutsRegistry(
 
 /**
  * The sole code path that touches `globalShortcut.register`/`unregister`.
- * Startup, a settings change, and a future suppression layer all converge
- * here (see the tech plan's governing mechanism).
+ * Never call this directly - it must only run inside
+ * `withGlobalShortcutsQueue` (via `reconcileGlobalShortcuts` or
+ * `applyGlobalShortcutIntent`), which is what actually serializes it.
+ *
+ * Acquire before release (amended decision 7): when the effective accelerator
+ * changes, the new one is registered while the old is still held, and the old
+ * is only released after the new registration succeeds. On refusal, the old
+ * accelerator was never touched, so nothing needs re-registering and status
+ * never claims `registered` when nothing is held. When the effective
+ * accelerator is unchanged, this is a no-op against the OS.
  *
  * `overrides` lets a caller reconcile a trial intent for one id WITHOUT
- * persisting it - `applyGlobalShortcutIntent`'s transactional rebind calls
- * this once with the desired intent as a trial, then again with no override
- * to revert to the still-persisted intent if the OS refused.
+ * persisting it - `applyGlobalShortcutIntent`'s transactional rebind passes
+ * the desired intent as a trial, then an empty override to revert to the
+ * still-persisted intent if the OS refused.
  */
-export async function reconcileGlobalShortcuts(
+async function reconcileGlobalShortcutsUnserialized(
   overrides: Partial<Record<GlobalShortcutId, GlobalShortcutIntent>>,
 ): Promise<GlobalShortcutsSnapshot> {
   await hydrateGlobalShortcutIntents();
@@ -115,27 +145,38 @@ export async function reconcileGlobalShortcuts(
   for (const def of DEFINITIONS) {
     const intent = overrides[def.id] ?? getGlobalShortcutIntent(def.id);
     const effectiveChord = intent.chord ?? def.defaultChord;
-
     const previousAccelerator = registeredAccelerators.get(def.id);
-    if (previousAccelerator !== undefined) {
-      globalShortcut.unregister(previousAccelerator);
-      registeredAccelerators.delete(def.id);
-    }
+    const desiredAccelerator =
+      intent.enabled && !suppressed
+        ? toAccelerator(effectiveChord, acceleratorPlatform())
+        : null;
 
     let status: GlobalShortcutRegistrationStatus;
-    if (!intent.enabled || suppressed) {
+    if (desiredAccelerator === null) {
+      if (previousAccelerator !== undefined) {
+        globalShortcut.unregister(previousAccelerator);
+        registeredAccelerators.delete(def.id);
+      }
       status = "disabled";
+    } else if (previousAccelerator === desiredAccelerator) {
+      // Already held and unchanged - no OS churn.
+      status = "registered";
     } else {
-      const accelerator = toAccelerator(effectiveChord, acceleratorPlatform());
-      const ok = globalShortcut.register(accelerator, def.run);
+      const ok = globalShortcut.register(desiredAccelerator, def.run);
       if (ok) {
-        registeredAccelerators.set(def.id, accelerator);
+        registeredAccelerators.set(def.id, desiredAccelerator);
+        // Only release the old accelerator now that the new one is live -
+        // never leaves the user without any working chord in between.
+        if (previousAccelerator !== undefined) {
+          globalShortcut.unregister(previousAccelerator);
+        }
         status = "registered";
       } else {
         log.warn("[shortcuts] global shortcut registration refused", {
           id: def.id,
-          accelerator,
+          accelerator: desiredAccelerator,
         });
+        // The old accelerator (if any) was never released - still live.
         status = "rejected";
       }
     }
@@ -148,6 +189,19 @@ export async function reconcileGlobalShortcuts(
     listener(snapshot);
   }
   return snapshot;
+}
+
+/**
+ * Public entry for a plain reconcile (startup, and a future suppression
+ * layer). Serialized on the same queue as `applyGlobalShortcutIntent` so the
+ * two families of callers can never interleave.
+ */
+export function reconcileGlobalShortcuts(
+  overrides: Partial<Record<GlobalShortcutId, GlobalShortcutIntent>>,
+): Promise<GlobalShortcutsSnapshot> {
+  return withGlobalShortcutsQueue(() =>
+    reconcileGlobalShortcutsUnserialized(overrides),
+  );
 }
 
 export function getGlobalShortcutsSnapshot(): GlobalShortcutsSnapshot {
@@ -171,29 +225,37 @@ export function getRegisteredAccelerator(id: GlobalShortcutId): string | null {
 }
 
 /**
- * Applies a desired intent for `id` transactionally against the OS: unregister
- * the current chord, try the new one, and if the OS refuses, re-register the
- * previous chord and never persist the rejected attempt. Only a durably
- * accepted registration is written to disk - a rejected trial leaves both the
- * OS registration and the persisted intent exactly as they were.
+ * Applies a desired intent for `id` transactionally against the OS: try the
+ * new chord (acquire-before-release inside `reconcileGlobalShortcutsUnserialized`),
+ * and if the OS refuses, revert to the still-persisted intent and never
+ * persist the rejected attempt. Only a durably accepted registration is
+ * written to disk.
+ *
+ * The ENTIRE transaction - trial registration, persist-or-revert, and the
+ * resulting fan-out - runs as one unit on `withGlobalShortcutsQueue` (amended
+ * decision 7's "serialized end to end" rule). It must call the unserialized
+ * reconcile directly, never the queued `reconcileGlobalShortcuts` export -
+ * re-entering the queue from inside itself would deadlock.
  *
  * May reject with `GlobalShortcutPersistenceError` if the OS accepted the new
  * chord but the write to disk failed; the caller (the IPC set-handler)
  * translates that into a friendly mutation error. The OS registration is not
  * rolled back in that case - see the tech plan's failure-handling table.
  */
-export async function applyGlobalShortcutIntent(
+export function applyGlobalShortcutIntent(
   id: GlobalShortcutId,
   intent: GlobalShortcutIntent,
 ): Promise<GlobalShortcutStatus> {
-  const trial = await reconcileGlobalShortcuts({ [id]: intent });
-  const trialStatus = trial.statuses[id];
-  if (trialStatus.status === "rejected") {
-    // Revert: an empty override means reconcile() re-reads the
-    // still-untouched persisted intent, re-registering the previous chord.
-    await reconcileGlobalShortcuts({});
+  return withGlobalShortcutsQueue(async () => {
+    const trial = await reconcileGlobalShortcutsUnserialized({ [id]: intent });
+    const trialStatus = trial.statuses[id];
+    if (trialStatus.status === "rejected") {
+      // Revert: an empty override means reconcile() re-reads the
+      // still-untouched persisted intent, re-registering the previous chord.
+      await reconcileGlobalShortcutsUnserialized({});
+      return trialStatus;
+    }
+    await setGlobalShortcutIntent(id, intent);
     return trialStatus;
-  }
-  await setGlobalShortcutIntent(id, intent);
-  return trialStatus;
+  });
 }

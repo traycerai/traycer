@@ -1,5 +1,6 @@
 import { app } from "electron";
 import { join } from "node:path";
+import { isValidChordString } from "@traycer-clients/shared/keybindings/chord-core";
 import {
   GLOBAL_SHORTCUT_IDS,
   globalShortcutIntentSchema,
@@ -57,9 +58,22 @@ function parseIntents(value: unknown): GlobalShortcutIntents {
   const next: Record<string, GlobalShortcutIntent> = {};
   for (const id of GLOBAL_SHORTCUT_IDS) {
     const parsed = globalShortcutIntentSchema.safeParse(Reflect.get(value, id));
-    next[id] = parsed.success ? parsed.data : DEFAULT_INTENT;
+    next[id] = parsed.success ? sanitizeChord(parsed.data) : DEFAULT_INTENT;
   }
   return next as GlobalShortcutIntents;
+}
+
+// Structural validation (the zod schema) only confirms `chord` is a string or
+// null - it says nothing about whether that string is a canonical chord. A
+// persisted value like `"mod+"` or an unsupported key would otherwise reach
+// `reconcile()` and Electron unchanged. Coercion here is semantic: resolve an
+// invalid chord to `null` ("use the definition's default"), keeping the rest
+// of the intent (`enabled`) as persisted.
+function sanitizeChord(intent: GlobalShortcutIntent): GlobalShortcutIntent {
+  if (intent.chord !== null && !isValidChordString(intent.chord)) {
+    return { enabled: intent.enabled, chord: null };
+  }
+  return intent;
 }
 
 function getStore() {

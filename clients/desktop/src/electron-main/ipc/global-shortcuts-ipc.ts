@@ -1,3 +1,4 @@
+import { isValidChordString } from "@traycer-clients/shared/keybindings/chord-core";
 import type {
   GlobalShortcutId,
   GlobalShortcutIntent,
@@ -69,6 +70,13 @@ function parseGlobalShortcutIntent(value: unknown): GlobalShortcutIntent {
   }
   if (chord !== null && typeof chord !== "string") {
     throw new Error("Malformed global shortcut intent: chord");
+  }
+  // Structural validity (a string) isn't semantic validity - reject a
+  // non-canonical chord (e.g. "mod+", wrong token order, an unsupported key)
+  // here rather than letting it reach `reconcile()`/Electron (amended
+  // decision 3).
+  if (chord !== null && !isValidChordString(chord)) {
+    throw new Error("Malformed global shortcut intent: chord is not valid");
   }
   return { enabled, chord };
 }

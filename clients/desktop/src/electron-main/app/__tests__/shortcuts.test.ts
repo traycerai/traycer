@@ -109,7 +109,7 @@ describe("reconcileGlobalShortcuts", () => {
     expect(shortcuts.getRegisteredAccelerator("summon")).toBeNull();
   });
 
-  it("unregisters the previous accelerator before registering a changed chord on the next reconcile", async () => {
+  it("registers a changed accelerator before releasing the previous one (acquire before release)", async () => {
     const shortcuts = await import("../shortcuts");
     await shortcuts.reconcileGlobalShortcuts({});
     expect(shortcuts.getRegisteredAccelerator("summon")).toBe(
@@ -128,10 +128,52 @@ describe("reconcileGlobalShortcuts", () => {
       newAccelerator,
       expect.any(Function),
     );
+    // Amended decision 7 (acquire before release): the new accelerator is
+    // registered while the old one is still held, and the old is only
+    // released after - never the reverse, which would leave a window with
+    // no working chord at all if the new registration were then refused.
     const unregisterOrder = electron.unregister.mock.invocationCallOrder[0];
     const registerOrder = electron.register.mock.invocationCallOrder[0];
-    expect(unregisterOrder).toBeLessThan(registerOrder);
+    expect(registerOrder).toBeLessThan(unregisterOrder);
     expect(shortcuts.getRegisteredAccelerator("summon")).toBe(newAccelerator);
+  });
+
+  it("does not touch the OS when the effective accelerator is unchanged", async () => {
+    const shortcuts = await import("../shortcuts");
+    await shortcuts.reconcileGlobalShortcuts({});
+    electron.register.mockClear();
+    electron.unregister.mockClear();
+
+    await shortcuts.reconcileGlobalShortcuts({});
+
+    expect(electron.register).not.toHaveBeenCalled();
+    expect(electron.unregister).not.toHaveBeenCalled();
+    expect(shortcuts.getRegisteredAccelerator("summon")).toBe(
+      DEFAULT_ACCELERATOR,
+    );
+  });
+
+  it("never releases the previous accelerator when the new registration is refused", async () => {
+    const shortcuts = await import("../shortcuts");
+    await shortcuts.reconcileGlobalShortcuts({});
+    expect(shortcuts.getRegisteredAccelerator("summon")).toBe(
+      DEFAULT_ACCELERATOR,
+    );
+
+    preferences.intents.summon = { enabled: true, chord: "mod+alt+x" };
+    electron.register.mockClear();
+    electron.unregister.mockClear();
+    electron.register.mockReturnValueOnce(false);
+
+    const snapshot = await shortcuts.reconcileGlobalShortcuts({});
+
+    expect(snapshot.statuses.summon.status).toBe("rejected");
+    expect(electron.unregister).not.toHaveBeenCalled();
+    // The old accelerator is still what's actually registered - the user is
+    // never left with no working chord.
+    expect(shortcuts.getRegisteredAccelerator("summon")).toBe(
+      DEFAULT_ACCELERATOR,
+    );
   });
 });
 

@@ -6,9 +6,13 @@ import {
   chordFromEventCtrlAware,
   formatChordForDisplay,
   isBareModifierEvent,
+  parseChordString,
   type ChordString,
 } from "@/lib/keybindings/chord";
 import type { ConflictResult } from "@/lib/keybindings/conflicts";
+
+const NO_MODIFIER_MESSAGE =
+  "Global shortcuts need at least one modifier key (⌘, Ctrl, Shift, or Alt).";
 
 /**
  * Result of validating a just-captured chord: the conflict message to show,
@@ -29,6 +33,21 @@ export interface ChordCaptureCoreProps {
    * have no hold/release semantics, so they always pass `false`.
    */
   readonly controlAware: boolean;
+  /**
+   * Reject a captured chord with no modifier held. A global (OS-level)
+   * shortcut with a bare key (`a`, Space, an arrow) would swallow ordinary
+   * typing system-wide, so the global-shortcut row passes `true`; renderer
+   * keybinding capture is unaffected and always passes `false`.
+   */
+  readonly requireModifier: boolean;
+  /**
+   * Disables entering capture mode (and force-cancels an in-progress capture)
+   * while a caller-owned async mutation is in flight - e.g. the global
+   * shortcut row disables this while its `set` invoke is pending, so a user
+   * can't fire overlapping rebind requests. Renderer keybinding capture is a
+   * synchronous local write and always passes `false`.
+   */
+  readonly disabled: boolean;
   /** Interpolated into "Rebind {label}" / "Recording new chord for {label}". */
   readonly label: string;
   readonly checkConflict: (candidate: ChordString) => ChordCaptureCheck | null;
@@ -45,13 +64,27 @@ export interface ChordCaptureCoreProps {
  * committed value are both supplied by the caller.
  */
 export function ChordCaptureCore(props: ChordCaptureCoreProps) {
-  const { value, controlAware, label, checkConflict, onCapture, onClear } =
-    props;
+  const {
+    value,
+    controlAware,
+    requireModifier,
+    disabled,
+    label,
+    checkConflict,
+    onCapture,
+    onClear,
+  } = props;
   const [captureState, dispatchCapture] = useReducer(captureReducer, {
     capturing: false,
     conflict: null,
   });
   const buttonRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (disabled && captureState.capturing) {
+      dispatchCapture({ type: "cancel" });
+    }
+  }, [disabled, captureState.capturing]);
 
   useEffect(() => {
     if (!captureState.capturing) return;
@@ -72,6 +105,23 @@ export function ChordCaptureCore(props: ChordCaptureCoreProps) {
         ? chordFromEventCtrlAware(event)
         : chordFromEvent(event);
       if (chord === null) return;
+      if (requireModifier) {
+        const parts = parseChordString(chord);
+        const hasModifier =
+          parts !== null &&
+          (parts.mod || parts.ctrl || parts.shift || parts.alt);
+        if (!hasModifier) {
+          dispatchCapture({
+            type: "conflict",
+            conflict: {
+              severity: "os-clash",
+              conflictingActionId: null,
+              message: NO_MODIFIER_MESSAGE,
+            },
+          });
+          return;
+        }
+      }
       const check = checkConflict(chord);
       if (check !== null && check.blocksCommit) {
         dispatchCapture({ type: "conflict", conflict: check.conflict });
@@ -86,7 +136,14 @@ export function ChordCaptureCore(props: ChordCaptureCoreProps) {
     window.addEventListener("keydown", handleKeyDown, { capture: true });
     return () =>
       window.removeEventListener("keydown", handleKeyDown, { capture: true });
-  }, [captureState.capturing, controlAware, checkConflict, onCapture, onClear]);
+  }, [
+    captureState.capturing,
+    controlAware,
+    requireModifier,
+    checkConflict,
+    onCapture,
+    onClear,
+  ]);
 
   useEffect(() => {
     if (!captureState.capturing) return;
@@ -129,6 +186,7 @@ export function ChordCaptureCore(props: ChordCaptureCoreProps) {
       <button
         ref={buttonRef}
         type="button"
+        disabled={disabled}
         onClick={() => {
           dispatchCapture({ type: "toggle" });
         }}
@@ -139,7 +197,7 @@ export function ChordCaptureCore(props: ChordCaptureCoreProps) {
             : `Rebind ${label}`
         }
         className={cn(
-          "inline-flex min-w-[5rem] items-center justify-center rounded-md outline-none transition-colors",
+          "inline-flex min-w-[5rem] items-center justify-center rounded-md outline-none transition-colors disabled:cursor-not-allowed disabled:opacity-50",
           buttonStateClass,
         )}
       >
