@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Command } from "commander";
-import { agentCreateDowngradeV20ToV10 } from "@traycer/protocol/host/agent/contracts";
-import { createAgentRequestSchemaV20 } from "@traycer/protocol/host/agent/shared";
+import { agentCreateDowngradeV30ToV20 } from "@traycer/protocol/host/agent/contracts";
+import { createAgentRequestSchemaV30 } from "@traycer/protocol/host/agent/shared";
 import { buildProgram } from "../../index";
 import { buildAgentConfigureCommand } from "../agent-configure";
 import { buildAgentCreateCommand } from "../agent-create";
@@ -85,6 +85,7 @@ function createOpts(profile: string | null) {
     agentMode: null,
     reasoningEffort: null,
     fast: false,
+    permissionMode: null,
     profile,
     cwd: null,
     workspacePaths: [],
@@ -164,6 +165,25 @@ describe("--profile parsing", () => {
 });
 
 describe("agent create profile selection", () => {
+  it("defaults permission mode to full access and forwards an override", async () => {
+    rpcMock.mockResolvedValue({ agentId: "agent_child", warnings: [] });
+
+    await buildAgentCreateCommand(createOpts(null))(makeCtx());
+    expect(rpcMock).toHaveBeenLastCalledWith(
+      "agent.create",
+      expect.objectContaining({ permissionMode: "full_access" }),
+    );
+
+    await buildAgentCreateCommand({
+      ...createOpts(null),
+      permissionMode: "supervised",
+    })(makeCtx());
+    expect(rpcMock).toHaveBeenLastCalledWith(
+      "agent.create",
+      expect.objectContaining({ permissionMode: "supervised" }),
+    );
+  });
+
   it("sends last_used when --profile is omitted", async () => {
     rpcMock.mockResolvedValue({ agentId: "agent_child", warnings: [] });
 
@@ -336,6 +356,7 @@ describe("agent configure", () => {
       profile: "ambient",
       reasoningEffort: "high",
       fast: false,
+      permissionMode: "supervised",
     })(makeCtx());
 
     expect(rpcMock).toHaveBeenCalledWith("agent.configure", {
@@ -347,6 +368,7 @@ describe("agent configure", () => {
       profileSelection: { kind: "ambient" },
       reasoningEffort: "high",
       fastMode: false,
+      permissionMode: "supervised",
     });
     expect(result.data).toEqual(response);
     expect(result.human).toContain("profile: --profile ambient");
@@ -367,11 +389,16 @@ describe("agent configure", () => {
       profile: "prof_work",
       reasoningEffort: null,
       fast: false,
+      permissionMode: null,
     })(makeCtx());
 
     expect(rpcMock).toHaveBeenCalledWith(
       "agent.configure",
-      expect.objectContaining({ reasoningEffort: null, fastMode: false }),
+      expect.objectContaining({
+        reasoningEffort: null,
+        fastMode: false,
+        permissionMode: "full_access",
+      }),
     );
   });
 
@@ -386,6 +413,7 @@ describe("agent configure", () => {
         profile: "ambient",
         reasoningEffort: null,
         fast: false,
+        permissionMode: null,
       })(makeCtx()),
     ).rejects.toBeInstanceOf(CliError);
     expect(rpcMock).not.toHaveBeenCalled();
@@ -444,6 +472,7 @@ describe("version skew", () => {
       profile: "ambient",
       reasoningEffort: null,
       fast: false,
+      permissionMode: null,
     })(makeCtx()).catch((err: unknown) => err);
 
     expect(error).toBeInstanceOf(CliError);
@@ -451,13 +480,11 @@ describe("version skew", () => {
     expect(error.code).toBe(CLI_ERROR_CODES.HOST_UNSUPPORTED);
   });
 
-  // The requests the CLI actually builds, run through the REAL v2→v1 create
-  // downgrade an old host's manifest triggers in the transport: an omitted
-  // --profile (`last_used`) and an explicit `--profile ambient` must both fail
-  // with upgrade guidance rather than project onto v1.0's `profileId: null`,
-  // which that host would read as "inherit the sender's profile".
+  // The requests the CLI actually builds, run through the REAL v3→v2 create
+  // downgrade a host-v1.1.7 manifest triggers in the transport. Every profile
+  // selection must fail because released v2.0 cannot carry permission intent.
   function cliCreateRequest(profile: string | null) {
-    return createAgentRequestSchemaV20.parse({
+    return createAgentRequestSchemaV30.parse({
       senderAgentId: "agent_parent",
       epicId: "epic_1",
       name: null,
@@ -467,46 +494,50 @@ describe("version skew", () => {
       agentMode: null,
       reasoningEffort: null,
       fastMode: null,
+      permissionMode: "full_access",
       workspace: null,
       profileSelection: parseCreateProfileSelection(profile),
     });
   }
 
   it("refuses to downgrade an omitted --profile onto an old host", () => {
-    const downgraded = agentCreateDowngradeV20ToV10.downgradeRequest(
+    const downgraded = agentCreateDowngradeV30ToV20.downgradeRequest(
       cliCreateRequest(null),
     );
 
     expect(downgraded.ok).toBe(false);
     if (downgraded.ok) throw new Error("unreachable");
     expect(downgraded.error.code).toBe("DOWNGRADE_UNSUPPORTED");
-    expect(downgraded.error.message).toContain("newer Traycer host");
+    expect(downgraded.error.message).toContain("Upgrade the host");
   });
 
   it("refuses to downgrade an explicit --profile ambient onto an old host", () => {
-    const downgraded = agentCreateDowngradeV20ToV10.downgradeRequest(
+    const downgraded = agentCreateDowngradeV30ToV20.downgradeRequest(
       cliCreateRequest("ambient"),
     );
 
     expect(downgraded.ok).toBe(false);
     if (downgraded.ok) throw new Error("unreachable");
-    expect(downgraded.error.message).toContain("upgrade the host");
+    expect(downgraded.error.message).toMatch(/upgrade the host/i);
   });
 
-  it("still downgrades an explicit managed profile onto an old host", () => {
-    const downgraded = agentCreateDowngradeV20ToV10.downgradeRequest(
+  it("refuses to drop full-access permissions on an old host even for a managed profile", () => {
+    const downgraded = agentCreateDowngradeV30ToV20.downgradeRequest(
       cliCreateRequest("prof_work"),
     );
 
-    expect(downgraded.ok).toBe(true);
-    if (!downgraded.ok) throw new Error("unreachable");
-    expect(downgraded.value.profileId).toBe("prof_work");
+    expect(downgraded.ok).toBe(false);
+    if (downgraded.ok) throw new Error("unreachable");
+    expect(downgraded.error.message).toContain("permission mode");
   });
 });
 
 describe("command registration", () => {
   it("registers the profile-aware agent commands alongside the existing family", () => {
     expect(optionFlags(expectAgentCommand("create"))).toContain("--profile");
+    expect(optionFlags(expectAgentCommand("create"))).toContain(
+      "--permission-mode",
+    );
     expect(optionFlags(expectAgentCommand("list-profiles"))).toContain(
       "--epic-id",
     );
@@ -522,7 +553,12 @@ describe("command registration", () => {
       ]),
     );
     expect(optionFlags(expectAgentCommand("configure"))).toEqual(
-      expect.arrayContaining(["--reasoning-effort", "--fast", "--json"]),
+      expect.arrayContaining([
+        "--reasoning-effort",
+        "--fast",
+        "--permission-mode",
+        "--json",
+      ]),
     );
   });
 

@@ -16,6 +16,7 @@ import {
 } from "@/hooks/epic/use-epic-tui-agent-mutations";
 import {
   EPIC_NODE_ICONS,
+  EPIC_NODE_SENTENCE_NOUNS,
   type EpicNodeKind,
 } from "@/lib/artifacts/node-display";
 import {
@@ -48,6 +49,7 @@ import {
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
 import type { TreeSlice } from "@/stores/epics/open-epic/types";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
+import type { ProviderId } from "@/components/home/data/landing-options";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
@@ -97,6 +99,7 @@ import {
   useEpicAgentActivityTiers,
   type AgentActivityTier,
   useEpicArtifactRecords,
+  useEpicChatHarnessId,
   useEpicConnectionStatus,
   useEpicNodeHostId,
   useEpicNodeOwnerKind,
@@ -572,8 +575,8 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     panelContent = (
       <SidebarPanelEmptyState
         icon={MessagesSquare}
-        title="No chats yet."
-        description={null}
+        title="No agents yet."
+        description="Add an agent and choose a Chat or Terminal interface."
         testId="epic-chat-sidebar-empty"
       />
     );
@@ -581,14 +584,17 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     panelContent = (
       <SidebarPanelEmptyState
         icon={MessagesSquare}
-        title="No chats match the filter."
+        // Names the INTERFACE as the thing with no matches. "No agents match"
+        // would imply the Task has none at all, when the filter is only hiding
+        // the other interface.
+        title="No agents use this interface."
         description={null}
         testId="epic-chat-sidebar-filter-empty"
       />
     );
   } else {
     panelContent = (
-      <ul role="tree" aria-label="Epic chats tree" className="space-y-0.5">
+      <ul role="tree" aria-label="Epic agents tree" className="space-y-0.5">
         {rootIds.map((nodeId) => (
           <ChatNode
             key={nodeId}
@@ -1172,7 +1178,7 @@ function ChatNodeShell(props: ChatNodeShellProps) {
             disabledTooltip={
               isDisconnected ? "Reconnect to make changes." : null
             }
-            triggerLabel="Add child chat or agent"
+            triggerLabel="Add child agent"
             triggerTestId={`epic-sidebar-add-${nodeId}`}
             actionRevealClassName={cn(
               "absolute right-7 top-1/2 -translate-y-1/2",
@@ -1207,7 +1213,7 @@ function ChatNodeShell(props: ChatNodeShellProps) {
       <ConfirmDestructiveDialog
         open={confirmDeleteOpen}
         onOpenChange={onConfirmDeleteOpenChange}
-        title={`Delete ${artifactType} "${nodeName}"?`}
+        title={`Delete ${EPIC_NODE_SENTENCE_NOUNS[artifactType]} "${nodeName}"?`}
         description="This action cannot be undone."
         cascadeSummary={cascadeSummary}
         actionLabel="Delete"
@@ -1350,14 +1356,16 @@ function ChatRenameRow(props: ChatRenameRowProps) {
       }}
     >
       <TreeChevronSpacer />
-      <ChatSidebarNodeIcon
-        epicId={epicId}
-        nodeId={nodeId}
-        artifactType={artifactType}
-        Icon={Icon}
-        artifactIconColorMode={artifactIconColorMode}
-        iconStyle={iconStyle}
-      />
+      <ChatSidebarNodeIconSlot>
+        <ChatSidebarNodeIcon
+          epicId={epicId}
+          nodeId={nodeId}
+          artifactType={artifactType}
+          Icon={Icon}
+          artifactIconColorMode={artifactIconColorMode}
+          iconStyle={iconStyle}
+        />
+      </ChatSidebarNodeIconSlot>
       <input
         ref={renameInputRef}
         value={renameValue}
@@ -1535,7 +1543,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
           onToggleSelection={onToggleSelection}
         />
         <span className="flex min-w-0 flex-1 items-center gap-1.5">
-          {nodeIcon}
+          <ChatSidebarNodeIconSlot>{nodeIcon}</ChatSidebarNodeIconSlot>
           <span className="min-w-0 flex-1 truncate">{nodeName}</span>
         </span>
       </label>
@@ -1563,7 +1571,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
         onToggle={onToggle}
       />
       <span className="flex min-w-0 flex-1 items-center gap-1.5">
-        {nodeIcon}
+        <ChatSidebarNodeIconSlot>{nodeIcon}</ChatSidebarNodeIconSlot>
         <span className="min-w-0 flex-1 truncate">{nodeName}</span>
         {resourceOwnerKind === null || !showNavigatorResourceStats ? null : (
           <OwnerResourceChip
@@ -1742,14 +1750,7 @@ interface ChatSidebarNodeIconProps {
 function ChatSidebarNodeIcon(props: ChatSidebarNodeIconProps) {
   if (props.artifactType === "chat") {
     return (
-      <ChatProgressIcon
-        epicId={props.epicId}
-        chatId={props.nodeId}
-        className={undefined}
-        mutedClassName="text-muted-foreground/70"
-        testId="chat-sidebar-spinner"
-        defaultIcon={undefined}
-      />
+      <GuiChatSidebarNodeIcon epicId={props.epicId} nodeId={props.nodeId} />
     );
   }
   if (props.artifactType === "terminal-agent") {
@@ -1767,6 +1768,36 @@ function ChatSidebarNodeIcon(props: ChatSidebarNodeIconProps) {
       Icon={props.Icon}
       artifactIconColorMode={props.artifactIconColorMode}
       iconStyle={props.iconStyle}
+    />
+  );
+}
+
+/**
+ * GUI chat sidebar icon. The persisted harness brand occupies the idle slot;
+ * `ChatProgressIcon` remains authoritative for read-only, activity, approval,
+ * failure, and completion states.
+ */
+function GuiChatSidebarNodeIcon(props: {
+  readonly epicId: string;
+  readonly nodeId: string;
+}) {
+  const harnessId = useEpicChatHarnessId(props.nodeId);
+  return (
+    <ChatProgressIcon
+      epicId={props.epicId}
+      chatId={props.nodeId}
+      className={undefined}
+      mutedClassName="text-muted-foreground/70"
+      testId="chat-sidebar-spinner"
+      defaultIcon={
+        harnessId === null ? undefined : (
+          <SidebarAgentHarnessIcon
+            nodeId={props.nodeId}
+            harnessId={harnessId}
+            surface="gui"
+          />
+        )
+      }
     />
   );
 }
@@ -1793,7 +1824,11 @@ function TerminalAgentProgressIcon(props: {
     // generic bot glyph is the fallback for unresolved/legacy records.
     if (harnessId !== null) {
       return (
-        <HarnessIcon harnessId={harnessId} className="size-3.5 shrink-0" />
+        <SidebarAgentHarnessIcon
+          nodeId={props.nodeId}
+          harnessId={harnessId}
+          surface="tui"
+        />
       );
     }
     return (
@@ -1818,6 +1853,48 @@ function TerminalAgentProgressIcon(props: {
         testId="terminal-agent-sidebar-spinner"
         variant={undefined}
       />
+    </span>
+  );
+}
+
+/**
+ * Harness identity with a terminal-only surface mark. GUI chats use the brand
+ * unchanged; TUI agents add a bare terminal glyph without a background so the
+ * harness mark stays visible beneath it.
+ */
+function SidebarAgentHarnessIcon(props: {
+  readonly nodeId: string;
+  readonly harnessId: ProviderId;
+  readonly surface: "gui" | "tui";
+}) {
+  const TerminalIcon = EPIC_NODE_ICONS.terminal;
+  const surfaceTitle =
+    props.surface === "gui" ? "GUI chat" : "TUI terminal agent";
+  return (
+    <span
+      data-testid={`sidebar-agent-harness-${props.nodeId}`}
+      data-agent-surface={props.surface}
+      className="relative inline-flex h-3.5 w-[1.125rem] shrink-0 items-center"
+      title={surfaceTitle}
+    >
+      <HarnessIcon harnessId={props.harnessId} className="size-3.5" />
+      {props.surface === "tui" ? (
+        <TerminalIcon
+          aria-hidden="true"
+          data-testid={`sidebar-agent-surface-${props.nodeId}`}
+          data-agent-surface="tui"
+          className="pointer-events-none absolute -right-1 -bottom-1.5 size-2 text-muted-foreground"
+          strokeWidth={3}
+        />
+      ) : null}
+    </span>
+  );
+}
+
+function ChatSidebarNodeIconSlot(props: { readonly children: ReactNode }) {
+  return (
+    <span className="inline-flex h-3.5 w-[1.125rem] shrink-0 items-center">
+      {props.children}
     </span>
   );
 }
@@ -1893,7 +1970,7 @@ function ChatMoreMenu(props: {
           type="button"
           variant="ghost"
           size="icon-xs"
-          aria-label={`Chat actions for ${nodeName}`}
+          aria-label={`Agent actions for ${nodeName}`}
           data-testid={`epic-sidebar-more-${nodeId}`}
           className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 transition-opacity focus-visible:opacity-100 group-hover/tree-item:opacity-100 aria-expanded:opacity-100"
           onClick={(event) => {

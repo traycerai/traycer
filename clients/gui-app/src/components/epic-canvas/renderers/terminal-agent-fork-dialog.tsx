@@ -25,7 +25,7 @@ import {
   type CreateTuiAgentStatus,
   useCreateTuiAgentForClient,
 } from "@/hooks/agent/use-create-tui-agent";
-import { tuiAgentDisplayTitle } from "@/lib/display-title";
+import { displayTitle } from "@/lib/display-title";
 import { readSeededLaunchWorkspace } from "@/lib/worktree/seeded-launch-worktree-intent";
 import { useSeededWorkspaceSnapshotStore } from "@/stores/worktree/seeded-workspace-snapshot-store";
 import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
@@ -339,7 +339,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
                 if (event.key === "Enter") submit();
               }}
               disabled={busy}
-              aria-label="Terminal agent additional arguments"
+              aria-label="Terminal interface CLI arguments"
               className="font-mono text-ui-xs"
             />
           </label>
@@ -437,10 +437,7 @@ function terminalForkSettingsSeed(agent: TuiAgentProjection): ChatRunSettings {
 }
 
 function terminalForkDefaultTitle(agent: TuiAgentProjection): string {
-  return `Fork - ${tuiAgentDisplayTitle({
-    title: agent.title,
-    harnessId: agent.harnessId,
-  })}`;
+  return `Fork - ${displayTitle(agent.title, "agent")}`;
 }
 
 function terminalForkModelPickerKey(

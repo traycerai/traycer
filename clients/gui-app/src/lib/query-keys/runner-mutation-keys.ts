@@ -53,6 +53,8 @@ export const runnerMutationKeys = {
   // Settings → log level (desktop/cli/host). Machine-local config, not
   // host-scoped, so a single static key suffices.
   logLevelsSet: () => ["runner.logLevels.set"] as const,
+  setAllowPrereleaseUpdates: () =>
+    ["runner.appUpdates.setAllowPrerelease"] as const,
 };
 
 export const runnerQueryKeys = {

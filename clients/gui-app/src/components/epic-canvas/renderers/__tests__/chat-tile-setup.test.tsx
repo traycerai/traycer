@@ -863,7 +863,7 @@ describe("<ChatTileErrorNoticeToasts />", () => {
     clickWarningReportAction();
 
     expect(useDesktopDialogStore.getState().reportIssueContext).toEqual({
-      title: "Chat action failed",
+      title: "Agent action failed",
       message: null,
       code: null,
       source: "Chat",

@@ -8,8 +8,12 @@ import { defineVersionedStreamRpcRegistry } from "@traycer/protocol/framework/ve
 import {
   agentCreateV10,
   agentCreateV20,
+  agentCreateV30,
   agentCreateDowngradeV20ToV10,
+  agentCreateDowngradeV30ToV10,
+  agentCreateDowngradeV30ToV20,
   agentCreateUpgradeV10ToV20,
+  agentCreateUpgradeV20ToV30,
   agentGetTranscriptV10,
   agentListHarnessModelsDowngradeV2ToV1,
   agentListHarnessModelsV10,
@@ -37,7 +41,10 @@ import {
   agentStopV10,
 } from "@traycer/protocol/host/agent/contracts";
 import {
+  agentConfigureDowngradeV20ToV10,
   agentConfigureV10,
+  agentConfigureV20,
+  agentConfigureUpgradeV10ToV20,
   agentGetProviderProfileRateLimitsV10,
   agentListProviderProfilesV10,
 } from "@traycer/protocol/host/agent/profiles";
@@ -127,7 +134,10 @@ import {
   epicRemoveRepoV10,
   epicRenameArtifactV10,
   epicRenameChatV10,
+  epicUpdateChatProfileV10,
+  epicUpdateChatRunSettingsUpgradeV10ToV11,
   epicUpdateChatRunSettingsV10,
+  epicUpdateChatRunSettingsV11,
   epicRenameTuiAgentV10,
   epicReparentArtifactV10,
   epicReparentChatV10,
@@ -189,6 +199,8 @@ import {
   resourcesSubscribeV10,
   resourcesSubscribeV11,
   resourcesSubscribeV12,
+  resourcesSubscribeV13,
+  resourcesKillV10,
 } from "@traycer/protocol/host/resources/subscribe";
 import {
   speechEnsureModelV10,
@@ -2443,6 +2455,19 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       },
       downgradePathsFromLatest: { 1: agentCreateDowngradeV20ToV10 },
     },
+    3: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentCreateV30,
+          upgradeFromPreviousVersion: agentCreateUpgradeV20ToV30,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentCreateDowngradeV30ToV10,
+        2: agentCreateDowngradeV30ToV20,
+      },
+    },
   },
   "agent.selectionGuide": {
     1: {
@@ -3012,10 +3037,36 @@ const HOST_RPC_REGISTRY_DEFINITION = {
   // persist-on-next-send behavior.
   "epic.updateChatRunSettings": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicUpdateChatRunSettingsV10,
+          upgradeFromPreviousVersion: null,
+        },
+        // v1.1: wire-strict settings tuple - a subset-field patch fails
+        // validation at the canonical minor instead of silently null-
+        // clobbering omitted fields. Profile-only changes belong on
+        // `epic.updateChatProfile`.
+        1: {
+          contract: epicUpdateChatRunSettingsV11,
+          upgradeFromPreviousVersion: epicUpdateChatRunSettingsUpgradeV10ToV11,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  // Optional (non-floor) capability: narrow profile-only update of a chat's
+  // persisted run settings - the host patches its own authoritative tuple, so
+  // clients never rebuild (and stale-patch) the full tuple to move a chat's
+  // profile. Old peers lack it; callers get E_HOST_UNSUPPORTED for this call
+  // only and degrade to persist-on-next-send.
+  "epic.updateChatProfile": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicUpdateChatProfileV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -3322,6 +3373,22 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       versions: {
         0: {
           contract: terminalKillV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // Brand-new v1.0 method (not on `RELEASED_FLOOR_METHOD_NAMES`): an old host
+  // simply lacks it, so callers get per-call upgrade guidance instead of a
+  // fatal handshake mismatch. Same pattern as `providers.submitLoginCode`.
+  "resources.kill": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: resourcesKillV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -4011,6 +4078,16 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       },
       downgradePathsFromLatest: {},
     },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentConfigureV20,
+          upgradeFromPreviousVersion: agentConfigureUpgradeV10ToV20,
+        },
+      },
+      downgradePathsFromLatest: { 1: agentConfigureDowngradeV20ToV10 },
+    },
   },
 } as const;
 
@@ -4139,7 +4216,7 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
   },
   "resources.subscribe": {
     1: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: resourcesSubscribeV10,
@@ -4149,6 +4226,9 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
         },
         2: {
           contract: resourcesSubscribeV12,
+        },
+        3: {
+          contract: resourcesSubscribeV13,
         },
       },
     },

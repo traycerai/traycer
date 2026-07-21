@@ -206,6 +206,7 @@ export interface DesktopAppUpdateSnapshot {
   readonly sequence: number;
   readonly status: DesktopAppUpdateStatus;
   readonly currentVersion: string;
+  readonly allowPrerelease: boolean;
   readonly latestVersion: string | null;
   // Whole-percent download progress (0-100) while `status` is "downloading";
   // null in every other state (including before a user-initiated download).
@@ -229,6 +230,9 @@ export interface DesktopAppUpdatesBridge {
   getSnapshot(): Promise<DesktopAppUpdateSnapshot>;
   checkForUpdates(
     intent: DesktopAppUpdateCheckIntent,
+  ): Promise<DesktopAppUpdateSnapshot>;
+  setAllowPrerelease(
+    allowPrerelease: boolean,
   ): Promise<DesktopAppUpdateSnapshot>;
   downloadUpdate(): Promise<DesktopAppUpdateSnapshot>;
   installUpdate(): Promise<DesktopAppUpdateSnapshot>;

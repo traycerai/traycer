@@ -6,6 +6,7 @@ import {
   type AgentMode,
 } from "@traycer/protocol/common/schemas";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
+import { permissionModeSchema } from "@traycer/protocol/persistence/epic/foundation";
 
 export { DEFAULT_AGENT_MODE, agentModeSchema, type AgentMode };
 
@@ -31,11 +32,15 @@ export { DEFAULT_AGENT_MODE, agentModeSchema, type AgentMode };
 // `TuiHarnessId extends HarnessId` are both true at the type level, so a
 // surface-narrow value passes everywhere a `HarnessId` is expected.
 //
-// Cursor is retained in the TUI subset because it shipped in the v1 wire
-// contract and persisted TUI union. It is a reserved compatibility value until
-// the Cursor CLI reaches the minimum feature set required for product support;
-// runtime adapter surfaces and catalogs, not this schema, decide what users can
-// currently create or launch.
+// Cursor is GUI-only in the product today: the GUI chat tab drives the
+// `@cursor/sdk` agent runtime in local mode. It is listed in `harnessIdSchema`
+// and `guiHarnessIdSchema`, and it stays in `tuiHarnessIdSchema` as a RESERVED
+// compatibility value only - a stable reserved id so existing persisted Cursor
+// Terminal-interface records keep parsing - NOT because a Cursor Terminal
+// launch path exists. There is none today: the host
+// adapter does not implement the TUI surface, the runtime TUI catalog omits
+// Cursor, and `epic.createTuiAgent` / `agent.create` reject `harnessId: "cursor"`
+// on the Terminal interface.
 export const harnessIdSchema = getRecordSchema(
   commonRecordRegistry,
   "harness-id",
@@ -307,7 +312,8 @@ export type ConcreteProfileSelection = z.infer<
  * `model`, `agentMode`, `reasoningEffort`, and `fastMode` are explicit
  * nullable overrides. `null` means "not requested"; the resolver fills
  * defaults and returns warnings for currently unsupported combinations instead
- * of rejecting the whole create.
+ * of rejecting the whole create. `permissionMode` arrives in v3 below; v1 and
+ * v2 remain frozen to their released request shapes.
  *
  * The new agent's `parentId` is set to `senderAgentId` so the epic projection
  * can render the spawn lineage without a separate join.
@@ -344,7 +350,7 @@ export const createAgentResponseSchema = z.object({
 export type CreateAgentResponse = z.infer<typeof createAgentResponseSchema>;
 
 /**
- * `agent.create@2.0` request - identical to v1.0 except the nullable
+ * Frozen `agent.create@2.0` request - identical to v1.0 except the nullable
  * `profileId` override is replaced by an explicit `profileSelection` (see
  * `ProfileSelection` above). Removing `profileId` is why this ships as a new
  * major rather than an additive minor: v1.0 stays frozen and reachable
@@ -366,6 +372,18 @@ export const createAgentRequestSchemaV20 = z.object({
   profileSelection: profileSelectionSchema,
 });
 export type CreateAgentRequestV20 = z.infer<typeof createAgentRequestSchemaV20>;
+
+/**
+ * `agent.create@3.0` adds the required permission-mode choice. `null` is a
+ * compatibility-only sentinel emitted by the v2->v3 upgrade path so released
+ * callers retain their legacy sender-inheritance behavior; current tool/CLI
+ * callers always send a concrete mode. Making the field required keeps the
+ * released v2.0 wire immutable.
+ */
+export const createAgentRequestSchemaV30 = createAgentRequestSchemaV20.extend({
+  permissionMode: permissionModeSchema.nullable(),
+});
+export type CreateAgentRequestV30 = z.infer<typeof createAgentRequestSchemaV30>;
 
 export const agentSelectionGuideRequestSchema = z.object({
   epicId: z.string(),

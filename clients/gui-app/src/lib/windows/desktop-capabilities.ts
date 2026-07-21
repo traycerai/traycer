@@ -70,6 +70,7 @@ function isDesktopAppUpdatesBridge(
     isRecord(value) &&
     typeof value.getSnapshot === "function" &&
     typeof value.checkForUpdates === "function" &&
+    typeof value.setAllowPrerelease === "function" &&
     typeof value.downloadUpdate === "function" &&
     typeof value.installUpdate === "function" &&
     typeof value.onChange === "function"

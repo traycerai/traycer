@@ -103,10 +103,9 @@ function imageHashesOf(content: JsonContent): Set<string> {
 }
 
 /**
- * Every hash that must NOT be collected: union of all persisted drafts' content
- * and the live editor mirror. The session cache is handled separately (it
- * protects the paste→insert window but its entries are reclaimed once a hash
- * leaves the live roots).
+ * Every hash that must NOT be collected: union of all persisted drafts'
+ * content and the live editor mirror. The session cache is handled separately
+ * to protect the normal paste-to-insert window.
  */
 function computeLiveRoots(): Set<string> {
   const roots = new Set<string>();

@@ -1,7 +1,8 @@
 /**
- * Filter dropdowns rendered in the chat and artifact panel headers.
+ * Filter dropdowns rendered in the Agents and artifact panel headers.
  *
- * Chat: a single origin choice (GUI chats vs TUI terminal agents).
+ * Agents: a single interface choice (All / Chat / Terminal). Every option lists
+ * Agents; the axis narrows how they are interacted with, not what they are.
  * Artifact: multi-select status + kind, plus a read/unread choice.
  *
  * The trigger reflects active state so a filter that hides nodes is never
@@ -57,13 +58,18 @@ import {
   type ChatOriginFilter,
 } from "@/stores/epics/left-panel-store";
 
+/**
+ * The Agents panel filters on the INTERFACE axis - every option lists Agents,
+ * narrowed by how the user interacts with them. `CHAT_ORIGIN.Gui` / `.Tui` are
+ * internal filter values on the compatibility boundary; only the copy moves.
+ */
 const CHAT_ORIGIN_OPTIONS: ReadonlyArray<{
   value: ChatOriginFilter;
   label: string;
 }> = [
   { value: CHAT_ORIGIN.All, label: "All" },
-  { value: CHAT_ORIGIN.Gui, label: "Chats" },
-  { value: CHAT_ORIGIN.Tui, label: "Terminal Agents" },
+  { value: CHAT_ORIGIN.Gui, label: "Chat" },
+  { value: CHAT_ORIGIN.Tui, label: "Terminal" },
 ];
 
 const ARTIFACT_STATUS_OPTIONS: ReadonlyArray<ArtifactStatusFilter> = [
@@ -186,7 +192,7 @@ export function ChatFilterMenu(props: {
       <FilterTrigger
         active={active}
         disabled={props.disabled}
-        label="Filter chats"
+        label="Filter agents"
       />
       <DropdownMenuContent
         align="end"
@@ -194,7 +200,7 @@ export function ChatFilterMenu(props: {
         style={{ maxHeight: "min(70vh, 24rem)" }}
       >
         <DropdownMenuLabel className="px-2 py-1 text-overline uppercase text-muted-foreground/70">
-          Show
+          Interface
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
         <DropdownMenuRadioGroup

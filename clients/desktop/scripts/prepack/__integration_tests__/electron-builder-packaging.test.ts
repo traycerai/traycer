@@ -227,11 +227,25 @@ describe.skipIf(process.platform !== "darwin")(
         "Contents",
         "Library",
         "LaunchAgents",
-        "ai.traycer.host.plist",
+        "ai.traycer.host.agent.plist",
       );
       expect(existsSync(agentPlistPath)).toBe(true);
       expect(() =>
         execFileSync("plutil", ["-lint", agentPlistPath]),
+      ).not.toThrow();
+
+      // The inert old-label plist ships beside the agent one (label-split
+      // transition: the desktop unregisters the old serviceName against it).
+      const inertOldPlistPath = path.join(
+        appPath,
+        "Contents",
+        "Library",
+        "LaunchAgents",
+        "ai.traycer.host.plist",
+      );
+      expect(existsSync(inertOldPlistPath)).toBe(true);
+      expect(() =>
+        execFileSync("plutil", ["-lint", inertOldPlistPath]),
       ).not.toThrow();
 
       const agentPlist = readFileSync(agentPlistPath, "utf8");
@@ -260,7 +274,7 @@ describe.skipIf(process.platform !== "darwin")(
         "Contents",
         "Library",
         "LaunchAgents",
-        "ai.traycer.host.plist",
+        "ai.traycer.host.agent.plist",
       );
       const agentPlist = readFileSync(agentPlistPath, "utf8");
       const bundleProgramMatch = agentPlist.match(

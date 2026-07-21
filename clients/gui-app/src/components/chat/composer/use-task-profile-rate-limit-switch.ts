@@ -3,8 +3,7 @@ import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type { ModelOption } from "@/components/home/data/landing-options";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
-import { useEpicUpdateChatRunSettings } from "@/hooks/epic/use-epic-chat-mutations";
-import { enqueuePersistChatRunSettings } from "@/lib/chats/chat-run-settings-write-queue";
+import { useEpicUpdateChatProfile } from "@/hooks/epic/use-epic-chat-mutations";
 import { getChatSessionRegistry } from "@/lib/registries/chat-session-registry";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import type { ChatsSlice } from "@/stores/epics/open-epic/types";
@@ -24,13 +23,15 @@ export interface TaskProfileRateLimitSwitch {
    */
   readonly affectedChatCount: number;
   /**
-   * Switches every OTHER affected chat to `nextProfileId`: persists each
-   * chat's settings durably via `epic.updateChatRunSettings` (best-effort -
-   * an old host rejects the optional method and those chats keep legacy
-   * persist-on-next-send behavior), live-updates any warm session so an open
-   * composer re-seeds immediately, and restamps its already-queued prompts so
-   * they don't keep running on the old profile. The caller's own composer
-   * commit (`onSwitchProfile`) covers this chat.
+   * Switches every OTHER affected chat to `nextProfileId` via the narrow
+   * `epic.updateChatProfile` RPC (best-effort - an old host rejects the
+   * optional method and those chats keep legacy persist-on-next-send
+   * behavior). The host patches its own authoritative persisted tuple and,
+   * for a warm session, moves already-queued prompts and a not-yet-spawned
+   * parked turn onto the new profile with it. Warm sessions additionally get
+   * a local composer re-seed so open sibling tiles reflect the switch
+   * immediately. The caller's own composer commit (`onSwitchProfile`) covers
+   * this chat.
    */
   readonly switchOtherTaskChats: (nextProfileId: string | null) => void;
 }
@@ -142,39 +143,37 @@ export function useTaskProfileRateLimitSwitch(input: {
     ? affected.length
     : affected.length + 1;
 
-  const updateChatRunSettings = useEpicUpdateChatRunSettings();
-  const updateChatRunSettingsMutateAsync = updateChatRunSettings.mutateAsync;
+  const updateChatProfile = useEpicUpdateChatProfile();
+  const updateChatProfileMutate = updateChatProfile.mutate;
   const switchOtherTaskChats = useCallback(
     (nextProfileId: string | null): void => {
       if (epicId === null) return;
       for (const chat of affected) {
         if (chat.chatId === chatId) continue;
-        const settings: ChatRunSettings = {
-          ...chat.settings,
-          profileId: nextProfileId,
-        };
-        // Routed through the same module-scoped queue the sibling's own
-        // composer writes use (chat-tile.tsx), so this task-wide switch can't
-        // race an in-flight write from that chat's own composer and leave it
-        // pinned to stale settings.
-        enqueuePersistChatRunSettings(updateChatRunSettingsMutateAsync, {
+        // Narrow profile-only update: the host patches its own authoritative
+        // persisted tuple (and, for a warm session, moves queued prompts and
+        // a not-yet-spawned parked turn with it). Deliberately NOT a
+        // client-side `{ ...chat.settings, profileId }` rebuild - the store
+        // projection can lag the sibling's real settings, and re-persisting
+        // a stale full tuple just to move the profile is exactly the
+        // subset-field misuse `epic.updateChatRunSettings` v1.1 forbids.
+        updateChatProfileMutate({
           epicId,
           chatId: chat.chatId,
-          settings,
+          profileId: nextProfileId,
         });
-        const warmSession = getChatSessionRegistry().peek(epicId, chat.chatId);
         // Warm sessions re-seed their composer toolbar from
         // `currentComposerSettings`, so an open sibling tile reflects the
-        // switch immediately instead of stomping it on its next send.
-        warmSession?.store.getState().setCurrentComposerSettings(settings);
-        // Also restamp its already-queued (not-yet-sent) prompts - otherwise
-        // they keep running on the old profile until another composer change
-        // happens to touch them. No queue item is "open for editing" from
-        // this task-wide switch's perspective, so nothing is excluded.
-        warmSession?.store.getState().restampQueuedItemSettings(settings, null);
+        // switch immediately instead of stomping it on its next send. This is
+        // local display state, not a wire persist.
+        const warmSession = getChatSessionRegistry().peek(epicId, chat.chatId);
+        warmSession?.store.getState().setCurrentComposerSettings({
+          ...chat.settings,
+          profileId: nextProfileId,
+        });
       }
     },
-    [affected, chatId, epicId, updateChatRunSettingsMutateAsync],
+    [affected, chatId, epicId, updateChatProfileMutate],
   );
 
   return { affectedChatCount, switchOtherTaskChats };

@@ -71,6 +71,50 @@ describe("buildQuoteBlockquote", () => {
     });
   });
 
+  it("drops a single trailing empty line (the browser's block-boundary blank after a triple-click)", () => {
+    const node = buildQuoteBlockquote({
+      text: "Third paragraph, the last one.\n",
+      fenceLanguage: null,
+    });
+    expect(node).toEqual({
+      type: "blockquote",
+      content: [paragraph("Third paragraph, the last one.")],
+    });
+  });
+
+  it("drops two trailing empty lines", () => {
+    const node = buildQuoteBlockquote({
+      text: "Third paragraph, the last one.\n\n",
+      fenceLanguage: null,
+    });
+    expect(node).toEqual({
+      type: "blockquote",
+      content: [paragraph("Third paragraph, the last one.")],
+    });
+  });
+
+  it("drops three trailing empty lines", () => {
+    const node = buildQuoteBlockquote({
+      text: "Third paragraph, the last one.\n\n\n",
+      fenceLanguage: null,
+    });
+    expect(node).toEqual({
+      type: "blockquote",
+      content: [paragraph("Third paragraph, the last one.")],
+    });
+  });
+
+  it("drops trailing empty lines after a multi-paragraph selection while keeping the internal blank line", () => {
+    const node = buildQuoteBlockquote({
+      text: "First.\n\nSecond.\n\n",
+      fenceLanguage: null,
+    });
+    expect(node).toEqual({
+      type: "blockquote",
+      content: [paragraph("First."), emptyParagraph(), paragraph("Second.")],
+    });
+  });
+
   it("wraps a fence selection in a codeBlock with the language attr, preserving raw lines", () => {
     const node = buildQuoteBlockquote({
       text: "const x = 1;  \nconst y = 2;",

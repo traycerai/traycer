@@ -1389,10 +1389,16 @@ function registerAgentCommands(program: Command): void {
         "Exact workspace binding. Repeatable. Use /path alone for existing/local, or /source=/run for a worktree.",
         collectRepeatedOption,
         [],
+      )
+      .option(
+        "--permission-mode <mode>",
+        "GUI permission mode: supervised, auto_accept_edits, or full_access. Defaults to full_access.",
       ),
     (opts) =>
       buildAgentCreateCommand({
         epicId: typeof opts.epicId === "string" ? opts.epicId : null,
+        permissionMode:
+          typeof opts.permissionMode === "string" ? opts.permissionMode : null,
         senderAgentId:
           typeof opts.senderAgentId === "string" ? opts.senderAgentId : null,
         name: typeof opts.name === "string" ? opts.name : null,
@@ -1534,10 +1540,16 @@ function registerAgentCommands(program: Command): void {
       .option(
         "--fast",
         "Enable fast mode for supported models. Omitting it disables fast mode.",
+      )
+      .option(
+        "--permission-mode <mode>",
+        "Permission mode for future turns: supervised, auto_accept_edits, or full_access. Defaults to full_access.",
       ),
     (opts) =>
       buildAgentConfigureCommand({
         epicId: typeof opts.epicId === "string" ? opts.epicId : null,
+        permissionMode:
+          typeof opts.permissionMode === "string" ? opts.permissionMode : null,
         senderAgentId:
           typeof opts.senderAgentId === "string" ? opts.senderAgentId : null,
         agentId: typeof opts.agentId === "string" ? opts.agentId : "",

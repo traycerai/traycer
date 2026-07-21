@@ -704,6 +704,7 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.displayList,
         RunnerHostInvoke.fileDropWriteTemporary,
         RunnerHostInvoke.fileDropCopyTemporary,
+        RunnerHostInvoke.fileDropReadNativeClipboardPaths,
         RunnerHostInvoke.fileSave,
         RunnerHostInvoke.gpuAccelerationGet,
         RunnerHostInvoke.gpuAccelerationSet,
@@ -2737,6 +2738,7 @@ describe("RunnerIpcBridge", () => {
       {
         channel: RunnerHostEvent.appUpdateChange,
         payload: {
+          allowPrerelease: false,
           sequence: 0,
           status: "idle",
           currentVersion: "1.0.0",
