@@ -5,7 +5,10 @@ import {
   formatCheckedAtTooltip,
   updatesDescription,
 } from "@/components/settings/panels/host-settings-panel-model";
-import type { HostRegistryUpdateState } from "@traycer-clients/shared/platform/runner-host";
+import type {
+  DownloadProgress,
+  HostRegistryUpdateState,
+} from "@traycer-clients/shared/platform/runner-host";
 
 interface UpdatesRowProps {
   readonly registryState: HostRegistryUpdateState | undefined;
@@ -14,6 +17,14 @@ interface UpdatesRowProps {
   readonly updatePending: boolean;
   readonly latestReleasedAt: string | null;
   readonly nowMs: number;
+  // Canonical two-lane status (Host Update Layer Redesign Tech Plan) - the
+  // action button gates on `updateReady`/`stagedVersion`, never the raw
+  // `registryState.updateAvailable` detection, so this row never offers an
+  // action for a merely-detected update. `downloadProgress` is purely
+  // informational (the download lane never disables this row's actions).
+  readonly updateReady: boolean;
+  readonly stagedVersion: string | null;
+  readonly downloadProgress: DownloadProgress | null;
   readonly onUpdate: () => void;
   readonly onRefresh: () => void;
 }
@@ -26,6 +37,9 @@ export function UpdatesRow(props: UpdatesRowProps) {
     updatePending,
     latestReleasedAt,
     nowMs,
+    updateReady,
+    stagedVersion,
+    downloadProgress,
     onUpdate,
     onRefresh,
   } = props;
@@ -44,6 +58,9 @@ export function UpdatesRow(props: UpdatesRowProps) {
           registryFetching={registryFetching}
           anyPending={anyPending}
           updatePending={updatePending}
+          updateReady={updateReady}
+          stagedVersion={stagedVersion}
+          downloadProgress={downloadProgress}
           onUpdate={onUpdate}
           onRefresh={onRefresh}
         />
@@ -57,6 +74,9 @@ function UpdatesControl(props: {
   readonly registryFetching: boolean;
   readonly anyPending: boolean;
   readonly updatePending: boolean;
+  readonly updateReady: boolean;
+  readonly stagedVersion: string | null;
+  readonly downloadProgress: DownloadProgress | null;
   readonly onUpdate: () => void;
   readonly onRefresh: () => void;
 }) {
@@ -65,21 +85,28 @@ function UpdatesControl(props: {
     registryFetching,
     anyPending,
     updatePending,
+    updateReady,
+    stagedVersion,
+    downloadProgress,
     onUpdate,
     onRefresh,
   } = props;
 
-  if (registryState !== undefined && registryState.updateAvailable) {
+  if (updateReady) {
     return (
       <div className="flex flex-wrap items-center justify-end gap-2">
-        <span className="font-mono text-code-xs text-muted-foreground">
-          v{registryState.latestVersion ?? "latest"}
+        <span
+          className="font-mono text-code-xs text-muted-foreground"
+          data-testid="settings-host-staged-version"
+        >
+          {stagedVersion === null ? "latest" : `v${stagedVersion}`}
         </span>
         <Button
           variant="default"
           size="sm"
           disabled={anyPending}
           onClick={onUpdate}
+          data-testid="settings-host-update-action"
         >
           {updatePending ? (
             <AgentSpinningDots
@@ -90,6 +117,28 @@ function UpdatesControl(props: {
           ) : null}
           Update
         </Button>
+      </div>
+    );
+  }
+
+  if (downloadProgress !== null) {
+    const percent =
+      downloadProgress.percent !== null
+        ? Math.max(0, Math.min(100, Math.round(downloadProgress.percent)))
+        : null;
+    return (
+      <div
+        className="flex items-center gap-2 text-ui-sm text-muted-foreground"
+        data-testid="settings-host-download-progress"
+      >
+        <AgentSpinningDots
+          className="size-3"
+          testId={undefined}
+          variant={undefined}
+        />
+        <span>
+          Downloading update{percent !== null ? `… ${percent}%` : "…"}
+        </span>
       </div>
     );
   }

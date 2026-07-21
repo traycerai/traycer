@@ -193,7 +193,6 @@ describe("<LocalHostLoading />", () => {
             <LocalHostLoading
               stage="loading"
               progress={{
-                operationId: "op-1",
                 stage: "download",
                 percent: 42,
                 bytes: 104_857_600,
@@ -233,7 +232,6 @@ describe("<LocalHostLoading />", () => {
             <LocalHostLoading
               stage="loading"
               progress={{
-                operationId: "op-1",
                 stage: "extract",
                 percent: 80,
                 bytes: null,

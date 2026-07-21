@@ -15,6 +15,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // sandbox root through `__setSandbox` exposed on the mock module.
 let sandboxRoot = "";
 
+// `store/paths` computes `TRAYCER_HOME` from `os.homedir()` once at module
+// load - any export this mock leaves un-overridden would otherwise resolve
+// against the REAL production `~/.traycer`, not this sandbox. Redirect the
+// `os` boundary itself so `vi.importActual`'s fresh module evaluation picks
+// up the sandbox (falling back to the real tmpdir, never the real home,
+// before the first `beforeEach` has set `sandboxRoot`).
+// `vi.mock` factories are hoisted above this file's own top-level `let
+// sandboxRoot` - a direct reference hits a TDZ `ReferenceError`, so the
+// live value has to live in `vi.hoisted` instead.
+const osHome = vi.hoisted(() => ({ current: "" }));
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return { ...actual, homedir: () => osHome.current || actual.tmpdir() };
+});
+
 vi.mock("../../store/paths", async () => {
   const actual =
     await vi.importActual<typeof import("../../store/paths")>(
@@ -55,6 +70,7 @@ import {
 
 function sampleRecord(version: string): HostInstallRecord {
   return {
+    installId: null,
     version,
     runtimeVersion: null,
     platform: "darwin",
@@ -72,6 +88,7 @@ function sampleRecord(version: string): HostInstallRecord {
 describe("manifest/host-install - install record I/O", () => {
   beforeEach(() => {
     sandboxRoot = mkdtempSync(join(tmpdir(), "traycer-cli-paths-"));
+    osHome.current = sandboxRoot;
   });
 
   afterEach(() => {
@@ -132,6 +149,31 @@ describe("manifest/host-install - install record I/O", () => {
     const read = await readHostInstallRecord("production");
     expect(read?.version).toBe("1.2.3");
     expect(read?.runtimeVersion).toBeNull();
+  });
+
+  it("round-trips a populated installId", async () => {
+    const record = {
+      ...sampleRecord("1.2.3"),
+      installId: "3f5b6c1a-1111-4c9a-9999-abcdefabcdef",
+    };
+    await writeHostInstallRecord("production", record);
+    expect((await readHostInstallRecord("production"))?.installId).toBe(
+      "3f5b6c1a-1111-4c9a-9999-abcdefabcdef",
+    );
+  });
+
+  it("reads legacy records without installId as null (tolerant read)", async () => {
+    const legacy: Record<string, unknown> = { ...sampleRecord("1.2.3") };
+    delete legacy.installId;
+    mkdirSync(paths.hostInstallDir("production"), { recursive: true });
+    writeFileSync(
+      paths.hostInstallRecordPath("production"),
+      JSON.stringify(legacy),
+      "utf8",
+    );
+    const read = await readHostInstallRecord("production");
+    expect(read?.version).toBe("1.2.3");
+    expect(read?.installId).toBeNull();
   });
 
   it("returns null when no record exists for the environment", async () => {

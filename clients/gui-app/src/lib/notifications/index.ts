@@ -1,5 +1,6 @@
 export {
   buildPayloadFromEvent,
+  isNotificationPayloadRoutable,
   parseNotificationPayload,
   routeNotification,
   type ApprovalNotificationPayload,

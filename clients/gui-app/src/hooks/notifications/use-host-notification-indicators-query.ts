@@ -15,7 +15,6 @@ const EMPTY_INDICATOR_STATE: HostNotificationsIndicatorStateResponse = {
   epics: {},
   chats: {},
 };
-const INDICATOR_ERROR_REFETCH_INTERVAL_MS = 30_000;
 
 export interface UseHostNotificationIndicatorsArgs {
   readonly epicIds: ReadonlyArray<string>;
@@ -61,10 +60,6 @@ export function useHostNotificationIndicators(
         : notificationsQueryKeys.indicatorIdentity(userId),
     options: {
       enabled: args.enabled && userId !== null,
-      refetchInterval: (query) =>
-        query.state.status === "error"
-          ? INDICATOR_ERROR_REFETCH_INTERVAL_MS
-          : false,
     },
     combine: (results) => ({
       data: mergeIndicatorResponses(results),

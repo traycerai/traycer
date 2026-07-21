@@ -38,15 +38,16 @@ export function GitDiffPanelActions(props: LeftPanelSlotProps) {
   // + submodules) - see `useGitSubmoduleSnapshotRefresh` for why it is not a
   // plain invalidate. The worktree-scoped request hits the correct host; on
   // an old host it still degrades to a parent-only snapshot.
-  const handleRefresh = useGitSubmoduleSnapshotRefresh({
-    hostId: selectedRepo?.hostId ?? null,
-    rootRunningDir: selectedRepo?.rootRunningDir ?? null,
-    ignoreWhitespace,
-  });
+  const { refresh: handleRefresh, isRefreshing } =
+    useGitSubmoduleSnapshotRefresh({
+      hostId: selectedRepo?.hostId ?? null,
+      rootRunningDir: selectedRepo?.rootRunningDir ?? null,
+      ignoreWhitespace,
+    });
 
   const refresh = useRefreshSpinner({
     onRefresh: handleRefresh,
-    externalRefreshing: false,
+    externalRefreshing: isRefreshing,
     timeoutMs: GIT_REFRESH_TIMEOUT_MS,
   });
 

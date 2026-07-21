@@ -8,6 +8,19 @@ import {
   writeCredentials,
 } from "../../store/credentials";
 
+const loggerMock = vi.hoisted(() => ({
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+}));
+
+// Every host-auth branch logs. Avoid writing those test diagnostics to the
+// live per-slot CLI log while preserving the credentials boundary mock below.
+vi.mock("../../logger", () => ({
+  createCliLogger: () => loggerMock,
+}));
+
 vi.mock("../../store/credentials", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../store/credentials")>();

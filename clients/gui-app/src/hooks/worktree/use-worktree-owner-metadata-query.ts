@@ -39,7 +39,7 @@ export function useWorktreeOwnerMetadata(args: {
     ownerId: args.ownerId,
     ownerKind: args.ownerKind,
     enabled: args.enabled && args.binding === undefined,
-    refetchInterval: false,
+    poll: false,
     staleTime: 60_000,
     refetchOnWindowFocus: false,
   });

@@ -53,8 +53,6 @@ export function useDictationAvailability(
     params: SPEECH_MODEL_PARAMS,
     options: {
       enabled,
-      refetchInterval: (query) =>
-        query.state.data?.downloadState === "downloading" ? 1500 : false,
     },
   });
 

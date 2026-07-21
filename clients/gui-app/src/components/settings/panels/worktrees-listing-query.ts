@@ -6,7 +6,7 @@ import {
   useMutation,
   useQueryClient,
 } from "@tanstack/react-query";
-import { withHostRpcErrorBoundary } from "@traycer-clients/shared/host-transport/host-messenger";
+import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { withHostMutationLifecycleBoundary } from "@/hooks/host/use-host-query";
 import type { WorktreeHostEntryV14 } from "@traycer/protocol/host/index";
@@ -180,7 +180,7 @@ export function useWorktreeListing(
   }: {
     readonly pageParam: string | null;
   }): Promise<WorktreeListAllForHostResponseV14> =>
-    withHostRpcErrorBoundary("worktree.listAllForHost", async () => {
+    withHostQueryErrorBoundary("worktree.listAllForHost", async () => {
       if (client === null) {
         throw hostClientUnavailableError("worktree.listAllForHost");
       }
@@ -235,7 +235,7 @@ export function useWorktreeListing(
       onError: (error) =>
         toastFromHostError(error, "Couldn't refresh worktrees."),
       mutationFn: (input) =>
-        withHostRpcErrorBoundary("worktree.listAllForHost", () =>
+        withHostQueryErrorBoundary("worktree.listAllForHost", () =>
           input.client.request("worktree.listAllForHost", {
             includeActivity: false,
             activityPaths: null,
