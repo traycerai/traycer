@@ -38,6 +38,7 @@ const mocks = vi.hoisted(() => ({
   folderPickPending: 0,
   kill: vi.fn(),
   killAsync: vi.fn(() => Promise.resolve({ killed: true })),
+  reconcileXtermHostAfterLayoutTransition: vi.fn(),
   queryClient: {
     cancelQueries: vi.fn(() => Promise.resolve()),
     fetchQuery: vi.fn(),
@@ -84,20 +85,6 @@ vi.mock(
     }),
   }),
 );
-vi.mock("@/components/epic-canvas/canvas/use-pointer-drag-commit", () => ({
-  pointerDragHandleAxisClassName: () => "",
-  usePointerDragCommit: () => ({
-    role: "slider",
-    tabIndex: 0,
-    "aria-orientation": "vertical",
-    onPointerDown: () => undefined,
-    onPointerMove: () => undefined,
-    onPointerUp: () => undefined,
-    onPointerCancel: () => undefined,
-    onDoubleClick: () => undefined,
-    onKeyDown: () => undefined,
-  }),
-}));
 vi.mock(
   "@/components/home/terminal-panel/use-landing-terminal-kill-mutation",
   () => ({
@@ -111,6 +98,10 @@ vi.mock("@/components/home/terminal-panel/landing-terminal-tile", () => ({
   LandingTerminalTile: () => (
     <div data-testid="landing-terminal-tile">Starting terminal…</div>
   ),
+}));
+vi.mock("@/components/epic-canvas/renderers/xterm-host-registry", () => ({
+  reconcileXtermHostAfterLayoutTransition:
+    mocks.reconcileXtermHostAfterLayoutTransition,
 }));
 
 import { LandingTerminalPanel } from "@/components/home/terminal-panel/landing-terminal-panel";
@@ -200,6 +191,29 @@ async function drainDeferredListFetches(
   });
 }
 
+async function flushAnimationFrame(): Promise<void> {
+  await act(
+    () =>
+      new Promise<void>((resolve) => {
+        window.requestAnimationFrame(() => resolve());
+      }),
+  );
+}
+
+function testRect(width: number, height: number, left: number): DOMRect {
+  return {
+    x: left,
+    y: 0,
+    width,
+    height,
+    top: 0,
+    right: left + width,
+    bottom: height,
+    left,
+    toJSON: () => ({}),
+  };
+}
+
 describe("<LandingTerminalPanel />", () => {
   const focusCleanups: Array<() => void> = [];
 
@@ -215,6 +229,7 @@ describe("<LandingTerminalPanel />", () => {
     mocks.folderPickPending = 0;
     mocks.kill.mockReset();
     mocks.killAsync.mockClear();
+    mocks.reconcileXtermHostAfterLayoutTransition.mockClear();
     mocks.queryClient.cancelQueries.mockClear();
     mocks.queryClient.fetchQuery.mockReset();
     mocks.queryClient.fetchQuery.mockImplementation(() =>
@@ -755,6 +770,173 @@ describe("<LandingTerminalPanel />", () => {
     });
     await waitFor(() => {
       expect(terminalFocus).toHaveBeenCalled();
+    });
+  });
+
+  it("refits the active terminal after reopening from zero width to the stored panel width", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = { sessions: [runningSession("session-1")] };
+    mocks.freshProbeData = mocks.probeData;
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "tab-1",
+      sessionId: "session-1",
+      hostId: "host-a",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+    });
+    useLandingTerminalStore.getState().setPanelWidthFraction(0.42);
+    useLandingTerminalStore.getState().setPanelOpen(true);
+    render(panelUi());
+
+    const panel = screen.getByTestId("landing-terminal-panel");
+    expect(panel.style.width).toBe("42%");
+    await flushAnimationFrame();
+    mocks.reconcileXtermHostAfterLayoutTransition.mockClear();
+
+    fireEvent.click(screen.getByTestId("landing-terminal-collapse"));
+    await waitFor(() => {
+      expect(panel.style.width).toBe("0%");
+    });
+    fireEvent.transitionEnd(panel, { propertyName: "width" });
+    expect(
+      mocks.reconcileXtermHostAfterLayoutTransition,
+    ).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId("landing-terminal-toggle"));
+    await waitFor(() => {
+      expect(panel.style.width).toBe("42%");
+    });
+    expect(
+      mocks.reconcileXtermHostAfterLayoutTransition,
+    ).not.toHaveBeenCalled();
+
+    fireEvent.transitionEnd(panel, { propertyName: "width" });
+    await flushAnimationFrame();
+    expect(
+      mocks.reconcileXtermHostAfterLayoutTransition,
+    ).toHaveBeenCalledOnce();
+    expect(mocks.reconcileXtermHostAfterLayoutTransition).toHaveBeenCalledWith(
+      "tab-1",
+    );
+  });
+
+  it("refits a terminal activated by delayed reconciliation after the reveal transition", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/other";
+    mocks.probeData = undefined;
+    const sessions = [
+      runningSession("session-1"),
+      { ...runningSession("session-2"), cwd: "/workspace/other" },
+    ];
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "tab-1",
+      sessionId: "session-1",
+      hostId: "host-a",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+    });
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "tab-2",
+      sessionId: "session-2",
+      hostId: "host-a",
+      cwd: "/workspace/other",
+      name: "other",
+      titleSource: "default",
+    });
+    useLandingTerminalStore.getState().activateTab("tab-1");
+    const resolvers: Array<(value: unknown) => void> = [];
+    mocks.queryClient.fetchQuery.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    const view = render(panelUi());
+
+    fireEvent.click(screen.getByTestId("landing-terminal-toggle"));
+    const panel = screen.getByTestId("landing-terminal-panel");
+    fireEvent.transitionEnd(panel, { propertyName: "width" });
+    await flushAnimationFrame();
+    expect(mocks.reconcileXtermHostAfterLayoutTransition).toHaveBeenCalledWith(
+      "tab-1",
+    );
+    mocks.reconcileXtermHostAfterLayoutTransition.mockClear();
+
+    mocks.probeData = { sessions };
+    mocks.dataUpdatedAt += 1;
+    view.rerender(panelUi());
+    await waitFor(() => {
+      expect(resolvers).toHaveLength(1);
+    });
+    const resolveFreshList = resolvers.shift();
+    if (resolveFreshList === undefined) {
+      throw new Error("Expected a deferred terminal list fetch");
+    }
+    await act(async () => {
+      resolveFreshList({ sessions });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(useLandingTerminalStore.getState().activeInstanceId).toBe("tab-2");
+    });
+    await waitFor(() => {
+      expect(
+        mocks.reconcileXtermHostAfterLayoutTransition,
+      ).toHaveBeenCalledWith("tab-2");
+    });
+  });
+
+  it("waits for an interrupted reveal drag to commit before refitting", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = { sessions: [runningSession("session-1")] };
+    mocks.freshProbeData = mocks.probeData;
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "tab-1",
+      sessionId: "session-1",
+      hostId: "host-a",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+    });
+    useLandingTerminalStore.getState().setPanelWidthFraction(0.42);
+    render(panelUi());
+
+    fireEvent.click(screen.getByTestId("landing-terminal-toggle"));
+    const panel = screen.getByTestId("landing-terminal-panel");
+    const resizeHandle = screen.getByTestId("landing-terminal-resize-handle");
+    const container = resizeHandle.parentElement;
+    if (container === null) throw new Error("Expected the panel container");
+    vi.spyOn(container, "getBoundingClientRect").mockReturnValue(
+      testRect(1_000, 800, 0),
+    );
+    vi.spyOn(panel, "getBoundingClientRect").mockReturnValue(
+      testRect(420, 800, 580),
+    );
+    mocks.reconcileXtermHostAfterLayoutTransition.mockClear();
+
+    fireEvent.pointerDown(resizeHandle, {
+      button: 0,
+      pointerId: 7,
+      clientX: 580,
+    });
+    fireEvent.transitionCancel(panel, { propertyName: "width" });
+    await flushAnimationFrame();
+    expect(
+      mocks.reconcileXtermHostAfterLayoutTransition,
+    ).not.toHaveBeenCalled();
+
+    fireEvent.pointerMove(resizeHandle, { pointerId: 7, clientX: 530 });
+    fireEvent.pointerUp(resizeHandle, { pointerId: 7, clientX: 530 });
+    expect(panel.style.width).toBe("47%");
+    await waitFor(() => {
+      expect(
+        mocks.reconcileXtermHostAfterLayoutTransition,
+      ).toHaveBeenCalledWith("tab-1");
     });
   });
 
