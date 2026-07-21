@@ -451,6 +451,38 @@ function mapHostRpcError(err: HostRpcError): CliError {
       exitCode: 1,
     });
   }
+  if (err.code === "E_AGENT_NOT_FOUND") {
+    return cliError({
+      code: CLI_ERROR_CODES.AGENT_NOT_FOUND,
+      message: `traycer: ${err.message} Check --agent-id (or $TRAYCER_AGENT_ID).`,
+      details: null,
+      exitCode: 1,
+    });
+  }
+  if (err.code === "E_AGENT_NOT_LOCAL") {
+    return cliError({
+      code: CLI_ERROR_CODES.AGENT_NOT_LOCAL,
+      message: `traycer: ${err.message}`,
+      details: null,
+      exitCode: 1,
+    });
+  }
+  if (err.code === "E_ROLE_FORBIDDEN") {
+    return cliError({
+      code: CLI_ERROR_CODES.ROLE_FORBIDDEN,
+      message: `traycer: ${err.message}`,
+      details: null,
+      exitCode: 1,
+    });
+  }
+  if (err.code === "E_INVALID_ARGUMENT") {
+    return cliError({
+      code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+      message: `traycer: ${err.message}`,
+      details: null,
+      exitCode: 1,
+    });
+  }
   if (err.code === "E_HOST_UNSUPPORTED") {
     return cliError({
       code: CLI_ERROR_CODES.HOST_UNSUPPORTED,

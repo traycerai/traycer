@@ -362,6 +362,19 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   "agent.getTranscript": { ...LATEST_SCHEDULING, poll: null },
   "agent.inbox.read": { ...LATEST_SCHEDULING, poll: null },
+  // Claiming a role persists responsibility and broadcasts awareness.
+  "agent.roles.claim": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "agent.roles.list": { ...LATEST_SCHEDULING, poll: null },
+  // Relinquishing a role removes persisted responsibility and broadcasts awareness.
+  "agent.roles.relinquish": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Stopping an agent terminates its active execution.
   "agent.stop": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   // Migrating a phase changes the epic's persisted workflow state.

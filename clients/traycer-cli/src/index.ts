@@ -21,6 +21,11 @@ import { buildAgentActivityFromHookCommand } from "./commands/agent-activity-fro
 import { buildAgentListHarnessesCommand } from "./commands/agent-list-harnesses";
 import { buildAgentListHarnessModelsCommand } from "./commands/agent-list-harness-models";
 import { buildAgentListCommand } from "./commands/agent-list";
+import {
+  buildAgentRoleClaimCommand,
+  buildAgentRoleListCommand,
+  buildAgentRoleRelinquishCommand,
+} from "./commands/agent-role";
 import { buildAgentSelectionGuideCommand } from "./commands/agent-selection-guide";
 import { buildAgentSendCommand } from "./commands/agent-send";
 import { buildAgentTitleFromHookCommand } from "./commands/agent-title-from-hook";
@@ -1606,6 +1611,74 @@ function registerAgentCommands(program: Command): void {
       buildAgentTranscriptCommand({
         epicId: typeof opts.epicId === "string" ? opts.epicId : null,
         agentId: typeof opts.agentId === "string" ? opts.agentId : "",
+      }),
+  );
+
+  const role = agent
+    .command("role")
+    .description(
+      "Claim, list, and relinquish durable Task-local roles for the calling agent",
+    );
+
+  withRunner(
+    role
+      .command("claim", readonlyHidden)
+      .description(
+        "Claim a durable role for the calling agent in this Task's role registry",
+      )
+      .requiredOption(
+        "--role <name>",
+        "Role name to claim. Short and memorable; disambiguate against existing roles.",
+      )
+      .requiredOption(
+        "--scope <scope>",
+        "Task-local scope of responsibility this role covers",
+      )
+      .option("--epic-id <id>", "Epic (defaults to $TRAYCER_EPIC_ID)")
+      .option(
+        "--agent-id <id>",
+        "Claiming agent (defaults to $TRAYCER_AGENT_ID)",
+      ),
+    (opts) =>
+      buildAgentRoleClaimCommand({
+        epicId: typeof opts.epicId === "string" ? opts.epicId : null,
+        agentId: typeof opts.agentId === "string" ? opts.agentId : null,
+        role: typeof opts.role === "string" ? opts.role : null,
+        scope: typeof opts.scope === "string" ? opts.scope : null,
+      }),
+  );
+
+  withRunner(
+    role
+      .command("list")
+      .description(
+        "List the roles currently claimed in this Task (your account's live agents only)",
+      )
+      .option("--epic-id <id>", "Epic (defaults to $TRAYCER_EPIC_ID)"),
+    (opts) =>
+      buildAgentRoleListCommand({
+        epicId: typeof opts.epicId === "string" ? opts.epicId : null,
+      }),
+  );
+
+  withRunner(
+    role
+      .command("relinquish", readonlyHidden)
+      .description("Relinquish a role claim held by the calling agent")
+      .requiredOption(
+        "--claim-id <id>",
+        "Claim id to relinquish (see 'traycer agent role list')",
+      )
+      .option("--epic-id <id>", "Epic (defaults to $TRAYCER_EPIC_ID)")
+      .option(
+        "--agent-id <id>",
+        "Relinquishing agent (defaults to $TRAYCER_AGENT_ID)",
+      ),
+    (opts) =>
+      buildAgentRoleRelinquishCommand({
+        epicId: typeof opts.epicId === "string" ? opts.epicId : null,
+        agentId: typeof opts.agentId === "string" ? opts.agentId : null,
+        claimId: typeof opts.claimId === "string" ? opts.claimId : null,
       }),
   );
 

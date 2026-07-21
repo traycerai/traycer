@@ -16,14 +16,23 @@
  *     `expectReply=true` gets a stalled-receiver notice if no progress
  *     happens within the window.
  *
- * Monitor presence is the TUI agent's authoritative reachability signal:
- * the resolver registers/unregisters the agent with the host's
- * `AgentActivityTracker` on open/close, replacing the older PTY-data
- * heuristic from `TerminalSessionManager`.
+ * Monitor presence: the resolver does NOT register the agent with the host's
+ * `AgentActivityTracker` - epic-activity ownership belongs to the
+ * `TerminalSessionManager` that owns the PTY, and a second registrar would
+ * race it. (An earlier version of this comment claimed otherwise; it was
+ * wrong, and the claim is load-bearing enough that it is worth correcting.)
+ *
+ * What the resolver DOES own is the ROLE-AWARENESS SINK registry: on a
+ * successful open it registers its connection as a live sink (keyed by
+ * connectionId, and only when the negotiated version is >= 1.1), and
+ * unregisters that same connection on close. Awareness is delivered only to a
+ * sink that is connected at that moment - it is never queued, so a
+ * reconnecting monitor never replays a stale broadcast.
  */
 import { defineRpcContract } from "@traycer/protocol/framework/index";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 import { z } from "zod";
+import { roleAwarenessEventSchema } from "@traycer/protocol/host/agent/roles";
 
 const textFrameFields = {
   hasBinaryPayload: z.literal(false),
@@ -161,7 +170,13 @@ export const agentInboxNoticeSchema = z.object({
 });
 export type AgentInboxNotice = z.infer<typeof agentInboxNoticeSchema>;
 
-export const agentInboxSubscribeServerFrameSchema = z.discriminatedUnion(
+// ─── Frozen agent.inbox.subscribe@1.0 shape (as shipped) ──────────────────
+//
+// IMMUTABLE. A monitor that negotiated @1.0 agreed to exactly these three
+// frame kinds, so this union must never learn a new one - sending a peer a
+// frame it did not negotiate is the host breaking the contract, not a
+// "graceful" degrade the peer happens to drop.
+export const agentInboxSubscribeServerFrameSchemaV10 = z.discriminatedUnion(
   "kind",
   [
     z.object({
@@ -180,6 +195,46 @@ export const agentInboxSubscribeServerFrameSchema = z.discriminatedUnion(
     }),
   ],
 );
+
+// ─── agent.inbox.subscribe@1.1 - additive: role awareness ─────────────────
+//
+// Adds the `role-awareness` frame: a peer in this Task claimed or relinquished
+// a role. Typed and NOT reply-bearing - it carries no responseId and no
+// `expectsReply`, so it cannot create a pending A2A thread. It is also never
+// queued: awareness is delivered only to a monitor that is connected AT THAT
+// MOMENT, so a reconnecting monitor never replays a stale broadcast (it reads
+// current roles from its prompt instead).
+//
+// Eligibility is gated on the NEGOTIATED minor: a @1.0 monitor is `unreachable`
+// for awareness and is never sent this frame.
+export const agentInboxSubscribeServerFrameSchemaV11 = z.discriminatedUnion(
+  "kind",
+  [
+    z.object({
+      kind: z.literal("message"),
+      ...textFrameFields,
+      item: agentInboxMessageSchema,
+    }),
+    z.object({
+      kind: z.literal("notice"),
+      ...textFrameFields,
+      notice: agentInboxNoticeSchema,
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      ...textFrameFields,
+    }),
+    z.object({
+      kind: z.literal("role-awareness"),
+      ...textFrameFields,
+      event: roleAwarenessEventSchema,
+    }),
+  ],
+);
+
+/** The latest installed shape. Host code builds frames against this. */
+export const agentInboxSubscribeServerFrameSchema =
+  agentInboxSubscribeServerFrameSchemaV11;
 export type AgentInboxSubscribeServerFrame = z.infer<
   typeof agentInboxSubscribeServerFrameSchema
 >;
@@ -201,7 +256,15 @@ export const agentInboxSubscribeV10 = defineStreamRpcContract({
   method: "agent.inbox.subscribe",
   schemaVersion: { major: 1, minor: 0 } as const,
   openRequestSchema: agentInboxSubscribeOpenRequestSchema,
-  serverFrameSchema: agentInboxSubscribeServerFrameSchema,
+  serverFrameSchema: agentInboxSubscribeServerFrameSchemaV10,
+  clientFrameSchema: agentInboxSubscribeClientFrameSchema,
+});
+
+export const agentInboxSubscribeV11 = defineStreamRpcContract({
+  method: "agent.inbox.subscribe",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  openRequestSchema: agentInboxSubscribeOpenRequestSchema,
+  serverFrameSchema: agentInboxSubscribeServerFrameSchemaV11,
   clientFrameSchema: agentInboxSubscribeClientFrameSchema,
 });
 

@@ -248,3 +248,77 @@ describe("runMonitor recovery", () => {
     );
   });
 });
+
+describe("role awareness frames (negotiated @1.1)", () => {
+  it("prints one compact [traycer roles] line per event, for both claim and relinquish", async () => {
+    const stdoutSpy = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation(() => true);
+    const result = runMonitor({ agentId: "a1", epicId: "e1" }).catch((e) => e);
+    await flush(0);
+
+    const claim = {
+      claimId: "33333333-3333-4333-8333-333333333333",
+      agentId: "peer-1",
+      role: "Planner",
+      scope: "auth migration",
+      claimedAt: 10,
+    };
+    sessions[0].serverFrame?.({
+      kind: "role-awareness",
+      hasBinaryPayload: false,
+      event: { kind: "role-claimed", epicId: "e1", claim, at: 20 },
+    });
+    sessions[0].serverFrame?.({
+      kind: "role-awareness",
+      hasBinaryPayload: false,
+      event: { kind: "role-relinquished", epicId: "e1", claim, at: 30 },
+    });
+
+    const lines = stdoutSpy.mock.calls.map((call) => String(call[0]));
+    expect(lines).toContain(
+      '[traycer roles] agent peer-1 claimed role "Planner" (scope: auth migration)\n',
+    );
+    expect(lines).toContain(
+      '[traycer roles] agent peer-1 relinquished role "Planner" (scope: auth migration)\n',
+    );
+
+    stdoutSpy.mockRestore();
+    void result;
+  });
+
+  it("drops a malformed role-awareness frame without printing", async () => {
+    const stdoutSpy = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation(() => true);
+    const result = runMonitor({ agentId: "a1", epicId: "e1" }).catch((e) => e);
+    await flush(0);
+
+    // `claim` violates the wire schema (empty role), so the frame must not
+    // reach the printer - the monitor drops what it cannot trust.
+    sessions[0].serverFrame?.({
+      kind: "role-awareness",
+      hasBinaryPayload: false,
+      event: {
+        kind: "role-claimed",
+        epicId: "e1",
+        claim: {
+          claimId: "33333333-3333-4333-8333-333333333333",
+          agentId: "peer-1",
+          role: "",
+          scope: "auth migration",
+          claimedAt: 10,
+        },
+        at: 20,
+      },
+    });
+
+    const lines = stdoutSpy.mock.calls.map((call) => String(call[0]));
+    expect(lines.filter((line) => line.includes("[traycer roles]"))).toEqual(
+      [],
+    );
+
+    stdoutSpy.mockRestore();
+    void result;
+  });
+});

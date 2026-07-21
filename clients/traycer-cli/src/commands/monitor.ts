@@ -8,6 +8,7 @@ import {
   type AgentInboxMessage,
   type AgentInboxNotice,
 } from "@traycer/protocol/host/agent/inbox";
+import type { RoleAwarenessEvent } from "@traycer/protocol/host/agent/roles";
 import { CredentialLeaseReleasedError } from "@traycer/protocol/auth/request-context";
 import { MutableBearerLease } from "../../../shared/auth/bearer-source";
 import {
@@ -498,6 +499,17 @@ function handleServerFrame(
       droppedReceiverCount: parsed.data.notice.droppedReceivers?.length ?? 0,
     });
     printInboxNotice(parsed.data.notice);
+    return;
+  }
+  if (parsed.data.kind === "role-awareness") {
+    logger.debug("Monitor received role awareness frame", {
+      environment: config.environment,
+      agentId: target.agentId,
+      epicId: target.epicId,
+      eventKind: parsed.data.event.kind,
+      claimAgentId: parsed.data.event.claim.agentId,
+    });
+    printRoleAwareness(parsed.data.event);
   }
 }
 
@@ -618,6 +630,19 @@ function printInboxNotice(notice: AgentInboxNotice): void {
     "",
   ];
   process.stdout.write(`${lines.join("\n")}\n`);
+}
+
+/**
+ * Role awareness is ambient coordination state, not a message — a single
+ * compact line informs the transcript without crowding it. Role and scope are
+ * normalized non-empty text by schema, so both always render.
+ */
+function printRoleAwareness(event: RoleAwarenessEvent): void {
+  const verb =
+    event.kind === "role-claimed" ? "claimed role" : "relinquished role";
+  process.stdout.write(
+    `[traycer roles] agent ${event.claim.agentId} ${verb} "${event.claim.role}" (scope: ${event.claim.scope})\n`,
+  );
 }
 
 /**

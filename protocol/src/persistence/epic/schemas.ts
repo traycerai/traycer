@@ -33,3 +33,4 @@ export * from "./chat-events";
 export * from "./chat";
 export * from "./artifacts";
 export * from "./tui-agents";
+export * from "./role-claims";
