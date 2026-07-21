@@ -11,6 +11,7 @@ import GithubCopilotMono from "@lobehub/icons/es/GithubCopilot/components/Mono";
 import OpenRouterMono from "@lobehub/icons/es/OpenRouter/components/Mono";
 import KimiMono from "@lobehub/icons/es/Kimi/components/Mono";
 import DevinMono from "@lobehub/icons/es/Devin/components/Mono";
+import HermesAgentMono from "@lobehub/icons/es/HermesAgent/components/Mono";
 
 export type HarnessIcon = (props: SVGProps<SVGSVGElement>) => ReactElement;
 
@@ -65,6 +66,12 @@ export const AmpIcon: HarnessIcon = (props) => (
 
 // Devin (Cognition) — lobehub monochrome brand mark (`currentColor` theming).
 export const DevinIcon: HarnessIcon = (props) => <DevinMono {...props} />;
+
+// Hermes Agent (Nous Research) — lobehub monochrome brand mark (`currentColor`
+// theming), same pattern as Devin.
+export const HermesIcon: HarnessIcon = (props) => (
+  <HermesAgentMono {...props} />
+);
 
 // Pi (pi.dev) has no lobehub entry — official badge mark from pi.dev/favicon.svg
 // (press kit). Brand dark plate + white glyph so it keeps identity in both themes
