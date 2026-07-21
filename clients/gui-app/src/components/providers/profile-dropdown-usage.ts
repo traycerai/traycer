@@ -13,6 +13,8 @@ export interface ProfileDropdownUsageEntry {
   readonly projection: ProfileUsageProjection;
   readonly refreshStatus: ProfileUsageRefreshStatus;
   readonly refresh: () => Promise<void>;
+  /** Non-forced automatic check - see `ProfileUsageComparisonEntry`. */
+  readonly ensureFresh: () => Promise<void>;
 }
 
 export interface ProfileDropdownUsagePresentation {
@@ -102,6 +104,7 @@ export function projectComparisonEntry(
     }),
     refreshStatus: entry.refreshStatus,
     refresh: entry.refresh,
+    ensureFresh: entry.ensureFresh,
   };
 }
 

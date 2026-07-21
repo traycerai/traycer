@@ -6,7 +6,7 @@ import type { ComposerPromptSegment } from "./types";
 
 export const MENTION_TOKEN_REGEX = /(^|\s)@([^\s@]+)(?=\s|$)/g;
 const COMPLETE_ENTITY_TOKEN_REGEX =
-  /^(epic:[^/\s]+|(spec|ticket|story|review|chat):[^/\s]+\/[^\s]+)$/u;
+  /^(epic:[^/\s]+|(spec|ticket|story|review|chat|terminal-agent):[^/\s]+\/[^\s]+)$/u;
 
 interface MentionTokenMatch {
   path: string;

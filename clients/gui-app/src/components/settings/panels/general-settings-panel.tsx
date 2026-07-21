@@ -111,7 +111,7 @@ export function GeneralSettingsPanel() {
       <PrereleaseUpdatesRow />
       <SettingsRow
         label="Prevent sleep while running"
-        description="Keep the computer awake while a chat or terminal agent is running, so work continues when you step away."
+        description="Keep the computer awake while an agent is running, so work continues when you step away."
         control={
           <Switch
             checked={preventSleepWhileRunning}
@@ -326,7 +326,7 @@ function DangerZoneSection() {
           open={confirmOpen}
           onOpenChange={setConfirmOpen}
           title="Remove Traycer from this device?"
-          description="This stops and removes Traycer's background host and services and won't reinstall them automatically. Your chats, history, and credentials stay on this device - you can reinstall anytime from Settings."
+          description="This stops and removes Traycer's background host and services and won't reinstall them automatically. Your agents, history, and credentials stay on this device - you can reinstall anytime from Settings."
           cascadeSummary={null}
           actionLabel="Remove Traycer"
           isPending={uninstall.isPending}
@@ -354,7 +354,7 @@ function RemoveTraycerDangerRow(props: {
     return (
       <SettingsRow
         label="Traycer removed"
-        description="Background components were removed. Your chats, history, and credentials are preserved on this device. To finish, quit Traycer and drag it from Applications to the Trash."
+        description="Background components were removed. Your agents, history, and credentials are preserved on this device. To finish, quit Traycer and drag it from Applications to the Trash."
         control={
           <Button
             type="button"
@@ -375,7 +375,7 @@ function RemoveTraycerDangerRow(props: {
   return (
     <SettingsRow
       label="Remove Traycer"
-      description="Stops the background host and services and removes the installed components from this device. Your chats and history are preserved, and the host won't reinstall itself."
+      description="Stops the background host and services and removes the installed components from this device. Your agents and history are preserved, and the host won't reinstall itself."
       control={
         <Button
           type="button"
@@ -497,7 +497,7 @@ function SettingsFileEditSnapshotsSection() {
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
         title="Clear file edit snapshots?"
-        description="Cleared snapshots cannot be restored. Existing chat history and checkpoint records remain visible, but Undo will be disabled for your past turns on this device."
+        description="Cleared snapshots cannot be restored. Existing conversation history and checkpoint records remain visible, but Undo will be disabled for your past turns on this device."
         cascadeSummary={null}
         actionLabel="Clear file edit snapshots"
         isPending={clearSnapshotsMutation.isPending}

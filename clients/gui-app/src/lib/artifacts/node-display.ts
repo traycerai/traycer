@@ -98,6 +98,27 @@ export const EPIC_NODE_LABELS: Readonly<Record<EpicNodeKind, string>> = {
   terminal: "Terminal",
 };
 
+/**
+ * Lower-case noun naming a node inside a sentence - destructive confirmations,
+ * summaries, and similar prose.
+ *
+ * `chat` and `terminal-agent` both collapse to **agent**: Agent is the durable
+ * entity the action operates on and Chat/Terminal are only the interfaces used
+ * to reach it, so "Delete agent "Foo"?" is true for either. Interpolating the
+ * raw node kind here previously leaked the hyphenated `terminal-agent` into
+ * user-facing copy.
+ */
+export const EPIC_NODE_SENTENCE_NOUNS: Readonly<Record<EpicNodeKind, string>> =
+  {
+    chat: "agent",
+    "terminal-agent": "agent",
+    spec: "spec",
+    ticket: "ticket",
+    story: "story",
+    review: "review",
+    terminal: "terminal",
+  };
+
 export type EpicNodeIconColors = Readonly<Record<EpicNodeKind, string>>;
 
 export const DEFAULT_EPIC_NODE_ICON_COLORS: EpicNodeIconColors = {

@@ -764,7 +764,7 @@ function HostRemovedSurface(props: HostRemovedSurfaceProps) {
             <p className="font-medium">Traycer was removed</p>
             <p className="text-muted-foreground">
               You removed Traycer's background components from this device, so
-              the host won't start. Your chats and history are preserved. To
+              the host won't start. Your agents and history are preserved. To
               finish, quit Traycer and drag it from Applications to the Trash.
             </p>
           </div>

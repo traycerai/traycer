@@ -126,6 +126,7 @@ const OWNER = {
   },
   sampledAt: 1_000,
   rootPids: [1],
+  harnessId: null,
   activeProcessName: "bash",
   processCount: 2,
   cpuPercent: 10,
@@ -217,7 +218,7 @@ describe("ResourcesStreamClient", () => {
     expect(parseText(sockets[0].textSent[1])).toEqual({
       kind: "subscribe",
       method: "resources.subscribe",
-      schemaVersion: { major: 1, minor: 2 },
+      schemaVersion: { major: 1, minor: 3 },
       params: {
         epicId: "epic-1",
         scope: { kind: "epic", epicId: "epic-1" },
@@ -250,6 +251,7 @@ describe("ResourcesStreamClient", () => {
     expect(snapshots).toHaveLength(1);
     expect(snapshots[0].app?.process?.name).toBe("traycer-host");
     expect(snapshots[0].owners[0].owner.ownerId).toBe("s1");
+    expect(snapshots[0].owners[0].harnessId).toBeNull();
     expect(snapshots[0].owners[0].processes[0].command).toBe("/bin/bash");
     expect(snapshots[0].epic?.epicId).toBe("epic-1");
     expect(snapshots[0].epics).toEqual([]);
@@ -260,6 +262,41 @@ describe("ResourcesStreamClient", () => {
     expect(updates[0].sampledAt).toBe(2_000);
     expect(updates[0].hostTree?.cpuPercent).toBe(60);
 
+    client.close();
+  });
+
+  it("backfills harnessId to null for a pre-1.3 (harnessId-less) frame", () => {
+    const { factory, sockets } = makeFactory();
+    const snapshots: ResourcesProjectionPayload[] = [];
+    const client = new ResourcesStreamClient({
+      wsStreamClient: makeWsStreamClient(factory),
+      scope: { kind: "epic", epicId: "epic-1" },
+      callbacks: {
+        onSnapshot: (p) => snapshots.push(p),
+        onUpdate: () => {},
+        onConnectionStatus: () => {},
+      },
+    });
+    completeHandshake(sockets[0]);
+
+    // An older host emits a `@1.2` frame whose owner carries NO harnessId. It
+    // fails the `@1.3` parse, falls back to `@1.2`, and `toPayload` normalizes
+    // the missing field to `null` so downstream always reads a defined value.
+    const { harnessId: _omit, ...ownerWithoutHarness } = OWNER;
+    sockets[0].fireText({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      sampledAt: 1_000,
+      app: APP,
+      owners: [ownerWithoutHarness],
+      epic: EPIC,
+      hostTree: HOST_TREE,
+      other: OTHER,
+    });
+
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0].owners[0].harnessId).toBeNull();
     client.close();
   });
 

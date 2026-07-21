@@ -37,6 +37,7 @@ vi.mock("@/components/home/composer/composer-shell", () => ({
     <div
       role="region"
       aria-label="Composer shell"
+      data-testid="composer-card"
       data-overlay={props.dragOverlayVariant ?? "none"}
       onDragOver={props.onDragOver}
       onDrop={props.onDrop}
@@ -80,7 +81,9 @@ function makePaste(): UseComposerPasteResult {
 function renderComposerBody(
   composerMode: ComposerMode,
   paste: UseComposerPasteResult,
-): void {
+  header: ReactNode,
+  topBanner: ReactNode,
+) {
   const toolbarStore = createComposerToolbarStore({
     seedKey: "test",
     values: {
@@ -94,7 +97,7 @@ function renderComposerBody(
     tuiOnly: composerMode === "terminal",
   });
 
-  render(
+  return render(
     <ComposerBody
       pickerStore={createComposerPickerStore()}
       editorRef={{ current: null }}
@@ -108,7 +111,8 @@ function renderComposerBody(
       isSubmitting={false}
       attachmentPending={false}
       workspaceDisabledHint={null}
-      header={null}
+      header={header}
+      topBanner={topBanner}
       attachmentsStrip={null}
       workspaceControls={null}
       dictationControl={null}
@@ -125,7 +129,7 @@ function renderComposerBody(
 describe("ComposerBody file-transfer routing", () => {
   it("does not dispatch file transfers to the hidden chat editor in terminal mode", () => {
     const paste = makePaste();
-    renderComposerBody("terminal", paste);
+    renderComposerBody("terminal", paste, null, null);
 
     const shell = screen.getByRole("region", { name: "Composer shell" });
     fireEvent.dragEnter(shell);
@@ -146,7 +150,7 @@ describe("ComposerBody file-transfer routing", () => {
 
   it("keeps file-transfer handling active in chat mode", () => {
     const paste = makePaste();
-    renderComposerBody("chat", paste);
+    renderComposerBody("chat", paste, null, null);
 
     const shell = screen.getByRole("region", { name: "Composer shell" });
     fireEvent.dragEnter(shell);
@@ -161,5 +165,50 @@ describe("ComposerBody file-transfer routing", () => {
     expect(paste.onDrop).toHaveBeenCalledOnce();
     expect(paste.onPaste).toHaveBeenCalledOnce();
     expect(shell.getAttribute("data-overlay")).toBe("paths");
+  });
+});
+
+describe("ComposerBody topBanner placement", () => {
+  it("renders nothing extra when topBanner is null", () => {
+    renderComposerBody(
+      "chat",
+      makePaste(),
+      <div data-testid="mode-switch-header">header</div>,
+      null,
+    );
+
+    expect(screen.queryByTestId("rate-limit-banner")).toBeNull();
+    expect(screen.getByTestId("mode-switch-header")).toBeTruthy();
+    expect(screen.getByTestId("composer-card")).toBeTruthy();
+  });
+
+  it("renders the mode-switch header, then topBanner, then the composer card, in that DOM order", () => {
+    const { container } = renderComposerBody(
+      "chat",
+      makePaste(),
+      <div data-testid="mode-switch-header">header</div>,
+      <div data-testid="rate-limit-banner">banner</div>,
+    );
+    const header = screen.getByTestId("mode-switch-header");
+    const banner = screen.getByTestId("rate-limit-banner");
+    const card = screen.getByTestId("composer-card");
+
+    expect(
+      header.compareDocumentPosition(banner) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      banner.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    const order = Array.from(
+      container.querySelectorAll(
+        '[data-testid="mode-switch-header"], [data-testid="rate-limit-banner"], [data-testid="composer-card"]',
+      ),
+    ).map((element) => element.getAttribute("data-testid"));
+    expect(order).toEqual([
+      "mode-switch-header",
+      "rate-limit-banner",
+      "composer-card",
+    ]);
   });
 });
