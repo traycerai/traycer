@@ -1,14 +1,7 @@
 import "../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  act,
-  cleanup,
-  fireEvent,
-  render,
-  waitFor,
-} from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { toast } from "sonner";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
@@ -44,7 +37,7 @@ import {
 } from "@traycer/protocol/notifications/notification-room";
 
 interface HostState {
-  id: string;
+  id: string | null;
   client: HostClient<HostRpcRegistry> | null;
 }
 
@@ -75,13 +68,100 @@ vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
   useReactiveActiveHostId: () => hostState.id,
 }));
 
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: (hostId: string) => {
+    if (hostId.length === 0) return null;
+    return mockLocalHostEntry;
+  },
+}));
+
 vi.mock("@/hooks/notifications/use-notifications", () => ({
   useNotificationShow: () => () => Promise.resolve(),
 }));
 
+const activateMock = vi.hoisted(() =>
+  vi.fn<
+    (input: {
+      readonly payload: { readonly kind: string };
+      readonly receivedAt: number;
+      readonly feedId: string | null;
+      readonly onResult: ((outcome: "success" | "failure") => void) | null;
+    }) => void
+  >(),
+);
+const markAsReadMock = vi.hoisted(() => vi.fn<(feedId: string) => void>());
+const lastHostDisplay = vi.hoisted(() => ({
+  originHostId: null as string | null,
+  onToastClick: null as
+    | ((row: {
+        readonly feedId: string;
+        readonly payload: { readonly kind: string } | null;
+        readonly createdAt: number;
+      }) => void)
+    | null,
+}));
+
+vi.mock("@/hooks/notifications/use-notification-activation", () => ({
+  useNotificationActivation: () => ({
+    activate: activateMock,
+    pendingFeedId: null,
+  }),
+}));
+
+vi.mock("@/stores/notifications/merged-notifications", async (importActual) => {
+  const actual =
+    await importActual<
+      typeof import("@/stores/notifications/merged-notifications")
+    >();
+  return {
+    ...actual,
+    useMergedNotificationsActions: () => ({
+      markAsRead: markAsReadMock,
+      markAllAsRead: vi.fn(),
+      loadMoreHost: vi.fn(),
+      canLoadMoreHost: false,
+      isLoadingMoreHost: false,
+      hasHostLoadError: false,
+      loadMoreAttention: vi.fn(),
+      canLoadMoreAttention: false,
+      isLoadingMoreAttention: false,
+      hasAttentionLoadError: false,
+      loadMoreUnreadRecent: vi.fn(),
+      canLoadMoreUnreadRecent: false,
+      isLoadingMoreUnreadRecent: false,
+      hasUnreadRecentLoadError: false,
+    }),
+  };
+});
+
+vi.mock("@/lib/notifications/notification-display", async (importActual) => {
+  const actual =
+    await importActual<
+      typeof import("@/lib/notifications/notification-display")
+    >();
+  return {
+    ...actual,
+    displayHostChannelEmission: (
+      _entries: unknown,
+      target: {
+        readonly onToastClick: (row: {
+          readonly feedId: string;
+          readonly payload: { readonly kind: string } | null;
+          readonly createdAt: number;
+        }) => void;
+      },
+      originHostId: string | null,
+    ) => {
+      lastHostDisplay.originHostId = originHostId;
+      lastHostDisplay.onToastClick = target.onToastClick;
+    },
+  };
+});
+
 import { NotificationsSessionProvider } from "@/providers/notifications-session-provider";
-import { Toaster } from "@/components/ui/sonner";
 import { __setNotificationsStreamFactoryForTests } from "@/providers/notifications-stream-factory-override";
+import { NotificationsBell } from "@/components/notifications/notifications-bell";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   __resetNotificationsStoreForTests,
@@ -100,7 +180,7 @@ import { makeOpenableNodeRef } from "@/stores/epics/canvas/types";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
 import { selectNotificationIndicatorState } from "@/stores/notifications/notification-indicator-state";
-import { useNotificationEventsStore } from "@/stores/notifications/notification-events-store";
+import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
 
 interface ControlledStream {
   closeCount: number;
@@ -111,6 +191,7 @@ class MockStreamSession implements IStreamSession {
   private statusChangeHandler: StatusChangeHandler | null = null;
   readonly clientFrames: HostNotificationsSubscribeClientFrame[] = [];
   closeCount = 0;
+  requestReconnectCount = 0;
 
   sendClientFrame(envelope: StreamFrameEnvelope): void {
     this.clientFrames.push(
@@ -126,6 +207,10 @@ class MockStreamSession implements IStreamSession {
     this.statusChangeHandler = handler;
   }
 
+  requestReconnect(): void {
+    this.requestReconnectCount += 1;
+  }
+
   close(): void {
     this.closeCount += 1;
   }
@@ -136,6 +221,10 @@ class MockStreamSession implements IStreamSession {
 
   emitOpen(): void {
     this.statusChangeHandler?.("open", null);
+  }
+
+  emitStatus(status: "connecting" | "open" | "closed" | "reconnecting"): void {
+    this.statusChangeHandler?.(status, null);
   }
 }
 
@@ -174,13 +263,14 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
 
 function resetAuth(
   status: "signed-out" | "signing-in" | "signed-in",
+  userId: string | null,
   email: string | null,
 ): void {
-  if (status === "signed-in" && email !== null) {
+  if (status === "signed-in" && userId !== null && email !== null) {
     useAuthStore.setState({
       status,
-      profile: { userId: email, userName: email, email },
-      contextMetadata: { userId: email, username: email },
+      profile: { userId, userName: userId, email },
+      contextMetadata: { userId, username: userId },
       subscriptionStatus: "PRO",
     });
     return;
@@ -246,11 +336,8 @@ function hostEntry(input: {
     epicId: input.epicId,
     chatId: input.chatId,
     payload: {
-      kind: "chat",
       epicId: input.epicId,
       chatId: input.chatId,
-      agentName: "Chat",
-      taskTitle: "Task",
       outcome: "completed",
     },
   };
@@ -336,9 +423,19 @@ async function renderHostNotificationsProvider(): Promise<{
   );
 
   act(() => {
-    resetAuth("signed-in", "alice@example.com");
+    resetAuth("signed-in", "alice@example.com", "alice@example.com");
   });
 
+  await waitFor(() => {
+    expect(streamClient.subscribedMethods).toContain(
+      "host.notifications.feed.subscribe",
+    );
+  });
+  // Presence is only sent after the stream reports open; the mock does not
+  // auto-ack, so drive that transition explicitly.
+  act(() => {
+    streamClient.session.emitOpen();
+  });
   await waitFor(() => {
     expect(streamClient.session.clientFrames).toHaveLength(1);
   });
@@ -383,10 +480,9 @@ describe("<NotificationsSessionProvider />", () => {
     __resetNotificationsStoreForTests();
     __resetHostNotificationsStoreForTests();
     useAppLocalNotificationsStore.getState().resetForTests();
-    useNotificationEventsStore.getState().clear();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     __setNotificationsStreamFactoryForTests(null);
-    resetAuth("signed-out", null);
+    resetAuth("signed-out", null, null);
   });
 
   afterEach(() => {
@@ -394,59 +490,10 @@ describe("<NotificationsSessionProvider />", () => {
     __resetNotificationsStoreForTests();
     __resetHostNotificationsStoreForTests();
     useAppLocalNotificationsStore.getState().resetForTests();
-    useNotificationEventsStore.getState().clear();
-    toast.dismiss();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     __setNotificationsStreamFactoryForTests(null);
-    resetAuth("signed-out", null);
+    resetAuth("signed-out", null, null);
     vi.restoreAllMocks();
-  });
-
-  it("hands host toast clicks to the router-bound notification bridge", async () => {
-    const { streamClient } = await renderHostNotificationsProvider();
-    render(<Toaster />);
-
-    act(() => {
-      streamClient.session.emitServerFrame({
-        kind: "channelEmission",
-        hasBinaryPayload: false,
-        emissionId: "emission-chat-click",
-        channelId: "renderer",
-        severity: "done",
-        rows: [
-          hostEntry({
-            id: "done-chat-click",
-            epicId: "epic-chat-click",
-            chatId: "chat-click",
-            severity: "done",
-          }),
-        ],
-        reason: "new",
-      });
-    });
-
-    await waitFor(() => {
-      expect(
-        document.querySelector("[data-notification-toast-action]"),
-      ).not.toBeNull();
-    });
-    const action = document.querySelector<HTMLElement>(
-      "[data-notification-toast-action]",
-    );
-    if (action === null) throw new Error("expected actionable host toast");
-
-    const beforeClick = Date.now();
-    fireEvent.click(action);
-
-    const notificationEvent =
-      useNotificationEventsStore.getState().notificationEvent;
-    expect(notificationEvent?.payload).toEqual({
-      kind: "chat",
-      epicId: "epic-chat-click",
-      chatId: "chat-click",
-    });
-    expect(notificationEvent?.openPopover).toBe(false);
-    expect(notificationEvent?.receivedAt).toBeGreaterThanOrEqual(beforeClick);
   });
 
   it("reopens the stream and resets the local replica on signed-in user switches", async () => {
@@ -472,7 +519,10 @@ describe("<NotificationsSessionProvider />", () => {
     );
 
     act(() => {
-      resetAuth("signed-in", "alice@example.com");
+      resetAuth("signed-in", "alice@example.com", "alice@example.com");
+      useAppLocalNotificationsStore
+        .getState()
+        .activateIdentity("alice@example.com");
     });
 
     await waitFor(() => {
@@ -486,15 +536,136 @@ describe("<NotificationsSessionProvider />", () => {
     await waitFor(() => {
       expect(useNotificationsStore.getState().entries).toHaveLength(1);
     });
+    useHostNotificationsStore.getState().applySnapshot({
+      attention: { entries: [], nextCursor: null },
+      recent: {
+        entries: [
+          hostEntry({
+            id: "host-before-user-switch",
+            epicId: "epic-alpha",
+            chatId: "chat-alpha",
+            severity: "done",
+          }),
+        ],
+        nextCursor: null,
+      },
+      summary: { unreadCount: 1, attentionCount: 0 },
+    });
+    emitTerminalCrashedNotification({
+      instanceId: "terminal-before-user-switch",
+      target: {
+        kind: "terminal",
+        epicId: "epic-alpha",
+        terminalId: "chat-alpha",
+        tabId: "view-tab",
+        paneId: "pane",
+        tileInstanceId: "terminal-before-user-switch",
+      },
+      cause: "exit",
+    });
 
     act(() => {
-      resetAuth("signed-in", "bob@example.com");
+      resetAuth("signed-in", "bob@example.com", "bob@example.com");
     });
 
     await waitFor(() => {
       expect(streams).toHaveLength(2);
       expect(streams[0].closeCount).toBe(1);
       expect(useNotificationsStore.getState().entries).toEqual([]);
+      expect(useHostNotificationsStore.getState().byId).toEqual({});
+      expect(
+        Object.keys(useAppLocalNotificationsStore.getState().byId),
+      ).not.toHaveLength(0);
+    });
+  });
+
+  it("resets collaboration and host replicas on a same-email different-userId switch", async () => {
+    // Two distinct canonical userIds sharing one email: an email-keyed
+    // identity comparison would misclassify this as an idle re-render and
+    // leave user-a's collaboration/host rows visible to user-b. The provider
+    // must key off `contextMetadata.userId`, not `profile.email`.
+    const queryClient = new QueryClient();
+    const streams: ControlledStream[] = [];
+    __setNotificationsStreamFactoryForTests((_callbacks) => {
+      const stream: ControlledStream = { closeCount: 0 };
+      streams.push(stream);
+      return {
+        applyUpdate: () => undefined,
+        close: () => {
+          stream.closeCount += 1;
+        },
+      };
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <NotificationsSessionProvider>
+          <div />
+        </NotificationsSessionProvider>
+      </QueryClientProvider>,
+    );
+
+    act(() => {
+      resetAuth("signed-in", "user-a", "shared@example.com");
+      useAppLocalNotificationsStore.getState().activateIdentity("user-a");
+    });
+
+    await waitFor(() => {
+      expect(streams).toHaveLength(1);
+    });
+
+    act(() => {
+      appendEntry(invitedEntry("n-user-a", "epic-alpha"));
+    });
+
+    await waitFor(() => {
+      expect(useNotificationsStore.getState().entries).toHaveLength(1);
+    });
+    useHostNotificationsStore.getState().applySnapshot({
+      attention: { entries: [], nextCursor: null },
+      recent: {
+        entries: [
+          hostEntry({
+            id: "host-user-a",
+            epicId: "epic-alpha",
+            chatId: "chat-alpha",
+            severity: "done",
+          }),
+        ],
+        nextCursor: null,
+      },
+      summary: { unreadCount: 1, attentionCount: 0 },
+    });
+    emitTerminalCrashedNotification({
+      instanceId: "terminal-user-a",
+      target: {
+        kind: "terminal",
+        epicId: "epic-alpha",
+        terminalId: "chat-alpha",
+        tabId: "view-tab",
+        paneId: "pane",
+        tileInstanceId: "terminal-user-a",
+      },
+      cause: "exit",
+    });
+
+    act(() => {
+      // Same email as user-a, distinct canonical userId.
+      resetAuth("signed-in", "user-b", "shared@example.com");
+    });
+
+    await waitFor(() => {
+      expect(streams).toHaveLength(2);
+      expect(streams[0].closeCount).toBe(1);
+      expect(useNotificationsStore.getState().entries).toEqual([]);
+      expect(useHostNotificationsStore.getState().byId).toEqual({});
+      // The provider does not own the app-local bucket: retargeting it by
+      // userId is `AppLocalNotificationsPersistLifecycleBridge`'s
+      // responsibility (see its own dedicated test file), so this replica
+      // must be left untouched by the session provider itself.
+      expect(
+        Object.keys(useAppLocalNotificationsStore.getState().byId),
+      ).not.toHaveLength(0);
     });
   });
 
@@ -521,7 +692,10 @@ describe("<NotificationsSessionProvider />", () => {
     );
 
     act(() => {
-      resetAuth("signed-in", "alice@example.com");
+      resetAuth("signed-in", "alice@example.com", "alice@example.com");
+      useAppLocalNotificationsStore
+        .getState()
+        .activateIdentity("alice@example.com");
     });
 
     await waitFor(() => {
@@ -534,6 +708,33 @@ describe("<NotificationsSessionProvider />", () => {
 
     await waitFor(() => {
       expect(useNotificationsStore.getState().entries).toHaveLength(1);
+    });
+    useHostNotificationsStore.getState().applySnapshot({
+      attention: { entries: [], nextCursor: null },
+      recent: {
+        entries: [
+          hostEntry({
+            id: "host-before-host-switch",
+            epicId: "epic-alpha",
+            chatId: "chat-alpha",
+            severity: "done",
+          }),
+        ],
+        nextCursor: null,
+      },
+      summary: { unreadCount: 1, attentionCount: 0 },
+    });
+    emitTerminalCrashedNotification({
+      instanceId: "terminal-before-host-switch",
+      target: {
+        kind: "terminal",
+        epicId: "epic-alpha",
+        terminalId: "chat-alpha",
+        tabId: "view-tab",
+        paneId: "pane",
+        tileInstanceId: "terminal-before-host-switch",
+      },
+      cause: "exit",
     });
 
     act(() => {
@@ -550,8 +751,430 @@ describe("<NotificationsSessionProvider />", () => {
     await waitFor(() => {
       expect(streams).toHaveLength(2);
       expect(streams[0].closeCount).toBe(1);
-      expect(useNotificationsStore.getState().entries).toEqual([]);
+      expect(useNotificationsStore.getState().entries).toHaveLength(1);
+      expect(useHostNotificationsStore.getState().byId).toEqual({});
+      expect(useHostNotificationsStore.getState().summary).toBeNull();
+      expect(
+        Object.keys(useAppLocalNotificationsStore.getState().byId),
+      ).not.toHaveLength(0);
     });
+  });
+
+  it("resets host replica on host switch while preserving collaboration store identity", async () => {
+    // Integrated boundary: host A rows+summary+cursors reset to the
+    // connecting-to-B empty state, while the global/collaboration store's
+    // projected entries keep the same values and object references.
+    const queryClient = new QueryClient();
+    const streams: ControlledStream[] = [];
+    __setNotificationsStreamFactoryForTests((_callbacks) => {
+      const stream: ControlledStream = { closeCount: 0 };
+      streams.push(stream);
+      return {
+        applyUpdate: () => undefined,
+        close: () => {
+          stream.closeCount += 1;
+        },
+      };
+    });
+
+    const view = render(
+      <QueryClientProvider client={queryClient}>
+        <NotificationsSessionProvider>
+          <div />
+        </NotificationsSessionProvider>
+      </QueryClientProvider>,
+    );
+
+    act(() => {
+      resetAuth("signed-in", "alice@example.com", "alice@example.com");
+      useAppLocalNotificationsStore
+        .getState()
+        .activateIdentity("alice@example.com");
+    });
+    await waitFor(() => {
+      expect(streams).toHaveLength(1);
+    });
+
+    act(() => {
+      appendEntry(invitedEntry("collab-host-switch", "epic-alpha"));
+    });
+    await waitFor(() => {
+      expect(useNotificationsStore.getState().entries).toHaveLength(1);
+    });
+
+    const collabEntriesBefore = useNotificationsStore.getState().entries;
+    const collabEntryBefore = collabEntriesBefore[0];
+    expect(collabEntryBefore).toBeDefined();
+    expect(collabEntryBefore.id).toBe("collab-host-switch");
+
+    useHostNotificationsStore.getState().applySnapshot({
+      attention: {
+        entries: [
+          hostEntry({
+            id: "host-a-attention",
+            epicId: "epic-alpha",
+            chatId: "chat-alpha",
+            severity: "needs_action",
+          }),
+        ],
+        nextCursor: {
+          kind: "attention",
+          tier: "blocking",
+          updatedAt: 1,
+          id: "host-a-attention",
+        },
+      },
+      recent: {
+        entries: [
+          hostEntry({
+            id: "host-a-recent",
+            epicId: "epic-alpha",
+            chatId: "chat-alpha",
+            severity: "done",
+          }),
+        ],
+        nextCursor: {
+          kind: "chronological",
+          updatedAt: 1,
+          id: "host-a-recent",
+        },
+      },
+      summary: { unreadCount: 2, attentionCount: 1 },
+    });
+    expect(
+      useHostNotificationsStore.getState().byId["host-a-recent"],
+    ).toBeDefined();
+    expect(useHostNotificationsStore.getState().summary).toEqual({
+      unreadCount: 2,
+      attentionCount: 1,
+    });
+    expect(useHostNotificationsStore.getState().attentionCursor).not.toBeNull();
+    expect(useHostNotificationsStore.getState().recentCursor).not.toBeNull();
+
+    act(() => {
+      hostState.id = "host-b";
+      view.rerender(
+        <QueryClientProvider client={queryClient}>
+          <NotificationsSessionProvider>
+            <div />
+          </NotificationsSessionProvider>
+        </QueryClientProvider>,
+      );
+    });
+
+    await waitFor(() => {
+      expect(streams).toHaveLength(2);
+      expect(useHostNotificationsStore.getState().byId).toEqual({});
+      expect(useHostNotificationsStore.getState().summary).toBeNull();
+    });
+
+    // Host-owned tracks reset to the connecting-to-B empty state.
+    const hostAfter = useHostNotificationsStore.getState();
+    expect(hostAfter.attentionCursor).toBeNull();
+    expect(hostAfter.recentCursor).toBeNull();
+    expect(hostAfter.attentionStatus).toBe("idle");
+    expect(hostAfter.recentStatus).toBe("idle");
+    expect(hostAfter.connectionStatus).toBe("connecting");
+
+    // Collaboration/global store completely untouched - same array and
+    // entry object references, not a copy or rebuild.
+    const collabEntriesAfter = useNotificationsStore.getState().entries;
+    expect(collabEntriesAfter).toBe(collabEntriesBefore);
+    expect(collabEntriesAfter[0]).toBe(collabEntryBefore);
+    expect(collabEntriesAfter).toHaveLength(1);
+    expect(collabEntryBefore.id).toBe("collab-host-switch");
+  });
+
+  it("drives reconnect/unknown through the full stream → store → bell path", async () => {
+    // Real session-provider stream wiring + real NotificationsBell: connect
+    // with an exact summary, disconnect to unknown (rows preserved), reconnect
+    // with a fresh snapshot and the matching badge.
+    useNotificationsPopoverStore.getState().setOpen(false);
+    const { streamClient } = await renderHostNotificationsProvider();
+
+    // Mount the real bell alongside the already-open session provider state.
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <TooltipProvider>
+          <NotificationsBell />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+
+    const snapshotEntry = hostEntry({
+      id: "connected-host-row",
+      epicId: "epic-alpha",
+      chatId: "chat-alpha",
+      severity: "done",
+    });
+    act(() => {
+      streamClient.session.emitServerFrame({
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        attention: { entries: [], nextCursor: null },
+        recent: {
+          entries: [snapshotEntry],
+          nextCursor: null,
+        },
+        summary: { unreadCount: 1, attentionCount: 0 },
+      });
+    });
+
+    await waitFor(() => {
+      expect(useHostNotificationsStore.getState().summary).toEqual({
+        unreadCount: 1,
+        attentionCount: 0,
+      });
+    });
+    expect(
+      useHostNotificationsStore.getState().byId["connected-host-row"],
+    ).toBeDefined();
+    expect(screen.getByTestId("notifications-quiet-dot")).not.toBeNull();
+    expect(screen.queryByTestId("notifications-unknown-indicator")).toBeNull();
+    expect(screen.queryByTestId("notifications-attention-badge")).toBeNull();
+
+    // (2) Disconnect → summary unknown, rows preserved, neutral unknown indicator.
+    act(() => {
+      streamClient.session.emitStatus("reconnecting");
+    });
+    expect(useHostNotificationsStore.getState().summary).toBeNull();
+    expect(
+      useHostNotificationsStore.getState().byId["connected-host-row"],
+    ).toBeDefined();
+    expect(
+      screen.getByTestId("notifications-unknown-indicator"),
+    ).not.toBeNull();
+    expect(screen.queryByTestId("notifications-quiet-dot")).toBeNull();
+    expect(screen.queryByTestId("notifications-attention-badge")).toBeNull();
+    expect(
+      screen.getByTestId("notifications-bell").getAttribute("aria-label"),
+    ).toBe("Notifications, task notification status unavailable");
+
+    // (3) Reconnect open + fresh atomic snapshot → exact summary + badge.
+    act(() => {
+      streamClient.session.emitStatus("open");
+      streamClient.session.emitServerFrame({
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        attention: {
+          entries: [
+            hostEntry({
+              id: "reconnected-prompt",
+              epicId: "epic-beta",
+              chatId: "chat-beta",
+              severity: "needs_action",
+            }),
+          ],
+          nextCursor: null,
+        },
+        recent: {
+          entries: [
+            hostEntry({
+              id: "reconnected-done",
+              epicId: "epic-beta",
+              chatId: "chat-beta",
+              severity: "done",
+            }),
+          ],
+          nextCursor: null,
+        },
+        summary: { unreadCount: 2, attentionCount: 1 },
+      });
+    });
+
+    await waitFor(() => {
+      expect(useHostNotificationsStore.getState().summary).toEqual({
+        unreadCount: 2,
+        attentionCount: 1,
+      });
+    });
+    // Fresh snapshot replaces prior rows.
+    expect(
+      useHostNotificationsStore.getState().byId["connected-host-row"],
+    ).toBeUndefined();
+    expect(
+      useHostNotificationsStore.getState().byId["reconnected-prompt"],
+    ).toBeDefined();
+    expect(
+      screen.getByTestId("notifications-attention-badge").textContent,
+    ).toBe("1");
+    expect(screen.queryByTestId("notifications-unknown-indicator")).toBeNull();
+    expect(screen.queryByTestId("notifications-quiet-dot")).toBeNull();
+    expect(
+      screen.getByTestId("notifications-bell").getAttribute("aria-label"),
+    ).toBe("Notifications, 1 notification needs attention");
+  });
+
+  it("preserves all non-host sources and host rows across disconnect and reconnect", async () => {
+    const queryClient = new QueryClient();
+    const streams: ControlledStream[] = [];
+    __setNotificationsStreamFactoryForTests((_callbacks) => {
+      const stream: ControlledStream = { closeCount: 0 };
+      streams.push(stream);
+      return {
+        applyUpdate: () => undefined,
+        close: () => {
+          stream.closeCount += 1;
+        },
+      };
+    });
+    const view = render(
+      <QueryClientProvider client={queryClient}>
+        <NotificationsSessionProvider>
+          <div />
+        </NotificationsSessionProvider>
+      </QueryClientProvider>,
+    );
+    act(() => {
+      resetAuth("signed-in", "alice@example.com", "alice@example.com");
+      useAppLocalNotificationsStore
+        .getState()
+        .activateIdentity("alice@example.com");
+    });
+    await waitFor(() => expect(streams).toHaveLength(1));
+    act(() => appendEntry(invitedEntry("disconnect-collab", "epic-alpha")));
+    useHostNotificationsStore.getState().applySnapshot({
+      attention: { entries: [], nextCursor: null },
+      recent: {
+        entries: [
+          hostEntry({
+            id: "disconnect-host",
+            epicId: "epic-alpha",
+            chatId: "chat-alpha",
+            severity: "done",
+          }),
+        ],
+        nextCursor: null,
+      },
+      summary: { unreadCount: 1, attentionCount: 0 },
+    });
+    emitTerminalCrashedNotification({
+      instanceId: "disconnect-system",
+      target: {
+        kind: "terminal",
+        epicId: "epic-alpha",
+        terminalId: "chat-alpha",
+        tabId: "view-tab",
+        paneId: "pane",
+        tileInstanceId: "disconnect-system",
+      },
+      cause: "exit",
+    });
+
+    act(() => {
+      hostState.id = null;
+      view.rerender(
+        <QueryClientProvider client={queryClient}>
+          <NotificationsSessionProvider>
+            <div />
+          </NotificationsSessionProvider>
+        </QueryClientProvider>,
+      );
+    });
+    await waitFor(() => {
+      expect(useHostNotificationsStore.getState().summary).toBeNull();
+      expect(
+        useHostNotificationsStore.getState().byId["disconnect-host"],
+      ).toBeDefined();
+    });
+    expect(useNotificationsStore.getState().entries).toHaveLength(1);
+    expect(useAppLocalNotificationsStore.getState().byId).not.toEqual({});
+
+    act(() => {
+      hostState.id = "host-a";
+      view.rerender(
+        <QueryClientProvider client={queryClient}>
+          <NotificationsSessionProvider>
+            <div />
+          </NotificationsSessionProvider>
+        </QueryClientProvider>,
+      );
+    });
+    await waitFor(() => expect(streams).toHaveLength(2));
+    expect(
+      useHostNotificationsStore.getState().byId["disconnect-host"],
+    ).toBeDefined();
+  });
+
+  it("resets the host replica when a different host appears after an intervening disconnect", async () => {
+    const queryClient = new QueryClient();
+    const streams: ControlledStream[] = [];
+    __setNotificationsStreamFactoryForTests((_callbacks) => {
+      const stream: ControlledStream = { closeCount: 0 };
+      streams.push(stream);
+      return {
+        applyUpdate: () => undefined,
+        close: () => {
+          stream.closeCount += 1;
+        },
+      };
+    });
+    const view = render(
+      <QueryClientProvider client={queryClient}>
+        <NotificationsSessionProvider>
+          <div />
+        </NotificationsSessionProvider>
+      </QueryClientProvider>,
+    );
+    act(() => {
+      resetAuth("signed-in", "alice@example.com", "alice@example.com");
+      useAppLocalNotificationsStore
+        .getState()
+        .activateIdentity("alice@example.com");
+    });
+    await waitFor(() => expect(streams).toHaveLength(1));
+    useHostNotificationsStore.getState().applySnapshot({
+      attention: { entries: [], nextCursor: null },
+      recent: {
+        entries: [
+          hostEntry({
+            id: "host-a-row",
+            epicId: "epic-alpha",
+            chatId: "chat-alpha",
+            severity: "done",
+          }),
+        ],
+        nextCursor: null,
+      },
+      summary: { unreadCount: 1, attentionCount: 0 },
+    });
+
+    act(() => {
+      hostState.id = null;
+      view.rerender(
+        <QueryClientProvider client={queryClient}>
+          <NotificationsSessionProvider>
+            <div />
+          </NotificationsSessionProvider>
+        </QueryClientProvider>,
+      );
+    });
+    await waitFor(() => {
+      expect(useHostNotificationsStore.getState().summary).toBeNull();
+    });
+    expect(
+      useHostNotificationsStore.getState().byId["host-a-row"],
+    ).toBeDefined();
+
+    // A different host appears after the disconnect gap: the replica must
+    // reset against "host-a" (the ref's last known non-null value), not
+    // against the disconnect's transient `null` - otherwise host-a's stale
+    // rows would render for one frame as if they belonged to host-b.
+    act(() => {
+      hostState.id = "host-b";
+      view.rerender(
+        <QueryClientProvider client={queryClient}>
+          <NotificationsSessionProvider>
+            <div />
+          </NotificationsSessionProvider>
+        </QueryClientProvider>,
+      );
+    });
+    await waitFor(() => {
+      expect(streams).toHaveLength(2);
+    });
+    expect(useHostNotificationsStore.getState().byId).toEqual({});
+    expect(useHostNotificationsStore.getState().summary).toBeNull();
   });
 
   it("rebinds both notification streams to a replaced stream client without resetting the replica", async () => {
@@ -574,14 +1197,22 @@ describe("<NotificationsSessionProvider />", () => {
     );
 
     act(() => {
-      resetAuth("signed-in", "alice@example.com");
+      resetAuth("signed-in", "alice@example.com", "alice@example.com");
     });
 
+    await waitFor(() => {
+      expect(firstClient.subscribedMethods).toContain(
+        "host.notifications.feed.subscribe",
+      );
+    });
+    act(() => {
+      firstClient.session.emitOpen();
+    });
     await waitFor(() => {
       expect(firstClient.session.clientFrames).toHaveLength(1);
     });
     expect([...firstClient.subscribedMethods].sort()).toEqual([
-      "host.notifications.subscribe",
+      "host.notifications.feed.subscribe",
       "notifications.subscribe",
     ]);
 
@@ -609,10 +1240,18 @@ describe("<NotificationsSessionProvider />", () => {
     });
 
     await waitFor(() => {
+      expect(secondClient.subscribedMethods).toContain(
+        "host.notifications.feed.subscribe",
+      );
+    });
+    act(() => {
+      secondClient.session.emitOpen();
+    });
+    await waitFor(() => {
       expect(secondClient.session.clientFrames).toHaveLength(1);
     });
     expect([...secondClient.subscribedMethods].sort()).toEqual([
-      "host.notifications.subscribe",
+      "host.notifications.feed.subscribe",
       "notifications.subscribe",
     ]);
     // Both streams shared `firstClient.session` in this mock, so both old
@@ -646,6 +1285,8 @@ describe("<NotificationsSessionProvider />", () => {
           chatId: "chat-a",
           severity: "done",
         }),
+        removedIds: [],
+        summary: { unreadCount: 1, attentionCount: 0 },
       });
       setFocusedChat("epic-a", "chat-a");
       hasFocus.mockReturnValue(true);
@@ -678,6 +1319,8 @@ describe("<NotificationsSessionProvider />", () => {
           chatId: "chat-a",
           severity: "done",
         }),
+        removedIds: [],
+        summary: { unreadCount: 1, attentionCount: 0 },
       });
       const tabId = useEpicCanvasStore.getState().openEpicTab("epic-a", "Epic");
       useEpicCanvasStore.getState().openTileInTab(
@@ -708,6 +1351,8 @@ describe("<NotificationsSessionProvider />", () => {
         entityRefs: [{ epicId: "epic-a", chatId: "chat-a" }],
         readAt: 2,
         resolvedAt: null,
+        removedIds: [],
+        summary: { unreadCount: 0, attentionCount: 0 },
       });
     });
 
@@ -761,6 +1406,8 @@ describe("<NotificationsSessionProvider />", () => {
           chatId: "chat-a",
           severity: "needs_action",
         }),
+        removedIds: [],
+        summary: { unreadCount: 1, attentionCount: 1 },
       });
     });
 
@@ -791,6 +1438,8 @@ describe("<NotificationsSessionProvider />", () => {
           chatId: "chat-b",
           severity: "done",
         }),
+        removedIds: [],
+        summary: { unreadCount: 1, attentionCount: 0 },
       });
     });
 
@@ -821,6 +1470,8 @@ describe("<NotificationsSessionProvider />", () => {
           chatId: "chat-a",
           severity: "done",
         }),
+        removedIds: [],
+        summary: { unreadCount: 1, attentionCount: 0 },
       });
     });
 
@@ -843,6 +1494,8 @@ describe("<NotificationsSessionProvider />", () => {
           chatId: "chat-a",
           severity: "done",
         }),
+        removedIds: [],
+        summary: { unreadCount: 1, attentionCount: 0 },
       });
     });
 
@@ -869,8 +1522,8 @@ describe("<NotificationsSessionProvider />", () => {
           kind: "terminal",
           epicId: "epic-a",
           terminalId: "terminal-a",
-          tabId: "view-tab-a",
-          paneId: "pane-a",
+          tabId: "view-tab",
+          paneId: "pane",
           tileInstanceId: "terminal-a-instance",
         },
         cause: "exit",
@@ -907,8 +1560,8 @@ describe("<NotificationsSessionProvider />", () => {
           kind: "terminal",
           epicId: "epic-a",
           terminalId: "terminal-b",
-          tabId: "view-tab-a",
-          paneId: "pane-a",
+          tabId: "view-tab",
+          paneId: "pane",
           tileInstanceId: "terminal-b-instance",
         },
         cause: "exit",
@@ -940,14 +1593,19 @@ describe("<NotificationsSessionProvider />", () => {
       streamClient.session.emitServerFrame({
         kind: "snapshot",
         hasBinaryPayload: false,
-        entries: [
-          hostEntry({
-            id: "done-after-reconnect",
-            epicId: "epic-a",
-            chatId: "chat-a",
-            severity: "done",
-          }),
-        ],
+        attention: { entries: [], nextCursor: null },
+        recent: {
+          entries: [
+            hostEntry({
+              id: "done-after-reconnect",
+              epicId: "epic-a",
+              chatId: "chat-a",
+              severity: "done",
+            }),
+          ],
+          nextCursor: null,
+        },
+        summary: { unreadCount: 1, attentionCount: 0 },
       });
       streamClient.session.emitOpen();
     });
@@ -969,7 +1627,9 @@ describe("<NotificationsSessionProvider />", () => {
       streamClient.session.emitServerFrame({
         kind: "snapshot",
         hasBinaryPayload: false,
-        entries: [],
+        attention: { entries: [], nextCursor: null },
+        recent: { entries: [], nextCursor: null },
+        summary: { unreadCount: 0, attentionCount: 0 },
       });
     });
 
@@ -992,6 +1652,8 @@ describe("<NotificationsSessionProvider />", () => {
         entityRefs: [{ epicId: "epic-a", chatId: "chat-a" }],
         readAt: 1,
         resolvedAt: null,
+        removedIds: [],
+        summary: { unreadCount: 0, attentionCount: 0 },
       });
     });
 
@@ -1009,8 +1671,205 @@ describe("<NotificationsSessionProvider />", () => {
         entityRefs: [],
         readAt: 2,
         resolvedAt: null,
+        removedIds: [],
+        summary: { unreadCount: 0, attentionCount: 0 },
       });
     });
     expect(queryClient.getQueryState(target)?.isInvalidated).toBe(false);
+  });
+
+  it("fully invalidates indicators for an upsert frame carrying removals", async () => {
+    const { queryClient, streamClient } =
+      await renderHostNotificationsProvider();
+    const target = indicatorKey("epic-a", "chat-a");
+    const other = indicatorKey("epic-b", "chat-b");
+    queryClient.setQueryData(target, { epics: {}, chats: {} });
+    queryClient.setQueryData(other, { epics: {}, chats: {} });
+
+    act(() => {
+      streamClient.session.emitServerFrame({
+        kind: "upserted",
+        hasBinaryPayload: false,
+        entry: hostEntry({
+          id: "surviving-upsert",
+          epicId: "epic-a",
+          chatId: "chat-a",
+          severity: "done",
+        }),
+        removedIds: ["unrelated-removed"],
+        summary: { unreadCount: 1, attentionCount: 0 },
+      });
+    });
+
+    expect(queryClient.getQueryState(target)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(other)?.isInvalidated).toBe(true);
+  });
+
+  it("fully invalidates indicators for a read-state frame carrying removals", async () => {
+    const { queryClient, streamClient } =
+      await renderHostNotificationsProvider();
+    const target = indicatorKey("epic-a", "chat-a");
+    const other = indicatorKey("epic-b", "chat-b");
+    queryClient.setQueryData(target, { epics: {}, chats: {} });
+    queryClient.setQueryData(other, { epics: {}, chats: {} });
+
+    act(() => {
+      streamClient.session.emitServerFrame({
+        kind: "readStateChanged",
+        hasBinaryPayload: false,
+        ids: ["read-1"],
+        entityRefs: [{ epicId: "epic-a", chatId: "chat-a" }],
+        readAt: 1,
+        resolvedAt: null,
+        removedIds: ["unrelated-removed"],
+        summary: { unreadCount: 0, attentionCount: 0 },
+      });
+    });
+
+    expect(queryClient.getQueryState(target)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(other)?.isInvalidated).toBe(true);
+  });
+
+  it("invalidates all indicator queries on a removed frame", async () => {
+    const { queryClient, streamClient } =
+      await renderHostNotificationsProvider();
+    const key = indicatorKey("epic-a", "chat-a");
+    queryClient.setQueryData(key, { epics: {}, chats: {} });
+
+    act(() => {
+      streamClient.session.emitServerFrame({
+        kind: "removed",
+        hasBinaryPayload: false,
+        removedIds: ["gone-1"],
+        summary: { unreadCount: 0, attentionCount: 0 },
+      });
+    });
+
+    expect(queryClient.getQueryState(key)?.isInvalidated).toBe(true);
+  });
+
+  it("wires host-channel toast clicks through success-only mark-read with stream origin host", async () => {
+    activateMock.mockReset();
+    markAsReadMock.mockReset();
+    lastHostDisplay.originHostId = null;
+    lastHostDisplay.onToastClick = null;
+    const trackSpy = vi.spyOn(
+      (await import("@/lib/analytics")).Analytics.getInstance(),
+      "track",
+    );
+    const { AnalyticsEvent } = await import("@/lib/analytics");
+
+    const { streamClient } = await renderHostNotificationsProvider();
+
+    act(() => {
+      streamClient.session.emitServerFrame({
+        kind: "channelEmission",
+        hasBinaryPayload: false,
+        emissionId: "emission-toast-1",
+        channelId: "renderer",
+        severity: "done",
+        rows: [
+          hostEntry({
+            id: "toast-row",
+            epicId: "epic-a",
+            chatId: "chat-a",
+            severity: "done",
+          }),
+        ],
+        reason: "new",
+      });
+    });
+
+    await waitFor(() => {
+      expect(lastHostDisplay.originHostId).toBe(mockLocalHostEntry.hostId);
+    });
+    expect(lastHostDisplay.onToastClick).toEqual(expect.any(Function));
+
+    const row = {
+      feedId: "host:toast-row",
+      source: "host" as const,
+      sourceId: "toast-row",
+      createdAt: 1,
+      readAt: null,
+      title: "Agent finished",
+      body: "done",
+      payload: {
+        kind: "chat" as const,
+        epicId: "epic-a",
+        chatId: "chat-a",
+      },
+      hostKind: "agent.stopped" as const,
+      severity: "done" as const,
+      resolvedAt: null,
+      category: "task" as const,
+    };
+
+    act(() => {
+      lastHostDisplay.onToastClick?.(row);
+    });
+
+    expect(activateMock).toHaveBeenCalledTimes(1);
+    const activateCall = activateMock.mock.calls[0][0];
+    expect(activateCall).toMatchObject({
+      payload: row.payload,
+      receivedAt: 1,
+      feedId: "host:toast-row",
+    });
+    expect(typeof activateCall.onResult).toBe("function");
+    expect(markAsReadMock).not.toHaveBeenCalled();
+
+    const onResult = activateCall.onResult;
+    if (onResult === null) {
+      throw new Error("expected onResult callback");
+    }
+    act(() => {
+      onResult("failure");
+    });
+    expect(markAsReadMock).not.toHaveBeenCalled();
+    expect(
+      trackSpy.mock.calls.filter(
+        (call) => call[0] === AnalyticsEvent.NotificationActivationCompleted,
+      ),
+    ).toEqual([
+      [
+        AnalyticsEvent.NotificationActivationCompleted,
+        {
+          category: "task",
+          section: "recent",
+          surface: "toast",
+          outcome: "failure",
+        },
+      ],
+    ]);
+    expect(
+      trackSpy.mock.calls.filter(
+        (call) => call[0] === AnalyticsEvent.NotificationMarkedRead,
+      ),
+    ).toHaveLength(0);
+
+    act(() => {
+      onResult("success");
+    });
+    expect(markAsReadMock).toHaveBeenCalledTimes(1);
+    expect(markAsReadMock).toHaveBeenCalledWith("host:toast-row");
+    expect(
+      trackSpy.mock.calls.filter(
+        (call) => call[0] === AnalyticsEvent.NotificationActivationCompleted,
+      ),
+    ).toHaveLength(2);
+    expect(
+      trackSpy.mock.calls.filter(
+        (call) => call[0] === AnalyticsEvent.NotificationMarkedRead,
+      ),
+    ).toEqual([
+      [
+        AnalyticsEvent.NotificationMarkedRead,
+        {
+          category: "task",
+          acknowledgment_source: "activation",
+        },
+      ],
+    ]);
+    trackSpy.mockRestore();
   });
 });
