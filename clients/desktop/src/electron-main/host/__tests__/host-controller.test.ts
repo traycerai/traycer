@@ -93,11 +93,21 @@ vi.mock("@traycer-clients/shared/host-client/host-activity-probe", () => ({
   probeHostActivityBusy: vi.fn(async () => false),
 }));
 
+vi.mock("../../app/update-preferences", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../app/update-preferences")>();
+  return {
+    ...actual,
+    prereleaseUpdatesEnabled: vi.fn(() => false),
+  };
+});
+
 import {
   runBundledTraycerCliJson,
   streamBundledTraycerCliJson,
   TraycerCliError,
 } from "../../cli/traycer-cli";
+import { prereleaseUpdatesEnabled } from "../../app/update-preferences";
 import {
   hasPendingLoginItemRevision,
   hostManagesHostLoginItem,
@@ -151,6 +161,7 @@ beforeEach(() => {
   // value across this test's fresh temp userData dir.
   __resetHostRemovalStateForTest();
   vi.mocked(hostManagesHostLoginItem).mockResolvedValue(false);
+  vi.mocked(prereleaseUpdatesEnabled).mockReturnValue(false);
   vi.mocked(runBundledTraycerCliJson).mockResolvedValue({});
   vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({ data: {} });
   vi.mocked(waitForHostReady).mockResolvedValue({
@@ -2018,6 +2029,89 @@ describe("yank/apply ordering", () => {
       "--json",
       "--include-pre-releases",
     ]);
+  });
+
+  it("resolve-then-pins the newest RC when release-candidate updates are opted in", async () => {
+    vi.mocked(prereleaseUpdatesEnabled).mockReturnValue(true);
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.8.0",
+      runtimeVersion: "1.8.0",
+    });
+    // Stable `latest` stays 1.8.0 (== installed, so `--automatic` sees "no
+    // update"); an RC 1.9.0-rc.1 is newer and must be pinned exactly.
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+      availableSnapshotFixture("1.8.0", ["1.8.0", "1.9.0-rc.1"]),
+    );
+    const downloads: string[] = [];
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args.includes("download")) downloads.push(opts.args.join(" "));
+      return { data: {} };
+    });
+
+    await controller.stageLatest();
+
+    // Opt-in widens the probe to pre-releases even with no RC already staged.
+    expect(runBundledTraycerCliJson).toHaveBeenCalledWith([
+      "host",
+      "available",
+      "--json",
+      "--include-pre-releases",
+    ]);
+    // The exact RC is pinned - never `--automatic`, which follows the stable
+    // `latest` pointer that RC releases never move.
+    expect(downloads).toEqual(["host download 1.9.0-rc.1"]);
+  });
+
+  it("never stages an RC at or below the installed host (downgrade guard)", async () => {
+    vi.mocked(prereleaseUpdatesEnabled).mockReturnValue(true);
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "2.0.0",
+      runtimeVersion: "2.0.0",
+    });
+    // The newest available RC (1.9.0-rc.1) is OLDER than the installed 2.0.0.
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+      availableSnapshotFixture("1.8.0", ["1.8.0", "1.9.0-rc.1"]),
+    );
+    const downloads: string[] = [];
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args.includes("download")) downloads.push(opts.args.join(" "));
+      return { data: {} };
+    });
+
+    await controller.stageLatest();
+
+    expect(downloads).toEqual([]);
+  });
+
+  it("keeps the stable --automatic path when release-candidate updates are off", async () => {
+    vi.mocked(prereleaseUpdatesEnabled).mockReturnValue(false);
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.8.0",
+      runtimeVersion: "1.8.0",
+    });
+    // A genuine stable update - the untouched `--automatic` path handles it.
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+      availableSnapshotFixture("1.9.0", ["1.9.0"]),
+    );
+    const downloads: string[] = [];
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args.includes("download")) downloads.push(opts.args.join(" "));
+      return { data: {} };
+    });
+
+    await controller.stageLatest();
+
+    // No opt-in and no RC staged => the probe stays stable-only...
+    expect(runBundledTraycerCliJson).toHaveBeenCalledWith([
+      "host",
+      "available",
+      "--json",
+    ]);
+    // ...and the download follows the stable `latest` via `--automatic`.
+    expect(downloads).toEqual(["host download --automatic"]);
   });
 
   it("purges only the yanked stage fingerprint on the download lane, never a replacement promoted during the registry probe", async () => {

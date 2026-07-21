@@ -3,6 +3,7 @@ import { access } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { encodeStageFingerprint } from "@traycer-clients/shared/host-version/stage-fingerprint";
 import { log } from "../app/logger";
+import { prereleaseUpdatesEnabled } from "../app/update-preferences";
 import {
   hasPendingLoginItemRevision,
   hostManagesHostLoginItem,
@@ -502,6 +503,51 @@ function latestVersionFromSnapshot(
     (candidate) => candidate.version === snapshot.latest,
   );
   return entry !== undefined && entry.available ? entry.version : null;
+}
+
+// Newest available version in the snapshot, INCLUDING pre-releases (unlike
+// `latestVersionFromSnapshot`, which reads the manifest's stable `latest`
+// pointer). Registry versions are always valid SemVer, so the pairwise
+// `isStrictlyNewerHostVersion` comparison never hits the incomparable arm.
+function maxAvailableVersion(snapshot: AvailableSnapshotShape): string | null {
+  const available = snapshot.versions.filter((entry) => entry.available);
+  if (available.length === 0) return null;
+  return available.reduce((max, entry) =>
+    isStrictlyNewerHostVersion(entry.version, max.version) ? entry : max,
+  ).version;
+}
+
+/**
+ * Resolve-then-pin target for opt-in release-candidate auto-updates.
+ *
+ * `host download --automatic` follows the manifest's `latest` pointer, which
+ * RC releases never move - so it is stable-only by construction, and
+ * `host available --include-pre-releases` widens the version list but leaves
+ * `latest` on stable too. When the user has opted into release candidates and
+ * the pre-release listing carries an RC newer than BOTH the installed host
+ * and the stable `latest`, return that exact version so the caller pins it via
+ * `host download <version>` instead of `--automatic`. Returns null (use
+ * `--automatic`, unchanged stable behavior) otherwise. `isStrictlyNewerHostVersion`
+ * is the downgrade guard: an incomparable (e.g. `local-*` install) or older
+ * target never pins.
+ */
+function resolveRcDownloadTarget(
+  snapshot: AvailableSnapshotShape,
+  installedVersion: string | null,
+  optedIntoPreReleases: boolean,
+): string | null {
+  if (!optedIntoPreReleases || installedVersion === null) return null;
+  const rcLatest = maxAvailableVersion(snapshot);
+  if (rcLatest === null || !rcLatest.includes("-")) return null;
+  if (!isStrictlyNewerHostVersion(rcLatest, installedVersion)) return null;
+  const stableLatest = latestVersionFromSnapshot(snapshot);
+  if (
+    stableLatest !== null &&
+    !isStrictlyNewerHostVersion(rcLatest, stableLatest)
+  ) {
+    return null;
+  }
+  return rcLatest;
 }
 
 /**
@@ -1679,13 +1725,14 @@ export class HostController {
     this.eligibleStage = null;
     let staged = await readDesktopHostStagedRecord(this.layout);
     let snapshot: AvailableSnapshotShape;
+    const optedIntoPreReleases = prereleaseUpdatesEnabled();
     try {
       snapshot = parseAvailableSnapshot(
         await this.runBundled<unknown>([
           "host",
           "available",
           "--json",
-          ...(staged?.version.includes("-") === true
+          ...(staged?.version.includes("-") === true || optedIntoPreReleases
             ? ["--include-pre-releases"]
             : []),
         ]),
@@ -1719,6 +1766,14 @@ export class HostController {
     }
     const installed = await readDesktopHostInstallRecord(this.layout);
     const installedVersion = installed?.version ?? null;
+    // Opt-in RC auto-update: `--automatic` is stable-only (follows the
+    // manifest `latest` pointer, which RC releases never move), so pin the
+    // exact newer RC when the user opted in. Downgrade-guarded inside.
+    const rcTarget = resolveRcDownloadTarget(
+      snapshot,
+      installedVersion,
+      optedIntoPreReleases,
+    );
     let migratedLegacyStage = false;
     if (staged?.stageId === null) {
       // Legacy archives predate the stage fingerprint used by the atomic
@@ -1784,6 +1839,7 @@ export class HostController {
     const needsDownload =
       !migratedLegacyStage &&
       (staged !== null ||
+        rcTarget !== null ||
         (this.latestVersionCache !== null &&
           installedVersion !== null &&
           isStrictlyNewerHostVersion(
@@ -1809,7 +1865,7 @@ export class HostController {
       this.stageLatestPending = true;
       return;
     }
-    await this.runDownloadLane(null);
+    await this.runDownloadLane(rcTarget);
     staged = await readDesktopHostStagedRecord(this.layout);
     const downloadedStageIsEligible =
       staged !== null &&
