@@ -51,7 +51,7 @@ describe("<HostSettingsPanel /> - mutation flows", () => {
     fireEvent.click(restartButton);
 
     const dialog = await screen.findByTestId("confirm-destructive-dialog");
-    expect(dialog.textContent).toContain("in-progress chats");
+    expect(dialog.textContent).toContain("in-progress agents");
     expect(restartHost).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByTestId("confirm-action"));

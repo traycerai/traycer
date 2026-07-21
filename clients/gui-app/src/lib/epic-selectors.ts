@@ -42,7 +42,7 @@ import {
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
-import { displayTitle, tuiAgentDisplayTitle } from "@/lib/display-title";
+import { displayTitle } from "@/lib/display-title";
 import { useEpicStore } from "@/hooks/use-epic-store";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
@@ -336,7 +336,9 @@ function recordForChat(c: ChatProjection, hostId: string): EpicTreeRecord {
   const record: EpicTreeRecord = {
     id: c.id,
     parentId: c.parentId,
-    name: displayTitle(c.title, "chat"),
+    // Durable Agent tree row: an untitled Chat-interface Agent falls back to
+    // "Untitled agent"; `type` stays the interface discriminator.
+    name: displayTitle(c.title, "agent"),
     type: "chat",
     status: null,
     hostId,
@@ -351,7 +353,10 @@ function recordForTerminalAgent(a: TuiAgentProjection): EpicTreeRecord {
   const record: EpicTreeRecord = {
     id: a.id,
     parentId: a.parentId,
-    name: tuiAgentDisplayTitle({ title: a.title, harnessId: a.harnessId }),
+    // Durable Agent tree row: an untitled Terminal-interface Agent falls back
+    // to "Untitled agent" too (harness identity is separate interface metadata,
+    // not the title fallback); `type` stays the interface discriminator.
+    name: displayTitle(a.title, "agent"),
     type: "terminal-agent",
     status: null,
     hostId: a.hostId,

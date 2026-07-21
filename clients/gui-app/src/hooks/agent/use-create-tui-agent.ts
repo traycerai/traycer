@@ -22,7 +22,7 @@ import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { type HostRpcRegistry, useHostClient } from "@/lib/host";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
-import { tuiAgentDisplayTitle } from "@/lib/display-title";
+import { displayTitle } from "@/lib/display-title";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import {
@@ -258,10 +258,7 @@ export function useCreateTuiAgentForClient(
           id: tuiAgentId,
           instanceId: uuidv4(),
           type: "terminal-agent" as const,
-          name: tuiAgentDisplayTitle({
-            title: input.title,
-            harnessId: input.harnessId,
-          }),
+          name: displayTitle(input.title, "agent"),
           hostId: placeholderHostId,
           pendingTuiHarnessId: input.harnessId,
         };

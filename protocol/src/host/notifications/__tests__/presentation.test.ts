@@ -179,7 +179,7 @@ const CASES: readonly {
       },
     },
     title: "Task",
-    body: "Chat • Approval requested",
+    body: "Agent • Approval requested",
   },
 ];
 

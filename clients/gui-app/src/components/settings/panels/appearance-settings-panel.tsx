@@ -208,7 +208,7 @@ export function AppearanceSettingsPanel() {
       />
       <SettingsRow
         label="Code font"
-        description="Font and size used for code across chats and diffs."
+        description="Font and size used for code across agents and diffs."
         control={
           <div className="flex flex-col items-end gap-2">
             <FontPicker

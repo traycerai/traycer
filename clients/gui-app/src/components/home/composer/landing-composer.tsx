@@ -281,8 +281,8 @@ export function LandingComposer(props: LandingComposerProps) {
       type="button"
       aria-label={
         composerMode === "chat"
-          ? "Switch to terminal mode"
-          : "Switch to chat mode"
+          ? "Switch to the Terminal interface"
+          : "Switch to the Chat interface"
       }
       className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-ui-xs text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       onClick={() => {

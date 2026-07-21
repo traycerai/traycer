@@ -15,12 +15,17 @@
  *    raw title when non-empty, else the per-kind `"Untitled <kind>"` literal.
  *    Use it at surfaces that only carry the raw title + kind.
  *
- * 2. **Source-aware fallback** - `epicDisplayTitle` / `tuiAgentDisplayTitle` /
- *    `chatDisplayTitle` derive a richer value from a record-specific source
- *    (the epic's `initialUserPrompt`, the agent's `harnessId`, the chat's first
- *    user message) before falling back to the kind-label. Use them at surfaces
- *    that carry that source so an empty stored title still renders a meaningful
- *    label.
+ * 2. **Source-aware fallback** - `epicDisplayTitle` / `chatDisplayTitle` derive
+ *    a richer value from a record-specific source (the epic's
+ *    `initialUserPrompt`, the chat's first user message) before falling back to
+ *    the kind-label. Use them at surfaces that carry that source so an empty
+ *    stored title still renders a meaningful label.
+ *
+ * A Terminal-interface Agent uses the plain `displayTitle(title, "agent")`
+ * fallback like any other durable Agent: an untitled one is an "Untitled
+ * agent", NOT its harness/provider label. Harness identity is secondary
+ * interface metadata (rendered as a badge where a surface exposes it via
+ * `TUI_AGENT_HARNESS_LABELS`), never the Agent's title fallback.
  *
  * RENDER-ONLY: apply these helpers where the string is rendered. Data, action,
  * and store fields must carry the RAW title. The exception is the small set of
@@ -29,25 +34,33 @@
  * strings stay single-sourced.
  */
 import type { EpicNodeKind } from "@/lib/artifacts/node-display";
-import { TUI_AGENT_HARNESS_LABELS } from "@/lib/artifacts/node-display";
 import { createEpicName } from "@/lib/epic-name";
-import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 
 /**
  * Kinds that carry a display title. Superset of `EpicNodeKind` with the two
- * top-level task kinds (`epic`, `phase`) that live outside the node tree but
- * share the same empty-title fallback contract.
+ * top-level task kinds (`epic`, `phase`) that live outside the node tree, plus
+ * the interface-agnostic `agent` kind - all share the same empty-title fallback
+ * contract.
  */
-export type DisplayTitleKind = EpicNodeKind | "epic" | "phase";
+export type DisplayTitleKind = EpicNodeKind | "epic" | "phase" | "agent";
 
 /**
  * Per-kind "Untitled <kind>" labels. Note `terminal-agent` renders as
  * "Untitled terminal agent" (spaced, not the hyphenated kind), not
  * `Untitled terminal-agent`.
+ *
+ * `agent` is the fallback for surfaces that address the durable **Agent**
+ * rather than one of its interfaces - an untitled Agent is an "Untitled agent"
+ * whether it is interacted with through Chat or Terminal. The narrower
+ * `chat` / `terminal-agent` literals remain for interface-specific surfaces and
+ * for historical titles: a record whose stored title literally reads
+ * "Untitled chat" keeps that text, because the system cannot tell a synthetic
+ * fallback baked into data apart from a title a user chose.
  */
 const UNTITLED_LABELS: Readonly<Record<DisplayTitleKind, string>> = {
   epic: "Untitled epic",
   phase: "Untitled phase",
+  agent: "Untitled agent",
   chat: "Untitled chat",
   "terminal-agent": "Untitled terminal agent",
   terminal: "Untitled terminal",
@@ -87,20 +100,6 @@ export function epicDisplayTitle(epic: {
   if (epic.title.length > 0) return epic.title;
   const derived = createEpicName(epic.initialUserPrompt);
   return derived.length > 0 ? derived : untitledLabel("epic");
-}
-
-/**
- * Source-aware terminal-agent title: the raw title when non-empty, else the
- * harness/provider label for the agent's `harnessId`, else
- * "Untitled terminal agent".
- */
-export function tuiAgentDisplayTitle(agent: {
-  readonly title: string;
-  readonly harnessId: TuiHarnessId;
-}): string {
-  if (agent.title.length > 0) return agent.title;
-  const label = TUI_AGENT_HARNESS_LABELS[agent.harnessId];
-  return label.length > 0 ? label : untitledLabel("terminal-agent");
 }
 
 /**

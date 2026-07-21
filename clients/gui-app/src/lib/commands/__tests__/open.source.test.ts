@@ -38,11 +38,12 @@ describe("openSource", () => {
     expect(readSyncItems(openSource.getItems(ctx(null)))).toEqual([]);
   });
 
-  it("emits the opener categories when bound to a target group", () => {
+  it("emits exactly one Agent category, ahead of the other openers", () => {
     const items = readSyncItems(openSource.getItems(ctx("group-1")));
+    // ONE Agent category: Chat and Terminal are interfaces inside it, never
+    // peer entity collections.
     expect(items.map((item) => item.label)).toEqual([
-      "Chats",
-      "TUI agents",
+      "Agents",
       "Terminals",
       "Artifacts",
       "Files",
@@ -51,6 +52,15 @@ describe("openSource", () => {
     for (const item of items) {
       expect(item.group).toBe("open");
       expect(item.subpage).not.toBeNull();
+    }
+  });
+
+  it("keeps legacy chat/tui vocabulary reaching the Agent category", () => {
+    const items = readSyncItems(openSource.getItems(ctx("group-1")));
+    const agents = items.find((item) => item.label === "Agents");
+    expect(agents).toBeDefined();
+    for (const legacy of ["chat", "chats", "tui", "terminal", "agent"]) {
+      expect(agents?.keywords).toContain(legacy);
     }
   });
 

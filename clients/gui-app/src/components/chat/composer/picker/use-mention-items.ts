@@ -14,8 +14,11 @@ import type {
   ArtifactsSlice,
   ChatProjection,
   ChatsSlice,
+  TerminalAgentsSlice,
+  TuiAgentProjection,
 } from "@/stores/epics/open-epic/types";
 import { isSubsequence } from "@traycer/protocol/utils/text/fuzzy";
+import { canParticipateInA2A } from "@traycer/protocol/host/agent/shared";
 import type { EpicMentionArtifactSuggestion } from "@traycer/protocol/host/epic/unary-schemas";
 import {
   epicArtifactMentionId,
@@ -34,8 +37,10 @@ import { buildEpicMentionSuggestionsFromTasks } from "@/lib/composer/mentions/lo
 import { taskMentionTitleFromRawTitle } from "@/lib/composer/mentions/task-mention-helpers";
 import { displayTitle } from "@/lib/display-title";
 import type {
+  EpicAgentMentionEntry,
   EpicChatMentionEntry,
   EpicMentionEntry,
+  EpicTerminalAgentMentionEntry,
   WorkspaceEntry,
 } from "@/lib/composer/types";
 
@@ -90,29 +95,30 @@ export function useMentionItems(params: UseMentionItemsParams): void {
   const { active, sessionId, query, step } = slice;
   const debouncedQuery = useDebouncedValue(query, MENTION_QUERY_DEBOUNCE_MS);
 
-  // The @-mention chat list is the ONLY consumer of the open-epic chat records,
-  // and only while the picker is open. Source it HERE, gated on `active`, rather
-  // than threading it as an eager prop from the chat tile: a chat's `updatedAt`
-  // bumps on every streaming-throttle tick (~80ms), which re-identified the
-  // records array and re-rendered the whole composer + its Radix chrome. Reading
-  // live via `getState` at query time keeps the recency sort accurate without
-  // subscribing the composer to that churn. `handle === null` is the landing
-  // composer (no open epic).
+  // The @-mention Agent list is the ONLY consumer of the open-epic chat and
+  // TUI-agent records, and only while the picker is open. Source it HERE, gated
+  // on `active`, rather than threading it as an eager prop from the chat tile: a
+  // record's `updatedAt` bumps on every streaming-throttle tick (~80ms), which
+  // re-identified the records array and re-rendered the whole composer + its
+  // Radix chrome. Reading live via `getState` at query time keeps the recency
+  // sort accurate without subscribing the composer to that churn.
+  // `handle === null` is the landing composer (no open epic).
   const handle = useMaybeOpenEpicHandle();
-  const epicChatEntries = useMemo<ReadonlyArray<EpicChatMentionEntry>>(() => {
+  const epicAgentEntries = useMemo<ReadonlyArray<EpicAgentMentionEntry>>(() => {
     if (!active || handle === null || currentEpicId === null) {
-      return EMPTY_CHAT_ENTRIES;
+      return EMPTY_AGENT_ENTRIES;
     }
     const state = handle.store.getState();
-    return epicChatMentionEntriesFromChats(
+    return epicAgentMentionEntriesFromEpic(
       state.chats,
+      state.tuiAgents,
       currentEpicId,
       state.epic.title,
     );
-    // Snapshot the chat list when the picker opens (`active` flips). The query
+    // Snapshot the Agent list when the picker opens (`active` flips). The query
     // filters this list downstream, so it does not need to re-pull per keystroke;
-    // the list only changes if a chat is added/removed while the picker is open,
-    // which re-snapshots on the next open.
+    // the list only changes if an Agent is added/removed while the picker is
+    // open, which re-snapshots on the next open.
   }, [active, handle, currentEpicId]);
 
   // The current epic's COMPLETE local artifact set, read the same churn-free way
@@ -168,7 +174,7 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       workspaceEntries: EMPTY_WORKSPACE_ENTRIES,
       epicEntries: EMPTY_EPIC_ENTRIES,
       currentEpicId,
-      chatEntries: EMPTY_CHAT_ENTRIES,
+      agentEntries: EMPTY_AGENT_ENTRIES,
     }),
     [currentEpicId, mentionRoots, query],
   );
@@ -181,7 +187,7 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       workspaceEntries: EMPTY_WORKSPACE_ENTRIES,
       epicEntries: EMPTY_EPIC_ENTRIES,
       currentEpicId,
-      chatEntries: EMPTY_CHAT_ENTRIES,
+      agentEntries: EMPTY_AGENT_ENTRIES,
     }),
     [currentEpicId, debouncedQuery, mentionRoots],
   );
@@ -276,11 +282,11 @@ export function useMentionItems(params: UseMentionItemsParams): void {
           : EMPTY_WORKSPACE_ENTRIES,
       epicEntries: epicRequests.length > 0 ? epicEntries : EMPTY_EPIC_ENTRIES,
       currentEpicId,
-      chatEntries: epicChatEntries,
+      agentEntries: epicAgentEntries,
     }),
     [
       currentEpicId,
-      epicChatEntries,
+      epicAgentEntries,
       epicEntries,
       epicRequests.length,
       mentionRoots,
@@ -341,7 +347,7 @@ export function useMentionItems(params: UseMentionItemsParams): void {
   }, [active, fetching, pickerStore]);
 }
 
-const EMPTY_CHAT_ENTRIES: ReadonlyArray<EpicChatMentionEntry> = [];
+const EMPTY_AGENT_ENTRIES: ReadonlyArray<EpicAgentMentionEntry> = [];
 const EMPTY_ARTIFACT_ENTRIES: ReadonlyArray<EpicMentionArtifactSuggestion> = [];
 const EMPTY_TITLE_MAP: ReadonlyMap<string, string> = new Map();
 
@@ -357,32 +363,90 @@ function buildChatMentionEntry(
     epicId,
     epicTitle,
     chatId: chat.id,
-    label: displayTitle(chat.title, "chat"),
+    // The picker addresses the durable Agent, so an untitled record falls back
+    // to "Untitled agent" regardless of interface. A record whose stored title
+    // literally reads "Untitled chat" keeps that text - it is data, not a
+    // fallback, and is indistinguishable from a title the user chose.
+    label: displayTitle(chat.title, "agent"),
     description: epicTitle,
     parentId: chat.parentId,
     updatedAt: chat.updatedAt,
+    agentInterface: "chat",
+    // Every GUI-backed Agent's runtime supports A2A (provider-native via the
+    // MCP bridge) - mirrors `canParticipateInA2A`'s `surface === "gui"` arm.
+    runtimeSupportsMessageDelivery: true,
+  };
+}
+
+function buildTerminalAgentMentionEntry(
+  agent: TuiAgentProjection,
+  epicId: string,
+  epicTitle: string,
+): EpicTerminalAgentMentionEntry {
+  return {
+    kind: "epic-terminal-agent",
+    id: `terminal-agent:${epicId}:${agent.id}`,
+    token: `terminal-agent:${epicId}/${agent.id}`,
+    epicId,
+    epicTitle,
+    terminalAgentId: agent.id,
+    harnessId: agent.harnessId,
+    // Same interface-agnostic fallback as the chat arm. Harness identity stays
+    // secondary metadata rather than becoming the Agent's title fallback.
+    label: displayTitle(agent.title, "agent"),
+    description: epicTitle,
+    parentId: agent.parentId,
+    updatedAt: agent.updatedAt,
+    agentInterface: "terminal",
+    // Delivery support is a runtime capability, not a referenceability gate:
+    // Codex and OpenCode Terminal Agents stay listed with `false` here rather
+    // than being filtered out. Single-sourced from the protocol's A2A gate.
+    runtimeSupportsMessageDelivery: canParticipateInA2A({
+      surface: "tui",
+      harnessId: agent.harnessId,
+    }),
   };
 }
 
 /**
- * Pure projection of the open-epic chat slice into @-mention chat entries.
+ * Pure projection of the open-epic Agent records - GUI chat-interface Agents
+ * AND TUI terminal-interface Agents - into one @-mention suggestion list.
  * Extracted so the picker can source the list live at query time (see
  * `useMentionItems`) instead of having it threaded in as an eager prop - which
  * re-rendered the whole composer on every streaming `updatedAt` bump.
+ *
+ * Every projected record is referenceable. Interface and message-delivery
+ * capability ride along as secondary metadata so the picker can label a row
+ * without dropping it. The one exclusion is Cursor: it is GUI-only in the
+ * product today, so a persisted Cursor TUI record (a reserved compatibility
+ * value in the released schema) must not surface as a referenceable Terminal
+ * Agent until minimal Cursor TUI support ships.
  */
-export function epicChatMentionEntriesFromChats(
+export function epicAgentMentionEntriesFromEpic(
   chats: ChatsSlice,
+  tuiAgents: TerminalAgentsSlice,
   epicId: string,
   rawEpicTitle: string,
-): ReadonlyArray<EpicChatMentionEntry> {
-  if (chats.allIds.length === 0) return EMPTY_CHAT_ENTRIES;
+): ReadonlyArray<EpicAgentMentionEntry> {
+  if (chats.allIds.length === 0 && tuiAgents.allIds.length === 0) {
+    return EMPTY_AGENT_ENTRIES;
+  }
   const epicTitle = taskMentionTitle(rawEpicTitle);
-  const entries = chats.allIds.flatMap((id) => {
+  const chatEntries = chats.allIds.flatMap((id) => {
     if (!Object.hasOwn(chats.byId, id)) return [];
-    const chat = chats.byId[id];
-    return [buildChatMentionEntry(chat, epicId, epicTitle)];
+    return [buildChatMentionEntry(chats.byId[id], epicId, epicTitle)];
   });
-  return entries.length === 0 ? EMPTY_CHAT_ENTRIES : entries;
+  const terminalEntries = tuiAgents.allIds.flatMap((id) => {
+    if (!Object.hasOwn(tuiAgents.byId, id)) return [];
+    const agent = tuiAgents.byId[id];
+    if (agent.harnessId === "cursor") return [];
+    return [buildTerminalAgentMentionEntry(agent, epicId, epicTitle)];
+  });
+  const entries: ReadonlyArray<EpicAgentMentionEntry> = [
+    ...chatEntries,
+    ...terminalEntries,
+  ];
+  return entries.length === 0 ? EMPTY_AGENT_ENTRIES : entries;
 }
 
 function matchesMentionQuery(label: string, normalizedQuery: string): boolean {

@@ -642,7 +642,7 @@ describe("FolderRow", () => {
     expect(pin.className).toContain("cursor-not-allowed");
     fireEvent.focus(pin);
     expect((await screen.findByRole("tooltip")).textContent).toContain(
-      "cannot be changed after the chat starts",
+      "cannot be changed after the agent starts",
     );
   });
 
@@ -654,7 +654,7 @@ describe("FolderRow", () => {
     tabForward();
     expect(document.activeElement).toBe(pin);
     expect((await screen.findByRole("tooltip")).textContent).toContain(
-      "cannot be changed after the chat starts",
+      "cannot be changed after the agent starts",
     );
   });
 
