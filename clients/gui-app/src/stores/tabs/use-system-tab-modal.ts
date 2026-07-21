@@ -12,6 +12,8 @@ import {
   ensureHistoryTab,
   ensureSettingsTab,
 } from "@/lib/commands/actions/open-system-tab";
+import { isMobileViewport } from "@/hooks/ui/use-mobile";
+import { settingsRouteOptions } from "@/stores/tabs/kinds/settings";
 import { type TabNavigationIntent } from "@/lib/tab-navigation";
 import { tabActivate, tabRouteOptions } from "@/stores/tabs/registry";
 import {
@@ -69,6 +71,21 @@ export function useSystemTabModalActions(): SystemTabModalActions {
 
   const openSettings = useCallback(
     (opts: OpenSettingsModalOpts) => {
+      // On phones the two-pane modal never opens: settings is only the
+      // full-page drill-down. Every modal entry point (user menu, deep-links,
+      // the bridge for palette/keybindings) funnels through here, so this one
+      // gate routes them all to `/settings` (the section list) or straight to
+      // the requested section. History keeps its modal on every viewport.
+      if (isMobileViewport()) {
+        // No `search` reducer: leaving the current route drops the overlay
+        // params on its own, and the settings routes carry no search schema.
+        if (opts.section !== null) {
+          void router.navigate(settingsRouteOptions(opts.section));
+          return;
+        }
+        void router.navigate({ to: "/settings" });
+        return;
+      }
       const settingsTab = useTabsStore.getState().systemTabs.settings;
       if (settingsTab !== null) {
         navigateToTabClearingOverlay(

@@ -35,6 +35,7 @@ export function SettingsModalContent(
           activeSection: section,
           onSelect: setSection,
         }}
+        variant="rail"
       />
       <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto">
         <SettingsPanelForSection section={section} />

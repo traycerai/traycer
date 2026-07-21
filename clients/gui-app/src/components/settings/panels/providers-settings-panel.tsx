@@ -371,6 +371,14 @@ function ProvidersRailLayout({
   const active =
     orderedProviders.find((p) => p.providerId === activeId) ??
     orderedProviders[0];
+  const selectProvider = (providerId: ProviderId): void => {
+    setInitialFocus({
+      harnessId: null,
+      profileId: null,
+      startSignIn: false,
+    });
+    setActiveId(providerId);
+  };
 
   return (
     // Fill the panel body (the shell stretches it to the settings scroll
@@ -378,10 +386,19 @@ function ProvidersRailLayout({
     // providers never resizes the box and the detail pane - not the outer
     // overlay - owns the scroll. Height follows the viewport: on shorter
     // screens it shrinks to fit the modal instead of overflowing it.
-    <div className="flex h-full">
+    // Below md the rail column collapses into a full-width provider select
+    // stacked above the detail pane.
+    <div className="flex h-full flex-col md:flex-row">
+      <div className="shrink-0 border-b border-border/60 p-2 md:hidden">
+        <ProvidersMobileSelect
+          providers={orderedProviders}
+          activeId={active.providerId}
+          onSelect={selectProvider}
+        />
+      </div>
       <nav
         aria-label="Providers"
-        className="flex w-[clamp(10rem,22vw,14rem)] shrink-0 flex-col gap-1 overflow-y-auto border-r border-border/60 p-2"
+        className="hidden w-[clamp(10rem,22vw,14rem)] shrink-0 flex-col gap-1 overflow-y-auto border-r border-border/60 p-2 md:flex"
       >
         <ProviderList
           ariaLabel="Providers"
@@ -395,14 +412,7 @@ function ProvidersRailLayout({
             badge: null,
             description: null,
             trailing: null,
-            onSelect: (providerId) => {
-              setInitialFocus({
-                harnessId: null,
-                profileId: null,
-                startSignIn: false,
-              });
-              setActiveId(providerId);
-            },
+            onSelect: selectProvider,
           }))}
         />
       </nav>
@@ -418,6 +428,35 @@ function ProvidersRailLayout({
         />
       </div>
     </div>
+  );
+}
+
+function ProvidersMobileSelect(props: {
+  readonly providers: readonly ProviderCliState[];
+  readonly activeId: ProviderId;
+  readonly onSelect: (providerId: ProviderId) => void;
+}): ReactNode {
+  return (
+    <Select
+      value={props.activeId}
+      onValueChange={(value) => {
+        // Resolve through the provider list instead of asserting the select's
+        // string value back into the ProviderId union.
+        const match = props.providers.find((p) => p.providerId === value);
+        if (match !== undefined) props.onSelect(match.providerId);
+      }}
+    >
+      <SelectTrigger aria-label="Provider" className="w-full">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {props.providers.map((provider) => (
+          <SelectItem key={provider.providerId} value={provider.providerId}>
+            {PROVIDER_DISPLAY_NAMES[provider.providerId]}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   );
 }
 

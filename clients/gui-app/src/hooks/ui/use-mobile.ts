@@ -24,3 +24,12 @@ export function useIsMobile(): boolean {
     readIsMobileServerSnapshot,
   );
 }
+
+/**
+ * Imperative read of the same breakpoint for command-time call sites (event
+ * handlers, non-subscribing actions) that must not re-render on viewport
+ * changes.
+ */
+export function isMobileViewport(): boolean {
+  return readIsMobileSnapshot();
+}

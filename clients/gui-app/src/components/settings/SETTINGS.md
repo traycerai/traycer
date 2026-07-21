@@ -38,11 +38,45 @@ which maps each `SettingsSectionId` to its panel in a `switch`. A new section
 must be added in BOTH places - the route file under `src/routes/` AND the modal
 `switch` - or the modal renders a blank pane for that section.
 
+## Responsive Behavior (mobile)
+
+The **route** presentation collapses to a drill-down below the 768px
+`useIsMobile()` breakpoint: `/settings` renders the section list full-screen
+(`SettingsSidebar` with `variant="mobile-list"` - the index no longer
+redirects on phones), tapping a section navigates to its existing route
+full-screen, and `settings-layout.tsx` shows a back-to-list header instead of
+the rail. Desktop keeps the exact two-pane shell; the **modal** presentation
+is deliberately unchanged internally (it always renders the rail variant) and
+simply never opens on phones: `openSettings` in
+`src/stores/tabs/use-system-tab-modal.ts` - the single funnel for every modal
+entry point (user menu, deep-links, the palette/keybinding bridge) - gates on
+`isMobileViewport()` and navigates to the full-page route instead
+(`/settings/<section>` when a section is requested, else `/settings`).
+History keeps its modal on every viewport.
+
+Supporting pieces, all viewport-agnostic where possible:
+
+- `settings-row.tsx` uses `flex-wrap` + a label `basis` so small controls
+  (switches) stay inline while wide controls wrap below the label on narrow
+  containers.
+- `settings-panel-shell.tsx` (and the inline shells in the Keybindings and
+  Shell panels) step padding down below `sm`; the shell header wraps.
+- The Providers rail collapses below `md` into a full-width provider `Select`
+  above the detail pane. `EnvOverrideEditor` rows restack onto two lines below
+  `sm` and hide the column header.
+- `settings-touch-targets.css` (imported by `settings-layout.tsx`, scoped
+  under `[data-settings-touch-scope]`) enlarges the *hit areas* of
+  switch/button/select-trigger primitives to >=44px on coarse-pointer devices
+  without changing any visual size - settings-only, the shared primitives in
+  `src/components/ui/` are untouched.
+
 ## Key Files
 
 - `settings-layout.tsx` Owns the two-column shell for the settings route.
 - `settings-sidebar.tsx` Renders navigation from `settings-sections.ts`.
 - `settings-panel-shell.tsx` Shared width, card shell, and panel spacing.
+- `settings-touch-targets.css` Coarse-pointer hit-area rules for the route
+  shell (see below).
 - `panels/*.tsx` Route-mounted settings sections.
 - `controls/settings-select.tsx` Shared select wrapper used by settings rows.
 - `src/stores/settings-store.ts` Persisted local settings state.

@@ -152,7 +152,7 @@ function ShellSettingsPanelInner() {
   };
 
   return (
-    <section className="mx-auto w-full max-w-5xl px-8 py-10">
+    <section className="mx-auto w-full max-w-5xl px-4 py-6 sm:px-8 sm:py-10">
       <header className="mb-8 space-y-2">
         <h1 className="text-title-lg font-semibold text-foreground">Shell</h1>
         <p className="max-w-2xl text-ui-sm text-muted-foreground">

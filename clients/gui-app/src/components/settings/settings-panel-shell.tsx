@@ -31,11 +31,11 @@ export function SettingsPanelShell(props: SettingsPanelShellProps) {
     <section
       data-settings-panel-shell
       className={cn(
-        "mx-auto w-full max-w-5xl px-8 py-10",
+        "mx-auto w-full max-w-5xl px-4 py-6 sm:px-8 sm:py-10",
         fillHeight && "flex h-full flex-col",
       )}
     >
-      <header className="mb-8 flex items-start justify-between gap-4">
+      <header className="mb-8 flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0 space-y-2">
           <h1 className="text-title-lg font-semibold text-foreground">
             {title}

@@ -13,7 +13,7 @@ const SETTINGS_PATH_PREFIX = "/settings";
 const SETTINGS_DEFAULT_PATH = "/settings/general";
 const LEGACY_SERVICE_PATH = "/settings/service";
 
-function settingsRouteOptions(section: SettingsSectionId) {
+export function settingsRouteOptions(section: SettingsSectionId) {
   switch (section) {
     case "general":
       return { to: "/settings/general" } as const;
