@@ -17,8 +17,12 @@ regexes = [
 ]
 
 [[allowlists]]
-description = "Historic WebSocket handshake test keys. These RFC 6455 fixture values are not credentials; allowlist only the two affected commits so the full-history scan remains strict elsewhere."
-commits = [
-  "89f06f265fc402b43d7261e77c51ee3fe5a34d58",
-  "62f701285fb2a74cec5460121c8b8b370396ea45",
+description = "RFC 6455's public sample client nonce in the historic loopback handshake probe. Require both the exact nonce and its source path so unrelated findings remain reportable."
+condition = "AND"
+regexTarget = "secret"
+paths = [
+  '''^clients/desktop/src/electron-main/host/host-lifecycle\.ts$''',
+]
+regexes = [
+  '''^dGhlIHNhbXBsZSBub25jZQ==$''',
 ]
