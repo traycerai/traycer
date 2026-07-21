@@ -3,11 +3,15 @@ import {
   type ChildProcess,
   type SpawnOptions,
 } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { access } from "node:fs/promises";
 import { dirname } from "node:path";
 import {
   openBootstrapLogFd,
   writeBootstrapMarker,
+  writeBootstrapTerminalMarker,
+  type BootstrapMarkerFields,
+  type BootstrapPhase,
 } from "../host/bootstrap-log";
 import { rotateHostLogIfOversized } from "../host/host-log-rotation";
 import {
@@ -150,6 +154,7 @@ export interface RunHostStartDeps extends ResolveHostStartTargetDeps {
   ) => Promise<"rotated" | "skipped">;
   readonly readEnvOverrides: () => Promise<Record<string, EnvOverrideValue>>;
   readonly writeMarker: typeof writeBootstrapMarker;
+  readonly writeTerminalMarker: typeof writeBootstrapTerminalMarker;
   // `process.exit` itself returns `never`, but the dependency is typed
   // `void` so test stubs can record the requested exit code without
   // throwing from inside event-handler callbacks. Real callers should
@@ -166,6 +171,7 @@ const defaultRunDeps: RunHostStartDeps = {
   rotateLog: rotateHostLogIfOversized,
   readEnvOverrides: async () => ({ ...(await listEnvOverrides()) }),
   writeMarker: writeBootstrapMarker,
+  writeTerminalMarker: writeBootstrapTerminalMarker,
   exit: (code) => {
     process.exit(code);
   },
@@ -188,10 +194,17 @@ export async function runHostStart(
 ): Promise<void> {
   const deps: RunHostStartDeps = { ...defaultRunDeps, ...injected };
   const logger = deps.logger ?? createCliLogger(opts.environment);
+  // One attempt id for every marker this supervisor invocation writes so
+  // readers can correlate starting → terminal pairs without relying only
+  // on a pre-action log baseline (Finding F evidence identity).
+  const attemptId = randomUUID();
+  const supervisorPid = process.pid;
 
   logger.info("Host supervisor starting", {
     environment: opts.environment,
     hasCwdOverride: opts.cwd !== null,
+    attemptId,
+    supervisorPid,
   });
 
   let target: HostStartTarget;
@@ -203,20 +216,25 @@ export async function runHostStart(
         environment: opts.environment,
         code: err.code,
         exitCode: err.exitCode,
+        attemptId,
       });
       const detailLine = JSON.stringify({
         code: err.code,
         message: err.message,
         details: err.details,
       });
-      await deps.writeMarker(opts.environment, "failed-to-spawn", {
-        shell: undefined,
-        args: undefined,
-        bundle: undefined,
-        exitCode: undefined,
-        signal: undefined,
-        error: `${err.code}: ${err.message}`,
-      });
+      await deps.writeMarker(
+        opts.environment,
+        "failed-to-spawn",
+        markerFields(attemptId, supervisorPid, {
+          shell: undefined,
+          args: undefined,
+          bundle: undefined,
+          exitCode: undefined,
+          signal: undefined,
+          error: `${err.code}: ${err.message}`,
+        }),
+      );
       deps.onError(`traycer host start: ${err.code}: ${err.message}`);
       deps.onError(detailLine);
       return deps.exit(err.exitCode);
@@ -268,14 +286,18 @@ export async function runHostStart(
     rotation,
   });
 
-  await deps.writeMarker(opts.environment, "starting", {
-    shell: undefined,
-    args: target.args,
-    bundle: target.executable,
-    exitCode: undefined,
-    signal: undefined,
-    error: undefined,
-  });
+  await deps.writeMarker(
+    opts.environment,
+    "starting",
+    markerFields(attemptId, supervisorPid, {
+      shell: undefined,
+      args: target.args,
+      bundle: target.executable,
+      exitCode: undefined,
+      signal: undefined,
+      error: undefined,
+    }),
+  );
 
   const logFd = await deps.openLogFd(opts.environment);
 
@@ -306,14 +328,18 @@ export async function runHostStart(
       { environment: opts.environment, exitCode: 66 },
       errorFromUnknown(cause),
     );
-    await deps.writeMarker(opts.environment, "failed-to-spawn", {
-      shell: undefined,
-      args: undefined,
-      bundle: target.executable,
-      exitCode: undefined,
-      signal: undefined,
-      error: message,
-    });
+    await deps.writeMarker(
+      opts.environment,
+      "failed-to-spawn",
+      markerFields(attemptId, supervisorPid, {
+        shell: undefined,
+        args: undefined,
+        bundle: target.executable,
+        exitCode: undefined,
+        signal: undefined,
+        error: message,
+      }),
+    );
     deps.onError(
       `traycer host start: ${CLI_ERROR_CODES.HOST_SPAWN_FAILED}: ${message}`,
     );
@@ -326,6 +352,7 @@ export async function runHostStart(
         environment: opts.environment,
         signal: sig,
         childPidKnown: child.pid !== undefined,
+        attemptId,
       });
       if (child.pid !== undefined) {
         try {
@@ -344,58 +371,137 @@ export async function runHostStart(
   }
 
   child.on("exit", (code, signal) => {
-    // Marker writes are fire-and-forget here - the listener can't await
-    // and the process is about to exit anyway; the OS flushes the log
-    // append on close.
+    // `process.exit()` is synchronous. Terminal markers are therefore written
+    // synchronously before exit rather than scheduling an append that the
+    // process could abandon. Desktop uses these as fail-now readiness evidence.
     if (signal !== null) {
       logger.warn("Host child exited by signal", {
         environment: opts.environment,
         signal,
         exitCode: 128 + signalNumber(signal),
+        attemptId,
       });
-      void deps.writeMarker(opts.environment, "killed", {
-        shell: undefined,
-        args: undefined,
-        bundle: target.executable,
-        exitCode: undefined,
-        signal,
-        error: undefined,
+      return persistTerminalMarkerAndExit({
+        deps,
+        logger,
+        environment: opts.environment,
+        phase: "killed",
+        fields: markerFields(attemptId, supervisorPid, {
+          shell: undefined,
+          args: undefined,
+          bundle: target.executable,
+          exitCode: undefined,
+          signal,
+          error: undefined,
+        }),
+        exitCode: 128 + signalNumber(signal),
       });
-      return deps.exit(128 + signalNumber(signal));
     }
     if (code === null || code === 0) {
       logger.info("Host child exited cleanly", {
         environment: opts.environment,
         exitCode: code ?? 0,
+        attemptId,
       });
-      void deps.writeMarker(opts.environment, "exited", {
-        shell: undefined,
-        args: undefined,
-        bundle: target.executable,
-        exitCode: code,
-        signal: undefined,
-        error: undefined,
+      return persistTerminalMarkerAndExit({
+        deps,
+        logger,
+        environment: opts.environment,
+        phase: "exited",
+        fields: markerFields(attemptId, supervisorPid, {
+          shell: undefined,
+          args: undefined,
+          bundle: target.executable,
+          exitCode: code,
+          signal: undefined,
+          error: undefined,
+        }),
+        exitCode: code ?? 0,
       });
-      return deps.exit(code ?? 0);
     }
     logger.error(
       "Host child exited with non-zero status",
       {
         environment: opts.environment,
         exitCode: code,
+        attemptId,
       },
       null,
     );
-    void deps.writeMarker(opts.environment, "crashed", {
-      shell: undefined,
-      args: undefined,
-      bundle: target.executable,
+    return persistTerminalMarkerAndExit({
+      deps,
+      logger,
+      environment: opts.environment,
+      phase: "crashed",
+      fields: markerFields(attemptId, supervisorPid, {
+        shell: undefined,
+        args: undefined,
+        bundle: target.executable,
+        exitCode: code,
+        signal: undefined,
+        error: undefined,
+      }),
       exitCode: code,
-      signal: undefined,
-      error: undefined,
     });
-    return deps.exit(code);
   });
+}
+
+function persistTerminalMarkerAndExit(options: {
+  readonly deps: RunHostStartDeps;
+  readonly logger: ILogger;
+  readonly environment: Environment;
+  readonly phase: Exclude<BootstrapPhase, "starting">;
+  readonly fields: BootstrapMarkerFields;
+  readonly exitCode: number;
+}): void {
+  try {
+    options.deps.writeTerminalMarker(
+      options.environment,
+      options.phase,
+      options.fields,
+    );
+  } catch (cause) {
+    options.logger.error(
+      "Host supervisor could not persist terminal marker before exit",
+      {
+        environment: options.environment,
+        phase: options.phase,
+        exitCode: options.exitCode,
+      },
+      errorFromUnknown(cause),
+    );
+  } finally {
+    // Marker persistence is best effort; it must never replace the child's
+    // actual exit code or cause a spurious service-manager restart.
+    options.deps.exit(options.exitCode);
+  }
+}
+
+// Stamp every marker with the attempt's identity fields. Diagnostics stay
+// caller-supplied so write sites remain explicit about which payload they
+// attach (project style: no optional/default parameters).
+function markerFields(
+  attemptId: string,
+  supervisorPid: number,
+  fields: {
+    readonly shell: string | undefined;
+    readonly args: readonly string[] | undefined;
+    readonly bundle: string | undefined;
+    readonly exitCode: number | null | undefined;
+    readonly signal: string | null | undefined;
+    readonly error: string | undefined;
+  },
+): BootstrapMarkerFields {
+  return {
+    shell: fields.shell,
+    args: fields.args,
+    bundle: fields.bundle,
+    exitCode: fields.exitCode,
+    signal: fields.signal,
+    error: fields.error,
+    attemptId,
+    supervisorPid,
+  };
 }
 
 function signalNumber(signal: NodeJS.Signals): number {

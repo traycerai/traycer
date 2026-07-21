@@ -4,12 +4,17 @@ import type {
   HostEnsureError,
   HostEnsureResultPayload,
   HostReadinessResult,
+  HostSpawnEvidenceBaseline,
   ServiceLifecycleSnapshot,
 } from "../../host/host-readiness";
 import type {
   HostLoginItemStatus,
   RegisterHostLoginItemResult,
 } from "../../app/host-login-item";
+
+vi.mock("../../cli/cli-discovery", () => ({
+  resolveBundledCliPath: () => Promise.resolve(null),
+}));
 
 // Ticket packaging-smappservice-activation (issue #287 descriptor-hardening
 // review, Finding 3): a busy/indeterminate `desktop-install-cloud.js`
@@ -80,6 +85,10 @@ const waitForHostReady: Mock<
     pidPath: string,
     pollIntervalMs: number,
     skipPid: number | null,
+    options: {
+      spawnEvidenceBaseline: unknown;
+      extendedTimeoutMs: number;
+    },
   ) => Promise<HostReadinessResult>
 > = vi.fn();
 const categorizeHostCliError: Mock<(err: unknown) => HostEnsureError> = vi.fn();
@@ -88,18 +97,31 @@ const readServiceLifecycle: Mock<
     payload: HostEnsureResultPayload | null | undefined,
   ) => ServiceLifecycleSnapshot
 > = vi.fn();
+const captureHostSpawnEvidenceBaseline: Mock<
+  (
+    logPath: string,
+    pidPath: string,
+  ) => Promise<HostSpawnEvidenceBaseline | null>
+> = vi.fn();
 vi.mock("../../host/host-readiness", () => ({
   HOST_READY_TIMEOUT_MS: 60_000,
   HOST_READY_POLL_MS: 250,
+  HOST_READY_EXTENDED_TIMEOUT_MS: 5 * 60_000,
   categorizeHostCliError: (err: unknown) => categorizeHostCliError(err),
   readServiceLifecycle: (payload: HostEnsureResultPayload | null | undefined) =>
     readServiceLifecycle(payload),
+  captureHostSpawnEvidenceBaseline: (logPath: string, pidPath: string) =>
+    captureHostSpawnEvidenceBaseline(logPath, pidPath),
   waitForHostReady: (
     timeoutMs: number,
     pidPath: string,
     pollIntervalMs: number,
     skipPid: number | null,
-  ) => waitForHostReady(timeoutMs, pidPath, pollIntervalMs, skipPid),
+    options: {
+      spawnEvidenceBaseline: unknown;
+      extendedTimeoutMs: number;
+    },
+  ) => waitForHostReady(timeoutMs, pidPath, pollIntervalMs, skipPid, options),
 }));
 
 const getHostFsLayout: Mock<(environment: Environment) => HostFsLayout> =
@@ -236,6 +258,7 @@ beforeEach(() => {
   streamCliWithProgress.mockReset();
   categorizeHostCliError.mockReset();
   readServiceLifecycle.mockReset();
+  captureHostSpawnEvidenceBaseline.mockReset().mockResolvedValue(null);
 });
 
 describe("ensureHost fast path - pending LaunchAgent revision (applyPendingLoginItemRevisionIfIdle)", () => {
@@ -293,6 +316,10 @@ describe("ensureHost fast path - pending LaunchAgent revision (applyPendingLogin
       PID_METADATA_FILE,
       250,
       SERVICE_PID,
+      {
+        spawnEvidenceBaseline: null,
+        extendedTimeoutMs: 5 * 60_000,
+      },
     );
   });
 
@@ -404,5 +431,152 @@ describe("ensureHost fast path - pending LaunchAgent revision (applyPendingLogin
       version: null,
     });
     expect(waitForHostReady).not.toHaveBeenCalled();
+  });
+});
+
+async function invokeEnsureWithServiceStatus(
+  status: FakeServiceStatus,
+): Promise<unknown> {
+  const getServiceStatus = vi.fn(() => Promise.resolve(status));
+  const reloadSnapshotFromDisk = vi.fn(() => Promise.resolve(null));
+  const bridge = makeBridge(getServiceStatus, reloadSnapshotFromDisk);
+  registerHostEnsureIpc(bridge as never);
+  const handler = bridge.handlers.get(RunnerHostInvoke.traycerHostEnsure);
+  expect(handler).toBeDefined();
+  return handler!(null, {});
+}
+
+describe("ensureHost running:false readiness gating (CLI-registered cohort only)", () => {
+  const stoppedStatus: FakeServiceStatus = {
+    state: "stopped",
+    version: null,
+    listenUrl: null,
+    pid: null,
+  };
+
+  it("routes CLI-owned running:false into evidence-gated readiness", async () => {
+    hostManagesHostLoginItem.mockResolvedValue(false);
+    readServiceLifecycle.mockReturnValue({
+      priorServiceState: "stopped",
+      postSwapAction: "start",
+      postSwapError: null,
+    });
+    streamCliWithProgress.mockResolvedValue({
+      action: "started",
+      running: false,
+      registered: true,
+      version: "1.5.0",
+      serviceLifecycle: {
+        priorServiceState: "stopped",
+        postSwapAction: "start",
+        postSwapError: null,
+      },
+    });
+
+    const result = await invokeEnsureWithServiceStatus(stoppedStatus);
+
+    expect(result).toEqual({
+      action: "provisioned",
+      running: true,
+      version: "9.9.9",
+    });
+    expect(waitForHostReady).toHaveBeenCalledTimes(1);
+    expect(registerHostLoginItem).not.toHaveBeenCalled();
+  });
+
+  it("still proceeds to SMAppService register + readiness when hostOwnsLoginItem and running:false", async () => {
+    hostManagesHostLoginItem.mockResolvedValue(true);
+    readServiceLifecycle.mockReturnValue({
+      priorServiceState: null,
+      postSwapAction: null,
+      postSwapError: null,
+    });
+    // running:false is expected on the SMAppService path — desktop starts
+    // the host after CLI installs bytes with --no-service-register.
+    streamCliWithProgress.mockResolvedValue({
+      action: "installed",
+      running: false,
+      registered: false,
+      version: "1.5.0",
+      serviceLifecycle: null,
+    });
+    registerHostLoginItem.mockResolvedValue("enabled");
+    waitForHostReady.mockResolvedValue({
+      ready: true,
+      version: "1.5.0",
+      pid: 4242,
+      reason: "ready",
+    });
+
+    const result = await invokeEnsureWithServiceStatus(stoppedStatus);
+
+    expect(result).toEqual({
+      action: "provisioned",
+      running: true,
+      version: "1.5.0",
+    });
+    expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
+    expect(waitForHostReady).toHaveBeenCalledTimes(1);
+  });
+
+  it("wires a non-null win32 baseline into the readiness wait after CLI ensure", async () => {
+    const originalPlatform = Object.getOwnPropertyDescriptor(
+      process,
+      "platform",
+    );
+    Object.defineProperty(process, "platform", {
+      configurable: true,
+      value: "win32",
+    });
+    try {
+      const baseline: HostSpawnEvidenceBaseline = {
+        logPath: "/tmp/host.log",
+        logExists: true,
+        logSize: 12,
+        logDev: 1,
+        logIno: 2,
+        pidPath: PID_METADATA_FILE,
+        pidExists: true,
+        pidMtimeMs: 100,
+        pid: 7,
+        markerAuthoritySinceMs: null,
+      };
+      hostManagesHostLoginItem.mockResolvedValue(false);
+      captureHostSpawnEvidenceBaseline.mockResolvedValue(baseline);
+      readServiceLifecycle.mockReturnValue({
+        priorServiceState: "stopped",
+        postSwapAction: "start",
+        postSwapError: null,
+      });
+      streamCliWithProgress.mockResolvedValue({
+        action: "started",
+        running: false,
+        registered: true,
+        version: "1.5.0",
+      });
+
+      await invokeEnsureWithServiceStatus(stoppedStatus);
+
+      expect(captureHostSpawnEvidenceBaseline).toHaveBeenCalledWith(
+        "/tmp/traycer-host-ensure-ipc-test/host.log",
+        PID_METADATA_FILE,
+      );
+      expect(waitForHostReady).toHaveBeenCalledWith(
+        60_000,
+        PID_METADATA_FILE,
+        250,
+        null,
+        expect.objectContaining({
+          spawnEvidenceBaseline: expect.objectContaining({
+            logPath: "/tmp/host.log",
+            markerAuthoritySinceMs: expect.any(Number),
+          }),
+        }),
+      );
+    } finally {
+      if (originalPlatform !== undefined) {
+        Object.defineProperty(process, "platform", originalPlatform);
+      }
+    }
   });
 });

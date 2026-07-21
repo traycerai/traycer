@@ -2,6 +2,11 @@ import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { access } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import {
+  WINDOWS_SCHTASKS_QUERY_TIMEOUT_MS,
+  WINDOWS_SCHTASKS_RUN_TIMEOUT_MS,
+  WINDOWS_START_SPAWN_VERIFY_MS,
+} from "@traycer/protocol/host/lifecycle-constants";
 import { log } from "../app/logger";
 import { resolveBundledCliPath } from "../cli/cli-discovery";
 import { RunnerHostInvoke } from "../../ipc-contracts/ipc-channels";
@@ -25,12 +30,16 @@ import { approvalRequiredMessage } from "../app/host-respawn";
 import { probeHostActivityBusy } from "@traycer-clients/shared/host-client/host-activity-probe";
 import { canReachHostWebsocketUrl } from "../host/host-lifecycle";
 import {
+  captureHostSpawnEvidenceBaseline,
   categorizeHostCliError,
+  HOST_READY_EXTENDED_TIMEOUT_MS,
   HOST_READY_POLL_MS,
   HOST_READY_TIMEOUT_MS,
   readServiceLifecycle,
   waitForHostReady,
   type HostEnsureResultPayload,
+  type HostSpawnEvidenceBaseline,
+  type WaitForHostReadyOptions,
 } from "../host/host-readiness";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
 
@@ -207,6 +216,18 @@ async function ensureHost(
     ...(bundledHostFrom !== null ? ["--from", bundledHostFrom] : []),
   ];
 
+  // win32: capture spawn-evidence baseline BEFORE the ensure that will
+  // /Run the task, so readiness can extend on post-baseline evidence and
+  // fail-fast on a post-baseline terminal marker. Darwin SMAppService
+  // extension is T6 (launchctl-gated); leave baseline null there.
+  const layout = getHostFsLayout(environment);
+  const spawnEvidenceBaseline: HostSpawnEvidenceBaseline | null =
+    process.platform === "win32"
+      ? await captureHostSpawnEvidenceBaseline(
+          layout.logFile,
+          layout.pidMetadataFile,
+        )
+      : null;
   let payload: unknown;
   try {
     payload = await streamCliWithProgress(
@@ -240,7 +261,28 @@ async function ensureHost(
     throw new Error(categorized.message);
   }
 
-  const lifecycle = readServiceLifecycle(payload as HostEnsureResultPayload);
+  const ensurePayload = payload as HostEnsureResultPayload;
+  // A successful win32 ensure proves its final `/Run` observed spawn evidence.
+  // `/Run` can consume its full control budget before that evidence reaches
+  // Desktop, and provisioning then performs a status query. Keep enough
+  // bounded authority for all three phases; a verifier-only 15s cutoff can
+  // discard the genuine final marker before readiness starts. Legacy markers
+  // retain their pre-action baseline fallback.
+  const readinessOptions: WaitForHostReadyOptions = {
+    spawnEvidenceBaseline:
+      spawnEvidenceBaseline === null
+        ? null
+        : {
+            ...spawnEvidenceBaseline,
+            markerAuthoritySinceMs:
+              Date.now() -
+              WINDOWS_SCHTASKS_RUN_TIMEOUT_MS -
+              WINDOWS_START_SPAWN_VERIFY_MS -
+              WINDOWS_SCHTASKS_QUERY_TIMEOUT_MS,
+          },
+    extendedTimeoutMs: HOST_READY_EXTENDED_TIMEOUT_MS,
+  };
+  const lifecycle = readServiceLifecycle(ensurePayload);
   if (lifecycle.postSwapError !== null) {
     log.warn("[host-ensure] service registration reported postSwapError", {
       postSwapError: lifecycle.postSwapError,
@@ -249,7 +291,6 @@ async function ensureHost(
       `The host was installed but its background service did not start cleanly: ${lifecycle.postSwapError}. Open Doctor or run 'traycer host doctor' to recover.`,
     );
   }
-
   // Close the host-owned restart window (#8): on this path the CLI installed
   // the new bytes inertly (`--no-service-register`) and the host teardown
   // happens HERE, in the desktop's SMAppService unregister→register cycle -
@@ -336,12 +377,12 @@ async function ensureHost(
   // host's pid when we are replacing a stale running build - in that case
   // the register cycle boots the old host out, so the poll must skip its
   // lingering pid.json and wait for the freshly spawned process.
-  const pidPath = getHostFsLayout(environment).pidMetadataFile;
   const readiness = await waitForHostReady(
     HOST_READY_TIMEOUT_MS,
-    pidPath,
+    layout.pidMetadataFile,
     HOST_READY_POLL_MS,
     prePid,
+    readinessOptions,
   );
   if (!readiness.ready) {
     // Re-read the SMAppService status: macOS can flip the agent to
@@ -478,11 +519,17 @@ async function applyPendingLoginItemRevisionIfIdle(
     );
   }
   const pidPath = getHostFsLayout(environment).pidMetadataFile;
+  // Pending-revision refresh is darwin SMAppService only — no win32 spawn-
+  // evidence extension (T6 owns launchctl-gated authority there).
   const readiness = await waitForHostReady(
     HOST_READY_TIMEOUT_MS,
     pidPath,
     HOST_READY_POLL_MS,
     prePid,
+    {
+      spawnEvidenceBaseline: null,
+      extendedTimeoutMs: HOST_READY_EXTENDED_TIMEOUT_MS,
+    },
   );
   if (!readiness.ready) {
     log.warn(

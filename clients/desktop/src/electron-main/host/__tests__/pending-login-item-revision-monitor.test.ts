@@ -95,6 +95,10 @@ const waitForHostReady: Mock<
     pidPath: string,
     pollIntervalMs: number,
     skipPid: number | null,
+    options: {
+      spawnEvidenceBaseline: unknown;
+      extendedTimeoutMs: number;
+    },
   ) => Promise<HostReadinessResult>
 > = vi.fn();
 const categorizeHostCliError: Mock<(err: unknown) => HostEnsureError> = vi.fn();
@@ -106,6 +110,7 @@ const readServiceLifecycle: Mock<
 vi.mock("../host-readiness", () => ({
   HOST_READY_TIMEOUT_MS: 60_000,
   HOST_READY_POLL_MS: 250,
+  HOST_READY_EXTENDED_TIMEOUT_MS: 5 * 60_000,
   categorizeHostCliError: (err: unknown) => categorizeHostCliError(err),
   readServiceLifecycle: (payload: HostEnsureResultPayload | null | undefined) =>
     readServiceLifecycle(payload),
@@ -114,7 +119,11 @@ vi.mock("../host-readiness", () => ({
     pidPath: string,
     pollIntervalMs: number,
     skipPid: number | null,
-  ) => waitForHostReady(timeoutMs, pidPath, pollIntervalMs, skipPid),
+    options: {
+      spawnEvidenceBaseline: unknown;
+      extendedTimeoutMs: number;
+    },
+  ) => waitForHostReady(timeoutMs, pidPath, pollIntervalMs, skipPid, options),
 }));
 
 const getHostFsLayout: Mock<(environment: Environment) => HostFsLayout> =
