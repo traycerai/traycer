@@ -95,7 +95,7 @@ describe("credentials mutation store", () => {
   });
 
   async function seedSignedIn(store: CredentialsMutationStore): Promise<void> {
-    const result = await store.signIn(CREDS, null);
+    const result = await store.signIn(CREDS, false, null);
     expect(result.outcome).toBe("applied");
   }
 
@@ -255,9 +255,47 @@ describe("credentials mutation store", () => {
       const out = await store.signOut(null);
       expect(out.outcome).toBe("deleted");
       expect(await readCredentialsFile(credentialsPath)).toBeNull();
-      const back = await store.signIn({ ...CREDS, token: "tok-2" }, null);
+      const back = await store.signIn({ ...CREDS, token: "tok-2" }, false, null);
       expect(back.outcome).toBe("applied");
       expect((await readCredentialsFile(credentialsPath))?.token).toBe("tok-2");
+    });
+
+    it("preserveRefreshTokenIfBlank carries over the on-disk refresh token read fresh under the lock", async () => {
+      const store = makeStore(refreshStub(rotateOk).fn);
+      await seedSignedIn(store);
+      const result = await store.signIn(
+        { ...CREDS, token: "tok-2", refreshToken: "" },
+        true,
+        null,
+      );
+      expect(result.outcome).toBe("applied");
+      expect(result.credentials?.refreshToken).toBe(CREDS.refreshToken);
+      expect((await readCredentialsFile(credentialsPath))?.refreshToken).toBe(
+        CREDS.refreshToken,
+      );
+    });
+
+    it("preserveRefreshTokenIfBlank does not resurrect a refresh token when there is no file yet", async () => {
+      const store = makeStore(refreshStub(rotateOk).fn);
+      const result = await store.signIn(
+        { ...CREDS, refreshToken: "" },
+        true,
+        null,
+      );
+      expect(result.outcome).toBe("applied");
+      expect(result.credentials?.refreshToken).toBe("");
+    });
+
+    it("a blank refreshToken is written as-is when preserveRefreshTokenIfBlank is false", async () => {
+      const store = makeStore(refreshStub(rotateOk).fn);
+      await seedSignedIn(store);
+      const result = await store.signIn(
+        { ...CREDS, token: "tok-2", refreshToken: "" },
+        false,
+        null,
+      );
+      expect(result.outcome).toBe("applied");
+      expect(result.credentials?.refreshToken).toBe("");
     });
   });
 
@@ -563,7 +601,7 @@ describe("credentials mutation store", () => {
         }),
       ).rejects.toThrow();
       // Interactive signIn rebuilds the sidecar and proceeds.
-      const back = await store.signIn({ ...CREDS, token: "rebuilt" }, null);
+      const back = await store.signIn({ ...CREDS, token: "rebuilt" }, false, null);
       expect(back.outcome).toBe("applied");
     });
   });
@@ -593,7 +631,7 @@ describe("credentials mutation store", () => {
         expect((await store.read())?.token).toBe("tok-0::r");
         // Unfreeze and let the continuation land the pair.
         chmodSync(workDir, 0o700);
-        const rerun = await store.signIn(CREDS, null);
+        const rerun = await store.signIn(CREDS, false, null);
         // (the interactive signIn's preamble drives the continuation first)
         expect(store.hasPendingContinuation()).toBe(false);
         expect(rerun.outcome).toBe("applied");

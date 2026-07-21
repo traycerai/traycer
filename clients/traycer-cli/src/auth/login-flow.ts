@@ -142,7 +142,7 @@ export async function runDeviceAuthFlow(
   // path with the desktop app. `signIn` is unconditional and clears any
   // tombstone - exactly the semantics an interactive sign-in needs.
   const persisted = await runWithCliStore((store) =>
-    withCommitRetry(() => store.signIn(credentials, null)),
+    withCommitRetry(() => store.signIn(credentials, false, null)),
   );
   if (persisted.outcome !== "applied") {
     throw cliError({

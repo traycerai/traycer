@@ -162,7 +162,7 @@ export class FileTokenStore {
       return;
     }
     try {
-      mkdirSync(this.credentialsDir, { recursive: true });
+      mkdirSync(this.credentialsDir, { recursive: true, mode: 0o700 });
     } catch (error) {
       log.warn(
         "[file-token-store] unable to ensure credentials dir for watch",
@@ -283,7 +283,7 @@ export class FileTokenStore {
         savedAt: new Date().toISOString(),
         user: identity,
       };
-      const result = await this.store.signIn(credentials, null);
+      const result = await this.store.signIn(credentials, false, null);
       if (result.outcome !== "applied") {
         throw new Error(`credentials sign-in did not apply: ${result.outcome}`);
       }

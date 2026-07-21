@@ -67,7 +67,7 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
   // across windows. Same fail-closed `{ token, refreshToken }` parse as signIn.
   bridge.handleInvoke(
     RunnerHostInvoke.authTokenStoreMigrateLegacy,
-    (legacy) => {
+    (_event, legacy: unknown) => {
       return bridge.authTokenStore.migrateLegacyCredentials(
         parseStoredAuthTokens(legacy),
       );

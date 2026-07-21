@@ -106,9 +106,17 @@ export interface CredentialsMutationStore {
     readonly refreshTokenOverride: string | null;
     readonly signal: AbortSignal | null;
   }): Promise<MutationResult>;
-  /** Interactive create/replace (unconditional); clears the tombstone. */
+  /**
+   * Interactive create/replace; clears the tombstone. Unconditional except for
+   * the refresh token: when `credentials.refreshToken` is blank AND
+   * `preserveRefreshTokenIfBlank` is true, the on-disk refresh token (read
+   * fresh under this same lock) is carried over instead of being clobbered to
+   * "" - closing the TOCTOU a caller would otherwise have if it read the
+   * current file before acquiring the lock to build `credentials`.
+   */
   signIn(
     credentials: StoredCredentials,
+    preserveRefreshTokenIfBlank: boolean,
     signal: AbortSignal | null,
   ): Promise<MutationResult>;
   /** Delete under the lock (ENOENT-tolerant); always advances the tombstone. */
@@ -453,24 +461,32 @@ export function createCredentialsMutationStore(
 
   async function signIn(
     credentials: StoredCredentials,
+    preserveRefreshTokenIfBlank: boolean,
     signal: AbortSignal | null,
   ): Promise<MutationResult> {
     return runMutation(
       signal,
       true,
-      async ({ state }): Promise<MutationResult> => {
+      async ({ state, file }): Promise<MutationResult> => {
+        // Resolved under the same lock that performs the write: a caller that
+        // built `credentials` from a pre-lock read (or omits the refresh token
+        // entirely) never races a concurrent rotate for this decision.
+        const resolved: StoredCredentials =
+          credentials.refreshToken.length > 0 || !preserveRefreshTokenIfBlank
+            ? credentials
+            : { ...credentials, refreshToken: file?.refreshToken ?? "" };
         const commit = await commitMutation({
           paths: commitPaths,
           op: "signIn",
-          target: { kind: "write", credentials },
+          target: { kind: "write", credentials: resolved },
           currentState: state,
         });
         // Interactive intent: on a persistent local failure the caller surfaces
         // the error and the user retries - the device-flow pair is re-obtainable,
         // so no background continuation is armed.
         return commit.kind === "committed"
-          ? { outcome: "applied", credentials }
-          : { outcome: "commit-failed", credentials };
+          ? { outcome: "applied", credentials: resolved }
+          : { outcome: "commit-failed", credentials: resolved };
       },
     );
   }

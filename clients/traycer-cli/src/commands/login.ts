@@ -6,7 +6,7 @@ import { runDeviceAuthFlow } from "../auth/login-flow";
 import { config } from "../config";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { CommandFn, CommandResult } from "../runner/runner";
-import { readCredentials, type StoredCredentials } from "../store/credentials";
+import type { StoredCredentials } from "../store/credentials";
 import { runWithCliStore, withCommitRetry } from "../store/credentials-store";
 
 // `traycer login` only authenticates: it opens the browser sign-in and
@@ -134,25 +134,24 @@ function loginWithToken(rawToken: string): CommandFn {
       });
     }
 
-    // A bare-bearer re-seed carries no refresh token (refreshToken ""); KEEP the
-    // refresh token already on disk instead of clobbering it to "", else the
-    // host loses its ability to self-refresh.
-    const finalRefreshToken =
-      refreshToken.length > 0
-        ? refreshToken
-        : ((await readCredentials())?.refreshToken ?? "");
     const user = credentialsIdentityFromAuthenticatedUser(validation.user);
     const credentials: StoredCredentials = {
       token,
-      refreshToken: finalRefreshToken,
+      // A bare-bearer re-seed carries no refresh token (refreshToken ""); the
+      // locked `signIn` KEEPS the refresh token already on disk in that case
+      // instead of clobbering it, else the host loses its ability to
+      // self-refresh. Read fresh under the same lock that performs the write,
+      // so a concurrent rotate can't race this fallback.
+      refreshToken,
       authnBaseUrl,
       savedAt: new Date().toISOString(),
       user,
     };
     // Persist through the locked mutation store (§7); `signIn` is unconditional
-    // and clears any tombstone - the interactive re-seed semantics.
+    // (aside from the refresh-token preservation above) and clears any
+    // tombstone - the interactive re-seed semantics.
     const persisted = await runWithCliStore((store) =>
-      withCommitRetry(() => store.signIn(credentials, null)),
+      withCommitRetry(() => store.signIn(credentials, true, null)),
     );
     if (persisted.outcome !== "applied") {
       ctx.runtime.logger.warn("Token login credentials persist failed", {
@@ -170,7 +169,8 @@ function loginWithToken(rawToken: string): CommandFn {
     ctx.runtime.logger.info("Token login credentials persisted", {
       environment: ctx.runtime.environment,
       refreshTokenFromStdin: refreshToken.length > 0,
-      hasFinalRefreshToken: finalRefreshToken.length > 0,
+      hasFinalRefreshToken:
+        (persisted.credentials?.refreshToken.length ?? 0) > 0,
     });
     return {
       data: { user, bootstrap: null },

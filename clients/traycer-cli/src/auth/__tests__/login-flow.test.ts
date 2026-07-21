@@ -162,8 +162,11 @@ describe("runDeviceAuthFlow", () => {
       email: "ada@traycer.ai",
       name: "Ada",
     });
-    // `signIn` is unconditional (clears any tombstone) — an interactive sign-in.
-    expect(signInMock.mock.calls[0][1]).toBeNull();
+    // `signIn` is unconditional (clears any tombstone) — an interactive sign-in
+    // always carries a fresh refresh token, so it never asks the locked store
+    // to preserve the on-disk one.
+    expect(signInMock.mock.calls[0][1]).toBe(false);
+    expect(signInMock.mock.calls[0][2]).toBeNull();
     expect(result).toEqual({
       token: "minted-bearer",
       user: { id: "u1", email: "ada@traycer.ai", name: "Ada" },

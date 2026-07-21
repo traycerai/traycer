@@ -1836,9 +1836,9 @@ export class AuthService {
    * preserve the same identity shape that host-minted contexts already
    * carry.
    *
-   * Refresh-on-401 behaviour is owned by the helper: a single refresh
-   * attempt is made before a terminal `rejected` / `network-error` result
-   * is returned, and a successful refresh is reported via `refreshedToken`.
+   * Access-only (§3): validates the bearer without spending. A stale/expired
+   * token returns `rejected`; the refresh spend is owned exclusively by the
+   * locked `rotate` path, never here.
    */
   private validateToken(token: string): Promise<ValidationOutcome> {
     return this.runnerHost.validateAuthTokenIdentity(token);

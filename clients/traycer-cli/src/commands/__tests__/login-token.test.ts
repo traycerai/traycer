@@ -7,7 +7,6 @@ import { noopLogger } from "../../logger";
 import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
 import { validateAuthTokenIdentityAccessOnly } from "../../../../shared/auth/auth-validation";
 import { createAuthenticatedUserFixture } from "../../../../shared/test-fixtures/authenticated-user";
-import { readCredentials } from "../../store/credentials";
 
 // `login --token -` is access-only + fail-fast (§7): validate the piped access
 // token WITHOUT a refresh fallback, then persist through the locked store. Keep
@@ -42,10 +41,6 @@ vi.mock("../../../../shared/auth/auth-validation", async (importOriginal) => {
   return { ...actual, validateAuthTokenIdentityAccessOnly: vi.fn() };
 });
 
-vi.mock("../../store/credentials", () => ({
-  readCredentials: vi.fn(),
-}));
-
 vi.mock("../../store/credentials-store", () => ({
   createCliCredentialsStore: () => fakeStore,
   runWithCliStore: (fn: (store: unknown) => unknown) => fn(fakeStore),
@@ -53,7 +48,6 @@ vi.mock("../../store/credentials-store", () => ({
 }));
 
 const identityMock = vi.mocked(validateAuthTokenIdentityAccessOnly);
-const readMock = vi.mocked(readCredentials);
 
 function makeRuntime(overrides: Partial<RuntimeContext>): RuntimeContext {
   return {
@@ -105,8 +99,6 @@ function stubStdin(value: { isTTY: boolean; chunks: string[] }): void {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  // Default: no credentials on disk yet.
-  readMock.mockResolvedValue(null);
   identityMock.mockResolvedValue({ kind: "valid", user: signedInUser });
   signInMock.mockResolvedValue({ outcome: "applied", credentials: null });
 });
@@ -175,18 +167,18 @@ describe("buildLoginCommand with --token", () => {
 
     expect(identityMock).toHaveBeenCalledWith(expect.any(String), "bearer");
     expect(signInMock.mock.calls[0][0].refreshToken).toBe("new-refresh");
+    // Always requested even when a fresh refresh token is present - it only
+    // takes effect on a blank one - so the CLI need not branch on this.
+    expect(signInMock.mock.calls[0][1]).toBe(true);
   });
 
-  it("keeps the on-disk refresh token when the stdin payload carries none", async () => {
-    // Empty paired refresh token must NOT wipe the refresh token already
-    // persisted (a bare-bearer re-seed treats `""` as "leave refresh alone").
-    readMock.mockResolvedValue({
-      token: "old-bearer",
-      refreshToken: "persisted-refresh",
-      authnBaseUrl: "https://authn.example",
-      savedAt: "2026-01-01T00:00:00.000Z",
-      user: { id: "u1", email: "ada@traycer.ai", name: "Ada" },
-    });
+  it("signs in with a blank refresh token + preserveRefreshTokenIfBlank when the stdin payload carries none", async () => {
+    // A bare-bearer re-seed must NOT resolve "keep the on-disk refresh token"
+    // itself (that pre-lock read/write raced a concurrent rotate); it hands the
+    // empty string plus `preserveRefreshTokenIfBlank: true` to the locked
+    // `signIn`, which resolves it under the same lock that performs the write.
+    // The actual preservation mechanics are covered at the store level in
+    // credentials-mutation.test.ts.
     stubStdin({
       isTTY: false,
       chunks: [JSON.stringify({ token: "rotated-bearer", refreshToken: "" })],
@@ -195,7 +187,8 @@ describe("buildLoginCommand with --token", () => {
     await fn(makeCtx(makeRuntime({})));
 
     expect(signInMock.mock.calls[0][0].token).toBe("rotated-bearer");
-    expect(signInMock.mock.calls[0][0].refreshToken).toBe("persisted-refresh");
+    expect(signInMock.mock.calls[0][0].refreshToken).toBe("");
+    expect(signInMock.mock.calls[0][1]).toBe(true);
   });
 
   it("surfaces a persistence failure (UNEXPECTED) when the store cannot commit", async () => {

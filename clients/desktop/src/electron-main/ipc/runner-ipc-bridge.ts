@@ -334,7 +334,7 @@ export interface RunnerIpcOptions {
   readonly authRedirectUri: string | null;
   // Absent in tests / the single-window shell: defaults to a null store. The
   // real desktop startup always injects a `FileTokenStore`.
-  readonly authTokenStore?: IpcAuthTokenStore;
+  readonly authTokenStore: IpcAuthTokenStore | undefined;
   readonly tray: DesktopTrayController | null;
   readonly window: IpcManagedWindow;
   readonly zoomController: IpcZoomController | undefined;
@@ -345,7 +345,7 @@ export interface RunnerIpcRegistryOptions {
   readonly hostController: IpcHostController;
   readonly authnBaseUrl: string;
   readonly authRedirectUri: string | null;
-  readonly authTokenStore?: IpcAuthTokenStore;
+  readonly authTokenStore: IpcAuthTokenStore | undefined;
   readonly tray: DesktopTrayController | null;
   readonly windowRegistry: IpcWindowRegistry;
   readonly ownership: IpcEpicWindowOwnership;
