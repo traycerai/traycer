@@ -77,6 +77,7 @@ export type AnalyticsHarness =
   | "devin"
   | "droid"
   | "grok"
+  | "hermes"
   | "kilocode"
   | "kimi"
   | "kiro"
@@ -159,6 +160,7 @@ export type AnalyticsProvider =
   | "devin"
   | "droid"
   | "grok"
+  | "hermes"
   | "kilocode"
   | "kimi"
   | "kiro"
@@ -833,6 +835,7 @@ const ANALYTICS_HARNESSES = new Set<string>([
   "devin",
   "droid",
   "grok",
+  "hermes",
   "kilocode",
   "kimi",
   "kiro",
@@ -852,6 +855,7 @@ const ANALYTICS_PROVIDERS = new Set<string>([
   "devin",
   "droid",
   "grok",
+  "hermes",
   "kilocode",
   "kimi",
   "kiro",
