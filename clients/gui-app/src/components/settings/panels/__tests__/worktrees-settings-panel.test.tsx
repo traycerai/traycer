@@ -35,6 +35,11 @@ import { __resetWorktreeDeleteRunForTests } from "@/components/settings/panels/u
 import { hostQueryKeys } from "@/lib/query-keys";
 import { WORKTREE_BINDING_INVALIDATIONS } from "@/hooks/worktree/invalidations";
 import {
+  DEFAULT_WORKTREE_SORT_MODE,
+  EMPTY_WORKTREE_TIER_FILTERS,
+  useWorktreesSettingsViewStore,
+} from "@/stores/settings/worktrees-settings-view-store";
+import {
   installWorktreeVirtualizerOffsetHeight,
   WORKTREE_TEST_VIRTUAL_ITEM_HEIGHT,
 } from "./worktrees-virtualizer-test-utils";
@@ -291,6 +296,11 @@ let virtualViewportHeight = 100_000;
 let restoreOffsetHeight: (() => void) | null = null;
 
 beforeEach(() => {
+  useWorktreesSettingsViewStore.setState({
+    searchText: "",
+    sortMode: DEFAULT_WORKTREE_SORT_MODE,
+    tierFilters: EMPTY_WORKTREE_TIER_FILTERS,
+  });
   virtualViewportHeight = 100_000;
   restoreOffsetHeight = installWorktreeVirtualizerOffsetHeight(
     () => virtualViewportHeight,
@@ -3047,6 +3057,62 @@ describe("WorktreesList v1.2 signals", () => {
       "Delete worktree feat-new",
       "Delete worktree feat-unknown",
     ]);
+  });
+
+  it("restores search, tier filters, and sort order after the panel remounts", () => {
+    const worktrees = [
+      entry({
+        worktreePath: "/wt/merged",
+        branch: "feat-merged",
+        createdAt: 2_000,
+        branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+      }),
+      entry({
+        worktreePath: "/wt/review",
+        branch: "feat-review",
+        createdAt: 1_000,
+        branchStatus: { ahead: 2, behind: 0, mergedIntoDefault: false },
+      }),
+    ];
+    const rendered = renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees,
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      seededPaths: undefined,
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
+    });
+
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search worktrees" }),
+      { target: { value: "feat-merged" } },
+    );
+    fireEvent.click(screen.getByTestId("worktrees-filter-merged"));
+    fireEvent.click(screen.getByTestId("worktrees-sort-oldest"));
+
+    rendered.unmount();
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees,
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      seededPaths: undefined,
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
+    });
+
+    const restoredSearch = screen.getByRole("searchbox", {
+      name: "Search worktrees",
+    });
+    if (!(restoredSearch instanceof HTMLInputElement)) {
+      throw new Error("expected the worktree search control to be an input");
+    }
+    expect(restoredSearch.value).toBe("feat-merged");
+    screen.getByRole("button", { name: "Filter: Landed" });
+    screen.getByRole("button", { name: "Sort: Oldest" });
   });
 
   it("keeps distinct labels for all three green tiers: Landed, At base commit, Unreferenced", () => {
