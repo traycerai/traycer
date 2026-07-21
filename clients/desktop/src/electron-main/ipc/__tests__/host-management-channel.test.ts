@@ -1339,6 +1339,109 @@ describe("host-management IPC - exact host update target safety", () => {
 });
 
 describe("host-management IPC - single-flight guard on concurrent host mutations", () => {
+  it("settles a real ensure reservation atomically with its retained outcome", async () => {
+    installFakeCli({ runResult: {}, streamResult: {} });
+    const mgmt = await import("../host-management-ipc");
+    const bridge = makeBridge();
+    const reservation = mgmt.reserveHostOperation(
+      bridge as never,
+      "ensure",
+      "op-real-seam",
+    );
+    const activeRevision = mgmt.getHostOperationStatus().revision;
+
+    mgmt.releaseHostOperation(reservation, {
+      operationId: "op-real-seam",
+      result: {
+        action: "already-ready",
+        running: true,
+        version: "1.7.0",
+      },
+      busyHostPid: null,
+    });
+
+    expect(mgmt.getHostOperationStatus()).toEqual({
+      revision: activeRevision + 1,
+      status: null,
+      lastEnsureOutcome: {
+        operationId: "op-real-seam",
+        revision: activeRevision + 1,
+        result: {
+          action: "already-ready",
+          running: true,
+          version: "1.7.0",
+        },
+        busyHostPid: null,
+      },
+    });
+  });
+
+  it("invalidates a retained ensure outcome before every untracked host mutation", async () => {
+    installFakeCli({ runResult: {}, streamResult: {} });
+    vi.doMock("../../host/host-removal-state", () => ({
+      clearHostRemovedByUser: vi.fn().mockResolvedValue(undefined),
+      isHostRemovedByUser: vi.fn().mockResolvedValue(false),
+      markHostRemovedByUser: vi.fn().mockResolvedValue(undefined),
+    }));
+    vi.doMock("../../app/host-login-item", () => ({
+      hostManagesHostLoginItem: vi.fn().mockResolvedValue(false),
+      unregisterHostLoginItem: vi.fn().mockResolvedValue(undefined),
+    }));
+    const mgmt = await import("../host-management-ipc");
+    const { RunnerHostInvoke } =
+      await import("../../../ipc-contracts/ipc-channels");
+    const bridge = makeBridge();
+    mgmt.registerHostManagementIpc(bridge as never);
+
+    const retainEnsureOutcome = (operationId: string): number => {
+      const reservation = mgmt.reserveHostOperation(
+        bridge as never,
+        "ensure",
+        operationId,
+      );
+      mgmt.releaseHostOperation(reservation, {
+        operationId,
+        result: {
+          action: "already-ready",
+          running: true,
+          version: "1.7.0",
+        },
+        busyHostPid: null,
+      });
+      return mgmt.getHostOperationStatus().revision;
+    };
+
+    const expectInvalidated = async (
+      operationId: string,
+      mutate: () => Promise<unknown>,
+    ): Promise<void> => {
+      const retainedRevision = retainEnsureOutcome(operationId);
+      await mutate();
+      expect(mgmt.getHostOperationStatus()).toMatchObject({
+        status: null,
+        lastEnsureOutcome: null,
+      });
+      expect(mgmt.getHostOperationStatus().revision).toBeGreaterThan(
+        retainedRevision,
+      );
+    };
+
+    await expectInvalidated("op-uninstall", () =>
+      bridge.handlers.get(RunnerHostInvoke.traycerHostUninstall)!(null, {
+        all: true,
+      }),
+    );
+    await expectInvalidated("op-app-uninstall", () =>
+      bridge.handlers.get(RunnerHostInvoke.traycerAppUninstall)!(null, null),
+    );
+    await expectInvalidated("op-service-deregister", () =>
+      bridge.handlers.get(RunnerHostInvoke.traycerServiceDeregister)!(
+        null,
+        null,
+      ),
+    );
+  });
+
   it("rejects a second concurrent host update without spawning a second CLI subprocess", async () => {
     writeOlderInstalledHost("production");
     const fake = installFakeCliWithDeferredStream();
@@ -1429,11 +1532,19 @@ describe("host-management IPC - single-flight guard on concurrent host mutations
       bridge.fanOut.mock.calls.filter(
         ([channel]) => channel === RunnerHostEvent.hostOperationStatusChange,
       );
-    expect(statusCalls()[0]?.[1]).toMatchObject({
-      kind: "update",
-      percent: null,
+    const startEnvelope = statusCalls()[0]?.[1] as {
+      readonly revision: number;
+      readonly status: { readonly kind: string; readonly percent: number | null };
+    };
+    expect(startEnvelope).toMatchObject({
+      status: { kind: "update", percent: null },
     });
-    expect(mgmt.getHostOperationStatus()).toMatchObject({ kind: "update" });
+    expect(startEnvelope.revision).toBeGreaterThan(0);
+    expect(mgmt.getHostOperationStatus()).toMatchObject({
+      revision: startEnvelope.revision,
+      status: { kind: "update" },
+      lastEnsureOutcome: null,
+    });
 
     fake.resolveStream({
       version: "1.7.0",
@@ -1449,15 +1560,36 @@ describe("host-management IPC - single-flight guard on concurrent host mutations
     // The deferred stream fixture fires one progress tick right before
     // resolving - assert it landed before the terminal null.
     const afterSettle = statusCalls();
-    const progressCall = afterSettle.find(
-      ([, payload]) =>
-        payload !== null &&
-        typeof payload === "object" &&
-        (payload as { percent: number | null }).percent === 50,
-    );
+    const progressCall = afterSettle.find(([, payload]) => {
+      if (payload === null || typeof payload !== "object") return false;
+      const status = (payload as { status: { percent: number | null } | null })
+        .status;
+      return status !== null && status.percent === 50;
+    });
     expect(progressCall).toBeDefined();
-    expect(afterSettle[afterSettle.length - 1]?.[1]).toBeNull();
-    expect(mgmt.getHostOperationStatus()).toBeNull();
+    const settleEnvelope = afterSettle[afterSettle.length - 1]?.[1] as {
+      readonly revision: number;
+      readonly status: null;
+      readonly lastEnsureOutcome: null;
+    };
+    expect(settleEnvelope).toMatchObject({
+      status: null,
+      lastEnsureOutcome: null,
+    });
+    expect(settleEnvelope.revision).toBeGreaterThan(startEnvelope.revision);
+    // Every pushed envelope revision is strictly monotonic.
+    const revisions = afterSettle.map(([, payload]) => {
+      expect(payload).toEqual(expect.objectContaining({ revision: expect.any(Number) }));
+      return (payload as { revision: number }).revision;
+    });
+    for (let i = 1; i < revisions.length; i += 1) {
+      expect(revisions[i]).toBeGreaterThan(revisions[i - 1]!);
+    }
+    expect(mgmt.getHostOperationStatus()).toMatchObject({
+      revision: settleEnvelope.revision,
+      status: null,
+      lastEnsureOutcome: null,
+    });
   });
 
   it("a failed operation still clears the status so a retry isn't permanently blocked", async () => {
@@ -1477,7 +1609,7 @@ describe("host-management IPC - single-flight guard on concurrent host mutations
     fake.rejectStream(new Error("network unreachable"));
     await expect(updatePromise).rejects.toThrow(/network unreachable/);
 
-    expect(mgmt.getHostOperationStatus()).toBeNull();
+    expect(mgmt.getHostOperationStatus().status).toBeNull();
     // A subsequent attempt is allowed through - the failed op didn't wedge
     // the guard. Reuses the same fake CLI: each `streamTraycerCliJson` call
     // creates a fresh deferred promise, so `resolveStream` below settles
@@ -1487,7 +1619,9 @@ describe("host-management IPC - single-flight guard on concurrent host mutations
     )!;
     const retry = retryHandler(null, { operationId: "op-retry" });
     await waitForStreamCallCount(fake, 2);
-    expect(mgmt.getHostOperationStatus()).toMatchObject({ kind: "update" });
+    expect(mgmt.getHostOperationStatus()).toMatchObject({
+      status: { kind: "update" },
+    });
     fake.resolveStream({
       version: "1.7.0",
       installedAt: "2026-05-15T00:00:00Z",
@@ -1513,13 +1647,15 @@ describe("host-management IPC - single-flight guard on concurrent host mutations
     const statusHandler = bridge.handlers.get(
       RunnerHostInvoke.traycerHostOperationStatusGet,
     )!;
-    expect(await statusHandler(null, null)).toBeNull();
+    expect(await statusHandler(null, null)).toMatchObject({ status: null });
 
     const updatePromise = bridge.handlers.get(
       RunnerHostInvoke.traycerHostUpdate,
     )!(null, { operationId: "op-update" });
     await waitForStreamCallCount(fake, 1);
-    expect(await statusHandler(null, null)).toMatchObject({ kind: "update" });
+    expect(await statusHandler(null, null)).toMatchObject({
+      status: { kind: "update" },
+    });
 
     fake.resolveStream({
       version: "1.7.0",
@@ -1531,7 +1667,7 @@ describe("host-management IPC - single-flight guard on concurrent host mutations
       sizeBytes: 0,
     });
     await updatePromise;
-    expect(await statusHandler(null, null)).toBeNull();
+    expect(await statusHandler(null, null)).toMatchObject({ status: null });
   });
 
   // Cold-review finding 5: operation reservation covers registry/capability
@@ -1570,8 +1706,7 @@ describe("host-management IPC - single-flight guard on concurrent host mutations
     const first = updateHandler(null, { operationId: "op-prework-first" });
     await capabilityEntered;
     expect(mgmt.getHostOperationStatus()).toMatchObject({
-      kind: "update",
-      operationId: "op-prework-first",
+      status: { kind: "update", operationId: "op-prework-first" },
     });
     // Still in prework - stream has not started.
     expect(operationStreamCalls(fake.calls)).toHaveLength(0);
@@ -2187,7 +2322,7 @@ describe("host-management IPC - app-facing stable/RC-only lists and installs", (
     // Rejected before clearHostRemoval / runHostOperation / streamCliWithProgress.
     expect(operationStreamCalls(fake.calls)).toHaveLength(0);
     expect(fake.calls.filter((c) => c.kind === "run")).toHaveLength(0);
-    expect(mgmt.getHostOperationStatus()).toBeNull();
+    expect(mgmt.getHostOperationStatus().status).toBeNull();
     expect(
       bridge.fanOut.mock.calls.filter(
         ([channel]) => channel === RunnerHostEvent.hostOperationStatusChange,
@@ -2651,8 +2786,7 @@ describe("host-management IPC - final admission hardening", () => {
     });
     await availableEntered;
     expect(mgmt.getHostOperationStatus()).toMatchObject({
-      kind: "install",
-      operationId: "op-install-prework-first",
+      status: { kind: "install", operationId: "op-install-prework-first" },
     });
     expect(operationStreamCalls(calls)).toHaveLength(0);
 
@@ -2785,28 +2919,29 @@ describe("host-management IPC - restart routes through the canonical operation-s
     const statusHandler = bridge.handlers.get(
       RunnerHostInvoke.traycerHostOperationStatusGet,
     )!;
-    expect(await statusHandler(null, null)).toBeNull();
+    expect(await statusHandler(null, null)).toMatchObject({ status: null });
 
     const restartPromise = bridge.handlers.get(
       RunnerHostInvoke.traycerHostRestart,
     )!(null, null);
     await waitForStreamCallCount(fake, 1);
 
-    expect(await statusHandler(null, null)).toMatchObject({ kind: "restart" });
+    expect(await statusHandler(null, null)).toMatchObject({
+      status: { kind: "restart" },
+    });
     const statusCalls = () =>
       bridge.fanOut.mock.calls.filter(
         ([channel]) => channel === RunnerHostEvent.hostOperationStatusChange,
       );
     expect(statusCalls()[0]?.[1]).toMatchObject({
-      kind: "restart",
-      percent: null,
+      status: { kind: "restart", percent: null },
     });
 
     fake.resolveStream({});
     await restartPromise;
 
-    expect(mgmt.getHostOperationStatus()).toBeNull();
-    expect(await statusHandler(null, null)).toBeNull();
+    expect(mgmt.getHostOperationStatus().status).toBeNull();
+    expect(await statusHandler(null, null)).toMatchObject({ status: null });
   });
 
   it("rejects a second concurrent host operation while a restart is in flight, without spawning a second CLI subprocess", async () => {

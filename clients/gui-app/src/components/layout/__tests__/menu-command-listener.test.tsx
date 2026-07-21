@@ -598,7 +598,11 @@ describe("<MenuCommandListener />", () => {
       ),
       deregisterService: vi.fn(() => Promise.resolve()),
       registryCheck: vi.fn(() => Promise.reject(new Error("not used"))),
-      getOperationStatus: vi.fn(() => Promise.resolve(null)),
+      getOperationStatus: vi.fn(() => Promise.resolve({
+  revision: 0,
+  status: null,
+  lastEnsureOutcome: null,
+})),
       freePortAndRestart: vi.fn(() => Promise.reject(new Error("not used"))),
       cliManifest: vi.fn(() => Promise.resolve(null)),
       getHostName: vi.fn(() =>

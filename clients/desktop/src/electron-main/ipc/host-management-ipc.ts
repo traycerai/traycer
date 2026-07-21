@@ -30,11 +30,14 @@ import type {
   HostAvailableSnapshot,
   HostAvailableVersionEntry,
   HostDoctorReport,
+  HostEnsureIpcResult,
+  HostEnsureOutcome,
   HostInstallResult,
   HostInstalledRecord,
   HostLogsTailResult,
   HostOperationKind,
   HostOperationStatus,
+  HostOperationStatusEnvelope,
   HostProgressEvent,
   HostRegistryUpdateState,
   HostRemovalState,
@@ -294,9 +297,35 @@ function nullableString(raw: unknown, key: string): string | null {
  * separate process (a terminal `traycer host update` racing the desktop) -
  * not the mechanism the UI relies on for correctness.
  */
-let currentOperationStatus: HostOperationStatus | null = null;
+let currentOperationStatus: HostOperationStatusEnvelope = {
+  revision: 0,
+  status: null,
+  lastEnsureOutcome: null,
+};
 
 export type HostOperationEventListener = (event: NdjsonEvent) => void;
+
+type PendingEnsureOutcome =
+  | {
+      readonly operationId: string;
+      readonly result: HostEnsureIpcResult;
+      readonly busyHostPid: number | null;
+    }
+  | {
+      readonly operationId: string;
+      readonly error: {
+        readonly message: string;
+        readonly code: string | null;
+      };
+    }
+  | null;
+
+export interface HostOperationReservation {
+  readonly bridge: RunnerIpcBridge;
+  readonly operationId: string;
+  readonly kind: HostOperationKind;
+  readonly startedAt: string;
+}
 
 export interface HostUpdateAdmission {
   readonly targetVersion: string;
@@ -308,16 +337,162 @@ export function captureHostUpdateChannel(): UpdateChannelSnapshot {
   return getUpdateChannelSnapshot();
 }
 
-export function getHostOperationStatus(): HostOperationStatus | null {
+export function getHostOperationStatus(): HostOperationStatusEnvelope {
   return currentOperationStatus;
+}
+
+/** Test-only: module envelope state would otherwise leak across cases. */
+export function resetHostOperationStatusForTests(): void {
+  currentOperationStatus = {
+    revision: 0,
+    status: null,
+    lastEnsureOutcome: null,
+  };
 }
 
 function setHostOperationStatus(
   bridge: RunnerIpcBridge,
   status: HostOperationStatus | null,
+  pendingEnsureOutcome: PendingEnsureOutcome,
+): HostOperationStatusEnvelope {
+  const revision = currentOperationStatus.revision + 1;
+  const lastEnsureOutcome: HostEnsureOutcome =
+    pendingEnsureOutcome === null
+      ? null
+      : "result" in pendingEnsureOutcome
+        ? {
+            operationId: pendingEnsureOutcome.operationId,
+            revision,
+            result: pendingEnsureOutcome.result,
+            busyHostPid: pendingEnsureOutcome.busyHostPid,
+          }
+        : {
+            operationId: pendingEnsureOutcome.operationId,
+            revision,
+            error: pendingEnsureOutcome.error,
+          };
+  currentOperationStatus = { revision, status, lastEnsureOutcome };
+  bridge.fanOut(
+    RunnerHostEvent.hostOperationStatusChange,
+    currentOperationStatus,
+  );
+  return currentOperationStatus;
+}
+
+export function reserveHostOperation(
+  bridge: RunnerIpcBridge,
+  kind: HostOperationKind,
+  operationId: string,
+): HostOperationReservation {
+  if (currentOperationStatus.status !== null) {
+    throw new Error(
+      `Another host operation (${currentOperationStatus.status.kind}) is already in progress`,
+    );
+  }
+  const reservation: HostOperationReservation = {
+    bridge,
+    operationId,
+    kind,
+    startedAt: new Date().toISOString(),
+  };
+  setHostOperationStatus(
+    bridge,
+    {
+      operationId,
+      kind,
+      stage: null,
+      percent: null,
+      bytes: null,
+      totalBytes: null,
+      message: null,
+      startedAt: reservation.startedAt,
+    },
+    null,
+  );
+  return reservation;
+}
+
+function currentStatusForReservation(
+  reservation: HostOperationReservation,
+): HostOperationStatus {
+  const status = currentOperationStatus.status;
+  if (status === null || status.operationId !== reservation.operationId) {
+    throw new Error("Host operation reservation was lost before it completed");
+  }
+  return status;
+}
+
+function publishHostOperationProgress(
+  reservation: HostOperationReservation,
+  event: NdjsonEvent,
 ): void {
-  currentOperationStatus = status;
-  bridge.fanOut(RunnerHostEvent.hostOperationStatusChange, status);
+  if (event.type !== "progress") return;
+  if (
+    currentOperationStatus.status === null ||
+    currentOperationStatus.status.operationId !== reservation.operationId
+  ) {
+    return;
+  }
+  const payload: HostProgressEvent = {
+    operationId: reservation.operationId,
+    stage: event.stage,
+    percent: event.percent,
+    bytes: event.bytes,
+    totalBytes: event.totalBytes,
+    message: event.message,
+  };
+  reservation.bridge.fanOut(RunnerHostEvent.cliOperationProgress, payload);
+  setHostOperationStatus(
+    reservation.bridge,
+    {
+      operationId: reservation.operationId,
+      kind: reservation.kind,
+      stage: event.stage,
+      percent: event.percent,
+      bytes: event.bytes,
+      totalBytes: event.totalBytes,
+      message: event.message,
+      startedAt: reservation.startedAt,
+    },
+    null,
+  );
+}
+
+export function publishHostOperationStage(
+  reservation: HostOperationReservation,
+  stage: string,
+): void {
+  const status = currentStatusForReservation(reservation);
+  setHostOperationStatus(
+    reservation.bridge,
+    {
+      ...status,
+      stage,
+      percent: null,
+      bytes: null,
+      totalBytes: null,
+      message: null,
+    },
+    null,
+  );
+}
+
+export function releaseHostOperation(
+  reservation: HostOperationReservation,
+  pendingEnsureOutcome: PendingEnsureOutcome,
+): void {
+  currentStatusForReservation(reservation);
+  setHostOperationStatus(reservation.bridge, null, pendingEnsureOutcome);
+}
+
+/**
+ * Short-lived host mutations that do not expose canonical progress still
+ * invalidate a retained ensure result before touching host state. A late
+ * join-only ensure must never replay a result from before an uninstall or
+ * service deregistration.
+ */
+export function clearRetainedEnsureOutcome(bridge: RunnerIpcBridge): void {
+  setHostOperationStatus(bridge, currentOperationStatus.status, null);
 }
 
 /**
@@ -333,50 +508,15 @@ async function trackHostOperation<T>(
   operationId: string,
   run: (onEvent: HostOperationEventListener) => Promise<T>,
 ): Promise<T> {
-  if (currentOperationStatus !== null) {
-    throw new Error(
-      `Another host operation (${currentOperationStatus.kind}) is already in progress`,
-    );
-  }
-  const startedAt = new Date().toISOString();
-  setHostOperationStatus(bridge, {
-    operationId,
-    kind,
-    stage: null,
-    percent: null,
-    bytes: null,
-    totalBytes: null,
-    message: null,
-    startedAt,
-  });
-  const onEvent = (event: NdjsonEvent): void => {
-    if (event.type !== "progress") return;
-    const payload: HostProgressEvent = {
-      operationId,
-      stage: event.stage,
-      percent: event.percent,
-      bytes: event.bytes,
-      totalBytes: event.totalBytes,
-      message: event.message,
-    };
-    bridge.fanOut(RunnerHostEvent.cliOperationProgress, payload);
-    setHostOperationStatus(bridge, {
-      operationId,
-      kind,
-      stage: event.stage,
-      percent: event.percent,
-      bytes: event.bytes,
-      totalBytes: event.totalBytes,
-      message: event.message,
-      startedAt,
-    });
-  };
+  const reservation = reserveHostOperation(bridge, kind, operationId);
   try {
-    return await run(onEvent);
+    return await run((event) =>
+      publishHostOperationProgress(reservation, event),
+    );
   } finally {
     // Always clears, success or failure, so a rejected operation never
     // leaves every surface permanently disabled.
-    setHostOperationStatus(bridge, null);
+    releaseHostOperation(reservation, null);
   }
 }
 
@@ -418,6 +558,23 @@ function streamCliWithinOperation(
     timeoutMs,
     invocation,
   }).then((result: { readonly data: unknown }) => result.data);
+}
+
+/**
+ * Streams CLI progress into an already-held host-operation reservation. This
+ * intentionally does not call `trackHostOperation`: whole-ensure tracking
+ * reserves before any native lifecycle work and releases only after readiness.
+ */
+export function streamCliWithinReservedOperation(
+  args: readonly string[],
+  timeoutMs: number,
+  invocation: TraycerCliInvocation | null,
+  reservation: HostOperationReservation,
+): Promise<unknown> {
+  currentStatusForReservation(reservation);
+  return streamCliWithinOperation(args, timeoutMs, invocation, (event) =>
+    publishHostOperationProgress(reservation, event),
+  );
 }
 
 // The CLI's internal network watchdog permits a 30s silent period plus a
@@ -476,7 +633,7 @@ function isAppHostVersionAllowed(
 }
 
 function assertHostOperationReservation(operationId: string): void {
-  if (currentOperationStatus?.operationId !== operationId) {
+  if (currentOperationStatus.status?.operationId !== operationId) {
     throw new Error("Host update operation admission was lost before spawn");
   }
 }
@@ -1433,6 +1590,7 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
       const all = optionalBoolean(raw, "all");
       const args = ["host", "uninstall"];
       if (all) args.push("--all");
+      clearRetainedEnsureOutcome(bridge);
       const data = await runTraycerCliJson<unknown>(args);
       return projectUninstallResult(data, { all });
     },
@@ -1449,6 +1607,7 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
   //      remove the host install. `~/.traycer` user data is never touched
   //      (the CLI has no purge path by design).
   bridge.handleInvoke(RunnerHostInvoke.traycerAppUninstall, async () => {
+    clearRetainedEnsureOutcome(bridge);
     await markHostRemovedByUser();
 
     let removedLoginItem = false;
@@ -1605,6 +1764,7 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
   );
 
   bridge.handleInvoke(RunnerHostInvoke.traycerServiceDeregister, async () => {
+    clearRetainedEnsureOutcome(bridge);
     await runTraycerCliJson<unknown>(["host", "service", "uninstall"]);
   });
 

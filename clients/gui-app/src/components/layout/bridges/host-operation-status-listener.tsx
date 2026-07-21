@@ -1,5 +1,7 @@
 import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import type { HostOperationStatusEnvelope } from "@traycer-clients/shared/platform/runner-host";
+import { selectNewestHostOperationStatusEnvelope } from "@/hooks/runner/use-runner-host-operation-status-query";
 import { runnerQueryKeys } from "@/lib/query-keys/runner-mutation-keys";
 import { resolveDesktopHostOperationStatusBridge } from "@/lib/windows/desktop-capabilities";
 import { useRunnerHost } from "@/providers/use-runner-host";
@@ -21,10 +23,11 @@ export function HostOperationStatusListener(): null {
     if (management === null) return;
     const bridge = resolveDesktopHostOperationStatusBridge(runnerHost);
     if (bridge === null) return;
-    const subscription = bridge.onChange((status) => {
-      queryClient.setQueryData(
+    const subscription = bridge.onChange((envelope) => {
+      queryClient.setQueryData<HostOperationStatusEnvelope>(
         runnerQueryKeys.hostOperationStatus(management),
-        status,
+        (previous) =>
+          selectNewestHostOperationStatusEnvelope(previous, envelope),
       );
     });
     return () => {

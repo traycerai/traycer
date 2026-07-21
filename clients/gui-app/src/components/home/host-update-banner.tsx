@@ -98,8 +98,9 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
   // open window via the same query key, so the button here disables and
   // shows progress whether THIS banner, Settings, or the background
   // auto-update reconciler is the one actually driving the update.
-  const { data: operationStatus } =
+  const { data: operationEnvelope } =
     useRunnerHostOperationStatusQuery(management);
+  const operationStatus = operationEnvelope?.status;
   const sharedOperationActive =
     operationStatus !== undefined && operationStatus !== null;
   const sharedPercent =

@@ -81,8 +81,9 @@ function HostDoctorCardInner(props: HostDoctorCardInnerProps) {
   // fix racing a tracked restart-class operation interleaves two independent
   // stop/kill/start sequences (worst on Windows, where one can kill the
   // other's freshly started host).
-  const { data: operationStatus } =
+  const { data: operationEnvelope } =
     useRunnerHostOperationStatusQuery(management);
+  const operationStatus = operationEnvelope?.status;
   // Fail closed while the initial status read is unresolved: `null` is the
   // only authoritative idle state. Otherwise Doctor could briefly enable a
   // destructive fix while another surface's operation is still being read.

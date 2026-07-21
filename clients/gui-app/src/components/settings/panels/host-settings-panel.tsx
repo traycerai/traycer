@@ -182,8 +182,9 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
   // auto-update reconciler) actually started the operation - so this panel no
   // longer needs its own per-mutation `onProgress` callback or local
   // `progress` state.
-  const { data: operationStatus } =
+  const { data: operationEnvelope } =
     useRunnerHostOperationStatusQuery(management);
+  const operationStatus = operationEnvelope?.status;
   const sharedOperationActive =
     operationStatus !== undefined && operationStatus !== null;
   const progress: HostProgressState | null =

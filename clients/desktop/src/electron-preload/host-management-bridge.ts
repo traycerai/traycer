@@ -8,13 +8,14 @@ import type {
   HostAvailableSnapshot,
   HostAvailableVersionsInput,
   HostDoctorReport,
-  HostEnsureResult,
+  HostEnsureJoinResult,
   HostInstallResult,
   HostInstalledRecord,
   HostLogsTailResult,
   HostNameSettings,
   HostOperationKind,
   HostOperationStatus,
+  HostOperationStatusEnvelope,
   HostProgressEvent,
   HostRegistryUpdateState,
   HostRemovalState,
@@ -61,7 +62,8 @@ export interface HostManagementBridgeSurface {
   ensureHost(input: {
     readonly onProgress: ((event: HostProgressEvent) => void) | null;
     readonly force: boolean;
-  }): Promise<HostEnsureResult>;
+    readonly observedOperationId: string | null;
+  }): Promise<HostEnsureJoinResult>;
   deregisterService(): Promise<void>;
   registryCheck(input: {
     readonly force: boolean;
@@ -69,8 +71,8 @@ export interface HostManagementBridgeSurface {
   onRegistryUpdateState(handler: (state: HostRegistryUpdateState) => void): {
     dispose: () => void;
   };
-  getOperationStatus(): Promise<HostOperationStatus | null>;
-  onOperationStatus(handler: (status: HostOperationStatus | null) => void): {
+  getOperationStatus(): Promise<HostOperationStatusEnvelope>;
+  onOperationStatus(handler: (status: HostOperationStatusEnvelope) => void): {
     dispose: () => void;
   };
   freePortAndRestart(
@@ -179,10 +181,10 @@ export function buildHostManagementBridge(): HostManagementBridgeSurface {
         null,
         onProgress,
       ),
-    ensureHost: ({ onProgress, force }) =>
-      withOperationListener<HostEnsureResult>(
+    ensureHost: ({ onProgress, force, observedOperationId }) =>
+      withOperationListener<HostEnsureJoinResult>(
         RunnerHostInvoke.traycerHostEnsure,
-        { force },
+        { force, observedOperationId },
         onProgress,
       ),
     deregisterService: () =>
@@ -210,10 +212,10 @@ export function buildHostManagementBridge(): HostManagementBridgeSurface {
     getOperationStatus: () =>
       ipcRenderer.invoke(
         RunnerHostInvoke.traycerHostOperationStatusGet,
-      ) as Promise<HostOperationStatus | null>,
+      ) as Promise<HostOperationStatusEnvelope>,
     onOperationStatus(handler) {
       const listener = (_event: IpcRendererEvent, payload: unknown): void => {
-        if (!isHostOperationStatusOrNull(payload)) return;
+        if (!isHostOperationStatusEnvelope(payload)) return;
         handler(payload);
       };
       ipcRenderer.on(RunnerHostEvent.hostOperationStatusChange, listener);
@@ -291,11 +293,9 @@ function isHostOperationKind(value: unknown): value is HostOperationKind {
   );
 }
 
-function isHostOperationStatusOrNull(
-  value: unknown,
-): value is HostOperationStatus | null {
-  if (value === null) return true;
+function isHostOperationStatus(value: unknown): value is HostOperationStatus {
   if (typeof value !== "object") return false;
+  if (value === null) return false;
   const candidate = value as Record<string, unknown>;
   const stage = candidate.stage;
   const percent = candidate.percent;
@@ -311,6 +311,73 @@ function isHostOperationStatusOrNull(
     (typeof totalBytes === "number" || totalBytes === null) &&
     (typeof message === "string" || message === null) &&
     typeof candidate.startedAt === "string"
+  );
+}
+
+const HOST_ENSURE_ACTIONS: Record<
+  "already-ready" | "provisioned" | "host-busy" | "removed",
+  true
+> = {
+  "already-ready": true,
+  provisioned: true,
+  "host-busy": true,
+  removed: true,
+};
+
+function isHostEnsureResult(value: unknown): boolean {
+  if (value === null || typeof value !== "object") return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.action === "string" &&
+    Object.hasOwn(HOST_ENSURE_ACTIONS, candidate.action) &&
+    typeof candidate.running === "boolean" &&
+    (typeof candidate.version === "string" || candidate.version === null)
+  );
+}
+
+function isHostEnsureOutcome(value: unknown): boolean {
+  if (value === null) return true;
+  if (typeof value !== "object") return false;
+  const candidate = value as Record<string, unknown>;
+  if (
+    typeof candidate.operationId !== "string" ||
+    typeof candidate.revision !== "number" ||
+    !Number.isInteger(candidate.revision) ||
+    candidate.revision < 1
+  ) {
+    return false;
+  }
+  if (Object.hasOwn(candidate, "result")) {
+    if (!isHostEnsureResult(candidate.result)) return false;
+    const result = candidate.result as Record<string, unknown>;
+    return result.action === "host-busy"
+      ? typeof candidate.busyHostPid === "number"
+      : candidate.busyHostPid === null;
+  }
+  if (Object.hasOwn(candidate, "error")) {
+    if (candidate.error === null || typeof candidate.error !== "object") {
+      return false;
+    }
+    const error = candidate.error as Record<string, unknown>;
+    return (
+      typeof error.message === "string" &&
+      (typeof error.code === "string" || error.code === null)
+    );
+  }
+  return false;
+}
+
+function isHostOperationStatusEnvelope(
+  value: unknown,
+): value is HostOperationStatusEnvelope {
+  if (value === null || typeof value !== "object") return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.revision === "number" &&
+    Number.isInteger(candidate.revision) &&
+    candidate.revision >= 0 &&
+    (candidate.status === null || isHostOperationStatus(candidate.status)) &&
+    isHostEnsureOutcome(candidate.lastEnsureOutcome)
   );
 }
 

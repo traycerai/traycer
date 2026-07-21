@@ -128,7 +128,11 @@ function makeManagement(): IHostManagement {
         includePreReleases: false,
       }),
     ),
-    getOperationStatus: vi.fn(() => Promise.resolve(null)),
+    getOperationStatus: vi.fn(() => Promise.resolve({
+  revision: 0,
+  status: null,
+  lastEnsureOutcome: null,
+})),
     freePortAndRestart: vi.fn((input) => Promise.resolve(input)),
     cliManifest: vi.fn(() => Promise.resolve(null)),
     getHostName: vi.fn(() =>

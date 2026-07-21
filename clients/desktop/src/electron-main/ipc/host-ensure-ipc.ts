@@ -11,11 +11,16 @@ import { log } from "../app/logger";
 import { resolveBundledCliPath } from "../cli/cli-discovery";
 import { RunnerHostInvoke } from "../../ipc-contracts/ipc-channels";
 import {
+  getHostOperationStatus,
   getActiveEnvironment,
   LONG_OP_TIMEOUT_MS,
   optionalBoolean,
   optionalString,
-  streamCliWithProgress,
+  publishHostOperationStage,
+  releaseHostOperation,
+  reserveHostOperation,
+  streamCliWithinReservedOperation,
+  type HostOperationReservation,
 } from "./host-management-ipc";
 import { getHostFsLayout } from "../host/host-paths";
 import type { Environment } from "../host/host-paths";
@@ -62,18 +67,49 @@ export interface HostEnsureIpcResult {
   readonly version: string | null;
 }
 
-let inFlight: Promise<HostEnsureIpcResult> | null = null;
-let inFlightForce = false;
+interface InFlightEnsure {
+  readonly operationId: string;
+  readonly force: boolean;
+  readonly promise: Promise<HostEnsureIpcResult>;
+}
+
+interface EnsureHostExecution {
+  readonly result: HostEnsureIpcResult;
+  readonly busyHostPid: number | null;
+}
+
+export type HostEnsureJoinIpcResult =
+  | HostEnsureIpcResult
+  | {
+      readonly action: "superseded";
+      readonly running: false;
+      readonly version: null;
+    };
+
+class RetainedEnsureError extends Error {
+  readonly code: string | null;
+
+  constructor(message: string, code: string | null) {
+    super(message);
+    this.code = code;
+  }
+}
+
+let inFlight: InFlightEnsure | null = null;
 
 export function registerHostEnsureIpc(bridge: RunnerIpcBridge): void {
   bridge.handleInvoke(
     RunnerHostInvoke.traycerHostEnsure,
     async (_event, raw: unknown) => {
       const operationId = optionalString(raw, "operationId") ?? randomUUID();
+      const observedOperationId = optionalString(raw, "observedOperationId");
       // The preload's `withOperationListener` spreads `{ force, operationId }`
       // into the invoke args; default false so a normal ensure keeps the busy
       // check.
       const force = optionalBoolean(raw, "force");
+      if (observedOperationId !== null) {
+        return joinEnsureHost(bridge, observedOperationId);
+      }
       return runEnsureHost(bridge, operationId, force);
     },
   );
@@ -104,32 +140,115 @@ export async function runEnsureHost(
   // behind a different-force in-flight op share ONE cycle instead of each
   // starting their own once the in-flight op settles.
   while (inFlight !== null) {
-    if (inFlightForce === force) {
-      return inFlight;
+    if (inFlight.force === force) {
+      return inFlight.promise;
     }
     try {
-      await inFlight;
+      await inFlight.promise;
     } catch {
       // The in-flight op's failure belongs to its own caller; re-evaluate.
     }
   }
-  const run = ensureHost(bridge, operationId, force);
-  inFlight = run;
-  inFlightForce = force;
-  try {
-    return await run;
-  } finally {
-    if (inFlight === run) {
+  const reservation = reserveHostOperation(bridge, "ensure", operationId);
+  const run = (async () => {
+    let outcome: "success" | "error" | null = null;
+    let result: HostEnsureIpcResult | null = null;
+    let busyHostPid: number | null = null;
+    let error: unknown = null;
+    try {
+      const execution = await ensureHost(bridge, reservation, force);
+      result = execution.result;
+      busyHostPid = execution.busyHostPid;
+      outcome = "success";
+      return result;
+    } catch (err) {
+      error = err;
+      outcome = "error";
+      throw err;
+    } finally {
+      // The reservation and coalesced-promise lifetimes are deliberately the
+      // same: no native phase can expose an idle status before the ensure has
+      // reached its terminal result.
+      if (outcome === "success" && result !== null) {
+        releaseHostOperation(reservation, {
+          operationId,
+          result,
+          busyHostPid,
+        });
+      } else if (outcome === "error") {
+        releaseHostOperation(reservation, {
+          operationId,
+          error: serializeEnsureError(error),
+        });
+      } else {
+        releaseHostOperation(reservation, null);
+      }
       inFlight = null;
     }
+  })();
+  inFlight = { operationId, force, promise: run };
+  return run;
+}
+
+function completedEnsure(result: HostEnsureIpcResult): EnsureHostExecution {
+  return { result, busyHostPid: null };
+}
+
+function serializeEnsureError(error: unknown): {
+  readonly message: string;
+  readonly code: string | null;
+} {
+  if (error instanceof RetainedEnsureError) {
+    return { message: error.message, code: error.code };
   }
+  if (error instanceof Error) {
+    return { message: error.message, code: null };
+  }
+  return { message: String(error), code: null };
+}
+
+function supersededEnsureResult(): HostEnsureJoinIpcResult {
+  return { action: "superseded", running: false, version: null };
+}
+
+async function joinEnsureHost(
+  bridge: RunnerIpcBridge,
+  observedOperationId: string,
+): Promise<HostEnsureJoinIpcResult> {
+  if (inFlight?.operationId === observedOperationId) {
+    return inFlight.promise;
+  }
+  const envelope = getHostOperationStatus();
+  const outcome = envelope.lastEnsureOutcome;
+  if (
+    envelope.status !== null ||
+    outcome === null ||
+    outcome.operationId !== observedOperationId ||
+    outcome.revision !== envelope.revision
+  ) {
+    return supersededEnsureResult();
+  }
+  if ("error" in outcome) {
+    throw new RetainedEnsureError(outcome.error.message, outcome.error.code);
+  }
+  if (outcome.result.action === "host-busy") {
+    const snapshot = bridge.options.host.getSnapshot();
+    if (
+      outcome.busyHostPid === null ||
+      snapshot === null ||
+      snapshot.pid !== outcome.busyHostPid
+    ) {
+      return supersededEnsureResult();
+    }
+  }
+  return outcome.result;
 }
 
 async function ensureHost(
   bridge: RunnerIpcBridge,
-  operationId: string,
+  reservation: HostOperationReservation,
   force: boolean,
-): Promise<HostEnsureIpcResult> {
+): Promise<EnsureHostExecution> {
   const environment = getActiveEnvironment();
 
   // The user removed Traycer's background components on this device (Settings
@@ -139,7 +258,11 @@ async function ensureHost(
   // surface instead; an explicit reinstall clears the sentinel first.
   if (await isHostRemovedByUser()) {
     log.info("[host-ensure] skipped - host removed by user");
-    return { action: "removed", running: false, version: null };
+    return completedEnsure({
+      action: "removed",
+      running: false,
+      version: null,
+    });
   }
 
   // When this is a macOS .app build that ships the in-bundle LaunchAgent
@@ -173,9 +296,10 @@ async function ensureHost(
         hostOwnsLoginItem,
         serviceStatus.listenUrl,
         prePid,
+        reservation,
       );
       if (refreshed !== null) {
-        return refreshed;
+        return completedEnsure(refreshed);
       }
       // Publish the reachable host into the lifecycle before returning.
       // This probe is private to the ensure flow - it does NOT update
@@ -185,11 +309,11 @@ async function ensureHost(
       // ensure can report success while the renderer's host directory stays
       // empty for the rest of the session (2026-07-14 incident).
       await bridge.options.host.reloadSnapshotFromDisk();
-      return {
+      return completedEnsure({
         action: "already-ready",
         running: true,
         version: serviceStatus.version,
-      };
+      });
     }
     log.debug(
       "[host-ensure] service status file points at an unreachable endpoint - ensuring",
@@ -230,20 +354,22 @@ async function ensureHost(
       : null;
   let payload: unknown;
   try {
-    payload = await streamCliWithProgress(
+    payload = await streamCliWithinReservedOperation(
       args,
-      operationId,
-      "ensure",
       LONG_OP_TIMEOUT_MS,
-      bridge,
       null,
+      reservation,
     );
   } catch (err) {
     const categorized = categorizeHostCliError(err);
     if (categorized.kind === "host-busy" && serviceStatus.version !== null) {
       // The running host has work in progress, so the CLI refused to restart
       // it. Keep it for the renderer's compat probe.
-      const kept = await surfaceBusyHostKeep(bridge, serviceStatus.version);
+      const kept = await surfaceBusyHostKeep(
+        bridge,
+        serviceStatus.version,
+        serviceStatus.pid,
+      );
       if (kept !== null) {
         log.info(
           "[host-ensure] host busy - kept for the renderer compat probe",
@@ -258,10 +384,11 @@ async function ensureHost(
       kind: categorized.kind,
       code: categorized.code,
     });
-    throw new Error(categorized.message);
+    throw new RetainedEnsureError(categorized.message, categorized.code);
   }
 
   const ensurePayload = payload as HostEnsureResultPayload;
+  publishHostOperationStage(reservation, "applying");
   // A successful win32 ensure proves its final `/Run` observed spawn evidence.
   // `/Run` can consume its full control budget before that evidence reaches
   // Desktop, and provisioning then performs a status query. Keep enough
@@ -309,7 +436,11 @@ async function ensureHost(
     !force &&
     (await probeHostActivityBusy(serviceStatus.listenUrl))
   ) {
-    const kept = await surfaceBusyHostKeep(bridge, serviceStatus.version);
+    const kept = await surfaceBusyHostKeep(
+      bridge,
+      serviceStatus.version,
+      prePid,
+    );
     if (kept !== null) {
       log.info(
         "[host-ensure] host became busy before the SMAppService restart - kept for the renderer compat probe",
@@ -350,7 +481,11 @@ async function ensureHost(
       // locked register cycle refused to resurrect the login item. Mirror
       // the entry check's result so the renderer shows the removed surface.
       log.info("[host-ensure] skipped - host removed by user mid-ensure");
-      return { action: "removed", running: false, version: null };
+      return completedEnsure({
+        action: "removed",
+        running: false,
+        version: null,
+      });
     }
     if (loginItemStatus === "requires-approval") {
       throw new Error(approvalRequiredMessage());
@@ -377,6 +512,7 @@ async function ensureHost(
   // host's pid when we are replacing a stale running build - in that case
   // the register cycle boots the old host out, so the poll must skip its
   // lingering pid.json and wait for the freshly spawned process.
+  publishHostOperationStage(reservation, "waiting-ready");
   const readiness = await waitForHostReady(
     HOST_READY_TIMEOUT_MS,
     layout.pidMetadataFile,
@@ -414,7 +550,11 @@ async function ensureHost(
   // main process logged this exact success while every chat tab stayed on
   // "Bound host is offline" until an app restart.
   await bridge.options.host.reloadSnapshotFromDisk();
-  return { action: "provisioned", running: true, version: readiness.version };
+  return completedEnsure({
+    action: "provisioned",
+    running: true,
+    version: readiness.version,
+  });
 }
 
 // Session quarantine for the fast-path refresh. Set when the refresh is
@@ -443,6 +583,11 @@ export function resetPendingRevisionQuarantineForTests(): void {
   pendingRevisionRefreshQuarantined = false;
 }
 
+/** Test-only: coalesced in-flight slot would otherwise leak across cases. */
+export function resetInFlightEnsureForTests(): void {
+  inFlight = null;
+}
+
 // A busy/indeterminate `desktop-install-cloud.js` update preserves the
 // running host instead of booting it out, so its LaunchAgent keeps the
 // launchd registration it had before the bundle swap - the freshly written
@@ -460,6 +605,7 @@ async function applyPendingLoginItemRevisionIfIdle(
   hostOwnsLoginItem: boolean,
   listenUrl: string,
   prePid: number | null,
+  reservation: HostOperationReservation,
 ): Promise<HostEnsureIpcResult | null> {
   if (!hostOwnsLoginItem) return null;
   if (pendingRevisionRefreshQuarantined) return null;
@@ -470,6 +616,7 @@ async function applyPendingLoginItemRevisionIfIdle(
     );
     return null;
   }
+  publishHostOperationStage(reservation, "applying");
   // Pre-flight: with the login item toggled off in System Settings the
   // cycle is guaranteed futile (only the user can re-enable it) AND
   // destructive (its leading bootout kills the healthy host we just probed).
@@ -521,6 +668,7 @@ async function applyPendingLoginItemRevisionIfIdle(
   const pidPath = getHostFsLayout(environment).pidMetadataFile;
   // Pending-revision refresh is darwin SMAppService only — no win32 spawn-
   // evidence extension (T6 owns launchctl-gated authority there).
+  publishHostOperationStage(reservation, "waiting-ready");
   const readiness = await waitForHostReady(
     HOST_READY_TIMEOUT_MS,
     pidPath,
@@ -582,10 +730,18 @@ async function resolveWindowsBundledHostArchive(): Promise<string | null> {
 async function surfaceBusyHostKeep(
   bridge: RunnerIpcBridge,
   version: string,
-): Promise<HostEnsureIpcResult | null> {
+  expectedPid: number | null,
+): Promise<EnsureHostExecution | null> {
   const surfaced = await bridge.options.host.reloadSnapshotFromDisk();
-  if (surfaced === null) {
+  if (
+    expectedPid === null ||
+    surfaced === null ||
+    surfaced.pid !== expectedPid
+  ) {
     return null;
   }
-  return { action: "host-busy", running: true, version };
+  return {
+    result: { action: "host-busy", running: true, version },
+    busyHostPid: surfaced.pid,
+  };
 }

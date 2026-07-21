@@ -476,7 +476,11 @@ function buildFakeBridge(
         includePreReleases: false,
       }),
       onRegistryUpdateState: () => ({ dispose: () => undefined }),
-      getOperationStatus: async () => null,
+      getOperationStatus: async () => ({
+  revision: 0,
+  status: null,
+  lastEnsureOutcome: null,
+}),
       onOperationStatus: () => ({ dispose: () => undefined }),
       freePortAndRestart: async (input) => input,
       cliManifest: async () => null,

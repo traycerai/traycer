@@ -133,8 +133,116 @@ vi.mock("../host-paths", () => ({
 }));
 
 const getActiveEnvironment: Mock<() => Environment> = vi.fn();
-const streamCliWithProgress: Mock<(...args: unknown[]) => Promise<unknown>> =
-  vi.fn();
+const streamCliWithinReservedOperation: Mock<
+  (...args: unknown[]) => Promise<unknown>
+> = vi.fn();
+
+type HostOperationKind =
+  | "install"
+  | "update"
+  | "register-service"
+  | "ensure"
+  | "restart"
+  | "free-port-and-restart";
+
+interface HostOperationStatus {
+  readonly operationId: string;
+  readonly kind: HostOperationKind;
+  readonly stage: string | null;
+  readonly percent: number | null;
+  readonly bytes: number | null;
+  readonly totalBytes: number | null;
+  readonly message: string | null;
+  readonly startedAt: string;
+}
+
+type HostEnsureOutcome =
+  | {
+      readonly operationId: string;
+      readonly revision: number;
+      readonly result: HostEnsureIpcResult;
+      readonly busyHostPid: number | null;
+    }
+  | {
+      readonly operationId: string;
+      readonly revision: number;
+      readonly error: {
+        readonly message: string;
+        readonly code: string | null;
+      };
+    }
+  | null;
+
+interface HostOperationStatusEnvelope {
+  revision: number;
+  status: HostOperationStatus | null;
+  lastEnsureOutcome: HostEnsureOutcome;
+}
+
+interface HostOperationReservation {
+  readonly bridge: {
+    fanOut: Mock<(channel: string, payload: unknown) => void>;
+  };
+  readonly operationId: string;
+  readonly kind: HostOperationKind;
+  readonly startedAt: string;
+}
+
+type PendingEnsureOutcome =
+  | {
+      readonly operationId: string;
+      readonly result: HostEnsureIpcResult;
+      readonly busyHostPid: number | null;
+    }
+  | {
+      readonly operationId: string;
+      readonly error: {
+        readonly message: string;
+        readonly code: string | null;
+      };
+    }
+  | null;
+
+let currentEnvelope: HostOperationStatusEnvelope = {
+  revision: 0,
+  status: null,
+  lastEnsureOutcome: null,
+};
+
+function resetEnvelopeSeam(): void {
+  currentEnvelope = {
+    revision: 0,
+    status: null,
+    lastEnsureOutcome: null,
+  };
+}
+
+function setEnvelope(
+  bridge: HostOperationReservation["bridge"],
+  status: HostOperationStatus | null,
+  pendingEnsureOutcome: PendingEnsureOutcome,
+): HostOperationStatusEnvelope {
+  const revision = currentEnvelope.revision + 1;
+  const lastEnsureOutcome: HostEnsureOutcome =
+    pendingEnsureOutcome === null
+      ? null
+      : "result" in pendingEnsureOutcome
+        ? {
+            operationId: pendingEnsureOutcome.operationId,
+            revision,
+            result: pendingEnsureOutcome.result,
+            busyHostPid: pendingEnsureOutcome.busyHostPid,
+          }
+        : {
+            operationId: pendingEnsureOutcome.operationId,
+            revision,
+            error: pendingEnsureOutcome.error,
+          };
+  currentEnvelope = { revision, status, lastEnsureOutcome };
+  bridge.fanOut("hostOperationStatusChange", currentEnvelope);
+  return currentEnvelope;
+}
+
 vi.mock("../../ipc/host-management-ipc", () => ({
   getActiveEnvironment: () => getActiveEnvironment(),
   optionalString: (raw: unknown, key: string) => {
@@ -148,14 +256,86 @@ vi.mock("../../ipc/host-management-ipc", () => ({
     if (raw === null || typeof raw !== "object" || !(key in raw)) {
       return false;
     }
-    return Boolean((raw as Record<string, unknown>)[key]);
+    return (raw as Record<string, unknown>)[key] === true;
   },
-  streamCliWithProgress: (...args: unknown[]) => streamCliWithProgress(...args),
+  getHostOperationStatus: () => currentEnvelope,
+  reserveHostOperation: (
+    bridge: HostOperationReservation["bridge"],
+    kind: HostOperationKind,
+    operationId: string,
+  ): HostOperationReservation => {
+    if (currentEnvelope.status !== null) {
+      throw new Error(
+        `Another host operation (${currentEnvelope.status.kind}) is already in progress`,
+      );
+    }
+    const reservation: HostOperationReservation = {
+      bridge,
+      operationId,
+      kind,
+      startedAt: "2026-05-15T00:00:00Z",
+    };
+    setEnvelope(
+      bridge,
+      {
+        operationId,
+        kind,
+        stage: null,
+        percent: null,
+        bytes: null,
+        totalBytes: null,
+        message: null,
+        startedAt: reservation.startedAt,
+      },
+      null,
+    );
+    return reservation;
+  },
+  publishHostOperationStage: (
+    reservation: HostOperationReservation,
+    stage: string,
+  ): void => {
+    const status = currentEnvelope.status;
+    if (status === null || status.operationId !== reservation.operationId) {
+      throw new Error(
+        "Host operation reservation was lost before it completed",
+      );
+    }
+    setEnvelope(
+      reservation.bridge,
+      {
+        ...status,
+        stage,
+        percent: null,
+        bytes: null,
+        totalBytes: null,
+        message: null,
+      },
+      null,
+    );
+  },
+  releaseHostOperation: (
+    reservation: HostOperationReservation,
+    pendingEnsureOutcome: PendingEnsureOutcome,
+  ): void => {
+    const status = currentEnvelope.status;
+    if (status === null || status.operationId !== reservation.operationId) {
+      throw new Error(
+        "Host operation reservation was lost before it completed",
+      );
+    }
+    setEnvelope(reservation.bridge, null, pendingEnsureOutcome);
+  },
+  streamCliWithinReservedOperation: (...args: unknown[]) =>
+    streamCliWithinReservedOperation(...args),
   LONG_OP_TIMEOUT_MS: 600_000,
 }));
 
 import { startPendingLoginItemRevisionMonitor } from "../pending-login-item-revision-monitor";
-import { runEnsureHost } from "../../ipc/host-ensure-ipc";
+import {
+  resetInFlightEnsureForTests,
+  runEnsureHost,
+} from "../../ipc/host-ensure-ipc";
 
 const INTERVAL_MS = 1_000;
 const LISTEN_URL = "ws://127.0.0.1:9999/rpc";
@@ -176,6 +356,7 @@ interface FakeServiceStatus {
 }
 
 interface FakeBridge {
+  readonly fanOut: Mock<(channel: string, payload: unknown) => void>;
   readonly options: {
     readonly host: {
       readonly getServiceStatus: Mock<() => Promise<FakeServiceStatus>>;
@@ -188,6 +369,7 @@ function fakeBridge(
   getServiceStatus: Mock<() => Promise<FakeServiceStatus>>,
 ): FakeBridge {
   return {
+    fanOut: vi.fn(),
     options: {
       host: {
         getServiceStatus,
@@ -208,6 +390,8 @@ function runningServiceStatus(): Mock<() => Promise<FakeServiceStatus>> {
 
 describe("startPendingLoginItemRevisionMonitor", () => {
   beforeEach(() => {
+    resetEnvelopeSeam();
+    resetInFlightEnsureForTests();
     vi.useFakeTimers();
   });
   afterEach(() => {
@@ -536,9 +720,11 @@ describe("mutual exclusion with a concurrent renderer-triggered ensure", () => {
     approvalRequiredMessage.mockReset();
     getHostFsLayout.mockReset();
     getActiveEnvironment.mockReset().mockReturnValue("production");
-    streamCliWithProgress.mockReset();
+    streamCliWithinReservedOperation.mockReset();
     categorizeHostCliError.mockReset();
     readServiceLifecycle.mockReset();
+    resetEnvelopeSeam();
+    resetInFlightEnsureForTests();
   });
 
   it("coalesces the monitor's runEnsureHost call onto a concurrent renderer-triggered one - the underlying cycle runs only once", async () => {

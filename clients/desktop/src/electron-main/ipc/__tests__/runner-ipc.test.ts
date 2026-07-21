@@ -2538,7 +2538,7 @@ describe("RunnerIpcBridge", () => {
     await respawnStarted.promise;
 
     await expect(statusHandler(bareEvent())).resolves.toMatchObject({
-      kind: "restart",
+      status: { kind: "restart" },
     });
     await expect(restartHandler(bareEvent())).rejects.toThrow(
       /Another host operation \(restart\) is already in progress/i,
@@ -2547,7 +2547,9 @@ describe("RunnerIpcBridge", () => {
 
     releaseRespawn.resolve();
     await respawn;
-    await expect(statusHandler(bareEvent())).resolves.toBeNull();
+    await expect(statusHandler(bareEvent())).resolves.toMatchObject({
+      status: null,
+    });
     bridge.dispose();
   });
 

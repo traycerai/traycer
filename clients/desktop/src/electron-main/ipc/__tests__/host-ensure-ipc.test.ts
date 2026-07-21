@@ -131,8 +131,129 @@ vi.mock("../../host/host-paths", () => ({
 }));
 
 const getActiveEnvironment: Mock<() => Environment> = vi.fn();
-const streamCliWithProgress: Mock<(...args: unknown[]) => Promise<unknown>> =
-  vi.fn();
+const streamCliWithinReservedOperation: Mock<
+  (...args: unknown[]) => Promise<unknown>
+> = vi.fn();
+
+type HostOperationKind =
+  | "install"
+  | "update"
+  | "register-service"
+  | "ensure"
+  | "restart"
+  | "free-port-and-restart";
+
+interface HostOperationStatus {
+  readonly operationId: string;
+  readonly kind: HostOperationKind;
+  readonly stage: string | null;
+  readonly percent: number | null;
+  readonly bytes: number | null;
+  readonly totalBytes: number | null;
+  readonly message: string | null;
+  readonly startedAt: string;
+}
+
+type HostEnsureOutcome =
+  | {
+      readonly operationId: string;
+      readonly revision: number;
+      readonly result: {
+        readonly action:
+          "already-ready" | "provisioned" | "host-busy" | "removed";
+        readonly running: boolean;
+        readonly version: string | null;
+      };
+      readonly busyHostPid: number | null;
+    }
+  | {
+      readonly operationId: string;
+      readonly revision: number;
+      readonly error: {
+        readonly message: string;
+        readonly code: string | null;
+      };
+    }
+  | null;
+
+interface HostOperationStatusEnvelope {
+  revision: number;
+  status: HostOperationStatus | null;
+  lastEnsureOutcome: HostEnsureOutcome;
+}
+
+interface HostOperationReservation {
+  readonly bridge: {
+    fanOut: Mock<(channel: string, payload: unknown) => void>;
+  };
+  readonly operationId: string;
+  readonly kind: HostOperationKind;
+  readonly startedAt: string;
+}
+
+type PendingEnsureOutcome =
+  | {
+      readonly operationId: string;
+      readonly result: {
+        readonly action:
+          "already-ready" | "provisioned" | "host-busy" | "removed";
+        readonly running: boolean;
+        readonly version: string | null;
+      };
+      readonly busyHostPid: number | null;
+    }
+  | {
+      readonly operationId: string;
+      readonly error: {
+        readonly message: string;
+        readonly code: string | null;
+      };
+    }
+  | null;
+
+// Faithful mocked seam for the T2 revisioned envelope + whole-ensure
+// reservation. Mirrors main's monotonic revision / settle-and-retain rules so
+// join-only admission can be exercised without booting real CLI hosts.
+let currentEnvelope: HostOperationStatusEnvelope = {
+  revision: 0,
+  status: null,
+  lastEnsureOutcome: null,
+};
+
+function resetEnvelopeSeam(): void {
+  currentEnvelope = {
+    revision: 0,
+    status: null,
+    lastEnsureOutcome: null,
+  };
+}
+
+function setEnvelope(
+  bridge: HostOperationReservation["bridge"],
+  status: HostOperationStatus | null,
+  pendingEnsureOutcome: PendingEnsureOutcome,
+): HostOperationStatusEnvelope {
+  const revision = currentEnvelope.revision + 1;
+  const lastEnsureOutcome: HostEnsureOutcome =
+    pendingEnsureOutcome === null
+      ? null
+      : "result" in pendingEnsureOutcome
+        ? {
+            operationId: pendingEnsureOutcome.operationId,
+            revision,
+            result: pendingEnsureOutcome.result,
+            busyHostPid: pendingEnsureOutcome.busyHostPid,
+          }
+        : {
+            operationId: pendingEnsureOutcome.operationId,
+            revision,
+            error: pendingEnsureOutcome.error,
+          };
+  currentEnvelope = { revision, status, lastEnsureOutcome };
+  bridge.fanOut("hostOperationStatusChange", currentEnvelope);
+  return currentEnvelope;
+}
+
 vi.mock("../host-management-ipc", () => ({
   getActiveEnvironment: () => getActiveEnvironment(),
   optionalString: (raw: unknown, key: string) => {
@@ -146,14 +267,84 @@ vi.mock("../host-management-ipc", () => ({
     if (raw === null || typeof raw !== "object" || !(key in raw)) {
       return false;
     }
-    return Boolean((raw as Record<string, unknown>)[key]);
+    return (raw as Record<string, unknown>)[key] === true;
   },
-  streamCliWithProgress: (...args: unknown[]) => streamCliWithProgress(...args),
+  getHostOperationStatus: () => currentEnvelope,
+  reserveHostOperation: (
+    bridge: HostOperationReservation["bridge"],
+    kind: HostOperationKind,
+    operationId: string,
+  ): HostOperationReservation => {
+    if (currentEnvelope.status !== null) {
+      throw new Error(
+        `Another host operation (${currentEnvelope.status.kind}) is already in progress`,
+      );
+    }
+    const reservation: HostOperationReservation = {
+      bridge,
+      operationId,
+      kind,
+      startedAt: "2026-05-15T00:00:00Z",
+    };
+    setEnvelope(
+      bridge,
+      {
+        operationId,
+        kind,
+        stage: null,
+        percent: null,
+        bytes: null,
+        totalBytes: null,
+        message: null,
+        startedAt: reservation.startedAt,
+      },
+      null,
+    );
+    return reservation;
+  },
+  publishHostOperationStage: (
+    reservation: HostOperationReservation,
+    stage: string,
+  ): void => {
+    const status = currentEnvelope.status;
+    if (status === null || status.operationId !== reservation.operationId) {
+      throw new Error(
+        "Host operation reservation was lost before it completed",
+      );
+    }
+    setEnvelope(
+      reservation.bridge,
+      {
+        ...status,
+        stage,
+        percent: null,
+        bytes: null,
+        totalBytes: null,
+        message: null,
+      },
+      null,
+    );
+  },
+  releaseHostOperation: (
+    reservation: HostOperationReservation,
+    pendingEnsureOutcome: PendingEnsureOutcome,
+  ): void => {
+    const status = currentEnvelope.status;
+    if (status === null || status.operationId !== reservation.operationId) {
+      throw new Error(
+        "Host operation reservation was lost before it completed",
+      );
+    }
+    setEnvelope(reservation.bridge, null, pendingEnsureOutcome);
+  },
+  streamCliWithinReservedOperation: (...args: unknown[]) =>
+    streamCliWithinReservedOperation(...args),
   LONG_OP_TIMEOUT_MS: 600_000,
 }));
 
 import {
   registerHostEnsureIpc,
+  resetInFlightEnsureForTests,
   resetPendingRevisionQuarantineForTests,
 } from "../host-ensure-ipc";
 import { RunnerHostInvoke } from "../../../ipc-contracts/ipc-channels";
@@ -170,6 +361,13 @@ interface FakeServiceStatus {
   readonly pid: number | null;
 }
 
+interface FakeHostSnapshot {
+  readonly pid: number;
+  readonly hostId: string;
+  readonly websocketUrl: string;
+  readonly version: string;
+}
+
 // `handleInvoke` + `options.host.{getServiceStatus,reloadSnapshotFromDisk}`
 // is exactly what `registerHostEnsureIpc`'s fast (already-reachable) path
 // dereferences, but `registerHostEnsureIpc(bridge as never)` below still
@@ -180,10 +378,14 @@ interface FakeBridge {
     string,
     (event: unknown, raw: unknown) => Promise<unknown>
   >;
+  readonly fanOut: Mock<(channel: string, payload: unknown) => void>;
   readonly options: {
     readonly host: {
       readonly getServiceStatus: Mock<() => Promise<FakeServiceStatus>>;
-      readonly reloadSnapshotFromDisk: Mock<() => Promise<null>>;
+      readonly reloadSnapshotFromDisk: Mock<
+        () => Promise<FakeHostSnapshot | null>
+      >;
+      readonly getSnapshot: Mock<() => FakeHostSnapshot | null>;
     };
   };
   handleInvoke(
@@ -194,7 +396,8 @@ interface FakeBridge {
 
 function makeBridge(
   getServiceStatus: Mock<() => Promise<FakeServiceStatus>>,
-  reloadSnapshotFromDisk: Mock<() => Promise<null>>,
+  reloadSnapshotFromDisk: Mock<() => Promise<FakeHostSnapshot | null>>,
+  getSnapshot: Mock<() => FakeHostSnapshot | null>,
 ): FakeBridge {
   const handlers = new Map<
     string,
@@ -202,11 +405,23 @@ function makeBridge(
   >();
   return {
     handlers,
-    options: { host: { getServiceStatus, reloadSnapshotFromDisk } },
+    fanOut: vi.fn(),
+    options: {
+      host: { getServiceStatus, reloadSnapshotFromDisk, getSnapshot },
+    },
     handleInvoke(channel, handler) {
       handlers.set(channel, async (event, raw) => handler(event, raw));
     },
   };
+}
+
+function registerEnsure(
+  bridge: FakeBridge,
+): (raw: unknown) => Promise<unknown> {
+  registerHostEnsureIpc(bridge as never);
+  const handler = bridge.handlers.get(RunnerHostInvoke.traycerHostEnsure);
+  expect(handler).toBeDefined();
+  return (raw) => handler!(null, raw);
 }
 
 async function invokeEnsure(): Promise<unknown> {
@@ -219,15 +434,19 @@ async function invokeEnsure(): Promise<unknown> {
     }),
   );
   const reloadSnapshotFromDisk = vi.fn(() => Promise.resolve(null));
-  const bridge = makeBridge(getServiceStatus, reloadSnapshotFromDisk);
-  registerHostEnsureIpc(bridge as never);
-  const handler = bridge.handlers.get(RunnerHostInvoke.traycerHostEnsure);
-  expect(handler).toBeDefined();
-  return handler!(null, {});
+  const getSnapshot = vi.fn(() => null);
+  const bridge = makeBridge(
+    getServiceStatus,
+    reloadSnapshotFromDisk,
+    getSnapshot,
+  );
+  return registerEnsure(bridge)({});
 }
 
 beforeEach(() => {
   resetPendingRevisionQuarantineForTests();
+  resetInFlightEnsureForTests();
+  resetEnvelopeSeam();
   isHostRemovedByUser.mockReset().mockResolvedValue(false);
   hostManagesHostLoginItem.mockReset().mockResolvedValue(true);
   hasPendingLoginItemRevision.mockReset().mockResolvedValue(false);
@@ -255,7 +474,7 @@ beforeEach(() => {
     environment: "production",
   });
   getActiveEnvironment.mockReset().mockReturnValue("production");
-  streamCliWithProgress.mockReset();
+  streamCliWithinReservedOperation.mockReset();
   categorizeHostCliError.mockReset();
   readServiceLifecycle.mockReset();
   captureHostSpawnEvidenceBaseline.mockReset().mockResolvedValue(null);
@@ -439,11 +658,13 @@ async function invokeEnsureWithServiceStatus(
 ): Promise<unknown> {
   const getServiceStatus = vi.fn(() => Promise.resolve(status));
   const reloadSnapshotFromDisk = vi.fn(() => Promise.resolve(null));
-  const bridge = makeBridge(getServiceStatus, reloadSnapshotFromDisk);
-  registerHostEnsureIpc(bridge as never);
-  const handler = bridge.handlers.get(RunnerHostInvoke.traycerHostEnsure);
-  expect(handler).toBeDefined();
-  return handler!(null, {});
+  const getSnapshot = vi.fn(() => null);
+  const bridge = makeBridge(
+    getServiceStatus,
+    reloadSnapshotFromDisk,
+    getSnapshot,
+  );
+  return registerEnsure(bridge)({});
 }
 
 describe("ensureHost running:false readiness gating (CLI-registered cohort only)", () => {
@@ -461,7 +682,7 @@ describe("ensureHost running:false readiness gating (CLI-registered cohort only)
       postSwapAction: "start",
       postSwapError: null,
     });
-    streamCliWithProgress.mockResolvedValue({
+    streamCliWithinReservedOperation.mockResolvedValue({
       action: "started",
       running: false,
       registered: true,
@@ -493,7 +714,7 @@ describe("ensureHost running:false readiness gating (CLI-registered cohort only)
     });
     // running:false is expected on the SMAppService path — desktop starts
     // the host after CLI installs bytes with --no-service-register.
-    streamCliWithProgress.mockResolvedValue({
+    streamCliWithinReservedOperation.mockResolvedValue({
       action: "installed",
       running: false,
       registered: false,
@@ -548,7 +769,7 @@ describe("ensureHost running:false readiness gating (CLI-registered cohort only)
         postSwapAction: "start",
         postSwapError: null,
       });
-      streamCliWithProgress.mockResolvedValue({
+      streamCliWithinReservedOperation.mockResolvedValue({
         action: "started",
         running: false,
         registered: true,
@@ -579,4 +800,332 @@ describe("ensureHost running:false readiness gating (CLI-registered cohort only)
       }
     }
   });
+});
+
+describe("T2 whole-ensure reservation + revisioned envelope", () => {
+  const runningStatus: FakeServiceStatus = {
+    state: "running",
+    version: SERVICE_VERSION,
+    listenUrl: SERVICE_LISTEN_URL,
+    pid: SERVICE_PID,
+  };
+
+  function makeRunningBridge(snapshot: FakeHostSnapshot | null): {
+    readonly bridge: FakeBridge;
+    readonly ensure: (raw: unknown) => Promise<unknown>;
+  } {
+    const getServiceStatus = vi.fn(() => Promise.resolve(runningStatus));
+    const reloadSnapshotFromDisk = vi.fn(() => Promise.resolve(snapshot));
+    const getSnapshot = vi.fn(() => snapshot);
+    const bridge = makeBridge(
+      getServiceStatus,
+      reloadSnapshotFromDisk,
+      getSnapshot,
+    );
+    return { bridge, ensure: registerEnsure(bridge) };
+  }
+
+  it("keeps the ensure reservation alive through pending-marker apply + readiness stages", async () => {
+    hasPendingLoginItemRevision.mockResolvedValue(true);
+    probeHostActivityBusy.mockResolvedValue(false);
+    registerHostLoginItem.mockResolvedValue("enabled");
+    waitForHostReady.mockImplementation(async () => {
+      expect(currentEnvelope.status).toMatchObject({
+        kind: "ensure",
+        stage: "waiting-ready",
+      });
+      return {
+        ready: true,
+        version: "9.9.9",
+        pid: 777,
+        reason: "ready",
+      };
+    });
+    const { bridge, ensure } = makeRunningBridge(null);
+
+    const resultPromise = ensure({ operationId: "op-pending" });
+    await Promise.resolve();
+    // Applying is published before waitForHostReady; reservation must still
+    // own the envelope while native readiness runs.
+    expect(currentEnvelope.status?.kind).toBe("ensure");
+    await expect(resultPromise).resolves.toEqual({
+      action: "already-ready",
+      running: true,
+      version: "9.9.9",
+    });
+    expect(currentEnvelope.status).toBeNull();
+    expect(currentEnvelope.lastEnsureOutcome).toMatchObject({
+      operationId: "op-pending",
+      result: {
+        action: "already-ready",
+        running: true,
+        version: "9.9.9",
+      },
+    });
+    expect(bridge.fanOut).toHaveBeenCalled();
+    const envelopes = bridge.fanOut.mock.calls
+      .map(([, payload]) => payload as HostOperationStatusEnvelope)
+      .filter((payload) => payload !== null && typeof payload === "object");
+    expect(envelopes.some((e) => e.status?.stage === "applying")).toBe(true);
+    expect(envelopes.some((e) => e.status?.stage === "waiting-ready")).toBe(
+      true,
+    );
+  });
+
+  it("settles and retains success atomically with a revision bump (status null + outcome same revision)", async () => {
+    const { ensure } = makeRunningBridge(null);
+    const before = currentEnvelope.revision;
+    await ensure({ operationId: "op-ready" });
+    expect(currentEnvelope.status).toBeNull();
+    expect(currentEnvelope.lastEnsureOutcome).toMatchObject({
+      operationId: "op-ready",
+      revision: currentEnvelope.revision,
+      result: {
+        action: "already-ready",
+        running: true,
+        version: SERVICE_VERSION,
+      },
+    });
+    expect(currentEnvelope.revision).toBeGreaterThan(before);
+  });
+
+  it("join-only observed ensure returns retained success without launching work", async () => {
+    const { ensure } = makeRunningBridge(null);
+    await ensure({ operationId: "op-join-success" });
+    streamCliWithinReservedOperation.mockClear();
+    hasPendingLoginItemRevision.mockClear();
+
+    const joined = await ensure({
+      observedOperationId: "op-join-success",
+    });
+    expect(joined).toEqual({
+      action: "already-ready",
+      running: true,
+      version: SERVICE_VERSION,
+    });
+    expect(streamCliWithinReservedOperation).not.toHaveBeenCalled();
+    expect(hasPendingLoginItemRevision).not.toHaveBeenCalled();
+  });
+
+  it("join-only retained error rejects and never resolves a success result", async () => {
+    hasPendingLoginItemRevision.mockResolvedValue(true);
+    probeHostActivityBusy.mockResolvedValue(false);
+    registerHostLoginItem.mockResolvedValue("not-registered");
+    const { ensure } = makeRunningBridge(null);
+
+    await expect(ensure({ operationId: "op-join-error" })).rejects.toThrow(
+      /could not be enabled \(status: not-registered\)/,
+    );
+    expect(currentEnvelope.lastEnsureOutcome).toMatchObject({
+      operationId: "op-join-error",
+      error: expect.objectContaining({
+        message: expect.stringMatching(/could not be enabled/),
+      }),
+    });
+    resetPendingRevisionQuarantineForTests();
+    hasPendingLoginItemRevision.mockClear();
+    registerHostLoginItem.mockClear();
+
+    await expect(
+      ensure({ observedOperationId: "op-join-error" }),
+    ).rejects.toThrow(/could not be enabled \(status: not-registered\)/);
+    expect(hasPendingLoginItemRevision).not.toHaveBeenCalled();
+    expect(registerHostLoginItem).not.toHaveBeenCalled();
+  });
+
+  it("active join shares the in-flight promise; late join after a newer op is superseded", async () => {
+    let releaseReady!: () => void;
+    const readyGate = new Promise<void>((resolve) => {
+      releaseReady = resolve;
+    });
+    hasPendingLoginItemRevision.mockResolvedValue(true);
+    probeHostActivityBusy.mockResolvedValue(false);
+    registerHostLoginItem.mockResolvedValue("enabled");
+    waitForHostReady.mockImplementation(async () => {
+      await readyGate;
+      return {
+        ready: true,
+        version: "9.9.9",
+        pid: 777,
+        reason: "ready",
+      };
+    });
+    const { ensure } = makeRunningBridge(null);
+
+    const first = ensure({ operationId: "op-active" });
+    const joinActive = ensure({ observedOperationId: "op-active" });
+    // Let the first ensure enter readiness before releasing.
+    await Promise.resolve();
+    releaseReady();
+    await expect(first).resolves.toEqual({
+      action: "already-ready",
+      running: true,
+      version: "9.9.9",
+    });
+    await expect(joinActive).resolves.toEqual({
+      action: "already-ready",
+      running: true,
+      version: "9.9.9",
+    });
+
+    // A different active ensure must not be joined by the old operation id.
+    let releaseNextReady!: () => void;
+    let markNextReadyEntered!: () => void;
+    const nextReadyGate = new Promise<void>((resolve) => {
+      releaseNextReady = resolve;
+    });
+    const nextReadyEntered = new Promise<void>((resolve) => {
+      markNextReadyEntered = resolve;
+    });
+    waitForHostReady.mockImplementation(async () => {
+      markNextReadyEntered();
+      await nextReadyGate;
+      return {
+        ready: true,
+        version: "9.9.9",
+        pid: 778,
+        reason: "ready",
+      };
+    });
+    const next = ensure({ operationId: "op-next" });
+    await nextReadyEntered;
+    expect(currentEnvelope.status).toMatchObject({
+      kind: "ensure",
+      operationId: "op-next",
+    });
+    const lateJoin = ensure({ observedOperationId: "op-active" });
+    releaseNextReady();
+    await expect(lateJoin).resolves.toEqual(
+      {
+        action: "superseded",
+        running: false,
+        version: null,
+      },
+    );
+    await expect(next).resolves.toEqual({
+      action: "already-ready",
+      running: true,
+      version: "9.9.9",
+    });
+  });
+
+  it("does not retain a busy verdict when the surfaced pid changed before retention", async () => {
+    const replacementSnapshot: FakeHostSnapshot = {
+      pid: SERVICE_PID + 1,
+      hostId: "host-2",
+      websocketUrl: SERVICE_LISTEN_URL,
+      version: SERVICE_VERSION,
+    };
+    canReachHostWebsocketUrl.mockResolvedValue(false);
+    hostManagesHostLoginItem.mockResolvedValue(false);
+    streamCliWithinReservedOperation.mockRejectedValue(
+      new Error("host is busy"),
+    );
+    categorizeHostCliError.mockReturnValue({
+      kind: "host-busy",
+      message: "host is busy",
+      code: "E_HOST_BUSY",
+    });
+    const getServiceStatus = vi.fn(() => Promise.resolve(runningStatus));
+    const reloadSnapshotFromDisk = vi.fn(() =>
+      Promise.resolve(replacementSnapshot),
+    );
+    const getSnapshot = vi.fn(() => replacementSnapshot);
+    const bridge = makeBridge(
+      getServiceStatus,
+      reloadSnapshotFromDisk,
+      getSnapshot,
+    );
+    const ensure = registerEnsure(bridge);
+
+    await expect(ensure({ operationId: "op-busy-pid-swap" })).rejects.toThrow(
+      "host is busy",
+    );
+    expect(currentEnvelope.lastEnsureOutcome).toMatchObject({
+      operationId: "op-busy-pid-swap",
+      error: { message: "host is busy", code: "E_HOST_BUSY" },
+    });
+  });
+
+  it("busy host-busy retention revalidates pid; pid loss/change before join is superseded", async () => {
+    const busySnapshot: FakeHostSnapshot = {
+      pid: SERVICE_PID,
+      hostId: "host-1",
+      websocketUrl: SERVICE_LISTEN_URL,
+      version: SERVICE_VERSION,
+    };
+    canReachHostWebsocketUrl.mockResolvedValue(false);
+    hostManagesHostLoginItem.mockResolvedValue(false);
+    streamCliWithinReservedOperation.mockRejectedValue(
+      new Error("host is busy"),
+    );
+    categorizeHostCliError.mockReturnValue({
+      kind: "host-busy",
+      message: "host is busy",
+      code: "E_HOST_BUSY",
+    });
+    const getServiceStatus = vi.fn(() => Promise.resolve(runningStatus));
+    const reloadSnapshotFromDisk = vi.fn(() => Promise.resolve(busySnapshot));
+    const getSnapshot: Mock<() => FakeHostSnapshot | null> = vi.fn(
+      () => busySnapshot,
+    );
+    const bridge = makeBridge(
+      getServiceStatus,
+      reloadSnapshotFromDisk,
+      getSnapshot,
+    );
+    const ensure = registerEnsure(bridge);
+
+    await expect(ensure({ operationId: "op-busy" })).resolves.toEqual({
+      action: "host-busy",
+      running: true,
+      version: SERVICE_VERSION,
+    });
+    expect(currentEnvelope.lastEnsureOutcome).toMatchObject({
+      operationId: "op-busy",
+      result: { action: "host-busy" },
+      busyHostPid: SERVICE_PID,
+    });
+
+    await expect(ensure({ observedOperationId: "op-busy" })).resolves.toEqual({
+      action: "host-busy",
+      running: true,
+      version: SERVICE_VERSION,
+    });
+
+    getSnapshot.mockReturnValue({ ...busySnapshot, pid: SERVICE_PID + 1 });
+    await expect(ensure({ observedOperationId: "op-busy" })).resolves.toEqual({
+      action: "superseded",
+      running: false,
+      version: null,
+    });
+
+    getSnapshot.mockReturnValue(null);
+    await expect(ensure({ observedOperationId: "op-busy" })).resolves.toEqual({
+      action: "superseded",
+      running: false,
+      version: null,
+    });
+  });
+
+  it("envelope revisions are monotonic across active transitions and settle-to-null", async () => {
+    hasPendingLoginItemRevision.mockResolvedValue(true);
+    probeHostActivityBusy.mockResolvedValue(false);
+    registerHostLoginItem.mockResolvedValue("enabled");
+    const { bridge, ensure } = makeRunningBridge(null);
+    await ensure({ operationId: "op-rev" });
+    const revisions = bridge.fanOut.mock.calls
+      .map(([, payload]) => payload as HostOperationStatusEnvelope)
+      .map((envelope) => envelope.revision);
+    expect(revisions.length).toBeGreaterThan(1);
+    for (let i = 1; i < revisions.length; i += 1) {
+      expect(revisions[i]).toBeGreaterThan(revisions[i - 1]!);
+    }
+    // Settled envelope: status cleared, outcome revision matches envelope.
+    expect(currentEnvelope.status).toBeNull();
+    expect(currentEnvelope.lastEnsureOutcome?.revision).toBe(
+      currentEnvelope.revision,
+    );
+  });
+
 });

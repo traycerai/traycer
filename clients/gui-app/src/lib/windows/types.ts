@@ -1,5 +1,5 @@
 import type {
-  HostOperationStatus,
+  HostOperationStatusEnvelope,
   HostRegistryUpdateState,
 } from "@traycer-clients/shared/platform/runner-host";
 
@@ -256,7 +256,7 @@ export interface DesktopHostRegistryUpdatesBridge {
 }
 
 export interface DesktopHostOperationStatusBridge {
-  onChange(handler: (status: HostOperationStatus | null) => void): {
+  onChange(handler: (status: HostOperationStatusEnvelope) => void): {
     dispose(): void;
   };
 }

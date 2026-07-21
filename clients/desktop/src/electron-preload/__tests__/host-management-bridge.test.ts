@@ -3,6 +3,7 @@ import { RunnerHostEvent } from "../../ipc-contracts/ipc-channels";
 import type {
   HostOperationKind,
   HostOperationStatus,
+  HostOperationStatusEnvelope,
 } from "../../ipc-contracts/host-management-types";
 
 /**
@@ -72,6 +73,16 @@ function makeStatus(kind: HostOperationKind): HostOperationStatus {
   };
 }
 
+function makeEnvelope(
+  kind: HostOperationKind | null,
+): HostOperationStatusEnvelope {
+  return {
+    revision: 1,
+    status: kind === null ? null : makeStatus(kind),
+    lastEnsureOutcome: null,
+  };
+}
+
 // Every member of `HostOperationKind` as of this writing. If the union
 // gains a member, `host-management-bridge.ts`'s `HOST_OPERATION_KINDS` map
 // fails to compile until it's added there too - update this list to match
@@ -102,34 +113,37 @@ describe("host-management-bridge onOperationStatus", () => {
       const { buildHostManagementBridge } =
         await import("../host-management-bridge");
       const bridge = buildHostManagementBridge();
-      const observed: (HostOperationStatus | null)[] = [];
+      const observed: HostOperationStatusEnvelope[] = [];
       const subscription = bridge.onOperationStatus((status) => {
         observed.push(status);
       });
 
       fakeElectron.emit(
         RunnerHostEvent.hostOperationStatusChange,
-        makeStatus(kind),
+        makeEnvelope(kind),
       );
 
-      expect(observed).toEqual([makeStatus(kind)]);
+      expect(observed).toEqual([makeEnvelope(kind)]);
       subscription.dispose();
     },
   );
 
-  it("passes a null operation-status broadcast through (operation cleared)", async () => {
+  it("passes an idle operation-status envelope through", async () => {
     vi.resetModules();
     const { buildHostManagementBridge } =
       await import("../host-management-bridge");
     const bridge = buildHostManagementBridge();
-    const observed: (HostOperationStatus | null)[] = [];
+    const observed: HostOperationStatusEnvelope[] = [];
     const subscription = bridge.onOperationStatus((status) => {
       observed.push(status);
     });
 
-    fakeElectron.emit(RunnerHostEvent.hostOperationStatusChange, null);
+    fakeElectron.emit(
+      RunnerHostEvent.hostOperationStatusChange,
+      makeEnvelope(null),
+    );
 
-    expect(observed).toEqual([null]);
+    expect(observed).toEqual([makeEnvelope(null)]);
     subscription.dispose();
   });
 
@@ -140,14 +154,17 @@ describe("host-management-bridge onOperationStatus", () => {
       const { buildHostManagementBridge } =
         await import("../host-management-bridge");
       const bridge = buildHostManagementBridge();
-      const observed: (HostOperationStatus | null)[] = [];
+      const observed: HostOperationStatusEnvelope[] = [];
       const subscription = bridge.onOperationStatus((status) => {
         observed.push(status);
       });
 
       fakeElectron.emit(RunnerHostEvent.hostOperationStatusChange, {
-        ...makeStatus("install"),
-        kind,
+        ...makeEnvelope("install"),
+        status: {
+          ...makeStatus("install"),
+          kind,
+        },
       });
 
       expect(observed).toEqual([]);

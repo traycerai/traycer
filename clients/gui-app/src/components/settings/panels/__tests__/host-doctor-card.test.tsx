@@ -13,7 +13,7 @@ import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import type {
   HostDoctorIssue,
   HostDoctorReport,
-  HostOperationStatus,
+  HostOperationStatusEnvelope,
   FreePortAndRestartInput,
   IHostManagement,
   IRunnerHost,
@@ -34,7 +34,7 @@ interface ManagementOverrides {
   readonly freePortAndRestart?: (
     input: FreePortAndRestartInput,
   ) => Promise<FreePortAndRestartInput>;
-  readonly getOperationStatus?: () => Promise<HostOperationStatus | null>;
+  readonly getOperationStatus?: () => Promise<HostOperationStatusEnvelope>;
 }
 
 function makeManagement(overrides: ManagementOverrides): IHostManagement {
@@ -59,7 +59,11 @@ function makeManagement(overrides: ManagementOverrides): IHostManagement {
     deregisterService: vi.fn(notImplemented("deregisterService")),
     registryCheck: vi.fn(notImplemented("registryCheck")),
     getOperationStatus:
-      overrides.getOperationStatus ?? vi.fn(() => Promise.resolve(null)),
+      overrides.getOperationStatus ?? vi.fn(() => Promise.resolve({
+  revision: 0,
+  status: null,
+  lastEnsureOutcome: null,
+})),
     freePortAndRestart:
       overrides.freePortAndRestart ?? vi.fn((input) => Promise.resolve(input)),
     cliManifest: vi.fn(() => Promise.resolve(null)),
@@ -377,15 +381,19 @@ describe("HostDoctorCard pending CLI upgrade", () => {
   // stop/kill/start sequences.
   it("disables fix buttons while a tracked host operation is active elsewhere", async () => {
     const restartHost = vi.fn(() => Promise.resolve());
-    const activeStatus: HostOperationStatus = {
-      operationId: "op-elsewhere",
-      kind: "install",
-      stage: null,
-      percent: null,
-      bytes: null,
-      totalBytes: null,
-      message: null,
-      startedAt: "2026-05-15T00:00:00Z",
+    const activeEnvelope: HostOperationStatusEnvelope = {
+      revision: 1,
+      status: {
+        operationId: "op-elsewhere",
+        kind: "install",
+        stage: null,
+        percent: null,
+        bytes: null,
+        totalBytes: null,
+        message: null,
+        startedAt: "2026-05-15T00:00:00Z",
+      },
+      lastEnsureOutcome: null,
     };
     const management = makeManagement({
       runDoctor: () =>
@@ -394,7 +402,7 @@ describe("HostDoctorCard pending CLI upgrade", () => {
           ranAt: "2026-05-15T00:00:00Z",
         }),
       restartHost,
-      getOperationStatus: () => Promise.resolve(activeStatus),
+      getOperationStatus: () => Promise.resolve(activeEnvelope),
     });
     renderCard(makeHostWithManagement(management));
 
@@ -409,7 +417,7 @@ describe("HostDoctorCard pending CLI upgrade", () => {
   });
 
   it("keeps fix buttons disabled until operation status resolves idle", async () => {
-    const operationStatus = Promise.withResolvers<HostOperationStatus | null>();
+    const operationStatus = Promise.withResolvers<HostOperationStatusEnvelope>();
     const restartHost = vi.fn(() => Promise.resolve());
     const management = makeManagement({
       runDoctor: () =>
@@ -427,7 +435,11 @@ describe("HostDoctorCard pending CLI upgrade", () => {
     });
     expect(button.disabled).toBe(true);
 
-    operationStatus.resolve(null);
+    operationStatus.resolve({
+      revision: 0,
+      status: null,
+      lastEnsureOutcome: null,
+    });
     await waitFor(() => {
       expect(button.disabled).toBe(false);
     });

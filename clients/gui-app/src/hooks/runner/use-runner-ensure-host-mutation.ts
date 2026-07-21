@@ -4,7 +4,7 @@ import {
   type UseMutationResult,
 } from "@tanstack/react-query";
 import type {
-  HostEnsureResult,
+  HostEnsureJoinResult,
   HostProgressEvent,
 } from "@traycer-clients/shared/platform/runner-host";
 import { useRunnerHost } from "@/providers/use-runner-host";
@@ -15,6 +15,9 @@ export interface EnsureHostVariables {
   // `true` = update the host even when a running host would normally be kept
   // because it has active work. Normal provisioning passes `false`.
   readonly force: boolean;
+  // A non-null id joins that exact observed ensure operation without ever
+  // starting another one. T3 supplies this from the status envelope.
+  readonly observedOperationId: string | null;
 }
 
 /**
@@ -25,22 +28,26 @@ export interface EnsureHostVariables {
  * this mutation), not a toast.
  */
 export function useRunnerEnsureHost(): UseMutationResult<
-  HostEnsureResult,
+  HostEnsureJoinResult,
   Error,
   EnsureHostVariables
 > {
   const runnerHost = useRunnerHost();
   const queryClient = useQueryClient();
   const { hostManagement, traycerCli } = runnerHost;
-  return useMutation<HostEnsureResult, Error, EnsureHostVariables>({
+  return useMutation<HostEnsureJoinResult, Error, EnsureHostVariables>({
     mutationKey: runnerMutationKeys.hostEnsure(),
-    mutationFn: ({ onProgress, force }) => {
+    mutationFn: ({ onProgress, force, observedOperationId }) => {
       if (hostManagement === null) {
         return Promise.reject(
           new Error("Host provisioning is not available on this platform."),
         );
       }
-      return hostManagement.ensureHost({ onProgress, force });
+      return hostManagement.ensureHost({
+        onProgress,
+        force,
+        observedOperationId,
+      });
     },
     onSuccess: () => {
       if (traycerCli !== null) {

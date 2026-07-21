@@ -799,6 +799,38 @@ export interface HostOperationStatus {
   readonly startedAt: string;
 }
 
+/**
+ * A terminal ensure result can be replayed only for the exact status
+ * transition that settled it. Main owns the revision so a snapshot read that
+ * races a pushed transition can never overwrite newer state in a renderer.
+ */
+export type HostEnsureOutcome =
+  | {
+      readonly operationId: string;
+      readonly revision: number;
+      readonly result: HostEnsureIpcResult;
+      readonly busyHostPid: number | null;
+    }
+  | {
+      readonly operationId: string;
+      readonly revision: number;
+      readonly error: {
+        readonly message: string;
+        readonly code: string | null;
+      };
+    }
+  | null;
+
+/**
+ * Main-authored host-operation state. `revision` advances on every status
+ * transition, including the terminal transition to an idle status.
+ */
+export interface HostOperationStatusEnvelope {
+  readonly revision: number;
+  readonly status: HostOperationStatus | null;
+  readonly lastEnsureOutcome: HostEnsureOutcome;
+}
+
 export interface HostInstallSourceTag {
   readonly kind: "registry" | "local-file";
   readonly value: string;
@@ -837,6 +869,25 @@ export interface HostEnsureResult {
   readonly running: boolean;
   readonly version: string | null;
 }
+
+/**
+ * A join-only ensure never starts a new operation. When the operation the
+ * caller observed has already been cleared or superseded, main returns this
+ * typed result so the renderer can re-evaluate the current envelope.
+ */
+export interface HostEnsureSupersededResult {
+  readonly action: "superseded";
+  readonly running: false;
+  readonly version: null;
+}
+
+// The terminal outcome always retains a full normal ensure result. The
+// join-only response adds `superseded` separately, because it is an admission
+// result rather than an ensure outcome.
+export type HostEnsureIpcResult = HostEnsureResult;
+
+export type HostEnsureJoinResult =
+  HostEnsureIpcResult | HostEnsureSupersededResult;
 
 // Whether the user has uninstalled Traycer's background components from this
 // device via Settings → General → Danger Zone. Persisted by the desktop main
@@ -1157,16 +1208,18 @@ export interface IHostManagement {
     // `true` = the desktop "Force restart" (skip the busy check and restart a
     // running host unconditionally). Normal/Retry ensures pass `false`.
     readonly force: boolean;
-  }) => Promise<HostEnsureResult>;
+    // Non-null means join the exact ensure operation this renderer observed.
+    // Such a call must never start a fresh ensure.
+    readonly observedOperationId: string | null;
+  }) => Promise<HostEnsureJoinResult>;
   readonly deregisterService: () => Promise<void>;
   readonly registryCheck: (input: {
     readonly force: boolean;
   }) => Promise<HostRegistryUpdateState>;
-  // Current cross-surface host operation status (or `null` when idle), read
-  // once on mount to prime the shared query cache; live updates arrive via
-  // the desktop-only `hostOperationStatus` push bridge (see
-  // `HostOperationStatusListener`).
-  readonly getOperationStatus: () => Promise<HostOperationStatus | null>;
+  // Current revisioned cross-surface host-operation state, read once on mount
+  // to prime the shared query cache; live updates arrive via the desktop-only
+  // `hostOperationStatus` push bridge (see `HostOperationStatusListener`).
+  readonly getOperationStatus: () => Promise<HostOperationStatusEnvelope>;
   readonly freePortAndRestart: (
     input: FreePortAndRestartInput,
   ) => Promise<FreePortAndRestartInput>;

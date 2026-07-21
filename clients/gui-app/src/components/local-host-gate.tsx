@@ -12,7 +12,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type {
   BootstrapMarkerEntry,
-  HostEnsureResult,
+  HostEnsureJoinResult,
   HostProgressEvent,
   IRunnerHost,
   LocalHostSnapshot,
@@ -49,9 +49,9 @@ type HostSetupReason = "launch" | "recovery" | "reinstall" | "update";
 // success nor failure - the user resolves them through their own surfaces.
 function hostSetupAnalyticsCallbacks(
   reason: HostSetupReason,
-  onSuccess: (result: HostEnsureResult) => void,
+  onSuccess: (result: HostEnsureJoinResult) => void,
 ): {
-  readonly onSuccess: (result: HostEnsureResult) => void;
+  readonly onSuccess: (result: HostEnsureJoinResult) => void;
   readonly onError: (error: unknown) => void;
 } {
   Analytics.getInstance().track(AnalyticsEvent.HostSetupStarted, { reason });
@@ -424,7 +424,7 @@ function useHostProvisioning(args: {
   // initial provision leaves the latch at its `false` default (normal error
   // path). Stable handler keeps the provision effect from re-running.
   const markBusyKeep = useCallback(
-    (result: HostEnsureResult): void => {
+    (result: HostEnsureJoinResult): void => {
       setInBusyKeepFlow(result.action === "host-busy");
       // The desktop refused to reinstall a user-removed host; latch the removed
       // surface. Any other settled result (provisioned/already-ready after a
@@ -452,7 +452,11 @@ function useHostProvisioning(args: {
     reset();
     setProgress(null);
     mutate(
-      { force, onProgress: (event) => setProgress(event) },
+      {
+        force,
+        onProgress: (event) => setProgress(event),
+        observedOperationId: null,
+      },
       hostSetupAnalyticsCallbacks(reason, markBusyKeep),
     );
   };
@@ -492,7 +496,11 @@ function useHostProvisioning(args: {
     }
     attemptedRef.current = true;
     mutate(
-      { force: false, onProgress: (event) => setProgress(event) },
+      {
+        force: false,
+        onProgress: (event) => setProgress(event),
+        observedOperationId: null,
+      },
       hostSetupAnalyticsCallbacks("launch", markBusyKeep),
     );
   }, [canProvision, args.isReady, mutate, markBusyKeep]);

@@ -19,7 +19,7 @@ import type { DesktopAppUpdateSnapshot } from "@/lib/windows/types";
 import type {
   HostInstallResult,
   HostInstalledRecord,
-  HostOperationStatus,
+  HostOperationStatusEnvelope,
   HostRegistryUpdateState,
   IHostManagement,
   IRunnerHost,
@@ -96,7 +96,13 @@ function makeManagement(overrides: {
     ensureHost: vi.fn(notImplemented("ensureHost")),
     deregisterService: vi.fn(notImplemented("deregisterService")),
     registryCheck: vi.fn(() => Promise.resolve(registryState)),
-    getOperationStatus: vi.fn(() => Promise.resolve(null)),
+    getOperationStatus: vi.fn(() =>
+      Promise.resolve({
+        revision: 0,
+        status: null,
+        lastEnsureOutcome: null,
+      }),
+    ),
     freePortAndRestart: vi.fn((input) => Promise.resolve(input)),
     cliManifest: vi.fn(() => Promise.resolve(null)),
     getHostName: vi.fn(() =>
@@ -188,17 +194,21 @@ describe("host update - shared state across the banner and Settings → Host", (
     // pipes into this same query cache entry once the banner's update
     // actually starts running on the CLI side.
     act(() => {
-      queryClient.setQueryData<HostOperationStatus>(
+      queryClient.setQueryData<HostOperationStatusEnvelope>(
         runnerQueryKeys.hostOperationStatus(management),
         {
-          operationId: "op-1",
-          kind: "update",
-          stage: "download",
-          percent: 37,
-          bytes: 37,
-          totalBytes: 100,
-          message: "downloading",
-          startedAt: "2026-05-15T00:00:00Z",
+          revision: 1,
+          status: {
+            operationId: "op-1",
+            kind: "update",
+            stage: "download",
+            percent: 37,
+            bytes: 37,
+            totalBytes: 100,
+            message: "downloading",
+            startedAt: "2026-05-15T00:00:00Z",
+          },
+          lastEnsureOutcome: null,
         },
       );
     });
@@ -211,9 +221,13 @@ describe("host update - shared state across the banner and Settings → Host", (
     expect(percentReadouts.length).toBeGreaterThanOrEqual(1);
 
     act(() => {
-      queryClient.setQueryData<HostOperationStatus | null>(
+      queryClient.setQueryData<HostOperationStatusEnvelope>(
         runnerQueryKeys.hostOperationStatus(management),
-        null,
+        {
+          revision: 2,
+          status: null,
+          lastEnsureOutcome: null,
+        },
       );
     });
     resolveUpdate({
@@ -253,17 +267,21 @@ describe("host update - shared state across the banner and Settings → Host", (
     // Settings (or the background auto-update reconciler) started the
     // operation - the banner never touched its own mutation.
     act(() => {
-      queryClient.setQueryData<HostOperationStatus>(
+      queryClient.setQueryData<HostOperationStatusEnvelope>(
         runnerQueryKeys.hostOperationStatus(management),
         {
-          operationId: "op-2",
-          kind: "update",
-          stage: null,
-          percent: null,
-          bytes: null,
-          totalBytes: null,
-          message: null,
-          startedAt: "2026-05-15T00:00:00Z",
+          revision: 1,
+          status: {
+            operationId: "op-2",
+            kind: "update",
+            stage: null,
+            percent: null,
+            bytes: null,
+            totalBytes: null,
+            message: null,
+            startedAt: "2026-05-15T00:00:00Z",
+          },
+          lastEnsureOutcome: null,
         },
       );
     });
@@ -324,7 +342,13 @@ describe("host update - channel change propagates across multiple renderer Query
       ensureHost: vi.fn(notImplemented("ensureHost")),
       deregisterService: vi.fn(notImplemented("deregisterService")),
       registryCheck: vi.fn(() => Promise.resolve(state.current)),
-      getOperationStatus: vi.fn(() => Promise.resolve(null)),
+      getOperationStatus: vi.fn(() =>
+        Promise.resolve({
+          revision: 0,
+          status: null,
+          lastEnsureOutcome: null,
+        }),
+      ),
       freePortAndRestart: vi.fn((input) => Promise.resolve(input)),
       cliManifest: vi.fn(() => Promise.resolve(null)),
       getHostName: vi.fn(() =>

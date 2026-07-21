@@ -17,7 +17,7 @@ import {
 } from "@/stores/settings/host-update-banner-store";
 import type {
   HostInstallResult,
-  HostOperationStatus,
+  HostOperationStatusEnvelope,
   HostRegistryUpdateState,
   IHostManagement,
   IRunnerHost,
@@ -36,7 +36,7 @@ vi.mock("sonner", () => ({
 interface Overrides {
   readonly registryCheck?: () => Promise<HostRegistryUpdateState>;
   readonly updateHost?: () => Promise<HostInstallResult>;
-  readonly getOperationStatus?: () => Promise<HostOperationStatus | null>;
+  readonly getOperationStatus?: () => Promise<HostOperationStatusEnvelope>;
 }
 
 function makeManagement(overrides: Overrides): IHostManagement {
@@ -71,7 +71,11 @@ function makeManagement(overrides: Overrides): IHostManagement {
         }),
       ),
     getOperationStatus: vi.fn(
-      overrides.getOperationStatus ?? (() => Promise.resolve(null)),
+      overrides.getOperationStatus ?? (() => Promise.resolve({
+  revision: 0,
+  status: null,
+  lastEnsureOutcome: null,
+})),
     ),
     freePortAndRestart: vi.fn((input) => Promise.resolve(input)),
     cliManifest: vi.fn(() => Promise.resolve(null)),

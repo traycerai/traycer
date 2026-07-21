@@ -7,12 +7,12 @@ import type {
   HostAvailableSnapshot,
   HostAvailableVersionsInput,
   HostDoctorReport,
-  HostEnsureResult,
+  HostEnsureJoinResult,
   HostInstallResult,
   HostInstalledRecord,
   HostLogsTailResult,
   HostNameSettings,
-  HostOperationStatus,
+  HostOperationStatusEnvelope,
   HostProgressEvent,
   HostRegistryUpdateState,
   HostRemovalState,
@@ -238,7 +238,8 @@ export interface DesktopHostManagementBridge {
   ensureHost(input: {
     readonly onProgress: ((event: HostProgressEvent) => void) | null;
     readonly force: boolean;
-  }): Promise<HostEnsureResult>;
+    readonly observedOperationId: string | null;
+  }): Promise<HostEnsureJoinResult>;
   deregisterService(): Promise<void>;
   registryCheck(input: {
     readonly force: boolean;
@@ -246,8 +247,8 @@ export interface DesktopHostManagementBridge {
   onRegistryUpdateState(handler: (state: HostRegistryUpdateState) => void): {
     dispose: () => void;
   };
-  getOperationStatus(): Promise<HostOperationStatus | null>;
-  onOperationStatus(handler: (status: HostOperationStatus | null) => void): {
+  getOperationStatus(): Promise<HostOperationStatusEnvelope>;
+  onOperationStatus(handler: (status: HostOperationStatusEnvelope) => void): {
     dispose: () => void;
   };
   freePortAndRestart(
@@ -273,7 +274,7 @@ export interface DesktopHostRegistryUpdatesBridge {
 }
 
 export interface DesktopHostOperationStatusBridge {
-  onChange(handler: (status: HostOperationStatus | null) => void): {
+  onChange(handler: (status: HostOperationStatusEnvelope) => void): {
     dispose: () => void;
   };
 }

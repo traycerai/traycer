@@ -17,7 +17,7 @@ import type {
   HostAvailableSnapshot,
   HostInstallResult,
   HostInstalledRecord,
-  HostOperationStatus,
+  HostOperationStatusEnvelope,
   HostRegistryUpdateState,
   IHostManagement,
   IRunnerHost,
@@ -206,17 +206,21 @@ describe("<HostSettingsPanel /> - mutation flows", () => {
     });
 
     act(() => {
-      queryClient.setQueryData<HostOperationStatus>(
+      queryClient.setQueryData<HostOperationStatusEnvelope>(
         runnerQueryKeys.hostOperationStatus(management),
         {
-          operationId: "op-1",
-          kind: "install",
-          stage: "download",
-          percent: 42,
-          bytes: 100,
-          totalBytes: 240,
-          message: "downloading",
-          startedAt: "2026-05-15T00:00:00Z",
+          revision: 1,
+          status: {
+            operationId: "op-1",
+            kind: "install",
+            stage: "download",
+            percent: 42,
+            bytes: 100,
+            totalBytes: 240,
+            message: "downloading",
+            startedAt: "2026-05-15T00:00:00Z",
+          },
+          lastEnsureOutcome: null,
         },
       );
     });
@@ -229,9 +233,13 @@ describe("<HostSettingsPanel /> - mutation flows", () => {
     ).toBe("42%");
 
     act(() => {
-      queryClient.setQueryData<HostOperationStatus | null>(
+      queryClient.setQueryData<HostOperationStatusEnvelope>(
         runnerQueryKeys.hostOperationStatus(management),
-        null,
+        {
+          revision: 2,
+          status: null,
+          lastEnsureOutcome: null,
+        },
       );
     });
     resolveInstall(makeInstallResult("1.4.2"));
@@ -435,7 +443,11 @@ function makeManagement(
           includePreReleases: false,
         }),
       ),
-    getOperationStatus: vi.fn(() => Promise.resolve(null)),
+    getOperationStatus: vi.fn(() => Promise.resolve({
+  revision: 0,
+  status: null,
+  lastEnsureOutcome: null,
+})),
     freePortAndRestart: vi.fn((input) => Promise.resolve(input)),
     cliManifest: overrides.cliManifest ?? vi.fn(() => Promise.resolve(null)),
     getHostName:

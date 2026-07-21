@@ -58,7 +58,11 @@ function makeManagement(
     registerService: vi.fn(notImplemented("registerService")),
     ensureHost: vi.fn(notImplemented("ensureHost")),
     deregisterService: vi.fn(notImplemented("deregisterService")),
-    getOperationStatus: vi.fn(() => Promise.resolve(null)),
+    getOperationStatus: vi.fn(() => Promise.resolve({
+  revision: 0,
+  status: null,
+  lastEnsureOutcome: null,
+})),
     registryCheck: vi.fn(() =>
       Promise.resolve({
         checkedAt: null,

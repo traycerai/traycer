@@ -205,7 +205,130 @@ vi.mock("@traycer-clients/shared/host-client/host-activity-probe", () => ({
 }));
 
 const getActiveEnvironmentMock = vi.fn<() => string>();
-const streamCliWithProgressMock = vi.fn();
+const streamCliWithinReservedOperationMock = vi.fn();
+
+type HostOperationKind =
+  | "install"
+  | "update"
+  | "register-service"
+  | "ensure"
+  | "restart"
+  | "free-port-and-restart";
+
+interface HostOperationStatus {
+  readonly operationId: string;
+  readonly kind: HostOperationKind;
+  readonly stage: string | null;
+  readonly percent: number | null;
+  readonly bytes: number | null;
+  readonly totalBytes: number | null;
+  readonly message: string | null;
+  readonly startedAt: string;
+}
+
+type HostEnsureOutcome =
+  | {
+      readonly operationId: string;
+      readonly revision: number;
+      readonly result: {
+        readonly action:
+          | "already-ready"
+          | "provisioned"
+          | "host-busy"
+          | "removed";
+        readonly running: boolean;
+        readonly version: string | null;
+      };
+      readonly busyHostPid: number | null;
+    }
+  | {
+      readonly operationId: string;
+      readonly revision: number;
+      readonly error: {
+        readonly message: string;
+        readonly code: string | null;
+      };
+    }
+  | null;
+
+interface HostOperationStatusEnvelope {
+  revision: number;
+  status: HostOperationStatus | null;
+  lastEnsureOutcome: HostEnsureOutcome;
+}
+
+interface HostOperationReservation {
+  readonly bridge: {
+    fanOut(channel: string, payload: unknown): void;
+  };
+  readonly operationId: string;
+  readonly kind: HostOperationKind;
+  readonly startedAt: string;
+}
+
+type PendingEnsureOutcome =
+  | {
+      readonly operationId: string;
+      readonly result: {
+        readonly action:
+          | "already-ready"
+          | "provisioned"
+          | "host-busy"
+          | "removed";
+        readonly running: boolean;
+        readonly version: string | null;
+      };
+      readonly busyHostPid: number | null;
+    }
+  | {
+      readonly operationId: string;
+      readonly error: {
+        readonly message: string;
+        readonly code: string | null;
+      };
+    }
+  | null;
+
+let currentEnvelope: HostOperationStatusEnvelope = {
+  revision: 0,
+  status: null,
+  lastEnsureOutcome: null,
+};
+
+function resetEnvelopeSeam(): void {
+  currentEnvelope = {
+    revision: 0,
+    status: null,
+    lastEnsureOutcome: null,
+  };
+}
+
+function setEnvelope(
+  bridge: HostOperationReservation["bridge"],
+  status: HostOperationStatus | null,
+  pendingEnsureOutcome: PendingEnsureOutcome,
+): HostOperationStatusEnvelope {
+  const revision = currentEnvelope.revision + 1;
+  const lastEnsureOutcome: HostEnsureOutcome =
+    pendingEnsureOutcome === null
+      ? null
+      : "result" in pendingEnsureOutcome
+        ? {
+            operationId: pendingEnsureOutcome.operationId,
+            revision,
+            result: pendingEnsureOutcome.result,
+            busyHostPid: pendingEnsureOutcome.busyHostPid,
+          }
+        : {
+            operationId: pendingEnsureOutcome.operationId,
+            revision,
+            error: pendingEnsureOutcome.error,
+          };
+  currentEnvelope = { revision, status, lastEnsureOutcome };
+  bridge.fanOut("hostOperationStatusChange", currentEnvelope);
+  return currentEnvelope;
+}
+
 vi.mock("../../ipc/host-management-ipc", () => ({
   getActiveEnvironment: () => getActiveEnvironmentMock(),
   optionalString: (raw: unknown, key: string) => {
@@ -215,10 +338,78 @@ vi.mock("../../ipc/host-management-ipc", () => ({
   },
   optionalBoolean: (raw: unknown, key: string) => {
     if (raw === null || typeof raw !== "object" || !(key in raw)) return false;
-    return Boolean((raw as Record<string, unknown>)[key]);
+    return (raw as Record<string, unknown>)[key] === true;
   },
-  streamCliWithProgress: (...args: unknown[]) =>
-    streamCliWithProgressMock(...args),
+  getHostOperationStatus: () => currentEnvelope,
+  reserveHostOperation: (
+    bridge: HostOperationReservation["bridge"],
+    kind: HostOperationKind,
+    operationId: string,
+  ): HostOperationReservation => {
+    if (currentEnvelope.status !== null) {
+      throw new Error(
+        `Another host operation (${currentEnvelope.status.kind}) is already in progress`,
+      );
+    }
+    const reservation: HostOperationReservation = {
+      bridge,
+      operationId,
+      kind,
+      startedAt: "2026-05-15T00:00:00Z",
+    };
+    setEnvelope(
+      bridge,
+      {
+        operationId,
+        kind,
+        stage: null,
+        percent: null,
+        bytes: null,
+        totalBytes: null,
+        message: null,
+        startedAt: reservation.startedAt,
+      },
+      null,
+    );
+    return reservation;
+  },
+  publishHostOperationStage: (
+    reservation: HostOperationReservation,
+    stage: string,
+  ): void => {
+    const status = currentEnvelope.status;
+    if (status === null || status.operationId !== reservation.operationId) {
+      throw new Error(
+        "Host operation reservation was lost before it completed",
+      );
+    }
+    setEnvelope(
+      reservation.bridge,
+      {
+        ...status,
+        stage,
+        percent: null,
+        bytes: null,
+        totalBytes: null,
+        message: null,
+      },
+      null,
+    );
+  },
+  releaseHostOperation: (
+    reservation: HostOperationReservation,
+    pendingEnsureOutcome: PendingEnsureOutcome,
+  ): void => {
+    const status = currentEnvelope.status;
+    if (status === null || status.operationId !== reservation.operationId) {
+      throw new Error(
+        "Host operation reservation was lost before it completed",
+      );
+    }
+    setEnvelope(reservation.bridge, null, pendingEnsureOutcome);
+  },
+  streamCliWithinReservedOperation: (...args: unknown[]) =>
+    streamCliWithinReservedOperationMock(...args),
   LONG_OP_TIMEOUT_MS: 600_000,
 }));
 
@@ -265,7 +456,8 @@ afterAll(() => {
 
 // Imported AFTER every mock above so module init evaluates against them.
 const { respawnHost } = await import("../host-respawn");
-const { runEnsureHost } = await import("../../ipc/host-ensure-ipc");
+const { resetInFlightEnsureForTests, runEnsureHost } =
+  await import("../../ipc/host-ensure-ipc");
 
 interface FakeHostServiceStatus {
   state: "running" | "stopped" | "not-installed";
@@ -324,6 +516,7 @@ interface FakeBridgeServiceStatus {
 // `options.host.{getServiceStatus,reloadSnapshotFromDisk}` are ever
 // dereferenced on the fast (already-reachable) path these tests exercise.
 function fakeBridge(status: FakeBridgeServiceStatus): {
+  readonly fanOut: (channel: string, payload: unknown) => void;
   readonly options: {
     readonly host: {
       readonly getServiceStatus: () => Promise<FakeBridgeServiceStatus>;
@@ -332,6 +525,7 @@ function fakeBridge(status: FakeBridgeServiceStatus): {
   };
 } {
   return {
+    fanOut: vi.fn(),
     options: {
       host: {
         getServiceStatus: () => Promise.resolve(status),
@@ -349,6 +543,8 @@ function flushMicrotasks(times: number): Promise<void> {
 }
 
 beforeEach(() => {
+  resetEnvelopeSeam();
+  resetInFlightEnsureForTests();
   setLoginItemSettingsMock.mockReset();
   getLoginItemSettingsMock.mockReset();
   hostManagesHostLoginItemMock.mockReset();
@@ -361,7 +557,7 @@ beforeEach(() => {
   canReachHostWebsocketUrlMock.mockReset().mockResolvedValue(true);
   probeHostActivityBusyMock.mockReset().mockResolvedValue(false);
   getActiveEnvironmentMock.mockReset().mockReturnValue("production");
-  streamCliWithProgressMock.mockReset();
+  streamCliWithinReservedOperationMock.mockReset();
 });
 
 // INCIDENT (2026-07-16, issue #287 registration-cycle-coordinator): an
@@ -415,7 +611,7 @@ describe("shared registration-cycle lock: respawnHost vs runEnsureHost", () => {
       postSwapAction: null,
       postSwapError: null,
     });
-    streamCliWithProgressMock.mockResolvedValue({
+    streamCliWithinReservedOperationMock.mockResolvedValue({
       version: "9.9.9",
       serviceLifecycle: { postSwapError: null },
     });
@@ -534,7 +730,7 @@ describe("runEnsureHost force-coalescing (individual semantics unchanged)", () =
       readonly version: string;
       readonly serviceLifecycle: { readonly postSwapError: string | null };
     }>();
-    streamCliWithProgressMock
+    streamCliWithinReservedOperationMock
       .mockImplementationOnce(() => firstCycle.promise)
       .mockImplementationOnce(() =>
         Promise.resolve({
@@ -556,7 +752,7 @@ describe("runEnsureHost force-coalescing (individual semantics unchanged)", () =
       false,
     );
     await vi.waitFor(() => {
-      if (streamCliWithProgressMock.mock.calls.length < 1) {
+      if (streamCliWithinReservedOperationMock.mock.calls.length < 1) {
         throw new Error("waiting for the non-force CLI cycle to start");
       }
     });
@@ -567,7 +763,7 @@ describe("runEnsureHost force-coalescing (individual semantics unchanged)", () =
     // until this test resolves it, so no amount of extra microtask
     // flushing here can make a second CLI cycle start early.
     await flushMicrotasks(10);
-    expect(streamCliWithProgressMock).toHaveBeenCalledTimes(1);
+    expect(streamCliWithinReservedOperationMock).toHaveBeenCalledTimes(1);
 
     firstCycle.resolve({
       version: "1.1.1",
@@ -591,10 +787,10 @@ describe("runEnsureHost force-coalescing (individual semantics unchanged)", () =
     });
     // The force call ran its OWN cycle rather than sharing the non-force
     // result - proof `--force` was never silently dropped.
-    expect(streamCliWithProgressMock).toHaveBeenCalledTimes(2);
-    const firstArgs = streamCliWithProgressMock.mock.calls[0]?.[0] as
+    expect(streamCliWithinReservedOperationMock).toHaveBeenCalledTimes(2);
+    const firstArgs = streamCliWithinReservedOperationMock.mock.calls[0]?.[0] as
       readonly string[] | undefined;
-    const secondArgs = streamCliWithProgressMock.mock.calls[1]?.[0] as
+    const secondArgs = streamCliWithinReservedOperationMock.mock.calls[1]?.[0] as
       readonly string[] | undefined;
     expect(firstArgs).not.toContain("--force");
     expect(secondArgs).toContain("--force");
@@ -622,7 +818,7 @@ describe("runEnsureHost force-coalescing (individual semantics unchanged)", () =
       readonly version: string;
       readonly serviceLifecycle: { readonly postSwapError: string | null };
     }>();
-    streamCliWithProgressMock
+    streamCliWithinReservedOperationMock
       .mockImplementationOnce(() => firstCycle.promise)
       .mockImplementationOnce(() =>
         Promise.resolve({
@@ -644,7 +840,7 @@ describe("runEnsureHost force-coalescing (individual semantics unchanged)", () =
       false,
     );
     await vi.waitFor(() => {
-      if (streamCliWithProgressMock.mock.calls.length < 1) {
+      if (streamCliWithinReservedOperationMock.mock.calls.length < 1) {
         throw new Error("waiting for the non-force CLI cycle to start");
       }
     });
@@ -654,7 +850,7 @@ describe("runEnsureHost force-coalescing (individual semantics unchanged)", () =
     // Both force calls are blocked on the non-force cycle's still-pending
     // promise; no amount of microtask flushing can start a CLI cycle early.
     await flushMicrotasks(10);
-    expect(streamCliWithProgressMock).toHaveBeenCalledTimes(1);
+    expect(streamCliWithinReservedOperationMock).toHaveBeenCalledTimes(1);
 
     firstCycle.resolve({
       version: "1.1.1",
@@ -673,9 +869,9 @@ describe("runEnsureHost force-coalescing (individual semantics unchanged)", () =
       version: "irrelevant",
     });
     // Exactly one MORE cycle ran (the two force callers shared it) - not two.
-    expect(streamCliWithProgressMock).toHaveBeenCalledTimes(2);
+    expect(streamCliWithinReservedOperationMock).toHaveBeenCalledTimes(2);
     expect(forceResultA).toEqual(forceResultB);
-    const secondArgs = streamCliWithProgressMock.mock.calls[1]?.[0] as
+    const secondArgs = streamCliWithinReservedOperationMock.mock.calls[1]?.[0] as
       readonly string[] | undefined;
     expect(secondArgs).toContain("--force");
   });
@@ -693,7 +889,7 @@ describe("runEnsureHost force-coalescing (individual semantics unchanged)", () =
       postSwapAction: null,
       postSwapError: null,
     });
-    streamCliWithProgressMock.mockResolvedValue({
+    streamCliWithinReservedOperationMock.mockResolvedValue({
       version: "1.1.1",
       serviceLifecycle: { postSwapError: null },
     });
@@ -711,6 +907,6 @@ describe("runEnsureHost force-coalescing (individual semantics unchanged)", () =
     ]);
 
     expect(first).toEqual(second);
-    expect(streamCliWithProgressMock).toHaveBeenCalledTimes(1);
+    expect(streamCliWithinReservedOperationMock).toHaveBeenCalledTimes(1);
   });
 });
