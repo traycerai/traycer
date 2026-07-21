@@ -47,11 +47,15 @@ export function ChordCaptureInput(props: ChordCaptureInputProps) {
   const controlAware = isControlAwareAction(actionId);
   // The desktop's global summon shortcut swallows its chord system-wide
   // before any renderer listener sees it - so it's a real conflict for a
-  // renderer binding, checked only while it's actually registered with the
-  // OS (a disabled or OS-refused shortcut doesn't actually swallow anything).
+  // renderer binding. Reserved by persisted INTENT, not live OS status
+  // (amended decision 6): a chord the user intends enabled stays reserved
+  // even while the OS currently rejects it, because it will register on a
+  // later launch and would otherwise silently swallow a renderer binding
+  // placed on it in the meantime. Only `enabled: false` frees the chord -
+  // the enable-path check (R1, in the settings row) guards re-enabling.
   const { status: summonStatus } = useSummonHotkey();
   const externalReserved = useMemo<ReadonlyArray<ExternalReservedChord>>(() => {
-    if (summonStatus === null || summonStatus.status !== "registered") {
+    if (summonStatus === null || !summonStatus.intent.enabled) {
       return [];
     }
     return [
@@ -69,6 +73,7 @@ export function ChordCaptureInput(props: ChordCaptureInputProps) {
       controlAware={controlAware}
       requireModifier={false}
       disabled={false}
+      clearResolvesTo={null}
       label={actionId}
       onCapture={onChange}
       onClear={onClear}

@@ -15,6 +15,7 @@ import { findConflict } from "@/lib/keybindings/conflicts";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { Kbd } from "@/components/ui/kbd";
 import { useSummonHotkey } from "@/hooks/runner/use-summon-hotkey";
+import { GLOBAL_SHORTCUT_DEFAULT_CHORDS } from "@traycer-clients/shared/keybindings/global-shortcuts";
 import { runnerMutationKeys } from "@/lib/query-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
 import { trackSettingChanged } from "@/lib/analytics";
@@ -60,6 +61,9 @@ export function KeybindingsSettingsPanel() {
         );
       }
       return summonBridge.set("summon", intent);
+    },
+    onSuccess: () => {
+      trackSettingChanged("keybindings", "summonHotkeyChord");
     },
     onError: (error) =>
       toastFromRunnerError(error, "Couldn't update the summon shortcut."),
@@ -309,8 +313,8 @@ function SummonHotkeyRow(props: SummonHotkeyRowProps) {
               if (checked) {
                 // Enabling makes `status.effectiveChord` live again - a
                 // renderer action may have claimed it while summon was off
-                // (it isn't reserved while disabled/rejected), so this is the
-                // one transition-to-live path `ChordCaptureCore`'s own
+                // (it isn't reserved while disabled), so this is the one
+                // transition-to-live path `ChordCaptureCore`'s own
                 // capture-time check never sees.
                 const conflict = findConflict(
                   bindings,
@@ -334,6 +338,7 @@ function SummonHotkeyRow(props: SummonHotkeyRowProps) {
             controlAware={false}
             requireModifier
             disabled={mutation.isPending}
+            clearResolvesTo={GLOBAL_SHORTCUT_DEFAULT_CHORDS.summon}
             label="the summon shortcut"
             onCapture={(chord) => {
               setEnableConflictMessage(null);

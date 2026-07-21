@@ -117,6 +117,17 @@ function mergePersistedKeybindings(
   persistedState: unknown,
   currentState: KeybindingState,
 ): KeybindingState {
+  // `persistedState === undefined` means the storage key is genuinely
+  // missing (removed, `localStorage.clear()`'d, or first launch) - zustand's
+  // persist passes `undefined` rather than skipping `merge` in that case.
+  // Reset to defaults rather than keeping whatever is in memory, so a
+  // cross-window "clear local data"/reset doesn't leave this window on a
+  // stale custom map that a later edit could persist right back
+  // (distinct from malformed-but-present data, which still falls back to
+  // `currentState` below).
+  if (persistedState === undefined) {
+    return { ...currentState, bindings: getDefaultBindings() };
+  }
   const bindings = readPersistedBindings(persistedState);
   if (bindings === null) return currentState;
   return {

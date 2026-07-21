@@ -11,6 +11,20 @@ export const GLOBAL_SHORTCUT_IDS = ["summon"] as const;
 export type GlobalShortcutId = (typeof GLOBAL_SHORTCUT_IDS)[number];
 
 /**
+ * Each definition's default chord (`intent.chord === null` means "use this").
+ * The single source of truth for both the main-process registry
+ * (`electron-main/app/shortcuts.ts`'s `DEFINITIONS`) and the renderer (the
+ * global-shortcut settings row needs it to conflict-check what clearing to
+ * default would actually commit - decision 6's "every commit path, including
+ * clear-to-default, runs the conflict check").
+ */
+export const GLOBAL_SHORTCUT_DEFAULT_CHORDS: Readonly<
+  Record<GlobalShortcutId, ChordString>
+> = {
+  summon: "mod+shift+space",
+};
+
+/**
  * User intent for one global shortcut, persisted in the main process
  * (`global-shortcuts.json`) and carried as-is over IPC. `chord: null` means
  * "use the definition's default chord".

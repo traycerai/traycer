@@ -9,7 +9,10 @@ export type {
   GlobalShortcutRegistrationStatus,
   GlobalShortcutStatus,
 } from "@traycer-clients/shared/keybindings/global-shortcuts";
-export { GLOBAL_SHORTCUT_IDS } from "@traycer-clients/shared/keybindings/global-shortcuts";
+export {
+  GLOBAL_SHORTCUT_DEFAULT_CHORDS,
+  GLOBAL_SHORTCUT_IDS,
+} from "@traycer-clients/shared/keybindings/global-shortcuts";
 
 /**
  * Wire snapshot pushed to every window on `globalShortcutsChange` and

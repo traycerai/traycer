@@ -1015,8 +1015,9 @@ async function createTraySafe(
 // (`ShortcutTargetWindow`, decision 10 in the tech plan: the summon action
 // resolves via `focusMru()` rather than the registry's first-inserted
 // record) - both just need "the window the user last used", so one proxy
-// backs both call sites.
-function createMruWindowProxy(
+// backs both call sites. Exported so tests can exercise this exact proxy
+// against a real `WindowRegistry` instead of a hand-rolled copy.
+export function createMruWindowProxy(
   registry: WindowRegistry,
 ): TrayManagedWindow & ShortcutTargetWindow {
   const current = (): BrowserWindow | null =>

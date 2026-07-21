@@ -48,6 +48,17 @@ export interface ChordCaptureCoreProps {
    * synchronous local write and always passes `false`.
    */
   readonly disabled: boolean;
+  /**
+   * The chord that clearing (Backspace) resolves to for conflict-checking
+   * purposes, or `null` when clearing simply unbinds (no chord becomes
+   * effective, so there's nothing to check). The global shortcut row passes
+   * the definition's default chord - `chord: null` there persists as "use
+   * the default", which is a real, live chord exactly as reservable as one
+   * the user captures directly (decision 6: every commit path, including
+   * clear-to-default, runs the conflict check). Renderer keybinding capture
+   * passes `null` - unbinding an action is always safe.
+   */
+  readonly clearResolvesTo: ChordString | null;
   /** Interpolated into "Rebind {label}" / "Recording new chord for {label}". */
   readonly label: string;
   readonly checkConflict: (candidate: ChordString) => ChordCaptureCheck | null;
@@ -69,6 +80,7 @@ export function ChordCaptureCore(props: ChordCaptureCoreProps) {
     controlAware,
     requireModifier,
     disabled,
+    clearResolvesTo,
     label,
     checkConflict,
     onCapture,
@@ -92,46 +104,27 @@ export function ChordCaptureCore(props: ChordCaptureCoreProps) {
       if (isBareModifierEvent(event)) return;
       event.preventDefault();
       event.stopPropagation();
-      if (event.key === "Escape") {
-        dispatchCapture({ type: "cancel" });
-        return;
-      }
-      if (event.key === "Backspace") {
-        onClear();
-        dispatchCapture({ type: "cancel" });
-        return;
-      }
-      const chord = controlAware
-        ? chordFromEventCtrlAware(event)
-        : chordFromEvent(event);
-      if (chord === null) return;
-      if (requireModifier) {
-        const parts = parseChordString(chord);
-        const hasModifier =
-          parts !== null &&
-          (parts.mod || parts.ctrl || parts.shift || parts.alt);
-        if (!hasModifier) {
-          dispatchCapture({
-            type: "conflict",
-            conflict: {
-              severity: "os-clash",
-              conflictingActionId: null,
-              message: NO_MODIFIER_MESSAGE,
-            },
-          });
-          return;
-        }
-      }
-      const check = checkConflict(chord);
-      if (check !== null && check.blocksCommit) {
-        dispatchCapture({ type: "conflict", conflict: check.conflict });
-        return;
-      }
-      onCapture(chord);
-      dispatchCapture({
-        type: "commit",
-        conflict: check === null ? null : check.conflict,
+      const decision = decideChordCapture(event, {
+        controlAware,
+        requireModifier,
+        clearResolvesTo,
+        checkConflict,
       });
+      if (decision === null) return;
+      if (decision.kind === "cancel") {
+        dispatchCapture({ type: "cancel" });
+        return;
+      }
+      if (decision.kind === "block") {
+        dispatchCapture({ type: "conflict", conflict: decision.conflict });
+        return;
+      }
+      if (decision.kind === "clear") {
+        onClear();
+      } else {
+        onCapture(decision.chord);
+      }
+      dispatchCapture({ type: "commit", conflict: decision.conflict });
     };
     window.addEventListener("keydown", handleKeyDown, { capture: true });
     return () =>
@@ -140,6 +133,7 @@ export function ChordCaptureCore(props: ChordCaptureCoreProps) {
     captureState.capturing,
     controlAware,
     requireModifier,
+    clearResolvesTo,
     checkConflict,
     onCapture,
     onClear,
@@ -216,6 +210,74 @@ export function ChordCaptureCore(props: ChordCaptureCoreProps) {
         </p>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * What a capturing keydown should do, decided as pure data so the event
+ * handler itself stays a simple dispatch table. `null` means "not a
+ * complete chord yet, ignore" (e.g. a modifier-only combination).
+ */
+type ChordKeyDownDecision =
+  | { readonly kind: "cancel" }
+  | { readonly kind: "block"; readonly conflict: ConflictResult }
+  | { readonly kind: "clear"; readonly conflict: ConflictResult | null }
+  | {
+      readonly kind: "capture";
+      readonly chord: ChordString;
+      readonly conflict: ConflictResult | null;
+    };
+
+interface ChordKeyDownOptions {
+  readonly controlAware: boolean;
+  readonly requireModifier: boolean;
+  readonly clearResolvesTo: ChordString | null;
+  readonly checkConflict: (candidate: ChordString) => ChordCaptureCheck | null;
+}
+
+function decideChordCapture(
+  event: KeyboardEvent,
+  options: ChordKeyDownOptions,
+): ChordKeyDownDecision | null {
+  if (event.key === "Escape") return { kind: "cancel" };
+  if (event.key === "Backspace") {
+    if (options.clearResolvesTo === null)
+      return { kind: "clear", conflict: null };
+    const check = options.checkConflict(options.clearResolvesTo);
+    if (check !== null && check.blocksCommit) {
+      return { kind: "block", conflict: check.conflict };
+    }
+    return { kind: "clear", conflict: check === null ? null : check.conflict };
+  }
+  const chord = options.controlAware
+    ? chordFromEventCtrlAware(event)
+    : chordFromEvent(event);
+  if (chord === null) return null;
+  if (options.requireModifier && !chordHasModifier(chord)) {
+    return {
+      kind: "block",
+      conflict: {
+        severity: "os-clash",
+        conflictingActionId: null,
+        message: NO_MODIFIER_MESSAGE,
+      },
+    };
+  }
+  const check = options.checkConflict(chord);
+  if (check !== null && check.blocksCommit) {
+    return { kind: "block", conflict: check.conflict };
+  }
+  return {
+    kind: "capture",
+    chord,
+    conflict: check === null ? null : check.conflict,
+  };
+}
+
+function chordHasModifier(chord: ChordString): boolean {
+  const parts = parseChordString(chord);
+  return (
+    parts !== null && (parts.mod || parts.ctrl || parts.shift || parts.alt)
   );
 }
 

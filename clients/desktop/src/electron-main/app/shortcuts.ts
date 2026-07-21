@@ -3,12 +3,13 @@ import {
   toAccelerator,
   type ChordString,
 } from "@traycer-clients/shared/keybindings/chord-core";
-import type {
-  GlobalShortcutId,
-  GlobalShortcutIntent,
-  GlobalShortcutRegistrationStatus,
-  GlobalShortcutsSnapshot,
-  GlobalShortcutStatus,
+import {
+  GLOBAL_SHORTCUT_DEFAULT_CHORDS,
+  type GlobalShortcutId,
+  type GlobalShortcutIntent,
+  type GlobalShortcutRegistrationStatus,
+  type GlobalShortcutsSnapshot,
+  type GlobalShortcutStatus,
 } from "../../ipc-contracts/global-shortcuts-types";
 import { log } from "./logger";
 import {
@@ -44,7 +45,7 @@ let resolveTargetWindow: (() => ShortcutTargetWindow | null) | null = null;
 const DEFINITIONS: readonly GlobalShortcutDefinition[] = [
   {
     id: "summon",
-    defaultChord: "mod+shift+space",
+    defaultChord: GLOBAL_SHORTCUT_DEFAULT_CHORDS.summon,
     run: () => {
       const window = resolveTargetWindow?.() ?? null;
       if (window === null || window.isDestroyed()) return;
